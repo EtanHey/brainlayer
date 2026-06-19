@@ -40,6 +40,50 @@ from typing import Any, Optional
 
 # ── Types ──────────────────────────────────────────────────────────────
 
+DEFAULT_PERSON_REDACTION_ALLOWLIST = frozenset(
+    {
+        # Owner identity and handles that must remain searchable in first-party memory.
+        "Etan",
+        "Etan Heyman",
+        "EtanHey",
+        "etanheyman",
+        # AI tools, agents, and vendors that NER can misclassify as PERSON.
+        "Claude",
+        "Codex",
+        "Cursor",
+        "Gemini",
+        "ChatGPT",
+        "Anthropic",
+        "OpenAI",
+        "Copilot",
+        "Llama",
+        "Mistral",
+    }
+)
+
+_PERSON_ALLOWLIST_TOOL_DESCRIPTOR_TOKENS = frozenset(
+    {
+        "agent",
+        "agents",
+        "ai",
+        "api",
+        "app",
+        "assistant",
+        "bot",
+        "chat",
+        "cli",
+        "cloud",
+        "code",
+        "desktop",
+        "llm",
+        "mcp",
+        "model",
+        "models",
+        "tool",
+        "tools",
+    }
+)
+
 
 @dataclass(frozen=True)
 class Replacement:
@@ -71,23 +115,40 @@ class SanitizeConfig:
     owner_emails: tuple[str, ...] = ()
     owner_paths: tuple[str, ...] = ()
     known_names: frozenset[str] = frozenset()
+    confirmed_person_names: frozenset[str] = frozenset()
     strip_emails: bool = True
     strip_ips: bool = True
     strip_jwts: bool = True
     strip_op_refs: bool = True
     strip_phone_numbers: bool = True
     use_spacy_ner: bool = True
+    person_redaction_allowlist: frozenset[str] = DEFAULT_PERSON_REDACTION_ALLOWLIST
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────
 
 # Hebrew nikud (diacritics) range: U+0591 to U+05C7
 _NIKUD_RE = re.compile(r"[\u0591-\u05c7]")
+_ALLOWLIST_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*|[\u0590-\u05ff]+")
 
 
 def _strip_nikud(text: str) -> str:
     """Remove Hebrew nikud (diacritical marks) for fuzzy name matching."""
     return _NIKUD_RE.sub("", text)
+
+
+def _normalize_person_allowlist_value(text: str) -> str:
+    """Normalize a PERSON allowlist value for case-insensitive matching."""
+    return " ".join(_strip_nikud(text).casefold().split())
+
+
+def _person_allowlist_tokens(text: str) -> frozenset[str]:
+    """Return normalized tokens so allowlisted tools inside NER spans survive."""
+    return frozenset(
+        token
+        for token in (_normalize_person_allowlist_value(match.group(0)) for match in _ALLOWLIST_TOKEN_RE.finditer(text))
+        if token
+    )
 
 
 def _nikud_offset_map(original: str) -> list[int]:
@@ -146,6 +207,20 @@ class Sanitizer:
         self._pseudo_lock = threading.Lock()  # Thread-safe pseudonym access
         self._owner_re: Optional[re.Pattern[str]] = None
         self._known_names_re: Optional[re.Pattern[str]] = None
+        self._confirmed_person_names_re: Optional[re.Pattern[str]] = None
+        self._person_redaction_allowlist = frozenset(
+            normalized
+            for normalized in (
+                _normalize_person_allowlist_value(name) for name in self.config.person_redaction_allowlist
+            )
+            if normalized
+        )
+        single_token_allowlist: set[str] = set()
+        for name in self.config.person_redaction_allowlist:
+            tokens = _person_allowlist_tokens(name)
+            if len(tokens) == 1:
+                single_token_allowlist.update(tokens)
+        self._person_redaction_allowlist_tokens = frozenset(single_token_allowlist)
 
         self._build_owner_regex()
         self._build_known_names_regex()
@@ -169,13 +244,18 @@ class Sanitizer:
         Hebrew Unicode chars), uses lookahead/lookbehind on whitespace since
         \\b doesn't work reliably with Hebrew script.
         """
-        if not self.config.known_names:
+        self._known_names_re = self._compile_name_regex(self.config.known_names)
+        self._confirmed_person_names_re = self._compile_name_regex(self.config.confirmed_person_names)
+
+    def _compile_name_regex(self, names: frozenset[str]) -> Optional[re.Pattern[str]]:
+        """Build a compiled regex for a set of personal names."""
+        if not names:
             return
 
         latin_names: list[str] = []
         hebrew_names: list[str] = []
 
-        for name in sorted(self.config.known_names, key=len, reverse=True):
+        for name in sorted(names, key=len, reverse=True):
             name = name.strip()
             if not name or len(name) < 2:
                 continue
@@ -195,7 +275,8 @@ class Sanitizer:
             parts.append(r"(?:^|(?<=\s))(?:" + "|".join(hebrew_names) + r")(?=\s|$)")
 
         if parts:
-            self._known_names_re = re.compile("|".join(parts), re.IGNORECASE | re.MULTILINE)
+            return re.compile("|".join(parts), re.IGNORECASE | re.MULTILINE)
+        return None
 
     def _get_nlp(self):
         """Lazy-load spaCy model on first use."""
@@ -219,6 +300,17 @@ class Sanitizer:
                 h = hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
                 self._name_to_pseudo[key] = f"[PERSON_{h}]"
             return self._name_to_pseudo[key]
+
+    def _is_person_redaction_allowlisted(self, name: str) -> bool:
+        """Return True when a PERSON span should remain verbatim."""
+        normalized = _normalize_person_allowlist_value(name)
+        if normalized in self._person_redaction_allowlist:
+            return True
+        tokens = _person_allowlist_tokens(name)
+        if not tokens or not (tokens & self._person_redaction_allowlist_tokens):
+            return False
+        allowed_mixed_span_tokens = self._person_redaction_allowlist_tokens | _PERSON_ALLOWLIST_TOOL_DESCRIPTOR_TOKENS
+        return tokens <= allowed_mixed_span_tokens
 
     def sanitize(
         self,
@@ -347,13 +439,17 @@ class Sanitizer:
 
         # ── Layer 2: Known names dictionary ──
 
-        if self._known_names_re:
+        def _collect_name_dict_matches(
+            pattern: re.Pattern[str],
+            *,
+            allow_allowlist_skip: bool,
+        ) -> list[tuple[int, int, str, str, str]]:
             # Match against nikud-stripped text but replace in original
             text_no_nikud = _strip_nikud(text)
             if text_no_nikud != text:
                 # Hebrew text with nikud — match on stripped version, map positions back
                 omap = _nikud_offset_map(text)
-                name_matches = [
+                return [
                     (
                         omap[m.start()],
                         omap[m.end()],
@@ -361,13 +457,27 @@ class Sanitizer:
                         "person_name",
                         "name_dict",
                     )
-                    for m in self._known_names_re.finditer(text_no_nikud)
+                    for m in pattern.finditer(text_no_nikud)
+                    if not (allow_allowlist_skip and self._is_person_redaction_allowlisted(m.group(0)))
                 ]
-            else:
-                name_matches = [
-                    (m.start(), m.end(), self._pseudonym(m.group(0)), "person_name", "name_dict")
-                    for m in self._known_names_re.finditer(text)
-                ]
+            return [
+                (m.start(), m.end(), self._pseudonym(m.group(0)), "person_name", "name_dict")
+                for m in pattern.finditer(text)
+                if not (allow_allowlist_skip and self._is_person_redaction_allowlisted(m.group(0)))
+            ]
+
+        if self._confirmed_person_names_re:
+            name_matches = _collect_name_dict_matches(
+                self._confirmed_person_names_re,
+                allow_allowlist_skip=False,
+            )
+            text = _apply_replacements(text, name_matches)
+
+        if self._known_names_re:
+            name_matches = _collect_name_dict_matches(
+                self._known_names_re,
+                allow_allowlist_skip=True,
+            )
             text = _apply_replacements(text, name_matches)
 
         # ── Layer 3: spaCy NER (English names only) ──
@@ -389,6 +499,9 @@ class Sanitizer:
                     continue
                 # Skip very short entities (likely false positives)
                 if len(ent.text.strip()) < 3:
+                    continue
+                # Skip owner/tool/agent names that must remain searchable.
+                if self._is_person_redaction_allowlisted(ent.text):
                     continue
                 # Skip if already replaced
                 if any(s <= ent.start_char < e for s, e in replaced_spans):
@@ -467,7 +580,7 @@ class Sanitizer:
         """Extract unique sender names from WhatsApp chunks in the DB.
 
         Queries the chunks table for distinct sender values where source='whatsapp'.
-        Returns the set of names found (can be passed to SanitizeConfig.known_names).
+        Returns the set of names found (can be passed to SanitizeConfig.confirmed_person_names).
         """
         cursor = store.conn.cursor()
         rows = list(
@@ -533,6 +646,9 @@ class Sanitizer:
         extra_names = frozenset(
             n.strip() for n in os.environ.get("BRAINLAYER_SANITIZE_EXTRA_NAMES", "").split(",") if n.strip()
         )
+        person_redaction_allowlist = DEFAULT_PERSON_REDACTION_ALLOWLIST | frozenset(
+            n.strip() for n in os.environ.get("BRAINLAYER_REDACTION_ALLOWLIST", "").split(",") if n.strip()
+        )
         use_spacy = os.environ.get("BRAINLAYER_SANITIZE_USE_SPACY", "true").lower() in (
             "true",
             "1",
@@ -545,5 +661,6 @@ class Sanitizer:
             owner_paths=owner_paths,
             known_names=extra_names,
             use_spacy_ner=use_spacy,
+            person_redaction_allowlist=person_redaction_allowlist,
         )
         return cls(config)

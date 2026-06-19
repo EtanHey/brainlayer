@@ -27,6 +27,7 @@ import json
 import os
 import sqlite3
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -40,7 +41,7 @@ from .pipeline.enrichment import (
     build_prompt,
     parse_enrichment,
 )
-from .pipeline.sanitize import SanitizeConfig, Sanitizer
+from .pipeline.sanitize import Sanitizer
 from .vector_store import VectorStore
 
 # ── Config ──────────────────────────────────────────────────────────────
@@ -486,17 +487,9 @@ def _init_sanitizer(store: VectorStore) -> Sanitizer:
     if known_names:
         print(f"  Built name dictionary: {len(known_names)} names from WhatsApp contacts")
         # Rebuild sanitizer with the full name dictionary
-        new_config = SanitizeConfig(
-            owner_names=sanitizer.config.owner_names,
-            owner_emails=sanitizer.config.owner_emails,
-            owner_paths=sanitizer.config.owner_paths,
-            known_names=frozenset(known_names) | sanitizer.config.known_names,
-            strip_emails=sanitizer.config.strip_emails,
-            strip_ips=sanitizer.config.strip_ips,
-            strip_jwts=sanitizer.config.strip_jwts,
-            strip_op_refs=sanitizer.config.strip_op_refs,
-            strip_phone_numbers=sanitizer.config.strip_phone_numbers,
-            use_spacy_ner=sanitizer.config.use_spacy_ner,
+        new_config = replace(
+            sanitizer.config,
+            confirmed_person_names=frozenset(known_names) | sanitizer.config.confirmed_person_names,
         )
         sanitizer = Sanitizer(new_config)
 
