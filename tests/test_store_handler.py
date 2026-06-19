@@ -72,6 +72,28 @@ async def test_busy_queue_fallback_returns_loud_deferred_receipt(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_store_validates_before_busy_deferral(tmp_path):
+    """Busy before store_memory must not queue requests that validation would reject."""
+    from brainlayer.mcp.store_handler import _store
+
+    queue_dir = tmp_path / "queue"
+
+    with (
+        patch("brainlayer.mcp.store_handler._get_vector_store", side_effect=apsw.BusyError("database is locked")),
+        patch("brainlayer.queue_io.get_queue_dir", return_value=queue_dir),
+    ):
+        result = await _store(
+            content="invalid memory type should never be queued",
+            memory_type="invalid_type",
+            project="test",
+        )
+
+    assert result.isError is True
+    assert "Validation error" in result.content[0].text
+    assert not list(queue_dir.glob("mcp-*.jsonl"))
+
+
+@pytest.mark.asyncio
 async def test_store_busy_budget_defers_promptly_and_pending_flush_replays(tmp_path, monkeypatch):
     """A held write lock must hit the bounded store budget, defer, and replay later."""
     from brainlayer.mcp.store_handler import _flush_pending_stores, _store

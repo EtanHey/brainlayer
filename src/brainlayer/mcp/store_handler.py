@@ -699,6 +699,22 @@ def _get_store_vector_store(deadline: float):
         return _get_vector_store()
 
 
+def _validate_store_request(content: str, memory_type: str) -> str:
+    from ..ingest_guard import reject_recursive_mcp_output
+    from ..pipeline.classify import looks_like_system_prompt
+    from ..store import VALID_MEMORY_TYPES
+
+    if not content or not content.strip():
+        raise ValueError("content must be non-empty")
+    content = content.strip()
+    if memory_type not in VALID_MEMORY_TYPES:
+        raise ValueError(f"type must be one of: {', '.join(VALID_MEMORY_TYPES)}")
+    reject_recursive_mcp_output(content)
+    if looks_like_system_prompt(content):
+        raise ValueError("system prompt content is not stored in BrainLayer")
+    return content
+
+
 async def _store(
     content: str,
     memory_type: str,
@@ -725,20 +741,11 @@ async def _store(
     promised_chunk_id = _new_manual_chunk_id()
     reservation_created_at = datetime.now(timezone.utc).isoformat()
     try:
-        if os.environ.get("BRAINLAYER_ARBITRATED") == "1":
-            from ..ingest_guard import reject_recursive_mcp_output
-            from ..pipeline.classify import looks_like_system_prompt
-            from ..search_repo import clear_hybrid_search_cache
-            from ..store import VALID_MEMORY_TYPES
+        content = _validate_store_request(content, memory_type)
 
-            if not content or not content.strip():
-                raise ValueError("content must be non-empty")
-            content = content.strip()
-            if memory_type not in VALID_MEMORY_TYPES:
-                raise ValueError(f"type must be one of: {', '.join(VALID_MEMORY_TYPES)}")
-            reject_recursive_mcp_output(content)
-            if looks_like_system_prompt(content):
-                raise ValueError("system prompt content is not stored in BrainLayer")
+        if os.environ.get("BRAINLAYER_ARBITRATED") == "1":
+            from ..search_repo import clear_hybrid_search_cache
+
             queue_path = _queue_store(
                 {
                     "chunk_id": promised_chunk_id,
