@@ -354,6 +354,50 @@ class TestFlushPendingStores:
         assert queued.exists()
         assert "batch preserved" in log_path.read_text()
 
+    def test_drain_stops_after_forced_schema_bootstrap_writer_in_use(self, tmp_path, monkeypatch):
+        """A schema-blocked store file must stop later queue files from draining."""
+        from brainlayer.vector_store import WriterInUseError
+
+        db_path = tmp_path / "brainlayer.db"
+        queue_dir = tmp_path / "queue"
+        log_path = tmp_path / "drain.log"
+        queue_dir.mkdir()
+        monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("CREATE TABLE marker(id TEXT)")
+
+        first = queue_dir / "a-store-schema-contended.jsonl"
+        second = queue_dir / "b-store-must-wait.jsonl"
+        first_payload = {
+            "kind": "store_memory",
+            "chunk_id": "manual-schema-contended-1",
+            "content": "first store should preserve queue order",
+            "memory_type": "note",
+            "project": "test",
+        }
+        second_payload = {
+            "kind": "store_memory",
+            "chunk_id": "manual-schema-contended-2",
+            "content": "second store must not be attempted after first schema block",
+            "memory_type": "note",
+            "project": "test",
+        }
+        first.write_text(json.dumps(first_payload) + "\n")
+        second.write_text(json.dumps(second_payload) + "\n")
+        first_before = first.read_text()
+        second_before = second.read_text()
+
+        with patch(
+            "brainlayer.drain._ensure_drain_db_schema",
+            side_effect=WriterInUseError("another writer is using brainlayer.db (pid 123)"),
+        ) as ensure_schema:
+            drained = drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=2, log_path=log_path)
+
+        assert drained == 0
+        assert ensure_schema.call_count == 1
+        assert first.read_text() == first_before
+        assert second.read_text() == second_before
+
     def test_burn_drain_preserves_store_queue_when_schema_bootstrap_writer_in_use(self, tmp_path, monkeypatch):
         """Burn drain must preserve store files if first-run schema init is contended."""
         from brainlayer.vector_store import WriterInUseError
@@ -393,6 +437,50 @@ class TestFlushPendingStores:
         assert result.files_deleted == 0
         assert queued.exists()
         assert "batch preserved" in log_path.read_text()
+
+    def test_burn_drain_missing_chunks_retry_counts_events_once(self, tmp_path, monkeypatch):
+        """A failed first schema attempt must not inflate committed event counts."""
+        db_path = tmp_path / "brainlayer.db"
+        queue_dir = tmp_path / "queue"
+        log_path = tmp_path / "drain.log"
+        queue_dir.mkdir()
+        monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("CREATE TABLE marker(id TEXT)")
+
+        queued = queue_dir / "store-missing-chunks-retry.jsonl"
+        queued.write_text(
+            json.dumps({"kind": "unknown", "content": "noop counted only after commit"})
+            + "\n"
+            + json.dumps(
+                {
+                    "kind": "store_memory",
+                    "chunk_id": "manual-missing-chunks-retry",
+                    "content": "burn drain retry should count committed events once",
+                    "memory_type": "note",
+                    "project": "test",
+                }
+            )
+            + "\n"
+        )
+
+        result = burn_drain_once(
+            db_path=db_path,
+            queue_dir=queue_dir,
+            batch_size=1,
+            log_path=log_path,
+        )
+
+        assert result.applied_events == 2
+        assert result.failed_files == 0
+        assert result.files_deleted == 1
+        assert not queued.exists()
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT id FROM chunks WHERE id = ?",
+                ("manual-missing-chunks-retry",),
+            ).fetchone()
+        assert row == ("manual-missing-chunks-retry",)
 
     def test_flush_preserves_legacy_pending_chunk_id(self, tmp_path):
         """Legacy pending-stores flush must persist the caller-visible queued ID."""
