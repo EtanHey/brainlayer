@@ -64,6 +64,65 @@ def test_export_unenriched_chunks_disables_thinking(tmp_path, monkeypatch):
         store.close()
 
 
+def test_init_sanitizer_preserves_env_allowlist_when_adding_whatsapp_names(tmp_path, monkeypatch):
+    """DB-derived contact names should not discard env-extended redaction allowlist entries."""
+    export_dir = tmp_path / "exports"
+    monkeypatch.setattr(cloud_backfill, "EXPORT_DIR", export_dir)
+    monkeypatch.setenv("BRAINLAYER_SANITIZE_USE_SPACY", "false")
+    monkeypatch.setenv("BRAINLAYER_REDACTION_ALLOWLIST", "BrainLayerBot")
+
+    store = VectorStore(tmp_path / "backfill.db")
+    try:
+        cursor = store.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO chunks (id, content, metadata, source_file, project, content_type, char_count, source, sender)
+            VALUES (?, ?, '{}', 'whatsapp.jsonl', 'test-project', 'message', ?, 'whatsapp', ?)
+            """,
+            (
+                "contact-person",
+                "John Smith sent a long enough WhatsApp message to populate sanitizer contacts.",
+                70,
+                "John Smith",
+            ),
+        )
+
+        sanitizer = cloud_backfill._init_sanitizer(store)
+        result = sanitizer.sanitize("BrainLayerBot coordinated with John Smith.")
+
+        assert "BrainLayerBot" in sanitizer.config.person_redaction_allowlist
+        assert "BrainLayerBot" in result.sanitized
+        assert "John Smith" not in result.sanitized
+        assert "[PERSON_" in result.sanitized
+    finally:
+        store.close()
+
+
+def test_init_sanitizer_redacts_allowlisted_whatsapp_contact_names(tmp_path, monkeypatch):
+    """Confirmed DB contact names should redact even if their text matches a tool allowlist entry."""
+    export_dir = tmp_path / "exports"
+    monkeypatch.setattr(cloud_backfill, "EXPORT_DIR", export_dir)
+
+    store = VectorStore(tmp_path / "backfill.db")
+    try:
+        store.conn.cursor().execute(
+            """
+            INSERT INTO chunks (id, content, metadata, source_file, project, content_type, char_count, source, sender)
+            VALUES ('contact-claude', 'Claude sent a long enough WhatsApp message.', '{}',
+                    'whatsapp.jsonl', 'test-project', 'message', 43, 'whatsapp', 'Claude')
+            """
+        )
+
+        sanitizer = cloud_backfill._init_sanitizer(store)
+        result = sanitizer.sanitize("Claude sent a message.")
+
+        assert "Claude" not in result.sanitized
+        assert "[PERSON_" in result.sanitized
+        assert any(replacement.source == "name_dict" for replacement in result.replacements)
+    finally:
+        store.close()
+
+
 def test_estimate_batch_cost_uses_discounted_batch_rates():
     """Batch usage cost helper should apply the documented 50% discount."""
     cost = cloud_backfill.estimate_batch_cost_usd(1_000_000, 2_000_000)
