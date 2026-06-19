@@ -174,6 +174,20 @@ def _open_connection(db_path: Path) -> apsw.Connection:
     return conn
 
 
+def _ensure_drain_db_schema(db_path: Path) -> None:
+    from .vector_store import VectorStore
+
+    store = VectorStore(db_path)
+    store.close()
+
+
+def _db_needs_initial_schema(db_path: Path) -> bool:
+    try:
+        return not db_path.exists() or db_path.stat().st_size == 0
+    except OSError:
+        return False
+
+
 def _acquire_queue_lock(queue_dir: Path) -> int:
     fd = os.open(queue_dir, os.O_RDONLY)
     try:
@@ -310,6 +324,14 @@ def _event_payload(event: dict[str, Any]) -> dict[str, Any]:
     if "session_id" in event and "content" in event:
         return {"kind": "hook_chunk", **event}
     return {"kind": "unknown", **event}
+
+
+def _events_include_store(events: list[dict[str, Any]]) -> bool:
+    return any(_event_payload(event).get("kind") == "store_memory" for event in events)
+
+
+def _is_missing_chunks_error(exc: BaseException) -> bool:
+    return "no such table: chunks" in str(exc).lower()
 
 
 def _event_created_at(event: dict[str, Any]) -> str:
@@ -985,49 +1007,60 @@ def burn_drain_once(
             return result
 
         all_events = [event for _, events in batch for event in events]
-        conn = _open_connection(db_path)
-        try:
-            _ensure_enrichment_update_schema(conn)
-            conn.execute("BEGIN IMMEDIATE")
-            prefetched_state = _prefetch_enrichment_state(conn, all_events)
-            store_chunk_ids: list[str] = []
-            for _, events in batch:
-                for event in events:
-                    if _is_verified_redundant_enrichment(event, prefetched_state):
-                        payload = _event_payload(event)
-                        enqueue_provenance_resolution_for_entities(
-                            conn,
-                            payload.get("entities"),
-                            chunk_id=payload.get("chunk_id"),
-                            commit=False,
-                        )
-                        result.skipped_verified_stale += 1
-                        continue
-                    applied = _apply_event(conn, event)
-                    result.applied_events += 1
-                    if applied.chunk_id:
-                        store_chunk_ids.append(applied.chunk_id)
-            if _embedding_enabled():
-                _embed_store_chunks(conn, store_chunk_ids, embed_fn)
-            conn.execute("COMMIT")
-            conn.setbusytimeout(_checkpoint_busy_timeout_ms())
+        batch_includes_store = _events_include_store(all_events)
+        if batch_includes_store and _db_needs_initial_schema(db_path):
+            _ensure_drain_db_schema(db_path)
+        for schema_attempt in range(2):
+            conn = _open_connection(db_path)
             try:
-                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                result.checkpoints += 1
-            except apsw.Error as exc:
-                _log(log_path, f"burn drain checkpoint skipped: {exc}")
+                _ensure_enrichment_update_schema(conn)
+                conn.execute("BEGIN IMMEDIATE")
+                prefetched_state = _prefetch_enrichment_state(conn, all_events)
+                store_chunk_ids: list[str] = []
+                for _, events in batch:
+                    for event in events:
+                        if _is_verified_redundant_enrichment(event, prefetched_state):
+                            payload = _event_payload(event)
+                            enqueue_provenance_resolution_for_entities(
+                                conn,
+                                payload.get("entities"),
+                                chunk_id=payload.get("chunk_id"),
+                                commit=False,
+                            )
+                            result.skipped_verified_stale += 1
+                            continue
+                        applied = _apply_event(conn, event)
+                        result.applied_events += 1
+                        if applied.chunk_id:
+                            store_chunk_ids.append(applied.chunk_id)
+                if _embedding_enabled():
+                    _embed_store_chunks(conn, store_chunk_ids, embed_fn)
+                conn.execute("COMMIT")
+                conn.setbusytimeout(_checkpoint_busy_timeout_ms())
+                try:
+                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    result.checkpoints += 1
+                except apsw.Error as exc:
+                    _log(log_path, f"burn drain checkpoint skipped: {exc}")
+                finally:
+                    conn.setbusytimeout(_drain_busy_timeout_ms())
+                break
+            except Exception as exc:
+                try:
+                    conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+                if batch_includes_store and _is_missing_chunks_error(exc) and schema_attempt == 0:
+                    conn.close()
+                    conn = None
+                    _ensure_drain_db_schema(db_path)
+                    continue
+                result.failed_files = len(batch)
+                _log(log_path, f"burn drain failed; batch preserved: {exc}")
+                return result
             finally:
-                conn.setbusytimeout(_drain_busy_timeout_ms())
-        except Exception as exc:
-            try:
-                conn.execute("ROLLBACK")
-            except Exception:
-                pass
-            result.failed_files = len(batch)
-            _log(log_path, f"burn drain failed; batch preserved: {exc}")
-            return result
-        finally:
-            conn.close()
+                if conn is not None:
+                    conn.close()
 
         for path, _events in batch:
             try:
@@ -1086,6 +1119,9 @@ def drain_once(
                 continue
             events_to_apply = events[: _max_events_per_transaction()]
             remaining_events = events[len(events_to_apply) :]
+            events_include_store = _events_include_store(events_to_apply)
+            if events_include_store and _db_needs_initial_schema(db_path):
+                _ensure_drain_db_schema(db_path)
 
             for attempt in range(5):
                 conn: apsw.Connection | None = None
@@ -1145,6 +1181,12 @@ def drain_once(
                         delay = 0.05 * (2**attempt)
                         _log(log_path, f"drain busy; retrying in {delay:.2f}s")
                         time.sleep(delay)
+                        continue
+                    if events_include_store and _is_missing_chunks_error(exc) and attempt < 4:
+                        if conn is not None:
+                            conn.close()
+                            conn = None
+                        _ensure_drain_db_schema(db_path)
                         continue
                     _log(log_path, f"drain failed for {path.name}: {exc}")
                     break

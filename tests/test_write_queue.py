@@ -284,6 +284,42 @@ class TestFlushPendingStores:
         assert flushed == 1
         assert not pending_path.exists()  # File deleted after full flush
 
+    def test_drain_store_event_initializes_missing_schema(self, tmp_path, monkeypatch):
+        """Queued store replay must recover if the first store deferred before schema init."""
+        db_path = tmp_path / "brainlayer.db"
+        queue_dir = tmp_path / "queue"
+        log_path = tmp_path / "drain.log"
+        queue_dir.mkdir()
+        monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+
+        queued = queue_dir / "store-fresh-schema.jsonl"
+        queued.write_text(
+            json.dumps(
+                {
+                    "kind": "store_memory",
+                    "chunk_id": "manual-fresh-schema",
+                    "content": "fresh queued store should create schema before replay",
+                    "memory_type": "note",
+                    "project": "test",
+                    "created_at": "2026-06-19T08:54:00Z",
+                }
+            )
+            + "\n"
+        )
+
+        assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=log_path) == 1
+        assert not queued.exists()
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT id, content, project FROM chunks WHERE id = ?",
+                ("manual-fresh-schema",),
+            ).fetchone()
+        assert row == (
+            "manual-fresh-schema",
+            "fresh queued store should create schema before replay",
+            "test",
+        )
+
     def test_flush_preserves_legacy_pending_chunk_id(self, tmp_path):
         """Legacy pending-stores flush must persist the caller-visible queued ID."""
         pending_path = tmp_path / "pending-stores.jsonl"
