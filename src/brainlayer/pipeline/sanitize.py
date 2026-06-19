@@ -114,7 +114,9 @@ class SanitizeConfig:
     owner_names: tuple[str, ...] = ()
     owner_emails: tuple[str, ...] = ()
     owner_paths: tuple[str, ...] = ()
+    # General dictionaries may include tool/agent false positives and honor the PERSON allowlist.
     known_names: frozenset[str] = frozenset()
+    # Explicit PII dictionaries always redact, even when a name collides with the allowlist.
     confirmed_person_names: frozenset[str] = frozenset()
     strip_emails: bool = True
     strip_ips: bool = True
@@ -659,7 +661,7 @@ class Sanitizer:
             owner_names=owner_names,
             owner_emails=owner_emails,
             owner_paths=owner_paths,
-            known_names=extra_names,
+            confirmed_person_names=extra_names,
             use_spacy_ner=use_spacy,
             person_redaction_allowlist=person_redaction_allowlist,
         )
