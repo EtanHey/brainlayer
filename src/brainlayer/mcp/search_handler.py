@@ -3,6 +3,7 @@
 import asyncio
 import glob
 import json
+import math
 import os
 import platform
 import re
@@ -69,16 +70,9 @@ def _embed_timeout_ms() -> float:
         value = float(raw)
     except (TypeError, ValueError):
         return _DEFAULT_EMBED_TIMEOUT_MS
-    if not value or value < 0:
+    if not math.isfinite(value) or value <= 0:
         return _DEFAULT_EMBED_TIMEOUT_MS
     return min(value, 30_000.0)
-
-
-def _embed_query_and_release(query: str) -> list[float]:
-    try:
-        return _get_embedding_model().embed_query(query)
-    finally:
-        _EMBED_IN_FLIGHT.release()
 
 
 def _origin_candidate_count(num_results: int) -> int:
@@ -1805,14 +1799,46 @@ async def _search(
                 fallback="fts_only",
             )
         else:
+            embed_state = {"started": False, "released": False}
+            embed_state_lock = threading.Lock()
+
+            def release_embed_lock_once() -> None:
+                should_release = False
+                with embed_state_lock:
+                    if not embed_state["released"]:
+                        embed_state["released"] = True
+                        should_release = True
+                if should_release:
+                    _EMBED_IN_FLIGHT.release()
+
+            def release_if_embed_never_started() -> None:
+                should_release = False
+                with embed_state_lock:
+                    if not embed_state["started"] and not embed_state["released"]:
+                        embed_state["released"] = True
+                        should_release = True
+                if should_release:
+                    _EMBED_IN_FLIGHT.release()
+
+            def embed_query_guarded() -> list[float] | None:
+                with embed_state_lock:
+                    if embed_state["released"]:
+                        return None
+                    embed_state["started"] = True
+                try:
+                    return _get_embedding_model().embed_query(query)
+                finally:
+                    release_embed_lock_once()
+
             try:
                 try:
-                    embed_future = loop.run_in_executor(None, _embed_query_and_release, query)
+                    embed_future = loop.run_in_executor(None, embed_query_guarded)
                 except Exception:
-                    _EMBED_IN_FLIGHT.release()
+                    release_embed_lock_once()
                     raise
                 query_embedding = await asyncio.wait_for(embed_future, timeout=embed_timeout_ms / 1000.0)
             except TimeoutError as exc:
+                release_if_embed_never_started()
                 search_mode = "fts_only"
                 fallback_reason = "embed_timeout"
                 search_profile.emit(

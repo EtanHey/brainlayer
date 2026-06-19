@@ -136,6 +136,12 @@ class TestPollutionFiltering:
 
 
 class TestSearchFallback:
+    def _wait_for_hybrid_release(self, prompt_search, timeout_s: float = 1.0):
+        deadline = time.monotonic() + timeout_s
+        while prompt_search.HYBRID_IN_FLIGHT.locked() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert not prompt_search.HYBRID_IN_FLIGHT.locked()
+
     def test_fallback_to_fts_only(self, prompt_search, monkeypatch):
         fts_rows = [_row("fts-best", 0.0)]
 
@@ -181,7 +187,7 @@ class TestSearchFallback:
             assert used_hybrid is False
             assert [row["id"] for row in rows] == ["fts-timeout"]
         finally:
-            time.sleep(0.06)
+            self._wait_for_hybrid_release(prompt_search)
 
     def test_timed_out_hybrid_search_does_not_spawn_parallel_workers(self, prompt_search, monkeypatch):
         fts_rows = [_row("fts-busy", 0.0)]
@@ -217,7 +223,14 @@ class TestSearchFallback:
             assert [row["id"] for row in rows1] == ["fts-busy"]
             assert [row["id"] for row in rows2] == ["fts-busy"]
         finally:
-            time.sleep(0.25)
+            self._wait_for_hybrid_release(prompt_search)
+
+    def test_embed_timeout_rejects_non_finite_values(self, prompt_search, monkeypatch):
+        monkeypatch.setenv("BRAINLAYER_EMBED_TIMEOUT_MS", "nan")
+        assert prompt_search.embed_timeout_ms() == 1000.0
+
+        monkeypatch.setenv("BRAINLAYER_EMBED_TIMEOUT_MS", "inf")
+        assert prompt_search.embed_timeout_ms() == 1000.0
 
     def test_fast_hybrid_search_stays_on_hybrid_path(self, prompt_search, monkeypatch):
         hybrid_rows = [_row("hybrid-best", 0.02)]

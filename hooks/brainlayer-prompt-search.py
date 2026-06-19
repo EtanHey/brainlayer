@@ -12,6 +12,7 @@ Target: <500ms total.
 """
 
 import json
+import math
 import os
 import queue
 import re
@@ -54,7 +55,7 @@ def embed_timeout_ms():
         value = float(raw)
     except (TypeError, ValueError):
         return DEFAULT_EMBED_TIMEOUT_MS
-    if not value or value < 0:
+    if not math.isfinite(value) or value <= 0:
         return DEFAULT_EMBED_TIMEOUT_MS
     return min(value, 30_000.0)
 
