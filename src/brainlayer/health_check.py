@@ -399,10 +399,9 @@ def run_health_check(
         command_runner=command_runner,
     )
     if result.missing_vectors is not None or heal_failures:
-        state_payload: dict[str, Any] = {
-            "heal_failures": heal_failures,
-            "ts": now.isoformat(),
-        }
+        state_payload: dict[str, Any] = dict(state)
+        state_payload["heal_failures"] = heal_failures
+        state_payload["ts"] = now.isoformat()
         if result.missing_vectors is not None:
             state_payload["missing_vectors"] = result.missing_vectors
             state_payload["stalled_ticks"] = result.stalled_ticks

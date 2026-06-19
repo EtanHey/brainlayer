@@ -192,6 +192,41 @@ def test_missing_embeddings_climb_resets_stall_counter(tmp_path):
     assert saved["stalled_ticks"] == 0
 
 
+def test_heal_state_write_preserves_missing_vector_history_when_count_fails(tmp_path):
+    state_path = tmp_path / "health-state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "missing_vectors": 7,
+                "stalled_ticks": 1,
+                "ts": "2026-06-19T04:25:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_health_check(
+        HealthCheckConfig(
+            db_path=tmp_path / "missing" / "brainlayer.db",
+            state_path=state_path,
+            heal=True,
+        ),
+        ps_output_fn=lambda: (
+            "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 0 --enrich-limit 25\n"
+        ),
+        socket_request_fn=_ok_canary,
+        command_runner=lambda _args: None,
+        now_fn=lambda: datetime(2026, 6, 19, 4, 30, tzinfo=UTC),
+    )
+
+    assert result.ok is False
+    assert "missing_embeddings_count_failed" in [issue.code for issue in result.issues]
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+    assert saved["missing_vectors"] == 7
+    assert saved["stalled_ticks"] == 1
+    assert saved["heal_failures"]["hotlane_backlog_disabled"] == 1
+
+
 def test_brainbar_canary_error_waits_until_repeated_failure_to_kickstart_brainbar(tmp_path):
     db_path = tmp_path / "brainlayer.db"
     state_path = tmp_path / "health-state.json"
