@@ -1088,7 +1088,9 @@ async def _brain_search_dispatch(
             brainbar_helper_fast_profile=brainbar_helper_fast_profile,
         )
 
-    if _query_signals_current_context(query):
+    allow_smart_route = order == "relevance"
+
+    if allow_smart_route and _query_signals_current_context(query):
         ctx = await _current_context(hours=24, project=project, consumer_scope=consumer_scope)
         think_result = await _think(
             context=query,
@@ -1109,7 +1111,7 @@ async def _brain_search_dispatch(
             merged_text.extend(think_result)
         return merged_text
 
-    if _query_signals_think(query):
+    if allow_smart_route and _query_signals_think(query):
         return await _think(
             context=query,
             project=project,
@@ -1119,7 +1121,7 @@ async def _brain_search_dispatch(
             consumer_scope=consumer_scope,
         )
 
-    if _query_signals_recall(query):
+    if allow_smart_route and _query_signals_recall(query):
         return await _recall(
             topic=query,
             project=project,

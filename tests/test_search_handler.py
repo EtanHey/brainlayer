@@ -244,6 +244,47 @@ async def test_brain_search_origin_order_sorts_entity_route_chunks(monkeypatch):
     assert "- Order: origin" in origin_content[0].text
 
 
+@pytest.mark.parametrize(
+    ("signal_name", "handler_name"),
+    [
+        ("_query_signals_current_context", "_current_context"),
+        ("_query_signals_think", "_think"),
+        ("_query_signals_recall", "_recall"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_brain_search_origin_order_bypasses_smart_routes(monkeypatch, signal_name, handler_name):
+    store = RecordingSearchStore()
+
+    async def fail_smart_route(*_args, **_kwargs):
+        raise AssertionError("origin order must stay on search route")
+
+    monkeypatch.setattr("brainlayer.mcp.search_handler._helper_route_enabled", lambda: False)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: store)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_embedding_model", lambda: FakeEmbeddingModel())
+    monkeypatch.setattr("brainlayer.mcp.search_handler._expanded_fts_query", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._exact_chunk_lookup_result", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._detect_entities", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("brainlayer.mcp.search_handler._normalize_project_name", lambda project: project)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._query_signals_current_context", lambda _query: False)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._query_signals_think", lambda _query: False)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._query_signals_recall", lambda _query: False)
+    monkeypatch.setattr(f"brainlayer.mcp.search_handler.{signal_name}", lambda _query: True)
+    monkeypatch.setattr(f"brainlayer.mcp.search_handler.{handler_name}", fail_smart_route)
+
+    _content, structured = await _brain_search(
+        query="how did I implement auth originmarker",
+        project="brainlayer",
+        source="all",
+        num_results=1,
+        order="origin",
+        allow_helper_route=False,
+    )
+
+    assert store.hybrid_kwargs is not None
+    assert structured["order"] == "origin"
+
+
 @pytest.mark.asyncio
 async def test_brain_search_threads_fail_closed_worker_consumer_scope_when_env_unset(monkeypatch):
     store = RecordingSearchStore()
