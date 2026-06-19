@@ -783,14 +783,14 @@ private struct BrainBarSignalCoveragePanel: View {
 
     @ViewBuilder
     private var signalBars: some View {
-        if compact {
-            VStack(spacing: 8) {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: compact ? 8 : 10) {
                 ForEach(signals) { signal in
                     signalRow(for: signal)
                 }
             }
-        } else {
-            HStack(alignment: .top, spacing: 10) {
+
+            VStack(spacing: 8) {
                 ForEach(signals) { signal in
                     signalRow(for: signal)
                 }
@@ -814,8 +814,10 @@ private struct BrainBarSignalCoveragePanel: View {
             }
             .buttonStyle(.plain)
             .help("Show Vector backlog details")
+            .frame(minWidth: compact ? 150 : 170, maxWidth: .infinity, alignment: .leading)
         } else {
             BrainBarSignalCoverageRow(signal: signal, compact: compact, isSelected: false)
+                .frame(minWidth: compact ? 150 : 170, maxWidth: .infinity, alignment: .leading)
         }
     }
 }
@@ -916,6 +918,7 @@ private struct BrainBarVectorSignalDetail: View {
         }
         .padding(.vertical, compact ? 12 : 14)
         .padding(.horizontal, compact ? 12 : 16)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: BrainBarDesignTokens.Radius.md, style: .continuous)
                 .fill(signal.accentColor.opacity(0.08))
