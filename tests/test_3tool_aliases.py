@@ -121,6 +121,18 @@ class TestBrainRecallSearchMode:
         assert call_kwargs["num_results"] == 10
         assert call_kwargs["detail"] == "full"
 
+    def test_search_mode_passes_order(self):
+        """mode=search passes order through to brain_search."""
+        with patch(
+            "brainlayer.mcp.search_handler._brain_search",
+            new_callable=AsyncMock,
+            return_value=MagicMock(),
+        ) as mock_search:
+            asyncio.run(_brain_recall(mode="search", query="auth origin", order="origin"))
+
+        call_kwargs = mock_search.call_args[1]
+        assert call_kwargs["order"] == "origin"
+
     def test_search_mode_requires_query(self):
         """mode=search without query returns error."""
         result = asyncio.run(_brain_recall(mode="search", query=None))
@@ -442,6 +454,18 @@ class TestToolsListBackwardCompat:
         tools = asyncio.run(list_tools())
         recall_tool = next(t for t in tools if t.name == "brain_recall")
         assert "query" in recall_tool.inputSchema["properties"]
+
+    def test_brain_recall_search_schema_has_order_param(self):
+        """brain_recall search mode exposes origin ordering like brain_search."""
+        from brainlayer.mcp import list_tools
+
+        tools = asyncio.run(list_tools())
+        recall_tool = next(t for t in tools if t.name == "brain_recall")
+        order = recall_tool.inputSchema["properties"]["order"]
+
+        assert order["type"] == "string"
+        assert order["enum"] == ["relevance", "origin"]
+        assert order["default"] == "relevance"
 
 
 # ── Edge cases ────────────────────────────────────────────────────────────────

@@ -1028,6 +1028,7 @@ class SearchMixin:
         include_archived: bool = False,
         include_checkpoints: bool = False,
         source_filter_like: Optional[str] = None,
+        source_file_filter_like: Optional[str] = None,
         correction_category: Optional[str] = None,
         include_audit: bool = False,
         include_operational: bool = False,
@@ -1095,6 +1096,9 @@ class SearchMixin:
             if source_filter_like:
                 where_clauses.append("c.source LIKE ?")
                 filter_params.append(source_filter_like)
+            if source_file_filter_like:
+                where_clauses.append("c.source_file LIKE ? ESCAPE '\\'")
+                filter_params.append(source_file_filter_like)
             if correction_category:
                 where_clauses.append("c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
                 filter_params.append(f"correction:{correction_category}%")
@@ -1135,6 +1139,7 @@ class SearchMixin:
                 entity_id
                 or (source_filter and source_filter != "claude_code")
                 or source_filter_like
+                or source_file_filter_like
                 or correction_category
             )
             effective_k = self._effective_knn_k(n_results, bool(needs_overfetch), include_checkpoints, include_audit)
@@ -1212,6 +1217,9 @@ class SearchMixin:
             if source_filter_like:
                 where_clauses.append("source LIKE ?")
                 params.append(source_filter_like)
+            if source_file_filter_like:
+                where_clauses.append("source_file LIKE ? ESCAPE '\\'")
+                params.append(source_file_filter_like)
             if correction_category:
                 where_clauses.append("id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
                 params.append(f"correction:{correction_category}%")
@@ -1457,6 +1465,7 @@ class SearchMixin:
         include_archived: bool = False,
         include_checkpoints: bool = False,
         source_filter_like: Optional[str] = None,
+        source_file_filter_like: Optional[str] = None,
         correction_category: Optional[str] = None,
         include_audit: bool = False,
         include_operational: bool = False,
@@ -1514,6 +1523,9 @@ class SearchMixin:
         if source_filter_like:
             where_clauses.append("c.source LIKE ?")
             filter_params.append(source_filter_like)
+        if source_file_filter_like:
+            where_clauses.append("c.source_file LIKE ? ESCAPE '\\'")
+            filter_params.append(source_file_filter_like)
         if correction_category:
             where_clauses.append("c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
             filter_params.append(f"correction:{correction_category}%")
@@ -1547,7 +1559,11 @@ class SearchMixin:
             where_sql = "AND " + " AND ".join(where_clauses)
 
         needs_overfetch = (
-            entity_id or (source_filter and source_filter != "claude_code") or source_filter_like or correction_category
+            entity_id
+            or (source_filter and source_filter != "claude_code")
+            or source_filter_like
+            or source_file_filter_like
+            or correction_category
         )
         if brainbar_helper_fast_profile:
             effective_k = min(max(n_results, _BRAINBAR_HELPER_FAST_K), _SQLITE_VEC_MAX_K)
@@ -1717,6 +1733,7 @@ class SearchMixin:
         include_checkpoints: bool = False,
         kg_boost: bool = False,
         source_filter_like: Optional[str] = None,
+        source_file_filter_like: Optional[str] = None,
         correction_category: Optional[str] = None,
         filter_meta_noise: bool = True,
         include_audit: bool = False,
@@ -1774,6 +1791,7 @@ class SearchMixin:
             fts_query_override,
             kg_boost,
             source_filter_like,
+            source_file_filter_like,
             correction_category,
             filter_meta_noise,
             brainbar_helper_fast_profile,
@@ -1814,6 +1832,7 @@ class SearchMixin:
                 include_archived=include_archived,
                 include_checkpoints=include_checkpoints,
                 source_filter_like=source_filter_like,
+                source_file_filter_like=source_file_filter_like,
                 correction_category=correction_category,
                 include_audit=include_audit,
                 include_operational=include_operational,
@@ -1859,6 +1878,7 @@ class SearchMixin:
                 include_archived=include_archived,
                 include_checkpoints=include_checkpoints,
                 source_filter_like=source_filter_like,
+                source_file_filter_like=source_file_filter_like,
                 correction_category=correction_category,
                 include_audit=include_audit,
                 include_operational=include_operational,
@@ -1932,6 +1952,9 @@ class SearchMixin:
             if source_filter_like:
                 fts_extra.append("AND c.source LIKE ?")
                 fts_filter_params.append(source_filter_like)
+            if source_file_filter_like:
+                fts_extra.append("AND c.source_file LIKE ? ESCAPE '\\'")
+                fts_filter_params.append(source_file_filter_like)
             if correction_category:
                 fts_extra.append("AND c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
                 fts_filter_params.append(f"correction:{correction_category}%")
@@ -2120,6 +2143,9 @@ class SearchMixin:
             if source_filter_like:
                 recent_extra.append("AND source LIKE ?")
                 recent_params.append(source_filter_like)
+            if source_file_filter_like:
+                recent_extra.append("AND source_file LIKE ? ESCAPE '\\'")
+                recent_params.append(source_file_filter_like)
             if correction_category:
                 recent_extra.append("AND id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
                 recent_params.append(f"correction:{correction_category}%")

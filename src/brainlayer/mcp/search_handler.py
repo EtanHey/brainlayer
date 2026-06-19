@@ -26,8 +26,12 @@ from ..search_repo import _is_audit_recursion_metadata, _metadata_matches_projec
 _RETRY_MAX_ATTEMPTS = 3
 _retry_delay = 0.1  # base delay in seconds (exposed for test patching)
 _VALID_SEARCH_DETAILS = frozenset({"compact", "full"})
+_VALID_SEARCH_ORDERS = frozenset({"relevance", "origin"})
 _MAX_PUBLIC_NUM_RESULTS = 100
 _MIN_PUBLIC_NUM_RESULTS = 1
+_ORIGIN_CANDIDATE_LIMIT = 100
+_ORIGIN_ORDER_SCOPE = "expanded_hybrid_candidates"
+_ORIGIN_ORDER_LABEL = "- Order: origin (earliest among expanded hybrid candidates)"
 _HELPER_SOCKET_GLOB = "/tmp/brainbar-hybrid-*.sock"
 _HELPER_SOCKET_TIMEOUT_SECONDS = 2.0
 
@@ -54,6 +58,46 @@ from ._shared import (
 def _get_vector_store():
     """Compatibility hook for tests; search handlers use the readonly store by default."""
     return _get_search_vector_store()
+
+
+def _origin_candidate_count(num_results: int) -> int:
+    return min(_MAX_PUBLIC_NUM_RESULTS, max(num_results, _ORIGIN_CANDIDATE_LIMIT))
+
+
+def _created_at_origin_key(meta: dict[str, Any], index: int) -> tuple[int, float | str, int]:
+    created_at = meta.get("created_at") if isinstance(meta, dict) else None
+    if isinstance(created_at, str) and created_at:
+        try:
+            parsed = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return (0, parsed.timestamp(), index)
+        except (TypeError, ValueError, OverflowError):
+            return (1, created_at, index)
+    return (2, "", index)
+
+
+def _sort_hybrid_results_by_origin(results: dict[str, list], num_results: int) -> dict[str, list]:
+    rows = [
+        (index, chunk_id, document, metadata, distance)
+        for index, (chunk_id, document, metadata, distance) in enumerate(
+            zip(
+                results.get("ids", [[]])[0],
+                results.get("documents", [[]])[0],
+                results.get("metadatas", [[]])[0],
+                results.get("distances", [[]])[0],
+            )
+        )
+    ]
+    rows.sort(key=lambda row: _created_at_origin_key(row[3], row[0]))
+    rows = rows[:num_results]
+
+    ordered = dict(results)
+    ordered["ids"] = [[row[1] for row in rows]]
+    ordered["documents"] = [[row[2] for row in rows]]
+    ordered["metadatas"] = [[row[3] for row in rows]]
+    ordered["distances"] = [[row[4] for row in rows]]
+    return ordered
 
 
 def _is_sqlite_vec_knn_error(exc: Exception) -> bool:
@@ -734,6 +778,7 @@ async def _brain_search(
     entity_id: str | None = None,
     agent_id: str | None = None,
     num_results: int = 5,
+    order: str = "relevance",
     before: int = 3,
     after: int = 3,
     max_results: int = 10,
@@ -756,6 +801,7 @@ async def _brain_search(
     try:
         if (
             allow_helper_route
+            and order == "relevance"
             and _helper_route_enabled()
             and _should_try_helper_route(
                 query,
@@ -823,6 +869,7 @@ async def _brain_search(
             entity_id=entity_id,
             agent_id=agent_id,
             num_results=num_results,
+            order=order,
             before=before,
             after=after,
             max_results=max_results,
@@ -858,6 +905,7 @@ async def _brain_search_dispatch(
     entity_id: str | None = None,
     agent_id: str | None = None,
     num_results: int = 5,
+    order: str = "relevance",
     before: int = 3,
     after: int = 3,
     max_results: int = 10,
@@ -874,6 +922,8 @@ async def _brain_search_dispatch(
 ):
     if detail not in _VALID_SEARCH_DETAILS:
         return _error_result(f"Invalid detail='{detail}'. Must be one of: {sorted(_VALID_SEARCH_DETAILS)}")
+    if order not in _VALID_SEARCH_ORDERS:
+        return _error_result(f"Invalid order='{order}'. Must be one of: {sorted(_VALID_SEARCH_ORDERS)}")
     if num_results < _MIN_PUBLIC_NUM_RESULTS or num_results > _MAX_PUBLIC_NUM_RESULTS:
         return _error_result(
             f"num_results={num_results} must be between {_MIN_PUBLIC_NUM_RESULTS} and {_MAX_PUBLIC_NUM_RESULTS}"
@@ -909,6 +959,7 @@ async def _brain_search_dispatch(
             entity_id=entity_id,
             agent_id=agent_id,
             detail=detail,
+            order=order,
             source_filter_like=source_filter,
             correction_category=correction_category,
             include_checkpoints=include_checkpoints,
@@ -970,7 +1021,10 @@ async def _brain_search_dispatch(
             consumer_scope=consumer_scope,
         )
 
-    if file_path is not None and _query_has_regression_signal(query):
+    allow_file_route = order == "relevance"
+    origin_file_path = file_path if order == "origin" else None
+
+    if allow_file_route and file_path is not None and _query_has_regression_signal(query):
         regression_result = await _regression(file_path=file_path, project=project, consumer_scope=consumer_scope)
         recall_result = await _recall(
             file_path=file_path,
@@ -989,7 +1043,7 @@ async def _brain_search_dispatch(
             merged_text.extend(recall_result)
         return merged_text
 
-    if file_path is not None:
+    if allow_file_route and file_path is not None:
         timeline = await _file_timeline(file_path=file_path, project=project, limit=50, consumer_scope=consumer_scope)
         recall_result = await _recall(
             file_path=file_path,
@@ -1010,35 +1064,40 @@ async def _brain_search_dispatch(
 
     extracted_file = _extract_file_path(query)
     if extracted_file:
-        return await _brain_search(
-            query=query,
-            project=project,
-            consumer=consumer,
-            file_path=extracted_file,
-            content_type=content_type,
-            source=source,
-            tag=tag,
-            intent=intent,
-            importance_min=importance_min,
-            date_from=date_from,
-            date_to=date_to,
-            sentiment=sentiment,
-            agent_id=agent_id,
-            num_results=num_results,
-            max_results=max_results,
-            detail=detail,
-            source_filter=source_filter,
-            correction_category=correction_category,
-            include_checkpoints=include_checkpoints,
-            include_audit=include_audit,
-            include_operational=include_operational,
-            content_class_filter=content_class_filter,
-            profile_query_id=profile_query_id,
-            profile_scope=profile_scope,
-            brainbar_helper_fast_profile=brainbar_helper_fast_profile,
-        )
+        if allow_file_route:
+            return await _brain_search(
+                query=query,
+                project=project,
+                consumer=consumer,
+                file_path=extracted_file,
+                content_type=content_type,
+                source=source,
+                tag=tag,
+                intent=intent,
+                importance_min=importance_min,
+                date_from=date_from,
+                date_to=date_to,
+                sentiment=sentiment,
+                agent_id=agent_id,
+                num_results=num_results,
+                order=order,
+                max_results=max_results,
+                detail=detail,
+                source_filter=source_filter,
+                correction_category=correction_category,
+                include_checkpoints=include_checkpoints,
+                include_audit=include_audit,
+                include_operational=include_operational,
+                content_class_filter=content_class_filter,
+                profile_query_id=profile_query_id,
+                profile_scope=profile_scope,
+                brainbar_helper_fast_profile=brainbar_helper_fast_profile,
+            )
+        origin_file_path = origin_file_path or extracted_file
 
-    if _query_signals_current_context(query):
+    allow_smart_route = order == "relevance"
+
+    if allow_smart_route and _query_signals_current_context(query):
         ctx = await _current_context(hours=24, project=project, consumer_scope=consumer_scope)
         think_result = await _think(
             context=query,
@@ -1059,7 +1118,7 @@ async def _brain_search_dispatch(
             merged_text.extend(think_result)
         return merged_text
 
-    if _query_signals_think(query):
+    if allow_smart_route and _query_signals_think(query):
         return await _think(
             context=query,
             project=project,
@@ -1069,7 +1128,7 @@ async def _brain_search_dispatch(
             consumer_scope=consumer_scope,
         )
 
-    if _query_signals_recall(query):
+    if allow_smart_route and _query_signals_recall(query):
         return await _recall(
             topic=query,
             project=project,
@@ -1105,6 +1164,7 @@ async def _brain_search_dispatch(
     if exact_chunk_hit is not None:
         return exact_chunk_hit
     fts_query_override = _expanded_fts_query(query, store)
+    source_file_filter_like = _source_file_like_pattern(origin_file_path)
 
     # Entity-aware routing: detect known entity names in query.
     # Path 1: Pure SQL KG lookup (no embeddings, always works).
@@ -1123,6 +1183,7 @@ async def _brain_search_dispatch(
             source_filter,
             correction_category,
             content_class_filter,
+            source_file_filter_like,
         ]
     )
     detected_entities = _detect_entities(query, store) if not has_active_filters else []
@@ -1162,11 +1223,12 @@ async def _brain_search_dispatch(
             loop = asyncio.get_running_loop()
             model = _get_embedding_model()
             query_embedding = await loop.run_in_executor(None, model.embed_query, query)
+            kg_n_results = _origin_candidate_count(num_results) if order == "origin" else num_results
 
             kg_results = store.kg_hybrid_search(
                 query_embedding=query_embedding,
                 query_text=query,
-                n_results=num_results,
+                n_results=kg_n_results,
                 entity_name=entity_name,
                 project_filter=normalized_project,
                 include_checkpoints=include_checkpoints,
@@ -1178,6 +1240,8 @@ async def _brain_search_dispatch(
                 consumer_scope=consumer_scope,
             )
             chunk_results = kg_results.get("chunks", {})
+            if order == "origin" and chunk_results.get("ids") and chunk_results["ids"][0]:
+                chunk_results = _sort_hybrid_results_by_origin(chunk_results, num_results)
 
             if chunk_results.get("ids") and chunk_results["ids"][0]:
                 for cid, doc, meta, dist in zip(
@@ -1247,10 +1311,15 @@ async def _brain_search_dispatch(
                 "results": structured_results,
                 "facts": fact_items,
             }
+            if order == "origin":
+                structured["order"] = order
+                structured["order_scope"] = _ORIGIN_ORDER_SCOPE
             if kg_degraded:
                 structured["kg_degraded"] = True
                 structured["kg_degrade_reason"] = kg_degrade_reason
             formatted_text = format_kg_search(entity_name, structured_results, fact_items, query)
+            if order == "origin":
+                formatted_text += f"\n{_ORIGIN_ORDER_LABEL}"
             if kg_degraded:
                 formatted_text += f"\n⚠ KG search degraded — reason={kg_degrade_reason} — showing SQL-only results"
             return ([TextContent(type="text", text=formatted_text)], structured)
@@ -1290,8 +1359,10 @@ async def _brain_search_dispatch(
         date_to=date_to,
         sentiment=sentiment,
         detail=detail,
+        order=order,
         fts_query_override=fts_query_override,
         source_filter_like=source_filter,
+        source_file_filter_like=source_file_filter_like,
         correction_category=correction_category,
         include_checkpoints=include_checkpoints,
         include_audit=include_audit,
@@ -1309,6 +1380,12 @@ async def _brain_search_dispatch(
 def _escape_like_pattern(value: str) -> str:
     """Escape user text for a literal SQLite LIKE pattern."""
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _source_file_like_pattern(file_path: str | None) -> str | None:
+    if not file_path:
+        return None
+    return f"%{_escape_like_pattern(file_path)}%"
 
 
 async def _execute_resume_query_with_retry(store: Any, query: str, params: list[Any]) -> list:
@@ -1493,6 +1570,7 @@ async def _brain_recall(
     entity_id: str | None = None,
     agent_id: str | None = None,
     num_results: int = 5,
+    order: str = "relevance",
     before: int = 3,
     after: int = 3,
     max_results: int = 10,
@@ -1575,6 +1653,7 @@ async def _brain_recall(
             entity_id=entity_id,
             agent_id=agent_id,
             num_results=num_results,
+            order=order,
             before=before,
             after=after,
             max_results=max_results,
@@ -1635,6 +1714,7 @@ async def _search(
     project: str | None = None,
     content_type: str | None = None,
     num_results: int = 5,
+    order: str = "relevance",
     source: str | None = None,
     tag: str | None = None,
     intent: str | None = None,
@@ -1650,6 +1730,7 @@ async def _search(
     output_format: str | None = None,
     # --- T3 filter additions ---
     source_filter_like: str | None = None,
+    source_file_filter_like: str | None = None,
     correction_category: str | None = None,
     include_checkpoints: bool = False,
     include_audit: bool = False,
@@ -1666,10 +1747,14 @@ async def _search(
         if output_format is not None:
             detail = output_format
 
+        if order not in _VALID_SEARCH_ORDERS:
+            return _error_result(f"Invalid order='{order}'. Must be one of: {sorted(_VALID_SEARCH_ORDERS)}")
+
         if num_results < 1:
             num_results = 5
         elif num_results > 100:
             num_results = 100
+        hybrid_n_results = _origin_candidate_count(num_results) if order == "origin" else num_results
 
         store = _get_vector_store()
 
@@ -1721,7 +1806,7 @@ async def _search(
                         query_embedding=query_embedding,
                         query_text=query,
                         fts_query_override=fts_query_override,
-                        n_results=num_results,
+                        n_results=hybrid_n_results,
                         project_filter=normalized_project,
                         content_type_filter=content_type,
                         source_filter=source_filter,
@@ -1734,6 +1819,7 @@ async def _search(
                         entity_id=entity_id,
                         agent_id=agent_id,
                         source_filter_like=source_filter_like,
+                        source_file_filter_like=source_file_filter_like,
                         correction_category=correction_category,
                         include_checkpoints=include_checkpoints,
                         include_audit=include_audit,
@@ -1777,6 +1863,8 @@ async def _search(
             return ([TextContent(type="text", text="No results found.")], empty)
 
         results = store.enrich_results_with_session_context(results)
+        if order == "origin":
+            results = _sort_hybrid_results_by_origin(results, num_results)
 
         if detail == "compact":
             structured_results = []
@@ -1803,10 +1891,20 @@ async def _search(
                 )
                 structured_results.append(item)
             structured = {"query": query, "total": len(structured_results), "results": structured_results}
-            formatted_text = format_search_results(query, structured_results, len(structured_results))
+            if order == "origin":
+                structured["order"] = order
+                structured["order_scope"] = _ORIGIN_ORDER_SCOPE
+            formatted_text = format_search_results(
+                query,
+                structured_results,
+                len(structured_results),
+                order=order if order == "origin" else None,
+            )
             return ([TextContent(type="text", text=formatted_text)], structured)
 
         output_parts = [f"## Search Results for: {query}\n"]
+        if order == "origin":
+            output_parts.append(_ORIGIN_ORDER_LABEL)
         structured_results = []
 
         for i, (cid, doc, meta, dist) in enumerate(
@@ -1876,6 +1974,9 @@ async def _search(
             output_parts.append("\n---")
 
         structured = {"query": query, "total": len(structured_results), "results": structured_results}
+        if order == "origin":
+            structured["order"] = order
+            structured["order_scope"] = _ORIGIN_ORDER_SCOPE
         return ([TextContent(type="text", text="\n".join(output_parts))], structured)
 
     except Exception as e:

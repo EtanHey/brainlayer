@@ -260,6 +260,8 @@ _SEARCH_OUTPUT_SCHEMA = {
     "properties": {
         "query": {"type": "string"},
         "total": {"type": "integer"},
+        "order": {"type": "string", "enum": ["origin"]},
+        "order_scope": {"type": "string"},
         "results": {
             "type": "array",
             "items": {
@@ -482,6 +484,12 @@ async def list_tools() -> list[Tool]:
                             "minimum": 1,
                             "maximum": 100,
                             "description": "Number of results to return (default: 5, max: 100)",
+                        },
+                        "order": {
+                            "type": "string",
+                            "enum": ["relevance", "origin"],
+                            "default": "relevance",
+                            "description": "Result ordering. 'relevance' preserves default hybrid relevance/recency ranking; 'origin' sorts an expanded relevance-ranked hybrid candidate set by created_at, not an exhaustive all-DB oldest-match scan.",
                         },
                         "before": {
                             "type": "integer",
@@ -876,6 +884,12 @@ async def list_tools() -> list[Tool]:
                             "enum": ["compact", "full"],
                             "default": "compact",
                             "description": "Result detail level (mode=search). 'compact': snippet + metadata. 'full': complete content.",
+                        },
+                        "order": {
+                            "type": "string",
+                            "enum": ["relevance", "origin"],
+                            "default": "relevance",
+                            "description": "Result ordering in mode=search. 'relevance' preserves default hybrid relevance/recency ranking; 'origin' sorts an expanded relevance-ranked hybrid candidate set by created_at, not an exhaustive all-DB oldest-match scan.",
                         },
                         "include_checkpoints": {
                             "type": "boolean",
@@ -1325,6 +1339,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 entity_id=arguments.get("entity_id"),
                 agent_id=arguments.get("agent_id"),
                 num_results=arguments.get("num_results", 5),
+                order=arguments.get("order", "relevance"),
                 before=max(0, min(arguments.get("before", 3), 50)),
                 after=max(0, min(arguments.get("after", 3), 50)),
                 max_results=arguments.get("max_results", 10),
@@ -1419,6 +1434,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 entity_id=arguments.get("entity_id"),
                 agent_id=arguments.get("agent_id"),
                 num_results=arguments.get("num_results", 5),
+                order=arguments.get("order", "relevance"),
                 before=max(0, min(arguments.get("before", 3), 50)),
                 after=max(0, min(arguments.get("after", 3), 50)),
                 max_results=arguments.get("max_results", 10),
@@ -1545,6 +1561,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 sentiment=arguments.get("sentiment"),
                 entity_id=arguments.get("entity_id"),
                 num_results=arguments.get("num_results", 5),
+                order=arguments.get("order", "relevance"),
                 before=max(0, min(arguments.get("before", 3), 50)),
                 after=max(0, min(arguments.get("after", 3), 50)),
                 max_results=arguments.get("max_results", 10),

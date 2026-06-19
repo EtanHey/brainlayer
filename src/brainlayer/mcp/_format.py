@@ -70,7 +70,13 @@ def _append_kv_section(lines: list[str], title: str, values: dict | None, *, ski
         lines.append(f"- {key}: {value}")
 
 
-def format_search_results(query: str, results: list[dict], total: int, detail: str = "compact") -> str:
+def format_search_results(
+    query: str,
+    results: list[dict],
+    total: int,
+    detail: str = "compact",
+    order: str | None = None,
+) -> str:
     """Format search results as labeled-field markdown.
 
     Each result dict should have: chunk_id, score, project, date, snippet, summary, importance.
@@ -86,6 +92,11 @@ def format_search_results(query: str, results: list[dict], total: int, detail: s
 
     lines = []
     lines.append(f'## Search results for "{_truncate(query, 50)}" - {len(results)} of {total} shown')
+    if order:
+        if order == "origin":
+            lines.append("- Order: origin (earliest among expanded hybrid candidates)")
+        else:
+            lines.append(f"- Order: {order}")
 
     for i, r in enumerate(results):
         summary = r.get("summary") or ""
