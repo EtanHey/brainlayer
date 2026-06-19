@@ -14,6 +14,9 @@ struct SparklineChartPoint: Identifiable, Equatable, Sendable {
 struct SparklineChartPresentation: Equatable, Sendable {
     let label: String
     let values: [Int]
+    let secondaryValues: [Int]
+    let primarySeriesLabel: String?
+    let secondarySeriesLabel: String?
     let activityWindowMinutes: Int
     let latestBucketName: String
     let fetchedAt: Date
@@ -21,12 +24,18 @@ struct SparklineChartPresentation: Equatable, Sendable {
     init(
         label: String,
         values: [Int],
+        secondaryValues: [Int] = [],
+        primarySeriesLabel: String? = nil,
+        secondarySeriesLabel: String? = nil,
         activityWindowMinutes: Int = 30,
         latestBucketName: String = "latest bucket count",
         fetchedAt: Date = Date()
     ) {
         self.label = label
         self.values = values
+        self.secondaryValues = secondaryValues
+        self.primarySeriesLabel = primarySeriesLabel
+        self.secondarySeriesLabel = secondarySeriesLabel
         self.activityWindowMinutes = activityWindowMinutes
         self.latestBucketName = latestBucketName
         self.fetchedAt = fetchedAt
@@ -42,16 +51,30 @@ struct SparklineChartPresentation: Equatable, Sendable {
         points.last
     }
 
+    var secondaryPoints: [SparklineChartPoint] {
+        secondaryValues.enumerated().map { index, value in
+            SparklineChartPoint(bucket: index, value: value, timestamp: bucketMidpoint(for: index))
+        }
+    }
+
+    var hasSecondarySeries: Bool {
+        !secondaryValues.isEmpty
+    }
+
     var accessibilityLabel: String {
         label
     }
 
     var accessibilityValue: String {
-        "\(latestBucketName) \(values.last ?? 0), \(trendDescription)"
+        var components = ["\(latestBucketName) \(values.last ?? 0)", trendDescription]
+        if let secondarySeriesLabel, hasSecondarySeries {
+            components.append("\(secondarySeriesLabel) latest bucket \(secondaryValues.last ?? 0)")
+        }
+        return components.joined(separator: ", ")
     }
 
     var maxValue: Int {
-        max(values.max() ?? 0, 1)
+        max(values.max() ?? 0, secondaryValues.max() ?? 0, 1)
     }
 
     var xAxisDomainStart: Date {
@@ -140,6 +163,7 @@ struct SparklineChartPresentation: Equatable, Sendable {
 struct SparklineChart: View {
     let presentation: SparklineChartPresentation
     let accentColor: NSColor
+    let secondaryAccentColor: NSColor?
     let compact: Bool
     @State private var hoveredBucket: Int?
     @State private var hoverLocation: CGPoint?
@@ -147,39 +171,55 @@ struct SparklineChart: View {
     init(
         presentation: SparklineChartPresentation,
         accentColor: NSColor,
+        secondaryAccentColor: NSColor? = nil,
         compact: Bool = false
     ) {
         self.presentation = presentation
         self.accentColor = accentColor
+        self.secondaryAccentColor = secondaryAccentColor
         self.compact = compact
     }
 
     var body: some View {
         VStack(spacing: 2) {
-            Chart(presentation.points) { point in
-                if !compact {
-                    AreaMark(
+            Chart {
+                ForEach(presentation.points) { point in
+                    if !compact {
+                        AreaMark(
+                            x: .value("Time", point.timestamp),
+                            y: .value("Count", point.value)
+                        )
+                        .foregroundStyle(Color.brainBar(nsColor: accentColor).opacity(0.10))
+                    }
+
+                    LineMark(
                         x: .value("Time", point.timestamp),
                         y: .value("Count", point.value)
                     )
-                    .foregroundStyle(Color.brainBar(nsColor: accentColor).opacity(0.10))
+                    .interpolationMethod(.linear)
+                    .foregroundStyle(Color.brainBar(nsColor: accentColor).opacity(0.85))
+                    .lineStyle(StrokeStyle(lineWidth: compact ? 1.6 : 2, lineCap: .round, lineJoin: .round))
+
+                    if point == presentation.latestPoint {
+                        PointMark(
+                            x: .value("Time", point.timestamp),
+                            y: .value("Count", point.value)
+                        )
+                        .foregroundStyle(Color.brainBar(nsColor: accentColor))
+                        .symbolSize(compact ? 18 : 42)
+                    }
                 }
 
-                LineMark(
-                    x: .value("Time", point.timestamp),
-                    y: .value("Count", point.value)
-                )
-                .interpolationMethod(.linear)
-                .foregroundStyle(Color.brainBar(nsColor: accentColor).opacity(0.85))
-                .lineStyle(StrokeStyle(lineWidth: compact ? 1.6 : 2, lineCap: .round, lineJoin: .round))
-
-                if point == presentation.latestPoint {
-                    PointMark(
-                        x: .value("Time", point.timestamp),
-                        y: .value("Count", point.value)
-                    )
-                    .foregroundStyle(Color.brainBar(nsColor: accentColor))
-                    .symbolSize(compact ? 18 : 42)
+                if presentation.hasSecondarySeries {
+                    ForEach(presentation.secondaryPoints) { point in
+                        LineMark(
+                            x: .value("Time", point.timestamp),
+                            y: .value("Count", point.value)
+                        )
+                        .interpolationMethod(.linear)
+                        .foregroundStyle(Color.brainBar(nsColor: secondaryAccentColor ?? .systemPurple).opacity(0.88))
+                        .lineStyle(StrokeStyle(lineWidth: compact ? 1.4 : 2, lineCap: .round, lineJoin: .round, dash: compact ? [] : [4, 3]))
+                    }
                 }
             }
             .chartXAxis(.hidden)

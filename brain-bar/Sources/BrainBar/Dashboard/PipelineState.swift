@@ -194,6 +194,10 @@ struct DashboardFlowLane: Sendable, Equatable {
     let sparklineLabel: String
     let latestBucketName: String
     let accentColor: NSColor
+    let primarySeriesLabel: String?
+    let secondaryValues: [Int]
+    let secondarySeriesLabel: String?
+    let secondaryAccentColor: NSColor?
 }
 
 struct DashboardQueueSummary: Sendable, Equatable {
@@ -322,10 +326,14 @@ struct DashboardFlowSummary: Sendable, Equatable {
                     activityWindowMinutes: stats.activityWindowMinutes,
                     now: now
                 ),
-                values: stats.recentActivityBuckets,
+                values: stats.recentAgentWriteBuckets,
                 sparklineLabel: "Writes over \(windowLabel)",
                 latestBucketName: "latest write bucket",
-                accentColor: ingressColor
+                accentColor: ingressColor,
+                primarySeriesLabel: "Agent",
+                secondaryValues: stats.recentWatcherWriteBuckets,
+                secondarySeriesLabel: "Watcher",
+                secondaryAccentColor: BrainBarStateTheme.active.theme.color
             ),
             queue: DashboardQueueSummary(
                 status: queueStatus,
@@ -378,7 +386,11 @@ struct DashboardFlowSummary: Sendable, Equatable {
                 values: stats.recentEnrichmentBuckets,
                 sparklineLabel: "Enrichment completions over \(windowLabel)",
                 latestBucketName: "latest enrichment bucket",
-                accentColor: enrichmentColor
+                accentColor: enrichmentColor,
+                primarySeriesLabel: nil,
+                secondaryValues: [],
+                secondarySeriesLabel: nil,
+                secondaryAccentColor: nil
             )
         )
     }

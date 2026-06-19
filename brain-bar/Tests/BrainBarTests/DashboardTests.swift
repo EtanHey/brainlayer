@@ -242,6 +242,56 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.recentEnrichmentCount, 4)
     }
 
+    func testDashboardStatsSplitsAgentAndWatcherWriteBuckets() throws {
+        let fixtures: [(id: String, source: String, offset: TimeInterval)] = [
+            ("agent-27m", "mcp", -27 * 60),
+            ("agent-4m", "mcp", -4 * 60),
+            ("watcher-52m", "realtime_watcher", -52 * 60),
+            ("watcher-27m", "realtime_watcher", -27 * 60),
+            ("watcher-4m", "realtime", -4 * 60),
+        ]
+        for fixture in fixtures {
+            _ = try db.store(
+                content: "Write source split fixture \(fixture.id)",
+                tags: ["dashboard"],
+                importance: 5,
+                source: fixture.source,
+                chunkID: fixture.id
+            )
+            db.exec("""
+                UPDATE chunks
+                SET created_at = datetime('now', '\(Int(fixture.offset)) seconds')
+                WHERE id = '\(fixture.id)'
+            """)
+        }
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 60, bucketCount: 12)
+
+        XCTAssertEqual(stats.recentAgentWriteBuckets, [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
+        XCTAssertEqual(stats.recentWatcherWriteBuckets, [0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
+        XCTAssertEqual(stats.recentActivityBuckets, [0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2])
+    }
+
+    func testDashboardStatsComputesVectorETAFromBacklogAndNetDrain() {
+        let stats = DashboardStats(
+            chunkCount: 10_105,
+            enrichedChunkCount: 0,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 0,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 4_096,
+            recentActivityBuckets: [10],
+            recentEnrichmentBuckets: [65],
+            activityWindowMinutes: 1,
+            bucketCount: 1,
+            signalEligibleChunkCount: 10_105,
+            vectorIndexedChunkCount: 0
+        )
+
+        XCTAssertEqual(stats.vectorNetDrainRatePerHour, 3_300, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(stats.vectorBacklogETAHours), 10_105.0 / 3_300.0, accuracy: 0.001)
+    }
+
     func testDashboardStatsSamplesPendingStoreQueueBeforeReadTransaction() throws {
         let source = try brainBarSourceFile("Sources/BrainBar/BrainDatabase.swift")
         let methodRange = try XCTUnwrap(source.range(of: "func dashboardStats("))

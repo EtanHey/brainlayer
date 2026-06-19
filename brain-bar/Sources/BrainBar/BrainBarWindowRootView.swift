@@ -715,7 +715,9 @@ private struct BrainBarSignalCoveragePanel: View {
                 backlogCount: stats.vectorBacklogCount,
                 coveragePercent: stats.vectorCoveragePercent,
                 accentColor: amber,
-                showsDetail: true
+                showsDetail: true,
+                vectorNetDrainRatePerHour: stats.vectorNetDrainRatePerHour,
+                vectorBacklogETAHours: stats.vectorBacklogETAHours
             ),
             BrainBarSignalCoverage(
                 name: "FTS5",
@@ -724,7 +726,9 @@ private struct BrainBarSignalCoveragePanel: View {
                 backlogCount: stats.ftsBacklogCount,
                 coveragePercent: stats.ftsCoveragePercent,
                 accentColor: green,
-                showsDetail: false
+                showsDetail: false,
+                vectorNetDrainRatePerHour: nil,
+                vectorBacklogETAHours: nil
             ),
             BrainBarSignalCoverage(
                 name: "Trigram",
@@ -733,7 +737,9 @@ private struct BrainBarSignalCoveragePanel: View {
                 backlogCount: stats.trigramBacklogCount,
                 coveragePercent: stats.trigramCoveragePercent,
                 accentColor: green,
-                showsDetail: false
+                showsDetail: false,
+                vectorNetDrainRatePerHour: nil,
+                vectorBacklogETAHours: nil
             ),
         ]
     }
@@ -745,11 +751,6 @@ private struct BrainBarSignalCoveragePanel: View {
             if isExpanded {
                 signalBars
                     .transition(.opacity.combined(with: .move(edge: .top)))
-
-                if isVectorDetailExpanded, let vector = signals.first(where: { $0.showsDetail }) {
-                    BrainBarVectorSignalDetail(signal: vector, compact: compact)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -786,39 +787,45 @@ private struct BrainBarSignalCoveragePanel: View {
         ViewThatFits(in: .horizontal) {
             HStack(alignment: .top, spacing: compact ? 8 : 10) {
                 ForEach(signals) { signal in
-                    signalRow(for: signal)
+                    signalColumn(for: signal)
                 }
             }
 
             VStack(spacing: 8) {
                 ForEach(signals) { signal in
-                    signalRow(for: signal)
+                    signalColumn(for: signal)
                 }
             }
         }
     }
 
     @ViewBuilder
-    private func signalRow(for signal: BrainBarSignalCoverage) -> some View {
-        if signal.showsDetail {
-            Button {
-                withAnimation(.easeInOut(duration: 0.18)) {
-                    isVectorDetailExpanded.toggle()
+    private func signalColumn(for signal: BrainBarSignalCoverage) -> some View {
+        VStack(alignment: .leading, spacing: compact ? 8 : 10) {
+            if signal.showsDetail {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        isVectorDetailExpanded.toggle()
+                    }
+                } label: {
+                    BrainBarSignalCoverageRow(
+                        signal: signal,
+                        compact: compact,
+                        isSelected: isVectorDetailExpanded
+                    )
                 }
-            } label: {
-                BrainBarSignalCoverageRow(
-                    signal: signal,
-                    compact: compact,
-                    isSelected: isVectorDetailExpanded
-                )
+                .buttonStyle(.plain)
+                .help("Show Vector backlog details")
+
+                if isVectorDetailExpanded {
+                    BrainBarVectorSignalDetail(signal: signal, compact: compact)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            } else {
+                BrainBarSignalCoverageRow(signal: signal, compact: compact, isSelected: false)
             }
-            .buttonStyle(.plain)
-            .help("Show Vector backlog details")
-            .frame(minWidth: compact ? 150 : 170, maxWidth: .infinity, alignment: .leading)
-        } else {
-            BrainBarSignalCoverageRow(signal: signal, compact: compact, isSelected: false)
-                .frame(minWidth: compact ? 150 : 170, maxWidth: .infinity, alignment: .leading)
         }
+        .frame(minWidth: compact ? 150 : 170, maxWidth: .infinity, alignment: .topLeading)
     }
 }
 
@@ -830,6 +837,8 @@ private struct BrainBarSignalCoverage: Identifiable {
     let coveragePercent: Double
     let accentColor: Color
     let showsDetail: Bool
+    let vectorNetDrainRatePerHour: Double?
+    let vectorBacklogETAHours: Double?
 
     var id: String { name }
 
@@ -896,11 +905,6 @@ private struct BrainBarVectorSignalDetail: View {
     let signal: BrainBarSignalCoverage
     let compact: Bool
 
-    // TODO: Replace these rollout estimates with measured vector drain fields
-    // once DashboardStats carries vector indexing history.
-    private let estimatedDrainRatePerHour = 3_300
-    private let estimatedETAHours = 13
-
     var body: some View {
         Group {
             if compact {
@@ -932,21 +936,21 @@ private struct BrainBarVectorSignalDetail: View {
     private var metrics: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: compact ? 14 : 22) {
-                BrainBarSignalDetailMetric(label: "drain", value: "~\(formatted(estimatedDrainRatePerHour))/hr", tint: signal.accentColor)
-                BrainBarSignalDetailMetric(label: "ETA", value: "~\(estimatedETAHours)h", tint: signal.accentColor)
+                BrainBarSignalDetailMetric(label: "drain", value: drainText, tint: signal.accentColor)
+                BrainBarSignalDetailMetric(label: "ETA", value: etaText, tint: signal.accentColor)
                 BrainBarSignalDetailMetric(label: "backlog", value: signal.backlogText, tint: Color.brainBarTextPrimary)
             }
 
             VStack(alignment: .leading, spacing: 10) {
-                BrainBarSignalDetailMetric(label: "drain", value: "~\(formatted(estimatedDrainRatePerHour))/hr", tint: signal.accentColor)
-                BrainBarSignalDetailMetric(label: "ETA", value: "~\(estimatedETAHours)h", tint: signal.accentColor)
+                BrainBarSignalDetailMetric(label: "drain", value: drainText, tint: signal.accentColor)
+                BrainBarSignalDetailMetric(label: "ETA", value: etaText, tint: signal.accentColor)
                 BrainBarSignalDetailMetric(label: "backlog", value: signal.backlogText, tint: Color.brainBarTextPrimary)
             }
         }
     }
 
     private var trend: some View {
-        Label("falling", systemImage: "arrow.down.right")
+        Label(isFalling ? "falling" : "waiting", systemImage: isFalling ? "arrow.down.right" : "clock")
             .font(.system(size: 11, weight: .bold))
             .foregroundStyle(signal.accentColor)
             .padding(.vertical, 5)
@@ -954,6 +958,27 @@ private struct BrainBarVectorSignalDetail: View {
             .background(Capsule().fill(signal.accentColor.opacity(0.12)))
             .overlay(Capsule().stroke(signal.accentColor.opacity(0.32), lineWidth: 1))
             .help("Vector backlog trend")
+    }
+
+    private var isFalling: Bool {
+        (signal.vectorNetDrainRatePerHour ?? 0) > 0
+    }
+
+    private var drainText: String {
+        guard let rate = signal.vectorNetDrainRatePerHour, rate > 0 else { return "n/a" }
+        return "~\(formatted(Int(rate.rounded())))/hr"
+    }
+
+    private var etaText: String {
+        guard let hours = signal.vectorBacklogETAHours, hours.isFinite, hours > 0 else { return "n/a" }
+        if hours < 1 {
+            return "~\(max(1, Int((hours * 60).rounded())))m"
+        }
+        if hours < 10 {
+            let rounded = (hours * 10).rounded() / 10
+            return rounded == rounded.rounded() ? "~\(Int(rounded))h" : String(format: "~%.1fh", rounded)
+        }
+        return "~\(Int(hours.rounded()))h"
     }
 
     private func formatted(_ value: Int) -> String {
@@ -1010,13 +1035,28 @@ private struct BrainBarFlowLaneCard: View {
             BrainBarHeroSparkline(
                 label: lane.sparklineLabel,
                 values: lane.values,
+                secondaryValues: lane.secondaryValues,
+                primarySeriesLabel: lane.primarySeriesLabel,
+                secondarySeriesLabel: lane.secondarySeriesLabel,
                 latestBucketName: lane.latestBucketName,
                 accentColor: lane.accentColor,
+                secondaryAccentColor: lane.secondaryAccentColor,
                 activityWindowMinutes: lane.activityWindowMinutes,
                 fetchedAt: fetchedAt,
                 pulseRevision: pulseRevision
             )
             .frame(height: chartHeight)
+
+            if let primarySeriesLabel = lane.primarySeriesLabel,
+               let secondarySeriesLabel = lane.secondarySeriesLabel,
+               let secondaryAccentColor = lane.secondaryAccentColor {
+                BrainBarSeriesLegend(
+                    primaryLabel: primarySeriesLabel,
+                    primaryColor: lane.accentColor,
+                    secondaryLabel: secondarySeriesLabel,
+                    secondaryColor: secondaryAccentColor
+                )
+            }
 
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 12) {
@@ -1150,6 +1190,47 @@ private struct BrainBarQueueRail: View {
         case .unavailable:
             return "Offline"
         }
+    }
+}
+
+private struct BrainBarSeriesLegend: View {
+    let primaryLabel: String
+    let primaryColor: NSColor
+    let secondaryLabel: String
+    let secondaryColor: NSColor
+
+    var body: some View {
+        HStack(spacing: 12) {
+            legendItem(label: primaryLabel, color: primaryColor, dashed: false)
+            legendItem(label: secondaryLabel, color: secondaryColor, dashed: true)
+            Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(primaryLabel) and \(secondaryLabel) write series")
+    }
+
+    private func legendItem(label: String, color: NSColor, dashed: Bool) -> some View {
+        HStack(spacing: 6) {
+            Capsule()
+                .fill(Color.brainBar(nsColor: color).opacity(dashed ? 0.55 : 0.9))
+                .frame(width: dashed ? 14 : 18, height: 3)
+                .overlay {
+                    if dashed {
+                        HStack(spacing: 2) {
+                            ForEach(0..<3, id: \.self) { _ in
+                                Capsule()
+                                    .fill(Color.brainBarGlassSecondary)
+                                    .frame(width: 2, height: 3)
+                            }
+                        }
+                    }
+                }
+            Text(label)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Color.brainBarTextMuted)
+                .lineLimit(1)
+        }
+        .fixedSize(horizontal: true, vertical: false)
     }
 }
 
@@ -1533,8 +1614,12 @@ private struct BrainBarFlowStatusPill: View {
 private struct BrainBarHeroSparkline: View {
     let label: String
     let values: [Int]
+    let secondaryValues: [Int]
+    let primarySeriesLabel: String?
+    let secondarySeriesLabel: String?
     let latestBucketName: String
     let accentColor: NSColor
+    let secondaryAccentColor: NSColor?
     let activityWindowMinutes: Int
     let fetchedAt: Date
     let pulseRevision: Int
@@ -1550,11 +1635,15 @@ private struct BrainBarHeroSparkline: View {
                 presentation: SparklineChartPresentation(
                     label: label,
                     values: values,
+                    secondaryValues: secondaryValues,
+                    primarySeriesLabel: primarySeriesLabel,
+                    secondarySeriesLabel: secondarySeriesLabel,
                     activityWindowMinutes: activityWindowMinutes,
                     latestBucketName: latestBucketName,
                     fetchedAt: fetchedAt
                 ),
                 accentColor: accentColor,
+                secondaryAccentColor: secondaryAccentColor,
                 compact: SparklineRenderer.isCompact(size: renderSize)
             )
             .id(pulseRevision)
