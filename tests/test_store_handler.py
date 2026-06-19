@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import threading
 import time
 from unittest.mock import MagicMock, patch
 
@@ -169,6 +170,126 @@ async def test_store_busy_budget_restores_timeout_between_concurrent_retries(mon
 
     assert all(isinstance(result, apsw.BusyError) for result in results)
     assert store.conn.timeout_ms == 5000
+
+
+@pytest.mark.asyncio
+async def test_store_busy_budget_bounds_store_memory_inner_retry_loop(tmp_path, monkeypatch):
+    """The MCP budget must bound store_memory's internal BEGIN IMMEDIATE retry loop."""
+    import brainlayer.store as store_module
+    from brainlayer.mcp.store_handler import _store
+
+    pending_path = tmp_path / "pending-stores.jsonl"
+    real_sleep = time.sleep
+    begin_attempts = 0
+
+    class FakeCursor:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql, *args):
+            nonlocal begin_attempts
+            if sql == "PRAGMA busy_timeout":
+                return self
+            if sql == "BEGIN IMMEDIATE":
+                begin_attempts += 1
+                real_sleep(self.conn.timeout_ms / 1000)
+                raise apsw.BusyError("database is locked")
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+        def fetchone(self):
+            return (self.conn.timeout_ms,)
+
+    class FakeConn:
+        def __init__(self):
+            self.timeout_ms = 5000
+
+        def cursor(self):
+            return FakeCursor(self)
+
+        def setbusytimeout(self, timeout_ms):
+            self.timeout_ms = timeout_ms
+
+    store = MagicMock()
+    store.conn = FakeConn()
+
+    monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "80")
+    monkeypatch.setattr("brainlayer.mcp.store_handler._retry_delay", 0.001)
+    monkeypatch.setattr(store_module.time, "sleep", lambda delay: real_sleep(min(delay, 0.001)))
+
+    with (
+        patch("brainlayer.mcp.store_handler._get_vector_store", return_value=store),
+        patch("brainlayer.mcp.store_handler._normalize_project_name", return_value="test"),
+        patch("brainlayer.queue_io.enqueue_store", side_effect=RuntimeError("force legacy pending queue")),
+        patch("brainlayer.mcp.store_handler._get_pending_store_path", return_value=pending_path),
+    ):
+        started = time.perf_counter()
+        _texts, structured = await _store(
+            content="inner retries must respect mcp busy budget",
+            memory_type="note",
+            project="test",
+        )
+        elapsed = time.perf_counter() - started
+
+    assert elapsed < 0.18
+    assert begin_attempts <= 2
+    assert structured["status"] == "DEFERRED"
+    assert structured["deferred"]["action"] == "queued_for_replay"
+
+
+@pytest.mark.asyncio
+async def test_store_busy_budget_refreshes_after_timeout_lock_wait(monkeypatch):
+    """Time spent waiting for the timeout lock must count against the store budget."""
+    from brainlayer.mcp import store_handler
+
+    real_sleep = time.sleep
+
+    class FakeCursor:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql):
+            assert sql == "PRAGMA busy_timeout"
+            return self
+
+        def fetchone(self):
+            return (self.conn.timeout_ms,)
+
+    class FakeConn:
+        def __init__(self):
+            self.timeout_ms = 5000
+
+        def cursor(self):
+            return FakeCursor(self)
+
+        def setbusytimeout(self, timeout_ms):
+            self.timeout_ms = timeout_ms
+
+    store = MagicMock()
+    store.conn = FakeConn()
+
+    def locked_store_memory(**kwargs):
+        real_sleep(store.conn.timeout_ms / 1000)
+        raise apsw.BusyError("database is locked")
+
+    monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "200")
+    monkeypatch.setattr(store_handler, "_RETRY_MAX_ATTEMPTS", 1)
+
+    store_handler._STORE_BUSY_TIMEOUT_LOCK.acquire()
+    timer = threading.Timer(0.15, store_handler._STORE_BUSY_TIMEOUT_LOCK.release)
+    timer.start()
+    try:
+        started = time.perf_counter()
+        result = await store_handler._store_memory_with_retries(locked_store_memory, store=store)
+    except apsw.BusyError as exc:
+        result = exc
+        elapsed = time.perf_counter() - started
+    finally:
+        timer.cancel()
+        if store_handler._STORE_BUSY_TIMEOUT_LOCK.locked():
+            store_handler._STORE_BUSY_TIMEOUT_LOCK.release()
+
+    assert isinstance(result, apsw.BusyError)
+    assert elapsed < 0.28
 
 
 @pytest.mark.asyncio

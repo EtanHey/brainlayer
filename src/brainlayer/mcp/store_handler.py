@@ -547,18 +547,27 @@ def _set_connection_busy_timeout(conn, timeout_ms: int | None) -> None:
         logger.debug("Failed to set store busy timeout", exc_info=True)
 
 
+def _remaining_store_busy_budget_ms(deadline: float) -> int:
+    remaining_ms = int((deadline - time.monotonic()) * 1000)
+    if remaining_ms <= 0:
+        raise apsw.BusyError("brain_store busy budget exceeded")
+    return max(1, min(remaining_ms, _MAX_APSW_BUSY_TIMEOUT_MS))
+
+
 @contextmanager
-def _temporary_store_busy_timeout(conn, timeout_ms: int):
+def _temporary_store_busy_timeout(conn, deadline: float):
     if conn is None:
         yield
         return
 
+    timeout_ms = _remaining_store_busy_budget_ms(deadline)
     acquired = _STORE_BUSY_TIMEOUT_LOCK.acquire(timeout=max(timeout_ms, 1) / 1000)
     if not acquired:
         raise apsw.BusyError("brain_store busy_timeout lock wait exceeded")
 
     original_busy_timeout_ms = _connection_busy_timeout_ms(conn)
     try:
+        timeout_ms = _remaining_store_busy_budget_ms(deadline)
         _set_connection_busy_timeout(conn, timeout_ms)
         yield
     finally:
@@ -643,8 +652,8 @@ async def _store_memory_with_retries(store_memory, **kwargs):
         if remaining_ms <= 0 and last_err is not None:
             raise last_err
         try:
-            with _temporary_store_busy_timeout(conn, remaining_ms):
-                return store_memory(**kwargs)
+            with _temporary_store_busy_timeout(conn, deadline):
+                return store_memory(**kwargs, busy_deadline=deadline)
         except Exception as exc:
             if not _is_lock_error(exc) or attempt >= _RETRY_MAX_ATTEMPTS - 1:
                 raise
