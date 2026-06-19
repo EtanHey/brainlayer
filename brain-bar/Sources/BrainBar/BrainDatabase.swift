@@ -103,6 +103,8 @@ final class BrainDatabase: @unchecked Sendable {
         let liveWindowMinutes: Int
         let lastWriteAt: Date?
         let lastEnrichedAt: Date?
+        let vectorIndexedChunkCount: Int
+        let ftsIndexedChunkCount: Int
         let trigramIndexedChunkCount: Int
         let pendingStoreQueueDepth: Int
         let pendingStoreOldestQueuedAt: Date?
@@ -125,6 +127,8 @@ final class BrainDatabase: @unchecked Sendable {
             liveWindowMinutes: Int = 1,
             lastWriteAt: Date? = nil,
             lastEnrichedAt: Date? = nil,
+            vectorIndexedChunkCount: Int = 0,
+            ftsIndexedChunkCount: Int = 0,
             trigramIndexedChunkCount: Int = 0,
             pendingStoreQueueDepth: Int = 0,
             pendingStoreOldestQueuedAt: Date? = nil,
@@ -146,6 +150,8 @@ final class BrainDatabase: @unchecked Sendable {
             self.liveWindowMinutes = liveWindowMinutes
             self.lastWriteAt = lastWriteAt
             self.lastEnrichedAt = lastEnrichedAt
+            self.vectorIndexedChunkCount = vectorIndexedChunkCount
+            self.ftsIndexedChunkCount = ftsIndexedChunkCount
             self.trigramIndexedChunkCount = trigramIndexedChunkCount
             self.pendingStoreQueueDepth = pendingStoreQueueDepth
             self.pendingStoreOldestQueuedAt = pendingStoreOldestQueuedAt
@@ -180,9 +186,33 @@ final class BrainDatabase: @unchecked Sendable {
             eventIsLive(lastEnrichedAt, now: now) || recentEnrichmentCount > 0
         }
 
+        var vectorBacklogCount: Int {
+            max(chunkCount - vectorIndexedChunkCount, 0)
+        }
+
+        var ftsBacklogCount: Int {
+            max(chunkCount - ftsIndexedChunkCount, 0)
+        }
+
+        var trigramBacklogCount: Int {
+            max(chunkCount - trigramIndexedChunkCount, 0)
+        }
+
+        var vectorCoveragePercent: Double {
+            coveragePercent(indexedCount: vectorIndexedChunkCount)
+        }
+
+        var ftsCoveragePercent: Double {
+            coveragePercent(indexedCount: ftsIndexedChunkCount)
+        }
+
         var trigramCoveragePercent: Double {
+            coveragePercent(indexedCount: trigramIndexedChunkCount)
+        }
+
+        private func coveragePercent(indexedCount: Int) -> Double {
             guard chunkCount > 0 else { return 100 }
-            return (Double(trigramIndexedChunkCount) / Double(chunkCount)) * 100
+            return (Double(indexedCount) / Double(chunkCount)) * 100
         }
 
         func withPendingStoreFlushRate(_ rate: Double) -> DashboardStats {
@@ -202,6 +232,8 @@ final class BrainDatabase: @unchecked Sendable {
                 liveWindowMinutes: liveWindowMinutes,
                 lastWriteAt: lastWriteAt,
                 lastEnrichedAt: lastEnrichedAt,
+                vectorIndexedChunkCount: vectorIndexedChunkCount,
+                ftsIndexedChunkCount: ftsIndexedChunkCount,
                 trigramIndexedChunkCount: trigramIndexedChunkCount,
                 pendingStoreQueueDepth: pendingStoreQueueDepth,
                 pendingStoreOldestQueuedAt: pendingStoreOldestQueuedAt,
@@ -1597,6 +1629,7 @@ final class BrainDatabase: @unchecked Sendable {
             }
 
             let counts = try dashboardCounts()
+            let signalCounts = try dashboardSignalCoverageCounts()
             let lastEvents = try dashboardLastEvents(now: now)
             let chunkCount = counts.chunkCount
             let enrichedChunkCount = counts.enrichedChunkCount
@@ -1632,7 +1665,9 @@ final class BrainDatabase: @unchecked Sendable {
                 liveWindowMinutes: liveWindowMinutes,
                 lastWriteAt: lastEvents.lastWriteAt,
                 lastEnrichedAt: lastEvents.lastEnrichedAt,
-                trigramIndexedChunkCount: (try? countRows(in: "chunks_fts_trigram")) ?? 0,
+                vectorIndexedChunkCount: signalCounts.vectorIndexedChunkCount,
+                ftsIndexedChunkCount: signalCounts.ftsIndexedChunkCount,
+                trigramIndexedChunkCount: signalCounts.trigramIndexedChunkCount,
                 pendingStoreQueueDepth: pendingStoreQueue.depth,
                 pendingStoreOldestQueuedAt: pendingStoreQueue.oldestQueuedAt,
                 watcherHealth: watcherHealth
@@ -1707,6 +1742,35 @@ final class BrainDatabase: @unchecked Sendable {
             enrichedChunkCount: try scalarInt("SELECT COUNT(*) FROM chunks WHERE enrich_status IS NOT NULL"),
             pendingEnrichmentCount: try scalarInt("SELECT COUNT(*) FROM chunks WHERE enrich_status IS NULL AND enriched_at IS NULL")
         )
+    }
+
+    private func dashboardSignalCoverageCounts() throws -> (
+        vectorIndexedChunkCount: Int,
+        ftsIndexedChunkCount: Int,
+        trigramIndexedChunkCount: Int
+    ) {
+        (
+            vectorIndexedChunkCount: try joinedCoverageCount(tableName: "chunk_vectors_rowids", idColumn: "id"),
+            ftsIndexedChunkCount: try joinedCoverageCount(tableName: "chunks_fts", idColumn: "chunk_id"),
+            trigramIndexedChunkCount: try joinedCoverageCount(tableName: "chunks_fts_trigram", idColumn: "chunk_id")
+        )
+    }
+
+    private func joinedCoverageCount(tableName: String, idColumn: String) throws -> Int {
+        let allowedTables = [
+            "chunk_vectors_rowids": "id",
+            "chunks_fts": "chunk_id",
+            "chunks_fts_trigram": "chunk_id",
+        ]
+        guard allowedTables[tableName] == idColumn else {
+            throw DBError.exec(SQLITE_ERROR, "invalid coverage table")
+        }
+        guard (try? tableExists(tableName)) == true else { return 0 }
+        return try scalarInt("""
+            SELECT COUNT(DISTINCT signal.\(idColumn))
+            FROM \(tableName) AS signal
+            INNER JOIN chunks AS c ON c.id = signal.\(idColumn)
+        """)
     }
 
     private func dashboardLastEvents(now: Date) throws -> (lastWriteAt: Date?, lastEnrichedAt: Date?) {

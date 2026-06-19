@@ -336,6 +336,7 @@ private struct BrainBarDashboardView: View {
                     overviewCard(layout: layout)
                     freshnessLine
                     pipelinePanel(layout: layout)
+                    signalCoveragePanel(layout: layout)
                     diagnostics(layout: layout)
                 }
                 .padding(layout.outerPadding)
@@ -545,6 +546,13 @@ private struct BrainBarDashboardView: View {
         )
     }
 
+    private func signalCoveragePanel(layout: BrainBarDashboardLayout) -> some View {
+        BrainBarSignalCoveragePanel(
+            stats: collector.stats,
+            compact: layout.compactCards
+        )
+    }
+
     @ViewBuilder
     private func diagnostics(layout: BrainBarDashboardLayout) -> some View {
         let flowCard = BrainBarDiagnosticCard(
@@ -558,6 +566,7 @@ private struct BrainBarDashboardView: View {
                     fromByteCount: collector.stats.databaseSizeBytes,
                     countStyle: .file
                 )),
+                ("Vector", vectorSummary),
             ],
             columns: layout.diagnosticItemColumns
         )
@@ -569,6 +578,7 @@ private struct BrainBarDashboardView: View {
                 ("Daemon", daemonSummary),
                 ("Agents", collector.agentActivity.summaryText),
                 ("State", collector.state.label),
+                ("FTS", ftsSummary),
                 ("Trigram", trigramSummary),
                 ("Last seen", daemonLastSeenSummary),
             ],
@@ -629,9 +639,34 @@ private struct BrainBarDashboardView: View {
         )
     }
 
+    private var vectorSummary: String {
+        signalSummary(
+            indexedCount: collector.stats.vectorIndexedChunkCount,
+            backlogCount: collector.stats.vectorBacklogCount,
+            coveragePercent: collector.stats.vectorCoveragePercent
+        )
+    }
+
+    private var ftsSummary: String {
+        signalSummary(
+            indexedCount: collector.stats.ftsIndexedChunkCount,
+            backlogCount: collector.stats.ftsBacklogCount,
+            coveragePercent: collector.stats.ftsCoveragePercent
+        )
+    }
+
     private var trigramSummary: String {
-        "\(collector.stats.trigramIndexedChunkCount)/\(collector.stats.chunkCount) · " +
-            String(format: "%.0f%%", collector.stats.trigramCoveragePercent)
+        signalSummary(
+            indexedCount: collector.stats.trigramIndexedChunkCount,
+            backlogCount: collector.stats.trigramBacklogCount,
+            coveragePercent: collector.stats.trigramCoveragePercent
+        )
+    }
+
+    private func signalSummary(indexedCount: Int, backlogCount: Int, coveragePercent: Double) -> String {
+        "\(indexedCount)/\(collector.stats.chunkCount) · " +
+            String(format: "%.0f%%", coveragePercent) +
+            " · backlog \(backlogCount)"
     }
 }
 
@@ -651,6 +686,138 @@ private struct BrainBarTrigramProgress: View {
             }
             ProgressView(value: min(stats.trigramCoveragePercent, 100), total: 100)
         }
+    }
+}
+
+private struct BrainBarSignalCoveragePanel: View {
+    let stats: BrainDatabase.DashboardStats
+    let compact: Bool
+
+    private var signals: [BrainBarSignalCoverage] {
+        [
+            BrainBarSignalCoverage(
+                name: "Vector",
+                indexedCount: stats.vectorIndexedChunkCount,
+                totalCount: stats.chunkCount,
+                backlogCount: stats.vectorBacklogCount,
+                coveragePercent: stats.vectorCoveragePercent,
+                accentColor: .brainBarAccent
+            ),
+            BrainBarSignalCoverage(
+                name: "FTS",
+                indexedCount: stats.ftsIndexedChunkCount,
+                totalCount: stats.chunkCount,
+                backlogCount: stats.ftsBacklogCount,
+                coveragePercent: stats.ftsCoveragePercent,
+                accentColor: .brainBarAccentBright
+            ),
+            BrainBarSignalCoverage(
+                name: "Trigram",
+                indexedCount: stats.trigramIndexedChunkCount,
+                totalCount: stats.chunkCount,
+                backlogCount: stats.trigramBacklogCount,
+                coveragePercent: stats.trigramCoveragePercent,
+                accentColor: .brainBarAccentViolet
+            ),
+        ]
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: compact ? 12 : 16) {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    BrainBarSectionLabel("Signal Coverage")
+                    Text("Coverage is counted per retrieval signal; backlogs stay separate.")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    BrainBarSectionLabel("Signal Coverage")
+                    Text("Coverage is counted per retrieval signal; backlogs stay separate.")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            if compact {
+                VStack(spacing: 10) {
+                    ForEach(signals) { signal in
+                        BrainBarSignalCoverageRow(signal: signal, compact: true)
+                    }
+                }
+            } else {
+                HStack(alignment: .top, spacing: 12) {
+                    ForEach(signals) { signal in
+                        BrainBarSignalCoverageRow(signal: signal, compact: false)
+                    }
+                }
+            }
+        }
+        .padding(compact ? 18 : 22)
+        .background(
+            BrainBarGlassPanel(cornerRadius: BrainBarDesignTokens.Radius.lg, tint: .brainBarAccentBright)
+        )
+    }
+}
+
+private struct BrainBarSignalCoverage: Identifiable {
+    let name: String
+    let indexedCount: Int
+    let totalCount: Int
+    let backlogCount: Int
+    let coveragePercent: Double
+    let accentColor: Color
+
+    var id: String { name }
+
+    var countText: String {
+        "\(indexedCount)/\(totalCount)"
+    }
+
+    var percentText: String {
+        String(format: "%.0f%%", coveragePercent)
+    }
+
+    var backlogText: String {
+        "backlog \(backlogCount)"
+    }
+}
+
+private struct BrainBarSignalCoverageRow: View {
+    let signal: BrainBarSignalCoverage
+    let compact: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: compact ? 8 : 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(signal.name)
+                    .font(.system(size: compact ? 13 : 14, weight: .semibold))
+                Spacer(minLength: 8)
+                Text(signal.percentText)
+                    .font(.system(size: compact ? 16 : 18, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+            }
+
+            ProgressView(value: min(max(signal.coveragePercent, 0), 100), total: 100)
+                .tint(signal.accentColor)
+
+            HStack(spacing: 10) {
+                BrainBarLaneMetric(label: "Indexed", value: signal.countText)
+                BrainBarLaneMetric(label: "Backlog", value: "\(signal.backlogCount)")
+                Spacer(minLength: 0)
+            }
+
+            Text(signal.backlogText)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(compact ? 12 : 14)
+        .background(BrainBarDashboardCardStyle())
     }
 }
 
