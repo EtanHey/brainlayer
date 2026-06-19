@@ -117,6 +117,46 @@ def test_hotlane_run_threads_model_batch_embedder_to_backlog_cycle():
     assert received_batch_fns[0].__func__ is FakeModel.embed_texts
 
 
+def test_hotlane_run_uses_document_embeddings_for_stored_chunks():
+    hotlane = _load_hotlane_module()
+    received_embed_fns = []
+
+    class FakeStore:
+        def close(self):
+            pass
+
+    class FakeModel:
+        def embed_query(self, _text):
+            return [1.0]
+
+        def embed_texts(self, texts):
+            return [[2.0] for _text in texts]
+
+    def fake_cycle(**kwargs):
+        received_embed_fns.append(kwargs["embed_fn"])
+        return hotlane.CycleResult()
+
+    hotlane.run(
+        db_path=Path("/tmp/unused.db"),
+        interval=0.25,
+        recent_limit=5,
+        backlog_interval=10.0,
+        backlog_batch=hotlane.DEFAULT_BACKLOG_BATCH,
+        enrich_interval=10.0,
+        enrich_limit=0,
+        enrich_since_hours=8760,
+        vector_store_cls=lambda _path: FakeStore(),
+        model_factory=FakeModel,
+        cycle_fn=fake_cycle,
+        time_fn=iter([0.0, 100.0]).__next__,
+        sleep_fn=lambda _seconds: None,
+        max_cycles=1,
+    )
+
+    assert len(received_embed_fns) == 1
+    assert received_embed_fns[0]("stored chunk text") == [2.0]
+
+
 def test_hotlane_run_schedules_backlog_on_first_cycle():
     hotlane = _load_hotlane_module()
     scheduled_backlog_batches = []

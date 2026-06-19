@@ -132,8 +132,17 @@ def run(
     store = vector_store_cls(db_path)
     try:
         model = model_factory()
-        embed_fn = model.embed_query
         embed_batch_fn = getattr(model, "embed_texts", None)
+        if embed_batch_fn is not None:
+
+            def embed_fn(text: str) -> list[float]:
+                embeddings = embed_batch_fn([text])
+                if len(embeddings) != 1:
+                    raise RuntimeError(f"single text embedder returned {len(embeddings)} embeddings")
+                return embeddings[0]
+
+        else:
+            embed_fn = model.embed_query
         last_backlog = time_fn() - backlog_interval
         last_enrich = 0.0
         enrich_disabled = False

@@ -623,6 +623,31 @@ class TestBackgroundEmbedder:
         assert not _has_vector(store, "batch-write-1")
         assert _has_vector(store, "batch-write-2")
 
+    def test_embed_pending_batch_embed_failure_falls_back_per_row(self, store):
+        """Batch embed failure should not let one bad row block newer pending chunks."""
+        from brainlayer.store import embed_pending_chunks
+
+        _insert_pending_chunk(store, chunk_id="batch-fallback-good-0", source="claude_code", content="good zero")
+        _insert_pending_chunk(store, chunk_id="batch-fallback-bad-1", source="claude_code", content="bad one")
+        _insert_pending_chunk(store, chunk_id="batch-fallback-good-2", source="claude_code", content="good two")
+
+        def row_embed(text: str) -> list[float]:
+            if "bad" in text:
+                raise RuntimeError("simulated bad row")
+            return [0.25] * 1024
+
+        count = embed_pending_chunks(
+            store=store,
+            embed_fn=row_embed,
+            batch_size=3,
+            embed_batch_fn=lambda _texts: (_ for _ in ()).throw(RuntimeError("simulated batch failure")),
+        )
+
+        assert count == 2
+        assert _has_vector(store, "batch-fallback-good-0")
+        assert not _has_vector(store, "batch-fallback-bad-1")
+        assert _has_vector(store, "batch-fallback-good-2")
+
 
 class TestMCPStoreDeferred:
     """MCP _store handler uses deferred embedding."""
