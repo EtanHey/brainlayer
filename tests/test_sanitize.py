@@ -159,15 +159,27 @@ class TestNameDictionary:
 
     def test_env_redaction_allowlist_extends_person_pseudonym_exclusions(self, monkeypatch):
         monkeypatch.setenv("BRAINLAYER_SANITIZE_USE_SPACY", "false")
-        monkeypatch.setenv("BRAINLAYER_SANITIZE_EXTRA_NAMES", "BrainLayerBot,John Smith")
+        monkeypatch.setenv("BRAINLAYER_SANITIZE_EXTRA_NAMES", "John Smith")
         monkeypatch.setenv("BRAINLAYER_REDACTION_ALLOWLIST", "BrainLayerBot")
 
         s = Sanitizer.from_env()
         result = s.sanitize("BrainLayerBot discussed it with John Smith")
 
+        assert "BrainLayerBot" in s.config.person_redaction_allowlist
         assert "BrainLayerBot" in result.sanitized
         assert "John Smith" not in result.sanitized
         assert "[PERSON_" in result.sanitized
+
+    def test_env_extra_names_redact_even_when_default_allowlisted(self, monkeypatch):
+        monkeypatch.setenv("BRAINLAYER_SANITIZE_USE_SPACY", "false")
+        monkeypatch.setenv("BRAINLAYER_SANITIZE_EXTRA_NAMES", "Claude")
+
+        s = Sanitizer.from_env()
+        result = s.sanitize("Claude joined the thread")
+
+        assert "Claude" not in result.sanitized
+        assert "[PERSON_" in result.sanitized
+        assert any(replacement.original == "Claude" for replacement in result.replacements)
 
     def test_allowlisted_token_in_span_preserves_tool_spans_not_people(self):
         s = Sanitizer(
