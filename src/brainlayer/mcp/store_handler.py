@@ -47,6 +47,10 @@ def _store_busy_budget_ms() -> int:
     return _positive_int_env("BRAINLAYER_STORE_BUSY_BUDGET_MS", _DEFAULT_STORE_BUSY_BUDGET_MS)
 
 
+def _store_busy_deadline() -> float:
+    return time.monotonic() + (_store_busy_budget_ms() / 1000)
+
+
 def _is_lock_error(exc: BaseException) -> bool:
     from ..vector_store import WriterInUseError
 
@@ -642,10 +646,11 @@ def _flush_pending_stores(store, embed_fn) -> int:
         return flushed
 
 
-async def _store_memory_with_retries(store_memory, **kwargs):
+async def _store_memory_with_retries(store_memory, *, deadline: float | None = None, **kwargs):
     last_err = None
     budget_ms = _store_busy_budget_ms()
-    deadline = time.monotonic() + (budget_ms / 1000)
+    if deadline is None:
+        deadline = _store_busy_deadline()
     conn = getattr(kwargs.get("store"), "conn", None)
     for attempt in range(_RETRY_MAX_ATTEMPTS):
         remaining_ms = int((deadline - time.monotonic()) * 1000)
@@ -751,13 +756,17 @@ async def _store(
             return ([TextContent(type="text", text=format_store_result(promised_chunk_id, queued=True))], structured)
 
         from ..store import embed_hot_chunk, embed_pending_chunks, store_memory
+        from ..vector_store import temporary_write_busy_timeout_ms
 
-        store = _get_vector_store()
+        deadline = _store_busy_deadline()
+        with temporary_write_busy_timeout_ms(_remaining_store_busy_budget_ms(deadline), deadline=deadline):
+            store = _get_vector_store()
         normalized_project = _normalize_project_name(project)
 
         # Store WITHOUT embedding — returns immediately (no executor needed)
         result = await _store_memory_with_retries(
             store_memory,
+            deadline=deadline,
             store=store,
             embed_fn=None,
             content=content,

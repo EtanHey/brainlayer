@@ -15,6 +15,7 @@ import struct
 import subprocess
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -63,6 +64,7 @@ from .tag_normalization import ensure_tag_tombstone_schema
 _DEFAULT_BUSY_TIMEOUT_MS = 30_000
 _DEFAULT_READ_BUSY_TIMEOUT_MS = 5_000
 _MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
+_WRITE_BUSY_TIMEOUT_STATE = threading.local()
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -79,6 +81,53 @@ def _read_busy_timeout_ms() -> int:
     return _positive_int_env("BRAINLAYER_READ_BUSY_TIMEOUT_MS", _DEFAULT_READ_BUSY_TIMEOUT_MS)
 
 
+def _write_busy_deadline() -> float | None:
+    deadline = getattr(_WRITE_BUSY_TIMEOUT_STATE, "deadline", None)
+    if isinstance(deadline, int | float):
+        return float(deadline)
+    return None
+
+
+def _remaining_busy_deadline_ms(deadline: float) -> int:
+    remaining_ms = int((deadline - time.monotonic()) * 1000)
+    if remaining_ms <= 0:
+        raise apsw.BusyError("write busy deadline exceeded")
+    return max(1, min(remaining_ms, _MAX_APSW_BUSY_TIMEOUT_MS))
+
+
+def _write_busy_timeout_ms() -> int:
+    timeout_ms = getattr(_WRITE_BUSY_TIMEOUT_STATE, "timeout_ms", _DEFAULT_BUSY_TIMEOUT_MS)
+    deadline = _write_busy_deadline()
+    if deadline is not None:
+        timeout_ms = min(int(timeout_ms), _remaining_busy_deadline_ms(deadline))
+    return max(1, min(int(timeout_ms), _MAX_APSW_BUSY_TIMEOUT_MS))
+
+
+@contextmanager
+def temporary_write_busy_timeout_ms(timeout_ms: int, *, deadline: float | None = None):
+    old_timeout = getattr(_WRITE_BUSY_TIMEOUT_STATE, "timeout_ms", None)
+    old_deadline = getattr(_WRITE_BUSY_TIMEOUT_STATE, "deadline", None)
+    _WRITE_BUSY_TIMEOUT_STATE.timeout_ms = max(1, min(int(timeout_ms), _MAX_APSW_BUSY_TIMEOUT_MS))
+    if deadline is None:
+        if hasattr(_WRITE_BUSY_TIMEOUT_STATE, "deadline"):
+            delattr(_WRITE_BUSY_TIMEOUT_STATE, "deadline")
+    else:
+        _WRITE_BUSY_TIMEOUT_STATE.deadline = float(deadline)
+    try:
+        yield
+    finally:
+        if old_timeout is None:
+            if hasattr(_WRITE_BUSY_TIMEOUT_STATE, "timeout_ms"):
+                delattr(_WRITE_BUSY_TIMEOUT_STATE, "timeout_ms")
+        else:
+            _WRITE_BUSY_TIMEOUT_STATE.timeout_ms = old_timeout
+        if old_deadline is None:
+            if hasattr(_WRITE_BUSY_TIMEOUT_STATE, "deadline"):
+                delattr(_WRITE_BUSY_TIMEOUT_STATE, "deadline")
+        else:
+            _WRITE_BUSY_TIMEOUT_STATE.deadline = old_deadline
+
+
 def _set_busy_timeout_hook(conn: apsw.Connection) -> None:
     """Set busy_timeout on every new connection before any other hooks.
 
@@ -86,7 +135,7 @@ def _set_busy_timeout_hook(conn: apsw.Connection) -> None:
     the Connection() constructor. Without busy_timeout set first, this PRAGMA
     fails with BusyError when other processes hold the DB lock.
     """
-    timeout_ms = _read_busy_timeout_ms() if conn.readonly("main") else _DEFAULT_BUSY_TIMEOUT_MS
+    timeout_ms = _read_busy_timeout_ms() if conn.readonly("main") else _write_busy_timeout_ms()
     conn.setbusytimeout(timeout_ms)
 
 
@@ -530,7 +579,10 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         last_err = None
         start = time.monotonic()
         retry_budget = max(int(self._INIT_MAX_RETRIES), 1)
+        deadline = _write_busy_deadline()
         for attempt in range(retry_budget):
+            if deadline is not None and time.monotonic() >= deadline:
+                raise last_err or apsw.BusyError("write busy deadline exceeded")
             try:
                 self._init_db()
                 return
@@ -547,6 +599,10 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     f"elapsed {elapsed:.1f}s, retrying in {delay:.1f}s...",
                     file=sys.stderr,
                 )
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0 or delay >= remaining:
+                        raise last_err
                 time.sleep(delay)
         raise last_err  # type: ignore[misc]
 
@@ -555,7 +611,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         self.conn = apsw.Connection(str(self.db_path))
 
         # Set busy timeout IMMEDIATELY via APSW native method — before any DDL.
-        self.conn.setbusytimeout(10_000)  # 10 seconds
+        self.conn.setbusytimeout(_write_busy_timeout_ms())
 
         self.conn.enableloadextension(True)
         self.conn.loadextension(sqlite_vec.loadable_path())

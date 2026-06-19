@@ -293,6 +293,54 @@ async def test_store_busy_budget_refreshes_after_timeout_lock_wait(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_store_busy_budget_covers_cold_vector_store_init(tmp_path, monkeypatch):
+    """The store budget must include cold VectorStore init before queuing."""
+    import brainlayer.store  # noqa: F401
+    from brainlayer.mcp import _shared
+    from brainlayer.mcp.store_handler import _store
+    from brainlayer.vector_store import VectorStore
+
+    pending_path = tmp_path / "pending-stores.jsonl"
+    db_path = tmp_path / "busy-init.db"
+    real_sleep = time.sleep
+    init_attempts = 0
+
+    def busy_init(self):
+        nonlocal init_attempts
+        init_attempts += 1
+        real_sleep(0.075)
+        raise apsw.BusyError("database is locked")
+
+    monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "100")
+    monkeypatch.setattr(_shared, "_vector_store", None)
+    monkeypatch.setattr("brainlayer.paths.get_db_path", lambda: db_path)
+    monkeypatch.setattr(VectorStore, "_INIT_MAX_RETRIES", 4)
+    monkeypatch.setattr(VectorStore, "_INIT_BASE_DELAY", 0.001)
+    monkeypatch.setattr(VectorStore, "_INIT_MAX_DELAY", 0.001)
+    monkeypatch.setattr(VectorStore, "_acquire_writer_pidfile", lambda self: None)
+    monkeypatch.setattr(VectorStore, "_release_writer_pidfile", lambda self: None)
+    monkeypatch.setattr(VectorStore, "_init_db", busy_init)
+
+    with (
+        patch("brainlayer.mcp.store_handler._normalize_project_name", return_value="test"),
+        patch("brainlayer.queue_io.enqueue_store", side_effect=RuntimeError("force legacy pending queue")),
+        patch("brainlayer.mcp.store_handler._get_pending_store_path", return_value=pending_path),
+    ):
+        started = time.perf_counter()
+        _texts, structured = await _store(
+            content="cold vector store init must respect busy budget",
+            memory_type="note",
+            project="test",
+        )
+        elapsed = time.perf_counter() - started
+
+    assert elapsed < 0.22
+    assert init_attempts <= 2
+    assert structured["status"] == "DEFERRED"
+    assert structured["deferred"]["action"] == "queued_for_replay"
+
+
+@pytest.mark.asyncio
 async def test_store_preassigns_same_chunk_id_across_busy_retry(tmp_path, monkeypatch):
     """The MCP handler promises one chunk ID before the first write attempt."""
     from brainlayer.mcp.store_handler import _store
