@@ -188,6 +188,25 @@ def _db_needs_initial_schema(db_path: Path) -> bool:
         return False
 
 
+def _ensure_drain_db_schema_preserving_queue(
+    db_path: Path,
+    log_path: Path,
+    *,
+    context: str,
+    force: bool = False,
+) -> bool:
+    if not force and not _db_needs_initial_schema(db_path):
+        return True
+    try:
+        _ensure_drain_db_schema(db_path)
+        return True
+    except Exception as exc:
+        if not _is_busy_error(exc):
+            raise
+        _log(log_path, f"{context} schema init busy; batch preserved: {exc}")
+        return False
+
+
 def _acquire_queue_lock(queue_dir: Path) -> int:
     fd = os.open(queue_dir, os.O_RDONLY)
     try:
@@ -786,7 +805,9 @@ def _table_names(conn: apsw.Connection) -> set[str]:
 
 
 def _is_busy_error(exc: BaseException) -> bool:
-    return _is_sqlite_busy_error(exc)
+    from .vector_store import WriterInUseError
+
+    return isinstance(exc, WriterInUseError) or _is_sqlite_busy_error(exc)
 
 
 def _default_embed_fn() -> Callable[[str], list[float]]:
@@ -1008,8 +1029,13 @@ def burn_drain_once(
 
         all_events = [event for _, events in batch for event in events]
         batch_includes_store = _events_include_store(all_events)
-        if batch_includes_store and _db_needs_initial_schema(db_path):
-            _ensure_drain_db_schema(db_path)
+        if batch_includes_store and not _ensure_drain_db_schema_preserving_queue(
+            db_path,
+            log_path,
+            context="burn drain failed before transaction",
+        ):
+            result.failed_files = len(batch)
+            return result
         for schema_attempt in range(2):
             conn = _open_connection(db_path)
             try:
@@ -1053,7 +1079,14 @@ def burn_drain_once(
                 if batch_includes_store and _is_missing_chunks_error(exc) and schema_attempt == 0:
                     conn.close()
                     conn = None
-                    _ensure_drain_db_schema(db_path)
+                    if not _ensure_drain_db_schema_preserving_queue(
+                        db_path,
+                        log_path,
+                        context="burn drain failed before transaction",
+                        force=True,
+                    ):
+                        result.failed_files = len(batch)
+                        return result
                     continue
                 result.failed_files = len(batch)
                 _log(log_path, f"burn drain failed; batch preserved: {exc}")
@@ -1120,8 +1153,12 @@ def drain_once(
             events_to_apply = events[: _max_events_per_transaction()]
             remaining_events = events[len(events_to_apply) :]
             events_include_store = _events_include_store(events_to_apply)
-            if events_include_store and _db_needs_initial_schema(db_path):
-                _ensure_drain_db_schema(db_path)
+            if events_include_store and not _ensure_drain_db_schema_preserving_queue(
+                db_path,
+                log_path,
+                context=f"drain failed for {path.name}",
+            ):
+                break
 
             for attempt in range(5):
                 conn: apsw.Connection | None = None
@@ -1186,7 +1223,13 @@ def drain_once(
                         if conn is not None:
                             conn.close()
                             conn = None
-                        _ensure_drain_db_schema(db_path)
+                        if not _ensure_drain_db_schema_preserving_queue(
+                            db_path,
+                            log_path,
+                            context=f"drain failed for {path.name}",
+                            force=True,
+                        ):
+                            break
                         continue
                     _log(log_path, f"drain failed for {path.name}: {exc}")
                     break

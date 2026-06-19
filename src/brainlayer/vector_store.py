@@ -114,17 +114,30 @@ def _refresh_write_busy_timeout_for_deadline(conn: apsw.Connection) -> None:
     conn.setbusytimeout(_write_busy_timeout_ms())
 
 
+def _is_write_busy_cleanup_statement(statement) -> bool:
+    if not isinstance(statement, str):
+        return False
+    sql = statement.lstrip().upper()
+    return sql.startswith("ROLLBACK") or sql.startswith("RELEASE")
+
+
+def _run_write_busy_exec_trace(trace, cursor, statement, bindings):
+    if trace is _NO_EXEC_TRACE or trace is None:
+        return True
+    result = trace(cursor, statement, bindings)
+    return True if result is None else result
+
+
 def _install_write_busy_deadline_trace(conn: apsw.Connection):
     if _write_busy_deadline() is None:
         return _NO_EXEC_TRACE
     old_trace = conn.getexectrace()
 
     def refresh_timeout(cursor, statement, bindings):
+        if _is_write_busy_cleanup_statement(statement):
+            return _run_write_busy_exec_trace(old_trace, cursor, statement, bindings)
         _refresh_write_busy_timeout_for_deadline(conn)
-        if old_trace is None:
-            return True
-        result = old_trace(cursor, statement, bindings)
-        return True if result is None else result
+        return _run_write_busy_exec_trace(old_trace, cursor, statement, bindings)
 
     conn.setexectrace(refresh_timeout)
     return old_trace

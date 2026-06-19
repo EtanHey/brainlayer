@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 import apsw
 import pytest
 
-from brainlayer.drain import _open_connection, drain_once
+from brainlayer.drain import _open_connection, burn_drain_once, drain_once
 from brainlayer.mcp.store_handler import (
     _flush_pending_stores,
     _queue_store,
@@ -319,6 +319,80 @@ class TestFlushPendingStores:
             "fresh queued store should create schema before replay",
             "test",
         )
+
+    def test_drain_preserves_store_queue_when_schema_bootstrap_writer_in_use(self, tmp_path, monkeypatch):
+        """Schema bootstrap contention must preserve queued store files for retry."""
+        from brainlayer.vector_store import WriterInUseError
+
+        db_path = tmp_path / "brainlayer.db"
+        queue_dir = tmp_path / "queue"
+        log_path = tmp_path / "drain.log"
+        queue_dir.mkdir()
+        monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+
+        queued = queue_dir / "store-schema-contended.jsonl"
+        queued.write_text(
+            json.dumps(
+                {
+                    "kind": "store_memory",
+                    "chunk_id": "manual-schema-contended",
+                    "content": "store queue should survive contended schema bootstrap",
+                    "memory_type": "note",
+                    "project": "test",
+                }
+            )
+            + "\n"
+        )
+
+        with patch(
+            "brainlayer.drain._ensure_drain_db_schema",
+            side_effect=WriterInUseError("another writer is using brainlayer.db (pid 123)"),
+        ):
+            drained = drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=log_path)
+
+        assert drained == 0
+        assert queued.exists()
+        assert "batch preserved" in log_path.read_text()
+
+    def test_burn_drain_preserves_store_queue_when_schema_bootstrap_writer_in_use(self, tmp_path, monkeypatch):
+        """Burn drain must preserve store files if first-run schema init is contended."""
+        from brainlayer.vector_store import WriterInUseError
+
+        db_path = tmp_path / "brainlayer.db"
+        queue_dir = tmp_path / "queue"
+        log_path = tmp_path / "drain.log"
+        queue_dir.mkdir()
+        monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+
+        queued = queue_dir / "store-schema-contended.jsonl"
+        queued.write_text(
+            json.dumps(
+                {
+                    "kind": "store_memory",
+                    "chunk_id": "manual-schema-contended",
+                    "content": "burn drain should preserve contended schema bootstrap",
+                    "memory_type": "note",
+                    "project": "test",
+                }
+            )
+            + "\n"
+        )
+
+        with patch(
+            "brainlayer.drain._ensure_drain_db_schema",
+            side_effect=WriterInUseError("another writer is using brainlayer.db (pid 123)"),
+        ):
+            result = burn_drain_once(
+                db_path=db_path,
+                queue_dir=queue_dir,
+                batch_size=1,
+                log_path=log_path,
+            )
+
+        assert result.failed_files == 1
+        assert result.files_deleted == 0
+        assert queued.exists()
+        assert "batch preserved" in log_path.read_text()
 
     def test_flush_preserves_legacy_pending_chunk_id(self, tmp_path):
         """Legacy pending-stores flush must persist the caller-visible queued ID."""

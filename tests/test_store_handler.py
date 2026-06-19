@@ -504,6 +504,59 @@ def test_store_busy_budget_refreshes_cold_init_timeout_between_statements(tmp_pa
     assert seen_timeouts[2] < seen_timeouts[1]
 
 
+def test_vector_store_init_trace_allows_expired_rollback_cleanup(monkeypatch):
+    """Init deadline trace must not block transaction cleanup after expiry."""
+    import brainlayer.vector_store as vector_store_module
+    from brainlayer.vector_store import temporary_write_busy_timeout_ms
+
+    fake_clock = {"now": 0.0}
+    executed = []
+
+    class FakeCursor:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql):
+            if self.conn.exec_trace is not None:
+                result = self.conn.exec_trace(self, sql, None)
+                if result is False:
+                    raise apsw.ExecTraceAbort("exec trace aborted")
+            executed.append(sql)
+            return self
+
+    class FakeConn:
+        def __init__(self):
+            self.timeout_ms = 100
+            self.exec_trace = None
+
+        def setbusytimeout(self, timeout_ms):
+            self.timeout_ms = timeout_ms
+
+        def getexectrace(self):
+            return self.exec_trace
+
+        def setexectrace(self, trace):
+            self.exec_trace = trace
+
+        def cursor(self):
+            return FakeCursor(self)
+
+    conn = FakeConn()
+    monkeypatch.setattr(vector_store_module.time, "monotonic", lambda: fake_clock["now"])
+
+    with temporary_write_busy_timeout_ms(100, deadline=0.1):
+        vector_store_module._install_write_busy_deadline_trace(conn)
+        cursor = conn.cursor()
+        fake_clock["now"] = 0.11
+        cursor.execute("ROLLBACK")
+        cursor.execute("ROLLBACK TO vector_init")
+        cursor.execute("RELEASE vector_init")
+        with pytest.raises(apsw.BusyError):
+            cursor.execute("CREATE TABLE after_deadline(id TEXT)")
+
+    assert executed == ["ROLLBACK", "ROLLBACK TO vector_init", "RELEASE vector_init"]
+
+
 @pytest.mark.asyncio
 async def test_store_busy_budget_bounds_singleton_init_lock_wait(tmp_path, monkeypatch):
     """Waiting for another cold VectorStore init must not exceed the store budget."""
