@@ -1212,11 +1212,12 @@ async def _brain_search_dispatch(
             loop = asyncio.get_running_loop()
             model = _get_embedding_model()
             query_embedding = await loop.run_in_executor(None, model.embed_query, query)
+            kg_n_results = _origin_candidate_count(num_results) if order == "origin" else num_results
 
             kg_results = store.kg_hybrid_search(
                 query_embedding=query_embedding,
                 query_text=query,
-                n_results=num_results,
+                n_results=kg_n_results,
                 entity_name=entity_name,
                 project_filter=normalized_project,
                 include_checkpoints=include_checkpoints,
@@ -1228,6 +1229,8 @@ async def _brain_search_dispatch(
                 consumer_scope=consumer_scope,
             )
             chunk_results = kg_results.get("chunks", {})
+            if order == "origin" and chunk_results.get("ids") and chunk_results["ids"][0]:
+                chunk_results = _sort_hybrid_results_by_origin(chunk_results, num_results)
 
             if chunk_results.get("ids") and chunk_results["ids"][0]:
                 for cid, doc, meta, dist in zip(
@@ -1297,10 +1300,14 @@ async def _brain_search_dispatch(
                 "results": structured_results,
                 "facts": fact_items,
             }
+            if order == "origin":
+                structured["order"] = order
             if kg_degraded:
                 structured["kg_degraded"] = True
                 structured["kg_degrade_reason"] = kg_degrade_reason
             formatted_text = format_kg_search(entity_name, structured_results, fact_items, query)
+            if order == "origin":
+                formatted_text += "\n- Order: origin"
             if kg_degraded:
                 formatted_text += f"\n⚠ KG search degraded — reason={kg_degrade_reason} — showing SQL-only results"
             return ([TextContent(type="text", text=formatted_text)], structured)

@@ -56,6 +56,33 @@ class RecordingKgSearchStore(RecordingSearchStore):
         }
 
 
+class OriginKgSearchStore(RecordingKgSearchStore):
+    def kg_hybrid_search(self, **kwargs):
+        self.kg_hybrid_kwargs = kwargs
+        return {
+            "chunks": {
+                "ids": [["kg-new", "kg-old"]],
+                "documents": [["newer Alice origin note", "oldest Alice origin note"]],
+                "metadatas": [
+                    [
+                        {
+                            "source_file": "kg-new.md",
+                            "project": "brainlayer",
+                            "created_at": "2026-03-05T09:00:00Z",
+                        },
+                        {
+                            "source_file": "kg-old.md",
+                            "project": "brainlayer",
+                            "created_at": "2026-01-05T09:00:00Z",
+                        },
+                    ]
+                ],
+                "distances": [[0.1, 0.2]],
+            },
+            "facts": [],
+        }
+
+
 def _origin_embedding(seed: float) -> list[float]:
     return [seed + (i / 100000.0) for i in range(1024)]
 
@@ -175,6 +202,48 @@ async def test_brain_search_origin_order_returns_oldest_matching_chunks_without_
         assert "- Order: origin" in origin_content[0].text
     finally:
         store.close()
+
+
+@pytest.mark.asyncio
+async def test_brain_search_origin_order_sorts_entity_route_chunks(monkeypatch):
+    store = OriginKgSearchStore()
+
+    monkeypatch.setattr("brainlayer.mcp.search_handler._helper_route_enabled", lambda: False)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: store)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_embedding_model", lambda: FakeEmbeddingModel())
+    monkeypatch.setattr("brainlayer.mcp.search_handler._expanded_fts_query", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._exact_chunk_lookup_result", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._kg_facts_sql", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        "brainlayer.mcp.search_handler._detect_entities",
+        lambda *_args, **_kwargs: [{"name": "Alice"}],
+    )
+    monkeypatch.setattr("brainlayer.mcp.search_handler._normalize_project_name", lambda project: project)
+
+    _default_content, default_structured = await _brain_search(
+        query="Alice originmarker",
+        project="brainlayer",
+        source="all",
+        num_results=2,
+        allow_helper_route=False,
+    )
+    default_ids = [item["chunk_id"] for item in default_structured["results"]]
+    assert default_ids == ["kg-new", "kg-old"]
+
+    origin_content, origin_structured = await _brain_search(
+        query="Alice originmarker",
+        project="brainlayer",
+        source="all",
+        num_results=2,
+        order="origin",
+        allow_helper_route=False,
+    )
+
+    origin_ids = [item["chunk_id"] for item in origin_structured["results"]]
+    assert origin_ids == ["kg-old", "kg-new"]
+    assert origin_structured["order"] == "origin"
+    assert store.kg_hybrid_kwargs["n_results"] == 100
+    assert "- Order: origin" in origin_content[0].text
 
 
 @pytest.mark.asyncio
