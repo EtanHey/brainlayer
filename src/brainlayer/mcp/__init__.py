@@ -487,7 +487,7 @@ async def list_tools() -> list[Tool]:
                             "type": "string",
                             "enum": ["relevance", "origin"],
                             "default": "relevance",
-                            "description": "Result ordering. 'relevance' preserves default hybrid relevance/recency ranking; 'origin' returns the earliest matching chunks by created_at.",
+                            "description": "Result ordering. 'relevance' preserves default hybrid relevance/recency ranking; 'origin' returns the earliest hybrid-matched chunks by created_at.",
                         },
                         "before": {
                             "type": "integer",
@@ -882,6 +882,12 @@ async def list_tools() -> list[Tool]:
                             "enum": ["compact", "full"],
                             "default": "compact",
                             "description": "Result detail level (mode=search). 'compact': snippet + metadata. 'full': complete content.",
+                        },
+                        "order": {
+                            "type": "string",
+                            "enum": ["relevance", "origin"],
+                            "default": "relevance",
+                            "description": "Result ordering in mode=search. 'relevance' preserves default hybrid relevance/recency ranking; 'origin' returns the earliest hybrid-matched chunks by created_at.",
                         },
                         "include_checkpoints": {
                             "type": "boolean",

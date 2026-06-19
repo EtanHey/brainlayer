@@ -455,6 +455,18 @@ class TestToolsListBackwardCompat:
         recall_tool = next(t for t in tools if t.name == "brain_recall")
         assert "query" in recall_tool.inputSchema["properties"]
 
+    def test_brain_recall_search_schema_has_order_param(self):
+        """brain_recall search mode exposes origin ordering like brain_search."""
+        from brainlayer.mcp import list_tools
+
+        tools = asyncio.run(list_tools())
+        recall_tool = next(t for t in tools if t.name == "brain_recall")
+        order = recall_tool.inputSchema["properties"]["order"]
+
+        assert order["type"] == "string"
+        assert order["enum"] == ["relevance", "origin"]
+        assert order["default"] == "relevance"
+
 
 # ── Edge cases ────────────────────────────────────────────────────────────────
 
