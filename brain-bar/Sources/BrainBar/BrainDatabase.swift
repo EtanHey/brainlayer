@@ -845,7 +845,7 @@ final class BrainDatabase: @unchecked Sendable {
             "COALESCE(c.archived, 0) = 0",
             "COALESCE(c.status, 'active') = 'active'"
         ]
-        if project != nil { conditions.append("c.project = ?") }
+        if project != nil { conditions.append("(c.project = ? OR c.project IS NULL)") }
         if sourceFilter != nil { conditions.append("c.source = ?") }
         if let explicitTag = tag {
             conditions.append("c.tags LIKE ?")
@@ -1255,7 +1255,7 @@ final class BrainDatabase: @unchecked Sendable {
             "COALESCE(c.archived, 0) = 0",
             "COALESCE(c.status, 'active') = 'active'"
         ]
-        if project != nil { conditions.append("c.project = ?") }
+        if project != nil { conditions.append("(c.project = ? OR c.project IS NULL)") }
         if sourceFilter != nil { conditions.append("c.source = ?") }
         if let explicitTag = tag {
             conditions.append("c.tags LIKE ?")
@@ -2231,8 +2231,10 @@ final class BrainDatabase: @unchecked Sendable {
         }
         guard !tokens.isEmpty else { return "\"\"" }
         // Prefix search keeps typeahead fast while the reranker narrows the
-        // bounded candidate set later in the search pipeline.
-        return tokens.joined(separator: " ")
+        // bounded candidate set later in the search pipeline. Keep short
+        // queries precise, but avoid over-constraining longer natural-language
+        // queries into zero-result intersections.
+        return tokens.joined(separator: tokens.count >= 4 ? " OR " : " ")
     }
 
     private func sanitizeTrigramFTS5Query(_ query: String) -> String {
@@ -2361,7 +2363,7 @@ final class BrainDatabase: @unchecked Sendable {
             "COALESCE(c.archived, 0) = 0",
             "COALESCE(c.status, 'active') = 'active'"
         ]
-        if project != nil { conditions.append("c.project = ?") }
+        if project != nil { conditions.append("(c.project = ? OR c.project IS NULL)") }
         if sourceFilter != nil { conditions.append("c.source = ?") }
         if tag != nil { conditions.append("c.tags LIKE ?") }
         if importanceMin != nil { conditions.append("c.importance >= ?") }

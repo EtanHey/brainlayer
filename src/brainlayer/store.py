@@ -411,8 +411,8 @@ def embed_pending_chunks(
         cursor.execute(
             """
             SELECT c.id, c.content FROM chunks c
-            LEFT JOIN chunk_vectors v ON c.id = v.chunk_id
-            WHERE v.chunk_id IS NULL
+            LEFT JOIN chunk_vectors_rowids r ON c.id = r.id
+            WHERE r.id IS NULL
               AND c.content IS NOT NULL
               AND c.content != ''
               AND c.archived_at IS NULL
@@ -444,6 +444,13 @@ def embed_pending_chunks(
                     logger.warning("Failed to write pending chunk %s: %s", chunk_id, e)
         except Exception as e:
             logger.warning("Failed to embed pending chunk batch: %s", e)
+            for chunk_id, content in rows:
+                try:
+                    embedding = embed_fn(content)
+                    store._upsert_chunk_vector(cursor, chunk_id, embedding)
+                    count += 1
+                except Exception as row_error:
+                    logger.warning("Failed to embed chunk %s: %s", chunk_id, row_error)
     else:
         for chunk_id, content in rows:
             try:
