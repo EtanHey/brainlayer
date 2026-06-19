@@ -300,6 +300,29 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(summary.ingress.tertiarySeriesLabel, "Digest")
     }
 
+    func testDashboardFlowUsesDistinctV1WriteSeriesPalette() {
+        let stats = DashboardStats(
+            chunkCount: 9,
+            enrichedChunkCount: 0,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 0,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 0,
+            recentActivityBuckets: [1, 2, 3],
+            recentAgentWriteBuckets: [1, 0, 1],
+            recentWatcherWriteBuckets: [0, 2, 1],
+            recentDigestWriteBuckets: [0, 0, 1],
+            recentEnrichmentBuckets: [0, 0, 0],
+            activityWindowMinutes: 15
+        )
+
+        let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: Date(timeIntervalSince1970: 1_764_236_400))
+
+        XCTAssertEqual(summary.ingress.accentColor, BrainBarDesignTokens.Colors.seriesAgent)
+        XCTAssertEqual(summary.ingress.secondaryAccentColor, BrainBarDesignTokens.Colors.seriesWatcher)
+        XCTAssertEqual(summary.ingress.tertiaryAccentColor, BrainBarDesignTokens.Colors.seriesDigest)
+    }
+
     func testDashboardStatsComputesVectorETAFromBacklogAndNetDrain() {
         let stats = DashboardStats(
             chunkCount: 10_105,
@@ -758,6 +781,42 @@ final class DashboardTests: XCTestCase {
         ])
         XCTAssertEqual(presentation.xAxisDomainStart, now.addingTimeInterval(-20 * 60))
         XCTAssertEqual(presentation.xAxisDomainEnd, now)
+    }
+
+    func testSparklinePresentationOmitsZeroWriteSourcesButKeepsDimmedLegendEntries() {
+        let presentation = SparklineChartPresentation(
+            label: "Writes over 30m",
+            values: [0, 1, 0],
+            secondaryValues: [0, 0, 0],
+            tertiaryValues: [0, 0, 2],
+            primarySeriesLabel: "Agent stores",
+            secondarySeriesLabel: "JSONL watcher",
+            tertiarySeriesLabel: "Digest",
+            activityWindowMinutes: 30,
+            fetchedAt: Date(timeIntervalSince1970: 1_764_236_400)
+        )
+
+        XCTAssertEqual(presentation.visibleSeriesLabels, ["Agent stores", "Digest"])
+        XCTAssertEqual(presentation.legendEntries.map(\.label), ["Agent stores", "JSONL watcher", "Digest"])
+        XCTAssertEqual(presentation.legendEntries.map(\.isActive), [true, false, true])
+    }
+
+    func testSparklinePresentationShowsListeningCaptionForColdWriteStart() {
+        let presentation = SparklineChartPresentation(
+            label: "Writes over 30m",
+            values: [0, 0, 0],
+            secondaryValues: [0, 0, 0],
+            tertiaryValues: [0, 0, 0],
+            primarySeriesLabel: "Agent stores",
+            secondarySeriesLabel: "JSONL watcher",
+            tertiarySeriesLabel: "Digest",
+            activityWindowMinutes: 30,
+            fetchedAt: Date(timeIntervalSince1970: 1_764_236_400)
+        )
+
+        XCTAssertTrue(presentation.showsListeningForWritesCaption)
+        XCTAssertEqual(presentation.visibleSeriesLabels, [])
+        XCTAssertTrue(presentation.legendEntries.allSatisfy { !$0.isActive })
     }
 
     func testSparklineTooltipPlacementClampsHorizontally() {

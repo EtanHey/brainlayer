@@ -232,9 +232,9 @@ struct DashboardFlowSummary: Sendable, Equatable {
 
     static func derive(daemon: DaemonHealthSnapshot?, stats: DashboardStats, now: Date = Date()) -> DashboardFlowSummary {
         let windowLabel = DashboardMetricFormatter.windowLabel(minutes: stats.activityWindowMinutes)
-        let agentStoresColor = NSColor.systemGreen
-        let jsonlWatcherColor = NSColor.systemOrange
-        let digestColor = NSColor.systemPurple
+        let agentStoresColor = BrainBarDesignTokens.Colors.seriesAgent
+        let jsonlWatcherColor = BrainBarDesignTokens.Colors.seriesWatcher
+        let digestColor = BrainBarDesignTokens.Colors.seriesDigest
         let enrichmentColor = BrainBarStateTheme.active.theme.color
 
         let writesLive = stats.eventIsLive(stats.lastWriteAt, now: now)
