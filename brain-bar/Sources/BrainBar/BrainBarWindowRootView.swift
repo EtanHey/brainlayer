@@ -664,7 +664,7 @@ private struct BrainBarDashboardView: View {
     }
 
     private func signalSummary(indexedCount: Int, backlogCount: Int, coveragePercent: Double) -> String {
-        "\(indexedCount)/\(collector.stats.chunkCount) · " +
+        "\(indexedCount)/\(collector.stats.signalEligibleChunkCount) · " +
             String(format: "%.0f%%", coveragePercent) +
             " · backlog \(backlogCount)"
     }
@@ -679,7 +679,7 @@ private struct BrainBarTrigramProgress: View {
                 Text("Trigram maintenance")
                     .font(.system(size: 11, weight: .semibold))
                 Spacer(minLength: 8)
-                Text("\(stats.trigramIndexedChunkCount)/\(stats.chunkCount)")
+                Text("\(stats.trigramIndexedChunkCount)/\(stats.signalEligibleChunkCount)")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
@@ -698,7 +698,7 @@ private struct BrainBarSignalCoveragePanel: View {
             BrainBarSignalCoverage(
                 name: "Vector",
                 indexedCount: stats.vectorIndexedChunkCount,
-                totalCount: stats.chunkCount,
+                totalCount: stats.signalEligibleChunkCount,
                 backlogCount: stats.vectorBacklogCount,
                 coveragePercent: stats.vectorCoveragePercent,
                 accentColor: .brainBarAccent
@@ -706,7 +706,7 @@ private struct BrainBarSignalCoveragePanel: View {
             BrainBarSignalCoverage(
                 name: "FTS",
                 indexedCount: stats.ftsIndexedChunkCount,
-                totalCount: stats.chunkCount,
+                totalCount: stats.signalEligibleChunkCount,
                 backlogCount: stats.ftsBacklogCount,
                 coveragePercent: stats.ftsCoveragePercent,
                 accentColor: .brainBarAccentBright
@@ -714,7 +714,7 @@ private struct BrainBarSignalCoveragePanel: View {
             BrainBarSignalCoverage(
                 name: "Trigram",
                 indexedCount: stats.trigramIndexedChunkCount,
-                totalCount: stats.chunkCount,
+                totalCount: stats.signalEligibleChunkCount,
                 backlogCount: stats.trigramBacklogCount,
                 coveragePercent: stats.trigramCoveragePercent,
                 accentColor: .brainBarAccentViolet

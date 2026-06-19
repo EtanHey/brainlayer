@@ -66,7 +66,7 @@ final class BrainBarDashboardPanelController {
         panel.titlebarAppearsTransparent = true
         panel.isReleasedWhenClosed = false
         panel.isFloatingPanel = true
-        panel.hidesOnDeactivate = true
+        panel.hidesOnDeactivate = false
         panel.level = .statusBar
         panel.minSize = minSize
         panel.maxSize = maxSize

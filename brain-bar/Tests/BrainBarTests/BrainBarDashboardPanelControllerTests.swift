@@ -14,6 +14,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         XCTAssertGreaterThan(panel.maxSize.height, BrainBarDashboardPanelController.defaultSize.height)
         XCTAssertEqual(panel.minSize, BrainBarDashboardPanelController.minSize)
         XCTAssertTrue(panel.styleMask.contains(.resizable))
+        XCTAssertFalse(panel.hidesOnDeactivate)
         XCTAssertEqual(panel.contentViewController, controller.contentViewControllerForTesting)
         XCTAssertEqual(controller.contentViewControllerForTesting.view.frame.size, BrainBarDashboardPanelController.defaultSize)
     }
@@ -83,7 +84,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         )
         XCTAssertNotNil(
             field,
-            "Command bar should create its ready text field when runtime.database was installed before the popover became visible."
+            "Command bar should create its ready text field when runtime.database was installed before the panel became visible."
         )
     }
 

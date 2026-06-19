@@ -86,7 +86,7 @@ final class DashboardTests: XCTestCase {
     }
 
     func testDashboardStatsReportsPerSignalCoverageAndBacklogs() throws {
-        for id in ["signal-1", "signal-2", "signal-3"] {
+        for id in ["signal-1", "signal-2", "signal-3", "signal-archived"] {
             try db.insertChunk(
                 id: id,
                 content: "Signal coverage fixture \(id)",
@@ -96,6 +96,7 @@ final class DashboardTests: XCTestCase {
                 importance: 5
             )
         }
+        db.exec("UPDATE chunks SET archived = 1, archived_at = '2026-06-19T00:00:00Z', status = 'archived' WHERE id = 'signal-archived'")
         db.exec("CREATE TABLE IF NOT EXISTS chunk_vectors_rowids(id TEXT PRIMARY KEY)")
         db.exec("INSERT INTO chunk_vectors_rowids(id) VALUES ('signal-1'), ('signal-2')")
         db.exec("DELETE FROM chunks_fts WHERE chunk_id = 'signal-3'")
@@ -103,7 +104,8 @@ final class DashboardTests: XCTestCase {
 
         let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
 
-        XCTAssertEqual(stats.chunkCount, 3)
+        XCTAssertEqual(stats.chunkCount, 4)
+        XCTAssertEqual(stats.signalEligibleChunkCount, 3)
         XCTAssertEqual(stats.vectorIndexedChunkCount, 2)
         XCTAssertEqual(stats.ftsIndexedChunkCount, 2)
         XCTAssertEqual(stats.trigramIndexedChunkCount, 2)
@@ -113,6 +115,26 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.vectorCoveragePercent, 66.666, accuracy: 0.01)
         XCTAssertEqual(stats.ftsCoveragePercent, 66.666, accuracy: 0.01)
         XCTAssertEqual(stats.trigramCoveragePercent, 66.666, accuracy: 0.01)
+    }
+
+    func testDashboardStatsTreatsLegacyFtsTableWithoutChunkIdAsUnknownCoverage() throws {
+        try db.insertChunk(
+            id: "legacy-fts-1",
+            content: "Legacy FTS fixture",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+        db.exec("DROP TABLE chunks_fts")
+        db.exec("CREATE VIRTUAL TABLE chunks_fts USING fts5(content)")
+        db.exec("INSERT INTO chunks_fts(content) VALUES ('Legacy FTS fixture')")
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
+
+        XCTAssertEqual(stats.signalEligibleChunkCount, 1)
+        XCTAssertEqual(stats.ftsIndexedChunkCount, 0)
+        XCTAssertEqual(stats.ftsBacklogCount, 1)
     }
 
     func testDashboardStatsReadsWatcherHealthSnapshot() throws {
@@ -276,6 +298,7 @@ final class DashboardTests: XCTestCase {
         XCTAssertTrue(source.contains("Vector"))
         XCTAssertTrue(source.contains("FTS"))
         XCTAssertTrue(source.contains("Trigram"))
+        XCTAssertTrue(source.contains("signalEligibleChunkCount"))
         XCTAssertTrue(source.contains("vectorBacklogCount"))
         XCTAssertTrue(source.contains("ftsBacklogCount"))
         XCTAssertTrue(source.contains("trigramBacklogCount"))
