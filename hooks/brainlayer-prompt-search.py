@@ -13,9 +13,11 @@ Target: <500ms total.
 
 import json
 import os
+import queue
 import re
 import sqlite3
 import sys
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
@@ -34,6 +36,7 @@ LIGHT_CONFIDENCE_THRESHOLD = 0.005
 MAX_ADAPTIVE_INJECTION = 3
 MAX_HYBRID_CANDIDATES = 8
 DEGRADED_PREFIX = "⚠️ DEGRADED: BrainLayer"
+DEFAULT_EMBED_TIMEOUT_MS = 1000.0
 
 
 def degraded_notice(reason):
@@ -42,6 +45,38 @@ def degraded_notice(reason):
 
 def emit_degraded(reason):
     print(degraded_notice(reason))
+
+
+def embed_timeout_ms():
+    raw = os.environ.get("BRAINLAYER_EMBED_TIMEOUT_MS", str(DEFAULT_EMBED_TIMEOUT_MS))
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_EMBED_TIMEOUT_MS
+    if not value or value < 0:
+        return DEFAULT_EMBED_TIMEOUT_MS
+    return min(value, 30_000.0)
+
+
+def run_with_timeout(func, timeout_ms, *args, **kwargs):
+    results = queue.Queue(maxsize=1)
+
+    def target():
+        try:
+            results.put((True, func(*args, **kwargs)))
+        except BaseException as exc:
+            results.put((False, exc))
+
+    thread = threading.Thread(target=target, name="brainlayer-hook-hybrid", daemon=True)
+    thread.start()
+    thread.join(timeout_ms / 1000.0)
+    if thread.is_alive():
+        raise TimeoutError(f"hybrid search exceeded {timeout_ms:.0f}ms")
+
+    ok, payload = results.get_nowait()
+    if ok:
+        return payload
+    raise payload
 
 
 # Prompts shorter than this are probably greetings/commands — skip search
@@ -944,7 +979,7 @@ def run_fts_search(db_path, keywords, limit):
 def search_prompt_chunks(prompt, db_path, keywords, limit):
     """Search with hybrid first, then fall back to FTS-only behavior."""
     try:
-        return run_hybrid_search(prompt, db_path, keywords, limit), True
+        return run_with_timeout(run_hybrid_search, embed_timeout_ms(), prompt, db_path, keywords, limit), True
     except Exception:
         return run_fts_search(db_path, keywords, limit), False
 

@@ -1,13 +1,26 @@
+import time
+
 import pytest
 
 from brainlayer.mcp import call_tool
-from brainlayer.mcp.search_handler import _brain_search
+from brainlayer.mcp.search_handler import _brain_search, _search
 from brainlayer.vector_store import VectorStore
 
 
 class FakeEmbeddingModel:
     def embed_query(self, _query: str) -> list[float]:
         return [0.1, 0.2, 0.3]
+
+
+class SlowEmbeddingModel:
+    def embed_query(self, _query: str) -> list[float]:
+        time.sleep(0.05)
+        return [0.9, 0.9, 0.9]
+
+
+class RaisingEmbeddingModel:
+    def embed_query(self, _query: str) -> list[float]:
+        raise RuntimeError("embedding backend unavailable")
 
 
 class OriginEmbeddingModel:
@@ -36,6 +49,24 @@ class RecordingSearchStore:
 
     def enrich_results_with_session_context(self, results):
         return results
+
+
+class FtsFallbackSearchStore(RecordingSearchStore):
+    def hybrid_search(self, **kwargs):
+        self.hybrid_kwargs = kwargs
+        if kwargs["query_embedding"] is None:
+            return {
+                "ids": [["fts-fallback-hit"]],
+                "documents": [["keyword fallback result from FTS"]],
+                "metadatas": [[{"source_file": "fts.md", "project": "brainlayer"}]],
+                "distances": [[1.0]],
+            }
+        return {
+            "ids": [["hybrid-hit"]],
+            "documents": [["semantic and keyword hybrid result"]],
+            "metadatas": [[{"source_file": "hybrid.md", "project": "brainlayer"}]],
+            "distances": [[0.25]],
+        }
 
 
 class RecordingKgSearchStore(RecordingSearchStore):
@@ -134,6 +165,72 @@ def _seed_origin_search_store(db_path) -> tuple[VectorStore, list[float]]:
         ],
     )
     return store, query_embedding
+
+
+@pytest.mark.asyncio
+async def test_brain_search_falls_back_to_fts_when_embedding_times_out(monkeypatch):
+    store = FtsFallbackSearchStore()
+
+    monkeypatch.setenv("BRAINLAYER_EMBED_TIMEOUT_MS", "1")
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: store)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_embedding_model", lambda: SlowEmbeddingModel())
+    monkeypatch.setattr("brainlayer.mcp.search_handler._normalize_project_name", lambda project: project)
+
+    started = time.monotonic()
+    content, structured = await _search(
+        query="keyword fallback",
+        source="all",
+        num_results=1,
+    )
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.5
+    assert store.hybrid_kwargs["query_embedding"] is None
+    assert structured["search_mode"] == "fts_only"
+    assert structured["fallback_reason"] == "embed_timeout"
+    assert [item["chunk_id"] for item in structured["results"]] == ["fts-fallback-hit"]
+    assert "FTS-only fallback" in content[0].text
+
+
+@pytest.mark.asyncio
+async def test_brain_search_falls_back_to_fts_when_embedding_raises(monkeypatch):
+    store = FtsFallbackSearchStore()
+
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: store)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_embedding_model", lambda: RaisingEmbeddingModel())
+    monkeypatch.setattr("brainlayer.mcp.search_handler._normalize_project_name", lambda project: project)
+
+    _content, structured = await _search(
+        query="keyword fallback",
+        source="all",
+        num_results=1,
+    )
+
+    assert store.hybrid_kwargs["query_embedding"] is None
+    assert structured["search_mode"] == "fts_only"
+    assert structured["fallback_reason"] == "embed_error:RuntimeError"
+    assert [item["chunk_id"] for item in structured["results"]] == ["fts-fallback-hit"]
+
+
+@pytest.mark.asyncio
+async def test_brain_search_uses_hybrid_when_embedding_is_fast(monkeypatch):
+    store = FtsFallbackSearchStore()
+
+    monkeypatch.setenv("BRAINLAYER_EMBED_TIMEOUT_MS", "1000")
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: store)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_embedding_model", lambda: FakeEmbeddingModel())
+    monkeypatch.setattr("brainlayer.mcp.search_handler._normalize_project_name", lambda project: project)
+
+    _content, structured = await _search(
+        query="keyword fallback",
+        source="all",
+        num_results=1,
+    )
+
+    assert store.hybrid_kwargs["query_embedding"] == [0.1, 0.2, 0.3]
+    assert structured["search_mode"] == "hybrid"
+    assert "fallback_reason" not in structured
+    assert [item["chunk_id"] for item in structured["results"]] == ["hybrid-hit"]
 
 
 @pytest.mark.asyncio

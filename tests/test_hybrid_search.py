@@ -217,6 +217,23 @@ class TestHybridSearch:
 
         assert "fts-hit" in results["ids"][0]
 
+    def test_hybrid_search_accepts_none_embedding_for_fts_only_fallback(self, store):
+        _insert_chunk(
+            store,
+            chunk_id="fts-none-embedding-hit",
+            content="exact keyword fallback when embedding is unavailable",
+            embedding=_embed("distant vector"),
+        )
+        store.build_binary_index()
+
+        results = store.hybrid_search(
+            query_embedding=None,
+            query_text="embedding unavailable",
+            n_results=5,
+        )
+
+        assert results["ids"][0] == ["fts-none-embedding-hit"]
+
     def test_hybrid_search_fts_only_returns_provenance_metadata(self, store):
         cursor = store.conn.cursor()
         columns = {row[1] for row in cursor.execute("PRAGMA table_info(chunks)")}
