@@ -728,6 +728,73 @@ def test_store_busy_budget_refreshes_supersede_timeout_between_statements(monkey
     assert conn.exec_trace is None
 
 
+def test_store_busy_budget_allows_expired_rollback_cleanup(monkeypatch):
+    """Rollback cleanup must not be blocked by the expired busy-budget trace."""
+    from brainlayer.mcp import store_handler
+
+    fake_clock = {"now": 0.0}
+    executed = []
+
+    class FakeCursor:
+        def __init__(self, conn):
+            self.conn = conn
+            self._pragma = False
+
+        def execute(self, sql, *args):
+            if sql == "PRAGMA busy_timeout":
+                self._pragma = True
+                return self
+            if self.conn.exec_trace is not None:
+                bindings = args[0] if args else None
+                result = self.conn.exec_trace(self, sql, bindings)
+                if result is False:
+                    raise apsw.ExecTraceAbort("exec trace aborted")
+            executed.append(sql)
+            return self
+
+        def fetchone(self):
+            if self._pragma:
+                return (self.conn.timeout_ms,)
+            return None
+
+    class FakeConn:
+        def __init__(self):
+            self.timeout_ms = 250
+            self.exec_trace = None
+
+        def cursor(self):
+            return FakeCursor(self)
+
+        def setbusytimeout(self, timeout_ms):
+            self.timeout_ms = timeout_ms
+
+        def getexectrace(self):
+            return self.exec_trace
+
+        def setexectrace(self, trace):
+            self.exec_trace = trace
+
+    conn = FakeConn()
+    monkeypatch.setattr(store_handler.time, "monotonic", lambda: fake_clock["now"])
+
+    with store_handler._temporary_store_busy_timeout(conn, 0.1):
+        cursor = conn.cursor()
+        cursor.execute("BEGIN IMMEDIATE")
+        fake_clock["now"] = 0.11
+        cursor.execute("ROLLBACK")
+        cursor.execute("ROLLBACK TO store_memory")
+        cursor.execute("RELEASE store_memory")
+
+    assert executed == [
+        "BEGIN IMMEDIATE",
+        "ROLLBACK",
+        "ROLLBACK TO store_memory",
+        "RELEASE store_memory",
+    ]
+    assert conn.timeout_ms == 250
+    assert conn.exec_trace is None
+
+
 @pytest.mark.asyncio
 async def test_store_preassigns_same_chunk_id_across_busy_retry(tmp_path, monkeypatch):
     """The MCP handler promises one chunk ID before the first write attempt."""

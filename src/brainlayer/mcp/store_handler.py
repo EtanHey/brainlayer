@@ -571,6 +571,20 @@ def _set_connection_exec_trace(conn, trace) -> None:
         logger.debug("Failed to set store exec trace", exc_info=True)
 
 
+def _is_store_busy_cleanup_statement(statement) -> bool:
+    if not isinstance(statement, str):
+        return False
+    sql = statement.lstrip().upper()
+    return sql.startswith("ROLLBACK") or sql.startswith("RELEASE")
+
+
+def _run_connection_exec_trace(trace, cursor, statement, bindings):
+    if trace is _NO_EXEC_TRACE or trace is None:
+        return True
+    result = trace(cursor, statement, bindings)
+    return True if result is None else result
+
+
 def _remaining_store_busy_budget_ms(deadline: float) -> int:
     remaining_ms = int((deadline - time.monotonic()) * 1000)
     if remaining_ms <= 0:
@@ -593,11 +607,10 @@ def _temporary_store_busy_timeout(conn, deadline: float):
     original_exec_trace = _connection_exec_trace(conn)
 
     def refresh_timeout(cursor, statement, bindings):
+        if _is_store_busy_cleanup_statement(statement):
+            return _run_connection_exec_trace(original_exec_trace, cursor, statement, bindings)
         _set_connection_busy_timeout(conn, _remaining_store_busy_budget_ms(deadline))
-        if original_exec_trace is _NO_EXEC_TRACE or original_exec_trace is None:
-            return True
-        result = original_exec_trace(cursor, statement, bindings)
-        return True if result is None else result
+        return _run_connection_exec_trace(original_exec_trace, cursor, statement, bindings)
 
     try:
         timeout_ms = _remaining_store_busy_budget_ms(deadline)
