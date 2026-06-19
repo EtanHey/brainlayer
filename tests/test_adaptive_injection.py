@@ -1,6 +1,7 @@
 """Tests for score-based adaptive prompt injection in the BrainLayer hook."""
 
 import importlib.util
+import time
 from pathlib import Path
 
 import pytest
@@ -154,6 +155,48 @@ class TestSearchFallback:
 
         assert used_hybrid is False
         assert [row["id"] for row in rows] == ["fts-best"]
+
+    def test_slow_hybrid_search_falls_back_to_fts_only_within_timeout(self, prompt_search, monkeypatch):
+        fts_rows = [_row("fts-timeout", 0.0)]
+
+        def slow_hybrid(*args, **kwargs):
+            time.sleep(0.05)
+            return [_row("late-hybrid", 0.02)]
+
+        monkeypatch.setenv("BRAINLAYER_EMBED_TIMEOUT_MS", "1")
+        monkeypatch.setattr(prompt_search, "run_hybrid_search", slow_hybrid)
+        monkeypatch.setattr(prompt_search, "run_fts_search", lambda *args, **kwargs: fts_rows)
+
+        started = time.monotonic()
+        rows, used_hybrid = prompt_search.search_prompt_chunks(
+            prompt="keyword fallback query",
+            db_path="/tmp/test.db",
+            keywords=["keyword", "fallback"],
+            limit=8,
+        )
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 0.5
+        assert used_hybrid is False
+        assert [row["id"] for row in rows] == ["fts-timeout"]
+
+    def test_fast_hybrid_search_stays_on_hybrid_path(self, prompt_search, monkeypatch):
+        hybrid_rows = [_row("hybrid-best", 0.02)]
+        fts_rows = [_row("fts-unused", 0.0)]
+
+        monkeypatch.setenv("BRAINLAYER_EMBED_TIMEOUT_MS", "1000")
+        monkeypatch.setattr(prompt_search, "run_hybrid_search", lambda *args, **kwargs: hybrid_rows)
+        monkeypatch.setattr(prompt_search, "run_fts_search", lambda *args, **kwargs: fts_rows)
+
+        rows, used_hybrid = prompt_search.search_prompt_chunks(
+            prompt="keyword fallback query",
+            db_path="/tmp/test.db",
+            keywords=["keyword", "fallback"],
+            limit=8,
+        )
+
+        assert used_hybrid is True
+        assert [row["id"] for row in rows] == ["hybrid-best"]
 
     def test_hybrid_search_opens_vector_store_readonly(self, prompt_search, monkeypatch, tmp_path):
         opened = []

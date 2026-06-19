@@ -1711,7 +1711,7 @@ class SearchMixin:
 
     def hybrid_search(
         self,
-        query_embedding: List[float],
+        query_embedding: Optional[List[float]],
         query_text: str,
         fts_query_override: Optional[str] = None,
         n_results: int = 10,
@@ -1810,8 +1810,19 @@ class SearchMixin:
 
         # 1. Semantic search leg — prefer binary vectors, fall back to float vectors
         # when the binary index is unavailable (for example readonly live DBs).
+        # A None embedding is an intentional FTS-only fallback: query embedding
+        # must never block lexical reads.
         candidate_fetch_count = max(n_results * 3, _MMR_CANDIDATE_LIMIT)
-        if getattr(self, "_binary_index_available", False):
+        if query_embedding is None:
+            semantic = {"ids": [[]], "documents": [[]], "metadatas": [[]], "distances": [[]]}
+            search_profile.emit(
+                profile_scope,
+                "semantic_skip",
+                profile_query_id,
+                0.0,
+                reason="missing_query_embedding",
+            )
+        elif getattr(self, "_binary_index_available", False):
             binary_started = search_profile.now()
             semantic = self._binary_search(
                 query_embedding=query_embedding,

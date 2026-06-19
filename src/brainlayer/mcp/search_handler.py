@@ -34,6 +34,7 @@ _ORIGIN_ORDER_SCOPE = "expanded_hybrid_candidates"
 _ORIGIN_ORDER_LABEL = "- Order: origin (earliest among expanded hybrid candidates)"
 _HELPER_SOCKET_GLOB = "/tmp/brainbar-hybrid-*.sock"
 _HELPER_SOCKET_TIMEOUT_SECONDS = 2.0
+_DEFAULT_EMBED_TIMEOUT_MS = 1000.0
 
 from ._format import format_kg_search, format_recalled_context, format_search_results, format_stats
 from ._shared import (
@@ -58,6 +59,17 @@ from ._shared import (
 def _get_vector_store():
     """Compatibility hook for tests; search handlers use the readonly store by default."""
     return _get_search_vector_store()
+
+
+def _embed_timeout_ms() -> float:
+    raw = os.environ.get("BRAINLAYER_EMBED_TIMEOUT_MS", str(_DEFAULT_EMBED_TIMEOUT_MS))
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_EMBED_TIMEOUT_MS
+    if not value or value < 0:
+        return _DEFAULT_EMBED_TIMEOUT_MS
+    return min(value, 30_000.0)
 
 
 def _origin_candidate_count(num_results: int) -> int:
@@ -1767,20 +1779,44 @@ async def _search(
 
         normalized_project = _normalize_project_name(project)
         loop = asyncio.get_running_loop()
-        model = _get_embedding_model()
         embed_started = search_profile.now()
+        query_embedding = None
+        search_mode = "hybrid"
+        fallback_reason = None
         try:
-            query_embedding = await loop.run_in_executor(None, model.embed_query, query)
-        except Exception as exc:
+            embed_timeout_ms = _embed_timeout_ms()
+            query_embedding = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    lambda: _get_embedding_model().embed_query(query),
+                ),
+                timeout=embed_timeout_ms / 1000.0,
+            )
+        except TimeoutError as exc:
+            search_mode = "fts_only"
+            fallback_reason = "embed_timeout"
             search_profile.emit(
                 profile_scope,
                 "embed",
                 profile_query_id,
                 search_profile.dur_ms(embed_started),
                 error=exc.__class__.__name__,
+                timeout_ms=embed_timeout_ms,
+                fallback="fts_only",
             )
-            raise
-        search_profile.emit(profile_scope, "embed", profile_query_id, search_profile.dur_ms(embed_started))
+        except Exception as exc:
+            search_mode = "fts_only"
+            fallback_reason = f"embed_error:{exc.__class__.__name__}"
+            search_profile.emit(
+                profile_scope,
+                "embed",
+                profile_query_id,
+                search_profile.dur_ms(embed_started),
+                error=exc.__class__.__name__,
+                fallback="fts_only",
+            )
+        else:
+            search_profile.emit(profile_scope, "embed", profile_query_id, search_profile.dur_ms(embed_started))
 
         if source == "all":
             source_filter = None
@@ -1890,7 +1926,14 @@ async def _search(
                     }
                 )
                 structured_results.append(item)
-            structured = {"query": query, "total": len(structured_results), "results": structured_results}
+            structured = {
+                "query": query,
+                "total": len(structured_results),
+                "results": structured_results,
+                "search_mode": search_mode,
+            }
+            if fallback_reason:
+                structured["fallback_reason"] = fallback_reason
             if order == "origin":
                 structured["order"] = order
                 structured["order_scope"] = _ORIGIN_ORDER_SCOPE
@@ -1900,9 +1943,16 @@ async def _search(
                 len(structured_results),
                 order=order if order == "origin" else None,
             )
+            if search_mode == "fts_only":
+                formatted_text = (
+                    f"{formatted_text}\n\n"
+                    f"Search mode: FTS-only fallback ({fallback_reason}); vector embedding was skipped."
+                )
             return ([TextContent(type="text", text=formatted_text)], structured)
 
         output_parts = [f"## Search Results for: {query}\n"]
+        if search_mode == "fts_only":
+            output_parts.append(f"Search mode: FTS-only fallback ({fallback_reason}); vector embedding was skipped.")
         if order == "origin":
             output_parts.append(_ORIGIN_ORDER_LABEL)
         structured_results = []
@@ -1973,7 +2023,14 @@ async def _search(
             output_parts.append(doc)
             output_parts.append("\n---")
 
-        structured = {"query": query, "total": len(structured_results), "results": structured_results}
+        structured = {
+            "query": query,
+            "total": len(structured_results),
+            "results": structured_results,
+            "search_mode": search_mode,
+        }
+        if fallback_reason:
+            structured["fallback_reason"] = fallback_reason
         if order == "origin":
             structured["order"] = order
             structured["order_scope"] = _ORIGIN_ORDER_SCOPE
