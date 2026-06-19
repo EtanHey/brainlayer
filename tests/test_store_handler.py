@@ -1,7 +1,10 @@
 """Tests for MCP store handler responses."""
 
+import asyncio
 import json
-from unittest.mock import patch
+import threading
+import time
+from unittest.mock import MagicMock, patch
 
 import apsw
 import pytest
@@ -66,6 +69,783 @@ async def test_busy_queue_fallback_returns_loud_deferred_receipt(tmp_path):
     assert structured["deferred"]["queue_path"] == str(queued_files[0])
     assert structured["deferred"]["action"] == "queued_for_drain"
     assert any("DEFERRED" in item.text for item in texts)
+
+
+@pytest.mark.asyncio
+async def test_store_validates_before_busy_deferral(tmp_path):
+    """Busy before store_memory must not queue requests that validation would reject."""
+    from brainlayer.mcp.store_handler import _store
+
+    queue_dir = tmp_path / "queue"
+
+    with (
+        patch("brainlayer.mcp.store_handler._get_vector_store", side_effect=apsw.BusyError("database is locked")),
+        patch("brainlayer.queue_io.get_queue_dir", return_value=queue_dir),
+    ):
+        result = await _store(
+            content="invalid memory type should never be queued",
+            memory_type="invalid_type",
+            project="test",
+        )
+
+    assert result.isError is True
+    assert "Validation error" in result.content[0].text
+    assert not list(queue_dir.glob("mcp-*.jsonl"))
+
+
+@pytest.mark.asyncio
+async def test_store_busy_budget_defers_promptly_and_pending_flush_replays(tmp_path, monkeypatch):
+    """A held write lock must hit the bounded store budget, defer, and replay later."""
+    from brainlayer.mcp.store_handler import _flush_pending_stores, _store
+
+    pending_path = tmp_path / "pending-stores.jsonl"
+    attempts = 0
+
+    def held_write_lock_store_memory(**kwargs):
+        nonlocal attempts
+        attempts += 1
+        time.sleep(0.075)
+        raise apsw.BusyError("database is locked")
+
+    monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "100")
+    monkeypatch.setattr("brainlayer.mcp.store_handler._retry_delay", 0.001)
+
+    with (
+        patch("brainlayer.mcp.store_handler._get_vector_store", return_value=MagicMock()),
+        patch("brainlayer.mcp.store_handler._normalize_project_name", return_value="test"),
+        patch("brainlayer.queue_io.enqueue_store", side_effect=RuntimeError("force legacy pending queue")),
+        patch("brainlayer.mcp.store_handler._get_pending_store_path", return_value=pending_path),
+        patch("brainlayer.store.store_memory", side_effect=held_write_lock_store_memory),
+    ):
+        started = time.perf_counter()
+        texts, structured = await _store(
+            content="queued within busy budget",
+            memory_type="note",
+            project="test",
+        )
+        elapsed = time.perf_counter() - started
+
+    assert elapsed < 0.22
+    assert attempts <= 2
+    assert structured["status"] == "DEFERRED"
+    assert structured["deferred"]["action"] == "queued_for_replay"
+    assert structured["deferred"]["queue_path"] == str(pending_path)
+    assert any("queued" in item.text.lower() for item in texts)
+
+    queued_event = json.loads(pending_path.read_text())
+    assert queued_event["chunk_id"] == structured["chunk_id"]
+    assert queued_event["content"] == "queued within busy budget"
+
+    with (
+        patch("brainlayer.mcp.store_handler._get_pending_store_path", return_value=pending_path),
+        patch("brainlayer.store.store_memory", return_value={"id": structured["chunk_id"], "related": []}) as replay,
+    ):
+        flushed = _flush_pending_stores(MagicMock(), MagicMock())
+
+    assert flushed == 1
+    assert not pending_path.exists()
+    assert replay.call_args.kwargs["chunk_id"] == structured["chunk_id"]
+    assert replay.call_args.kwargs["content"] == "queued within busy budget"
+
+
+@pytest.mark.asyncio
+async def test_store_busy_budget_restores_timeout_between_concurrent_retries(monkeypatch):
+    """Overlapping retry sleeps must not snapshot another store call's temporary timeout."""
+    from brainlayer.mcp import store_handler
+
+    class FakeCursor:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql):
+            assert sql == "PRAGMA busy_timeout"
+            return self
+
+        def fetchone(self):
+            return (self.conn.timeout_ms,)
+
+    class FakeConn:
+        def __init__(self):
+            self.timeout_ms = 5000
+
+        def cursor(self):
+            return FakeCursor(self)
+
+        def setbusytimeout(self, timeout_ms):
+            self.timeout_ms = timeout_ms
+
+    store = MagicMock()
+    store.conn = FakeConn()
+
+    def locked_store_memory(**kwargs):
+        raise apsw.BusyError("database is locked")
+
+    monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "1000")
+    monkeypatch.setattr(store_handler, "_retry_delay", 0.02)
+    monkeypatch.setattr(store_handler, "_RETRY_MAX_ATTEMPTS", 2)
+
+    results = await asyncio.gather(
+        store_handler._store_memory_with_retries(locked_store_memory, store=store),
+        store_handler._store_memory_with_retries(locked_store_memory, store=store),
+        return_exceptions=True,
+    )
+
+    assert all(isinstance(result, apsw.BusyError) for result in results)
+    assert store.conn.timeout_ms == 5000
+
+
+@pytest.mark.asyncio
+async def test_store_busy_budget_bounds_store_memory_inner_retry_loop(tmp_path, monkeypatch):
+    """The MCP budget must bound store_memory's internal BEGIN IMMEDIATE retry loop."""
+    import brainlayer.store as store_module
+    from brainlayer.mcp.store_handler import _store
+
+    pending_path = tmp_path / "pending-stores.jsonl"
+    real_sleep = time.sleep
+    begin_attempts = 0
+
+    class FakeCursor:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql, *args):
+            nonlocal begin_attempts
+            if sql == "PRAGMA busy_timeout":
+                return self
+            if sql == "BEGIN IMMEDIATE":
+                begin_attempts += 1
+                real_sleep(self.conn.timeout_ms / 1000)
+                raise apsw.BusyError("database is locked")
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+        def fetchone(self):
+            return (self.conn.timeout_ms,)
+
+    class FakeConn:
+        def __init__(self):
+            self.timeout_ms = 5000
+
+        def cursor(self):
+            return FakeCursor(self)
+
+        def setbusytimeout(self, timeout_ms):
+            self.timeout_ms = timeout_ms
+
+    store = MagicMock()
+    store.conn = FakeConn()
+
+    monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "80")
+    monkeypatch.setattr("brainlayer.mcp.store_handler._retry_delay", 0.001)
+    monkeypatch.setattr(store_module.time, "sleep", lambda delay: real_sleep(min(delay, 0.001)))
+
+    with (
+        patch("brainlayer.mcp.store_handler._get_vector_store", return_value=store),
+        patch("brainlayer.mcp.store_handler._normalize_project_name", return_value="test"),
+        patch("brainlayer.queue_io.enqueue_store", side_effect=RuntimeError("force legacy pending queue")),
+        patch("brainlayer.mcp.store_handler._get_pending_store_path", return_value=pending_path),
+    ):
+        started = time.perf_counter()
+        _texts, structured = await _store(
+            content="inner retries must respect mcp busy budget",
+            memory_type="note",
+            project="test",
+        )
+        elapsed = time.perf_counter() - started
+
+    assert elapsed < 0.18
+    assert begin_attempts <= 2
+    assert structured["status"] == "DEFERRED"
+    assert structured["deferred"]["action"] == "queued_for_replay"
+
+
+@pytest.mark.asyncio
+async def test_store_busy_budget_refreshes_after_timeout_lock_wait(monkeypatch):
+    """Time spent waiting for the timeout lock must count against the store budget."""
+    from brainlayer.mcp import store_handler
+
+    real_sleep = time.sleep
+
+    class FakeCursor:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql):
+            assert sql == "PRAGMA busy_timeout"
+            return self
+
+        def fetchone(self):
+            return (self.conn.timeout_ms,)
+
+    class FakeConn:
+        def __init__(self):
+            self.timeout_ms = 5000
+
+        def cursor(self):
+            return FakeCursor(self)
+
+        def setbusytimeout(self, timeout_ms):
+            self.timeout_ms = timeout_ms
+
+    store = MagicMock()
+    store.conn = FakeConn()
+
+    def locked_store_memory(**kwargs):
+        real_sleep(store.conn.timeout_ms / 1000)
+        raise apsw.BusyError("database is locked")
+
+    monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "200")
+    monkeypatch.setattr(store_handler, "_RETRY_MAX_ATTEMPTS", 1)
+
+    store_handler._STORE_BUSY_TIMEOUT_LOCK.acquire()
+    timer = threading.Timer(0.15, store_handler._STORE_BUSY_TIMEOUT_LOCK.release)
+    timer.start()
+    try:
+        started = time.perf_counter()
+        result = await store_handler._store_memory_with_retries(locked_store_memory, store=store)
+    except apsw.BusyError as exc:
+        result = exc
+        elapsed = time.perf_counter() - started
+    finally:
+        timer.cancel()
+        if store_handler._STORE_BUSY_TIMEOUT_LOCK.locked():
+            store_handler._STORE_BUSY_TIMEOUT_LOCK.release()
+
+    assert isinstance(result, apsw.BusyError)
+    assert elapsed < 0.28
+
+
+@pytest.mark.asyncio
+async def test_store_busy_budget_covers_cold_vector_store_init(tmp_path, monkeypatch):
+    """The store budget must include cold VectorStore init before queuing."""
+    import brainlayer.store  # noqa: F401
+    from brainlayer.mcp import _shared
+    from brainlayer.mcp.store_handler import _store
+    from brainlayer.vector_store import VectorStore
+
+    pending_path = tmp_path / "pending-stores.jsonl"
+    db_path = tmp_path / "busy-init.db"
+    real_sleep = time.sleep
+    init_attempts = 0
+
+    def busy_init(self):
+        nonlocal init_attempts
+        init_attempts += 1
+        real_sleep(0.075)
+        raise apsw.BusyError("database is locked")
+
+    monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "100")
+    monkeypatch.setattr(_shared, "_vector_store", None)
+    monkeypatch.setattr("brainlayer.paths.get_db_path", lambda: db_path)
+    monkeypatch.setattr(VectorStore, "_INIT_MAX_RETRIES", 4)
+    monkeypatch.setattr(VectorStore, "_INIT_BASE_DELAY", 0.001)
+    monkeypatch.setattr(VectorStore, "_INIT_MAX_DELAY", 0.001)
+    monkeypatch.setattr(VectorStore, "_acquire_writer_pidfile", lambda self: None)
+    monkeypatch.setattr(VectorStore, "_release_writer_pidfile", lambda self: None)
+    monkeypatch.setattr(VectorStore, "_init_db", busy_init)
+
+    with (
+        patch("brainlayer.mcp.store_handler._normalize_project_name", return_value="test"),
+        patch("brainlayer.queue_io.enqueue_store", side_effect=RuntimeError("force legacy pending queue")),
+        patch("brainlayer.mcp.store_handler._get_pending_store_path", return_value=pending_path),
+    ):
+        started = time.perf_counter()
+        _texts, structured = await _store(
+            content="cold vector store init must respect busy budget",
+            memory_type="note",
+            project="test",
+        )
+        elapsed = time.perf_counter() - started
+
+    assert elapsed < 0.22
+    assert init_attempts <= 2
+    assert structured["status"] == "DEFERRED"
+    assert structured["deferred"]["action"] == "queued_for_replay"
+
+
+@pytest.mark.asyncio
+async def test_store_busy_budget_restores_cold_vector_store_write_timeout(tmp_path, monkeypatch):
+    """A cold store init may be capped, but the singleton must return to normal writes."""
+    import brainlayer.vector_store as vector_store_module
+    from brainlayer.mcp import _shared
+    from brainlayer.mcp.store_handler import _store
+    from brainlayer.vector_store import VectorStore
+
+    pending_path = tmp_path / "pending-stores.jsonl"
+    db_path = tmp_path / "cold-timeout.db"
+
+    class FakeCursor:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql):
+            assert sql == "PRAGMA busy_timeout"
+            return self
+
+        def fetchone(self):
+            return (self.conn.timeout_ms,)
+
+    class FakeConn:
+        def __init__(self):
+            self.timeout_ms = vector_store_module._DEFAULT_BUSY_TIMEOUT_MS
+
+        def cursor(self):
+            return FakeCursor(self)
+
+        def setbusytimeout(self, timeout_ms):
+            self.timeout_ms = timeout_ms
+
+        def readonly(self, _database):
+            return False
+
+        def close(self):
+            pass
+
+    def fake_init_db(self):
+        self.conn = FakeConn()
+        self.conn.setbusytimeout(vector_store_module._write_busy_timeout_ms())
+
+    monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "100")
+    monkeypatch.setattr(_shared, "_vector_store", None)
+    monkeypatch.setattr("brainlayer.paths.get_db_path", lambda: db_path)
+    monkeypatch.setattr(VectorStore, "_INIT_MAX_RETRIES", 1)
+    monkeypatch.setattr(VectorStore, "_acquire_writer_pidfile", lambda self: None)
+    monkeypatch.setattr(VectorStore, "_release_writer_pidfile", lambda self: None)
+    monkeypatch.setattr(VectorStore, "_init_db", fake_init_db)
+    monkeypatch.setattr("brainlayer.mcp.store_handler._retry_delay", 0.001)
+
+    with (
+        patch("brainlayer.mcp.store_handler._normalize_project_name", return_value="test"),
+        patch("brainlayer.queue_io.enqueue_store", side_effect=RuntimeError("force legacy pending queue")),
+        patch("brainlayer.mcp.store_handler._get_pending_store_path", return_value=pending_path),
+        patch("brainlayer.store.store_memory", side_effect=apsw.BusyError("database is locked")),
+    ):
+        _texts, structured = await _store(
+            content="cold vector store timeout must restore",
+            memory_type="note",
+            project="test",
+        )
+
+    assert structured["status"] == "DEFERRED"
+    assert _shared._vector_store.conn.timeout_ms == vector_store_module._DEFAULT_BUSY_TIMEOUT_MS
+
+
+def test_store_busy_budget_refreshes_cold_init_timeout_between_statements(tmp_path, monkeypatch):
+    """Cold init must spend one absolute store budget across multiple DDL statements."""
+    import brainlayer.vector_store as vector_store_module
+    from brainlayer.vector_store import VectorStore, temporary_write_busy_timeout_ms
+
+    class StopInit(Exception):
+        pass
+
+    fake_clock = {"now": 0.0}
+    seen_timeouts = []
+
+    class FakeCursor:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql, *args):
+            if self.conn.exec_trace is not None:
+                bindings = args[0] if args else None
+                result = self.conn.exec_trace(self, sql, bindings)
+                if result is False:
+                    raise apsw.ExecTraceAbort("exec trace aborted")
+            seen_timeouts.append(self.conn.timeout_ms)
+            fake_clock["now"] += 0.04
+            if len(seen_timeouts) == 3:
+                raise StopInit
+            return self
+
+        def fetchone(self):
+            return None
+
+        def __iter__(self):
+            return iter(())
+
+    class FakeConnection:
+        def __init__(self, path):
+            self.path = path
+            self.timeout_ms = None
+            self.exec_trace = None
+
+        def setbusytimeout(self, timeout_ms):
+            self.timeout_ms = timeout_ms
+
+        def getexectrace(self):
+            return self.exec_trace
+
+        def setexectrace(self, trace):
+            self.exec_trace = trace
+
+        def enableloadextension(self, enabled):
+            self.load_extension_enabled = enabled
+
+        def loadextension(self, path):
+            self.loaded_extension = path
+
+        def cursor(self):
+            return FakeCursor(self)
+
+        def readonly(self, name):
+            return False
+
+    monkeypatch.setattr(vector_store_module.apsw, "Connection", FakeConnection)
+    monkeypatch.setattr(vector_store_module.sqlite_vec, "loadable_path", lambda: "sqlite-vec")
+    monkeypatch.setattr(vector_store_module.time, "monotonic", lambda: fake_clock["now"])
+
+    store = object.__new__(VectorStore)
+    store.db_path = tmp_path / "cold-init-deadline.db"
+
+    with temporary_write_busy_timeout_ms(200, deadline=0.2), pytest.raises(StopInit):
+        store._init_db()
+
+    assert len(seen_timeouts) == 3
+    assert seen_timeouts[1] < seen_timeouts[0]
+    assert seen_timeouts[2] < seen_timeouts[1]
+
+
+def test_vector_store_init_trace_allows_expired_rollback_cleanup(monkeypatch):
+    """Init deadline trace must not block transaction cleanup after expiry."""
+    import brainlayer.vector_store as vector_store_module
+    from brainlayer.vector_store import temporary_write_busy_timeout_ms
+
+    fake_clock = {"now": 0.0}
+    executed = []
+
+    class FakeCursor:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql):
+            if self.conn.exec_trace is not None:
+                result = self.conn.exec_trace(self, sql, None)
+                if result is False:
+                    raise apsw.ExecTraceAbort("exec trace aborted")
+            executed.append(sql)
+            return self
+
+    class FakeConn:
+        def __init__(self):
+            self.timeout_ms = 100
+            self.exec_trace = None
+
+        def setbusytimeout(self, timeout_ms):
+            self.timeout_ms = timeout_ms
+
+        def getexectrace(self):
+            return self.exec_trace
+
+        def setexectrace(self, trace):
+            self.exec_trace = trace
+
+        def cursor(self):
+            return FakeCursor(self)
+
+    conn = FakeConn()
+    monkeypatch.setattr(vector_store_module.time, "monotonic", lambda: fake_clock["now"])
+
+    with temporary_write_busy_timeout_ms(100, deadline=0.1):
+        vector_store_module._install_write_busy_deadline_trace(conn)
+        cursor = conn.cursor()
+        fake_clock["now"] = 0.11
+        cursor.execute("ROLLBACK")
+        cursor.execute("ROLLBACK TO vector_init")
+        cursor.execute("RELEASE vector_init")
+        with pytest.raises(apsw.BusyError):
+            cursor.execute("CREATE TABLE after_deadline(id TEXT)")
+
+    assert executed == ["ROLLBACK", "ROLLBACK TO vector_init", "RELEASE vector_init"]
+
+
+@pytest.mark.asyncio
+async def test_store_busy_budget_bounds_singleton_init_lock_wait(tmp_path, monkeypatch):
+    """Waiting for another cold VectorStore init must not exceed the store budget."""
+    from brainlayer.mcp import _shared
+    from brainlayer.mcp.store_handler import _store
+
+    pending_path = tmp_path / "pending-stores.jsonl"
+    db_path = tmp_path / "singleton-lock.db"
+
+    class FakeVectorStore:
+        def __init__(self, path):
+            self.db_path = path
+            self.conn = MagicMock()
+
+    monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "80")
+    monkeypatch.setattr(_shared, "_vector_store", None)
+    monkeypatch.setattr("brainlayer.paths.get_db_path", lambda: db_path)
+    monkeypatch.setattr("brainlayer.vector_store.VectorStore", FakeVectorStore)
+
+    with (
+        patch("brainlayer.mcp.store_handler._normalize_project_name", return_value="test"),
+        patch("brainlayer.queue_io.enqueue_store", side_effect=RuntimeError("force legacy pending queue")),
+        patch("brainlayer.mcp.store_handler._get_pending_store_path", return_value=pending_path),
+        patch("brainlayer.store.store_memory", side_effect=apsw.BusyError("database is locked")),
+    ):
+        _shared._store_lock.acquire()
+        timer = threading.Timer(0.24, _shared._store_lock.release)
+        timer.start()
+        try:
+            started = time.perf_counter()
+            _texts, structured = await _store(
+                content="store init lock wait must respect busy budget",
+                memory_type="note",
+                project="test",
+            )
+            elapsed = time.perf_counter() - started
+        finally:
+            timer.cancel()
+            if _shared._store_lock.locked():
+                _shared._store_lock.release()
+
+    assert elapsed < 0.18
+    assert structured["status"] == "DEFERRED"
+    assert structured["deferred"]["action"] == "queued_for_replay"
+    assert _shared._vector_store is None
+
+
+@pytest.mark.asyncio
+async def test_store_busy_budget_disables_store_memory_internal_busy_sleep(monkeypatch):
+    """Outer MCP retries should own busy backoff instead of holding the timeout lock."""
+    from brainlayer.mcp import store_handler
+
+    real_sleep = time.sleep
+
+    class FakeCursor:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql):
+            assert sql == "PRAGMA busy_timeout"
+            return self
+
+        def fetchone(self):
+            return (self.conn.timeout_ms,)
+
+    class FakeConn:
+        def __init__(self):
+            self.timeout_ms = 5000
+
+        def cursor(self):
+            return FakeCursor(self)
+
+        def setbusytimeout(self, timeout_ms):
+            self.timeout_ms = timeout_ms
+
+    store = MagicMock()
+    store.conn = FakeConn()
+    retry_flags = []
+
+    def internally_retrying_store_memory(**kwargs):
+        retry_flags.append(kwargs.get("retry_on_busy"))
+        if kwargs.get("retry_on_busy") is not False:
+            real_sleep(0.12)
+        raise apsw.BusyError("database is locked")
+
+    monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "80")
+    monkeypatch.setattr(store_handler, "_RETRY_MAX_ATTEMPTS", 1)
+
+    started = time.perf_counter()
+    with pytest.raises(apsw.BusyError):
+        await store_handler._store_memory_with_retries(internally_retrying_store_memory, store=store)
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 0.16
+    assert retry_flags == [False]
+
+
+@pytest.mark.asyncio
+async def test_store_busy_budget_bounds_supersede_update(tmp_path, monkeypatch):
+    """The same store budget must bound the post-store supersede write."""
+    from brainlayer.mcp.store_handler import _store
+
+    pending_path = tmp_path / "pending-stores.jsonl"
+    real_sleep = time.sleep
+
+    class FakeCursor:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql):
+            assert sql == "PRAGMA busy_timeout"
+            return self
+
+        def fetchone(self):
+            return (self.conn.timeout_ms,)
+
+    class FakeConn:
+        def __init__(self):
+            self.timeout_ms = 250
+
+        def cursor(self):
+            return FakeCursor(self)
+
+        def setbusytimeout(self, timeout_ms):
+            self.timeout_ms = timeout_ms
+
+    store = MagicMock()
+    store.conn = FakeConn()
+
+    def successful_store_memory(**kwargs):
+        return {"id": kwargs["chunk_id"], "related": []}
+
+    def locked_supersede(_old_chunk_id, _new_chunk_id):
+        real_sleep(store.conn.timeout_ms / 1000)
+        raise apsw.BusyError("database is locked")
+
+    store.supersede_chunk.side_effect = locked_supersede
+
+    monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "80")
+
+    with (
+        patch("brainlayer.mcp.store_handler._get_vector_store", return_value=store),
+        patch("brainlayer.mcp.store_handler._normalize_project_name", return_value="test"),
+        patch("brainlayer.queue_io.enqueue_store", side_effect=RuntimeError("force legacy pending queue")),
+        patch("brainlayer.mcp.store_handler._get_pending_store_path", return_value=pending_path),
+        patch("brainlayer.store.store_memory", side_effect=successful_store_memory),
+    ):
+        started = time.perf_counter()
+        _texts, structured = await _store(
+            content="supersede update must respect busy budget",
+            memory_type="note",
+            project="test",
+            supersedes="manual-old",
+        )
+        elapsed = time.perf_counter() - started
+
+    assert elapsed < 0.18
+    assert structured["status"] == "DEFERRED"
+    assert structured["deferred"]["action"] == "queued_for_replay"
+    assert json.loads(pending_path.read_text())["supersedes"] == "manual-old"
+
+
+def test_store_busy_budget_refreshes_supersede_timeout_between_statements(monkeypatch):
+    """Store busy context must refresh the deadline before each SQL statement."""
+    from brainlayer.mcp import store_handler
+
+    fake_clock = {"now": 0.0}
+    seen_timeouts = []
+
+    class FakeCursor:
+        def __init__(self, conn):
+            self.conn = conn
+            self._pragma = False
+
+        def execute(self, sql, *args):
+            if sql == "PRAGMA busy_timeout":
+                self._pragma = True
+                return self
+            if self.conn.exec_trace is not None:
+                bindings = args[0] if args else None
+                result = self.conn.exec_trace(self, sql, bindings)
+                if result is False:
+                    raise apsw.ExecTraceAbort("exec trace aborted")
+            seen_timeouts.append(self.conn.timeout_ms)
+            fake_clock["now"] += 0.04
+            return self
+
+        def fetchone(self):
+            if self._pragma:
+                return (self.conn.timeout_ms,)
+            return None
+
+    class FakeConn:
+        def __init__(self):
+            self.timeout_ms = 250
+            self.exec_trace = None
+
+        def cursor(self):
+            return FakeCursor(self)
+
+        def setbusytimeout(self, timeout_ms):
+            self.timeout_ms = timeout_ms
+
+        def getexectrace(self):
+            return self.exec_trace
+
+        def setexectrace(self, trace):
+            self.exec_trace = trace
+
+    conn = FakeConn()
+    monkeypatch.setattr(store_handler.time, "monotonic", lambda: fake_clock["now"])
+
+    with store_handler._temporary_store_busy_timeout(conn, 0.2):
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 FROM chunks WHERE id = ?", ("old",))
+        cursor.execute("UPDATE chunks SET superseded_by = ? WHERE id = ?", ("new", "old"))
+        cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", ("old",))
+
+    assert seen_timeouts[1] < seen_timeouts[0]
+    assert seen_timeouts[2] < seen_timeouts[1]
+    assert conn.timeout_ms == 250
+    assert conn.exec_trace is None
+
+
+def test_store_busy_budget_allows_expired_rollback_cleanup(monkeypatch):
+    """Rollback cleanup must not be blocked by the expired busy-budget trace."""
+    from brainlayer.mcp import store_handler
+
+    fake_clock = {"now": 0.0}
+    executed = []
+
+    class FakeCursor:
+        def __init__(self, conn):
+            self.conn = conn
+            self._pragma = False
+
+        def execute(self, sql, *args):
+            if sql == "PRAGMA busy_timeout":
+                self._pragma = True
+                return self
+            if self.conn.exec_trace is not None:
+                bindings = args[0] if args else None
+                result = self.conn.exec_trace(self, sql, bindings)
+                if result is False:
+                    raise apsw.ExecTraceAbort("exec trace aborted")
+            executed.append(sql)
+            return self
+
+        def fetchone(self):
+            if self._pragma:
+                return (self.conn.timeout_ms,)
+            return None
+
+    class FakeConn:
+        def __init__(self):
+            self.timeout_ms = 250
+            self.exec_trace = None
+
+        def cursor(self):
+            return FakeCursor(self)
+
+        def setbusytimeout(self, timeout_ms):
+            self.timeout_ms = timeout_ms
+
+        def getexectrace(self):
+            return self.exec_trace
+
+        def setexectrace(self, trace):
+            self.exec_trace = trace
+
+    conn = FakeConn()
+    monkeypatch.setattr(store_handler.time, "monotonic", lambda: fake_clock["now"])
+
+    with store_handler._temporary_store_busy_timeout(conn, 0.1):
+        cursor = conn.cursor()
+        cursor.execute("BEGIN IMMEDIATE")
+        fake_clock["now"] = 0.11
+        cursor.execute("ROLLBACK")
+        cursor.execute("ROLLBACK TO store_memory")
+        cursor.execute("RELEASE store_memory")
+
+    assert executed == [
+        "BEGIN IMMEDIATE",
+        "ROLLBACK",
+        "ROLLBACK TO store_memory",
+        "RELEASE store_memory",
+    ]
+    assert conn.timeout_ms == 250
+    assert conn.exec_trace is None
 
 
 @pytest.mark.asyncio

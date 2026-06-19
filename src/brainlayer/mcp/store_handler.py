@@ -5,6 +5,7 @@ import fcntl
 import json
 import os
 import threading
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -27,6 +28,28 @@ from ._shared import (
 _RETRY_MAX_ATTEMPTS = 4
 _retry_delay = 0.15  # base delay in seconds (exposed for test patching)
 _QUEUE_MAX_SIZE = 100
+_DEFAULT_STORE_BUSY_BUDGET_MS = 3_000
+_MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
+_STORE_BUSY_TIMEOUT_LOCK = threading.Lock()
+_NO_EXEC_TRACE = object()
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    if value <= 0 or value > _MAX_APSW_BUSY_TIMEOUT_MS:
+        return default
+    return value
+
+
+def _store_busy_budget_ms() -> int:
+    return _positive_int_env("BRAINLAYER_STORE_BUSY_BUDGET_MS", _DEFAULT_STORE_BUSY_BUDGET_MS)
+
+
+def _store_busy_deadline() -> float:
+    return time.monotonic() + (_store_busy_budget_ms() / 1000)
 
 
 def _is_lock_error(exc: BaseException) -> bool:
@@ -510,6 +533,96 @@ def _deferred_store_receipt(chunk_id: str, queue_path, *, reason: str = "DB_BUSY
     }
 
 
+def _connection_busy_timeout_ms(conn) -> int | None:
+    if conn is None:
+        return None
+    try:
+        row = conn.cursor().execute("PRAGMA busy_timeout").fetchone()
+        return int(row[0])
+    except Exception:
+        return None
+
+
+def _set_connection_busy_timeout(conn, timeout_ms: int | None) -> None:
+    if conn is None or timeout_ms is None:
+        return
+    try:
+        conn.setbusytimeout(max(1, min(timeout_ms, _MAX_APSW_BUSY_TIMEOUT_MS)))
+    except Exception:
+        logger.debug("Failed to set store busy timeout", exc_info=True)
+
+
+def _connection_exec_trace(conn):
+    if conn is None or not hasattr(conn, "getexectrace"):
+        return _NO_EXEC_TRACE
+    try:
+        return conn.getexectrace()
+    except Exception:
+        logger.debug("Failed to read store exec trace", exc_info=True)
+        return _NO_EXEC_TRACE
+
+
+def _set_connection_exec_trace(conn, trace) -> None:
+    if conn is None or not hasattr(conn, "setexectrace") or trace is _NO_EXEC_TRACE:
+        return
+    try:
+        conn.setexectrace(trace)
+    except Exception:
+        logger.debug("Failed to set store exec trace", exc_info=True)
+
+
+def _is_store_busy_cleanup_statement(statement) -> bool:
+    if not isinstance(statement, str):
+        return False
+    sql = statement.lstrip().upper()
+    return sql.startswith("ROLLBACK") or sql.startswith("RELEASE")
+
+
+def _run_connection_exec_trace(trace, cursor, statement, bindings):
+    if trace is _NO_EXEC_TRACE or trace is None:
+        return True
+    result = trace(cursor, statement, bindings)
+    return True if result is None else result
+
+
+def _remaining_store_busy_budget_ms(deadline: float) -> int:
+    remaining_ms = int((deadline - time.monotonic()) * 1000)
+    if remaining_ms <= 0:
+        raise apsw.BusyError("brain_store busy budget exceeded")
+    return max(1, min(remaining_ms, _MAX_APSW_BUSY_TIMEOUT_MS))
+
+
+@contextmanager
+def _temporary_store_busy_timeout(conn, deadline: float):
+    if conn is None:
+        yield
+        return
+
+    timeout_ms = _remaining_store_busy_budget_ms(deadline)
+    acquired = _STORE_BUSY_TIMEOUT_LOCK.acquire(timeout=max(timeout_ms, 1) / 1000)
+    if not acquired:
+        raise apsw.BusyError("brain_store busy_timeout lock wait exceeded")
+
+    original_busy_timeout_ms = _connection_busy_timeout_ms(conn)
+    original_exec_trace = _connection_exec_trace(conn)
+
+    def refresh_timeout(cursor, statement, bindings):
+        if _is_store_busy_cleanup_statement(statement):
+            return _run_connection_exec_trace(original_exec_trace, cursor, statement, bindings)
+        _set_connection_busy_timeout(conn, _remaining_store_busy_budget_ms(deadline))
+        return _run_connection_exec_trace(original_exec_trace, cursor, statement, bindings)
+
+    try:
+        timeout_ms = _remaining_store_busy_budget_ms(deadline)
+        _set_connection_busy_timeout(conn, timeout_ms)
+        _set_connection_exec_trace(conn, refresh_timeout)
+        yield
+    finally:
+        _set_connection_exec_trace(conn, original_exec_trace)
+        _set_connection_busy_timeout(conn, original_busy_timeout_ms)
+        _STORE_BUSY_TIMEOUT_LOCK.release()
+
+
 def _flush_pending_stores(store, embed_fn) -> int:
     """Flush pending-stores.jsonl (FIFO). Returns count flushed."""
     from ..store import store_memory
@@ -577,16 +690,39 @@ def _flush_pending_stores(store, embed_fn) -> int:
         return flushed
 
 
-async def _store_memory_with_retries(store_memory, **kwargs):
+async def _store_memory_with_retries(store_memory, *, deadline: float | None = None, **kwargs):
     last_err = None
+    budget_ms = _store_busy_budget_ms()
+    if deadline is None:
+        deadline = _store_busy_deadline()
+    conn = getattr(kwargs.get("store"), "conn", None)
     for attempt in range(_RETRY_MAX_ATTEMPTS):
+        remaining_ms = int((deadline - time.monotonic()) * 1000)
+        if remaining_ms <= 0 and last_err is not None:
+            raise last_err
         try:
-            return store_memory(**kwargs)
+            with _temporary_store_busy_timeout(conn, deadline):
+                return store_memory(**kwargs, busy_deadline=deadline, retry_on_busy=False)
         except Exception as exc:
             if not _is_lock_error(exc) or attempt >= _RETRY_MAX_ATTEMPTS - 1:
                 raise
             last_err = exc
+            remaining_ms = int((deadline - time.monotonic()) * 1000)
+            if remaining_ms <= 0:
+                logger.warning(
+                    "brain_store BusyError exceeded %dms busy budget after attempt %d/%d; deferring",
+                    budget_ms,
+                    attempt + 1,
+                    _RETRY_MAX_ATTEMPTS,
+                )
+                raise
             delay = _retry_delay * (2**attempt)
+            if int(delay * 1000) >= remaining_ms:
+                logger.warning(
+                    "brain_store BusyError has %dms budget left before retry delay; deferring",
+                    remaining_ms,
+                )
+                raise
             logger.warning(
                 "brain_store BusyError (attempt %d/%d), retrying in %.2fs",
                 attempt + 1,
@@ -595,6 +731,32 @@ async def _store_memory_with_retries(store_memory, **kwargs):
             )
             await asyncio.sleep(delay)
     raise last_err  # type: ignore[misc]
+
+
+def _get_store_vector_store(deadline: float):
+    timeout = max(0.0, deadline - time.monotonic())
+    try:
+        return _get_vector_store(timeout=timeout)
+    except TypeError as exc:
+        if "timeout" not in str(exc):
+            raise
+        return _get_vector_store()
+
+
+def _validate_store_request(content: str, memory_type: str) -> str:
+    from ..ingest_guard import reject_recursive_mcp_output
+    from ..pipeline.classify import looks_like_system_prompt
+    from ..store import VALID_MEMORY_TYPES
+
+    if not content or not content.strip():
+        raise ValueError("content must be non-empty")
+    content = content.strip()
+    if memory_type not in VALID_MEMORY_TYPES:
+        raise ValueError(f"type must be one of: {', '.join(VALID_MEMORY_TYPES)}")
+    reject_recursive_mcp_output(content)
+    if looks_like_system_prompt(content):
+        raise ValueError("system prompt content is not stored in BrainLayer")
+    return content
 
 
 async def _store(
@@ -623,20 +785,11 @@ async def _store(
     promised_chunk_id = _new_manual_chunk_id()
     reservation_created_at = datetime.now(timezone.utc).isoformat()
     try:
-        if os.environ.get("BRAINLAYER_ARBITRATED") == "1":
-            from ..ingest_guard import reject_recursive_mcp_output
-            from ..pipeline.classify import looks_like_system_prompt
-            from ..search_repo import clear_hybrid_search_cache
-            from ..store import VALID_MEMORY_TYPES
+        content = _validate_store_request(content, memory_type)
 
-            if not content or not content.strip():
-                raise ValueError("content must be non-empty")
-            content = content.strip()
-            if memory_type not in VALID_MEMORY_TYPES:
-                raise ValueError(f"type must be one of: {', '.join(VALID_MEMORY_TYPES)}")
-            reject_recursive_mcp_output(content)
-            if looks_like_system_prompt(content):
-                raise ValueError("system prompt content is not stored in BrainLayer")
+        if os.environ.get("BRAINLAYER_ARBITRATED") == "1":
+            from ..search_repo import clear_hybrid_search_cache
+
             queue_path = _queue_store(
                 {
                     "chunk_id": promised_chunk_id,
@@ -664,13 +817,17 @@ async def _store(
             return ([TextContent(type="text", text=format_store_result(promised_chunk_id, queued=True))], structured)
 
         from ..store import embed_hot_chunk, embed_pending_chunks, store_memory
+        from ..vector_store import temporary_write_busy_timeout_ms
 
-        store = _get_vector_store()
+        deadline = _store_busy_deadline()
+        with temporary_write_busy_timeout_ms(_remaining_store_busy_budget_ms(deadline), deadline=deadline):
+            store = _get_store_vector_store(deadline)
         normalized_project = _normalize_project_name(project)
 
         # Store WITHOUT embedding — returns immediately (no executor needed)
         result = await _store_memory_with_retries(
             store_memory,
+            deadline=deadline,
             store=store,
             embed_fn=None,
             content=content,
@@ -697,7 +854,8 @@ async def _store(
         # If supersedes is set, mark the old chunk as superseded by the new one
         superseded_ok = None
         if supersedes:
-            superseded_ok = store.supersede_chunk(supersedes, chunk_id)
+            with _temporary_store_busy_timeout(getattr(store, "conn", None), deadline):
+                superseded_ok = store.supersede_chunk(supersedes, chunk_id)
 
         # Schedule background embedding + flush in a single daemon thread.
         # CRITICAL: must use a separate VectorStore connection — APSW enforces

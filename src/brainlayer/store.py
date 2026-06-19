@@ -50,6 +50,32 @@ from .vector_store import VectorStore
 logger = logging.getLogger(__name__)
 
 VALID_MEMORY_TYPES = ["idea", "mistake", "decision", "learning", "todo", "bookmark", "note", "journal", "issue"]
+_MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
+
+
+def _busy_deadline_timeout_ms(busy_deadline: Optional[float]) -> int | None:
+    if busy_deadline is None:
+        return None
+    remaining_ms = int((busy_deadline - time.monotonic()) * 1000)
+    if remaining_ms <= 0:
+        raise apsw.BusyError("store busy budget exceeded")
+    return max(1, min(remaining_ms, _MAX_APSW_BUSY_TIMEOUT_MS))
+
+
+def _set_busy_timeout_for_deadline(conn, busy_deadline: Optional[float]) -> None:
+    timeout_ms = _busy_deadline_timeout_ms(busy_deadline)
+    if timeout_ms is None:
+        return
+    conn.setbusytimeout(timeout_ms)
+
+
+def _sleep_before_busy_retry(delay: float, busy_deadline: Optional[float]) -> None:
+    if busy_deadline is not None:
+        remaining = busy_deadline - time.monotonic()
+        if remaining <= 0 or delay >= remaining:
+            raise apsw.BusyError("store busy budget exceeded")
+        delay = min(delay, remaining)
+    time.sleep(delay)
 
 
 def store_memory(
@@ -76,6 +102,8 @@ def store_memory(
     origin_repo_path: Optional[str] = None,
     replayed_by: Optional[str] = None,
     chunk_origin: Optional[str] = None,
+    busy_deadline: Optional[float] = None,
+    retry_on_busy: bool = True,
 ) -> Dict[str, Any]:
     """Persistently store a memory into BrainLayer.
 
@@ -107,6 +135,8 @@ def store_memory(
         origin_repo_path: Optional git root for the fallback's originating repo.
         replayed_by: Optional replay worker identifier.
         chunk_origin: Optional explicit origin classification preserved from queued fallback metadata.
+        busy_deadline: Optional monotonic deadline for internal BusyError retries.
+        retry_on_busy: Whether store_memory should run its own synchronous BusyError retry loop.
 
     Returns:
         Dict with 'id' (chunk ID) and 'related' (list of similar existing memories).
@@ -190,6 +220,7 @@ def store_memory(
         cursor = store.conn.cursor()
         transaction_started = False
         try:
+            _set_busy_timeout_for_deadline(store.conn, busy_deadline)
             cursor.execute("BEGIN IMMEDIATE")
             transaction_started = True
             pending_reembed = None
@@ -337,9 +368,9 @@ def store_memory(
         except apsw.BusyError:
             if transaction_started:
                 cursor.execute("ROLLBACK")
-            if attempt == 4:
+            if not retry_on_busy or attempt == 4:
                 raise
-            time.sleep(0.1 * (2**attempt))
+            _sleep_before_busy_retry(0.1 * (2**attempt), busy_deadline)
         except Exception:
             if transaction_started:
                 cursor.execute("ROLLBACK")
@@ -352,6 +383,7 @@ def store_memory(
             cursor = store.conn.cursor()
             transaction_started = False
             try:
+                _set_busy_timeout_for_deadline(store.conn, busy_deadline)
                 cursor.execute("BEGIN IMMEDIATE")
                 transaction_started = True
                 store._upsert_chunk_vector(cursor, reembed_chunk_id, merged_embedding)
@@ -361,9 +393,9 @@ def store_memory(
             except apsw.BusyError:
                 if transaction_started:
                     cursor.execute("ROLLBACK")
-                if attempt == 4:
+                if not retry_on_busy or attempt == 4:
                     raise
-                time.sleep(0.1 * (2**attempt))
+                _sleep_before_busy_retry(0.1 * (2**attempt), busy_deadline)
             except Exception:
                 if transaction_started:
                     cursor.execute("ROLLBACK")

@@ -74,16 +74,21 @@ def _bootstrap_search_store(db_path) -> None:
     bootstrap_store.close()
 
 
-def _get_vector_store():
+def _get_vector_store(timeout: float | None = None):
     """Get or initialize the global VectorStore (thread-safe)."""
     global _vector_store
     if _vector_store is None:
-        with _store_lock:
+        acquired = _store_lock.acquire() if timeout is None else _store_lock.acquire(timeout=max(0.0, timeout))
+        if not acquired:
+            raise apsw.BusyError("timed out waiting for vector store initialization")
+        try:
             if _vector_store is None:
                 from ..paths import get_db_path
                 from ..vector_store import VectorStore
 
                 _vector_store = VectorStore(get_db_path())
+        finally:
+            _store_lock.release()
     return _vector_store
 
 
