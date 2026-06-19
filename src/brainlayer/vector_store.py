@@ -103,6 +103,10 @@ def _write_busy_timeout_ms() -> int:
     return max(1, min(int(timeout_ms), _MAX_APSW_BUSY_TIMEOUT_MS))
 
 
+def _default_write_busy_timeout_ms() -> int:
+    return max(1, min(_DEFAULT_BUSY_TIMEOUT_MS, _MAX_APSW_BUSY_TIMEOUT_MS))
+
+
 @contextmanager
 def temporary_write_busy_timeout_ms(timeout_ms: int, *, deadline: float | None = None):
     old_timeout = getattr(_WRITE_BUSY_TIMEOUT_STATE, "timeout_ms", None)
@@ -585,6 +589,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 raise last_err or apsw.BusyError("write busy deadline exceeded")
             try:
                 self._init_db()
+                self._restore_default_write_busy_timeout()
                 return
             except apsw.Error as e:
                 if not _is_retryable_init_error(e):
@@ -605,6 +610,17 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                         raise last_err
                 time.sleep(delay)
         raise last_err  # type: ignore[misc]
+
+    def _restore_default_write_busy_timeout(self) -> None:
+        conn = getattr(self, "conn", None)
+        if conn is None:
+            return
+        try:
+            if conn.readonly("main"):
+                return
+        except apsw.Error:
+            return
+        conn.setbusytimeout(_default_write_busy_timeout_ms())
 
     def _init_db(self) -> None:
         """Initialize database with vector extension."""
