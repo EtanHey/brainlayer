@@ -260,6 +260,8 @@ _SEARCH_OUTPUT_SCHEMA = {
     "properties": {
         "query": {"type": "string"},
         "total": {"type": "integer"},
+        "order": {"type": "string", "enum": ["origin"]},
+        "order_scope": {"type": "string"},
         "results": {
             "type": "array",
             "items": {
@@ -487,7 +489,7 @@ async def list_tools() -> list[Tool]:
                             "type": "string",
                             "enum": ["relevance", "origin"],
                             "default": "relevance",
-                            "description": "Result ordering. 'relevance' preserves default hybrid relevance/recency ranking; 'origin' returns the earliest hybrid-matched chunks by created_at.",
+                            "description": "Result ordering. 'relevance' preserves default hybrid relevance/recency ranking; 'origin' sorts an expanded relevance-ranked hybrid candidate set by created_at, not an exhaustive all-DB oldest-match scan.",
                         },
                         "before": {
                             "type": "integer",
@@ -887,7 +889,7 @@ async def list_tools() -> list[Tool]:
                             "type": "string",
                             "enum": ["relevance", "origin"],
                             "default": "relevance",
-                            "description": "Result ordering in mode=search. 'relevance' preserves default hybrid relevance/recency ranking; 'origin' returns the earliest hybrid-matched chunks by created_at.",
+                            "description": "Result ordering in mode=search. 'relevance' preserves default hybrid relevance/recency ranking; 'origin' sorts an expanded relevance-ranked hybrid candidate set by created_at, not an exhaustive all-DB oldest-match scan.",
                         },
                         "include_checkpoints": {
                             "type": "boolean",

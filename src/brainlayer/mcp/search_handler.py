@@ -30,6 +30,8 @@ _VALID_SEARCH_ORDERS = frozenset({"relevance", "origin"})
 _MAX_PUBLIC_NUM_RESULTS = 100
 _MIN_PUBLIC_NUM_RESULTS = 1
 _ORIGIN_CANDIDATE_LIMIT = 100
+_ORIGIN_ORDER_SCOPE = "expanded_hybrid_candidates"
+_ORIGIN_ORDER_LABEL = "- Order: origin (earliest among expanded hybrid candidates)"
 _HELPER_SOCKET_GLOB = "/tmp/brainbar-hybrid-*.sock"
 _HELPER_SOCKET_TIMEOUT_SECONDS = 2.0
 
@@ -1304,12 +1306,13 @@ async def _brain_search_dispatch(
             }
             if order == "origin":
                 structured["order"] = order
+                structured["order_scope"] = _ORIGIN_ORDER_SCOPE
             if kg_degraded:
                 structured["kg_degraded"] = True
                 structured["kg_degrade_reason"] = kg_degrade_reason
             formatted_text = format_kg_search(entity_name, structured_results, fact_items, query)
             if order == "origin":
-                formatted_text += "\n- Order: origin"
+                formatted_text += f"\n{_ORIGIN_ORDER_LABEL}"
             if kg_degraded:
                 formatted_text += f"\n⚠ KG search degraded — reason={kg_degrade_reason} — showing SQL-only results"
             return ([TextContent(type="text", text=formatted_text)], structured)
@@ -1874,6 +1877,7 @@ async def _search(
             structured = {"query": query, "total": len(structured_results), "results": structured_results}
             if order == "origin":
                 structured["order"] = order
+                structured["order_scope"] = _ORIGIN_ORDER_SCOPE
             formatted_text = format_search_results(
                 query,
                 structured_results,
@@ -1884,7 +1888,7 @@ async def _search(
 
         output_parts = [f"## Search Results for: {query}\n"]
         if order == "origin":
-            output_parts.append("- Order: origin")
+            output_parts.append(_ORIGIN_ORDER_LABEL)
         structured_results = []
 
         for i, (cid, doc, meta, dist) in enumerate(
@@ -1956,6 +1960,7 @@ async def _search(
         structured = {"query": query, "total": len(structured_results), "results": structured_results}
         if order == "origin":
             structured["order"] = order
+            structured["order_scope"] = _ORIGIN_ORDER_SCOPE
         return ([TextContent(type="text", text="\n".join(output_parts))], structured)
 
     except Exception as e:

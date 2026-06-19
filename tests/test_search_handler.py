@@ -197,7 +197,9 @@ async def test_brain_search_origin_order_returns_oldest_matching_chunks_without_
         assert origin_ids == ["origin-old", "origin-mid"]
         assert [item["date"] for item in origin_structured["results"]] == ["2026-01-05", "2026-02-05"]
         assert origin_structured["order"] == "origin"
+        assert origin_structured["order_scope"] == "expanded_hybrid_candidates"
         assert "- Order: origin" in origin_content[0].text
+        assert "expanded hybrid candidates" in origin_content[0].text
     finally:
         store.close()
 
@@ -240,8 +242,10 @@ async def test_brain_search_origin_order_sorts_entity_route_chunks(monkeypatch):
     origin_ids = [item["chunk_id"] for item in origin_structured["results"]]
     assert origin_ids == ["kg-old", "kg-new"]
     assert origin_structured["order"] == "origin"
+    assert origin_structured["order_scope"] == "expanded_hybrid_candidates"
     assert store.kg_hybrid_kwargs["n_results"] == 100
     assert "- Order: origin" in origin_content[0].text
+    assert "expanded hybrid candidates" in origin_content[0].text
 
 
 @pytest.mark.parametrize(
@@ -283,6 +287,7 @@ async def test_brain_search_origin_order_bypasses_smart_routes(monkeypatch, sign
 
     assert store.hybrid_kwargs is not None
     assert structured["order"] == "origin"
+    assert structured["order_scope"] == "expanded_hybrid_candidates"
 
 
 @pytest.mark.asyncio

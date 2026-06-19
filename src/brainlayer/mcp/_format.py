@@ -93,7 +93,10 @@ def format_search_results(
     lines = []
     lines.append(f'## Search results for "{_truncate(query, 50)}" - {len(results)} of {total} shown')
     if order:
-        lines.append(f"- Order: {order}")
+        if order == "origin":
+            lines.append("- Order: origin (earliest among expanded hybrid candidates)")
+        else:
+            lines.append(f"- Order: {order}")
 
     for i, r in enumerate(results):
         summary = r.get("summary") or ""
