@@ -25,6 +25,13 @@
 		<string>__BRAINLAYER_ENV_FILE__</string>
 		<key>BRAINLAYER_LAUNCHD_SERVICE</key>
 		<string>drain</string>
+		<!-- Write chunks WITHOUT computing embeddings inside the drain's write
+		     transaction. Inline embedding lengthens the write-lock hold time and,
+		     under multi-writer contention (BrainBar/daemon/hybrid/watcher), starves
+		     the drain on SQLITE_BUSY so the realtime queue backs up. Vectors are
+		     backfilled out-of-band by enrichment/hotlane. (M1/throughput fix.) -->
+		<key>BRAINLAYER_DRAIN_EMBED</key>
+		<string>0</string>
 	</dict>
 	<key>StandardOutPath</key>
 	<string>__HOME__/Library/Logs/brainlayer/drain.out.log</string>
