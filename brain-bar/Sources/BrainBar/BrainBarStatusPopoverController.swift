@@ -24,6 +24,7 @@ final class BrainBarStatusPopoverController: NSObject {
         configureContextMenu()
         configureStatusItem()
         bindRuntime()
+        dashboardPanelController.statusItemButton = statusItemForTesting.button
     }
 
     func toggle(_ sender: Any?) {

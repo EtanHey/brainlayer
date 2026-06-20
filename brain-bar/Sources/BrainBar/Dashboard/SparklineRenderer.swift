@@ -119,7 +119,9 @@ struct SparklineChartPresentation: Equatable, Sendable {
     }
 
     var primaryLegendLabel: String {
-        primarySeriesLabel ?? "Primary"
+        if let primarySeriesLabel, !primarySeriesLabel.isEmpty { return primarySeriesLabel }
+        let trimmed = label.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? "Activity" : trimmed
     }
 
     var secondaryLegendLabel: String {
@@ -150,6 +152,34 @@ struct SparklineChartPresentation: Equatable, Sendable {
 
     var maxValue: Int {
         max(values.max() ?? 0, secondaryValues.max() ?? 0, tertiaryValues.max() ?? 0, 1)
+    }
+
+    var tightAxisMax: Int {
+        maxValue <= 5 ? max(maxValue, 1) : axisMax
+    }
+
+    /// Rounds the raw peak up to a glanceable 1/2/5 x 10^n tick so y-axis labels are round.
+    var axisMax: Int {
+        let raw = maxValue
+        guard raw > 1 else { return 1 }
+        let exponent = floor(log10(Double(raw)))
+        let base = pow(10, exponent)
+        let fraction = Double(raw) / base
+        let niceFraction: Double = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10
+        return max(Int((niceFraction * base).rounded(.up)), 1)
+    }
+    /// Tick values bottom->top: always includes 0 (baseline) and axisMax (peak).
+    var yAxisTicks: [Int] {
+        let top = axisMax
+        if top <= 2 { return Array(0...top) }
+        let mid = Int((Double(top) / 2).rounded())
+        return Array(Set([0, mid, top])).sorted()
+    }
+
+    var tightYAxisTicks: [Int] {
+        let top = tightAxisMax
+        if top <= 2 { return Array(0...top) }
+        return Array(Set([0, Int(ceil(Double(top) / 2)), top])).sorted()
     }
 
     func points(for role: SparklineSeriesRole) -> [SparklineChartPoint] {
@@ -199,6 +229,16 @@ struct SparklineChartPresentation: Equatable, Sendable {
         return (1...2).contains(total)
     }
 
+    func nonZeroFraction(_ role: SparklineSeriesRole) -> Double {
+        let rolePoints = points(for: role)
+        guard !rolePoints.isEmpty else { return 0 }
+        return Double(rolePoints.filter { $0.value > 0 }.count) / Double(rolePoints.count)
+    }
+
+    func isDense(_ role: SparklineSeriesRole) -> Bool {
+        nonZeroFraction(role) >= 0.5
+    }
+
     var xAxisDomainStart: Date {
         fetchedAt.addingTimeInterval(-Double(max(activityWindowMinutes * 60, 1)))
     }
@@ -228,25 +268,6 @@ struct SparklineChartPresentation: Equatable, Sendable {
             return "last \(Self.durationLabel(seconds: olderSecondsAgo))"
         }
         return "\(Self.durationLabel(seconds: olderSecondsAgo))-\(Self.durationLabel(seconds: newerSecondsAgo)) ago"
-    }
-
-    func tooltipText(forBucket bucket: Int) -> String {
-        let clampedBucket = min(max(bucket, 0), max(values.count - 1, 0))
-        let primaryValue = values.indices.contains(clampedBucket) ? values[clampedBucket] : 0
-        guard hasMultipleSeries else {
-            return "\(bucketLabel(for: clampedBucket)) (\(relativeBucketLabel(for: clampedBucket))): \(primaryValue)"
-        }
-
-        var seriesComponents = ["\(primarySeriesLabel ?? "Primary") \(primaryValue)"]
-        if let secondarySeriesLabel, hasSecondarySeries {
-            let value = secondaryValues.indices.contains(clampedBucket) ? secondaryValues[clampedBucket] : 0
-            seriesComponents.append("\(secondarySeriesLabel) \(value)")
-        }
-        if let tertiarySeriesLabel, hasTertiarySeries {
-            let value = tertiaryValues.indices.contains(clampedBucket) ? tertiaryValues[clampedBucket] : 0
-            seriesComponents.append("\(tertiarySeriesLabel) \(value)")
-        }
-        return "\(bucketLabel(for: clampedBucket)) (\(relativeBucketLabel(for: clampedBucket))): \(seriesComponents.joined(separator: ", "))"
     }
 
     private func bucketRange(for bucket: Int) -> (start: Date, end: Date) {
@@ -295,29 +316,44 @@ struct SparklineChartPresentation: Equatable, Sendable {
     }
 }
 
+enum SparklineSmoothing {
+    case linear
+    case monotone
+    case catmullRom
+}
+
 struct SparklineChart: View {
     let presentation: SparklineChartPresentation
     let accentColor: NSColor
     let secondaryAccentColor: NSColor?
     let tertiaryAccentColor: NSColor?
     let compact: Bool
+    let referenceValue: Int?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hoveredBucket: Int?
     @State private var hoverLocation: CGPoint?
-    @State private var lineRevealProgress: CGFloat = 1
 
     init(
         presentation: SparklineChartPresentation,
         accentColor: NSColor,
         secondaryAccentColor: NSColor? = nil,
         tertiaryAccentColor: NSColor? = nil,
-        compact: Bool = false
+        compact: Bool = false,
+        referenceValue: Int? = nil,
+        previewHoveredBucket: Int? = nil,
+        previewHoverX: CGFloat? = nil
     ) {
         self.presentation = presentation
         self.accentColor = accentColor
         self.secondaryAccentColor = secondaryAccentColor
         self.tertiaryAccentColor = tertiaryAccentColor
         self.compact = compact
+        self.referenceValue = referenceValue
+        // Test/preview seam: render a fixed hover state without a live cursor.
+        _hoveredBucket = State(initialValue: previewHoveredBucket)
+        if previewHoveredBucket != nil {
+            _hoverLocation = State(initialValue: CGPoint(x: previewHoverX ?? 0, y: 0))
+        }
     }
 
     var body: some View {
@@ -346,51 +382,150 @@ struct SparklineChart: View {
                 }
                 .frame(height: 12)
                 .padding(.horizontal, 16)
+                .opacity(hoveredBucket == nil ? 0 : 1)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: hoveredBucket)
             }
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Text(presentation.accessibilityLabel))
         .accessibilityValue(Text(presentation.accessibilityValue))
-        .onAppear {
-            if reduceMotion {
-                lineRevealProgress = 1
-            } else {
-                lineRevealProgress = 0
-                withAnimation(.easeOut(duration: 0.6)) {
-                    lineRevealProgress = 1
-                }
-            }
-        }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: presentation)
     }
 
     private var chartBody: some View {
         GeometryReader { geometry in
             let plotFrame = plotFrame(in: geometry.size)
+            let isHovering = hoveredBucket != nil
 
             ZStack(alignment: .topLeading) {
+                if !compact {
+                    ForEach(presentation.tightYAxisTicks, id: \.self) { tick in
+                        let y = yPosition(forValue: tick, in: plotFrame)
+                        if tick == 0 || isHovering {
+                            Path { p in
+                                p.move(to: CGPoint(x: plotFrame.minX, y: y))
+                                p.addLine(to: CGPoint(x: plotFrame.maxX, y: y))
+                            }
+                            .stroke(
+                                Color.brainBarBorderSoft.opacity(tick == 0 ? 0.55 : 0.22),
+                                style: StrokeStyle(lineWidth: tick == 0 ? 1 : 0.75,
+                                                   dash: tick == 0 ? [] : [2, 3])
+                            )
+                            .transition(.opacity)
+
+                            if tick != 0 {
+                                Text(DashboardMetricFormatter.axisTickString(tick))
+                                    .font(.system(size: 9, weight: .medium))
+                                    .monospacedDigit()
+                                    .foregroundStyle(Color.brainBarTextMuted)
+                                    .frame(width: yAxisGutter - 4, alignment: .trailing)
+                                    .position(x: (yAxisGutter - 4) / 2, y: y)
+                                    .transition(.opacity)
+                            }
+                        }
+                    }
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: hoveredBucket)
+                }
+
+                ForEach(SparklineSeriesRole.allCases, id: \.self) { role in
+                    if !compact, presentation.shouldPlotSeries(role) {
+                        SparklineSeriesAreaShape(
+                            points: presentation.points(for: role),
+                            maxValue: plotMax,
+                            plotFrame: plotFrame,
+                            baselineY: baselineY(for: role, in: plotFrame),
+                            smoothing: smoothing(for: role)
+                        )
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    color(for: role).opacity(role == .primary ? 0.34 : 0.16),
+                                    color(for: role).opacity(0.0),
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                    }
+                }
+
+                if !compact, let referenceValue {
+                    let clampedReference = min(max(referenceValue, 0), plotMax)
+                    let y = yPosition(forValue: clampedReference, in: plotFrame)
+                    Path { p in
+                        p.move(to: CGPoint(x: plotFrame.minX, y: y))
+                        p.addLine(to: CGPoint(x: plotFrame.maxX, y: y))
+                    }
+                    .stroke(
+                        color(for: .primary).opacity(0.4),
+                        style: StrokeStyle(lineWidth: 1, lineCap: .round, dash: [4, 4])
+                    )
+                }
+
+                if let hoveredBucket, !compact, !presentation.points.isEmpty {
+                    let clampedBucket = min(max(hoveredBucket, 0), presentation.values.count - 1)
+                    let anchorPoint = point(
+                        for: presentation.points[clampedBucket],
+                        bucketCount: presentation.points.count,
+                        in: plotFrame
+                    )
+                    Path { p in
+                        p.move(to: CGPoint(x: anchorPoint.x, y: plotFrame.minY))
+                        p.addLine(to: CGPoint(x: anchorPoint.x, y: plotFrame.maxY))
+                    }
+                    .stroke(
+                        color(for: .primary).opacity(0.3),
+                        style: StrokeStyle(lineWidth: 1, lineCap: .round, dash: [3, 3])
+                    )
+                }
+
                 ForEach(SparklineSeriesRole.allCases, id: \.self) { role in
                     if presentation.shouldPlotSeries(role) {
                         SparklineSeriesPathShape(
                             points: presentation.points(for: role),
-                            maxValue: presentation.maxValue,
-                            plotFrame: plotFrame
+                            maxValue: plotMax,
+                            plotFrame: plotFrame,
+                            smoothing: smoothing(for: role)
                         )
                         .stroke(color(for: role), style: lineStyle(for: role))
+                        .shadow(
+                            color: !compact && role == .primary ? color(for: role).opacity(0.25) : .clear,
+                            radius: !compact && role == .primary ? 4 : 0,
+                            y: !compact && role == .primary ? 1 : 0
+                        )
 
-                        ForEach(visiblePointMarkers(for: role)) { point in
-                            Circle()
-                                .fill(color(for: role))
-                                .frame(width: compact ? 4.4 : 9, height: compact ? 4.4 : 9)
-                                .position(
-                                    self.point(
-                                        for: point,
-                                        bucketCount: presentation.points(for: role).count,
-                                        in: plotFrame
+                        if compact {
+                            ForEach(visiblePointMarkers(for: role)) { point in
+                                Circle()
+                                    .fill(color(for: role))
+                                    .frame(width: 4.4, height: 4.4)
+                                    .position(
+                                        self.point(
+                                            for: point,
+                                            bucketCount: presentation.points(for: role).count,
+                                            in: plotFrame
+                                        )
                                     )
-                                )
+                            }
                         }
                     }
+                }
+
+                if let hoveredBucket, !compact, !presentation.points.isEmpty {
+                    let clampedBucket = min(max(hoveredBucket, 0), presentation.values.count - 1)
+                    let anchorPoint = point(
+                        for: presentation.points[clampedBucket],
+                        bucketCount: presentation.points.count,
+                        in: plotFrame
+                    )
+                    Circle()
+                        .fill(color(for: .primary))
+                        .frame(width: 8, height: 8)
+                        .overlay(
+                            Circle()
+                                .stroke(Color.brainBarBackgroundRaised, lineWidth: 1.5)
+                        )
+                        .position(anchorPoint)
                 }
 
                 Rectangle()
@@ -409,14 +544,25 @@ struct SparklineChart: View {
 
                 if let hoveredBucket,
                    let hoverLocation,
-                   !compact {
-                    let tooltipSize = SparklineTooltipPlacement.tooltipSize(in: geometry.size)
-                    sparklineTooltip(forBucket: hoveredBucket)
-                        .frame(width: tooltipSize.width, alignment: .leading)
+                   !compact,
+                   !presentation.points.isEmpty {
+                    let clampedBucket = min(max(hoveredBucket, 0), max(presentation.values.count - 1, 0))
+                    let anchorPoint = point(
+                        for: presentation.points[clampedBucket],
+                        bucketCount: presentation.points.count,
+                        in: plotFrame
+                    )
+                    let tooltipSize = SparklineTooltipPlacement.tooltipSize(
+                        in: geometry.size,
+                        seriesCount: tooltipRows(forBucket: clampedBucket).count
+                    )
+                    sparklineTooltip(forBucket: clampedBucket, size: tooltipSize)
                         .position(
                             SparklineTooltipPlacement.position(
-                                near: hoverLocation,
-                                in: geometry.size,
+                                near: CGPoint(x: hoverLocation.x, y: anchorPoint.y),
+                                anchorY: anchorPoint.y,
+                                hoveredX: anchorPoint.x,
+                                containerBounds: geometry.size,
                                 tooltipSize: tooltipSize
                             )
                         )
@@ -442,16 +588,34 @@ struct SparklineChart: View {
         } else {
             x = plotFrame.minX + CGFloat(point.bucket) * (plotFrame.width / CGFloat(bucketCount - 1))
         }
-        let normalizedValue = CGFloat(point.value) / CGFloat(max(presentation.maxValue, 1))
+        let normalizedValue = CGFloat(point.value) / CGFloat(max(plotMax, 1))
         return CGPoint(x: x, y: plotFrame.maxY - (normalizedValue * plotFrame.height))
+    }
+
+    private func yPosition(forValue value: Int, in plotFrame: CGRect) -> CGFloat {
+        let normalized = CGFloat(value) / CGFloat(max(plotMax, 1))
+        return plotFrame.maxY - normalized * plotFrame.height
+    }
+
+    private var yAxisGutter: CGFloat { compact ? 0 : 30 }
+    private var plotMax: Int { compact ? presentation.maxValue : presentation.tightAxisMax }
+
+    private func smoothing(for role: SparklineSeriesRole) -> SparklineSmoothing {
+        guard !compact else { return .linear }
+        return presentation.isDense(role) ? .catmullRom : .monotone
+    }
+
+    private func baselineY(for role: SparklineSeriesRole, in plotFrame: CGRect) -> CGFloat {
+        presentation.isDense(role) ? plotFrame.maxY : plotFrame.maxY - plotFrame.height * 0.10
     }
 
     private func plotFrame(in size: CGSize) -> CGRect {
         let inset: CGFloat = compact ? 2 : 10
+        let leftInset = inset + yAxisGutter
         return CGRect(
-            x: inset,
+            x: leftInset,
             y: inset,
-            width: max(size.width - inset * 2, 1),
+            width: max(size.width - leftInset - inset, 1),
             height: max(size.height - inset * 2, 1)
         )
     }
@@ -542,22 +706,76 @@ struct SparklineChart: View {
         }
     }
 
+    private func tooltipRows(forBucket bucket: Int) -> [(role: SparklineSeriesRole, label: String, value: Int)] {
+        return SparklineSeriesRole.allCases.compactMap { role in
+            guard presentation.shouldPlotSeries(role),
+                  let label = presentation.label(for: role) else { return nil }
+            let series: [Int]
+            switch role {
+            case .primary:   series = presentation.values
+            case .secondary: series = presentation.secondaryValues
+            case .tertiary:  series = presentation.tertiaryValues
+            }
+            let value = series.indices.contains(bucket) ? series[bucket] : 0
+            return (role, label, value)
+        }
+    }
+
     @ViewBuilder
-    private func sparklineTooltip(forBucket bucket: Int) -> some View {
-        Text(presentation.tooltipText(forBucket: bucket))
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(.primary)
-            .lineLimit(2)
-            .truncationMode(.tail)
+    private func sparklineTooltip(forBucket bucket: Int, size: CGSize) -> some View {
+        let rows = tooltipRows(forBucket: bucket)
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(presentation.bucketLabel(for: bucket))
+                    .font(.system(size: 11, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(Color.brainBarTextPrimary)
+                Text(presentation.relativeBucketLabel(for: bucket))
+                    .font(.system(size: 9.5, weight: .medium))
+                    .foregroundStyle(Color.brainBarTextSecondary.opacity(0.70))
+            }
+            .lineLimit(1)
             .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color.brainBar(nsColor: accentColor).opacity(0.35), lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.14), radius: 8, y: 3)
+
+            if !rows.isEmpty {
+                Rectangle()
+                    .fill(Color.brainBarBorderSoft)
+                    .frame(height: 1)
+                    .padding(.horizontal, 2)
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(rows, id: \.role) { row in
+                        HStack(spacing: 6) {
+                            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                                .fill(color(for: row.role))
+                                .frame(width: 7, height: 7)
+                            Text(row.label)
+                                .font(.system(size: 10.5, weight: .medium))
+                                .foregroundStyle(Color.brainBarTextSecondary)
+                                .lineLimit(1).truncationMode(.tail)
+                            Spacer(minLength: 8)
+                            Text("\(row.value)")
+                                .font(.system(size: 11, weight: .semibold))
+                                .monospacedDigit()
+                                .foregroundStyle(Color.brainBarTextPrimary)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(Color.brainBarBackgroundRaised)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(Color.brainBar(nsColor: accentColor).opacity(0.35), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.28), radius: 9, y: 3)
+        .accessibilityHidden(true)
     }
 }
 
@@ -565,29 +783,193 @@ private struct SparklineSeriesPathShape: Shape {
     let points: [SparklineChartPoint]
     let maxValue: Int
     let plotFrame: CGRect
+    let smoothing: SparklineSmoothing
 
     func path(in rect: CGRect) -> Path {
+        SparklineSeriesPathBuilder.topPath(
+            for: points,
+            maxValue: maxValue,
+            plotFrame: plotFrame,
+            smoothing: smoothing
+        )
+    }
+}
+
+private struct SparklineSeriesAreaShape: Shape {
+    let points: [SparklineChartPoint]
+    let maxValue: Int
+    let plotFrame: CGRect
+    let baselineY: CGFloat
+    let smoothing: SparklineSmoothing
+
+    func path(in rect: CGRect) -> Path {
+        let renderedPoints = SparklineSeriesPathBuilder.renderedPoints(
+            for: points,
+            maxValue: maxValue,
+            plotFrame: plotFrame
+        )
+        guard let first = renderedPoints.first, let last = renderedPoints.last else {
+            return Path()
+        }
+
+        var path = SparklineSeriesPathBuilder.topPath(
+            for: renderedPoints,
+            plotFrame: plotFrame,
+            smoothing: smoothing
+        )
+        let clampedBaseline = min(max(baselineY, plotFrame.minY), plotFrame.maxY)
+        path.addLine(to: CGPoint(x: last.x, y: clampedBaseline))
+        path.addLine(to: CGPoint(x: first.x, y: clampedBaseline))
+        path.closeSubpath()
+        return path
+    }
+}
+
+private enum SparklineSeriesPathBuilder {
+    static func topPath(
+        for points: [SparklineChartPoint],
+        maxValue: Int,
+        plotFrame: CGRect,
+        smoothing: SparklineSmoothing
+    ) -> Path {
+        topPath(
+            for: renderedPoints(for: points, maxValue: maxValue, plotFrame: plotFrame),
+            plotFrame: plotFrame,
+            smoothing: smoothing
+        )
+    }
+
+    static func renderedPoints(
+        for points: [SparklineChartPoint],
+        maxValue: Int,
+        plotFrame: CGRect
+    ) -> [CGPoint] {
+        points.map { point in
+            let x: CGFloat
+            if points.count <= 1 {
+                x = plotFrame.midX
+            } else {
+                x = plotFrame.minX + CGFloat(point.bucket) * (plotFrame.width / CGFloat(points.count - 1))
+            }
+            let normalizedValue = CGFloat(point.value) / CGFloat(max(maxValue, 1))
+            return CGPoint(x: x, y: plotFrame.maxY - (normalizedValue * plotFrame.height))
+        }
+    }
+
+    static func topPath(
+        for renderedPoints: [CGPoint],
+        plotFrame: CGRect,
+        smoothing: SparklineSmoothing
+    ) -> Path {
+        guard let first = renderedPoints.first else { return Path() }
+        guard renderedPoints.count > 1 else {
+            var path = Path()
+            path.move(to: first)
+            return path
+        }
+
+        switch smoothing {
+        case .linear:
+            return linearPath(for: renderedPoints)
+        case .monotone:
+            return monotonePath(for: renderedPoints, plotFrame: plotFrame)
+        case .catmullRom:
+            return catmullRomPath(for: renderedPoints, plotFrame: plotFrame)
+        }
+    }
+
+    private static func linearPath(for points: [CGPoint]) -> Path {
         var path = Path()
         for (index, point) in points.enumerated() {
-            let renderedPoint = renderedPoint(for: point, bucketCount: points.count)
             if index == 0 {
-                path.move(to: renderedPoint)
+                path.move(to: point)
             } else {
-                path.addLine(to: renderedPoint)
+                path.addLine(to: point)
             }
         }
         return path
     }
 
-    private func renderedPoint(for point: SparklineChartPoint, bucketCount: Int) -> CGPoint {
-        let x: CGFloat
-        if bucketCount <= 1 {
-            x = plotFrame.midX
-        } else {
-            x = plotFrame.minX + CGFloat(point.bucket) * (plotFrame.width / CGFloat(bucketCount - 1))
+    private static func monotonePath(for points: [CGPoint], plotFrame: CGRect) -> Path {
+        let count = points.count
+        var secants = Array(repeating: CGFloat.zero, count: count - 1)
+        for index in 0..<(count - 1) {
+            let dx = points[index + 1].x - points[index].x
+            secants[index] = dx == 0 ? 0 : (points[index + 1].y - points[index].y) / dx
         }
-        let normalizedValue = CGFloat(point.value) / CGFloat(max(maxValue, 1))
-        return CGPoint(x: x, y: plotFrame.maxY - (normalizedValue * plotFrame.height))
+
+        var tangents = Array(repeating: CGFloat.zero, count: count)
+        tangents[0] = secants[0]
+        tangents[count - 1] = secants[count - 2]
+        if count > 2 {
+            for index in 1..<(count - 1) {
+                let previous = secants[index - 1]
+                let next = secants[index]
+                if previous == 0 || next == 0 || (previous > 0) != (next > 0) {
+                    tangents[index] = 0
+                } else {
+                    tangents[index] = (previous + next) / 2
+                }
+            }
+        }
+
+        for index in 0..<(count - 1) {
+            let secant = secants[index]
+            guard secant != 0 else {
+                tangents[index] = 0
+                tangents[index + 1] = 0
+                continue
+            }
+            let alpha = tangents[index] / secant
+            let beta = tangents[index + 1] / secant
+            let magnitude = alpha * alpha + beta * beta
+            if magnitude > 9 {
+                let scale = 3 / sqrt(magnitude)
+                tangents[index] = scale * alpha * secant
+                tangents[index + 1] = scale * beta * secant
+            }
+        }
+
+        var path = Path()
+        path.move(to: points[0])
+        for index in 0..<(count - 1) {
+            let dx = points[index + 1].x - points[index].x
+            let control1 = CGPoint(
+                x: points[index].x + dx / 3,
+                y: clampY(points[index].y + tangents[index] * dx / 3, in: plotFrame)
+            )
+            let control2 = CGPoint(
+                x: points[index + 1].x - dx / 3,
+                y: clampY(points[index + 1].y - tangents[index + 1] * dx / 3, in: plotFrame)
+            )
+            path.addCurve(to: points[index + 1], control1: control1, control2: control2)
+        }
+        return path
+    }
+
+    private static func catmullRomPath(for points: [CGPoint], plotFrame: CGRect) -> Path {
+        var path = Path()
+        path.move(to: points[0])
+        for index in 0..<(points.count - 1) {
+            let p0 = points[max(index - 1, 0)]
+            let p1 = points[index]
+            let p2 = points[index + 1]
+            let p3 = points[min(index + 2, points.count - 1)]
+            let control1 = CGPoint(
+                x: p1.x + (p2.x - p0.x) / 6,
+                y: clampY(p1.y + (p2.y - p0.y) / 6, in: plotFrame)
+            )
+            let control2 = CGPoint(
+                x: p2.x - (p3.x - p1.x) / 6,
+                y: clampY(p2.y - (p3.y - p1.y) / 6, in: plotFrame)
+            )
+            path.addCurve(to: p2, control1: control1, control2: control2)
+        }
+        return path
+    }
+
+    private static func clampY(_ y: CGFloat, in plotFrame: CGRect) -> CGFloat {
+        min(max(y, plotFrame.minY), plotFrame.maxY)
     }
 }
 
@@ -595,36 +977,61 @@ enum SparklineTooltipPlacement {
     private static let margin: CGFloat = 8
     private static let preferredWidth: CGFloat = 260
     private static let minimumWidth: CGFloat = 112
-    private static let estimatedHeight: CGFloat = 44
     private static let cursorGap: CGFloat = 12
+    // Structured-card metrics = the PINNED card height (matches sparklineTooltip's paddings/spacing).
+    private static let verticalPadding: CGFloat = 9
+    private static let headerHeight: CGFloat = 24
+    private static let dividerBlock: CGFloat = 14
+    private static let rowHeight: CGFloat = 16
 
-    static func tooltipSize(in containerSize: CGSize) -> CGSize {
+    static func tooltipSize(in containerSize: CGSize, seriesCount: Int = 1) -> CGSize {
         let availableWidth = max(containerSize.width - margin * 2, minimumWidth)
-        return CGSize(
-            width: min(preferredWidth, availableWidth),
-            height: estimatedHeight
-        )
+        let rows = max(seriesCount, 0)
+        let rowsBlock = rows > 0 ? dividerBlock + CGFloat(rows) * rowHeight : 0
+        let height = verticalPadding * 2 + headerHeight + rowsBlock
+        let availableHeight = max(containerSize.height - margin * 2, height)
+        return CGSize(width: min(preferredWidth, availableWidth),
+                      height: min(height, availableHeight))
     }
 
     static func position(
         near location: CGPoint,
-        in containerSize: CGSize,
+        anchorY: CGFloat,
+        hoveredX: CGFloat,
+        containerBounds: CGSize,
         tooltipSize: CGSize
     ) -> CGPoint {
         let halfWidth = tooltipSize.width / 2
         let halfHeight = tooltipSize.height / 2
         let minX = margin + halfWidth
-        let maxX = max(containerSize.width - margin - halfWidth, minX)
+        let maxX = max(containerBounds.width - margin - halfWidth, minX)
         let x = min(max(location.x, minX), maxX)
-
-        let yAbove = location.y - cursorGap - halfHeight
-        let yBelow = location.y + cursorGap + halfHeight
         let minY = margin + halfHeight
-        let maxY = max(containerSize.height - margin - halfHeight, minY)
-        let preferredY = yAbove >= minY ? yAbove : yBelow
-        let y = min(max(preferredY, minY), maxY)
+        let maxY = max(containerBounds.height - margin - halfHeight, minY)
 
-        return CGPoint(x: x, y: y)
+        let yAbove = anchorY - cursorGap - halfHeight
+        if yAbove >= minY {
+            return CGPoint(x: x, y: yAbove)
+        }
+
+        let yBelow = anchorY + cursorGap + halfHeight
+        if yBelow <= maxY {
+            return CGPoint(x: x, y: yBelow)
+        }
+
+        let rightX = hoveredX + halfWidth + cursorGap
+        let leftX = hoveredX - halfWidth - cursorGap
+        let sideX: CGFloat
+        if rightX >= minX, rightX <= maxX {
+            sideX = rightX
+        } else if leftX >= minX, leftX <= maxX {
+            sideX = leftX
+        } else {
+            sideX = x
+        }
+        let y = min(max(anchorY, minY), maxY)
+
+        return CGPoint(x: sideX, y: y)
     }
 }
 

@@ -7,6 +7,14 @@ enum DashboardMetricFormatter {
         return formatter
     }()
 
+    static func axisTickString(_ value: Int) -> String {
+        if value >= 1000 {
+            let thousands = Double(value) / 1000
+            return thousands >= 10 ? "\(Int(thousands.rounded()))k" : String(format: "%.1fk", thousands)
+        }
+        return "\(value)"
+    }
+
     private static let shortAbsoluteTimeFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm"
