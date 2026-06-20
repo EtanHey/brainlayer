@@ -443,8 +443,13 @@ struct InjectionFeedView: View {
                                 .font(.system(size: 11, weight: .semibold))
                         }
                         Text(event.displayTitle)
-                            .font(.system(size: 14, weight: .semibold))
+                            // QA Part B: the thread name read too small next to the
+                            // 14pt body — bump to 15 and let it span the row so it
+                            // is the clear primary label of the expanded row.
+                            .font(.system(size: 15, weight: .semibold))
                             .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
                     if let triggeredBy = event.expandedRowTriggeredByText {
@@ -475,16 +480,27 @@ struct InjectionFeedView: View {
 
                 Spacer(minLength: 10)
 
+                // QA Part B: "open thread" button was a bare text label crammed
+                // against the trailing edge — it clipped at narrow widths. Give it
+                // a real pill affordance and a fixed intrinsic width so it never
+                // truncates ("Opening" is longer than "Open").
                 Button {
                     if let firstChunk = event.uniqueChunkIDs.first {
                         openConversation(chunkID: firstChunk, title: event.openingModalTitle(forChunkID: firstChunk))
                     }
                 } label: {
-                    Text(loadingConversationChunkID == event.uniqueChunkIDs.first ? "Opening" : "Open")
+                    Text(loadingConversationChunkID == event.uniqueChunkIDs.first ? "Opening" : "Open thread")
                         .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.blue)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(Color.brainBarAccent.opacity(0.14)))
                 }
                 .buttonStyle(.plain)
                 .disabled(event.uniqueChunkIDs.isEmpty || loadingConversationChunkID != nil)
+                .accessibilityLabel("Open thread")
             }
 
             Rectangle()

@@ -535,6 +535,94 @@ struct DashboardFlowSummary: Sendable, Equatable {
     }
 }
 
+/// The three independent flow series the redesigned dashboard plots as
+/// separately-scaled cards. `agentStores` and `jsonlWatcher` were previously
+/// co-normalized into a single `ingress` lane (the watcher peak crushed the
+/// agent series flat). `enrichment` reuses the existing enrichment lane.
+enum PipelineSeries: String, Sendable, Equatable, CaseIterable, Identifiable {
+    case agentStores
+    case jsonlWatcher
+    case enrichment
+
+    var id: String { rawValue }
+}
+
+extension DashboardFlowSummary {
+    /// A single-series lane for one `PipelineSeries`, used by the redesigned
+    /// per-series cards. Each lane carries ONLY its own `values` (empty
+    /// secondary/tertiary), so `SparklineChartPresentation.maxValue` auto-fits
+    /// the chart to that one series — the scale-disconnect fix is free.
+    ///
+    /// `ingress` is intentionally NOT removed: legacy callers (status popover,
+    /// diagnostics "Writes" row) still read the combined lane.
+    func lane(for series: PipelineSeries) -> DashboardFlowLane {
+        switch series {
+        case .enrichment:
+            // Reuse the existing enrichment lane verbatim (keeps its
+            // sparklineReferenceValue benchmark behaviour downstream).
+            return enrichment
+        case .agentStores:
+            return DashboardFlowLane(
+                name: "Agent stores",
+                status: ingress.status,
+                statusText: ingress.statusText,
+                windowLabel: ingress.windowLabel,
+                activityWindowMinutes: ingress.activityWindowMinutes,
+                rateText: DashboardMetricFormatter.rateString(
+                    totalEvents: ingress.values.reduce(0, +),
+                    activityWindowMinutes: ingress.activityWindowMinutes
+                ),
+                volumeText: DashboardMetricFormatter.activitySummaryString(
+                    totalEvents: ingress.values.reduce(0, +),
+                    activityWindowMinutes: ingress.activityWindowMinutes
+                ),
+                // Single shared lastWriteAt — keep the lane's own last-event text.
+                lastEventText: ingress.lastEventText,
+                values: ingress.values,
+                sparklineLabel: "Agent stores over \(ingress.windowLabel)",
+                latestBucketName: "latest agent-store bucket",
+                accentColor: BrainBarDesignTokens.Colors.seriesAgent,
+                primarySeriesLabel: nil,
+                secondaryValues: [],
+                secondarySeriesLabel: nil,
+                secondaryAccentColor: nil,
+                tertiaryValues: [],
+                tertiarySeriesLabel: nil,
+                tertiaryAccentColor: nil
+            )
+        case .jsonlWatcher:
+            let watcherValues = ingress.secondaryValues
+            return DashboardFlowLane(
+                name: "JSONL watcher",
+                status: ingress.status,
+                statusText: ingress.statusText,
+                windowLabel: ingress.windowLabel,
+                activityWindowMinutes: ingress.activityWindowMinutes,
+                rateText: DashboardMetricFormatter.rateString(
+                    totalEvents: watcherValues.reduce(0, +),
+                    activityWindowMinutes: ingress.activityWindowMinutes
+                ),
+                volumeText: DashboardMetricFormatter.activitySummaryString(
+                    totalEvents: watcherValues.reduce(0, +),
+                    activityWindowMinutes: ingress.activityWindowMinutes
+                ),
+                lastEventText: ingress.lastEventText,
+                values: watcherValues,
+                sparklineLabel: "JSONL watcher over \(ingress.windowLabel)",
+                latestBucketName: "latest watcher bucket",
+                accentColor: BrainBarDesignTokens.Colors.seriesWatcher,
+                primarySeriesLabel: nil,
+                secondaryValues: [],
+                secondarySeriesLabel: nil,
+                secondaryAccentColor: nil,
+                tertiaryValues: [],
+                tertiarySeriesLabel: nil,
+                tertiaryAccentColor: nil
+            )
+        }
+    }
+}
+
 enum PipelineState: String, Sendable, Equatable {
     case degraded
     case indexing

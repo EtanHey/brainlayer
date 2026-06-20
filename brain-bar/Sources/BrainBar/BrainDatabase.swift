@@ -256,6 +256,44 @@ final class BrainDatabase: @unchecked Sendable {
             return (Double(indexedCount) / Double(signalEligibleChunkCount)) * 100
         }
 
+        /// Returns a copy whose per-series buckets + activity window are replaced
+        /// with REAL windowed data (the shared Live/3h/24h selector). Everything
+        /// else (counts, coverage, queue, last-event) is preserved so the lanes
+        /// re-derive their volume/rate text from the wider window while the rest
+        /// of the dashboard stays consistent.
+        func withWindowedPipelineBuckets(_ buckets: PipelineWindowBuckets) -> DashboardStats {
+            DashboardStats(
+                chunkCount: chunkCount,
+                enrichedChunkCount: enrichedChunkCount,
+                pendingEnrichmentCount: pendingEnrichmentCount,
+                enrichmentPercent: enrichmentPercent,
+                enrichmentRatePerMinute: enrichmentRatePerMinute,
+                databaseSizeBytes: databaseSizeBytes,
+                recentActivityBuckets: zip(
+                    buckets.agentWriteBuckets,
+                    buckets.watcherWriteBuckets
+                ).map(+),
+                recentAgentWriteBuckets: buckets.agentWriteBuckets,
+                recentWatcherWriteBuckets: buckets.watcherWriteBuckets,
+                recentEnrichmentBuckets: buckets.enrichmentBuckets,
+                recentWriteFiveMinuteCount: recentWriteFiveMinuteCount,
+                recentEnrichmentFiveMinuteCount: recentEnrichmentFiveMinuteCount,
+                activityWindowMinutes: buckets.activityWindowMinutes,
+                bucketCount: buckets.bucketCount,
+                liveWindowMinutes: liveWindowMinutes,
+                lastWriteAt: lastWriteAt,
+                lastEnrichedAt: lastEnrichedAt,
+                signalEligibleChunkCount: signalEligibleChunkCount,
+                vectorIndexedChunkCount: vectorIndexedChunkCount,
+                ftsIndexedChunkCount: ftsIndexedChunkCount,
+                trigramIndexedChunkCount: trigramIndexedChunkCount,
+                pendingStoreQueueDepth: pendingStoreQueueDepth,
+                pendingStoreOldestQueuedAt: pendingStoreOldestQueuedAt,
+                pendingStoreFlushRatePerMinute: pendingStoreFlushRatePerMinute,
+                watcherHealth: watcherHealth
+            )
+        }
+
         func withPendingStoreFlushRate(_ rate: Double) -> DashboardStats {
             DashboardStats(
                 chunkCount: chunkCount,
@@ -290,6 +328,24 @@ final class BrainDatabase: @unchecked Sendable {
     struct PendingStoreQueueSnapshot: Sendable, Equatable {
         let depth: Int
         let oldestQueuedAt: Date?
+    }
+
+    /// The three pipeline series (agent stores / JSONL watcher / enrichment)
+    /// bucketed over an ARBITRARY window — the data primitive behind the shared
+    /// Live(30m)/3h/24h selector. Unlike `DashboardStats` (which is pinned to the
+    /// resting window), this is a lightweight windowed re-fetch the dashboard
+    /// asks for when the timeframe changes, so 3h/24h show REAL historical DB
+    /// data rather than relabeling the live buckets.
+    struct PipelineWindowBuckets: Sendable, Equatable {
+        let activityWindowMinutes: Int
+        let bucketCount: Int
+        let agentWriteBuckets: [Int]
+        let watcherWriteBuckets: [Int]
+        let enrichmentBuckets: [Int]
+
+        var agentTotal: Int { agentWriteBuckets.reduce(0, +) }
+        var watcherTotal: Int { watcherWriteBuckets.reduce(0, +) }
+        var enrichmentTotal: Int { enrichmentBuckets.reduce(0, +) }
     }
 
     struct SubscriberRecord: Sendable {
@@ -1730,6 +1786,56 @@ final class BrainDatabase: @unchecked Sendable {
                 pendingStoreQueueDepth: pendingStoreQueue.depth,
                 pendingStoreOldestQueuedAt: pendingStoreQueue.oldestQueuedAt,
                 watcherHealth: watcherHealth
+            )
+        }
+    }
+
+    /// Windowed re-fetch of the three pipeline series for an ARBITRARY window
+    /// (180 min for 3h, 1440 for 24h, …). This is what makes the shared
+    /// Live/3h/24h selector show REAL historical data instead of relabeling the
+    /// live buckets: the view calls this on timeframe change and feeds the result
+    /// into the charts. Reuses the exact same per-source bucketing the live
+    /// `dashboardStats` uses, so the wider windows are honest DB reads.
+    func pipelineWindowBuckets(
+        activityWindowMinutes: Int,
+        bucketCount: Int = 12,
+        now: Date = Date()
+    ) throws -> PipelineWindowBuckets {
+        try withReadTransaction {
+            guard bucketCount > 0, activityWindowMinutes > 0 else {
+                return PipelineWindowBuckets(
+                    activityWindowMinutes: activityWindowMinutes,
+                    bucketCount: bucketCount,
+                    agentWriteBuckets: Array(repeating: 0, count: max(bucketCount, 0)),
+                    watcherWriteBuckets: Array(repeating: 0, count: max(bucketCount, 0)),
+                    enrichmentBuckets: Array(repeating: 0, count: max(bucketCount, 0))
+                )
+            }
+
+            let agentWriteBuckets = try recentWriteBuckets(
+                whereClause: Self.agentWriteSourceWhereClause,
+                activityWindowMinutes: activityWindowMinutes,
+                bucketCount: bucketCount,
+                now: now
+            )
+            let watcherWriteBuckets = try recentWriteBuckets(
+                whereClause: Self.watcherWriteSourceWhereClause,
+                activityWindowMinutes: activityWindowMinutes,
+                bucketCount: bucketCount,
+                now: now
+            )
+            let enrichmentBuckets = try recentEnrichmentBuckets(
+                activityWindowMinutes: activityWindowMinutes,
+                bucketCount: bucketCount,
+                now: now
+            )
+
+            return PipelineWindowBuckets(
+                activityWindowMinutes: activityWindowMinutes,
+                bucketCount: bucketCount,
+                agentWriteBuckets: agentWriteBuckets,
+                watcherWriteBuckets: watcherWriteBuckets,
+                enrichmentBuckets: enrichmentBuckets
             )
         }
     }

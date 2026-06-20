@@ -30,6 +30,16 @@ final class StatsCollector: ObservableObject {
     @Published private(set) var hasPendingStatsRefresh = false
     @Published private(set) var lastDataFetchedAt: Date?
     @Published private(set) var heartbeat: DashboardHeartbeat
+    /// REAL windowed buckets for the shared Live/3h/24h selector. `nil` means
+    /// "no wider window selected yet" — the views fall back to the live `stats`
+    /// buckets (the resting 30m view). When the selector picks 3h/24h, the view
+    /// requests a windowed fetch; this publishes the actual DB data for that
+    /// window so the charts re-render with genuine history, not a relabel.
+    @Published private(set) var windowedBuckets: BrainDatabase.PipelineWindowBuckets?
+    @Published private(set) var windowedBucketsWindowMinutes: Int?
+    @Published private(set) var isWindowedBucketsLoading = false
+    private var windowedBucketsTask: Task<Void, Never>?
+    private var windowedBucketsGeneration = 0
 
     private let dbPath: String
     private let databaseOpenConfiguration: BrainDatabase.OpenConfiguration
@@ -126,6 +136,9 @@ final class StatsCollector: ObservableObject {
         autoRefreshTask = nil
         dashboardRefreshTask?.cancel()
         dashboardRefreshTask = nil
+        windowedBucketsTask?.cancel()
+        windowedBucketsTask = nil
+        isWindowedBucketsLoading = false
         pendingStatsRefreshTask?.cancel()
         pendingStatsRefreshTask = nil
         pendingStatsRefreshFireAt = nil
@@ -153,6 +166,59 @@ final class StatsCollector: ObservableObject {
         pendingStatsRefreshBypassesCoalescing = false
         hasPendingStatsRefresh = false
         requestRefresh(force: true, trigger: .manual)
+    }
+
+    /// Fetch REAL windowed buckets for the shared Live/3h/24h selector.
+    ///
+    /// The `.live` (30m) lens reads straight off the resting `stats` buckets, so
+    /// it clears any wider-window fetch and returns immediately. The 3h/24h
+    /// lenses trigger a genuine off-main DB re-fetch over the requested window
+    /// (180 / 1440 minutes) and publish `windowedBuckets` so the charts re-render
+    /// with actual history — fixing the prior bug where wider lenses only
+    /// relabeled the live buckets.
+    func selectTimeframe(windowMinutes: Int, isLive: Bool) {
+        windowedBucketsTask?.cancel()
+        windowedBucketsTask = nil
+
+        if isLive {
+            windowedBuckets = nil
+            windowedBucketsWindowMinutes = nil
+            isWindowedBucketsLoading = false
+            return
+        }
+
+        windowedBucketsGeneration += 1
+        let generation = windowedBucketsGeneration
+        let dbPath = self.dbPath
+        let openConfiguration = self.databaseOpenConfiguration
+        let bucketCount = Self.defaultBucketCount
+        isWindowedBucketsLoading = true
+
+        windowedBucketsTask = Task.detached(priority: .userInitiated) { [weak self] in
+            let result: Result<BrainDatabase.PipelineWindowBuckets, Error> = Result {
+                let backgroundDatabase = BrainDatabase(path: dbPath, openConfiguration: openConfiguration)
+                defer { backgroundDatabase.close() }
+                backgroundDatabase.reopenIfNeeded()
+                return try backgroundDatabase.pipelineWindowBuckets(
+                    activityWindowMinutes: windowMinutes,
+                    bucketCount: bucketCount
+                )
+            }
+
+            await MainActor.run {
+                guard let self, !self.isStopped, generation == self.windowedBucketsGeneration else { return }
+                self.windowedBucketsTask = nil
+                self.isWindowedBucketsLoading = false
+                switch result {
+                case .success(let buckets):
+                    self.windowedBuckets = buckets
+                    self.windowedBucketsWindowMinutes = windowMinutes
+                case .failure:
+                    self.windowedBuckets = nil
+                    self.windowedBucketsWindowMinutes = nil
+                }
+            }
+        }
     }
 
     func requestRefresh(
