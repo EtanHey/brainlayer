@@ -309,6 +309,7 @@ class JSONLTailer:
             try:
                 parsed = json.loads(line_data)
                 if isinstance(parsed, dict):
+                    parsed["_line_end_offset"] = self.offset + nl_idx + 1
                     lines.append(parsed)
             except (json.JSONDecodeError, UnicodeDecodeError):
                 logger.debug("Skipping corrupt JSONL line at offset %d", self.offset)
@@ -337,18 +338,21 @@ class BatchIndexer:
 
     def __init__(
         self,
-        on_flush: Callable[[list[dict]], int | None],
+        on_flush: Callable[[list[dict]], dict[str, int] | None],
         batch_size: int = 10,
         flush_interval_ms: int = 100,
+        on_confirm_offsets: Callable[[dict[str, int]], None] | None = None,
     ):
         self.on_flush = on_flush
         self.batch_size = batch_size
         self.flush_interval_ms = flush_interval_ms
+        self.on_confirm_offsets = on_confirm_offsets
         self._buffer: list[dict] = []
         self._lock = threading.Lock()
         self._last_flush = time.monotonic()
         self.total_flushed = 0
         self.total_outputs = 0
+        self._flush_failures = 0
 
     def add(self, items: list[dict]):
         """Add parsed lines to the buffer."""
@@ -381,11 +385,68 @@ class BatchIndexer:
         count = len(batch)
         try:
             result = self.on_flush(batch)
+            watermarks = self._confirmed_watermarks(batch, result)
+            if watermarks and self.on_confirm_offsets:
+                self.on_confirm_offsets(watermarks)
             self._buffer = []  # Clear only after successful flush
+            self._flush_failures = 0
             self.total_flushed += count
-            self.total_outputs += result if isinstance(result, int) else count
+            self.total_outputs += getattr(result, "inserted", count)
         except Exception as e:
             logger.error("Batch flush failed (%d items), retaining in buffer: %s", count, e)
+            self._isolate_failed_flush(batch, e)
+
+    def _confirmed_watermarks(self, batch: list[dict], result: dict[str, int] | None) -> dict[str, int]:
+        if isinstance(result, dict):
+            return {str(source_file): int(offset) for source_file, offset in result.items()}
+        return {}
+
+    def _flush_retain_limit(self) -> int:
+        try:
+            return max(1, int(os.environ.get("BRAINLAYER_WATCHER_FLUSH_RETAIN_LIMIT", "3")))
+        except ValueError:
+            return 3
+
+    def _quarantine_entries(self, entries: list[dict], reason: Exception) -> None:
+        quarantine_dir = Path(
+            os.environ.get("BRAINLAYER_WATCHER_QUARANTINE_DIR", "~/.brainlayer/quarantine")
+        ).expanduser()
+        quarantine_dir.mkdir(parents=True, exist_ok=True)
+        path = quarantine_dir / f"watcher-flush-{int(time.time() * 1000)}.jsonl"
+        with path.open("w", encoding="utf-8") as handle:
+            for entry in entries:
+                handle.write(json.dumps({"reason": str(reason), "entry": entry}, sort_keys=True) + "\n")
+        logger.critical("Quarantined %d watcher flush entries at %s after repeated failures", len(entries), path)
+
+    def _isolate_failed_flush(self, batch: list[dict], reason: Exception) -> None:
+        if len(batch) <= 1:
+            self._flush_failures += 1
+            if self._flush_failures >= self._flush_retain_limit():
+                self._quarantine_entries(batch, reason)
+                self._buffer = []
+                self._flush_failures = 0
+            return
+
+        retained: list[dict] = []
+        confirmed: dict[str, int] = {}
+        outputs = 0
+        for item in batch:
+            try:
+                result = self.on_flush([item])
+            except Exception:
+                retained.append(item)
+                continue
+            item_watermarks = self._confirmed_watermarks([item], result)
+            for source_file, offset in item_watermarks.items():
+                confirmed[source_file] = max(confirmed.get(source_file, 0), offset)
+            outputs += getattr(result, "inserted", 1)
+
+        if confirmed and self.on_confirm_offsets:
+            self.on_confirm_offsets(confirmed)
+        self.total_outputs += outputs
+        self.total_flushed += len(batch) - len(retained)
+        self._buffer = retained
+        self._flush_failures = self._flush_failures + 1 if retained else 0
 
 
 # ── JSONL Watcher ────────────────────────────────────────────────────────────
@@ -411,7 +472,7 @@ class JSONLWatcher:
         self,
         watch_dir: str | Path | None = None,
         registry_path: str | Path | None = None,
-        on_flush: Callable[[list[dict]], None] | None = None,
+        on_flush: Callable[[list[dict]], dict[str, int] | None] | None = None,
         on_rewind: Callable[[str, str, int, int], None] | None = None,
         watch_roots: list[WatchRoot] | None = None,
         db_path: str | Path | None = None,
@@ -439,6 +500,7 @@ class JSONLWatcher:
             on_flush=on_flush or (lambda _items: None),
             batch_size=batch_size,
             flush_interval_ms=flush_interval_ms,
+            on_confirm_offsets=self._advance_confirmed_offsets,
         )
         self.poll_interval_s = poll_interval_s
         self.registry_flush_interval_s = registry_flush_interval_s
@@ -454,9 +516,27 @@ class JSONLWatcher:
         self._health_window_started_epoch = time.time()
         self._health_entries_seen = 0
         self._health_output_at_start = 0
+        self.poll_count = 0
+
+    def _advance_confirmed_offsets(self, watermarks: dict[str, int]) -> None:
+        for filepath, offset in watermarks.items():
+            tailer = self._tailers.get(filepath)
+            inode = tailer.get_inode() if tailer else self.registry.get(filepath)[1]
+            current_offset, _current_inode = self.registry.get(filepath)
+            if offset >= current_offset:
+                self.registry.set(filepath, offset, inode)
 
     def provider_for_file(self, filepath: str) -> str:
-        return self._file_providers.get(filepath, "unknown")
+        provider = self._file_providers.get(filepath)
+        if provider:
+            return provider
+
+        path = Path(filepath).expanduser().resolve(strict=False)
+        for root in self.watch_roots:
+            root_path = root.resolved_path.resolve(strict=False)
+            if path == root_path or path.is_relative_to(root_path):
+                return root.provider
+        return "unknown"
 
     def _discover_jsonl_files(self) -> list[str]:
         """Find all .jsonl files under each watched project, including nested session artifacts."""
@@ -498,6 +578,8 @@ class JSONLWatcher:
                 continue
             entry["_source_file"] = filepath
             entry["_provider"] = provider
+            if isinstance(line.get("_line_end_offset"), int):
+                entry["_line_end_offset"] = line["_line_end_offset"]
             normalized.append(entry)
         return normalized
 
@@ -551,6 +633,7 @@ class JSONLWatcher:
         )
         payload = {
             "updated_at": datetime.now(timezone.utc).isoformat(),
+            "poll_count": self.poll_count,
             "providers": sorted({root.provider for root in self.watch_roots}),
             "files_tracked": len(files),
             "active_jsonl_entries_per_minute": entries_per_min,
@@ -600,69 +683,74 @@ class JSONLWatcher:
     def poll_once(self) -> int:
         """Run one poll cycle. Returns number of new lines found."""
         total_new = 0
-        files = self._discover_jsonl_files()
+        files: list[str] = []
+        self.poll_count += 1
 
-        for filepath in files:
-            tailer = self._ensure_tailer(filepath)
-            new_lines = tailer.read_new_lines(max_lines=self.max_lines_per_file)
+        try:
+            files = self._discover_jsonl_files()
 
-            # Handle rewind detection (checkpoint restore)
-            if tailer.rewound:
-                session_id = Path(filepath).stem
-                logger.warning(
-                    "Checkpoint restore: %s (offset %d → %d)",
-                    session_id,
-                    tailer.rewind_old_offset,
-                    tailer.rewind_new_offset,
-                )
+            for filepath in files:
                 try:
-                    from .telemetry import emit
+                    tailer = self._ensure_tailer(filepath)
+                    new_lines = tailer.read_new_lines(max_lines=self.max_lines_per_file)
 
-                    emit(
-                        "brainlayer-watcher",
-                        {
-                            "_type": "rewind_detected",
-                            "session_id": session_id,
-                            "file_path": filepath,
-                            "old_offset": tailer.rewind_old_offset,
-                            "new_offset": tailer.rewind_new_offset,
-                        },
-                    )
-                except Exception:
-                    pass
-
-                # Call rewind callback if set
-                if self.on_rewind:
-                    try:
-                        self.on_rewind(
-                            filepath,
+                    # Handle rewind detection (checkpoint restore)
+                    if tailer.rewound:
+                        session_id = Path(filepath).stem
+                        logger.warning(
+                            "Checkpoint restore: %s (offset %d → %d)",
                             session_id,
                             tailer.rewind_old_offset,
                             tailer.rewind_new_offset,
                         )
-                    except Exception as e:
-                        logger.error("Rewind callback failed: %s", e)
+                        try:
+                            from .telemetry import emit
 
-                tailer.rewound = False  # Reset flag
+                            emit(
+                                "brainlayer-watcher",
+                                {
+                                    "_type": "rewind_detected",
+                                    "session_id": session_id,
+                                    "file_path": filepath,
+                                    "old_offset": tailer.rewind_old_offset,
+                                    "new_offset": tailer.rewind_new_offset,
+                                },
+                            )
+                        except Exception:
+                            pass
 
-            if new_lines:
-                normalized_lines = self._normalize_lines(filepath, new_lines)
-                self.indexer.add(normalized_lines)
-                self.registry.set(filepath, tailer.offset, tailer.get_inode())
-                self._health_entries_seen += len(normalized_lines)
-                total_new += len(normalized_lines)
+                        # Call rewind callback if set
+                        if self.on_rewind:
+                            try:
+                                self.on_rewind(
+                                    filepath,
+                                    session_id,
+                                    tailer.rewind_old_offset,
+                                    tailer.rewind_new_offset,
+                                )
+                            except Exception as e:
+                                logger.error("Rewind callback failed: %s", e)
 
-        self.indexer.tick()
+                        tailer.rewound = False  # Reset flag
 
-        # Periodic registry flush
-        now = time.monotonic()
-        if now - self._last_registry_flush >= self.registry_flush_interval_s:
-            self.registry.flush()
-            self._last_registry_flush = now
+                    if new_lines:
+                        normalized_lines = self._normalize_lines(filepath, new_lines)
+                        self.indexer.add(normalized_lines)
+                        self._health_entries_seen += len(normalized_lines)
+                        total_new += len(normalized_lines)
+                except Exception:
+                    logger.exception("Poll file error: %s", filepath)
 
-        self._write_health_snapshot(files)
+            self.indexer.tick()
+            return total_new
+        finally:
+            # Periodic registry flush
+            now = time.monotonic()
+            if now - self._last_registry_flush >= self.registry_flush_interval_s:
+                self.registry.flush()
+                self._last_registry_flush = now
 
-        return total_new
+            self._write_health_snapshot(files)
 
     def start(self):
         """Start the watcher loop (blocking). Call stop() from another thread."""
@@ -683,16 +771,49 @@ class JSONLWatcher:
 
         heartbeat_interval_s = 60.0
         last_heartbeat = time.monotonic()
+        last_error_fingerprint: str | None = None
+        repeated_error_count = 0
+        try:
+            livelock_threshold = int(os.environ.get("BRAINLAYER_WATCHER_LIVELOCK_ERROR_THRESHOLD", "5"))
+        except ValueError:
+            livelock_threshold = 5
 
         while not self._stop.is_set():
             try:
                 self.poll_once()
+                last_error_fingerprint = None
+                repeated_error_count = 0
             except Exception as e:
                 logger.error("Poll cycle error: %s", e)
+                fingerprint = f"{type(e).__name__}:{e}"
+                if fingerprint == last_error_fingerprint:
+                    repeated_error_count += 1
+                else:
+                    last_error_fingerprint = fingerprint
+                    repeated_error_count = 1
                 try:
                     emit_watcher_error("poll_cycle", str(e))
                 except Exception:
                     pass
+                if repeated_error_count > livelock_threshold:
+                    logger.critical(
+                        "Watcher live-locked on repeated poll error (%d): %s",
+                        repeated_error_count,
+                        fingerprint,
+                    )
+                    try:
+                        from .telemetry import emit
+
+                        emit(
+                            "brainlayer-watcher",
+                            {
+                                "_type": "watcher_live_locked",
+                                "error": fingerprint,
+                                "repeated_error_count": repeated_error_count,
+                            },
+                        )
+                    except Exception:
+                        pass
 
             # Periodic heartbeat
             now = time.monotonic()
