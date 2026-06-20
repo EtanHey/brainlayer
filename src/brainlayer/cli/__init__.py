@@ -591,7 +591,9 @@ def health_check_command(
             watch_plist_path=watch_plist_path.expanduser(),
             drain_plist_path=drain_plist_path.expanduser(),
             health_check_plist_path=health_check_plist_path.expanduser(),
-            source_jsonl_globs=source_jsonl_globs if source_jsonl_globs is not None else HealthCheckConfig().source_jsonl_globs,
+            source_jsonl_globs=source_jsonl_globs
+            if source_jsonl_globs is not None
+            else HealthCheckConfig().source_jsonl_globs,
             pause_sentinel_path=pause_sentinel_path.expanduser(),
             drain_health_path=drain_health_path.expanduser(),
             queue_dir=queue_dir.expanduser(),

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import inspect
 import json
+import os
 import plistlib
 import sqlite3
-import inspect
-import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -348,8 +348,7 @@ def test_health_check_bootstraps_absent_default_launchd_labels_instead_of_kickst
             heal_min_consecutive_failures=1,
         ),
         ps_output_fn=lambda: (
-            "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py "
-            "--interval 1 --backlog-batch 4 --enrich-limit 5\n"
+            "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 4 --enrich-limit 5\n"
         ),
         socket_request_fn=_ok_canary,
         command_runner=command_runner,
@@ -422,9 +421,7 @@ def test_health_check_reports_watcher_stalled_drain_no_progress_and_queue_backed
             queue_auto_heal_count=1,
             queue_page_count=1,
         ),
-        ps_output_fn=lambda: (
-            "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 4\n"
-        ),
+        ps_output_fn=lambda: "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 4\n",
         socket_request_fn=_ok_canary,
         command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="", stderr=""),
         now_fn=lambda: now,
@@ -453,9 +450,7 @@ def test_success_tick_clears_heal_breaker_state(tmp_path):
 
     result = run_health_check(
         HealthCheckConfig(db_path=db_path, state_path=state_path),
-        ps_output_fn=lambda: (
-            "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 4\n"
-        ),
+        ps_output_fn=lambda: "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 4\n",
         socket_request_fn=_ok_canary,
         command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="", stderr=""),
         now_fn=lambda: datetime(2026, 6, 20, 10, 0, tzinfo=UTC),

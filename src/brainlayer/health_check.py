@@ -652,7 +652,9 @@ def run_health_check(
 
     pause_payload, pause_active, pause_stale = _pause_sentinel_state(config, now)
     if pause_stale:
-        add_issue("pause_sentinel_stale", "critical", "pause sentinel is expired; launchd resume may have been forgotten")
+        add_issue(
+            "pause_sentinel_stale", "critical", "pause sentinel is expired; launchd resume may have been forgotten"
+        )
         _push_notification("BrainLayer pause expired", "pause.sentinel is stale")
         if config.heal:
             try:
@@ -670,13 +672,10 @@ def run_health_check(
             f"durable queue backlog count={queue_count} bytes={queue_bytes} oldest_age={queue_oldest_age}",
         )
         heal_issue_labels["queue_backed_up"] = (config.drain_label, _plist_for_label(config, config.drain_label))
-    if (
-        queue_count > 0
-        and (
-            queue_count >= config.queue_page_count
-            or queue_bytes >= config.queue_page_bytes
-            or (queue_oldest_age is not None and queue_oldest_age >= config.queue_page_oldest_seconds)
-        )
+    if queue_count > 0 and (
+        queue_count >= config.queue_page_count
+        or queue_bytes >= config.queue_page_bytes
+        or (queue_oldest_age is not None and queue_oldest_age >= config.queue_page_oldest_seconds)
     ):
         _push_notification("BrainLayer queue backlog", f"queue_count={queue_count} queue_bytes={queue_bytes}")
 

@@ -98,9 +98,10 @@ class TestPreClassifyFilters:
         assert _extract_raw_text({"type": "user", "message": long_text}) == long_text
         assert _extract_raw_text({"type": "assistant", "message": long_text}) == long_text
         assert _extract_raw_text({"type": "user", "message": {"content": long_text}}) == long_text
-        assert _extract_raw_text(
-            {"type": "assistant", "message": {"content": [{"type": "text", "text": long_text}]}}
-        ) == long_text
+        assert (
+            _extract_raw_text({"type": "assistant", "message": {"content": [{"type": "text", "text": long_text}]}})
+            == long_text
+        )
 
 
 # ── Post-Chunk Filters ───────────────────────────────────────────────────────
@@ -212,7 +213,9 @@ class TestFlushCallback:
         conn.close()
         assert rows == (0,)
 
-    def test_classification_poison_entry_confirms_its_offset_and_does_not_block_later_entries(self, tmp_path, monkeypatch):
+    def test_classification_poison_entry_confirms_its_offset_and_does_not_block_later_entries(
+        self, tmp_path, monkeypatch
+    ):
         import brainlayer.watcher_bridge as bridge
 
         db_path = tmp_path / "test.db"

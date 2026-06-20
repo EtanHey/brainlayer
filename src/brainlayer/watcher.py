@@ -408,7 +408,9 @@ class BatchIndexer:
             return 3
 
     def _quarantine_entries(self, entries: list[dict], reason: Exception) -> None:
-        quarantine_dir = Path(os.environ.get("BRAINLAYER_WATCHER_QUARANTINE_DIR", "~/.brainlayer/quarantine")).expanduser()
+        quarantine_dir = Path(
+            os.environ.get("BRAINLAYER_WATCHER_QUARANTINE_DIR", "~/.brainlayer/quarantine")
+        ).expanduser()
         quarantine_dir.mkdir(parents=True, exist_ok=True)
         path = quarantine_dir / f"watcher-flush-{int(time.time() * 1000)}.jsonl"
         with path.open("w", encoding="utf-8") as handle:

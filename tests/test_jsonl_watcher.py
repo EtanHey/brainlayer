@@ -375,8 +375,11 @@ class TestJSONLWatcher:
         watcher = JSONLWatcher(
             watch_dir=tmp_path / "projects",
             registry_path=tmp_path / "offsets.json",
-            on_flush=lambda items: flushed.extend(items)
-            or {str(healthy): len(b'{"id":"healthy"}\n')} if items and items[0].get("id") == "healthy" else {},
+            on_flush=lambda items: (
+                flushed.extend(items) or {str(healthy): len(b'{"id":"healthy"}\n')}
+                if items and items[0].get("id") == "healthy"
+                else {}
+            ),
             batch_size=1,
             health_path=health_path,
         )
@@ -406,8 +409,7 @@ class TestJSONLWatcher:
         w1 = JSONLWatcher(
             watch_dir=tmp_path / "projects",
             registry_path=tmp_path / "offsets.json",
-            on_flush=lambda items: flushed1.extend(items)
-            or {str(f): max(item["_line_end_offset"] for item in items)},
+            on_flush=lambda items: flushed1.extend(items) or {str(f): max(item["_line_end_offset"] for item in items)},
             batch_size=1,
         )
         w1.poll_once()
@@ -422,8 +424,7 @@ class TestJSONLWatcher:
         w2 = JSONLWatcher(
             watch_dir=tmp_path / "projects",
             registry_path=tmp_path / "offsets.json",
-            on_flush=lambda items: flushed2.extend(items)
-            or {str(f): max(item["_line_end_offset"] for item in items)},
+            on_flush=lambda items: flushed2.extend(items) or {str(f): max(item["_line_end_offset"] for item in items)},
             batch_size=1,
         )
         w2.poll_once()
