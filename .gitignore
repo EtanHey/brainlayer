@@ -92,3 +92,6 @@ scripts/.kg_rebuild_progress.json
 .claude.local.md
 .vercel
 site/
+
+# render-verification ephemeral logs
+brain-bar/.render-logs/

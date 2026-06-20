@@ -564,3 +564,39 @@ enum DashboardRefreshTrigger: String {
     case manual
     case tabSwitch = "tab_switch"
 }
+
+#if DEBUG
+extension StatsCollector {
+    /// Builds a `StatsCollector` pre-loaded with fixed snapshot state and NO live
+    /// wiring — `start()` is never called, so no database is opened, no Darwin
+    /// observer is installed, and no refresh timers run. Used by the deterministic
+    /// dashboard render seam (`BrainBarDashboardPreview` + the snapshot tests) so
+    /// any agent can render the real dashboard to a PNG without live collectors.
+    ///
+    /// This lives in the same file as `StatsCollector` because the published
+    /// properties are `private(set)`; only same-file code may assign them.
+    @MainActor
+    static func fixture(
+        stats: DashboardStats,
+        daemon: DaemonHealthSnapshot?,
+        agentActivity: AgentActivitySnapshot,
+        state: PipelineState,
+        heartbeat: DashboardHeartbeat = .empty,
+        lastDataFetchedAt: Date?
+    ) -> StatsCollector {
+        // targetPID 0 makes the monitor's sample() return nil; it is never used
+        // because start()/requestRefresh() are not called on a fixture.
+        let collector = StatsCollector(
+            dbPath: "/nonexistent/brainbar-fixture.db",
+            daemonMonitor: DaemonHealthMonitor(targetPID: 0)
+        )
+        collector.stats = stats
+        collector.daemon = daemon
+        collector.agentActivity = agentActivity
+        collector.state = state
+        collector.heartbeat = heartbeat
+        collector.lastDataFetchedAt = lastDataFetchedAt
+        return collector
+    }
+}
+#endif
