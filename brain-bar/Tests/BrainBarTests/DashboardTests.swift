@@ -1023,6 +1023,50 @@ final class DashboardTests: XCTestCase {
                           "The card must not sit on the anchor column overlapping the curve.")
     }
 
+    // The hover indicator must ride the PLOTTED series with the visible spike at the
+    // hovered bucket, not always the primary — otherwise a Writes chart fed only by
+    // the watcher lane (primary all-zero) anchors the dot/tooltip to the baseline.
+    // (Reviewers: Cursor Bugbot Medium / Codex P2, PR #526.)
+    func testHoverAnchorPicksDominantPlottedSeries() {
+        // Only secondary plotted, secondary has the value at this bucket.
+        XCTAssertEqual(
+            SparklineHoverAnchor.dominantRole(
+                plotted: [.secondary],
+                valueAtBucket: [.secondary: 4]
+            ),
+            .secondary
+        )
+        // Both plotted; secondary spikes while primary is zero -> ride secondary.
+        XCTAssertEqual(
+            SparklineHoverAnchor.dominantRole(
+                plotted: [.primary, .secondary],
+                valueAtBucket: [.primary: 0, .secondary: 5]
+            ),
+            .secondary
+        )
+        // Tie favors primary (declaration order).
+        XCTAssertEqual(
+            SparklineHoverAnchor.dominantRole(
+                plotted: [.primary, .secondary],
+                valueAtBucket: [.primary: 3, .secondary: 3]
+            ),
+            .primary
+        )
+        // Primary dominates.
+        XCTAssertEqual(
+            SparklineHoverAnchor.dominantRole(
+                plotted: [.primary, .secondary, .tertiary],
+                valueAtBucket: [.primary: 6, .secondary: 2, .tertiary: 1]
+            ),
+            .primary
+        )
+        // Nothing plotted -> safe fallback to primary.
+        XCTAssertEqual(
+            SparklineHoverAnchor.dominantRole(plotted: [], valueAtBucket: [:]),
+            .primary
+        )
+    }
+
     func testSparklineTooltipPlacementFlipsBelowNearTopEdge() {
         let container = CGSize(width: 260, height: 120)
         let tooltip = SparklineTooltipPlacement.tooltipSize(in: container)

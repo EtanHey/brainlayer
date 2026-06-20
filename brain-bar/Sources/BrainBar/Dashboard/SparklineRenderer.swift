@@ -322,6 +322,31 @@ enum SparklineSmoothing {
     case catmullRom
 }
 
+/// Picks which plotted series the hover indicator rides. Pure + testable.
+enum SparklineHoverAnchor {
+    /// Among the plotted series, return the one with the highest value at the hovered
+    /// bucket; ties keep declaration order (primary first). Falls back to the first
+    /// plotted series, then `.primary` when nothing is plotted — so the dot, crosshair,
+    /// and tooltip never anchor to an empty baseline on a multi-series chart where only
+    /// a secondary/tertiary lane has data.
+    static func dominantRole(
+        plotted: [SparklineSeriesRole],
+        valueAtBucket: [SparklineSeriesRole: Int]
+    ) -> SparklineSeriesRole {
+        guard let first = plotted.first else { return .primary }
+        var best = first
+        var bestValue = valueAtBucket[first] ?? 0
+        for role in plotted.dropFirst() {
+            let value = valueAtBucket[role] ?? 0
+            if value > bestValue {
+                best = role
+                bestValue = value
+            }
+        }
+        return best
+    }
+}
+
 struct SparklineChart: View {
     let presentation: SparklineChartPresentation
     let accentColor: NSColor
@@ -483,17 +508,14 @@ struct SparklineChart: View {
 
                 if let hoveredBucket, !compact, !presentation.points.isEmpty {
                     let clampedBucket = min(max(hoveredBucket, 0), presentation.values.count - 1)
-                    let anchorPoint = point(
-                        for: presentation.points[clampedBucket],
-                        bucketCount: presentation.points.count,
-                        in: plotFrame
-                    )
+                    let anchorRole = hoverAnchorRole(forBucket: clampedBucket)
+                    let anchorPoint = hoverAnchorPoint(forBucket: clampedBucket, in: plotFrame)
                     Path { p in
                         p.move(to: CGPoint(x: anchorPoint.x, y: plotFrame.minY))
                         p.addLine(to: CGPoint(x: anchorPoint.x, y: plotFrame.maxY))
                     }
                     .stroke(
-                        color(for: .primary).opacity(0.3),
+                        color(for: anchorRole).opacity(0.3),
                         style: StrokeStyle(lineWidth: 1, lineCap: .round, dash: [3, 3])
                     )
                 }
@@ -532,13 +554,10 @@ struct SparklineChart: View {
 
                 if let hoveredBucket, !compact, !presentation.points.isEmpty {
                     let clampedBucket = min(max(hoveredBucket, 0), presentation.values.count - 1)
-                    let anchorPoint = point(
-                        for: presentation.points[clampedBucket],
-                        bucketCount: presentation.points.count,
-                        in: plotFrame
-                    )
+                    let anchorRole = hoverAnchorRole(forBucket: clampedBucket)
+                    let anchorPoint = hoverAnchorPoint(forBucket: clampedBucket, in: plotFrame)
                     Circle()
-                        .fill(color(for: .primary))
+                        .fill(color(for: anchorRole))
                         .frame(width: 8, height: 8)
                         .overlay(
                             Circle()
@@ -566,11 +585,7 @@ struct SparklineChart: View {
                    !compact,
                    !presentation.points.isEmpty {
                     let clampedBucket = min(max(hoveredBucket, 0), max(presentation.values.count - 1, 0))
-                    let anchorPoint = point(
-                        for: presentation.points[clampedBucket],
-                        bucketCount: presentation.points.count,
-                        in: plotFrame
-                    )
+                    let anchorPoint = hoverAnchorPoint(forBucket: clampedBucket, in: plotFrame)
                     let tooltipSize = SparklineTooltipPlacement.tooltipSize(
                         in: geometry.size,
                         seriesCount: tooltipRows(forBucket: clampedBucket).count
@@ -609,6 +624,29 @@ struct SparklineChart: View {
         }
         let normalizedValue = CGFloat(point.value) / CGFloat(max(plotMax, 1))
         return CGPoint(x: x, y: plotFrame.maxY - (normalizedValue * plotFrame.height))
+    }
+
+    /// The plotted series the hover indicator should ride at the given bucket (the
+    /// visible spike may be on a secondary/tertiary lane, not the primary).
+    private func hoverAnchorRole(forBucket bucket: Int) -> SparklineSeriesRole {
+        let plotted = SparklineSeriesRole.allCases.filter { presentation.shouldPlotSeries($0) }
+        let values = Dictionary(uniqueKeysWithValues: plotted.map { role -> (SparklineSeriesRole, Int) in
+            let pts = presentation.points(for: role)
+            return (role, pts.indices.contains(bucket) ? pts[bucket].value : 0)
+        })
+        return SparklineHoverAnchor.dominantRole(plotted: plotted, valueAtBucket: values)
+    }
+
+    /// On-curve anchor point (x = bucket position, y = dominant plotted series' value
+    /// at that bucket) for the crosshair, ring dot, and tooltip vertical placement.
+    private func hoverAnchorPoint(forBucket bucket: Int, in plotFrame: CGRect) -> CGPoint {
+        let role = hoverAnchorRole(forBucket: bucket)
+        let pts = presentation.points(for: role)
+        let clamped = min(max(bucket, 0), max(pts.count - 1, 0))
+        guard pts.indices.contains(clamped) else {
+            return CGPoint(x: plotFrame.midX, y: plotFrame.maxY)
+        }
+        return point(for: pts[clamped], bucketCount: pts.count, in: plotFrame)
     }
 
     private func yPosition(forValue value: Int, in plotFrame: CGRect) -> CGFloat {

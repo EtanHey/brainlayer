@@ -149,5 +149,22 @@ final class SparklineSnapshotTests: XCTestCase {
         )
         save(BrainBarFlowLaneCardPreview.make(lane: writesLane),
              "card-writes", size: CGSize(width: 380, height: 320))
+
+        // HOVER where ONLY the secondary (rose) series has the spike and primary is
+        // zero at that bucket: the dot/crosshair/tooltip must ride the ROSE curve, not
+        // the green baseline. (Reviewer multi-series anchor fix.) Bucket 4 -> secondary=3.
+        let secondaryOnly = SparklineChartPresentation(
+            label: "Writes",
+            values: [0, 0, 0, 0, 0, 0, 0, 0],
+            secondaryValues: [0, 1, 0, 2, 3, 0, 1, 0],
+            primarySeriesLabel: "Agent",
+            secondarySeriesLabel: "Watcher"
+        )
+        save(
+            SparklineChart(presentation: secondaryOnly, accentColor: accent,
+                           secondaryAccentColor: watcher,
+                           previewHoveredBucket: 4, previewHoverX: 160),
+            "secondary-spike-hover"
+        )
     }
 }
