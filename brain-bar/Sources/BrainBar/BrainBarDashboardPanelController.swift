@@ -88,11 +88,13 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
 
     private func dismissIfClickOutside() {
         guard panel.isVisible, Date().timeIntervalSince(shownAt) > 0.20 else { return }
+        guard !BrainBarSettingsActions.suppressDashboardResignDismiss else { return }
         dismiss()
     }
 
     private func dismissIfLocalClickOutside(_ event: NSEvent) {
         guard panel.isVisible, Date().timeIntervalSince(shownAt) > 0.20 else { return }
+        guard !BrainBarSettingsActions.suppressDashboardResignDismiss else { return }
         if event.window === panel { return }
         if let button = statusItemButton, event.window === button.window { return }   // let toggle() own the menubar click
         dismiss()

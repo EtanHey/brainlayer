@@ -1023,6 +1023,18 @@ final class DashboardTests: XCTestCase {
                           "The card must not sit on the anchor column overlapping the curve.")
     }
 
+    // A sparse series with a spike gets the lifted soft floor (so its zeros read as a
+    // designed band), but a series with NO data at all stays on the true zero baseline
+    // so it never implies a phantom band of activity. (Reviewer Codex P2, PR #526.)
+    func testSparkBaselineUsesSoftFloorOnlyForSparseSeriesWithData() {
+        // Sparse but has a spike -> soft floor.
+        XCTAssertTrue(SparklineBaseline.usesSoftFloor(isDense: false, nonZeroFraction: 0.2))
+        // Completely empty -> true baseline (no soft floor).
+        XCTAssertFalse(SparklineBaseline.usesSoftFloor(isDense: false, nonZeroFraction: 0.0))
+        // Dense -> true baseline.
+        XCTAssertFalse(SparklineBaseline.usesSoftFloor(isDense: true, nonZeroFraction: 0.8))
+    }
+
     // The hover indicator must ride the PLOTTED series with the visible spike at the
     // hovered bucket, not always the primary — otherwise a Writes chart fed only by
     // the watcher lane (primary all-zero) anchors the dot/tooltip to the baseline.

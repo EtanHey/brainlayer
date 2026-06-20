@@ -322,6 +322,17 @@ enum SparklineSmoothing {
     case catmullRom
 }
 
+/// Decides the area-fill floor for a series. Pure + testable.
+enum SparklineBaseline {
+    /// Sparse series with at least one nonzero bucket get a lifted soft floor so their
+    /// runs of zeros read as a designed band around the spike. Dense series fill to the
+    /// true zero baseline, and a series with NO data at all also stays on the true
+    /// baseline so it never implies a phantom band of activity.
+    static func usesSoftFloor(isDense: Bool, nonZeroFraction: Double) -> Bool {
+        !isDense && nonZeroFraction > 0
+    }
+}
+
 /// Picks which plotted series the hover indicator rides. Pure + testable.
 enum SparklineHoverAnchor {
     /// Among the plotted series, return the one with the highest value at the hovered
@@ -663,7 +674,11 @@ struct SparklineChart: View {
     }
 
     private func baselineY(for role: SparklineSeriesRole, in plotFrame: CGRect) -> CGFloat {
-        presentation.isDense(role) ? plotFrame.maxY : plotFrame.maxY - plotFrame.height * 0.10
+        let softFloor = SparklineBaseline.usesSoftFloor(
+            isDense: presentation.isDense(role),
+            nonZeroFraction: presentation.nonZeroFraction(role)
+        )
+        return softFloor ? plotFrame.maxY - plotFrame.height * 0.10 : plotFrame.maxY
     }
 
     private func plotFrame(in size: CGSize) -> CGRect {

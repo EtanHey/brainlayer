@@ -1237,7 +1237,9 @@ private struct BrainBarFlowLaneCard: View {
 
     private var sparklineReferenceValue: Int? {
         guard lane.name.localizedCaseInsensitiveContains("enrichment") else { return nil }
-        return max(lane.values.max() ?? 0, lane.secondaryValues.max() ?? 0, lane.tertiaryValues.max() ?? 0, 1)
+        let peak = max(lane.values.max() ?? 0, lane.secondaryValues.max() ?? 0, lane.tertiaryValues.max() ?? 0)
+        // No benchmark line on a completely empty chart — it would imply a phantom target.
+        return peak > 0 ? peak : nil
     }
 }
 
