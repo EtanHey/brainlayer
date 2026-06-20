@@ -633,20 +633,17 @@ private struct BrainBarDashboardView: View {
     }
 
     private var vectorDetailTransition: AnyTransition {
+        // NOTE: deliberately NOT using RevealClip here. RevealClip masks the popover
+        // to height*progress; the height-measurement re-render (BrainBarVectorDetailHeightKey)
+        // interrupts the insertion animation, leaving progress < 1 → the popover renders
+        // CLIPPED to a partial height with empty space below it (Etan live-QA 2026-06-20).
+        // A plain opacity (+ subtle slide on removal) can never clip the content height.
         if reduceMotion {
             .opacity
         } else {
             .asymmetric(
-            insertion: .opacity.combined(with: .modifier(
-                active: RevealClip(progress: 0),
-                identity: RevealClip(progress: 1)
-            )),
-            removal: .opacity
-                .combined(with: .modifier(
-                    active: RevealClip(progress: 0),
-                    identity: RevealClip(progress: 1)
-                ))
-                .combined(with: .offset(y: -6))
+                insertion: .opacity,
+                removal: .opacity.combined(with: .offset(y: -6))
             )
         }
     }
