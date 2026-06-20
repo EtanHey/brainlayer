@@ -24,6 +24,38 @@ final class HybridSearchHelperClientTests: XCTestCase {
         XCTAssertEqual(resolved, pythonPath)
     }
 
+    func testResolvePythonExecutablePrefersHomebrewVenvOverBarePython3() throws {
+        // On a Homebrew clone with no repo checkout, bare `python3` on PATH is the
+        // system interpreter (e.g. python3.14) that lacks the `brainlayer` module.
+        // The formula venv at <prefix>/opt/brainlayer/libexec/venv/bin/python MUST win.
+        let prefix = NSTemporaryDirectory() + "brainbar-brew-\(UUID().uuidString)"
+        let venvPython = "\(prefix)/opt/brainlayer/libexec/venv/bin/python"
+        try FileManager.default.createDirectory(
+            atPath: "\(prefix)/opt/brainlayer/libexec/venv/bin",
+            withIntermediateDirectories: true
+        )
+        FileManager.default.createFile(atPath: venvPython, contents: Data("#!/bin/sh\n".utf8))
+        chmod(venvPython, 0o755)
+
+        let pathDir = NSTemporaryDirectory() + "brainbar-brew-path-\(UUID().uuidString)"
+        let barePython3 = "\(pathDir)/python3"
+        try FileManager.default.createDirectory(atPath: pathDir, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: barePython3, contents: Data("#!/bin/sh\n".utf8))
+        chmod(barePython3, 0o755)
+
+        defer {
+            try? FileManager.default.removeItem(atPath: prefix)
+            try? FileManager.default.removeItem(atPath: pathDir)
+        }
+
+        let resolved = HybridSearchHelperClient.resolvePythonExecutable(environment: [
+            "HOMEBREW_PREFIX": prefix,
+            "PATH": pathDir
+        ])
+
+        XCTAssertEqual(resolved, venvPython)
+    }
+
     func testResolvePythonPathPrefersInstalledPackageWhenUnset() throws {
         let repoRoot = NSTemporaryDirectory() + "brainbar-helper-src-\(UUID().uuidString)"
         try FileManager.default.createDirectory(
