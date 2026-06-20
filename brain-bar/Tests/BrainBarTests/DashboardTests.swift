@@ -416,7 +416,11 @@ final class DashboardTests: XCTestCase {
         let source = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
         let bodyRange = try XCTUnwrap(source.range(of: "var body: some View"))
         let pipelinePanelRange = try XCTUnwrap(source.range(of: "private func pipelinePanel"))
-        let writesCardRange = try XCTUnwrap(source[pipelinePanelRange.upperBound...].range(of: "private func writesCard"))
+        // Redesign (feat/brainbar-dashboard-redesign): the old single `writesCard`
+        // helper was split into `writeCardsBand` (+ per-series card helpers). The
+        // band helper is the first function after `pipelinePanel`, so it remains
+        // the correct lower bound for slicing the pipeline-panel source.
+        let writesCardRange = try XCTUnwrap(source[pipelinePanelRange.upperBound...].range(of: "private func writeCardsBand"))
         let bodySource = String(source[bodyRange.lowerBound..<pipelinePanelRange.lowerBound])
         let pipelinePanelSource = String(source[pipelinePanelRange.lowerBound..<writesCardRange.lowerBound])
         let signalColumnRange = try XCTUnwrap(source.range(of: "private func signalColumn"))
