@@ -458,29 +458,28 @@ private struct BrainBarDashboardView: View {
 
     @ViewBuilder
     private func overviewCard(layout: BrainBarDashboardLayout) -> some View {
-        VStack(alignment: .leading, spacing: layout.gridSpacing) {
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .top, spacing: layout.gridSpacing) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        overviewNarrative(layout: layout)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    overviewMetaRow(layout: layout)
-                        .frame(width: layout.overviewStatsWidth)
-                }
-
-                VStack(alignment: .leading, spacing: layout.gridSpacing) {
+        // RESPONSIVE HERO: when wide, the stats column is tall while the narrative
+        // is short — so the live-agents row rides at the BOTTOM of the narrative
+        // column (a Spacer pushes it down) to fill that gap instead of leaving a
+        // big empty band. When narrow, everything stacks vertically.
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: layout.gridSpacing) {
+                VStack(alignment: .leading, spacing: 12) {
                     overviewNarrative(layout: layout)
-                    overviewMetaRow(layout: layout)
+                    Spacer(minLength: layout.gridSpacing)
+                    heroLiveAgentsRow(layout: layout)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                overviewMetaRow(layout: layout)
+                    .frame(width: layout.overviewStatsWidth)
             }
 
-            // COMPACT HERO: the old "Live uses last 1m / trend cards last 1h"
-            // caption line is gone — its vertical band is replaced by the
-            // live-agents row itself, so the hero packs the live-CLI presence
-            // (Claude/Codex/Cursor/Gemini) without a separate tall caption band.
-            heroLiveAgentsRow(layout: layout)
+            VStack(alignment: .leading, spacing: layout.gridSpacing) {
+                overviewNarrative(layout: layout)
+                overviewMetaRow(layout: layout)
+                heroLiveAgentsRow(layout: layout)
+            }
         }
         .padding(layout.cardPadding)
         .background(
@@ -1540,14 +1539,16 @@ enum PipelineTimeframe: String, CaseIterable, Identifiable {
     /// Sublabel for the live chip so "Live" still surfaces the 30m window.
     var subLabel: String? {
         switch self {
-        case .live: return "30m"
+        case .live: return "1h"
         case .threeHour, .day: return nil
         }
     }
 
     var windowMinutes: Int {
         switch self {
-        case .live: return 30
+        // Live is the resting 1h window (matches StatsCollector.defaultActivityWindowMinutes
+        // and the hero's "in last 1h"); the chip previously mislabeled it 30m.
+        case .live: return 60
         case .threeHour: return 180
         case .day: return 1_440
         }
