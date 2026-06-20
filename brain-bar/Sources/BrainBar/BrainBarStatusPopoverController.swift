@@ -75,12 +75,14 @@ final class BrainBarStatusPopoverController: NSObject {
     }
 
     private func renderStatusIcon(stats: BrainDatabase.DashboardStats, state: PipelineState) {
-        let livePresentation = BrainBarLivePresentation.derive(stats: stats)
-        statusItemForTesting.button?.image = SparklineRenderer.render(
-            state: state,
-            values: stats.recentEnrichmentBuckets,
-            size: NSSize(width: 22, height: 12),
-            accentColor: livePresentation.accentColor
+        // Three overlapping pipeline lines (Agent stores / JSONL watcher / Enrichment)
+        // with an always-visible baseline so the icon stays legible on a dark
+        // fullscreen menu bar instead of the old single gray line that vanished.
+        statusItemForTesting.button?.image = SparklineRenderer.renderStatusBarIcon(
+            agent: stats.recentAgentWriteBuckets,
+            watcher: stats.recentWatcherWriteBuckets,
+            enrichment: stats.recentEnrichmentBuckets,
+            size: NSSize(width: 26, height: 14)
         )
     }
 
