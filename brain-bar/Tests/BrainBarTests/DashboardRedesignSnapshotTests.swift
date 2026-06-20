@@ -130,17 +130,17 @@ final class DashboardRedesignSnapshotTests: XCTestCase {
             size: CGSize(width: 980, height: 1_320)
         )
 
-        // FOCUSED (Part D Stage 1): tapping the Agent-stores card widens it +
-        // reveals the 30m/3h/24h timelapse control; the watcher card collapses
-        // to a peek header.
+        // REDESIGN: ONE shared selector switches ALL graphs at once. No card
+        // expands or collapses. Render with the 24h lens selected so the shared
+        // selector chip shows the wider window highlighted (Live / 3h / [24h]).
         save(
             BrainBarPipelinePanelPreview.make(
                 stats: stats,
                 containerSize: containerSize,
                 signalCoverageExpanded: false,
-                focusedLane: .agentStores
+                selectedTimeframe: .day
             ),
-            "pipeline-focused-agent-stores",
+            "pipeline-shared-timeframe-24h",
             size: canvasSize
         )
     }

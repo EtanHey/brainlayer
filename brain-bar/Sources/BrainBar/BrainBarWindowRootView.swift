@@ -326,13 +326,34 @@ private struct BrainBarDashboardView: View {
     @State private var vectorSignalDetailExpanded = false
     @State private var vectorSignalRowFrame: CGRect = .zero
     @State private var vectorSignalRootFrame: CGRect = .zero
-    @State private var focusedLane: PipelineSeries?
-    @State private var focusedTimeframe: PipelineTimeframe = .live
-    @Namespace private var pipelineNamespace
+    /// ONE shared timeframe for ALL pipeline graphs (agent / watcher /
+    /// enrichment). Selecting 3h/24h re-fetches REAL DB history for that window
+    /// via the collector and feeds every chart at once — no per-card expand.
+    @State private var selectedTimeframe: PipelineTimeframe = .live
     @State private var vectorDetailHeight: CGFloat = 0
+
+    /// The stats the graphs render. For the live (30m) lens this is the resting
+    /// `collector.stats`; for a wider lens, if the collector has published REAL
+    /// windowed buckets for that window, they are swapped in so the charts show
+    /// genuine history (not a relabel).
+    private var pipelineStats: BrainDatabase.DashboardStats {
+        guard selectedTimeframe != .live,
+              let buckets = collector.windowedBuckets,
+              collector.windowedBucketsWindowMinutes == selectedTimeframe.windowMinutes
+        else {
+            return collector.stats
+        }
+        return collector.stats.withWindowedPipelineBuckets(buckets)
+    }
 
     private var flowSummary: DashboardFlowSummary {
         DashboardFlowSummary.derive(daemon: collector.daemon, stats: collector.stats)
+    }
+
+    /// Flow summary for the pipeline graphs — uses the windowed `pipelineStats`
+    /// so the cards reflect the shared timeframe selection.
+    private var pipelineFlowSummary: DashboardFlowSummary {
+        DashboardFlowSummary.derive(daemon: collector.daemon, stats: pipelineStats)
     }
 
     private var vectorSignal: BrainBarSignalCoverage {
@@ -395,17 +416,6 @@ private struct BrainBarDashboardView: View {
                         .zIndex(vectorSignalDetailExpanded ? 30 : 0)
                 }
             }
-            .onExitCommand {
-                if focusedLane != nil {
-                    if reduceMotion {
-                        focusedLane = nil
-                    } else {
-                        withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                            focusedLane = nil
-                        }
-                    }
-                }
-            }
             .onPreferenceChange(BrainBarVectorDetailHeightKey.self) { height in
                 if height > 0 {
                     vectorDetailHeight = height
@@ -435,6 +445,15 @@ private struct BrainBarDashboardView: View {
             }
             previousEnrichmentBuckets = newBuckets
         }
+        // Shared timeframe selector → REAL windowed re-fetch. Selecting 3h/24h
+        // triggers an off-main DB fetch over that window; the published buckets
+        // flow into every graph at once. `.live` clears the fetch (resting 30m).
+        .onChange(of: selectedTimeframe) { _, newTimeframe in
+            collector.selectTimeframe(
+                windowMinutes: newTimeframe.windowMinutes,
+                isLive: newTimeframe == .live
+            )
+        }
     }
 
     @ViewBuilder
@@ -444,7 +463,6 @@ private struct BrainBarDashboardView: View {
                 HStack(alignment: .top, spacing: layout.gridSpacing) {
                     VStack(alignment: .leading, spacing: 12) {
                         overviewNarrative(layout: layout)
-                        overviewCaption
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -455,14 +473,13 @@ private struct BrainBarDashboardView: View {
                 VStack(alignment: .leading, spacing: layout.gridSpacing) {
                     overviewNarrative(layout: layout)
                     overviewMetaRow(layout: layout)
-                    overviewCaption
                 }
             }
 
-            // Live agents pulled UP into the hero (Part B: "hero feels dead, move
-            // live agents in"). The hero is the first thing the eye lands on, so
-            // the live-CLI presence belongs here, not buried in the collapsed
-            // Runtime & Details disclosure.
+            // COMPACT HERO: the old "Live uses last 1m / trend cards last 1h"
+            // caption line is gone — its vertical band is replaced by the
+            // live-agents row itself, so the hero packs the live-CLI presence
+            // (Claude/Codex/Cursor/Gemini) without a separate tall caption band.
             heroLiveAgentsRow(layout: layout)
         }
         .padding(layout.cardPadding)
@@ -530,13 +547,6 @@ private struct BrainBarDashboardView: View {
         }
     }
 
-    private var overviewCaption: some View {
-        Text("Live uses the last \(collector.stats.liveWindowMinutes)m. Trend cards use \(flowSummary.windowLabel.lowercased()).")
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-
     private var freshnessLine: some View {
         HStack(spacing: 8) {
             Image(systemName: "clock")
@@ -600,10 +610,27 @@ private struct BrainBarDashboardView: View {
     @ViewBuilder
     private func pipelinePanel(layout: BrainBarDashboardLayout) -> some View {
         VStack(alignment: .leading, spacing: layout.gridSpacing) {
-            BrainBarSectionLabel(
-                "Ingest",
-                caption: "What is landing — agent stores and the JSONL watcher — plus how well each retrieval signal covers it."
-            )
+            // ONE shared timeframe selector for ALL pipeline graphs lives in the
+            // INGEST header. It switches agent + watcher + enrichment at once; no
+            // per-card expand is needed to change the window.
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .center, spacing: 12) {
+                    BrainBarSectionLabel(
+                        "Ingest",
+                        caption: "What is landing — agent stores and the JSONL watcher — plus how well each retrieval signal covers it."
+                    )
+                    Spacer(minLength: 8)
+                    sharedTimeframeSelector
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    BrainBarSectionLabel(
+                        "Ingest",
+                        caption: "What is landing — agent stores and the JSONL watcher — plus how well each retrieval signal covers it."
+                    )
+                    sharedTimeframeSelector
+                }
+            }
 
             writeCardsBand(layout: layout)
 
@@ -619,24 +646,33 @@ private struct BrainBarDashboardView: View {
         }
     }
 
-    /// BAND 1 — the two separately-scaled write cards. Default is stacked
-    /// full-width (paired "two writers"); `ViewThatFits` degrades gracefully at
-    /// very narrow widths. Stacked-full-width is primary because full horizontal
-    /// resolution is what makes the low-amplitude agent series legible.
+    /// The ONE shared Live(30m)/3h/24h control. It is the SOLE timeframe control
+    /// on the dashboard — every pipeline graph reads `selectedTimeframe`, so the
+    /// cards no longer expand to reveal a per-card picker.
+    private var sharedTimeframeSelector: some View {
+        BrainBarSharedTimeframeSelector(
+            selection: $selectedTimeframe,
+            isLoading: collector.isWindowedBucketsLoading
+        )
+    }
+
+    /// BAND 1 — the two separately-scaled write cards, ALWAYS visible at resting
+    /// height. Stacked full-width is primary because full horizontal resolution
+    /// is what makes the low-amplitude agent series legible. Clicking a card no
+    /// longer collapses it or its sibling.
     @ViewBuilder
     private func writeCardsBand(layout: BrainBarDashboardLayout) -> some View {
         let fetchedAt = collector.lastDataFetchedAt ?? Date()
         let restingHeight = layout.sparklineHeight
-        let focusedHeight = layout.compactCards ? 220.0 : 280.0
 
         ViewThatFits(in: .horizontal) {
             VStack(alignment: .leading, spacing: 12) {
-                agentStoresCard(layout: layout, restingHeight: restingHeight, focusedHeight: focusedHeight, fetchedAt: fetchedAt)
-                watcherCard(layout: layout, restingHeight: restingHeight, focusedHeight: focusedHeight, fetchedAt: fetchedAt)
+                agentStoresCard(layout: layout, restingHeight: restingHeight, fetchedAt: fetchedAt)
+                watcherCard(layout: layout, restingHeight: restingHeight, fetchedAt: fetchedAt)
             }
             VStack(alignment: .leading, spacing: 12) {
-                agentStoresCard(layout: layout, restingHeight: restingHeight, focusedHeight: focusedHeight, fetchedAt: fetchedAt)
-                watcherCard(layout: layout, restingHeight: restingHeight, focusedHeight: focusedHeight, fetchedAt: fetchedAt)
+                agentStoresCard(layout: layout, restingHeight: restingHeight, fetchedAt: fetchedAt)
+                watcherCard(layout: layout, restingHeight: restingHeight, fetchedAt: fetchedAt)
             }
         }
     }
@@ -644,40 +680,32 @@ private struct BrainBarDashboardView: View {
     private func agentStoresCard(
         layout: BrainBarDashboardLayout,
         restingHeight: CGFloat,
-        focusedHeight: CGFloat,
         fetchedAt: Date
     ) -> some View {
         BrainBarPipelineSeriesCard(
             series: .agentStores,
-            lane: flowSummary.lane(for: .agentStores),
+            lane: pipelineFlowSummary.lane(for: .agentStores),
             pulseRevision: writePulseRevision,
             compact: layout.compactCards,
-            restingChartHeight: restingHeight,
-            focusedChartHeight: focusedHeight,
+            chartHeight: restingHeight,
             fetchedAt: fetchedAt,
-            focusedLane: $focusedLane,
-            timeframe: $focusedTimeframe,
-            namespace: pipelineNamespace
+            timeframe: selectedTimeframe
         )
     }
 
     private func watcherCard(
         layout: BrainBarDashboardLayout,
         restingHeight: CGFloat,
-        focusedHeight: CGFloat,
         fetchedAt: Date
     ) -> some View {
         BrainBarPipelineSeriesCard(
             series: .jsonlWatcher,
-            lane: flowSummary.lane(for: .jsonlWatcher),
+            lane: pipelineFlowSummary.lane(for: .jsonlWatcher),
             pulseRevision: watcherPulseRevision,
             compact: layout.compactCards,
-            restingChartHeight: restingHeight,
-            focusedChartHeight: focusedHeight,
+            chartHeight: restingHeight,
             fetchedAt: fetchedAt,
-            focusedLane: $focusedLane,
-            timeframe: $focusedTimeframe,
-            namespace: pipelineNamespace
+            timeframe: selectedTimeframe
         )
     }
 
@@ -696,7 +724,6 @@ private struct BrainBarDashboardView: View {
     private func flowPanel(layout: BrainBarDashboardLayout) -> some View {
         let fetchedAt = collector.lastDataFetchedAt ?? Date()
         let restingHeight = layout.sparklineHeight
-        let focusedHeight = layout.compactCards ? 220.0 : 280.0
 
         VStack(alignment: .leading, spacing: layout.gridSpacing) {
             BrainBarSectionLabel(
@@ -706,15 +733,12 @@ private struct BrainBarDashboardView: View {
 
             BrainBarPipelineSeriesCard(
                 series: .enrichment,
-                lane: flowSummary.lane(for: .enrichment),
+                lane: pipelineFlowSummary.lane(for: .enrichment),
                 pulseRevision: enrichmentPulseRevision,
                 compact: layout.compactCards,
-                restingChartHeight: restingHeight,
-                focusedChartHeight: focusedHeight,
+                chartHeight: restingHeight,
                 fetchedAt: fetchedAt,
-                focusedLane: $focusedLane,
-                timeframe: $focusedTimeframe,
-                namespace: pipelineNamespace
+                timeframe: selectedTimeframe
             )
 
             queueRail(layout: layout)
@@ -1492,13 +1516,11 @@ private struct BrainBarFlowLaneCard: View {
     }
 }
 
-/// Wider-history windows for the focus/widen "timelapse" lens (Part D Stage 2).
-/// `.live` is the resting 30m window the card always has; the wider windows
-/// re-window the same series so the control is live (selecting one switches the
-/// focused timeframe and relabels the chart) even before a dedicated per-lane
-/// wider-window fetch lands in `BrainDatabase`. `hasDedicatedHistory` flags
-/// whether the buckets are a true wider fetch (`.live` today) versus the
-/// current-window stand-in the other lenses render.
+/// The ONE shared window for every pipeline graph: Live(30m) / 3h / 24h.
+/// `.live` is the resting 30m window the graphs always have; `.threeHour` and
+/// `.day` trigger a REAL windowed re-fetch from `BrainDatabase` (180 / 1440
+/// minutes) so the charts show genuine historical data, not a relabel. Selecting
+/// a window switches ALL graphs at once — there is no per-card timeframe control.
 enum PipelineTimeframe: String, CaseIterable, Identifiable {
     case live
     case threeHour
@@ -1506,28 +1528,81 @@ enum PipelineTimeframe: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    /// The chip label shown in the shared selector.
     var label: String {
         switch self {
-        case .live: return "30m"
+        case .live: return "Live"
         case .threeHour: return "3h"
         case .day: return "24h"
         }
     }
 
-    /// All three lenses are selectable so the control is never dead; selecting a
-    /// wider lens switches `focusedTimeframe` and relabels the chart caption.
-    var isAvailable: Bool { true }
-
-    /// Whether this lens is backed by a true wider-history fetch (only `.live`
-    /// today). Wider lenses re-window the live series as a preview until the
-    /// per-lane collector method (`requestBuckets(windowMinutes:)`) lands.
-    var hasDedicatedHistory: Bool { self == .live }
+    /// Sublabel for the live chip so "Live" still surfaces the 30m window.
+    var subLabel: String? {
+        switch self {
+        case .live: return "30m"
+        case .threeHour, .day: return nil
+        }
+    }
 
     var windowMinutes: Int {
         switch self {
         case .live: return 30
         case .threeHour: return 180
         case .day: return 1_440
+        }
+    }
+}
+
+/// The single shared Live/3h/24h selector that drives every pipeline graph.
+/// Replaces the removed per-card 30m/3h/24h picker. A small spinner appears
+/// while a wider window is being fetched from the DB.
+struct BrainBarSharedTimeframeSelector: View {
+    @Binding var selection: PipelineTimeframe
+    var isLoading: Bool = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if isLoading {
+                ProgressView()
+                    .controlSize(.small)
+                    .scaleEffect(0.7)
+                    .frame(width: 14, height: 14)
+            }
+            ForEach(PipelineTimeframe.allCases) { frame in
+                Button {
+                    selection = frame
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(frame.label)
+                            .font(.system(size: 11, weight: .semibold))
+                        if let sub = frame.subLabel {
+                            Text(sub)
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .monospacedDigit()
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 5)
+                    .foregroundStyle(
+                        selection == frame
+                            ? Color.brainBarAccent
+                            : Color.brainBarTextSecondary.opacity(0.85)
+                    )
+                    .background(
+                        Capsule().fill(selection == frame ? Color.brainBarAccent.opacity(0.16) : .clear)
+                    )
+                    .overlay(
+                        Capsule().stroke(
+                            selection == frame ? Color.brainBarAccent.opacity(0.32) : Color.brainBarBorderSoft,
+                            lineWidth: 1
+                        )
+                    )
+                }
+                .buttonStyle(.plain)
+                .help("Show \(frame.label) window")
+            }
         }
     }
 }
@@ -1540,25 +1615,19 @@ enum PipelineTimeframe: String, CaseIterable, Identifiable {
 /// preserves the Aldante aesthetic by reusing `BrainBarHeroSparkline` (gradient
 /// density fill + point-anchored hover) and the number-first hero header.
 ///
-/// Three states, driven by `focusBinding`:
-///  - resting (no focus): paired stacked card with its own hero + chart + caption.
-///  - focused: full-width, taller chart, plus the 30m/3h/24h timelapse control.
-///  - peek (a sibling is focused): slim header only (hero + pill), chart hidden.
+/// REDESIGN: there is no longer any expand/collapse/peek state. Every graph is
+/// ALWAYS visible at its resting height; clicking a graph does nothing to its
+/// layout. The window is driven externally by the ONE shared timeframe selector
+/// (`timeframe`), which feeds REAL windowed data into `lane` so the chart shows
+/// genuine history for the selected window.
 private struct BrainBarPipelineSeriesCard: View {
     let series: PipelineSeries
     let lane: DashboardFlowLane
     let pulseRevision: Int
     let compact: Bool
-    let restingChartHeight: CGFloat
-    let focusedChartHeight: CGFloat
+    let chartHeight: CGFloat
     let fetchedAt: Date
-    @Binding var focusedLane: PipelineSeries?
-    @Binding var timeframe: PipelineTimeframe
-    let namespace: Namespace.ID
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private var isFocused: Bool { focusedLane == series }
-    private var isPeek: Bool { focusedLane != nil && focusedLane != series }
+    let timeframe: PipelineTimeframe
 
     private var presentation: SparklineChartPresentation {
         SparklineChartPresentation(
@@ -1573,8 +1642,7 @@ private struct BrainBarPipelineSeriesCard: View {
     /// "scale · peak N" so two similar-height waveforms are not misread as equal
     /// volume — the magnitude gap stays honest even at auto-fit y-scales. When a
     /// dashed reference line is drawn (enrichment lanes), the caption doubles as
-    /// its legend — "dashed = peak N" — so the line is never an unlabeled mystery
-    /// (Part A: dashed-line legend).
+    /// its legend — "dashed = peak N" — so the line is never an unlabeled mystery.
     private var scaleCaptionText: String {
         if sparklineReferenceValue != nil {
             return "scale · dashed = peak \(presentation.axisMax)"
@@ -1582,10 +1650,9 @@ private struct BrainBarPipelineSeriesCard: View {
         return "scale · peak \(presentation.axisMax)"
     }
 
-    /// The window the focused lens is showing, e.g. "Last 30m" / "Last 3h" /
-    /// "Last 24h". Changing the 30m/3h/24h control relabels this line so the
-    /// control is visibly live even while the wider lenses re-window the same
-    /// series as a preview.
+    /// The window currently selected by the shared control, e.g. "Last 30m" /
+    /// "Last 3h" / "Last 24h" — kept in the caption so the chart always names the
+    /// window it is plotting.
     private var timeframeWindowText: String {
         DashboardMetricFormatter.windowLabel(minutes: timeframe.windowMinutes)
     }
@@ -1596,89 +1663,60 @@ private struct BrainBarPipelineSeriesCard: View {
         VStack(alignment: .leading, spacing: compact ? 8 : 10) {
             header
 
-            if !isPeek {
-                if isFocused {
-                    timeframePicker
-                        .transition(.opacity)
-                }
+            ZStack(alignment: .bottomTrailing) {
+                BrainBarHeroSparkline(
+                    label: lane.sparklineLabel,
+                    values: lane.values,
+                    secondaryValues: [],
+                    primarySeriesLabel: nil,
+                    secondarySeriesLabel: nil,
+                    tertiaryValues: [],
+                    tertiarySeriesLabel: nil,
+                    latestBucketName: lane.latestBucketName,
+                    accentColor: lane.accentColor,
+                    secondaryAccentColor: nil,
+                    tertiaryAccentColor: nil,
+                    activityWindowMinutes: lane.activityWindowMinutes,
+                    fetchedAt: fetchedAt,
+                    pulseRevision: pulseRevision,
+                    referenceValue: sparklineReferenceValue
+                )
+                .frame(height: chartHeight)
 
-                ZStack(alignment: .bottomTrailing) {
-                    BrainBarHeroSparkline(
-                        label: lane.sparklineLabel,
-                        values: lane.values,
-                        secondaryValues: [],
-                        primarySeriesLabel: nil,
-                        secondarySeriesLabel: nil,
-                        tertiaryValues: [],
-                        tertiarySeriesLabel: nil,
-                        latestBucketName: lane.latestBucketName,
-                        accentColor: lane.accentColor,
-                        secondaryAccentColor: nil,
-                        tertiaryAccentColor: nil,
-                        activityWindowMinutes: lane.activityWindowMinutes,
-                        fetchedAt: fetchedAt,
-                        pulseRevision: pulseRevision,
-                        referenceValue: sparklineReferenceValue
+                Text(scaleCaptionText)
+                    .font(.system(size: 10, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(Color.brainBarTextSecondary.opacity(0.62))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(
+                        Capsule().fill(Color.brainBarGlassSecondary.opacity(0.85))
                     )
-                    .frame(height: chartHeight)
+                    .padding(6)
+                    .allowsHitTesting(false)
+            }
 
-                    Text(scaleCaptionText)
-                        .font(.system(size: 10, weight: .semibold))
-                        .monospacedDigit()
-                        .foregroundStyle(Color.brainBarTextSecondary.opacity(0.62))
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(
-                            Capsule().fill(Color.brainBarGlassSecondary.opacity(0.85))
-                        )
-                        .padding(6)
-                        .allowsHitTesting(false)
-                }
-
-                // ONE caption line (Part C.3): volume only — single shared
-                // lastWriteAt cannot be made per-series yet, and the status pill
-                // already conveys live/recent/idle, so the statusText paragraph
-                // is intentionally dropped for the single-series cards. When
-                // focused, the selected timeframe window is appended so the
-                // 30m/3h/24h control visibly relabels the card.
-                HStack(spacing: 8) {
-                    Text(lane.volumeText)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Color.brainBarTextSecondary.opacity(0.70))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    if isFocused {
-                        Text("·")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(Color.brainBarTextSecondary.opacity(0.45))
-                        Text("window: \(timeframeWindowText)")
-                            .font(.system(size: 11, weight: .semibold))
-                            .monospacedDigit()
-                            .foregroundStyle(accent.opacity(0.85))
-                            .lineLimit(1)
-                            .transition(.opacity)
-                    }
-                }
+            // ONE caption line: volume for the selected window, plus the window
+            // label so the shared selector visibly relabels every card.
+            HStack(spacing: 8) {
+                Text(lane.volumeText)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.brainBarTextSecondary.opacity(0.70))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text("·")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.brainBarTextSecondary.opacity(0.45))
+                Text("window: \(timeframeWindowText)")
+                    .font(.system(size: 11, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(accent.opacity(0.85))
+                    .lineLimit(1)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(compact ? 16 : 18)
         .background(BrainBarDashboardCardStyle(emphasized: true))
-        // A single coordinated animation on the focus/peek state keeps the chart
-        // grow, the timeframe-picker reveal, and the sibling peek-collapse on one
-        // spring — no competing matchedGeometry frame fight (the prior cause of
-        // the widen jank / layout shift, Part A). The card never changes
-        // container or position, so matchedGeometryEffect is unnecessary here.
-        .animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.85), value: focusedLane)
-        .contentShape(Rectangle())
-        .onTapGesture { toggleFocus() }
-        .help(isFocused ? "Collapse this series" : "Tap to widen and reveal timeframes")
-    }
-
-    /// Resting vs focused chart height. The peek branch never renders the chart,
-    /// so this only varies between resting and focused.
-    private var chartHeight: CGFloat {
-        isFocused ? focusedChartHeight : restingChartHeight
     }
 
     private var header: some View {
@@ -1689,9 +1727,7 @@ private struct BrainBarPipelineSeriesCard: View {
                     .tracking(0.80)
                     .foregroundStyle(Color.brainBarTextSecondary.opacity(0.60))
                 Text(lane.rateText)
-                    // Peek headers shrink the hero number so the collapsed
-                    // sibling reads clearly as a tucked-away peek, not a bug.
-                    .font(.system(size: isPeek ? (compact ? 17 : 19) : (compact ? 22 : 26), weight: .bold))
+                    .font(.system(size: compact ? 22 : 26, weight: .bold))
                     .monospacedDigit()
                     .foregroundStyle(Color.brainBarTextPrimary)
                     .lineLimit(1)
@@ -1699,85 +1735,6 @@ private struct BrainBarPipelineSeriesCard: View {
             }
             Spacer(minLength: 12)
             BrainBarFlowStatusPill(text: lane.status.label, accentColor: accent)
-            if isPeek {
-                // Affordance so the collapsed sibling reads as "tap to expand",
-                // never as a chart that silently vanished (Part A).
-                HStack(spacing: 4) {
-                    Text("expand")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Color.brainBarTextSecondary.opacity(0.75))
-                    Image(systemName: "chevron.up")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(Color.brainBarTextSecondary.opacity(0.75))
-                }
-                .padding(.leading, 4)
-                .transition(.opacity)
-            }
-        }
-    }
-
-    private var timeframePicker: some View {
-        HStack(spacing: 6) {
-            ForEach(PipelineTimeframe.allCases) { frame in
-                Button {
-                    selectTimeframe(frame)
-                } label: {
-                    Text(frame.label)
-                        .font(.system(size: 11, weight: .semibold))
-                        .monospacedDigit()
-                        .padding(.horizontal, 11)
-                        .padding(.vertical, 5)
-                        .foregroundStyle(
-                            timeframe == frame
-                                ? accent
-                                : Color.brainBarTextSecondary.opacity(0.85)
-                        )
-                        .background(
-                            Capsule().fill(timeframe == frame ? accent.opacity(0.16) : .clear)
-                        )
-                        .overlay(
-                            Capsule().stroke(
-                                timeframe == frame ? accent.opacity(0.32) : Color.brainBarBorderSoft,
-                                lineWidth: 1
-                            )
-                        )
-                }
-                .buttonStyle(.plain)
-                .help("Show \(frame.label) window")
-            }
-            Spacer(minLength: 8)
-            // Honest preview note: only the resting 30m lens has dedicated
-            // history today; the wider lenses re-window the live series until the
-            // per-lane wider fetch lands, so we label it as a preview rather than
-            // implying full 3h/24h history is already plotted.
-            if !timeframe.hasDedicatedHistory {
-                Text("preview · wider history soon")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(Color.brainBarTextSecondary.opacity(0.5))
-                    .transition(.opacity)
-            }
-        }
-    }
-
-    private func selectTimeframe(_ frame: PipelineTimeframe) {
-        guard timeframe != frame else { return }
-        if reduceMotion {
-            timeframe = frame
-        } else {
-            withAnimation(.easeInOut(duration: 0.2)) {
-                timeframe = frame
-            }
-        }
-    }
-
-    private func toggleFocus() {
-        let next: PipelineSeries? = isFocused ? nil : series
-        if reduceMotion {
-            focusedLane = next
-        } else {
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                focusedLane = next
-            }
         }
     }
 
@@ -1827,7 +1784,7 @@ enum BrainBarPipelinePanelPreview {
         fetchedAt: Date = Date(),
         watcherText: String = "12 files",
         signalCoverageExpanded: Bool = true,
-        focusedLane: PipelineSeries? = nil
+        selectedTimeframe: PipelineTimeframe = .live
     ) -> AnyView {
         AnyView(
             BrainBarPipelinePanelPreviewView(
@@ -1836,7 +1793,7 @@ enum BrainBarPipelinePanelPreview {
                 fetchedAt: fetchedAt,
                 watcherText: watcherText,
                 signalCoverageExpanded: signalCoverageExpanded,
-                focusedLane: focusedLane
+                selectedTimeframe: selectedTimeframe
             )
         )
     }
@@ -1844,18 +1801,17 @@ enum BrainBarPipelinePanelPreview {
 
 /// Wrapper that owns the @State bindings the real signal-coverage panel needs
 /// (`isExpanded` / `isVectorDetailExpanded`) so the production views can be
-/// rendered as-is. Mirrors `BrainBarDashboardView.pipelinePanel(layout:)`.
+/// rendered as-is. Mirrors `BrainBarDashboardView.pipelinePanel(layout:)` — now
+/// with the ONE shared timeframe selector in the Ingest header and ALL graphs
+/// always visible at resting height (no expand/collapse).
 private struct BrainBarPipelinePanelPreviewView: View {
     let stats: BrainDatabase.DashboardStats
     let containerSize: CGSize
     let fetchedAt: Date
     let watcherText: String
-    let focusedLaneSeed: PipelineSeries?
     @State private var signalCoverageExpanded: Bool
     @State private var vectorSignalDetailExpanded = false
-    @State private var focusedLane: PipelineSeries?
-    @State private var focusedTimeframe: PipelineTimeframe = .live
-    @Namespace private var pipelineNamespace
+    @State private var selectedTimeframe: PipelineTimeframe
 
     init(
         stats: BrainDatabase.DashboardStats,
@@ -1863,15 +1819,14 @@ private struct BrainBarPipelinePanelPreviewView: View {
         fetchedAt: Date,
         watcherText: String,
         signalCoverageExpanded: Bool,
-        focusedLane: PipelineSeries?
+        selectedTimeframe: PipelineTimeframe
     ) {
         self.stats = stats
         self.containerSize = containerSize
         self.fetchedAt = fetchedAt
         self.watcherText = watcherText
-        self.focusedLaneSeed = focusedLane
         _signalCoverageExpanded = State(initialValue: signalCoverageExpanded)
-        _focusedLane = State(initialValue: focusedLane)
+        _selectedTimeframe = State(initialValue: selectedTimeframe)
     }
 
     private var flowSummary: DashboardFlowSummary {
@@ -1881,24 +1836,27 @@ private struct BrainBarPipelinePanelPreviewView: View {
     var body: some View {
         let layout = BrainBarDashboardLayout(containerSize: containerSize)
         let restingHeight = layout.sparklineHeight
-        let focusedHeight = layout.compactCards ? 220.0 : 280.0
 
         VStack(alignment: .leading, spacing: layout.sectionSpacing) {
-            // Band 1 + Band 2 — the INGEST panel.
+            // Band 1 + Band 2 — the INGEST panel, with the ONE shared selector.
             VStack(alignment: .leading, spacing: layout.gridSpacing) {
-                BrainBarSectionLabel(
-                    "Ingest",
-                    caption: "What is landing — agent stores and the JSONL watcher — plus how well each retrieval signal covers it."
-                )
+                HStack(alignment: .center, spacing: 12) {
+                    BrainBarSectionLabel(
+                        "Ingest",
+                        caption: "What is landing — agent stores and the JSONL watcher — plus how well each retrieval signal covers it."
+                    )
+                    Spacer(minLength: 8)
+                    BrainBarSharedTimeframeSelector(selection: $selectedTimeframe)
+                }
 
                 ViewThatFits(in: .horizontal) {
                     VStack(alignment: .leading, spacing: 12) {
-                        seriesCard(.agentStores, layout: layout, restingHeight: restingHeight, focusedHeight: focusedHeight)
-                        seriesCard(.jsonlWatcher, layout: layout, restingHeight: restingHeight, focusedHeight: focusedHeight)
+                        seriesCard(.agentStores, layout: layout, restingHeight: restingHeight)
+                        seriesCard(.jsonlWatcher, layout: layout, restingHeight: restingHeight)
                     }
                     VStack(alignment: .leading, spacing: 12) {
-                        seriesCard(.agentStores, layout: layout, restingHeight: restingHeight, focusedHeight: focusedHeight)
-                        seriesCard(.jsonlWatcher, layout: layout, restingHeight: restingHeight, focusedHeight: focusedHeight)
+                        seriesCard(.agentStores, layout: layout, restingHeight: restingHeight)
+                        seriesCard(.jsonlWatcher, layout: layout, restingHeight: restingHeight)
                     }
                 }
 
@@ -1922,7 +1880,7 @@ private struct BrainBarPipelinePanelPreviewView: View {
                     caption: "What is being processed out of the backlog — enrichment completions and the queue draining behind them."
                 )
 
-                seriesCard(.enrichment, layout: layout, restingHeight: restingHeight, focusedHeight: focusedHeight)
+                seriesCard(.enrichment, layout: layout, restingHeight: restingHeight)
 
                 BrainBarQueueRail(
                     summary: flowSummary.queue,
@@ -1941,20 +1899,16 @@ private struct BrainBarPipelinePanelPreviewView: View {
     private func seriesCard(
         _ series: PipelineSeries,
         layout: BrainBarDashboardLayout,
-        restingHeight: CGFloat,
-        focusedHeight: CGFloat
+        restingHeight: CGFloat
     ) -> some View {
         BrainBarPipelineSeriesCard(
             series: series,
             lane: flowSummary.lane(for: series),
             pulseRevision: 0,
             compact: layout.compactCards,
-            restingChartHeight: restingHeight,
-            focusedChartHeight: focusedHeight,
+            chartHeight: restingHeight,
             fetchedAt: fetchedAt,
-            focusedLane: $focusedLane,
-            timeframe: $focusedTimeframe,
-            namespace: pipelineNamespace
+            timeframe: selectedTimeframe
         )
     }
 }
