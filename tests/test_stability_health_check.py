@@ -18,25 +18,43 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture(autouse=True)
-def _isolate_default_queue_dir(tmp_path_factory, monkeypatch):
-    """Isolate the default HealthCheckConfig queue_dir from the live queue.
+def _isolate_default_live_paths(tmp_path_factory, monkeypatch):
+    """Isolate HealthCheckConfig defaults that point at live developer state.
 
-    Tests that build HealthCheckConfig without an explicit queue_dir otherwise
-    read the developer's real ~/.brainlayer/queue; a populated live queue then
-    makes them spuriously report `queue_backed_up`. We redirect _queue_stats
-    so the live default path is treated as the empty isolated dir, while tests
-    that pass an explicit queue_dir are honored unchanged.
+    Several tests build HealthCheckConfig without overriding every path, so they
+    inherit the developer's real ~/.brainlayer/queue and
+    ~/.local/share/brainlayer/pause.sentinel. A populated live queue then makes
+    them spuriously report `queue_backed_up`, and a live pause sentinel
+    suppresses `watcher_stalled`. We redirect the queue-stats and
+    pause-sentinel readers so the live default paths resolve to empty/absent
+    isolated locations, while tests that pass explicit paths are honored.
     """
     empty_queue = tmp_path_factory.mktemp("hc-queue")
-    live_default = Path("~/.brainlayer/queue").expanduser()
+    live_queue_default = Path("~/.brainlayer/queue").expanduser()
     real_queue_stats = health_check._queue_stats
 
     def _isolated_queue_stats(queue_dir, now):
-        if queue_dir.expanduser() == live_default:
+        if queue_dir.expanduser() == live_queue_default:
             queue_dir = empty_queue
         return real_queue_stats(queue_dir, now)
 
     monkeypatch.setattr(health_check, "_queue_stats", _isolated_queue_stats)
+
+    # Redirect the live default pause-sentinel path to an absent tmp file so a
+    # real `brainlayer pause` sentinel cannot leak into tests that don't
+    # override pause_sentinel_path.
+    absent_sentinel = tmp_path_factory.mktemp("hc-sentinel") / "pause.sentinel"
+    live_sentinel_default = Path("~/.local/share/brainlayer/pause.sentinel").expanduser()
+    real_pause_state = health_check._pause_sentinel_state
+
+    def _isolated_pause_state(config, now):
+        if config.pause_sentinel_path.expanduser() == live_sentinel_default:
+            from dataclasses import replace
+
+            config = replace(config, pause_sentinel_path=absent_sentinel)
+        return real_pause_state(config, now)
+
+    monkeypatch.setattr(health_check, "_pause_sentinel_state", _isolated_pause_state)
     yield
 
 
