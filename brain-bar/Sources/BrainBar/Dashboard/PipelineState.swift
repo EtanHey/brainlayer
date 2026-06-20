@@ -394,7 +394,7 @@ struct DashboardFlowSummary: Sendable, Equatable {
                 sparklineLabel: "Enrichment completions over \(windowLabel)",
                 latestBucketName: "latest enrichment bucket",
                 accentColor: enrichmentColor,
-                primarySeriesLabel: nil,
+                primarySeriesLabel: "Enrichments",
                 secondaryValues: [],
                 secondarySeriesLabel: nil,
                 secondaryAccentColor: nil,

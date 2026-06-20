@@ -1,8 +1,13 @@
 import AppKit
 import SwiftUI
 
+final class BrainBarDashboardPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+}
+
 @MainActor
-final class BrainBarDashboardPanelController {
+final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     static let defaultSize = NSSize(
         width: BrainBarWindowPlacement.defaultSize.width,
         height: BrainBarWindowPlacement.defaultSize.height
@@ -18,6 +23,10 @@ final class BrainBarDashboardPanelController {
     var isShownForTesting: Bool { panel.isVisible }
 
     private let panel: NSPanel
+    private var clickOutsideMonitor: Any?
+    private var localClickMonitor: Any?
+    private var shownAt: Date = .distantPast
+    weak var statusItemButton: NSView?
 
     init(runtime: BrainBarRuntime) {
         let hostingController = NSHostingController(
@@ -31,7 +40,8 @@ final class BrainBarDashboardPanelController {
         contentViewControllerForTesting = hostingController
         panel = Self.makePanel(contentViewController: hostingController)
         panelForTesting = panel
-
+        super.init()
+        panel.delegate = self
     }
 
     func toggle(anchoredTo anchorView: NSView? = nil) {
@@ -48,14 +58,60 @@ final class BrainBarDashboardPanelController {
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         panel.orderFrontRegardless()
+        shownAt = Date()
+        installClickOutsideMonitor()
     }
 
     func dismiss() {
+        removeClickOutsideMonitor()
         panel.orderOut(nil)
     }
 
+    private func installClickOutsideMonitor() {
+        removeClickOutsideMonitor()
+        let mask: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        clickOutsideMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] _ in
+            Task { @MainActor in self?.dismissIfClickOutside() }
+        }
+        localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
+            Task { @MainActor in self?.dismissIfLocalClickOutside(event) }
+            return event
+        }
+    }
+
+    private func removeClickOutsideMonitor() {
+        if let clickOutsideMonitor { NSEvent.removeMonitor(clickOutsideMonitor) }
+        if let localClickMonitor { NSEvent.removeMonitor(localClickMonitor) }
+        clickOutsideMonitor = nil
+        localClickMonitor = nil
+    }
+
+    private func dismissIfClickOutside() {
+        guard panel.isVisible, Date().timeIntervalSince(shownAt) > 0.20 else { return }
+        guard !BrainBarSettingsActions.suppressDashboardResignDismiss else { return }
+        dismiss()
+    }
+
+    private func dismissIfLocalClickOutside(_ event: NSEvent) {
+        guard panel.isVisible, Date().timeIntervalSince(shownAt) > 0.20 else { return }
+        guard !BrainBarSettingsActions.suppressDashboardResignDismiss else { return }
+        if event.window === panel { return }
+        if let button = statusItemButton, event.window === button.window { return }   // let toggle() own the menubar click
+        dismiss()
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        guard panel.isVisible, Date().timeIntervalSince(shownAt) > 0.20 else { return }
+        guard !BrainBarSettingsActions.suppressDashboardResignDismiss else { return }
+        dismiss()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        removeClickOutsideMonitor()
+    }
+
     private static func makePanel(contentViewController: NSViewController) -> NSPanel {
-        let panel = NSPanel(
+        let panel = BrainBarDashboardPanel(
             contentRect: NSRect(origin: .zero, size: defaultSize),
             styleMask: [.titled, .fullSizeContentView, .closable, .resizable],
             backing: .buffered,
@@ -68,6 +124,7 @@ final class BrainBarDashboardPanelController {
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
         panel.level = .statusBar
+        panel.becomesKeyOnlyIfNeeded = false
         panel.minSize = minSize
         panel.maxSize = maxSize
         panel.contentViewController = contentViewController

@@ -387,6 +387,9 @@ final class DashboardTests: XCTestCase {
     func testDashboardShowsLoadingUntilFirstStatsFetchCompletes() throws {
         let source = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
 
+        XCTAssertTrue(source.contains("private struct BrainBarDashboardContent: View"))
+        XCTAssertTrue(source.contains("@ObservedObject var collector: StatsCollector"))
+        XCTAssertTrue(source.contains("BrainBarDashboardContent("))
         XCTAssertTrue(source.contains("collector.lastDataFetchedAt == nil"))
         XCTAssertTrue(source.contains("Connecting to daemon and loading dashboard data"))
     }
@@ -409,6 +412,91 @@ final class DashboardTests: XCTestCase {
         XCTAssertTrue(source.contains("trigramBacklogCount"))
     }
 
+    func testVectorSignalDetailMountsAtRootToEscapePipelineAndScrollClips() throws {
+        let source = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
+        let bodyRange = try XCTUnwrap(source.range(of: "var body: some View"))
+        let pipelinePanelRange = try XCTUnwrap(source.range(of: "private func pipelinePanel"))
+        let writesCardRange = try XCTUnwrap(source[pipelinePanelRange.upperBound...].range(of: "private func writesCard"))
+        let bodySource = String(source[bodyRange.lowerBound..<pipelinePanelRange.lowerBound])
+        let pipelinePanelSource = String(source[pipelinePanelRange.lowerBound..<writesCardRange.lowerBound])
+        let signalColumnRange = try XCTUnwrap(source.range(of: "private func signalColumn"))
+        let coverageModelRange = try XCTUnwrap(source[signalColumnRange.upperBound...].range(of: "private struct BrainBarSignalCoverage"))
+        let signalColumnSource = String(source[signalColumnRange.lowerBound..<coverageModelRange.lowerBound])
+
+        XCTAssertFalse(
+            source.contains("overlayPreferenceValue(VectorRowAnchorKey.self)"),
+            "Vector detail should not depend on a preference anchor that can fail to resolve while the selected row styling still changes."
+        )
+        XCTAssertFalse(
+            source.contains("anchorPreference(key: VectorRowAnchorKey.self"),
+            "The Vector row click path should mount the detail directly instead of only emitting an anchor preference."
+        )
+        XCTAssertTrue(
+            bodySource.contains(".coordinateSpace(name: BrainBarVectorSignalCoordinateSpace.root)"),
+            "The root GeometryReader should define the coordinate space used to position the unclipped Vector detail."
+        )
+        XCTAssertTrue(
+            bodySource.contains(".overlay(alignment: .topLeading)"),
+            "The Vector detail must be hoisted to a root overlay so the pipeline panel and ScrollView cannot clip it."
+        )
+        XCTAssertTrue(
+            bodySource.contains("BrainBarVectorSignalDetail(signal: vectorSignal, compact: layout.compactCards)"),
+            "The root overlay should own the Vector detail float."
+        )
+        XCTAssertTrue(
+            bodySource.contains(".zIndex(vectorSignalDetailExpanded ? 30 : 0)"),
+            "The hoisted Vector detail needs a high zIndex above every sibling pipeline card."
+        )
+        XCTAssertFalse(
+            pipelinePanelSource.contains("BrainBarVectorSignalDetail(signal: vectorSignal, compact: layout.compactCards)"),
+            "The Vector detail cannot remain inside the pipeline panel overlay because that panel clips the float."
+        )
+        XCTAssertFalse(
+            pipelinePanelSource.contains(".zIndex(vectorSignalDetailExpanded ? 1 : 0)"),
+            "The old in-panel zIndex workaround should be removed once the float lives at root level."
+        )
+        XCTAssertFalse(
+            pipelinePanelSource.contains(".padding(.top, max(0, 20 - layout.gridSpacing))"),
+            "The old in-panel spacing workaround should be removed once the float lives at root level."
+        )
+        XCTAssertFalse(
+            signalColumnSource.contains("BrainBarVectorSignalDetail"),
+            "The Vector detail cannot live in the signal column overlay because later pipeline siblings paint over that layer."
+        )
+        XCTAssertTrue(
+            signalColumnSource.contains("BrainBarVectorSignalRootFrameKey"),
+            "The Vector signal row should emit a root-space frame for the unclipped overlay."
+        )
+    }
+
+    func testVectorSignalDetailUsesDerivedZLiftNotHeldState() throws {
+        let source = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
+
+        XCTAssertFalse(source.contains("@State private var isFloatLifted"))
+        XCTAssertFalse(source.contains("DispatchQueue.main.asyncAfter(deadline: .now() + 0.27)"))
+        XCTAssertTrue(source.contains(".zIndex(vectorSignalDetailExpanded ? 30 : 0)"))
+    }
+
+    func testDashboardCardTopHighlightIsClippedInsideRoundedCorners() throws {
+        let source = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
+        let styleRange = try XCTUnwrap(source.range(of: "private struct BrainBarDashboardCardStyle"))
+        let nextStructRange = try XCTUnwrap(source[styleRange.upperBound...].range(of: "private struct BrainBarFlowStatusPill"))
+        let styleSource = String(source[styleRange.lowerBound..<nextStructRange.lowerBound])
+
+        XCTAssertFalse(
+            styleSource.contains(".overlay(alignment: .top) {\n                Rectangle()"),
+            "A full-width top Rectangle creates the flat divider hat across rounded card corners."
+        )
+        XCTAssertTrue(
+            styleSource.contains(".strokeBorder(Color.brainBarBorderSoft, lineWidth: 1)"),
+            "The card border should use strokeBorder so it remains correct after clipping."
+        )
+        XCTAssertTrue(
+            styleSource.contains(".padding(.horizontal, max(10, cornerRadius * 0.70))\n            }\n            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))\n            .shadow"),
+            "The shared card top highlight should be inset clear of rounded corners."
+        )
+    }
+
     func testBrainBarHeaderExposesRestartAndQuitControls() throws {
         let rootSource = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
         let processSource = try brainBarSourceFile("Sources/BrainBar/BrainBarProcessControl.swift")
@@ -423,6 +511,23 @@ final class DashboardTests: XCTestCase {
         XCTAssertTrue(processSource.contains("FileManager.default.fileExists"))
         XCTAssertTrue(processSource.contains("URL(fileURLWithPath: \"/usr/bin/open\")"))
         XCTAssertFalse(processSource.contains("URL(fileURLWithPath: \"/bin/sh\")"))
+    }
+
+    @MainActor
+    func testDashboardPanelUsesKeyWindowContractAndSettingsDismissSuppression() throws {
+        let controller = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
+        let panel = controller.panelForTesting
+        let panelSource = try brainBarSourceFile("Sources/BrainBar/BrainBarDashboardPanelController.swift")
+        let settingsSource = try brainBarSourceFile("Sources/BrainBar/BrainBarSettingsActions.swift")
+
+        XCTAssertTrue(panel.canBecomeKey)
+        XCTAssertFalse(panel.canBecomeMain)
+        XCTAssertFalse(panel.becomesKeyOnlyIfNeeded)
+        XCTAssertTrue(panelSource.contains("func windowWillClose(_ notification: Notification)"))
+        XCTAssertTrue(panelSource.contains("BrainBarSettingsActions.suppressDashboardResignDismiss"))
+        XCTAssertTrue(settingsSource.contains("private(set) static var suppressDashboardResignDismiss"))
+        XCTAssertTrue(settingsSource.contains("suppressDashboardResignDismiss = true"))
+        XCTAssertTrue(settingsSource.contains("suppressDashboardResignDismiss = false"))
     }
 
     func testRestartHandoffAllowsOnlyMatchingFreshExistingInstance() throws {
@@ -736,10 +841,7 @@ final class DashboardTests: XCTestCase {
             presentation.bucketLabel(for: 3),
             "\(Self.shortTime(now.addingTimeInterval(-5 * 60)))-\(Self.shortTime(now))"
         )
-        XCTAssertEqual(
-            presentation.tooltipText(forBucket: 2),
-            "\(Self.shortTime(now.addingTimeInterval(-10 * 60)))-\(Self.shortTime(now.addingTimeInterval(-5 * 60))) (10m-5m ago): 5"
-        )
+        XCTAssertEqual(presentation.relativeBucketLabel(for: 2), "10m-5m ago")
     }
 
     func testSparklineChartPresentationLabelsPartialMinuteBucketsLikeDatabase() {
@@ -815,23 +917,166 @@ final class DashboardTests: XCTestCase {
         XCTAssertTrue(presentation.legendEntries.allSatisfy { !$0.isActive })
     }
 
+    func testSparklinePresentationClassifiesDensityAndUsesTightTicksForSmallPeaks() {
+        let sparse = SparklineChartPresentation(
+            label: "Enrichments over 30m",
+            values: [0, 0, 3, 0, 0],
+            secondaryValues: [1, 1, 0, 1, 1],
+            activityWindowMinutes: 30,
+            fetchedAt: Date(timeIntervalSince1970: 1_764_236_400)
+        )
+
+        XCTAssertEqual(sparse.nonZeroFraction(.primary), 0.2, accuracy: 0.001)
+        XCTAssertFalse(sparse.isDense(.primary))
+        XCTAssertTrue(sparse.isDense(.secondary))
+        XCTAssertEqual(sparse.axisMax, 5)
+        XCTAssertEqual(sparse.tightAxisMax, 3)
+        XCTAssertEqual(sparse.tightYAxisTicks, [0, 2, 3])
+
+        let larger = SparklineChartPresentation(
+            label: "Writes over 30m",
+            values: [0, 9],
+            activityWindowMinutes: 30,
+            fetchedAt: Date(timeIntervalSince1970: 1_764_236_400)
+        )
+
+        XCTAssertEqual(larger.tightAxisMax, larger.axisMax)
+        XCTAssertEqual(larger.axisMax, 10)
+    }
+
     func testSparklineTooltipPlacementClampsHorizontally() {
         let container = CGSize(width: 160, height: 100)
         let tooltip = SparklineTooltipPlacement.tooltipSize(in: container)
 
         let left = SparklineTooltipPlacement.position(
             near: CGPoint(x: 0, y: 80),
-            in: container,
+            anchorY: 80,
+            hoveredX: 0,
+            containerBounds: container,
             tooltipSize: tooltip
         )
         let right = SparklineTooltipPlacement.position(
             near: CGPoint(x: 220, y: 80),
-            in: container,
+            anchorY: 80,
+            hoveredX: 220,
+            containerBounds: container,
             tooltipSize: tooltip
         )
 
         XCTAssertGreaterThanOrEqual(left.x - tooltip.width / 2, 8)
         XCTAssertLessThanOrEqual(right.x + tooltip.width / 2, container.width - 8)
+    }
+
+    func testSparklineTooltipPlacementAnchorsToPointAndFallsBackSidewaysNearTopSpike() {
+        let container = CGSize(width: 420, height: 96)
+        let tooltip = SparklineTooltipPlacement.tooltipSize(in: container)
+
+        let topSpike = SparklineTooltipPlacement.position(
+            near: CGPoint(x: 35, y: 12),
+            anchorY: 12,
+            hoveredX: 35,
+            containerBounds: container,
+            tooltipSize: tooltip
+        )
+        let roomy = SparklineTooltipPlacement.position(
+            near: CGPoint(x: 220, y: 86),
+            anchorY: 86,
+            hoveredX: 220,
+            containerBounds: container,
+            tooltipSize: tooltip
+        )
+
+        XCTAssertGreaterThan(topSpike.x, 35, "Top spikes should side-place instead of pinning the tooltip to the bottom.")
+        XCTAssertLessThanOrEqual(topSpike.y + tooltip.height / 2, container.height - 8)
+        XCTAssertLessThan(roomy.y, 86, "Roomy lower points should place the tooltip above the on-curve anchor.")
+    }
+
+    // Degenerate case: a top-edge spike in a container so narrow that NEITHER side
+    // candidate fits at the anchor column. The card must still clear the dot by
+    // pinning to the edge with more room — never land on the anchor column and
+    // overlap the curve. (Reviewer M1, PR #526.)
+    func testSparklineTooltipPlacementSidePinsToEdgeWhenNoSideRoomAtAnchor() {
+        // 300 wide so minX (138) < maxX (162): the edge is distinct from the
+        // horizontally-clamped anchor column, yet the tooltip (260 wide) is wide
+        // enough that NEITHER side candidate fits at the anchor.
+        let container = CGSize(width: 300, height: 96)
+        let tooltip = SparklineTooltipPlacement.tooltipSize(in: container)
+        let halfWidth = tooltip.width / 2
+        let minX = 8 + halfWidth
+        let maxX = max(container.width - 8 - halfWidth, minX)
+        XCTAssertLessThan(minX, maxX, "Test geometry must keep the edges distinct from the anchor column.")
+
+        // Top spike right-of-center: rightX and leftX both fall outside [minX, maxX],
+        // so the SIDE fallback must pin to the roomier (left) edge, not the anchor column.
+        let anchorX: CGFloat = 175
+        let topSpike = SparklineTooltipPlacement.position(
+            near: CGPoint(x: anchorX, y: 8),
+            anchorY: 8,
+            hoveredX: anchorX,
+            containerBounds: container,
+            tooltipSize: tooltip
+        )
+        let clampedAnchorColumn = min(max(anchorX, minX), maxX)
+        XCTAssertEqual(topSpike.x, minX, accuracy: 0.5,
+                       "No side room at the anchor column should pin to the roomier (left) edge.")
+        XCTAssertNotEqual(topSpike.x, clampedAnchorColumn, accuracy: 0.5,
+                          "The card must not sit on the anchor column overlapping the curve.")
+    }
+
+    // A sparse series with a spike gets the lifted soft floor (so its zeros read as a
+    // designed band), but a series with NO data at all stays on the true zero baseline
+    // so it never implies a phantom band of activity. (Reviewer Codex P2, PR #526.)
+    func testSparkBaselineUsesSoftFloorOnlyForSparseSeriesWithData() {
+        // Sparse but has a spike -> soft floor.
+        XCTAssertTrue(SparklineBaseline.usesSoftFloor(isDense: false, nonZeroFraction: 0.2))
+        // Completely empty -> true baseline (no soft floor).
+        XCTAssertFalse(SparklineBaseline.usesSoftFloor(isDense: false, nonZeroFraction: 0.0))
+        // Dense -> true baseline.
+        XCTAssertFalse(SparklineBaseline.usesSoftFloor(isDense: true, nonZeroFraction: 0.8))
+    }
+
+    // The hover indicator must ride the PLOTTED series with the visible spike at the
+    // hovered bucket, not always the primary — otherwise a Writes chart fed only by
+    // the watcher lane (primary all-zero) anchors the dot/tooltip to the baseline.
+    // (Reviewers: Cursor Bugbot Medium / Codex P2, PR #526.)
+    func testHoverAnchorPicksDominantPlottedSeries() {
+        // Only secondary plotted, secondary has the value at this bucket.
+        XCTAssertEqual(
+            SparklineHoverAnchor.dominantRole(
+                plotted: [.secondary],
+                valueAtBucket: [.secondary: 4]
+            ),
+            .secondary
+        )
+        // Both plotted; secondary spikes while primary is zero -> ride secondary.
+        XCTAssertEqual(
+            SparklineHoverAnchor.dominantRole(
+                plotted: [.primary, .secondary],
+                valueAtBucket: [.primary: 0, .secondary: 5]
+            ),
+            .secondary
+        )
+        // Tie favors primary (declaration order).
+        XCTAssertEqual(
+            SparklineHoverAnchor.dominantRole(
+                plotted: [.primary, .secondary],
+                valueAtBucket: [.primary: 3, .secondary: 3]
+            ),
+            .primary
+        )
+        // Primary dominates.
+        XCTAssertEqual(
+            SparklineHoverAnchor.dominantRole(
+                plotted: [.primary, .secondary, .tertiary],
+                valueAtBucket: [.primary: 6, .secondary: 2, .tertiary: 1]
+            ),
+            .primary
+        )
+        // Nothing plotted -> safe fallback to primary.
+        XCTAssertEqual(
+            SparklineHoverAnchor.dominantRole(plotted: [], valueAtBucket: [:]),
+            .primary
+        )
     }
 
     func testSparklineTooltipPlacementFlipsBelowNearTopEdge() {
@@ -840,17 +1085,47 @@ final class DashboardTests: XCTestCase {
 
         let top = SparklineTooltipPlacement.position(
             near: CGPoint(x: 130, y: 4),
-            in: container,
+            anchorY: 4,
+            hoveredX: 130,
+            containerBounds: container,
             tooltipSize: tooltip
         )
         let lower = SparklineTooltipPlacement.position(
             near: CGPoint(x: 130, y: 90),
-            in: container,
+            anchorY: 90,
+            hoveredX: 130,
+            containerBounds: container,
             tooltipSize: tooltip
         )
 
         XCTAssertGreaterThan(top.y, 4)
         XCTAssertLessThan(lower.y, 90)
+    }
+
+    func testSparklineTooltipUsesRoundedUpMetricsAndSingleOpaqueBackground() throws {
+        let compactContainer = CGSize(width: 260, height: 90)
+        let tooltip = SparklineTooltipPlacement.tooltipSize(in: compactContainer, seriesCount: 3)
+        let source = try brainBarSourceFile("Sources/BrainBar/Dashboard/SparklineRenderer.swift")
+
+        XCTAssertEqual(tooltip.height, 104)
+        XCTAssertTrue(source.contains("private static let headerHeight: CGFloat = 24"))
+        XCTAssertTrue(source.contains("private static let dividerBlock: CGFloat = 14"))
+        XCTAssertTrue(source.contains("private static let rowHeight: CGFloat = 16"))
+        XCTAssertFalse(source.contains(".background(.regularMaterial"))
+        XCTAssertTrue(source.contains(".fill(Color.brainBarBackgroundRaised)"))
+    }
+
+    func testSparklineRendererSimplifiesStructuredTooltipHelpers() throws {
+        let source = try brainBarSourceFile("Sources/BrainBar/Dashboard/SparklineRenderer.swift")
+
+        XCTAssertFalse(source.contains("func tooltipText(forBucket"))
+        XCTAssertTrue(source.contains("let clampedBucket = min(max(hoveredBucket, 0), max(presentation.values.count - 1, 0))"))
+        XCTAssertTrue(source.contains("private var plotMax: Int { compact ? presentation.maxValue : presentation.tightAxisMax }"))
+        XCTAssertFalse(source.contains("line 523"))
+        XCTAssertFalse(source.contains("(G3)"))
+        XCTAssertFalse(source.contains("(G4)"))
+        XCTAssertFalse(source.contains("(G5)"))
+        XCTAssertFalse(source.contains("(I1)"))
     }
 
     func testDashboardMetricFormatterRequiresAbsoluteLastEventText() {
@@ -886,6 +1161,19 @@ final class DashboardTests: XCTestCase {
         XCTAssertTrue(SparklineRenderer.isCompact(size: NSSize(width: 52, height: 116)))
         XCTAssertTrue(SparklineRenderer.isCompact(size: NSSize(width: 300, height: 20)))
         XCTAssertFalse(SparklineRenderer.isCompact(size: NSSize(width: 53, height: 21)))
+    }
+
+    func testSparklineChartOmitsCurrentValueEndpointAnnotation() throws {
+        let source = try brainBarSourceFile("Sources/BrainBar/Dashboard/SparklineRenderer.swift")
+
+        XCTAssertFalse(
+            source.contains("currentValueLabelPosition"),
+            "Dashboard sparklines should keep endpoint markers but not render the floating current-value pill."
+        )
+        XCTAssertFalse(
+            source.contains("Text(\"\\(last.value)\")"),
+            "The confusing numeric endpoint pill should be removed from Writes and Enrichments charts."
+        )
     }
 
     func testDashboardStatsCountsRecentISO8601Timestamps() throws {

@@ -103,14 +103,10 @@ struct BrainBarWindowRootView: View {
     @ViewBuilder
     private var dashboardContent: some View {
         if let collector = runtime.collector {
-            if collector.lastDataFetchedAt == nil {
-                BrainBarLoadingView(title: "BrainBar", subtitle: "Connecting to daemon and loading dashboard data...")
-            } else {
-                BrainBarDashboardView(
-                    collector: collector,
-                    hotkeyStatus: runtime.hotkeyStatus.statusLine
-                )
-            }
+            BrainBarDashboardContent(
+                collector: collector,
+                hotkeyStatus: runtime.hotkeyStatus.statusLine
+            )
         } else {
             BrainBarLoadingView(title: "BrainBar", subtitle: "Opening database and warming the dashboard...")
         }
@@ -161,6 +157,22 @@ struct BrainBarWindowRootView: View {
     }
 }
 
+private struct BrainBarDashboardContent: View {
+    @ObservedObject var collector: StatsCollector
+    let hotkeyStatus: String
+
+    var body: some View {
+        if collector.lastDataFetchedAt == nil {
+            BrainBarLoadingView(title: "BrainBar", subtitle: "Connecting to daemon and loading dashboard data...")
+        } else {
+            BrainBarDashboardView(
+                collector: collector,
+                hotkeyStatus: hotkeyStatus
+            )
+        }
+    }
+}
+
 @MainActor
 private final class BrainBarCommandBarViewModelProvider {
     private let panelState = QuickCapturePanelState()
@@ -193,31 +205,16 @@ private struct BrainBarWindowHeader: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .center, spacing: 16) {
-                    brand
-                    Spacer(minLength: 16)
-                    sectionPicker(maxWidth: 280)
-                    refreshControls
-                    BrainBarAppControlMenu()
-                    Spacer(minLength: 12)
-                    hotkeyLabel
-                }
-
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(alignment: .center, spacing: 12) {
-                        brand
-                        Spacer(minLength: 12)
-                        BrainBarAppControlMenu()
-                        hotkeyLabel
-                            .frame(maxWidth: 180, alignment: .trailing)
-                    }
-
-                    HStack(alignment: .center, spacing: 10) {
-                        sectionPicker(maxWidth: .infinity)
-                        refreshControls
-                    }
-                }
+            HStack(alignment: .center, spacing: 12) {
+                brand
+                Spacer(minLength: 12)
+                BrainBarAppControlMenu()
+                hotkeyLabel
+                    .frame(maxWidth: 200, alignment: .trailing)
+            }
+            HStack(alignment: .center, spacing: 10) {
+                sectionPicker(maxWidth: .infinity)
+                refreshControls
             }
 
             BrainBarCommandBar(viewModel: commandBarViewModel)
@@ -317,6 +314,7 @@ private struct BrainBarDashboardView: View {
     @ObservedObject var collector: StatsCollector
     let hotkeyStatus: String
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var previousWriteBuckets: [Int] = []
     @State private var previousEnrichmentBuckets: [Int] = []
     @State private var writePulseRevision = 0
@@ -324,26 +322,61 @@ private struct BrainBarDashboardView: View {
     @State private var detailsExpanded = false
     @State private var signalCoverageExpanded = false
     @State private var vectorSignalDetailExpanded = false
+    @State private var vectorSignalRowFrame: CGRect = .zero
+    @State private var vectorSignalRootFrame: CGRect = .zero
 
     private var flowSummary: DashboardFlowSummary {
         DashboardFlowSummary.derive(daemon: collector.daemon, stats: collector.stats)
+    }
+
+    private var vectorSignal: BrainBarSignalCoverage {
+        BrainBarSignalCoverage(
+            name: "Vector",
+            indexedCount: collector.stats.vectorIndexedChunkCount,
+            totalCount: collector.stats.signalEligibleChunkCount,
+            backlogCount: collector.stats.vectorBacklogCount,
+            coveragePercent: collector.stats.vectorCoveragePercent,
+            accentColor: .brainBarSignalVector,
+            showsDetail: true,
+            vectorNetDrainRatePerHour: collector.stats.vectorNetDrainRatePerHour,
+            vectorBacklogETAHours: collector.stats.vectorBacklogETAHours
+        )
     }
 
     var body: some View {
         GeometryReader { proxy in
             let layout = BrainBarDashboardLayout(containerSize: proxy.size)
 
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: layout.sectionSpacing) {
-                    overviewCard(layout: layout)
-                    freshnessLine
-                    pipelinePanel(layout: layout)
-                    diagnostics(layout: layout)
+            ZStack(alignment: .topLeading) {
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: layout.sectionSpacing) {
+                        overviewCard(layout: layout)
+                        freshnessLine
+                        pipelinePanel(layout: layout)
+                        diagnostics(layout: layout)
+                    }
+                    .padding(layout.outerPadding)
+                    .frame(maxWidth: layout.maxContentWidth, alignment: .topLeading)
+                    .frame(maxWidth: .infinity, alignment: .top)
                 }
-                .padding(layout.outerPadding)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .coordinateSpace(name: BrainBarVectorSignalCoordinateSpace.root)
+            .onPreferenceChange(BrainBarVectorSignalRootFrameKey.self) { frame in
+                vectorSignalRootFrame = frame
+            }
+            .overlay(alignment: .topLeading) {
+                if signalCoverageExpanded, vectorSignalDetailExpanded, vectorSignalRootFrame != .zero {
+                    BrainBarVectorSignalDetail(signal: vectorSignal, compact: layout.compactCards)
+                        .frame(width: vectorDetailWidth(layout: layout), alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .offset(x: vectorDetailXOffset(layout: layout), y: vectorDetailYOffset(layout: layout))
+                        .shadow(color: .brainBarBlack.opacity(0.55), radius: 22, y: 12)
+                        .shadow(color: .brainBarBlack.opacity(0.30), radius: 6, y: 2)
+                        .transition(vectorDetailTransition)
+                        .zIndex(vectorSignalDetailExpanded ? 30 : 0)
+                }
+            }
         }
         .onAppear {
             previousWriteBuckets = collector.stats.recentActivityBuckets
@@ -491,7 +524,6 @@ private struct BrainBarDashboardView: View {
             writesCard(layout: layout)
 
             signalCoveragePanel(layout: layout)
-                .padding(.top, max(0, 20 - layout.gridSpacing))
 
             if layout.chartColumns == 2 {
                 HStack(alignment: .top, spacing: layout.gridSpacing) {
@@ -511,6 +543,10 @@ private struct BrainBarDashboardView: View {
         .background(
             BrainBarGlassPanel(cornerRadius: layout.panelCornerRadius, tint: .brainBarAccent)
         )
+        .coordinateSpace(name: BrainBarVectorSignalCoordinateSpace.pipelinePanel)
+        .onPreferenceChange(BrainBarVectorSignalFrameKey.self) { frame in
+            vectorSignalRowFrame = frame
+        }
     }
 
     private func writesCard(layout: BrainBarDashboardLayout) -> some View {
@@ -560,6 +596,38 @@ private struct BrainBarDashboardView: View {
         )
     }
 
+    private func vectorDetailXOffset(layout: BrainBarDashboardLayout) -> CGFloat {
+        max(layout.outerPadding, vectorSignalRootFrame.minX)
+    }
+
+    private func vectorDetailYOffset(layout: BrainBarDashboardLayout) -> CGFloat {
+        vectorSignalRootFrame.maxY + (layout.compactCards ? 8 : 10)
+    }
+
+    private func vectorDetailWidth(layout: BrainBarDashboardLayout) -> CGFloat {
+        let measuredWidth = vectorSignalRootFrame == .zero ? vectorSignalRowFrame.width : vectorSignalRootFrame.width
+        return max(layout.compactCards ? 150 : 170, measuredWidth)
+    }
+
+    private var vectorDetailTransition: AnyTransition {
+        if reduceMotion {
+            .opacity
+        } else {
+            .asymmetric(
+            insertion: .opacity.combined(with: .modifier(
+                active: RevealClip(progress: 0),
+                identity: RevealClip(progress: 1)
+            )),
+            removal: .opacity
+                .combined(with: .modifier(
+                    active: RevealClip(progress: 0),
+                    identity: RevealClip(progress: 1)
+                ))
+                .combined(with: .offset(y: -6))
+            )
+        }
+    }
+
     @ViewBuilder
     private func diagnostics(layout: BrainBarDashboardLayout) -> some View {
         let flowCard = BrainBarDiagnosticCard(
@@ -573,7 +641,6 @@ private struct BrainBarDashboardView: View {
                     fromByteCount: collector.stats.databaseSizeBytes,
                     countStyle: .file
                 )),
-                ("Vector", vectorSummary),
             ],
             columns: layout.diagnosticItemColumns
         )
@@ -585,8 +652,6 @@ private struct BrainBarDashboardView: View {
                 ("Daemon", daemonSummary),
                 ("Agents", collector.agentActivity.summaryText),
                 ("State", collector.state.label),
-                ("FTS", ftsSummary),
-                ("Trigram", trigramSummary),
                 ("Last seen", daemonLastSeenSummary),
             ],
             columns: layout.diagnosticItemColumns
@@ -606,7 +671,6 @@ private struct BrainBarDashboardView: View {
                             runtimeCard
                         }
                     }
-                    BrainBarTrigramProgress(stats: collector.stats)
                 }
                 .padding(.top, 4)
             } label: {
@@ -645,57 +709,45 @@ private struct BrainBarDashboardView: View {
             activityWindowMinutes: collector.stats.activityWindowMinutes
         )
     }
+}
 
-    private var vectorSummary: String {
-        signalSummary(
-            indexedCount: collector.stats.vectorIndexedChunkCount,
-            backlogCount: collector.stats.vectorBacklogCount,
-            coveragePercent: collector.stats.vectorCoveragePercent
-        )
-    }
-
-    private var ftsSummary: String {
-        signalSummary(
-            indexedCount: collector.stats.ftsIndexedChunkCount,
-            backlogCount: collector.stats.ftsBacklogCount,
-            coveragePercent: collector.stats.ftsCoveragePercent
-        )
-    }
-
-    private var trigramSummary: String {
-        signalSummary(
-            indexedCount: collector.stats.trigramIndexedChunkCount,
-            backlogCount: collector.stats.trigramBacklogCount,
-            coveragePercent: collector.stats.trigramCoveragePercent
-        )
-    }
-
-    private func signalSummary(indexedCount: Int, backlogCount: Int, coveragePercent: Double) -> String {
-        "\(indexedCount)/\(collector.stats.signalEligibleChunkCount) · " +
-            String(format: "%.0f%%", coveragePercent) +
-            " · backlog \(backlogCount)"
+private struct RevealClip: ViewModifier, Animatable {
+    var progress: CGFloat          // 0 = collapsed, 1 = full height
+    nonisolated var animatableData: CGFloat { get { progress } set { progress = newValue } }
+    func body(content: Content) -> some View {
+        content
+            .frame(maxWidth: .infinity, alignment: .top)
+            .mask(alignment: .top) {
+                GeometryReader { geo in
+                    Color.black.frame(height: geo.size.height * max(0, min(progress, 1)), alignment: .top)
+                }
+            }
     }
 }
 
-private struct BrainBarTrigramProgress: View {
-    let stats: BrainDatabase.DashboardStats
+private enum BrainBarVectorSignalCoordinateSpace {
+    static let pipelinePanel = "BrainBarPipelinePanel"
+    static let root = "BrainBarRoot"
+}
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("Trigram maintenance")
-                    .font(.system(size: 11, weight: .semibold))
-                Spacer(minLength: 8)
-                Text("\(stats.trigramIndexedChunkCount)/\(stats.signalEligibleChunkCount)")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-            BrainBarAnimatedCoverageBar(
-                percent: min(stats.trigramCoveragePercent, 100),
-                accentColor: .brainBarSignalTrigram
-            )
-            .frame(height: 6)
+private struct BrainBarVectorSignalFrameKey: PreferenceKey {
+    static let defaultValue: CGRect = .zero
+
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if next != .zero {
+            value = next
+        }
+    }
+}
+
+private struct BrainBarVectorSignalRootFrameKey: PreferenceKey {
+    static let defaultValue: CGRect = .zero
+
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if next != .zero {
+            value = next
         }
     }
 }
@@ -746,6 +798,12 @@ private struct BrainBarSignalCoveragePanel: View {
         ]
     }
 
+    private func setVectorDetail(_ open: Bool) {
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) {
+            isVectorDetailExpanded = open
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 10 : 12) {
             Text("SIGNAL COVERAGE")
@@ -756,16 +814,16 @@ private struct BrainBarSignalCoveragePanel: View {
 
             if isExpanded {
                 signalBars
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .frame(maxWidth: .infinity, alignment: .top)
+                    .transition(.opacity)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onAppear {
-            updateRevealedSignals(animated: false)
+        .onExitCommand {
+            if isVectorDetailExpanded { setVectorDetail(false) }
         }
-        .onChange(of: isExpanded) { _, _ in
-            updateRevealedSignals(animated: true)
-        }
+        .onAppear { updateRevealedSignals(animated: false) }
+        .onChange(of: isExpanded) { _, _ in updateRevealedSignals(animated: true) }
     }
 
     private var disclosureButton: some View {
@@ -818,30 +876,38 @@ private struct BrainBarSignalCoveragePanel: View {
         VStack(alignment: .leading, spacing: compact ? 8 : 10) {
             if signal.showsDetail {
                 Button {
-                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) {
-                        isVectorDetailExpanded.toggle()
-                    }
+                    setVectorDetail(!isVectorDetailExpanded)
                 } label: {
                     BrainBarSignalCoverageRow(
                         signal: signal,
                         compact: compact,
                         isSelected: isVectorDetailExpanded
                     )
+                    .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.plain)
                 .help("Show Vector backlog details")
-
-                if isVectorDetailExpanded {
-                    BrainBarVectorSignalDetail(signal: signal, compact: compact)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                }
             } else {
                 BrainBarSignalCoverageRow(signal: signal, compact: compact, isSelected: false)
             }
         }
         .frame(minWidth: compact ? 150 : 170, maxWidth: .infinity, alignment: .topLeading)
         .opacity(isExpanded ? (revealedSignalIDs.contains(signal.id) ? 1 : 0) : 1)
-        .offset(y: isExpanded && !revealedSignalIDs.contains(signal.id) ? 8 : 0)
+        .background {
+            if signal.showsDetail {
+                GeometryReader { proxy in
+                    Color.clear
+                        .preference(
+                            key: BrainBarVectorSignalFrameKey.self,
+                            value: proxy.frame(in: .named(BrainBarVectorSignalCoordinateSpace.pipelinePanel))
+                        )
+                        .preference(
+                            key: BrainBarVectorSignalRootFrameKey.self,
+                            value: proxy.frame(in: .named(BrainBarVectorSignalCoordinateSpace.root))
+                        )
+                }
+            }
+        }
     }
 
     private func updateRevealedSignals(animated: Bool) {
@@ -992,12 +1058,23 @@ private struct BrainBarVectorSignalDetail: View {
         .padding(.horizontal, compact ? 12 : 16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: BrainBarDesignTokens.Radius.md, style: .continuous)
-                .fill(signal.accentColor.opacity(0.08))
-                .overlay(
-                    RoundedRectangle(cornerRadius: BrainBarDesignTokens.Radius.md, style: .continuous)
-                        .stroke(signal.accentColor.opacity(0.28), lineWidth: 1)
-                )
+            ZStack {
+                RoundedRectangle(cornerRadius: BrainBarDesignTokens.Radius.md, style: .continuous)
+                    .fill(Color.brainBarBackgroundRaised)
+                RoundedRectangle(cornerRadius: BrainBarDesignTokens.Radius.md, style: .continuous)
+                    .fill(signal.accentColor.opacity(0.10))
+                RoundedRectangle(cornerRadius: BrainBarDesignTokens.Radius.md, style: .continuous)
+                    .stroke(
+                        LinearGradient(colors: [Color.brainBarWhite.opacity(0.08), .clear],
+                                       startPoint: .top, endPoint: .bottom),
+                        lineWidth: 1
+                    )
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: BrainBarDesignTokens.Radius.md, style: .continuous)
+                    .stroke(signal.accentColor.opacity(0.45), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: BrainBarDesignTokens.Radius.md, style: .continuous))
         )
     }
 
@@ -1087,14 +1164,17 @@ private struct BrainBarFlowLaneCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 10 : 12) {
             HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text(lane.name.uppercased())
-                        .font(.system(size: 11, weight: .semibold))
-                        .tracking(0.88)
+                        .font(.system(size: 10, weight: .semibold))
+                        .tracking(0.80)
                         .foregroundStyle(Color.brainBarTextSecondary.opacity(0.60))
-                    Text(lane.windowLabel)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
+                    Text(lane.rateText)
+                        .font(.system(size: compact ? 22 : 26, weight: .bold))
+                        .monospacedDigit()
+                        .foregroundStyle(Color.brainBarTextPrimary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.78)
                 }
                 Spacer(minLength: 12)
                 BrainBarFlowStatusPill(
@@ -1117,7 +1197,8 @@ private struct BrainBarFlowLaneCard: View {
                 tertiaryAccentColor: lane.tertiaryAccentColor,
                 activityWindowMinutes: lane.activityWindowMinutes,
                 fetchedAt: fetchedAt,
-                pulseRevision: pulseRevision
+                pulseRevision: pulseRevision,
+                referenceValue: sparklineReferenceValue
             )
             .frame(height: chartHeight)
 
@@ -1137,23 +1218,11 @@ private struct BrainBarFlowLaneCard: View {
                 )
             }
 
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) {
-                    BrainBarLaneMetric(label: "Rate", value: lane.rateText)
-                    BrainBarLaneMetric(label: "Volume", value: lane.volumeText)
-                    BrainBarLaneMetric(label: "Last event", value: lane.lastEventText)
-                    Spacer(minLength: 0)
-                }
-
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 12) {
-                        BrainBarLaneMetric(label: "Rate", value: lane.rateText)
-                        BrainBarLaneMetric(label: "Volume", value: lane.volumeText)
-                        Spacer(minLength: 0)
-                    }
-                    BrainBarLaneMetric(label: "Last event", value: lane.lastEventText)
-                }
-            }
+            Text("\(lane.volumeText) · \(lane.lastEventText)")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.brainBarTextSecondary.opacity(0.70))
+                .lineLimit(1)
+                .truncationMode(.tail)
 
             Text(lane.statusText)
                 .font(.system(size: 11, weight: .medium))
@@ -1165,7 +1234,39 @@ private struct BrainBarFlowLaneCard: View {
         .padding(compact ? 16 : 18)
         .background(BrainBarDashboardCardStyle(emphasized: emphasize))
     }
+
+    private var sparklineReferenceValue: Int? {
+        guard lane.name.localizedCaseInsensitiveContains("enrichment") else { return nil }
+        let peak = max(lane.values.max() ?? 0, lane.secondaryValues.max() ?? 0, lane.tertiaryValues.max() ?? 0)
+        // No benchmark line on a completely empty chart — it would imply a phantom target.
+        return peak > 0 ? peak : nil
+    }
 }
+
+#if DEBUG
+/// Debug-only seam: render the (private) number-first flow lane card for visual QA.
+/// Never compiled into a release build.
+@MainActor
+enum BrainBarFlowLaneCardPreview {
+    static func make(
+        lane: DashboardFlowLane,
+        compact: Bool = false,
+        chartHeight: CGFloat = 170,
+        fetchedAt: Date = Date()
+    ) -> AnyView {
+        AnyView(
+            BrainBarFlowLaneCard(
+                lane: lane,
+                pulseRevision: 0,
+                compact: compact,
+                chartHeight: chartHeight,
+                fetchedAt: fetchedAt,
+                emphasize: true
+            )
+        )
+    }
+}
+#endif
 
 private struct BrainBarQueueRail: View {
     let summary: DashboardQueueSummary
@@ -1345,28 +1446,30 @@ struct BrainBarDashboardLayout {
     let metricValueFontSize: CGFloat
     let sparklineHeight: CGFloat
     let panelCornerRadius: CGFloat
+    let maxContentWidth: CGFloat
 
     init(containerSize: CGSize) {
         let compactHeight = containerSize.height < 620
         let compactWidth = containerSize.width < 920
 
-        chartColumns = containerSize.width >= 1_200 ? 2 : 1
-        overviewMetricColumns = containerSize.width >= 980 ? 4 : 2
-        diagnosticColumns = containerSize.width >= 960 ? 2 : 1
-        diagnosticItemColumns = containerSize.width >= 820 ? 2 : 1
+        chartColumns = containerSize.width >= 1_040 ? 2 : 1
+        overviewMetricColumns = containerSize.width >= 900 ? 4 : 2
+        diagnosticColumns = containerSize.width >= 880 ? 2 : 1
+        diagnosticItemColumns = containerSize.width >= 760 ? 2 : 1
 
         compactCards = compactWidth || compactHeight
-        outerPadding = compactCards ? 28 : 48
-        sectionSpacing = compactCards ? 22 : 34
-        gridSpacing = compactCards ? 18 : 24
-        cardPadding = compactCards ? 28 : 44
+        outerPadding = compactCards ? 24 : 32
+        sectionSpacing = compactCards ? 20 : 28
+        gridSpacing = compactCards ? 16 : 22
+        cardPadding = compactCards ? 22 : 32
         overviewTitleFontSize = compactCards ? BrainBarDesignTokens.TypeScale.title : BrainBarDesignTokens.TypeScale.display
         overviewSubtitleFontSize = BrainBarDesignTokens.TypeScale.body
         overviewStatsWidth = compactCards ? 310 : 420
         metricCardMinHeight = compactCards ? 96 : 128
         metricValueFontSize = compactCards ? 48 : BrainBarDesignTokens.TypeScale.hero
-        sparklineHeight = compactCards ? 118 : 150
+        sparklineHeight = compactCards ? 140 : 170
         panelCornerRadius = BrainBarDesignTokens.Radius.xl
+        maxContentWidth = 1_280
     }
 }
 
@@ -1685,14 +1788,15 @@ private struct BrainBarDashboardCardStyle: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(Color.brainBarBorderSoft, lineWidth: 1)
+                    .strokeBorder(Color.brainBarBorderSoft, lineWidth: 1)
             )
             .overlay(alignment: .top) {
-                Rectangle()
+                Capsule(style: .continuous)
                     .fill(Color.brainBarWhite.opacity(0.06))
                     .frame(height: 1)
-                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                    .padding(.horizontal, max(10, cornerRadius * 0.70))
             }
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .shadow(color: Color.brainBarBlack.opacity(0.30), radius: 8, y: 2)
     }
 }
@@ -1733,6 +1837,7 @@ private struct BrainBarHeroSparkline: View {
     let activityWindowMinutes: Int
     let fetchedAt: Date
     let pulseRevision: Int
+    let referenceValue: Int?
 
     var body: some View {
         GeometryReader { proxy in
@@ -1757,7 +1862,8 @@ private struct BrainBarHeroSparkline: View {
                 accentColor: accentColor,
                 secondaryAccentColor: secondaryAccentColor,
                 tertiaryAccentColor: tertiaryAccentColor,
-                compact: SparklineRenderer.isCompact(size: renderSize)
+                compact: SparklineRenderer.isCompact(size: renderSize),
+                referenceValue: referenceValue
             )
             .id(pulseRevision)
             .frame(width: proxy.size.width, height: proxy.size.height)

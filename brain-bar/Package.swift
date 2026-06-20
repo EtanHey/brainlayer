@@ -21,6 +21,9 @@ let package = Package(
                 .product(name: "GRDB", package: "GRDB.swift"),
             ],
             path: "Sources/BrainBar",
+            swiftSettings: [
+                .define("BRAINBAR_UI"),
+            ],
             linkerSettings: [
                 .linkedLibrary("sqlite3"),
             ]
