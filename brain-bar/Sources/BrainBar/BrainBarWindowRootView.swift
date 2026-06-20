@@ -1244,6 +1244,31 @@ private struct BrainBarFlowLaneCard: View {
 }
 
 #if DEBUG
+/// Debug-only seam: render the (private) full dashboard view for deterministic
+/// visual QA. Never compiled into a release build. Pair with a fixture collector
+/// (`BrainBarDashboardFixture.makeCollector()`) and `accessibilityReduceMotion`
+/// so the render is byte-stable. `width` (set on the host frame by the caller)
+/// selects the layout breakpoint: compact < 920 ≤ default < 1040 ≤ wide.
+@MainActor
+enum BrainBarDashboardPreview {
+    static func make(
+        collector: StatsCollector,
+        hotkeyStatus: String = "Hotkey ⌃⌥Space ready"
+    ) -> AnyView {
+        AnyView(
+            ZStack {
+                BrainBarAppBackground()
+                BrainBarDashboardView(collector: collector, hotkeyStatus: hotkeyStatus)
+            }
+            .environment(\.colorScheme, .dark)
+            // Suppress SwiftUI animations so every value lands at its final state
+            // immediately — no mid-animation capture. (The read-only
+            // `accessibilityReduceMotion` env key can't be injected directly.)
+            .transaction { $0.disablesAnimations = true }
+        )
+    }
+}
+
 /// Debug-only seam: render the (private) number-first flow lane card for visual QA.
 /// Never compiled into a release build.
 @MainActor
