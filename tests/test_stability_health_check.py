@@ -9,10 +9,35 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 import brainlayer.health_check as health_check
 from brainlayer.health_check import HealthCheckConfig, run_health_check
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True)
+def _isolate_default_queue_dir(tmp_path_factory, monkeypatch):
+    """Isolate the default HealthCheckConfig queue_dir from the live queue.
+
+    Tests that build HealthCheckConfig without an explicit queue_dir otherwise
+    read the developer's real ~/.brainlayer/queue; a populated live queue then
+    makes them spuriously report `queue_backed_up`. We redirect _queue_stats
+    so the live default path is treated as the empty isolated dir, while tests
+    that pass an explicit queue_dir are honored unchanged.
+    """
+    empty_queue = tmp_path_factory.mktemp("hc-queue")
+    live_default = Path("~/.brainlayer/queue").expanduser()
+    real_queue_stats = health_check._queue_stats
+
+    def _isolated_queue_stats(queue_dir, now):
+        if queue_dir.expanduser() == live_default:
+            queue_dir = empty_queue
+        return real_queue_stats(queue_dir, now)
+
+    monkeypatch.setattr(health_check, "_queue_stats", _isolated_queue_stats)
+    yield
 
 
 def _make_db(path: Path, *, total: int, vector_rows: int) -> None:

@@ -128,3 +128,38 @@ class TestSystemPromptDetection:
     def test_does_not_flag_normal_user_question(self):
         content = "You are using SQLite here, right? Why does the lock happen?"
         assert looks_like_system_prompt(content) is False
+
+
+class TestBareStringMessageDoesNotCrash:
+    """Regression: classify_content must not raise AttributeError on bare-string messages.
+
+    Watcher Mode-D live-lock: a JSONL entry whose `message` is a bare string
+    (not a dict) caused `entry.get("message", {}).get("content", "")` to raise
+    `'str' object has no attribute 'get'`, aborting the poll cycle and freezing
+    offsets. See watcher-durable-fix-spec.md Mode D.
+    """
+
+    def test_user_bare_string_message(self):
+        entry = {"type": "user", "message": "a plain user string long enough to keep around"}
+        # Must not raise; should classify as user content.
+        result = classify_content(entry)
+        assert result is not None
+        assert result.content_type == ContentType.USER_MESSAGE
+
+    def test_assistant_bare_string_message(self):
+        entry = {"type": "assistant", "message": "a plain assistant string long enough to retain"}
+        # Must not raise AttributeError (the Mode-D crash). Retention is a
+        # separate content-filtering concern; the guarantee here is no crash.
+        result = classify_content(entry)
+        assert result is None or result.content_type is not None
+
+    def test_user_dict_message_still_works(self):
+        entry = {"type": "user", "message": {"content": "dict user content kept around for testing"}}
+        result = classify_content(entry)
+        assert result is not None
+        assert result.content_type == ContentType.USER_MESSAGE
+
+    def test_non_str_non_dict_message_returns_safely(self):
+        # Weird shapes must not raise.
+        assert classify_content({"type": "user", "message": 123}) is None
+        assert classify_content({"type": "assistant", "message": None}) is None
