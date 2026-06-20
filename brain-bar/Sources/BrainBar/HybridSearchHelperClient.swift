@@ -86,6 +86,13 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, HybridSearchRe
                 return candidate
             }
         }
+        // On a Homebrew install with no repo checkout, the bare `python3`/`python`
+        // on PATH is the system interpreter (e.g. python3.14) that lacks the
+        // `brainlayer` module — using it yields ModuleNotFoundError at warmup.
+        // Prefer the formula venv, which has the package installed.
+        if let venvPython = resolveHomebrewVenvPython(environment: environment) {
+            return venvPython
+        }
         if let python3 = findExecutable(named: "python3", path: environment["PATH"]) {
             return python3
         }
@@ -110,6 +117,26 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, HybridSearchRe
             return nil
         }
         return sourcePath
+    }
+
+    /// Resolve the brainlayer Homebrew formula venv python, which has the
+    /// `brainlayer` package installed. Probes `$HOMEBREW_PREFIX` first (set in
+    /// Homebrew shells / launchd plists), then the canonical Apple-Silicon and
+    /// Intel prefixes so a clone works even when HOMEBREW_PREFIX is unset.
+    static func resolveHomebrewVenvPython(environment: [String: String]) -> String? {
+        var prefixes: [String] = []
+        if let prefix = environment["HOMEBREW_PREFIX"],
+           !prefix.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            prefixes.append(prefix)
+        }
+        prefixes.append(contentsOf: ["/opt/homebrew", "/usr/local"])
+        for prefix in prefixes {
+            let candidate = "\(prefix)/opt/brainlayer/libexec/venv/bin/python"
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        return nil
     }
 
     private static func normalizedRepoRoot(environment: [String: String]) -> String? {
