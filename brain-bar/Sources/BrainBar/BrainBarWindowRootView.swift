@@ -324,6 +324,7 @@ private struct BrainBarDashboardView: View {
     @State private var vectorSignalDetailExpanded = false
     @State private var vectorSignalRowFrame: CGRect = .zero
     @State private var vectorSignalRootFrame: CGRect = .zero
+    @State private var vectorDetailHeight: CGFloat = 0
 
     private var flowSummary: DashboardFlowSummary {
         DashboardFlowSummary.derive(daemon: collector.daemon, stats: collector.stats)
@@ -370,11 +371,27 @@ private struct BrainBarDashboardView: View {
                     BrainBarVectorSignalDetail(signal: vectorSignal, compact: layout.compactCards)
                         .frame(width: vectorDetailWidth(layout: layout), alignment: .leading)
                         .fixedSize(horizontal: false, vertical: true)
-                        .offset(x: vectorDetailXOffset(layout: layout), y: vectorDetailYOffset(layout: layout))
+                        .background(
+                            GeometryReader { geo in
+                                Color.clear.preference(
+                                    key: BrainBarVectorDetailHeightKey.self,
+                                    value: geo.size.height
+                                )
+                            }
+                        )
+                        .offset(
+                            x: vectorDetailXOffset(layout: layout),
+                            y: vectorDetailYOffset(layout: layout, containerHeight: proxy.size.height)
+                        )
                         .shadow(color: .brainBarBlack.opacity(0.55), radius: 22, y: 12)
                         .shadow(color: .brainBarBlack.opacity(0.30), radius: 6, y: 2)
                         .transition(vectorDetailTransition)
                         .zIndex(vectorSignalDetailExpanded ? 30 : 0)
+                }
+            }
+            .onPreferenceChange(BrainBarVectorDetailHeightKey.self) { height in
+                if height > 0 {
+                    vectorDetailHeight = height
                 }
             }
         }
@@ -600,8 +617,14 @@ private struct BrainBarDashboardView: View {
         max(layout.outerPadding, vectorSignalRootFrame.minX)
     }
 
-    private func vectorDetailYOffset(layout: BrainBarDashboardLayout) -> CGFloat {
-        vectorSignalRootFrame.maxY + (layout.compactCards ? 8 : 10)
+    private func vectorDetailYOffset(layout: BrainBarDashboardLayout, containerHeight: CGFloat) -> CGFloat {
+        BrainBarVectorDetailLayout.yOffset(
+            anchorMaxY: vectorSignalRootFrame.maxY,
+            gap: layout.compactCards ? 8 : 10,
+            detailHeight: vectorDetailHeight,
+            containerHeight: containerHeight,
+            padding: layout.outerPadding
+        )
     }
 
     private func vectorDetailWidth(layout: BrainBarDashboardLayout) -> CGFloat {
@@ -749,6 +772,39 @@ private struct BrainBarVectorSignalRootFrameKey: PreferenceKey {
         if next != .zero {
             value = next
         }
+    }
+}
+
+private struct BrainBarVectorDetailHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        let next = nextValue()
+        if next > 0 {
+            value = next
+        }
+    }
+}
+
+/// Positioning math for the Vector "see under the hood" popover. Kept as a pure,
+/// testable function so the clamp logic can't silently regress to clipping.
+enum BrainBarVectorDetailLayout {
+    /// Y offset for the popover within the dashboard container. Prefers sitting just
+    /// below the anchor (`anchorMaxY + gap`), but clamps upward so the full popover
+    /// height stays within `containerHeight - padding` — it pops OVER the content
+    /// above rather than overflowing and clipping at the bottom edge. Falls back to
+    /// the preferred offset until the popover height has been measured.
+    static func yOffset(
+        anchorMaxY: CGFloat,
+        gap: CGFloat,
+        detailHeight: CGFloat,
+        containerHeight: CGFloat,
+        padding: CGFloat
+    ) -> CGFloat {
+        let preferred = anchorMaxY + gap
+        guard detailHeight > 0, containerHeight > 0 else { return preferred }
+        let highestTop = max(padding, containerHeight - padding - detailHeight)
+        return min(preferred, highestTop)
     }
 }
 
