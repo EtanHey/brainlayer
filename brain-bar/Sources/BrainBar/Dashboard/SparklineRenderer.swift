@@ -1111,6 +1111,60 @@ enum SparklineTooltipPlacement {
     }
 }
 
+/// The menu-bar status icon: three overlapping pipeline sparklines (Agent stores /
+/// JSONL watcher / Enrichment) over an always-visible baseline. Bright colors on a
+/// transparent ground (isTemplate=false) keep it visible on a dark fullscreen menu
+/// bar — where the old single gray line vanished. Even when every series is idle,
+/// the baseline keeps the icon on screen.
+struct MenuBarSparklineIcon: View {
+    struct Series: Equatable {
+        let values: [Int]
+        let color: Color
+    }
+
+    let series: [Series]
+
+    var body: some View {
+        Canvas { ctx, size in
+            let inset: CGFloat = 1.5
+            let rect = CGRect(
+                x: inset,
+                y: inset,
+                width: max(size.width - inset * 2, 1),
+                height: max(size.height - inset * 2, 1)
+            )
+
+            // Always-visible baseline so the icon never disappears on any background.
+            var baseline = Path()
+            baseline.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+            baseline.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+            ctx.stroke(baseline, with: .color(.white.opacity(0.28)), lineWidth: 0.75)
+
+            // Shared scale across series so relative activity reads at a glance.
+            let globalMax = max(series.flatMap { $0.values }.max() ?? 0, 1)
+            for s in series {
+                guard s.values.count > 1 else { continue }
+                var path = Path()
+                for (index, value) in s.values.enumerated() {
+                    let x = rect.minX + CGFloat(index) * (rect.width / CGFloat(s.values.count - 1))
+                    let normalized = CGFloat(value) / CGFloat(globalMax)
+                    let y = rect.maxY - normalized * rect.height
+                    if index == 0 {
+                        path.move(to: CGPoint(x: x, y: y))
+                    } else {
+                        path.addLine(to: CGPoint(x: x, y: y))
+                    }
+                }
+                ctx.stroke(
+                    path,
+                    with: .color(s.color),
+                    style: StrokeStyle(lineWidth: 1.2, lineCap: .round, lineJoin: .round)
+                )
+            }
+        }
+    }
+}
+
 enum SparklineRenderer {
     static func isCompact(size: NSSize) -> Bool {
         let width = max(size.width.rounded(.up), 1)
@@ -1167,6 +1221,34 @@ enum SparklineRenderer {
         .frame(width: width, height: height)
 
         let renderer = ImageRenderer(content: chart)
+        renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
+        if let image = renderer.nsImage {
+            image.isTemplate = false
+            return image
+        }
+        return NSImage(size: NSSize(width: width, height: height))
+    }
+
+    /// Render the three-line pipeline status-bar icon (Agent / Watcher / Enrichment).
+    /// isTemplate=false: we want the bright colors, and the baseline guarantees the
+    /// icon stays visible on a dark fullscreen menu bar even when all series are idle.
+    @MainActor
+    static func renderStatusBarIcon(
+        agent: [Int],
+        watcher: [Int],
+        enrichment: [Int],
+        size: NSSize = NSSize(width: 26, height: 14)
+    ) -> NSImage {
+        let width = max(size.width.rounded(.up), 1)
+        let height = max(size.height.rounded(.up), 1)
+        let icon = MenuBarSparklineIcon(series: [
+            .init(values: agent, color: Color(nsColor: BrainBarDesignTokens.Colors.seriesAgent)),
+            .init(values: watcher, color: Color(nsColor: BrainBarDesignTokens.Colors.seriesWatcher)),
+            .init(values: enrichment, color: Color(nsColor: BrainBarDesignTokens.Colors.signalFTS5)),
+        ])
+        .frame(width: width, height: height)
+
+        let renderer = ImageRenderer(content: icon)
         renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
         if let image = renderer.nsImage {
             image.isTemplate = false
