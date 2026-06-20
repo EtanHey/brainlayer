@@ -79,9 +79,11 @@ def test_active_daemon_launchd_hygiene_matrix():
             "KeepAlive": True,
         },
         "scripts/launchd/com.brainlayer.drain.plist": {
-            "ProcessType": "Adaptive",
+            "ProcessType": "Background",
             "ExitTimeOut": 60,
             "LowPriorityIO": True,
+            "KeepAlive": True,
+            "ThrottleInterval": 10,
         },
         "scripts/launchd/com.brainlayer.backup-daily.plist": {
             "ProcessType": "Background",
@@ -97,10 +99,9 @@ def test_active_daemon_launchd_hygiene_matrix():
             assert plist.get(key) == value, path
 
     drain = _load("scripts/launchd/com.brainlayer.drain.plist")
-    assert "KeepAlive" not in drain
-    assert drain["WatchPaths"] == ["__HOME__/.brainlayer/queue"]
-    assert drain["QueueDirectories"] == ["__HOME__/.brainlayer/queue"]
-    assert "--once" in drain["ProgramArguments"]
+    assert "WatchPaths" not in drain
+    assert "QueueDirectories" not in drain
+    assert "--once" not in drain["ProgramArguments"]
 
     backup = _load("scripts/launchd/com.brainlayer.backup-daily.plist")
     assert "KeepAlive" not in backup
@@ -326,3 +327,15 @@ def test_launchd_installer_wires_health_check_target():
     assert "health-check)" in install_source
     assert "install_plist health-check" in install_source
     assert "remove_plist health-check" in install_source
+
+
+def test_launchd_installer_uses_bootstrap_not_legacy_load_unload():
+    install_source = (REPO_ROOT / "scripts/launchd/install.sh").read_text(encoding="utf-8")
+    load_plist_body = install_source.split("load_plist() {", 1)[1].split("\nunload_plist() {", 1)[0]
+
+    assert "launchctl enable" in load_plist_body
+    assert "launchctl bootout" in load_plist_body
+    assert "launchctl bootstrap" in load_plist_body
+    assert "launchctl print" in load_plist_body
+    assert "launchctl load" not in load_plist_body
+    assert "launchctl unload" not in load_plist_body

@@ -141,6 +141,10 @@ def _default_log_path() -> Path:
     return Path.home() / ".brainlayer" / "logs" / "drain.log"
 
 
+def _default_drain_health_path() -> Path:
+    return Path.home() / ".local" / "share" / "brainlayer" / "drain-health.json"
+
+
 def _log(path: Path, message: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).isoformat()
@@ -847,6 +851,45 @@ def _embed_store_chunks(
             logger.warning("Failed to embed drained chunk %s: %s", chunk_id, exc)
 
 
+def _precompute_event_embeddings(
+    events: list[dict[str, Any]],
+    embed_fn: Callable[[str], list[float]] | None,
+) -> dict[str, bytes]:
+    if not _embedding_enabled():
+        return {}
+    contents = []
+    for event in events:
+        payload = _event_payload(event)
+        if payload.get("kind") not in {"store_memory", "hook_chunk"}:
+            continue
+        content = str(payload.get("content") or "").strip()
+        if content:
+            contents.append(content)
+    if not contents:
+        return {}
+    resolved_embed_fn = embed_fn or _default_embed_fn()
+    precomputed: dict[str, bytes] = {}
+    for content in dict.fromkeys(contents):
+        try:
+            precomputed[content] = serialize_f32(resolved_embed_fn(content))
+        except Exception as exc:
+            logger.warning("Failed to precompute drained embedding: %s", exc)
+    return precomputed
+
+
+def _insert_precomputed_embedding(conn: apsw.Connection, chunk_id: str, embedding_bytes: bytes) -> None:
+    if "chunk_vectors" not in _table_names(conn):
+        return
+    conn.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
+    conn.execute("INSERT INTO chunk_vectors (chunk_id, embedding) VALUES (?, ?)", (chunk_id, embedding_bytes))
+    if "chunk_vectors_binary" in _table_names(conn):
+        conn.execute("DELETE FROM chunk_vectors_binary WHERE chunk_id = ?", (chunk_id,))
+        conn.execute(
+            "INSERT INTO chunk_vectors_binary (chunk_id, embedding) VALUES (?, vec_quantize_binary(?))",
+            (chunk_id, embedding_bytes),
+        )
+
+
 def _quarantine_file(path: Path, log_path: Path, reason: BaseException) -> None:
     target = path.with_name(f"{path.name}.bad")
     if target.exists():
@@ -1144,7 +1187,6 @@ def drain_once(
 
         drained = 0
         collisions_dropped = 0
-        should_embed = _embedding_enabled()
         for path in files:
             try:
                 events = _read_events(path)
@@ -1165,6 +1207,7 @@ def drain_once(
                 break
 
             stop_draining = False
+            precomputed_embeddings = _precompute_event_embeddings(events_to_apply, embed_fn)
             for attempt in range(5):
                 conn: apsw.Connection | None = None
                 attempt_drained = 0
@@ -1179,11 +1222,13 @@ def drain_once(
                         result = _apply_event(conn, event)
                         if result.chunk_id:
                             store_chunk_ids.append(result.chunk_id)
+                            content = str(_event_payload(event).get("content") or "").strip()
+                            embedding_bytes = precomputed_embeddings.get(content)
+                            if embedding_bytes:
+                                _insert_precomputed_embedding(conn, result.chunk_id, embedding_bytes)
                         if result.collision_chunk_id:
                             collision_ids.append(result.collision_chunk_id)
                         attempt_drained += 1
-                    if should_embed:
-                        _embed_store_chunks(conn, store_chunk_ids, embed_fn)
                     conn.execute("COMMIT")
                     # Best-effort WAL reclaim. The truncating checkpoint (not PASSIVE)
                     # shrinks the WAL file after each drained batch — PASSIVE leaves
@@ -1253,10 +1298,40 @@ def drain_once(
     return drained
 
 
-def run_daemon(interval: float, batch_size: int) -> None:
+def _write_drain_health(path: Path, *, drain_cycles: int, drained_total: int) -> None:
+    payload = {
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "drain_cycles": drain_cycles,
+        "drained_total": drained_total,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def run_daemon(
+    interval: float,
+    batch_size: int,
+    *,
+    health_path: Path | None = None,
+    drain_once_fn: Callable[..., int] = drain_once,
+    sleep_fn: Callable[[float], None] = time.sleep,
+    max_cycles: int | None = None,
+) -> None:
+    health_path = health_path or Path(os.environ.get("BRAINLAYER_DRAIN_HEALTH_PATH", str(_default_drain_health_path())))
+    drain_cycles = 0
+    drained_total = 0
     while True:
-        drain_once(batch_size=batch_size)
-        time.sleep(interval)
+        if max_cycles is not None and drain_cycles >= max_cycles:
+            return
+        drained_total += int(drain_once_fn(batch_size=batch_size) or 0)
+        drain_cycles += 1
+        try:
+            _write_drain_health(health_path, drain_cycles=drain_cycles, drained_total=drained_total)
+        except OSError:
+            logger.debug("Failed to write drain health snapshot", exc_info=True)
+        sleep_fn(interval)
 
 
 def main() -> int:

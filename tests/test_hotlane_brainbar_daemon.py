@@ -74,7 +74,7 @@ def test_hotlane_cycle_can_disable_enrichment():
 def test_hotlane_default_backlog_batch_drains_pending_embeddings():
     hotlane = _load_hotlane_module()
 
-    assert hotlane.DEFAULT_BACKLOG_BATCH >= 64
+    assert hotlane.DEFAULT_BACKLOG_BATCH == 4
 
 
 def test_hotlane_run_threads_model_batch_embedder_to_backlog_cycle():
@@ -181,6 +181,7 @@ def test_hotlane_run_schedules_backlog_on_first_cycle():
         vector_store_cls=lambda _path: FakeStore(),
         model_factory=lambda: SimpleNamespace(embed_query=lambda _text: [0.0]),
         cycle_fn=fake_cycle,
+        queue_depth_fn=lambda _queue_dir: 0,
         time_fn=iter([100.0, 100.0]).__next__,
         sleep_fn=lambda _seconds: None,
         max_cycles=1,
@@ -215,6 +216,7 @@ def test_hotlane_run_advances_enrich_timer_before_failed_cycle():
         vector_store_cls=lambda _path: FakeStore(),
         model_factory=lambda: SimpleNamespace(embed_query=lambda _text: [0.0]),
         cycle_fn=fake_cycle,
+        queue_depth_fn=lambda _queue_dir: 0,
         time_fn=iter([0.0, 100.0, 101.0]).__next__,
         sleep_fn=lambda _seconds: None,
         max_cycles=2,
@@ -249,9 +251,81 @@ def test_hotlane_run_disables_enrichment_after_daily_cap():
         vector_store_cls=lambda _path: FakeStore(),
         model_factory=lambda: SimpleNamespace(embed_query=lambda _text: [0.0]),
         cycle_fn=fake_cycle,
+        queue_depth_fn=lambda _queue_dir: 0,
         time_fn=iter([0.0, 100.0, 111.0]).__next__,
         sleep_fn=lambda _seconds: None,
         max_cycles=2,
     )
 
     assert scheduled_enrich_limits == [25, 0]
+
+
+def test_hotlane_run_opens_and_closes_writer_store_each_cycle(tmp_path):
+    hotlane = _load_hotlane_module()
+    events = []
+
+    class FakeStore:
+        def __init__(self, path):
+            events.append(("open", path))
+
+        def close(self):
+            events.append(("close", None))
+
+    def fake_cycle(**_kwargs):
+        return hotlane.CycleResult()
+
+    hotlane.run(
+        db_path=tmp_path / "brainlayer.db",
+        interval=0.25,
+        recent_limit=5,
+        backlog_interval=10.0,
+        backlog_batch=0,
+        enrich_interval=10.0,
+        enrich_limit=0,
+        enrich_since_hours=8760,
+        vector_store_cls=FakeStore,
+        model_factory=lambda: SimpleNamespace(embed_query=lambda _text: [0.0]),
+        cycle_fn=fake_cycle,
+        time_fn=iter([0.0, 100.0, 101.0]).__next__,
+        sleep_fn=lambda _seconds: None,
+        max_cycles=2,
+    )
+
+    assert [event[0] for event in events] == ["open", "close", "open", "close"]
+
+
+def test_hotlane_run_keeps_recent_cycle_while_queue_is_backlogged(tmp_path):
+    hotlane = _load_hotlane_module()
+    opened = []
+    cycle_calls = []
+
+    class FakeStore:
+        def __init__(self, path):
+            opened.append(path)
+
+        def close(self):
+            pass
+
+    hotlane.run(
+        db_path=tmp_path / "brainlayer.db",
+        interval=0.25,
+        recent_limit=5,
+        backlog_interval=10.0,
+        backlog_batch=hotlane.DEFAULT_BACKLOG_BATCH,
+        enrich_interval=10.0,
+        enrich_limit=hotlane.DEFAULT_HOTLANE_ENRICH_LIMIT,
+        enrich_since_hours=8760,
+        vector_store_cls=FakeStore,
+        model_factory=lambda: SimpleNamespace(embed_query=lambda _text: [0.0]),
+        cycle_fn=lambda **kwargs: cycle_calls.append(kwargs) or hotlane.CycleResult(),
+        time_fn=iter([0.0, 100.0]).__next__,
+        sleep_fn=lambda _seconds: None,
+        max_cycles=1,
+        queue_depth_fn=lambda _queue_dir: 3,
+    )
+
+    assert opened == [tmp_path / "brainlayer.db"]
+    assert len(cycle_calls) == 1
+    assert cycle_calls[0]["backlog_batch"] == 0
+    assert cycle_calls[0]["enrich_limit"] == 0
+    assert cycle_calls[0]["recent_limit"] == 5
