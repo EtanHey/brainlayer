@@ -3,9 +3,12 @@
 import hashlib
 import json
 import logging
+import os
 import re as _re
+import subprocess
 import sys
 import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -37,6 +40,149 @@ agent_profile_app = typer.Typer(help="Manage per-agent search ranking profiles")
 app.add_typer(agent_profile_app, name="agent-profile")
 provenance_app = typer.Typer(help="Resolve provenance conflicts and pending confirmations")
 app.add_typer(provenance_app, name="provenance")
+
+
+def _launchd_target(label: str) -> str:
+    return f"gui/{os.getuid()}/{label}"
+
+
+def _run_launchctl(args: list[str]) -> int:
+    result = subprocess.run(args, text=True, capture_output=True, check=False)
+    if result.returncode != 0 and result.stderr:
+        typer.echo(result.stderr.strip(), err=True)
+    return int(result.returncode)
+
+
+def _plist_for_launchd_label(label: str, *, watch: Path, drain: Path, health_check: Path) -> Path:
+    if label == "com.brainlayer.watch":
+        return watch.expanduser()
+    if label == "com.brainlayer.drain":
+        return drain.expanduser()
+    if label == "com.brainlayer.health-check":
+        return health_check.expanduser()
+    return Path(f"~/Library/LaunchAgents/{label}.plist").expanduser()
+
+
+def _bootstrap_label(label: str, plist_path: Path) -> None:
+    target = _launchd_target(label)
+    _run_launchctl(["launchctl", "enable", target])
+    _run_launchctl(["launchctl", "bootout", target])
+    _run_launchctl(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist_path.expanduser())])
+    _run_launchctl(["launchctl", "print", target])
+
+
+def _bootout_label(label: str) -> None:
+    _run_launchctl(["launchctl", "bootout", _launchd_target(label)])
+
+
+def _default_pause_labels() -> list[str]:
+    return ["com.brainlayer.watch", "com.brainlayer.drain", "com.brainlayer.health-check"]
+
+
+@app.command("pause")
+def pause_command(
+    labels: list[str] | None = typer.Option(None, "--label", help="launchd label to pause; repeatable."),
+    pause_sentinel_path: Path = typer.Option(
+        Path("~/.local/share/brainlayer/pause.sentinel"),
+        "--pause-sentinel-path",
+        help="Pause sentinel path.",
+    ),
+    ttl_seconds: int = typer.Option(3600, "--ttl-seconds", min=1, help="Pause expiry in seconds."),
+) -> None:
+    """Record an intentional pause and bootout BrainLayer launchd labels."""
+    selected_labels = labels or _default_pause_labels()
+    now = datetime.now(UTC)
+    resolved = pause_sentinel_path.expanduser()
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    resolved.write_text(
+        json.dumps(
+            {
+                "labels": selected_labels,
+                "created_at": now.isoformat(),
+                "expires_at": (now + timedelta(seconds=ttl_seconds)).isoformat(),
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    for label in selected_labels:
+        _bootout_label(label)
+    typer.echo(f"paused labels={','.join(selected_labels)} sentinel={resolved}")
+
+
+@app.command("resume")
+def resume_command(
+    pause_sentinel_path: Path = typer.Option(
+        Path("~/.local/share/brainlayer/pause.sentinel"),
+        "--pause-sentinel-path",
+        help="Pause sentinel path.",
+    ),
+    watch_plist_path: Path = typer.Option(
+        Path("~/Library/LaunchAgents/com.brainlayer.watch.plist"),
+        "--watch-plist-path",
+    ),
+    drain_plist_path: Path = typer.Option(
+        Path("~/Library/LaunchAgents/com.brainlayer.drain.plist"),
+        "--drain-plist-path",
+    ),
+    health_check_plist_path: Path = typer.Option(
+        Path("~/Library/LaunchAgents/com.brainlayer.health-check.plist"),
+        "--health-check-plist-path",
+    ),
+) -> None:
+    """Remove an intentional pause and bootstrap recorded launchd labels."""
+    resolved = pause_sentinel_path.expanduser()
+    try:
+        payload = json.loads(resolved.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        payload = {}
+    labels = payload.get("labels") if isinstance(payload, dict) else None
+    selected_labels = [str(label) for label in labels] if isinstance(labels, list) else _default_pause_labels()
+    for label in selected_labels:
+        _bootstrap_label(
+            label,
+            _plist_for_launchd_label(
+                label,
+                watch=watch_plist_path,
+                drain=drain_plist_path,
+                health_check=health_check_plist_path,
+            ),
+        )
+    try:
+        resolved.unlink()
+    except FileNotFoundError:
+        pass
+    typer.echo(f"resumed labels={','.join(selected_labels)}")
+
+
+@app.command("reconcile-launchd")
+def reconcile_launchd_command(
+    watch_label: str = typer.Option("com.brainlayer.watch", "--watch-label"),
+    drain_label: str = typer.Option("com.brainlayer.drain", "--drain-label"),
+    health_check_label: str = typer.Option("com.brainlayer.health-check", "--health-check-label"),
+    watch_plist_path: Path = typer.Option(
+        Path("~/Library/LaunchAgents/com.brainlayer.watch.plist"),
+        "--watch-plist-path",
+    ),
+    drain_plist_path: Path = typer.Option(
+        Path("~/Library/LaunchAgents/com.brainlayer.drain.plist"),
+        "--drain-plist-path",
+    ),
+    health_check_plist_path: Path = typer.Option(
+        Path("~/Library/LaunchAgents/com.brainlayer.health-check.plist"),
+        "--health-check-plist-path",
+    ),
+) -> None:
+    """Bootstrap the watcher, drain, and health-check launchd labels if absent."""
+    for label, plist_path in (
+        (watch_label, watch_plist_path),
+        (drain_label, drain_plist_path),
+        (health_check_label, health_check_plist_path),
+    ):
+        if label:
+            _bootstrap_label(label, plist_path)
+    typer.echo("reconciled launchd labels")
 
 
 @app.command()
@@ -382,6 +528,52 @@ def health_check_command(
         help="Seconds to wait for the BrainBar socket canary.",
     ),
     heal: bool = typer.Option(False, "--heal/--no-heal", help="Kickstart launchd services for cheap self-heals."),
+    watch_label: str = typer.Option("com.brainlayer.watch", "--watch-label", help="watch launchd label."),
+    drain_label: str = typer.Option("com.brainlayer.drain", "--drain-label", help="drain launchd label."),
+    health_check_label: str = typer.Option(
+        "com.brainlayer.health-check", "--health-check-label", help="health-check launchd label."
+    ),
+    watch_plist_path: Path = typer.Option(
+        Path("~/Library/LaunchAgents/com.brainlayer.watch.plist"),
+        "--watch-plist-path",
+        help="watch LaunchAgent plist path.",
+    ),
+    drain_plist_path: Path = typer.Option(
+        Path("~/Library/LaunchAgents/com.brainlayer.drain.plist"),
+        "--drain-plist-path",
+        help="drain LaunchAgent plist path.",
+    ),
+    health_check_plist_path: Path = typer.Option(
+        Path("~/Library/LaunchAgents/com.brainlayer.health-check.plist"),
+        "--health-check-plist-path",
+        help="health-check LaunchAgent plist path.",
+    ),
+    source_jsonl_globs: list[str] | None = typer.Option(
+        None,
+        "--source-jsonl-glob",
+        help="Source JSONL glob used to detect active writes; repeatable.",
+    ),
+    pause_sentinel_path: Path = typer.Option(
+        Path("~/.local/share/brainlayer/pause.sentinel"),
+        "--pause-sentinel-path",
+        help="Pause sentinel path.",
+    ),
+    drain_health_path: Path = typer.Option(
+        Path("~/.local/share/brainlayer/drain-health.json"),
+        "--drain-health-path",
+        help="Drain health JSON path.",
+    ),
+    queue_dir: Path = typer.Option(Path("~/.brainlayer/queue"), "--queue-dir", help="Durable queue directory."),
+    offsets_path: Path = typer.Option(
+        Path("~/.local/share/brainlayer/offsets.json"),
+        "--offsets-path",
+        help="Watcher offsets JSON path.",
+    ),
+    watcher_health_path: Path = typer.Option(
+        Path("~/.local/share/brainlayer/watcher-health.json"),
+        "--watcher-health-path",
+        help="Watcher health JSON path.",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
     """Run the lightweight BrainLayer stability health-check."""
@@ -393,6 +585,20 @@ def health_check_command(
             state_path=state_path.expanduser(),
             socket_path=socket_path.expanduser(),
             canary_query=canary_query,
+            watch_label=watch_label,
+            drain_label=drain_label,
+            health_check_label=health_check_label,
+            watch_plist_path=watch_plist_path.expanduser(),
+            drain_plist_path=drain_plist_path.expanduser(),
+            health_check_plist_path=health_check_plist_path.expanduser(),
+            source_jsonl_globs=source_jsonl_globs
+            if source_jsonl_globs is not None
+            else HealthCheckConfig().source_jsonl_globs,
+            pause_sentinel_path=pause_sentinel_path.expanduser(),
+            drain_health_path=drain_health_path.expanduser(),
+            queue_dir=queue_dir.expanduser(),
+            offsets_path=offsets_path.expanduser(),
+            watcher_health_path=watcher_health_path.expanduser(),
             heal=heal,
             socket_timeout_seconds=socket_timeout_seconds,
             max_stalled_ticks=max_stalled_ticks,

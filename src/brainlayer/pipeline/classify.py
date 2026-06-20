@@ -385,7 +385,13 @@ def classify_content(entry: dict) -> ClassifiedContent | None:
     base_meta = _extract_entry_metadata(entry)
 
     if entry_type == "user":
-        raw_content = entry.get("message", {}).get("content", "")
+        msg = entry.get("message")
+        if isinstance(msg, str):
+            raw_content = msg
+        elif isinstance(msg, dict):
+            raw_content = msg.get("content", "")
+        else:
+            raw_content = ""
         content = _extract_text_content(raw_content)
         task_result = _extract_task_notification_result(content)
         if task_result is not None:
@@ -419,8 +425,15 @@ def classify_content(entry: dict) -> ClassifiedContent | None:
         )
 
     if entry_type == "assistant":
-        message = entry.get("message", {})
-        content_blocks = message.get("content", [])
+        message = entry.get("message")
+        if isinstance(message, str):
+            content_blocks = [{"type": "text", "text": message}]
+        elif isinstance(message, dict):
+            content_blocks = message.get("content", [])
+        else:
+            content_blocks = []
+        if isinstance(content_blocks, str):
+            content_blocks = [{"type": "text", "text": content_blocks}]
 
         # Process each content block
         results = []

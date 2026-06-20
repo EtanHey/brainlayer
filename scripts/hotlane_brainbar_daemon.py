@@ -28,8 +28,8 @@ from brainlayer.vector_store import VectorStore
 
 LOGGER = logging.getLogger("brainlayer.hotlane_brainbar")
 STOP = False
-DEFAULT_HOTLANE_ENRICH_LIMIT = 25
-DEFAULT_BACKLOG_BATCH = 128
+DEFAULT_HOTLANE_ENRICH_LIMIT = 5
+DEFAULT_BACKLOG_BATCH = 4
 
 
 class CycleResult(NamedTuple):
@@ -68,6 +68,19 @@ def _candidate_chunk_ids(store: VectorStore, *, limit: int) -> list[str]:
         (limit,),
     )
     return [str(row[0]) for row in rows]
+
+
+def _default_queue_dir() -> Path:
+    import os
+
+    return Path(os.environ.get("BRAINLAYER_QUEUE_DIR", str(Path.home() / ".brainlayer" / "queue"))).expanduser()
+
+
+def _queue_depth(queue_dir: Path) -> int:
+    try:
+        return sum(1 for _path in queue_dir.glob("*.jsonl"))
+    except OSError:
+        return 0
 
 
 def run_cycle(
@@ -128,43 +141,49 @@ def run(
     time_fn: Callable[[], float] = time.monotonic,
     sleep_fn: Callable[[float], None] = time.sleep,
     max_cycles: int | None = None,
+    queue_dir: Path | None = None,
+    queue_depth_fn: Callable[[Path], int] = _queue_depth,
 ) -> None:
-    store = vector_store_cls(db_path)
-    try:
-        model = model_factory()
-        embed_batch_fn = getattr(model, "embed_texts", None)
-        if embed_batch_fn is not None:
+    model = model_factory()
+    embed_batch_fn = getattr(model, "embed_texts", None)
+    if embed_batch_fn is not None:
 
-            def embed_fn(text: str) -> list[float]:
-                embeddings = embed_batch_fn([text])
-                if len(embeddings) != 1:
-                    raise RuntimeError(f"single text embedder returned {len(embeddings)} embeddings")
-                return embeddings[0]
+        def embed_fn(text: str) -> list[float]:
+            embeddings = embed_batch_fn([text])
+            if len(embeddings) != 1:
+                raise RuntimeError(f"single text embedder returned {len(embeddings)} embeddings")
+            return embeddings[0]
 
-        else:
-            embed_fn = model.embed_query
-        last_backlog = time_fn() - backlog_interval
-        last_enrich = 0.0
-        enrich_disabled = False
-        cycles = 0
-        LOGGER.info("hotlane adapter started db=%s", db_path)
-        while not STOP:
-            if max_cycles is not None and cycles >= max_cycles:
-                break
+    else:
+        embed_fn = model.embed_query
+    queue_dir_was_explicit = queue_dir is not None
+    queue_dir = queue_dir or _default_queue_dir()
+    last_backlog = time_fn() - backlog_interval
+    last_enrich = 0.0
+    enrich_disabled = False
+    cycles = 0
+    LOGGER.info("hotlane adapter started db=%s", db_path)
+    while not STOP:
+        if max_cycles is not None and cycles >= max_cycles:
+            break
+        try:
+            now = time_fn()
+            queue_has_backlog = queue_depth_fn(queue_dir) > 0
+            if queue_has_backlog:
+                LOGGER.info("durable queue has backlog; yielding writer slot to drain")
+            cycle_backlog_batch = backlog_batch if backlog_batch > 0 and now - last_backlog >= backlog_interval else 0
+            cycle_enrich_limit = (
+                enrich_limit if not enrich_disabled and enrich_limit > 0 and now - last_enrich >= enrich_interval else 0
+            )
+            if queue_has_backlog:
+                cycle_backlog_batch = 0
+                cycle_enrich_limit = 0
+            if cycle_backlog_batch > 0:
+                last_backlog = now
+            if cycle_enrich_limit > 0:
+                last_enrich = now
+            store = vector_store_cls(db_path)
             try:
-                now = time_fn()
-                cycle_backlog_batch = (
-                    backlog_batch if backlog_batch > 0 and now - last_backlog >= backlog_interval else 0
-                )
-                cycle_enrich_limit = (
-                    enrich_limit
-                    if not enrich_disabled and enrich_limit > 0 and now - last_enrich >= enrich_interval
-                    else 0
-                )
-                if cycle_backlog_batch > 0:
-                    last_backlog = now
-                if cycle_enrich_limit > 0:
-                    last_enrich = now
                 result = cycle_fn(
                     store=store,
                     embed_fn=embed_fn,
@@ -174,25 +193,25 @@ def run(
                     enrich_limit=cycle_enrich_limit,
                     enrich_since_hours=enrich_since_hours,
                 )
-                if result.enrich_daily_cap_reached:
-                    enrich_disabled = True
-                    LOGGER.warning("enrichment daily cap reached; disabling hotlane enrichment until restart")
-                if result.embedded or result.enrich_attempted:
-                    LOGGER.info(
-                        "embedded=%d enrich_attempted=%d enriched=%d skipped=%d failed=%d",
-                        result.embedded,
-                        result.enrich_attempted,
-                        result.enriched,
-                        result.enrich_skipped,
-                        result.enrich_failed,
-                    )
-            except Exception:
-                LOGGER.exception("hotlane adapter cycle failed")
-                sleep_fn(min(interval * 2, 5.0))
-            cycles += 1
-            sleep_fn(interval)
-    finally:
-        store.close()
+            finally:
+                store.close()
+            if result.enrich_daily_cap_reached:
+                enrich_disabled = True
+                LOGGER.warning("enrichment daily cap reached; disabling hotlane enrichment until restart")
+            if result.embedded or result.enrich_attempted:
+                LOGGER.info(
+                    "embedded=%d enrich_attempted=%d enriched=%d skipped=%d failed=%d",
+                    result.embedded,
+                    result.enrich_attempted,
+                    result.enriched,
+                    result.enrich_skipped,
+                    result.enrich_failed,
+                )
+        except Exception:
+            LOGGER.exception("hotlane adapter cycle failed")
+            sleep_fn(min(interval * 2, 5.0))
+        cycles += 1
+        sleep_fn(interval)
 
 
 def main() -> None:

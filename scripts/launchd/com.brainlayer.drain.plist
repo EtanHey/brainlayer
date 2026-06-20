@@ -10,9 +10,8 @@
 		<string>__PYTHON_BIN__</string>
 		<string>-m</string>
 		<string>brainlayer.drain</string>
-		<string>--once</string>
 		<string>--batch-size</string>
-		<string>250</string>
+		<string>50</string>
 	</array>
 	<key>EnvironmentVariables</key>
 	<dict>
@@ -31,20 +30,16 @@
 	<string>__HOME__/Library/Logs/brainlayer/drain.out.log</string>
 	<key>StandardErrorPath</key>
 	<string>__HOME__/Library/Logs/brainlayer/drain.err.log</string>
-	<key>WatchPaths</key>
-	<array>
-		<string>__HOME__/.brainlayer/queue</string>
-	</array>
-	<key>QueueDirectories</key>
-	<array>
-		<string>__HOME__/.brainlayer/queue</string>
-	</array>
+	<key>KeepAlive</key>
+	<true/>
 	<key>RunAtLoad</key>
 	<true/>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
 	<key>Nice</key>
 	<integer>10</integer>
 	<key>ProcessType</key>
-	<string>Adaptive</string>
+	<string>Background</string>
 	<key>ExitTimeOut</key>
 	<integer>60</integer>
 	<key>LowPriorityIO</key>

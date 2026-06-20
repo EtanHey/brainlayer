@@ -14,11 +14,14 @@ import json
 import sqlite3
 import time
 
+import apsw
+
 from brainlayer.vector_store import VectorStore
 from brainlayer.watcher import JSONLTailer, JSONLWatcher
 from brainlayer.watcher_bridge import (
     _extract_claude_conversation_id,
     _extract_project_from_source,
+    _extract_raw_text,
     _normalize_project_name,
     _strip_system_reminders,
     create_flush_callback,
@@ -88,6 +91,17 @@ class TestPreClassifyFilters:
 
     def test_skip_unknown_type(self):
         assert should_skip_entry({"type": "unknown-new-type"}) is not None
+
+    def test_extract_raw_text_accepts_bare_string_messages_for_user_and_assistant(self):
+        long_text = "Bare string messages should not crash the watcher bridge extraction path."
+
+        assert _extract_raw_text({"type": "user", "message": long_text}) == long_text
+        assert _extract_raw_text({"type": "assistant", "message": long_text}) == long_text
+        assert _extract_raw_text({"type": "user", "message": {"content": long_text}}) == long_text
+        assert (
+            _extract_raw_text({"type": "assistant", "message": {"content": [{"type": "text", "text": long_text}]}})
+            == long_text
+        )
 
 
 # ── Post-Chunk Filters ───────────────────────────────────────────────────────
@@ -174,6 +188,63 @@ class TestFlushCallback:
         assert inserted == 1
         assert len(queued_files) == 1
         assert rows == (0,)
+
+    def test_direct_write_busy_spills_to_queue_instead_of_silently_dropping(self, tmp_path, monkeypatch):
+        import brainlayer.watcher_bridge as bridge
+
+        db_path = tmp_path / "test.db"
+        queue_dir = tmp_path / "queue"
+        VectorStore(db_path).close()
+        monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+        monkeypatch.setenv("BRAINLAYER_WATCHER_WRITE_DEADLINE_S", "0")
+        monkeypatch.setattr(bridge, "find_duplicate", lambda *_args, **_kwargs: (_ for _ in ()).throw(apsw.BusyError()))
+
+        flush = create_flush_callback(db_path, arbitrated=False)
+        entry = _make_jsonl_entry(text=_LONG_TEXT, entry_type="assistant")
+        entry["_source_file"] = str(tmp_path / "projects" / "test-project" / "session.jsonl")
+        entry["_line_end_offset"] = 123
+
+        result = flush([entry])
+
+        assert result[str(entry["_source_file"])] == 123
+        assert len(list(queue_dir.glob("watcher-*.jsonl"))) == 1
+        conn = sqlite3.connect(str(db_path))
+        rows = conn.execute("SELECT COUNT(*) FROM chunks WHERE source = 'realtime_watcher'").fetchone()
+        conn.close()
+        assert rows == (0,)
+
+    def test_classification_poison_entry_confirms_its_offset_and_does_not_block_later_entries(
+        self, tmp_path, monkeypatch
+    ):
+        import brainlayer.watcher_bridge as bridge
+
+        db_path = tmp_path / "test.db"
+        VectorStore(db_path).close()
+        original_classify = bridge.classify_content
+
+        def classify_or_poison(entry):
+            if entry.get("poison"):
+                raise ValueError("deterministic bad entry")
+            return original_classify(entry)
+
+        monkeypatch.setattr(bridge, "classify_content", classify_or_poison)
+        flush = create_flush_callback(db_path, arbitrated=False)
+        source_file = str(tmp_path / "projects" / "test-project" / "session.jsonl")
+        poison = _make_jsonl_entry(text=_LONG_TEXT, entry_type="assistant", poison=True)
+        poison["_source_file"] = source_file
+        poison["_line_end_offset"] = 10
+        healthy = _make_jsonl_entry(text=_LONG_TEXT + " healthy", entry_type="assistant")
+        healthy["_source_file"] = source_file
+        healthy["_line_end_offset"] = 30
+
+        result = flush([poison, healthy])
+
+        assert result[source_file] == 30
+        assert result.skipped == 1
+        conn = sqlite3.connect(str(db_path))
+        rows = conn.execute("SELECT COUNT(*) FROM chunks WHERE source = 'realtime_watcher'").fetchone()
+        conn.close()
+        assert rows[0] >= 1
 
     def test_inserts_valid_entry(self, tmp_path):
         db_path = tmp_path / "test.db"

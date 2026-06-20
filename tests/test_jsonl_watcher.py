@@ -201,6 +201,23 @@ class TestBatchIndexer:
         indexer.add([{"c": 3}, {"d": 4}])
         assert indexer.total_flushed == 4
 
+    def test_flush_callback_watermark_is_forwarded_to_offset_callback(self):
+        confirmed = []
+        indexer = BatchIndexer(
+            on_flush=lambda items: {"/tmp/source.jsonl": items[-1]["_line_end_offset"]},
+            batch_size=2,
+            on_confirm_offsets=confirmed.append,
+        )
+
+        indexer.add(
+            [
+                {"_source_file": "/tmp/source.jsonl", "_line_end_offset": 10},
+                {"_source_file": "/tmp/source.jsonl", "_line_end_offset": 20},
+            ]
+        )
+
+        assert confirmed == [{"/tmp/source.jsonl": 20}]
+
     def test_flush_error_retains_buffer(self):
         def bad_flush(items):
             raise RuntimeError("flush failed")
@@ -320,6 +337,68 @@ class TestJSONLWatcher:
         watcher.poll_once()
         assert "_source_file" in flushed[0]
         assert flushed[0]["_source_file"].endswith("s1.jsonl")
+        assert flushed[0]["_line_end_offset"] == len(b'{"id":"1"}\n')
+
+    def test_offsets_advance_only_to_flush_confirmed_watermark(self, tmp_path):
+        project = self._make_project_dir(tmp_path)
+        f = project / "s1.jsonl"
+        first_line = b'{"id":"1"}\n'
+        second_line = b'{"id":"2"}\n'
+        f.write_bytes(first_line + second_line)
+
+        def partial_flush(items):
+            return {items[0]["_source_file"]: items[0]["_line_end_offset"]}
+
+        watcher = JSONLWatcher(
+            watch_dir=tmp_path / "projects",
+            registry_path=tmp_path / "offsets.json",
+            on_flush=partial_flush,
+            batch_size=100,
+            flush_interval_ms=0,
+        )
+
+        assert watcher.poll_once() == 2
+
+        offset, _inode = watcher.registry.get(str(f))
+        assert offset == len(first_line)
+        assert watcher._tailers[str(f)].offset == len(first_line + second_line)
+
+    def test_poll_once_isolates_file_crashes_and_still_flushes_health(self, tmp_path):
+        project = self._make_project_dir(tmp_path)
+        poison = project / "poison.jsonl"
+        healthy = project / "healthy.jsonl"
+        poison.write_text('{"id":"poison"}\n')
+        healthy.write_text('{"id":"healthy"}\n')
+        flushed = []
+        health_path = tmp_path / "watcher-health.json"
+
+        watcher = JSONLWatcher(
+            watch_dir=tmp_path / "projects",
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda items: (
+                flushed.extend(items) or {str(healthy): len(b'{"id":"healthy"}\n')}
+                if items and items[0].get("id") == "healthy"
+                else {}
+            ),
+            batch_size=1,
+            health_path=health_path,
+        )
+        watcher._discover_jsonl_files = lambda: [str(poison), str(healthy)]
+        original_normalize = watcher._normalize_lines
+
+        def crash_one_file(filepath, new_lines):
+            if filepath == str(poison):
+                raise AttributeError("poison parse failure")
+            return original_normalize(filepath, new_lines)
+
+        watcher._normalize_lines = crash_one_file
+
+        assert watcher.poll_once() == 1
+        assert [item["id"] for item in flushed] == ["healthy"]
+        assert watcher.registry.get(str(poison))[0] == 0
+        assert watcher.registry.get(str(healthy))[0] == len(b'{"id":"healthy"}\n')
+        payload = json.loads(health_path.read_text())
+        assert payload["poll_count"] == 1
 
     def test_offset_survives_restart(self, tmp_path):
         project = self._make_project_dir(tmp_path)
@@ -330,7 +409,7 @@ class TestJSONLWatcher:
         w1 = JSONLWatcher(
             watch_dir=tmp_path / "projects",
             registry_path=tmp_path / "offsets.json",
-            on_flush=lambda items: flushed1.extend(items),
+            on_flush=lambda items: flushed1.extend(items) or {str(f): max(item["_line_end_offset"] for item in items)},
             batch_size=1,
         )
         w1.poll_once()
@@ -345,7 +424,7 @@ class TestJSONLWatcher:
         w2 = JSONLWatcher(
             watch_dir=tmp_path / "projects",
             registry_path=tmp_path / "offsets.json",
-            on_flush=lambda items: flushed2.extend(items),
+            on_flush=lambda items: flushed2.extend(items) or {str(f): max(item["_line_end_offset"] for item in items)},
             batch_size=1,
         )
         w2.poll_once()

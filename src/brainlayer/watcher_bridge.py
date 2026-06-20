@@ -13,6 +13,7 @@ Filtering layers:
 import json
 import logging
 import os
+import random
 import re
 import time
 from datetime import datetime, timezone
@@ -67,6 +68,28 @@ _SYSTEM_REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.D
 _PURE_DELETION_DIFF_RE = re.compile(r"^```(?:diff)?\n(?:-[^\n]*\n)+```$", re.MULTILINE)
 
 
+class FlushWatermarks(dict[str, int]):
+    """Confirmed per-source offsets returned by watcher flushes."""
+
+    def __init__(self, *args: Any, inserted: int = 0, skipped: int = 0, **kwargs: Any):
+        super().__init__(*args, **kwargs)
+        self.inserted = inserted
+        self.skipped = skipped
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, int):
+            return self.inserted == other
+        return super().__eq__(other)
+
+
+def _nonnegative_float_env(name: str, default: float) -> float:
+    try:
+        value = float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if value >= 0 else default
+
+
 def _strip_system_reminders(text: str) -> str:
     """Remove system-reminder XML blocks from text content."""
     return _SYSTEM_REMINDER_RE.sub("", text).strip()
@@ -91,7 +114,8 @@ def _extract_raw_text(entry: dict) -> str:
     """Extract the raw text content from any JSONL entry type."""
     entry_type = entry.get("type", "")
     if entry_type == "user":
-        raw = entry.get("message", {}).get("content", "")
+        msg = entry.get("message")
+        raw = msg if isinstance(msg, str) else (msg.get("content", "") if isinstance(msg, dict) else "")
         if isinstance(raw, str):
             return raw
         if isinstance(raw, list):
@@ -102,7 +126,10 @@ def _extract_raw_text(entry: dict) -> str:
             return " ".join(parts)
         return ""
     if entry_type == "assistant":
-        blocks = entry.get("message", {}).get("content", [])
+        msg = entry.get("message")
+        blocks = msg if isinstance(msg, str) else (msg.get("content", []) if isinstance(msg, dict) else [])
+        if isinstance(blocks, str):
+            return blocks
         parts = []
         for block in blocks:
             if isinstance(block, dict) and block.get("type") == "text":
@@ -226,7 +253,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
         arbitrated = os.environ.get("BRAINLAYER_ARBITRATED") == "1"
     store = None if arbitrated else VectorStore(db_path or get_db_path())
 
-    def flush_to_db(entries: list[dict[str, Any]]) -> int:
+    def flush_to_db(entries: list[dict[str, Any]]) -> FlushWatermarks:
         """Process raw JSONL entries through pipeline and insert into DB."""
         import time as _time
 
@@ -235,6 +262,42 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
         inserted = 0
         skipped = 0
         source_files_seen: set[str] = set()
+        confirmed_offsets: dict[str, int] = {}
+
+        def confirm_entry(entry: dict[str, Any], source_file: str) -> None:
+            raw_offset = entry.get("_line_end_offset")
+            if isinstance(raw_offset, int):
+                confirmed_offsets[source_file] = max(confirmed_offsets.get(source_file, 0), raw_offset)
+
+        def enqueue_chunk(
+            *,
+            chunk_id: str,
+            clean_content: str,
+            metadata: dict[str, Any],
+            source_file: str,
+            project: str | None,
+            content_type: str,
+            value_type: str,
+            created_at: str,
+            conversation_id: str,
+            sender: Any,
+            tags: str | None,
+            chunk_origin: str | None,
+        ) -> None:
+            enqueue_watcher_chunk(
+                chunk_id=chunk_id,
+                content=clean_content,
+                metadata=metadata,
+                source_file=source_file,
+                project=project,
+                content_type=content_type,
+                value_type=value_type,
+                created_at=created_at,
+                conversation_id=conversation_id,
+                sender=sender,
+                tags=json.loads(tags) if tags else None,
+                chunk_origin=chunk_origin,
+            )
 
         for entry in entries:
             source_file = entry.get("_source_file", "unknown")
@@ -246,25 +309,33 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
             skip_reason = should_skip_entry(entry, source_file=source_file)
             if skip_reason:
                 skipped += 1
+                confirm_entry(entry, source_file)
                 continue
 
             # Layer 2: Pipeline classify
             try:
                 classified = classify_content(entry)
             except Exception:
+                logger.exception("Classification failed for watcher entry from %s", source_file)
                 skipped += 1
+                confirm_entry(entry, source_file)
                 continue
 
             if classified is None:
                 skipped += 1
+                confirm_entry(entry, source_file)
                 continue
 
             # Layer 3: Pipeline chunk
             try:
                 chunks = chunk_content(classified)
             except Exception:
+                logger.exception("Chunking failed for watcher entry from %s", source_file)
                 skipped += 1
+                confirm_entry(entry, source_file)
                 continue
+
+            entry_confirmed = True
 
             for chunk in chunks:
                 clean_content = _strip_system_reminders(chunk.content)
@@ -293,11 +364,11 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                         tags = json.dumps(correction_tags)
                 chunk_origin = detect_chunk_origin(clean_content)
 
-                try:
-                    if arbitrated:
-                        enqueue_watcher_chunk(
+                if arbitrated:
+                    try:
+                        enqueue_chunk(
                             chunk_id=chunk_id,
-                            content=clean_content,
+                            clean_content=clean_content,
                             metadata=metadata,
                             source_file=source_file,
                             project=project,
@@ -306,47 +377,36 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                             created_at=created_at,
                             conversation_id=conversation_id,
                             sender=metadata.get("sender"),
-                            tags=json.loads(tags) if tags else None,
+                            tags=tags,
                             chunk_origin=chunk_origin,
                         )
-                        inserted += 1
-                    else:
-                        assert cursor is not None and store is not None
-                        for attempt in range(5):
-                            transaction_started = False
-                            try:
-                                cursor.execute("BEGIN IMMEDIATE")
-                                transaction_started = True
-                                duplicate, dedupe_fields = find_duplicate(
+                    except Exception:
+                        entry_confirmed = False
+                        raise
+                    inserted += 1
+                else:
+                    assert cursor is not None and store is not None
+                    deadline_s = _nonnegative_float_env("BRAINLAYER_WATCHER_WRITE_DEADLINE_S", 15.0)
+                    deadline = time.monotonic() + deadline_s
+                    attempt = 0
+                    while True:
+                        transaction_started = False
+                        try:
+                            cursor.execute("BEGIN IMMEDIATE")
+                            transaction_started = True
+                            duplicate, dedupe_fields = find_duplicate(
+                                store.conn,
+                                chunk_id=chunk_id,
+                                content=clean_content,
+                                created_at=created_at,
+                                project=project,
+                                content_type=chunk.content_type.value,
+                            )
+                            if duplicate is not None:
+                                merge_duplicate_chunk(
                                     store.conn,
-                                    chunk_id=chunk_id,
-                                    content=clean_content,
-                                    created_at=created_at,
-                                    project=project,
-                                    content_type=chunk.content_type.value,
-                                )
-                                if duplicate is not None:
-                                    merge_duplicate_chunk(
-                                        store.conn,
-                                        canonical_id=duplicate.canonical_chunk_id,
-                                        duplicate_id=chunk_id,
-                                        incoming={
-                                            "id": chunk_id,
-                                            "content": clean_content,
-                                            "tags": tags,
-                                            "created_at": created_at,
-                                            "last_seen_at": created_at,
-                                        },
-                                        mechanism=duplicate.mechanism,
-                                        hamming_distance_value=duplicate.hamming_distance,
-                                    )
-                                    cursor.execute("COMMIT")
-                                    transaction_started = False
-                                    inserted += 1
-                                    break
-                                if merge_existing_chunk_seen(
-                                    store.conn,
-                                    chunk_id=chunk_id,
+                                    canonical_id=duplicate.canonical_chunk_id,
+                                    duplicate_id=chunk_id,
                                     incoming={
                                         "id": chunk_id,
                                         "content": clean_content,
@@ -354,67 +414,111 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                         "created_at": created_at,
                                         "last_seen_at": created_at,
                                     },
-                                ):
-                                    cursor.execute("COMMIT")
-                                    transaction_started = False
-                                    inserted += 1
-                                    break
-                                cursor.execute(
-                                    """INSERT OR IGNORE INTO chunks
-                                       (id, content, metadata, source_file, project,
-                                        content_type, value_type, char_count, source,
-                                        created_at, conversation_id, sender, tags, chunk_origin,
-                                        seen_count, last_seen_at, dedupe_hash, simhash,
-                                        simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3,
-                                        ingested_at)
-                                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                                               CAST(strftime('%s', 'now') AS INTEGER))""",
-                                    (
-                                        chunk_id,
-                                        clean_content,
-                                        json.dumps(metadata),
-                                        source_file,
-                                        project,
-                                        chunk.content_type.value,
-                                        chunk.value.value,
-                                        len(clean_content),
-                                        "realtime_watcher",
-                                        created_at,
-                                        conversation_id,
-                                        metadata.get("sender"),
-                                        tags,
-                                        chunk_origin,
-                                        1,
-                                        created_at,
-                                        dedupe_fields.dedupe_hash,
-                                        dedupe_fields.simhash,
-                                        dedupe_fields.bands[0],
-                                        dedupe_fields.bands[1],
-                                        dedupe_fields.bands[2],
-                                        dedupe_fields.bands[3],
-                                    ),
+                                    mechanism=duplicate.mechanism,
+                                    hamming_distance_value=duplicate.hamming_distance,
                                 )
-                                changed = store.conn.changes() > 0
                                 cursor.execute("COMMIT")
                                 transaction_started = False
-                                if changed:
-                                    inserted += 1
-                                else:
-                                    skipped += 1
+                                inserted += 1
                                 break
-                            except apsw.BusyError:
-                                if transaction_started:
-                                    cursor.execute("ROLLBACK")
-                                if attempt == 4:
+                            if merge_existing_chunk_seen(
+                                store.conn,
+                                chunk_id=chunk_id,
+                                incoming={
+                                    "id": chunk_id,
+                                    "content": clean_content,
+                                    "tags": tags,
+                                    "created_at": created_at,
+                                    "last_seen_at": created_at,
+                                },
+                            ):
+                                cursor.execute("COMMIT")
+                                transaction_started = False
+                                inserted += 1
+                                break
+                            cursor.execute(
+                                """INSERT OR IGNORE INTO chunks
+                                   (id, content, metadata, source_file, project,
+                                    content_type, value_type, char_count, source,
+                                    created_at, conversation_id, sender, tags, chunk_origin,
+                                    seen_count, last_seen_at, dedupe_hash, simhash,
+                                    simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3,
+                                    ingested_at)
+                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                                           CAST(strftime('%s', 'now') AS INTEGER))""",
+                                (
+                                    chunk_id,
+                                    clean_content,
+                                    json.dumps(metadata),
+                                    source_file,
+                                    project,
+                                    chunk.content_type.value,
+                                    chunk.value.value,
+                                    len(clean_content),
+                                    "realtime_watcher",
+                                    created_at,
+                                    conversation_id,
+                                    metadata.get("sender"),
+                                    tags,
+                                    chunk_origin,
+                                    1,
+                                    created_at,
+                                    dedupe_fields.dedupe_hash,
+                                    dedupe_fields.simhash,
+                                    dedupe_fields.bands[0],
+                                    dedupe_fields.bands[1],
+                                    dedupe_fields.bands[2],
+                                    dedupe_fields.bands[3],
+                                ),
+                            )
+                            changed = store.conn.changes() > 0
+                            cursor.execute("COMMIT")
+                            transaction_started = False
+                            if changed:
+                                inserted += 1
+                            else:
+                                skipped += 1
+                            break
+                        except apsw.BusyError:
+                            if transaction_started:
+                                cursor.execute("ROLLBACK")
+                            if time.monotonic() >= deadline:
+                                try:
+                                    enqueue_chunk(
+                                        chunk_id=chunk_id,
+                                        clean_content=clean_content,
+                                        metadata=metadata,
+                                        source_file=source_file,
+                                        project=project,
+                                        content_type=chunk.content_type.value,
+                                        value_type=chunk.value.value,
+                                        created_at=created_at,
+                                        conversation_id=conversation_id,
+                                        sender=metadata.get("sender"),
+                                        tags=tags,
+                                        chunk_origin=chunk_origin,
+                                    )
+                                except Exception:
+                                    logger.exception("spill_failed chunk_id=%s source_file=%s", chunk_id, source_file)
+                                    entry_confirmed = False
                                     raise
-                                time.sleep(0.05 * (2**attempt))
+                                inserted += 1
+                                logger.warning("Direct watcher write busy for %s; spilled to queue", chunk_id)
+                                break
+                            delay = min(0.05 * (2**attempt), 1.0) * random.uniform(0.8, 1.2)
+                            attempt += 1
+                            time.sleep(delay)
+                        except Exception:
+                            transaction_started = False
+                            try:
+                                cursor.execute("ROLLBACK")
                             except Exception:
-                                if transaction_started:
-                                    cursor.execute("ROLLBACK")
-                                raise
-                except Exception as e:
-                    logger.warning("Queue/write failed for %s: %s", chunk_id, e)
-                    skipped += 1
+                                pass
+                            entry_confirmed = False
+                            raise
+
+            if entry_confirmed:
+                confirm_entry(entry, source_file)
 
         latency_ms = (_time.monotonic() - flush_start) * 1000
 
@@ -438,6 +542,6 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
         except Exception:
             pass
 
-        return inserted
+        return FlushWatermarks(confirmed_offsets, inserted=inserted, skipped=skipped)
 
     return flush_to_db

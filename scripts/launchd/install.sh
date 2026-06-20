@@ -106,8 +106,11 @@ verify_config_file() {
 load_plist() {
     local name="$1"
     local dst="$LAUNCH_DIR/com.brainlayer.${name}.plist"
-    launchctl unload "$dst" 2>/dev/null || true
-    launchctl load "$dst"
+    local label="com.brainlayer.${name}"
+    launchctl enable "gui/$UID/$label"
+    launchctl bootout "gui/$UID/$label" 2>/dev/null || true
+    launchctl bootstrap "gui/$UID" "$dst"
+    launchctl print "gui/$UID/$label" >/dev/null
     echo "  Loaded: com.brainlayer.${name}"
 }
 
