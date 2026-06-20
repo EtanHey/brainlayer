@@ -991,6 +991,38 @@ final class DashboardTests: XCTestCase {
         XCTAssertLessThan(roomy.y, 86, "Roomy lower points should place the tooltip above the on-curve anchor.")
     }
 
+    // Degenerate case: a top-edge spike in a container so narrow that NEITHER side
+    // candidate fits at the anchor column. The card must still clear the dot by
+    // pinning to the edge with more room — never land on the anchor column and
+    // overlap the curve. (Reviewer M1, PR #526.)
+    func testSparklineTooltipPlacementSidePinsToEdgeWhenNoSideRoomAtAnchor() {
+        // 300 wide so minX (138) < maxX (162): the edge is distinct from the
+        // horizontally-clamped anchor column, yet the tooltip (260 wide) is wide
+        // enough that NEITHER side candidate fits at the anchor.
+        let container = CGSize(width: 300, height: 96)
+        let tooltip = SparklineTooltipPlacement.tooltipSize(in: container)
+        let halfWidth = tooltip.width / 2
+        let minX = 8 + halfWidth
+        let maxX = max(container.width - 8 - halfWidth, minX)
+        XCTAssertLessThan(minX, maxX, "Test geometry must keep the edges distinct from the anchor column.")
+
+        // Top spike right-of-center: rightX and leftX both fall outside [minX, maxX],
+        // so the SIDE fallback must pin to the roomier (left) edge, not the anchor column.
+        let anchorX: CGFloat = 175
+        let topSpike = SparklineTooltipPlacement.position(
+            near: CGPoint(x: anchorX, y: 8),
+            anchorY: 8,
+            hoveredX: anchorX,
+            containerBounds: container,
+            tooltipSize: tooltip
+        )
+        let clampedAnchorColumn = min(max(anchorX, minX), maxX)
+        XCTAssertEqual(topSpike.x, minX, accuracy: 0.5,
+                       "No side room at the anchor column should pin to the roomier (left) edge.")
+        XCTAssertNotEqual(topSpike.x, clampedAnchorColumn, accuracy: 0.5,
+                          "The card must not sit on the anchor column overlapping the curve.")
+    }
+
     func testSparklineTooltipPlacementFlipsBelowNearTopEdge() {
         let container = CGSize(width: 260, height: 120)
         let tooltip = SparklineTooltipPlacement.tooltipSize(in: container)

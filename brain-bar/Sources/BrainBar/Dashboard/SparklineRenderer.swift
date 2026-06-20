@@ -339,9 +339,7 @@ struct SparklineChart: View {
         secondaryAccentColor: NSColor? = nil,
         tertiaryAccentColor: NSColor? = nil,
         compact: Bool = false,
-        referenceValue: Int? = nil,
-        previewHoveredBucket: Int? = nil,
-        previewHoverX: CGFloat? = nil
+        referenceValue: Int? = nil
     ) {
         self.presentation = presentation
         self.accentColor = accentColor
@@ -349,12 +347,33 @@ struct SparklineChart: View {
         self.tertiaryAccentColor = tertiaryAccentColor
         self.compact = compact
         self.referenceValue = referenceValue
-        // Test/preview seam: render a fixed hover state without a live cursor.
+    }
+
+#if DEBUG
+    /// Debug-only seam: render a fixed hover state (dot + crosshair + tooltip) without
+    /// a live cursor, for snapshot/visual QA. Never compiled into a release build.
+    init(
+        presentation: SparklineChartPresentation,
+        accentColor: NSColor,
+        secondaryAccentColor: NSColor? = nil,
+        tertiaryAccentColor: NSColor? = nil,
+        compact: Bool = false,
+        referenceValue: Int? = nil,
+        previewHoveredBucket: Int?,
+        previewHoverX: CGFloat
+    ) {
+        self.presentation = presentation
+        self.accentColor = accentColor
+        self.secondaryAccentColor = secondaryAccentColor
+        self.tertiaryAccentColor = tertiaryAccentColor
+        self.compact = compact
+        self.referenceValue = referenceValue
         _hoveredBucket = State(initialValue: previewHoveredBucket)
         if previewHoveredBucket != nil {
-            _hoverLocation = State(initialValue: CGPoint(x: previewHoverX ?? 0, y: 0))
+            _hoverLocation = State(initialValue: CGPoint(x: previewHoverX, y: 0))
         }
     }
+#endif
 
     var body: some View {
         VStack(spacing: 2) {
@@ -1027,7 +1046,11 @@ enum SparklineTooltipPlacement {
         } else if leftX >= minX, leftX <= maxX {
             sideX = leftX
         } else {
-            sideX = x
+            // No clean side fits at the anchor column — pin to whichever edge has
+            // more room so the card still clears the on-curve dot instead of
+            // landing on the anchor column and overlapping the curve (a top-edge
+            // spike in a narrow / tall-tooltip container).
+            sideX = (hoveredX - minX) >= (maxX - hoveredX) ? minX : maxX
         }
         let y = min(max(anchorY, minY), maxY)
 

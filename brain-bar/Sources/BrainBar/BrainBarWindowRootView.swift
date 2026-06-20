@@ -1241,7 +1241,9 @@ private struct BrainBarFlowLaneCard: View {
     }
 }
 
-/// Test/preview seam: render the (private) number-first flow lane card for visual QA.
+#if DEBUG
+/// Debug-only seam: render the (private) number-first flow lane card for visual QA.
+/// Never compiled into a release build.
 @MainActor
 enum BrainBarFlowLaneCardPreview {
     static func make(
@@ -1262,6 +1264,7 @@ enum BrainBarFlowLaneCardPreview {
         )
     }
 }
+#endif
 
 private struct BrainBarQueueRail: View {
     let summary: DashboardQueueSummary
