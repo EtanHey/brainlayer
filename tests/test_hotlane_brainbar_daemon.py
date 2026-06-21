@@ -294,7 +294,7 @@ def test_hotlane_run_opens_and_closes_writer_store_each_cycle(tmp_path):
     assert [event[0] for event in events] == ["open", "close", "open", "close"]
 
 
-def test_hotlane_run_keeps_recent_cycle_while_queue_is_backlogged(tmp_path):
+def test_hotlane_run_keeps_embedding_backlog_while_queue_is_backlogged(tmp_path):
     hotlane = _load_hotlane_module()
     opened = []
     cycle_calls = []
@@ -326,6 +326,6 @@ def test_hotlane_run_keeps_recent_cycle_while_queue_is_backlogged(tmp_path):
 
     assert opened == [tmp_path / "brainlayer.db"]
     assert len(cycle_calls) == 1
-    assert cycle_calls[0]["backlog_batch"] == 0
+    assert cycle_calls[0]["backlog_batch"] == hotlane.DEFAULT_BACKLOG_BATCH
     assert cycle_calls[0]["enrich_limit"] == 0
     assert cycle_calls[0]["recent_limit"] == 5
