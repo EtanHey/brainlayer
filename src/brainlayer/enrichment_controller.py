@@ -444,6 +444,13 @@ def run_enrich_supervisor(
                     stats.errors.append(str(exc))
                     logger.warning("Enrich supervisor stopping: %s", exc)
                     break
+                except Exception as exc:  # noqa: BLE001
+                    stats.failed_cycles += 1
+                    stats.errors.append(f"supervisor-idle-backlog: {exc}")
+                    logger.exception("Enrich supervisor idle-backlog pass failed; continuing")
+                    if max_cycles is None or stats.cycles < max_cycles:
+                        _sleep_or_wait_for_stop(stop_event, idle_poll_seconds, sleep_fn)
+                    continue
                 stats.attempted += backlog_result.attempted
                 stats.enriched += backlog_result.enriched
                 stats.skipped += backlog_result.skipped

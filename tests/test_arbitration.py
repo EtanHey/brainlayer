@@ -723,8 +723,7 @@ def test_real_concurrent_writers_keep_interactive_store_searchable_under_sla(tmp
         assert search_payload is not None
         assert search_payload.get("total", 0) >= 1, search_payload
         assert any(
-            marker in (item.get("content", "") + item.get("snippet", ""))
-            for item in search_payload.get("results", [])
+            marker in (item.get("content", "") + item.get("snippet", "")) for item in search_payload.get("results", [])
         ), search_payload
         assert roundtrip_latency < 2.0
     finally:

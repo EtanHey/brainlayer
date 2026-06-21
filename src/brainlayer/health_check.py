@@ -657,7 +657,12 @@ def run_health_check(
         )
 
     if config.heal:
-        for label in (config.watch_label, config.drain_label, config.health_check_label):
+        for label in (
+            config.watch_label,
+            config.drain_label,
+            config.health_check_label,
+            config.enrichment_label,
+        ):
             if label:
                 action = _bootstrap_if_absent(label, _plist_for_label(config, label), command_runner)
                 if action.startswith(("bootstrap:", "bootstrap_failed:", "launchctl-unavailable:")):

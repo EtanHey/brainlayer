@@ -44,9 +44,9 @@ _DEFAULT_MAX_EVENTS_PER_TRANSACTION = 5
 _DEFAULT_BURN_MAX_EVENTS_PER_TRANSACTION = 100
 _DEFAULT_POST_COMMIT_YIELD_MS = 10.0
 _DEFAULT_MAX_ENRICHMENT_FILES_PER_CYCLE = 16
-# The post-commit WAL checkpoint is best-effort. Bound how long TRUNCATE may wait
-# on readers so a pinned reader can't stall every other writer for the full drain
-# busy_timeout (30s). Short window → reclaim when possible, skip cheaply otherwise.
+# The post-commit WAL checkpoint is best-effort and must stay non-blocking. A
+# truncating checkpoint can wedge the live writer behind long-lived readers on a
+# multi-GB WAL; the scheduled wal-checkpoint job owns truncation.
 _DEFAULT_CHECKPOINT_BUSY_TIMEOUT_MS = 1000
 
 
@@ -1143,7 +1143,7 @@ def burn_drain_once(
                 result.skipped_verified_stale += attempt_skipped_verified_stale
                 conn.setbusytimeout(_checkpoint_busy_timeout_ms())
                 try:
-                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
                     result.checkpoints += 1
                 except apsw.Error as exc:
                     _log(log_path, f"burn drain checkpoint skipped: {exc}")
@@ -1260,18 +1260,14 @@ def drain_once(
                             collision_ids.append(result.collision_chunk_id)
                         attempt_drained += 1
                     conn.execute("COMMIT")
-                    # Best-effort WAL reclaim. The truncating checkpoint (not PASSIVE)
-                    # shrinks the WAL file after each drained batch — PASSIVE leaves
-                    # frames in place when a reader pins a page, letting the WAL grow
-                    # unbounded (observed multi-GB) and starve brain_store writes. But it
-                    # blocks other writers while waiting for readers, so bound that wait
-                    # to a short window (default 1s): if a reader pins the WAL we skip
-                    # this round rather than stall every writer for the full drain
-                    # busy_timeout. journal_size_limit and the out-of-band wal-checkpoint
-                    # job reclaim later. The except keeps a busy checkpoint non-fatal.
+                    # Best-effort WAL checkpoint. Keep the live writer path PASSIVE:
+                    # TRUNCATE can block behind long-lived readers on the live multi-GB
+                    # WAL, which stalls queue drain before it can publish health.
+                    # journal_size_limit and the scheduled wal-checkpoint job reclaim
+                    # disk later. The except keeps a busy checkpoint non-fatal.
                     conn.setbusytimeout(_checkpoint_busy_timeout_ms())
                     try:
-                        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                        conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
                     except apsw.Error:
                         pass
                     finally:

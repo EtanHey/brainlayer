@@ -416,7 +416,7 @@ def test_health_check_bootstraps_absent_enrichment_and_clears_tripped_after_succ
         now_fn=lambda: datetime(2026, 6, 21, 10, 0, tzinfo=UTC),
     )
 
-    assert "enrichment_unloaded" in [issue.code for issue in result.issues]
+    assert "enrichment_unloaded" not in [issue.code for issue in result.issues]
     assert [
         "launchctl",
         "bootstrap",

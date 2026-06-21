@@ -184,6 +184,37 @@ class TestQueueStore:
 
         assert result.chunk_id == "rt-canonical"
 
+    def test_drain_once_uses_nonblocking_checkpoint_on_hot_path(self, tmp_path, monkeypatch):
+        """The live drain loop must not wedge behind a large pinned WAL checkpoint."""
+        from brainlayer import drain
+
+        queue_dir = tmp_path / "queue"
+        queue_dir.mkdir()
+        (queue_dir / "noop.jsonl").write_text(json.dumps({"kind": "noop"}) + "\n", encoding="utf-8")
+        checkpoint_sql: list[str] = []
+
+        class FakeConnection:
+            def execute(self, sql, *_args):
+                if "wal_checkpoint" in sql:
+                    checkpoint_sql.append(sql)
+                return []
+
+            def setbusytimeout(self, _timeout_ms):
+                return None
+
+            def close(self):
+                return None
+
+        monkeypatch.setattr(drain, "_open_connection", lambda _db_path: FakeConnection())
+        monkeypatch.setattr(drain, "_ensure_enrichment_update_schema", lambda _conn: None)
+        monkeypatch.setattr(drain, "ensure_dedupe_schema", lambda _conn: None)
+        monkeypatch.setattr(drain, "_apply_event", lambda _conn, _event: drain.ApplyResult())
+
+        drained = drain_once(db_path=tmp_path / "db.sqlite", queue_dir=queue_dir, batch_size=1)
+
+        assert drained == 1
+        assert checkpoint_sql == ["PRAGMA wal_checkpoint(PASSIVE)"]
+
 
 class TestSingleWriterQueue:
     def test_single_worker_serializes_writes(self):

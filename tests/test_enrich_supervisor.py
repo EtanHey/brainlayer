@@ -290,6 +290,45 @@ def test_supervisor_runs_unbounded_idle_backlog_before_sleep(tmp_path, monkeypat
     assert result.enriched == 1
 
 
+def test_supervisor_idle_backlog_error_does_not_exit(tmp_path, monkeypatch):
+    from brainlayer import enrichment_controller as controller
+
+    monkeypatch.setenv("BRAINLAYER_ENRICH_IDLE_BACKLOG", "1")
+
+    class FakeVectorStore:
+        def __init__(self, db_path: Path):
+            pass
+
+        def close(self):
+            pass
+
+    calls = []
+
+    def idle_backlog_fails_once(store, **kwargs):
+        calls.append(kwargs["since_hours"])
+        if kwargs["since_hours"] is None and calls.count(None) == 1:
+            raise RuntimeError("database is locked")
+        return _result(attempted=0)
+
+    sleeps = []
+    result = controller.run_enrich_supervisor(
+        tmp_path / "brainlayer.db",
+        limit=5,
+        since_hours=24,
+        max_cycles=2,
+        vector_store_cls=FakeVectorStore,
+        enrich_fn=idle_backlog_fails_once,
+        idle_backlog_ready_fn=lambda: True,
+        sleep_fn=sleeps.append,
+    )
+
+    assert calls == [24, None, 24, None]
+    assert result.cycles == 2
+    assert result.failed_cycles == 1
+    assert result.errors == ["supervisor-idle-backlog: database is locked"]
+    assert sleeps == [30.0]
+
+
 def test_idle_backlog_requires_watcher_offsets_and_health_to_be_idle(tmp_path, monkeypatch):
     from brainlayer import enrichment_controller as controller
 
