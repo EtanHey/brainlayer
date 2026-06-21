@@ -301,10 +301,26 @@ def test_launchd_installer_rejects_key_only_enrichment_config(tmp_path):
     env_file.write_text("GOOGLE_API_KEY='test-secret'\n", encoding="utf-8")
     env_file.chmod(0o600)
 
+    child_env = {
+        key: value
+        for key, value in os.environ.items()
+        if key
+        not in {
+            "BRAINLAYER_ENRICH_ENABLED",
+            "BRAINLAYER_ENRICH_MODE",
+            "BRAINLAYER_ENRICH_PROVIDER",
+            "BRAINLAYER_ENRICH_BACKEND",
+            "BRAINLAYER_ENRICH_RATE",
+            "BRAINLAYER_ENRICH_CONCURRENCY",
+            "BRAINLAYER_MAX_COMMIT_BATCH",
+            "BRAINLAYER_GEMINI_SERVICE_TIER",
+        }
+    }
+
     result = subprocess.run(
         [str(harness)],
         env={
-            **os.environ,
+            **child_env,
             "HOME": str(tmp_path),
             "BRAINLAYER_BIN": "/usr/bin/true",
             "PYTHON_BIN": "/usr/bin/true",

@@ -590,16 +590,16 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     return ApplyResult(chunk_id=stored_chunk_id)
 
 
-def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> None:
+def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     chunk_id = event.get("chunk_id")
     raw_content = event.get("content")
     if not chunk_id or raw_content is None:
         logger.warning("Skipping malformed watcher event without chunk_id/content")
-        return
+        return ApplyResult()
     content = str(raw_content).strip()
     if not content:
         logger.warning("Skipping malformed watcher event with empty content")
-        return
+        return ApplyResult()
     source_file = event.get("source_file") or "realtime-watcher"
     recursive_reason = recursive_mcp_output_reason(
         content,
@@ -609,7 +609,7 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> None:
     )
     if recursive_reason:
         logger.warning("Skipping recursive MCP watcher event: %s", recursive_reason)
-        return
+        return ApplyResult()
     tags = event.get("tags")
     stored_chunk_id = _insert_or_merge_chunk(
         conn,
@@ -631,6 +631,7 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> None:
             "chunk_origin": detect_chunk_origin(content, event.get("chunk_origin")),
         },
     )
+    return ApplyResult(chunk_id=stored_chunk_id)
 
 
 def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
@@ -780,7 +781,7 @@ def _apply_event(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     if kind == "store_memory":
         return _apply_store(conn, event)
     elif kind == "watcher_chunk":
-        _apply_watcher(conn, event)
+        return _apply_watcher(conn, event)
     elif kind == "hook_chunk":
         return _apply_hook(conn, event)
     elif kind == "enrichment_update":
@@ -860,7 +861,7 @@ def _precompute_event_embeddings(
     contents = []
     for event in events:
         payload = _event_payload(event)
-        if payload.get("kind") not in {"store_memory", "hook_chunk"}:
+        if payload.get("kind") not in {"store_memory", "hook_chunk", "watcher_chunk"}:
             continue
         content = str(payload.get("content") or "").strip()
         if content:

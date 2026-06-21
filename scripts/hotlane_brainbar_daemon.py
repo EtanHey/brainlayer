@@ -170,13 +170,12 @@ def run(
             now = time_fn()
             queue_has_backlog = queue_depth_fn(queue_dir) > 0
             if queue_has_backlog:
-                LOGGER.info("durable queue has backlog; yielding writer slot to drain")
+                LOGGER.info("durable queue has backlog; suppressing enrichment only")
             cycle_backlog_batch = backlog_batch if backlog_batch > 0 and now - last_backlog >= backlog_interval else 0
             cycle_enrich_limit = (
                 enrich_limit if not enrich_disabled and enrich_limit > 0 and now - last_enrich >= enrich_interval else 0
             )
             if queue_has_backlog:
-                cycle_backlog_batch = 0
                 cycle_enrich_limit = 0
             if cycle_backlog_batch > 0:
                 last_backlog = now

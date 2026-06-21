@@ -81,6 +81,17 @@ def _has_vector(store: VectorStore, chunk_id: str) -> bool:
     )
 
 
+def _has_vector_rowid(store: VectorStore, chunk_id: str) -> bool:
+    cursor = store.conn.cursor()
+    return (
+        cursor.execute(
+            "SELECT COUNT(*) FROM chunk_vectors_rowids WHERE id = ?",
+            (chunk_id,),
+        ).fetchone()[0]
+        == 1
+    )
+
+
 def _pending_active_count(store: VectorStore) -> int:
     cursor = store.conn.cursor()
     return cursor.execute(
@@ -647,6 +658,55 @@ class TestBackgroundEmbedder:
         assert _has_vector(store, "batch-fallback-good-0")
         assert not _has_vector(store, "batch-fallback-bad-1")
         assert _has_vector(store, "batch-fallback-good-2")
+
+
+class TestDrainWatcherEmbedding:
+    def test_drain_precomputes_watcher_chunk_vector_and_hybrid_finds_it(self, store, tmp_path):
+        """D2: watcher_chunk drain must create vectors without depending on hotlane."""
+        from brainlayer.drain import drain_once
+        from brainlayer.queue_io import enqueue_watcher_chunk
+
+        queue_dir = tmp_path / "queue"
+        content = "d2 watcher vector probe alpha unique searchable"
+        chunk_id = "d2-watcher-vector-probe"
+
+        enqueue_watcher_chunk(
+            chunk_id=chunk_id,
+            content=content,
+            metadata={"probe": "d2"},
+            source_file="realtime-watcher",
+            project="test",
+            content_type="assistant_text",
+            value_type="high",
+            created_at="2026-06-21T00:00:00+00:00",
+            conversation_id="d2-watch",
+            sender="assistant",
+            queue_dir=queue_dir,
+        )
+
+        def probe_embed(text: str) -> list[float]:
+            if text == content:
+                return [1.0] + [0.0] * 1023
+            return [0.0, 1.0] + [0.0] * 1022
+
+        assert drain_once(db_path=store.db_path, queue_dir=queue_dir, embed_fn=probe_embed) == 1
+
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            if _has_vector(store, chunk_id) and _has_vector_rowid(store, chunk_id):
+                break
+            time.sleep(0.05)
+
+        assert _has_vector(store, chunk_id)
+        assert _has_vector_rowid(store, chunk_id)
+
+        results = store.hybrid_search(
+            query_embedding=probe_embed(content),
+            query_text="no_keyword_match_for_d2_watcher_vector_probe",
+            n_results=1,
+            project_filter="test",
+        )
+        assert results["ids"][0][0] == chunk_id
 
 
 class TestMCPStoreDeferred:
