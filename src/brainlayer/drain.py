@@ -818,7 +818,15 @@ def _is_busy_error(exc: BaseException) -> bool:
 def _default_embed_fn() -> Callable[[str], list[float]]:
     from .embeddings import get_embedding_model
 
-    return get_embedding_model().embed_query
+    model = get_embedding_model()
+
+    def embed_text(text: str) -> list[float]:
+        embeddings = model.embed_texts([text], batch_size=1)
+        if len(embeddings) != 1:
+            raise RuntimeError(f"single text embedder returned {len(embeddings)} embeddings")
+        return embeddings[0]
+
+    return embed_text
 
 
 def _embedding_enabled() -> bool:

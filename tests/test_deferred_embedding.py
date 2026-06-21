@@ -661,6 +661,30 @@ class TestBackgroundEmbedder:
 
 
 class TestDrainWatcherEmbedding:
+    def test_drain_default_precompute_uses_passage_embeddings(self, monkeypatch):
+        """Stored chunk vectors must use passage embeddings, not query-prefixed embeddings."""
+        from brainlayer import drain
+        from brainlayer import embeddings
+        from brainlayer._helpers import serialize_f32
+
+        class FakeModel:
+            def embed_query(self, _text: str) -> list[float]:
+                return [9.0] * 1024
+
+            def embed_texts(self, texts: list[str], batch_size: int = 64) -> list[list[float]]:
+                assert texts == ["d2 passage embedding proof"]
+                assert batch_size == 1
+                return [[2.0] * 1024]
+
+        monkeypatch.setattr(embeddings, "get_embedding_model", lambda: FakeModel())
+
+        precomputed = drain._precompute_event_embeddings(
+            [{"kind": "watcher_chunk", "content": "d2 passage embedding proof"}],
+            embed_fn=None,
+        )
+
+        assert precomputed == {"d2 passage embedding proof": serialize_f32([2.0] * 1024)}
+
     def test_drain_precomputes_watcher_chunk_vector_and_hybrid_finds_it(self, store, tmp_path):
         """D2: watcher_chunk drain must create vectors without depending on hotlane."""
         from brainlayer.drain import drain_once

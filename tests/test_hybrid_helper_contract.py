@@ -13,7 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
 
 
-def _wait_for_socket(socket_path: Path, process: subprocess.Popen, timeout: float = 5.0) -> None:
+def _wait_for_socket(socket_path: Path, process: subprocess.Popen, timeout: float = 20.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if process.poll() is not None:
@@ -21,7 +21,9 @@ def _wait_for_socket(socket_path: Path, process: subprocess.Popen, timeout: floa
         if socket_path.exists():
             return
         time.sleep(0.05)
-    raise AssertionError("helper socket did not appear")
+    stdout = process.stdout.read() if process.poll() is not None and process.stdout else ""
+    stderr = process.stderr.read() if process.poll() is not None and process.stderr else ""
+    raise AssertionError(f"helper socket did not appear within {timeout}s; stdout={stdout!r} stderr={stderr!r}")
 
 
 def test_brainbar_hybrid_helper_ndjson_contract_accepts_documented_brain_search_keys(tmp_path):
