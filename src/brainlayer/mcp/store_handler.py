@@ -28,7 +28,7 @@ from ._shared import (
 _RETRY_MAX_ATTEMPTS = 4
 _retry_delay = 0.15  # base delay in seconds (exposed for test patching)
 _QUEUE_MAX_SIZE = 100
-_DEFAULT_STORE_BUSY_BUDGET_MS = 3_000
+_DEFAULT_STORE_BUSY_BUDGET_MS = 400
 _MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 _STORE_BUSY_TIMEOUT_LOCK = threading.Lock()
 _NO_EXEC_TRACE = object()

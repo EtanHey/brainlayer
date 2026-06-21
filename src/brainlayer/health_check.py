@@ -26,6 +26,7 @@ DEFAULT_BRAINBAR_DAEMON_LABEL = "com.brainlayer.brainbar-daemon"
 DEFAULT_WATCH_LABEL = "com.brainlayer.watch"
 DEFAULT_DRAIN_LABEL = "com.brainlayer.drain"
 DEFAULT_HEALTH_CHECK_LABEL = "com.brainlayer.health-check"
+DEFAULT_ENRICHMENT_LABEL = "com.brainlayer.enrichment"
 DEFAULT_BACKLOG_BATCH = 4
 DEFAULT_HEAL_MIN_CONSECUTIVE_FAILURES = 2
 DEFAULT_HEAL_CIRCUIT_BREAKER_LIMIT = 3
@@ -61,6 +62,7 @@ class HealthCheckConfig:
     watch_label: str = DEFAULT_WATCH_LABEL
     drain_label: str = DEFAULT_DRAIN_LABEL
     health_check_label: str = DEFAULT_HEALTH_CHECK_LABEL
+    enrichment_label: str = DEFAULT_ENRICHMENT_LABEL
     watch_plist_path: Path = field(
         default_factory=lambda: Path("~/Library/LaunchAgents/com.brainlayer.watch.plist").expanduser()
     )
@@ -69,6 +71,9 @@ class HealthCheckConfig:
     )
     health_check_plist_path: Path = field(
         default_factory=lambda: Path("~/Library/LaunchAgents/com.brainlayer.health-check.plist").expanduser()
+    )
+    enrichment_plist_path: Path = field(
+        default_factory=lambda: Path("~/Library/LaunchAgents/com.brainlayer.enrichment.plist").expanduser()
     )
     offsets_path: Path = field(default_factory=lambda: Path("~/.local/share/brainlayer/offsets.json").expanduser())
     watcher_health_path: Path = field(
@@ -400,10 +405,25 @@ def _apply_heals(
         return heal_failures, tripped
     threshold = max(1, config.heal_min_consecutive_failures)
     breaker_limit = max(threshold, config.heal_circuit_breaker_limit)
+    bootstrap_issue_codes = {
+        "watch_unloaded",
+        "drain_unloaded",
+        "health_check_unloaded",
+        "hotlane_unloaded",
+        "enrichment_unloaded",
+    }
     for issue_code, (label, plist_path) in issue_labels.items():
         key = _heal_key(label, issue_code)
         consecutive_failures = heal_failures.get(key, 0)
         if consecutive_failures >= breaker_limit:
+            if issue_code in bootstrap_issue_codes:
+                action = _bootstrap_if_absent(label, plist_path, command_runner)
+                if action.startswith("bootstrap:"):
+                    tripped.discard(key)
+                    heal_failures.pop(key, None)
+                    if action not in result.actions:
+                        result.actions.append(action)
+                    continue
             if key not in tripped:
                 tripped.add(key)
                 result.actions.append(f"heal_escalation:{label}:{issue_code}")
@@ -420,9 +440,12 @@ def _apply_heals(
         if consecutive_failures >= threshold:
             action = (
                 _bootstrap_if_absent(label, plist_path, command_runner)
-                if issue_code in {"watch_unloaded", "drain_unloaded", "health_check_unloaded"}
+                if issue_code in bootstrap_issue_codes
                 else _kickstart(label, command_runner)
             )
+            if action.startswith("bootstrap:"):
+                tripped.discard(key)
+                heal_failures.pop(key, None)
             if action not in result.actions:
                 print(
                     f"heal action label={label} issue={issue_code} "
@@ -520,6 +543,8 @@ def _plist_for_label(config: HealthCheckConfig, label: str) -> Path:
         return config.drain_plist_path
     if label == config.health_check_label:
         return config.health_check_plist_path
+    if label == config.enrichment_label:
+        return config.enrichment_plist_path
     if label == config.hotlane_label:
         return Path(f"~/Library/LaunchAgents/{label}.plist").expanduser()
     if label == config.brainbar_daemon_label:
@@ -642,6 +667,7 @@ def run_health_check(
         (config.watch_label, "watch_unloaded", "watch launchd label is not loaded"),
         (config.drain_label, "drain_unloaded", "drain launchd label is not loaded"),
         (config.health_check_label, "health_check_unloaded", "health-check launchd label is not loaded"),
+        (config.enrichment_label, "enrichment_unloaded", "enrichment launchd label is not loaded"),
     ):
         if not label:
             continue

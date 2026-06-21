@@ -43,6 +43,7 @@ _DEFAULT_DRAIN_OPEN_RETRY_MAX_DELAY_MS = 5000.0
 _DEFAULT_MAX_EVENTS_PER_TRANSACTION = 5
 _DEFAULT_BURN_MAX_EVENTS_PER_TRANSACTION = 100
 _DEFAULT_POST_COMMIT_YIELD_MS = 10.0
+_DEFAULT_MAX_ENRICHMENT_FILES_PER_CYCLE = 16
 # The post-commit WAL checkpoint is best-effort. Bound how long TRUNCATE may wait
 # on readers so a pinned reader can't stall every other writer for the full drain
 # busy_timeout (30s). Short window → reclaim when possible, skip cheaply otherwise.
@@ -89,6 +90,13 @@ def _nonnegative_float_env(name: str, default: float) -> float:
 
 def _max_events_per_transaction() -> int:
     return _positive_int_env("BRAINLAYER_DRAIN_MAX_EVENTS_PER_TRANSACTION", _DEFAULT_MAX_EVENTS_PER_TRANSACTION)
+
+
+def _max_enrichment_files_per_cycle() -> int:
+    return _positive_int_env(
+        "BRAINLAYER_DRAIN_MAX_ENRICHMENT_FILES_PER_CYCLE",
+        _DEFAULT_MAX_ENRICHMENT_FILES_PER_CYCLE,
+    )
 
 
 def _post_commit_yield_seconds() -> float:
@@ -919,6 +927,23 @@ def _unlink_processed_file(path: Path, log_path: Path) -> None:
         _log(log_path, f"drain committed but could not unlink {path}: {exc}")
 
 
+def _is_enrichment_queue_file(path: Path) -> bool:
+    return path.name.startswith("enrichment-")
+
+
+def _queue_file_priority(path: Path) -> tuple[int, str]:
+    return (2 if _is_enrichment_queue_file(path) else 0, path.name)
+
+
+def _select_priority_queue_files(files: list[Path], batch_size: int, *, cap_enrichment: bool = True) -> list[Path]:
+    ordered = sorted(files, key=_queue_file_priority)
+    high_priority = [path for path in ordered if not _is_enrichment_queue_file(path)]
+    if high_priority:
+        return high_priority[:batch_size]
+    enrichment_limit = min(batch_size, _max_enrichment_files_per_cycle()) if cap_enrichment else batch_size
+    return ordered[:enrichment_limit]
+
+
 def _rewrite_events_file(path: Path, events: list[dict[str, Any]]) -> None:
     tmp_path = path.with_suffix(".tmp")
     tmp_path.write_text(
@@ -1064,9 +1089,7 @@ def burn_drain_once(
     result = BurnDrainResult()
     lock_fd = _acquire_queue_lock(queue_dir)
     try:
-        files = sorted(queue_dir.glob("*.jsonl"), key=lambda path: (path.name.startswith("enrichment-"), path.name))[
-            :batch_size
-        ]
+        files = _select_priority_queue_files(list(queue_dir.glob("*.jsonl")), batch_size, cap_enrichment=False)
         if not files:
             return result
         try:
@@ -1187,9 +1210,7 @@ def drain_once(
 
     lock_fd = _acquire_queue_lock(queue_dir)
     try:
-        files = sorted(queue_dir.glob("*.jsonl"), key=lambda path: (path.name.startswith("enrichment-"), path.name))[
-            :batch_size
-        ]
+        files = _select_priority_queue_files(list(queue_dir.glob("*.jsonl")), batch_size)
         if not files:
             return 0
         _log(log_path, f"queue_depth={len(files)}")

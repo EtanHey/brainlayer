@@ -116,6 +116,10 @@ def test_reconcile_launchd_bootstraps_all_mode_a_labels(monkeypatch, tmp_path):
             str(tmp_path / "drain.plist"),
             "--health-check-plist-path",
             str(tmp_path / "health.plist"),
+            "--hotlane-plist-path",
+            str(tmp_path / "hotlane.plist"),
+            "--enrichment-plist-path",
+            str(tmp_path / "enrichment.plist"),
         ],
     )
 
@@ -124,3 +128,5 @@ def test_reconcile_launchd_bootstraps_all_mode_a_labels(monkeypatch, tmp_path):
     assert "com.brainlayer.watch" in command_text
     assert "com.brainlayer.drain" in command_text
     assert "com.brainlayer.health-check" in command_text
+    assert "com.brainlayer.hotlane-brainbar" in command_text
+    assert "com.brainlayer.enrichment" in command_text

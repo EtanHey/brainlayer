@@ -186,10 +186,10 @@ async def test_brain_search_falls_back_to_fts_when_embedding_times_out(monkeypat
 
     assert elapsed < 0.5
     assert store.hybrid_kwargs["query_embedding"] is None
-    assert structured["search_mode"] == "fts_only"
+    assert structured["search_mode"] == "fts_fallback"
     assert structured["fallback_reason"] == "embed_timeout"
     assert [item["chunk_id"] for item in structured["results"]] == ["fts-fallback-hit"]
-    assert "FTS-only fallback" in content[0].text
+    assert "FTS fallback" in content[0].text
 
 
 @pytest.mark.asyncio
@@ -207,7 +207,7 @@ async def test_brain_search_falls_back_to_fts_when_embedding_raises(monkeypatch)
     )
 
     assert store.hybrid_kwargs["query_embedding"] is None
-    assert structured["search_mode"] == "fts_only"
+    assert structured["search_mode"] == "fts_fallback"
     assert structured["fallback_reason"] == "embed_error:RuntimeError"
     assert [item["chunk_id"] for item in structured["results"]] == ["fts-fallback-hit"]
 

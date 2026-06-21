@@ -10,6 +10,15 @@ import apsw
 import pytest
 
 
+def test_default_store_busy_budget_is_sub_500ms(monkeypatch):
+    """brain_store should defer quickly instead of waiting seconds behind background writers."""
+    from brainlayer.mcp.store_handler import _store_busy_budget_ms
+
+    monkeypatch.delenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", raising=False)
+
+    assert _store_busy_budget_ms() <= 500
+
+
 @pytest.mark.asyncio
 async def test_busy_queue_fallback_returns_queued_chunk_id(tmp_path):
     """DB-busy fallback returns the durable queue chunk ID, not a sentinel."""

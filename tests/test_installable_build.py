@@ -118,6 +118,16 @@ def test_setup_command_writes_op_backed_env_without_plaintext_and_can_skip_launc
     assert oct(env_file.stat().st_mode & 0o777) == "0o600"
 
 
+def test_launchd_env_runner_makes_homebrew_op_available_before_loading_env() -> None:
+    runner = REPO_ROOT / "scripts" / "launchd" / "brainlayer-env-run.sh"
+    content = runner.read_text(encoding="utf-8")
+
+    path_export_index = content.index("export PATH=")
+    load_index = content.index("load_simple_env_file")
+    assert "/opt/homebrew/bin" in content[path_export_index:load_index]
+    assert path_export_index < load_index
+
+
 def test_setup_command_does_not_install_launchd_by_default(tmp_path: Path, monkeypatch) -> None:
     import brainlayer.setup as setup_helpers
     from brainlayer.cli import app
