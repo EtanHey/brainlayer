@@ -151,13 +151,14 @@ async def test_store_queues_fast_when_background_queue_is_present(tmp_path, monk
 
 
 @pytest.mark.asyncio
-async def test_store_priority_queue_does_not_cold_import_search_repo(tmp_path, monkeypatch):
-    """The first queued brain_store call must not import the full search stack."""
+async def test_store_priority_queue_does_not_cold_import_heavy_write_stack(tmp_path, monkeypatch):
+    """The first queued brain_store call must not import heavy write/search stacks."""
     queue_dir = tmp_path / "queue"
     queue_dir.mkdir()
     monkeypatch.setenv("BRAINLAYER_INTERACTIVE_STORE_QUEUE", "1")
     monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
-    monkeypatch.delitem(sys.modules, "brainlayer.search_repo", raising=False)
+    monkeypatch.delitem(sys.modules, "brainlayer.pipeline", raising=False)
+    monkeypatch.delitem(sys.modules, "brainlayer.store", raising=False)
 
     from brainlayer.mcp.store_handler import _store
 
@@ -173,7 +174,8 @@ async def test_store_priority_queue_does_not_cold_import_search_repo(tmp_path, m
 
     assert structured["queued"] is True
     assert structured["deferred"]["reason"] == "INTERACTIVE_PRIORITY"
-    assert "brainlayer.search_repo" not in sys.modules
+    assert "brainlayer.pipeline" not in sys.modules
+    assert "brainlayer.store" not in sys.modules
 
 
 @pytest.mark.asyncio

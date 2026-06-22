@@ -784,8 +784,8 @@ def _get_store_vector_store(deadline: float):
 
 def _validate_store_request(content: str, memory_type: str) -> str:
     from ..ingest_guard import reject_recursive_mcp_output
-    from ..pipeline.classify import looks_like_system_prompt
-    from ..store import VALID_MEMORY_TYPES
+    from ..memory_types import VALID_MEMORY_TYPES
+    from ..system_prompt_guard import looks_like_system_prompt
 
     if not content or not content.strip():
         raise ValueError("content must be non-empty")

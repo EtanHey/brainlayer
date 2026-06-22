@@ -44,12 +44,12 @@ from .chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, detect_chunk_origi
 from .content_class import classify_content_class
 from .dedupe import find_duplicate, merge_duplicate_chunk, merge_existing_chunk_content, merge_existing_chunk_seen
 from .ingest_guard import reject_recursive_mcp_output
-from .pipeline.classify import looks_like_system_prompt
+from .memory_types import VALID_MEMORY_TYPES
+from .system_prompt_guard import looks_like_system_prompt
 from .vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 
-VALID_MEMORY_TYPES = ["idea", "mistake", "decision", "learning", "todo", "bookmark", "note", "journal", "issue"]
 _MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 
 

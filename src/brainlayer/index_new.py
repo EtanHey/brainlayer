@@ -7,7 +7,7 @@ from typing import Callable, List, Optional
 from .claude_paths import extract_claude_conversation_id as _extract_claude_conversation_id
 from .embeddings import embed_chunks
 from .pipeline.chunk import Chunk
-from .pipeline.classify import looks_like_system_prompt
+from .system_prompt_guard import looks_like_system_prompt
 from .vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
