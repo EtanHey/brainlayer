@@ -166,13 +166,17 @@ def test_run_doctor_exits_nonzero_when_queue_backlog_is_not_moving(tmp_path):
 
 
 def test_doctor_cli_is_registered_with_json_and_db_options():
+    from typer.main import get_command
+
     from brainlayer.cli import app
 
     result = CliRunner().invoke(app, ["doctor", "--help"])
 
     assert result.exit_code == 0
-    assert "--json" in result.output
-    assert "--db" in result.output
+    doctor_command = get_command(app).commands["doctor"]
+    option_decls = {opt for param in doctor_command.params for opt in getattr(param, "opts", [])}
+    assert "--json" in option_decls
+    assert "--db" in option_decls
 
 
 def test_doctor_cli_json_uses_injected_runner_and_db_option(tmp_path, monkeypatch):
