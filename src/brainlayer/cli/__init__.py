@@ -668,6 +668,54 @@ def health_check_command(
     raise typer.Exit(0 if result.ok else 1)
 
 
+def _run_doctor_cli(config):
+    from ..doctor import run_doctor
+
+    return run_doctor(config)
+
+
+@app.command("doctor")
+def doctor_command(
+    db: Optional[Path] = typer.Option(None, "--db", help="Path to brainlayer.db"),
+    queue_dir: Path = typer.Option(Path("~/.brainlayer/queue"), "--queue-dir", help="Durable queue directory."),
+    watcher_health_path: Path = typer.Option(
+        Path("~/.local/share/brainlayer/watcher-health.json"),
+        "--watcher-health-path",
+        help="Watcher health JSON path.",
+    ),
+    drain_health_path: Path = typer.Option(
+        Path("~/.local/share/brainlayer/drain-health.json"),
+        "--drain-health-path",
+        help="Drain health JSON path.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Run the read-only BrainLayer doctor health gate."""
+    from ..doctor import DoctorConfig
+
+    result = _run_doctor_cli(
+        DoctorConfig(
+            db_path=db.expanduser() if db else get_db_path(),
+            queue_dir=queue_dir.expanduser(),
+            watcher_health_path=watcher_health_path.expanduser(),
+            drain_health_path=drain_health_path.expanduser(),
+        )
+    )
+    payload = result.to_dict()
+    if json_output:
+        typer.echo(json.dumps(payload, sort_keys=True))
+    else:
+        status = "ok" if result.ok else "unhealthy"
+        rprint(
+            f"[bold]{status}[/] chunks={result.chunk_count} "
+            f"recent_unvectored={result.recent_unvectored_chunks} queue={result.queue_count}"
+        )
+        for issue in result.issues:
+            color = "red" if issue.severity == "fatal" else "yellow"
+            rprint(f"[{color}]{issue.severity.upper()}[/] {issue.code}: {issue.message}")
+    raise typer.Exit(result.exit_code)
+
+
 @app.command("drain")
 def drain_command(
     batch_size: int = typer.Option(50, "--batch-size", help="Queue files to consider per cycle.", min=1),
