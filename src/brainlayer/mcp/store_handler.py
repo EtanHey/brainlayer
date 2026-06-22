@@ -516,6 +516,35 @@ def _queue_store(item: dict):
     return path
 
 
+def _queue_has_background_pressure() -> bool:
+    """Return true when background queue work is already pending.
+
+    The interactive MCP store path should reserve through the durable queue
+    instead of opening a writer connection behind background drain/enrichment
+    work. This check is intentionally cheap: finding any queued JSONL file is
+    enough signal that drain owns the persistence lane.
+    """
+    if os.environ.get("PYTEST_CURRENT_TEST") and "BRAINLAYER_QUEUE_DIR" not in os.environ:
+        return False
+    try:
+        from ..queue_io import get_queue_dir
+
+        queue_dir = get_queue_dir()
+        return next(queue_dir.glob("*.jsonl"), None) is not None
+    except OSError:
+        return False
+
+
+def _interactive_queue_reason() -> str | None:
+    if os.environ.get("BRAINLAYER_ARBITRATED") == "1":
+        return "ARBITRATED"
+    if os.environ.get("BRAINLAYER_INTERACTIVE_STORE_QUEUE") == "1":
+        return "INTERACTIVE_PRIORITY"
+    if _queue_has_background_pressure():
+        return "INTERACTIVE_PRIORITY"
+    return None
+
+
 def _deferred_store_receipt(chunk_id: str, queue_path, *, reason: str = "DB_BUSY") -> dict:
     action = "queued_for_replay" if str(queue_path).endswith("pending-stores.jsonl") else "queued_for_drain"
     return {
@@ -787,7 +816,8 @@ async def _store(
     try:
         content = _validate_store_request(content, memory_type)
 
-        if os.environ.get("BRAINLAYER_ARBITRATED") == "1":
+        queue_reason = _interactive_queue_reason()
+        if queue_reason is not None:
             from ..search_repo import clear_hybrid_search_cache
 
             queue_path = _queue_store(
@@ -813,7 +843,7 @@ async def _store(
                 }
             )
             clear_hybrid_search_cache()
-            structured = _deferred_store_receipt(promised_chunk_id, queue_path, reason="ARBITRATED")
+            structured = _deferred_store_receipt(promised_chunk_id, queue_path, reason=queue_reason)
             return ([TextContent(type="text", text=format_store_result(promised_chunk_id, queued=True))], structured)
 
         from ..store import embed_hot_chunk, embed_pending_chunks, store_memory

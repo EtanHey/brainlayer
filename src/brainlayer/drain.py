@@ -931,6 +931,13 @@ def _is_enrichment_queue_file(path: Path) -> bool:
     return path.name.startswith("enrichment-")
 
 
+def _has_high_priority_queue_files(queue_dir: Path) -> bool:
+    try:
+        return any(not _is_enrichment_queue_file(path) for path in queue_dir.glob("*.jsonl"))
+    except OSError:
+        return False
+
+
 def _queue_file_priority(path: Path) -> tuple[int, str]:
     return (2 if _is_enrichment_queue_file(path) else 0, path.name)
 
@@ -1283,6 +1290,8 @@ def drain_once(
                     yield_seconds = _post_commit_yield_seconds()
                     if yield_seconds > 0:
                         time.sleep(yield_seconds)
+                    if _is_enrichment_queue_file(path) and _has_high_priority_queue_files(queue_dir):
+                        stop_draining = True
                     break
                 except Exception as exc:
                     if conn is not None:

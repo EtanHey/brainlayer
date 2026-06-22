@@ -926,6 +926,78 @@ def test_drain_limits_enrichment_events_per_transaction(tmp_path, monkeypatch):
     assert summaries == {"c0": "s0", "c1": "s1", "c2": None, "c3": None}
 
 
+def test_drain_yields_enrichment_cycle_when_interactive_file_appears(tmp_path, monkeypatch):
+    """A new interactive store file must preempt the rest of a selected enrichment batch."""
+    import brainlayer.drain as drain_module
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "drain.log"
+
+    conn = apsw.Connection(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT,
+            summary TEXT,
+            enriched_at TEXT,
+            enrich_status TEXT,
+            content_hash TEXT
+        )
+        """
+    )
+    for idx in range(2):
+        conn.execute(
+            "INSERT INTO chunks (id, content, content_hash) VALUES (?, ?, ?)",
+            (f"c{idx}", f"content {idx}", f"h{idx}"),
+        )
+    conn.close()
+
+    first = enqueue_enrichment_updates(
+        [{"chunk_id": "c0", "content_hash": "h0", "enrichment": {"summary": "s0"}}],
+        queue_dir=queue_dir,
+    )
+    second = enqueue_enrichment_updates(
+        [{"chunk_id": "c1", "content_hash": "h1", "enrichment": {"summary": "s1"}}],
+        queue_dir=queue_dir,
+    )
+
+    real_unlink = drain_module._unlink_processed_file
+    processed_enrichment_files = 0
+
+    def create_interactive_after_first_unlink(path, log_path):
+        nonlocal processed_enrichment_files
+        real_unlink(path, log_path)
+        if path.name.startswith("enrichment-"):
+            processed_enrichment_files += 1
+        if processed_enrichment_files == 1:
+            (queue_dir / "mcp-interactive.jsonl").write_text(
+                json.dumps(
+                    {
+                        "kind": "store_memory",
+                        "chunk_id": "interactive-queued",
+                        "content": "interactive queue file should preempt enrichment",
+                        "memory_type": "note",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+    monkeypatch.setattr(drain_module, "_unlink_processed_file", create_interactive_after_first_unlink)
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10, log_path=log_path) == 1
+
+    conn = apsw.Connection(str(db_path))
+    summaries = dict(conn.execute("SELECT id, summary FROM chunks ORDER BY id"))
+    conn.close()
+
+    assert summaries in ({"c0": "s0", "c1": None}, {"c0": None, "c1": "s1"})
+    assert sum(path.exists() for path in (first, second)) == 1
+    assert (queue_dir / "mcp-interactive.jsonl").exists()
+
+
 def test_drain_persists_enrichment_provenance_in_chunk_metadata(tmp_path):
     """Queued enrichment writes must stamp provenance fields onto chunk metadata."""
     db_path = tmp_path / "brainlayer.db"

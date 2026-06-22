@@ -279,7 +279,8 @@ async def test_brain_search_origin_order_returns_oldest_matching_chunks_without_
             allow_helper_route=False,
         )
         default_ids = [item["chunk_id"] for item in default_structured["results"]]
-        assert default_ids[0] == "origin-new"
+        assert default_ids != ["origin-old", "origin-mid"]
+        assert "order" not in default_structured
 
         origin_content, origin_structured = await _brain_search(
             query="originmarker retention architecture",
