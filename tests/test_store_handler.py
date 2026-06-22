@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import sys
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -147,6 +148,32 @@ async def test_store_queues_fast_when_background_queue_is_present(tmp_path, monk
     assert structured["deferred"]["reason"] == "INTERACTIVE_PRIORITY"
     assert structured["deferred"]["queue_path"] == str(queued_files[0])
     assert any(structured["chunk_id"] in item.text for item in texts)
+
+
+@pytest.mark.asyncio
+async def test_store_priority_queue_does_not_cold_import_search_repo(tmp_path, monkeypatch):
+    """The first queued brain_store call must not import the full search stack."""
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    monkeypatch.setenv("BRAINLAYER_INTERACTIVE_STORE_QUEUE", "1")
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+    monkeypatch.delitem(sys.modules, "brainlayer.search_repo", raising=False)
+
+    from brainlayer.mcp.store_handler import _store
+
+    with (
+        patch("brainlayer.queue_io.get_queue_dir", return_value=queue_dir),
+        patch("brainlayer.mcp.store_handler._get_vector_store", side_effect=AssertionError("DB writer path used")),
+    ):
+        _texts, structured = await _store(
+            content="interactive reservation should not pay search import cold-start",
+            memory_type="note",
+            project="test",
+        )
+
+    assert structured["queued"] is True
+    assert structured["deferred"]["reason"] == "INTERACTIVE_PRIORITY"
+    assert "brainlayer.search_repo" not in sys.modules
 
 
 @pytest.mark.asyncio

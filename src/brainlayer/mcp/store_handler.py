@@ -4,6 +4,7 @@ import asyncio
 import fcntl
 import json
 import os
+import sys
 import threading
 import time
 import uuid
@@ -545,6 +546,15 @@ def _interactive_queue_reason() -> str | None:
     return None
 
 
+def _clear_hybrid_search_cache_if_loaded() -> None:
+    search_repo = sys.modules.get("brainlayer.search_repo")
+    if search_repo is None:
+        return
+    clear_cache = getattr(search_repo, "clear_hybrid_search_cache", None)
+    if clear_cache is not None:
+        clear_cache()
+
+
 def _deferred_store_receipt(chunk_id: str, queue_path, *, reason: str = "DB_BUSY") -> dict:
     action = "queued_for_replay" if str(queue_path).endswith("pending-stores.jsonl") else "queued_for_drain"
     return {
@@ -818,8 +828,6 @@ async def _store(
 
         queue_reason = _interactive_queue_reason()
         if queue_reason is not None:
-            from ..search_repo import clear_hybrid_search_cache
-
             queue_path = _queue_store(
                 {
                     "chunk_id": promised_chunk_id,
@@ -842,7 +850,7 @@ async def _store(
                     "created_at": reservation_created_at,
                 }
             )
-            clear_hybrid_search_cache()
+            _clear_hybrid_search_cache_if_loaded()
             structured = _deferred_store_receipt(promised_chunk_id, queue_path, reason=queue_reason)
             return ([TextContent(type="text", text=format_store_result(promised_chunk_id, queued=True))], structured)
 
