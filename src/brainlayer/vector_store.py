@@ -1862,7 +1862,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             "severity": severity,
         }
 
-    def check_fts5_health(self, cache_ttl_seconds: int = 60) -> Dict[str, Any]:
+    def check_fts5_health(self, cache_ttl_seconds: int = 60, *, auto_rebuild: bool = True) -> Dict[str, Any]:
         """Check FTS5 sync health with a short-lived cache for hot-path callers."""
         now = time.time()
         cache = self._fts5_health_cache
@@ -1872,7 +1872,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         chunk_count, fts_count = self._get_fts5_counts()
         desync_pct = 0.0 if chunk_count == 0 else abs(chunk_count - fts_count) * 100.0 / chunk_count
 
-        if desync_pct > 20.0:
+        if desync_pct > 20.0 and auto_rebuild:
             self._log_health_event(
                 "fts5_desync_critical",
                 "emergency",
@@ -1887,6 +1887,9 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 "severity": "emergency",
                 "rebuild_triggered": True,
             }
+        elif desync_pct > 20.0:
+            result = self._build_fts5_health_result(chunk_count, fts_count, "emergency")
+            result["rebuild_triggered"] = False
         elif desync_pct > 5.0:
             result = self._build_fts5_health_result(chunk_count, fts_count, "critical")
             self._log_health_event("fts5_desync_critical", "critical", result)
