@@ -19,13 +19,26 @@ def _plist_args(name: str) -> list[str]:
     return plistlib.loads(plist_path.read_bytes())["ProgramArguments"]
 
 
-def test_brainlayer_cli_entrypoint_imports_typer_app() -> None:
+def test_brainlayer_cli_entrypoint_imports_typer_app(monkeypatch) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+
     from brainlayer.cli import app
 
     result = CliRunner().invoke(app, ["--help"])
 
     assert result.exit_code == 0
     assert "brainlayer" in result.stdout
+
+
+def test_brainlayer_cli_exposes_transport_commands(monkeypatch) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+
+    from brainlayer.cli import app
+
+    for args in (["drain", "--help"], ["status", "--help"]):
+        result = CliRunner().invoke(app, args)
+
+        assert result.exit_code == 0, result.stdout
 
 
 def test_launchd_templates_are_declared_as_package_data() -> None:
