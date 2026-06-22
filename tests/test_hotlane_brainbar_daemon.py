@@ -1,18 +1,15 @@
 from __future__ import annotations
 
-import importlib.util
+import importlib
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 
 def _load_hotlane_module():
-    module_path = Path(__file__).resolve().parents[1] / "scripts" / "hotlane_brainbar_daemon.py"
-    spec = importlib.util.spec_from_file_location("hotlane_brainbar_daemon", module_path)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    importlib.invalidate_caches()
+    sys.modules.pop("scripts.hotlane_brainbar_daemon", None)
+    return importlib.import_module("scripts.hotlane_brainbar_daemon")
 
 
 def _raise_if_called(message: str):

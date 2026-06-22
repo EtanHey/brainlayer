@@ -1,10 +1,11 @@
 import asyncio
 import hashlib
-import importlib.util
+import importlib
 import json
 import multiprocessing as mp
 import re
 import sqlite3
+import sys
 import threading
 import time
 from pathlib import Path
@@ -181,12 +182,9 @@ def _create_vec_db(path: Path) -> None:
 
 
 def _load_hotlane_module():
-    module_path = Path(__file__).resolve().parents[1] / "scripts" / "hotlane_brainbar_daemon.py"
-    spec = importlib.util.spec_from_file_location("brainlayer_hotlane_brainbar_test", module_path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    importlib.invalidate_caches()
+    sys.modules.pop("scripts.hotlane_brainbar_daemon", None)
+    return importlib.import_module("scripts.hotlane_brainbar_daemon")
 
 
 class _FastEmbeddingModel:
