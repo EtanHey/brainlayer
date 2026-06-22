@@ -219,6 +219,42 @@ def test_cli_enrich_mode_batch_submit_defaults_to_full_batch(monkeypatch):
     assert called["submit_only"] is True
 
 
+def test_cli_enrich_mode_batch_drain_submit_routes_to_cloud_backfill(monkeypatch):
+    monkeypatch.setattr("brainlayer.cli.get_db_path", lambda: "/tmp/test.db")
+    called = {}
+
+    def fake_backfill(
+        db_path,
+        model,
+        dry_run=False,
+        sample=0,
+        no_sanitize=False,
+        submit_only=False,
+        drain_backlog=False,
+    ):
+        called.update(
+            {
+                "db_path": str(db_path),
+                "model": model,
+                "dry_run": dry_run,
+                "sample": sample,
+                "no_sanitize": no_sanitize,
+                "submit_only": submit_only,
+                "drain_backlog": drain_backlog,
+            }
+        )
+
+    monkeypatch.setattr("brainlayer.cloud_backfill.run_full_backfill", fake_backfill)
+
+    result = runner.invoke(app, ["enrich", "--mode", "batch", "--phase", "drain-submit", "--limit", "50"])
+
+    assert result.exit_code == 0
+    assert called["db_path"] == "/tmp/test.db"
+    assert called["sample"] == 50
+    assert called["submit_only"] is True
+    assert called["drain_backlog"] is True
+
+
 def test_cli_enrich_mode_local_is_rejected():
     result = runner.invoke(app, ["enrich", "--mode", "local"])
 

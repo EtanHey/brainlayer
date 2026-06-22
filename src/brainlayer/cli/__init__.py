@@ -1599,7 +1599,11 @@ def enrich(
             f"Realtime mode: only enrich chunks from the last N hours. Default: {DEFAULT_REALTIME_ENRICH_SINCE_HOURS}h"
         ),
     ),
-    phase: str = typer.Option("run", "--phase", help="Batch mode phase: submit, poll, import, run, status"),
+    phase: str = typer.Option(
+        "run",
+        "--phase",
+        help="Batch mode phase: submit, poll, import, run, status, drain-submit, drain-poll, drain-import, drain-run",
+    ),
     model: str = typer.Option(
         "models/gemini-2.5-flash-lite",
         "--model",
@@ -1699,6 +1703,16 @@ def enrich(
             )
             console.print(f"[bold green]Done![/] mode=batch phase=submit sample={limit or 0} model={model}")
             return
+        if phase == "drain-submit":
+            cloud_backfill.run_full_backfill(
+                db_path,
+                model=model,
+                sample=limit or 0,
+                submit_only=True,
+                drain_backlog=True,
+            )
+            console.print(f"[bold green]Done![/] mode=batch phase=drain-submit sample={limit or 0} model={model}")
+            return
         if phase == "run":
             cloud_backfill.run_full_backfill(
                 db_path,
@@ -1708,8 +1722,27 @@ def enrich(
             )
             console.print(f"[bold green]Done![/] mode=batch phase=run sample={limit or 0} model={model}")
             return
+        if phase == "drain-run":
+            cloud_backfill.run_full_backfill(
+                db_path,
+                model=model,
+                sample=limit or 0,
+                submit_only=False,
+                drain_backlog=True,
+            )
+            console.print(f"[bold green]Done![/] mode=batch phase=drain-run sample={limit or 0} model={model}")
+            return
         if phase in {"poll", "import"}:
             summary = cloud_backfill.process_pending_jobs_once(db_path)
+            console.print(
+                "[bold green]Done![/] "
+                f"mode=batch phase={phase} checked={summary['checked']} "
+                f"imported_jobs={summary['imported_jobs']} pending={summary['still_pending']} "
+                f"success={summary['success']} failed={summary['failed']} skipped={summary['skipped']}"
+            )
+            return
+        if phase in {"drain-poll", "drain-import"}:
+            summary = cloud_backfill.process_pending_jobs_once(db_path, import_mode=cloud_backfill.IMPORT_MODE_DRAIN)
             console.print(
                 "[bold green]Done![/] "
                 f"mode=batch phase={phase} checked={summary['checked']} "
