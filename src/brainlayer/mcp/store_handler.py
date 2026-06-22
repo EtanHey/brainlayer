@@ -4,6 +4,7 @@ import asyncio
 import fcntl
 import json
 import os
+import sys
 import threading
 import time
 import uuid
@@ -28,7 +29,7 @@ from ._shared import (
 _RETRY_MAX_ATTEMPTS = 4
 _retry_delay = 0.15  # base delay in seconds (exposed for test patching)
 _QUEUE_MAX_SIZE = 100
-_DEFAULT_STORE_BUSY_BUDGET_MS = 3_000
+_DEFAULT_STORE_BUSY_BUDGET_MS = 400
 _MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 _STORE_BUSY_TIMEOUT_LOCK = threading.Lock()
 _NO_EXEC_TRACE = object()
@@ -516,6 +517,44 @@ def _queue_store(item: dict):
     return path
 
 
+def _queue_has_background_pressure() -> bool:
+    """Return true when background queue work is already pending.
+
+    The interactive MCP store path should reserve through the durable queue
+    instead of opening a writer connection behind background drain/enrichment
+    work. This check is intentionally cheap: finding any queued JSONL file is
+    enough signal that drain owns the persistence lane.
+    """
+    if os.environ.get("PYTEST_CURRENT_TEST") and "BRAINLAYER_QUEUE_DIR" not in os.environ:
+        return False
+    try:
+        from ..queue_io import get_queue_dir
+
+        queue_dir = get_queue_dir()
+        return next(queue_dir.glob("*.jsonl"), None) is not None
+    except OSError:
+        return False
+
+
+def _interactive_queue_reason() -> str | None:
+    if os.environ.get("BRAINLAYER_ARBITRATED") == "1":
+        return "ARBITRATED"
+    if os.environ.get("BRAINLAYER_INTERACTIVE_STORE_QUEUE") == "1":
+        return "INTERACTIVE_PRIORITY"
+    if _queue_has_background_pressure():
+        return "INTERACTIVE_PRIORITY"
+    return None
+
+
+def _clear_hybrid_search_cache_if_loaded() -> None:
+    search_repo = sys.modules.get("brainlayer.search_repo")
+    if search_repo is None:
+        return
+    clear_cache = getattr(search_repo, "clear_hybrid_search_cache", None)
+    if clear_cache is not None:
+        clear_cache()
+
+
 def _deferred_store_receipt(chunk_id: str, queue_path, *, reason: str = "DB_BUSY") -> dict:
     action = "queued_for_replay" if str(queue_path).endswith("pending-stores.jsonl") else "queued_for_drain"
     return {
@@ -745,8 +784,8 @@ def _get_store_vector_store(deadline: float):
 
 def _validate_store_request(content: str, memory_type: str) -> str:
     from ..ingest_guard import reject_recursive_mcp_output
-    from ..pipeline.classify import looks_like_system_prompt
-    from ..store import VALID_MEMORY_TYPES
+    from ..memory_types import VALID_MEMORY_TYPES
+    from ..system_prompt_guard import looks_like_system_prompt
 
     if not content or not content.strip():
         raise ValueError("content must be non-empty")
@@ -787,9 +826,8 @@ async def _store(
     try:
         content = _validate_store_request(content, memory_type)
 
-        if os.environ.get("BRAINLAYER_ARBITRATED") == "1":
-            from ..search_repo import clear_hybrid_search_cache
-
+        queue_reason = _interactive_queue_reason()
+        if queue_reason is not None:
             queue_path = _queue_store(
                 {
                     "chunk_id": promised_chunk_id,
@@ -812,8 +850,8 @@ async def _store(
                     "created_at": reservation_created_at,
                 }
             )
-            clear_hybrid_search_cache()
-            structured = _deferred_store_receipt(promised_chunk_id, queue_path, reason="ARBITRATED")
+            _clear_hybrid_search_cache_if_loaded()
+            structured = _deferred_store_receipt(promised_chunk_id, queue_path, reason=queue_reason)
             return ([TextContent(type="text", text=format_store_result(promised_chunk_id, queued=True))], structured)
 
         from ..store import embed_hot_chunk, embed_pending_chunks, store_memory

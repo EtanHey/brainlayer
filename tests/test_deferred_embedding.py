@@ -663,8 +663,7 @@ class TestBackgroundEmbedder:
 class TestDrainWatcherEmbedding:
     def test_drain_default_precompute_uses_passage_embeddings(self, monkeypatch):
         """Stored chunk vectors must use passage embeddings, not query-prefixed embeddings."""
-        from brainlayer import drain
-        from brainlayer import embeddings
+        from brainlayer import drain, embeddings
         from brainlayer._helpers import serialize_f32
 
         class FakeModel:

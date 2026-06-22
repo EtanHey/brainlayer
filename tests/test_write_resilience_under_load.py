@@ -6,10 +6,12 @@ checkpoint (cannot reclaim WAL under reader load) and `journal_size_limit` was -
 (the WAL file never truncated back after a checkpoint). Observed multi-GB WAL in
 production logs (2.4-3.9GB); a real store queued with WAL at only 33MB.
 
-The fix:
+The bounded-WAL fix:
   1. vector_store.py sets `PRAGMA journal_size_limit` (env BRAINLAYER_WAL_SIZE_LIMIT_BYTES,
      default 256MB) on every connection so the WAL truncates back after a checkpoint.
-  2. drain.py checkpoints with TRUNCATE (not PASSIVE) so each drained batch reclaims WAL.
+  2. drain.py uses a non-blocking PASSIVE checkpoint in the writer hot path; the
+     scheduled wal-checkpoint job owns TRUNCATE so live queue drain cannot wedge
+     behind long-lived readers.
 
 These tests fail on origin/main (journal_size_limit == -1, WAL unbounded) and pass
 after the fix. They use isolated tmp DBs only — never the real ~/.local/share DB.

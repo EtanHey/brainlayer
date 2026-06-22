@@ -114,13 +114,13 @@ def test_enrichment_provenance_columns_are_audit_queryable_but_not_normal_search
         store.close()
 
 
-def test_enrich_realtime_uses_legacy_direct_writes_by_default(monkeypatch, tmp_path):
+def test_enrich_realtime_uses_legacy_direct_writes_when_disabled(monkeypatch, tmp_path):
     from brainlayer import enrichment_controller as controller
 
     store = MagicMock()
     store.get_enrichment_candidates.return_value = [_candidate("c1", "x" * 120)]
     _patch_realtime_deps(monkeypatch, controller, store)
-    monkeypatch.delenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", raising=False)
+    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "0")
     monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
     monkeypatch.setattr(controller, "_is_duplicate_content", lambda _store, _content: False)
     monkeypatch.setattr(controller, "_emit_enrichment_start", lambda *_args, **_kwargs: False)

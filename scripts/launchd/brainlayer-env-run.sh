@@ -3,6 +3,7 @@
 set -euo pipefail
 
 ENV_FILE="${BRAINLAYER_ENV_FILE:-$HOME/.config/brainlayer/brainlayer.env}"
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.local/bin:${PATH:-}"
 
 if [ ! -f "$ENV_FILE" ]; then
     echo "ERROR: BrainLayer env file not found at $ENV_FILE" >&2
@@ -22,10 +23,66 @@ if [ -n "$(find "$ENV_FILE" -prune -perm -0002 -print 2>/dev/null)" ]; then
     exit 78
 fi
 
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
+valid_env_key() {
+    case "$1" in
+        ""|[0-9]*|*[!A-Za-z0-9_]*)
+            return 1
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+}
+
+strip_matching_quotes() {
+    local value="$1"
+    if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+        printf '%s' "${value:1:${#value}-2}"
+    elif [[ "$value" == \'*\' && "$value" == *\' ]]; then
+        printf '%s' "${value:1:${#value}-2}"
+    else
+        printf '%s' "$value"
+    fi
+}
+
+load_simple_env_file() {
+    local raw_line line key value
+    while IFS= read -r raw_line || [ -n "$raw_line" ]; do
+        line="${raw_line#"${raw_line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        case "$line" in
+            ""|\#*)
+                continue
+                ;;
+            export\ *)
+                line="${line#export }"
+                ;;
+        esac
+        case "$line" in
+            *=*) ;;
+            *) continue ;;
+        esac
+        key="${line%%=*}"
+        value="${line#*=}"
+        key="${key%"${key##*[![:space:]]}"}"
+        value="${value#"${value%%[![:space:]]*}"}"
+        if ! valid_env_key "$key"; then
+            continue
+        fi
+        case "$value" in
+            *'$('*|*'`'*)
+                continue
+                ;;
+        esac
+        export "$key=$(strip_matching_quotes "$value")"
+    done < "$ENV_FILE"
+}
+
+env_file_declares_google_key() {
+    grep -Eq '^[[:space:]]*(export[[:space:]]+)?GOOGLE(_GENERATIVE_AI)?_API_KEY[[:space:]]*=' "$ENV_FILE"
+}
+
+load_simple_env_file
 
 is_false() {
     case "${1:-}" in
@@ -68,7 +125,9 @@ if [ "${BRAINLAYER_SKIP_DISABLE_GATES:-0}" != "1" ]; then
     fi
 fi
 
-if [ "${BRAINLAYER_REQUIRE_GOOGLE_API_KEY:-0}" = "1" ] && [ -z "${GOOGLE_API_KEY:-${GOOGLE_GENERATIVE_AI_API_KEY:-}}" ]; then
+if [ "${BRAINLAYER_REQUIRE_GOOGLE_API_KEY:-0}" = "1" ] \
+    && [ -z "${GOOGLE_API_KEY:-${GOOGLE_GENERATIVE_AI_API_KEY:-}}" ] \
+    && ! env_file_declares_google_key; then
     echo "ERROR: GOOGLE_API_KEY not set by $ENV_FILE" >&2
     exit 78
 fi

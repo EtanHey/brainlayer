@@ -30,6 +30,7 @@ LOGGER = logging.getLogger("brainlayer.hotlane_brainbar")
 STOP = False
 DEFAULT_HOTLANE_ENRICH_LIMIT = 5
 DEFAULT_BACKLOG_BATCH = 4
+MAX_BACKLOG_BATCH = 16
 
 
 class CycleResult(NamedTuple):
@@ -79,6 +80,13 @@ def _default_queue_dir() -> Path:
 def _queue_depth(queue_dir: Path) -> int:
     try:
         return sum(1 for _path in queue_dir.glob("*.jsonl"))
+    except OSError:
+        return 0
+
+
+def _high_priority_queue_depth(queue_dir: Path) -> int:
+    try:
+        return sum(1 for path in queue_dir.glob("*.jsonl") if not path.name.startswith("enrichment-"))
     except OSError:
         return 0
 
@@ -143,6 +151,7 @@ def run(
     max_cycles: int | None = None,
     queue_dir: Path | None = None,
     queue_depth_fn: Callable[[Path], int] = _queue_depth,
+    high_priority_queue_depth_fn: Callable[[Path], int] = _high_priority_queue_depth,
 ) -> None:
     model = model_factory()
     embed_batch_fn = getattr(model, "embed_texts", None)
@@ -162,6 +171,7 @@ def run(
     last_enrich = 0.0
     enrich_disabled = False
     cycles = 0
+    backlog_batch = min(max(backlog_batch, 0), MAX_BACKLOG_BATCH)
     LOGGER.info("hotlane adapter started db=%s", db_path)
     while not STOP:
         if max_cycles is not None and cycles >= max_cycles:
@@ -169,8 +179,14 @@ def run(
         try:
             now = time_fn()
             queue_has_backlog = queue_depth_fn(queue_dir) > 0
+            queue_has_high_priority_backlog = queue_has_backlog and high_priority_queue_depth_fn(queue_dir) > 0
             if queue_has_backlog:
                 LOGGER.info("durable queue has backlog; suppressing enrichment only")
+            if queue_has_high_priority_backlog:
+                LOGGER.info("durable high-priority queue has backlog; yielding writer slot to drain")
+                cycles += 1
+                sleep_fn(interval)
+                continue
             cycle_backlog_batch = backlog_batch if backlog_batch > 0 and now - last_backlog >= backlog_interval else 0
             cycle_enrich_limit = (
                 enrich_limit if not enrich_disabled and enrich_limit > 0 and now - last_enrich >= enrich_interval else 0
@@ -233,7 +249,7 @@ def main() -> None:
         interval=max(args.interval, 0.25),
         recent_limit=max(args.recent_limit, 1),
         backlog_interval=max(args.backlog_interval, 1.0),
-        backlog_batch=max(args.backlog_batch, 0),
+        backlog_batch=min(max(args.backlog_batch, 0), MAX_BACKLOG_BATCH),
         enrich_interval=max(args.enrich_interval, 1.0),
         enrich_limit=max(args.enrich_limit, 0),
         enrich_since_hours=max(args.enrich_since_hours, 0),

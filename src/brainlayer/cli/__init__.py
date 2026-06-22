@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re as _re
+import sqlite3
 import subprocess
 import sys
 import time
@@ -53,13 +54,25 @@ def _run_launchctl(args: list[str]) -> int:
     return int(result.returncode)
 
 
-def _plist_for_launchd_label(label: str, *, watch: Path, drain: Path, health_check: Path) -> Path:
+def _plist_for_launchd_label(
+    label: str,
+    *,
+    watch: Path,
+    drain: Path,
+    health_check: Path,
+    hotlane: Path | None = None,
+    enrichment: Path | None = None,
+) -> Path:
     if label == "com.brainlayer.watch":
         return watch.expanduser()
     if label == "com.brainlayer.drain":
         return drain.expanduser()
     if label == "com.brainlayer.health-check":
         return health_check.expanduser()
+    if label == "com.brainlayer.hotlane-brainbar" and hotlane is not None:
+        return hotlane.expanduser()
+    if label == "com.brainlayer.enrichment" and enrichment is not None:
+        return enrichment.expanduser()
     return Path(f"~/Library/LaunchAgents/{label}.plist").expanduser()
 
 
@@ -76,7 +89,13 @@ def _bootout_label(label: str) -> None:
 
 
 def _default_pause_labels() -> list[str]:
-    return ["com.brainlayer.watch", "com.brainlayer.drain", "com.brainlayer.health-check"]
+    return [
+        "com.brainlayer.watch",
+        "com.brainlayer.drain",
+        "com.brainlayer.hotlane-brainbar",
+        "com.brainlayer.enrichment",
+        "com.brainlayer.health-check",
+    ]
 
 
 @app.command("pause")
@@ -130,6 +149,14 @@ def resume_command(
         Path("~/Library/LaunchAgents/com.brainlayer.health-check.plist"),
         "--health-check-plist-path",
     ),
+    hotlane_plist_path: Path = typer.Option(
+        Path("~/Library/LaunchAgents/com.brainlayer.hotlane-brainbar.plist"),
+        "--hotlane-plist-path",
+    ),
+    enrichment_plist_path: Path = typer.Option(
+        Path("~/Library/LaunchAgents/com.brainlayer.enrichment.plist"),
+        "--enrichment-plist-path",
+    ),
 ) -> None:
     """Remove an intentional pause and bootstrap recorded launchd labels."""
     resolved = pause_sentinel_path.expanduser()
@@ -147,6 +174,8 @@ def resume_command(
                 watch=watch_plist_path,
                 drain=drain_plist_path,
                 health_check=health_check_plist_path,
+                hotlane=hotlane_plist_path,
+                enrichment=enrichment_plist_path,
             ),
         )
     try:
@@ -161,6 +190,8 @@ def reconcile_launchd_command(
     watch_label: str = typer.Option("com.brainlayer.watch", "--watch-label"),
     drain_label: str = typer.Option("com.brainlayer.drain", "--drain-label"),
     health_check_label: str = typer.Option("com.brainlayer.health-check", "--health-check-label"),
+    hotlane_label: str = typer.Option("com.brainlayer.hotlane-brainbar", "--hotlane-label"),
+    enrichment_label: str = typer.Option("com.brainlayer.enrichment", "--enrichment-label"),
     watch_plist_path: Path = typer.Option(
         Path("~/Library/LaunchAgents/com.brainlayer.watch.plist"),
         "--watch-plist-path",
@@ -173,11 +204,21 @@ def reconcile_launchd_command(
         Path("~/Library/LaunchAgents/com.brainlayer.health-check.plist"),
         "--health-check-plist-path",
     ),
+    hotlane_plist_path: Path = typer.Option(
+        Path("~/Library/LaunchAgents/com.brainlayer.hotlane-brainbar.plist"),
+        "--hotlane-plist-path",
+    ),
+    enrichment_plist_path: Path = typer.Option(
+        Path("~/Library/LaunchAgents/com.brainlayer.enrichment.plist"),
+        "--enrichment-plist-path",
+    ),
 ) -> None:
-    """Bootstrap the watcher, drain, and health-check launchd labels if absent."""
+    """Bootstrap BrainLayer launchd labels if absent."""
     for label, plist_path in (
         (watch_label, watch_plist_path),
         (drain_label, drain_plist_path),
+        (hotlane_label, hotlane_plist_path),
+        (enrichment_label, enrichment_plist_path),
         (health_check_label, health_check_plist_path),
     ):
         if label:
@@ -533,6 +574,9 @@ def health_check_command(
     health_check_label: str = typer.Option(
         "com.brainlayer.health-check", "--health-check-label", help="health-check launchd label."
     ),
+    enrichment_label: str = typer.Option(
+        "com.brainlayer.enrichment", "--enrichment-label", help="enrichment launchd label."
+    ),
     watch_plist_path: Path = typer.Option(
         Path("~/Library/LaunchAgents/com.brainlayer.watch.plist"),
         "--watch-plist-path",
@@ -547,6 +591,11 @@ def health_check_command(
         Path("~/Library/LaunchAgents/com.brainlayer.health-check.plist"),
         "--health-check-plist-path",
         help="health-check LaunchAgent plist path.",
+    ),
+    enrichment_plist_path: Path = typer.Option(
+        Path("~/Library/LaunchAgents/com.brainlayer.enrichment.plist"),
+        "--enrichment-plist-path",
+        help="enrichment LaunchAgent plist path.",
     ),
     source_jsonl_globs: list[str] | None = typer.Option(
         None,
@@ -588,9 +637,11 @@ def health_check_command(
             watch_label=watch_label,
             drain_label=drain_label,
             health_check_label=health_check_label,
+            enrichment_label=enrichment_label,
             watch_plist_path=watch_plist_path.expanduser(),
             drain_plist_path=drain_plist_path.expanduser(),
             health_check_plist_path=health_check_plist_path.expanduser(),
+            enrichment_plist_path=enrichment_plist_path.expanduser(),
             source_jsonl_globs=source_jsonl_globs
             if source_jsonl_globs is not None
             else HealthCheckConfig().source_jsonl_globs,
@@ -615,6 +666,106 @@ def health_check_command(
         for action in result.actions:
             rprint(f"[yellow]action[/] {action}")
     raise typer.Exit(0 if result.ok else 1)
+
+
+@app.command("drain")
+def drain_command(
+    batch_size: int = typer.Option(50, "--batch-size", help="Queue files to consider per cycle.", min=1),
+    interval: float = typer.Option(0.5, "--interval", help="Daemon sleep interval in seconds.", min=0.0),
+    once: bool = typer.Option(False, "--once", help="Run one drain cycle and exit."),
+    daemon: bool = typer.Option(False, "--daemon", help="Run continuously until interrupted."),
+    burn: bool = typer.Option(False, "--burn", help="Use burn-drain mode for stale enrichment cleanup."),
+    max_events_per_transaction: int = typer.Option(
+        100,
+        "--max-events-per-transaction",
+        help="Maximum burn-drain events per transaction.",
+        min=1,
+    ),
+) -> None:
+    """Drain the durable write queue through the single writer."""
+    from ..drain import burn_drain_once, drain_once, run_daemon
+
+    if daemon and once:
+        raise typer.BadParameter("--daemon and --once are mutually exclusive")
+    if burn:
+        result = burn_drain_once(batch_size=batch_size, max_events_per_transaction=max_events_per_transaction)
+        typer.echo(json.dumps(result.__dict__, sort_keys=True))
+        return
+    if daemon:
+        run_daemon(interval=interval, batch_size=batch_size)
+        return
+
+    drained = drain_once(batch_size=batch_size)
+    typer.echo(str(drained))
+
+
+def _status_count_unembedded(db_path: Path) -> int | None:
+    if not db_path.exists():
+        return None
+    uri = f"file:{db_path}?mode=ro"
+    with sqlite3.connect(uri, uri=True, timeout=1.0) as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM chunks c
+            LEFT JOIN chunk_vectors_rowids r ON c.id = r.id
+            WHERE r.id IS NULL
+              AND c.content IS NOT NULL
+              AND c.content != ''
+              AND (c.archived_at IS NULL OR c.archived_at = '')
+              AND c.superseded_by IS NULL
+              AND c.aggregated_into IS NULL
+            """
+        ).fetchone()
+    return int(row[0]) if row else None
+
+
+@app.command("status")
+def status_command(
+    db: Optional[Path] = typer.Option(None, "--db", help="Path to brainlayer.db"),
+    queue_dir: Path = typer.Option(Path("~/.brainlayer/queue"), "--queue-dir", help="Durable queue directory."),
+    drain_health_path: Path = typer.Option(
+        Path("~/.local/share/brainlayer/drain-health.json"),
+        "--drain-health-path",
+        help="Drain health JSON path.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Show a lightweight BrainLayer transport status snapshot."""
+    db_path = (db or get_db_path()).expanduser()
+    queue_path = queue_dir.expanduser()
+    drain_health = drain_health_path.expanduser()
+
+    try:
+        queue_depth = len(list(queue_path.glob("*.jsonl"))) if queue_path.exists() else 0
+    except OSError:
+        queue_depth = None
+    try:
+        unembedded = _status_count_unembedded(db_path)
+    except sqlite3.Error:
+        unembedded = None
+    try:
+        drain_snapshot = json.loads(drain_health.read_text(encoding="utf-8")) if drain_health.exists() else None
+    except (OSError, json.JSONDecodeError):
+        drain_snapshot = None
+
+    payload = {
+        "db": str(db_path),
+        "db_exists": db_path.exists(),
+        "queue_depth": queue_depth,
+        "unembedded_chunks": unembedded,
+        "drain_health": drain_snapshot,
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, sort_keys=True))
+        return
+
+    rprint(f"[bold]DB:[/] {payload['db']} ({'present' if payload['db_exists'] else 'missing'})")
+    rprint(f"[bold]Queue depth:[/] {queue_depth if queue_depth is not None else 'unknown'}")
+    rprint(f"[bold]Unembedded chunks:[/] {unembedded if unembedded is not None else 'unknown'}")
+    if drain_snapshot:
+        rprint(f"[bold]Drain cycles:[/] {drain_snapshot.get('drain_cycles', 'unknown')}")
+        rprint(f"[bold]Drained total:[/] {drain_snapshot.get('drained_total', 'unknown')}")
 
 
 @app.command("reembed-backfill")

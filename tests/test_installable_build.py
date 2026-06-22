@@ -19,13 +19,26 @@ def _plist_args(name: str) -> list[str]:
     return plistlib.loads(plist_path.read_bytes())["ProgramArguments"]
 
 
-def test_brainlayer_cli_entrypoint_imports_typer_app() -> None:
+def test_brainlayer_cli_entrypoint_imports_typer_app(monkeypatch) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+
     from brainlayer.cli import app
 
     result = CliRunner().invoke(app, ["--help"])
 
     assert result.exit_code == 0
     assert "brainlayer" in result.stdout
+
+
+def test_brainlayer_cli_exposes_transport_commands(monkeypatch) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+
+    from brainlayer.cli import app
+
+    for args in (["drain", "--help"], ["status", "--help"]):
+        result = CliRunner().invoke(app, args)
+
+        assert result.exit_code == 0, result.stdout
 
 
 def test_launchd_templates_are_declared_as_package_data() -> None:
@@ -116,6 +129,16 @@ def test_setup_command_writes_op_backed_env_without_plaintext_and_can_skip_launc
     assert "GOOGLE_API_KEY=\"$(op read 'op://Private/Google AI/Gemini API key')\"" in content
     assert "AIza" not in content
     assert oct(env_file.stat().st_mode & 0o777) == "0o600"
+
+
+def test_launchd_env_runner_makes_homebrew_op_available_before_loading_env() -> None:
+    runner = REPO_ROOT / "scripts" / "launchd" / "brainlayer-env-run.sh"
+    content = runner.read_text(encoding="utf-8")
+
+    path_export_index = content.index("export PATH=")
+    load_index = content.index("load_simple_env_file")
+    assert "/opt/homebrew/bin" in content[path_export_index:load_index]
+    assert path_export_index < load_index
 
 
 def test_setup_command_does_not_install_launchd_by_default(tmp_path: Path, monkeypatch) -> None:

@@ -1,18 +1,15 @@
 from __future__ import annotations
 
-import importlib.util
+import importlib
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 
 def _load_hotlane_module():
-    module_path = Path(__file__).resolve().parents[1] / "scripts" / "hotlane_brainbar_daemon.py"
-    spec = importlib.util.spec_from_file_location("hotlane_brainbar_daemon", module_path)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    importlib.invalidate_caches()
+    sys.modules.pop("scripts.hotlane_brainbar_daemon", None)
+    return importlib.import_module("scripts.hotlane_brainbar_daemon")
 
 
 def _raise_if_called(message: str):
@@ -108,6 +105,8 @@ def test_hotlane_run_threads_model_batch_embedder_to_backlog_cycle():
         vector_store_cls=lambda _path: FakeStore(),
         model_factory=FakeModel,
         cycle_fn=fake_cycle,
+        queue_depth_fn=lambda _queue_dir: 0,
+        high_priority_queue_depth_fn=lambda _queue_dir: 0,
         time_fn=iter([0.0, 100.0]).__next__,
         sleep_fn=lambda _seconds: None,
         max_cycles=1,
@@ -148,6 +147,8 @@ def test_hotlane_run_uses_document_embeddings_for_stored_chunks():
         vector_store_cls=lambda _path: FakeStore(),
         model_factory=FakeModel,
         cycle_fn=fake_cycle,
+        queue_depth_fn=lambda _queue_dir: 0,
+        high_priority_queue_depth_fn=lambda _queue_dir: 0,
         time_fn=iter([0.0, 100.0]).__next__,
         sleep_fn=lambda _seconds: None,
         max_cycles=1,
@@ -182,6 +183,7 @@ def test_hotlane_run_schedules_backlog_on_first_cycle():
         model_factory=lambda: SimpleNamespace(embed_query=lambda _text: [0.0]),
         cycle_fn=fake_cycle,
         queue_depth_fn=lambda _queue_dir: 0,
+        high_priority_queue_depth_fn=lambda _queue_dir: 0,
         time_fn=iter([100.0, 100.0]).__next__,
         sleep_fn=lambda _seconds: None,
         max_cycles=1,
@@ -217,6 +219,7 @@ def test_hotlane_run_advances_enrich_timer_before_failed_cycle():
         model_factory=lambda: SimpleNamespace(embed_query=lambda _text: [0.0]),
         cycle_fn=fake_cycle,
         queue_depth_fn=lambda _queue_dir: 0,
+        high_priority_queue_depth_fn=lambda _queue_dir: 0,
         time_fn=iter([0.0, 100.0, 101.0]).__next__,
         sleep_fn=lambda _seconds: None,
         max_cycles=2,
@@ -252,6 +255,7 @@ def test_hotlane_run_disables_enrichment_after_daily_cap():
         model_factory=lambda: SimpleNamespace(embed_query=lambda _text: [0.0]),
         cycle_fn=fake_cycle,
         queue_depth_fn=lambda _queue_dir: 0,
+        high_priority_queue_depth_fn=lambda _queue_dir: 0,
         time_fn=iter([0.0, 100.0, 111.0]).__next__,
         sleep_fn=lambda _seconds: None,
         max_cycles=2,
@@ -286,6 +290,8 @@ def test_hotlane_run_opens_and_closes_writer_store_each_cycle(tmp_path):
         vector_store_cls=FakeStore,
         model_factory=lambda: SimpleNamespace(embed_query=lambda _text: [0.0]),
         cycle_fn=fake_cycle,
+        queue_depth_fn=lambda _queue_dir: 0,
+        high_priority_queue_depth_fn=lambda _queue_dir: 0,
         time_fn=iter([0.0, 100.0, 101.0]).__next__,
         sleep_fn=lambda _seconds: None,
         max_cycles=2,
@@ -294,7 +300,7 @@ def test_hotlane_run_opens_and_closes_writer_store_each_cycle(tmp_path):
     assert [event[0] for event in events] == ["open", "close", "open", "close"]
 
 
-def test_hotlane_run_keeps_embedding_backlog_while_queue_is_backlogged(tmp_path):
+def test_hotlane_run_keeps_embedding_backlog_when_only_enrichment_is_backlogged(tmp_path):
     hotlane = _load_hotlane_module()
     opened = []
     cycle_calls = []
@@ -322,6 +328,7 @@ def test_hotlane_run_keeps_embedding_backlog_while_queue_is_backlogged(tmp_path)
         sleep_fn=lambda _seconds: None,
         max_cycles=1,
         queue_depth_fn=lambda _queue_dir: 3,
+        high_priority_queue_depth_fn=lambda _queue_dir: 0,
     )
 
     assert opened == [tmp_path / "brainlayer.db"]
@@ -329,3 +336,70 @@ def test_hotlane_run_keeps_embedding_backlog_while_queue_is_backlogged(tmp_path)
     assert cycle_calls[0]["backlog_batch"] == hotlane.DEFAULT_BACKLOG_BATCH
     assert cycle_calls[0]["enrich_limit"] == 0
     assert cycle_calls[0]["recent_limit"] == 5
+
+
+def test_hotlane_run_yields_writer_to_high_priority_queue_backlog(tmp_path):
+    hotlane = _load_hotlane_module()
+    opened = []
+    cycle_calls = []
+    sleeps = []
+
+    class FakeStore:
+        def __init__(self, path):
+            opened.append(path)
+
+        def close(self):
+            pass
+
+    hotlane.run(
+        db_path=tmp_path / "brainlayer.db",
+        interval=0.25,
+        recent_limit=5,
+        backlog_interval=10.0,
+        backlog_batch=hotlane.DEFAULT_BACKLOG_BATCH,
+        enrich_interval=10.0,
+        enrich_limit=hotlane.DEFAULT_HOTLANE_ENRICH_LIMIT,
+        enrich_since_hours=8760,
+        vector_store_cls=FakeStore,
+        model_factory=lambda: SimpleNamespace(embed_query=lambda _text: [0.0]),
+        cycle_fn=lambda **kwargs: cycle_calls.append(kwargs) or hotlane.CycleResult(),
+        time_fn=iter([0.0, 100.0]).__next__,
+        sleep_fn=sleeps.append,
+        max_cycles=1,
+        queue_depth_fn=lambda _queue_dir: 3,
+        high_priority_queue_depth_fn=lambda _queue_dir: 1,
+    )
+
+    assert opened == []
+    assert cycle_calls == []
+    assert sleeps == [0.25]
+
+
+def test_hotlane_run_caps_backlog_batch_at_priority_gate_limit(tmp_path):
+    hotlane = _load_hotlane_module()
+    scheduled_backlog_batches = []
+
+    class FakeStore:
+        def close(self):
+            pass
+
+    hotlane.run(
+        db_path=tmp_path / "brainlayer.db",
+        interval=0.25,
+        recent_limit=5,
+        backlog_interval=10.0,
+        backlog_batch=128,
+        enrich_interval=10.0,
+        enrich_limit=0,
+        enrich_since_hours=8760,
+        vector_store_cls=lambda _path: FakeStore(),
+        model_factory=lambda: SimpleNamespace(embed_query=lambda _text: [0.0]),
+        cycle_fn=lambda **kwargs: scheduled_backlog_batches.append(kwargs["backlog_batch"]) or hotlane.CycleResult(),
+        queue_depth_fn=lambda _queue_dir: 0,
+        high_priority_queue_depth_fn=lambda _queue_dir: 0,
+        time_fn=iter([100.0, 100.0]).__next__,
+        sleep_fn=lambda _seconds: None,
+        max_cycles=1,
+    )
+
+    assert scheduled_backlog_batches == [16]

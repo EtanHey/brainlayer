@@ -1793,7 +1793,7 @@ async def _search(
                 timeout=embed_timeout_ms / 1000.0,
             )
         except TimeoutError as exc:
-            search_mode = "fts_only"
+            search_mode = "fts_fallback"
             fallback_reason = "embed_timeout"
             search_profile.emit(
                 profile_scope,
@@ -1802,10 +1802,10 @@ async def _search(
                 search_profile.dur_ms(embed_started),
                 error=exc.__class__.__name__,
                 timeout_ms=embed_timeout_ms,
-                fallback="fts_only",
+                fallback="fts_fallback",
             )
         except Exception as exc:
-            search_mode = "fts_only"
+            search_mode = "fts_fallback"
             fallback_reason = f"embed_error:{exc.__class__.__name__}"
             search_profile.emit(
                 profile_scope,
@@ -1813,7 +1813,7 @@ async def _search(
                 profile_query_id,
                 search_profile.dur_ms(embed_started),
                 error=exc.__class__.__name__,
-                fallback="fts_only",
+                fallback="fts_fallback",
             )
         else:
             search_profile.emit(profile_scope, "embed", profile_query_id, search_profile.dur_ms(embed_started))
@@ -1943,16 +1943,15 @@ async def _search(
                 len(structured_results),
                 order=order if order == "origin" else None,
             )
-            if search_mode == "fts_only":
+            if search_mode == "fts_fallback":
                 formatted_text = (
-                    f"{formatted_text}\n\n"
-                    f"Search mode: FTS-only fallback ({fallback_reason}); vector embedding was skipped."
+                    f"{formatted_text}\n\nSearch mode: FTS fallback ({fallback_reason}); vector embedding was skipped."
                 )
             return ([TextContent(type="text", text=formatted_text)], structured)
 
         output_parts = [f"## Search Results for: {query}\n"]
-        if search_mode == "fts_only":
-            output_parts.append(f"Search mode: FTS-only fallback ({fallback_reason}); vector embedding was skipped.")
+        if search_mode == "fts_fallback":
+            output_parts.append(f"Search mode: FTS fallback ({fallback_reason}); vector embedding was skipped.")
         if order == "origin":
             output_parts.append(_ORIGIN_ORDER_LABEL)
         structured_results = []

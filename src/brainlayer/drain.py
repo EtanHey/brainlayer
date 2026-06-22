@@ -43,9 +43,10 @@ _DEFAULT_DRAIN_OPEN_RETRY_MAX_DELAY_MS = 5000.0
 _DEFAULT_MAX_EVENTS_PER_TRANSACTION = 5
 _DEFAULT_BURN_MAX_EVENTS_PER_TRANSACTION = 100
 _DEFAULT_POST_COMMIT_YIELD_MS = 10.0
-# The post-commit WAL checkpoint is best-effort. Bound how long TRUNCATE may wait
-# on readers so a pinned reader can't stall every other writer for the full drain
-# busy_timeout (30s). Short window → reclaim when possible, skip cheaply otherwise.
+_DEFAULT_MAX_ENRICHMENT_FILES_PER_CYCLE = 16
+# The post-commit WAL checkpoint is best-effort and must stay non-blocking. A
+# truncating checkpoint can wedge the live writer behind long-lived readers on a
+# multi-GB WAL; the scheduled wal-checkpoint job owns truncation.
 _DEFAULT_CHECKPOINT_BUSY_TIMEOUT_MS = 1000
 
 
@@ -89,6 +90,13 @@ def _nonnegative_float_env(name: str, default: float) -> float:
 
 def _max_events_per_transaction() -> int:
     return _positive_int_env("BRAINLAYER_DRAIN_MAX_EVENTS_PER_TRANSACTION", _DEFAULT_MAX_EVENTS_PER_TRANSACTION)
+
+
+def _max_enrichment_files_per_cycle() -> int:
+    return _positive_int_env(
+        "BRAINLAYER_DRAIN_MAX_ENRICHMENT_FILES_PER_CYCLE",
+        _DEFAULT_MAX_ENRICHMENT_FILES_PER_CYCLE,
+    )
 
 
 def _post_commit_yield_seconds() -> float:
@@ -919,6 +927,30 @@ def _unlink_processed_file(path: Path, log_path: Path) -> None:
         _log(log_path, f"drain committed but could not unlink {path}: {exc}")
 
 
+def _is_enrichment_queue_file(path: Path) -> bool:
+    return path.name.startswith("enrichment-")
+
+
+def _has_high_priority_queue_files(queue_dir: Path) -> bool:
+    try:
+        return any(not _is_enrichment_queue_file(path) for path in queue_dir.glob("*.jsonl"))
+    except OSError:
+        return False
+
+
+def _queue_file_priority(path: Path) -> tuple[int, str]:
+    return (2 if _is_enrichment_queue_file(path) else 0, path.name)
+
+
+def _select_priority_queue_files(files: list[Path], batch_size: int, *, cap_enrichment: bool = True) -> list[Path]:
+    ordered = sorted(files, key=_queue_file_priority)
+    high_priority = [path for path in ordered if not _is_enrichment_queue_file(path)]
+    if high_priority:
+        return high_priority[:batch_size]
+    enrichment_limit = min(batch_size, _max_enrichment_files_per_cycle()) if cap_enrichment else batch_size
+    return ordered[:enrichment_limit]
+
+
 def _rewrite_events_file(path: Path, events: list[dict[str, Any]]) -> None:
     tmp_path = path.with_suffix(".tmp")
     tmp_path.write_text(
@@ -1064,9 +1096,7 @@ def burn_drain_once(
     result = BurnDrainResult()
     lock_fd = _acquire_queue_lock(queue_dir)
     try:
-        files = sorted(queue_dir.glob("*.jsonl"), key=lambda path: (path.name.startswith("enrichment-"), path.name))[
-            :batch_size
-        ]
+        files = _select_priority_queue_files(list(queue_dir.glob("*.jsonl")), batch_size, cap_enrichment=False)
         if not files:
             return result
         try:
@@ -1120,7 +1150,7 @@ def burn_drain_once(
                 result.skipped_verified_stale += attempt_skipped_verified_stale
                 conn.setbusytimeout(_checkpoint_busy_timeout_ms())
                 try:
-                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
                     result.checkpoints += 1
                 except apsw.Error as exc:
                     _log(log_path, f"burn drain checkpoint skipped: {exc}")
@@ -1187,9 +1217,7 @@ def drain_once(
 
     lock_fd = _acquire_queue_lock(queue_dir)
     try:
-        files = sorted(queue_dir.glob("*.jsonl"), key=lambda path: (path.name.startswith("enrichment-"), path.name))[
-            :batch_size
-        ]
+        files = _select_priority_queue_files(list(queue_dir.glob("*.jsonl")), batch_size)
         if not files:
             return 0
         _log(log_path, f"queue_depth={len(files)}")
@@ -1239,18 +1267,14 @@ def drain_once(
                             collision_ids.append(result.collision_chunk_id)
                         attempt_drained += 1
                     conn.execute("COMMIT")
-                    # Best-effort WAL reclaim. The truncating checkpoint (not PASSIVE)
-                    # shrinks the WAL file after each drained batch — PASSIVE leaves
-                    # frames in place when a reader pins a page, letting the WAL grow
-                    # unbounded (observed multi-GB) and starve brain_store writes. But it
-                    # blocks other writers while waiting for readers, so bound that wait
-                    # to a short window (default 1s): if a reader pins the WAL we skip
-                    # this round rather than stall every writer for the full drain
-                    # busy_timeout. journal_size_limit and the out-of-band wal-checkpoint
-                    # job reclaim later. The except keeps a busy checkpoint non-fatal.
+                    # Best-effort WAL checkpoint. Keep the live writer path PASSIVE:
+                    # TRUNCATE can block behind long-lived readers on the live multi-GB
+                    # WAL, which stalls queue drain before it can publish health.
+                    # journal_size_limit and the scheduled wal-checkpoint job reclaim
+                    # disk later. The except keeps a busy checkpoint non-fatal.
                     conn.setbusytimeout(_checkpoint_busy_timeout_ms())
                     try:
-                        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                        conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
                     except apsw.Error:
                         pass
                     finally:
@@ -1266,6 +1290,8 @@ def drain_once(
                     yield_seconds = _post_commit_yield_seconds()
                     if yield_seconds > 0:
                         time.sleep(yield_seconds)
+                    if _is_enrichment_queue_file(path) and _has_high_priority_queue_files(queue_dir):
+                        stop_draining = True
                     break
                 except Exception as exc:
                     if conn is not None:

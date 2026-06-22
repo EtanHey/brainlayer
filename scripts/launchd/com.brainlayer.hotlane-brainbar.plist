@@ -3,35 +3,40 @@
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>com.brainlayer.enrichment</string>
+	<string>com.brainlayer.hotlane-brainbar</string>
 	<key>ProgramArguments</key>
 	<array>
 		<string>__BRAINLAYER_ENV_RUN__</string>
-		<string>__BRAINLAYER_BIN__</string>
-		<string>enrich</string>
-		<string>--mode</string>
-		<string>realtime</string>
-		<string>--supervisor</string>
+		<string>__BRAINLAYER_PYTHON__</string>
+		<string>__BRAINLAYER_DIR__/scripts/hotlane_brainbar_daemon.py</string>
+		<string>--interval</string>
+		<string>1.0</string>
+		<string>--recent-limit</string>
+		<string>5</string>
+		<string>--backlog-interval</string>
+		<string>10.0</string>
+		<string>--backlog-batch</string>
+		<string>4</string>
+		<string>--enrich-interval</string>
+		<string>10.0</string>
+		<string>--enrich-limit</string>
+		<string>5</string>
+		<string>--enrich-since-hours</string>
+		<string>87600</string>
 	</array>
 	<key>WorkingDirectory</key>
 	<string>__BRAINLAYER_DIR__</string>
 	<key>KeepAlive</key>
 	<true/>
 	<key>StandardOutPath</key>
-	<string>__HOME__/Library/Logs/brainlayer/enrichment.out.log</string>
+	<string>__HOME__/Library/Logs/brainlayer/hotlane-brainbar.out.log</string>
 	<key>StandardErrorPath</key>
-	<string>__HOME__/Library/Logs/brainlayer/enrichment.err.log</string>
+	<string>__HOME__/Library/Logs/brainlayer/hotlane-brainbar.err.log</string>
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>PATH</key>
-		<string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:__HOME__/.local/bin</string>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:__HOME__/.local/bin</string>
 		<key>PYTHONUNBUFFERED</key>
-		<string>1</string>
-		<key>BRAINLAYER_STALL_TIMEOUT</key>
-		<string>300</string>
-		<key>BRAINLAYER_ENRICHMENT_QUEUE_WRITES</key>
-		<string>1</string>
-		<key>BRAINLAYER_ENRICH_IDLE_BACKLOG</key>
 		<string>1</string>
 		<key>BRAINLAYER_ENV_FILE</key>
 		<string>__BRAINLAYER_ENV_FILE__</string>
@@ -39,21 +44,27 @@
 		<string>1</string>
 		<key>BRAINLAYER_REPO_ROOT</key>
 		<string>__BRAINLAYER_DIR__</string>
+		<key>BRAINLAYER_GEMINI_SERVICE_TIER</key>
+		<string>flex</string>
+		<key>BRAINLAYER_ENRICH_CONCURRENCY</key>
+		<string>4</string>
+		<key>BRAINLAYER_ENRICH_RATE</key>
+		<string>15</string>
 		<key>BRAINLAYER_LAUNCHD_SERVICE</key>
-		<string>enrichment</string>
+		<string>hotlane-brainbar</string>
 	</dict>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>ThrottleInterval</key>
-	<integer>60</integer>
+	<integer>5</integer>
 	<key>Nice</key>
 	<integer>10</integer>
 	<key>ProcessType</key>
 	<string>Background</string>
 	<key>ExitTimeOut</key>
-	<integer>120</integer>
+	<integer>30</integer>
 	<key>LowPriorityIO</key>
-	<false/>
+	<true/>
 	<key>SoftResourceLimits</key>
 	<dict>
 		<key>NumberOfFiles</key>

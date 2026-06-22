@@ -2,12 +2,22 @@
 
 import asyncio
 import json
+import sys
 import threading
 import time
 from unittest.mock import MagicMock, patch
 
 import apsw
 import pytest
+
+
+def test_default_store_busy_budget_is_sub_500ms(monkeypatch):
+    """brain_store should defer quickly instead of waiting seconds behind background writers."""
+    from brainlayer.mcp.store_handler import _store_busy_budget_ms
+
+    monkeypatch.delenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", raising=False)
+
+    assert _store_busy_budget_ms() <= 500
 
 
 @pytest.mark.asyncio
@@ -91,6 +101,81 @@ async def test_store_validates_before_busy_deferral(tmp_path):
     assert result.isError is True
     assert "Validation error" in result.content[0].text
     assert not list(queue_dir.glob("mcp-*.jsonl"))
+
+
+@pytest.mark.asyncio
+async def test_store_queues_fast_when_background_queue_is_present(tmp_path, monkeypatch):
+    """Live brain_store should reserve through the queue instead of waiting on background writers."""
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    (queue_dir / "enrichment-live-backlog.jsonl").write_text(
+        json.dumps(
+            {
+                "kind": "enrichment_update",
+                "chunk_id": "background-enrichment",
+                "enrichment": {"summary": "background work can wait"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+    monkeypatch.delenv("BRAINLAYER_ARBITRATED", raising=False)
+
+    import brainlayer.search_repo  # noqa: F401 - warm steady-state cache invalidation import before timing.
+    from brainlayer.mcp.store_handler import _store, _validate_store_request
+
+    _validate_store_request("warm validation imports", "note")
+
+    with (
+        patch("brainlayer.queue_io.get_queue_dir", return_value=queue_dir),
+        patch("brainlayer.mcp.store_handler._get_vector_store", side_effect=AssertionError("DB writer path used")),
+        patch("brainlayer.search_repo.clear_hybrid_search_cache"),
+    ):
+        started = time.perf_counter()
+        texts, structured = await _store(
+            content="interactive reservation should not wait behind background enrichment",
+            memory_type="note",
+            project="test",
+        )
+        elapsed = time.perf_counter() - started
+
+    queued_files = list(queue_dir.glob("mcp-*.jsonl"))
+    assert elapsed < 0.5
+    assert len(queued_files) == 1
+    assert structured["queued"] is True
+    assert structured["deferred"]["reason"] == "INTERACTIVE_PRIORITY"
+    assert structured["deferred"]["queue_path"] == str(queued_files[0])
+    assert any(structured["chunk_id"] in item.text for item in texts)
+
+
+@pytest.mark.asyncio
+async def test_store_priority_queue_does_not_cold_import_heavy_write_stack(tmp_path, monkeypatch):
+    """The first queued brain_store call must not import heavy write/search stacks."""
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    monkeypatch.setenv("BRAINLAYER_INTERACTIVE_STORE_QUEUE", "1")
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+    monkeypatch.delitem(sys.modules, "brainlayer.pipeline", raising=False)
+    monkeypatch.delitem(sys.modules, "brainlayer.store", raising=False)
+
+    from brainlayer.mcp.store_handler import _store
+
+    with (
+        patch("brainlayer.queue_io.get_queue_dir", return_value=queue_dir),
+        patch("brainlayer.mcp.store_handler._get_vector_store", side_effect=AssertionError("DB writer path used")),
+    ):
+        _texts, structured = await _store(
+            content="interactive reservation should not pay search import cold-start",
+            memory_type="note",
+            project="test",
+        )
+
+    assert structured["queued"] is True
+    assert structured["deferred"]["reason"] == "INTERACTIVE_PRIORITY"
+    assert "brainlayer.pipeline" not in sys.modules
+    assert "brainlayer.store" not in sys.modules
 
 
 @pytest.mark.asyncio
@@ -415,6 +500,7 @@ async def test_store_busy_budget_restores_cold_vector_store_write_timeout(tmp_pa
 
     with (
         patch("brainlayer.mcp.store_handler._normalize_project_name", return_value="test"),
+        patch("brainlayer.queue_io.get_queue_dir", return_value=tmp_path / "empty-queue"),
         patch("brainlayer.queue_io.enqueue_store", side_effect=RuntimeError("force legacy pending queue")),
         patch("brainlayer.mcp.store_handler._get_pending_store_path", return_value=pending_path),
         patch("brainlayer.store.store_memory", side_effect=apsw.BusyError("database is locked")),

@@ -1,10 +1,11 @@
 import json
 import logging
+import time
 
 import pytest
 
 from brainlayer import search_profile
-from brainlayer.mcp.search_handler import _brain_search
+from brainlayer.mcp.search_handler import _brain_search, _search
 
 
 class FakeEmbeddingModel:
@@ -31,6 +32,12 @@ class FakeSearchStore:
 class FakeFailingSearchStore(FakeSearchStore):
     def hybrid_search(self, **_kwargs):
         raise RuntimeError("profile failure")
+
+
+class SlowEmbeddingModel:
+    def embed_query(self, _query):
+        time.sleep(0.05)
+        return [0.1, 0.2, 0.3]
 
 
 def _profile_events(caplog):
@@ -80,6 +87,22 @@ async def test_brain_search_profile_flag_emits_failed_hybrid_timing(monkeypatch,
     hybrid_events = [event for event in _profile_events(caplog) if event.get("step") == "hybrid_search"]
     assert len(hybrid_events) == 1
     assert hybrid_events[0]["error"] == "RuntimeError"
+
+
+@pytest.mark.asyncio
+async def test_brain_search_embed_timeout_returns_fts_fallback(monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_EMBED_TIMEOUT_MS", "1")
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: FakeSearchStore())
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_embedding_model", lambda: SlowEmbeddingModel())
+    monkeypatch.setattr("brainlayer.mcp.search_handler._expanded_fts_query", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._detect_entities", lambda *_args, **_kwargs: [])
+
+    texts, structured = await _search(query="auth refactor", project="brainlayer", source="all", detail="compact")
+
+    assert structured["total"] == 1
+    assert structured["search_mode"] == "fts_fallback"
+    assert structured["fallback_reason"] == "embed_timeout"
+    assert "auth refactor profile result" in texts[0].text
 
 
 @pytest.mark.asyncio

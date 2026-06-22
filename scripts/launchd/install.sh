@@ -16,6 +16,7 @@
 #   ./scripts/launchd/install.sh jsonl-backup # Install daily JSONL backup only
 #   ./scripts/launchd/install.sh maintenance  # Install recurring maintenance jobs
 #   ./scripts/launchd/install.sh health-check # Install stability health check only
+#   ./scripts/launchd/install.sh hotlane      # Install BrainBar hotlane embed/enrich daemon only
 #   ./scripts/launchd/install.sh remove       # Unload and remove all
 set -euo pipefail
 
@@ -255,6 +256,10 @@ case "${1:-all}" in
     health-check)
         install_plist health-check
         ;;
+    hotlane|hotlane-brainbar)
+        verify_gemini_env_file
+        install_plist hotlane-brainbar
+        ;;
     all)
         install_env_runner
         verify_config_file
@@ -262,6 +267,7 @@ case "${1:-all}" in
         install_plist index
         install_plist drain
         install_plist watch
+        install_plist hotlane-brainbar
         install_plist enrichment
         install_plist decay
         install_plist wal-checkpoint
@@ -290,11 +296,12 @@ case "${1:-all}" in
         remove_plist maintenance-nightly 2>/dev/null || true
         remove_plist maintenance-weekly 2>/dev/null || true
         remove_plist health-check 2>/dev/null || true
+        remove_plist hotlane-brainbar 2>/dev/null || true
         rm -f "$BRAINLAYER_LIB_DIR/backup-daily.sh"
         rm -f "$BRAINLAYER_LIB_DIR/jsonl-backup.sh"
         ;;
     *)
-        echo "Usage: $0 [index|watch|enrich|enrichment|decay|drain|repair-fts|load [name]|unload [name]|checkpoint|backup|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|all|remove]"
+        echo "Usage: $0 [index|watch|enrich|enrichment|decay|drain|hotlane|repair-fts|load [name]|unload [name]|checkpoint|backup|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|all|remove]"
         exit 1
         ;;
 esac

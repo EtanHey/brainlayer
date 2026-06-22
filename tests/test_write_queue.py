@@ -184,6 +184,37 @@ class TestQueueStore:
 
         assert result.chunk_id == "rt-canonical"
 
+    def test_drain_once_uses_nonblocking_checkpoint_on_hot_path(self, tmp_path, monkeypatch):
+        """The live drain loop must not wedge behind a large pinned WAL checkpoint."""
+        from brainlayer import drain
+
+        queue_dir = tmp_path / "queue"
+        queue_dir.mkdir()
+        (queue_dir / "noop.jsonl").write_text(json.dumps({"kind": "noop"}) + "\n", encoding="utf-8")
+        checkpoint_sql: list[str] = []
+
+        class FakeConnection:
+            def execute(self, sql, *_args):
+                if "wal_checkpoint" in sql:
+                    checkpoint_sql.append(sql)
+                return []
+
+            def setbusytimeout(self, _timeout_ms):
+                return None
+
+            def close(self):
+                return None
+
+        monkeypatch.setattr(drain, "_open_connection", lambda _db_path: FakeConnection())
+        monkeypatch.setattr(drain, "_ensure_enrichment_update_schema", lambda _conn: None)
+        monkeypatch.setattr(drain, "ensure_dedupe_schema", lambda _conn: None)
+        monkeypatch.setattr(drain, "_apply_event", lambda _conn, _event: drain.ApplyResult())
+
+        drained = drain_once(db_path=tmp_path / "db.sqlite", queue_dir=queue_dir, batch_size=1)
+
+        assert drained == 1
+        assert checkpoint_sql == ["PRAGMA wal_checkpoint(PASSIVE)"]
+
 
 class TestSingleWriterQueue:
     def test_single_worker_serializes_writes(self):
@@ -893,6 +924,78 @@ def test_drain_limits_enrichment_events_per_transaction(tmp_path, monkeypatch):
     conn.close()
 
     assert summaries == {"c0": "s0", "c1": "s1", "c2": None, "c3": None}
+
+
+def test_drain_yields_enrichment_cycle_when_interactive_file_appears(tmp_path, monkeypatch):
+    """A new interactive store file must preempt the rest of a selected enrichment batch."""
+    import brainlayer.drain as drain_module
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "drain.log"
+
+    conn = apsw.Connection(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT,
+            summary TEXT,
+            enriched_at TEXT,
+            enrich_status TEXT,
+            content_hash TEXT
+        )
+        """
+    )
+    for idx in range(2):
+        conn.execute(
+            "INSERT INTO chunks (id, content, content_hash) VALUES (?, ?, ?)",
+            (f"c{idx}", f"content {idx}", f"h{idx}"),
+        )
+    conn.close()
+
+    first = enqueue_enrichment_updates(
+        [{"chunk_id": "c0", "content_hash": "h0", "enrichment": {"summary": "s0"}}],
+        queue_dir=queue_dir,
+    )
+    second = enqueue_enrichment_updates(
+        [{"chunk_id": "c1", "content_hash": "h1", "enrichment": {"summary": "s1"}}],
+        queue_dir=queue_dir,
+    )
+
+    real_unlink = drain_module._unlink_processed_file
+    processed_enrichment_files = 0
+
+    def create_interactive_after_first_unlink(path, log_path):
+        nonlocal processed_enrichment_files
+        real_unlink(path, log_path)
+        if path.name.startswith("enrichment-"):
+            processed_enrichment_files += 1
+        if processed_enrichment_files == 1:
+            (queue_dir / "mcp-interactive.jsonl").write_text(
+                json.dumps(
+                    {
+                        "kind": "store_memory",
+                        "chunk_id": "interactive-queued",
+                        "content": "interactive queue file should preempt enrichment",
+                        "memory_type": "note",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+    monkeypatch.setattr(drain_module, "_unlink_processed_file", create_interactive_after_first_unlink)
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10, log_path=log_path) == 1
+
+    conn = apsw.Connection(str(db_path))
+    summaries = dict(conn.execute("SELECT id, summary FROM chunks ORDER BY id"))
+    conn.close()
+
+    assert summaries in ({"c0": "s0", "c1": None}, {"c0": None, "c1": "s1"})
+    assert sum(path.exists() for path in (first, second)) == 1
+    assert (queue_dir / "mcp-interactive.jsonl").exists()
 
 
 def test_drain_persists_enrichment_provenance_in_chunk_metadata(tmp_path):

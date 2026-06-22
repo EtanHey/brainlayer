@@ -42,6 +42,7 @@ DEFAULT_POST_WRITE_YIELD_MS = 20.0
 DEFAULT_ENRICH_SUPERVISOR_LIMIT = 200_000
 DEFAULT_ENRICH_SUPERVISOR_SINCE_HOURS = 87_600
 DEFAULT_ENRICH_IDLE_POLL_SECONDS = 30.0
+DEFAULT_ENRICH_WATCHER_IDLE_SECONDS = 5.0
 DEFAULT_ENRICH_DAILY_USD_CAP = 5.0
 ENRICH_DAILY_COST_COUNTER_FILENAME = "enrich-daily-cost.json"
 _DEFAULT_CHUNK_ORIGIN = object()
@@ -291,6 +292,69 @@ def _current_idle_poll_seconds() -> float:
     )
 
 
+def _idle_backlog_enabled() -> bool:
+    return os.environ.get("BRAINLAYER_ENRICH_IDLE_BACKLOG", "0").lower() not in {"0", "false", "no"}
+
+
+def _watcher_offsets_path() -> Path:
+    override = os.environ.get("BRAINLAYER_WATCHER_OFFSETS_PATH") or os.environ.get("BRAINLAYER_OFFSETS_PATH")
+    if override:
+        return Path(override).expanduser()
+
+    from .paths import get_db_path
+
+    return get_db_path().parent / "offsets.json"
+
+
+def _watcher_health_path() -> Path:
+    override = os.environ.get("BRAINLAYER_WATCHER_HEALTH_PATH")
+    if override:
+        return Path(override).expanduser()
+
+    from .paths import get_db_path
+
+    return get_db_path().parent / "watcher-health.json"
+
+
+def _watcher_idle_seconds() -> float:
+    return _bounded_nonnegative_float(
+        os.environ.get("BRAINLAYER_ENRICH_WATCHER_IDLE_SECONDS"),
+        DEFAULT_ENRICH_WATCHER_IDLE_SECONDS,
+    )
+
+
+def _path_is_idle(path: Path, *, now: float, idle_seconds: float) -> bool:
+    try:
+        stat_result = path.stat()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return now - stat_result.st_mtime >= idle_seconds
+
+
+def _watcher_idle() -> bool:
+    idle_seconds = _watcher_idle_seconds()
+    if idle_seconds <= 0:
+        return True
+    now = time.time()
+    return all(
+        _path_is_idle(path, now=now, idle_seconds=idle_seconds)
+        for path in (_watcher_offsets_path(), _watcher_health_path())
+    )
+
+
+def _idle_backlog_ready() -> bool:
+    if not _idle_backlog_enabled():
+        return False
+    try:
+        from .queue_io import get_queue_dir
+
+        return not any(get_queue_dir().expanduser().glob("*.jsonl")) and _watcher_idle()
+    except OSError:
+        return False
+
+
 def _sleep_or_wait_for_stop(stop_event: threading.Event | None, seconds: float, sleep_fn) -> None:
     if seconds <= 0:
         return
@@ -310,6 +374,7 @@ def run_enrich_supervisor(
     stop_event: threading.Event | None = None,
     vector_store_cls=None,
     enrich_fn=None,
+    idle_backlog_ready_fn=None,
     sleep_fn=time.sleep,
 ) -> EnrichmentSupervisorResult:
     """Run realtime enrichment as a long-lived supervisor around one VectorStore.
@@ -324,6 +389,8 @@ def run_enrich_supervisor(
         vector_store_cls = VectorStore
     if enrich_fn is None:
         enrich_fn = enrich_realtime
+    if idle_backlog_ready_fn is None:
+        idle_backlog_ready_fn = _idle_backlog_ready
     if idle_poll_seconds is None:
         idle_poll_seconds = _current_idle_poll_seconds()
 
@@ -363,7 +430,42 @@ def run_enrich_supervisor(
             if _result_hit_daily_cap(result):
                 break
 
-            if result.attempted == 0 and (max_cycles is None or stats.cycles < max_cycles):
+            idle_backlog_attempted = 0
+            if (
+                result.attempted == 0
+                and since_hours is not None
+                and idle_backlog_ready_fn()
+                and (max_cycles is None or stats.cycles <= max_cycles)
+            ):
+                logger.info("Enrich supervisor recent queue empty; checking idle backlog")
+                try:
+                    backlog_result = enrich_fn(store, limit=limit, since_hours=None)
+                except EnrichmentDailyCapReached as exc:
+                    stats.errors.append(str(exc))
+                    logger.warning("Enrich supervisor stopping: %s", exc)
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    stats.failed_cycles += 1
+                    stats.errors.append(f"supervisor-idle-backlog: {exc}")
+                    logger.exception("Enrich supervisor idle-backlog pass failed; continuing")
+                    if max_cycles is None or stats.cycles < max_cycles:
+                        _sleep_or_wait_for_stop(stop_event, idle_poll_seconds, sleep_fn)
+                    continue
+                stats.attempted += backlog_result.attempted
+                stats.enriched += backlog_result.enriched
+                stats.skipped += backlog_result.skipped
+                stats.failed += backlog_result.failed
+                stats.errors.extend(backlog_result.errors)
+                idle_backlog_attempted = backlog_result.attempted
+                if _result_hit_daily_cap(backlog_result):
+                    break
+
+            if (
+                stats.cycles > 0
+                and result.attempted == 0
+                and idle_backlog_attempted == 0
+                and (max_cycles is None or stats.cycles < max_cycles)
+            ):
                 logger.info("Enrich supervisor queue empty; sleeping %.1fs", idle_poll_seconds)
                 _sleep_or_wait_for_stop(stop_event, idle_poll_seconds, sleep_fn)
     finally:
@@ -464,7 +566,7 @@ def _arbitrated_writes_enabled() -> bool:
 
 
 def _enrichment_writes_queued_enabled() -> bool:
-    return os.environ.get("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "0").lower() not in {"0", "false", "no"}
+    return os.environ.get("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "1").lower() not in {"0", "false", "no"}
 
 
 def _open_enrich_supervisor_store(vector_store_cls, db_path: Path):

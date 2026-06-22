@@ -1,8 +1,12 @@
+import asyncio
 import hashlib
+import importlib
 import json
 import multiprocessing as mp
 import re
 import sqlite3
+import sys
+import threading
 import time
 from pathlib import Path
 
@@ -177,6 +181,20 @@ def _create_vec_db(path: Path) -> None:
         conn.close()
 
 
+def _load_hotlane_module():
+    importlib.invalidate_caches()
+    sys.modules.pop("scripts.hotlane_brainbar_daemon", None)
+    return importlib.import_module("scripts.hotlane_brainbar_daemon")
+
+
+class _FastEmbeddingModel:
+    def embed_query(self, _text: str) -> list[float]:
+        return [0.03125] * 1024
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        return [[0.03125] * 1024 for _text in texts]
+
+
 def test_drain_default_queue_dir_expands_env_tilde(monkeypatch):
     from brainlayer.drain import _default_queue_dir
 
@@ -220,6 +238,55 @@ def test_drain_prioritizes_writes_before_enrichment(tmp_path, monkeypatch):
     assert (queue_dir / "enrichment-000.jsonl").exists()
     with sqlite3.connect(db_path) as conn:
         assert conn.execute("SELECT id FROM chunks WHERE id = 'watcher-priority'").fetchone() == ("watcher-priority",)
+
+
+def test_drain_yields_enrichment_when_interactive_store_is_queued(tmp_path, monkeypatch):
+    """Interactive stores are higher priority than enrichment metadata writes."""
+    from brainlayer.drain import drain_once
+    from brainlayer.queue_io import enqueue_enrichment_updates, enqueue_store
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    _create_minimal_db(db_path)
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+
+    with _connect_apsw(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO chunks (id, content, metadata, source_file, content_hash)
+            VALUES ('enrich-low-priority', 'metadata can wait', '{}', 'fixture', 'hash-low')
+            """
+        )
+
+    store_path = enqueue_store(
+        content="interactive store must drain before enrichment",
+        memory_type="note",
+        project="arbitration-test",
+        source="mcp",
+        queue_dir=queue_dir,
+    )
+    enrichment_path = enqueue_enrichment_updates(
+        [
+            {
+                "chunk_id": "enrich-low-priority",
+                "content_hash": "hash-low",
+                "enrichment": {"summary": "low priority summary"},
+            }
+        ],
+        queue_dir=queue_dir,
+    )
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10) == 1
+
+    assert not store_path.exists()
+    assert enrichment_path.exists()
+    with _connect_apsw(db_path) as conn:
+        stored = conn.execute(
+            "SELECT COUNT(*) FROM chunks WHERE content = 'interactive store must drain before enrichment'"
+        ).fetchone()[0]
+        summary = conn.execute("SELECT summary FROM chunks WHERE id = 'enrich-low-priority'").fetchone()[0]
+    assert stored == 1
+    assert summary is None
 
 
 def test_drain_skips_stale_enrichment_for_rewritten_chunk(tmp_path, monkeypatch):
@@ -472,6 +539,197 @@ def test_drain_daemon_serializes_three_concurrent_producers(tmp_path, monkeypatc
     assert total_drained == 3000, f"drain_once accumulated {total_drained} (expected 3000)"
     assert not list(queue_dir.glob("*.jsonl"))
     assert "database is locked" not in log_path.read_text(encoding="utf-8").lower()
+
+
+def test_real_concurrent_writers_keep_interactive_store_searchable_under_sla(tmp_path, monkeypatch):
+    """Real drain + hotlane writers must not starve interactive store->search."""
+    from brainlayer.drain import drain_once
+    from brainlayer.mcp import search_handler, store_handler
+    from brainlayer.mcp.search_handler import _search
+    from brainlayer.mcp.store_handler import _store
+    from brainlayer.queue_io import enqueue_enrichment_updates, enqueue_store
+    from brainlayer.vector_store import VectorStore
+
+    hotlane = _load_hotlane_module()
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    writer_pid_dir = tmp_path / "pidfiles"
+    log_path = tmp_path / "drain.log"
+    marker = "d3realconcurrencygate42"
+
+    monkeypatch.setenv("BRAINLAYER_ARBITRATED", "1")
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(writer_pid_dir))
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "1")
+    monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "400")
+    monkeypatch.setenv("BRAINLAYER_EMBED_TIMEOUT_MS", "1000")
+    monkeypatch.setattr(store_handler, "_get_embedding_model", lambda: _FastEmbeddingModel())
+    monkeypatch.setattr(search_handler, "_get_embedding_model", lambda: _FastEmbeddingModel())
+
+    store = VectorStore(db_path)
+    now = "2026-06-21T20:00:00+00:00"
+    try:
+        cursor = store.conn.cursor()
+        cursor.execute("BEGIN IMMEDIATE")
+        for index in range(48):
+            chunk_id = f"hotlane-seed-{index}"
+            content = f"hotlane seed backlog item {index}"
+            cursor.execute(
+                """
+                INSERT INTO chunks (
+                    id, content, metadata, source_file, project, content_type,
+                    value_type, char_count, source, created_at, status
+                )
+                VALUES (?, ?, '{}', 'brainbar-store', 'arbitration-test', 'note',
+                        'high', ?, 'mcp', ?, 'active')
+                """,
+                (chunk_id, content, len(content), now),
+            )
+        cursor.execute("COMMIT")
+    finally:
+        store.close()
+
+    for index in range(8):
+        enqueue_store(
+            content=f"drain background backlog item {index}",
+            memory_type="note",
+            project="arbitration-test",
+            source="watcher",
+            queue_dir=queue_dir,
+        )
+    enqueue_enrichment_updates(
+        [
+            {
+                "chunk_id": "hotlane-seed-0",
+                "content_hash": None,
+                "enrichment": {"summary": "low priority enrichment must yield"},
+            }
+        ],
+        queue_dir=queue_dir,
+    )
+
+    stop = threading.Event()
+    drain_writes = 0
+    hotlane_embeddings = 0
+    counters_lock = threading.Lock()
+
+    def drain_loop() -> None:
+        nonlocal drain_writes
+        while not stop.is_set():
+            drained = drain_once(
+                db_path=db_path,
+                queue_dir=queue_dir,
+                batch_size=8,
+                log_path=log_path,
+                embed_fn=lambda _text: [0.0625] * 1024,
+            )
+            if drained:
+                with counters_lock:
+                    drain_writes += drained
+            time.sleep(0.005)
+
+    def recording_cycle(**kwargs):
+        nonlocal hotlane_embeddings
+        result = hotlane.run_cycle(**kwargs)
+        if result.embedded:
+            with counters_lock:
+                hotlane_embeddings += result.embedded
+        return result
+
+    def hotlane_loop() -> None:
+        hotlane.STOP = False
+        hotlane.run(
+            db_path=db_path,
+            interval=0.005,
+            recent_limit=4,
+            backlog_interval=0.005,
+            backlog_batch=4,
+            enrich_interval=9999,
+            enrich_limit=0,
+            enrich_since_hours=24,
+            vector_store_cls=VectorStore,
+            model_factory=_FastEmbeddingModel,
+            cycle_fn=recording_cycle,
+            sleep_fn=lambda seconds: time.sleep(min(seconds, 0.005)),
+            max_cycles=400,
+            queue_dir=queue_dir,
+        )
+
+    drain_thread = threading.Thread(target=drain_loop, name="test-drain-loop", daemon=True)
+    hotlane_thread = threading.Thread(target=hotlane_loop, name="test-hotlane-loop", daemon=True)
+    drain_thread.start()
+    hotlane_thread.start()
+
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        with counters_lock:
+            high_priority_queue_empty = not any(
+                path for path in queue_dir.glob("*.jsonl") if not path.name.startswith("enrichment-")
+            )
+            if drain_writes >= 8 and hotlane_embeddings > 0 and high_priority_queue_empty:
+                break
+        time.sleep(0.01)
+    with counters_lock:
+        assert drain_writes >= 8
+        assert hotlane_embeddings > 0
+    assert not any(path for path in queue_dir.glob("*.jsonl") if not path.name.startswith("enrichment-"))
+
+    readonly_store = VectorStore(db_path, readonly=True)
+    monkeypatch.setattr(search_handler, "_get_vector_store", lambda: readonly_store)
+
+    try:
+        roundtrip_started = time.perf_counter()
+        store_started = time.perf_counter()
+        store_result = asyncio.run(
+            _store(
+                content=f"{marker} interactive store must be searchable while drain and hotlane write",
+                memory_type="note",
+                project="arbitration-test",
+                tags=["d3", "concurrency"],
+                importance=8,
+            )
+        )
+        store_latency = time.perf_counter() - store_started
+        assert store_latency < 0.5
+        assert store_result[1]["queued"] is True
+
+        search_payload = None
+        while time.perf_counter() - roundtrip_started < 2.0:
+            search_result = asyncio.run(
+                _search(
+                    query=marker,
+                    project="arbitration-test",
+                    source="all",
+                    num_results=5,
+                    include_operational=True,
+                )
+            )
+            if not isinstance(search_result, tuple):
+                error_text = "\n".join(getattr(part, "text", "") for part in getattr(search_result, "content", []))
+                search_payload = {"total": 0, "results": [], "error": error_text}
+                time.sleep(0.025)
+                continue
+            search_payload = search_result[1]
+            if search_payload.get("total", 0) >= 1 and any(
+                marker in (item.get("content", "") + item.get("snippet", ""))
+                for item in search_payload.get("results", [])
+            ):
+                break
+            time.sleep(0.025)
+
+        roundtrip_latency = time.perf_counter() - roundtrip_started
+        assert search_payload is not None
+        assert search_payload.get("total", 0) >= 1, search_payload
+        assert any(
+            marker in (item.get("content", "") + item.get("snippet", "")) for item in search_payload.get("results", [])
+        ), search_payload
+        assert roundtrip_latency < 2.0
+    finally:
+        readonly_store.close()
+        stop.set()
+        hotlane.STOP = True
+        drain_thread.join(timeout=2)
+        hotlane_thread.join(timeout=2)
 
 
 def test_queue_sanitizes_source_and_drain_preserves_supersedes(tmp_path):

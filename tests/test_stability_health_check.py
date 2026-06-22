@@ -369,6 +369,65 @@ def test_health_check_bootstraps_absent_default_launchd_labels_instead_of_kickst
     assert not any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands)
 
 
+def test_health_check_bootstraps_absent_enrichment_and_clears_tripped_after_success(tmp_path):
+    db_path = tmp_path / "brainlayer.db"
+    state_path = tmp_path / "health-state.json"
+    _make_db(db_path, total=1, vector_rows=1)
+    state_path.write_text(
+        json.dumps(
+            {
+                "heal_failures": {"com.brainlayer.enrichment:enrichment_unloaded": 3},
+                "heal_tripped": ["com.brainlayer.enrichment:enrichment_unloaded"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    commands: list[list[str]] = []
+    enrichment_bootstrapped = False
+
+    def command_runner(args: list[str]):
+        nonlocal enrichment_bootstrapped
+        commands.append(args)
+        if args[:2] == ["launchctl", "print"] and "com.brainlayer.enrichment" in args[2]:
+            return (
+                SimpleNamespace(returncode=0, stdout="", stderr="")
+                if enrichment_bootstrapped
+                else SimpleNamespace(returncode=113, stdout="", stderr="Could not find service")
+            )
+        if args[:2] == ["launchctl", "bootstrap"] and str(args[-1]).endswith("com.brainlayer.enrichment.plist"):
+            enrichment_bootstrapped = True
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if args[:2] == ["launchctl", "print"]:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    result = run_health_check(
+        HealthCheckConfig(
+            db_path=db_path,
+            state_path=state_path,
+            heal=True,
+            heal_min_consecutive_failures=1,
+        ),
+        ps_output_fn=lambda: (
+            "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 4 --enrich-limit 5\n"
+        ),
+        socket_request_fn=_ok_canary,
+        command_runner=command_runner,
+        now_fn=lambda: datetime(2026, 6, 21, 10, 0, tzinfo=UTC),
+    )
+
+    assert "enrichment_unloaded" not in [issue.code for issue in result.issues]
+    assert [
+        "launchctl",
+        "bootstrap",
+        f"gui/{os.getuid()}",
+        str(Path("~/Library/LaunchAgents/com.brainlayer.enrichment.plist").expanduser()),
+    ] in commands
+    assert "bootstrap:com.brainlayer.enrichment" in result.actions
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+    assert "com.brainlayer.enrichment:enrichment_unloaded" not in saved["heal_tripped"]
+
+
 def test_run_health_check_references_mode_d_detector_helpers():
     source = inspect.getsource(health_check.run_health_check)
 

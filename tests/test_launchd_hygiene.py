@@ -85,6 +85,13 @@ def test_active_daemon_launchd_hygiene_matrix():
             "KeepAlive": True,
             "ThrottleInterval": 10,
         },
+        "scripts/launchd/com.brainlayer.hotlane-brainbar.plist": {
+            "ProcessType": "Background",
+            "ExitTimeOut": 30,
+            "LowPriorityIO": True,
+            "KeepAlive": True,
+            "ThrottleInterval": 5,
+        },
         "scripts/launchd/com.brainlayer.backup-daily.plist": {
             "ProcessType": "Background",
             "ExitTimeOut": 300,
@@ -164,21 +171,82 @@ def test_all_script_launchagents_source_unified_config_file():
         assert env["BRAINLAYER_LAUNCHD_SERVICE"] == service, str(path)
 
 
-def test_launchd_env_loader_exists_and_sources_env_before_exec():
+def test_launchd_env_loader_exists_and_loads_safe_env_before_exec():
     loader = REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh"
     content = loader.read_text(encoding="utf-8")
 
     assert 'ENV_FILE="${BRAINLAYER_ENV_FILE:-$HOME/.config/brainlayer/brainlayer.env}"' in content
+    assert "export PATH=" in content
     assert "BRAINLAYER_SYSTEM_ENABLED" in content
     assert "BRAINLAYER_LAUNCHD_SERVICE" in content
     assert "BRAINLAYER_LAUNCHD_${service_key}_ENABLED" in content
     assert "BRAINLAYER_ENRICH_ENABLED" in content
     assert "current user or root" in content
     assert "world-writable" in content
-    assert "set -a" in content
-    assert 'source "$ENV_FILE"' in content
+    assert "load_simple_env_file" in content
+    assert "env_file_declares_google_key" in content
+    assert 'source "$ENV_FILE"' not in content
     assert 'exec "$@"' in content
     assert "GOOGLE_API_KEY" in content
+
+
+def test_launchd_env_loader_does_not_evaluate_env_command_substitution(tmp_path):
+    loader = REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh"
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text(
+        "\n".join(
+            [
+                'GOOGLE_API_KEY="$(sleep 5)"',
+                "BRAINLAYER_SYSTEM_ENABLED=1",
+                "BRAINLAYER_LAUNCHD_DRAIN_ENABLED=1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    env_file.chmod(0o600)
+
+    result = subprocess.run(
+        [
+            str(loader),
+            "/bin/sh",
+            "-c",
+            'test -z "${GOOGLE_API_KEY:-}" && test "$BRAINLAYER_SYSTEM_ENABLED" = "1"',
+        ],
+        env={
+            **os.environ,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_SERVICE": "drain",
+        },
+        capture_output=True,
+        text=True,
+        timeout=1,
+        check=False,
+    )
+
+    assert result.returncode == 0
+
+
+def test_launchd_env_loader_required_google_key_allows_op_backed_declaration_without_shell_eval(tmp_path):
+    loader = REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh"
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text('GOOGLE_API_KEY="$(sleep 5)"\n', encoding="utf-8")
+    env_file.chmod(0o600)
+
+    result = subprocess.run(
+        [str(loader), "/usr/bin/true"],
+        env={
+            **os.environ,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_REQUIRE_GOOGLE_API_KEY": "1",
+            "BRAINLAYER_SKIP_DISABLE_GATES": "1",
+        },
+        capture_output=True,
+        text=True,
+        timeout=1,
+        check=False,
+    )
+
+    assert result.returncode == 0
 
 
 def test_launchd_env_loader_rejects_world_writable_env_file(tmp_path):
