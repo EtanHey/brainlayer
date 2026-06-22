@@ -270,7 +270,7 @@ def test_submit_only_reuses_existing_exports_without_reexporting(tmp_path, monke
     def fake_export(*args, **kwargs):  # pragma: no cover - should not be called
         raise AssertionError("submit-only should reuse existing export files, not regenerate them")
 
-    def fake_submit(jsonl_path, model, store):
+    def fake_submit(jsonl_path, model, store, **kwargs):
         submitted_paths.append(Path(jsonl_path))
         return f"job-{Path(jsonl_path).stem}"
 
@@ -368,7 +368,7 @@ def test_submit_only_exports_new_chunks_when_old_files_are_checkpointed(tmp_path
         new_file.write_text("{}\n")
         return [new_file]
 
-    def fake_submit(jsonl_path, model, store):
+    def fake_submit(jsonl_path, model, store, **kwargs):
         submitted_paths.append(Path(jsonl_path))
         return f"job-{Path(jsonl_path).stem}"
 
@@ -450,8 +450,89 @@ def test_export_unenriched_chunks_includes_legacy_rows_without_summary_v2(tmp_pa
         store.close()
 
 
-def test_import_results_writes_preview_fields_for_unenriched_chunks(tmp_path, monkeypatch):
-    """Fresh chunks should receive preview summaries without mutating live enrichment fields."""
+def test_export_backlog_drain_chunks_uses_realtime_eligible_predicate(tmp_path, monkeypatch):
+    """Batch drain export should target only chunks counted by the realtime backlog."""
+    export_dir = tmp_path / "exports"
+    monkeypatch.setattr(cloud_backfill, "EXPORT_DIR", export_dir)
+
+    store = VectorStore(tmp_path / "backfill.db")
+    try:
+        cursor = store.conn.cursor()
+        _insert_unenriched_chunk(
+            store,
+            "eligible",
+            "This long assistant chunk should be exported by the backlog drain selector.",
+        )
+        _insert_unenriched_chunk(store, "too-short", "short")
+        cursor.execute(
+            """
+            INSERT INTO chunks (
+                id, content, metadata, source_file, project, content_type, char_count,
+                source, enrich_status
+            ) VALUES (?, ?, '{}', 'test.jsonl', 'test-project', 'assistant_text', ?, 'claude_code', ?)
+            """,
+            (
+                "terminal-status",
+                "This long chunk already has a terminal enrichment status and must not drain.",
+                74,
+                "failed",
+            ),
+        )
+        cursor.execute(
+            """
+            INSERT INTO chunks (
+                id, content, metadata, source_file, project, content_type, char_count,
+                source, summary, enriched_at, summary_v2
+            ) VALUES (?, ?, '{}', 'test.jsonl', 'test-project', 'assistant_text', ?, 'claude_code', ?, ?, NULL)
+            """,
+            (
+                "legacy-preview",
+                "This legacy row belongs to preview re-enrichment, not backlog drain.",
+                67,
+                "Old summary",
+                "2026-04-01T00:00:00+00:00",
+            ),
+        )
+
+        jsonl_files = cloud_backfill.export_backlog_drain_chunks(
+            store,
+            max_chunks=10,
+            no_sanitize=True,
+        )
+
+        exported_keys = [
+            json.loads(line)["key"] for path in jsonl_files for line in path.read_text(encoding="utf-8").splitlines()
+        ]
+
+        assert exported_keys == ["eligible"]
+        assert [chunk["id"] for chunk in store.get_enrichment_candidates(limit=10)] == ["eligible"]
+    finally:
+        store.close()
+
+
+def test_record_batch_usage_counts_against_enrichment_daily_cap(tmp_path, monkeypatch):
+    """Batch usage should spend from the same enrichment daily cost counter."""
+    monkeypatch.setenv("BRAINLAYER_ENRICH_COST_DIR", str(tmp_path))
+    monkeypatch.setenv("BRAINLAYER_ENRICH_DAILY_USD_CAP", "0.10")
+
+    first_cost = cloud_backfill.record_batch_usage_against_daily_cap(1_000_000, 0)
+
+    assert first_cost == pytest.approx(0.05)
+    counter = json.loads((tmp_path / "enrich-daily-cost.json").read_text(encoding="utf-8"))
+    assert counter["spent_usd"] == pytest.approx(0.05)
+
+    second_cost = cloud_backfill.record_batch_usage_against_daily_cap(2_000_000, 0)
+    assert second_cost == pytest.approx(0.10)
+
+    counter = json.loads((tmp_path / "enrich-daily-cost.json").read_text(encoding="utf-8"))
+    assert counter["spent_usd"] == pytest.approx(0.15)
+
+    with pytest.raises(RuntimeError, match="ENRICH_DAILY_CAP_REACHED"):
+        cloud_backfill.record_batch_usage_against_daily_cap(1, 0)
+
+
+def test_import_results_commits_canonical_fields_for_unenriched_chunks(tmp_path, monkeypatch):
+    """Fresh chunks should receive canonical enrichment fields, not preview-only fields."""
     store = VectorStore(tmp_path / "brainlayer.db")
     try:
         _insert_unenriched_chunk(
@@ -497,14 +578,98 @@ def test_import_results_writes_preview_fields_for_unenriched_chunks(tmp_path, mo
         row = (
             store.conn.cursor()
             .execute(
-                "SELECT summary, summary_v2, enrichment_version, enriched_at FROM chunks WHERE id = ?",
+                "SELECT summary, summary_v2, enrichment_version, enriched_at, enrich_status FROM chunks WHERE id = ?",
                 ("chunk-1",),
             )
             .fetchone()
         )
 
         assert counts == {"success": 1, "failed": 0, "skipped": 0}
-        assert row == (None, "Remote enrichment imported successfully.", "2.0", None)
+        assert row[0] == "Remote enrichment imported successfully."
+        assert row[1] is None
+        assert row[2] == "r82-hybrid-taxonomy"
+        assert row[3] is not None
+        assert row[4] == "success"
+    finally:
+        store.close()
+
+
+def test_import_results_commits_enrichment_for_eligible_backlog_chunks(tmp_path, monkeypatch):
+    """Batch-drain imports must clear the same eligible set as realtime enrichment."""
+    store = VectorStore(tmp_path / "brainlayer.db")
+    try:
+        _insert_unenriched_chunk(
+            store,
+            "chunk-drain-1",
+            "Batch drain should commit canonical enrichment for this long eligible chunk.",
+        )
+
+        monkeypatch.setattr(cloud_backfill, "save_checkpoint", lambda *args, **kwargs: None)
+
+        assert [chunk["id"] for chunk in store.get_enrichment_candidates(limit=10)] == ["chunk-drain-1"]
+
+        results = [
+            {
+                "key": "chunk-drain-1",
+                "response": {
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [
+                                    {
+                                        "text": json.dumps(
+                                            {
+                                                "summary": "Canonical batch drain summary.",
+                                                "tags": ["brainlayer", "batch-drain"],
+                                                "importance": 8,
+                                                "intent": "implementing",
+                                                "primary_symbols": ["src/brainlayer/cloud_backfill.py"],
+                                                "resolved_query": "How does batch drain clear eligible chunks?",
+                                                "epistemic_level": "validated",
+                                                "debt_impact": "resolution",
+                                                "external_deps": ["Gemini Batch API"],
+                                                "entities": [
+                                                    {
+                                                        "name": "BrainLayer",
+                                                        "type": "project",
+                                                        "salience": 0.9,
+                                                        "role": "system_under_test",
+                                                    }
+                                                ],
+                                            }
+                                        )
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                },
+            }
+        ]
+
+        counts = cloud_backfill.import_results(store, results, "batch-drain-1")
+
+        row = (
+            store.conn.cursor()
+            .execute(
+                """
+                SELECT summary, tags, importance, intent, enriched_at, enrich_status, summary_v2
+                FROM chunks WHERE id = ?
+                """,
+                ("chunk-drain-1",),
+            )
+            .fetchone()
+        )
+
+        assert counts == {"success": 1, "failed": 0, "skipped": 0}
+        assert row[0] == "Canonical batch drain summary."
+        assert json.loads(row[1]) == ["brainlayer", "batch-drain"]
+        assert row[2] == 8
+        assert row[3] == "implementing"
+        assert row[4] is not None
+        assert row[5] == "success"
+        assert row[6] is None
+        assert store.get_enrichment_candidates(limit=10) == []
     finally:
         store.close()
 

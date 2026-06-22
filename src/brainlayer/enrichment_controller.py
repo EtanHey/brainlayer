@@ -190,6 +190,11 @@ def _estimate_gemini_response_cost_usd(response: Any, service_tier: str | None =
 
 def _record_enrich_response_usage(response: Any) -> float:
     cost_usd = _estimate_gemini_response_cost_usd(response)
+    return _record_enrich_cost_usd(cost_usd)
+
+
+def _record_enrich_cost_usd(cost_usd: float) -> float:
+    """Add an already-estimated enrichment cost to the shared daily counter."""
     if cost_usd <= 0:
         return 0.0
 
@@ -1359,6 +1364,8 @@ def _apply_enrichment(
     enrichment: dict[str, Any],
     *,
     chunk_origin: str | None = None,
+    enrichment_model: str | None = None,
+    enrichment_backend: str | None = None,
 ) -> None:
     should_promote_raw_entities = False
     with _savepoint(store.conn, "enrichment_apply_provenance"):
@@ -1386,8 +1393,8 @@ def _apply_enrichment(
             "sentiment_score": enrichment.get("sentiment_score"),
             "sentiment_signals": enrichment.get("sentiment_signals"),
             "chunk_origin": normalized_origin or None,
-            "enrichment_model": GEMINI_REALTIME_MODEL,
-            "enrichment_backend": _current_enrichment_backend(),
+            "enrichment_model": enrichment_model or GEMINI_REALTIME_MODEL,
+            "enrichment_backend": enrichment_backend or _current_enrichment_backend(),
         }
         enrichment_version = (enrichment.get("enrichment_metadata") or {}).get("prompt_version")
         if enrichment_version:

@@ -34,6 +34,11 @@ from typing import Any, Dict, List, Optional
 
 import apsw
 
+from .enrichment_controller import (
+    _apply_enrichment,
+    _raise_if_enrich_daily_cap_reached,
+    _record_enrich_cost_usd,
+)
 from .paths import get_db_path
 from .pipeline.enrichment import (
     HIGH_VALUE_TYPES,
@@ -122,7 +127,12 @@ CHECKPOINT_COLUMNS = (
     "input_tokens",
     "output_tokens",
     "cost_usd",
+    "import_mode",
 )
+
+IMPORT_MODE_AUTO = "auto"
+IMPORT_MODE_DRAIN = "drain"
+IMPORT_MODE_PREVIEW = "preview"
 
 
 def build_batch_request_line(chunk_id: str, prompt: str) -> Dict[str, Any]:
@@ -147,6 +157,13 @@ def build_batch_request_line(chunk_id: str, prompt: str) -> Dict[str, Any]:
 def estimate_batch_cost_usd(input_tokens: int, output_tokens: int) -> float:
     """Estimate Gemini 2.5 Flash-Lite Batch API cost using the 50% batch discount."""
     return (input_tokens * BATCH_INPUT_COST_PER_MILLION + output_tokens * BATCH_OUTPUT_COST_PER_MILLION) / 1_000_000
+
+
+def record_batch_usage_against_daily_cap(input_tokens: int, output_tokens: int) -> float:
+    """Record Gemini Batch usage against the shared enrichment daily cap counter."""
+    _raise_if_enrich_daily_cap_reached()
+    cost_usd = estimate_batch_cost_usd(input_tokens, output_tokens)
+    return _record_enrich_cost_usd(cost_usd)
 
 
 # ── DB helpers ──────────────────────────────────────────────────────────
@@ -197,9 +214,13 @@ def _ensure_checkpoint_table_in_conn(conn: apsw.Connection) -> None:
             error TEXT,
             input_tokens INTEGER DEFAULT 0,
             output_tokens INTEGER DEFAULT 0,
-            cost_usd REAL DEFAULT 0
+            cost_usd REAL DEFAULT 0,
+            import_mode TEXT DEFAULT 'auto'
         )
     """)
+    existing_columns = {row[1] for row in cursor.execute(f"PRAGMA table_info({CHECKPOINT_TABLE})")}
+    if "import_mode" not in existing_columns:
+        cursor.execute(f"ALTER TABLE {CHECKPOINT_TABLE} ADD COLUMN import_mode TEXT DEFAULT 'auto'")
 
 
 def _main_checkpoint_rows(store: Optional[VectorStore]) -> List[tuple]:
@@ -217,7 +238,21 @@ def _main_checkpoint_rows(store: Optional[VectorStore]) -> List[tuple]:
     if not table_exists:
         return []
 
-    return list(cursor.execute(f"SELECT {', '.join(CHECKPOINT_COLUMNS)} FROM {CHECKPOINT_TABLE}"))
+    available_columns = {row[1] for row in cursor.execute(f"PRAGMA table_info({CHECKPOINT_TABLE})")}
+    selected_columns = [column for column in CHECKPOINT_COLUMNS if column in available_columns]
+    if not selected_columns:
+        return []
+
+    rows = []
+    for raw_row in cursor.execute(f"SELECT {', '.join(selected_columns)} FROM {CHECKPOINT_TABLE}"):
+        values = dict(zip(selected_columns, raw_row))
+        rows.append(
+            tuple(
+                values.get(column, IMPORT_MODE_AUTO if column == "import_mode" else None)
+                for column in CHECKPOINT_COLUMNS
+            )
+        )
+    return rows
 
 
 def _migrate_checkpoints_from_main_db(store: Optional[VectorStore], conn: apsw.Connection) -> int:
@@ -335,13 +370,23 @@ def get_pending_jobs(store: VectorStore) -> List[Dict[str, Any]]:
         rows = list(
             conn.cursor().execute(
                 f"""
-                SELECT batch_id, backend, model, status, jsonl_path
+                SELECT batch_id, backend, model, status, jsonl_path, import_mode
                 FROM {CHECKPOINT_TABLE}
                 WHERE status = 'submitted'
                 """
             )
         )
-        return [{"batch_id": r[0], "backend": r[1], "model": r[2], "status": r[3], "jsonl_path": r[4]} for r in rows]
+        return [
+            {
+                "batch_id": r[0],
+                "backend": r[1],
+                "model": r[2],
+                "status": r[3],
+                "jsonl_path": r[4],
+                "import_mode": r[5] or IMPORT_MODE_AUTO,
+            }
+            for r in rows
+        ]
     finally:
         conn.close()
 
@@ -469,6 +514,22 @@ def get_reenrichment_stats(
         "remaining": remaining,
         "percent": percent,
     }
+
+
+def get_backlog_drain_stats(store: Any, *, min_char_count: int = 50) -> Dict[str, Any]:
+    """Return the live eligible backlog count used by realtime enrichment."""
+    cursor = store.conn.cursor()
+    remaining = cursor.execute(
+        """
+        SELECT COUNT(*)
+        FROM chunks
+        WHERE enriched_at IS NULL
+          AND enrich_status IS NULL
+          AND char_count >= ?
+        """,
+        (min_char_count,),
+    ).fetchone()[0]
+    return {"remaining": remaining}
 
 
 # ── Export ──────────────────────────────────────────────────────────────
@@ -599,6 +660,63 @@ def export_unenriched_chunks(
     return jsonl_files
 
 
+def export_backlog_drain_chunks(
+    store: VectorStore,
+    max_chunks: int = 0,
+    min_char_count: int = 50,
+    no_sanitize: bool = False,
+) -> List[Path]:
+    """Export realtime-eligible enrichment backlog chunks to Gemini Batch JSONL."""
+    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+
+    if no_sanitize:
+        print("WARNING: PII sanitization DISABLED — use only for local testing!")
+        sanitizer = None
+    else:
+        print("Initializing PII sanitizer...")
+        sanitizer = _init_sanitizer(store)
+
+    limit = max_chunks if max_chunks > 0 else 200_000
+    rows = store.get_enrichment_candidates(
+        limit=limit,
+        min_content_length=min_char_count,
+        order="oldest",
+    )
+    print(f"Fetched {len(rows)} backlog drain chunks for export")
+
+    jsonl_files = []
+    batch_num = 0
+    total_pii_found = 0
+
+    for i in range(0, len(rows), CHUNKS_PER_JOB):
+        batch = rows[i : i + CHUNKS_PER_JOB]
+        batch_num += 1
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = EXPORT_DIR / f"batch_drain_{ts}_{batch_num:03d}.jsonl"
+
+        with open(filename, "w") as f:
+            for chunk in batch:
+                if sanitizer is not None:
+                    prompt, sanitize_result = build_external_prompt(chunk, sanitizer)
+                    if sanitize_result.pii_detected:
+                        total_pii_found += 1
+                else:
+                    prompt = build_prompt(chunk)
+
+                f.write(json.dumps(build_batch_request_line(chunk["id"], prompt)) + "\n")
+
+        jsonl_files.append(filename)
+        print(f"  Wrote {filename.name} ({len(batch)} chunks)")
+
+    if sanitizer is not None:
+        mapping_path = EXPORT_DIR / "pii_mapping.json"
+        sanitizer.save_mapping(mapping_path)
+        print(f"Mapping saved to: {mapping_path}")
+    print(f"\nPII sanitization: {total_pii_found}/{len(rows)} chunks had PII stripped")
+    print(f"Exported {len(rows)} backlog chunks to {len(jsonl_files)} JSONL files")
+    return jsonl_files
+
+
 # ── Gemini Batch API (google.genai SDK) ────────────────────────────────
 
 
@@ -623,8 +741,10 @@ def submit_gemini_batch(
     model: str = DEFAULT_BATCH_MODEL,
     store: Optional[VectorStore] = None,
     max_retries: int = 3,
+    import_mode: str = IMPORT_MODE_AUTO,
 ) -> Optional[str]:
     """Upload JSONL and submit a Gemini batch job. Returns batch job name or None on failure."""
+    _raise_if_enrich_daily_cap_reached()
     client = _get_genai_client()
 
     # Count chunks in file
@@ -663,6 +783,7 @@ def submit_gemini_batch(
                     chunk_count=chunk_count,
                     jsonl_path=str(jsonl_path),
                     submitted_at=datetime.now(timezone.utc).isoformat(),
+                    import_mode=import_mode,
                 )
 
             return batch_job.name
@@ -685,6 +806,7 @@ def submit_gemini_batch(
                         chunk_count=chunk_count,
                         jsonl_path=str(jsonl_path),
                         error=err[:500],
+                        import_mode=import_mode,
                     )
                 return None
 
@@ -824,12 +946,58 @@ def _clear_imported_preview(store: VectorStore, chunk_id: str) -> None:
     )
 
 
+def _extract_batch_response_text(result: Dict[str, Any]) -> Optional[str]:
+    """Extract generated text from a Gemini Batch JSONL result row."""
+    try:
+        response = result.get("response", result.get("output", {}))
+        if isinstance(response, dict):
+            candidates = response.get("candidates", [])
+            if candidates:
+                parts = candidates[0].get("content", {}).get("parts", [])
+                if parts:
+                    return parts[0].get("text", "")
+        elif isinstance(response, str):
+            return response
+    except (KeyError, IndexError, TypeError):
+        return None
+    return None
+
+
+def _get_canonical_import_candidate(store: VectorStore, chunk_id: str) -> Optional[dict[str, Any]]:
+    """Return the realtime-eligible chunk dict for a batch import, if still eligible."""
+    candidates = store.get_enrichment_candidates(limit=1, chunk_ids=[chunk_id])
+    if candidates and candidates[0]["id"] == chunk_id:
+        return candidates[0]
+    return None
+
+
+def _commit_batch_enrichment(
+    store: VectorStore,
+    chunk: dict[str, Any],
+    enrichment: dict[str, Any],
+    *,
+    model: str,
+) -> None:
+    """Commit batch output through the same canonical write path as realtime."""
+    _apply_enrichment(
+        store,
+        chunk,
+        enrichment,
+        chunk_origin=model.replace("models/", ""),
+        enrichment_model=model,
+        enrichment_backend="gemini-batch",
+    )
+
+
 def import_results(
     store: VectorStore,
     results: List[Dict[str, Any]],
     batch_id: str,
+    *,
+    import_mode: str = IMPORT_MODE_AUTO,
+    model: str = DEFAULT_BATCH_MODEL,
 ) -> Dict[str, int]:
-    """Import preview summaries back to DB without mutating the live summary."""
+    """Import batch results, committing eligible backlog rows canonically."""
     success = 0
     failed = 0
     skipped = 0
@@ -842,38 +1010,42 @@ def import_results(
             failed += 1
             continue
 
-        # Skip if preview summary already exists.
-        existing = list(
-            cursor.execute(
-                "SELECT summary_v2 FROM chunks WHERE id = ?",
-                [chunk_id],
-            )
-        )
-        if existing and existing[0][0] is not None:
-            skipped += 1
-            continue
-
-        # Extract the generated text from Gemini response
-        response_text = None
-        try:
-            response = result.get("response", result.get("output", {}))
-            if isinstance(response, dict):
-                candidates = response.get("candidates", [])
-                if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    if parts:
-                        response_text = parts[0].get("text", "")
-            elif isinstance(response, str):
-                response_text = response
-        except (KeyError, IndexError, TypeError):
-            pass
-
+        response_text = _extract_batch_response_text(result)
         if not response_text:
             failed += 1
             continue
 
         enrichment = parse_enrichment(response_text)
         if enrichment:
+            canonical_chunk = None
+            if import_mode in {IMPORT_MODE_AUTO, IMPORT_MODE_DRAIN}:
+                canonical_chunk = _get_canonical_import_candidate(store, chunk_id)
+
+            if canonical_chunk is not None:
+                try:
+                    _commit_batch_enrichment(store, canonical_chunk, enrichment, model=model)
+                except Exception as exc:
+                    print(f"  WARNING: canonical import failed for {chunk_id}: {exc}")
+                    failed += 1
+                    continue
+                success += 1
+                continue
+
+            if import_mode == IMPORT_MODE_DRAIN:
+                skipped += 1
+                continue
+
+            # Skip if preview summary already exists.
+            existing = list(
+                cursor.execute(
+                    "SELECT summary_v2 FROM chunks WHERE id = ?",
+                    [chunk_id],
+                )
+            )
+            if existing and existing[0][0] is not None:
+                skipped += 1
+                continue
+
             try:
                 store.update_reenrichment_preview(
                     chunk_id=chunk_id,
@@ -947,22 +1119,30 @@ def run_full_backfill(
     sample: int = 0,
     no_sanitize: bool = False,
     submit_only: bool = False,
+    drain_backlog: bool = False,
 ) -> None:
     """Run the full backfill: export → submit → poll → import."""
-    store = open_backfill_store(db_path, allow_read_only_fallback=(submit_only or dry_run))
+    store = open_backfill_store(db_path, allow_read_only_fallback=((submit_only or dry_run) and not drain_backlog))
     ensure_checkpoint_table(store)
 
     try:
-        preview_stats = get_reenrichment_stats(store)
-        print(
-            "Current preview progress: "
-            f"{preview_stats['previewed']}/{preview_stats['eligible']} ({preview_stats['percent']}%)"
-        )
-        print(f"Remaining preview candidates: {preview_stats['remaining']}\n")
+        import_mode = IMPORT_MODE_DRAIN if drain_backlog else IMPORT_MODE_AUTO
+        if drain_backlog:
+            drain_stats = get_backlog_drain_stats(store)
+            print(f"Current backlog drain remaining: {drain_stats['remaining']}\n")
+        else:
+            preview_stats = get_reenrichment_stats(store)
+            print(
+                "Current preview progress: "
+                f"{preview_stats['previewed']}/{preview_stats['eligible']} ({preview_stats['percent']}%)"
+            )
+            print(f"Remaining preview candidates: {preview_stats['remaining']}\n")
 
         # Step 1: Export or reuse existing batch files
         max_chunks = sample if sample > 0 else 0
-        if submit_only and sample == 0:
+        if drain_backlog:
+            jsonl_files = export_backlog_drain_chunks(store, max_chunks=max_chunks, no_sanitize=no_sanitize)
+        elif submit_only and sample == 0:
             jsonl_files = get_unsubmitted_export_files(db_path=db_path)
             if jsonl_files:
                 print(f"Reusing {len(jsonl_files)} existing JSONL batch files not yet checkpointed from {EXPORT_DIR}")
@@ -990,7 +1170,7 @@ def run_full_backfill(
         # Step 2: Submit all batch jobs
         batch_names = []
         for jsonl_path in jsonl_files:
-            batch_name = submit_gemini_batch(jsonl_path, model=model, store=store)
+            batch_name = submit_gemini_batch(jsonl_path, model=model, store=store, import_mode=import_mode)
             if batch_name is not None:
                 batch_names.append(batch_name)
             else:
@@ -1017,7 +1197,7 @@ def run_full_backfill(
             if result["state"] == "succeeded":
                 # Download + import
                 batch_results = download_gemini_results(result["job"])
-                counts = import_results(store, batch_results, batch_name)
+                counts = import_results(store, batch_results, batch_name, import_mode=import_mode, model=model)
                 for k in total_imported:
                     total_imported[k] += counts[k]
 
@@ -1025,6 +1205,10 @@ def run_full_backfill(
                 job = result.get("job")
                 usage = _extract_usage_metadata(job) if job else {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0}
                 if usage["input_tokens"] or usage["output_tokens"]:
+                    usage["cost_usd"] = record_batch_usage_against_daily_cap(
+                        usage["input_tokens"],
+                        usage["output_tokens"],
+                    )
                     log_batch_usage(
                         batch_name,
                         model,
@@ -1051,21 +1235,27 @@ def run_full_backfill(
                 print(f"  FAILED: {batch_name} — {result.get('error')}")
 
         # Final stats
-        final_stats = get_reenrichment_stats(store)
         print(f"\n{'=' * 60}")
         print("BACKFILL COMPLETE")
         print(
             f"  Imported: {total_imported['success']} ok, "
             f"{total_imported['failed']} fail, {total_imported['skipped']} skip"
         )
-        print(f"  Preview progress: {final_stats['previewed']}/{final_stats['eligible']} ({final_stats['percent']}%)")
+        if drain_backlog:
+            final_stats = get_backlog_drain_stats(store)
+            print(f"  Backlog drain remaining: {final_stats['remaining']}")
+        else:
+            final_stats = get_reenrichment_stats(store)
+            print(
+                f"  Preview progress: {final_stats['previewed']}/{final_stats['eligible']} ({final_stats['percent']}%)"
+            )
         print(f"{'=' * 60}")
 
     finally:
         store.close()
 
 
-def process_pending_jobs_once(db_path: Path) -> Dict[str, int]:
+def process_pending_jobs_once(db_path: Path, *, import_mode: str | None = None) -> Dict[str, int]:
     """Check each submitted job once, importing any completed results."""
     store = VectorStore(db_path)
     ensure_checkpoint_table(store)
@@ -1080,19 +1270,33 @@ def process_pending_jobs_once(db_path: Path) -> Dict[str, int]:
         "skipped": 0,
     }
     try:
-        pending = get_pending_jobs(store)
+        pending = [
+            job for job in get_pending_jobs(store) if import_mode is None or job.get("import_mode") == import_mode
+        ]
         summary["checked"] = len(pending)
         for job in pending:
+            _raise_if_enrich_daily_cap_reached()
             status = get_gemini_batch_state(job["batch_id"])
             if status["state"] == "succeeded":
                 batch_job = status["job"]
                 batch_results = download_gemini_results(batch_job)
-                counts = import_results(store, batch_results, job["batch_id"])
+                job_import_mode = job.get("import_mode") or IMPORT_MODE_AUTO
+                counts = import_results(
+                    store,
+                    batch_results,
+                    job["batch_id"],
+                    import_mode=job_import_mode,
+                    model=job.get("model") or DEFAULT_BATCH_MODEL,
+                )
                 for key in ("success", "failed", "skipped"):
                     summary[key] += counts[key]
 
                 usage = _extract_usage_metadata(batch_job)
                 if usage["input_tokens"] or usage["output_tokens"]:
+                    usage["cost_usd"] = record_batch_usage_against_daily_cap(
+                        usage["input_tokens"],
+                        usage["output_tokens"],
+                    )
                     log_batch_usage(
                         job["batch_id"],
                         job.get("model") or DEFAULT_BATCH_MODEL,
@@ -1157,12 +1361,23 @@ def resume_backfill(db_path: Path) -> None:
 
             if result["state"] == "succeeded":
                 batch_results = download_gemini_results(result["job"])
-                import_results(store, batch_results, job["batch_id"])
+                job_import_mode = job.get("import_mode") or IMPORT_MODE_AUTO
+                import_results(
+                    store,
+                    batch_results,
+                    job["batch_id"],
+                    import_mode=job_import_mode,
+                    model=job.get("model") or DEFAULT_BATCH_MODEL,
+                )
                 imported_count += 1
 
                 # Log usage to Supabase (best-effort)
                 usage = _extract_usage_metadata(result.get("job"))
                 if usage["input_tokens"] or usage["output_tokens"]:
+                    usage["cost_usd"] = record_batch_usage_against_daily_cap(
+                        usage["input_tokens"],
+                        usage["output_tokens"],
+                    )
                     log_batch_usage(
                         job["batch_id"],
                         job.get("model") or DEFAULT_BATCH_MODEL,
