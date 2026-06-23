@@ -14,8 +14,13 @@ final class MCPRouter: @unchecked Sendable {
     // for replay so brain_store returns well under the 1s prompt-queue budget.
     // Longer contention handling belongs in the deferred single-writer/backpressure
     // path, not in the synchronous MCP response.
-    private static let mcpStoreBusyTimeoutMillis: Int32 = 250
-    private static let mcpStoreRetries = 1
+    //
+    // Budget math: a contended BEGIN IMMEDIATE blocks up to the busy timeout, and
+    // each extra retry adds another busy-timeout block plus a retry sleep. To stay
+    // under the 200ms queue budget the synchronous path makes exactly one short
+    // attempt (retries == 0) with a sub-budget busy timeout, then queues on busy.
+    private static let mcpStoreBusyTimeoutMillis: Int32 = 100
+    private static let mcpStoreRetries = 0
 
     private struct ToolOutput {
         let text: String

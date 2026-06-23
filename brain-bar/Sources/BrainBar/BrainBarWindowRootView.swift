@@ -2130,7 +2130,7 @@ struct BrainBarDashboardLayout {
         diagnosticItemColumns = containerSize.width >= 760 ? 2 : 1
 
         compactCards = compactWidth || compactHeight
-        outerPadding = compactCards ? 24 : 32
+        outerPadding = compactCards ? 24 : 36
         sectionSpacing = compactCards ? 20 : 28
         gridSpacing = compactCards ? 16 : 22
         cardPadding = compactCards ? 22 : 32
