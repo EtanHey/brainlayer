@@ -664,17 +664,50 @@ final class BrainBarServer: @unchecked Sendable {
 
         // Claude Desktop's MCPB utility process currently parses raw extension
         // stdout in 8192-byte chunks. Raw newline transport omits optional tool
-        // annotations; Content-Length transport keeps the canonical tools/list.
+        // annotations and the verbose human-readable description prose (both the
+        // top-level tool descriptions and the per-property inputSchema
+        // descriptions). The Content-Length transport keeps the canonical, fully
+        // described tools/list; the raw line keeps only the machine-required
+        // shape (name + inputSchema structure) so the response stays under the
+        // 8192-byte MCPB chunk limit without dropping any tool.
         var compactResult = result
         compactResult["tools"] = tools.map { tool in
             var compact = tool
             compact.removeValue(forKey: "annotations")
+            compact.removeValue(forKey: "description")
+            if let schema = compact["inputSchema"] as? [String: Any] {
+                compact["inputSchema"] = stripSchemaDescriptions(schema)
+            }
             return compact
         }
 
         var compactResponse = response
         compactResponse["result"] = compactResult
         return compactResponse
+    }
+
+    /// Recursively removes human-readable `description` keys from a JSON schema
+    /// so the raw-line tools/list stays under Claude Desktop's MCPB chunk limit.
+    /// Structural keys (type, properties, required, enum, items, maxLength, …)
+    /// are preserved so the tool remains callable.
+    private static func stripSchemaDescriptions(_ schema: [String: Any]) -> [String: Any] {
+        var stripped = schema
+        stripped.removeValue(forKey: "description")
+        if let properties = stripped["properties"] as? [String: Any] {
+            var newProperties: [String: Any] = [:]
+            for (key, value) in properties {
+                if let nested = value as? [String: Any] {
+                    newProperties[key] = stripSchemaDescriptions(nested)
+                } else {
+                    newProperties[key] = value
+                }
+            }
+            stripped["properties"] = newProperties
+        }
+        if let items = stripped["items"] as? [String: Any] {
+            stripped["items"] = stripSchemaDescriptions(items)
+        }
+        return stripped
     }
 
     private func disconnectClient(fd: Int32) {
