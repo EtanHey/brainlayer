@@ -5,6 +5,7 @@ See search_repo.py, kg_repo.py, session_repo.py for the extracted methods.
 """
 
 import atexit
+import errno
 import fcntl
 import glob
 import hashlib
@@ -398,7 +399,15 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         if fd is None:
             return False
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                if not isinstance(exc, BlockingIOError) and exc.errno not in {errno.EACCES, errno.EAGAIN}:
+                    raise
+                other_pid, _other_start_time = self._read_writer_pidfile_owner_fd(fd)
+                if other_pid is not None:
+                    raise WriterInUseError(f"another writer is using {self.db_path} (pid {other_pid})") from exc
+                raise WriterInUseError(f"writer pidfile is locked for {self.db_path}") from exc
             other_pid, other_start_time = self._read_writer_pidfile_owner_fd(fd)
             if other_pid == pid and self._pidfile_owner_matches(other_pid, other_start_time):
                 with self._PIDFILE_REFS_LOCK:

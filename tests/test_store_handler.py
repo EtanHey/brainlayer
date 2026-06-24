@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import os
+import subprocess
 import sys
 import threading
 import time
@@ -9,6 +11,54 @@ from unittest.mock import MagicMock, patch
 
 import apsw
 import pytest
+
+
+def _locked_writer_pidfile_process(pidfile, db_path, *, lock_seconds: float = 0.45, live_seconds: float = 1.0):
+    script = """
+import fcntl
+import os
+import time
+from pathlib import Path
+
+pidfile = Path(os.environ["PIDFILE"])
+db_path = Path(os.environ["DB_PATH"]).resolve()
+pidfile.parent.mkdir(parents=True, exist_ok=True)
+fd = os.open(pidfile, os.O_CREAT | os.O_RDWR, 0o644)
+fcntl.flock(fd, fcntl.LOCK_EX)
+os.ftruncate(fd, 0)
+os.write(fd, f"{os.getpid()}\\ndb_path={db_path}\\n".encode("utf-8"))
+print("LOCKED", flush=True)
+time.sleep(float(os.environ["LOCK_SECONDS"]))
+fcntl.flock(fd, fcntl.LOCK_UN)
+print("UNLOCKED", flush=True)
+time.sleep(float(os.environ["LIVE_SECONDS"]))
+os.close(fd)
+"""
+    proc = subprocess.Popen(
+        [sys.executable, "-c", script],
+        env={
+            **os.environ,
+            "PIDFILE": str(pidfile),
+            "DB_PATH": str(db_path),
+            "LOCK_SECONDS": str(lock_seconds),
+            "LIVE_SECONDS": str(live_seconds),
+        },
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert proc.stdout is not None
+    try:
+        assert proc.stdout.readline().strip() == "LOCKED"
+        return proc
+    except Exception:
+        proc.terminate()
+        try:
+            proc.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate(timeout=2)
+        raise
 
 
 def test_default_store_busy_budget_is_sub_500ms(monkeypatch):
@@ -147,6 +197,102 @@ async def test_store_queues_fast_when_background_queue_is_present(tmp_path, monk
     assert structured["queued"] is True
     assert structured["deferred"]["reason"] == "INTERACTIVE_PRIORITY"
     assert structured["deferred"]["queue_path"] == str(queued_files[0])
+    assert any(structured["chunk_id"] in item.text for item in texts)
+
+
+@pytest.mark.asyncio
+async def test_store_queues_within_bound_when_writer_pidfile_is_locked(tmp_path, monkeypatch):
+    """A drain-held writer pidfile lock must not block interactive brain_store."""
+    from brainlayer.mcp import _shared
+    from brainlayer.mcp.store_handler import _store
+    from brainlayer.vector_store import VectorStore
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    pidfile_dir = tmp_path / "pidfiles"
+    probe = object.__new__(VectorStore)
+    probe.db_path = db_path
+
+    monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "80")
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(pidfile_dir))
+    monkeypatch.setattr(_shared, "_vector_store", None)
+    monkeypatch.setattr("brainlayer.paths.get_db_path", lambda: db_path)
+
+    proc = _locked_writer_pidfile_process(probe._writer_pidfile_path(), db_path)
+    try:
+        started = time.perf_counter()
+        texts, structured = await _store(
+            content="interactive store must not wait for drain-held writer pidfile",
+            memory_type="note",
+            project="brainlayer",
+        )
+        elapsed = time.perf_counter() - started
+    finally:
+        proc.terminate()
+        try:
+            proc.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate(timeout=2)
+
+    queued_files = list(queue_dir.glob("mcp-*.jsonl"))
+    assert elapsed < 0.25
+    assert structured["status"] == "DEFERRED"
+    assert structured["deferred"]["action"] == "queued_for_drain"
+    assert len(queued_files) == 1
+    assert any("DEFERRED" in item.text for item in texts)
+
+
+@pytest.mark.asyncio
+async def test_store_saves_normally_when_uncontended(tmp_path, monkeypatch):
+    """The snappy contention path must not turn ordinary brain_store calls into queue writes."""
+    from brainlayer.mcp import _shared
+    from brainlayer.mcp.store_handler import _store
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    started_threads = []
+
+    class NoopThread:
+        def __init__(self, *, target, daemon):
+            self.target = target
+            self.daemon = daemon
+
+        def start(self):
+            started_threads.append(self)
+
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(tmp_path / "pidfiles"))
+    monkeypatch.setattr(_shared, "_vector_store", None)
+    monkeypatch.setattr("brainlayer.paths.get_db_path", lambda: db_path)
+    monkeypatch.setattr("brainlayer.mcp.store_handler.threading.Thread", NoopThread)
+
+    try:
+        texts, structured = await _store(
+            content="uncontended brain_store should persist immediately",
+            memory_type="note",
+            project="brainlayer",
+        )
+
+        row = (
+            _shared._vector_store.conn.cursor()
+            .execute("SELECT id, content, project FROM chunks WHERE id = ?", (structured["chunk_id"],))
+            .fetchone()
+        )
+    finally:
+        if _shared._vector_store is not None:
+            _shared._vector_store.close()
+            _shared._vector_store = None
+
+    assert row == (
+        structured["chunk_id"],
+        "uncontended brain_store should persist immediately",
+        "brainlayer",
+    )
+    assert "queued" not in structured
+    assert not list(queue_dir.glob("*.jsonl"))
+    assert len(started_threads) == 1
     assert any(structured["chunk_id"] in item.text for item in texts)
 
 
