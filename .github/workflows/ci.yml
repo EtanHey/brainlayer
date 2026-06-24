@@ -28,6 +28,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Select Xcode (Swift 6)
+        if: needs.changes.outputs.brain_bar == 'true'
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
       - name: Swift version
         run: swift --version
 

@@ -133,12 +133,37 @@ def test_swift_required_check_always_reports_status():
 
     gated_steps = _find_steps(steps, lambda step: step.get("if") == SWIFT_GATE_CONDITION)
     assert any(step.get("uses") == "actions/cache@v4" for step in gated_steps), "SwiftPM cache step must be gated"
-    assert any(_step_runs_command_in_brain_bar(step, "swift build") for step in gated_steps), "swift build step must be gated"
-    assert any(_step_runs_command_in_brain_bar(step, "swift test") for step in gated_steps), "swift test step must be gated"
+    assert any(_step_runs_command_in_brain_bar(step, "swift build") for step in gated_steps), (
+        "swift build step must be gated"
+    )
+    assert any(_step_runs_command_in_brain_bar(step, "swift test") for step in gated_steps), (
+        "swift test step must be gated"
+    )
 
     skip_steps = _find_steps(
         steps,
-        lambda step: "no brain-bar changes" in str(step.get("run", "")).lower()
-        and "swift build/test skipped" in str(step.get("run", "")).lower(),
+        lambda step: (
+            "no brain-bar changes" in str(step.get("run", "")).lower()
+            and "swift build/test skipped" in str(step.get("run", "")).lower()
+        ),
     )
     assert skip_steps, "swift job must report success explicitly when brain-bar did not change"
+
+
+def test_swift_job_selects_swift_6_xcode_before_version_check():
+    workflow = _load_workflow()
+    swift_job = _find_swift_job(workflow)
+    assert swift_job is not None, "CI must include a macOS Swift job before Xcode selection can be verified"
+
+    _job_id, job = swift_job
+    steps = job.get("steps", [])
+    xcode_steps = _find_steps(steps, lambda step: str(step.get("uses", "")).startswith("maxim-lobanov/setup-xcode@"))
+    assert xcode_steps, "swift job must select an Xcode version with Swift 6 before running SwiftPM"
+
+    xcode_step = xcode_steps[0]
+    assert xcode_step.get("if") == SWIFT_GATE_CONDITION
+    assert xcode_step.get("with", {}).get("xcode-version") == "latest-stable"
+
+    xcode_index = steps.index(xcode_step)
+    swift_version_index = next(index for index, step in enumerate(steps) if step.get("run") == "swift --version")
+    assert xcode_index < swift_version_index, "Xcode selection must happen before swift --version"
