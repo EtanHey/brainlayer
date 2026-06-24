@@ -24,7 +24,6 @@ jobs:
   swift:
     name: swift (macos-14)
     needs: changes
-    if: needs.changes.outputs.brain_bar == 'true'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -33,6 +32,7 @@ jobs:
         run: swift --version
 
       - name: Cache SwiftPM
+        if: needs.changes.outputs.brain_bar == 'true'
         uses: actions/cache@v4
         with:
           path: |
@@ -42,10 +42,16 @@ jobs:
           restore-keys: ${{ runner.os }}-swiftpm-
 
       - name: Build BrainBar
+        if: needs.changes.outputs.brain_bar == 'true'
         run: cd brain-bar && swift build -c release
 
       - name: Test BrainBar
+        if: needs.changes.outputs.brain_bar == 'true'
         run: cd brain-bar && swift test
+
+      - name: Skip BrainBar Swift build
+        if: needs.changes.outputs.brain_bar != 'true'
+        run: echo "no brain-bar changes — swift build/test skipped"
 
   test:
     runs-on: ubuntu-latest

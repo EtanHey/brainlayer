@@ -8,6 +8,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+SWIFT_GATE_CONDITION = "needs.changes.outputs.brain_bar == 'true'"
 
 
 def _workflow_path() -> Path:
@@ -66,6 +67,10 @@ def _step_runs_command_in_brain_bar_any_step(steps: Sequence, command: str) -> b
     return any(isinstance(step, Mapping) and _step_runs_command_in_brain_bar(step, command) for step in steps)
 
 
+def _find_steps(steps: Sequence, predicate) -> list[Mapping]:
+    return [step for step in steps if isinstance(step, Mapping) and predicate(step)]
+
+
 def _contains_brain_bar_path_filter(value) -> bool:
     for item in _strings(value):
         for line in item.splitlines():
@@ -87,7 +92,8 @@ def _swift_job_is_gated_on_brain_bar_paths(workflow: Mapping, job_id: str, job: 
     if _contains_brain_bar_path_filter(job):
         return True
 
-    condition = str(job.get("if", ""))
+    step_conditions = " ".join(str(step.get("if", "")) for step in job.get("steps", []) if isinstance(step, Mapping))
+    condition = " ".join([str(job.get("if", "")), step_conditions])
     for needed_job_id in _as_list(job.get("needs")):
         needed_job = workflow.get("jobs", {}).get(needed_job_id, {})
         references_needed_output = f"needs.{needed_job_id}.outputs." in condition
@@ -113,3 +119,26 @@ def test_swift_job_runs_only_for_brain_bar_changes():
     job_id, job = swift_job
 
     assert _swift_job_is_gated_on_brain_bar_paths(workflow, job_id, job)
+
+
+def test_swift_required_check_always_reports_status():
+    workflow = _load_workflow()
+    swift_job = _find_swift_job(workflow)
+    assert swift_job is not None, "CI must include a macOS Swift job before required-check semantics can be verified"
+
+    _job_id, job = swift_job
+    steps = job.get("steps", [])
+
+    assert "if" not in job, "swift required-check candidate must not be skipped at job level"
+
+    gated_steps = _find_steps(steps, lambda step: step.get("if") == SWIFT_GATE_CONDITION)
+    assert any(step.get("uses") == "actions/cache@v4" for step in gated_steps), "SwiftPM cache step must be gated"
+    assert any(_step_runs_command_in_brain_bar(step, "swift build") for step in gated_steps), "swift build step must be gated"
+    assert any(_step_runs_command_in_brain_bar(step, "swift test") for step in gated_steps), "swift test step must be gated"
+
+    skip_steps = _find_steps(
+        steps,
+        lambda step: "no brain-bar changes" in str(step.get("run", "")).lower()
+        and "swift build/test skipped" in str(step.get("run", "")).lower(),
+    )
+    assert skip_steps, "swift job must report success explicitly when brain-bar did not change"
