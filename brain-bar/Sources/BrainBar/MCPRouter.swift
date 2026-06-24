@@ -557,7 +557,11 @@ final class MCPRouter: @unchecked Sendable {
                 // busy DB, drain the existing backlog so prior writes are not stranded.
                 // Exclude the just-queued chunk so it is not immediately re-replayed /
                 // double-stored before its own deferred drain runs.
-                let flushedStores = db.flushPendingStores(excludingChunkIDs: [chunkID])
+                let flushedStores = db.flushPendingStores(
+                    excludingChunkIDs: [chunkID],
+                    busyTimeoutMillis: Self.mcpStoreBusyTimeoutMillis,
+                    retries: Self.mcpStoreRetries
+                )
                 return queuedBrainStoreOutput(
                     queueID: queueID,
                     queuedAt: queuedAt,

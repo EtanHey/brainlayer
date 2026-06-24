@@ -7,6 +7,46 @@ on:
     branches: [main]
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      brain_bar: ${{ steps.filter.outputs.brain_bar }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            brain_bar:
+              - 'brain-bar/**'
+
+  swift:
+    name: swift (macos-14)
+    needs: changes
+    if: needs.changes.outputs.brain_bar == 'true'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.swiftpm
+            brain-bar/.build
+          key: ${{ runner.os }}-swiftpm-${{ hashFiles('brain-bar/Package.resolved') }}
+          restore-keys: ${{ runner.os }}-swiftpm-
+
+      - name: Build BrainBar
+        run: cd brain-bar && swift build -c release
+
+      - name: Test BrainBar
+        run: cd brain-bar && swift test
+
   test:
     runs-on: ubuntu-latest
     strategy:
