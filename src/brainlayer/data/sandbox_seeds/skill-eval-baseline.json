@@ -1,0 +1,29 @@
+[
+  {
+    "id": "skill-eval-baseline-001",
+    "content": "Sandbox skill eval baseline memory: BrainLayer stores durable project facts and retrieves them through isolated SQLite databases.",
+    "project": "brainlayer-sandbox-eval",
+    "content_type": "assistant_text",
+    "created_at": "2026-06-24T00:00:00Z",
+    "tags": ["sandbox", "skill-eval", "baseline"],
+    "importance": 6
+  },
+  {
+    "id": "skill-eval-baseline-002",
+    "content": "Sandbox skill eval baseline memory: live eval agents must derive task answers from their prompt and tools, not from prior eval writes.",
+    "project": "brainlayer-sandbox-eval",
+    "content_type": "assistant_text",
+    "created_at": "2026-06-24T00:01:00Z",
+    "tags": ["sandbox", "anti-cheat", "baseline"],
+    "importance": 6
+  },
+  {
+    "id": "skill-eval-baseline-003",
+    "content": "Sandbox skill eval baseline memory: deterministic local embeddings keep CI and cmux probes offline-safe.",
+    "project": "brainlayer-sandbox-eval",
+    "content_type": "assistant_text",
+    "created_at": "2026-06-24T00:02:00Z",
+    "tags": ["sandbox", "determinism", "baseline"],
+    "importance": 5
+  }
+]

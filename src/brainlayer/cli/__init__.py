@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re as _re
+import shlex
 import sqlite3
 import subprocess
 import sys
@@ -41,6 +42,8 @@ agent_profile_app = typer.Typer(help="Manage per-agent search ranking profiles")
 app.add_typer(agent_profile_app, name="agent-profile")
 provenance_app = typer.Typer(help="Resolve provenance conflicts and pending confirmations")
 app.add_typer(provenance_app, name="provenance")
+sandbox_app = typer.Typer(help="Manage isolated sandbox BrainLayer databases")
+app.add_typer(sandbox_app, name="sandbox")
 
 
 def _launchd_target(label: str) -> str:
@@ -86,6 +89,31 @@ def _bootstrap_label(label: str, plist_path: Path) -> None:
 
 def _bootout_label(label: str) -> None:
     _run_launchctl(["launchctl", "bootout", _launchd_target(label)])
+
+
+@sandbox_app.command("start")
+def sandbox_start_command(
+    seed: str = typer.Option(..., "--seed", help="Named seed set to load."),
+    token: str = typer.Option(..., "--token", help="Unique sandbox run token."),
+) -> None:
+    """Start a seeded sandbox DB and print an eval-able export block."""
+    from ..sandbox_db import start_sandbox
+
+    sandbox = start_sandbox(seed=seed, token=token)
+    typer.echo(f"# brainlayer sandbox token={shlex.quote(token)}")
+    typer.echo(f"export BRAINLAYER_DB={shlex.quote(str(sandbox.db_path))}")
+    typer.echo(f"# db_path={shlex.quote(str(sandbox.db_path))}")
+
+
+@sandbox_app.command("stop")
+def sandbox_stop_command(
+    token: str = typer.Option(..., "--token", help="Sandbox run token to tear down."),
+) -> None:
+    """Stop a sandbox DB and assert no DB residue remains."""
+    from ..sandbox_db import stop_sandbox
+
+    stop_sandbox(token=token)
+    typer.echo(f"stopped sandbox token={token}")
 
 
 def _default_pause_labels() -> list[str]:
