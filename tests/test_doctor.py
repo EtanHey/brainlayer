@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -70,6 +70,41 @@ def _build_db(path: Path, *, missing_recent_vector: bool = False, fts_desync: bo
         store.close()
 
 
+def _add_enrichment_backlog(path: Path) -> None:
+    store = VectorStore(path)
+    try:
+        _insert_chunk(
+            store,
+            "doctor-enrichment-backlog",
+            content="doctor enrichment backlog content long enough to require realtime Gemini enrichment",
+        )
+        _insert_vector(store, "doctor-enrichment-backlog", 3.0)
+        store.conn.cursor().execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        store.close()
+
+
+def _write_drain_health(path: Path, *, updated_at: datetime, drained_total: int = 0) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "drain_cycles": 3,
+                "drained_total": drained_total,
+                "updated_at": updated_at.isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_daily_cap_reached(cost_dir: Path, *, now: datetime, spent_usd: float = 5.0) -> None:
+    cost_dir.mkdir()
+    (cost_dir / "enrich-daily-cost.json").write_text(
+        json.dumps({"date": now.astimezone().date().isoformat(), "spent_usd": spent_usd}),
+        encoding="utf-8",
+    )
+
+
 def _doctor_config(tmp_path: Path, db_path: Path):
     from brainlayer.doctor import DoctorConfig
 
@@ -84,6 +119,7 @@ def _doctor_config(tmp_path: Path, db_path: Path):
         queue_dir=queue_dir,
         watcher_health_path=watcher_health_path,
         drain_health_path=drain_health_path,
+        queue_movement_sample_seconds=0,
     )
 
 
@@ -163,6 +199,83 @@ def test_run_doctor_exits_nonzero_when_queue_backlog_is_not_moving(tmp_path):
 
     assert result.exit_code == 1
     assert any(issue.code == "queue_not_moving_with_backlog" for issue in result.issues)
+
+
+def test_run_doctor_fails_loudly_when_loaded_drain_heartbeat_stale_with_backlog_without_quota(tmp_path, monkeypatch):
+    from brainlayer.doctor import run_doctor
+
+    monkeypatch.setenv("BRAINLAYER_ENRICH_COST_DIR", str(tmp_path / "cost"))
+    monkeypatch.setenv("BRAINLAYER_ENRICH_DAILY_USD_CAP", "5.0")
+    db_path = tmp_path / "drain-liveness-stalled.db"
+    _build_db(db_path)
+    _add_enrichment_backlog(db_path)
+    config = _doctor_config(tmp_path, db_path)
+    _write_drain_health(config.drain_health_path, updated_at=NOW - timedelta(minutes=10))
+
+    result = run_doctor(
+        config,
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+
+    issue = next(issue for issue in result.issues if issue.code == "drain_liveness_stalled")
+    assert result.exit_code == 1
+    assert issue.severity == "fatal"
+    assert "DRAIN_LIVENESS_STALLED" in issue.message
+    assert issue.details["backlog_count"] == 1
+    assert issue.details["drain_label"] == "com.brainlayer.drain"
+
+
+def test_run_doctor_does_not_fail_drain_liveness_when_heartbeat_is_advancing(tmp_path, monkeypatch):
+    from brainlayer.doctor import run_doctor
+
+    monkeypatch.setenv("BRAINLAYER_ENRICH_COST_DIR", str(tmp_path / "cost"))
+    monkeypatch.setenv("BRAINLAYER_ENRICH_DAILY_USD_CAP", "5.0")
+    db_path = tmp_path / "drain-liveness-moving.db"
+    _build_db(db_path)
+    _add_enrichment_backlog(db_path)
+    config = _doctor_config(tmp_path, db_path)
+    _write_drain_health(config.drain_health_path, updated_at=NOW - timedelta(seconds=30))
+
+    result = run_doctor(
+        config,
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+
+    assert result.exit_code == 0
+    assert result.ok is True
+    assert not [issue for issue in result.issues if issue.code == "drain_liveness_stalled"]
+    assert any(issue.code == "enrichment_idle_with_backlog" for issue in result.issues)
+
+
+def test_run_doctor_keeps_loaded_but_idle_warning_only_when_daily_cap_blocks_enrichment(tmp_path, monkeypatch):
+    from brainlayer.doctor import run_doctor
+
+    cost_dir = tmp_path / "cost"
+    monkeypatch.setenv("BRAINLAYER_ENRICH_COST_DIR", str(cost_dir))
+    monkeypatch.setenv("BRAINLAYER_ENRICH_DAILY_USD_CAP", "5.0")
+    _write_daily_cap_reached(cost_dir, now=NOW)
+    db_path = tmp_path / "drain-liveness-quota.db"
+    _build_db(db_path)
+    _add_enrichment_backlog(db_path)
+    config = _doctor_config(tmp_path, db_path)
+    _write_drain_health(config.drain_health_path, updated_at=NOW - timedelta(minutes=10))
+
+    result = run_doctor(
+        config,
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+
+    assert result.exit_code == 0
+    assert result.ok is True
+    assert not [issue for issue in result.issues if issue.severity == "fatal"]
+    assert any(issue.code == "enrichment_idle_with_backlog" for issue in result.issues)
+    assert any(issue.code == "drain_liveness_quota_blocked" for issue in result.issues)
 
 
 def test_doctor_cli_is_registered_with_json_and_db_options():
