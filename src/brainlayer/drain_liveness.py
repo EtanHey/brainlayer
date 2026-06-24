@@ -55,7 +55,10 @@ def _enrich_daily_usd_cap() -> float:
     return _bounded_nonnegative_float(os.environ.get("BRAINLAYER_ENRICH_DAILY_USD_CAP"), DEFAULT_ENRICH_DAILY_USD_CAP)
 
 
-def _enrich_cost_counter_path() -> Path:
+def _enrich_cost_counter_path(path: Path | None = None) -> Path:
+    if path is not None:
+        return path.expanduser()
+
     override_dir = os.environ.get("BRAINLAYER_ENRICH_COST_DIR")
     if override_dir:
         return Path(override_dir).expanduser() / ENRICH_DAILY_COST_COUNTER_FILENAME
@@ -78,11 +81,11 @@ def _read_enrich_cost_record(path: Path, today: str) -> dict[str, Any]:
     return data
 
 
-def _daily_cap_blocker(now: datetime) -> str | None:
+def _daily_cap_blocker(now: datetime, *, enrich_cost_counter_path: Path | None = None) -> str | None:
     try:
         cap_usd = _enrich_daily_usd_cap()
         today = now.astimezone().date().isoformat()
-        record = _read_enrich_cost_record(_enrich_cost_counter_path(), today)
+        record = _read_enrich_cost_record(_enrich_cost_counter_path(enrich_cost_counter_path), today)
         spent_usd = float(record.get("spent_usd", 0.0) or 0.0)
     except Exception:
         return None
@@ -96,14 +99,18 @@ def check_drain_liveness(
     *,
     drain_label: str,
     drain_loaded: bool | None,
-    backlog_count: int | None,
+    queue_count: int | None,
+    enrichment_backlog: int | None,
     drain_health: dict[str, Any],
     now: datetime,
     stale_seconds: float = DEFAULT_DRAIN_LIVENESS_STALE_SECONDS,
+    enrich_cost_counter_path: Path | None = None,
     quota_or_throttle_blocker: str | None = None,
 ) -> DrainLivenessIssue | None:
     """Return a loud issue when a loaded drain has backlog but no fresh heartbeat."""
-    backlog = _positive_int(backlog_count)
+    queue_backlog = _positive_int(queue_count)
+    enrichment_backlog_count = _positive_int(enrichment_backlog)
+    backlog = queue_backlog + enrichment_backlog_count
     if drain_loaded is not True or backlog <= 0:
         return None
 
@@ -112,13 +119,20 @@ def check_drain_liveness(
     if heartbeat_age is not None and heartbeat_age < max(0.0, stale_seconds):
         return None
 
-    blocker = quota_or_throttle_blocker or _daily_cap_blocker(now)
+    blocker = None
+    if queue_backlog == 0 and enrichment_backlog_count > 0:
+        blocker = quota_or_throttle_blocker or _daily_cap_blocker(
+            now,
+            enrich_cost_counter_path=enrich_cost_counter_path,
+        )
     details = {
         "backlog_count": backlog,
         "drain_cycles": drain_health.get("drain_cycles"),
         "drain_label": drain_label,
         "drained_total": drain_health.get("drained_total"),
+        "enrichment_backlog": enrichment_backlog_count,
         "heartbeat_age_seconds": round(heartbeat_age, 3) if heartbeat_age is not None else None,
+        "queue_count": queue_backlog,
         "stale_seconds": stale_seconds,
         "updated_at": drain_health.get("updated_at"),
     }
@@ -136,7 +150,8 @@ def check_drain_liveness(
         STALLED_CODE,
         "fatal",
         (
-            f"DRAIN_LIVENESS_STALLED: {drain_label} is loaded and backlog={backlog}, "
+            f"DRAIN_LIVENESS_STALLED: {drain_label} is loaded and backlog={backlog} "
+            f"(queue={queue_backlog}, enrichment={enrichment_backlog_count}), "
             f"but drain-health updated_at is {stale_description}; no quota/throttle blocker detected"
         ),
         details,

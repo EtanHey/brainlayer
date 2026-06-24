@@ -98,7 +98,7 @@ def _write_drain_health(path: Path, *, updated_at: datetime, drained_total: int 
 
 
 def _write_daily_cap_reached(cost_dir: Path, *, now: datetime, spent_usd: float = 5.0) -> None:
-    cost_dir.mkdir()
+    cost_dir.mkdir(parents=True, exist_ok=True)
     (cost_dir / "enrich-daily-cost.json").write_text(
         json.dumps({"date": now.astimezone().date().isoformat(), "spent_usd": spent_usd}),
         encoding="utf-8",
@@ -204,7 +204,6 @@ def test_run_doctor_exits_nonzero_when_queue_backlog_is_not_moving(tmp_path):
 def test_run_doctor_fails_loudly_when_loaded_drain_heartbeat_stale_with_backlog_without_quota(tmp_path, monkeypatch):
     from brainlayer.doctor import run_doctor
 
-    monkeypatch.setenv("BRAINLAYER_ENRICH_COST_DIR", str(tmp_path / "cost"))
     monkeypatch.setenv("BRAINLAYER_ENRICH_DAILY_USD_CAP", "5.0")
     db_path = tmp_path / "drain-liveness-stalled.db"
     _build_db(db_path)
@@ -224,13 +223,14 @@ def test_run_doctor_fails_loudly_when_loaded_drain_heartbeat_stale_with_backlog_
     assert issue.severity == "fatal"
     assert "DRAIN_LIVENESS_STALLED" in issue.message
     assert issue.details["backlog_count"] == 1
+    assert issue.details["queue_count"] == 0
+    assert issue.details["enrichment_backlog"] == 1
     assert issue.details["drain_label"] == "com.brainlayer.drain"
 
 
 def test_run_doctor_does_not_fail_drain_liveness_when_heartbeat_is_advancing(tmp_path, monkeypatch):
     from brainlayer.doctor import run_doctor
 
-    monkeypatch.setenv("BRAINLAYER_ENRICH_COST_DIR", str(tmp_path / "cost"))
     monkeypatch.setenv("BRAINLAYER_ENRICH_DAILY_USD_CAP", "5.0")
     db_path = tmp_path / "drain-liveness-moving.db"
     _build_db(db_path)
@@ -254,11 +254,12 @@ def test_run_doctor_does_not_fail_drain_liveness_when_heartbeat_is_advancing(tmp
 def test_run_doctor_keeps_loaded_but_idle_warning_only_when_daily_cap_blocks_enrichment(tmp_path, monkeypatch):
     from brainlayer.doctor import run_doctor
 
-    cost_dir = tmp_path / "cost"
-    monkeypatch.setenv("BRAINLAYER_ENRICH_COST_DIR", str(cost_dir))
+    canonical_dir = tmp_path / "canonical"
+    canonical_dir.mkdir()
+    monkeypatch.setenv("BRAINLAYER_DB", str(canonical_dir / "brainlayer.db"))
     monkeypatch.setenv("BRAINLAYER_ENRICH_DAILY_USD_CAP", "5.0")
-    _write_daily_cap_reached(cost_dir, now=NOW)
     db_path = tmp_path / "drain-liveness-quota.db"
+    _write_daily_cap_reached(db_path.parent, now=NOW)
     _build_db(db_path)
     _add_enrichment_backlog(db_path)
     config = _doctor_config(tmp_path, db_path)
@@ -276,6 +277,33 @@ def test_run_doctor_keeps_loaded_but_idle_warning_only_when_daily_cap_blocks_enr
     assert not [issue for issue in result.issues if issue.severity == "fatal"]
     assert any(issue.code == "enrichment_idle_with_backlog" for issue in result.issues)
     assert any(issue.code == "drain_liveness_quota_blocked" for issue in result.issues)
+
+
+def test_run_doctor_does_not_let_enrichment_quota_mask_durable_queue_liveness(tmp_path, monkeypatch):
+    from brainlayer.doctor import run_doctor
+
+    monkeypatch.setenv("BRAINLAYER_ENRICH_DAILY_USD_CAP", "5.0")
+    db_path = tmp_path / "drain-liveness-queue-quota.db"
+    _write_daily_cap_reached(db_path.parent, now=NOW)
+    _build_db(db_path)
+    config = _doctor_config(tmp_path, db_path)
+    (config.queue_dir / "pending.jsonl").write_text('{"kind":"watcher_chunk"}\n', encoding="utf-8")
+    _write_drain_health(config.drain_health_path, updated_at=NOW - timedelta(minutes=10))
+
+    result = run_doctor(
+        config,
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+
+    issue = next(issue for issue in result.issues if issue.code == "drain_liveness_stalled")
+    assert result.exit_code == 1
+    assert issue.severity == "fatal"
+    assert issue.details["backlog_count"] == 1
+    assert issue.details["queue_count"] == 1
+    assert issue.details["enrichment_backlog"] == 0
+    assert not [issue for issue in result.issues if issue.code == "drain_liveness_quota_blocked"]
 
 
 def test_doctor_cli_is_registered_with_json_and_db_options():

@@ -16,7 +16,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
-from .drain_liveness import DEFAULT_DRAIN_LIVENESS_STALE_SECONDS, check_drain_liveness
+from .drain_liveness import (
+    DEFAULT_DRAIN_LIVENESS_STALE_SECONDS,
+    ENRICH_DAILY_COST_COUNTER_FILENAME,
+    check_drain_liveness,
+)
 from .health_check import (
     DEFAULT_DRAIN_LABEL,
     DEFAULT_ENRICHMENT_LABEL,
@@ -365,10 +369,12 @@ def run_doctor(
     drain_liveness_issue = check_drain_liveness(
         drain_label=config.drain_label,
         drain_loaded=drain_loaded,
-        backlog_count=queue_count + (result.enrichment_backlog or 0),
+        queue_count=queue_count,
+        enrichment_backlog=result.enrichment_backlog,
         drain_health=drain_health,
         now=now,
         stale_seconds=config.drain_liveness_stale_seconds,
+        enrich_cost_counter_path=config.db_path.expanduser().parent / ENRICH_DAILY_COST_COUNTER_FILENAME,
     )
     if drain_liveness_issue is not None:
         result.issues.append(
