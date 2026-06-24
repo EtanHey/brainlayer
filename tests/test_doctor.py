@@ -204,6 +204,7 @@ def test_run_doctor_exits_nonzero_when_queue_backlog_is_not_moving(tmp_path):
 def test_run_doctor_fails_loudly_when_loaded_drain_heartbeat_stale_with_backlog_without_quota(tmp_path, monkeypatch):
     from brainlayer.doctor import run_doctor
 
+    monkeypatch.delenv("BRAINLAYER_ENRICH_COST_DIR", raising=False)
     monkeypatch.setenv("BRAINLAYER_ENRICH_DAILY_USD_CAP", "5.0")
     db_path = tmp_path / "drain-liveness-stalled.db"
     _build_db(db_path)
@@ -231,6 +232,7 @@ def test_run_doctor_fails_loudly_when_loaded_drain_heartbeat_stale_with_backlog_
 def test_run_doctor_does_not_fail_drain_liveness_when_heartbeat_is_advancing(tmp_path, monkeypatch):
     from brainlayer.doctor import run_doctor
 
+    monkeypatch.delenv("BRAINLAYER_ENRICH_COST_DIR", raising=False)
     monkeypatch.setenv("BRAINLAYER_ENRICH_DAILY_USD_CAP", "5.0")
     db_path = tmp_path / "drain-liveness-moving.db"
     _build_db(db_path)
@@ -254,6 +256,7 @@ def test_run_doctor_does_not_fail_drain_liveness_when_heartbeat_is_advancing(tmp
 def test_run_doctor_keeps_loaded_but_idle_warning_only_when_daily_cap_blocks_enrichment(tmp_path, monkeypatch):
     from brainlayer.doctor import run_doctor
 
+    monkeypatch.delenv("BRAINLAYER_ENRICH_COST_DIR", raising=False)
     canonical_dir = tmp_path / "canonical"
     canonical_dir.mkdir()
     monkeypatch.setenv("BRAINLAYER_DB", str(canonical_dir / "brainlayer.db"))
@@ -279,9 +282,38 @@ def test_run_doctor_keeps_loaded_but_idle_warning_only_when_daily_cap_blocks_enr
     assert any(issue.code == "drain_liveness_quota_blocked" for issue in result.issues)
 
 
+def test_run_doctor_honors_enrich_cost_dir_for_drain_liveness_quota(tmp_path, monkeypatch):
+    from brainlayer.doctor import run_doctor
+
+    cost_dir = tmp_path / "configured-cost-dir"
+    monkeypatch.setenv("BRAINLAYER_ENRICH_COST_DIR", str(cost_dir))
+    monkeypatch.setenv("BRAINLAYER_ENRICH_DAILY_USD_CAP", "5.0")
+    db_path = tmp_path / "drain-liveness-env-quota.db"
+    _write_daily_cap_reached(cost_dir, now=NOW)
+    _build_db(db_path)
+    _add_enrichment_backlog(db_path)
+    config = _doctor_config(tmp_path, db_path)
+    _write_drain_health(config.drain_health_path, updated_at=NOW - timedelta(minutes=10))
+
+    result = run_doctor(
+        config,
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+
+    assert result.exit_code == 0
+    assert result.ok is True
+    assert not [issue for issue in result.issues if issue.severity == "fatal"]
+    assert any(issue.code == "enrichment_idle_with_backlog" for issue in result.issues)
+    assert any(issue.code == "drain_liveness_quota_blocked" for issue in result.issues)
+    assert not [issue for issue in result.issues if issue.code == "drain_liveness_stalled"]
+
+
 def test_run_doctor_does_not_let_enrichment_quota_mask_durable_queue_liveness(tmp_path, monkeypatch):
     from brainlayer.doctor import run_doctor
 
+    monkeypatch.delenv("BRAINLAYER_ENRICH_COST_DIR", raising=False)
     monkeypatch.setenv("BRAINLAYER_ENRICH_DAILY_USD_CAP", "5.0")
     db_path = tmp_path / "drain-liveness-queue-quota.db"
     _write_daily_cap_reached(db_path.parent, now=NOW)
@@ -309,6 +341,7 @@ def test_run_doctor_does_not_let_enrichment_quota_mask_durable_queue_liveness(tm
 def test_run_doctor_skips_drain_liveness_when_drain_label_is_disabled(tmp_path, monkeypatch):
     from brainlayer.doctor import run_doctor
 
+    monkeypatch.delenv("BRAINLAYER_ENRICH_COST_DIR", raising=False)
     monkeypatch.setenv("BRAINLAYER_ENRICH_DAILY_USD_CAP", "5.0")
     db_path = tmp_path / "drain-liveness-disabled-label.db"
     _build_db(db_path)
@@ -333,6 +366,7 @@ def test_run_doctor_skips_drain_liveness_when_drain_label_is_disabled(tmp_path, 
 def test_run_doctor_suppresses_stale_liveness_when_drain_counter_advances(tmp_path, monkeypatch):
     import brainlayer.doctor as doctor
 
+    monkeypatch.delenv("BRAINLAYER_ENRICH_COST_DIR", raising=False)
     monkeypatch.setenv("BRAINLAYER_ENRICH_DAILY_USD_CAP", "5.0")
     db_path = tmp_path / "drain-liveness-counter-advances.db"
     _build_db(db_path)

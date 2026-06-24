@@ -56,12 +56,12 @@ def _enrich_daily_usd_cap() -> float:
 
 
 def _enrich_cost_counter_path(path: Path | None = None) -> Path:
-    if path is not None:
-        return path.expanduser()
-
     override_dir = os.environ.get("BRAINLAYER_ENRICH_COST_DIR")
     if override_dir:
         return Path(override_dir).expanduser() / ENRICH_DAILY_COST_COUNTER_FILENAME
+
+    if path is not None:
+        return path.expanduser()
 
     from .paths import get_db_path
 
