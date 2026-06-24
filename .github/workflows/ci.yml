@@ -22,9 +22,9 @@ jobs:
               - 'brain-bar/**'
 
   swift:
-    name: swift (macos-14)
+    name: swift (macos-15)
     needs: changes
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 

@@ -167,3 +167,14 @@ def test_swift_job_selects_swift_6_xcode_before_version_check():
     xcode_index = steps.index(xcode_step)
     swift_version_index = next(index for index, step in enumerate(steps) if step.get("run") == "swift --version")
     assert xcode_index < swift_version_index, "Xcode selection must happen before swift --version"
+
+
+def test_swift_job_uses_macos_15_runner_for_newer_xcode():
+    workflow = _load_workflow()
+    swift_job = _find_swift_job(workflow)
+    assert swift_job is not None, "CI must include a macOS Swift job before runner selection can be verified"
+
+    _job_id, job = swift_job
+
+    assert job.get("runs-on") == "macos-15"
+    assert job.get("name") == "swift (macos-15)"
