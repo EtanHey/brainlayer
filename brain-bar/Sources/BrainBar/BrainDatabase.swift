@@ -1274,7 +1274,11 @@ final class BrainDatabase: @unchecked Sendable {
         return (queueID: queueID, queuedAt: queuedAt, chunkID: chunkID)
     }
 
-    func flushPendingStores(excludingChunkIDs excludedChunkIDs: Set<String> = []) -> [FlushedPendingStore] {
+    func flushPendingStores(
+        excludingChunkIDs excludedChunkIDs: Set<String> = [],
+        busyTimeoutMillis: Int32? = nil,
+        retries: Int = 3
+    ) -> [FlushedPendingStore] {
         let path = pendingStorePath()
         Self.pendingStoreFileLock.lock()
         defer { Self.pendingStoreFileLock.unlock() }
@@ -1330,7 +1334,9 @@ final class BrainDatabase: @unchecked Sendable {
                             chunkID: chunkID,
                             queueID: queueID,
                             createdAt: item.createdAt ?? item.queuedAt,
-                            refreshStatistics: false
+                            refreshStatistics: false,
+                            retries: retries,
+                            busyTimeoutMillis: busyTimeoutMillis
                         )
                         flushed.append(
                             FlushedPendingStore(

@@ -19,7 +19,7 @@ final class MCPRouter: @unchecked Sendable {
     // each extra retry adds another busy-timeout block plus a retry sleep. To stay
     // under the 200ms queue budget the synchronous path makes exactly one short
     // attempt (retries == 0) with a sub-budget busy timeout, then queues on busy.
-    private static let mcpStoreBusyTimeoutMillis: Int32 = 100
+    private static let mcpStoreBusyTimeoutMillis: Int32 = 25
     private static let mcpStoreRetries = 0
 
     private struct ToolOutput {
@@ -528,6 +528,7 @@ final class MCPRouter: @unchecked Sendable {
                 reason: "DB_NOT_OPEN"
             )
         }
+        let hadPendingStoresBeforeAttempt = db.pendingStoreQueueSnapshot().depth > 0
         do {
             switch try db.storeOrQueueWithinBudget(
                 content: content,
@@ -557,7 +558,13 @@ final class MCPRouter: @unchecked Sendable {
                 // busy DB, drain the existing backlog so prior writes are not stranded.
                 // Exclude the just-queued chunk so it is not immediately re-replayed /
                 // double-stored before its own deferred drain runs.
-                let flushedStores = db.flushPendingStores(excludingChunkIDs: [chunkID])
+                let flushedStores = hadPendingStoresBeforeAttempt
+                    ? db.flushPendingStores(
+                        excludingChunkIDs: [chunkID],
+                        busyTimeoutMillis: Self.mcpStoreBusyTimeoutMillis,
+                        retries: Self.mcpStoreRetries
+                    )
+                    : []
                 return queuedBrainStoreOutput(
                     queueID: queueID,
                     queuedAt: queuedAt,

@@ -20,6 +20,11 @@ import XCTest
 /// Run just this suite:
 ///   swift test --filter BrainBarDashboardSnapshotTests
 final class BrainBarDashboardSnapshotTests: XCTestCase {
+    private var shouldSkipDisplayDependentRenderInCI: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        return environment["CI"] == "true" && environment["BRAINBAR_RENDER_IN_CI"] != "1"
+    }
+
     /// Layout breakpoints come from `BrainBarDashboardLayout`: compact < 920,
     /// 920 ≤ default < 1040, wide ≥ 1040 (two chart columns).
     private enum Breakpoint: String, CaseIterable {
@@ -42,6 +47,11 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
 
     @MainActor
     func testDashboardRendersAtAllBreakpoints() throws {
+        try XCTSkipIf(
+            shouldSkipDisplayDependentRenderInCI,
+            "Dashboard PNG render verification is display-dependent; set BRAINBAR_RENDER_IN_CI=1 to run in CI."
+        )
+
         for breakpoint in Breakpoint.allCases {
             let collector = BrainBarDashboardFixture.makeCollector()
             let view = BrainBarDashboardPreview.make(collector: collector)
@@ -60,6 +70,11 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
 
     @MainActor
     func testSettingsRendersDeterministically() throws {
+        try XCTSkipIf(
+            shouldSkipDisplayDependentRenderInCI,
+            "Settings PNG render verification is display-dependent; set BRAINBAR_RENDER_IN_CI=1 to run in CI."
+        )
+
         let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("brainbar-render-settings-\(UUID().uuidString)", isDirectory: true)
         let configURL = tempRoot

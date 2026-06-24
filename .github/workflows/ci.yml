@@ -7,6 +7,58 @@ on:
     branches: [main]
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      brain_bar: ${{ steps.filter.outputs.brain_bar }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            brain_bar:
+              - 'brain-bar/**'
+
+  swift:
+    name: swift (macos-15)
+    needs: changes
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode (Swift 6)
+        if: needs.changes.outputs.brain_bar == 'true'
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Cache SwiftPM
+        if: needs.changes.outputs.brain_bar == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.swiftpm
+            brain-bar/.build
+          key: ${{ runner.os }}-swiftpm-${{ hashFiles('brain-bar/Package.resolved') }}
+          restore-keys: ${{ runner.os }}-swiftpm-
+
+      - name: Build BrainBar
+        if: needs.changes.outputs.brain_bar == 'true'
+        run: cd brain-bar && swift build -c release
+
+      - name: Test BrainBar
+        if: needs.changes.outputs.brain_bar == 'true'
+        run: cd brain-bar && swift test
+
+      - name: Skip BrainBar Swift build
+        if: needs.changes.outputs.brain_bar != 'true'
+        run: echo "no brain-bar changes — swift build/test skipped"
+
   test:
     runs-on: ubuntu-latest
     strategy:

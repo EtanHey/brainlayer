@@ -131,7 +131,9 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
             guard let self else { return }
             stalePIDs.forEach { self.terminateProcess($0, SIGKILL) }
             self.relaunch(self.configuration.relaunchCommand)
-            self.isRestarting = false
+            self.queue.asyncAfter(deadline: .now() + self.configuration.terminateGraceInterval) { [weak self] in
+                self?.isRestarting = false
+            }
         }
     }
 

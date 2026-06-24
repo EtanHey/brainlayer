@@ -205,19 +205,11 @@ final class StatsCollector: ObservableObject {
                 )
             }
 
-            await MainActor.run {
-                guard let self, !self.isStopped, generation == self.windowedBucketsGeneration else { return }
-                self.windowedBucketsTask = nil
-                self.isWindowedBucketsLoading = false
-                switch result {
-                case .success(let buckets):
-                    self.windowedBuckets = buckets
-                    self.windowedBucketsWindowMinutes = windowMinutes
-                case .failure:
-                    self.windowedBuckets = nil
-                    self.windowedBucketsWindowMinutes = nil
-                }
-            }
+            await self?.finishWindowedBucketsFetch(
+                result: result,
+                windowMinutes: windowMinutes,
+                generation: generation
+            )
         }
     }
 
@@ -287,18 +279,54 @@ final class StatsCollector: ObservableObject {
                 )
             }
 
-            await MainActor.run {
-                guard let self, !self.isStopped, generation == self.dashboardRefreshGeneration else { return }
-                self.finishRequestedRefresh(
-                    result: result,
-                    daemon: nextDaemon,
-                    snapshotTime: snapshotTime,
-                    startUnix: startUnix,
-                    force: force,
-                    trigger: trigger
-                )
-            }
+            await self?.finishRequestedRefreshIfCurrent(
+                result: result,
+                daemon: nextDaemon,
+                snapshotTime: snapshotTime,
+                startUnix: startUnix,
+                force: force,
+                trigger: trigger,
+                generation: generation
+            )
         }
+    }
+
+    private func finishWindowedBucketsFetch(
+        result: Result<BrainDatabase.PipelineWindowBuckets, Error>,
+        windowMinutes: Int,
+        generation: Int
+    ) {
+        guard !isStopped, generation == windowedBucketsGeneration else { return }
+        windowedBucketsTask = nil
+        isWindowedBucketsLoading = false
+        switch result {
+        case .success(let buckets):
+            windowedBuckets = buckets
+            windowedBucketsWindowMinutes = windowMinutes
+        case .failure:
+            windowedBuckets = nil
+            windowedBucketsWindowMinutes = nil
+        }
+    }
+
+    private func finishRequestedRefreshIfCurrent(
+        result: Result<DashboardStats, Error>,
+        daemon nextDaemon: DaemonHealthSnapshot?,
+        snapshotTime: Date,
+        startUnix: TimeInterval,
+        force: Bool,
+        trigger: DashboardRefreshTrigger,
+        generation: Int
+    ) {
+        guard !isStopped, generation == dashboardRefreshGeneration else { return }
+        finishRequestedRefresh(
+            result: result,
+            daemon: nextDaemon,
+            snapshotTime: snapshotTime,
+            startUnix: startUnix,
+            force: force,
+            trigger: trigger
+        )
     }
 
     func refresh(force: Bool = false, trigger: DashboardRefreshTrigger) {
