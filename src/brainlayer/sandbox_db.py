@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -69,16 +70,6 @@ def _resolved(path: Path) -> Path:
     return path.expanduser().resolve(strict=False)
 
 
-def _is_managed_sandbox_db_path(path: Path) -> bool:
-    resolved = _resolved(path)
-    temp_root = _resolved(Path(tempfile.gettempdir()))
-    return (
-        resolved.name == "brainlayer.db"
-        and resolved.parent.name.startswith("bl-sandbox-")
-        and resolved.parent.parent == temp_root
-    )
-
-
 def _protected_db_residue_paths(db_path: Path) -> set[Path]:
     resolved_db = _resolved(db_path)
     return {
@@ -108,7 +99,7 @@ def _assert_not_prod_path(
     for protected_db in protected_paths:
         if protected_db is None:
             continue
-        if resolved_db in _protected_db_residue_paths(protected_db) and not _is_managed_sandbox_db_path(resolved_db):
+        if resolved_db in _protected_db_residue_paths(protected_db):
             raise SandboxProdLeakError(f"sandbox db path resolves to active BrainLayer DB: {resolved_db}")
 
 
@@ -125,6 +116,29 @@ def _load_seed(seed: str) -> list[dict[str, Any]]:
     if not isinstance(payload, list):
         raise ValueError(f"sandbox seed must be a list: {seed}")
     return [dict(item) for item in payload]
+
+
+def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _read_lease_owner_pid(path: Path) -> int | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+    try:
+        return int(payload["pid"])
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def _seed_chunk_payload(*, seed: str, row: dict[str, Any]) -> dict[str, Any]:
@@ -164,11 +178,13 @@ def seed_sandbox_db(db_path: str | Path, seed: str) -> list[str]:
     try:
         chunks = [_seed_chunk_payload(seed=seed, row=row) for row in rows]
         embeddings = [_embed(chunk["content"]) for chunk in chunks]
-        store.upsert_chunks(chunks, embeddings)
+        processed = store.upsert_chunks(chunks, embeddings)
+        if processed != len(chunks):
+            raise RuntimeError(f"seed {seed!r} inserted {processed}/{len(chunks)} chunks")
     finally:
         store.close()
     clear_hybrid_search_cache(path)
-    return [str(row["id"]) for row in rows]
+    return [str(chunk["id"]) for chunk in chunks]
 
 
 class SandboxDB:
@@ -188,12 +204,15 @@ class SandboxDB:
         self.env = {"BRAINLAYER_DB": str(self.db_path)}
         self.seeded_ids: list[str] = []
         self._protected_db_path = _resolved(brain_paths.get_db_path())
+        self._patched_default_paths: list[tuple[object, str, Any]] = []
         self._old_env: str | None = None
         self._started = False
         self._lease_acquired = False
 
     def __enter__(self) -> SandboxDB:
-        return self.start()
+        self.start()
+        self._patch_default_db_paths()
+        return self
 
     def __exit__(
         self,
@@ -220,10 +239,36 @@ class SandboxDB:
         finally:
             self._lease_acquired = False
 
+    def _patch_default_db_paths(self) -> None:
+        self._patched_default_paths = []
+        old_path = self._protected_db_path
+        new_path = Path(self.db_path)
+        for module in list(sys.modules.values()):
+            if module is None or not getattr(module, "__name__", "").startswith("brainlayer"):
+                continue
+            if getattr(module, "DEFAULT_DB_PATH", None) != old_path:
+                continue
+            self._patched_default_paths.append((module, "DEFAULT_DB_PATH", old_path))
+            setattr(module, "DEFAULT_DB_PATH", new_path)
+
+    def _restore_default_db_paths(self) -> None:
+        for module, attr, value in reversed(self._patched_default_paths):
+            setattr(module, attr, value)
+        self._patched_default_paths = []
+
+    def _validate_owned_stop_lease(self) -> bool:
+        if not self._owns_temp_dir:
+            return self._started
+        if self._started:
+            return True
+        owner_pid = _read_lease_owner_pid(self.paths.lease_path)
+        if owner_pid is not None and owner_pid != os.getpid() and _pid_is_running(owner_pid):
+            raise RuntimeError(f"sandbox token is active in another process: {self.token}")
+        return True
+
     def start(self) -> SandboxDB:
         if self._started:
             raise RuntimeError("sandbox already started")
-        _assert_not_prod_path(self.db_path, protected_db_path=self._protected_db_path)
         if self._owns_temp_dir and self.paths.temp_dir.exists():
             if self.paths.lease_path.exists():
                 raise RuntimeError(f"sandbox token already exists and is already active: {self.token}")
@@ -231,6 +276,11 @@ class SandboxDB:
                 raise RuntimeError(f"sandbox token already exists with live DB: {self.token}")
             if any(self.paths.temp_dir.iterdir()):
                 raise RuntimeError(f"sandbox token already exists with residue: {self.token}")
+        _assert_not_prod_path(self.db_path, protected_db_path=self._protected_db_path)
+        if not self._owns_temp_dir and any(
+            path.exists() for path in (self.paths.db_path, self.paths.wal_path, self.paths.shm_path)
+        ):
+            raise RuntimeError(f"sandbox db path already exists with live DB: {self.db_path}")
         self.paths.temp_dir.mkdir(parents=True, exist_ok=True)
         self._acquire_lease()
         try:
@@ -246,10 +296,13 @@ class SandboxDB:
         return self
 
     def stop(self) -> None:
-        ignore_current_active_db = self._started and _resolved(brain_paths.get_db_path()) == _resolved(self.db_path)
+        lease_allows_token_stop = self._validate_owned_stop_lease()
+        ignore_current_active_db = lease_allows_token_stop and _resolved(brain_paths.get_db_path()) == _resolved(
+            self.db_path
+        )
         _assert_not_prod_path(
             self.db_path,
-            protected_db_path=self._protected_db_path,
+            protected_db_path=None if ignore_current_active_db else self._protected_db_path,
             ignore_current_active_db=ignore_current_active_db,
         )
         clear_hybrid_search_cache(self.db_path)
@@ -291,6 +344,7 @@ class SandboxDB:
             else:
                 os.environ["BRAINLAYER_DB"] = self._old_env
             self._started = False
+            self._restore_default_db_paths()
         elif os.environ.get("BRAINLAYER_DB") == str(self.db_path):
             os.environ.pop("BRAINLAYER_DB", None)
 
