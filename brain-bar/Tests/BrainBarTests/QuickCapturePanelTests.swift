@@ -99,13 +99,12 @@ final class QuickCapturePanelTests: XCTestCase {
 
         let startedAt = Date()
         model.handleInputChange("live search")
-        try await Task.sleep(for: .milliseconds(200))
+        await Task.yield()
 
         XCTAssertEqual(model.inputText, "live search")
         XCTAssertTrue(model.results.isEmpty)
         XCTAssertEqual(searchCallTimes.count, 0)
 
-        try await Task.sleep(for: .milliseconds(120))
         await model._pendingSearchTask?.value
 
         XCTAssertEqual(searchCallTimes.count, 1)
