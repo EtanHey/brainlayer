@@ -32,6 +32,7 @@ class SandboxPaths:
     db_path: Path
     wal_path: Path
     shm_path: Path
+    lease_path: Path
 
 
 def _validate_name(value: str, *, label: str) -> str:
@@ -50,6 +51,7 @@ def sandbox_paths_for_token(token: str) -> SandboxPaths:
         db_path=db_path,
         wal_path=Path(f"{db_path}-wal"),
         shm_path=Path(f"{db_path}-shm"),
+        lease_path=temp_dir / ".brainlayer-sandbox.lease",
     )
 
 
@@ -59,6 +61,7 @@ def _paths_for_db_path(db_path: Path) -> SandboxPaths:
         db_path=db_path,
         wal_path=Path(f"{db_path}-wal"),
         shm_path=Path(f"{db_path}-shm"),
+        lease_path=db_path.parent / f".{db_path.name}.sandbox.lease",
     )
 
 
@@ -76,15 +79,37 @@ def _is_managed_sandbox_db_path(path: Path) -> bool:
     )
 
 
-def _assert_not_prod_path(db_path: Path) -> None:
+def _protected_db_residue_paths(db_path: Path) -> set[Path]:
+    resolved_db = _resolved(db_path)
+    return {
+        resolved_db,
+        _resolved(Path(f"{resolved_db}-wal")),
+        _resolved(Path(f"{resolved_db}-shm")),
+    }
+
+
+def _assert_not_prod_path(
+    db_path: Path,
+    *,
+    protected_db_path: Path | None = None,
+    ignore_current_active_db: bool = False,
+) -> None:
     resolved_db = _resolved(db_path)
     canonical_db = _resolved(_CANONICAL_DB_PATH)
     canonical_dir = _resolved(_CANONICAL_DB_PATH.parent)
     if resolved_db == canonical_db or resolved_db.is_relative_to(canonical_dir):
         raise SandboxProdLeakError(f"sandbox db path resolves inside production BrainLayer dir: {resolved_db}")
     active_db = _resolved(brain_paths.get_db_path())
-    if resolved_db == active_db and not _is_managed_sandbox_db_path(resolved_db):
-        raise SandboxProdLeakError(f"sandbox db path resolves to active BrainLayer DB: {resolved_db}")
+    protected_paths = []
+    if not ignore_current_active_db:
+        protected_paths.append(active_db)
+    if protected_db_path is not None:
+        protected_paths.append(_resolved(protected_db_path))
+    for protected_db in protected_paths:
+        if protected_db is None:
+            continue
+        if resolved_db in _protected_db_residue_paths(protected_db) and not _is_managed_sandbox_db_path(resolved_db):
+            raise SandboxProdLeakError(f"sandbox db path resolves to active BrainLayer DB: {resolved_db}")
 
 
 def _seed_path(seed: str) -> Path:
@@ -162,8 +187,10 @@ class SandboxDB:
         self.db_path = self.paths.db_path
         self.env = {"BRAINLAYER_DB": str(self.db_path)}
         self.seeded_ids: list[str] = []
+        self._protected_db_path = _resolved(brain_paths.get_db_path())
         self._old_env: str | None = None
         self._started = False
+        self._lease_acquired = False
 
     def __enter__(self) -> SandboxDB:
         return self.start()
@@ -176,23 +203,56 @@ class SandboxDB:
     ) -> None:
         self.stop()
 
+    def _acquire_lease(self) -> None:
+        try:
+            fd = os.open(self.paths.lease_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError as exc:
+            raise RuntimeError(f"sandbox token already exists and is already active: {self.token}") from exc
+        with os.fdopen(fd, "w", encoding="utf-8") as lease_file:
+            lease_file.write(json.dumps({"pid": os.getpid(), "token": self.token}, sort_keys=True) + "\n")
+        self._lease_acquired = True
+
+    def _release_lease(self) -> None:
+        try:
+            self.paths.lease_path.unlink()
+        except FileNotFoundError:
+            pass
+        finally:
+            self._lease_acquired = False
+
     def start(self) -> SandboxDB:
         if self._started:
             raise RuntimeError("sandbox already started")
-        _assert_not_prod_path(self.db_path)
+        _assert_not_prod_path(self.db_path, protected_db_path=self._protected_db_path)
         if self._owns_temp_dir and self.paths.temp_dir.exists():
+            if self.paths.lease_path.exists():
+                raise RuntimeError(f"sandbox token already exists and is already active: {self.token}")
             if any(path.exists() for path in (self.paths.db_path, self.paths.wal_path, self.paths.shm_path)):
                 raise RuntimeError(f"sandbox token already exists with live DB: {self.token}")
             if any(self.paths.temp_dir.iterdir()):
                 raise RuntimeError(f"sandbox token already exists with residue: {self.token}")
         self.paths.temp_dir.mkdir(parents=True, exist_ok=True)
-        self.seeded_ids = seed_sandbox_db(self.db_path, self.seed)
-        self._old_env = os.environ.get("BRAINLAYER_DB")
-        os.environ["BRAINLAYER_DB"] = str(self.db_path)
-        self._started = True
+        self._acquire_lease()
+        try:
+            self.seeded_ids = seed_sandbox_db(self.db_path, self.seed)
+            self._old_env = os.environ.get("BRAINLAYER_DB")
+            os.environ["BRAINLAYER_DB"] = str(self.db_path)
+            self._started = True
+        except Exception:
+            self._release_lease()
+            if self._owns_temp_dir:
+                shutil.rmtree(self.paths.temp_dir, ignore_errors=True)
+            raise
         return self
 
     def stop(self) -> None:
+        ignore_current_active_db = self._started and _resolved(brain_paths.get_db_path()) == _resolved(self.db_path)
+        _assert_not_prod_path(
+            self.db_path,
+            protected_db_path=self._protected_db_path,
+            ignore_current_active_db=ignore_current_active_db,
+        )
+        clear_hybrid_search_cache(self.db_path)
         errors: list[str] = []
         for residue in (self.paths.db_path, self.paths.wal_path, self.paths.shm_path):
             try:
@@ -201,6 +261,13 @@ class SandboxDB:
                 pass
             except OSError as exc:
                 errors.append(f"{residue}: {exc}")
+        if not self._owns_temp_dir:
+            try:
+                self.paths.lease_path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                errors.append(f"{self.paths.lease_path}: {exc}")
         if self._owns_temp_dir:
             try:
                 shutil.rmtree(self.paths.temp_dir)
@@ -212,6 +279,8 @@ class SandboxDB:
         residue_paths = [self.paths.db_path, self.paths.wal_path, self.paths.shm_path]
         if self._owns_temp_dir:
             residue_paths.append(self.paths.temp_dir)
+        else:
+            residue_paths.append(self.paths.lease_path)
         remaining = [str(path) for path in residue_paths if path.exists()]
         if remaining:
             errors.append(f"residue remains after sandbox teardown: {', '.join(remaining)}")
@@ -222,7 +291,11 @@ class SandboxDB:
             else:
                 os.environ["BRAINLAYER_DB"] = self._old_env
             self._started = False
+        elif os.environ.get("BRAINLAYER_DB") == str(self.db_path):
+            os.environ.pop("BRAINLAYER_DB", None)
 
+        self._lease_acquired = False
+        clear_hybrid_search_cache(self.db_path)
         if errors:
             raise RuntimeError("; ".join(errors))
 

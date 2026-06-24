@@ -63,6 +63,28 @@ def _binary_vector_count(db_path: Path) -> int:
         store.close()
 
 
+def test_sandbox_stop_rejects_active_db_path_without_deleting_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from brainlayer.sandbox_db import SandboxDB, SandboxProdLeakError
+
+    active_db = tmp_path / "active-live" / "brainlayer.db"
+    active_db.parent.mkdir()
+    active_db.write_text("live", encoding="utf-8")
+    wal_path = Path(f"{active_db}-wal")
+    shm_path = Path(f"{active_db}-shm")
+    wal_path.write_text("wal", encoding="utf-8")
+    shm_path.write_text("shm", encoding="utf-8")
+    monkeypatch.setenv("BRAINLAYER_DB", str(active_db))
+
+    with pytest.raises(SandboxProdLeakError):
+        SandboxDB(seed="skill-eval-baseline", token="stop-prod", db_path=active_db).stop()
+
+    assert active_db.read_text(encoding="utf-8") == "live"
+    assert wal_path.read_text(encoding="utf-8") == "wal"
+    assert shm_path.read_text(encoding="utf-8") == "shm"
+
+
 def test_sandbox_rejects_prod_path_and_accepts_temp_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from brainlayer.paths import _CANONICAL_DB_PATH
     from brainlayer.sandbox_db import SandboxDB, SandboxProdLeakError
@@ -92,6 +114,19 @@ def test_sandbox_rejects_active_noncanonical_db_path(tmp_path: Path, monkeypatch
         SandboxDB(seed="skill-eval-baseline", token="active-live", db_path=active_db).start()
 
 
+def test_sandbox_rejects_active_db_sidecar_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from brainlayer.sandbox_db import SandboxDB, SandboxProdLeakError
+
+    active_db = tmp_path / "active-live" / "brainlayer.db"
+    monkeypatch.setenv("BRAINLAYER_DB", str(active_db))
+
+    for suffix in ("-wal", "-shm"):
+        with pytest.raises(SandboxProdLeakError):
+            SandboxDB(
+                seed="skill-eval-baseline", token=f"active-live{suffix}", db_path=Path(f"{active_db}{suffix}")
+            ).start()
+
+
 def test_sandbox_seed_is_retrievable_through_real_hybrid_search(monkeypatch: pytest.MonkeyPatch) -> None:
     from brainlayer.isolation_proof import _embed
     from brainlayer.sandbox_db import SandboxDB
@@ -113,6 +148,30 @@ def test_sandbox_seed_is_retrievable_through_real_hybrid_search(monkeypatch: pyt
 
         assert "skill-eval-baseline-003" in results["ids"][0]
         assert _binary_vector_count(sandbox.db_path) == len(sandbox.seeded_ids)
+
+
+def test_sandbox_stop_clears_hybrid_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    from brainlayer.isolation_proof import _embed
+    from brainlayer.sandbox_db import SandboxDB
+    from brainlayer.search_repo import _hybrid_cache
+    from brainlayer.vector_store import VectorStore
+
+    monkeypatch.delenv("BRAINLAYER_DB", raising=False)
+    sandbox = SandboxDB(seed="skill-eval-baseline", token="cache-clear").start()
+    store = VectorStore(sandbox.db_path, readonly=True)
+    try:
+        store.hybrid_search(
+            query_embedding=_embed("deterministic local embeddings"),
+            query_text="deterministic local embeddings",
+            n_results=5,
+        )
+    finally:
+        store.close()
+    assert any(key[0] == str(sandbox.db_path) for key in _hybrid_cache)
+
+    sandbox.stop()
+
+    assert not any(key[0] == str(sandbox.db_path) for key in _hybrid_cache)
 
 
 def test_sandbox_tokens_do_not_share_stored_sentinel(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -167,6 +226,22 @@ def test_sandbox_start_refuses_existing_live_token(monkeypatch: pytest.MonkeyPat
         sandbox.stop()
 
 
+def test_sandbox_start_uses_token_lease(monkeypatch: pytest.MonkeyPatch) -> None:
+    from brainlayer.sandbox_db import SandboxDB, sandbox_paths_for_token
+
+    monkeypatch.delenv("BRAINLAYER_DB", raising=False)
+    sandbox = SandboxDB(seed="skill-eval-baseline", token="lease-token").start()
+    paths = sandbox_paths_for_token("lease-token")
+    try:
+        assert paths.lease_path.exists()
+        with pytest.raises(RuntimeError, match="already active"):
+            SandboxDB(seed="skill-eval-baseline", token="lease-token").start()
+    finally:
+        sandbox.stop()
+
+    assert not paths.lease_path.exists()
+
+
 def test_sandbox_start_refuses_double_start_and_restores_original_env(monkeypatch: pytest.MonkeyPatch) -> None:
     from brainlayer.sandbox_db import SandboxDB
 
@@ -181,6 +256,18 @@ def test_sandbox_start_refuses_double_start_and_restores_original_env(monkeypatc
         sandbox.stop()
 
     assert os.environ["BRAINLAYER_DB"] == original_db
+
+
+def test_stop_sandbox_clears_matching_env_pointer(monkeypatch: pytest.MonkeyPatch) -> None:
+    from brainlayer.sandbox_db import start_sandbox, stop_sandbox
+
+    monkeypatch.delenv("BRAINLAYER_DB", raising=False)
+    sandbox = start_sandbox(seed="skill-eval-baseline", token="stop-wrapper")
+    assert os.environ["BRAINLAYER_DB"] == str(sandbox.db_path)
+
+    stop_sandbox(token="stop-wrapper")
+
+    assert "BRAINLAYER_DB" not in os.environ
 
 
 def test_sandbox_seed_is_deterministic(monkeypatch: pytest.MonkeyPatch) -> None:
