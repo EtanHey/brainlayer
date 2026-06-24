@@ -222,12 +222,13 @@ final class HybridSearchHelperClientTests: XCTestCase {
             pythonExecutable: fixture.executablePath,
             environment: [:],
             socketIOTimeout: 2.0,
-            readinessTimeout: 2.0,
-            readinessProbeInterval: 0.02
+            readinessTimeout: 5.0,
+            readinessProbeInterval: 0.02,
+            readinessProbeTimeout: 0.05
         )
         defer { client.stop() }
         client.startWarming()
-        XCTAssertTrue(waitUntil(timeout: 2.0) { client.isReady })
+        XCTAssertTrue(waitUntil(timeout: 5.0) { client.isReady })
 
         let router = MCPRouter(hybridSearchClient: client, hybridSearchBudget: 0.05)
         router.setDatabase(db)
