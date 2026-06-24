@@ -391,7 +391,9 @@ private struct BrainBarDashboardView: View {
             }
             .coordinateSpace(name: BrainBarVectorSignalCoordinateSpace.root)
             .onPreferenceChange(BrainBarVectorSignalRootFrameKey.self) { frame in
-                vectorSignalRootFrame = frame
+                MainActor.assumeIsolated {
+                    vectorSignalRootFrame = frame
+                }
             }
             .overlay(alignment: .topLeading) {
                 if signalCoverageExpanded, vectorSignalDetailExpanded, vectorSignalRootFrame != .zero {
@@ -417,8 +419,10 @@ private struct BrainBarDashboardView: View {
                 }
             }
             .onPreferenceChange(BrainBarVectorDetailHeightKey.self) { height in
-                if height > 0 {
-                    vectorDetailHeight = height
+                MainActor.assumeIsolated {
+                    if height > 0 {
+                        vectorDetailHeight = height
+                    }
                 }
             }
         }
@@ -641,7 +645,9 @@ private struct BrainBarDashboardView: View {
         )
         .coordinateSpace(name: BrainBarVectorSignalCoordinateSpace.pipelinePanel)
         .onPreferenceChange(BrainBarVectorSignalFrameKey.self) { frame in
-            vectorSignalRowFrame = frame
+            MainActor.assumeIsolated {
+                vectorSignalRowFrame = frame
+            }
         }
     }
 
