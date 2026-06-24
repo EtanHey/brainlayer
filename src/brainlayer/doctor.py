@@ -19,6 +19,7 @@ from typing import Any, Callable
 from .drain_liveness import (
     DEFAULT_DRAIN_LIVENESS_STALE_SECONDS,
     ENRICH_DAILY_COST_COUNTER_FILENAME,
+    STALLED_CODE,
     check_drain_liveness,
 )
 from .health_check import (
@@ -328,7 +329,7 @@ def run_doctor(
     except Exception as exc:
         fatal("enrichment_backlog_failed", f"could not count enrichment backlog: {exc}")
 
-    drain_loaded: bool | None = True if not config.drain_label else None
+    drain_loaded: bool | None = None
     for label, code, message in (
         (config.enrichment_label, "enrichment_unloaded", "enrichment launchd label is not loaded"),
         (config.hotlane_label, "hotlane_unloaded", "hot-lane launchd label is not loaded"),
@@ -366,7 +367,7 @@ def run_doctor(
     # Drain should publish heartbeat cycles even while the durable queue is empty.
     # Stale drain health plus enrichment backlog is the loaded-but-dead case that
     # the generic loaded-but-idle warning cannot distinguish from quota throttling.
-    drain_liveness_issue = check_drain_liveness(
+    pending_drain_liveness_issue = check_drain_liveness(
         drain_label=config.drain_label,
         drain_loaded=drain_loaded,
         queue_count=queue_count,
@@ -376,15 +377,6 @@ def run_doctor(
         stale_seconds=config.drain_liveness_stale_seconds,
         enrich_cost_counter_path=config.db_path.expanduser().parent / ENRICH_DAILY_COST_COUNTER_FILENAME,
     )
-    if drain_liveness_issue is not None:
-        result.issues.append(
-            DoctorIssue(
-                drain_liveness_issue.code,
-                drain_liveness_issue.severity,
-                drain_liveness_issue.message,
-                drain_liveness_issue.details,
-            )
-        )
     drain_total = drain_health.get("drained_total")
     watcher_poll_count = watcher_health.get("poll_count")
     drain_moving = queue_count == 0
@@ -398,6 +390,17 @@ def run_doctor(
         drain_total = next_drain_health.get("drained_total", drain_total)
         watcher_poll_count = next_watcher_health.get("poll_count", watcher_poll_count)
     queue_moving = drain_moving or watcher_moving
+    if pending_drain_liveness_issue is not None:
+        suppress_stale_drain = pending_drain_liveness_issue.code == STALLED_CODE and queue_count > 0 and drain_moving
+        if not suppress_stale_drain:
+            result.issues.append(
+                DoctorIssue(
+                    pending_drain_liveness_issue.code,
+                    pending_drain_liveness_issue.severity,
+                    pending_drain_liveness_issue.message,
+                    pending_drain_liveness_issue.details,
+                )
+            )
     if queue_count > 0 and not queue_moving:
         fatal(
             "queue_not_moving_with_backlog",

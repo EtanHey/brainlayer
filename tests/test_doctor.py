@@ -306,6 +306,69 @@ def test_run_doctor_does_not_let_enrichment_quota_mask_durable_queue_liveness(tm
     assert not [issue for issue in result.issues if issue.code == "drain_liveness_quota_blocked"]
 
 
+def test_run_doctor_skips_drain_liveness_when_drain_label_is_disabled(tmp_path, monkeypatch):
+    from brainlayer.doctor import run_doctor
+
+    monkeypatch.setenv("BRAINLAYER_ENRICH_DAILY_USD_CAP", "5.0")
+    db_path = tmp_path / "drain-liveness-disabled-label.db"
+    _build_db(db_path)
+    _add_enrichment_backlog(db_path)
+    config = _doctor_config(tmp_path, db_path)
+    config.drain_label = ""
+    _write_drain_health(config.drain_health_path, updated_at=NOW - timedelta(minutes=10))
+
+    result = run_doctor(
+        config,
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+
+    assert result.exit_code == 0
+    assert result.ok is True
+    assert any(issue.code == "enrichment_idle_with_backlog" for issue in result.issues)
+    assert not [issue for issue in result.issues if issue.code.startswith("drain_liveness")]
+
+
+def test_run_doctor_suppresses_stale_liveness_when_drain_counter_advances(tmp_path, monkeypatch):
+    import brainlayer.doctor as doctor
+
+    monkeypatch.setenv("BRAINLAYER_ENRICH_DAILY_USD_CAP", "5.0")
+    db_path = tmp_path / "drain-liveness-counter-advances.db"
+    _build_db(db_path)
+    config = _doctor_config(tmp_path, db_path)
+    (config.queue_dir / "pending.jsonl").write_text('{"kind":"watcher_chunk"}\n', encoding="utf-8")
+    stale_updated_at = (NOW - timedelta(minutes=10)).isoformat()
+    drain_reads = 0
+    original_load_json = doctor._load_json
+
+    def fake_load_json(path: Path) -> dict:
+        nonlocal drain_reads
+        if path == config.drain_health_path:
+            drain_reads += 1
+            return {
+                "drain_cycles": 3 + drain_reads,
+                "drained_total": 40 + drain_reads,
+                "updated_at": stale_updated_at,
+            }
+        return original_load_json(path)
+
+    monkeypatch.setattr(doctor, "_load_json", fake_load_json)
+
+    result = doctor.run_doctor(
+        config,
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+
+    assert result.exit_code == 0
+    assert result.ok is True
+    assert drain_reads == 2
+    assert not [issue for issue in result.issues if issue.code == "drain_liveness_stalled"]
+    assert not [issue for issue in result.issues if issue.code == "queue_not_moving_with_backlog"]
+
+
 def test_doctor_cli_is_registered_with_json_and_db_options():
     from typer.main import get_command
 
