@@ -404,9 +404,13 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             except OSError as exc:
                 if not isinstance(exc, BlockingIOError) and exc.errno not in {errno.EACCES, errno.EAGAIN}:
                     raise
-                other_pid, _other_start_time = self._read_writer_pidfile_owner_fd(fd)
-                if other_pid is not None:
+                other_pid, other_start_time, other_db_path = self._read_writer_pidfile_record_fd(fd)
+                if other_db_path is not None and not self._pidfile_db_path_matches(other_db_path):
+                    return False
+                if other_pid is not None and self._pidfile_owner_matches(other_pid, other_start_time):
                     raise WriterInUseError(f"another writer is using {self.db_path} (pid {other_pid})") from exc
+                if other_pid is not None:
+                    return False
                 raise WriterInUseError(f"writer pidfile is locked for {self.db_path}") from exc
             other_pid, other_start_time = self._read_writer_pidfile_owner_fd(fd)
             if other_pid == pid and self._pidfile_owner_matches(other_pid, other_start_time):

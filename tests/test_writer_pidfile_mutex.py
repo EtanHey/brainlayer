@@ -557,6 +557,22 @@ def test_stale_pidfile_unlink_missing_race_is_ignored(tmp_path, monkeypatch):
     assert store._handle_existing_writer_pidfile(pidfile, os.getpid()) is False
 
 
+def test_locked_stale_pidfile_is_retryable_not_active_writer(tmp_path, monkeypatch):
+    pidfile = tmp_path / "writer.pid"
+    pidfile.write_text("999999\nstart_time=stale-start\n", encoding="utf-8")
+    store = object.__new__(VectorStore)
+    store.db_path = tmp_path / "writer.db"
+    monkeypatch.setattr(store, "_pid_is_alive", lambda _pid: False)
+
+    def locked_flock(_fd: int, operation: int) -> None:
+        if operation == (fcntl.LOCK_EX | fcntl.LOCK_NB):
+            raise BlockingIOError
+
+    monkeypatch.setattr(fcntl, "flock", locked_flock)
+
+    assert store._handle_existing_writer_pidfile(pidfile, os.getpid()) is False
+
+
 def test_pidfile_removed_on_close(tmp_path, monkeypatch):
     pidfile_dir = tmp_path / "pidfiles"
     db_path = tmp_path / "writer.db"
