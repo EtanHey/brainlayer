@@ -29,6 +29,9 @@ htmlcov/
 *.db-wal
 *.db-shm
 data/
+!src/brainlayer/data/
+!src/brainlayer/data/sandbox_seeds/
+!src/brainlayer/data/sandbox_seeds/*.json
 
 # Secrets
 .env
