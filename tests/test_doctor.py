@@ -105,6 +105,11 @@ def _write_daily_cap_reached(cost_dir: Path, *, now: datetime, spent_usd: float 
     )
 
 
+def _write_corrupt_daily_cap_counter(cost_dir: Path) -> None:
+    cost_dir.mkdir(parents=True, exist_ok=True)
+    (cost_dir / "enrich-daily-cost.json").write_text('{"date": ', encoding="utf-8")
+
+
 def _doctor_config(tmp_path: Path, db_path: Path):
     from brainlayer.doctor import DoctorConfig
 
@@ -310,6 +315,33 @@ def test_run_doctor_honors_enrich_cost_dir_for_drain_liveness_quota(tmp_path, mo
     assert not [issue for issue in result.issues if issue.code == "drain_liveness_stalled"]
 
 
+def test_run_doctor_warns_when_drain_liveness_quota_counter_is_corrupt(tmp_path, monkeypatch):
+    from brainlayer.doctor import run_doctor
+
+    monkeypatch.delenv("BRAINLAYER_ENRICH_COST_DIR", raising=False)
+    monkeypatch.setenv("BRAINLAYER_ENRICH_DAILY_USD_CAP", "5.0")
+    db_path = tmp_path / "drain-liveness-corrupt-quota.db"
+    _write_corrupt_daily_cap_counter(db_path.parent)
+    _build_db(db_path)
+    _add_enrichment_backlog(db_path)
+    config = _doctor_config(tmp_path, db_path)
+    _write_drain_health(config.drain_health_path, updated_at=NOW - timedelta(minutes=10))
+
+    result = run_doctor(
+        config,
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+
+    issue = next(issue for issue in result.issues if issue.code == "drain_liveness_blocker_unknown")
+    assert result.exit_code == 0
+    assert result.ok is True
+    assert issue.severity == "warning"
+    assert "DRAIN_LIVENESS_BLOCKER_UNKNOWN" in issue.message
+    assert not [issue for issue in result.issues if issue.code == "drain_liveness_stalled"]
+
+
 def test_run_doctor_does_not_let_enrichment_quota_mask_durable_queue_liveness(tmp_path, monkeypatch):
     from brainlayer.doctor import run_doctor
 
@@ -399,6 +431,90 @@ def test_run_doctor_suppresses_stale_liveness_when_drain_counter_advances(tmp_pa
     assert result.exit_code == 0
     assert result.ok is True
     assert drain_reads == 2
+    assert not [issue for issue in result.issues if issue.code == "drain_liveness_stalled"]
+    assert not [issue for issue in result.issues if issue.code == "queue_not_moving_with_backlog"]
+
+
+def test_run_doctor_suppresses_stale_liveness_when_drain_cycles_advance(tmp_path, monkeypatch):
+    import brainlayer.doctor as doctor
+
+    monkeypatch.delenv("BRAINLAYER_ENRICH_COST_DIR", raising=False)
+    monkeypatch.setenv("BRAINLAYER_ENRICH_DAILY_USD_CAP", "5.0")
+    db_path = tmp_path / "drain-liveness-cycles-advance.db"
+    _build_db(db_path)
+    config = _doctor_config(tmp_path, db_path)
+    (config.queue_dir / "pending.jsonl").write_text('{"kind":"watcher_chunk"}\n', encoding="utf-8")
+    stale_updated_at = (NOW - timedelta(minutes=10)).isoformat()
+    drain_reads = 0
+    original_load_json = doctor._load_json
+
+    def fake_load_json(path: Path) -> dict:
+        nonlocal drain_reads
+        if path == config.drain_health_path:
+            drain_reads += 1
+            return {
+                "drain_cycles": 20 + drain_reads,
+                "drained_total": 40,
+                "updated_at": stale_updated_at,
+            }
+        return original_load_json(path)
+
+    monkeypatch.setattr(doctor, "_load_json", fake_load_json)
+
+    result = doctor.run_doctor(
+        config,
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+
+    assert result.exit_code == 0
+    assert result.ok is True
+    assert drain_reads == 2
+    assert not [issue for issue in result.issues if issue.code == "drain_liveness_stalled"]
+    assert not [issue for issue in result.issues if issue.code == "queue_not_moving_with_backlog"]
+
+
+def test_run_doctor_suppresses_stale_liveness_when_sampled_heartbeat_is_fresh(tmp_path, monkeypatch):
+    import brainlayer.doctor as doctor
+
+    monkeypatch.delenv("BRAINLAYER_ENRICH_COST_DIR", raising=False)
+    monkeypatch.setenv("BRAINLAYER_ENRICH_DAILY_USD_CAP", "5.0")
+    db_path = tmp_path / "drain-liveness-sampled-fresh.db"
+    _build_db(db_path)
+    config = _doctor_config(tmp_path, db_path)
+    (config.queue_dir / "pending.jsonl").write_text('{"kind":"watcher_chunk"}\n', encoding="utf-8")
+    drain_reads = 0
+    watcher_reads = 0
+    original_load_json = doctor._load_json
+
+    def fake_load_json(path: Path) -> dict:
+        nonlocal drain_reads, watcher_reads
+        if path == config.drain_health_path:
+            drain_reads += 1
+            return {
+                "drain_cycles": 20,
+                "drained_total": 40,
+                "updated_at": (NOW - timedelta(minutes=10)).isoformat() if drain_reads == 1 else NOW.isoformat(),
+            }
+        if path == config.watcher_health_path:
+            watcher_reads += 1
+            return {"poll_count": 12 + watcher_reads}
+        return original_load_json(path)
+
+    monkeypatch.setattr(doctor, "_load_json", fake_load_json)
+
+    result = doctor.run_doctor(
+        config,
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+
+    assert result.exit_code == 0
+    assert result.ok is True
+    assert drain_reads == 2
+    assert watcher_reads == 2
     assert not [issue for issue in result.issues if issue.code == "drain_liveness_stalled"]
     assert not [issue for issue in result.issues if issue.code == "queue_not_moving_with_backlog"]
 
