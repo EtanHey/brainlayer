@@ -12,7 +12,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any
 
-from ._helpers import serialize_f32
+from . import paths as brain_paths
 from .isolation_proof import _embed
 from .paths import _CANONICAL_DB_PATH
 from .search_repo import clear_hybrid_search_cache
@@ -66,12 +66,25 @@ def _resolved(path: Path) -> Path:
     return path.expanduser().resolve(strict=False)
 
 
+def _is_managed_sandbox_db_path(path: Path) -> bool:
+    resolved = _resolved(path)
+    temp_root = _resolved(Path(tempfile.gettempdir()))
+    return (
+        resolved.name == "brainlayer.db"
+        and resolved.parent.name.startswith("bl-sandbox-")
+        and resolved.parent.parent == temp_root
+    )
+
+
 def _assert_not_prod_path(db_path: Path) -> None:
     resolved_db = _resolved(db_path)
     canonical_db = _resolved(_CANONICAL_DB_PATH)
     canonical_dir = _resolved(_CANONICAL_DB_PATH.parent)
     if resolved_db == canonical_db or resolved_db.is_relative_to(canonical_dir):
         raise SandboxProdLeakError(f"sandbox db path resolves inside production BrainLayer dir: {resolved_db}")
+    active_db = _resolved(brain_paths.get_db_path())
+    if resolved_db == active_db and not _is_managed_sandbox_db_path(resolved_db):
+        raise SandboxProdLeakError(f"sandbox db path resolves to active BrainLayer DB: {resolved_db}")
 
 
 def _seed_path(seed: str) -> Path:
@@ -89,35 +102,25 @@ def _load_seed(seed: str) -> list[dict[str, Any]]:
     return [dict(item) for item in payload]
 
 
-def _insert_seed_chunk(store: VectorStore, *, seed: str, row: dict[str, Any]) -> None:
+def _seed_chunk_payload(*, seed: str, row: dict[str, Any]) -> dict[str, Any]:
     chunk_id = str(row["id"])
     content = str(row["content"])
     project = row.get("project")
     created_at = str(row["created_at"])
-    cursor = store.conn.cursor()
-    cursor.execute(
-        """INSERT INTO chunks (
-            id, content, metadata, source_file, project, content_type,
-            char_count, source, created_at, tags, importance
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            chunk_id,
-            content,
-            json.dumps({"sandbox_seed": seed}, sort_keys=True),
-            f"sandbox-seed:{seed}",
-            project if project is None else str(project),
-            str(row.get("content_type", "assistant_text")),
-            len(content),
-            "sandbox_seed",
-            created_at,
-            json.dumps(row.get("tags", []), sort_keys=True),
-            row.get("importance"),
-        ),
-    )
-    cursor.execute(
-        "INSERT INTO chunk_vectors (chunk_id, embedding) VALUES (?, ?)",
-        (chunk_id, serialize_f32(_embed(content))),
-    )
+    return {
+        "id": chunk_id,
+        "content": content,
+        "metadata": {"sandbox_seed": seed},
+        "source_file": f"sandbox-seed:{seed}",
+        "project": project if project is None else str(project),
+        "content_type": str(row.get("content_type", "assistant_text")),
+        "char_count": len(content),
+        "source": "sandbox_seed",
+        "created_at": created_at,
+        "tags": row.get("tags", []),
+        "importance": row.get("importance"),
+        "status": "active",
+    }
 
 
 def seed_sandbox_db(db_path: str | Path, seed: str) -> list[str]:
@@ -133,16 +136,14 @@ def seed_sandbox_db(db_path: str | Path, seed: str) -> list[str]:
 
     rows = _load_seed(seed)
     store = VectorStore(path)
-    store._binary_index_available = False
     try:
-        seeded_ids: list[str] = []
-        for row in rows:
-            _insert_seed_chunk(store, seed=seed, row=row)
-            seeded_ids.append(str(row["id"]))
+        chunks = [_seed_chunk_payload(seed=seed, row=row) for row in rows]
+        embeddings = [_embed(chunk["content"]) for chunk in chunks]
+        store.upsert_chunks(chunks, embeddings)
     finally:
         store.close()
     clear_hybrid_search_cache(path)
-    return seeded_ids
+    return [str(row["id"]) for row in rows]
 
 
 class SandboxDB:
@@ -176,9 +177,14 @@ class SandboxDB:
         self.stop()
 
     def start(self) -> SandboxDB:
+        if self._started:
+            raise RuntimeError("sandbox already started")
         _assert_not_prod_path(self.db_path)
         if self._owns_temp_dir and self.paths.temp_dir.exists():
-            shutil.rmtree(self.paths.temp_dir)
+            if any(path.exists() for path in (self.paths.db_path, self.paths.wal_path, self.paths.shm_path)):
+                raise RuntimeError(f"sandbox token already exists with live DB: {self.token}")
+            if any(self.paths.temp_dir.iterdir()):
+                raise RuntimeError(f"sandbox token already exists with residue: {self.token}")
         self.paths.temp_dir.mkdir(parents=True, exist_ok=True)
         self.seeded_ids = seed_sandbox_db(self.db_path, self.seed)
         self._old_env = os.environ.get("BRAINLAYER_DB")
