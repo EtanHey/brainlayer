@@ -110,6 +110,12 @@ def _bootout_label(label: str) -> None:
     _run_launchctl(["launchctl", "bootout", _launchd_target(label)])
 
 
+def _launchctl_returncode(result) -> int:
+    if isinstance(result, int):
+        return result
+    return int(getattr(result, "returncode", 1) or 0)
+
+
 @sandbox_app.command("start")
 def sandbox_start_command(
     seed: str = typer.Option(..., "--seed", help="Named seed set to load."),
@@ -277,6 +283,148 @@ def reconcile_launchd_command(
         action="reconcile",
     )
     typer.echo("reconciled launchd labels")
+
+
+def _default_deploy_labels() -> list[str]:
+    return [
+        "com.mcplayer.brainlayer-proxy",
+        "com.brainlayer.enrichment",
+        "com.brainlayer.drain",
+        "com.brainlayer.watch",
+    ]
+
+
+def _deploy_plist_for_label(
+    label: str,
+    *,
+    proxy: Path,
+    enrichment: Path,
+    drain: Path,
+    watch: Path,
+) -> Path:
+    if label == "com.mcplayer.brainlayer-proxy":
+        return proxy.expanduser()
+    if label == "com.brainlayer.enrichment":
+        return enrichment.expanduser()
+    if label == "com.brainlayer.drain":
+        return drain.expanduser()
+    if label == "com.brainlayer.watch":
+        return watch.expanduser()
+    return Path(f"~/Library/LaunchAgents/{label}.plist").expanduser()
+
+
+def _kickstart_label_or_raise(label: str) -> None:
+    from ..launchd_primitive import LaunchdCommandError, verify_launchd_label_loaded
+
+    command = ["launchctl", "kickstart", "-k", _launchd_target(label)]
+    result = _run_launchctl(command)
+    returncode = _launchctl_returncode(result)
+    if returncode != 0:
+        raise LaunchdCommandError(
+            f"launchctl command failed for {label}: {' '.join(command)}",
+            label=label,
+            target=_launchd_target(label),
+            reason="launchctl_command_failed",
+            plist_path=Path(f"~/Library/LaunchAgents/{label}.plist").expanduser(),
+            command=command,
+            returncode=returncode,
+            stdout=str(getattr(result, "stdout", "") or ""),
+            stderr=str(getattr(result, "stderr", "") or ""),
+        )
+    verify_launchd_label_loaded(label, command_runner=_run_launchctl, context="after deploy kickstart")
+
+
+def _restart_deploy_label(label: str, plist_path: Path) -> str:
+    from ..launchd_primitive import LaunchdVerificationError, is_launchd_label_loaded
+
+    loaded = is_launchd_label_loaded(label, command_runner=_run_launchctl)
+    if loaded is True:
+        _kickstart_label_or_raise(label)
+        return f"kickstart:{label}"
+    if loaded is False:
+        _bootstrap_label(label, plist_path)
+        return f"bootstrap:{label}"
+    raise LaunchdVerificationError(
+        f"could not determine whether {label} is loaded before deploy",
+        label=label,
+        target=_launchd_target(label),
+        reason="unknown_loaded_state",
+        plist_path=plist_path,
+    )
+
+
+def _record_deploy_provenance_for_label(*, label: str, plist_path: Path, provenance_dir: Path) -> None:
+    from ..deploy_drift import record_deploy_provenance_for_label
+
+    record_deploy_provenance_for_label(label=label, plist_path=plist_path, provenance_dir=provenance_dir)
+
+
+def _brainbar_changed_for_deploy(provenance_dir: Path) -> bool:
+    from ..deploy_drift import brainbar_changed_for_deploy
+
+    return brainbar_changed_for_deploy(provenance_dir)
+
+
+@app.command("deploy")
+def deploy_command(
+    labels: list[str] | None = typer.Option(None, "--label", help="launchd label to restart; repeatable."),
+    provenance_dir: Optional[Path] = typer.Option(
+        None,
+        "--provenance-dir",
+        help="Directory for daemon launch provenance JSON files.",
+    ),
+    proxy_plist_path: Path = typer.Option(
+        Path("~/Library/LaunchAgents/com.mcplayer.brainlayer-proxy.plist"),
+        "--proxy-plist-path",
+    ),
+    enrichment_plist_path: Path = typer.Option(
+        Path("~/Library/LaunchAgents/com.brainlayer.enrichment.plist"),
+        "--enrichment-plist-path",
+    ),
+    drain_plist_path: Path = typer.Option(
+        Path("~/Library/LaunchAgents/com.brainlayer.drain.plist"),
+        "--drain-plist-path",
+    ),
+    watch_plist_path: Path = typer.Option(
+        Path("~/Library/LaunchAgents/com.brainlayer.watch.plist"),
+        "--watch-plist-path",
+    ),
+) -> None:
+    """Restart long-running BrainLayer daemons so merged code becomes live."""
+    from ..deploy_drift import DeployProvenanceError, default_deploy_provenance_dir
+    from ..launchd_primitive import LaunchdVerificationError
+
+    selected_labels = labels or _default_deploy_labels()
+    resolved_provenance_dir = (provenance_dir or default_deploy_provenance_dir()).expanduser()
+    brainbar_changed = _brainbar_changed_for_deploy(resolved_provenance_dir)
+    failures: list[LaunchdVerificationError | DeployProvenanceError] = []
+    actions: list[str] = []
+    for label in selected_labels:
+        plist_path = _deploy_plist_for_label(
+            label,
+            proxy=proxy_plist_path,
+            enrichment=enrichment_plist_path,
+            drain=drain_plist_path,
+            watch=watch_plist_path,
+        )
+        try:
+            actions.append(_restart_deploy_label(label, plist_path))
+            _record_deploy_provenance_for_label(
+                label=label,
+                plist_path=plist_path,
+                provenance_dir=resolved_provenance_dir,
+            )
+        except (LaunchdVerificationError, DeployProvenanceError) as exc:
+            failures.append(exc)
+
+    if brainbar_changed:
+        rprint("[bold yellow]BrainBar source changed; rebuild BrainBar manually.[/]")
+
+    for failure in failures:
+        typer.echo(f"failed to deploy launchd label {failure.label}: {failure}", err=True)
+    if failures:
+        raise typer.Exit(1)
+    typer.echo(f"deployed labels={','.join(selected_labels)} actions={','.join(actions)}")
 
 
 @app.command()
@@ -1753,6 +1901,13 @@ def enrich(
                 import signal
                 import threading
 
+                try:
+                    from ..deploy_drift import record_launch_from_environment
+
+                    record_launch_from_environment()
+                except Exception:
+                    logging.getLogger(__name__).debug("Failed to record enrichment launch provenance", exc_info=True)
+
                 stop_event = threading.Event()
 
                 def handle_signal(signum, frame):
@@ -2529,6 +2684,12 @@ def watch(
 
     install_parent_death_watcher()
     os.environ.setdefault("BRAINLAYER_ARBITRATED", "1")
+    try:
+        from ..deploy_drift import record_launch_from_environment
+
+        record_launch_from_environment()
+    except Exception:
+        logging.getLogger(__name__).debug("Failed to record watcher launch provenance", exc_info=True)
 
     db_path = get_db_path()
     offsets_path = db_path.parent / "offsets.json"

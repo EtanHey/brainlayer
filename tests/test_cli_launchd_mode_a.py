@@ -133,6 +133,62 @@ def test_reconcile_launchd_bootstraps_all_mode_a_labels(monkeypatch, tmp_path):
     assert "com.brainlayer.enrichment" in command_text
 
 
+def test_deploy_kickstarts_runtime_daemons_and_does_not_restart_brainbar(monkeypatch, tmp_path):
+    commands: list[list[str]] = []
+    recorded: list[str] = []
+
+    def command_runner(args: list[str]) -> SimpleNamespace:
+        commands.append(args)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("brainlayer.cli._run_launchctl", command_runner)
+    monkeypatch.setattr(
+        "brainlayer.cli._record_deploy_provenance_for_label",
+        lambda *, label, plist_path, provenance_dir: recorded.append(label),
+        raising=False,
+    )
+    monkeypatch.setattr("brainlayer.cli._brainbar_changed_for_deploy", lambda *_args, **_kwargs: False, raising=False)
+
+    result = CliRunner().invoke(app, ["deploy", "--provenance-dir", str(tmp_path / "provenance")])
+
+    assert result.exit_code == 0, result.output
+    command_text = "\n".join(" ".join(command) for command in commands)
+    for label in (
+        "com.mcplayer.brainlayer-proxy",
+        "com.brainlayer.enrichment",
+        "com.brainlayer.drain",
+        "com.brainlayer.watch",
+    ):
+        assert ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{label}"] in commands
+        assert label in recorded
+    assert "com.brainlayer.brainbar" not in command_text
+    assert "com.brainlayer.brainbar-daemon" not in command_text
+
+
+def test_deploy_flags_brainbar_changes_without_restart(monkeypatch, tmp_path):
+    commands: list[list[str]] = []
+
+    def command_runner(args: list[str]) -> SimpleNamespace:
+        commands.append(args)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("brainlayer.cli._run_launchctl", command_runner)
+    monkeypatch.setattr(
+        "brainlayer.cli._record_deploy_provenance_for_label",
+        lambda *, label, plist_path, provenance_dir: None,
+        raising=False,
+    )
+    monkeypatch.setattr("brainlayer.cli._brainbar_changed_for_deploy", lambda *_args, **_kwargs: True, raising=False)
+
+    result = CliRunner().invoke(app, ["deploy", "--provenance-dir", str(tmp_path / "provenance")])
+
+    assert result.exit_code == 0, result.output
+    assert "BrainBar source changed; rebuild BrainBar manually" in result.output
+    command_text = "\n".join(" ".join(command) for command in commands)
+    assert "com.brainlayer.brainbar" not in command_text
+    assert "com.brainlayer.brainbar-daemon" not in command_text
+
+
 def test_resume_attempts_all_labels_and_keeps_sentinel_when_bootstrap_verification_fails(monkeypatch, tmp_path):
     commands: list[list[str]] = []
 

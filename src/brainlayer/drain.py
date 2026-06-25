@@ -1445,6 +1445,12 @@ def main() -> int:
     if args.once:
         print(drain_once(batch_size=args.batch_size))
         return 0
+    try:
+        from brainlayer.deploy_drift import record_launch_from_environment
+
+        record_launch_from_environment()
+    except Exception:
+        logger.debug("Failed to record drain launch provenance", exc_info=True)
     run_daemon(args.interval, args.batch_size)
     return 0
 

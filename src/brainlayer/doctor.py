@@ -16,7 +16,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
-from .alarm import BrainLayerAlarm, emit_alarm
+from .alarm import BrainLayerAlarm, emit_alarm, raise_alarm
+from .deploy_drift import DEFAULT_DEPLOY_DRIFT_LABELS, default_deploy_provenance_dir, detect_deploy_drift
 from .drain_liveness import (
     DEFAULT_DRAIN_LIVENESS_STALE_SECONDS,
     ENRICH_DAILY_COST_COUNTER_FILENAME,
@@ -36,7 +37,12 @@ from .health_check import (
     count_missing_embeddings,
     parse_hotlane_processes,
 )
-from .launchd_primitive import LaunchdLabelNotLoadedError, LaunchdVerificationError, verify_launchd_label_loaded
+from .launchd_primitive import (
+    LaunchdLabelNotLoadedError,
+    LaunchdVerificationError,
+    is_launchd_label_loaded,
+    verify_launchd_label_loaded,
+)
 from .paths import get_db_path
 from .search_repo import clear_hybrid_search_cache
 from .vector_store import VectorStore
@@ -75,6 +81,9 @@ class DoctorConfig:
     queue_warning_count: int = DEFAULT_QUEUE_WARNING_COUNT
     queue_movement_sample_seconds: float = DEFAULT_QUEUE_MOVEMENT_SAMPLE_SECONDS
     drain_liveness_stale_seconds: float = DEFAULT_DRAIN_LIVENESS_STALE_SECONDS
+    deploy_provenance_dir: Path = field(default_factory=default_deploy_provenance_dir)
+    deploy_drift_labels: tuple[str, ...] = DEFAULT_DEPLOY_DRIFT_LABELS
+    deploy_drift_enabled: bool = True
 
 
 @dataclass
@@ -250,6 +259,26 @@ def _counter_increased(before: Any, after: Any) -> bool:
     return isinstance(before, int) and isinstance(after, int) and after > before
 
 
+def _check_deploy_drift(
+    *,
+    labels: tuple[str, ...],
+    provenance_dir: Path,
+    command_runner: CommandRunner,
+) -> None:
+    for label in labels:
+        loaded = is_launchd_label_loaded(label, command_runner=command_runner)
+        if loaded is not True:
+            continue
+        finding = detect_deploy_drift(label, provenance_dir)
+        if finding is None:
+            continue
+        raise_alarm(
+            "deploy_drift",
+            f"daemon {label} running stale code, redeploy needed",
+            finding.to_context(),
+        )
+
+
 def run_doctor(
     config: DoctorConfig,
     *,
@@ -349,6 +378,13 @@ def run_doctor(
             )
             if code == "drain_unloaded":
                 drain_loaded = loaded
+
+    if config.deploy_drift_enabled:
+        _check_deploy_drift(
+            labels=config.deploy_drift_labels,
+            provenance_dir=config.deploy_provenance_dir,
+            command_runner=command_runner,
+        )
 
     hotlane_processes = parse_hotlane_processes(ps_output_fn())
     result.hotlane_running = bool(hotlane_processes)
