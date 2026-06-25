@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import plistlib
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,6 +19,85 @@ NOW = datetime(2026, 6, 22, 12, 0, tzinfo=UTC)
 def _loaded_launchctl(args: list[str]) -> SimpleNamespace:
     assert args[:2] == ["launchctl", "print"]
     return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+
+def _clean_git_env() -> dict[str, str]:
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
+def _run_git(repo: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(repo), *args],
+        text=True,
+        capture_output=True,
+        env=_clean_git_env(),
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def _git_repo_with_two_commits(path: Path) -> tuple[str, str]:
+    path.mkdir()
+    _run_git(path, "init")
+    _run_git(path, "config", "user.email", "brainlayer-tests@example.com")
+    _run_git(path, "config", "user.name", "BrainLayer Tests")
+    source = path / "src" / "brainlayer"
+    source.mkdir(parents=True)
+    marker = source / "deploy_marker.py"
+    marker.write_text("VERSION = 'old'\n", encoding="utf-8")
+    _run_git(path, "add", ".")
+    _run_git(path, "commit", "-m", "old launch commit")
+    old_commit = _run_git(path, "rev-parse", "HEAD")
+    marker.write_text("VERSION = 'new'\n", encoding="utf-8")
+    _run_git(path, "add", ".")
+    _run_git(path, "commit", "-m", "new deployed commit")
+    head_commit = _run_git(path, "rev-parse", "HEAD")
+    return old_commit, head_commit
+
+
+def _git_repo_with_diverged_commits(path: Path) -> tuple[str, str]:
+    path.mkdir()
+    _run_git(path, "init", "-b", "main")
+    _run_git(path, "config", "user.email", "brainlayer-tests@example.com")
+    _run_git(path, "config", "user.name", "BrainLayer Tests")
+    marker = path / "marker.txt"
+    marker.write_text("base\n", encoding="utf-8")
+    _run_git(path, "add", ".")
+    _run_git(path, "commit", "-m", "base commit")
+    _run_git(path, "checkout", "-b", "daemon-launch")
+    marker.write_text("daemon launch\n", encoding="utf-8")
+    _run_git(path, "add", ".")
+    _run_git(path, "commit", "-m", "daemon launch commit")
+    launch_commit = _run_git(path, "rev-parse", "HEAD")
+    _run_git(path, "checkout", "main")
+    marker.write_text("deployed head\n", encoding="utf-8")
+    _run_git(path, "add", ".")
+    _run_git(path, "commit", "-m", "deployed head commit")
+    deployed_commit = _run_git(path, "rev-parse", "HEAD")
+    return launch_commit, deployed_commit
+
+
+def _write_daemon_provenance(
+    provenance_dir: Path,
+    *,
+    label: str,
+    repo_root: Path,
+    launch_commit: str,
+) -> None:
+    provenance_dir.mkdir(parents=True, exist_ok=True)
+    (provenance_dir / f"{label}.json").write_text(
+        json.dumps(
+            {
+                "label": label,
+                "repo_root": str(repo_root),
+                "launch_commit": launch_commit,
+                "launched_at": "2026-06-22T10:00:00+00:00",
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def test_launchd_install_and_verify_returns_true_when_label_is_loaded(tmp_path):
@@ -258,6 +339,197 @@ def test_run_doctor_exits_zero_on_healthy_fixture(tmp_path):
     assert result.exit_code == 0
     assert result.ok is True
     assert not [issue for issue in result.issues if issue.severity == "fatal"]
+
+
+def test_run_doctor_stays_silent_when_loaded_daemon_launch_commit_matches_head(tmp_path):
+    from brainlayer.doctor import run_doctor
+
+    db_path = tmp_path / "deploy-drift-current.db"
+    repo_root = tmp_path / "repo-current"
+    _build_db(db_path)
+    _old_commit, head_commit = _git_repo_with_two_commits(repo_root)
+    provenance_dir = tmp_path / "daemon-provenance"
+    _write_daemon_provenance(
+        provenance_dir,
+        label="com.brainlayer.drain",
+        repo_root=repo_root,
+        launch_commit=head_commit,
+    )
+    config = _doctor_config(tmp_path, db_path)
+    config.deploy_provenance_dir = provenance_dir
+    config.deploy_drift_labels = ("com.brainlayer.drain",)
+
+    result = run_doctor(
+        config,
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+
+    assert result.ok is True
+    assert not [issue for issue in result.issues if issue.code == "deploy_drift"]
+
+
+def test_run_doctor_raises_alarm_when_loaded_daemon_launch_commit_is_older_than_head(tmp_path):
+    from brainlayer.alarm import BrainLayerAlarm
+    from brainlayer.doctor import run_doctor
+
+    db_path = tmp_path / "deploy-drift-stale.db"
+    repo_root = tmp_path / "repo-stale"
+    _build_db(db_path)
+    old_commit, head_commit = _git_repo_with_two_commits(repo_root)
+    provenance_dir = tmp_path / "daemon-provenance"
+    _write_daemon_provenance(
+        provenance_dir,
+        label="com.brainlayer.drain",
+        repo_root=repo_root,
+        launch_commit=old_commit,
+    )
+    config = _doctor_config(tmp_path, db_path)
+    config.deploy_provenance_dir = provenance_dir
+    config.deploy_drift_labels = ("com.brainlayer.drain",)
+
+    with pytest.raises(BrainLayerAlarm) as alarm:
+        run_doctor(
+            config,
+            ps_output_fn=_hotlane_ps,
+            command_runner=_loaded_launchctl,
+            now_fn=lambda: NOW,
+        )
+
+    assert alarm.value.code == "deploy_drift"
+    assert alarm.value.message == "daemon com.brainlayer.drain running stale code, redeploy needed"
+    assert alarm.value.context["label"] == "com.brainlayer.drain"
+    assert alarm.value.context["launch_commit"] == old_commit
+    assert alarm.value.context["deployed_commit"] == head_commit
+
+
+def test_deploy_drift_git_shellouts_ignore_inherited_git_env(tmp_path, monkeypatch):
+    from brainlayer.alarm import BrainLayerAlarm
+    from brainlayer.doctor import run_doctor
+
+    parent_repo = tmp_path / "parent-repo"
+    _old_parent, _head_parent = _git_repo_with_two_commits(parent_repo)
+    repo_root = tmp_path / "repo-stale-with-poisoned-env"
+    db_path = tmp_path / "deploy-drift-poisoned-env.db"
+    _build_db(db_path)
+    old_commit, head_commit = _git_repo_with_two_commits(repo_root)
+    provenance_dir = tmp_path / "daemon-provenance"
+    _write_daemon_provenance(
+        provenance_dir,
+        label="com.brainlayer.drain",
+        repo_root=repo_root,
+        launch_commit=old_commit,
+    )
+    config = _doctor_config(tmp_path, db_path)
+    config.deploy_provenance_dir = provenance_dir
+    config.deploy_drift_labels = ("com.brainlayer.drain",)
+    monkeypatch.setenv("GIT_DIR", str(parent_repo / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(parent_repo))
+
+    with pytest.raises(BrainLayerAlarm) as alarm:
+        run_doctor(
+            config,
+            ps_output_fn=_hotlane_ps,
+            command_runner=_loaded_launchctl,
+            now_fn=lambda: NOW,
+        )
+
+    assert alarm.value.context["launch_commit"] == old_commit
+    assert alarm.value.context["deployed_commit"] == head_commit
+
+
+def test_run_doctor_raises_alarm_when_loaded_daemon_launch_commit_diverged_from_head(tmp_path):
+    from brainlayer.alarm import BrainLayerAlarm
+    from brainlayer.doctor import run_doctor
+
+    db_path = tmp_path / "deploy-drift-diverged.db"
+    repo_root = tmp_path / "repo-diverged"
+    _build_db(db_path)
+    launch_commit, deployed_commit = _git_repo_with_diverged_commits(repo_root)
+    provenance_dir = tmp_path / "daemon-provenance"
+    _write_daemon_provenance(
+        provenance_dir,
+        label="com.brainlayer.drain",
+        repo_root=repo_root,
+        launch_commit=launch_commit,
+    )
+    config = _doctor_config(tmp_path, db_path)
+    config.deploy_provenance_dir = provenance_dir
+    config.deploy_drift_labels = ("com.brainlayer.drain",)
+
+    with pytest.raises(BrainLayerAlarm) as alarm:
+        run_doctor(
+            config,
+            ps_output_fn=_hotlane_ps,
+            command_runner=_loaded_launchctl,
+            now_fn=lambda: NOW,
+        )
+
+    assert alarm.value.code == "deploy_drift"
+    assert alarm.value.context["drift_status"] == "diverged"
+    assert alarm.value.context["launch_commit"] == launch_commit
+    assert alarm.value.context["deployed_commit"] == deployed_commit
+
+
+def test_brainbar_changed_for_deploy_detects_brainbar_changes_since_launch(tmp_path):
+    from brainlayer.deploy_drift import brainbar_changed_for_deploy
+
+    repo_root = tmp_path / "repo-brainbar"
+    old_commit, _head_commit = _git_repo_with_two_commits(repo_root)
+    brainbar_file = repo_root / "brain-bar" / "Sources" / "BrainBar" / "Marker.swift"
+    brainbar_file.parent.mkdir(parents=True)
+    brainbar_file.write_text("let marker = 1\n", encoding="utf-8")
+    _run_git(repo_root, "add", ".")
+    _run_git(repo_root, "commit", "-m", "brainbar source changed")
+    provenance_dir = tmp_path / "daemon-provenance"
+    _write_daemon_provenance(
+        provenance_dir,
+        label="com.brainlayer.watch",
+        repo_root=repo_root,
+        launch_commit=old_commit,
+    )
+
+    assert brainbar_changed_for_deploy(provenance_dir, repo_root=repo_root) is True
+
+
+def test_brainbar_changed_for_deploy_ignores_non_brainbar_changes_since_launch(tmp_path):
+    from brainlayer.deploy_drift import brainbar_changed_for_deploy
+
+    repo_root = tmp_path / "repo-non-brainbar"
+    old_commit, _head_commit = _git_repo_with_two_commits(repo_root)
+    marker = repo_root / "src" / "brainlayer" / "deploy_marker.py"
+    marker.write_text("VERSION = 'after-deploy'\n", encoding="utf-8")
+    _run_git(repo_root, "add", ".")
+    _run_git(repo_root, "commit", "-m", "python source changed")
+    provenance_dir = tmp_path / "daemon-provenance"
+    _write_daemon_provenance(
+        provenance_dir,
+        label="com.brainlayer.watch",
+        repo_root=repo_root,
+        launch_commit=old_commit,
+    )
+
+    assert brainbar_changed_for_deploy(provenance_dir, repo_root=repo_root) is False
+
+
+def test_record_deploy_provenance_requires_repo_root_from_launchd_plist(tmp_path):
+    from brainlayer.deploy_drift import DeployProvenanceError, record_deploy_provenance_for_label
+
+    plist_path = tmp_path / "com.example.no-repo.plist"
+    with plist_path.open("wb") as handle:
+        plistlib.dump({"Label": "com.example.no-repo", "ProgramArguments": ["/bin/echo", "hello"]}, handle)
+    provenance_dir = tmp_path / "daemon-provenance"
+
+    with pytest.raises(DeployProvenanceError) as exc:
+        record_deploy_provenance_for_label(
+            label="com.example.no-repo",
+            plist_path=plist_path,
+            provenance_dir=provenance_dir,
+        )
+
+    assert exc.value.label == "com.example.no-repo"
+    assert not (provenance_dir / "com.example.no-repo.json").exists()
 
 
 def test_run_doctor_exits_nonzero_for_recent_unvectored_chunk(tmp_path):
