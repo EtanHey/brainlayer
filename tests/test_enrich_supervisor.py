@@ -20,19 +20,22 @@ def _result(*, attempted: int, enriched: int = 0, skipped: int = 0, failed: int 
     )
 
 
-def test_supervisor_reuses_one_vector_store_across_cycles(tmp_path):
+def test_supervisor_releases_vector_store_between_cycles(tmp_path):
     from brainlayer import enrichment_controller as controller
 
     init_paths = []
     enrich_calls = []
+    closed = []
 
     class FakeVectorStore:
         def __init__(self, db_path: Path):
+            self.index = len(init_paths)
             init_paths.append(db_path)
             self.closed = False
 
         def close(self):
             self.closed = True
+            closed.append(self.index)
 
     def fake_enrich(store, **kwargs):
         enrich_calls.append((store, kwargs))
@@ -48,10 +51,11 @@ def test_supervisor_reuses_one_vector_store_across_cycles(tmp_path):
         sleep_fn=lambda seconds: None,
     )
 
-    assert init_paths == [tmp_path / "brainlayer.db"]
-    assert len({id(call[0]) for call in enrich_calls}) == 1
+    assert init_paths == [tmp_path / "brainlayer.db"] * 3
+    assert len({id(call[0]) for call in enrich_calls}) == 3
     assert len(enrich_calls) == 3
     assert all(call[1]["limit"] == 7 and call[1]["since_hours"] == 12 for call in enrich_calls)
+    assert closed == [0, 1, 2]
     assert result.cycles == 3
     assert result.enriched == 3
 
@@ -168,6 +172,38 @@ def test_supervisor_backs_off_between_persistent_cycle_errors(tmp_path):
     assert sleeps == [30.0, 30.0]
 
 
+def test_supervisor_backs_off_after_transient_store_open_error(tmp_path):
+    from brainlayer import enrichment_controller as controller
+
+    init_attempts = 0
+    sleeps = []
+
+    class FakeVectorStore:
+        def __init__(self, db_path: Path):
+            nonlocal init_attempts
+            init_attempts += 1
+            if init_attempts == 2:
+                raise RuntimeError("sqlite transient open busy")
+
+        def close(self):
+            pass
+
+    result = controller.run_enrich_supervisor(
+        tmp_path / "brainlayer.db",
+        max_cycles=3,
+        vector_store_cls=FakeVectorStore,
+        enrich_fn=lambda store, **kwargs: _result(attempted=1, enriched=1),
+        sleep_fn=sleeps.append,
+    )
+
+    assert init_attempts == 3
+    assert result.cycles == 3
+    assert result.enriched == 2
+    assert result.failed_cycles == 1
+    assert result.errors == ["supervisor-open: sqlite transient open busy"]
+    assert sleeps == [30.0]
+
+
 def test_supervisor_graceful_shutdown_closes_store_after_inflight_cycle(tmp_path):
     from brainlayer import enrichment_controller as controller
 
@@ -211,6 +247,25 @@ def test_supervisor_propagates_writer_in_use_from_vector_store(tmp_path):
             raise WriterInUseError("another writer is using brainlayer.db (pid 123)")
 
     with pytest.raises(WriterInUseError, match="another writer is using"):
+        controller.run_enrich_supervisor(
+            tmp_path / "brainlayer.db",
+            vector_store_cls=FakeVectorStore,
+            enrich_fn=lambda store, **kwargs: _result(attempted=0),
+            sleep_fn=lambda seconds: None,
+        )
+
+
+def test_supervisor_propagates_pidfile_ref_mismatch_from_vector_store(tmp_path):
+    from brainlayer import enrichment_controller as controller
+
+    class WriterInUseError(RuntimeError):
+        pass
+
+    class FakeVectorStore:
+        def __init__(self, db_path: Path):
+            raise WriterInUseError("pidfile ref mismatch for brainlayer.db; refusing to clear active refs")
+
+    with pytest.raises(WriterInUseError, match="pidfile ref mismatch"):
         controller.run_enrich_supervisor(
             tmp_path / "brainlayer.db",
             vector_store_cls=FakeVectorStore,
@@ -398,7 +453,7 @@ def test_supervisor_skips_idle_backlog_when_watcher_is_active(tmp_path, monkeypa
     assert result.attempted == 0
 
 
-def test_supervisor_logs_single_vectorstore_initialized_line(tmp_path, caplog):
+def test_supervisor_does_not_log_per_cycle_store_initialization_at_info(tmp_path, caplog):
     from brainlayer import enrichment_controller as controller
 
     class FakeVectorStore:
@@ -417,10 +472,8 @@ def test_supervisor_logs_single_vectorstore_initialized_line(tmp_path, caplog):
             sleep_fn=lambda seconds: None,
         )
 
-    init_lines = [
-        record for record in caplog.records if "VectorStore initialized for enrich supervisor" in record.message
-    ]
-    assert len(init_lines) == 1
+    init_lines = [record for record in caplog.records if "initialized for enrich supervisor pass" in record.message]
+    assert init_lines == []
 
 
 def test_enrichment_launchagent_runs_supervisor_not_shell_respawn_loop():
