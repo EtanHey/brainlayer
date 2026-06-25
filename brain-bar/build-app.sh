@@ -326,6 +326,36 @@ build_time_utc() {
     date -u +"%Y-%m-%dT%H:%M:%SZ"
 }
 
+validate_release_version() {
+    local version="$1"
+    if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        return 0
+    fi
+    echo "[build-app] ERROR: release version must match X.Y.Z for macOS bundle metadata (got '$version')" >&2
+    return 1
+}
+
+release_version() {
+    local version
+    if [ -n "${BRAINBAR_RELEASE_VERSION:-}" ]; then
+        version="$BRAINBAR_RELEASE_VERSION"
+        validate_release_version "$version" || return 1
+        printf '%s\n' "$version"
+        return 0
+    fi
+
+    local exact_tag
+    exact_tag="$(git -C "$PACKAGE_DIR" describe --tags --exact-match 2>/dev/null || true)"
+    if [[ "$exact_tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+        printf '%s\n' "${BASH_REMATCH[1]}"
+        return 0
+    fi
+
+    version="$("$PLIST_BUDDY" -c "Print :CFBundleShortVersionString" "$BUNDLE_DIR/Info.plist" 2>/dev/null || printf '0.0.0\n')"
+    validate_release_version "$version" || return 1
+    printf '%s\n' "$version"
+}
+
 plist_set_string() {
     local plist_path="$1"
     local key="$2"
@@ -393,7 +423,10 @@ stamp_info_plist() {
     local commit_sha="$2"
     local describe_ref="$3"
     local build_utc="$4"
+    local release_version="$5"
 
+    plist_set_string "$plist_path" "CFBundleShortVersionString" "$release_version"
+    plist_set_string "$plist_path" "CFBundleVersion" "$release_version"
     plist_set_string "$plist_path" "GitCommit" "$commit_sha"
     plist_set_string "$plist_path" "GitDescribe" "$describe_ref"
     plist_set_string "$plist_path" "BuildTimeUTC" "$build_utc"
@@ -585,17 +618,24 @@ fi
 echo "[build-app] Creating .app bundle at $APP_DIR..."
 mkdir -p "$APP_DIR/Contents/MacOS"
 mkdir -p "$APP_DIR/Contents/Resources"
+mkdir -p "$APP_DIR/Contents/Resources/LaunchAgents"
 mkdir -p "$BRAINLAYER_LOG_DIR"
 
 cp "$BUNDLE_DIR/Info.plist" "$APP_DIR/Contents/"
 cp "$BINARY" "$APP_DIR/Contents/MacOS/BrainBar"
 cp "$DAEMON_BINARY" "$APP_DIR/Contents/MacOS/BrainBarDaemon"
+cp "$UI_PLIST_SRC" "$APP_DIR/Contents/Resources/LaunchAgents/$UI_PLIST_FILENAME"
+cp "$DAEMON_PLIST_SRC" "$APP_DIR/Contents/Resources/LaunchAgents/$DAEMON_PLIST_FILENAME"
 
 COMMIT_SHA="$(git_commit)"
 DESCRIBE_REF="$(git_describe)"
 BUILD_UTC="$(build_time_utc)"
-stamp_info_plist "$APP_DIR/Contents/Info.plist" "$COMMIT_SHA" "$DESCRIBE_REF" "$BUILD_UTC"
+if ! RELEASE_VERSION="$(release_version)"; then
+    exit 1
+fi
+stamp_info_plist "$APP_DIR/Contents/Info.plist" "$COMMIT_SHA" "$DESCRIBE_REF" "$BUILD_UTC" "$RELEASE_VERSION"
 echo "[build-app] Stamped Info.plist:"
+echo "  ReleaseVersion=$RELEASE_VERSION"
 echo "  GitCommit=$COMMIT_SHA"
 echo "  GitDescribe=$DESCRIBE_REF"
 echo "  BuildTimeUTC=$BUILD_UTC"

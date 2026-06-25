@@ -199,8 +199,8 @@ final class InjectionStoreTests: XCTestCase {
         store.scheduleRefreshForTesting(force: false)
         store.scheduleRefreshForTesting(force: false)
         store.scheduleRefreshForTesting(force: false)
-
-        try await Task.sleep(for: .milliseconds(120))
+        let pendingRefresh = store._pendingRefreshTask
+        await pendingRefresh?.value
 
         XCTAssertEqual(reader.listCallCount, 2)
         XCTAssertEqual(store.events.map(\.query), ["debounced"])

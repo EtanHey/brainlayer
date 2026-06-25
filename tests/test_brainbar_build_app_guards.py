@@ -7,6 +7,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 def _clean_git_env() -> dict[str, str]:
     return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
@@ -214,6 +216,10 @@ if [[ "$2" == "Print :GitCommit" && -f "$3" ]]; then
   ' "$3"
   exit 0
 fi
+if [[ "$2" == "Print :CFBundleShortVersionString" ]]; then
+  printf '1.4.0\\n'
+  exit 0
+fi
 if [[ "$2" == Print* ]]; then
   exit 1
 fi
@@ -367,6 +373,77 @@ def test_canonical_build_allows_launchagent_install_when_brainlayer_package_is_i
 
     assert result.returncode == 0, result.stderr
     assert "[build-app] brainlayer package is installed" in result.stdout
+
+
+def test_build_app_embeds_launchagent_templates_in_app_resources(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    (home / "Library" / "LaunchAgents").mkdir(parents=True)
+    _prepare_bundle_inputs(repo)
+    _install_fake_venv_python(repo, import_brainlayer_succeeds=True)
+    tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+        dry_run=False,
+        extra_args=["--force-dirty"],
+        extra_env=_fake_build_env(tmp_path, tool_dir, bin_dir),
+    )
+
+    launchagents_dir = home / "Applications" / "BrainBar.app" / "Contents" / "Resources" / "LaunchAgents"
+    assert result.returncode == 0, result.stderr
+    assert (launchagents_dir / "com.brainlayer.brainbar.plist").is_file()
+    assert (launchagents_dir / "com.brainlayer.brainbar-daemon.plist").is_file()
+
+
+def test_build_app_rejects_invalid_release_version(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-dev-worktree")
+    home = tmp_path / "home"
+    home.mkdir()
+    _prepare_bundle_inputs(repo)
+    tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=tmp_path / "canonical",
+        home=home,
+        dry_run=False,
+        extra_args=["--force-worktree-build"],
+        extra_env={
+            **_fake_build_env(tmp_path, tool_dir, bin_dir),
+            "BRAINBAR_RELEASE_VERSION": "1.2.3-beta1",
+        },
+    )
+
+    assert result.returncode != 0
+    assert "release version must match X.Y.Z" in result.stderr
+
+
+@pytest.mark.parametrize("tag_name", ["ci-smoke", "1.2.3"])
+def test_build_app_ignores_non_release_exact_tags_and_uses_plist_version(tmp_path: Path, tag_name: str) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-dev-worktree")
+    home = tmp_path / "home"
+    home.mkdir()
+    _prepare_bundle_inputs(repo)
+    tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
+    _git(repo, "tag", tag_name)
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=tmp_path / "canonical",
+        home=home,
+        dry_run=False,
+        extra_args=["--force-worktree-build"],
+        extra_env=_fake_build_env(tmp_path, tool_dir, bin_dir),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "ReleaseVersion=1.4.0" in result.stdout
 
 
 def test_build_app_script_is_notarization_ready_for_developer_id() -> None:
