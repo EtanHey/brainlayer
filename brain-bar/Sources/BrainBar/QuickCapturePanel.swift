@@ -117,6 +117,10 @@ final class QuickCaptureViewModel: ObservableObject {
     var _pendingSearchTask: Task<Void, Never>?
     /// Exposed for test awaiting — set when an async store is in flight.
     var _pendingStoreTask: Task<Void, Never>?
+    /// Exposed for tests that need deterministic feedback auto-clear timing.
+    var _pendingFeedbackResetTask: Task<Void, Never>? {
+        feedbackResetTask
+    }
     /// Feedback state clears back to `.idle` after this delay on success.
     /// Injectable so tests can collapse the wait window.
     private let feedbackAutoClearDelay: Duration

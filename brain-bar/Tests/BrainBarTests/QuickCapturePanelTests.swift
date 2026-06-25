@@ -576,8 +576,7 @@ final class QuickCapturePanelTests: XCTestCase {
         await model._pendingStoreTask?.value
         XCTAssertEqual(model.feedback, .success("Stored in BrainLayer"))
 
-        // Wait for the auto-clear task to fire (30ms delay + buffer).
-        try? await Task.sleep(for: .milliseconds(80))
+        await model._pendingFeedbackResetTask?.value
         XCTAssertTrue(
             model.feedback.isIdle,
             "Feedback must auto-clear to idle after the success window so the trailing hint returns to its keyboard-shortcut legend."
