@@ -1173,13 +1173,13 @@ final class MCPRouter: @unchecked Sendable {
 
     nonisolated(unsafe) static let recallAnnotations: [String: Any] = {
         var annotations = MCPRouter.readOnlyAnnotations
-        annotations["anthropic/maxResultSizeChars"] = 200_000
+        annotations["anthropic/maxResultSizeChars"] = 250_000
         return annotations
     }()
 
     nonisolated(unsafe) static let expandAnnotations: [String: Any] = {
         var annotations = MCPRouter.readOnlyAnnotations
-        annotations["anthropic/maxResultSizeChars"] = 200_000
+        annotations["anthropic/maxResultSizeChars"] = 250_000
         return annotations
     }()
 

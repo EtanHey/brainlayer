@@ -278,7 +278,7 @@ final class MCPRouterTests: XCTestCase {
 
             XCTAssertGreaterThanOrEqual(
                 annotations["anthropic/maxResultSizeChars"] as? Int ?? 0,
-                200_000,
+                250_000,
                 "\(toolName) should declare enough result budget for full stored chunks"
             )
         }

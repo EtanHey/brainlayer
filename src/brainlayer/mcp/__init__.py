@@ -116,7 +116,7 @@ server = Server(
 )
 
 # Tool annotations
-_MAX_FULL_CONTENT_RESULT_CHARS = 200_000
+_MAX_FULL_CONTENT_RESULT_CHARS = 250_000
 
 _READ_ONLY = ToolAnnotations(
     readOnlyHint=True,
