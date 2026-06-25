@@ -335,10 +335,16 @@ case "${1:-all}" in
         verify_config_file
         verify_gemini_env_file
         failures=0
-        main_services_ok=0
-        if install_many index drain watch hotlane-brainbar enrichment decay wal-checkpoint repair-fts; then
-            main_services_ok=1
+        enrichment_ok=0
+        if ! install_many index drain watch hotlane-brainbar; then
+            failures=1
+        fi
+        if install_plist enrichment; then
+            enrichment_ok=1
         else
+            failures=1
+        fi
+        if ! install_many decay wal-checkpoint repair-fts; then
             failures=1
         fi
         if ! install_backup_script; then
@@ -354,8 +360,8 @@ case "${1:-all}" in
         if ! install_many maintenance-nightly maintenance-weekly health-check; then
             failures=1
         fi
-        # Remove old enrich plist only after the replacement enrichment batch loads.
-        if [ "$main_services_ok" -eq 1 ]; then
+        # Remove old enrich plist only after the replacement enrichment service loads.
+        if [ "$enrichment_ok" -eq 1 ]; then
             remove_plist enrich 2>/dev/null || true
         fi
         if [ "$failures" -ne 0 ]; then

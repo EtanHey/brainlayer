@@ -918,6 +918,54 @@ def test_launchd_all_preserves_legacy_enrich_when_replacement_batch_fails(tmp_pa
     assert not any(command.startswith("unload ") and "com.brainlayer.enrich.plist" in command for command in commands)
 
 
+def test_launchd_all_removes_legacy_enrich_when_replacement_loads_despite_sibling_failure(
+    tmp_path: Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+                'if [ "$1" = "bootstrap" ] && [[ "$3" == *"com.brainlayer.repair-fts.plist" ]]; then',
+                '  printf "%s\\n" "repair bootstrap failed" >&2',
+                "  exit 5",
+                "fi",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = tmp_path / "brainlayer.env"
+    _write_full_launchd_env(env_file)
+
+    result = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "all"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": sys.executable,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    commands = launchctl_log.read_text(encoding="utf-8").splitlines()
+    assert result.returncode != 0
+    assert "repair bootstrap failed" in result.stderr
+    assert any(command.startswith("unload ") and "com.brainlayer.enrich.plist" in command for command in commands)
+
+
 def test_wheel_contains_cli_and_launchd_templates(tmp_path: Path) -> None:
     wheel_dir = tmp_path / "dist"
     pip_available = (
