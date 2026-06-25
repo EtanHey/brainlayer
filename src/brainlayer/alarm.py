@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import logging
 import sys
+import threading
 from typing import Any, NoReturn
 
 logger = logging.getLogger(__name__)
 
 ALARM_DATASET = "brainlayer-alarms"
+_TELEMETRY_JOIN_TIMEOUT_S = 0.05
 
 
 class BrainLayerAlarm(BaseException):
@@ -71,12 +73,28 @@ def emit_alarm(alarm: BrainLayerAlarm) -> bool:
         print(human_message, file=sys.stderr, flush=True)
     except Exception as exc:
         logger.debug("Alarm stderr emit failed: %s", exc)
-    try:
-        from .telemetry import emit
 
-        return emit(ALARM_DATASET, alarm.to_event())
+    result: dict[str, bool] = {"ok": False}
+    event = alarm.to_event()
+
+    def emit_telemetry() -> None:
+        try:
+            from .telemetry import emit
+
+            result["ok"] = emit(ALARM_DATASET, event)
+        except Exception as exc:
+            logger.debug("Alarm telemetry emit failed: %s", exc)
+
+    try:
+        thread = threading.Thread(target=emit_telemetry, name=f"brainlayer-alarm-{alarm.code}", daemon=True)
+        thread.start()
+        thread.join(_TELEMETRY_JOIN_TIMEOUT_S)
+        if thread.is_alive():
+            logger.debug("Alarm telemetry emit still running in background: %s", alarm.code)
+            return True
+        return result["ok"]
     except Exception as exc:
-        logger.debug("Alarm telemetry emit failed: %s", exc)
+        logger.debug("Alarm telemetry dispatch failed: %s", exc)
         return False
 
 

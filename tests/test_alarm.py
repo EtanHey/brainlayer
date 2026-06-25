@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -12,8 +14,14 @@ NOW = datetime(2026, 6, 25, 12, 0, tzinfo=UTC)
 
 def test_raise_alarm_emits_telemetry_and_escapes_broad_exception_handlers(monkeypatch, capsys):
     emitted: list[tuple[str, dict]] = []
+    telemetry_emitted = threading.Event()
 
-    monkeypatch.setattr("brainlayer.telemetry.emit", lambda dataset, event: emitted.append((dataset, event)) or True)
+    def capture_emit(dataset, event):
+        emitted.append((dataset, event))
+        telemetry_emitted.set()
+        return True
+
+    monkeypatch.setattr("brainlayer.telemetry.emit", capture_emit)
 
     with pytest.raises(BrainLayerAlarm) as raised:
         try:
@@ -25,6 +33,7 @@ def test_raise_alarm_emits_telemetry_and_escapes_broad_exception_handlers(monkey
     assert raised.value.exit_code == 1
     assert raised.value.details == {"active_entries": 4}
     assert "BRAINLAYER_ALARM write_zero: writer produced zero durable writes" in capsys.readouterr().err
+    assert telemetry_emitted.wait(1)
     assert emitted == [
         (
             "brainlayer-alarms",
@@ -38,6 +47,27 @@ def test_raise_alarm_emits_telemetry_and_escapes_broad_exception_handlers(monkey
             },
         )
     ]
+
+
+def test_raise_alarm_does_not_block_on_stuck_telemetry(monkeypatch, capsys):
+    telemetry_started = threading.Event()
+
+    def slow_emit(_dataset, _event):
+        telemetry_started.set()
+        time.sleep(0.35)
+        return True
+
+    monkeypatch.setattr("brainlayer.telemetry.emit", slow_emit)
+
+    started = time.monotonic()
+    with pytest.raises(BrainLayerAlarm) as raised:
+        raise_alarm("telemetry_stuck", "alarm telemetry should not block the caller", {"active_entries": 1})
+    elapsed = time.monotonic() - started
+
+    assert telemetry_started.wait(1)
+    assert elapsed < 0.2
+    assert raised.value.code == "telemetry_stuck"
+    assert "BRAINLAYER_ALARM telemetry_stuck" in capsys.readouterr().err
 
 
 def test_drain_liveness_stalled_uses_alarm_primitive():

@@ -273,6 +273,27 @@ class TestQueueStore:
         assert chunk_row == ("manual", 123, 2)
         assert liveness_row == (event["chunk_id"], 2000)
 
+    def test_record_watcher_liveness_requires_schema_initialized(self, tmp_path):
+        """Per-event liveness recording must not run schema DDL on the write hot path."""
+        from brainlayer import drain
+
+        conn = apsw.Connection(str(tmp_path / "brainlayer.db"))
+        try:
+            with pytest.raises(apsw.SQLError, match="no such table: watcher_liveness_events"):
+                drain._record_watcher_liveness(conn, "rt-watcher-liveness", 2000)
+
+            drain._ensure_watcher_liveness_schema(conn)
+            drain._record_watcher_liveness(conn, "rt-watcher-liveness", 2000)
+
+            row = conn.execute(
+                "SELECT chunk_id, ingested_at FROM watcher_liveness_events WHERE chunk_id = ?",
+                ("rt-watcher-liveness",),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        assert row == ("rt-watcher-liveness", 2000)
+
     def test_drain_embeds_hook_event_chunk(self, tmp_path, monkeypatch):
         """Hook queue events must return chunk IDs so drain can embed them."""
         from brainlayer.vector_store import VectorStore

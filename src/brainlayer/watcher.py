@@ -611,7 +611,7 @@ class JSONLWatcher:
                     """
                     SELECT COUNT(*) FROM chunks
                     WHERE source = 'realtime_watcher'
-                      AND COALESCE(ingested_at, strftime('%s', created_at)) >= ?
+                      AND COALESCE(ingested_at, CAST(strftime('%s', created_at) AS INTEGER)) >= ?
                     """,
                     (window_started,),
                 ).fetchone()

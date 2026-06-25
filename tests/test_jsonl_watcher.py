@@ -971,6 +971,51 @@ class TestJSONLWatcher:
         assert payload["db_realtime_inserts_per_minute"] > 0
         assert payload["alerting"] is False
 
+    def test_db_realtime_insert_probe_casts_created_at_fallback_to_epoch(self, tmp_path):
+        db_path = tmp_path / "brainlayer.db"
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("CREATE TABLE chunks (source TEXT, ingested_at INTEGER, created_at TEXT)")
+            conn.execute(
+                "INSERT INTO chunks (source, ingested_at, created_at) VALUES (?, ?, ?)",
+                ("realtime_watcher", None, "2020-01-01T00:00:00Z"),
+            )
+            conn.commit()
+
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda items: None,
+            batch_size=1,
+            db_path=db_path,
+        )
+        watcher._health_window_started_epoch = 2_000_000_000
+
+        assert watcher._db_realtime_inserts_since_window_start() == 0
+
+    def test_start_propagates_brainlayer_alarm_from_poll_once(self, tmp_path, monkeypatch):
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda items: None,
+            batch_size=1,
+            poll_interval_s=0,
+        )
+        alarm = BrainLayerAlarm("watcher_zero_writes_while_active", "fatal write-side degradation")
+
+        def raise_from_poll_once():
+            raise alarm
+
+        monkeypatch.setattr(watcher, "poll_once", raise_from_poll_once)
+
+        with pytest.raises(BrainLayerAlarm) as raised:
+            watcher.start()
+
+        assert raised.value is alarm
+
     def test_health_snapshot_does_not_alarm_when_legitimately_idle(self, tmp_path):
         health_path = tmp_path / "watcher-health.json"
         sessions = tmp_path / "codex" / "sessions"

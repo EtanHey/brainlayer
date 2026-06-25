@@ -362,7 +362,7 @@ def _refresh_realtime_watcher_ingested_at(conn: apsw.Connection, chunk_id: str, 
     )
 
 
-def _record_watcher_liveness(conn: apsw.Connection, chunk_id: str, ingested_at: int) -> None:
+def _ensure_watcher_liveness_schema(conn: apsw.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS watcher_liveness_events (
@@ -373,6 +373,9 @@ def _record_watcher_liveness(conn: apsw.Connection, chunk_id: str, ingested_at: 
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_watcher_liveness_ingested_at ON watcher_liveness_events(ingested_at)")
+
+
+def _record_watcher_liveness(conn: apsw.Connection, chunk_id: str, ingested_at: int) -> None:
     conn.execute(
         """
         INSERT INTO watcher_liveness_events (chunk_id, ingested_at)
@@ -1165,6 +1168,7 @@ def burn_drain_once(
             conn = _open_connection(db_path)
             try:
                 _ensure_enrichment_update_schema(conn)
+                _ensure_watcher_liveness_schema(conn)
                 conn.execute("BEGIN IMMEDIATE")
                 prefetched_state = _prefetch_enrichment_state(conn, all_events)
                 store_chunk_ids: list[str] = []
@@ -1296,6 +1300,7 @@ def drain_once(
                 try:
                     conn = _open_connection(db_path)
                     _ensure_enrichment_update_schema(conn)
+                    _ensure_watcher_liveness_schema(conn)
                     conn.execute("BEGIN IMMEDIATE")
                     ensure_dedupe_schema(conn)
                     for event in events_to_apply:
