@@ -15,7 +15,6 @@ DEFAULT_ENRICH_DAILY_USD_CAP = 5.0
 ENRICH_DAILY_COST_COUNTER_FILENAME = "enrich-daily-cost.json"
 STALLED_CODE = "drain_liveness_stalled"
 QUOTA_BLOCKED_CODE = "drain_liveness_quota_blocked"
-UNKNOWN_BLOCKER_CODE = "drain_liveness_blocker_unknown"
 
 
 @dataclass(frozen=True)
@@ -24,10 +23,6 @@ class DrainLivenessIssue:
     severity: str
     message: str
     details: dict[str, Any]
-
-
-class _EnrichCostCounterUnreadable(RuntimeError):
-    """Raised when a present quota counter cannot be trusted."""
 
 
 def _parse_updated_at(value: Any) -> datetime | None:
@@ -76,43 +71,35 @@ def _enrich_cost_counter_path(path: Path | None = None) -> Path:
 
 def _read_enrich_cost_record(path: Path, today: str) -> dict[str, Any]:
     try:
-        raw = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
         return {"date": today, "spent_usd": 0.0}
-    except OSError as exc:
-        raise _EnrichCostCounterUnreadable(f"could not read {path}: {exc}") from exc
-
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise _EnrichCostCounterUnreadable(f"could not parse {path}: {exc}") from exc
 
     if not isinstance(data, dict):
-        raise _EnrichCostCounterUnreadable(f"{path} did not contain a JSON object")
+        return {"date": today, "spent_usd": 0.0}
     if data.get("date") != today:
         return {"date": today, "spent_usd": 0.0}
-    return data
+    try:
+        spent_usd = float(data.get("spent_usd", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        spent_usd = 0.0
+    if not math.isfinite(spent_usd) or spent_usd < 0:
+        spent_usd = 0.0
+    return {"date": today, "spent_usd": spent_usd}
 
 
-def _daily_cap_blocker(now: datetime, *, enrich_cost_counter_path: Path | None = None) -> tuple[str | None, str | None]:
+def _daily_cap_blocker(now: datetime, *, enrich_cost_counter_path: Path | None = None) -> str | None:
     try:
         cap_usd = _enrich_daily_usd_cap()
         today = now.astimezone().date().isoformat()
         record = _read_enrich_cost_record(_enrich_cost_counter_path(enrich_cost_counter_path), today)
-        try:
-            spent_usd = float(record.get("spent_usd", 0.0) or 0.0)
-        except (TypeError, ValueError) as exc:
-            return None, f"invalid spent_usd in quota counter: {exc}"
-        if not math.isfinite(spent_usd) or spent_usd < 0:
-            return None, f"invalid spent_usd in quota counter: {spent_usd!r}"
-    except _EnrichCostCounterUnreadable as exc:
-        return None, str(exc)
+        spent_usd = float(record.get("spent_usd", 0.0))
     except Exception:
-        return None, None
+        return None
 
     if spent_usd >= cap_usd:
-        return f"enrichment daily cap reached: spent=${spent_usd:.6f} cap=${cap_usd:.2f}", None
-    return None, None
+        return f"enrichment daily cap reached: spent=${spent_usd:.6f} cap=${cap_usd:.2f}"
+    return None
 
 
 def check_drain_liveness(
@@ -140,12 +127,11 @@ def check_drain_liveness(
         return None
 
     blocker = None
-    blocker_error = None
     if queue_backlog == 0 and enrichment_backlog_count > 0:
         if quota_or_throttle_blocker:
             blocker = quota_or_throttle_blocker
         else:
-            blocker, blocker_error = _daily_cap_blocker(
+            blocker = _daily_cap_blocker(
                 now,
                 enrich_cost_counter_path=enrich_cost_counter_path,
             )
@@ -166,17 +152,6 @@ def check_drain_liveness(
             QUOTA_BLOCKED_CODE,
             "warning",
             f"DRAIN_LIVENESS_QUOTA_BLOCKED: {blocker}; loaded drain heartbeat is stale but backlog is blocked",
-            details,
-        )
-    if blocker_error:
-        details["blocker_error"] = blocker_error
-        return DrainLivenessIssue(
-            UNKNOWN_BLOCKER_CODE,
-            "warning",
-            (
-                "DRAIN_LIVENESS_BLOCKER_UNKNOWN: loaded drain heartbeat is stale, "
-                f"but quota/throttle blocker state could not be read: {blocker_error}"
-            ),
             details,
         )
 

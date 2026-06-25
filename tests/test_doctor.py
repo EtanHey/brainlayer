@@ -364,7 +364,7 @@ def test_run_doctor_honors_enrich_cost_dir_for_drain_liveness_quota(tmp_path, mo
     assert not [issue for issue in result.issues if issue.code == "drain_liveness_stalled"]
 
 
-def test_run_doctor_warns_when_drain_liveness_quota_counter_is_corrupt(tmp_path, monkeypatch):
+def test_run_doctor_fails_loudly_when_drain_liveness_quota_counter_is_corrupt(tmp_path, monkeypatch):
     from brainlayer.doctor import run_doctor
 
     monkeypatch.delenv("BRAINLAYER_ENRICH_COST_DIR", raising=False)
@@ -383,16 +383,19 @@ def test_run_doctor_warns_when_drain_liveness_quota_counter_is_corrupt(tmp_path,
         now_fn=lambda: NOW,
     )
 
-    issue = next(issue for issue in result.issues if issue.code == "drain_liveness_blocker_unknown")
-    assert result.exit_code == 0
-    assert result.ok is True
-    assert issue.severity == "warning"
-    assert "DRAIN_LIVENESS_BLOCKER_UNKNOWN" in issue.message
-    assert not [issue for issue in result.issues if issue.code == "drain_liveness_stalled"]
+    issue = next(issue for issue in result.issues if issue.code == "drain_liveness_stalled")
+    assert result.exit_code == 1
+    assert result.ok is False
+    assert issue.severity == "fatal"
+    assert "DRAIN_LIVENESS_STALLED" in issue.message
+    assert not [issue for issue in result.issues if issue.code == "drain_liveness_quota_blocked"]
+    assert not [issue for issue in result.issues if issue.code == "drain_liveness_blocker_unknown"]
 
 
 @pytest.mark.parametrize("invalid_spend", ["oops", "nan", "inf", "-1"])
-def test_run_doctor_warns_when_drain_liveness_quota_counter_has_invalid_spend(tmp_path, monkeypatch, invalid_spend):
+def test_run_doctor_fails_loudly_when_drain_liveness_quota_counter_has_invalid_spend(
+    tmp_path, monkeypatch, invalid_spend
+):
     from brainlayer.doctor import run_doctor
 
     monkeypatch.delenv("BRAINLAYER_ENRICH_COST_DIR", raising=False)
@@ -411,12 +414,13 @@ def test_run_doctor_warns_when_drain_liveness_quota_counter_has_invalid_spend(tm
         now_fn=lambda: NOW,
     )
 
-    issue = next(issue for issue in result.issues if issue.code == "drain_liveness_blocker_unknown")
-    assert result.exit_code == 0
-    assert result.ok is True
-    assert issue.severity == "warning"
-    assert "invalid spent_usd" in issue.details["blocker_error"]
-    assert not [issue for issue in result.issues if issue.code == "drain_liveness_stalled"]
+    issue = next(issue for issue in result.issues if issue.code == "drain_liveness_stalled")
+    assert result.exit_code == 1
+    assert result.ok is False
+    assert issue.severity == "fatal"
+    assert "DRAIN_LIVENESS_STALLED" in issue.message
+    assert not [issue for issue in result.issues if issue.code == "drain_liveness_quota_blocked"]
+    assert not [issue for issue in result.issues if issue.code == "drain_liveness_blocker_unknown"]
 
 
 def test_run_doctor_does_not_let_enrichment_quota_mask_durable_queue_liveness(tmp_path, monkeypatch):
