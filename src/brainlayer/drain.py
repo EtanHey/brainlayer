@@ -632,6 +632,7 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
             "char_count": len(content),
             "source": "realtime_watcher",
             "created_at": event.get("created_at") or datetime.now(timezone.utc).isoformat(),
+            "ingested_at": int(time.time()),
             "conversation_id": event.get("conversation_id"),
             "sender": event.get("sender"),
             "tags": json.dumps(tags) if tags else None,
