@@ -821,6 +821,90 @@ class TestJSONLWatcher:
         assert raised.value.code == "watcher_zero_writes_while_active"
         assert raised.value.details["watcher_chunks_output_per_minute"] > 0
 
+    def test_health_snapshot_resets_partial_durable_window_before_later_zero_write_alarm(self, tmp_path, monkeypatch):
+        now = [0.0]
+        monkeypatch.setattr("brainlayer.watcher.time.time", lambda: now[0])
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        transcript = sessions / "session.jsonl"
+        transcript.write_text(
+            json.dumps(
+                {
+                    "role": "assistant",
+                    "content": "The first watcher line gets a durable liveness row.",
+                }
+            )
+            + "\n"
+        )
+        db_path = tmp_path / "brainlayer.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE chunks (source TEXT, ingested_at INTEGER, created_at TEXT)")
+        conn.execute("CREATE TABLE watcher_liveness_events (chunk_id TEXT, ingested_at INTEGER)")
+        conn.commit()
+        conn.close()
+        health_path = tmp_path / "watcher-health.json"
+        flush_calls = [0]
+
+        def flush_first_call_only(items):
+            flush_calls[0] += 1
+            if flush_calls[0] == 1:
+                with sqlite3.connect(db_path) as write_conn:
+                    write_conn.execute(
+                        "INSERT INTO watcher_liveness_events (chunk_id, ingested_at) VALUES (?, ?)",
+                        ("first-durable", int(now[0])),
+                    )
+                    write_conn.commit()
+            return {str(transcript): max(item["_line_end_offset"] for item in items)}
+
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=flush_first_call_only,
+            batch_size=1,
+            health_path=health_path,
+            db_path=db_path,
+            coverage_watchdog=CoverageWatchdog(
+                coverage_ratio_threshold=0.75,
+                lag_threshold_bytes=1_000_000,
+                alert_after_s=60,
+                now_fn=lambda: now[0],
+            ),
+        )
+
+        watcher.poll_once()
+        with transcript.open("a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "content": "The second watcher line is accepted while durable writes are already behind.",
+                    }
+                )
+                + "\n"
+            )
+        now[0] = 61.0
+        watcher._health_window_started = time.monotonic() - 61
+        assert watcher.poll_once() == 1
+        assert watcher._health_window_started_epoch == 61.0
+
+        with transcript.open("a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "content": "The third watcher line should alarm because no durable writes followed reset.",
+                    }
+                )
+                + "\n"
+            )
+        now[0] = 122.0
+        watcher._health_window_started = time.monotonic() - 61
+        with pytest.raises(BrainLayerAlarm) as raised:
+            watcher.poll_once()
+
+        assert raised.value.code == "watcher_zero_writes_while_active"
+        assert raised.value.details["durable_writes_per_minute"] == 0
+
     def test_health_snapshot_raises_alarm_when_db_probe_fails_while_active(self, tmp_path):
         now = [0.0]
         sessions = tmp_path / "codex" / "sessions"

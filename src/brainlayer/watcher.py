@@ -669,6 +669,8 @@ class JSONLWatcher:
             active_entries_per_min > 0
             and watchdog_inserts_per_min / active_entries_per_min < self.coverage_watchdog.coverage_ratio_threshold
         )
+        durable_writes_per_min = watchdog_inserts_per_min
+        zero_write_degraded = coverage_degraded and durable_writes_per_min <= 0
         payload = {
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "poll_count": self.poll_count,
@@ -691,7 +693,6 @@ class JSONLWatcher:
         except OSError:
             logger.debug("Failed to write watcher health snapshot", exc_info=True)
 
-        durable_writes_per_min = watchdog_inserts_per_min
         if (
             watchdog.get("alerting") is True
             and "coverage_drop" in watchdog.get("alert_reasons", [])
@@ -716,7 +717,7 @@ class JSONLWatcher:
                 },
             )
 
-        if elapsed >= 60.0 and not coverage_degraded:
+        if elapsed >= 60.0 and not zero_write_degraded:
             self._health_window_started = now
             self._health_window_started_epoch = time.time()
             self._health_entries_seen = 0

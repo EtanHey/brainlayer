@@ -384,6 +384,35 @@ class TestFlushCallback:
         assert aliases[0][1] == row[0]
         assert audit_count == 1
 
+    def test_direct_dedup_into_non_realtime_canonical_records_liveness(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        VectorStore(db_path).close()
+
+        flush = create_flush_callback(db_path, arbitrated=False)
+        content = "Direct watcher dedupe liveness should count durable merges into manual canonical chunks"
+        first = _make_jsonl_entry(text=content, entry_type="assistant", timestamp="2026-05-16T09:00:00Z")
+        second = _make_jsonl_entry(text=content, entry_type="assistant", timestamp="2026-05-16T10:00:00Z")
+        first["_source_file"] = "/tmp/projects/test-project/alpha-session.jsonl"
+        second["_source_file"] = "/tmp/projects/test-project/beta-session.jsonl"
+
+        flush([first])
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.execute("UPDATE chunks SET source = 'manual' WHERE source = 'realtime_watcher'")
+            conn.commit()
+
+        flush([second])
+
+        conn = sqlite3.connect(str(db_path))
+        source, seen_count = conn.execute("SELECT source, seen_count FROM chunks").fetchone()
+        realtime_rows = conn.execute("SELECT COUNT(*) FROM chunks WHERE source = 'realtime_watcher'").fetchone()[0]
+        liveness_count = conn.execute("SELECT COUNT(*) FROM watcher_liveness_events").fetchone()[0]
+        conn.close()
+
+        assert source == "manual"
+        assert seen_count == 2
+        assert realtime_rows == 0
+        assert liveness_count == 2
+
     def test_auto_tags_detected_correction_user_message(self, tmp_path):
         db_path = tmp_path / "test.db"
         VectorStore(db_path).close()
