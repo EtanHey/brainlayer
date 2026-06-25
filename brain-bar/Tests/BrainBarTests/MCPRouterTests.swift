@@ -268,11 +268,20 @@ final class MCPRouterTests: XCTestCase {
         }
     }
 
-    func testBrainRecallDeclaresLargeResultBudget() throws {
-        let tool = try XCTUnwrap(MCPRouter.toolDefinitions.first { ($0["name"] as? String) == "brain_recall" })
-        let annotations = try XCTUnwrap(tool["annotations"] as? [String: Any])
+    func testFullContentToolsDeclareLargeResultBudget() throws {
+        for toolName in ["brain_recall", "brain_expand"] {
+            let tool = try XCTUnwrap(
+                MCPRouter.toolDefinitions.first { ($0["name"] as? String) == toolName },
+                "\(toolName) should be registered"
+            )
+            let annotations = try XCTUnwrap(tool["annotations"] as? [String: Any])
 
-        XCTAssertGreaterThanOrEqual(annotations["anthropic/maxResultSizeChars"] as? Int ?? 0, 100_000)
+            XCTAssertGreaterThanOrEqual(
+                annotations["anthropic/maxResultSizeChars"] as? Int ?? 0,
+                250_000,
+                "\(toolName) should declare enough result budget for full stored chunks"
+            )
+        }
     }
 
     func testEachToolSchemaBoundsStringInputs() throws {
@@ -650,6 +659,40 @@ No results found.
             "query": "readonly"
         ])))
         XCTAssertTrue(tagsText.contains("readonly-route"), tagsText)
+    }
+
+    func testBrainExpandReturnsFullTargetContentWhenSummaryExists() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-expand-full-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+
+        let fullBody = "BEGIN-" + String(repeating: "complete target body ", count: 300) + "END-OF-FULL-CONTENT"
+        XCTAssertGreaterThan(fullBody.count, 200)
+        XCTAssertGreaterThan(fullBody.count, 4_000)
+
+        try db.insertChunk(
+            id: "expand-full-target",
+            content: fullBody,
+            sessionId: "expand-full-session",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 7
+        )
+        try sqliteExec(
+            path: tempDB,
+            sql: "UPDATE chunks SET summary = 'Short generated summary' WHERE id = 'expand-full-target'"
+        )
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+        let expandText = try toolText(router.handle(toolCall(id: 307, name: "brain_expand", arguments: [
+            "chunk_id": "expand-full-target"
+        ])))
+
+        XCTAssertTrue(expandText.contains(fullBody), expandText)
+        XCTAssertTrue(expandText.contains("END-OF-FULL-CONTENT"), expandText)
+        XCTAssertFalse(expandText.contains("\u{2502} Short generated summary"), expandText)
     }
 
     /// Regression: brain_search(unread_only) marks messages delivered (a write).

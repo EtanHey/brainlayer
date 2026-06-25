@@ -116,11 +116,14 @@ server = Server(
 )
 
 # Tool annotations
+_MAX_FULL_CONTENT_RESULT_CHARS = 250_000
+
 _READ_ONLY = ToolAnnotations(
     readOnlyHint=True,
     destructiveHint=False,
     idempotentHint=True,
     openWorldHint=False,
+    **{"anthropic/maxResultSizeChars": _MAX_FULL_CONTENT_RESULT_CHARS},
 )
 
 _RECALL_READ_ONLY = ToolAnnotations(
@@ -128,7 +131,7 @@ _RECALL_READ_ONLY = ToolAnnotations(
     destructiveHint=False,
     idempotentHint=True,
     openWorldHint=False,
-    **{"anthropic/maxResultSizeChars": 100_000},
+    **{"anthropic/maxResultSizeChars": _MAX_FULL_CONTENT_RESULT_CHARS},
 )
 
 _WRITE = ToolAnnotations(
