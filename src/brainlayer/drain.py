@@ -347,6 +347,21 @@ def _insert_or_merge_chunk(conn: apsw.Connection, values: dict[str, Any]) -> str
     return chunk_id
 
 
+def _refresh_realtime_watcher_ingested_at(conn: apsw.Connection, chunk_id: str, ingested_at: int) -> None:
+    cols = _columns(conn, "chunks")
+    if "ingested_at" not in cols or "source" not in cols:
+        return
+    conn.execute(
+        """
+        UPDATE chunks
+        SET ingested_at = ?
+        WHERE id = ?
+          AND source = 'realtime_watcher'
+        """,
+        (ingested_at, chunk_id),
+    )
+
+
 def _event_payload(event: dict[str, Any]) -> dict[str, Any]:
     if "kind" in event:
         return event
@@ -619,6 +634,7 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
         logger.warning("Skipping recursive MCP watcher event: %s", recursive_reason)
         return ApplyResult()
     tags = event.get("tags")
+    ingested_at = int(time.time())
     stored_chunk_id = _insert_or_merge_chunk(
         conn,
         {
@@ -632,7 +648,7 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
             "char_count": len(content),
             "source": "realtime_watcher",
             "created_at": event.get("created_at") or datetime.now(timezone.utc).isoformat(),
-            "ingested_at": int(time.time()),
+            "ingested_at": ingested_at,
             "conversation_id": event.get("conversation_id"),
             "sender": event.get("sender"),
             "tags": json.dumps(tags) if tags else None,
@@ -640,6 +656,7 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
             "chunk_origin": detect_chunk_origin(content, event.get("chunk_origin")),
         },
     )
+    _refresh_realtime_watcher_ingested_at(conn, stored_chunk_id, ingested_at)
     return ApplyResult(chunk_id=stored_chunk_id)
 
 

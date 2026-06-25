@@ -623,8 +623,9 @@ class JSONLWatcher:
 
         now = time.monotonic()
         elapsed = max(now - self._health_window_started, 1.0)
-        entries_per_min = self._health_entries_seen / elapsed * 60.0
+        normalized_entries_per_min = self._health_entries_seen / elapsed * 60.0
         outputs_per_min = (self.indexer.total_outputs - self._health_output_at_start) / elapsed * 60.0
+        active_entries_per_min = outputs_per_min
         db_inserts = self._db_realtime_inserts_since_window_start()
         db_probe_failed = self.db_path is not None and db_inserts is None
         if db_inserts is not None:
@@ -636,7 +637,7 @@ class JSONLWatcher:
         watchdog_inserts_per_min = 0.0 if db_probe_failed else db_inserts_per_min
         max_lag = self._max_offset_lag_bytes(files)
         watchdog = self.coverage_watchdog.evaluate(
-            active_entries_per_minute=entries_per_min,
+            active_entries_per_minute=active_entries_per_min,
             realtime_inserts_per_minute=watchdog_inserts_per_min,
             max_offset_lag_bytes=max_lag,
         )
@@ -645,7 +646,8 @@ class JSONLWatcher:
             "poll_count": self.poll_count,
             "providers": sorted({root.provider for root in self.watch_roots}),
             "files_tracked": len(files),
-            "active_jsonl_entries_per_minute": entries_per_min,
+            "active_jsonl_entries_per_minute": active_entries_per_min,
+            "normalized_jsonl_entries_per_minute": normalized_entries_per_min,
             "db_probe_failed": db_probe_failed,
             "db_realtime_inserts_per_minute": db_inserts_per_min,
             "watcher_chunks_output_per_minute": outputs_per_min,
@@ -664,14 +666,15 @@ class JSONLWatcher:
         if (
             watchdog.get("alerting") is True
             and "coverage_drop" in watchdog.get("alert_reasons", [])
-            and entries_per_min > 0
+            and active_entries_per_min > 0
             and durable_writes_per_min <= 0
         ):
             raise_alarm(
                 "watcher_zero_writes_while_active",
-                "watcher observed active JSONL input but produced zero durable realtime writes",
+                "watcher accepted indexable JSONL input but produced zero durable realtime writes",
                 {
-                    "active_jsonl_entries_per_minute": entries_per_min,
+                    "active_jsonl_entries_per_minute": active_entries_per_min,
+                    "normalized_jsonl_entries_per_minute": normalized_entries_per_min,
                     "db_probe_failed": db_probe_failed,
                     "db_realtime_inserts_per_minute": db_inserts_per_min,
                     "durable_writes_per_minute": durable_writes_per_min,

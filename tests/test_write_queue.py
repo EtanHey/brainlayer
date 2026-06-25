@@ -161,6 +161,60 @@ class TestQueueStore:
         assert before - 5 <= row[1] <= after + 5
         assert row[2] == "realtime_watcher"
 
+    def test_drain_refreshes_ingested_at_for_duplicate_arbitrated_watcher_chunk(self, tmp_path, monkeypatch):
+        """Duplicate watcher chunks still count as fresh durable watcher ingestion."""
+        from brainlayer.vector_store import VectorStore
+
+        db_path = tmp_path / "watcher-duplicate-ingested-at.db"
+        queue_dir = tmp_path / "queue"
+        VectorStore(db_path).close()
+        monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+        content = "duplicate queued watcher chunk should refresh ingestion liveness without changing event time"
+        old_ingested_at = 123
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO chunks (id, content, metadata, source, source_file, created_at, ingested_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "rt-session-watcher-duplicate",
+                    content,
+                    "{}",
+                    "realtime_watcher",
+                    "/Users/test/Gits/brainlayer/session.jsonl",
+                    "2026-06-06T20:04:14Z",
+                    old_ingested_at,
+                ),
+            )
+            conn.commit()
+        event = {
+            "kind": "watcher_chunk",
+            "chunk_id": "rt-session-watcher-duplicate",
+            "content": content,
+            "metadata": {"session_id": "session-watcher-duplicate"},
+            "project": "brainlayer",
+            "source_file": "/Users/test/Gits/brainlayer/session.jsonl",
+            "content_type": "assistant_text",
+            "value_type": "high",
+            "created_at": "2026-06-06T20:04:14Z",
+            "conversation_id": "session-watcher-duplicate",
+        }
+        queue_dir.mkdir()
+        (queue_dir / "watcher-duplicate.jsonl").write_text(json.dumps(event) + "\n")
+
+        monkeypatch.setattr("brainlayer.drain.time.time", lambda: 2000)
+        drained = drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=tmp_path / "drain.log")
+
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT created_at, ingested_at, seen_count, source FROM chunks WHERE id = ?",
+                (event["chunk_id"],),
+            ).fetchone()
+
+        assert drained == 1
+        assert row == ("2026-06-06T20:04:14Z", 2000, 2, "realtime_watcher")
+
     def test_drain_embeds_hook_event_chunk(self, tmp_path, monkeypatch):
         """Hook queue events must return chunk IDs so drain can embed them."""
         from brainlayer.vector_store import VectorStore

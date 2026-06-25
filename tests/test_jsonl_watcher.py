@@ -17,6 +17,7 @@ import pytest
 
 from brainlayer.alarm import BrainLayerAlarm
 from brainlayer.watcher import BatchIndexer, CoverageWatchdog, JSONLTailer, JSONLWatcher, OffsetRegistry, WatchRoot
+from brainlayer.watcher_bridge import FlushWatermarks
 
 # ── OffsetRegistry Tests ─────────────────────────────────────────────────────
 
@@ -814,6 +815,59 @@ class TestJSONLWatcher:
         assert payload["db_probe_failed"] is True
         assert raised.value.code == "watcher_zero_writes_while_active"
         assert raised.value.details["db_probe_failed"] is True
+
+    def test_health_snapshot_does_not_alarm_when_active_input_is_intentionally_skipped(self, tmp_path):
+        now = [0.0]
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        transcript = sessions / "session.jsonl"
+        transcript.write_text(
+            json.dumps(
+                {
+                    "role": "assistant",
+                    "content": "A normalized assistant response that the flush classifier intentionally skips.",
+                }
+            )
+            + "\n"
+        )
+        db_path = tmp_path / "brainlayer.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE chunks (source TEXT, ingested_at INTEGER, created_at TEXT)")
+        conn.commit()
+        conn.close()
+        health_path = tmp_path / "watcher-health.json"
+        watchdog = CoverageWatchdog(
+            lag_threshold_bytes=1_000_000,
+            alert_after_s=5,
+            now_fn=lambda: now[0],
+        )
+
+        def flush_all_skipped(items):
+            return FlushWatermarks(
+                {str(transcript): max(item["_line_end_offset"] for item in items)},
+                inserted=0,
+                skipped=len(items),
+            )
+
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=flush_all_skipped,
+            batch_size=1,
+            health_path=health_path,
+            db_path=db_path,
+            coverage_watchdog=watchdog,
+        )
+
+        watcher.poll_once()
+        now[0] = 6.0
+        assert watcher.poll_once() == 0
+
+        payload = json.loads(health_path.read_text())
+        assert payload["normalized_jsonl_entries_per_minute"] > 0
+        assert payload["active_jsonl_entries_per_minute"] == 0
+        assert payload["watcher_chunks_output_per_minute"] == 0
+        assert payload["alerting"] is False
 
     def test_health_snapshot_does_not_alarm_when_legitimately_idle(self, tmp_path):
         health_path = tmp_path / "watcher-health.json"
