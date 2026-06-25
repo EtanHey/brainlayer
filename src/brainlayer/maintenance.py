@@ -548,7 +548,11 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
     finally:
         resume_failures = _resume_services(config.repo_root, services)
         if resume_failures and body_error is not None:
-            body_error.add_note(_format_resume_failures(resume_failures))
+            resume_failure_reason = _format_resume_failures(resume_failures)
+            body_error.add_note(resume_failure_reason)
+            if isinstance(body_error, MaintenanceAbort):
+                body_error.reason = f"{body_error.reason}; {resume_failure_reason}"
+                body_error.args = (body_error.reason,)
 
     if resume_failures:
         raise MaintenanceAbort(_format_resume_failures(resume_failures))

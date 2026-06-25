@@ -442,6 +442,7 @@ def test_maintenance_body_error_reports_resume_failures_as_exception_note(tmp_pa
         maintenance.run_maintenance("light", config=config)
 
     assert resumed == list(maintenance.DEFAULT_SERVICES)
+    assert "failed to resume 1 launchd service: enrichment: bootstrap I/O error" in exc_info.value.reason
     assert any(
         "failed to resume 1 launchd service: enrichment: bootstrap I/O error" in note
         for note in getattr(exc_info.value, "__notes__", [])

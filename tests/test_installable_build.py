@@ -19,6 +19,27 @@ def _plist_args(name: str) -> list[str]:
     return plistlib.loads(plist_path.read_bytes())["ProgramArguments"]
 
 
+def _write_full_launchd_env(env_file: Path) -> None:
+    env_file.write_text(
+        "\n".join(
+            [
+                "GOOGLE_API_KEY=test-key",
+                "BRAINLAYER_ENRICH_ENABLED=1",
+                "BRAINLAYER_ENRICH_MODE=realtime",
+                "BRAINLAYER_ENRICH_PROVIDER=google",
+                "BRAINLAYER_ENRICH_BACKEND=gemini",
+                "BRAINLAYER_ENRICH_RATE=1",
+                "BRAINLAYER_ENRICH_CONCURRENCY=1",
+                "BRAINLAYER_MAX_COMMIT_BATCH=1",
+                "BRAINLAYER_GEMINI_SERVICE_TIER=flex",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    env_file.chmod(0o600)
+
+
 def test_brainlayer_cli_entrypoint_imports_typer_app(monkeypatch) -> None:
     monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
 
@@ -451,7 +472,7 @@ def test_launchd_installer_renders_launchd_dir_for_maintenance_resume(tmp_path: 
     launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
 
     result = subprocess.run(
-        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "maintenance-nightly"],
+        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "maintenance"],
         env={
             **os.environ,
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
@@ -632,6 +653,269 @@ def test_launchd_installer_does_not_load_services_when_env_runner_install_fails(
     assert "brainlayer-env-run.sh" in result.stdout
     assert not launchctl_log.exists()
     assert not list((home / "Library" / "LaunchAgents").glob("com.brainlayer.*.plist"))
+
+
+def test_launchd_installer_does_not_load_service_when_env_runner_copy_fails(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_install = fake_bin / "install"
+    fake_install.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'printf "%s\\n" "install failed" >&2',
+                "exit 13",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_install.chmod(0o755)
+    launchctl_log = tmp_path / "launchctl.log"
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("BRAINLAYER_ENRICH_ENABLED=0\n", encoding="utf-8")
+    env_file.chmod(0o600)
+
+    result = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "maintenance-nightly"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": sys.executable,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "install failed" in result.stderr
+    assert not launchctl_log.exists()
+
+
+def test_launchd_installer_does_not_load_service_when_plist_render_fails(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_sed = fake_bin / "sed"
+    fake_sed.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'printf "%s\\n" "sed failed" >&2',
+                "exit 7",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_sed.chmod(0o755)
+    launchctl_log = tmp_path / "launchctl.log"
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("BRAINLAYER_ENRICH_ENABLED=0\n", encoding="utf-8")
+    env_file.chmod(0o600)
+
+    result = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "maintenance-nightly"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": sys.executable,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "sed failed" in result.stderr
+    assert not launchctl_log.exists()
+
+
+def test_launchd_enable_missing_service_is_retried_after_bootstrap(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    bootstrap_state = tmp_path / "bootstrapped"
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+                'if [ "$1" = "enable" ] && [ ! -f "$FAKE_BOOTSTRAPPED" ]; then',
+                '  printf "%s\\n" "Could not find service" >&2',
+                "  exit 113",
+                "fi",
+                'if [ "$1" = "bootstrap" ]; then',
+                '  touch "$FAKE_BOOTSTRAPPED"',
+                "fi",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("BRAINLAYER_ENRICH_ENABLED=0\n", encoding="utf-8")
+    env_file.chmod(0o600)
+
+    result = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "maintenance-nightly"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": sys.executable,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+            "FAKE_BOOTSTRAPPED": str(bootstrap_state),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    commands = launchctl_log.read_text(encoding="utf-8").splitlines()
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert [command.split()[0] for command in commands] == ["bootout", "enable", "bootstrap", "enable", "print"]
+
+
+def test_launchd_all_does_not_load_backup_jobs_when_wrapper_render_fails(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_sed = fake_bin / "sed"
+    fake_sed.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'last="${@: -1}"',
+                'case "$last" in',
+                '  */backup-daily.sh|*/jsonl-backup.sh) printf "%s\\n" "wrapper render failed" >&2; exit 7 ;;',
+                "esac",
+                'exec /usr/bin/sed "$@"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_sed.chmod(0o755)
+    launchctl_log = tmp_path / "launchctl.log"
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = tmp_path / "brainlayer.env"
+    _write_full_launchd_env(env_file)
+
+    result = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "all"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": sys.executable,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    commands = launchctl_log.read_text(encoding="utf-8").splitlines()
+    assert result.returncode != 0
+    assert "wrapper render failed" in result.stderr
+    assert not any(command.startswith("bootstrap ") and "backup-daily.plist" in command for command in commands)
+    assert not any(command.startswith("bootstrap ") and "jsonl-backup.plist" in command for command in commands)
+
+
+def test_launchd_all_preserves_legacy_enrich_when_replacement_batch_fails(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+                'if [ "$1" = "bootstrap" ] && [[ "$3" == *"com.brainlayer.enrichment.plist" ]]; then',
+                '  printf "%s\\n" "replacement bootstrap failed" >&2',
+                "  exit 5",
+                "fi",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = tmp_path / "brainlayer.env"
+    _write_full_launchd_env(env_file)
+
+    result = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "all"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": sys.executable,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    commands = launchctl_log.read_text(encoding="utf-8").splitlines()
+    assert result.returncode != 0
+    assert "replacement bootstrap failed" in result.stderr
+    assert not any(command.startswith("unload ") and "com.brainlayer.enrich.plist" in command for command in commands)
 
 
 def test_wheel_contains_cli_and_launchd_templates(tmp_path: Path) -> None:

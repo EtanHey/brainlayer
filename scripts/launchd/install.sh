@@ -86,7 +86,7 @@ install_env_runner() {
         return 1
     fi
 
-    install -m 0755 "$src" "$BRAINLAYER_ENV_RUN"
+    install -m 0755 "$src" "$BRAINLAYER_ENV_RUN" || return 1
     echo "Installed: $BRAINLAYER_ENV_RUN"
 }
 
@@ -137,14 +137,28 @@ load_plist() {
     local name="$1"
     local dst="$LAUNCH_DIR/com.brainlayer.${name}.plist"
     local label="com.brainlayer.${name}"
+    local enable_error=""
+    local retry_enable_after_bootstrap=0
     launchctl bootout "gui/$UID/$label" 2>/dev/null || true
-    if ! launchctl enable "gui/$UID/$label"; then
-        echo "ERROR: launchctl enable failed for $label" >&2
-        return 1
+    if ! enable_error="$(launchctl enable "gui/$UID/$label" 2>&1)"; then
+        if printf "%s" "$enable_error" | grep -qi "could not find service"; then
+            echo "WARN: launchctl enable could not find $label before bootstrap; retrying after bootstrap" >&2
+            retry_enable_after_bootstrap=1
+        else
+            printf "%s\n" "$enable_error" >&2
+            echo "ERROR: launchctl enable failed for $label" >&2
+            return 1
+        fi
     fi
     if ! launchctl bootstrap "gui/$UID" "$dst"; then
         echo "ERROR: launchctl bootstrap failed for $label" >&2
         return 1
+    fi
+    if [ "$retry_enable_after_bootstrap" -ne 0 ]; then
+        if ! launchctl enable "gui/$UID/$label"; then
+            echo "ERROR: launchctl enable failed for $label after bootstrap" >&2
+            return 1
+        fi
     fi
     if ! launchctl print "gui/$UID/$label" >/dev/null; then
         echo "ERROR: launchctl print failed for $label after bootstrap" >&2
@@ -188,7 +202,7 @@ install_plist() {
         -e "s|__REPO_ROOT__|$BRAINLAYER_DIR|g" \
         -e "s|__BRAINLAYER_ENV_FILE__|$BRAINLAYER_ENV_FILE|g" \
         -e "s|__BRAINLAYER_ENV_RUN__|$BRAINLAYER_ENV_RUN|g" \
-        "$src" > "$dst"
+        "$src" > "$dst" || return 1
 
     echo "Installed: $dst"
     echo "  Logs: $LOG_DIR/ and $BRAINLAYER_LOG_DIR/"
@@ -225,11 +239,11 @@ install_backup_script() {
         return 1
     fi
 
-    escaped_brainlayer_dir="$(printf '%s' "$BRAINLAYER_DIR" | sed 's/[\\&|]/\\&/g')"
+    escaped_brainlayer_dir="$(printf '%s' "$BRAINLAYER_DIR" | sed 's/[\\&|]/\\&/g')" || return 1
     sed \
         -e "s|__BRAINLAYER_DIR_VALUE__|$escaped_brainlayer_dir|g" \
-        "$src" > "$dst"
-    chmod 755 "$dst"
+        "$src" > "$dst" || return 1
+    chmod 755 "$dst" || return 1
     echo "Installed: $dst"
 }
 
@@ -243,11 +257,11 @@ install_jsonl_backup_script() {
         return 1
     fi
 
-    escaped_brainlayer_dir="$(printf '%s' "$BRAINLAYER_DIR" | sed 's/[\\&|]/\\&/g')"
+    escaped_brainlayer_dir="$(printf '%s' "$BRAINLAYER_DIR" | sed 's/[\\&|]/\\&/g')" || return 1
     sed \
         -e "s|__BRAINLAYER_DIR_VALUE__|$escaped_brainlayer_dir|g" \
-        "$src" > "$dst"
-    chmod 755 "$dst"
+        "$src" > "$dst" || return 1
+    chmod 755 "$dst" || return 1
     echo "Installed: $dst"
 }
 
@@ -321,7 +335,10 @@ case "${1:-all}" in
         verify_config_file
         verify_gemini_env_file
         failures=0
-        if ! install_many index drain watch hotlane-brainbar enrichment decay wal-checkpoint repair-fts; then
+        main_services_ok=0
+        if install_many index drain watch hotlane-brainbar enrichment decay wal-checkpoint repair-fts; then
+            main_services_ok=1
+        else
             failures=1
         fi
         if ! install_backup_script; then
@@ -337,8 +354,10 @@ case "${1:-all}" in
         if ! install_many maintenance-nightly maintenance-weekly health-check; then
             failures=1
         fi
-        # Remove old enrich plist if present
-        remove_plist enrich 2>/dev/null || true
+        # Remove old enrich plist only after the replacement enrichment batch loads.
+        if [ "$main_services_ok" -eq 1 ]; then
+            remove_plist enrich 2>/dev/null || true
+        fi
         if [ "$failures" -ne 0 ]; then
             exit 1
         fi
