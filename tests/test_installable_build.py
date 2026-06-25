@@ -578,8 +578,14 @@ def test_launchd_installer_attempts_remaining_services_after_bootstrap_error(tmp
 
     commands = launchctl_log.read_text(encoding="utf-8").splitlines()
     assert result.returncode != 0
-    assert any(command.startswith("bootstrap ") and command.endswith("com.brainlayer.maintenance-nightly.plist") for command in commands)
-    assert any(command.startswith("bootstrap ") and command.endswith("com.brainlayer.maintenance-weekly.plist") for command in commands)
+    assert any(
+        command.startswith("bootstrap ") and command.endswith("com.brainlayer.maintenance-nightly.plist")
+        for command in commands
+    )
+    assert any(
+        command.startswith("bootstrap ") and command.endswith("com.brainlayer.maintenance-weekly.plist")
+        for command in commands
+    )
 
 
 def test_launchd_installer_does_not_load_services_when_env_runner_install_fails(tmp_path: Path) -> None:
