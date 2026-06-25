@@ -21,15 +21,44 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+stable_brainlayer_path() {
+    local value="${1:-}"
+    local prefix
+    local after_cellar
+    local after_version
+
+    if [ -z "$value" ]; then
+        printf "%s" "$value"
+        return 0
+    fi
+
+    case "$value" in
+        */Cellar/brainlayer/*)
+            prefix="${value%%/Cellar/brainlayer/*}"
+            after_cellar="${value#*/Cellar/brainlayer/}"
+            after_version="${after_cellar#*/}"
+            if [ "$after_version" = "$after_cellar" ]; then
+                printf "%s/opt/brainlayer" "$prefix"
+            else
+                printf "%s/opt/brainlayer/%s" "$prefix" "$after_version"
+            fi
+            ;;
+        *)
+            printf "%s" "$value"
+            ;;
+    esac
+}
+
 LAUNCH_DIR="$HOME/Library/LaunchAgents"
 LOG_DIR="$HOME/Library/Logs"
 BRAINLAYER_LOG_DIR="$HOME/.local/share/brainlayer/logs"
 BRAINLAYER_LIB_DIR="$HOME/.local/lib/brainlayer"
-BRAINLAYER_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-BRAINLAYER_LAUNCHD_DIR="${BRAINLAYER_LAUNCHD_DIR:-$SCRIPT_DIR}"
-BRAINLAYER_BIN="${BRAINLAYER_BIN:-$(which brainlayer 2>/dev/null || echo "$HOME/.local/bin/brainlayer")}"
-PYTHON_BIN="${PYTHON_BIN:-$(command -v python3)}"
-BRAINLAYER_PYTHON="${BRAINLAYER_PYTHON:-$PYTHON_BIN}"
+BRAINLAYER_DIR="$(stable_brainlayer_path "$(cd "$SCRIPT_DIR/../.." && pwd)")"
+BRAINLAYER_LAUNCHD_DIR="$(stable_brainlayer_path "${BRAINLAYER_LAUNCHD_DIR:-$SCRIPT_DIR}")"
+BRAINLAYER_BIN="$(stable_brainlayer_path "${BRAINLAYER_BIN:-$(which brainlayer 2>/dev/null || echo "$HOME/.local/bin/brainlayer")}")"
+PYTHON_BIN="$(stable_brainlayer_path "${PYTHON_BIN:-$(command -v python3)}")"
+BRAINLAYER_PYTHON="$(stable_brainlayer_path "${BRAINLAYER_PYTHON:-$PYTHON_BIN}")"
 BRAINLAYER_ENV_FILE="${BRAINLAYER_ENV_FILE:-$HOME/.config/brainlayer/brainlayer.env}"
 BRAINLAYER_ENV_RUN="$BRAINLAYER_LIB_DIR/brainlayer-env-run.sh"
 
@@ -108,10 +137,19 @@ load_plist() {
     local name="$1"
     local dst="$LAUNCH_DIR/com.brainlayer.${name}.plist"
     local label="com.brainlayer.${name}"
-    launchctl enable "gui/$UID/$label"
     launchctl bootout "gui/$UID/$label" 2>/dev/null || true
-    launchctl bootstrap "gui/$UID" "$dst"
-    launchctl print "gui/$UID/$label" >/dev/null
+    if ! launchctl enable "gui/$UID/$label"; then
+        echo "ERROR: launchctl enable failed for $label" >&2
+        return 1
+    fi
+    if ! launchctl bootstrap "gui/$UID" "$dst"; then
+        echo "ERROR: launchctl bootstrap failed for $label" >&2
+        return 1
+    fi
+    if ! launchctl print "gui/$UID/$label" >/dev/null; then
+        echo "ERROR: launchctl print failed for $label after bootstrap" >&2
+        return 1
+    fi
     echo "  Loaded: com.brainlayer.${name}"
 }
 
@@ -132,11 +170,11 @@ install_plist() {
         return 1
     fi
 
-    install_env_runner
-    verify_config_file
+    install_env_runner || return 1
+    verify_config_file || return 1
 
     if [ "$name" = "enrichment" ] || [ "$name" = "enrich" ]; then
-        verify_gemini_env_file
+        verify_gemini_env_file || return 1
     fi
 
     # Replace placeholders
@@ -155,7 +193,26 @@ install_plist() {
     echo "Installed: $dst"
     echo "  Logs: $LOG_DIR/ and $BRAINLAYER_LOG_DIR/"
 
-    load_plist "$name"
+    if ! load_plist "$name"; then
+        return 1
+    fi
+}
+
+install_many() {
+    local failures=0
+    local name
+
+    for name in "$@"; do
+        if ! install_plist "$name"; then
+            echo "ERROR: failed to install/load com.brainlayer.${name}" >&2
+            failures=$((failures + 1))
+        fi
+    done
+
+    if [ "$failures" -ne 0 ]; then
+        echo "ERROR: failed to install/load $failures launchd service(s)" >&2
+        return 1
+    fi
 }
 
 install_backup_script() {
@@ -250,8 +307,7 @@ case "${1:-all}" in
         install_plist maintenance-weekly
         ;;
     maintenance)
-        install_plist maintenance-nightly
-        install_plist maintenance-weekly
+        install_many maintenance-nightly maintenance-weekly
         ;;
     health-check)
         install_plist health-check
@@ -264,23 +320,28 @@ case "${1:-all}" in
         install_env_runner
         verify_config_file
         verify_gemini_env_file
-        install_plist index
-        install_plist drain
-        install_plist watch
-        install_plist hotlane-brainbar
-        install_plist enrichment
-        install_plist decay
-        install_plist wal-checkpoint
-        install_plist repair-fts
-        install_backup_script
-        install_plist backup-daily
-        install_jsonl_backup_script
-        install_plist jsonl-backup
-        install_plist maintenance-nightly
-        install_plist maintenance-weekly
-        install_plist health-check
+        failures=0
+        if ! install_many index drain watch hotlane-brainbar enrichment decay wal-checkpoint repair-fts; then
+            failures=1
+        fi
+        if ! install_backup_script; then
+            failures=1
+        elif ! install_many backup-daily; then
+            failures=1
+        fi
+        if ! install_jsonl_backup_script; then
+            failures=1
+        elif ! install_many jsonl-backup; then
+            failures=1
+        fi
+        if ! install_many maintenance-nightly maintenance-weekly health-check; then
+            failures=1
+        fi
         # Remove old enrich plist if present
         remove_plist enrich 2>/dev/null || true
+        if [ "$failures" -ne 0 ]; then
+            exit 1
+        fi
         ;;
     remove)
         remove_plist index

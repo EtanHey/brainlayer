@@ -474,6 +474,160 @@ def test_launchd_installer_renders_launchd_dir_for_maintenance_resume(tmp_path: 
     assert "__BRAINLAYER_LAUNCHD_DIR__" not in content
 
 
+def test_launchd_installer_renders_homebrew_opt_symlink_instead_of_cellar_version(tmp_path: Path) -> None:
+    fake_homebrew = tmp_path / "opt" / "homebrew"
+    cellar_root = fake_homebrew / "Cellar" / "brainlayer" / "9.9.9"
+    opt_root = fake_homebrew / "opt" / "brainlayer"
+    launchd_dir = cellar_root / "libexec" / "lib" / "python3.12" / "site-packages" / "brainlayer" / "launchd"
+    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    opt_root.parent.mkdir(parents=True)
+    opt_root.symlink_to(cellar_root)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+    brainlayer_bin = cellar_root / "libexec" / "bin" / "brainlayer"
+    brainlayer_bin.parent.mkdir(parents=True)
+    brainlayer_bin.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    brainlayer_bin.chmod(0o755)
+    python_bin = cellar_root / "libexec" / "bin" / "python3"
+    python_bin.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    python_bin.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("BRAINLAYER_ENRICH_ENABLED=0\n", encoding="utf-8")
+    env_file.chmod(0o600)
+
+    result = subprocess.run(
+        [str(launchd_dir / "install.sh"), "maintenance-nightly"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": str(brainlayer_bin),
+            "PYTHON_BIN": str(python_bin),
+            "BRAINLAYER_PYTHON": str(python_bin),
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    rendered = home / "Library" / "LaunchAgents" / "com.brainlayer.maintenance-nightly.plist"
+    content = rendered.read_text(encoding="utf-8")
+    assert f"{fake_homebrew}/Cellar/brainlayer/9.9.9" not in content
+    assert f"<string>{opt_root}/libexec/bin/python3</string>" in content
+    assert f"<string>{opt_root}/libexec/lib/python3.12/site-packages</string>" in content
+    assert f"<string>{opt_root}/libexec/lib/python3.12/site-packages/brainlayer/launchd</string>" in content
+
+
+def test_launchd_installer_attempts_remaining_services_after_bootstrap_error(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+                'if [ "$1" = "bootstrap" ] && [[ "$3" == *"maintenance-nightly.plist" ]]; then',
+                '  printf "%s\\n" "bootstrap failed" >&2',
+                "  exit 5",
+                "fi",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("BRAINLAYER_ENRICH_ENABLED=0\n", encoding="utf-8")
+    env_file.chmod(0o600)
+
+    result = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "maintenance"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": sys.executable,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    commands = launchctl_log.read_text(encoding="utf-8").splitlines()
+    assert result.returncode != 0
+    assert any(command.startswith("bootstrap ") and command.endswith("com.brainlayer.maintenance-nightly.plist") for command in commands)
+    assert any(command.startswith("bootstrap ") and command.endswith("com.brainlayer.maintenance-weekly.plist") for command in commands)
+
+
+def test_launchd_installer_does_not_load_services_when_env_runner_install_fails(tmp_path: Path) -> None:
+    launchd_dir = tmp_path / "launchd"
+    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    (launchd_dir / "brainlayer-env-run.sh").unlink()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("BRAINLAYER_ENRICH_ENABLED=0\n", encoding="utf-8")
+    env_file.chmod(0o600)
+
+    result = subprocess.run(
+        [str(launchd_dir / "install.sh"), "maintenance"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": sys.executable,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "brainlayer-env-run.sh" in result.stdout
+    assert not launchctl_log.exists()
+    assert not list((home / "Library" / "LaunchAgents").glob("com.brainlayer.*.plist"))
+
+
 def test_wheel_contains_cli_and_launchd_templates(tmp_path: Path) -> None:
     wheel_dir = tmp_path / "dist"
     pip_available = (
