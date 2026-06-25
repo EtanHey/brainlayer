@@ -98,7 +98,10 @@ def _daily_cap_blocker(now: datetime, *, enrich_cost_counter_path: Path | None =
         cap_usd = _enrich_daily_usd_cap()
         today = now.astimezone().date().isoformat()
         record = _read_enrich_cost_record(_enrich_cost_counter_path(enrich_cost_counter_path), today)
-        spent_usd = float(record.get("spent_usd", 0.0) or 0.0)
+        try:
+            spent_usd = float(record.get("spent_usd", 0.0) or 0.0)
+        except (TypeError, ValueError) as exc:
+            return None, f"invalid spent_usd in quota counter: {exc}"
     except _EnrichCostCounterUnreadable as exc:
         return None, str(exc)
     except Exception:
