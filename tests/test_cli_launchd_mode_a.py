@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
@@ -130,3 +131,68 @@ def test_reconcile_launchd_bootstraps_all_mode_a_labels(monkeypatch, tmp_path):
     assert "com.brainlayer.health-check" in command_text
     assert "com.brainlayer.hotlane-brainbar" in command_text
     assert "com.brainlayer.enrichment" in command_text
+
+
+def test_resume_attempts_all_labels_and_keeps_sentinel_when_bootstrap_verification_fails(monkeypatch, tmp_path):
+    commands: list[list[str]] = []
+
+    def command_runner(args: list[str]) -> SimpleNamespace:
+        commands.append(args)
+        if args[:2] == ["launchctl", "bootstrap"] and str(args[-1]).endswith("com.test.watch.plist"):
+            return SimpleNamespace(returncode=5, stdout="", stderr="bootstrap failed")
+        if args[:2] == ["launchctl", "print"] and args[2].endswith("/com.test.watch"):
+            return SimpleNamespace(returncode=113, stdout="", stderr="Could not find service")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("brainlayer.cli._run_launchctl", command_runner)
+    pause_path = tmp_path / "pause.sentinel"
+    pause_path.write_text(json.dumps({"labels": ["com.test.watch", "com.test.drain"]}), encoding="utf-8")
+
+    result = CliRunner().invoke(app, ["resume", "--pause-sentinel-path", str(pause_path)])
+
+    assert result.exit_code == 1
+    assert pause_path.exists()
+    command_text = "\n".join(" ".join(command) for command in commands)
+    assert "com.test.watch" in command_text
+    assert "com.test.drain" in command_text
+    assert "failed to resume launchd label com.test.watch" in result.output
+
+
+def test_reconcile_launchd_attempts_remaining_labels_when_one_bootstrap_fails(monkeypatch, tmp_path):
+    commands: list[list[str]] = []
+
+    def command_runner(args: list[str]) -> SimpleNamespace:
+        commands.append(args)
+        if args[:2] == ["launchctl", "bootstrap"] and str(args[-1]) == str(tmp_path / "watch.plist"):
+            return SimpleNamespace(returncode=5, stdout="", stderr="bootstrap failed")
+        if args[:2] == ["launchctl", "print"] and args[2].endswith("/com.brainlayer.watch"):
+            return SimpleNamespace(returncode=113, stdout="", stderr="Could not find service")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("brainlayer.cli._run_launchctl", command_runner)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "reconcile-launchd",
+            "--watch-plist-path",
+            str(tmp_path / "watch.plist"),
+            "--drain-plist-path",
+            str(tmp_path / "drain.plist"),
+            "--health-check-plist-path",
+            str(tmp_path / "health.plist"),
+            "--hotlane-plist-path",
+            str(tmp_path / "hotlane.plist"),
+            "--enrichment-plist-path",
+            str(tmp_path / "enrichment.plist"),
+        ],
+    )
+
+    assert result.exit_code == 1
+    command_text = "\n".join(" ".join(command) for command in commands)
+    assert "com.brainlayer.watch" in command_text
+    assert "com.brainlayer.drain" in command_text
+    assert "com.brainlayer.health-check" in command_text
+    assert "com.brainlayer.hotlane-brainbar" in command_text
+    assert "com.brainlayer.enrichment" in command_text
+    assert "failed to reconcile launchd label com.brainlayer.watch" in result.output

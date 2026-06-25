@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +17,110 @@ NOW = datetime(2026, 6, 22, 12, 0, tzinfo=UTC)
 def _loaded_launchctl(args: list[str]) -> SimpleNamespace:
     assert args[:2] == ["launchctl", "print"]
     return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+
+def test_launchd_install_and_verify_returns_true_when_label_is_loaded(tmp_path):
+    from brainlayer.launchd_primitive import install_and_verify_launchagent
+
+    plist_path = tmp_path / "com.example.loaded.plist"
+    plist_path.write_text("<plist />", encoding="utf-8")
+    commands: list[list[str]] = []
+
+    def command_runner(args: list[str]) -> SimpleNamespace:
+        commands.append(args)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    assert install_and_verify_launchagent(
+        "com.example.loaded",
+        plist_path,
+        command_runner=command_runner,
+    )
+    assert ["launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist_path)] in commands
+    assert ["launchctl", "print", f"gui/{os.getuid()}/com.example.loaded"] in commands
+
+
+def test_launchd_install_and_verify_raises_when_bootstrap_does_not_load_label(tmp_path):
+    from brainlayer.launchd_primitive import LaunchdLabelNotLoadedError, install_and_verify_launchagent
+
+    plist_path = tmp_path / "com.example.not-loaded.plist"
+    plist_path.write_text("<plist />", encoding="utf-8")
+    commands: list[list[str]] = []
+
+    def command_runner(args: list[str]) -> SimpleNamespace:
+        commands.append(args)
+        if args[:2] == ["launchctl", "print"]:
+            return SimpleNamespace(returncode=113, stdout="", stderr="Could not find service")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    try:
+        install_and_verify_launchagent(
+            "com.example.not-loaded",
+            plist_path,
+            command_runner=command_runner,
+        )
+    except LaunchdLabelNotLoadedError as exc:
+        assert exc.label == "com.example.not-loaded"
+        assert exc.plist_path == plist_path
+        assert "not loaded after bootstrap" in str(exc)
+    else:
+        raise AssertionError("install_and_verify_launchagent returned success for an unloaded label")
+
+    assert ["launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist_path)] in commands
+    assert ["launchctl", "print", f"gui/{os.getuid()}/com.example.not-loaded"] in commands
+
+
+def test_launchd_install_and_verify_rejects_malformed_command_runner_result(tmp_path):
+    from brainlayer.launchd_primitive import LaunchdCommandError, install_and_verify_launchagent
+
+    plist_path = tmp_path / "com.example.malformed.plist"
+    plist_path.write_text("<plist />", encoding="utf-8")
+
+    try:
+        install_and_verify_launchagent(
+            "com.example.malformed",
+            plist_path,
+            command_runner=lambda _args: object(),
+        )
+    except LaunchdCommandError as exc:
+        assert exc.reason == "launchctl_command_failed"
+        assert exc.returncode == 1
+    else:
+        raise AssertionError("malformed command_runner result was treated as launchctl success")
+
+
+def test_launchd_install_and_verify_accepts_loaded_label_after_bootstrap_already_loaded(tmp_path):
+    from brainlayer.launchd_primitive import install_and_verify_launchagent
+
+    plist_path = tmp_path / "com.example.race.plist"
+    plist_path.write_text("<plist />", encoding="utf-8")
+
+    def command_runner(args: list[str]) -> SimpleNamespace:
+        if args[:2] == ["launchctl", "bootstrap"]:
+            return SimpleNamespace(returncode=37, stdout="", stderr="service already bootstrapped")
+        if args[:2] == ["launchctl", "print"]:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    assert install_and_verify_launchagent(
+        "com.example.race",
+        plist_path,
+        command_runner=command_runner,
+    )
+
+
+def test_launchd_label_loaded_does_not_use_unscoped_list_fallback():
+    from brainlayer.launchd_primitive import is_launchd_label_loaded
+
+    commands: list[list[str]] = []
+
+    def command_runner(args: list[str]) -> SimpleNamespace:
+        commands.append(args)
+        if args[:2] == ["launchctl", "list"]:
+            return SimpleNamespace(returncode=0, stdout="com.example.ambiguous\n", stderr="")
+        return SimpleNamespace(returncode=1, stdout="", stderr="unexpected launchctl failure")
+
+    assert is_launchd_label_loaded("com.example.ambiguous", command_runner=command_runner) is None
+    assert ["launchctl", "list", "com.example.ambiguous"] not in commands
 
 
 def _hotlane_ps() -> str:
@@ -171,6 +276,32 @@ def test_run_doctor_exits_nonzero_for_recent_unvectored_chunk(tmp_path):
     assert result.exit_code == 1
     assert result.ok is False
     assert any(issue.code == "recent_unvectored_chunks" for issue in result.issues)
+
+
+def test_run_doctor_fails_loudly_when_required_launchd_label_is_not_loaded(tmp_path):
+    from brainlayer.doctor import run_doctor
+
+    db_path = tmp_path / "launchd-not-loaded.db"
+    _build_db(db_path)
+
+    def command_runner(args: list[str]) -> SimpleNamespace:
+        if args == ["launchctl", "print", f"gui/{os.getuid()}/com.brainlayer.watch"]:
+            return SimpleNamespace(returncode=113, stdout="", stderr="Could not find service")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    result = run_doctor(
+        _doctor_config(tmp_path, db_path),
+        ps_output_fn=_hotlane_ps,
+        command_runner=command_runner,
+        now_fn=lambda: NOW,
+    )
+
+    assert result.exit_code == 1
+    issue = next(issue for issue in result.issues if issue.code == "watch_unloaded")
+    assert issue.severity == "fatal"
+    assert issue.details["label"] == "com.brainlayer.watch"
+    assert issue.details["target"] == f"gui/{os.getuid()}/com.brainlayer.watch"
+    assert issue.details["reason"] == "not_loaded"
 
 
 def test_run_doctor_reports_fts_desync_without_rebuilding(tmp_path):
