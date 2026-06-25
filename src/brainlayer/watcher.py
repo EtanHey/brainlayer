@@ -26,6 +26,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from .alarm import raise_alarm
+
 logger = logging.getLogger(__name__)
 
 
@@ -649,6 +651,28 @@ class JSONLWatcher:
             tmp_path.replace(self.health_path)
         except OSError:
             logger.debug("Failed to write watcher health snapshot", exc_info=True)
+
+        durable_writes_per_min = inserts_per_min if db_inserts is not None else outputs_per_min
+        if (
+            watchdog.get("alerting") is True
+            and "coverage_drop" in watchdog.get("alert_reasons", [])
+            and entries_per_min > 0
+            and durable_writes_per_min <= 0
+        ):
+            raise_alarm(
+                "watcher_zero_writes_while_active",
+                "watcher observed active JSONL input but produced zero durable realtime writes",
+                {
+                    "active_jsonl_entries_per_minute": entries_per_min,
+                    "db_realtime_inserts_per_minute": inserts_per_min,
+                    "durable_writes_per_minute": durable_writes_per_min,
+                    "files_tracked": len(files),
+                    "max_offset_lag_bytes": max_lag,
+                    "providers": payload["providers"],
+                    "watcher_chunks_output_per_minute": outputs_per_min,
+                    "watchdog_reasons": watchdog.get("alert_reasons", []),
+                },
+            )
 
         if elapsed >= 60.0:
             self._health_window_started = now

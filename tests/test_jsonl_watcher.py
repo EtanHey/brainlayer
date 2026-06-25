@@ -13,6 +13,9 @@ import sqlite3
 import threading
 import time
 
+import pytest
+
+from brainlayer.alarm import BrainLayerAlarm
 from brainlayer.watcher import BatchIndexer, CoverageWatchdog, JSONLTailer, JSONLWatcher, OffsetRegistry, WatchRoot
 
 # ── OffsetRegistry Tests ─────────────────────────────────────────────────────
@@ -713,7 +716,7 @@ class TestJSONLWatcher:
         assert payload["watcher_chunks_output_per_minute"] > 0
         assert payload["db_realtime_inserts_per_minute"] == 0
 
-    def test_health_snapshot_alerts_on_coverage_drop_and_offset_lag(self, tmp_path):
+    def test_health_snapshot_raises_alarm_on_zero_db_writes_while_active(self, tmp_path):
         now = [0.0]
         sessions = tmp_path / "codex" / "sessions"
         sessions.mkdir(parents=True)
@@ -727,30 +730,59 @@ class TestJSONLWatcher:
             )
             + "\n"
         )
+        db_path = tmp_path / "brainlayer.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE chunks (source TEXT, ingested_at INTEGER, created_at TEXT)")
+        conn.commit()
+        conn.close()
         health_path = tmp_path / "watcher-health.json"
         watchdog = CoverageWatchdog(
-            lag_threshold_bytes=1,
+            lag_threshold_bytes=1_000_000,
             alert_after_s=5,
             now_fn=lambda: now[0],
         )
 
+        def flush_without_durable_write(items):
+            return {str(transcript): max(item["_line_end_offset"] for item in items)}
+
         watcher = JSONLWatcher(
             watch_roots=[WatchRoot("codex", sessions)],
             registry_path=tmp_path / "offsets.json",
-            on_flush=lambda items: None,
-            batch_size=100,
+            on_flush=flush_without_durable_write,
+            batch_size=1,
             health_path=health_path,
+            db_path=db_path,
             coverage_watchdog=watchdog,
         )
 
         watcher.poll_once()
-        transcript.write_text(transcript.read_text() + (" " * 2048))
-        watcher.poll_once()
         now[0] = 6.0
-        watcher.poll_once()
+        with pytest.raises(BrainLayerAlarm) as raised:
+            watcher.poll_once()
 
         payload = json.loads(health_path.read_text())
         assert payload["providers"] == ["codex"]
-        assert payload["max_offset_lag_bytes"] > 1
         assert payload["alerting"] is True
-        assert "offset_lag" in payload["alert_reasons"]
+        assert "coverage_drop" in payload["alert_reasons"]
+        assert raised.value.code == "watcher_zero_writes_while_active"
+        assert raised.value.details["active_jsonl_entries_per_minute"] > 0
+        assert raised.value.details["db_realtime_inserts_per_minute"] == 0
+
+    def test_health_snapshot_does_not_alarm_when_legitimately_idle(self, tmp_path):
+        health_path = tmp_path / "watcher-health.json"
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda items: None,
+            batch_size=1,
+            health_path=health_path,
+            coverage_watchdog=CoverageWatchdog(alert_after_s=0),
+        )
+
+        watcher.poll_once()
+
+        payload = json.loads(health_path.read_text())
+        assert payload["active_jsonl_entries_per_minute"] == 0
+        assert payload["alerting"] is False

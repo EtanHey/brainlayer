@@ -16,6 +16,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
+from .alarm import BrainLayerAlarm, emit_alarm
 from .drain_liveness import (
     DEFAULT_DRAIN_LIVENESS_STALE_SECONDS,
     ENRICH_DAILY_COST_COUNTER_FILENAME,
@@ -416,6 +417,8 @@ def run_doctor(
             active_drain_liveness_issue.code == STALLED_CODE and has_drain_backlog and drain_liveness_moving
         )
         if not suppress_stale_drain:
+            if isinstance(active_drain_liveness_issue, BrainLayerAlarm):
+                emit_alarm(active_drain_liveness_issue)
             result.issues.append(
                 DoctorIssue(
                     active_drain_liveness_issue.code,
