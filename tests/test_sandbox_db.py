@@ -114,6 +114,16 @@ def test_sandbox_rejects_active_noncanonical_db_path(tmp_path: Path, monkeypatch
         SandboxDB(seed="skill-eval-baseline", token="active-live", db_path=active_db).start()
 
 
+def test_sandbox_rejects_active_managed_sandbox_db_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    from brainlayer.sandbox_db import SandboxDB, SandboxProdLeakError
+
+    monkeypatch.delenv("BRAINLAYER_DB", raising=False)
+    with SandboxDB(seed="skill-eval-baseline", token="active-managed") as active:
+        with pytest.raises(SandboxProdLeakError):
+            SandboxDB(seed="skill-eval-baseline", token="active-managed-explicit", db_path=active.db_path).start()
+        assert active.db_path.exists()
+
+
 def test_sandbox_rejects_active_db_sidecar_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from brainlayer.sandbox_db import SandboxDB, SandboxProdLeakError
 
@@ -158,18 +168,19 @@ def test_sandbox_stop_clears_hybrid_cache(monkeypatch: pytest.MonkeyPatch) -> No
 
     monkeypatch.delenv("BRAINLAYER_DB", raising=False)
     sandbox = SandboxDB(seed="skill-eval-baseline", token="cache-clear").start()
-    store = VectorStore(sandbox.db_path, readonly=True)
     try:
-        store.hybrid_search(
-            query_embedding=_embed("deterministic local embeddings"),
-            query_text="deterministic local embeddings",
-            n_results=5,
-        )
+        store = VectorStore(sandbox.db_path, readonly=True)
+        try:
+            store.hybrid_search(
+                query_embedding=_embed("deterministic local embeddings"),
+                query_text="deterministic local embeddings",
+                n_results=5,
+            )
+        finally:
+            store.close()
+        assert any(key[0] == str(sandbox.db_path) for key in _hybrid_cache)
     finally:
-        store.close()
-    assert any(key[0] == str(sandbox.db_path) for key in _hybrid_cache)
-
-    sandbox.stop()
+        sandbox.stop()
 
     assert not any(key[0] == str(sandbox.db_path) for key in _hybrid_cache)
 
@@ -226,6 +237,19 @@ def test_sandbox_start_refuses_existing_live_token(monkeypatch: pytest.MonkeyPat
         sandbox.stop()
 
 
+def test_sandbox_start_refuses_existing_explicit_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from brainlayer.sandbox_db import SandboxDB
+
+    monkeypatch.delenv("BRAINLAYER_DB", raising=False)
+    db_path = tmp_path / "brainlayer.db"
+    db_path.write_text("live", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="already exists with live DB"):
+        SandboxDB(seed="skill-eval-baseline", token="explicit-existing", db_path=db_path).start()
+
+    assert db_path.read_text(encoding="utf-8") == "live"
+
+
 def test_sandbox_start_uses_token_lease(monkeypatch: pytest.MonkeyPatch) -> None:
     from brainlayer.sandbox_db import SandboxDB, sandbox_paths_for_token
 
@@ -240,6 +264,27 @@ def test_sandbox_start_uses_token_lease(monkeypatch: pytest.MonkeyPatch) -> None
         sandbox.stop()
 
     assert not paths.lease_path.exists()
+
+
+def test_sandbox_stop_refuses_other_live_lease(monkeypatch: pytest.MonkeyPatch) -> None:
+    from brainlayer.sandbox_db import SandboxDB, sandbox_paths_for_token
+
+    monkeypatch.delenv("BRAINLAYER_DB", raising=False)
+    token = "other-live-lease"
+    paths = sandbox_paths_for_token(token)
+    paths.temp_dir.mkdir(parents=True, exist_ok=True)
+    paths.db_path.write_text("live", encoding="utf-8")
+    paths.lease_path.write_text('{"pid": 424242, "token": "other-live-lease"}\n', encoding="utf-8")
+    monkeypatch.setattr("brainlayer.sandbox_db._pid_is_running", lambda pid: pid == 424242)
+
+    with pytest.raises(RuntimeError, match="active in another process"):
+        SandboxDB(seed="skill-eval-baseline", token=token).stop()
+
+    assert paths.db_path.exists()
+    assert paths.lease_path.exists()
+    paths.lease_path.unlink()
+    paths.db_path.unlink()
+    paths.temp_dir.rmdir()
 
 
 def test_sandbox_start_refuses_double_start_and_restores_original_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -258,6 +303,19 @@ def test_sandbox_start_refuses_double_start_and_restores_original_env(monkeypatc
     assert os.environ["BRAINLAYER_DB"] == original_db
 
 
+def test_sandbox_patches_cached_default_db_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    from brainlayer import paths as brain_paths
+    from brainlayer.sandbox_db import SandboxDB
+
+    monkeypatch.delenv("BRAINLAYER_DB", raising=False)
+    original_default = brain_paths.DEFAULT_DB_PATH
+
+    with SandboxDB(seed="skill-eval-baseline", token="default-path") as sandbox:
+        assert brain_paths.DEFAULT_DB_PATH == sandbox.db_path
+
+    assert brain_paths.DEFAULT_DB_PATH == original_default
+
+
 def test_stop_sandbox_clears_matching_env_pointer(monkeypatch: pytest.MonkeyPatch) -> None:
     from brainlayer.sandbox_db import start_sandbox, stop_sandbox
 
@@ -268,6 +326,26 @@ def test_stop_sandbox_clears_matching_env_pointer(monkeypatch: pytest.MonkeyPatc
     stop_sandbox(token="stop-wrapper")
 
     assert "BRAINLAYER_DB" not in os.environ
+
+
+def test_seed_sandbox_db_fails_when_upsert_skips_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from brainlayer import sandbox_db
+
+    class PartialStore:
+        def __init__(self, _path: Path) -> None:
+            pass
+
+        def upsert_chunks(self, chunks, embeddings):  # noqa: ANN001
+            return len(chunks) - 1
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.delenv("BRAINLAYER_DB", raising=False)
+    monkeypatch.setattr(sandbox_db, "VectorStore", PartialStore)
+
+    with pytest.raises(RuntimeError, match="inserted 2/3 chunks"):
+        sandbox_db.seed_sandbox_db(tmp_path / "brainlayer.db", "skill-eval-baseline")
 
 
 def test_sandbox_seed_is_deterministic(monkeypatch: pytest.MonkeyPatch) -> None:
