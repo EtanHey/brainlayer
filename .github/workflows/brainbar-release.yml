@@ -13,12 +13,13 @@ jobs:
     name: package BrainBar
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Select Xcode (Swift 6)
-        uses: maxim-lobanov/setup-xcode@v1
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90
         with:
           xcode-version: latest-stable
 
@@ -40,11 +41,9 @@ jobs:
           echo "BrainBar build time UTC: $build_time_utc"
 
       - name: Cache SwiftPM
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
-          path: |
-            ~/.swiftpm
-            brain-bar/.build
+          path: ~/.swiftpm
           key: ${{ runner.os }}-swiftpm-${{ hashFiles('brain-bar/Package.resolved') }}
           restore-keys: ${{ runner.os }}-swiftpm-
 
@@ -190,7 +189,7 @@ jobs:
           echo "BrainBar.zip size: $(stat -f%z dist/BrainBar.zip) bytes"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           tag_name: ${{ github.ref_name }}
           name: BrainBar ${{ github.ref_name }}

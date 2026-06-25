@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from pathlib import Path
 
@@ -128,10 +129,32 @@ def _assert_launchagents_are_packaged(job: dict) -> None:
     assert "com.brainlayer.brainbar-daemon.plist" in runs, "BrainBar.app must include the daemon launch agent plist"
 
 
+def _assert_action_refs_are_pinned(job: dict) -> None:
+    action_steps = [step for step in job.get("steps", []) if isinstance(step, dict) and "uses" in step]
+    assert action_steps, "BrainBar release workflow must declare action steps explicitly"
+    for step in action_steps:
+        uses = str(step["uses"])
+        assert re.search(r"@[0-9a-f]{40}$", uses), f"BrainBar release action must be pinned to a SHA: {uses}"
+
+
+def _assert_swift_cache_excludes_local_build(job: dict) -> None:
+    cache_steps = [
+        step
+        for step in job.get("steps", [])
+        if isinstance(step, dict) and str(step.get("uses", "")).startswith("actions/cache@")
+    ]
+    assert cache_steps, "BrainBar release workflow must cache SwiftPM dependencies"
+    cache_paths = "\n".join(str(step.get("with", {}).get("path", "")) for step in cache_steps)
+    assert "~/.swiftpm" in cache_paths, "BrainBar release workflow must cache external SwiftPM dependencies"
+    assert "brain-bar/.build" not in cache_paths, "BrainBar release workflow must not restore local .build artifacts"
+
+
 def _assert_release_workflow_contract(workflow: dict) -> None:
     _assert_tag_triggered(workflow)
     job = _release_job(workflow)
+    _assert_action_refs_are_pinned(job)
     _assert_swift_build_contract(job)
+    _assert_swift_cache_excludes_local_build(job)
     _assert_version_stamp(job)
     _assert_signing_decode_is_macos_safe(job)
     _assert_launchagents_are_packaged(job)

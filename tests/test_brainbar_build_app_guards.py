@@ -7,6 +7,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 def _clean_git_env() -> dict[str, str]:
     return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
@@ -214,6 +216,10 @@ if [[ "$2" == "Print :GitCommit" && -f "$3" ]]; then
   ' "$3"
   exit 0
 fi
+if [[ "$2" == "Print :CFBundleShortVersionString" ]]; then
+  printf '1.4.0\\n'
+  exit 0
+fi
 if [[ "$2" == Print* ]]; then
   exit 1
 fi
@@ -415,6 +421,29 @@ def test_build_app_rejects_invalid_release_version(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "release version must match X.Y.Z" in result.stderr
+
+
+@pytest.mark.parametrize("tag_name", ["ci-smoke", "1.2.3"])
+def test_build_app_ignores_non_release_exact_tags_and_uses_plist_version(tmp_path: Path, tag_name: str) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-dev-worktree")
+    home = tmp_path / "home"
+    home.mkdir()
+    _prepare_bundle_inputs(repo)
+    tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
+    _git(repo, "tag", tag_name)
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=tmp_path / "canonical",
+        home=home,
+        dry_run=False,
+        extra_args=["--force-worktree-build"],
+        extra_env=_fake_build_env(tmp_path, tool_dir, bin_dir),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "ReleaseVersion=1.4.0" in result.stdout
 
 
 def test_build_app_script_is_notarization_ready_for_developer_id() -> None:

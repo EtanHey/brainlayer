@@ -346,10 +346,8 @@ release_version() {
 
     local exact_tag
     exact_tag="$(git -C "$PACKAGE_DIR" describe --tags --exact-match 2>/dev/null || true)"
-    if [ -n "$exact_tag" ]; then
-        version="${exact_tag#v}"
-        validate_release_version "$version" || return 1
-        printf '%s\n' "$version"
+    if [[ "$exact_tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+        printf '%s\n' "${BASH_REMATCH[1]}"
         return 0
     fi
 
