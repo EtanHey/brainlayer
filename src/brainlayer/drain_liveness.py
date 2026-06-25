@@ -10,6 +10,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .alarm import BrainLayerAlarm, build_alarm
+
 DEFAULT_DRAIN_LIVENESS_STALE_SECONDS = 300.0
 DEFAULT_ENRICH_DAILY_USD_CAP = 5.0
 ENRICH_DAILY_COST_COUNTER_FILENAME = "enrich-daily-cost.json"
@@ -113,7 +115,7 @@ def check_drain_liveness(
     stale_seconds: float = DEFAULT_DRAIN_LIVENESS_STALE_SECONDS,
     enrich_cost_counter_path: Path | None = None,
     quota_or_throttle_blocker: str | None = None,
-) -> DrainLivenessIssue | None:
+) -> BrainLayerAlarm | DrainLivenessIssue | None:
     """Return a loud issue when a loaded drain has backlog but no fresh heartbeat."""
     queue_backlog = _positive_int(queue_count)
     enrichment_backlog_count = _positive_int(enrichment_backlog)
@@ -156,9 +158,8 @@ def check_drain_liveness(
         )
 
     stale_description = "missing" if heartbeat_at is None else f"stale for {heartbeat_age:.0f}s"
-    return DrainLivenessIssue(
+    return build_alarm(
         STALLED_CODE,
-        "fatal",
         (
             f"DRAIN_LIVENESS_STALLED: {drain_label} is loaded and backlog={backlog} "
             f"(queue={queue_backlog}, enrichment={enrichment_backlog_count}), "

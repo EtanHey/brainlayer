@@ -252,6 +252,25 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
     if arbitrated is None:
         arbitrated = os.environ.get("BRAINLAYER_ARBITRATED") == "1"
     store = None if arbitrated else VectorStore(db_path or get_db_path())
+    liveness_schema_ready = False
+
+    def ensure_direct_liveness_schema() -> None:
+        if liveness_schema_ready or store is None:
+            return
+        from .drain import _ensure_watcher_liveness_schema
+
+        _ensure_watcher_liveness_schema(store.conn)
+
+    def mark_direct_liveness_schema_ready() -> None:
+        nonlocal liveness_schema_ready
+        liveness_schema_ready = True
+
+    def record_direct_liveness(chunk_id: str, ingested_at: int) -> None:
+        if store is None:
+            return
+        from .drain import _record_watcher_liveness
+
+        _record_watcher_liveness(store.conn, chunk_id, ingested_at)
 
     def flush_to_db(entries: list[dict[str, Any]]) -> FlushWatermarks:
         """Process raw JSONL entries through pipeline and insert into DB."""
@@ -392,8 +411,10 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                     while True:
                         transaction_started = False
                         try:
+                            ingested_at = int(time.time())
                             cursor.execute("BEGIN IMMEDIATE")
                             transaction_started = True
+                            ensure_direct_liveness_schema()
                             duplicate, dedupe_fields = find_duplicate(
                                 store.conn,
                                 chunk_id=chunk_id,
@@ -417,7 +438,9 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                     mechanism=duplicate.mechanism,
                                     hamming_distance_value=duplicate.hamming_distance,
                                 )
+                                record_direct_liveness(duplicate.canonical_chunk_id, ingested_at)
                                 cursor.execute("COMMIT")
+                                mark_direct_liveness_schema_ready()
                                 transaction_started = False
                                 inserted += 1
                                 break
@@ -432,7 +455,9 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                     "last_seen_at": created_at,
                                 },
                             ):
+                                record_direct_liveness(chunk_id, ingested_at)
                                 cursor.execute("COMMIT")
+                                mark_direct_liveness_schema_ready()
                                 transaction_started = False
                                 inserted += 1
                                 break
@@ -445,7 +470,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                     simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3,
                                     ingested_at)
                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                                           CAST(strftime('%s', 'now') AS INTEGER))""",
+                                           ?)""",
                                 (
                                     chunk_id,
                                     clean_content,
@@ -469,10 +494,14 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                     dedupe_fields.bands[1],
                                     dedupe_fields.bands[2],
                                     dedupe_fields.bands[3],
+                                    ingested_at,
                                 ),
                             )
                             changed = store.conn.changes() > 0
+                            if changed:
+                                record_direct_liveness(chunk_id, ingested_at)
                             cursor.execute("COMMIT")
+                            mark_direct_liveness_schema_ready()
                             transaction_started = False
                             if changed:
                                 inserted += 1

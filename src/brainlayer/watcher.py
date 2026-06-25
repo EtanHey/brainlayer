@@ -26,6 +26,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from .alarm import raise_alarm
+
 logger = logging.getLogger(__name__)
 
 
@@ -352,6 +354,7 @@ class BatchIndexer:
         self._last_flush = time.monotonic()
         self.total_flushed = 0
         self.total_outputs = 0
+        self.total_failed_inputs = 0
         self._flush_failures = 0
 
     def add(self, items: list[dict]):
@@ -394,7 +397,12 @@ class BatchIndexer:
             self.total_outputs += getattr(result, "inserted", count)
         except Exception as e:
             logger.error("Batch flush failed (%d items), retaining in buffer: %s", count, e)
-            self._isolate_failed_flush(batch, e)
+            self.total_failed_inputs += self._isolate_failed_flush(batch, e)
+
+    def retained_failed_input_count(self) -> int:
+        """Return currently retained flush-failed inputs without counting retry attempts."""
+        with self._lock:
+            return len(self._buffer) if self._flush_failures > 0 else 0
 
     def _confirmed_watermarks(self, batch: list[dict], result: dict[str, int] | None) -> dict[str, int]:
         if isinstance(result, dict):
@@ -418,14 +426,14 @@ class BatchIndexer:
                 handle.write(json.dumps({"reason": str(reason), "entry": entry}, sort_keys=True) + "\n")
         logger.critical("Quarantined %d watcher flush entries at %s after repeated failures", len(entries), path)
 
-    def _isolate_failed_flush(self, batch: list[dict], reason: Exception) -> None:
+    def _isolate_failed_flush(self, batch: list[dict], reason: Exception) -> int:
         if len(batch) <= 1:
             self._flush_failures += 1
             if self._flush_failures >= self._flush_retain_limit():
                 self._quarantine_entries(batch, reason)
                 self._buffer = []
                 self._flush_failures = 0
-            return
+            return len(batch)
 
         retained: list[dict] = []
         confirmed: dict[str, int] = {}
@@ -447,6 +455,7 @@ class BatchIndexer:
         self.total_flushed += len(batch) - len(retained)
         self._buffer = retained
         self._flush_failures = self._flush_failures + 1 if retained else 0
+        return len(retained)
 
 
 # ── JSONL Watcher ────────────────────────────────────────────────────────────
@@ -601,15 +610,33 @@ class JSONLWatcher:
         try:
             conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=1)
             try:
+                window_started = int(self._health_window_started_epoch)
                 row = conn.execute(
                     """
                     SELECT COUNT(*) FROM chunks
                     WHERE source = 'realtime_watcher'
-                      AND COALESCE(ingested_at, strftime('%s', created_at)) >= ?
+                      AND COALESCE(ingested_at, CAST(strftime('%s', created_at) AS INTEGER)) >= ?
                     """,
-                    (int(self._health_window_started_epoch),),
+                    (window_started,),
                 ).fetchone()
-                return int(row[0]) if row else 0
+                chunk_count = int(row[0]) if row else 0
+                liveness_count = 0
+                if conn.execute(
+                    """
+                    SELECT 1 FROM sqlite_master
+                    WHERE type = 'table'
+                      AND name = 'watcher_liveness_events'
+                    """
+                ).fetchone():
+                    liveness_row = conn.execute(
+                        """
+                        SELECT COUNT(*) FROM watcher_liveness_events
+                        WHERE ingested_at >= ?
+                        """,
+                        (window_started,),
+                    ).fetchone()
+                    liveness_count = int(liveness_row[0]) if liveness_row else 0
+                return liveness_count if liveness_count > 0 else chunk_count
             finally:
                 conn.close()
         except sqlite3.Error:
@@ -621,23 +648,41 @@ class JSONLWatcher:
 
         now = time.monotonic()
         elapsed = max(now - self._health_window_started, 1.0)
-        entries_per_min = self._health_entries_seen / elapsed * 60.0
+        normalized_entries_per_min = self._health_entries_seen / elapsed * 60.0
         outputs_per_min = (self.indexer.total_outputs - self._health_output_at_start) / elapsed * 60.0
+        failed_flush_inputs_per_min = self.indexer.retained_failed_input_count() / elapsed * 60.0
+        active_entries_per_min = outputs_per_min + failed_flush_inputs_per_min
         db_inserts = self._db_realtime_inserts_since_window_start()
-        inserts_per_min = (db_inserts / elapsed * 60.0) if db_inserts is not None else outputs_per_min
+        db_probe_failed = self.db_path is not None and db_inserts is None
+        if db_inserts is not None:
+            db_inserts_per_min = db_inserts / elapsed * 60.0
+        elif self.db_path is not None:
+            db_inserts_per_min = None
+        else:
+            db_inserts_per_min = outputs_per_min
+        watchdog_inserts_per_min = 0.0 if db_probe_failed else db_inserts_per_min
         max_lag = self._max_offset_lag_bytes(files)
         watchdog = self.coverage_watchdog.evaluate(
-            active_entries_per_minute=entries_per_min,
-            realtime_inserts_per_minute=inserts_per_min,
+            active_entries_per_minute=active_entries_per_min,
+            realtime_inserts_per_minute=watchdog_inserts_per_min,
             max_offset_lag_bytes=max_lag,
         )
+        coverage_degraded = (
+            active_entries_per_min > 0
+            and watchdog_inserts_per_min / active_entries_per_min < self.coverage_watchdog.coverage_ratio_threshold
+        )
+        durable_writes_per_min = watchdog_inserts_per_min
+        zero_write_degraded = coverage_degraded and durable_writes_per_min <= 0
         payload = {
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "poll_count": self.poll_count,
             "providers": sorted({root.provider for root in self.watch_roots}),
             "files_tracked": len(files),
-            "active_jsonl_entries_per_minute": entries_per_min,
-            "db_realtime_inserts_per_minute": inserts_per_min,
+            "active_jsonl_entries_per_minute": active_entries_per_min,
+            "normalized_jsonl_entries_per_minute": normalized_entries_per_min,
+            "db_probe_failed": db_probe_failed,
+            "db_realtime_inserts_per_minute": db_inserts_per_min,
+            "failed_flush_inputs_per_minute": failed_flush_inputs_per_min,
             "watcher_chunks_output_per_minute": outputs_per_min,
             "max_offset_lag_bytes": max_lag,
             **watchdog,
@@ -650,7 +695,31 @@ class JSONLWatcher:
         except OSError:
             logger.debug("Failed to write watcher health snapshot", exc_info=True)
 
-        if elapsed >= 60.0:
+        if (
+            watchdog.get("alerting") is True
+            and "coverage_drop" in watchdog.get("alert_reasons", [])
+            and active_entries_per_min > 0
+            and durable_writes_per_min <= 0
+        ):
+            raise_alarm(
+                "watcher_zero_writes_while_active",
+                "watcher accepted indexable JSONL input but produced zero durable realtime writes",
+                {
+                    "active_jsonl_entries_per_minute": active_entries_per_min,
+                    "normalized_jsonl_entries_per_minute": normalized_entries_per_min,
+                    "db_probe_failed": db_probe_failed,
+                    "db_realtime_inserts_per_minute": db_inserts_per_min,
+                    "durable_writes_per_minute": durable_writes_per_min,
+                    "failed_flush_inputs_per_minute": failed_flush_inputs_per_min,
+                    "files_tracked": len(files),
+                    "max_offset_lag_bytes": max_lag,
+                    "providers": payload["providers"],
+                    "watcher_chunks_output_per_minute": outputs_per_min,
+                    "watchdog_reasons": watchdog.get("alert_reasons", []),
+                },
+            )
+
+        if elapsed >= 60.0 and not zero_write_degraded:
             self._health_window_started = now
             self._health_window_started_epoch = time.time()
             self._health_entries_seen = 0

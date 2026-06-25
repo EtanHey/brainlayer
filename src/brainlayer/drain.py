@@ -347,6 +347,48 @@ def _insert_or_merge_chunk(conn: apsw.Connection, values: dict[str, Any]) -> str
     return chunk_id
 
 
+def _refresh_realtime_watcher_ingested_at(conn: apsw.Connection, chunk_id: str, ingested_at: int) -> None:
+    cols = _columns(conn, "chunks")
+    if "ingested_at" not in cols or "source" not in cols:
+        return
+    conn.execute(
+        """
+        UPDATE chunks
+        SET ingested_at = ?
+        WHERE id = ?
+          AND source = 'realtime_watcher'
+        """,
+        (ingested_at, chunk_id),
+    )
+
+
+def _ensure_watcher_liveness_schema(conn: apsw.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS watcher_liveness_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chunk_id TEXT NOT NULL,
+            ingested_at INTEGER NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_watcher_liveness_ingested_at ON watcher_liveness_events(ingested_at)")
+
+
+def _record_watcher_liveness(conn: apsw.Connection, chunk_id: str, ingested_at: int) -> None:
+    conn.execute(
+        """
+        INSERT INTO watcher_liveness_events (chunk_id, ingested_at)
+        VALUES (?, ?)
+        """,
+        (chunk_id, ingested_at),
+    )
+    conn.execute(
+        "DELETE FROM watcher_liveness_events WHERE ingested_at < ?",
+        (ingested_at - 86_400,),
+    )
+
+
 def _event_payload(event: dict[str, Any]) -> dict[str, Any]:
     if "kind" in event:
         return event
@@ -619,6 +661,7 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
         logger.warning("Skipping recursive MCP watcher event: %s", recursive_reason)
         return ApplyResult()
     tags = event.get("tags")
+    ingested_at = int(time.time())
     stored_chunk_id = _insert_or_merge_chunk(
         conn,
         {
@@ -632,6 +675,7 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
             "char_count": len(content),
             "source": "realtime_watcher",
             "created_at": event.get("created_at") or datetime.now(timezone.utc).isoformat(),
+            "ingested_at": ingested_at,
             "conversation_id": event.get("conversation_id"),
             "sender": event.get("sender"),
             "tags": json.dumps(tags) if tags else None,
@@ -639,6 +683,8 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
             "chunk_origin": detect_chunk_origin(content, event.get("chunk_origin")),
         },
     )
+    _refresh_realtime_watcher_ingested_at(conn, stored_chunk_id, ingested_at)
+    _record_watcher_liveness(conn, stored_chunk_id, ingested_at)
     return ApplyResult(chunk_id=stored_chunk_id)
 
 
@@ -1122,6 +1168,7 @@ def burn_drain_once(
             conn = _open_connection(db_path)
             try:
                 _ensure_enrichment_update_schema(conn)
+                _ensure_watcher_liveness_schema(conn)
                 conn.execute("BEGIN IMMEDIATE")
                 prefetched_state = _prefetch_enrichment_state(conn, all_events)
                 store_chunk_ids: list[str] = []
@@ -1253,6 +1300,7 @@ def drain_once(
                 try:
                     conn = _open_connection(db_path)
                     _ensure_enrichment_update_schema(conn)
+                    _ensure_watcher_liveness_schema(conn)
                     conn.execute("BEGIN IMMEDIATE")
                     ensure_dedupe_schema(conn)
                     for event in events_to_apply:
