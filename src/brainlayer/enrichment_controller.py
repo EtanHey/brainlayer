@@ -413,7 +413,12 @@ def _open_enrich_supervisor_pass_store(
 
 def _should_propagate_supervisor_open_error(exc: BaseException) -> bool:
     text = str(exc).lower()
-    return "another writer is using" in text or "writer pidfile" in text or "writer is using" in text
+    return (
+        "another writer is using" in text
+        or "writer pidfile" in text
+        or "writer is using" in text
+        or "pidfile ref mismatch" in text
+    )
 
 
 def run_enrich_supervisor(

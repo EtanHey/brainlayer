@@ -255,6 +255,25 @@ def test_supervisor_propagates_writer_in_use_from_vector_store(tmp_path):
         )
 
 
+def test_supervisor_propagates_pidfile_ref_mismatch_from_vector_store(tmp_path):
+    from brainlayer import enrichment_controller as controller
+
+    class WriterInUseError(RuntimeError):
+        pass
+
+    class FakeVectorStore:
+        def __init__(self, db_path: Path):
+            raise WriterInUseError("pidfile ref mismatch for brainlayer.db; refusing to clear active refs")
+
+    with pytest.raises(WriterInUseError, match="pidfile ref mismatch"):
+        controller.run_enrich_supervisor(
+            tmp_path / "brainlayer.db",
+            vector_store_cls=FakeVectorStore,
+            enrich_fn=lambda store, **kwargs: _result(attempted=0),
+            sleep_fn=lambda seconds: None,
+        )
+
+
 def test_supervisor_sleeps_when_queue_empty_and_polls_again(tmp_path):
     from brainlayer import enrichment_controller as controller
 
