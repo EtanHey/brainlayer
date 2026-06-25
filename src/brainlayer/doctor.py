@@ -16,6 +16,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
+from .drain_liveness import (
+    DEFAULT_DRAIN_LIVENESS_STALE_SECONDS,
+    ENRICH_DAILY_COST_COUNTER_FILENAME,
+    STALLED_CODE,
+    check_drain_liveness,
+)
 from .health_check import (
     DEFAULT_DRAIN_LABEL,
     DEFAULT_ENRICHMENT_LABEL,
@@ -67,6 +73,7 @@ class DoctorConfig:
     roundtrip_timeout_seconds: float = DEFAULT_ROUNDTRIP_TIMEOUT_SECONDS
     queue_warning_count: int = DEFAULT_QUEUE_WARNING_COUNT
     queue_movement_sample_seconds: float = DEFAULT_QUEUE_MOVEMENT_SAMPLE_SECONDS
+    drain_liveness_stale_seconds: float = DEFAULT_DRAIN_LIVENESS_STALE_SECONDS
 
 
 @dataclass
@@ -322,6 +329,7 @@ def run_doctor(
     except Exception as exc:
         fatal("enrichment_backlog_failed", f"could not count enrichment backlog: {exc}")
 
+    drain_loaded: bool | None = None
     for label, code, message in (
         (config.enrichment_label, "enrichment_unloaded", "enrichment launchd label is not loaded"),
         (config.hotlane_label, "hotlane_unloaded", "hot-lane launchd label is not loaded"),
@@ -329,7 +337,15 @@ def run_doctor(
         (config.drain_label, "drain_unloaded", "drain launchd label is not loaded"),
     ):
         if label:
-            _check_launchd(result, label=label, issue_code=code, message=message, command_runner=command_runner)
+            loaded = _check_launchd(
+                result,
+                label=label,
+                issue_code=code,
+                message=message,
+                command_runner=command_runner,
+            )
+            if code == "drain_unloaded":
+                drain_loaded = loaded
 
     hotlane_processes = parse_hotlane_processes(ps_output_fn())
     result.hotlane_running = bool(hotlane_processes)
@@ -348,19 +364,66 @@ def run_doctor(
     result.queue_bytes = queue_bytes
     drain_health = _load_json(config.drain_health_path)
     watcher_health = _load_json(config.watcher_health_path)
+    # Drain should publish heartbeat cycles even while the durable queue is empty.
+    # Stale drain health plus enrichment backlog is the loaded-but-dead case that
+    # the generic loaded-but-idle warning cannot distinguish from quota throttling.
+    pending_drain_liveness_issue = check_drain_liveness(
+        drain_label=config.drain_label,
+        drain_loaded=drain_loaded,
+        queue_count=queue_count,
+        enrichment_backlog=result.enrichment_backlog,
+        drain_health=drain_health,
+        now=now,
+        stale_seconds=config.drain_liveness_stale_seconds,
+        enrich_cost_counter_path=config.db_path.expanduser().parent / ENRICH_DAILY_COST_COUNTER_FILENAME,
+    )
     drain_total = drain_health.get("drained_total")
+    drain_cycles = drain_health.get("drain_cycles")
     watcher_poll_count = watcher_health.get("poll_count")
+    has_drain_backlog = queue_count > 0 or bool(result.enrichment_backlog and result.enrichment_backlog > 0)
     drain_moving = queue_count == 0
+    drain_liveness_moving = not has_drain_backlog
     watcher_moving = queue_count == 0
-    if queue_count > 0:
+    sampled_drain_liveness_issue = pending_drain_liveness_issue
+    if has_drain_backlog:
         time.sleep(max(0.0, config.queue_movement_sample_seconds))
         next_drain_health = _load_json(config.drain_health_path)
-        next_watcher_health = _load_json(config.watcher_health_path)
-        drain_moving = _counter_increased(drain_total, next_drain_health.get("drained_total"))
-        watcher_moving = _counter_increased(watcher_poll_count, next_watcher_health.get("poll_count"))
+        next_drain_total = next_drain_health.get("drained_total")
+        next_drain_cycles = next_drain_health.get("drain_cycles")
+        drain_total_moving = _counter_increased(drain_total, next_drain_total)
+        drain_moving = queue_count == 0 or drain_total_moving
+        drain_liveness_moving = drain_total_moving or _counter_increased(drain_cycles, next_drain_cycles)
         drain_total = next_drain_health.get("drained_total", drain_total)
-        watcher_poll_count = next_watcher_health.get("poll_count", watcher_poll_count)
+        drain_cycles = next_drain_health.get("drain_cycles", drain_cycles)
+        if queue_count > 0:
+            next_watcher_health = _load_json(config.watcher_health_path)
+            watcher_moving = _counter_increased(watcher_poll_count, next_watcher_health.get("poll_count"))
+            watcher_poll_count = next_watcher_health.get("poll_count", watcher_poll_count)
+        sampled_drain_liveness_issue = check_drain_liveness(
+            drain_label=config.drain_label,
+            drain_loaded=drain_loaded,
+            queue_count=queue_count,
+            enrichment_backlog=result.enrichment_backlog,
+            drain_health=next_drain_health,
+            now=now_fn(),
+            stale_seconds=config.drain_liveness_stale_seconds,
+            enrich_cost_counter_path=config.db_path.expanduser().parent / ENRICH_DAILY_COST_COUNTER_FILENAME,
+        )
     queue_moving = drain_moving or watcher_moving
+    active_drain_liveness_issue = sampled_drain_liveness_issue if has_drain_backlog else pending_drain_liveness_issue
+    if active_drain_liveness_issue is not None:
+        suppress_stale_drain = (
+            active_drain_liveness_issue.code == STALLED_CODE and has_drain_backlog and drain_liveness_moving
+        )
+        if not suppress_stale_drain:
+            result.issues.append(
+                DoctorIssue(
+                    active_drain_liveness_issue.code,
+                    active_drain_liveness_issue.severity,
+                    active_drain_liveness_issue.message,
+                    active_drain_liveness_issue.details,
+                )
+            )
     if queue_count > 0 and not queue_moving:
         fatal(
             "queue_not_moving_with_backlog",
