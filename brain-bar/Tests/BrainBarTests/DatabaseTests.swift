@@ -1686,6 +1686,33 @@ final class DatabaseTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(context.count, 2, "Should return at least 2 surrounding chunks")
     }
 
+    func testExpandChunkCapsTargetByDefaultAndAllowsFullTargetOptIn() throws {
+        let fullBody = "BEGIN-" + String(repeating: "complete target body ", count: 300) + "END-OF-FULL-CONTENT"
+        try db.insertChunk(
+            id: "exp-full-target",
+            content: fullBody,
+            sessionId: "expand-full-session",
+            project: "test",
+            contentType: "assistant_text",
+            importance: 5
+        )
+
+        let capped = try db.expandChunk(id: "exp-full-target", before: 0, after: 0)
+        let cappedTarget = capped["target"] as? [String: Any] ?? [:]
+        let cappedContent = cappedTarget["content"] as? String ?? ""
+        XCTAssertFalse(cappedContent.contains("END-OF-FULL-CONTENT"))
+        XCTAssertLessThan(cappedContent.count, fullBody.count)
+
+        let full = try db.expandChunk(
+            id: "exp-full-target",
+            before: 0,
+            after: 0,
+            includeFullTargetContent: true
+        )
+        let fullTarget = full["target"] as? [String: Any] ?? [:]
+        XCTAssertEqual(fullTarget["content"] as? String, fullBody)
+    }
+
     // MARK: - brain_entity (lookup entity + relations)
 
     func testEntityLookup() throws {

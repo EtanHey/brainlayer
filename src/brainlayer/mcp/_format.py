@@ -140,7 +140,10 @@ def format_recalled_context(query: str, chunks: list[dict]) -> str:
         if meta_lines:
             lines.extend(meta_lines)
             lines.append("")
-        lines.append(content)
+        if chunk.get("is_target"):
+            lines.append(content)
+        else:
+            lines.append(_truncate(content, 200))
     return "\n".join(lines)
 
 

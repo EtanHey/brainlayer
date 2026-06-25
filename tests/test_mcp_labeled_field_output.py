@@ -221,6 +221,32 @@ def test_brain_recall_context_preserves_full_target_content():
     assert "END-OF-FULL-CONTENT" in output
 
 
+def test_brain_recall_context_compacts_non_target_neighbors():
+    body = "NEIGHBOR " + ("surrounding detail " * 120) + "END-OF-NEIGHBOR-CONTENT"
+
+    output = format_recalled_context(
+        "chunk-long-body",
+        [
+            {
+                "chunk_id": "chunk-neighbor",
+                "source_file": "session.jsonl",
+                "is_target": False,
+                "content": body,
+            },
+            {
+                "chunk_id": "chunk-long-body",
+                "source_file": "session.jsonl",
+                "is_target": True,
+                "content": "TARGET " + ("full target detail " * 120) + "END-OF-FULL-CONTENT",
+            },
+        ],
+    )
+
+    assert len(body) > 1500
+    assert "END-OF-NEIGHBOR-CONTENT" not in output
+    assert "END-OF-FULL-CONTENT" in output
+
+
 def test_brain_recall_context_uses_project_when_source_file_missing():
     output = format_recalled_context(
         "session context",

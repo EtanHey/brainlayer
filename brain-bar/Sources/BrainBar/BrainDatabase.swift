@@ -3891,21 +3891,33 @@ final class BrainDatabase: @unchecked Sendable {
 
     // MARK: - brain_expand: get chunk + surrounding session context
 
-    func expandChunk(id: String, before: Int = 3, after: Int = 3) throws -> [String: Any] {
+    func expandChunk(
+        id: String,
+        before: Int = 3,
+        after: Int = 3,
+        includeFullTargetContent: Bool = false
+    ) throws -> [String: Any] {
         guard let db else { throw DBError.notOpen }
         let boundedBefore = min(max(before, 0), Self.maximumConversationContextPerSide)
         let boundedAfter = min(max(after, 0), Self.maximumConversationContextPerSide)
+        let contentLimit = Int32(Self.maximumConversationContentCharacters)
         let chunkColumns = try tableColumns(name: "chunks", on: db)
         let senderSelect = chunkColumns.contains("sender") ? "sender" : "NULL AS sender"
+        let targetContentSelect = includeFullTargetContent ? "content" : "substr(content, 1, ?)"
 
         // Get the target chunk with its session_id and rowid
-        let targetSQL = "SELECT rowid, id, content, conversation_id, project, content_type, \(senderSelect), importance, created_at, summary, tags FROM chunks WHERE id = ?"
+        let targetSQL = "SELECT rowid, id, \(targetContentSelect), conversation_id, project, content_type, \(senderSelect), importance, created_at, summary, tags FROM chunks WHERE id = ?"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, targetSQL, -1, &stmt, nil) == SQLITE_OK else {
             throw DBError.prepare(sqlite3_errcode(db))
         }
         defer { sqlite3_finalize(stmt) }
-        bindText(id, to: stmt, index: 1)
+        var targetBindIndex: Int32 = 1
+        if !includeFullTargetContent {
+            sqlite3_bind_int(stmt, targetBindIndex, contentLimit)
+            targetBindIndex += 1
+        }
+        bindText(id, to: stmt, index: targetBindIndex)
         guard sqlite3_step(stmt) == SQLITE_ROW else { throw DBError.noResult }
 
         let targetRowID = sqlite3_column_int64(stmt, 0)
@@ -3924,7 +3936,6 @@ final class BrainDatabase: @unchecked Sendable {
         ]
 
         // Get surrounding chunks from same session using two separate queries
-        let contentLimit = Int32(Self.maximumConversationContentCharacters)
         var beforeContext: [[String: Any]] = []
         var afterContext: [[String: Any]] = []
 

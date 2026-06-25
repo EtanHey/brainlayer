@@ -751,7 +751,12 @@ final class MCPRouter: @unchecked Sendable {
         let db = try readDB()
         let before = args["before"] as? Int ?? 3
         let after = args["after"] as? Int ?? 3
-        let expanded = try db.expandChunk(id: chunkId, before: before, after: after)
+        let expanded = try db.expandChunk(
+            id: chunkId,
+            before: before,
+            after: after,
+            includeFullTargetContent: true
+        )
         let target = expanded["target"] as? [String: Any] ?? [:]
         let context = expanded["context"] as? [[String: Any]] ?? []
         var lines: [String] = []
