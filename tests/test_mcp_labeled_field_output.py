@@ -244,6 +244,7 @@ def test_brain_recall_context_compacts_non_target_neighbors():
 
     assert len(body) > 1500
     assert "END-OF-NEIGHBOR-CONTENT" not in output
+    assert "Reference: chunk-neighbor" in output
     assert "END-OF-FULL-CONTENT" in output
 
 
