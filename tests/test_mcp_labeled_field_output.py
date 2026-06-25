@@ -201,6 +201,26 @@ def test_brain_recall_context_preserves_position_target_and_type():
     assert "- Target: yes" in output
 
 
+def test_brain_recall_context_preserves_full_target_content():
+    body = "BEGIN " + ("full body detail " * 120) + "END-OF-FULL-CONTENT"
+
+    output = format_recalled_context(
+        "chunk-long-body",
+        [
+            {
+                "chunk_id": "chunk-long-body",
+                "source_file": "session.jsonl",
+                "is_target": True,
+                "content": body,
+            }
+        ],
+    )
+
+    assert len(body) > 1500
+    assert body in output
+    assert "END-OF-FULL-CONTENT" in output
+
+
 def test_brain_recall_context_uses_project_when_source_file_missing():
     output = format_recalled_context(
         "session context",

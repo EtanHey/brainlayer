@@ -756,10 +756,10 @@ final class MCPRouter: @unchecked Sendable {
         let context = expanded["context"] as? [[String: Any]] ?? []
         var lines: [String] = []
         lines.append("\u{250c}\u{2500} brain_expand: \(chunkId)")
-        let targetContent = (target["summary"] as? String) ?? (target["content"] as? String) ?? ""
+        let targetContent = (target["content"] as? String) ?? ""
         if !targetContent.isEmpty {
             lines.append("\u{251c}\u{2500} Target")
-            lines.append("\u{2502} \(String(targetContent.prefix(200)))")
+            lines.append("\u{2502} \(targetContent)")
         }
         if !context.isEmpty {
             lines.append("\u{251c}\u{2500} Context (\(context.count) chunks)")

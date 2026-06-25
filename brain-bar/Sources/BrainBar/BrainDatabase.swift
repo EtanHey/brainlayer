@@ -3895,19 +3895,17 @@ final class BrainDatabase: @unchecked Sendable {
         guard let db else { throw DBError.notOpen }
         let boundedBefore = min(max(before, 0), Self.maximumConversationContextPerSide)
         let boundedAfter = min(max(after, 0), Self.maximumConversationContextPerSide)
-        let contentLimit = Int32(Self.maximumConversationContentCharacters)
         let chunkColumns = try tableColumns(name: "chunks", on: db)
         let senderSelect = chunkColumns.contains("sender") ? "sender" : "NULL AS sender"
 
         // Get the target chunk with its session_id and rowid
-        let targetSQL = "SELECT rowid, id, substr(content, 1, ?), conversation_id, project, content_type, \(senderSelect), importance, created_at, summary, tags FROM chunks WHERE id = ?"
+        let targetSQL = "SELECT rowid, id, content, conversation_id, project, content_type, \(senderSelect), importance, created_at, summary, tags FROM chunks WHERE id = ?"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, targetSQL, -1, &stmt, nil) == SQLITE_OK else {
             throw DBError.prepare(sqlite3_errcode(db))
         }
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_int(stmt, 1, contentLimit)
-        bindText(id, to: stmt, index: 2)
+        bindText(id, to: stmt, index: 1)
         guard sqlite3_step(stmt) == SQLITE_ROW else { throw DBError.noResult }
 
         let targetRowID = sqlite3_column_int64(stmt, 0)
@@ -3926,6 +3924,7 @@ final class BrainDatabase: @unchecked Sendable {
         ]
 
         // Get surrounding chunks from same session using two separate queries
+        let contentLimit = Int32(Self.maximumConversationContentCharacters)
         var beforeContext: [[String: Any]] = []
         var afterContext: [[String: Any]] = []
 
@@ -3991,7 +3990,9 @@ final class BrainDatabase: @unchecked Sendable {
 
         let target = ConversationChunk(
             chunkID: targetPayload["chunk_id"] as? String ?? "",
-            content: targetPayload["content"] as? String ?? "",
+            content: String(
+                (targetPayload["content"] as? String ?? "").prefix(Self.maximumConversationContentCharacters)
+            ),
             contentType: targetPayload["content_type"] as? String ?? "",
             sender: targetPayload["sender"] as? String ?? "",
             importance: targetPayload["importance"] as? Double ?? 0,

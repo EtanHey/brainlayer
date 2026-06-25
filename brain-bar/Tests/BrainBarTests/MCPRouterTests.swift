@@ -652,6 +652,40 @@ No results found.
         XCTAssertTrue(tagsText.contains("readonly-route"), tagsText)
     }
 
+    func testBrainExpandReturnsFullTargetContentWhenSummaryExists() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-expand-full-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+
+        let fullBody = "BEGIN-" + String(repeating: "complete target body ", count: 300) + "END-OF-FULL-CONTENT"
+        XCTAssertGreaterThan(fullBody.count, 200)
+        XCTAssertGreaterThan(fullBody.count, 4_000)
+
+        try db.insertChunk(
+            id: "expand-full-target",
+            content: fullBody,
+            sessionId: "expand-full-session",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 7
+        )
+        try sqliteExec(
+            path: tempDB,
+            sql: "UPDATE chunks SET summary = 'Short generated summary' WHERE id = 'expand-full-target'"
+        )
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+        let expandText = try toolText(router.handle(toolCall(id: 307, name: "brain_expand", arguments: [
+            "chunk_id": "expand-full-target"
+        ])))
+
+        XCTAssertTrue(expandText.contains(fullBody), expandText)
+        XCTAssertTrue(expandText.contains("END-OF-FULL-CONTENT"), expandText)
+        XCTAssertFalse(expandText.contains("\u{2502} Short generated summary"), expandText)
+    }
+
     /// Regression: brain_search(unread_only) marks messages delivered (a write).
     /// It must run on the writable connection, not the read-only read handle —
     /// otherwise markDelivered fails with `SQLite step failed: 8` (SQLITE_READONLY).

@@ -140,13 +140,7 @@ def format_recalled_context(query: str, chunks: list[dict]) -> str:
         if meta_lines:
             lines.extend(meta_lines)
             lines.append("")
-        if len(content) <= 1500:
-            lines.append(content)
-        else:
-            lines.append(content[:1500] + "...")
-            if chunk.get("chunk_id"):
-                lines.append("")
-                lines.append(f"Reference: {chunk['chunk_id']}")
+        lines.append(content)
     return "\n".join(lines)
 
 
