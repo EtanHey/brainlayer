@@ -47,14 +47,16 @@ app.add_typer(sandbox_app, name="sandbox")
 
 
 def _launchd_target(label: str) -> str:
-    return f"gui/{os.getuid()}/{label}"
+    from ..launchd_primitive import launchd_target
+
+    return launchd_target(label)
 
 
-def _run_launchctl(args: list[str]) -> int:
+def _run_launchctl(args: list[str]) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(args, text=True, capture_output=True, check=False)
     if result.returncode != 0 and result.stderr:
         typer.echo(result.stderr.strip(), err=True)
-    return int(result.returncode)
+    return result
 
 
 def _plist_for_launchd_label(
@@ -80,11 +82,28 @@ def _plist_for_launchd_label(
 
 
 def _bootstrap_label(label: str, plist_path: Path) -> None:
-    target = _launchd_target(label)
-    _run_launchctl(["launchctl", "enable", target])
-    _run_launchctl(["launchctl", "bootout", target])
-    _run_launchctl(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist_path.expanduser())])
-    _run_launchctl(["launchctl", "print", target])
+    from ..launchd_primitive import install_and_verify_launchagent
+
+    install_and_verify_launchagent(label, plist_path, command_runner=_run_launchctl)
+
+
+def _bootstrap_labels_or_exit(label_plist_pairs: list[tuple[str, Path]], *, action: str) -> None:
+    from ..launchd_primitive import LaunchdVerificationError
+
+    failures: list[LaunchdVerificationError] = []
+    for label, plist_path in label_plist_pairs:
+        if not label:
+            continue
+        try:
+            _bootstrap_label(label, plist_path)
+        except LaunchdVerificationError as exc:
+            failures.append(exc)
+    if not failures:
+        return
+
+    for failure in failures:
+        typer.echo(f"failed to {action} launchd label {failure.label}: {failure}", err=True)
+    raise typer.Exit(1)
 
 
 def _bootout_label(label: str) -> None:
@@ -194,18 +213,23 @@ def resume_command(
         payload = {}
     labels = payload.get("labels") if isinstance(payload, dict) else None
     selected_labels = [str(label) for label in labels] if isinstance(labels, list) else _default_pause_labels()
-    for label in selected_labels:
-        _bootstrap_label(
-            label,
-            _plist_for_launchd_label(
+    _bootstrap_labels_or_exit(
+        [
+            (
                 label,
-                watch=watch_plist_path,
-                drain=drain_plist_path,
-                health_check=health_check_plist_path,
-                hotlane=hotlane_plist_path,
-                enrichment=enrichment_plist_path,
-            ),
-        )
+                _plist_for_launchd_label(
+                    label,
+                    watch=watch_plist_path,
+                    drain=drain_plist_path,
+                    health_check=health_check_plist_path,
+                    hotlane=hotlane_plist_path,
+                    enrichment=enrichment_plist_path,
+                ),
+            )
+            for label in selected_labels
+        ],
+        action="resume",
+    )
     try:
         resolved.unlink()
     except FileNotFoundError:
@@ -242,15 +266,16 @@ def reconcile_launchd_command(
     ),
 ) -> None:
     """Bootstrap BrainLayer launchd labels if absent."""
-    for label, plist_path in (
-        (watch_label, watch_plist_path),
-        (drain_label, drain_plist_path),
-        (hotlane_label, hotlane_plist_path),
-        (enrichment_label, enrichment_plist_path),
-        (health_check_label, health_check_plist_path),
-    ):
-        if label:
-            _bootstrap_label(label, plist_path)
+    _bootstrap_labels_or_exit(
+        [
+            (watch_label, watch_plist_path),
+            (drain_label, drain_plist_path),
+            (hotlane_label, hotlane_plist_path),
+            (enrichment_label, enrichment_plist_path),
+            (health_check_label, health_check_plist_path),
+        ],
+        action="reconcile",
+    )
     typer.echo("reconciled launchd labels")
 
 
@@ -2495,7 +2520,6 @@ def watch(
 
     This is a persistent process — run it as a LaunchAgent or in a terminal.
     """
-    import os
     import signal
 
     from ..parent_death import install_parent_death_watcher

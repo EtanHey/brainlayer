@@ -31,12 +31,12 @@ from .health_check import (
     CommandRunner,
     _default_command_runner,
     _default_ps_output,
-    _launchd_label_loaded,
     _load_json,
     _queue_stats,
     count_missing_embeddings,
     parse_hotlane_processes,
 )
+from .launchd_primitive import LaunchdLabelNotLoadedError, LaunchdVerificationError, verify_launchd_label_loaded
 from .paths import get_db_path
 from .search_repo import clear_hybrid_search_cache
 from .vector_store import VectorStore
@@ -229,19 +229,21 @@ def _check_launchd(
     message: str,
     command_runner: CommandRunner,
 ) -> bool | None:
-    loaded = _launchd_label_loaded(label, command_runner)
-    if loaded is False:
-        result.issues.append(DoctorIssue(issue_code, "fatal", message, {"label": label}))
-    elif loaded is None:
+    try:
+        return verify_launchd_label_loaded(label, command_runner=command_runner)
+    except LaunchdLabelNotLoadedError as exc:
+        result.issues.append(DoctorIssue(issue_code, "fatal", message, exc.issue_details()))
+        return False
+    except LaunchdVerificationError as exc:
         result.issues.append(
             DoctorIssue(
                 f"{issue_code}_unknown",
                 "warning",
                 f"could not determine whether {label} is loaded",
-                {"label": label},
+                exc.issue_details(),
             )
         )
-    return loaded
+        return None
 
 
 def _counter_increased(before: Any, after: Any) -> bool:
