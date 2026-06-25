@@ -626,11 +626,18 @@ class JSONLWatcher:
         entries_per_min = self._health_entries_seen / elapsed * 60.0
         outputs_per_min = (self.indexer.total_outputs - self._health_output_at_start) / elapsed * 60.0
         db_inserts = self._db_realtime_inserts_since_window_start()
-        inserts_per_min = (db_inserts / elapsed * 60.0) if db_inserts is not None else outputs_per_min
+        db_probe_failed = self.db_path is not None and db_inserts is None
+        if db_inserts is not None:
+            db_inserts_per_min = db_inserts / elapsed * 60.0
+        elif self.db_path is not None:
+            db_inserts_per_min = None
+        else:
+            db_inserts_per_min = outputs_per_min
+        watchdog_inserts_per_min = 0.0 if db_probe_failed else db_inserts_per_min
         max_lag = self._max_offset_lag_bytes(files)
         watchdog = self.coverage_watchdog.evaluate(
             active_entries_per_minute=entries_per_min,
-            realtime_inserts_per_minute=inserts_per_min,
+            realtime_inserts_per_minute=watchdog_inserts_per_min,
             max_offset_lag_bytes=max_lag,
         )
         payload = {
@@ -639,7 +646,8 @@ class JSONLWatcher:
             "providers": sorted({root.provider for root in self.watch_roots}),
             "files_tracked": len(files),
             "active_jsonl_entries_per_minute": entries_per_min,
-            "db_realtime_inserts_per_minute": inserts_per_min,
+            "db_probe_failed": db_probe_failed,
+            "db_realtime_inserts_per_minute": db_inserts_per_min,
             "watcher_chunks_output_per_minute": outputs_per_min,
             "max_offset_lag_bytes": max_lag,
             **watchdog,
@@ -652,7 +660,7 @@ class JSONLWatcher:
         except OSError:
             logger.debug("Failed to write watcher health snapshot", exc_info=True)
 
-        durable_writes_per_min = inserts_per_min if db_inserts is not None else outputs_per_min
+        durable_writes_per_min = watchdog_inserts_per_min
         if (
             watchdog.get("alerting") is True
             and "coverage_drop" in watchdog.get("alert_reasons", [])
@@ -664,7 +672,8 @@ class JSONLWatcher:
                 "watcher observed active JSONL input but produced zero durable realtime writes",
                 {
                     "active_jsonl_entries_per_minute": entries_per_min,
-                    "db_realtime_inserts_per_minute": inserts_per_min,
+                    "db_probe_failed": db_probe_failed,
+                    "db_realtime_inserts_per_minute": db_inserts_per_min,
                     "durable_writes_per_minute": durable_writes_per_min,
                     "files_tracked": len(files),
                     "max_offset_lag_bytes": max_lag,

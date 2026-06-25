@@ -768,6 +768,53 @@ class TestJSONLWatcher:
         assert raised.value.details["active_jsonl_entries_per_minute"] > 0
         assert raised.value.details["db_realtime_inserts_per_minute"] == 0
 
+    def test_health_snapshot_raises_alarm_when_db_probe_fails_while_active(self, tmp_path):
+        now = [0.0]
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        transcript = sessions / "session.jsonl"
+        transcript.write_text(
+            json.dumps(
+                {
+                    "role": "assistant",
+                    "content": "A substantive assistant response that should be observed by the watcher.",
+                }
+            )
+            + "\n"
+        )
+        db_path = tmp_path / "brainlayer.db"
+        sqlite3.connect(db_path).close()
+        health_path = tmp_path / "watcher-health.json"
+        watchdog = CoverageWatchdog(
+            lag_threshold_bytes=1_000_000,
+            alert_after_s=5,
+            now_fn=lambda: now[0],
+        )
+
+        def flush_without_probeable_db(items):
+            return {str(transcript): max(item["_line_end_offset"] for item in items)}
+
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=flush_without_probeable_db,
+            batch_size=1,
+            health_path=health_path,
+            db_path=db_path,
+            coverage_watchdog=watchdog,
+        )
+
+        watcher.poll_once()
+        now[0] = 6.0
+        with pytest.raises(BrainLayerAlarm) as raised:
+            watcher.poll_once()
+
+        payload = json.loads(health_path.read_text())
+        assert payload["db_realtime_inserts_per_minute"] is None
+        assert payload["db_probe_failed"] is True
+        assert raised.value.code == "watcher_zero_writes_while_active"
+        assert raised.value.details["db_probe_failed"] is True
+
     def test_health_snapshot_does_not_alarm_when_legitimately_idle(self, tmp_path):
         health_path = tmp_path / "watcher-health.json"
         sessions = tmp_path / "codex" / "sessions"
