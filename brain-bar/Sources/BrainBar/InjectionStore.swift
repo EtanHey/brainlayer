@@ -205,6 +205,11 @@ final class InjectionStore: ObservableObject {
         scheduleRefresh(force: force)
     }
 
+    /// Exposed for tests that need deterministic debounced refresh timing.
+    var _pendingRefreshTask: Task<Void, Never>? {
+        pendingRefreshTask
+    }
+
     private func startPolling() {
         guard pollTask == nil else { return }
         let interval = pollInterval
