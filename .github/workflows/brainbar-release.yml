@@ -1,0 +1,197 @@
+name: BrainBar Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: package BrainBar
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select Xcode (Swift 6)
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Resolve release metadata
+        run: |
+          set -euo pipefail
+          release_version="${GITHUB_REF_NAME#v}"
+          build_time_utc="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          echo "BRAINBAR_RELEASE_VERSION=$release_version" >> "$GITHUB_ENV"
+          echo "BRAINBAR_BUILD_TIME_UTC=$build_time_utc" >> "$GITHUB_ENV"
+          echo "BrainBar release version: $release_version"
+          echo "BrainBar build time UTC: $build_time_utc"
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.swiftpm
+            brain-bar/.build
+          key: ${{ runner.os }}-swiftpm-${{ hashFiles('brain-bar/Package.resolved') }}
+          restore-keys: ${{ runner.os }}-swiftpm-
+
+      - name: Build BrainBar
+        run: cd brain-bar && swift build -c release
+
+      - name: Assemble BrainBar.app
+        run: |
+          set -euo pipefail
+
+          app_dir="$PWD/dist/BrainBar.app"
+          bin_dir="$(cd brain-bar && swift build -c release --show-bin-path)"
+          plist="$app_dir/Contents/Info.plist"
+          plist_buddy="/usr/libexec/PlistBuddy"
+
+          rm -rf "$PWD/dist"
+          mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
+          cp brain-bar/bundle/Info.plist "$plist"
+          cp "$bin_dir/BrainBar" "$app_dir/Contents/MacOS/BrainBar"
+          cp "$bin_dir/BrainBarDaemon" "$app_dir/Contents/MacOS/BrainBarDaemon"
+
+          set_plist_string() {
+            local key="$1"
+            local value="$2"
+            if "$plist_buddy" -c "Print :$key" "$plist" >/dev/null 2>&1; then
+              "$plist_buddy" -c "Set :$key $value" "$plist"
+            else
+              "$plist_buddy" -c "Add :$key string $value" "$plist"
+            fi
+          }
+
+          set_plist_string CFBundleShortVersionString "$BRAINBAR_RELEASE_VERSION"
+          set_plist_string CFBundleVersion "$BRAINBAR_RELEASE_VERSION"
+          set_plist_string GitCommit "$GITHUB_SHA"
+          set_plist_string GitDescribe "$GITHUB_REF_NAME"
+          set_plist_string BuildTimeUTC "$BRAINBAR_BUILD_TIME_UTC"
+
+          "$plist_buddy" -c "Print :CFBundleShortVersionString" "$plist"
+          "$plist_buddy" -c "Print :GitCommit" "$plist"
+          "$plist_buddy" -c "Print :BuildTimeUTC" "$plist"
+
+      - name: Import Developer ID certificate
+        id: signing
+        env:
+          BRAINBAR_DEVELOPER_ID_CERTIFICATE_BASE64: ${{ secrets.BRAINBAR_DEVELOPER_ID_CERTIFICATE_BASE64 }}
+          BRAINBAR_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.BRAINBAR_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          BRAINBAR_DEVELOPER_ID_APPLICATION: ${{ secrets.BRAINBAR_DEVELOPER_ID_APPLICATION }}
+          BRAINBAR_SIGNING_KEYCHAIN_PASSWORD: ${{ secrets.BRAINBAR_SIGNING_KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$BRAINBAR_DEVELOPER_ID_CERTIFICATE_BASE64" ] \
+            || [ -z "$BRAINBAR_DEVELOPER_ID_CERTIFICATE_PASSWORD" ] \
+            || [ -z "$BRAINBAR_DEVELOPER_ID_APPLICATION" ]; then
+            echo "::warning title=BrainBar signing skipped::Developer ID signing secrets are not fully configured; BrainBar.zip will contain an unsigned app."
+            {
+              echo "## BrainBar signing"
+              echo ""
+              echo "SIGNING SKIPPED: Developer ID secrets are not fully configured. The uploaded BrainBar.zip contains an unsigned app."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "BRAINBAR_SIGNING_STATUS=unsigned - Developer ID signing secrets were missing" >> "$GITHUB_ENV"
+            echo "BRAINBAR_NOTARIZATION_STATUS=skipped - signing was skipped" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          keychain_password="${BRAINBAR_SIGNING_KEYCHAIN_PASSWORD:-$(uuidgen)}"
+          cert_path="$RUNNER_TEMP/brainbar-developer-id.p12"
+          keychain_path="$RUNNER_TEMP/brainbar-signing.keychain-db"
+
+          echo "$BRAINBAR_DEVELOPER_ID_CERTIFICATE_BASE64" | base64 --decode > "$cert_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$cert_path" \
+            -P "$BRAINBAR_DEVELOPER_ID_CERTIFICATE_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "$keychain_path"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+          echo "BRAINBAR_SIGNING_IDENTITY=$BRAINBAR_DEVELOPER_ID_APPLICATION" >> "$GITHUB_ENV"
+          echo "BRAINBAR_SIGNING_STATUS=Developer ID signed" >> "$GITHUB_ENV"
+
+      - name: Sign BrainBar.app
+        if: steps.signing.outputs.signed == 'true'
+        run: |
+          set -euo pipefail
+          codesign --force --deep --options runtime --timestamp --sign "$BRAINBAR_SIGNING_IDENTITY" dist/BrainBar.app
+          codesign -dv --verbose=4 dist/BrainBar.app
+
+      - name: Notarize BrainBar.app
+        if: steps.signing.outputs.signed == 'true'
+        env:
+          BRAINBAR_NOTARY_APPLE_ID: ${{ secrets.BRAINBAR_NOTARY_APPLE_ID }}
+          BRAINBAR_NOTARY_PASSWORD: ${{ secrets.BRAINBAR_NOTARY_PASSWORD }}
+          BRAINBAR_NOTARY_TEAM_ID: ${{ secrets.BRAINBAR_NOTARY_TEAM_ID }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$BRAINBAR_NOTARY_APPLE_ID" ] \
+            || [ -z "$BRAINBAR_NOTARY_PASSWORD" ] \
+            || [ -z "$BRAINBAR_NOTARY_TEAM_ID" ]; then
+            echo "::warning title=BrainBar notarization skipped::Notary secrets are not fully configured; signed BrainBar.app will be packaged without notarization."
+            {
+              echo "## BrainBar notarization"
+              echo ""
+              echo "NOTARIZATION SKIPPED: notary secrets are not fully configured. The uploaded BrainBar.zip is signed but not notarized."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "BRAINBAR_NOTARIZATION_STATUS=skipped - notary secrets were missing" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          notary_zip="$RUNNER_TEMP/BrainBar-notary.zip"
+          ditto -c -k --keepParent dist/BrainBar.app "$notary_zip"
+          xcrun notarytool submit "$notary_zip" \
+            --apple-id "$BRAINBAR_NOTARY_APPLE_ID" \
+            --password "$BRAINBAR_NOTARY_PASSWORD" \
+            --team-id "$BRAINBAR_NOTARY_TEAM_ID" \
+            --wait
+          xcrun stapler staple dist/BrainBar.app
+          echo "BRAINBAR_NOTARIZATION_STATUS=notarized and stapled" >> "$GITHUB_ENV"
+
+      - name: Package BrainBar.zip
+        run: |
+          set -euo pipefail
+          ditto -c -k --keepParent dist/BrainBar.app dist/BrainBar.zip
+          ls -lh dist/BrainBar.zip
+
+      - name: Guard BrainBar.zip exists before release
+        run: |
+          set -euo pipefail
+          if [ ! -s dist/BrainBar.zip ]; then
+            echo "::error title=BrainBar.zip missing::Expected non-empty dist/BrainBar.zip before creating the GitHub Release"
+            exit 1
+          fi
+          echo "BrainBar.zip size: $(stat -f%z dist/BrainBar.zip) bytes"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: BrainBar ${{ github.ref_name }}
+          files: dist/BrainBar.zip
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          append_body: true
+          body: |
+            BrainBar release version: ${{ env.BRAINBAR_RELEASE_VERSION }}
+            Signing status: ${{ env.BRAINBAR_SIGNING_STATUS }}
+            Notarization status: ${{ env.BRAINBAR_NOTARIZATION_STATUS }}

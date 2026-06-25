@@ -326,6 +326,22 @@ build_time_utc() {
     date -u +"%Y-%m-%dT%H:%M:%SZ"
 }
 
+release_version() {
+    if [ -n "${BRAINBAR_RELEASE_VERSION:-}" ]; then
+        printf '%s\n' "$BRAINBAR_RELEASE_VERSION"
+        return 0
+    fi
+
+    local exact_tag
+    exact_tag="$(git -C "$PACKAGE_DIR" describe --tags --exact-match 2>/dev/null || true)"
+    if [ -n "$exact_tag" ]; then
+        printf '%s\n' "${exact_tag#v}"
+        return 0
+    fi
+
+    "$PLIST_BUDDY" -c "Print :CFBundleShortVersionString" "$BUNDLE_DIR/Info.plist" 2>/dev/null || printf '0.0.0\n'
+}
+
 plist_set_string() {
     local plist_path="$1"
     local key="$2"
@@ -393,7 +409,10 @@ stamp_info_plist() {
     local commit_sha="$2"
     local describe_ref="$3"
     local build_utc="$4"
+    local release_version="$5"
 
+    plist_set_string "$plist_path" "CFBundleShortVersionString" "$release_version"
+    plist_set_string "$plist_path" "CFBundleVersion" "$release_version"
     plist_set_string "$plist_path" "GitCommit" "$commit_sha"
     plist_set_string "$plist_path" "GitDescribe" "$describe_ref"
     plist_set_string "$plist_path" "BuildTimeUTC" "$build_utc"
@@ -594,8 +613,10 @@ cp "$DAEMON_BINARY" "$APP_DIR/Contents/MacOS/BrainBarDaemon"
 COMMIT_SHA="$(git_commit)"
 DESCRIBE_REF="$(git_describe)"
 BUILD_UTC="$(build_time_utc)"
-stamp_info_plist "$APP_DIR/Contents/Info.plist" "$COMMIT_SHA" "$DESCRIBE_REF" "$BUILD_UTC"
+RELEASE_VERSION="$(release_version)"
+stamp_info_plist "$APP_DIR/Contents/Info.plist" "$COMMIT_SHA" "$DESCRIBE_REF" "$BUILD_UTC" "$RELEASE_VERSION"
 echo "[build-app] Stamped Info.plist:"
+echo "  ReleaseVersion=$RELEASE_VERSION"
 echo "  GitCommit=$COMMIT_SHA"
 echo "  GitDescribe=$DESCRIBE_REF"
 echo "  BuildTimeUTC=$BUILD_UTC"
