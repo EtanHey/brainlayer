@@ -268,11 +268,20 @@ final class MCPRouterTests: XCTestCase {
         }
     }
 
-    func testBrainRecallDeclaresLargeResultBudget() throws {
-        let tool = try XCTUnwrap(MCPRouter.toolDefinitions.first { ($0["name"] as? String) == "brain_recall" })
-        let annotations = try XCTUnwrap(tool["annotations"] as? [String: Any])
+    func testFullContentToolsDeclareLargeResultBudget() throws {
+        for toolName in ["brain_recall", "brain_expand"] {
+            let tool = try XCTUnwrap(
+                MCPRouter.toolDefinitions.first { ($0["name"] as? String) == toolName },
+                "\(toolName) should be registered"
+            )
+            let annotations = try XCTUnwrap(tool["annotations"] as? [String: Any])
 
-        XCTAssertGreaterThanOrEqual(annotations["anthropic/maxResultSizeChars"] as? Int ?? 0, 100_000)
+            XCTAssertGreaterThanOrEqual(
+                annotations["anthropic/maxResultSizeChars"] as? Int ?? 0,
+                200_000,
+                "\(toolName) should declare enough result budget for full stored chunks"
+            )
+        }
     }
 
     func testEachToolSchemaBoundsStringInputs() throws {

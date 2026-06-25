@@ -1173,7 +1173,13 @@ final class MCPRouter: @unchecked Sendable {
 
     nonisolated(unsafe) static let recallAnnotations: [String: Any] = {
         var annotations = MCPRouter.readOnlyAnnotations
-        annotations["anthropic/maxResultSizeChars"] = 100_000
+        annotations["anthropic/maxResultSizeChars"] = 200_000
+        return annotations
+    }()
+
+    nonisolated(unsafe) static let expandAnnotations: [String: Any] = {
+        var annotations = MCPRouter.readOnlyAnnotations
+        annotations["anthropic/maxResultSizeChars"] = 200_000
         return annotations
     }()
 
@@ -1294,7 +1300,7 @@ final class MCPRouter: @unchecked Sendable {
         [
             "name": "brain_expand",
             "description": "Drill into a specific search result. Returns full content + surrounding chunks.",
-            "annotations": MCPRouter.readOnlyAnnotations,
+            "annotations": MCPRouter.expandAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
                 "properties": [
