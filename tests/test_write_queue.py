@@ -215,6 +215,64 @@ class TestQueueStore:
         assert drained == 1
         assert row == ("2026-06-06T20:04:14Z", 2000, 2, "realtime_watcher")
 
+    def test_drain_records_liveness_when_watcher_merges_non_realtime_canonical(self, tmp_path, monkeypatch):
+        """Watcher merges into non-realtime rows still need a durable liveness signal."""
+        from brainlayer.vector_store import VectorStore
+
+        db_path = tmp_path / "watcher-manual-canonical-liveness.db"
+        queue_dir = tmp_path / "queue"
+        VectorStore(db_path).close()
+        monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+        content = "watcher duplicate into a manual canonical row should still count as durable watcher work"
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO chunks (id, content, metadata, source, source_file, created_at, ingested_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "rt-session-manual-canonical",
+                    content,
+                    "{}",
+                    "manual",
+                    "brainlayer-store",
+                    "2026-06-06T20:04:14Z",
+                    123,
+                ),
+            )
+            conn.commit()
+        event = {
+            "kind": "watcher_chunk",
+            "chunk_id": "rt-session-manual-canonical",
+            "content": content,
+            "metadata": {"session_id": "session-manual-canonical"},
+            "project": "brainlayer",
+            "source_file": "/Users/test/Gits/brainlayer/session.jsonl",
+            "content_type": "assistant_text",
+            "value_type": "high",
+            "created_at": "2026-06-06T20:04:14Z",
+            "conversation_id": "session-manual-canonical",
+        }
+        queue_dir.mkdir()
+        (queue_dir / "watcher-manual-canonical.jsonl").write_text(json.dumps(event) + "\n")
+
+        monkeypatch.setattr("brainlayer.drain.time.time", lambda: 2000)
+        drained = drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=tmp_path / "drain.log")
+
+        with sqlite3.connect(db_path) as conn:
+            chunk_row = conn.execute(
+                "SELECT source, ingested_at, seen_count FROM chunks WHERE id = ?",
+                (event["chunk_id"],),
+            ).fetchone()
+            liveness_row = conn.execute(
+                "SELECT chunk_id, ingested_at FROM watcher_liveness_events WHERE chunk_id = ?",
+                (event["chunk_id"],),
+            ).fetchone()
+
+        assert drained == 1
+        assert chunk_row == ("manual", 123, 2)
+        assert liveness_row == (event["chunk_id"], 2000)
+
     def test_drain_embeds_hook_event_chunk(self, tmp_path, monkeypatch):
         """Hook queue events must return chunk IDs so drain can embed them."""
         from brainlayer.vector_store import VectorStore

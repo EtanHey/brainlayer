@@ -354,6 +354,7 @@ class BatchIndexer:
         self._last_flush = time.monotonic()
         self.total_flushed = 0
         self.total_outputs = 0
+        self.total_failed_inputs = 0
         self._flush_failures = 0
 
     def add(self, items: list[dict]):
@@ -396,7 +397,7 @@ class BatchIndexer:
             self.total_outputs += getattr(result, "inserted", count)
         except Exception as e:
             logger.error("Batch flush failed (%d items), retaining in buffer: %s", count, e)
-            self._isolate_failed_flush(batch, e)
+            self.total_failed_inputs += self._isolate_failed_flush(batch, e)
 
     def _confirmed_watermarks(self, batch: list[dict], result: dict[str, int] | None) -> dict[str, int]:
         if isinstance(result, dict):
@@ -420,14 +421,14 @@ class BatchIndexer:
                 handle.write(json.dumps({"reason": str(reason), "entry": entry}, sort_keys=True) + "\n")
         logger.critical("Quarantined %d watcher flush entries at %s after repeated failures", len(entries), path)
 
-    def _isolate_failed_flush(self, batch: list[dict], reason: Exception) -> None:
+    def _isolate_failed_flush(self, batch: list[dict], reason: Exception) -> int:
         if len(batch) <= 1:
             self._flush_failures += 1
             if self._flush_failures >= self._flush_retain_limit():
                 self._quarantine_entries(batch, reason)
                 self._buffer = []
                 self._flush_failures = 0
-            return
+            return len(batch)
 
         retained: list[dict] = []
         confirmed: dict[str, int] = {}
@@ -449,6 +450,7 @@ class BatchIndexer:
         self.total_flushed += len(batch) - len(retained)
         self._buffer = retained
         self._flush_failures = self._flush_failures + 1 if retained else 0
+        return len(retained)
 
 
 # ── JSONL Watcher ────────────────────────────────────────────────────────────
@@ -518,6 +520,7 @@ class JSONLWatcher:
         self._health_window_started_epoch = time.time()
         self._health_entries_seen = 0
         self._health_output_at_start = 0
+        self._health_failed_input_at_start = 0
         self.poll_count = 0
 
     def _advance_confirmed_offsets(self, watermarks: dict[str, int]) -> None:
@@ -603,15 +606,33 @@ class JSONLWatcher:
         try:
             conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=1)
             try:
+                window_started = int(self._health_window_started_epoch)
                 row = conn.execute(
                     """
                     SELECT COUNT(*) FROM chunks
                     WHERE source = 'realtime_watcher'
                       AND COALESCE(ingested_at, strftime('%s', created_at)) >= ?
                     """,
-                    (int(self._health_window_started_epoch),),
+                    (window_started,),
                 ).fetchone()
-                return int(row[0]) if row else 0
+                chunk_count = int(row[0]) if row else 0
+                liveness_count = 0
+                if conn.execute(
+                    """
+                    SELECT 1 FROM sqlite_master
+                    WHERE type = 'table'
+                      AND name = 'watcher_liveness_events'
+                    """
+                ).fetchone():
+                    liveness_row = conn.execute(
+                        """
+                        SELECT COUNT(*) FROM watcher_liveness_events
+                        WHERE ingested_at >= ?
+                        """,
+                        (window_started,),
+                    ).fetchone()
+                    liveness_count = int(liveness_row[0]) if liveness_row else 0
+                return liveness_count if liveness_count > 0 else chunk_count
             finally:
                 conn.close()
         except sqlite3.Error:
@@ -625,7 +646,10 @@ class JSONLWatcher:
         elapsed = max(now - self._health_window_started, 1.0)
         normalized_entries_per_min = self._health_entries_seen / elapsed * 60.0
         outputs_per_min = (self.indexer.total_outputs - self._health_output_at_start) / elapsed * 60.0
-        active_entries_per_min = outputs_per_min
+        failed_flush_inputs_per_min = (
+            (self.indexer.total_failed_inputs - self._health_failed_input_at_start) / elapsed * 60.0
+        )
+        active_entries_per_min = outputs_per_min + failed_flush_inputs_per_min
         db_inserts = self._db_realtime_inserts_since_window_start()
         db_probe_failed = self.db_path is not None and db_inserts is None
         if db_inserts is not None:
@@ -650,6 +674,7 @@ class JSONLWatcher:
             "normalized_jsonl_entries_per_minute": normalized_entries_per_min,
             "db_probe_failed": db_probe_failed,
             "db_realtime_inserts_per_minute": db_inserts_per_min,
+            "failed_flush_inputs_per_minute": failed_flush_inputs_per_min,
             "watcher_chunks_output_per_minute": outputs_per_min,
             "max_offset_lag_bytes": max_lag,
             **watchdog,
@@ -678,6 +703,7 @@ class JSONLWatcher:
                     "db_probe_failed": db_probe_failed,
                     "db_realtime_inserts_per_minute": db_inserts_per_min,
                     "durable_writes_per_minute": durable_writes_per_min,
+                    "failed_flush_inputs_per_minute": failed_flush_inputs_per_min,
                     "files_tracked": len(files),
                     "max_offset_lag_bytes": max_lag,
                     "providers": payload["providers"],
@@ -691,6 +717,7 @@ class JSONLWatcher:
             self._health_window_started_epoch = time.time()
             self._health_entries_seen = 0
             self._health_output_at_start = self.indexer.total_outputs
+            self._health_failed_input_at_start = self.indexer.total_failed_inputs
 
     def _ensure_tailer(self, filepath: str) -> JSONLTailer:
         """Get or create a tailer for a file, respecting stored offsets."""

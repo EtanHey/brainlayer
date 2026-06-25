@@ -362,6 +362,30 @@ def _refresh_realtime_watcher_ingested_at(conn: apsw.Connection, chunk_id: str, 
     )
 
 
+def _record_watcher_liveness(conn: apsw.Connection, chunk_id: str, ingested_at: int) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS watcher_liveness_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chunk_id TEXT NOT NULL,
+            ingested_at INTEGER NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_watcher_liveness_ingested_at ON watcher_liveness_events(ingested_at)")
+    conn.execute(
+        """
+        INSERT INTO watcher_liveness_events (chunk_id, ingested_at)
+        VALUES (?, ?)
+        """,
+        (chunk_id, ingested_at),
+    )
+    conn.execute(
+        "DELETE FROM watcher_liveness_events WHERE ingested_at < ?",
+        (ingested_at - 86_400,),
+    )
+
+
 def _event_payload(event: dict[str, Any]) -> dict[str, Any]:
     if "kind" in event:
         return event
@@ -657,6 +681,7 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
         },
     )
     _refresh_realtime_watcher_ingested_at(conn, stored_chunk_id, ingested_at)
+    _record_watcher_liveness(conn, stored_chunk_id, ingested_at)
     return ApplyResult(chunk_id=stored_chunk_id)
 
 

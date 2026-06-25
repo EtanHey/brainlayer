@@ -816,6 +816,56 @@ class TestJSONLWatcher:
         assert raised.value.code == "watcher_zero_writes_while_active"
         assert raised.value.details["db_probe_failed"] is True
 
+    def test_health_snapshot_raises_alarm_when_flush_fails_while_active(self, tmp_path):
+        now = [0.0]
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        transcript = sessions / "session.jsonl"
+        transcript.write_text(
+            json.dumps(
+                {
+                    "role": "assistant",
+                    "content": "A substantive assistant response that should be flushed but the writer fails.",
+                }
+            )
+            + "\n"
+        )
+        db_path = tmp_path / "brainlayer.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE chunks (source TEXT, ingested_at INTEGER, created_at TEXT)")
+        conn.commit()
+        conn.close()
+        health_path = tmp_path / "watcher-health.json"
+        watchdog = CoverageWatchdog(
+            lag_threshold_bytes=1_000_000,
+            alert_after_s=5,
+            now_fn=lambda: now[0],
+        )
+
+        def fail_flush(_items):
+            raise RuntimeError("queue unavailable")
+
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=fail_flush,
+            batch_size=1,
+            health_path=health_path,
+            db_path=db_path,
+            coverage_watchdog=watchdog,
+        )
+
+        watcher.poll_once()
+        now[0] = 6.0
+        with pytest.raises(BrainLayerAlarm) as raised:
+            watcher.poll_once()
+
+        payload = json.loads(health_path.read_text())
+        assert payload["failed_flush_inputs_per_minute"] > 0
+        assert payload["active_jsonl_entries_per_minute"] > 0
+        assert payload["watcher_chunks_output_per_minute"] == 0
+        assert raised.value.code == "watcher_zero_writes_while_active"
+
     def test_health_snapshot_does_not_alarm_when_active_input_is_intentionally_skipped(self, tmp_path):
         now = [0.0]
         sessions = tmp_path / "codex" / "sessions"
@@ -867,6 +917,58 @@ class TestJSONLWatcher:
         assert payload["normalized_jsonl_entries_per_minute"] > 0
         assert payload["active_jsonl_entries_per_minute"] == 0
         assert payload["watcher_chunks_output_per_minute"] == 0
+        assert payload["alerting"] is False
+
+    def test_health_snapshot_counts_drain_watcher_liveness_events(self, tmp_path):
+        now = [0.0]
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        transcript = sessions / "session.jsonl"
+        transcript.write_text(
+            json.dumps(
+                {
+                    "role": "assistant",
+                    "content": "A watcher chunk that merges into a non realtime canonical row still writes liveness.",
+                }
+            )
+            + "\n"
+        )
+        db_path = tmp_path / "brainlayer.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE chunks (source TEXT, ingested_at INTEGER, created_at TEXT)")
+        conn.execute("CREATE TABLE watcher_liveness_events (chunk_id TEXT, ingested_at INTEGER)")
+        conn.commit()
+        conn.close()
+        health_path = tmp_path / "watcher-health.json"
+
+        def flush_with_liveness(items):
+            with sqlite3.connect(db_path) as write_conn:
+                write_conn.execute(
+                    "INSERT INTO watcher_liveness_events (chunk_id, ingested_at) VALUES (?, ?)",
+                    ("manual-canonical", int(time.time())),
+                )
+                write_conn.commit()
+            return FlushWatermarks(
+                {str(transcript): max(item["_line_end_offset"] for item in items)},
+                inserted=len(items),
+                skipped=0,
+            )
+
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=flush_with_liveness,
+            batch_size=1,
+            health_path=health_path,
+            db_path=db_path,
+            coverage_watchdog=CoverageWatchdog(alert_after_s=0, now_fn=lambda: now[0]),
+        )
+
+        watcher.poll_once()
+
+        payload = json.loads(health_path.read_text())
+        assert payload["active_jsonl_entries_per_minute"] > 0
+        assert payload["db_realtime_inserts_per_minute"] > 0
         assert payload["alerting"] is False
 
     def test_health_snapshot_does_not_alarm_when_legitimately_idle(self, tmp_path):
