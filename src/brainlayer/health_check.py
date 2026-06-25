@@ -15,6 +15,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from .launchd_primitive import (
+    LaunchdVerificationError,
+    install_and_verify_launchagent,
+    is_launchd_label_loaded,
+    launchd_target,
+)
 from .paths import get_db_path
 from .watcher import default_watch_roots
 
@@ -156,26 +162,11 @@ def _command_stdout(result: Any) -> str:
 
 
 def _launchd_target(label: str) -> str:
-    return f"gui/{os.getuid()}/{label}"
+    return launchd_target(label)
 
 
 def _launchd_label_loaded(label: str, command_runner: CommandRunner) -> bool | None:
-    if not label:
-        return True
-    result = command_runner(["launchctl", "print", _launchd_target(label)])
-    returncode = _command_returncode(result)
-    stderr = str(getattr(result, "stderr", "") or "")
-    stdout = _command_stdout(result)
-    if returncode == 0:
-        return True
-    if returncode == 127:
-        return None
-    output = f"{stdout}\n{stderr}".lower()
-    if "operation not permitted" in output or "permission" in output or "input/output error" in output:
-        return None
-    if "could not find service" in output or "service is not loaded" in output or returncode in {3, 36, 113}:
-        return False
-    return None
+    return is_launchd_label_loaded(label, command_runner=command_runner)
 
 
 def _kickstart(label: str, command_runner: CommandRunner) -> str:
@@ -190,14 +181,11 @@ def _bootstrap_if_absent(label: str, plist_path: Path, command_runner: CommandRu
         return f"loaded:{label}"
     if loaded is None:
         return f"launchctl-unavailable:{label}"
-    target = _launchd_target(label)
-    command_runner(["launchctl", "enable", target])
-    command_runner(["launchctl", "bootout", target])
-    command_runner(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist_path.expanduser())])
-    verified = _launchd_label_loaded(label, command_runner)
-    if verified is True:
+    try:
+        install_and_verify_launchagent(label, plist_path, command_runner=command_runner)
         return f"bootstrap:{label}"
-    return f"bootstrap_failed:{label}"
+    except LaunchdVerificationError:
+        return f"bootstrap_failed:{label}"
 
 
 def _emit_heal_event(event: dict[str, Any]) -> None:
