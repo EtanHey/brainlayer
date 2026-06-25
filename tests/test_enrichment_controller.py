@@ -196,6 +196,121 @@ def test_enrich_supervisor_opens_readonly_store_when_writes_are_queued(monkeypat
     assert opened == [(tmp_path / "supervisor.db", True)]
 
 
+def test_enrich_supervisor_releases_store_between_cycles_when_writes_are_queued(monkeypatch, tmp_path):
+    from brainlayer import enrichment_controller as controller
+
+    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "1")
+    opened = []
+    closed = []
+
+    class FakeStore:
+        def __init__(self, db_path, readonly=False):
+            self.index = len(opened)
+            opened.append((db_path, readonly))
+
+        def close(self):
+            closed.append(self.index)
+
+    controller.run_enrich_supervisor(
+        tmp_path / "supervisor.db",
+        max_cycles=2,
+        idle_poll_seconds=0,
+        sleep_fn=lambda _seconds: None,
+        vector_store_cls=FakeStore,
+        enrich_fn=lambda _store, **_kwargs: controller.EnrichmentResult(
+            mode="realtime",
+            attempted=0,
+            enriched=0,
+            skipped=0,
+            failed=0,
+            errors=[],
+        ),
+    )
+
+    assert opened == [(tmp_path / "supervisor.db", True), (tmp_path / "supervisor.db", True)]
+    assert closed == [0, 1]
+
+
+def test_enrich_supervisor_yields_writer_so_drain_can_advance_between_cycles(monkeypatch, tmp_path):
+    from brainlayer import enrichment_controller as controller
+
+    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "1")
+
+    db_path = tmp_path / "supervisor-drain.db"
+
+    class WriterHoldingStore:
+        active_writers = 0
+
+        def __init__(self, db_path, readonly=False):
+            WriterHoldingStore.active_writers += 1
+
+        def close(self):
+            WriterHoldingStore.active_writers -= 1
+
+    drain_heartbeats = []
+
+    def drain_during_supervisor_sleep(_seconds):
+        drain_heartbeats.append(0 if WriterHoldingStore.active_writers else 1)
+
+    controller.run_enrich_supervisor(
+        db_path,
+        max_cycles=2,
+        idle_poll_seconds=0.001,
+        sleep_fn=drain_during_supervisor_sleep,
+        vector_store_cls=WriterHoldingStore,
+        enrich_fn=lambda _store, **_kwargs: controller.EnrichmentResult(
+            mode="realtime",
+            attempted=0,
+            enriched=0,
+            skipped=0,
+            failed=0,
+            errors=[],
+        ),
+    )
+
+    assert drain_heartbeats == [1]
+
+
+def test_enrich_supervisor_checkpoints_wal_after_each_cycle(monkeypatch, tmp_path):
+    from brainlayer import enrichment_controller as controller
+
+    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "1")
+    db_path = tmp_path / "supervisor.db"
+    checkpoints = []
+
+    class FakeStore:
+        def __init__(self, db_path, readonly=False):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        controller,
+        "_checkpoint_enrich_supervisor_wal",
+        lambda checkpoint_db_path: checkpoints.append(checkpoint_db_path),
+        raising=False,
+    )
+
+    controller.run_enrich_supervisor(
+        db_path,
+        max_cycles=2,
+        idle_poll_seconds=0,
+        sleep_fn=lambda _seconds: None,
+        vector_store_cls=FakeStore,
+        enrich_fn=lambda _store, **_kwargs: controller.EnrichmentResult(
+            mode="realtime",
+            attempted=0,
+            enriched=0,
+            skipped=0,
+            failed=0,
+            errors=[],
+        ),
+    )
+
+    assert checkpoints == [db_path, db_path]
+
+
 def test_enrich_realtime_runs_with_readonly_store_while_writer_is_open(monkeypatch, tmp_path):
     from brainlayer import enrichment_controller as controller
     from brainlayer.vector_store import VectorStore

@@ -369,6 +369,53 @@ def _sleep_or_wait_for_stop(stop_event: threading.Event | None, seconds: float, 
     sleep_fn(seconds)
 
 
+def _checkpoint_enrich_supervisor_wal(db_path: Path) -> None:
+    """Best-effort non-blocking WAL checkpoint after a supervisor pass."""
+    if not db_path.exists():
+        return
+    import sqlite3
+
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=0.0)
+        try:
+            conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        logger.debug("Enrich supervisor WAL checkpoint skipped for %s", db_path, exc_info=True)
+
+
+def _run_enrich_supervisor_pass(
+    store,
+    db_path: Path,
+    enrich_fn,
+    *,
+    limit: int,
+    since_hours: int | None,
+) -> EnrichmentResult:
+    try:
+        return enrich_fn(store, limit=limit, since_hours=since_hours)
+    finally:
+        try:
+            store.close()
+        finally:
+            _checkpoint_enrich_supervisor_wal(db_path)
+
+
+def _open_enrich_supervisor_pass_store(
+    vector_store_cls,
+    db_path: Path,
+) -> Any:
+    store = _open_enrich_supervisor_store(vector_store_cls, db_path)
+    logger.debug("VectorStore initialized for enrich supervisor pass: %s", db_path)
+    return store
+
+
+def _should_propagate_supervisor_open_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return "another writer is using" in text or "writer pidfile" in text or "writer is using" in text
+
+
 def run_enrich_supervisor(
     db_path: Path | str,
     *,
@@ -382,11 +429,10 @@ def run_enrich_supervisor(
     idle_backlog_ready_fn=None,
     sleep_fn=time.sleep,
 ) -> EnrichmentSupervisorResult:
-    """Run realtime enrichment as a long-lived supervisor around one VectorStore.
+    """Run realtime enrichment as a long-lived supervisor with bounded store passes.
 
-    PR-alpha's writer pidfile mutex is acquired by the writable VectorStore
-    constructor. Keeping that store alive here keeps the pidfile for the whole
-    supervisor lifetime instead of reacquiring it on every launchd respawn.
+    Each pass opens and closes its own store so enrichment cannot pin a writer,
+    reader transaction, or WAL checkpoint across supervisor cycles.
     """
     from .vector_store import VectorStore
 
@@ -401,80 +447,106 @@ def run_enrich_supervisor(
 
     db_path = Path(db_path)
     stats = EnrichmentSupervisorResult()
-    store = _open_enrich_supervisor_store(vector_store_cls, db_path)
-    logger.info("VectorStore initialized for enrich supervisor: %s", db_path)
-    try:
-        while stop_event is None or not stop_event.is_set():
-            if max_cycles is not None and stats.cycles >= max_cycles:
-                break
+    while stop_event is None or not stop_event.is_set():
+        if max_cycles is not None and stats.cycles >= max_cycles:
+            break
 
+        try:
+            store = _open_enrich_supervisor_pass_store(vector_store_cls, db_path)
+        except Exception as exc:  # noqa: BLE001
+            if _should_propagate_supervisor_open_error(exc):
+                raise
+            stats.cycles += 1
+            stats.failed_cycles += 1
+            error = f"supervisor-open: {exc}"
+            stats.errors.append(error)
+            logger.exception("Enrich supervisor store open failed; continuing")
+            if max_cycles is None or stats.cycles < max_cycles:
+                _sleep_or_wait_for_stop(stop_event, idle_poll_seconds, sleep_fn)
+            continue
+
+        try:
+            result = _run_enrich_supervisor_pass(store, db_path, enrich_fn, limit=limit, since_hours=since_hours)
+        except EnrichmentDailyCapReached as exc:
+            stats.cycles += 1
+            stats.errors.append(str(exc))
+            logger.warning("Enrich supervisor stopping: %s", exc)
+            break
+        except Exception as exc:  # noqa: BLE001
+            stats.cycles += 1
+            stats.failed_cycles += 1
+            error = f"supervisor: {exc}"
+            stats.errors.append(error)
+            logger.exception("Enrich supervisor cycle failed; continuing")
+            if max_cycles is None or stats.cycles < max_cycles:
+                _sleep_or_wait_for_stop(stop_event, idle_poll_seconds, sleep_fn)
+            continue
+
+        stats.cycles += 1
+        stats.attempted += result.attempted
+        stats.enriched += result.enriched
+        stats.skipped += result.skipped
+        stats.failed += result.failed
+        stats.errors.extend(result.errors)
+
+        if _result_hit_daily_cap(result):
+            break
+
+        idle_backlog_attempted = 0
+        if (
+            result.attempted == 0
+            and since_hours is not None
+            and idle_backlog_ready_fn()
+            and (max_cycles is None or stats.cycles <= max_cycles)
+        ):
+            logger.info("Enrich supervisor recent queue empty; checking idle backlog")
             try:
-                result = enrich_fn(store, limit=limit, since_hours=since_hours)
+                store = _open_enrich_supervisor_pass_store(vector_store_cls, db_path)
+            except Exception as exc:  # noqa: BLE001
+                if _should_propagate_supervisor_open_error(exc):
+                    raise
+                stats.failed_cycles += 1
+                stats.errors.append(f"supervisor-idle-backlog-open: {exc}")
+                logger.exception("Enrich supervisor idle-backlog store open failed; continuing")
+                if max_cycles is None or stats.cycles < max_cycles:
+                    _sleep_or_wait_for_stop(stop_event, idle_poll_seconds, sleep_fn)
+                continue
+            try:
+                backlog_result = _run_enrich_supervisor_pass(
+                    store,
+                    db_path,
+                    enrich_fn,
+                    limit=limit,
+                    since_hours=None,
+                )
             except EnrichmentDailyCapReached as exc:
-                stats.cycles += 1
                 stats.errors.append(str(exc))
                 logger.warning("Enrich supervisor stopping: %s", exc)
                 break
             except Exception as exc:  # noqa: BLE001
-                stats.cycles += 1
                 stats.failed_cycles += 1
-                error = f"supervisor: {exc}"
-                stats.errors.append(error)
-                logger.exception("Enrich supervisor cycle failed; continuing")
+                stats.errors.append(f"supervisor-idle-backlog: {exc}")
+                logger.exception("Enrich supervisor idle-backlog pass failed; continuing")
                 if max_cycles is None or stats.cycles < max_cycles:
                     _sleep_or_wait_for_stop(stop_event, idle_poll_seconds, sleep_fn)
                 continue
-
-            stats.cycles += 1
-            stats.attempted += result.attempted
-            stats.enriched += result.enriched
-            stats.skipped += result.skipped
-            stats.failed += result.failed
-            stats.errors.extend(result.errors)
-
-            if _result_hit_daily_cap(result):
+            stats.attempted += backlog_result.attempted
+            stats.enriched += backlog_result.enriched
+            stats.skipped += backlog_result.skipped
+            stats.failed += backlog_result.failed
+            stats.errors.extend(backlog_result.errors)
+            idle_backlog_attempted = backlog_result.attempted
+            if _result_hit_daily_cap(backlog_result):
                 break
 
-            idle_backlog_attempted = 0
-            if (
-                result.attempted == 0
-                and since_hours is not None
-                and idle_backlog_ready_fn()
-                and (max_cycles is None or stats.cycles <= max_cycles)
-            ):
-                logger.info("Enrich supervisor recent queue empty; checking idle backlog")
-                try:
-                    backlog_result = enrich_fn(store, limit=limit, since_hours=None)
-                except EnrichmentDailyCapReached as exc:
-                    stats.errors.append(str(exc))
-                    logger.warning("Enrich supervisor stopping: %s", exc)
-                    break
-                except Exception as exc:  # noqa: BLE001
-                    stats.failed_cycles += 1
-                    stats.errors.append(f"supervisor-idle-backlog: {exc}")
-                    logger.exception("Enrich supervisor idle-backlog pass failed; continuing")
-                    if max_cycles is None or stats.cycles < max_cycles:
-                        _sleep_or_wait_for_stop(stop_event, idle_poll_seconds, sleep_fn)
-                    continue
-                stats.attempted += backlog_result.attempted
-                stats.enriched += backlog_result.enriched
-                stats.skipped += backlog_result.skipped
-                stats.failed += backlog_result.failed
-                stats.errors.extend(backlog_result.errors)
-                idle_backlog_attempted = backlog_result.attempted
-                if _result_hit_daily_cap(backlog_result):
-                    break
-
-            if (
-                stats.cycles > 0
-                and result.attempted == 0
-                and idle_backlog_attempted == 0
-                and (max_cycles is None or stats.cycles < max_cycles)
-            ):
-                logger.info("Enrich supervisor queue empty; sleeping %.1fs", idle_poll_seconds)
-                _sleep_or_wait_for_stop(stop_event, idle_poll_seconds, sleep_fn)
-    finally:
-        store.close()
+        if (
+            stats.cycles > 0
+            and result.attempted == 0
+            and idle_backlog_attempted == 0
+            and (max_cycles is None or stats.cycles < max_cycles)
+        ):
+            logger.info("Enrich supervisor queue empty; sleeping %.1fs", idle_poll_seconds)
+            _sleep_or_wait_for_stop(stop_event, idle_poll_seconds, sleep_fn)
     return stats
 
 
