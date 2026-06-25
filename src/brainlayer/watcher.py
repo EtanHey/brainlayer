@@ -399,6 +399,11 @@ class BatchIndexer:
             logger.error("Batch flush failed (%d items), retaining in buffer: %s", count, e)
             self.total_failed_inputs += self._isolate_failed_flush(batch, e)
 
+    def retained_failed_input_count(self) -> int:
+        """Return currently retained flush-failed inputs without counting retry attempts."""
+        with self._lock:
+            return len(self._buffer) if self._flush_failures > 0 else 0
+
     def _confirmed_watermarks(self, batch: list[dict], result: dict[str, int] | None) -> dict[str, int]:
         if isinstance(result, dict):
             return {str(source_file): int(offset) for source_file, offset in result.items()}
@@ -520,7 +525,6 @@ class JSONLWatcher:
         self._health_window_started_epoch = time.time()
         self._health_entries_seen = 0
         self._health_output_at_start = 0
-        self._health_failed_input_at_start = 0
         self.poll_count = 0
 
     def _advance_confirmed_offsets(self, watermarks: dict[str, int]) -> None:
@@ -646,9 +650,7 @@ class JSONLWatcher:
         elapsed = max(now - self._health_window_started, 1.0)
         normalized_entries_per_min = self._health_entries_seen / elapsed * 60.0
         outputs_per_min = (self.indexer.total_outputs - self._health_output_at_start) / elapsed * 60.0
-        failed_flush_inputs_per_min = (
-            (self.indexer.total_failed_inputs - self._health_failed_input_at_start) / elapsed * 60.0
-        )
+        failed_flush_inputs_per_min = self.indexer.retained_failed_input_count() / elapsed * 60.0
         active_entries_per_min = outputs_per_min + failed_flush_inputs_per_min
         db_inserts = self._db_realtime_inserts_since_window_start()
         db_probe_failed = self.db_path is not None and db_inserts is None
@@ -722,7 +724,6 @@ class JSONLWatcher:
             self._health_window_started_epoch = time.time()
             self._health_entries_seen = 0
             self._health_output_at_start = self.indexer.total_outputs
-            self._health_failed_input_at_start = self.indexer.total_failed_inputs
 
     def _ensure_tailer(self, filepath: str) -> JSONLTailer:
         """Get or create a tailer for a file, respecting stored offsets."""

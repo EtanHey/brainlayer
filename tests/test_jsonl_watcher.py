@@ -1002,6 +1002,61 @@ class TestJSONLWatcher:
         assert payload["watcher_chunks_output_per_minute"] == 0
         assert raised.value.code == "watcher_zero_writes_while_active"
 
+    def test_health_snapshot_does_not_treat_quarantined_retry_as_active_input(self, tmp_path, monkeypatch):
+        now = [0.0]
+        monkeypatch.setenv("BRAINLAYER_WATCHER_FLUSH_RETAIN_LIMIT", "2")
+        monkeypatch.setenv("BRAINLAYER_WATCHER_QUARANTINE_DIR", str(tmp_path / "quarantine"))
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        transcript = sessions / "session.jsonl"
+        transcript.write_text(
+            json.dumps(
+                {
+                    "role": "assistant",
+                    "content": "A poison watcher line should not remain active after quarantine.",
+                }
+            )
+            + "\n"
+        )
+        db_path = tmp_path / "brainlayer.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE chunks (source TEXT, ingested_at INTEGER, created_at TEXT)")
+        conn.commit()
+        conn.close()
+        health_path = tmp_path / "watcher-health.json"
+        watchdog = CoverageWatchdog(
+            lag_threshold_bytes=1_000_000,
+            alert_after_s=120,
+            now_fn=lambda: now[0],
+        )
+
+        def fail_flush(_items):
+            raise RuntimeError("poison batch")
+
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=fail_flush,
+            batch_size=1,
+            health_path=health_path,
+            db_path=db_path,
+            coverage_watchdog=watchdog,
+        )
+
+        watcher.poll_once()
+        now[0] = 61.0
+        watcher._health_window_started = time.monotonic() - 61
+        watcher.indexer._last_flush = time.monotonic() - 1
+        assert watcher.poll_once() == 0
+
+        payload = json.loads(health_path.read_text())
+        assert payload["failed_flush_inputs_per_minute"] == 0
+        assert payload["active_jsonl_entries_per_minute"] == 0
+
+        now[0] = 121.0
+        watcher._health_window_started = time.monotonic() - 60
+        assert watcher.poll_once() == 0
+
     def test_health_snapshot_does_not_alarm_when_active_input_is_intentionally_skipped(self, tmp_path):
         now = [0.0]
         sessions = tmp_path / "codex" / "sessions"
