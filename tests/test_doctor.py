@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from typer.testing import CliRunner
 
 from brainlayer.vector_store import VectorStore
@@ -110,10 +111,10 @@ def _write_corrupt_daily_cap_counter(cost_dir: Path) -> None:
     (cost_dir / "enrich-daily-cost.json").write_text('{"date": ', encoding="utf-8")
 
 
-def _write_invalid_spent_daily_cap_counter(cost_dir: Path, *, now: datetime) -> None:
+def _write_invalid_spent_daily_cap_counter(cost_dir: Path, *, now: datetime, spent_usd: object = "oops") -> None:
     cost_dir.mkdir(parents=True, exist_ok=True)
     (cost_dir / "enrich-daily-cost.json").write_text(
-        json.dumps({"date": now.astimezone().date().isoformat(), "spent_usd": "oops"}),
+        json.dumps({"date": now.astimezone().date().isoformat(), "spent_usd": spent_usd}),
         encoding="utf-8",
     )
 
@@ -390,13 +391,14 @@ def test_run_doctor_warns_when_drain_liveness_quota_counter_is_corrupt(tmp_path,
     assert not [issue for issue in result.issues if issue.code == "drain_liveness_stalled"]
 
 
-def test_run_doctor_warns_when_drain_liveness_quota_counter_has_invalid_spend(tmp_path, monkeypatch):
+@pytest.mark.parametrize("invalid_spend", ["oops", "nan", "inf", "-1"])
+def test_run_doctor_warns_when_drain_liveness_quota_counter_has_invalid_spend(tmp_path, monkeypatch, invalid_spend):
     from brainlayer.doctor import run_doctor
 
     monkeypatch.delenv("BRAINLAYER_ENRICH_COST_DIR", raising=False)
     monkeypatch.setenv("BRAINLAYER_ENRICH_DAILY_USD_CAP", "5.0")
     db_path = tmp_path / "drain-liveness-invalid-counter.db"
-    _write_invalid_spent_daily_cap_counter(db_path.parent, now=NOW)
+    _write_invalid_spent_daily_cap_counter(db_path.parent, now=NOW, spent_usd=invalid_spend)
     _build_db(db_path)
     _add_enrichment_backlog(db_path)
     config = _doctor_config(tmp_path, db_path)

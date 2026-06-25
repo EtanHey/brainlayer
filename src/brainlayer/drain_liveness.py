@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -102,6 +103,8 @@ def _daily_cap_blocker(now: datetime, *, enrich_cost_counter_path: Path | None =
             spent_usd = float(record.get("spent_usd", 0.0) or 0.0)
         except (TypeError, ValueError) as exc:
             return None, f"invalid spent_usd in quota counter: {exc}"
+        if not math.isfinite(spent_usd) or spent_usd < 0:
+            return None, f"invalid spent_usd in quota counter: {spent_usd!r}"
     except _EnrichCostCounterUnreadable as exc:
         return None, str(exc)
     except Exception:
