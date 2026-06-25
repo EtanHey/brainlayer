@@ -29,6 +29,10 @@ jobs:
         run: |
           set -euo pipefail
           release_version="${GITHUB_REF_NAME#v}"
+          if [[ ! "$release_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error title=Invalid BrainBar release tag::Expected tag format vX.Y.Z so Info.plist can be stamped with valid macOS bundle versions; got '$GITHUB_REF_NAME'"
+            exit 1
+          fi
           build_time_utc="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
           echo "BRAINBAR_RELEASE_VERSION=$release_version" >> "$GITHUB_ENV"
           echo "BRAINBAR_BUILD_TIME_UTC=$build_time_utc" >> "$GITHUB_ENV"
@@ -54,13 +58,16 @@ jobs:
           app_dir="$PWD/dist/BrainBar.app"
           bin_dir="$(cd brain-bar && swift build -c release --show-bin-path)"
           plist="$app_dir/Contents/Info.plist"
+          launchagents_dir="$app_dir/Contents/Resources/LaunchAgents"
           plist_buddy="/usr/libexec/PlistBuddy"
 
           rm -rf "$PWD/dist"
-          mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
+          mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources" "$launchagents_dir"
           cp brain-bar/bundle/Info.plist "$plist"
           cp "$bin_dir/BrainBar" "$app_dir/Contents/MacOS/BrainBar"
           cp "$bin_dir/BrainBarDaemon" "$app_dir/Contents/MacOS/BrainBarDaemon"
+          cp brain-bar/bundle/com.brainlayer.brainbar.plist "$launchagents_dir/com.brainlayer.brainbar.plist"
+          cp brain-bar/bundle/com.brainlayer.brainbar-daemon.plist "$launchagents_dir/com.brainlayer.brainbar-daemon.plist"
 
           set_plist_string() {
             local key="$1"
@@ -111,7 +118,7 @@ jobs:
           cert_path="$RUNNER_TEMP/brainbar-developer-id.p12"
           keychain_path="$RUNNER_TEMP/brainbar-signing.keychain-db"
 
-          echo "$BRAINBAR_DEVELOPER_ID_CERTIFICATE_BASE64" | base64 --decode > "$cert_path"
+          echo "$BRAINBAR_DEVELOPER_ID_CERTIFICATE_BASE64" | base64 -D -o "$cert_path"
           security create-keychain -p "$keychain_password" "$keychain_path"
           security set-keychain-settings -lut 21600 "$keychain_path"
           security unlock-keychain -p "$keychain_password" "$keychain_path"

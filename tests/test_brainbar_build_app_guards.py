@@ -369,6 +369,54 @@ def test_canonical_build_allows_launchagent_install_when_brainlayer_package_is_i
     assert "[build-app] brainlayer package is installed" in result.stdout
 
 
+def test_build_app_embeds_launchagent_templates_in_app_resources(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    (home / "Library" / "LaunchAgents").mkdir(parents=True)
+    _prepare_bundle_inputs(repo)
+    _install_fake_venv_python(repo, import_brainlayer_succeeds=True)
+    tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+        dry_run=False,
+        extra_args=["--force-dirty"],
+        extra_env=_fake_build_env(tmp_path, tool_dir, bin_dir),
+    )
+
+    launchagents_dir = home / "Applications" / "BrainBar.app" / "Contents" / "Resources" / "LaunchAgents"
+    assert result.returncode == 0, result.stderr
+    assert (launchagents_dir / "com.brainlayer.brainbar.plist").is_file()
+    assert (launchagents_dir / "com.brainlayer.brainbar-daemon.plist").is_file()
+
+
+def test_build_app_rejects_invalid_release_version(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-dev-worktree")
+    home = tmp_path / "home"
+    home.mkdir()
+    _prepare_bundle_inputs(repo)
+    tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=tmp_path / "canonical",
+        home=home,
+        dry_run=False,
+        extra_args=["--force-worktree-build"],
+        extra_env={
+            **_fake_build_env(tmp_path, tool_dir, bin_dir),
+            "BRAINBAR_RELEASE_VERSION": "1.2.3-beta1",
+        },
+    )
+
+    assert result.returncode != 0
+    assert "release version must match X.Y.Z" in result.stderr
+
+
 def test_build_app_script_is_notarization_ready_for_developer_id() -> None:
     script = (Path(__file__).resolve().parents[1] / "brain-bar" / "build-app.sh").read_text()
 

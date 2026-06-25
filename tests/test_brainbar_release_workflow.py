@@ -105,6 +105,27 @@ def _assert_version_stamp(job: dict) -> None:
     assert any("CFBundleShortVersionString" in _step_run(step) for step in version_steps), (
         "Info.plist release version must come from the pushed tag"
     )
+    metadata_steps = [
+        step
+        for step in job.get("steps", [])
+        if isinstance(step, dict) and "BRAINBAR_RELEASE_VERSION" in _step_run(step)
+    ]
+    assert any(r"^[0-9]+\.[0-9]+\.[0-9]+$" in _step_run(step) for step in metadata_steps), (
+        "BrainBar release workflow must reject tags that cannot be stamped into macOS bundle versions"
+    )
+
+
+def _assert_signing_decode_is_macos_safe(job: dict) -> None:
+    runs = "\n".join(_step_run(step) for step in job.get("steps", []) if isinstance(step, dict))
+    assert "base64 --decode" not in runs, "macOS base64 does not support --decode in the signing path"
+    assert "base64 -D" in runs, "BrainBar release workflow must decode signing certificates with macOS base64 -D"
+
+
+def _assert_launchagents_are_packaged(job: dict) -> None:
+    runs = "\n".join(_step_run(step) for step in job.get("steps", []) if isinstance(step, dict))
+    assert "Contents/Resources/LaunchAgents" in runs, "BrainBar.app must package launch agent templates"
+    assert "com.brainlayer.brainbar.plist" in runs, "BrainBar.app must include the UI launch agent plist"
+    assert "com.brainlayer.brainbar-daemon.plist" in runs, "BrainBar.app must include the daemon launch agent plist"
 
 
 def _assert_release_workflow_contract(workflow: dict) -> None:
@@ -112,6 +133,8 @@ def _assert_release_workflow_contract(workflow: dict) -> None:
     job = _release_job(workflow)
     _assert_swift_build_contract(job)
     _assert_version_stamp(job)
+    _assert_signing_decode_is_macos_safe(job)
+    _assert_launchagents_are_packaged(job)
     _assert_no_zip_guardrail_before_release(job)
 
 
