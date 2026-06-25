@@ -380,22 +380,25 @@ def run_doctor(
     drain_total = drain_health.get("drained_total")
     drain_cycles = drain_health.get("drain_cycles")
     watcher_poll_count = watcher_health.get("poll_count")
+    has_drain_backlog = queue_count > 0 or bool(result.enrichment_backlog and result.enrichment_backlog > 0)
     drain_moving = queue_count == 0
-    drain_liveness_moving = queue_count == 0
+    drain_liveness_moving = not has_drain_backlog
     watcher_moving = queue_count == 0
     sampled_drain_liveness_issue = pending_drain_liveness_issue
-    if queue_count > 0:
+    if has_drain_backlog:
         time.sleep(max(0.0, config.queue_movement_sample_seconds))
         next_drain_health = _load_json(config.drain_health_path)
-        next_watcher_health = _load_json(config.watcher_health_path)
         next_drain_total = next_drain_health.get("drained_total")
         next_drain_cycles = next_drain_health.get("drain_cycles")
-        drain_moving = _counter_increased(drain_total, next_drain_total)
-        drain_liveness_moving = drain_moving or _counter_increased(drain_cycles, next_drain_cycles)
-        watcher_moving = _counter_increased(watcher_poll_count, next_watcher_health.get("poll_count"))
+        drain_total_moving = _counter_increased(drain_total, next_drain_total)
+        drain_moving = queue_count == 0 or drain_total_moving
+        drain_liveness_moving = drain_total_moving or _counter_increased(drain_cycles, next_drain_cycles)
         drain_total = next_drain_health.get("drained_total", drain_total)
         drain_cycles = next_drain_health.get("drain_cycles", drain_cycles)
-        watcher_poll_count = next_watcher_health.get("poll_count", watcher_poll_count)
+        if queue_count > 0:
+            next_watcher_health = _load_json(config.watcher_health_path)
+            watcher_moving = _counter_increased(watcher_poll_count, next_watcher_health.get("poll_count"))
+            watcher_poll_count = next_watcher_health.get("poll_count", watcher_poll_count)
         sampled_drain_liveness_issue = check_drain_liveness(
             drain_label=config.drain_label,
             drain_loaded=drain_loaded,
@@ -407,10 +410,10 @@ def run_doctor(
             enrich_cost_counter_path=config.db_path.expanduser().parent / ENRICH_DAILY_COST_COUNTER_FILENAME,
         )
     queue_moving = drain_moving or watcher_moving
-    active_drain_liveness_issue = sampled_drain_liveness_issue if queue_count > 0 else pending_drain_liveness_issue
+    active_drain_liveness_issue = sampled_drain_liveness_issue if has_drain_backlog else pending_drain_liveness_issue
     if active_drain_liveness_issue is not None:
         suppress_stale_drain = (
-            active_drain_liveness_issue.code == STALLED_CODE and queue_count > 0 and drain_liveness_moving
+            active_drain_liveness_issue.code == STALLED_CODE and has_drain_backlog and drain_liveness_moving
         )
         if not suppress_stale_drain:
             result.issues.append(

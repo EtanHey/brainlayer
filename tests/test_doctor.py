@@ -266,6 +266,46 @@ def test_run_doctor_does_not_fail_drain_liveness_when_heartbeat_is_advancing(tmp
     assert any(issue.code == "enrichment_idle_with_backlog" for issue in result.issues)
 
 
+def test_run_doctor_suppresses_enrichment_only_stale_liveness_when_drain_cycles_advance(tmp_path, monkeypatch):
+    import brainlayer.doctor as doctor
+
+    monkeypatch.delenv("BRAINLAYER_ENRICH_COST_DIR", raising=False)
+    monkeypatch.setenv("BRAINLAYER_ENRICH_DAILY_USD_CAP", "5.0")
+    db_path = tmp_path / "drain-liveness-enrichment-cycles-advance.db"
+    _build_db(db_path)
+    _add_enrichment_backlog(db_path)
+    config = _doctor_config(tmp_path, db_path)
+    stale_updated_at = (NOW - timedelta(minutes=10)).isoformat()
+    drain_reads = 0
+    original_load_json = doctor._load_json
+
+    def fake_load_json(path: Path) -> dict:
+        nonlocal drain_reads
+        if path == config.drain_health_path:
+            drain_reads += 1
+            return {
+                "drain_cycles": 20 + drain_reads,
+                "drained_total": 40,
+                "updated_at": stale_updated_at,
+            }
+        return original_load_json(path)
+
+    monkeypatch.setattr(doctor, "_load_json", fake_load_json)
+
+    result = doctor.run_doctor(
+        config,
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+
+    assert result.exit_code == 0
+    assert result.ok is True
+    assert drain_reads == 2
+    assert any(issue.code == "enrichment_idle_with_backlog" for issue in result.issues)
+    assert not [issue for issue in result.issues if issue.code == "drain_liveness_stalled"]
+
+
 def test_run_doctor_keeps_loaded_but_idle_warning_only_when_daily_cap_blocks_enrichment(tmp_path, monkeypatch):
     from brainlayer.doctor import run_doctor
 
