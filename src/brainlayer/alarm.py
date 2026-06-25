@@ -66,7 +66,11 @@ def build_alarm(
 
 
 def emit_alarm(alarm: BrainLayerAlarm) -> bool:
-    """Persist the alarm to every existing non-blocking notification path."""
+    """Emit local loud alarm output and best-effort non-blocking telemetry.
+
+    stderr/logging are the guaranteed fatal alarm paths. Axiom telemetry stays
+    off the caller thread so a stalled network path cannot delay the alarm raise.
+    """
     human_message = alarm.human_message()
     logger.critical(human_message)
     try:

@@ -769,6 +769,58 @@ class TestJSONLWatcher:
         assert raised.value.details["active_jsonl_entries_per_minute"] > 0
         assert raised.value.details["db_realtime_inserts_per_minute"] == 0
 
+    def test_health_snapshot_holds_zero_write_alarm_across_quiet_burst(self, tmp_path):
+        now = [0.0]
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        transcript = sessions / "session.jsonl"
+        transcript.write_text(
+            json.dumps(
+                {
+                    "role": "assistant",
+                    "content": "A finite accepted burst should still alarm if the drain never writes it.",
+                }
+            )
+            + "\n"
+        )
+        db_path = tmp_path / "brainlayer.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE chunks (source TEXT, ingested_at INTEGER, created_at TEXT)")
+        conn.commit()
+        conn.close()
+        health_path = tmp_path / "watcher-health.json"
+
+        def flush_without_durable_write(items):
+            return {str(transcript): max(item["_line_end_offset"] for item in items)}
+
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=flush_without_durable_write,
+            batch_size=1,
+            health_path=health_path,
+            db_path=db_path,
+            coverage_watchdog=CoverageWatchdog(
+                lag_threshold_bytes=1_000_000,
+                alert_after_s=120,
+                now_fn=lambda: now[0],
+            ),
+        )
+
+        watcher.poll_once()
+        now[0] = 61.0
+        watcher._health_window_started = time.monotonic() - 61
+        assert watcher.poll_once() == 0
+        assert json.loads(health_path.read_text())["active_jsonl_entries_per_minute"] > 0
+
+        now[0] = 121.0
+        watcher._health_window_started = time.monotonic() - 121
+        with pytest.raises(BrainLayerAlarm) as raised:
+            watcher.poll_once()
+
+        assert raised.value.code == "watcher_zero_writes_while_active"
+        assert raised.value.details["watcher_chunks_output_per_minute"] > 0
+
     def test_health_snapshot_raises_alarm_when_db_probe_fails_while_active(self, tmp_path):
         now = [0.0]
         sessions = tmp_path / "codex" / "sessions"

@@ -665,6 +665,10 @@ class JSONLWatcher:
             realtime_inserts_per_minute=watchdog_inserts_per_min,
             max_offset_lag_bytes=max_lag,
         )
+        coverage_degraded = (
+            active_entries_per_min > 0
+            and watchdog_inserts_per_min / active_entries_per_min < self.coverage_watchdog.coverage_ratio_threshold
+        )
         payload = {
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "poll_count": self.poll_count,
@@ -712,7 +716,7 @@ class JSONLWatcher:
                 },
             )
 
-        if elapsed >= 60.0:
+        if elapsed >= 60.0 and not coverage_degraded:
             self._health_window_started = now
             self._health_window_started_epoch = time.time()
             self._health_entries_seen = 0
