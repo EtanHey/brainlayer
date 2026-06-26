@@ -403,9 +403,21 @@ def _quiesce_services(services: Sequence[str]) -> None:
         _bootout_service(service)
 
 
-def _resume_services(repo_root: Path, services: Sequence[str]) -> None:
+def _resume_services(repo_root: Path, services: Sequence[str]) -> list[tuple[str, Exception]]:
+    failures: list[tuple[str, Exception]] = []
     for service in services:
-        _resume_service(repo_root, service)
+        try:
+            _resume_service(repo_root, service)
+        except Exception as exc:
+            failures.append((service, exc))
+    return failures
+
+
+def _format_resume_failures(failures: Sequence[tuple[str, Exception]]) -> str:
+    details = "; ".join(f"{service}: {failure}" for service, failure in failures)
+    count = len(failures)
+    noun = "service" if count == 1 else "services"
+    return f"failed to resume {count} launchd {noun}: {details}"
 
 
 def _checkpoint_full(db_path: Path) -> tuple[int, int, int]:
@@ -508,6 +520,8 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
     services = DEFAULT_SERVICES
     if mode == "burn":
         services = (*REFEED_SERVICES, "drain")
+    resume_failures: list[tuple[str, Exception]] = []
+    body_error: BaseException | None = None
     _quiesce_services(services)
     try:
         result.checkpoint = _checkpoint_full(config.db_path)
@@ -528,8 +542,20 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
                 dry_run=False,
                 now=config.now_fn(),
             )
+    except BaseException as exc:
+        body_error = exc
+        raise
     finally:
-        _resume_services(config.repo_root, services)
+        resume_failures = _resume_services(config.repo_root, services)
+        if resume_failures and body_error is not None:
+            resume_failure_reason = _format_resume_failures(resume_failures)
+            body_error.add_note(resume_failure_reason)
+            if isinstance(body_error, MaintenanceAbort):
+                body_error.reason = f"{body_error.reason}; {resume_failure_reason}"
+                body_error.args = (body_error.reason,)
+
+    if resume_failures:
+        raise MaintenanceAbort(_format_resume_failures(resume_failures))
 
     result.db_after_bytes = _file_size(config.db_path)
     result.queue_after_files = len(_queue_files(config.queue_dir))
