@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import plistlib
 import shutil
 import subprocess
 from pathlib import Path
@@ -130,10 +131,15 @@ def _prepare_bundle_inputs(repo: Path) -> None:
  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
 </dict>
 </plist>
 """
     )
+    (bundle_dir / "AppIcon.icns").write_bytes(b"fake icns")
     for label in ("com.brainlayer.brainbar", "com.brainlayer.brainbar-daemon"):
         (bundle_dir / f"{label}.plist").write_text(
             """<?xml version="1.0" encoding="UTF-8"?>
@@ -394,7 +400,13 @@ def test_build_app_embeds_launchagent_templates_in_app_resources(tmp_path: Path)
     )
 
     launchagents_dir = home / "Applications" / "BrainBar.app" / "Contents" / "Resources" / "LaunchAgents"
+    resources_dir = home / "Applications" / "BrainBar.app" / "Contents" / "Resources"
+    info_plist = home / "Applications" / "BrainBar.app" / "Contents" / "Info.plist"
     assert result.returncode == 0, result.stderr
+    assert (resources_dir / "AppIcon.icns").read_bytes() == b"fake icns"
+    plist_data = plistlib.loads(info_plist.read_bytes())
+    assert plist_data["CFBundleIconFile"] == "AppIcon"
+    assert plist_data["CFBundleIconName"] == "AppIcon"
     assert (launchagents_dir / "com.brainlayer.brainbar.plist").is_file()
     assert (launchagents_dir / "com.brainlayer.brainbar-daemon.plist").is_file()
 
