@@ -749,7 +749,7 @@ class TestJSONLWatcher:
         assert payload["watcher_chunks_output_per_minute"] > 0
         assert payload["db_realtime_inserts_per_minute"] == 0
 
-    def test_health_snapshot_raises_alarm_on_zero_db_writes_while_active(self, tmp_path):
+    def test_health_snapshot_emits_alarm_without_stopping_on_zero_db_writes_while_active(self, tmp_path):
         now = [0.0]
         sessions = tmp_path / "codex" / "sessions"
         sessions.mkdir(parents=True)
@@ -790,18 +790,16 @@ class TestJSONLWatcher:
 
         watcher.poll_once()
         now[0] = 6.0
-        with pytest.raises(BrainLayerAlarm) as raised:
-            watcher.poll_once()
+        assert watcher.poll_once() == 0
 
         payload = json.loads(health_path.read_text())
         assert payload["providers"] == ["codex"]
         assert payload["alerting"] is True
         assert "coverage_drop" in payload["alert_reasons"]
-        assert raised.value.code == "watcher_zero_writes_while_active"
-        assert raised.value.details["active_jsonl_entries_per_minute"] > 0
-        assert raised.value.details["db_realtime_inserts_per_minute"] == 0
+        assert payload["active_jsonl_entries_per_minute"] > 0
+        assert payload["db_realtime_inserts_per_minute"] == 0
 
-    def test_health_snapshot_holds_zero_write_alarm_across_quiet_burst(self, tmp_path):
+    def test_health_snapshot_holds_zero_write_alarm_across_quiet_burst_without_stopping(self, tmp_path):
         now = [0.0]
         sessions = tmp_path / "codex" / "sessions"
         sessions.mkdir(parents=True)
@@ -847,11 +845,11 @@ class TestJSONLWatcher:
 
         now[0] = 121.0
         watcher._health_window_started = time.monotonic() - 121
-        with pytest.raises(BrainLayerAlarm) as raised:
-            watcher.poll_once()
+        assert watcher.poll_once() == 0
 
-        assert raised.value.code == "watcher_zero_writes_while_active"
-        assert raised.value.details["watcher_chunks_output_per_minute"] > 0
+        payload = json.loads(health_path.read_text())
+        assert payload["alerting"] is True
+        assert payload["watcher_chunks_output_per_minute"] > 0
 
     def test_health_snapshot_resets_partial_durable_window_before_later_zero_write_alarm(self, tmp_path, monkeypatch):
         now = [0.0]
@@ -931,13 +929,13 @@ class TestJSONLWatcher:
             )
         now[0] = 122.0
         watcher._health_window_started = time.monotonic() - 61
-        with pytest.raises(BrainLayerAlarm) as raised:
-            watcher.poll_once()
+        assert watcher.poll_once() == 1
 
-        assert raised.value.code == "watcher_zero_writes_while_active"
-        assert raised.value.details["durable_writes_per_minute"] == 0
+        payload = json.loads(health_path.read_text())
+        assert payload["alerting"] is True
+        assert payload["db_realtime_inserts_per_minute"] == 0
 
-    def test_health_snapshot_raises_alarm_when_db_probe_fails_while_active(self, tmp_path):
+    def test_health_snapshot_emits_alarm_when_db_probe_fails_while_active(self, tmp_path):
         now = [0.0]
         sessions = tmp_path / "codex" / "sessions"
         sessions.mkdir(parents=True)
@@ -975,16 +973,14 @@ class TestJSONLWatcher:
 
         watcher.poll_once()
         now[0] = 6.0
-        with pytest.raises(BrainLayerAlarm) as raised:
-            watcher.poll_once()
+        assert watcher.poll_once() == 0
 
         payload = json.loads(health_path.read_text())
         assert payload["db_realtime_inserts_per_minute"] is None
         assert payload["db_probe_failed"] is True
-        assert raised.value.code == "watcher_zero_writes_while_active"
-        assert raised.value.details["db_probe_failed"] is True
+        assert payload["alerting"] is True
 
-    def test_health_snapshot_raises_alarm_when_flush_fails_while_active(self, tmp_path):
+    def test_health_snapshot_emits_alarm_when_flush_fails_while_active(self, tmp_path):
         now = [0.0]
         sessions = tmp_path / "codex" / "sessions"
         sessions.mkdir(parents=True)
@@ -1025,14 +1021,13 @@ class TestJSONLWatcher:
 
         watcher.poll_once()
         now[0] = 6.0
-        with pytest.raises(BrainLayerAlarm) as raised:
-            watcher.poll_once()
+        assert watcher.poll_once() == 0
 
         payload = json.loads(health_path.read_text())
         assert payload["failed_flush_inputs_per_minute"] > 0
         assert payload["active_jsonl_entries_per_minute"] > 0
         assert payload["watcher_chunks_output_per_minute"] == 0
-        assert raised.value.code == "watcher_zero_writes_while_active"
+        assert payload["alerting"] is True
 
     def test_health_snapshot_does_not_treat_quarantined_retry_as_active_input(self, tmp_path, monkeypatch):
         now = [0.0]

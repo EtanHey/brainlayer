@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from .alarm import raise_alarm
+from .alarm import BrainLayerAlarm, raise_alarm
 
 logger = logging.getLogger(__name__)
 
@@ -708,23 +708,26 @@ class JSONLWatcher:
             and active_entries_per_min > 0
             and durable_writes_per_min <= 0
         ):
-            raise_alarm(
-                "watcher_zero_writes_while_active",
-                "watcher accepted indexable JSONL input but produced zero durable realtime writes",
-                {
-                    "active_jsonl_entries_per_minute": active_entries_per_min,
-                    "normalized_jsonl_entries_per_minute": normalized_entries_per_min,
-                    "db_probe_failed": db_probe_failed,
-                    "db_realtime_inserts_per_minute": db_inserts_per_min,
-                    "durable_writes_per_minute": durable_writes_per_min,
-                    "failed_flush_inputs_per_minute": failed_flush_inputs_per_min,
-                    "files_tracked": len(files),
-                    "max_offset_lag_bytes": max_lag,
-                    "providers": payload["providers"],
-                    "watcher_chunks_output_per_minute": outputs_per_min,
-                    "watchdog_reasons": watchdog.get("alert_reasons", []),
-                },
-            )
+            try:
+                raise_alarm(
+                    "watcher_zero_writes_while_active",
+                    "watcher accepted indexable JSONL input but produced zero durable realtime writes",
+                    {
+                        "active_jsonl_entries_per_minute": active_entries_per_min,
+                        "normalized_jsonl_entries_per_minute": normalized_entries_per_min,
+                        "db_probe_failed": db_probe_failed,
+                        "db_realtime_inserts_per_minute": db_inserts_per_min,
+                        "durable_writes_per_minute": durable_writes_per_min,
+                        "failed_flush_inputs_per_minute": failed_flush_inputs_per_min,
+                        "files_tracked": len(files),
+                        "max_offset_lag_bytes": max_lag,
+                        "providers": payload["providers"],
+                        "watcher_chunks_output_per_minute": outputs_per_min,
+                        "watchdog_reasons": watchdog.get("alert_reasons", []),
+                    },
+                )
+            except BrainLayerAlarm as alarm:
+                logger.error("Watcher health alarm emitted without stopping watcher: %s", alarm)
 
         if elapsed >= 60.0 and not zero_write_degraded:
             self._health_window_started = now
