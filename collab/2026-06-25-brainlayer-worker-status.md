@@ -4,3 +4,15 @@
 - deploy-drift-worker | feat/deploy-drift-detector | GREEN | 2026-06-26T00:30:35+0300
 - deploy-drift-worker | feat/deploy-drift-detector | GREEN | 2026-06-26T00:43:29+0300
 - deploy-drift-worker | feat/deploy-drift-detector | PR#553 | 2026-06-26T00:50:37+0300
+- m1-fixes-worker | fix/launchd-plist-symlink-and-maintenance-resume | STARTED | 2026-06-25 23:44:01 IDT
+- m1-fixes-worker | fix/launchd-plist-symlink-and-maintenance-resume | GREEN | 2026-06-25 23:57:35 IDT
+- m1-fixes-worker | fix/launchd-plist-symlink-and-maintenance-resume | GREEN | 2026-06-26 00:16:46 IDT
+- m1-fixes-worker | fix/launchd-plist-symlink-and-maintenance-resume | PR#552 | 2026-06-26 00:25:28 IDT
+- m1-fixes-worker | fix/launchd-plist-symlink-and-maintenance-resume | STARTED | 2026-06-26 00:31:46 IDT
+- m1-fixes-worker | fix/launchd-plist-symlink-and-maintenance-resume | GREEN | 2026-06-26 00:32:30 IDT
+- m1-fixes-worker | fix/launchd-plist-symlink-and-maintenance-resume | STARTED | 2026-06-26 00:52:22 IDT
+- m1-fixes-worker | fix/launchd-plist-symlink-and-maintenance-resume | GREEN | 2026-06-26 00:56:19 IDT
+- m1-fixes-worker | fix/launchd-plist-symlink-and-maintenance-resume | STARTED | 2026-06-26 01:13:20 IDT
+- m1-fixes-worker | fix/launchd-plist-symlink-and-maintenance-resume | GREEN | 2026-06-26 01:14:30 IDT
+- m1-fixes-worker | fix/launchd-plist-symlink-and-maintenance-resume | STARTED | 2026-06-26 01:25:57 IDT
+- m1-fixes-worker | fix/launchd-plist-symlink-and-maintenance-resume | GREEN | 2026-06-26 01:27:22 IDT

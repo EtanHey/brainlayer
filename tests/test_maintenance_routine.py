@@ -389,6 +389,66 @@ def test_resume_service_uses_configured_launchd_dir_for_packaged_installs(tmp_pa
     assert commands == [[str(launchd_dir / "install.sh"), "enrichment"]]
 
 
+def test_maintenance_resume_attempts_all_services_after_mid_resume_failure(tmp_path, monkeypatch):
+    from brainlayer import maintenance
+
+    config = _config(tmp_path, now=dt.datetime(2026, 5, 30, 4, 5, tzinfo=dt.timezone.utc))
+    config.queue_dir.mkdir(parents=True)
+    config.db_path.write_bytes(b"db")
+    quiesced: list[str] = []
+    resumed: list[str] = []
+    monkeypatch.setattr(maintenance, "collect_lsof_entries", lambda _paths: [])
+    monkeypatch.setattr(maintenance, "_bootout_service", lambda service: quiesced.append(service))
+    monkeypatch.setattr(maintenance, "_checkpoint_full", lambda _db_path: (0, 0, 0))
+    monkeypatch.setattr(maintenance, "_verify_search_latency", lambda _db_path: 1.0)
+
+    def fail_mid_resume(_repo_root: Path, service: str) -> None:
+        resumed.append(service)
+        if service == "enrichment":
+            raise RuntimeError("bootstrap I/O error")
+
+    monkeypatch.setattr(maintenance, "_resume_service", fail_mid_resume)
+
+    with pytest.raises(maintenance.MaintenanceAbort, match="failed to resume 1 launchd service"):
+        maintenance.run_maintenance("light", config=config)
+
+    assert quiesced == list(maintenance.DEFAULT_SERVICES)
+    assert resumed == list(maintenance.DEFAULT_SERVICES)
+
+
+def test_maintenance_body_error_reports_resume_failures_as_exception_note(tmp_path, monkeypatch):
+    from brainlayer import maintenance
+
+    config = _config(tmp_path, now=dt.datetime(2026, 5, 30, 4, 5, tzinfo=dt.timezone.utc))
+    config.queue_dir.mkdir(parents=True)
+    config.db_path.write_bytes(b"db")
+    resumed: list[str] = []
+    monkeypatch.setattr(maintenance, "collect_lsof_entries", lambda _paths: [])
+    monkeypatch.setattr(maintenance, "_bootout_service", lambda _service: None)
+    monkeypatch.setattr(
+        maintenance,
+        "_checkpoint_full",
+        lambda _db_path: (_ for _ in ()).throw(maintenance.MaintenanceAbort("checkpoint failed")),
+    )
+
+    def fail_mid_resume(_repo_root: Path, service: str) -> None:
+        resumed.append(service)
+        if service == "enrichment":
+            raise RuntimeError("bootstrap I/O error")
+
+    monkeypatch.setattr(maintenance, "_resume_service", fail_mid_resume)
+
+    with pytest.raises(maintenance.MaintenanceAbort, match="checkpoint failed") as exc_info:
+        maintenance.run_maintenance("light", config=config)
+
+    assert resumed == list(maintenance.DEFAULT_SERVICES)
+    assert "failed to resume 1 launchd service: enrichment: bootstrap I/O error" in exc_info.value.reason
+    assert any(
+        "failed to resume 1 launchd service: enrichment: bootstrap I/O error" in note
+        for note in getattr(exc_info.value, "__notes__", [])
+    )
+
+
 def test_enrichment_template_flex_validation_parses_active_env_lines(tmp_path):
     from brainlayer.maintenance import _verify_enrichment_template_flex_backend
 
