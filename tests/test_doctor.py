@@ -341,6 +341,104 @@ def test_run_doctor_exits_zero_on_healthy_fixture(tmp_path):
     assert not [issue for issue in result.issues if issue.severity == "fatal"]
 
 
+def test_roundtrip_probe_ignores_projectless_keyword_competitors(tmp_path):
+    from brainlayer.doctor import _roundtrip_probe
+
+    db_path = tmp_path / "roundtrip-projectless-competitor.db"
+    store = VectorStore(db_path)
+    try:
+        competitor_id = "projectless-keyword-competitor"
+        content = "no keyword match for brainlayer doctor probe projectless competing memory"
+        created_at = NOW.isoformat()
+        cursor = store.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO chunks (
+                id, content, metadata, source_file, project, content_type,
+                value_type, char_count, source, tags, summary, created_at,
+                enriched_at, enrich_status, chunk_origin, seen_count, last_seen_at,
+                content_class
+            ) VALUES (?, ?, '{}', 'brainbar-store', NULL, 'user_message',
+                'HIGH', ?, 'mcp', ?, ?, ?, NULL, NULL, 'raw', 1, ?,
+                'operational')
+            """,
+            (
+                competitor_id,
+                content,
+                len(content),
+                json.dumps(["doctor-probe"]),
+                content,
+                created_at,
+                created_at,
+            ),
+        )
+        store._upsert_chunk_vector(cursor, competitor_id, [1.0] + [0.0] * 1023)
+        store.conn.cursor().execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        store.close()
+
+    ok, _latency, reason = _roundtrip_probe(db_path, timeout_seconds=2.0)
+
+    assert ok is True, reason
+
+
+def test_roundtrip_probe_reports_writer_conflict_without_traceback(tmp_path, monkeypatch):
+    from brainlayer import doctor
+
+    class BusyVectorStore:
+        def __init__(self, _db_path):
+            raise RuntimeError("another writer is using brainlayer.db")
+
+    monkeypatch.setattr(doctor, "VectorStore", BusyVectorStore)
+
+    ok, _latency, reason = doctor._roundtrip_probe(tmp_path / "busy.db", timeout_seconds=0.1)
+
+    assert ok is False
+    assert "another writer is using brainlayer.db" in reason
+
+
+def test_roundtrip_probe_attempts_search_after_slow_setup(tmp_path, monkeypatch):
+    from brainlayer import doctor
+
+    class FakeCursor:
+        def __init__(self, store):
+            self.store = store
+
+        def execute(self, sql, params=()):
+            if "INSERT INTO chunks" in sql:
+                self.store.chunk_id = params[0]
+            return self
+
+    class FakeConnection:
+        def __init__(self, store):
+            self.store = store
+
+        def cursor(self):
+            return FakeCursor(self.store)
+
+    class SlowSetupStore:
+        def __init__(self, _db_path):
+            self.conn = FakeConnection(self)
+            self.chunk_id = None
+
+        def _upsert_chunk_vector(self, _cursor, _chunk_id, _embedding):
+            return None
+
+        def hybrid_search(self, **_kwargs):
+            return {"ids": [[self.chunk_id]], "documents": [[]], "metadatas": [[]], "distances": [[]]}
+
+        def close(self):
+            return None
+
+    ticks = iter([0.0, 3.0, 3.1])
+    monkeypatch.setattr(doctor, "VectorStore", SlowSetupStore)
+    monkeypatch.setattr(doctor.time, "monotonic", lambda: next(ticks, 3.1))
+
+    ok, _latency, reason = doctor._roundtrip_probe(tmp_path / "slow-setup.db", timeout_seconds=2.0)
+
+    assert ok is True, reason
+
+
 def test_run_doctor_stays_silent_when_loaded_daemon_launch_commit_matches_head(tmp_path):
     from brainlayer.doctor import run_doctor
 

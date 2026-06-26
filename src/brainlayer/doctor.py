@@ -176,11 +176,11 @@ def _cleanup_probe(store: VectorStore, chunk_id: str) -> None:
 
 def _roundtrip_probe(db_path: Path, timeout_seconds: float) -> tuple[bool, float, str]:
     started = time.monotonic()
-    deadline = started + timeout_seconds
     chunk_id = f"doctor-probe-{uuid.uuid4().hex}"
     content = f"doctor vector roundtrip probe {chunk_id}"
-    store = VectorStore(db_path)
+    store: VectorStore | None = None
     try:
+        store = VectorStore(db_path)
         cursor = store.conn.cursor()
         cursor.execute(
             """
@@ -208,26 +208,32 @@ def _roundtrip_probe(db_path: Path, timeout_seconds: float) -> tuple[bool, float
         store._upsert_chunk_vector(cursor, chunk_id, _probe_embedding(content))
         clear_hybrid_search_cache(getattr(store, "db_path", None))
 
-        while time.monotonic() < deadline:
+        deadline = time.monotonic() + timeout_seconds
+        while True:
             results = store.hybrid_search(
                 query_embedding=_probe_embedding(content),
                 query_text="no_keyword_match_for_brainlayer_doctor_probe",
                 n_results=1,
                 project_filter=DOCTOR_PROBE_PROJECT,
+                content_type_filter="doctor_probe",
+                source_filter="doctor",
                 include_operational=True,
             )
             ids = results.get("ids") or [[]]
             if ids and ids[0] and ids[0][0] == chunk_id:
                 return True, time.monotonic() - started, "vector_retrieved"
+            if time.monotonic() >= deadline:
+                break
             time.sleep(0.05)
         return False, time.monotonic() - started, "probe_not_vector_retrievable"
     except Exception as exc:
         return False, time.monotonic() - started, str(exc)
     finally:
-        try:
-            _cleanup_probe(store, chunk_id)
-        finally:
-            store.close()
+        if store is not None:
+            try:
+                _cleanup_probe(store, chunk_id)
+            finally:
+                store.close()
 
 
 def _check_launchd(

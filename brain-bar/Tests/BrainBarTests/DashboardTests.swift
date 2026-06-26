@@ -848,6 +848,20 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(presentation.relativeBucketLabel(for: 2), "10m-5m ago")
     }
 
+    func testSparklineChartPresentationNamesHoverBucketsByRecency() {
+        let now = Date(timeIntervalSince1970: 1_764_236_400)
+        let presentation = SparklineChartPresentation(
+            label: "Recent activity sparkline",
+            values: [0, 2, 5, 3],
+            activityWindowMinutes: 20,
+            fetchedAt: now
+        )
+
+        XCTAssertEqual(presentation.bucketRecencyLabel(for: 3), "now")
+        XCTAssertEqual(presentation.bucketRecencyLabel(for: 2), "5m ago")
+        XCTAssertEqual(presentation.bucketRecencyLabel(for: 0), "15m ago")
+    }
+
     func testSparklineChartPresentationLabelsPartialMinuteBucketsLikeDatabase() {
         let now = Date(timeIntervalSince1970: 1_764_236_400)
         let presentation = SparklineChartPresentation(

@@ -65,6 +65,21 @@ final class BrainDatabaseWindowedBucketsTests: XCTestCase {
         )
     }
 
+    private func insertWatcherLiveness(chunkID: String, ingestedAt: Date) throws {
+        try sqliteExecWriteLocal(
+            path: tempDBPath,
+            sql: """
+                CREATE TABLE IF NOT EXISTS watcher_liveness_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chunk_id TEXT NOT NULL,
+                    ingested_at INTEGER NOT NULL
+                );
+                INSERT INTO watcher_liveness_events (chunk_id, ingested_at)
+                VALUES ('\(chunkID)', \(Int(ingestedAt.timeIntervalSince1970)));
+            """
+        )
+    }
+
     func testWiderWindowReturnsMoreHistoricalDataThanLiveWindow() throws {
         // Force the schema to exist (constructor opens + ensures schema, but make
         // it explicit so an empty-table call cannot be misread).
@@ -153,6 +168,29 @@ final class BrainDatabaseWindowedBucketsTests: XCTestCase {
         XCTAssertEqual(emptyDB.watcherTotal, 0)
         XCTAssertEqual(emptyDB.enrichmentTotal, 0)
         XCTAssertEqual(emptyDB.agentWriteBuckets.count, 12)
+    }
+
+    func testWatcherWindowBucketsUseIngestionLivenessInsteadOfTranscriptCreatedAt() throws {
+        XCTAssertTrue(try db.tableExists("chunks"))
+
+        let now = Date()
+        try insertWrite(
+            id: "watcher-ingested-now",
+            source: "realtime_watcher",
+            createdAt: now.addingTimeInterval(-22 * 60)
+        )
+        try insertWatcherLiveness(
+            chunkID: "watcher-ingested-now",
+            ingestedAt: now.addingTimeInterval(-30)
+        )
+
+        let buckets = try db.pipelineWindowBuckets(activityWindowMinutes: 30, bucketCount: 6, now: now)
+
+        XCTAssertEqual(
+            buckets.watcherWriteBuckets,
+            [0, 0, 0, 0, 0, 1],
+            "JSONL watcher graph must show durable ingestion recency, not the older transcript event time."
+        )
     }
 }
 

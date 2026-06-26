@@ -1775,8 +1775,7 @@ final class BrainDatabase: @unchecked Sendable {
                 bucketCount: bucketCount,
                 now: now
             )
-            let recentWatcherWriteBuckets = try recentWriteBuckets(
-                whereClause: Self.watcherWriteSourceWhereClause,
+            let recentWatcherWriteBuckets = try recentWatcherWriteBuckets(
                 activityWindowMinutes: activityWindowMinutes,
                 bucketCount: bucketCount,
                 now: now
@@ -1846,8 +1845,7 @@ final class BrainDatabase: @unchecked Sendable {
                 bucketCount: bucketCount,
                 now: now
             )
-            let watcherWriteBuckets = try recentWriteBuckets(
-                whereClause: Self.watcherWriteSourceWhereClause,
+            let watcherWriteBuckets = try recentWatcherWriteBuckets(
                 activityWindowMinutes: activityWindowMinutes,
                 bucketCount: bucketCount,
                 now: now
@@ -2074,6 +2072,33 @@ final class BrainDatabase: @unchecked Sendable {
         )
     }
 
+    private func recentWatcherWriteBuckets(
+        activityWindowMinutes: Int,
+        bucketCount: Int,
+        now: Date
+    ) throws -> [Int] {
+        guard activityWindowMinutes > 0 else { return Array(repeating: 0, count: bucketCount) }
+
+        if try tableExists("watcher_liveness_events"),
+           let db,
+           try tableColumns(name: "watcher_liveness_events", on: db).contains("ingested_at") {
+            return try indexedUnixEpochBuckets(
+                tableName: "watcher_liveness_events",
+                epochColumn: "ingested_at",
+                activityWindowMinutes: activityWindowMinutes,
+                bucketCount: bucketCount,
+                now: now
+            )
+        }
+
+        return try recentWriteBuckets(
+            whereClause: Self.watcherWriteSourceWhereClause,
+            activityWindowMinutes: activityWindowMinutes,
+            bucketCount: bucketCount,
+            now: now
+        )
+    }
+
     private func recentEnrichmentBuckets(activityWindowMinutes: Int, bucketCount: Int, now: Date) throws -> [Int] {
         guard activityWindowMinutes > 0 else { return Array(repeating: 0, count: bucketCount) }
 
@@ -2134,6 +2159,58 @@ final class BrainDatabase: @unchecked Sendable {
         for epoch in epochs {
             let eventDate = Date(timeIntervalSince1970: TimeInterval(epoch))
             let offset = eventDate.timeIntervalSince(windowStart)
+            if offset < 0 { continue }
+            if offset > windowDuration { continue }
+
+            let rawIndex = Int(offset / bucketWidthSeconds)
+            let clampedIndex = min(max(rawIndex, 0), bucketCount - 1)
+            buckets[clampedIndex] += 1
+        }
+
+        return buckets
+    }
+
+    private func indexedUnixEpochBuckets(
+        tableName: String,
+        epochColumn: String,
+        activityWindowMinutes: Int,
+        bucketCount: Int,
+        now: Date
+    ) throws -> [Int] {
+        guard bucketCount > 0, activityWindowMinutes > 0 else { return Array(repeating: 0, count: max(bucketCount, 0)) }
+        let allowedEpochTables = [
+            "watcher_liveness_events": Set(["ingested_at"]),
+        ]
+        guard allowedEpochTables[tableName]?.contains(epochColumn) == true else {
+            throw DBError.exec(SQLITE_ERROR, "invalid epoch bucket source")
+        }
+        guard let db else { throw DBError.notOpen }
+
+        let windowDuration = Double(activityWindowMinutes * 60)
+        let bucketWidthSeconds = max(1, windowDuration / Double(bucketCount))
+        let windowStart = now.addingTimeInterval(-windowDuration)
+        let cutoffEpoch = Int64(windowStart.timeIntervalSince1970)
+        let nowEpoch = Int64(now.timeIntervalSince1970)
+        var buckets = Array(repeating: 0, count: bucketCount)
+
+        let sql = """
+            SELECT \(epochColumn)
+            FROM \(tableName)
+            WHERE \(epochColumn) >= ?
+              AND \(epochColumn) <= ?
+            ORDER BY \(epochColumn) ASC
+        """
+
+        var stmt: OpaquePointer?
+        let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, cutoffEpoch)
+        sqlite3_bind_int64(stmt, 2, nowEpoch)
+
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let epoch = sqlite3_column_int64(stmt, 0)
+            let offset = Double(epoch - cutoffEpoch)
             if offset < 0 { continue }
             if offset > windowDuration { continue }
 

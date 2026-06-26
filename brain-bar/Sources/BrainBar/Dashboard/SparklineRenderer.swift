@@ -270,6 +270,16 @@ struct SparklineChartPresentation: Equatable, Sendable {
         return "\(Self.durationLabel(seconds: olderSecondsAgo))-\(Self.durationLabel(seconds: newerSecondsAgo)) ago"
     }
 
+    func bucketRecencyLabel(for bucket: Int) -> String {
+        guard !values.isEmpty else { return "no bucket" }
+        let clampedBucket = min(max(bucket, 0), values.count - 1)
+        if clampedBucket == values.count - 1 {
+            return "now"
+        }
+        let range = bucketRange(for: clampedBucket)
+        return DashboardMetricFormatter.relativeEventString(lastEventAt: range.end, now: fetchedAt)
+    }
+
     private func bucketRange(for bucket: Int) -> (start: Date, end: Date) {
         let totalSeconds = max(activityWindowMinutes * 60, 1)
         let bucketWidthSeconds = max(1, Double(totalSeconds) / Double(max(values.count, 1)))
@@ -798,11 +808,11 @@ struct SparklineChart: View {
         let rows = tooltipRows(forBucket: bucket)
         VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(presentation.bucketLabel(for: bucket))
+                Text(presentation.bucketRecencyLabel(for: bucket))
                     .font(.system(size: 11, weight: .semibold))
                     .monospacedDigit()
                     .foregroundStyle(Color.brainBarTextPrimary)
-                Text(presentation.relativeBucketLabel(for: bucket))
+                Text("\(presentation.relativeBucketLabel(for: bucket)) · \(presentation.bucketLabel(for: bucket))")
                     .font(.system(size: 9.5, weight: .medium))
                     .foregroundStyle(Color.brainBarTextSecondary.opacity(0.70))
             }
