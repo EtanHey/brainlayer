@@ -1186,3 +1186,73 @@ def test_flush_migrates_legacy_pending_stores_idempotently(tmp_path, monkeypatch
         rows = conn.execute("SELECT id FROM chunks WHERE content = 'legacy pending memory'").fetchall()
 
     assert len(rows) == 1
+
+
+def test_flush_migrates_legacy_pending_stores_under_shared_lock(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    from brainlayer.cli import flush
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    _create_minimal_db(db_path)
+    pending_path = db_path.parent / "pending-stores.jsonl"
+    pending_path.write_text('{"content":"locked pending memory","memory_type":"note","project":"arbitration-test"}\n')
+    locked_paths = []
+
+    @contextmanager
+    def fake_pending_lock(path):
+        locked_paths.append(path)
+        yield
+
+    monkeypatch.setenv("BRAINLAYER_DB", str(db_path))
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    monkeypatch.setattr("brainlayer.mcp.store_handler._pending_store_file_lock", fake_pending_lock)
+
+    flush()
+
+    assert locked_paths == [pending_path]
+
+
+def test_flush_preserves_malformed_legacy_pending_store_lines(tmp_path, monkeypatch):
+    from brainlayer.cli import flush
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    _create_minimal_db(db_path)
+    pending_path = db_path.parent / "pending-stores.jsonl"
+    valid = '{"content":"valid pending memory","memory_type":"note","project":"arbitration-test"}'
+    malformed = '{"content":'
+    pending_path.write_text(f"{valid}\n{malformed}\n")
+
+    monkeypatch.setenv("BRAINLAYER_DB", str(db_path))
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+
+    flush()
+
+    remaining = pending_path.read_text().splitlines()
+    assert remaining == [malformed]
+
+
+def test_flush_pending_only_migrates_legacy_pending_stores_without_draining_queue(tmp_path, monkeypatch):
+    from brainlayer.cli import flush
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    _create_minimal_db(db_path)
+    pending_path = db_path.parent / "pending-stores.jsonl"
+    pending_path.write_text('{"content":"pending only memory","memory_type":"note","project":"arbitration-test"}\n')
+
+    def fail_drain_once(**kwargs):
+        raise AssertionError("pending-only flush must not drain the unified queue")
+
+    monkeypatch.setenv("BRAINLAYER_DB", str(db_path))
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+    monkeypatch.setattr("brainlayer.drain.drain_once", fail_drain_once)
+
+    flush(pending_only=True)
+
+    assert not pending_path.exists()
+    assert len(list(queue_dir.glob("pending-*.jsonl"))) == 1

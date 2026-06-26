@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 class WatchRoot:
     provider: str
     path: Path | str
+    glob_pattern: str = "**/*.jsonl"
 
     @property
     def resolved_path(self) -> Path:
@@ -47,6 +48,11 @@ def default_watch_roots(home: Path | None = None) -> list[WatchRoot]:
         WatchRoot("claude", root / ".claude" / "projects"),
         WatchRoot("codex", root / ".codex" / "sessions"),
         WatchRoot("cursor", root / ".cursor" / "sessions"),
+        WatchRoot(
+            "cursor-agent-transcripts",
+            root / ".cursor" / "projects",
+            "**/agent-transcripts/**/*.jsonl",
+        ),
         WatchRoot("gemini", root / ".gemini" / "sessions"),
     ]
 
@@ -494,7 +500,7 @@ class JSONLWatcher:
         max_lines_per_file: int = 100,
     ):
         if watch_roots is not None:
-            self.watch_roots = [WatchRoot(root.provider, root.path) for root in watch_roots]
+            self.watch_roots = [WatchRoot(root.provider, root.path, root.glob_pattern) for root in watch_roots]
         elif watch_dir is not None:
             self.watch_roots = [WatchRoot("claude", Path(watch_dir).expanduser())]
         else:
@@ -557,10 +563,11 @@ class JSONLWatcher:
                 continue
             try:
                 bases = [root_path]
-                if root.provider == "claude":
+                if root.provider == "claude" and root.glob_pattern == "**/*.jsonl":
                     bases = [path for path in root_path.iterdir() if path.is_dir()]
                 for base in bases:
-                    for f in base.rglob("*.jsonl"):
+                    files = base.glob(root.glob_pattern)
+                    for f in files:
                         if f.is_file():
                             path = str(f)
                             try:

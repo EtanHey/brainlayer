@@ -225,6 +225,8 @@ struct DashboardFlowSummary: Sendable, Equatable {
     let ingress: DashboardFlowLane
     let queue: DashboardQueueSummary
     let enrichment: DashboardFlowLane
+    let watcherHealth: DashboardStats.WatcherHealth?
+    let watcherHealthIsFresh: Bool
 
     var isUnavailable: Bool {
         ingress.status == .unavailable || enrichment.status == .unavailable || queue.status == .unavailable
@@ -401,7 +403,9 @@ struct DashboardFlowSummary: Sendable, Equatable {
                 tertiaryValues: [],
                 tertiarySeriesLabel: nil,
                 tertiaryAccentColor: nil
-            )
+            ),
+            watcherHealth: stats.watcherHealth,
+            watcherHealthIsFresh: stats.watcherHealth?.isFresh(now: now) ?? false
         )
     }
 
@@ -562,23 +566,34 @@ extension DashboardFlowSummary {
             // sparklineReferenceValue benchmark behaviour downstream).
             return enrichment
         case .agentStores:
+            let agentValues = ingress.values
+            let agentTotal = agentValues.reduce(0, +)
+            let agentStatus = agentStoreStatus(values: agentValues)
             return DashboardFlowLane(
                 name: "Agent stores",
-                status: ingress.status,
-                statusText: ingress.statusText,
+                status: agentStatus,
+                statusText: agentStoreStatusText(
+                    status: agentStatus,
+                    totalEvents: agentTotal,
+                    windowLabel: ingress.windowLabel
+                ),
                 windowLabel: ingress.windowLabel,
                 activityWindowMinutes: ingress.activityWindowMinutes,
                 rateText: DashboardMetricFormatter.rateString(
-                    totalEvents: ingress.values.reduce(0, +),
+                    totalEvents: agentTotal,
                     activityWindowMinutes: ingress.activityWindowMinutes
                 ),
                 volumeText: DashboardMetricFormatter.activitySummaryString(
-                    totalEvents: ingress.values.reduce(0, +),
+                    totalEvents: agentTotal,
                     activityWindowMinutes: ingress.activityWindowMinutes
                 ),
-                // Single shared lastWriteAt — keep the lane's own last-event text.
-                lastEventText: ingress.lastEventText,
-                values: ingress.values,
+                lastEventText: agentStoreLastEventText(
+                    status: agentStatus,
+                    totalEvents: agentTotal,
+                    latestBucketCount: agentValues.last ?? 0,
+                    windowLabel: ingress.windowLabel
+                ),
+                values: agentValues,
                 sparklineLabel: "Agent stores over \(ingress.windowLabel)",
                 latestBucketName: "latest agent-store bucket",
                 accentColor: BrainBarDesignTokens.Colors.seriesAgent,
@@ -592,21 +607,37 @@ extension DashboardFlowSummary {
             )
         case .jsonlWatcher:
             let watcherValues = ingress.secondaryValues
+            let watcherTotal = watcherValues.reduce(0, +)
+            let watcherStatus = jsonlWatcherStatus(
+                values: watcherValues,
+                health: watcherHealth,
+                healthIsFresh: watcherHealthIsFresh
+            )
+            let watcherStatusText = jsonlWatcherStatusText(
+                status: watcherStatus,
+                totalEvents: watcherTotal,
+                windowLabel: ingress.windowLabel
+            )
             return DashboardFlowLane(
                 name: "JSONL watcher",
-                status: ingress.status,
-                statusText: ingress.statusText,
+                status: watcherStatus,
+                statusText: watcherStatusText,
                 windowLabel: ingress.windowLabel,
                 activityWindowMinutes: ingress.activityWindowMinutes,
                 rateText: DashboardMetricFormatter.rateString(
-                    totalEvents: watcherValues.reduce(0, +),
+                    totalEvents: watcherTotal,
                     activityWindowMinutes: ingress.activityWindowMinutes
                 ),
                 volumeText: DashboardMetricFormatter.activitySummaryString(
-                    totalEvents: watcherValues.reduce(0, +),
+                    totalEvents: watcherTotal,
                     activityWindowMinutes: ingress.activityWindowMinutes
                 ),
-                lastEventText: ingress.lastEventText,
+                lastEventText: jsonlWatcherLastEventText(
+                    status: watcherStatus,
+                    totalEvents: watcherTotal,
+                    latestBucketCount: watcherValues.last ?? 0,
+                    windowLabel: ingress.windowLabel
+                ),
                 values: watcherValues,
                 sparklineLabel: "JSONL watcher over \(ingress.windowLabel)",
                 latestBucketName: "latest watcher bucket",
@@ -620,6 +651,128 @@ extension DashboardFlowSummary {
                 tertiaryAccentColor: nil
             )
         }
+    }
+
+    private func agentStoreStatus(values: [Int]) -> DashboardFlowLaneStatus {
+        let totalEvents = values.reduce(0, +)
+        if (values.last ?? 0) > 0 {
+            return .live
+        }
+        if totalEvents > 0 {
+            return .recent
+        }
+        return .idle
+    }
+
+    private func agentStoreStatusText(
+        status: DashboardFlowLaneStatus,
+        totalEvents: Int,
+        windowLabel: String
+    ) -> String {
+        switch status {
+        case .live:
+            return "Agent stores live now"
+        case .recent:
+            return "Recent agent-store writes in \(windowLabel.lowercased())"
+        case .idle:
+            return totalEvents == 0 ? "No agent-store writes" : "Agent stores idle"
+        case .queued:
+            return "Agent stores queued"
+        case .draining:
+            return "Agent stores draining"
+        case .unavailable:
+            return "Agent stores unavailable"
+        }
+    }
+
+    private func agentStoreLastEventText(
+        status: DashboardFlowLaneStatus,
+        totalEvents: Int,
+        latestBucketCount: Int,
+        windowLabel: String
+    ) -> String {
+        if totalEvents == 0 {
+            return "No agent-store writes in \(windowLabel)"
+        }
+        if latestBucketCount > 0 || status == .live {
+            return "\(latestBucketCount) agent-store writes in latest bucket"
+        }
+        return "\(totalEvents) agent-store writes in \(windowLabel)"
+    }
+
+    private func jsonlWatcherStatus(
+        values: [Int],
+        health: DashboardStats.WatcherHealth?,
+        healthIsFresh: Bool
+    ) -> DashboardFlowLaneStatus {
+        let totalEvents = values.reduce(0, +)
+        guard health != nil else {
+            return .unavailable
+        }
+        if !healthIsFresh {
+            return .unavailable
+        }
+        if health?.alerting == true {
+            return .unavailable
+        }
+        if totalEvents == 0,
+           let health,
+           health.activeEntriesPerMinute > 0,
+           health.realtimeInsertsPerMinute <= 0 {
+            return .unavailable
+        }
+        if (values.last ?? 0) > 0 {
+            return .live
+        }
+        if totalEvents > 0 {
+            return .recent
+        }
+        return .idle
+    }
+
+    private func jsonlWatcherStatusText(
+        status: DashboardFlowLaneStatus,
+        totalEvents: Int,
+        windowLabel: String
+    ) -> String {
+        switch status {
+        case .live:
+            return "JSONL watcher live now"
+        case .recent:
+            return "Recent JSONL watcher writes in \(windowLabel.lowercased())"
+        case .unavailable:
+            if watcherHealth == nil {
+                return "Watcher health unavailable"
+            }
+            if !watcherHealthIsFresh {
+                return "Watcher health stale"
+            }
+            if watcherHealth?.alerting == true {
+                return "Watcher coverage alert"
+            }
+            return "Watcher stale: JSONL activity is not landing"
+        case .idle:
+            return totalEvents == 0 ? "No JSONL watcher writes" : "JSONL watcher idle"
+        case .queued:
+            return "JSONL watcher queued"
+        case .draining:
+            return "JSONL watcher draining"
+        }
+    }
+
+    private func jsonlWatcherLastEventText(
+        status: DashboardFlowLaneStatus,
+        totalEvents: Int,
+        latestBucketCount: Int,
+        windowLabel: String
+    ) -> String {
+        if totalEvents == 0 {
+            return "No watcher writes in \(windowLabel)"
+        }
+        if latestBucketCount > 0 || status == .live {
+            return "\(latestBucketCount) watcher writes in latest bucket"
+        }
+        return "\(totalEvents) watcher writes in \(windowLabel)"
     }
 }
 

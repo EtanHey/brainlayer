@@ -141,6 +141,189 @@ final class BrainBarUXLogicTests: XCTestCase {
         XCTAssertEqual(summary.windowLabel, "Last 1h")
     }
 
+    func testJsonlWatcherLaneDoesNotBorrowLiveStatusFromAgentStores() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let stats = DashboardStats(
+            chunkCount: 120,
+            enrichedChunkCount: 120,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 100,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 4_096,
+            recentActivityBuckets: [0, 0, 0, 3],
+            recentAgentWriteBuckets: [0, 0, 0, 3],
+            recentWatcherWriteBuckets: [0, 0, 0, 0],
+            recentEnrichmentBuckets: [0, 0, 0, 0],
+            activityWindowMinutes: 30,
+            bucketCount: 4,
+            liveWindowMinutes: 1,
+            lastWriteAt: now.addingTimeInterval(-15),
+            watcherHealth: DashboardStats.WatcherHealth(
+                alerting: false,
+                filesTracked: 12,
+                maxOffsetLagBytes: 0,
+                activeEntriesPerMinute: 0,
+                realtimeInsertsPerMinute: 0,
+                updatedAt: now
+            )
+        )
+
+        let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
+        let watcherLane = summary.lane(for: .jsonlWatcher)
+
+        XCTAssertEqual(summary.ingress.status, .live)
+        XCTAssertEqual(watcherLane.status, .idle)
+        XCTAssertEqual(watcherLane.statusText, "No JSONL watcher writes")
+        XCTAssertEqual(watcherLane.lastEventText, "No watcher writes in Last 30m")
+    }
+
+    func testAgentStoresLaneDoesNotBorrowLiveStatusFromJsonlWatcher() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let stats = DashboardStats(
+            chunkCount: 120,
+            enrichedChunkCount: 120,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 100,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 4_096,
+            recentActivityBuckets: [0, 0, 0, 3],
+            recentAgentWriteBuckets: [0, 0, 0, 0],
+            recentWatcherWriteBuckets: [0, 0, 0, 3],
+            recentEnrichmentBuckets: [0, 0, 0, 0],
+            activityWindowMinutes: 30,
+            bucketCount: 4,
+            liveWindowMinutes: 1,
+            lastWriteAt: now.addingTimeInterval(-15)
+        )
+
+        let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
+        let agentLane = summary.lane(for: .agentStores)
+
+        XCTAssertEqual(summary.ingress.status, .live)
+        XCTAssertEqual(agentLane.status, .idle)
+        XCTAssertEqual(agentLane.statusText, "No agent-store writes")
+        XCTAssertEqual(agentLane.lastEventText, "No agent-store writes in Last 30m")
+    }
+
+    func testJsonlWatcherLaneMarksFlatGraphBrokenWhenHealthSeesActiveJsonl() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let stats = DashboardStats(
+            chunkCount: 120,
+            enrichedChunkCount: 120,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 100,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 4_096,
+            recentActivityBuckets: [0, 0, 0, 0],
+            recentAgentWriteBuckets: [0, 0, 0, 0],
+            recentWatcherWriteBuckets: [0, 0, 0, 0],
+            recentEnrichmentBuckets: [0, 0, 0, 0],
+            activityWindowMinutes: 30,
+            bucketCount: 4,
+            watcherHealth: DashboardStats.WatcherHealth(
+                alerting: false,
+                filesTracked: 12,
+                maxOffsetLagBytes: 0,
+                activeEntriesPerMinute: 8.5,
+                realtimeInsertsPerMinute: 0,
+                updatedAt: now
+            )
+        )
+
+        let watcherLane = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
+            .lane(for: .jsonlWatcher)
+
+        XCTAssertEqual(watcherLane.status, .unavailable)
+        XCTAssertEqual(watcherLane.statusText, "Watcher stale: JSONL activity is not landing")
+    }
+
+    func testJsonlWatcherLaneMarksStaleWatcherHealthUnavailable() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let stats = DashboardStats(
+            chunkCount: 120,
+            enrichedChunkCount: 120,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 100,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 4_096,
+            recentActivityBuckets: [0, 0, 0, 0],
+            recentAgentWriteBuckets: [0, 0, 0, 0],
+            recentWatcherWriteBuckets: [0, 0, 0, 0],
+            recentEnrichmentBuckets: [0, 0, 0, 0],
+            activityWindowMinutes: 30,
+            bucketCount: 4,
+            watcherHealth: DashboardStats.WatcherHealth(
+                alerting: false,
+                filesTracked: 12,
+                maxOffsetLagBytes: 0,
+                activeEntriesPerMinute: 0,
+                realtimeInsertsPerMinute: 0,
+                updatedAt: now.addingTimeInterval(-601)
+            )
+        )
+
+        let watcherLane = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
+            .lane(for: .jsonlWatcher)
+
+        XCTAssertEqual(watcherLane.status, .unavailable)
+        XCTAssertEqual(watcherLane.statusText, "Watcher health stale")
+    }
+
+    func testJsonlWatcherLaneMarksMissingWatcherHealthUnavailable() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let stats = DashboardStats(
+            chunkCount: 120,
+            enrichedChunkCount: 120,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 100,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 4_096,
+            recentActivityBuckets: [0, 0, 0, 0],
+            recentAgentWriteBuckets: [0, 0, 0, 0],
+            recentWatcherWriteBuckets: [0, 0, 0, 0],
+            recentEnrichmentBuckets: [0, 0, 0, 0],
+            activityWindowMinutes: 30,
+            bucketCount: 4
+        )
+
+        let watcherLane = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
+            .lane(for: .jsonlWatcher)
+
+        XCTAssertEqual(watcherLane.status, .unavailable)
+        XCTAssertEqual(watcherLane.statusText, "Watcher health unavailable")
+    }
+
+    func testJsonlWatcherLaneMarksTimestamplessWatcherHealthUnavailable() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let stats = DashboardStats(
+            chunkCount: 120,
+            enrichedChunkCount: 120,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 100,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 4_096,
+            recentActivityBuckets: [0, 0, 0, 0],
+            recentAgentWriteBuckets: [0, 0, 0, 0],
+            recentWatcherWriteBuckets: [0, 0, 0, 0],
+            recentEnrichmentBuckets: [0, 0, 0, 0],
+            activityWindowMinutes: 30,
+            bucketCount: 4,
+            watcherHealth: DashboardStats.WatcherHealth(
+                alerting: false,
+                filesTracked: 12,
+                maxOffsetLagBytes: 0,
+                activeEntriesPerMinute: 0,
+                realtimeInsertsPerMinute: 0
+            )
+        )
+
+        let watcherLane = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
+            .lane(for: .jsonlWatcher)
+
+        XCTAssertEqual(watcherLane.status, .unavailable)
+        XCTAssertEqual(watcherLane.statusText, "Watcher health stale")
+    }
+
     func testDashboardFlowSummaryKeepsRecentEnrichmentDistinctFromLiveNow() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let stats = DashboardStats(

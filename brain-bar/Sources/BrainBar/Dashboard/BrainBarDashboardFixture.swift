@@ -57,7 +57,8 @@ enum BrainBarDashboardFixture {
             filesTracked: 14,
             maxOffsetLagBytes: 2_048,
             activeEntriesPerMinute: 12.5,
-            realtimeInsertsPerMinute: 9.0
+            realtimeInsertsPerMinute: 9.0,
+            updatedAt: fetchedAt
         )
     )
 
