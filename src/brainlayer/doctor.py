@@ -48,9 +48,9 @@ from .search_repo import clear_hybrid_search_cache
 from .vector_store import VectorStore
 
 DEFAULT_RECENT_WINDOW_HOURS = 24
-DEFAULT_ROUNDTRIP_TIMEOUT_SECONDS = 2.0
+DEFAULT_ROUNDTRIP_TIMEOUT_SECONDS = 60.0
 DEFAULT_QUEUE_WARNING_COUNT = 25
-DEFAULT_QUEUE_MOVEMENT_SAMPLE_SECONDS = 0.1
+DEFAULT_QUEUE_MOVEMENT_SAMPLE_SECONDS = 10.0
 DOCTOR_PROBE_PROJECT = "brainlayer-doctor"
 
 
@@ -174,66 +174,84 @@ def _cleanup_probe(store: VectorStore, chunk_id: str) -> None:
     clear_hybrid_search_cache(getattr(store, "db_path", None))
 
 
+def _is_retryable_probe_writer_conflict(reason: str) -> bool:
+    lowered = reason.lower()
+    return (
+        "another writer is using" in lowered
+        or "database is locked" in lowered
+        or "database table is locked" in lowered
+        or "sqlite_busy" in lowered
+    )
+
+
 def _roundtrip_probe(db_path: Path, timeout_seconds: float) -> tuple[bool, float, str]:
     started = time.monotonic()
     chunk_id = f"doctor-probe-{uuid.uuid4().hex}"
     content = f"doctor vector roundtrip probe {chunk_id}"
-    store: VectorStore | None = None
-    try:
-        store = VectorStore(db_path)
-        cursor = store.conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO chunks (
-                id, content, metadata, source_file, project, content_type,
-                value_type, char_count, source, tags, summary, created_at,
-                enriched_at, enrich_status, chunk_origin, seen_count, last_seen_at,
-                content_class
-            ) VALUES (?, ?, ?, 'doctor-probe', ?, 'doctor_probe',
-                'HIGH', ?, 'doctor', ?, ?, ?, NULL, NULL, 'raw', 1, ?,
-                'operational')
-            """,
-            (
-                chunk_id,
-                content,
-                json.dumps({"doctor_probe": True}),
-                DOCTOR_PROBE_PROJECT,
-                len(content),
-                json.dumps(["doctor-probe"]),
-                content,
-                datetime.now(UTC).isoformat(),
-                datetime.now(UTC).isoformat(),
-            ),
-        )
-        store._upsert_chunk_vector(cursor, chunk_id, _probe_embedding(content))
-        clear_hybrid_search_cache(getattr(store, "db_path", None))
-
-        deadline = time.monotonic() + timeout_seconds
-        while True:
-            results = store.hybrid_search(
-                query_embedding=_probe_embedding(content),
-                query_text="no_keyword_match_for_brainlayer_doctor_probe",
-                n_results=1,
-                project_filter=DOCTOR_PROBE_PROJECT,
-                content_type_filter="doctor_probe",
-                source_filter="doctor",
-                include_operational=True,
+    setup_deadline = started + timeout_seconds
+    last_retryable_reason = ""
+    while True:
+        store: VectorStore | None = None
+        try:
+            store = VectorStore(db_path)
+            cursor = store.conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO chunks (
+                    id, content, metadata, source_file, project, content_type,
+                    value_type, char_count, source, tags, summary, created_at,
+                    enriched_at, enrich_status, chunk_origin, seen_count, last_seen_at,
+                    content_class
+                ) VALUES (?, ?, ?, 'doctor-probe', ?, 'doctor_probe',
+                    'HIGH', ?, 'doctor', ?, ?, ?, NULL, NULL, 'raw', 1, ?,
+                    'operational')
+                """,
+                (
+                    chunk_id,
+                    content,
+                    json.dumps({"doctor_probe": True}),
+                    DOCTOR_PROBE_PROJECT,
+                    len(content),
+                    json.dumps(["doctor-probe"]),
+                    content,
+                    datetime.now(UTC).isoformat(),
+                    datetime.now(UTC).isoformat(),
+                ),
             )
-            ids = results.get("ids") or [[]]
-            if ids and ids[0] and ids[0][0] == chunk_id:
-                return True, time.monotonic() - started, "vector_retrieved"
-            if time.monotonic() >= deadline:
-                break
-            time.sleep(0.05)
-        return False, time.monotonic() - started, "probe_not_vector_retrievable"
-    except Exception as exc:
-        return False, time.monotonic() - started, str(exc)
-    finally:
-        if store is not None:
-            try:
-                _cleanup_probe(store, chunk_id)
-            finally:
-                store.close()
+            store._upsert_chunk_vector(cursor, chunk_id, _probe_embedding(content))
+            clear_hybrid_search_cache(getattr(store, "db_path", None))
+
+            deadline = time.monotonic() + timeout_seconds
+            while True:
+                results = store.hybrid_search(
+                    query_embedding=_probe_embedding(content),
+                    query_text="no_keyword_match_for_brainlayer_doctor_probe",
+                    n_results=1,
+                    project_filter=DOCTOR_PROBE_PROJECT,
+                    content_type_filter="doctor_probe",
+                    source_filter="doctor",
+                    include_operational=True,
+                )
+                ids = results.get("ids") or [[]]
+                if ids and ids[0] and ids[0][0] == chunk_id:
+                    return True, time.monotonic() - started, "vector_retrieved"
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.05)
+            return False, time.monotonic() - started, "probe_not_vector_retrievable"
+        except Exception as exc:
+            reason = str(exc)
+            if _is_retryable_probe_writer_conflict(reason) and time.monotonic() < setup_deadline:
+                last_retryable_reason = reason
+                time.sleep(0.05)
+                continue
+            return False, time.monotonic() - started, reason or last_retryable_reason
+        finally:
+            if store is not None:
+                try:
+                    _cleanup_probe(store, chunk_id)
+                finally:
+                    store.close()
 
 
 def _check_launchd(

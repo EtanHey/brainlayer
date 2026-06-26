@@ -20,7 +20,7 @@
 		<string>--enrich-interval</string>
 		<string>10.0</string>
 		<string>--enrich-limit</string>
-		<string>5</string>
+		<string>0</string>
 		<string>--enrich-since-hours</string>
 		<string>87600</string>
 	</array>

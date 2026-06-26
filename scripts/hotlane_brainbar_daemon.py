@@ -181,9 +181,10 @@ def run(
             queue_has_backlog = queue_depth_fn(queue_dir) > 0
             queue_has_high_priority_backlog = queue_has_backlog and high_priority_queue_depth_fn(queue_dir) > 0
             if queue_has_backlog:
-                LOGGER.info("durable queue has backlog; suppressing enrichment only")
-            if queue_has_high_priority_backlog:
-                LOGGER.info("durable high-priority queue has backlog; yielding writer slot to drain")
+                if queue_has_high_priority_backlog:
+                    LOGGER.info("durable high-priority queue has backlog; yielding writer slot to drain")
+                else:
+                    LOGGER.info("durable queue has enrichment backlog; yielding writer slot to drain")
                 cycles += 1
                 sleep_fn(interval)
                 continue
@@ -191,8 +192,6 @@ def run(
             cycle_enrich_limit = (
                 enrich_limit if not enrich_disabled and enrich_limit > 0 and now - last_enrich >= enrich_interval else 0
             )
-            if queue_has_backlog:
-                cycle_enrich_limit = 0
             if cycle_backlog_batch > 0:
                 last_backlog = now
             if cycle_enrich_limit > 0:

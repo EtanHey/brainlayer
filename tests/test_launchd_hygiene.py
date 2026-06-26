@@ -110,6 +110,11 @@ def test_active_daemon_launchd_hygiene_matrix():
     assert "QueueDirectories" not in drain
     assert "--once" not in drain["ProgramArguments"]
 
+    hotlane = _load("scripts/launchd/com.brainlayer.hotlane-brainbar.plist")
+    hotlane_args = hotlane["ProgramArguments"]
+    assert hotlane_args[hotlane_args.index("--backlog-batch") + 1] == "4"
+    assert hotlane_args[hotlane_args.index("--enrich-limit") + 1] == "0"
+
     backup = _load("scripts/launchd/com.brainlayer.backup-daily.plist")
     assert "KeepAlive" not in backup
     assert "StartCalendarInterval" in backup

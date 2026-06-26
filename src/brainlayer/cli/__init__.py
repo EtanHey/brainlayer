@@ -12,7 +12,7 @@ import sys
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Any, Optional
 
 import typer
 from rich import print as rprint
@@ -1024,6 +1024,137 @@ def _status_watcher_freshness(
     }
 
 
+def _status_queue_oldest_age_seconds(queue_path: Path) -> int | None:
+    try:
+        if not queue_path.exists():
+            return 0
+        mtimes = [path.stat().st_mtime for path in queue_path.glob("*.jsonl") if path.is_file()]
+    except OSError:
+        return None
+    if not mtimes:
+        return 0
+    return max(0, int(datetime.now(UTC).timestamp() - min(mtimes)))
+
+
+def _status_issue_to_dict(issue: object) -> dict[str, Any]:
+    raw = getattr(issue, "__dict__", {})
+    return {
+        "code": str(getattr(issue, "code", raw.get("code", "unknown"))),
+        "severity": str(getattr(issue, "severity", raw.get("severity", "unknown"))),
+        "message": str(getattr(issue, "message", raw.get("message", ""))),
+        "details": getattr(issue, "details", raw.get("details", {})) or {},
+    }
+
+
+def _status_doctor_gate(doctor_result: object | None, doctor_error: str | None) -> tuple[dict[str, Any], dict[str, Any]]:
+    if doctor_error is not None:
+        doctor_gate = {
+            "checked": True,
+            "ok": False,
+            "error": doctor_error,
+            "issues": [
+                {
+                    "code": "status_doctor_failed",
+                    "severity": "fatal",
+                    "message": doctor_error,
+                    "details": {},
+                }
+            ],
+        }
+        vector_roundtrip = {
+            "checked": True,
+            "status": "failed",
+            "issue": doctor_gate["issues"][0],
+            "latency_seconds": None,
+        }
+        return doctor_gate, vector_roundtrip
+
+    if doctor_result is None:
+        return (
+            {"checked": False, "ok": None, "issues": []},
+            {
+                "checked": False,
+                "status": "not_checked_by_status",
+                "green_gate": "Run `brainlayer status --check-doctor --json` or `brainlayer doctor --json`.",
+            },
+        )
+
+    issues = [_status_issue_to_dict(issue) for issue in (getattr(doctor_result, "issues", None) or [])]
+    roundtrip_issue = next((issue for issue in issues if issue.get("code") == "roundtrip_vector_probe_failed"), None)
+    latency = getattr(doctor_result, "roundtrip_latency_seconds", None)
+    doctor_ok = bool(getattr(doctor_result, "ok", False))
+    doctor_gate = {
+        "checked": True,
+        "ok": doctor_ok,
+        "exit_code": int(getattr(doctor_result, "exit_code", 1 if not doctor_ok else 0)),
+        "issues": issues,
+    }
+    vector_roundtrip = {
+        "checked": True,
+        "status": "failed" if roundtrip_issue else "passed",
+        "latency_seconds": latency,
+    }
+    if roundtrip_issue:
+        vector_roundtrip["issue"] = roundtrip_issue
+    return doctor_gate, vector_roundtrip
+
+
+def _status_queue_health(
+    *,
+    queue_depth: int | None,
+    queue_oldest_age_seconds: int | None,
+    drain_freshness: dict[str, object],
+    fresh_tail_count: int = 25,
+    fresh_tail_max_age_seconds: int = 300,
+) -> dict[str, object]:
+    if queue_depth is None:
+        return {"green": False, "status": "unknown", "reason": "queue_depth_unknown"}
+    if queue_depth == 0:
+        return {
+            "green": True,
+            "status": "empty",
+            "oldest_age_seconds": queue_oldest_age_seconds,
+            "fresh_tail_count": fresh_tail_count,
+            "fresh_tail_max_age_seconds": fresh_tail_max_age_seconds,
+        }
+    fresh_tail = (
+        queue_depth <= fresh_tail_count
+        and queue_oldest_age_seconds is not None
+        and queue_oldest_age_seconds <= fresh_tail_max_age_seconds
+        and drain_freshness.get("fresh") is True
+    )
+    return {
+        "green": fresh_tail,
+        "status": "draining" if fresh_tail else "backlog",
+        "oldest_age_seconds": queue_oldest_age_seconds,
+        "fresh_tail_count": fresh_tail_count,
+        "fresh_tail_max_age_seconds": fresh_tail_max_age_seconds,
+        "drain_fresh": drain_freshness.get("fresh"),
+    }
+
+
+def _status_queue_health_with_doctor(queue_health: dict[str, object], doctor_gate: dict[str, Any]) -> dict[str, object]:
+    if doctor_gate.get("checked") is not True or doctor_gate.get("ok") is not True:
+        return queue_health
+    moving_issue = None
+    for issue in doctor_gate.get("issues", []):
+        if issue.get("code") == "queue_backed_up_but_moving":
+            moving_issue = issue
+            break
+    if moving_issue is None:
+        return queue_health
+    updated = dict(queue_health)
+    updated.update(
+        {
+            "green": True,
+            "status": "moving_backlog",
+            "warning": True,
+            "doctor_issue": moving_issue,
+        }
+    )
+    return updated
+
+
 @app.command("status")
 def status_command(
     db: Optional[Path] = typer.Option(None, "--db", help="Path to brainlayer.db"),
@@ -1038,6 +1169,11 @@ def status_command(
         "--watcher-health-path",
         help="Watcher health JSON path.",
     ),
+    check_doctor: bool = typer.Option(
+        False,
+        "--check-doctor",
+        help="Run the doctor probe gate, including vector roundtrip, before computing operational_green.",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
     """Show a lightweight BrainLayer transport status snapshot."""
@@ -1051,6 +1187,7 @@ def status_command(
     except OSError:
         queue_depth = None
     queue_depth_by_source = _status_queue_depth_by_source(queue_path)
+    queue_oldest_age_seconds = _status_queue_oldest_age_seconds(queue_path)
     pending_store_lines = _status_count_pending_store_lines(db_path)
     try:
         unembedded = _status_count_unembedded(db_path)
@@ -1077,22 +1214,43 @@ def status_command(
         watcher_db_probe_failed = bool(watcher_snapshot.get("db_probe_failed"))
     watcher_missing_providers = sorted(set(expected_watch_providers) - set(watcher_providers))
     watcher_freshness = _status_watcher_freshness(watcher_snapshot)
-    vector_roundtrip = {
-        "checked": False,
-        "status": "not_checked_by_status",
-        "green_gate": "Run `brainlayer doctor --json` for the destructive-probe-isolated vector roundtrip gate.",
-    }
+    drain_freshness = _status_watcher_freshness(drain_snapshot)
+    queue_health = _status_queue_health(
+        queue_depth=queue_depth,
+        queue_oldest_age_seconds=queue_oldest_age_seconds,
+        drain_freshness=drain_freshness,
+    )
+    doctor_result = None
+    doctor_error = None
+    if check_doctor:
+        from ..doctor import DoctorConfig
+
+        try:
+            doctor_result = _run_doctor_cli(
+                DoctorConfig(
+                    db_path=db_path,
+                    queue_dir=queue_path,
+                    watcher_health_path=watcher_health,
+                    drain_health_path=drain_health,
+                )
+            )
+        except Exception as exc:
+            doctor_error = str(exc)
+    doctor_gate, vector_roundtrip = _status_doctor_gate(doctor_result, doctor_error)
+    queue_health = _status_queue_health_with_doctor(queue_health, doctor_gate)
+    queue_green = queue_health["green"] is True if check_doctor else queue_depth == 0
     operational_green = all(
         (
             db_path.exists(),
-            queue_depth == 0,
+            queue_green,
             unembedded == 0,
             pending_store_lines == 0,
             not watcher_missing_providers,
             watcher_freshness["fresh"] is True,
             watcher_alerting is False,
             watcher_db_probe_failed is False,
-            vector_roundtrip["checked"] is True,
+            doctor_gate["checked"] is True,
+            doctor_gate["ok"] is True,
         )
     )
 
@@ -1101,13 +1259,17 @@ def status_command(
         "db_exists": db_path.exists(),
         "queue_depth": queue_depth,
         "queue_depth_by_source": queue_depth_by_source,
+        "queue_oldest_age_seconds": queue_oldest_age_seconds,
+        "queue_health": queue_health,
         "pending_store_lines": pending_store_lines,
         "unembedded_chunks": unembedded,
         "drain_health": drain_snapshot,
+        "drain_freshness": drain_freshness,
         "watcher_health": watcher_snapshot,
         "watcher_freshness": watcher_freshness,
         "expected_watch_providers": expected_watch_providers,
         "watcher_missing_providers": watcher_missing_providers,
+        "doctor_gate": doctor_gate,
         "vector_roundtrip": vector_roundtrip,
         "operational_green": operational_green,
     }

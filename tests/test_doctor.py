@@ -397,6 +397,30 @@ def test_roundtrip_probe_reports_writer_conflict_without_traceback(tmp_path, mon
     assert "another writer is using brainlayer.db" in reason
 
 
+def test_roundtrip_probe_retries_transient_writer_conflict(tmp_path, monkeypatch):
+    from brainlayer import doctor
+
+    db_path = tmp_path / "roundtrip-transient-writer.db"
+    _build_db(db_path)
+    real_vector_store = doctor.VectorStore
+    attempts = 0
+
+    class TransientBusyVectorStore(real_vector_store):
+        def __init__(self, db_path):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise RuntimeError("another writer is using brainlayer.db (pid 123)")
+            super().__init__(db_path)
+
+    monkeypatch.setattr(doctor, "VectorStore", TransientBusyVectorStore)
+
+    ok, _latency, reason = doctor._roundtrip_probe(db_path, timeout_seconds=2.0)
+
+    assert ok is True, reason
+    assert attempts == 2
+
+
 def test_roundtrip_probe_attempts_search_after_slow_setup(tmp_path, monkeypatch):
     from brainlayer import doctor
 

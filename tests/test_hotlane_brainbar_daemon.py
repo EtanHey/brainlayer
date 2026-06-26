@@ -300,10 +300,11 @@ def test_hotlane_run_opens_and_closes_writer_store_each_cycle(tmp_path):
     assert [event[0] for event in events] == ["open", "close", "open", "close"]
 
 
-def test_hotlane_run_keeps_embedding_backlog_when_only_enrichment_is_backlogged(tmp_path):
+def test_hotlane_run_yields_writer_to_enrichment_queue_backlog(tmp_path):
     hotlane = _load_hotlane_module()
     opened = []
     cycle_calls = []
+    sleeps = []
 
     class FakeStore:
         def __init__(self, path):
@@ -325,17 +326,15 @@ def test_hotlane_run_keeps_embedding_backlog_when_only_enrichment_is_backlogged(
         model_factory=lambda: SimpleNamespace(embed_query=lambda _text: [0.0]),
         cycle_fn=lambda **kwargs: cycle_calls.append(kwargs) or hotlane.CycleResult(),
         time_fn=iter([0.0, 100.0]).__next__,
-        sleep_fn=lambda _seconds: None,
+        sleep_fn=sleeps.append,
         max_cycles=1,
         queue_depth_fn=lambda _queue_dir: 3,
         high_priority_queue_depth_fn=lambda _queue_dir: 0,
     )
 
-    assert opened == [tmp_path / "brainlayer.db"]
-    assert len(cycle_calls) == 1
-    assert cycle_calls[0]["backlog_batch"] == hotlane.DEFAULT_BACKLOG_BATCH
-    assert cycle_calls[0]["enrich_limit"] == 0
-    assert cycle_calls[0]["recent_limit"] == 5
+    assert opened == []
+    assert cycle_calls == []
+    assert sleeps == [0.25]
 
 
 def test_hotlane_run_yields_writer_to_high_priority_queue_backlog(tmp_path):
