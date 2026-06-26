@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="tile" x1="122" y1="92" x2="894" y2="936" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#171A22"/>
+      <stop offset="0.54" stop-color="#22263A"/>
+      <stop offset="1" stop-color="#10131A"/>
+    </linearGradient>
+    <linearGradient id="bar" x1="246" y1="656" x2="778" y2="656" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F1B083"/>
+      <stop offset="0.52" stop-color="#D49468"/>
+      <stop offset="1" stop-color="#B8754D"/>
+    </linearGradient>
+    <linearGradient id="core" x1="348" y1="198" x2="678" y2="574" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F7C4A5"/>
+      <stop offset="1" stop-color="#D49468"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="150%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="28" stdDeviation="34" flood-color="#000000" flood-opacity="0.34"/>
+    </filter>
+    <filter id="nodeGlow" x="-65%" y="-65%" width="230%" height="230%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="18" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <clipPath id="squircle">
+      <path d="M512 58c143 0 249 25 325 101s101 182 101 325v56c0 143-25 249-101 325S655 966 512 966h-56c-143 0-249-25-325-101S30 683 30 540v-56c0-143 25-249 101-325S313 58 456 58h56z"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#squircle)">
+    <path d="M0 0h1024v1024H0z" fill="url(#tile)"/>
+    <path d="M-50 724c184-102 344-98 520 14 166 106 330 116 604-34v370H-50z" fill="#D49468" opacity="0.08"/>
+    <path d="M160 92h704c38 0 68 30 68 68v704c0 38-30 68-68 68H160c-38 0-68-30-68-68V160c0-38 30-68 68-68z" fill="none" stroke="#FFFFFF" stroke-opacity="0.06" stroke-width="3"/>
+  </g>
+
+  <g filter="url(#softShadow)">
+    <g stroke="#D49468" stroke-width="17" stroke-opacity="0.36" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M387 215c68 22 130 22 194 0"/>
+      <path d="M387 215 265 352"/>
+      <path d="M387 215 512 342"/>
+      <path d="M581 215 729 352"/>
+      <path d="M581 215 512 342"/>
+      <path d="M265 352 512 342"/>
+      <path d="M729 352 512 342"/>
+      <path d="M265 352 220 520"/>
+      <path d="M265 352 390 526"/>
+      <path d="M729 352 804 520"/>
+      <path d="M729 352 634 526"/>
+      <path d="M512 342 390 526"/>
+      <path d="M512 342 634 526"/>
+      <path d="M220 520 390 526"/>
+      <path d="M634 526 804 520"/>
+      <path d="M390 526 634 526"/>
+      <path d="M220 520 348 690"/>
+      <path d="M390 526 348 690"/>
+      <path d="M390 526 512 710"/>
+      <path d="M634 526 676 690"/>
+      <path d="M634 526 512 710"/>
+      <path d="M804 520 676 690"/>
+      <path d="M348 690 512 710"/>
+      <path d="M676 690 512 710"/>
+      <path d="M348 690 676 690"/>
+    </g>
+
+    <circle cx="512" cy="342" r="116" fill="#D49468" opacity="0.13"/>
+    <circle cx="512" cy="342" r="76" fill="#D49468" opacity="0.10"/>
+
+    <g fill="#D49468">
+      <circle cx="387" cy="215" r="46" opacity="0.72"/>
+      <circle cx="581" cy="215" r="46" opacity="0.72"/>
+      <circle cx="265" cy="352" r="42" opacity="0.60"/>
+      <circle cx="729" cy="352" r="42" opacity="0.60"/>
+      <circle cx="220" cy="520" r="38" opacity="0.54"/>
+      <circle cx="390" cy="526" r="44" opacity="0.72"/>
+      <circle cx="634" cy="526" r="44" opacity="0.72"/>
+      <circle cx="804" cy="520" r="38" opacity="0.54"/>
+      <circle cx="348" cy="690" r="38" opacity="0.62"/>
+      <circle cx="676" cy="690" r="38" opacity="0.62"/>
+      <circle cx="512" cy="710" r="50" opacity="0.82"/>
+    </g>
+
+    <circle cx="512" cy="342" r="78" fill="url(#core)" filter="url(#nodeGlow)"/>
+    <circle cx="512" cy="342" r="30" fill="#FFFFFF" opacity="0.34"/>
+    <circle cx="512" cy="710" r="21" fill="#FFFFFF" opacity="0.22"/>
+
+    <rect x="246" y="770" width="532" height="82" rx="41" fill="url(#bar)"/>
+    <rect x="304" y="796" width="416" height="30" rx="15" fill="#FFFFFF" opacity="0.26"/>
+  </g>
+</svg>
