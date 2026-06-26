@@ -12,7 +12,7 @@ import sys
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Annotated, Optional
 
 import typer
 from rich import print as rprint
@@ -969,6 +969,61 @@ def _status_count_unembedded(db_path: Path) -> int | None:
     return int(row[0]) if row else None
 
 
+def _status_queue_depth_by_source(queue_path: Path) -> dict[str, int] | None:
+    try:
+        if not queue_path.exists():
+            return {}
+        counts: dict[str, int] = {}
+        for path in queue_path.glob("*.jsonl"):
+            source = path.name.split("-", 1)[0] or "unknown"
+            counts[source] = counts.get(source, 0) + 1
+        return dict(sorted(counts.items()))
+    except OSError:
+        return None
+
+
+def _status_count_pending_store_lines(db_path: Path) -> int | None:
+    pending_path = db_path.parent / "pending-stores.jsonl"
+    try:
+        if not pending_path.exists():
+            return 0
+        return len([line for line in pending_path.read_text(encoding="utf-8").splitlines() if line.strip()])
+    except OSError:
+        return None
+
+
+def _status_expected_watch_providers() -> list[str]:
+    from ..watcher import default_watch_roots
+
+    return sorted({root.provider for root in default_watch_roots()})
+
+
+def _status_watcher_freshness(
+    watcher_snapshot: object,
+    *,
+    max_age_seconds: int = 300,
+) -> dict[str, object]:
+    if not isinstance(watcher_snapshot, dict):
+        return {"fresh": False, "status": "missing", "age_seconds": None, "max_age_seconds": max_age_seconds}
+    raw_updated_at = watcher_snapshot.get("updated_at")
+    if not isinstance(raw_updated_at, str) or not raw_updated_at.strip():
+        return {"fresh": False, "status": "missing_updated_at", "age_seconds": None, "max_age_seconds": max_age_seconds}
+    try:
+        updated_at = datetime.fromisoformat(raw_updated_at.replace("Z", "+00:00"))
+    except ValueError:
+        return {"fresh": False, "status": "invalid_updated_at", "age_seconds": None, "max_age_seconds": max_age_seconds}
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=UTC)
+    age_seconds = max(0, int((datetime.now(UTC) - updated_at.astimezone(UTC)).total_seconds()))
+    fresh = age_seconds <= max_age_seconds
+    return {
+        "fresh": fresh,
+        "status": "fresh" if fresh else "stale",
+        "age_seconds": age_seconds,
+        "max_age_seconds": max_age_seconds,
+    }
+
+
 @app.command("status")
 def status_command(
     db: Optional[Path] = typer.Option(None, "--db", help="Path to brainlayer.db"),
@@ -978,17 +1033,25 @@ def status_command(
         "--drain-health-path",
         help="Drain health JSON path.",
     ),
+    watcher_health_path: Path = typer.Option(
+        Path("~/.local/share/brainlayer/watcher-health.json"),
+        "--watcher-health-path",
+        help="Watcher health JSON path.",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
     """Show a lightweight BrainLayer transport status snapshot."""
     db_path = (db or get_db_path()).expanduser()
     queue_path = queue_dir.expanduser()
     drain_health = drain_health_path.expanduser()
+    watcher_health = watcher_health_path.expanduser()
 
     try:
         queue_depth = len(list(queue_path.glob("*.jsonl"))) if queue_path.exists() else 0
     except OSError:
         queue_depth = None
+    queue_depth_by_source = _status_queue_depth_by_source(queue_path)
+    pending_store_lines = _status_count_pending_store_lines(db_path)
     try:
         unembedded = _status_count_unembedded(db_path)
     except sqlite3.Error:
@@ -997,13 +1060,56 @@ def status_command(
         drain_snapshot = json.loads(drain_health.read_text(encoding="utf-8")) if drain_health.exists() else None
     except (OSError, json.JSONDecodeError):
         drain_snapshot = None
+    try:
+        watcher_snapshot = json.loads(watcher_health.read_text(encoding="utf-8")) if watcher_health.exists() else None
+    except (OSError, json.JSONDecodeError):
+        watcher_snapshot = None
+
+    expected_watch_providers = _status_expected_watch_providers()
+    watcher_providers = []
+    watcher_alerting = None
+    watcher_db_probe_failed = None
+    if isinstance(watcher_snapshot, dict):
+        raw_providers = watcher_snapshot.get("providers")
+        if isinstance(raw_providers, list):
+            watcher_providers = sorted(str(provider) for provider in raw_providers)
+        watcher_alerting = bool(watcher_snapshot.get("alerting"))
+        watcher_db_probe_failed = bool(watcher_snapshot.get("db_probe_failed"))
+    watcher_missing_providers = sorted(set(expected_watch_providers) - set(watcher_providers))
+    watcher_freshness = _status_watcher_freshness(watcher_snapshot)
+    vector_roundtrip = {
+        "checked": False,
+        "status": "not_checked_by_status",
+        "green_gate": "Run `brainlayer doctor --json` for the destructive-probe-isolated vector roundtrip gate.",
+    }
+    operational_green = all(
+        (
+            db_path.exists(),
+            queue_depth == 0,
+            unembedded == 0,
+            pending_store_lines == 0,
+            not watcher_missing_providers,
+            watcher_freshness["fresh"] is True,
+            watcher_alerting is False,
+            watcher_db_probe_failed is False,
+            vector_roundtrip["checked"] is True,
+        )
+    )
 
     payload = {
         "db": str(db_path),
         "db_exists": db_path.exists(),
         "queue_depth": queue_depth,
+        "queue_depth_by_source": queue_depth_by_source,
+        "pending_store_lines": pending_store_lines,
         "unembedded_chunks": unembedded,
         "drain_health": drain_snapshot,
+        "watcher_health": watcher_snapshot,
+        "watcher_freshness": watcher_freshness,
+        "expected_watch_providers": expected_watch_providers,
+        "watcher_missing_providers": watcher_missing_providers,
+        "vector_roundtrip": vector_roundtrip,
+        "operational_green": operational_green,
     }
     if json_output:
         typer.echo(json.dumps(payload, sort_keys=True))
@@ -1011,7 +1117,10 @@ def status_command(
 
     rprint(f"[bold]DB:[/] {payload['db']} ({'present' if payload['db_exists'] else 'missing'})")
     rprint(f"[bold]Queue depth:[/] {queue_depth if queue_depth is not None else 'unknown'}")
+    rprint(f"[bold]Pending store lines:[/] {pending_store_lines if pending_store_lines is not None else 'unknown'}")
     rprint(f"[bold]Unembedded chunks:[/] {unembedded if unembedded is not None else 'unknown'}")
+    if watcher_missing_providers:
+        rprint(f"[bold]Watcher missing providers:[/] {', '.join(watcher_missing_providers)}")
     if drain_snapshot:
         rprint(f"[bold]Drain cycles:[/] {drain_snapshot.get('drain_cycles', 'unknown')}")
         rprint(f"[bold]Drained total:[/] {drain_snapshot.get('drained_total', 'unknown')}")
@@ -2757,6 +2866,74 @@ def watch(
     rprint(f"[bold green]Done.[/] Total flushed: {watcher.indexer.total_flushed}")
 
 
+@app.command("watch-backfill")
+def watch_backfill(
+    source: Optional[list[Path]] = typer.Option(
+        None,
+        "--source",
+        "-s",
+        help="Directory to scan for .jsonl files. Repeat to override default multi-provider roots.",
+    ),
+    home: Optional[Path] = typer.Option(
+        None,
+        "--home",
+        help="Home directory used to build default watch roots.",
+    ),
+    registry: Optional[Path] = typer.Option(
+        None,
+        "--registry",
+        help="Offset registry path. Defaults to the live BrainLayer offsets file.",
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Report files that would be replayed without writing."),
+    max_cycles: int = typer.Option(100, "--max-cycles", min=1, help="Maximum poll cycles to run."),
+) -> None:
+    """One-shot replay for watched JSONL roots using the durable queue writer path."""
+    from ..paths import get_db_path
+    from ..watcher import JSONLWatcher, WatchRoot, default_watch_roots
+    from ..watcher_bridge import create_flush_callback
+
+    db_path = get_db_path()
+    registry_path = registry.expanduser() if registry else db_path.parent / "offsets.json"
+    watch_roots = [WatchRoot("custom", item) for item in source] if source else default_watch_roots(home=home)
+
+    if dry_run:
+        watcher = JSONLWatcher(
+            watch_roots=watch_roots,
+            registry_path=registry_path,
+            on_flush=lambda items: None,
+            db_path=db_path,
+        )
+        files = watcher._discover_jsonl_files()
+        provider_counts: dict[str, int] = {}
+        for path in files:
+            provider = watcher.provider_for_file(path)
+            provider_counts[provider] = provider_counts.get(provider, 0) + 1
+        provider_summary = " ".join(f"{provider}={count}" for provider, count in sorted(provider_counts.items()))
+        rprint(
+            f"candidate_files={len(files)} {provider_summary} processed_entries=0 "
+            f"registry={registry_path}"
+        )
+        return
+
+    watcher = JSONLWatcher(
+        watch_roots=watch_roots,
+        registry_path=registry_path,
+        on_flush=create_flush_callback(db_path, arbitrated=True),
+        db_path=db_path,
+    )
+    processed = 0
+    cycles = 0
+    while cycles < max_cycles:
+        cycles += 1
+        count = watcher.poll_once()
+        if count == 0:
+            break
+        processed += count
+    watcher.indexer.flush()
+    watcher.registry.flush()
+    rprint(f"processed_entries={processed} cycles={cycles} registry={registry_path}")
+
+
 @app.command("index-fast", hidden=True)
 def index_fast(
     source: Path = typer.Argument(
@@ -3147,9 +3324,18 @@ def hooks(
 
 
 @app.command("flush")
-def flush() -> None:
+def flush(
+    pending_only: Annotated[
+        bool,
+        typer.Option(
+            "--pending-only",
+            help="Migrate legacy pending-stores.jsonl entries to the unified queue without draining the queue.",
+        ),
+    ] = False,
+) -> None:
     """Flush pending store queues and the unified arbitration queue."""
     from ..drain import drain_once
+    from ..mcp.store_handler import _atomic_rewrite_pending_store, _pending_store_file_lock
     from ..paths import get_db_path
     from ..queue_io import enqueue_store, get_queue_dir
 
@@ -3158,65 +3344,73 @@ def flush() -> None:
     migrated = 0
     skipped = 0
     try:
-        if queue_path.exists():
-            lines = queue_path.read_text().strip().splitlines()
-            for line in lines:
-                if not line.strip():
-                    continue
-                try:
-                    item = json.loads(line)
-                except json.JSONDecodeError:
-                    skipped += 1
-                    continue
-                content = item.get("content")
-                if not content:
-                    skipped += 1
-                    continue
-                stable_payload = {
-                    "content": content,
-                    "memory_type": item.get("memory_type", "note"),
-                    "project": item.get("project"),
-                    "tags": item.get("tags"),
-                    "importance": item.get("importance"),
-                }
-                chunk_id = (
-                    item.get("chunk_id")
-                    or "pending-"
-                    + hashlib.sha256(
-                        json.dumps(stable_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-                    ).hexdigest()[:16]
-                )
-                enqueue_store(
-                    content=content,
-                    memory_type=item.get("memory_type", "note"),
-                    project=item.get("project"),
-                    tags=item.get("tags"),
-                    importance=item.get("importance"),
-                    created_at=item.get("created_at") or item.get("queued_at"),
-                    source="pending",
-                    confidence_score=item.get("confidence_score"),
-                    outcome=item.get("outcome"),
-                    reversibility=item.get("reversibility"),
-                    files_changed=item.get("files_changed"),
-                    entity_id=item.get("entity_id"),
-                    status=item.get("status"),
-                    severity=item.get("severity"),
-                    file_path=item.get("file_path"),
-                    function_name=item.get("function_name"),
-                    line_number=item.get("line_number"),
-                    supersedes=item.get("supersedes"),
-                    chunk_id=chunk_id,
-                )
-                migrated += 1
-            queue_path.unlink(missing_ok=True)
+        with _pending_store_file_lock(queue_path):
+            if queue_path.exists():
+                lines = queue_path.read_text().strip().splitlines()
+                remaining = []
+                for line in lines:
+                    if not line.strip():
+                        continue
+                    try:
+                        item = json.loads(line)
+                    except json.JSONDecodeError:
+                        skipped += 1
+                        remaining.append(line)
+                        continue
+                    content = item.get("content")
+                    if not content:
+                        skipped += 1
+                        remaining.append(line)
+                        continue
+                    stable_payload = {
+                        "content": content,
+                        "memory_type": item.get("memory_type", "note"),
+                        "project": item.get("project"),
+                        "tags": item.get("tags"),
+                        "importance": item.get("importance"),
+                    }
+                    chunk_id = (
+                        item.get("chunk_id")
+                        or "pending-"
+                        + hashlib.sha256(
+                            json.dumps(stable_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                        ).hexdigest()[:16]
+                    )
+                    enqueue_store(
+                        content=content,
+                        memory_type=item.get("memory_type", "note"),
+                        project=item.get("project"),
+                        tags=item.get("tags"),
+                        importance=item.get("importance"),
+                        created_at=item.get("created_at") or item.get("queued_at"),
+                        source="pending",
+                        confidence_score=item.get("confidence_score"),
+                        outcome=item.get("outcome"),
+                        reversibility=item.get("reversibility"),
+                        files_changed=item.get("files_changed"),
+                        entity_id=item.get("entity_id"),
+                        status=item.get("status"),
+                        severity=item.get("severity"),
+                        file_path=item.get("file_path"),
+                        function_name=item.get("function_name"),
+                        line_number=item.get("line_number"),
+                        supersedes=item.get("supersedes"),
+                        chunk_id=chunk_id,
+                    )
+                    migrated += 1
+                if remaining:
+                    _atomic_rewrite_pending_store(queue_path, remaining)
+                else:
+                    queue_path.unlink(missing_ok=True)
 
-        queue_dir = get_queue_dir()
         drained = 0
-        while True:
-            count = drain_once(db_path=db_path, queue_dir=queue_dir)
-            if count == 0:
-                break
-            drained += count
+        if not pending_only:
+            queue_dir = get_queue_dir()
+            while True:
+                count = drain_once(db_path=db_path, queue_dir=queue_dir)
+                if count == 0:
+                    break
+                drained += count
     except Exception as exc:
         rprint(f"[bold red]Error flushing queues:[/] {exc}")
         raise typer.Exit(1)

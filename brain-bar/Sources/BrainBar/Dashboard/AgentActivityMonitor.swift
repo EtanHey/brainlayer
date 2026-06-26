@@ -39,6 +39,14 @@ struct AgentPresence: Sendable, Equatable {
     let count: Int
 
     var isActive: Bool { count > 0 }
+
+    var liveProcessLabel: String {
+        count == 1 ? "1 live agent process" : "\(count) live agent processes"
+    }
+
+    var accessibilityLabel: String {
+        "\(family.label): \(liveProcessLabel) from ps"
+    }
 }
 
 struct AgentActivitySnapshot: Sendable, Equatable {
@@ -59,11 +67,11 @@ struct AgentActivitySnapshot: Sendable, Equatable {
     var summaryText: String {
         switch totalActiveAgents {
         case 0:
-            return "No agent CLIs live"
+            return "No agent processes live"
         case 1:
-            return "1 agent CLI live"
+            return "1 agent process live"
         default:
-            return "\(totalActiveAgents) agent CLIs live"
+            return "\(totalActiveAgents) agent processes live"
         }
     }
 }

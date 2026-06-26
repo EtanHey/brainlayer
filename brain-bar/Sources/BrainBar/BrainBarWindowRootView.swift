@@ -2380,6 +2380,8 @@ private struct BrainBarAgentPresencePill: View {
                 .stroke(Color.brainBar(nsColor: presence.family.accentColor).opacity(presence.isActive ? 0.28 : 0.1), lineWidth: 1)
         )
         .fixedSize(horizontal: true, vertical: false)
+        .accessibilityLabel(Text(presence.accessibilityLabel))
+        .help(presence.accessibilityLabel)
     }
 }
 

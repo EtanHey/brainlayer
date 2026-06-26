@@ -75,6 +75,23 @@ final class BrainDatabase: @unchecked Sendable {
             let maxOffsetLagBytes: Int
             let activeEntriesPerMinute: Double
             let realtimeInsertsPerMinute: Double
+            let updatedAt: Date?
+
+            init(
+                alerting: Bool,
+                filesTracked: Int,
+                maxOffsetLagBytes: Int,
+                activeEntriesPerMinute: Double,
+                realtimeInsertsPerMinute: Double,
+                updatedAt: Date? = nil
+            ) {
+                self.alerting = alerting
+                self.filesTracked = filesTracked
+                self.maxOffsetLagBytes = maxOffsetLagBytes
+                self.activeEntriesPerMinute = activeEntriesPerMinute
+                self.realtimeInsertsPerMinute = realtimeInsertsPerMinute
+                self.updatedAt = updatedAt
+            }
 
             var summaryText: String {
                 if alerting {
@@ -87,6 +104,11 @@ final class BrainDatabase: @unchecked Sendable {
                     return "\(filesTracked) files"
                 }
                 return "idle"
+            }
+
+            func isFresh(now: Date = Date(), maxAgeSeconds: TimeInterval = 300) -> Bool {
+                guard let updatedAt else { return false }
+                return now.timeIntervalSince(updatedAt) <= maxAgeSeconds
             }
         }
 
@@ -1861,8 +1883,28 @@ final class BrainDatabase: @unchecked Sendable {
             filesTracked: payload["files_tracked"] as? Int ?? 0,
             maxOffsetLagBytes: payload["max_offset_lag_bytes"] as? Int ?? 0,
             activeEntriesPerMinute: payload["active_jsonl_entries_per_minute"] as? Double ?? 0,
-            realtimeInsertsPerMinute: payload["db_realtime_inserts_per_minute"] as? Double ?? 0
+            realtimeInsertsPerMinute: payload["db_realtime_inserts_per_minute"] as? Double ?? 0,
+            updatedAt: Self.parseWatcherHealthUpdatedAt(payload["updated_at"] as? String)
         )
+    }
+
+    private static func parseWatcherHealthUpdatedAt(_ rawValue: String?) -> Date? {
+        guard let rawValue else { return nil }
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: trimmed) {
+            return date
+        }
+        if let date = ISO8601DateFormatter().date(from: trimmed) {
+            return date
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXXXX"
+        return formatter.date(from: trimmed)
     }
 
     func dataVersion() throws -> Int {

@@ -16,7 +16,15 @@ import time
 import pytest
 
 from brainlayer.alarm import BrainLayerAlarm
-from brainlayer.watcher import BatchIndexer, CoverageWatchdog, JSONLTailer, JSONLWatcher, OffsetRegistry, WatchRoot
+from brainlayer.watcher import (
+    BatchIndexer,
+    CoverageWatchdog,
+    JSONLTailer,
+    JSONLWatcher,
+    OffsetRegistry,
+    WatchRoot,
+    default_watch_roots,
+)
 from brainlayer.watcher_bridge import FlushWatermarks
 
 # ── OffsetRegistry Tests ─────────────────────────────────────────────────────
@@ -496,6 +504,30 @@ class TestJSONLWatcher:
 
         assert len(files) == 4
         assert {watcher.provider_for_file(path) for path in files} == {"claude", "codex", "cursor", "gemini"}
+
+    def test_default_roots_discover_cursor_agent_transcripts_without_unrelated_project_jsonl(self, tmp_path):
+        cursor_session = tmp_path / ".cursor" / "sessions" / "session.jsonl"
+        cursor_agent_transcript = (
+            tmp_path / ".cursor" / "projects" / "repo" / "agent-transcripts" / "agent-session.jsonl"
+        )
+        unrelated_project_jsonl = tmp_path / ".cursor" / "projects" / "repo" / "state.jsonl"
+        for path in (cursor_session, cursor_agent_transcript, unrelated_project_jsonl):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('{"type":"message","payload":{"role":"user","content":"cursor line"}}\n')
+
+        watcher = JSONLWatcher(
+            watch_roots=default_watch_roots(home=tmp_path),
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda x: None,
+        )
+
+        files = set(watcher._discover_jsonl_files())
+
+        assert str(cursor_session) in files
+        assert str(cursor_agent_transcript) in files
+        assert str(unrelated_project_jsonl) not in files
+        assert watcher.provider_for_file(str(cursor_session)) == "cursor"
+        assert watcher.provider_for_file(str(cursor_agent_transcript)) == "cursor-agent-transcripts"
 
     def test_multi_root_discovers_newest_jsonl_files_first(self, tmp_path):
         codex_sessions = tmp_path / "codex" / "sessions"

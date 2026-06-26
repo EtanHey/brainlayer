@@ -32,7 +32,14 @@ final class AgentActivityMonitorTests: XCTestCase {
         XCTAssertEqual(activity.count(for: .cursor), 0)
         XCTAssertEqual(activity.count(for: .gemini), 0)
         XCTAssertEqual(activity.totalActiveAgents, 0)
-        XCTAssertEqual(activity.summaryText, "No agent CLIs live")
+        XCTAssertEqual(activity.summaryText, "No agent processes live")
+    }
+
+    func testPresenceLabelsSayCountsAreLiveAgentProcesses() {
+        let presence = AgentPresence(family: .codex, count: 12)
+
+        XCTAssertEqual(presence.liveProcessLabel, "12 live agent processes")
+        XCTAssertEqual(presence.accessibilityLabel, "Codex: 12 live agent processes from ps")
     }
 
     func testParseSnapshotSkipsSearchCommandsThatMentionAgentNames() {
