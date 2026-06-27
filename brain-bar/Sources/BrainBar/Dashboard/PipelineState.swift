@@ -568,13 +568,15 @@ extension DashboardFlowSummary {
         case .agentStores:
             let agentValues = ingress.values
             let agentTotal = agentValues.reduce(0, +)
-            let agentStatus = agentStoreStatus(values: agentValues)
+            let pendingStoreDepth = queue.storeDepth
+            let agentStatus = agentStoreStatus(values: agentValues, pendingStoreDepth: pendingStoreDepth)
             return DashboardFlowLane(
                 name: "Agent stores",
                 status: agentStatus,
                 statusText: agentStoreStatusText(
                     status: agentStatus,
                     totalEvents: agentTotal,
+                    pendingStoreDepth: pendingStoreDepth,
                     windowLabel: ingress.windowLabel
                 ),
                 windowLabel: ingress.windowLabel,
@@ -583,13 +585,15 @@ extension DashboardFlowSummary {
                     totalEvents: agentTotal,
                     activityWindowMinutes: ingress.activityWindowMinutes
                 ),
-                volumeText: DashboardMetricFormatter.activitySummaryString(
+                volumeText: agentStoreVolumeText(
                     totalEvents: agentTotal,
+                    pendingStoreDepth: pendingStoreDepth,
                     activityWindowMinutes: ingress.activityWindowMinutes
                 ),
                 lastEventText: agentStoreLastEventText(
                     status: agentStatus,
                     totalEvents: agentTotal,
+                    pendingStoreDepth: pendingStoreDepth,
                     latestBucketCount: agentValues.last ?? 0,
                     windowLabel: ingress.windowLabel
                 ),
@@ -653,10 +657,13 @@ extension DashboardFlowSummary {
         }
     }
 
-    private func agentStoreStatus(values: [Int]) -> DashboardFlowLaneStatus {
+    private func agentStoreStatus(values: [Int], pendingStoreDepth: Int) -> DashboardFlowLaneStatus {
         let totalEvents = values.reduce(0, +)
         if (values.last ?? 0) > 0 {
             return .live
+        }
+        if pendingStoreDepth > 0 {
+            return .queued
         }
         if totalEvents > 0 {
             return .recent
@@ -664,11 +671,34 @@ extension DashboardFlowSummary {
         return .idle
     }
 
+    private func agentStoreQueueText(_ depth: Int) -> String {
+        depth == 1 ? "1 agent store queued for replay" : "\(depth) agent stores queued for replay"
+    }
+
+    private func agentStoreVolumeText(
+        totalEvents: Int,
+        pendingStoreDepth: Int,
+        activityWindowMinutes: Int
+    ) -> String {
+        let committed = DashboardMetricFormatter.activitySummaryString(
+            totalEvents: totalEvents,
+            activityWindowMinutes: activityWindowMinutes
+        )
+        guard pendingStoreDepth > 0 else { return committed }
+        let queued = pendingStoreDepth == 1 ? "1 queued" : "\(pendingStoreDepth) queued"
+        return "\(committed), \(queued)"
+    }
+
     private func agentStoreStatusText(
         status: DashboardFlowLaneStatus,
         totalEvents: Int,
+        pendingStoreDepth: Int,
         windowLabel: String
     ) -> String {
+        if pendingStoreDepth > 0 {
+            return agentStoreQueueText(pendingStoreDepth)
+        }
+
         switch status {
         case .live:
             return "Agent stores live now"
@@ -688,9 +718,16 @@ extension DashboardFlowSummary {
     private func agentStoreLastEventText(
         status: DashboardFlowLaneStatus,
         totalEvents: Int,
+        pendingStoreDepth: Int,
         latestBucketCount: Int,
         windowLabel: String
     ) -> String {
+        if pendingStoreDepth > 0 && totalEvents == 0 {
+            return agentStoreQueueText(pendingStoreDepth)
+        }
+        if pendingStoreDepth > 0 {
+            return "\(agentStoreQueueText(pendingStoreDepth)); \(totalEvents) committed in \(windowLabel)"
+        }
         if totalEvents == 0 {
             return "No agent-store writes in \(windowLabel)"
         }

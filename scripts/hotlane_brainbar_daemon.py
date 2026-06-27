@@ -42,6 +42,11 @@ class CycleResult(NamedTuple):
     enrich_daily_cap_reached: bool = False
 
 
+class EmbedCandidate(NamedTuple):
+    chunk_id: str
+    content: str
+
+
 def _stop(_signum: int, _frame: object) -> None:
     global STOP
     STOP = True
@@ -69,6 +74,202 @@ def _candidate_chunk_ids(store: VectorStore, *, limit: int) -> list[str]:
         (limit,),
     )
     return [str(row[0]) for row in rows]
+
+
+def _candidate_chunk_rows(store: VectorStore, *, limit: int) -> list[EmbedCandidate]:
+    rows = store.conn.cursor().execute(
+        """
+        SELECT c.id, c.content
+        FROM chunks c
+        LEFT JOIN chunk_vectors_rowids r ON r.id = c.id
+        WHERE r.id IS NULL
+          AND c.source_file = 'brainbar-store'
+          AND c.source = 'mcp'
+          AND c.content IS NOT NULL
+          AND c.content != ''
+          AND c.archived_at IS NULL
+          AND c.superseded_by IS NULL
+          AND c.aggregated_into IS NULL
+          AND COALESCE(c.archived, 0) = 0
+          AND COALESCE(c.status, 'active') = 'active'
+        ORDER BY c.created_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    return [EmbedCandidate(str(row[0]), str(row[1])) for row in rows]
+
+
+def _pending_chunk_rows(store: VectorStore, *, limit: int) -> list[EmbedCandidate]:
+    rows = store.conn.cursor().execute(
+        """
+        SELECT c.id, c.content
+        FROM chunks c
+        LEFT JOIN chunk_vectors_rowids r ON c.id = r.id
+        WHERE r.id IS NULL
+          AND c.content IS NOT NULL
+          AND c.content != ''
+          AND c.archived_at IS NULL
+          AND c.superseded_by IS NULL
+          AND c.aggregated_into IS NULL
+          AND COALESCE(c.archived, 0) = 0
+          AND COALESCE(c.status, 'active') = 'active'
+        ORDER BY c.created_at ASC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    return [EmbedCandidate(str(row[0]), str(row[1])) for row in rows]
+
+
+def _embed_candidates(
+    candidates: list[EmbedCandidate],
+    *,
+    embed_fn: Callable[[str], list[float]],
+    embed_batch_fn: Callable[[list[str]], list[list[float]]] | None = None,
+) -> list[tuple[str, list[float]]]:
+    if not candidates:
+        return []
+
+    if embed_batch_fn is not None and len(candidates) > 1:
+        try:
+            embeddings = embed_batch_fn([candidate.content for candidate in candidates])
+            if len(embeddings) != len(candidates):
+                raise ValueError(
+                    f"batch embedder returned {len(embeddings)} embeddings for {len(candidates)} chunks"
+                )
+            return [
+                (candidate.chunk_id, embedding)
+                for candidate, embedding in zip(candidates, embeddings)
+            ]
+        except Exception as exc:
+            LOGGER.warning("Failed to embed hotlane batch: %s", exc)
+
+    embedded: list[tuple[str, list[float]]] = []
+    for candidate in candidates:
+        try:
+            embedded.append((candidate.chunk_id, embed_fn(candidate.content)))
+        except Exception as exc:
+            LOGGER.warning("Failed to embed chunk %s: %s", candidate.chunk_id, exc)
+    return embedded
+
+
+def _write_embedded_vectors(store: VectorStore, vectors: list[tuple[str, list[float]]]) -> int:
+    if not vectors:
+        return 0
+
+    cursor = store.conn.cursor()
+    transaction_started = False
+    count = 0
+    try:
+        cursor.execute("BEGIN IMMEDIATE")
+        transaction_started = True
+        for chunk_id, embedding in vectors:
+            still_eligible = cursor.execute(
+                """
+                SELECT 1
+                FROM chunks c
+                LEFT JOIN chunk_vectors_rowids r ON c.id = r.id
+                WHERE c.id = ?
+                  AND r.id IS NULL
+                  AND c.content IS NOT NULL
+                  AND c.content != ''
+                  AND c.archived_at IS NULL
+                  AND c.superseded_by IS NULL
+                  AND c.aggregated_into IS NULL
+                  AND COALESCE(c.archived, 0) = 0
+                  AND COALESCE(c.status, 'active') = 'active'
+                """,
+                (chunk_id,),
+            ).fetchone()
+            if not still_eligible:
+                continue
+            store._upsert_chunk_vector(cursor, chunk_id, embedding)
+            count += 1
+        cursor.execute("COMMIT")
+        transaction_started = False
+    except Exception:
+        if transaction_started:
+            cursor.execute("ROLLBACK")
+        raise
+
+    if count:
+        from brainlayer.search_repo import clear_hybrid_search_cache
+
+        clear_hybrid_search_cache(getattr(store, "db_path", None))
+    return count
+
+
+def _open_store(
+    vector_store_cls: Callable[..., VectorStore],
+    db_path: Path,
+    *,
+    readonly: bool,
+) -> VectorStore:
+    try:
+        return vector_store_cls(db_path, readonly=readonly)
+    except TypeError:
+        if readonly:
+            raise
+        return vector_store_cls(db_path)
+
+
+def _run_split_cycle(
+    *,
+    db_path: Path,
+    vector_store_cls: Callable[..., VectorStore],
+    embed_fn: Callable[[str], list[float]],
+    recent_limit: int,
+    backlog_batch: int,
+    enrich_limit: int,
+    enrich_since_hours: int,
+    embed_batch_fn: Callable[[list[str]], list[list[float]]] | None = None,
+    enrich_fn: Callable[..., object] = enrich_realtime,
+    candidate_rows_fn: Callable[..., list[EmbedCandidate]] = _candidate_chunk_rows,
+    pending_rows_fn: Callable[..., list[EmbedCandidate]] = _pending_chunk_rows,
+    write_vectors_fn: Callable[..., int] = _write_embedded_vectors,
+) -> CycleResult:
+    embedded = 0
+    hot_rows: list[EmbedCandidate] = []
+    pending_rows: list[EmbedCandidate] = []
+
+    if recent_limit > 0 or backlog_batch > 0:
+        read_store = _open_store(vector_store_cls, db_path, readonly=True)
+        try:
+            if recent_limit > 0:
+                hot_rows = candidate_rows_fn(read_store, limit=recent_limit)[:1]
+            if backlog_batch > 0:
+                pending_rows = pending_rows_fn(read_store, limit=backlog_batch)
+        finally:
+            read_store.close()
+
+    seen_hot_ids = {candidate.chunk_id for candidate in hot_rows}
+    pending_rows = [candidate for candidate in pending_rows if candidate.chunk_id not in seen_hot_ids]
+    vectors = _embed_candidates(hot_rows, embed_fn=embed_fn)
+    vectors.extend(_embed_candidates(pending_rows, embed_fn=embed_fn, embed_batch_fn=embed_batch_fn))
+    if vectors:
+        write_store = _open_store(vector_store_cls, db_path, readonly=False)
+        try:
+            embedded += write_vectors_fn(write_store, vectors)
+        finally:
+            write_store.close()
+
+    if enrich_limit <= 0:
+        return CycleResult(embedded=embedded)
+
+    enrich_store = _open_store(vector_store_cls, db_path, readonly=False)
+    try:
+        enrich_result = enrich_fn(store=enrich_store, limit=enrich_limit, since_hours=enrich_since_hours)
+    finally:
+        enrich_store.close()
+    return CycleResult(
+        embedded=embedded,
+        enrich_attempted=int(getattr(enrich_result, "attempted", 0) or 0),
+        enriched=int(getattr(enrich_result, "enriched", 0) or 0),
+        enrich_skipped=int(getattr(enrich_result, "skipped", 0) or 0),
+        enrich_failed=int(getattr(enrich_result, "failed", 0) or 0),
+        enrich_daily_cap_reached=hasattr(enrich_result, "errors") and _result_hit_daily_cap(enrich_result),
+    )
 
 
 def _default_queue_dir() -> Path:
@@ -182,24 +383,30 @@ def run(
             queue_has_high_priority_backlog = queue_has_backlog and high_priority_queue_depth_fn(queue_dir) > 0
             if queue_has_backlog:
                 if queue_has_high_priority_backlog:
-                    LOGGER.info("durable high-priority queue has backlog; yielding writer slot to drain")
+                    LOGGER.info("durable high-priority queue has backlog; yielding backlog/enrichment writer work")
                 else:
-                    LOGGER.info("durable queue has enrichment backlog; yielding writer slot to drain")
-                cycles += 1
-                sleep_fn(interval)
-                continue
-            cycle_backlog_batch = backlog_batch if backlog_batch > 0 and now - last_backlog >= backlog_interval else 0
-            cycle_enrich_limit = (
-                enrich_limit if not enrich_disabled and enrich_limit > 0 and now - last_enrich >= enrich_interval else 0
-            )
+                    LOGGER.info("durable queue has enrichment backlog; yielding backlog/enrichment writer work")
+                if cycle_fn is not run_cycle or recent_limit <= 0:
+                    cycles += 1
+                    sleep_fn(interval)
+                    continue
+                cycle_backlog_batch = 0
+                cycle_enrich_limit = 0
+            else:
+                cycle_backlog_batch = backlog_batch if backlog_batch > 0 and now - last_backlog >= backlog_interval else 0
+                cycle_enrich_limit = (
+                    enrich_limit
+                    if not enrich_disabled and enrich_limit > 0 and now - last_enrich >= enrich_interval
+                    else 0
+                )
             if cycle_backlog_batch > 0:
                 last_backlog = now
             if cycle_enrich_limit > 0:
                 last_enrich = now
-            store = vector_store_cls(db_path)
-            try:
-                result = cycle_fn(
-                    store=store,
+            if cycle_fn is run_cycle:
+                result = _run_split_cycle(
+                    db_path=db_path,
+                    vector_store_cls=vector_store_cls,
                     embed_fn=embed_fn,
                     recent_limit=recent_limit,
                     backlog_batch=cycle_backlog_batch,
@@ -207,8 +414,20 @@ def run(
                     enrich_limit=cycle_enrich_limit,
                     enrich_since_hours=enrich_since_hours,
                 )
-            finally:
-                store.close()
+            else:
+                store = vector_store_cls(db_path)
+                try:
+                    result = cycle_fn(
+                        store=store,
+                        embed_fn=embed_fn,
+                        recent_limit=recent_limit,
+                        backlog_batch=cycle_backlog_batch,
+                        embed_batch_fn=embed_batch_fn,
+                        enrich_limit=cycle_enrich_limit,
+                        enrich_since_hours=enrich_since_hours,
+                    )
+                finally:
+                    store.close()
             if result.enrich_daily_cap_reached:
                 enrich_disabled = True
                 LOGGER.warning("enrichment daily cap reached; disabling hotlane enrichment until restart")

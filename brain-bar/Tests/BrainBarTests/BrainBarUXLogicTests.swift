@@ -205,6 +205,35 @@ final class BrainBarUXLogicTests: XCTestCase {
         XCTAssertEqual(agentLane.lastEventText, "No agent-store writes in Last 30m")
     }
 
+    func testAgentStoresLaneShowsPendingReplayDebtWhenCommittedGraphIsZero() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let stats = DashboardStats(
+            chunkCount: 120,
+            enrichedChunkCount: 120,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 100,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 4_096,
+            recentActivityBuckets: [0, 0, 0, 0],
+            recentAgentWriteBuckets: [0, 0, 0, 0],
+            recentWatcherWriteBuckets: [0, 0, 0, 0],
+            recentEnrichmentBuckets: [0, 0, 0, 0],
+            activityWindowMinutes: 60,
+            bucketCount: 4,
+            liveWindowMinutes: 1,
+            pendingStoreQueueDepth: 5,
+            pendingStoreOldestQueuedAt: now.addingTimeInterval(-120),
+            pendingStoreFlushRatePerMinute: 0
+        )
+
+        let agentLane = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now).lane(for: .agentStores)
+
+        XCTAssertEqual(agentLane.status, .queued)
+        XCTAssertEqual(agentLane.statusText, "5 agent stores queued for replay")
+        XCTAssertEqual(agentLane.volumeText, "0 in 1h, 5 queued")
+        XCTAssertEqual(agentLane.lastEventText, "5 agent stores queued for replay")
+    }
+
     func testJsonlWatcherLaneMarksFlatGraphBrokenWhenHealthSeesActiveJsonl() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let stats = DashboardStats(

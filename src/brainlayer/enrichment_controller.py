@@ -360,6 +360,15 @@ def _idle_backlog_ready() -> bool:
         return False
 
 
+def _durable_queue_has_backlog() -> bool:
+    try:
+        from .queue_io import get_queue_dir
+
+        return any(get_queue_dir().expanduser().glob("*.jsonl"))
+    except OSError:
+        return False
+
+
 def _sleep_or_wait_for_stop(stop_event: threading.Event | None, seconds: float, sleep_fn) -> None:
     if seconds <= 0:
         return
@@ -455,6 +464,13 @@ def run_enrich_supervisor(
     while stop_event is None or not stop_event.is_set():
         if max_cycles is not None and stats.cycles >= max_cycles:
             break
+
+        if _durable_queue_has_backlog():
+            stats.cycles += 1
+            logger.info("Enrich supervisor yielding while durable write queue has backlog")
+            if max_cycles is None or stats.cycles < max_cycles:
+                _sleep_or_wait_for_stop(stop_event, idle_poll_seconds, sleep_fn)
+            continue
 
         try:
             store = _open_enrich_supervisor_pass_store(vector_store_cls, db_path)

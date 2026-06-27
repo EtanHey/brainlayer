@@ -300,7 +300,7 @@ def test_hotlane_run_opens_and_closes_writer_store_each_cycle(tmp_path):
     assert [event[0] for event in events] == ["open", "close", "open", "close"]
 
 
-def test_hotlane_run_yields_writer_to_enrichment_queue_backlog(tmp_path):
+def test_hotlane_run_yields_all_writer_work_during_enrichment_queue_backlog(tmp_path):
     hotlane = _load_hotlane_module()
     opened = []
     cycle_calls = []
@@ -337,7 +337,7 @@ def test_hotlane_run_yields_writer_to_enrichment_queue_backlog(tmp_path):
     assert sleeps == [0.25]
 
 
-def test_hotlane_run_yields_writer_to_high_priority_queue_backlog(tmp_path):
+def test_hotlane_run_yields_all_writer_work_during_high_priority_queue_backlog(tmp_path):
     hotlane = _load_hotlane_module()
     opened = []
     cycle_calls = []
@@ -374,6 +374,42 @@ def test_hotlane_run_yields_writer_to_high_priority_queue_backlog(tmp_path):
     assert sleeps == [0.25]
 
 
+def test_hotlane_run_keeps_hot_embedding_during_queue_backlog(tmp_path, monkeypatch):
+    hotlane = _load_hotlane_module()
+    split_calls = []
+    sleeps = []
+
+    def fake_split_cycle(**kwargs):
+        split_calls.append(kwargs)
+        return hotlane.CycleResult(embedded=1)
+
+    monkeypatch.setattr(hotlane, "_run_split_cycle", fake_split_cycle)
+
+    hotlane.run(
+        db_path=tmp_path / "brainlayer.db",
+        interval=0.25,
+        recent_limit=5,
+        backlog_interval=10.0,
+        backlog_batch=hotlane.DEFAULT_BACKLOG_BATCH,
+        enrich_interval=10.0,
+        enrich_limit=hotlane.DEFAULT_HOTLANE_ENRICH_LIMIT,
+        enrich_since_hours=8760,
+        vector_store_cls=lambda _path, readonly=False: None,
+        model_factory=lambda: SimpleNamespace(embed_query=lambda _text: [0.0]),
+        time_fn=iter([0.0, 100.0]).__next__,
+        sleep_fn=sleeps.append,
+        max_cycles=1,
+        queue_depth_fn=lambda _queue_dir: 3,
+        high_priority_queue_depth_fn=lambda _queue_dir: 1,
+    )
+
+    assert len(split_calls) == 1
+    assert split_calls[0]["recent_limit"] == 5
+    assert split_calls[0]["backlog_batch"] == 0
+    assert split_calls[0]["enrich_limit"] == 0
+    assert sleeps == [0.25]
+
+
 def test_hotlane_run_caps_backlog_batch_at_priority_gate_limit(tmp_path):
     hotlane = _load_hotlane_module()
     scheduled_backlog_batches = []
@@ -402,3 +438,93 @@ def test_hotlane_run_caps_backlog_batch_at_priority_gate_limit(tmp_path):
     )
 
     assert scheduled_backlog_batches == [16]
+
+
+def test_hotlane_split_cycle_embeds_before_opening_writer(tmp_path):
+    hotlane = _load_hotlane_module()
+    events = []
+
+    class FakeCursor:
+        def __init__(self, readonly):
+            self.readonly = readonly
+
+        def execute(self, sql, params=()):
+            if self.readonly:
+                if "c.source_file = 'brainbar-store'" in sql:
+                    return [("hot-1", "hot content")]
+                return [("pending-1", "pending content")]
+            events.append(("sql", sql.strip().splitlines()[0]))
+            if sql.strip().startswith("SELECT 1"):
+                return SimpleNamespace(fetchone=lambda: (1,))
+            return []
+
+    class FakeConn:
+        def __init__(self, readonly):
+            self.readonly = readonly
+
+        def cursor(self):
+            return FakeCursor(self.readonly)
+
+    class FakeStore:
+        def __init__(self, path, readonly=False):
+            self.db_path = path
+            self.conn = FakeConn(readonly)
+            events.append(("open", readonly))
+
+        def _upsert_chunk_vector(self, _cursor, chunk_id, embedding):
+            events.append(("upsert", chunk_id, embedding))
+
+        def close(self):
+            events.append(("close", None))
+
+    result = hotlane._run_split_cycle(
+        db_path=tmp_path / "brainlayer.db",
+        vector_store_cls=FakeStore,
+        embed_fn=lambda text: events.append(("embed", text)) or [1.0],
+        embed_batch_fn=lambda texts: events.append(("embed_batch", tuple(texts))) or [[2.0] for _ in texts],
+        recent_limit=5,
+        backlog_batch=4,
+        enrich_limit=0,
+        enrich_since_hours=8760,
+    )
+
+    assert result.embedded == 2
+    assert events.index(("embed", "hot content")) < events.index(("open", False))
+    assert events.index(("embed", "pending content")) < events.index(("open", False))
+    assert events.count(("open", False)) == 1
+    assert ("upsert", "hot-1", [1.0]) in events
+    assert ("upsert", "pending-1", [1.0]) in events
+
+
+def test_hotlane_split_cycle_does_not_open_writer_when_no_embedding_or_enrichment_work(tmp_path):
+    hotlane = _load_hotlane_module()
+    events = []
+
+    class FakeCursor:
+        def execute(self, _sql, _params=()):
+            return []
+
+    class FakeConn:
+        def cursor(self):
+            return FakeCursor()
+
+    class FakeStore:
+        def __init__(self, _path, readonly=False):
+            events.append(("open", readonly))
+            self.conn = FakeConn()
+
+        def close(self):
+            events.append(("close", None))
+
+    result = hotlane._run_split_cycle(
+        db_path=tmp_path / "brainlayer.db",
+        vector_store_cls=FakeStore,
+        embed_fn=lambda _text: [1.0],
+        recent_limit=5,
+        backlog_batch=4,
+        enrich_limit=0,
+        enrich_since_hours=8760,
+    )
+
+    assert result == hotlane.CycleResult()
+    assert events == [("open", True), ("close", None)]

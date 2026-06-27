@@ -274,6 +274,155 @@ def test_replay_returns_store_error_when_failed_attempt_marker_write_fails(tmp_p
     assert result.error == "store failed: store failed; write_replay_attempt failed: disk full"
 
 
+def test_inventory_fallbacks_reports_structured_pending_and_legacy_debt(tmp_path):
+    from brainlayer.fallback_replay import inventory_fallbacks
+
+    structured_repo = tmp_path / "structured"
+    legacy_repo = tmp_path / "legacy"
+    pending = _pending_file(structured_repo, "docs.local/decisions/pending.md")
+    replayed = _pending_file(structured_repo, "docs.local/decisions/replayed.md")
+    replayed.write_text(replayed.read_text(encoding="utf-8").replace("chunk_id:\n", "chunk_id: manual-existing\n"))
+    legacy = legacy_repo / "docs.local" / "brain-store-fallback" / "transport-closed.md"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("legacy fallback body\n", encoding="utf-8")
+
+    inventory = inventory_fallbacks(tmp_path, scope_map={})
+    summary = inventory.summary()
+
+    assert [entry.path for entry in inventory.pending] == [pending]
+    assert summary["green"] is False
+    assert summary["structured_count"] == 2
+    assert summary["pending_count"] == 1
+    assert summary["legacy_count"] == 1
+    assert summary["pending_sample"] == [str(pending)]
+    assert summary["legacy_sample"] == [str(legacy)]
+
+
+def test_queue_entry_enqueues_with_stable_chunk_id_and_updates_frontmatter(tmp_path):
+    from brainlayer.fallback_replay import parse_fallback_file, queue_entry
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    path = _pending_file(repo, "docs.local/decisions/pending.md")
+    calls = []
+
+    def enqueue_func(**kwargs):
+        calls.append(kwargs)
+        return tmp_path / "queue" / "fallback-replay.jsonl"
+
+    entry = parse_fallback_file(path)
+    first = queue_entry(entry, enqueue_func=enqueue_func, replayed_by="phase-1-test")
+    updated_entry = parse_fallback_file(path)
+    second = queue_entry(updated_entry, enqueue_func=enqueue_func, replayed_by="phase-1-test")
+
+    assert first.error is None
+    assert first.chunk_id is not None
+    assert first.chunk_id.startswith("fallback-")
+    assert second.chunk_id == first.chunk_id
+    assert calls[0]["source"] == "fallback-replay"
+    assert calls[0]["chunk_id"] == first.chunk_id
+    assert calls[0]["fallback_source_path"] == str(path)
+    assert calls[0]["origin_repo_path"] == str(repo.resolve())
+    assert "chunk_id: " + first.chunk_id in path.read_text(encoding="utf-8")
+
+
+def test_queue_entry_serializes_yaml_date_tags_for_jsonl_queue(tmp_path):
+    from brainlayer.fallback_replay import parse_fallback_file, queue_entry
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    path = repo / "docs.local" / "decisions" / "date-tag.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "---\n"
+        "intended_brain_store: true\n"
+        "importance: 7\n"
+        "tags:\n"
+        "- brainlayer\n"
+        "- 2026-06-04\n"
+        "timestamp: '2026-06-04T15:31:57Z'\n"
+        "chunk_id:\n"
+        "---\n"
+        "body with a yaml date-shaped tag\n",
+        encoding="utf-8",
+    )
+    calls = []
+
+    def jsonl_enqueue_func(**kwargs):
+        import json
+
+        json.dumps(kwargs)
+        calls.append(kwargs)
+
+    result = queue_entry(parse_fallback_file(path), enqueue_func=jsonl_enqueue_func, replayed_by="phase-1-test")
+
+    assert result.error is None
+    assert calls[0]["tags"] == ["brainlayer", "2026-06-04"]
+
+
+def test_queue_legacy_entry_synthesizes_metadata_and_marks_replayed(tmp_path):
+    from brainlayer.fallback_replay import legacy_entry_from_path, queue_legacy_entry
+
+    repo = tmp_path / "orchestrator"
+    _git_init(repo)
+    path = repo / "docs.local" / "brain-store-fallback" / "2026-05-29-gen10-boot" / "pending-stores.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "# gen-10 pending-stores\n"
+        "## [imp:8] USER CORRECTION -- use BrainLayer, NOT harness file-memory\n"
+        "Tags: etan-correction, frustration, brainlayer\n"
+        "Body stays intact.\n",
+        encoding="utf-8",
+    )
+    calls = []
+
+    def enqueue_func(**kwargs):
+        calls.append(kwargs)
+
+    result = queue_legacy_entry(
+        legacy_entry_from_path(path, scope_map={}),
+        enqueue_func=enqueue_func,
+        replayed_by="phase-1-test",
+    )
+
+    updated = path.read_text(encoding="utf-8")
+    assert result.error is None
+    assert result.chunk_id is not None
+    assert calls[0]["importance"] == 8
+    assert calls[0]["tags"] == ["legacy-fallback", "brain-store-fallback", "orchestrator"]
+    assert calls[0]["created_at"] == "2026-05-29T00:00:00Z"
+    assert calls[0]["source"] == "fallback-replay"
+    assert updated.startswith("---\n")
+    assert "legacy_brain_store_fallback: true" in updated
+    assert "chunk_id: " + result.chunk_id in updated
+    assert updated.endswith("Body stays intact.\n")
+
+
+def test_inventory_ignores_replayed_legacy_fallback_markers(tmp_path):
+    from brainlayer.fallback_replay import inventory_fallbacks
+
+    repo = tmp_path / "orchestrator"
+    _git_init(repo)
+    path = repo / "docs.local" / "brain-store-fallback" / "replayed.md"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "---\n"
+        "intended_brain_store: true\n"
+        "legacy_brain_store_fallback: true\n"
+        "retry_attempted: true\n"
+        "chunk_id: fallback-abc123\n"
+        "---\n"
+        "legacy body\n",
+        encoding="utf-8",
+    )
+
+    inventory = inventory_fallbacks(tmp_path, scope_map={})
+
+    assert inventory.legacy == []
+    assert inventory.summary()["legacy_count"] == 0
+    assert inventory.summary()["green"] is True
+
+
 def test_replay_cli_apply_exits_nonzero_when_any_replay_errors(tmp_path, monkeypatch):
     script = Path(__file__).resolve().parents[1] / "scripts" / "replay_brain_store_fallbacks.py"
     spec = importlib.util.spec_from_file_location("replay_brain_store_fallbacks_test", script)
@@ -281,19 +430,64 @@ def test_replay_cli_apply_exits_nonzero_when_any_replay_errors(tmp_path, monkeyp
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
+    from brainlayer.fallback_replay import parse_fallback_file
 
     repo = tmp_path / "systems"
     path = _pending_file(repo, "docs.local/decisions/failing.md")
-    entry = module.parse_fallback_file(path)
+    entry = parse_fallback_file(path)
 
     class DummyStore:
         def close(self):
             pass
 
     monkeypatch.setattr(module, "load_scope_map", lambda _path: {})
-    monkeypatch.setattr(module, "inventory", lambda _root, *, scope_map: ([entry], []))
+
+    class DummyInventory:
+        structured = [entry]
+        legacy = []
+        pending = [entry]
+
+    monkeypatch.setattr(module, "inventory_fallbacks", lambda _root, *, scope_map: DummyInventory())
     monkeypatch.setattr(module, "VectorStore", lambda _db: DummyStore())
     monkeypatch.setattr(module, "store_memory", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("store failed")))
     monkeypatch.setattr(sys, "argv", ["replay_brain_store_fallbacks.py", "--apply", "--gits-root", str(tmp_path)])
 
     assert module.main() == 1
+
+
+def test_replay_cli_apply_queue_legacy_marks_legacy_files(tmp_path, monkeypatch):
+    script = Path(__file__).resolve().parents[1] / "scripts" / "replay_brain_store_fallbacks.py"
+    spec = importlib.util.spec_from_file_location("replay_brain_store_fallbacks_legacy_test", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    repo = tmp_path / "orchestrator"
+    _git_init(repo)
+    path = repo / "docs.local" / "brain-store-fallback" / "legacy.md"
+    path.parent.mkdir(parents=True)
+    path.write_text("legacy body\n", encoding="utf-8")
+    calls = []
+
+    def enqueue_func(**kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr(module, "load_scope_map", lambda _path: {})
+    monkeypatch.setattr(module, "enqueue_store", enqueue_func)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "replay_brain_store_fallbacks.py",
+            "--apply",
+            "--queue",
+            "--legacy",
+            "--gits-root",
+            str(tmp_path),
+        ],
+    )
+
+    assert module.main() == 0
+    assert calls[0]["source"] == "fallback-replay"
+    assert "legacy_brain_store_fallback: true" in path.read_text(encoding="utf-8")

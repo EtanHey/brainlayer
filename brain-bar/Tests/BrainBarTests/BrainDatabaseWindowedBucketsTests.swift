@@ -192,6 +192,66 @@ final class BrainDatabaseWindowedBucketsTests: XCTestCase {
             "JSONL watcher graph must show durable ingestion recency, not the older transcript event time."
         )
     }
+
+    func testPendingSourceReplayCountsAsAgentStoreWrite() throws {
+        XCTAssertTrue(try db.tableExists("chunks"))
+
+        let now = Date()
+        try insertWrite(
+            id: "agent-pending-replay",
+            source: "pending",
+            createdAt: now.addingTimeInterval(-3 * 60)
+        )
+
+        let buckets = try db.pipelineWindowBuckets(activityWindowMinutes: 30, bucketCount: 6, now: now)
+
+        XCTAssertEqual(
+            buckets.agentTotal,
+            1,
+            "Legacy pending-store replay uses source='pending' and must still count as an agent store write."
+        )
+        XCTAssertEqual(buckets.agentWriteBuckets.reduce(0, +), 1)
+    }
+
+    func testFallbackReplaySourceCountsAsAgentStoreWrite() throws {
+        XCTAssertTrue(try db.tableExists("chunks"))
+
+        let now = Date()
+        try insertWrite(
+            id: "agent-fallback-replay",
+            source: "fallback-replay",
+            createdAt: now.addingTimeInterval(-4 * 60)
+        )
+
+        let buckets = try db.pipelineWindowBuckets(activityWindowMinutes: 30, bucketCount: 6, now: now)
+
+        XCTAssertEqual(
+            buckets.agentTotal,
+            1,
+            "Queued docs.local fallback replay uses source='fallback-replay' and must count as an agent store write."
+        )
+        XCTAssertEqual(buckets.agentWriteBuckets.reduce(0, +), 1)
+    }
+
+    func testFallbackSourceCountsAsAgentStoreWrite() throws {
+        XCTAssertTrue(try db.tableExists("chunks"))
+
+        let now = Date()
+        try insertWrite(
+            id: "agent-fallback-replay-short-source",
+            source: "fallback",
+            createdAt: now.addingTimeInterval(-4 * 60)
+        )
+
+        let buckets = try db.pipelineWindowBuckets(activityWindowMinutes: 30, bucketCount: 6, now: now)
+
+        XCTAssertEqual(
+            buckets.agentTotal,
+            1,
+            "Earlier docs.local fallback replay queue entries can use source='fallback' and must count as agent store writes."
+        )
+        XCTAssertEqual(buckets.agentWriteBuckets.reduce(0, +), 1)
+    }
 }
 
 /// Local raw-SQL writer (the DatabaseTests one is file-private to that file).

@@ -76,6 +76,7 @@ class _FakeDoctorResult:
 def test_status_json_surfaces_external_coverage_and_backlog_truth(tmp_path):
     db_path = tmp_path / "brainlayer.db"
     queue_dir = tmp_path / "queue"
+    fallback_root = tmp_path / "gits"
     watcher_health = tmp_path / "watcher-health.json"
     drain_health = tmp_path / "drain-health.json"
     pending_stores = tmp_path / "pending-stores.jsonl"
@@ -109,6 +110,8 @@ def test_status_json_surfaces_external_coverage_and_backlog_truth(tmp_path):
             str(drain_health),
             "--watcher-health-path",
             str(watcher_health),
+            "--fallback-gits-root",
+            str(fallback_root),
         ],
     )
 
@@ -118,6 +121,7 @@ def test_status_json_surfaces_external_coverage_and_backlog_truth(tmp_path):
     assert payload["queue_depth"] == 2
     assert payload["queue_depth_by_source"] == {"enrichment": 1, "watcher": 1}
     assert payload["pending_store_lines"] == 1
+    assert payload["fallback_replay"]["green"] is True
     assert payload["unembedded_chunks"] == 1
     assert payload["watcher_missing_providers"] == ["cursor-agent-transcripts"]
     assert payload["watcher_health"]["db_probe_failed"] is False
@@ -126,9 +130,25 @@ def test_status_json_surfaces_external_coverage_and_backlog_truth(tmp_path):
     assert payload["vector_roundtrip"]["checked"] is False
 
 
+def test_status_queue_depth_by_source_reads_hyphenated_jsonl_source(tmp_path):
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    (queue_dir / "fallback-replay-123.jsonl").write_text('{"source":"fallback-replay"}\n', encoding="utf-8")
+    (queue_dir / "cursor-agent-transcripts-123.jsonl").write_text(
+        '{"source":"cursor-agent-transcripts"}\n',
+        encoding="utf-8",
+    )
+
+    assert cli._status_queue_depth_by_source(queue_dir) == {
+        "cursor-agent-transcripts": 1,
+        "fallback-replay": 1,
+    }
+
+
 def test_status_check_doctor_can_go_green_with_fresh_draining_queue_tail(tmp_path, monkeypatch):
     db_path = tmp_path / "brainlayer.db"
     queue_dir = tmp_path / "queue"
+    fallback_root = tmp_path / "gits"
     watcher_health = tmp_path / "watcher-health.json"
     drain_health = tmp_path / "drain-health.json"
     _create_vectorized_status_db(db_path)
@@ -162,6 +182,8 @@ def test_status_check_doctor_can_go_green_with_fresh_draining_queue_tail(tmp_pat
             str(drain_health),
             "--watcher-health-path",
             str(watcher_health),
+            "--fallback-gits-root",
+            str(fallback_root),
         ],
     )
 
@@ -175,9 +197,74 @@ def test_status_check_doctor_can_go_green_with_fresh_draining_queue_tail(tmp_pat
     assert payload["vector_roundtrip"]["status"] == "passed"
 
 
+def test_status_json_surfaces_docs_local_fallback_replay_debt(tmp_path, monkeypatch):
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    fallback_root = tmp_path / "gits"
+    watcher_health = tmp_path / "watcher-health.json"
+    drain_health = tmp_path / "drain-health.json"
+    _create_vectorized_status_db(db_path)
+    queue_dir.mkdir()
+    repo = fallback_root / "cmuxlayer"
+    decision = repo / "docs.local" / "decisions" / "2026-06-27-correction-cmuxlayer-launcher-rollout.md"
+    decision.parent.mkdir(parents=True)
+    decision.write_text(
+        "---\n"
+        "intended_brain_store: true\n"
+        "project: cmuxlayer\n"
+        "importance: 8\n"
+        "chunk_id:\n"
+        "---\n"
+        "cmuxlayer launcher rollout correction should be replayed.\n",
+        encoding="utf-8",
+    )
+    now = datetime.now(timezone.utc)
+    watcher_health.write_text(
+        json.dumps(
+            {
+                "providers": ["claude", "codex", "cursor", "cursor-agent-transcripts", "gemini"],
+                "alerting": False,
+                "db_probe_failed": False,
+                "updated_at": now.isoformat(),
+            }
+        )
+    )
+    drain_health.write_text(json.dumps({"drained_total": 10, "drain_cycles": 2, "updated_at": now.isoformat()}))
+    monkeypatch.setattr(cli, "_run_doctor_cli", lambda _config: _FakeDoctorResult(ok=True))
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "status",
+            "--json",
+            "--check-doctor",
+            "--db",
+            str(db_path),
+            "--queue-dir",
+            str(queue_dir),
+            "--drain-health-path",
+            str(drain_health),
+            "--watcher-health-path",
+            str(watcher_health),
+            "--fallback-gits-root",
+            str(fallback_root),
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["operational_green"] is False
+    assert payload["fallback_replay"]["green"] is False
+    assert payload["fallback_replay"]["status"] == "debt"
+    assert payload["fallback_replay"]["pending_count"] == 1
+    assert payload["fallback_replay"]["legacy_count"] == 0
+    assert payload["fallback_replay"]["pending_sample"] == [str(decision)]
+
+
 def test_status_check_doctor_keeps_probe_failures_red(tmp_path, monkeypatch):
     db_path = tmp_path / "brainlayer.db"
     queue_dir = tmp_path / "queue"
+    fallback_root = tmp_path / "gits"
     watcher_health = tmp_path / "watcher-health.json"
     drain_health = tmp_path / "drain-health.json"
     _create_vectorized_status_db(db_path)
@@ -220,6 +307,8 @@ def test_status_check_doctor_keeps_probe_failures_red(tmp_path, monkeypatch):
             str(drain_health),
             "--watcher-health-path",
             str(watcher_health),
+            "--fallback-gits-root",
+            str(fallback_root),
         ],
     )
 
@@ -235,6 +324,7 @@ def test_status_check_doctor_keeps_probe_failures_red(tmp_path, monkeypatch):
 def test_status_check_doctor_accepts_visible_moving_queue_backlog(tmp_path, monkeypatch):
     db_path = tmp_path / "brainlayer.db"
     queue_dir = tmp_path / "queue"
+    fallback_root = tmp_path / "gits"
     watcher_health = tmp_path / "watcher-health.json"
     drain_health = tmp_path / "drain-health.json"
     _create_vectorized_status_db(db_path)
@@ -275,6 +365,8 @@ def test_status_check_doctor_accepts_visible_moving_queue_backlog(tmp_path, monk
             str(drain_health),
             "--watcher-health-path",
             str(watcher_health),
+            "--fallback-gits-root",
+            str(fallback_root),
         ],
     )
 

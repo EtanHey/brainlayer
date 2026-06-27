@@ -10,8 +10,7 @@ def test_watch_backfill_dry_run_reports_cursor_agent_transcripts_without_writing
     unrelated = tmp_path / ".cursor" / "projects" / "repo" / "state.jsonl"
     transcript.parent.mkdir(parents=True)
     transcript.write_text(
-        json.dumps({"type": "message", "payload": {"role": "user", "content": "cursor agent transcript line"}})
-        + "\n"
+        json.dumps({"type": "message", "payload": {"role": "user", "content": "cursor agent transcript line"}}) + "\n"
     )
     unrelated.write_text(json.dumps({"role": "user", "content": "unrelated project state"}) + "\n")
 

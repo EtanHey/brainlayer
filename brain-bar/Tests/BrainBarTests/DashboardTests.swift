@@ -882,6 +882,36 @@ final class DashboardTests: XCTestCase {
         )
     }
 
+    func testSparklineChartPresentationLabelsLongBucketsInHours() {
+        let now = Date(timeIntervalSince1970: 1_764_236_400)
+        let presentation = SparklineChartPresentation(
+            label: "JSONL watcher over Last 24h",
+            values: Array(repeating: 0, count: 12),
+            activityWindowMinutes: 1_440,
+            fetchedAt: now
+        )
+
+        XCTAssertEqual(presentation.relativeBucketLabel(for: 8), "8h-6h ago")
+        XCTAssertEqual(presentation.relativeBucketLabel(for: 11), "last 2h")
+    }
+
+    func testSparklinePresentationMarksLatestNonZeroBucketEvenWhenPeakCrushesScale() {
+        let presentation = SparklineChartPresentation(
+            label: "JSONL watcher over Last 24h",
+            values: [0, 0, 280, 590, 496, 763, 8_284, 2_065, 42, 0, 0, 70],
+            activityWindowMinutes: 1_440
+        )
+
+        XCTAssertEqual(
+            presentation.visiblePointMarkers(for: .primary, compact: false).map(\.bucket),
+            [11]
+        )
+        XCTAssertEqual(
+            presentation.visiblePointMarkers(for: .primary, compact: false).map(\.value),
+            [70]
+        )
+    }
+
     func testSparklineChartPresentationAnchorsPointsToWallClockBucketMidpoints() {
         let now = Date(timeIntervalSince1970: 1_764_236_400)
         let presentation = SparklineChartPresentation(

@@ -13,8 +13,16 @@ SRC = REPO_ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from brainlayer.fallback_replay import is_pending_entry, load_scope_map, parse_fallback_file, replay_entry
+from brainlayer.fallback_replay import (
+    inventory_fallbacks,
+    legacy_entry_from_path,
+    load_scope_map,
+    queue_entry,
+    queue_legacy_entry,
+    replay_entry,
+)
 from brainlayer.paths import DEFAULT_DB_PATH
+from brainlayer.queue_io import enqueue_store
 from brainlayer.store import store_memory
 from brainlayer.vector_store import VectorStore
 
@@ -25,70 +33,92 @@ def main() -> int:
     parser.add_argument("--scopes", type=Path, default=Path.home() / ".config" / "brainlayer" / "scopes.yaml")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
     parser.add_argument("--apply", action="store_true", help="Write pending structured files into BrainLayer.")
+    parser.add_argument(
+        "--queue",
+        action="store_true",
+        help="With --apply, enqueue pending structured files for the drain instead of direct DB writes.",
+    )
+    parser.add_argument(
+        "--legacy",
+        action="store_true",
+        help="With --apply --queue, also enqueue legacy docs.local/brain-store-fallback markdown files.",
+    )
     parser.add_argument("--limit", type=int, default=100, help="Maximum structured pending files to replay.")
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of text.")
     args = parser.parse_args()
 
     scope_map = load_scope_map(args.scopes)
-    structured, legacy = inventory(args.gits_root, scope_map=scope_map)
-    pending = [entry for entry in structured if is_pending_entry(entry)]
+    inventory = inventory_fallbacks(args.gits_root, scope_map=scope_map)
+    pending = inventory.pending
     result: dict[str, object] = {
-        "structured_count": len(structured),
+        "structured_count": len(inventory.structured),
         "pending_count": len(pending),
-        "legacy_count": len(legacy),
+        "legacy_count": len(inventory.legacy),
         "pending": [str(entry.path) for entry in pending],
-        "legacy": [str(path) for path in legacy],
+        "legacy": [str(path) for path in inventory.legacy],
         "replayed": [],
+        "legacy_replayed": [],
     }
 
     if args.apply:
-        if len(pending) > args.limit:
-            result["error"] = f"pending_count {len(pending)} exceeds --limit {args.limit}"
+        if args.legacy and not args.queue:
+            result["error"] = "--legacy requires --queue to avoid direct DB writes from unstructured fallback files"
             _emit(result, as_json=args.json)
             return 2
-        store = VectorStore(args.db)
-        try:
+        legacy_entries = (
+            [legacy_entry_from_path(path, scope_map=scope_map) for path in inventory.legacy] if args.legacy else []
+        )
+        replay_count = len(pending) + len(legacy_entries)
+        if replay_count > args.limit:
+            result["error"] = f"replay_count {replay_count} exceeds --limit {args.limit}"
+            _emit(result, as_json=args.json)
+            return 2
+        if args.queue:
             replayed = [
-                replay_entry(
+                queue_entry(
                     entry,
-                    store_func=lambda **kwargs: store_memory(store=store, embed_fn=None, **kwargs),
+                    enqueue_func=enqueue_store,
                     replayed_by="brainlayer-replay-fallbacks",
                 )
                 for entry in pending
             ]
-        finally:
-            store.close()
+            legacy_replayed = [
+                queue_legacy_entry(
+                    entry,
+                    enqueue_func=enqueue_store,
+                    replayed_by="brainlayer-replay-fallbacks",
+                )
+                for entry in legacy_entries
+            ]
+        else:
+            store = VectorStore(args.db)
+            try:
+                replayed = [
+                    replay_entry(
+                        entry,
+                        store_func=lambda **kwargs: store_memory(store=store, embed_fn=None, **kwargs),
+                        replayed_by="brainlayer-replay-fallbacks",
+                    )
+                    for entry in pending
+                ]
+            finally:
+                store.close()
+            legacy_replayed = []
         result["replayed"] = [
             {"path": str(item.path), "chunk_id": item.chunk_id, "error": item.error}
             for item in replayed
         ]
-        if any(item.error for item in replayed):
+        result["legacy_replayed"] = [
+            {"path": str(item.path), "chunk_id": item.chunk_id, "error": item.error}
+            for item in legacy_replayed
+        ]
+        if any(item.error for item in [*replayed, *legacy_replayed]):
             result["error"] = "one or more fallback replays failed"
             _emit(result, as_json=args.json)
             return 1
 
     _emit(result, as_json=args.json)
     return 0
-
-
-def inventory(gits_root: Path, *, scope_map: dict[str, str]):
-    structured = []
-    legacy = []
-    if not gits_root.exists():
-        return structured, legacy
-    for repo in sorted(path for path in gits_root.iterdir() if path.is_dir()):
-        for path in sorted((repo / "docs.local" / "decisions").glob("*.md")):
-            try:
-                entry = parse_fallback_file(path, scope_map=scope_map)
-            except Exception:
-                legacy.append(path)
-                continue
-            if entry.frontmatter.get("intended_brain_store"):
-                structured.append(entry)
-        fallback_dir = repo / "docs.local" / "brain-store-fallback"
-        if fallback_dir.exists():
-            legacy.extend(sorted(path for path in fallback_dir.rglob("*.md") if path.is_file()))
-    return structured, legacy
 
 
 def _emit(result: dict[str, object], *, as_json: bool) -> None:
@@ -102,6 +132,8 @@ def _emit(result: dict[str, object], *, as_json: bool) -> None:
         print(f"PENDING {path}")
     for item in result["replayed"]:
         print(f"REPLAYED {item['path']} -> {item.get('chunk_id') or item.get('error')}")
+    for item in result.get("legacy_replayed", []):
+        print(f"REPLAYED_LEGACY {item['path']} -> {item.get('chunk_id') or item.get('error')}")
 
 
 if __name__ == "__main__":

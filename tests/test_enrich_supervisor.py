@@ -20,6 +20,11 @@ def _result(*, attempted: int, enriched: int = 0, skipped: int = 0, failed: int 
     )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_live_queue(monkeypatch, tmp_path):
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
+
+
 def test_supervisor_releases_vector_store_between_cycles(tmp_path):
     from brainlayer import enrichment_controller as controller
 

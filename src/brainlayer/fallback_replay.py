@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import subprocess
 from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -29,6 +32,27 @@ class ReplayResult:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class FallbackInventory:
+    structured: list[FallbackEntry]
+    legacy: list[Path]
+
+    @property
+    def pending(self) -> list[FallbackEntry]:
+        return [entry for entry in self.structured if is_pending_entry(entry)]
+
+    def summary(self, *, sample_limit: int = 20) -> dict[str, Any]:
+        pending = self.pending
+        return {
+            "green": len(pending) == 0 and len(self.legacy) == 0,
+            "structured_count": len(self.structured),
+            "pending_count": len(pending),
+            "legacy_count": len(self.legacy),
+            "pending_sample": [str(entry.path) for entry in pending[:sample_limit]],
+            "legacy_sample": [str(path) for path in self.legacy[:sample_limit]],
+        }
+
+
 def load_scope_map(scopes_path: Path | None = None) -> dict[str, str]:
     path = scopes_path or Path.home() / ".config" / "brainlayer" / "scopes.yaml"
     if not path.exists():
@@ -36,6 +60,40 @@ def load_scope_map(scopes_path: Path | None = None) -> dict[str, str]:
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     scopes = data.get("scopes") or {}
     return {str(Path(prefix).expanduser().resolve()): str(project) for prefix, project in scopes.items()}
+
+
+def inventory_fallbacks(gits_root: Path, *, scope_map: dict[str, str]) -> FallbackInventory:
+    structured: list[FallbackEntry] = []
+    legacy: list[Path] = []
+    if not gits_root.exists():
+        return FallbackInventory(structured=structured, legacy=legacy)
+
+    for repo in sorted(path for path in gits_root.iterdir() if path.is_dir()):
+        for path in sorted((repo / "docs.local" / "decisions").glob("*.md")):
+            try:
+                entry = parse_fallback_file(path, scope_map=scope_map)
+            except Exception:
+                legacy.append(path)
+                continue
+            if entry.frontmatter.get("intended_brain_store"):
+                structured.append(entry)
+
+        fallback_dir = repo / "docs.local" / "brain-store-fallback"
+        if fallback_dir.exists():
+            for path in sorted(path for path in fallback_dir.rglob("*.md") if path.is_file()):
+                try:
+                    entry = parse_fallback_file(path, scope_map=scope_map)
+                except Exception:
+                    legacy.append(path)
+                    continue
+                if (
+                    entry.frontmatter.get("intended_brain_store")
+                    and str(entry.frontmatter.get("chunk_id") or "").strip()
+                ):
+                    continue
+                legacy.append(path)
+
+    return FallbackInventory(structured=structured, legacy=legacy)
 
 
 def parse_fallback_file(path: Path, *, scope_map: dict[str, str] | None = None) -> FallbackEntry:
@@ -115,6 +173,96 @@ def replay_entry(
     return ReplayResult(path=entry.path, attempted=True, chunk_id=chunk_id)
 
 
+def queue_entry(
+    entry: FallbackEntry,
+    *,
+    enqueue_func: Callable[..., Any],
+    replayed_by: str,
+    source: str = "fallback-replay",
+) -> ReplayResult:
+    chunk_id = str(entry.frontmatter.get("chunk_id") or "").strip() or _fallback_chunk_id(entry)
+    try:
+        enqueue_func(
+            content=entry.body,
+            memory_type=str(entry.frontmatter.get("memory_type") or "note"),
+            project=entry.project,
+            tags=_normalize_tags(entry.frontmatter.get("tags")),
+            importance=entry.frontmatter.get("importance"),
+            created_at=_json_safe_scalar(entry.frontmatter.get("timestamp")) or None,
+            source=source,
+            chunk_id=chunk_id,
+            fallback_source_path=str(entry.path),
+            origin_repo_path=str(entry.origin_repo_path),
+            replayed_by=replayed_by,
+            chunk_origin=entry.frontmatter.get("chunk_origin"),
+        )
+    except Exception as exc:
+        try:
+            _write_replay_attempt(entry, chunk_id=None)
+        except Exception as write_exc:
+            return ReplayResult(
+                path=entry.path,
+                attempted=True,
+                chunk_id=None,
+                error=f"queue failed: {exc}; write_replay_attempt failed: {write_exc}",
+            )
+        return ReplayResult(path=entry.path, attempted=True, chunk_id=None, error=str(exc))
+
+    try:
+        _write_replay_attempt(entry, chunk_id=chunk_id)
+    except Exception as exc:
+        return ReplayResult(
+            path=entry.path,
+            attempted=True,
+            chunk_id=chunk_id,
+            error=f"queued chunk_id={chunk_id} but failed to update fallback frontmatter: {exc}",
+        )
+
+    return ReplayResult(path=entry.path, attempted=True, chunk_id=chunk_id)
+
+
+def legacy_entry_from_path(path: Path, *, scope_map: dict[str, str] | None = None) -> FallbackEntry:
+    entry = parse_fallback_file(path, scope_map=scope_map or {})
+    frontmatter = dict(entry.frontmatter)
+    frontmatter.setdefault("intended_brain_store", True)
+    frontmatter["legacy_brain_store_fallback"] = True
+    frontmatter.setdefault("importance", _infer_legacy_importance(entry.body))
+    frontmatter.setdefault("tags", ["legacy-fallback", "brain-store-fallback", entry.project])
+    frontmatter.setdefault("timestamp", _infer_legacy_timestamp(path))
+    frontmatter.setdefault("reason", "legacy_brain_store_fallback")
+    return FallbackEntry(
+        path=entry.path,
+        frontmatter=frontmatter,
+        body=entry.body,
+        origin_repo_path=entry.origin_repo_path,
+        project=entry.project,
+    )
+
+
+def queue_legacy_entry(
+    entry: FallbackEntry,
+    *,
+    enqueue_func: Callable[..., Any],
+    replayed_by: str,
+    source: str = "fallback-replay",
+) -> ReplayResult:
+    return queue_entry(entry, enqueue_func=enqueue_func, replayed_by=replayed_by, source=source)
+
+
+def _fallback_chunk_id(entry: FallbackEntry) -> str:
+    stable = json.dumps(
+        {
+            "path": str(entry.path.resolve()),
+            "body": entry.body,
+            "timestamp": _json_safe_scalar(entry.frontmatter.get("timestamp")),
+            "project": entry.project,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "fallback-" + hashlib.sha256(stable.encode("utf-8")).hexdigest()[:16]
+
+
 def _write_replay_attempt(entry: FallbackEntry, *, chunk_id: Any) -> None:
     updated = dict(entry.frontmatter)
     updated["retry_attempted"] = True
@@ -126,8 +274,37 @@ def _normalize_tags(value: Any) -> list[Any]:
     if value is None:
         return []
     if isinstance(value, str) or not isinstance(value, list | tuple | set):
-        return [value]
-    return list(value)
+        return [_json_safe_scalar(value)]
+    return [_json_safe_scalar(item) for item in value]
+
+
+def _infer_legacy_importance(body: str) -> int:
+    patterns = (
+        r"\bimportance\s*[:=]\s*(10|[1-9])\b",
+        r"\bimp\s*[:=]\s*(10|[1-9])\b",
+        r"\[imp\s*:\s*(10|[1-9])\]",
+        r"\(imp\s*(10|[1-9])\)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, body, flags=re.I)
+        if match:
+            return int(match.group(1))
+    return 7
+
+
+def _infer_legacy_timestamp(path: Path) -> str:
+    match = re.search(r"(20\d{2}-\d{2}-\d{2})", str(path))
+    if match:
+        return f"{match.group(1)}T00:00:00Z"
+    return ""
+
+
+def _json_safe_scalar(value: Any) -> str | int | float | bool | None:
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    if isinstance(value, datetime | date):
+        return value.isoformat()
+    return str(value)
 
 
 def _split_frontmatter(text: str) -> tuple[dict[str, Any], str]:

@@ -30,8 +30,7 @@ Add to Claude Code (`~/.claude.json`):
 {
   "mcpServers": {
     "brainlayer": {
-      "command": "socat",
-      "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]
+      "command": "brainlayer-mcp-stdio-bridge"
     }
   }
 }
