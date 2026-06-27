@@ -192,6 +192,19 @@ def test_hotlane_run_schedules_backlog_on_first_cycle():
     assert scheduled_backlog_batches == [hotlane.DEFAULT_BACKLOG_BATCH]
 
 
+def test_open_store_readonly_accepts_one_argument_factory():
+    hotlane = _load_hotlane_module()
+    opened_paths = []
+    store = object()
+
+    def one_argument_factory(path):
+        opened_paths.append(path)
+        return store
+
+    assert hotlane._open_store(one_argument_factory, Path("/tmp/brainlayer.db"), readonly=True) is store
+    assert opened_paths == [Path("/tmp/brainlayer.db")]
+
+
 def test_hotlane_run_advances_enrich_timer_before_failed_cycle():
     hotlane = _load_hotlane_module()
     scheduled_enrich_limits = []

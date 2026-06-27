@@ -73,7 +73,6 @@ def inventory_fallbacks(gits_root: Path, *, scope_map: dict[str, str]) -> Fallba
             try:
                 entry = parse_fallback_file(path, scope_map=scope_map)
             except Exception:
-                legacy.append(path)
                 continue
             if entry.frontmatter.get("intended_brain_store"):
                 structured.append(entry)
@@ -84,7 +83,6 @@ def inventory_fallbacks(gits_root: Path, *, scope_map: dict[str, str]) -> Fallba
                 try:
                     entry = parse_fallback_file(path, scope_map=scope_map)
                 except Exception:
-                    legacy.append(path)
                     continue
                 if (
                     entry.frontmatter.get("intended_brain_store")

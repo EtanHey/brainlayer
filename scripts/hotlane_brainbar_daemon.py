@@ -216,8 +216,6 @@ def _open_store(
     try:
         return vector_store_cls(db_path, readonly=readonly)
     except TypeError:
-        if readonly:
-            raise
         return vector_store_cls(db_path)
 
 

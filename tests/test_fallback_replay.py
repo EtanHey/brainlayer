@@ -474,6 +474,21 @@ def test_inventory_ignores_replayed_legacy_fallback_markers(tmp_path):
     assert inventory.summary()["green"] is True
 
 
+def test_inventory_skips_unparseable_legacy_fallback_files(tmp_path):
+    from brainlayer.fallback_replay import inventory_fallbacks
+
+    repo = tmp_path / "orchestrator"
+    _git_init(repo)
+    path = repo / "docs.local" / "brain-store-fallback" / "bad-frontmatter.md"
+    path.parent.mkdir(parents=True)
+    path.write_text("---\n: bad yaml\n---\nlegacy body\n", encoding="utf-8")
+
+    inventory = inventory_fallbacks(tmp_path, scope_map={})
+
+    assert inventory.legacy == []
+    assert inventory.summary()["legacy_count"] == 0
+
+
 def test_replay_cli_apply_exits_nonzero_when_any_replay_errors(tmp_path, monkeypatch):
     script = Path(__file__).resolve().parents[1] / "scripts" / "replay_brain_store_fallbacks.py"
     spec = importlib.util.spec_from_file_location("replay_brain_store_fallbacks_test", script)
@@ -504,6 +519,46 @@ def test_replay_cli_apply_exits_nonzero_when_any_replay_errors(tmp_path, monkeyp
     monkeypatch.setattr(sys, "argv", ["replay_brain_store_fallbacks.py", "--apply", "--gits-root", str(tmp_path)])
 
     assert module.main() == 1
+
+
+def test_replay_cli_apply_queue_legacy_skips_malformed_legacy_files(tmp_path, monkeypatch):
+    script = Path(__file__).resolve().parents[1] / "scripts" / "replay_brain_store_fallbacks.py"
+    spec = importlib.util.spec_from_file_location("replay_brain_store_fallbacks_legacy_malformed_test", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    repo = tmp_path / "orchestrator"
+    _git_init(repo)
+    bad = repo / "docs.local" / "brain-store-fallback" / "bad.md"
+    good = repo / "docs.local" / "brain-store-fallback" / "good.md"
+    bad.parent.mkdir(parents=True)
+    bad.write_text("---\n: bad yaml\n---\nmalformed legacy body\n", encoding="utf-8")
+    good.write_text("valid legacy body\n", encoding="utf-8")
+    calls = []
+
+    def enqueue_func(**kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr(module, "load_scope_map", lambda _path: {})
+    monkeypatch.setattr(module, "enqueue_store", enqueue_func)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "replay_brain_store_fallbacks.py",
+            "--apply",
+            "--queue",
+            "--legacy",
+            "--gits-root",
+            str(tmp_path),
+        ],
+    )
+
+    assert module.main() == 0
+    assert len(calls) == 1
+    assert calls[0]["content"] == "valid legacy body\n"
 
 
 def test_replay_cli_apply_queue_legacy_marks_legacy_files(tmp_path, monkeypatch):
