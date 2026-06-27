@@ -21,6 +21,13 @@ final class MCPRouter: @unchecked Sendable {
     // attempt (retries == 0) with a sub-budget busy timeout, then queues on busy.
     private static let mcpStoreBusyTimeoutMillis: Int32 = 25
     private static let mcpStoreRetries = 0
+    private static let pendingStoreDrainQueue = DispatchQueue(
+        label: "com.brainlayer.brainbar.pending-store-drain",
+        qos: .utility
+    )
+    private static let pendingStoreDrainRegistry = PendingStoreDrainRegistry()
+    private static let pendingStoreDrainInitialDelay: TimeInterval = 0.25
+    private static let pendingStoreDrainMaxDelay: TimeInterval = 30.0
 
     private struct ToolOutput {
         let text: String
@@ -62,6 +69,23 @@ final class MCPRouter: @unchecked Sendable {
             lock.lock()
             defer { lock.unlock() }
             return result
+        }
+    }
+
+    private final class PendingStoreDrainRegistry: @unchecked Sendable {
+        private let lock = NSLock()
+        private var activeKeys = Set<String>()
+
+        func insert(_ key: String) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return activeKeys.insert(key).inserted
+        }
+
+        func remove(_ key: String) {
+            lock.lock()
+            activeKeys.remove(key)
+            lock.unlock()
         }
     }
 
@@ -565,6 +589,7 @@ final class MCPRouter: @unchecked Sendable {
                         retries: Self.mcpStoreRetries
                     )
                     : []
+                schedulePendingStoreDrain(db: db, chunkID: chunkID)
                 return queuedBrainStoreOutput(
                     queueID: queueID,
                     queuedAt: queuedAt,
@@ -583,6 +608,63 @@ final class MCPRouter: @unchecked Sendable {
                 reason: "DB_NOT_OPEN"
             )
         }
+    }
+
+    private func schedulePendingStoreDrain(db: BrainDatabase, chunkID: String) {
+        Self.schedulePendingStoreDrain(
+            db: db,
+            chunkID: chunkID,
+            delay: Self.pendingStoreDrainInitialDelay
+        )
+    }
+
+    private static func schedulePendingStoreDrain(db: BrainDatabase, chunkID: String, delay: TimeInterval) {
+        let drainKey = "\(ObjectIdentifier(db).hashValue):\(chunkID)"
+        guard pendingStoreDrainRegistry.insert(drainKey) else { return }
+
+        pendingStoreDrainQueue.asyncAfter(deadline: .now() + delay) {
+            drainPendingStoreTarget(db: db, chunkID: chunkID, drainKey: drainKey, delay: delay)
+        }
+    }
+
+    private static func drainPendingStoreTarget(
+        db: BrainDatabase,
+        chunkID: String,
+        drainKey: String,
+        delay: TimeInterval
+    ) {
+        guard db.isOpen else {
+            finishPendingStoreDrain(drainKey)
+            return
+        }
+
+        let targetIdentity = "chunk:\(chunkID)"
+        let before = db.pendingStoreQueueSnapshot()
+        guard before.identityKeys.contains(targetIdentity) else {
+            finishPendingStoreDrain(drainKey)
+            return
+        }
+
+        let flushedStores = db.flushPendingStores(
+            busyTimeoutMillis: mcpStoreBusyTimeoutMillis,
+            retries: mcpStoreRetries
+        )
+        let after = db.pendingStoreQueueSnapshot()
+        guard after.identityKeys.contains(targetIdentity) else {
+            finishPendingStoreDrain(drainKey)
+            return
+        }
+
+        let nextDelay = flushedStores.isEmpty
+            ? min(pendingStoreDrainMaxDelay, max(pendingStoreDrainInitialDelay, delay * 2.0))
+            : pendingStoreDrainInitialDelay
+        pendingStoreDrainQueue.asyncAfter(deadline: .now() + nextDelay) {
+            drainPendingStoreTarget(db: db, chunkID: chunkID, drainKey: drainKey, delay: nextDelay)
+        }
+    }
+
+    private static func finishPendingStoreDrain(_ drainKey: String) {
+        pendingStoreDrainRegistry.remove(drainKey)
     }
 
     private func queueBrainStore(

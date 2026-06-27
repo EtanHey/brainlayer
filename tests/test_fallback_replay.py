@@ -749,6 +749,52 @@ def test_fallback_marker_writes_are_serialized_per_file(tmp_path):
     assert updated.frontmatter["queued_chunk_id"] == chunk_id
 
 
+def test_queue_entry_serializes_enqueue_with_marker_check(tmp_path):
+    from brainlayer.fallback_replay import parse_fallback_file, queue_entry
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    path = _pending_file(repo, "docs.local/decisions/serialized-queue.md")
+    entry = parse_fallback_file(path)
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    calls: list[dict] = []
+    release_first_enqueue = threading.Event()
+
+    def enqueue_func(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            release_first_enqueue.wait(timeout=0.2)
+        queue_path = queue_dir / f"{len(calls)}.jsonl"
+        queue_path.write_text("queued\n", encoding="utf-8")
+        return queue_path
+
+    results = []
+    errors = []
+
+    def worker():
+        try:
+            results.append(queue_entry(entry, enqueue_func=enqueue_func, replayed_by="phase-1-test"))
+        except Exception as exc:  # pragma: no cover - assertion includes unexpected thread errors
+            errors.append(exc)
+
+    first = threading.Thread(target=worker)
+    second = threading.Thread(target=worker)
+    first.start()
+    second.start()
+    release_first_enqueue.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert errors == []
+    assert len(results) == 2
+    assert len(calls) == 1
+    updated = parse_fallback_file(path)
+    assert updated.frontmatter["queued_chunk_id"] == results[0].chunk_id
+
+
 def test_fallback_marker_file_lock_fails_closed_on_flock_error(tmp_path, monkeypatch):
     import fcntl
 

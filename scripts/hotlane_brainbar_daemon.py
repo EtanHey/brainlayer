@@ -12,11 +12,16 @@ from __future__ import annotations
 import argparse
 import inspect
 import logging
+import os
 import signal
 import time
 from pathlib import Path
 from typing import Callable, NamedTuple
 
+import apsw
+import sqlite_vec
+
+from brainlayer._helpers import serialize_f32
 from brainlayer.embeddings import get_embedding_model
 from brainlayer.enrichment_controller import (
     DEFAULT_ENRICH_SUPERVISOR_SINCE_HOURS,
@@ -32,6 +37,8 @@ STOP = False
 DEFAULT_HOTLANE_ENRICH_LIMIT = 5
 DEFAULT_BACKLOG_BATCH = 4
 MAX_BACKLOG_BATCH = 16
+DEFAULT_HOTLANE_WRITE_BUSY_TIMEOUT_MS = 1000
+MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 
 
 class CycleResult(NamedTuple):
@@ -159,11 +166,93 @@ def _embed_candidates(
     return embedded
 
 
-def _write_embedded_vectors(store: VectorStore, vectors: list[EmbeddedVector]) -> int:
+def _hotlane_write_busy_timeout_ms() -> int:
+    raw_value = os.environ.get("BRAINLAYER_HOTLANE_WRITE_BUSY_TIMEOUT_MS")
+    if raw_value is None:
+        return DEFAULT_HOTLANE_WRITE_BUSY_TIMEOUT_MS
+    try:
+        return max(1, min(int(raw_value), MAX_APSW_BUSY_TIMEOUT_MS))
+    except ValueError:
+        LOGGER.warning(
+            "Invalid BRAINLAYER_HOTLANE_WRITE_BUSY_TIMEOUT_MS=%r; using %dms",
+            raw_value,
+            DEFAULT_HOTLANE_WRITE_BUSY_TIMEOUT_MS,
+        )
+        return DEFAULT_HOTLANE_WRITE_BUSY_TIMEOUT_MS
+
+
+def _open_hotlane_write_connection(db_path: Path) -> apsw.Connection:
+    conn = apsw.Connection(str(db_path), flags=apsw.SQLITE_OPEN_READWRITE)
+    conn.setbusytimeout(_hotlane_write_busy_timeout_ms())
+    conn.enableloadextension(True)
+    conn.loadextension(sqlite_vec.loadable_path())
+    conn.enableloadextension(False)
+    return conn
+
+
+def _table_exists(conn: apsw.Connection, table_name: str) -> bool:
+    return bool(
+        conn.cursor()
+        .execute(
+            "SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?",
+            (table_name,),
+        )
+        .fetchone()
+    )
+
+
+def _upsert_chunk_vector_raw(
+    cursor,
+    chunk_id: str,
+    embedding: list[float],
+    *,
+    binary_index_available: bool,
+) -> None:
+    embedding_bytes = serialize_f32(embedding)
+    cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
+    cursor.execute(
+        """
+        INSERT INTO chunk_vectors (chunk_id, embedding)
+        VALUES (?, ?)
+        """,
+        (chunk_id, embedding_bytes),
+    )
+    if binary_index_available:
+        cursor.execute("DELETE FROM chunk_vectors_binary WHERE chunk_id = ?", (chunk_id,))
+        cursor.execute(
+            """
+            INSERT INTO chunk_vectors_binary (chunk_id, embedding)
+            VALUES (?, vec_quantize_binary(?))
+            """,
+            (chunk_id, embedding_bytes),
+        )
+
+
+def _write_embedded_vectors(store_or_path: VectorStore | Path | str, vectors: list[EmbeddedVector]) -> int:
     if not vectors:
         return 0
 
-    cursor = store.conn.cursor()
+    conn: apsw.Connection | None = None
+    db_path: Path | None
+    if hasattr(store_or_path, "conn"):
+        store = store_or_path
+        cursor = store.conn.cursor()
+        db_path = getattr(store, "db_path", None)
+        upsert_chunk_vector = store._upsert_chunk_vector
+    else:
+        db_path = Path(store_or_path)
+        conn = _open_hotlane_write_connection(db_path)
+        cursor = conn.cursor()
+        binary_index_available = _table_exists(conn, "chunk_vectors_binary")
+
+        def upsert_chunk_vector(cursor, chunk_id, embedding):
+            return _upsert_chunk_vector_raw(
+                cursor,
+                chunk_id,
+                embedding,
+                binary_index_available=binary_index_available,
+            )
+
     transaction_started = False
     count = 0
     try:
@@ -190,7 +279,7 @@ def _write_embedded_vectors(store: VectorStore, vectors: list[EmbeddedVector]) -
             ).fetchone()
             if not still_eligible:
                 continue
-            store._upsert_chunk_vector(cursor, chunk_id, embedding)
+            upsert_chunk_vector(cursor, chunk_id, embedding)
             count += 1
         cursor.execute("COMMIT")
         transaction_started = False
@@ -198,11 +287,14 @@ def _write_embedded_vectors(store: VectorStore, vectors: list[EmbeddedVector]) -
         if transaction_started:
             cursor.execute("ROLLBACK")
         raise
+    finally:
+        if conn is not None:
+            conn.close()
 
     if count:
         from brainlayer.search_repo import clear_hybrid_search_cache
 
-        clear_hybrid_search_cache(getattr(store, "db_path", None))
+        clear_hybrid_search_cache(db_path)
     return count
 
 
@@ -278,11 +370,7 @@ def _run_split_cycle(
     vectors = _embed_candidates(hot_rows, embed_fn=embed_fn, embed_batch_fn=embed_batch_fn)
     vectors.extend(_embed_candidates(pending_rows, embed_fn=embed_fn, embed_batch_fn=embed_batch_fn))
     if vectors:
-        write_store = _open_store(vector_store_cls, db_path, readonly=False)
-        try:
-            embedded += write_vectors_fn(write_store, vectors)
-        finally:
-            write_store.close()
+        embedded += write_vectors_fn(db_path, vectors)
 
     if enrich_limit <= 0:
         return CycleResult(embedded=embedded)
@@ -413,15 +501,12 @@ def run(
             queue_has_high_priority_backlog = queue_has_backlog and high_priority_queue_depth_fn(queue_dir) > 0
             if queue_has_backlog:
                 if queue_has_high_priority_backlog:
-                    LOGGER.info("durable high-priority queue has backlog; yielding backlog/enrichment writer work")
+                    LOGGER.info("durable high-priority queue has backlog; yielding all hotlane writer work")
                 else:
-                    LOGGER.info("durable queue has enrichment backlog; yielding backlog/enrichment writer work")
-                if cycle_fn is not run_cycle or recent_limit <= 0:
-                    cycles += 1
-                    sleep_fn(interval)
-                    continue
-                cycle_backlog_batch = 0
-                cycle_enrich_limit = 0
+                    LOGGER.info("durable queue has backlog; yielding all hotlane writer work")
+                cycles += 1
+                sleep_fn(interval)
+                continue
             else:
                 cycle_backlog_batch = (
                     backlog_batch if backlog_batch > 0 and now - last_backlog >= backlog_interval else 0

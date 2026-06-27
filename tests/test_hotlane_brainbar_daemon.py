@@ -282,6 +282,42 @@ def test_write_embedded_vectors_skips_when_content_changed_after_snapshot():
     assert ("upsert", "chunk-1", [0.5]) not in events
 
 
+def test_write_embedded_vectors_path_upserts_without_vectorstore_writer_pidfile(tmp_path, monkeypatch):
+    hotlane = _load_hotlane_module()
+    from brainlayer.vector_store import VectorStore
+
+    db_path = tmp_path / "brainlayer.db"
+    pidfile_dir = tmp_path / "writer-pids"
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(pidfile_dir))
+
+    store = VectorStore(db_path)
+    cursor = store.conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO chunks (id, content, metadata, source_file, source)
+        VALUES ('chunk-1', 'stable content', '{}', 'brainbar-store', 'mcp')
+        """
+    )
+    store.close()
+    assert list(pidfile_dir.glob("brainlayer-writer-*")) == []
+
+    count = hotlane._write_embedded_vectors(
+        db_path,
+        [hotlane.EmbeddedVector("chunk-1", "stable content", [0.25] * 1024)],
+    )
+
+    assert count == 1
+    assert list(pidfile_dir.glob("brainlayer-writer-*")) == []
+
+    readonly_store = VectorStore(db_path, readonly=True)
+    try:
+        cursor = readonly_store.conn.cursor()
+        assert cursor.execute("SELECT COUNT(*) FROM chunk_vectors WHERE chunk_id = 'chunk-1'").fetchone()[0] == 1
+        assert cursor.execute("SELECT COUNT(*) FROM chunk_vectors_binary WHERE chunk_id = 'chunk-1'").fetchone()[0] == 1
+    finally:
+        readonly_store.close()
+
+
 def test_split_cycle_embeds_all_hot_candidates_before_writer_revalidation(tmp_path):
     hotlane = _load_hotlane_module()
     db_path = tmp_path / "brainlayer.db"
@@ -498,7 +534,7 @@ def test_hotlane_run_yields_all_writer_work_during_high_priority_queue_backlog(t
     assert sleeps == [0.25]
 
 
-def test_hotlane_run_keeps_hot_embedding_during_queue_backlog(tmp_path, monkeypatch):
+def test_hotlane_run_skips_default_hot_embedding_during_queue_backlog(tmp_path, monkeypatch):
     hotlane = _load_hotlane_module()
     split_calls = []
     sleeps = []
@@ -527,10 +563,7 @@ def test_hotlane_run_keeps_hot_embedding_during_queue_backlog(tmp_path, monkeypa
         high_priority_queue_depth_fn=lambda _queue_dir: 1,
     )
 
-    assert len(split_calls) == 1
-    assert split_calls[0]["recent_limit"] == 5
-    assert split_calls[0]["backlog_batch"] == 0
-    assert split_calls[0]["enrich_limit"] == 0
+    assert split_calls == []
     assert sleeps == [0.25]
 
 
@@ -564,7 +597,7 @@ def test_hotlane_run_caps_backlog_batch_at_priority_gate_limit(tmp_path):
     assert scheduled_backlog_batches == [16]
 
 
-def test_hotlane_split_cycle_embeds_before_opening_writer(tmp_path):
+def test_hotlane_split_cycle_writes_vectors_without_opening_vectorstore_writer(tmp_path):
     hotlane = _load_hotlane_module()
     events = []
     db_path = tmp_path / "brainlayer.db"
@@ -603,6 +636,12 @@ def test_hotlane_split_cycle_embeds_before_opening_writer(tmp_path):
         def close(self):
             events.append(("close", None))
 
+    def write_vectors_fn(target, vectors):
+        events.append(("write_target", target))
+        for vector in vectors:
+            events.append(("upsert", vector.chunk_id, vector.embedding))
+        return len(vectors)
+
     result = hotlane._run_split_cycle(
         db_path=db_path,
         vector_store_cls=FakeStore,
@@ -612,12 +651,13 @@ def test_hotlane_split_cycle_embeds_before_opening_writer(tmp_path):
         backlog_batch=4,
         enrich_limit=0,
         enrich_since_hours=8760,
+        write_vectors_fn=write_vectors_fn,
     )
 
     assert result.embedded == 2
-    assert events.index(("embed", "hot content")) < events.index(("open", False))
-    assert events.index(("embed", "pending content")) < events.index(("open", False))
-    assert events.count(("open", False)) == 1
+    assert events.index(("embed", "hot content")) < events.index(("write_target", db_path))
+    assert events.index(("embed", "pending content")) < events.index(("write_target", db_path))
+    assert ("open", False) not in events
     assert ("upsert", "hot-1", [1.0]) in events
     assert ("upsert", "pending-1", [1.0]) in events
 
@@ -625,6 +665,8 @@ def test_hotlane_split_cycle_embeds_before_opening_writer(tmp_path):
 def test_hotlane_split_cycle_falls_through_recent_candidates_after_embed_failure(tmp_path):
     hotlane = _load_hotlane_module()
     events = []
+    db_path = tmp_path / "brainlayer.db"
+    db_path.touch()
 
     class FakeCursor:
         def __init__(self, readonly):
@@ -665,19 +707,26 @@ def test_hotlane_split_cycle_falls_through_recent_candidates_after_embed_failure
             raise RuntimeError("transient embed failure")
         return [3.0]
 
+    def write_vectors_fn(_target, vectors):
+        for vector in vectors:
+            events.append(("upsert", vector.chunk_id, vector.embedding))
+        return len(vectors)
+
     result = hotlane._run_split_cycle(
-        db_path=tmp_path / "brainlayer.db",
+        db_path=db_path,
         vector_store_cls=FakeStore,
         embed_fn=embed_fn,
         recent_limit=5,
         backlog_batch=0,
         enrich_limit=0,
         enrich_since_hours=8760,
+        write_vectors_fn=write_vectors_fn,
     )
 
     assert result.embedded == 1
     assert ("embed", "bad content") in events
     assert ("embed", "good content") in events
+    assert ("open", False) not in events
     assert ("upsert", "hot-good", [3.0]) in events
     assert ("upsert", "hot-bad", [3.0]) not in events
 

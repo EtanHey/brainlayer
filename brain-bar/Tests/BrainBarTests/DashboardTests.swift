@@ -938,6 +938,36 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
     }
 
+    func testDashboardStatsCountsDurableStoreQueueLinesAndSkipsEnrichmentEvents() throws {
+        let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pending-stores-dashboard-filtered-\(UUID().uuidString).jsonl")
+        let durableQueue = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("brainlayer-durable-filtered-\(UUID().uuidString)", isDirectory: true)
+        let restoreQueuePath = setDashboardPendingStoreQueuePath(queuePath)
+        let restoreDurableQueue = setDashboardDurableStoreQueuePath(durableQueue)
+        defer {
+            restoreQueuePath()
+            restoreDurableQueue()
+            try? FileManager.default.removeItem(at: queuePath)
+            try? FileManager.default.removeItem(at: durableQueue)
+        }
+        try FileManager.default.createDirectory(at: durableQueue, withIntermediateDirectories: true)
+        try """
+        {"kind":"store_memory","chunk_id":"durable-one","content":"queued one"}
+        {"kind":"enrichment_update","chunk_id":"enrich-one","summary":"queued enrichment"}
+        {"kind":"store_memory","chunk_id":"durable-two","content":"queued two"}
+        """.write(
+            to: durableQueue.appendingPathComponent("mixed-batch.jsonl"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 2)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+    }
+
     func testDashboardStatsDeduplicatesSameFallbackAcrossQueues() throws {
         let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("pending-stores-dashboard-duplicate-\(UUID().uuidString).jsonl")
@@ -985,6 +1015,57 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
         XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 1)
         XCTAssertEqual(stats.pendingStoreOldestQueuedAt, Date(timeIntervalSince1970: 1_800))
+    }
+
+    func testDashboardStatsDeduplicatesUnmarkedFallbackAgainstDurableFallbackChunkID() throws {
+        let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pending-stores-dashboard-derived-\(UUID().uuidString).jsonl")
+        let durableQueue = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("brainlayer-durable-derived-\(UUID().uuidString)", isDirectory: true)
+        let fallbackPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("derived.md")
+        let restoreQueuePath = setDashboardPendingStoreQueuePath(queuePath)
+        let restoreDurableQueue = setDashboardDurableStoreQueuePath(durableQueue)
+        defer {
+            restoreQueuePath()
+            restoreDurableQueue()
+            try? FileManager.default.removeItem(at: queuePath)
+            try? FileManager.default.removeItem(at: durableQueue)
+        }
+        try FileManager.default.createDirectory(at: durableQueue, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: fallbackPath.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let body = "derived duplicate fallback body\n"
+        let fallbackText = """
+        ---
+        intended_brain_store: true
+        importance: 10
+        timestamp: 1970-01-01T00:32:00Z
+        chunk_id:
+        ---
+        """ + "\n" + body
+        try fallbackText.write(to: fallbackPath, atomically: true, encoding: .utf8)
+        let fallbackID = dashboardFallbackChunkID(
+            file: fallbackPath,
+            originRepoPath: fallbackReplayRoot.appendingPathComponent("brainlayer", isDirectory: true),
+            project: "brainlayer",
+            timestamp: "1970-01-01T00:32:00Z",
+            body: body
+        )
+        try """
+        {"kind":"store_memory","chunk_id":"\(fallbackID)","content":"derived duplicate fallback body"}
+        """.write(
+            to: durableQueue.appendingPathComponent("fallback-replay-derived.jsonl"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
     }
 
     func testDashboardStatsCountsPendingFallbackReplayDebtWithoutTimestamp() throws {
@@ -1057,6 +1138,28 @@ final class DashboardTests: XCTestCase {
         ---
         normal decision note, not a BrainLayer fallback replay item
         """.write(to: decisionPath, atomically: true, encoding: .utf8)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 0)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+    }
+
+    func testDashboardStatsIgnoresDecisionMarkdownWithoutFrontmatter() throws {
+        let decisionPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("plain.md")
+        try FileManager.default.createDirectory(
+            at: decisionPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try "plain decision note without fallback frontmatter\n".write(
+            to: decisionPath,
+            atomically: true,
+            encoding: .utf8
+        )
 
         let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
 
@@ -1225,6 +1328,36 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
         XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
         XCTAssertEqual(stats.pendingStoreOldestQueuedAt, Date(timeIntervalSince1970: 1_620))
+    }
+
+    func testDashboardStatsTreatsBlankChunkIDAsPendingBeforeTrustedReplayHash() throws {
+        let storedPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("partial-trusted-direct.md")
+        try FileManager.default.createDirectory(
+            at: storedPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let body = "partial trusted direct replay body\n"
+        let bodyHash = SHA256.hash(data: Data(body.utf8)).map { String(format: "%02x", $0) }.joined()
+        let storedText = """
+        ---
+        intended_brain_store: true
+        importance: 10
+        timestamp: 1970-01-01T00:28:00Z
+        chunk_id:
+        replayed_body_sha256: \(bodyHash)
+        ---
+        """ + "\n" + body
+        try storedText.write(to: storedPath, atomically: true, encoding: .utf8)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+        XCTAssertEqual(stats.pendingStoreOldestQueuedAt, Date(timeIntervalSince1970: 1_680))
     }
 
     func testDashboardStatsIncludesLegacyFallbackReplayDebtWithoutFrontmatter() throws {
@@ -2664,6 +2797,69 @@ private func setDashboardDurableStoreQueuePath(_ path: URL) -> () -> Void {
             unsetenv("BRAINLAYER_QUEUE_DIR")
         }
     }
+}
+
+private func dashboardFallbackChunkID(
+    file: URL,
+    originRepoPath: URL,
+    project: String,
+    timestamp: String?,
+    body: String
+) -> String {
+    let stable = "{"
+        + "\"body\":\(dashboardJSONStringLiteral(body)),"
+        + "\"path\":\(dashboardJSONStringLiteral(dashboardRelativePath(file, to: originRepoPath))),"
+        + "\"project\":\(dashboardJSONStringLiteral(project)),"
+        + "\"timestamp\":\(timestamp.map(dashboardJSONStringLiteral) ?? "null")"
+        + "}"
+    let digest = SHA256.hash(data: Data(stable.utf8))
+    let prefix = digest.prefix(8).map { String(format: "%02x", $0) }.joined()
+    return "fallback-\(prefix)"
+}
+
+private func dashboardRelativePath(_ file: URL, to root: URL) -> String {
+    let filePath = file.standardizedFileURL.path
+    let rootPath = root.standardizedFileURL.path
+    let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+    if filePath.hasPrefix(prefix) {
+        return String(filePath.dropFirst(prefix.count))
+    }
+    return file.lastPathComponent
+}
+
+private func dashboardJSONStringLiteral(_ value: String) -> String {
+    var output = "\""
+    for scalar in value.unicodeScalars {
+        switch scalar.value {
+        case 0x08:
+            output += "\\b"
+        case 0x09:
+            output += "\\t"
+        case 0x0A:
+            output += "\\n"
+        case 0x0C:
+            output += "\\f"
+        case 0x0D:
+            output += "\\r"
+        case 0x22:
+            output += "\\\""
+        case 0x5C:
+            output += "\\\\"
+        case 0x00..<0x20:
+            output += String(format: "\\u%04x", scalar.value)
+        case 0x20...0x7E:
+            output.unicodeScalars.append(scalar)
+        case 0x7F...0xFFFF:
+            output += String(format: "\\u%04x", scalar.value)
+        default:
+            let adjusted = scalar.value - 0x10000
+            let high = 0xD800 + (adjusted >> 10)
+            let low = 0xDC00 + (adjusted & 0x3FF)
+            output += String(format: "\\u%04x\\u%04x", high, low)
+        }
+    }
+    output += "\""
+    return output
 }
 
 private func brainBarSourceFile(_ relativePath: String, testFilePath: StaticString = #filePath) throws -> String {

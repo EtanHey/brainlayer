@@ -373,6 +373,7 @@ final class DatabaseTests: XCTestCase {
                 );
             """
         )
+        let beforeSchemaObjects = try sqliteMasterObjectNames(path: legacyPath)
         defer {
             try? FileManager.default.removeItem(atPath: legacyPath)
             try? FileManager.default.removeItem(atPath: legacyPath + "-wal")
@@ -389,6 +390,11 @@ final class DatabaseTests: XCTestCase {
         XCTAssertFalse(
             try sqliteTableColumns(path: legacyPath, table: "chunks").contains("sender"),
             "Managed live opens must not run startup migrations or DDL that competes with the drain writer."
+        )
+        XCTAssertEqual(
+            try sqliteMasterObjectNames(path: legacyPath),
+            beforeSchemaObjects,
+            "Managed live opens must remain schema-neutral and avoid startup DDL."
         )
     }
 
@@ -969,6 +975,7 @@ final class DatabaseTests: XCTestCase {
 
         let results = try legacy.search(query: "NoTrigramNeedle", limit: 10)
 
+        XCTAssertFalse(try legacy.tableExists("chunks_fts_trigram"))
         XCTAssertEqual(results.first?["chunk_id"] as? String, "legacy-no-trigram-row")
     }
 
@@ -2069,6 +2076,31 @@ private func sqliteTableColumns(path: String, table: String) throws -> Set<Strin
             }
         }
         return columns
+    }
+}
+
+private func sqliteMasterObjectNames(path: String) throws -> Set<String> {
+    try withSQLiteConnection(path: path) { db in
+        var stmt: OpaquePointer?
+        let rc = sqlite3_prepare_v2(
+            db,
+            "SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'",
+            -1,
+            &stmt,
+            nil
+        )
+        guard rc == SQLITE_OK else {
+            throw NSError(domain: "DatabaseTests", code: Int(rc))
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        var names = Set<String>()
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let text = sqlite3_column_text(stmt, 0) {
+                names.insert(String(cString: text))
+            }
+        }
+        return names
     }
 }
 

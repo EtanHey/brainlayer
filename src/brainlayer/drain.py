@@ -60,6 +60,22 @@ def _drain_busy_timeout_ms() -> int:
     return timeout_ms
 
 
+def _set_drain_busy_timeout_hook(conn: apsw.Connection) -> None:
+    """Install drain busy_timeout before APSW connection best-practice hooks run."""
+    conn.setbusytimeout(_drain_busy_timeout_ms())
+
+
+def _install_drain_busy_timeout_hook() -> None:
+    try:
+        apsw.connection_hooks.remove(_set_drain_busy_timeout_hook)
+    except ValueError:
+        pass
+    apsw.connection_hooks.insert(0, _set_drain_busy_timeout_hook)
+
+
+_install_drain_busy_timeout_hook()
+
+
 def _checkpoint_busy_timeout_ms() -> int:
     try:
         timeout_ms = int(

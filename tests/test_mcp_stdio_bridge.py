@@ -511,6 +511,11 @@ def test_stdio_bridge_exits_after_notification_only_frame_at_stdin_eof(monkeypat
     finally:
         if stdin_w != -1:
             os.close(stdin_w)
+        for stream in (stdin_reader, stdout_writer, stderr_writer):
+            try:
+                stream.close()
+            except OSError:
+                pass
         for fd in (stdout_r, stderr_r):
             try:
                 os.close(fd)
@@ -605,6 +610,11 @@ def test_stdio_bridge_ignores_unmatched_backend_response_id_before_eof_drain(mon
     finally:
         if stdin_w != -1:
             os.close(stdin_w)
+        for stream in (stdin_reader, stdout_writer, stderr_writer):
+            try:
+                stream.close()
+            except OSError:
+                pass
         for fd in (stdout_r, stderr_r):
             try:
                 os.close(fd)
@@ -717,10 +727,13 @@ def test_stdio_bridge_replays_full_frame_after_partial_socket_send_then_reconnec
     finally:
         if stdin_w != -1:
             os.close(stdin_w)
+        for stream in (stdin_reader, stdout_writer, stderr_writer):
+            try:
+                stream.close()
+            except OSError:
+                pass
         os.close(stdout_r)
         os.close(stderr_r)
-        stdout_writer.close()
-        stderr_writer.close()
 
 
 def test_stdio_bridge_waits_for_complete_content_length_response_after_stdin_eof(tmp_path: Path) -> None:
@@ -799,6 +812,87 @@ def test_stdio_bridge_waits_for_complete_content_length_response_after_stdin_eof
         except FileNotFoundError:
             pass
         thread.join(timeout=1)
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=5)
+
+
+def test_stdio_bridge_clears_partial_backend_frame_before_reconnect(tmp_path: Path) -> None:
+    socket_path = Path("/tmp") / f"bl-stale-{os.getpid()}-{time.monotonic_ns()}.sock"
+    stale_prefix = b"Content-Length: 999\r\n\r\n{"
+    second_response = b'{"jsonrpc":"2.0","id":2,"result":{"generation":2}}\n'
+    stop = threading.Event()
+    ready = threading.Event()
+    first_served = threading.Event()
+    second_served = threading.Event()
+
+    def serve() -> None:
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(str(socket_path))
+        listener.listen()
+        listener.settimeout(0.05)
+        ready.set()
+        connection_index = 0
+        try:
+            while not stop.is_set() and connection_index < 2:
+                try:
+                    client, _ = listener.accept()
+                except TimeoutError:
+                    continue
+                except OSError:
+                    break
+                connection_index += 1
+                with client:
+                    _ = client.recv(4096)
+                    if connection_index == 1:
+                        client.sendall(stale_prefix)
+                        first_served.set()
+                    else:
+                        client.sendall(second_response)
+                        second_served.set()
+                        stop.wait(timeout=1.5)
+        finally:
+            listener.close()
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    assert ready.wait(timeout=2)
+
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
+        "BRAINLAYER_MCP_SOCKET": str(socket_path),
+        "BRAINLAYER_MCP_RECONNECT_MS": "10",
+        "BRAINLAYER_MCP_MAX_RECONNECT_MS": "10",
+        "BRAINLAYER_MCP_CONNECT_TIMEOUT_MS": "1000",
+        "BRAINLAYER_MCP_STDIN_EOF_DRAIN_MS": "50",
+    }
+    process = subprocess.Popen(
+        [sys.executable, "-m", "brainlayer.mcp_stdio_bridge"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+    )
+    try:
+        _write_json_line(process, {"jsonrpc": "2.0", "id": 1, "method": "first"})
+        assert first_served.wait(timeout=2)
+        _write_json_line(process, {"jsonrpc": "2.0", "id": 2, "method": "second"})
+        assert process.stdin is not None
+        process.stdin.close()
+        assert process.stdout is not None
+        output = _read_fd_until(process.stdout.fileno(), lambda data: second_response in data, timeout=2)
+        assert second_served.wait(timeout=2)
+
+        assert second_response in output
+        assert process.wait(timeout=0.4) == 0
+    finally:
+        stop.set()
+        thread.join(timeout=1)
+        try:
+            socket_path.unlink()
+        except FileNotFoundError:
+            pass
         if process.poll() is None:
             process.terminate()
             process.wait(timeout=5)
@@ -887,6 +981,11 @@ def test_stdio_bridge_returns_error_when_backend_disconnects_after_full_send(mon
     finally:
         if stdin_w != -1:
             os.close(stdin_w)
+        for stream in (stdin_reader, stdout_writer, stderr_writer):
+            try:
+                stream.close()
+            except OSError:
+                pass
         for fd in (stdout_r, stderr_r):
             try:
                 os.close(fd)
@@ -963,18 +1062,23 @@ def test_stdio_bridge_exits_when_backend_never_replies_after_stdin_eof(monkeypat
         os.close(stdin_w)
         stdin_w = -1
         assert request_received.wait(timeout=1)
+        received = _read_content_length_payload(stdout_r, timeout=2)
         thread.join(timeout=2)
 
+        assert received["id"] == 1
+        assert received["error"]["code"] == -32000
         assert not thread.is_alive()
         assert exit_codes == [0]
     finally:
         if stdin_w != -1:
             os.close(stdin_w)
+        for stream in (stdin_reader, stdout_writer, stderr_writer):
+            try:
+                stream.close()
+            except OSError:
+                pass
         for fd in (stdout_r, stderr_r):
             try:
                 os.close(fd)
             except OSError:
                 pass
-        stdout_writer.close()
-        stderr_writer.close()
-        stdin_reader.close()

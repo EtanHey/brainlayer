@@ -190,48 +190,56 @@ def queue_entry(
     replayed_by: str,
     source: str = "fallback-replay",
 ) -> ReplayResult:
-    chunk_id = _fallback_chunk_id(entry)
-    latest = _latest_entry(entry)
-    queued = str(latest.frontmatter.get("queued_chunk_id") or "").strip()
-    queued_path = _queued_queue_path(latest)
-    if queued == chunk_id and is_pending_entry(latest) and (queued_path is None or queued_path.exists()):
-        return ReplayResult(path=entry.path, attempted=True, chunk_id=chunk_id)
-    try:
-        queue_path = enqueue_func(
-            content=entry.body,
-            memory_type=str(entry.frontmatter.get("memory_type") or "note"),
-            project=entry.project,
-            tags=_normalize_tags(entry.frontmatter.get("tags")),
-            importance=entry.frontmatter.get("importance"),
-            created_at=_json_safe_scalar(entry.frontmatter.get("timestamp")) or None,
-            source=source,
-            chunk_id=chunk_id,
-            fallback_source_path=str(entry.path),
-            origin_repo_path=str(entry.origin_repo_path),
-            replayed_by=replayed_by,
-            chunk_origin=entry.frontmatter.get("chunk_origin"),
-        )
-    except Exception as exc:
+    with _fallback_marker_file_lock(entry.path):
+        latest = _latest_entry(entry)
+        chunk_id = _fallback_chunk_id(latest)
+        queued = str(latest.frontmatter.get("queued_chunk_id") or "").strip()
+        queued_path = _queued_queue_path(latest)
+        if queued == chunk_id and is_pending_entry(latest) and (queued_path is None or queued_path.exists()):
+            return ReplayResult(path=entry.path, attempted=True, chunk_id=chunk_id)
+
+        stored = _stored_chunk_id(latest.frontmatter)
+        if stored and _fallback_chunk_matches(latest, stored):
+            return ReplayResult(path=entry.path, attempted=True, chunk_id=stored)
+        if not is_pending_entry(latest):
+            return ReplayResult(path=entry.path, attempted=False, chunk_id=None)
+
         try:
-            _write_replay_attempt(entry, chunk_id=None)
-        except Exception as write_exc:
+            queue_path = enqueue_func(
+                content=latest.body,
+                memory_type=str(latest.frontmatter.get("memory_type") or "note"),
+                project=latest.project,
+                tags=_normalize_tags(latest.frontmatter.get("tags")),
+                importance=latest.frontmatter.get("importance"),
+                created_at=_json_safe_scalar(latest.frontmatter.get("timestamp")) or None,
+                source=source,
+                chunk_id=chunk_id,
+                fallback_source_path=str(latest.path),
+                origin_repo_path=str(latest.origin_repo_path),
+                replayed_by=replayed_by,
+                chunk_origin=latest.frontmatter.get("chunk_origin"),
+            )
+        except Exception as exc:
+            try:
+                _write_replay_attempt_locked(latest, chunk_id=None)
+            except Exception as write_exc:
+                return ReplayResult(
+                    path=entry.path,
+                    attempted=True,
+                    chunk_id=None,
+                    error=f"queue failed: {exc}; write_replay_attempt failed: {write_exc}",
+                )
+            return ReplayResult(path=entry.path, attempted=True, chunk_id=None, error=str(exc))
+
+        try:
+            _write_queue_attempt_locked(latest, chunk_id=chunk_id, queue_path=queue_path)
+        except Exception as exc:
             return ReplayResult(
                 path=entry.path,
                 attempted=True,
-                chunk_id=None,
-                error=f"queue failed: {exc}; write_replay_attempt failed: {write_exc}",
+                chunk_id=chunk_id,
+                error=f"queued chunk_id={chunk_id} but failed to update fallback frontmatter: {exc}",
             )
-        return ReplayResult(path=entry.path, attempted=True, chunk_id=None, error=str(exc))
-
-    try:
-        _write_queue_attempt(entry, chunk_id=chunk_id, queue_path=queue_path)
-    except Exception as exc:
-        return ReplayResult(
-            path=entry.path,
-            attempted=True,
-            chunk_id=chunk_id,
-            error=f"queued chunk_id={chunk_id} but failed to update fallback frontmatter: {exc}",
-        )
 
     return ReplayResult(path=entry.path, attempted=True, chunk_id=chunk_id)
 
@@ -341,40 +349,48 @@ def _queued_queue_path(entry: FallbackEntry) -> Path | None:
 
 def _write_queue_attempt(entry: FallbackEntry, *, chunk_id: Any, queue_path: Any = None) -> None:
     with _fallback_marker_file_lock(entry.path):
-        latest = _latest_entry(entry)
-        stored = _stored_chunk_id(latest.frontmatter)
-        if stored and _fallback_chunk_matches(latest, stored):
-            return
-        if not is_pending_entry(latest):
-            return
-        if chunk_id and not _fallback_chunk_matches(latest, chunk_id):
-            return
-        updated = _frontmatter_with_resolved_project(latest)
-        updated["retry_attempted"] = True
-        updated["queued_chunk_id"] = chunk_id
-        updated["queued_queue_path"] = str(queue_path) if queue_path else None
-        updated["chunk_id"] = None
-        _write_frontmatter(latest.path, updated, latest.body)
+        _write_queue_attempt_locked(entry, chunk_id=chunk_id, queue_path=queue_path)
+
+
+def _write_queue_attempt_locked(entry: FallbackEntry, *, chunk_id: Any, queue_path: Any = None) -> None:
+    latest = _latest_entry(entry)
+    stored = _stored_chunk_id(latest.frontmatter)
+    if stored and _fallback_chunk_matches(latest, stored):
+        return
+    if not is_pending_entry(latest):
+        return
+    if chunk_id and not _fallback_chunk_matches(latest, chunk_id):
+        return
+    updated = _frontmatter_with_resolved_project(latest)
+    updated["retry_attempted"] = True
+    updated["queued_chunk_id"] = chunk_id
+    updated["queued_queue_path"] = str(queue_path) if queue_path else None
+    updated["chunk_id"] = None
+    _write_frontmatter(latest.path, updated, latest.body)
 
 
 def _write_replay_attempt(entry: FallbackEntry, *, chunk_id: Any, trust_chunk_id: bool = False) -> None:
     with _fallback_marker_file_lock(entry.path):
-        latest = _latest_entry(entry)
-        stored = _stored_chunk_id(latest.frontmatter)
-        if not chunk_id and stored and _fallback_chunk_matches(latest, stored):
-            return
-        if chunk_id and not trust_chunk_id and not _fallback_chunk_matches(latest, chunk_id):
-            return
-        if not is_pending_entry(latest):
-            return
-        updated = _frontmatter_with_resolved_project(latest)
-        updated["retry_attempted"] = True
-        updated["chunk_id"] = chunk_id or None
-        if chunk_id:
-            updated.pop("queued_chunk_id", None)
-        if trust_chunk_id and chunk_id:
-            updated["replayed_body_sha256"] = _body_sha256(latest.body)
-        _write_frontmatter(latest.path, updated, latest.body)
+        _write_replay_attempt_locked(entry, chunk_id=chunk_id, trust_chunk_id=trust_chunk_id)
+
+
+def _write_replay_attempt_locked(entry: FallbackEntry, *, chunk_id: Any, trust_chunk_id: bool = False) -> None:
+    latest = _latest_entry(entry)
+    stored = _stored_chunk_id(latest.frontmatter)
+    if not chunk_id and stored and _fallback_chunk_matches(latest, stored):
+        return
+    if chunk_id and not trust_chunk_id and not _fallback_chunk_matches(latest, chunk_id):
+        return
+    if not is_pending_entry(latest):
+        return
+    updated = _frontmatter_with_resolved_project(latest)
+    updated["retry_attempted"] = True
+    updated["chunk_id"] = chunk_id or None
+    if chunk_id:
+        updated.pop("queued_chunk_id", None)
+    if trust_chunk_id and chunk_id:
+        updated["replayed_body_sha256"] = _body_sha256(latest.body)
+    _write_frontmatter(latest.path, updated, latest.body)
 
 
 @contextmanager

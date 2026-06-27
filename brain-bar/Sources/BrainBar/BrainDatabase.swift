@@ -3584,13 +3584,32 @@ final class BrainDatabase: @unchecked Sendable {
         var oldestQueuedAt: Date?
         var identityKeys = Set<String>()
         for file in files where file.pathExtension == "jsonl" && urlIsRegularFile(file) {
-            depth += 1
+            guard let data = try? Data(contentsOf: file) else {
+                depth += 1
+                identityKeys.insert(normalizedPathIdentityKey(file))
+                if let values = try? file.resourceValues(forKeys: [.contentModificationDateKey]),
+                   let modified = values.contentModificationDate {
+                    oldestQueuedAt = oldestQueuedAt.map { min($0, modified) } ?? modified
+                }
+                continue
+            }
+
+            var storeLineCount = 0
+            for (index, line) in pendingStoreLines(from: data).enumerated() {
+                guard let payload = jsonLinePayload(line),
+                      jsonPayloadIsStoreQueueItem(payload) else {
+                    continue
+                }
+                storeLineCount += 1
+                let key = jsonPayloadChunkIdentityKey(payload)
+                    ?? "\(normalizedPathIdentityKey(file))#line:\(index)"
+                identityKeys.insert(key)
+            }
+            guard storeLineCount > 0 else { continue }
+            depth += storeLineCount
             if let values = try? file.resourceValues(forKeys: [.contentModificationDateKey]),
                let modified = values.contentModificationDate {
                 oldestQueuedAt = oldestQueuedAt.map { min($0, modified) } ?? modified
-            }
-            if let key = queueFileIdentityKey(file) {
-                identityKeys.insert(key)
             }
         }
         return PendingStoreQueueSnapshot(depth: depth, oldestQueuedAt: oldestQueuedAt, identityKeys: identityKeys)
@@ -3703,6 +3722,7 @@ final class BrainDatabase: @unchecked Sendable {
         }
         guard let parsed = fallbackReplayComponents(from: text) else {
             guard countUnparseableAsDebt else { return nil }
+            guard countParsedWithoutIntent || textLooksLikeFrontmatterAttempt(text) else { return nil }
             return (inferLegacyFallbackTimestamp(from: file), normalizedPathIdentityKey(file))
         }
         let frontmatter = parsed.frontmatter
@@ -3719,7 +3739,12 @@ final class BrainDatabase: @unchecked Sendable {
         }
         return (
             parsePendingStoreQueuedAt(frontmatter["timestamp"] ?? ""),
-            fallbackReplayIdentityKey(frontmatter: frontmatter, file: file)
+            fallbackReplayIdentityKey(
+                frontmatter: frontmatter,
+                file: file,
+                originRepoPath: originRepoPath,
+                body: parsed.body
+            )
         )
     }
 
@@ -3769,14 +3794,14 @@ final class BrainDatabase: @unchecked Sendable {
         body: String
     ) -> Bool {
         let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if normalized.isEmpty || normalized == "null" || normalized == "~" {
+            return true
+        }
         let replayedBodySHA = frontmatter["replayed_body_sha256"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased() ?? ""
         if !replayedBodySHA.isEmpty {
             return replayedBodySHA != bodySHA256(body)
-        }
-        if normalized.isEmpty || normalized == "null" || normalized == "~" {
-            return true
         }
         if normalized.hasPrefix("fallback-") {
             return normalized != fallbackChunkID(
@@ -3836,33 +3861,64 @@ final class BrainDatabase: @unchecked Sendable {
         return parsePendingStoreQueuedAt("\(file.path[range])T00:00:00Z")
     }
 
-    private static func fallbackReplayIdentityKey(frontmatter: [String: String], file: URL) -> String? {
+    private static func textLooksLikeFrontmatterAttempt(_ text: String) -> Bool {
+        text.hasPrefix("---\n") || text.hasPrefix("---\r\n")
+    }
+
+    private static func fallbackReplayIdentityKey(
+        frontmatter: [String: String],
+        file: URL,
+        originRepoPath: URL,
+        body: String
+    ) -> String? {
         for key in ["queued_chunk_id", "chunk_id"] {
             if let identity = normalizedChunkIdentityKey(frontmatter[key]) {
                 return identity
             }
         }
-        return normalizedPathIdentityKey(file)
-    }
-
-    private static func queueFileIdentityKey(_ file: URL) -> String? {
-        guard let data = try? Data(contentsOf: file) else {
-            return normalizedPathIdentityKey(file)
-        }
-        for line in pendingStoreLines(from: data) {
-            if let identity = jsonLineChunkIdentityKey(line) {
-                return identity
-            }
-        }
-        return normalizedPathIdentityKey(file)
+        return normalizedChunkIdentityKey(
+            fallbackChunkID(
+                file: file,
+                originRepoPath: originRepoPath,
+                frontmatter: frontmatter,
+                body: body
+            )
+        )
     }
 
     private static func jsonLineChunkIdentityKey(_ line: Data) -> String? {
-        guard let payload = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-              let value = payload["chunk_id"] else {
+        guard let payload = jsonLinePayload(line) else {
+            return nil
+        }
+        return jsonPayloadChunkIdentityKey(payload)
+    }
+
+    private static func jsonLinePayload(_ line: Data) -> [String: Any]? {
+        try? JSONSerialization.jsonObject(with: line) as? [String: Any]
+    }
+
+    private static func jsonPayloadChunkIdentityKey(_ payload: [String: Any]) -> String? {
+        guard let value = payload["chunk_id"] else {
             return nil
         }
         return normalizedChunkIdentityKey(String(describing: value))
+    }
+
+    private static func jsonPayloadIsStoreQueueItem(_ payload: [String: Any]) -> Bool {
+        if let kind = payload["kind"] as? String {
+            switch kind {
+            case "store_memory", "watcher_chunk", "hook_chunk":
+                return true
+            case "enrichment_update":
+                return false
+            default:
+                return false
+            }
+        }
+        if let content = payload["content"] as? String {
+            return !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        return false
     }
 
     private static func normalizedChunkIdentityKey(_ value: String?) -> String? {

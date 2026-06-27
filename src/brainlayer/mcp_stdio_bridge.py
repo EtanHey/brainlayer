@@ -278,6 +278,7 @@ def run_bridge(
         nonlocal sock, connected, connecting, connect_started_at, next_connect_at, reconnect_delay
         if schedule:
             fail_in_flight_requests()
+        backend_response_buffer.clear()
         _close_socket(sock)
         sock = None
         connected = False
@@ -339,6 +340,7 @@ def run_bridge(
                 and eof_response_deadline is not None
                 and now >= eof_response_deadline
             ):
+                fail_in_flight_requests()
                 return 0
             if connecting and _connect_timed_out(connect_started_at, now, config):
                 disconnect(schedule=True)
