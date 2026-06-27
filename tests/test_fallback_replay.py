@@ -448,7 +448,12 @@ def test_replay_entry_trusts_returned_fallback_chunk_id_from_direct_store(tmp_pa
 
 
 def test_mark_fallback_stored_handles_legacy_path_metadata(tmp_path):
-    from brainlayer.fallback_replay import _fallback_chunk_id, inventory_fallbacks, legacy_entry_from_path, mark_fallback_stored
+    from brainlayer.fallback_replay import (
+        _fallback_chunk_id,
+        inventory_fallbacks,
+        legacy_entry_from_path,
+        mark_fallback_stored,
+    )
 
     repo = tmp_path / "orchestrator"
     _git_init(repo)
