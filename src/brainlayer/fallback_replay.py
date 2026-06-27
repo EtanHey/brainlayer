@@ -81,13 +81,10 @@ def inventory_fallbacks(gits_root: Path, *, scope_map: dict[str, str]) -> Fallba
         if fallback_dir.exists():
             for path in sorted(path for path in fallback_dir.rglob("*.md") if path.is_file()):
                 try:
-                    entry = parse_fallback_file(path, scope_map=scope_map)
+                    entry = legacy_entry_from_path(path, scope_map=scope_map)
                 except Exception:
                     continue
-                if (
-                    entry.frontmatter.get("intended_brain_store")
-                    and str(entry.frontmatter.get("chunk_id") or "").strip()
-                ):
+                if entry.frontmatter.get("intended_brain_store") and not is_pending_entry(entry):
                     continue
                 legacy.append(path)
 
@@ -255,7 +252,7 @@ def queue_legacy_entry(
 def _fallback_chunk_id(entry: FallbackEntry) -> str:
     stable = json.dumps(
         {
-            "path": str(entry.path.resolve()),
+            "path": os.path.relpath(entry.path.resolve(), entry.origin_repo_path.resolve()),
             "body": entry.body,
             "timestamp": _json_safe_scalar(entry.frontmatter.get("timestamp")),
             "project": entry.project,
@@ -271,21 +268,57 @@ def mark_fallback_stored(path: Path, *, chunk_id: str) -> None:
     _write_replay_attempt(entry, chunk_id=chunk_id)
 
 
+def _latest_entry(entry: FallbackEntry) -> FallbackEntry:
+    try:
+        latest = parse_fallback_file(entry.path)
+    except Exception:
+        return entry
+    frontmatter = dict(latest.frontmatter)
+    for key, value in entry.frontmatter.items():
+        frontmatter.setdefault(key, value)
+    return FallbackEntry(
+        path=latest.path,
+        frontmatter=frontmatter,
+        body=latest.body,
+        origin_repo_path=latest.origin_repo_path,
+        project=entry.project,
+    )
+
+
+def _stored_chunk_id(frontmatter: dict[str, Any]) -> str:
+    return str(frontmatter.get("chunk_id") or "").strip()
+
+
+def _fallback_chunk_matches(entry: FallbackEntry, chunk_id: Any) -> bool:
+    text = str(chunk_id or "").strip()
+    return not text.startswith("fallback-") or text == _fallback_chunk_id(entry)
+
+
 def _write_queue_attempt(entry: FallbackEntry, *, chunk_id: Any) -> None:
-    updated = dict(entry.frontmatter)
+    latest = _latest_entry(entry)
+    if _stored_chunk_id(latest.frontmatter):
+        return
+    if chunk_id and not _fallback_chunk_matches(latest, chunk_id):
+        return
+    updated = dict(latest.frontmatter)
     updated["retry_attempted"] = True
     updated["queued_chunk_id"] = chunk_id
     updated["chunk_id"] = None
-    _write_frontmatter(entry.path, updated, entry.body)
+    _write_frontmatter(latest.path, updated, latest.body)
 
 
 def _write_replay_attempt(entry: FallbackEntry, *, chunk_id: Any) -> None:
-    updated = dict(entry.frontmatter)
+    latest = _latest_entry(entry)
+    if not chunk_id and _stored_chunk_id(latest.frontmatter):
+        return
+    if chunk_id and not _fallback_chunk_matches(latest, chunk_id):
+        return
+    updated = dict(latest.frontmatter)
     updated["retry_attempted"] = True
     updated["chunk_id"] = chunk_id or None
     if chunk_id:
         updated.pop("queued_chunk_id", None)
-    _write_frontmatter(entry.path, updated, entry.body)
+    _write_frontmatter(latest.path, updated, latest.body)
 
 
 def _normalize_tags(value: Any) -> list[Any]:

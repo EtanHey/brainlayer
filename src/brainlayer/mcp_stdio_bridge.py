@@ -25,6 +25,8 @@ DEFAULT_RECONNECT_MS = 250
 DEFAULT_MAX_RECONNECT_MS = 2000
 DEFAULT_CONNECT_TIMEOUT_MS = 5000
 DEFAULT_MAX_PENDING_BYTES = 16 * 1024 * 1024
+DEFAULT_STDIN_EOF_DRAIN_MS = 1000
+CONTENT_LENGTH_SEPARATOR = b"\r\n\r\n"
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,23 @@ class BridgeConfig:
     max_reconnect_ms: int = DEFAULT_MAX_RECONNECT_MS
     connect_timeout_ms: int = DEFAULT_CONNECT_TIMEOUT_MS
     max_pending_bytes: int = DEFAULT_MAX_PENDING_BYTES
+    stdin_eof_drain_ms: int = DEFAULT_STDIN_EOF_DRAIN_MS
+
+
+@dataclass
+class PendingFrame:
+    data: bytes
+    offset: int = 0
+
+    def remaining(self) -> memoryview:
+        return memoryview(self.data)[self.offset :]
+
+    def advance(self, count: int) -> bool:
+        self.offset += count
+        return self.offset >= len(self.data)
+
+    def reset(self) -> None:
+        self.offset = 0
 
 
 def _positive_int(value: str | None, default: int) -> int:
@@ -57,6 +76,10 @@ def config_from_env(env: MutableMapping[str, str] | None = None) -> BridgeConfig
             DEFAULT_CONNECT_TIMEOUT_MS,
         ),
         max_pending_bytes=_positive_int(env.get("BRAINLAYER_MCP_MAX_PENDING_BYTES"), DEFAULT_MAX_PENDING_BYTES),
+        stdin_eof_drain_ms=_positive_int(
+            env.get("BRAINLAYER_MCP_STDIN_EOF_DRAIN_MS"),
+            DEFAULT_STDIN_EOF_DRAIN_MS,
+        ),
     )
 
 
@@ -96,6 +119,49 @@ def _write_all(fd: int, data: bytes) -> None:
         view = view[written:]
 
 
+def _content_length_frame_size(buffer: bytearray) -> int | None:
+    if not bytes(buffer[:32]).lower().startswith(b"content-length:"):
+        return None
+    separator = buffer.find(CONTENT_LENGTH_SEPARATOR)
+    if separator == -1:
+        return None
+    headers = bytes(buffer[:separator]).decode("ascii", errors="ignore")
+    content_length: int | None = None
+    for line in headers.split("\r\n"):
+        name, _, value = line.partition(":")
+        if name.lower() != "content-length":
+            continue
+        try:
+            content_length = int(value.strip())
+        except ValueError:
+            return separator + len(CONTENT_LENGTH_SEPARATOR)
+        break
+    if content_length is None or content_length <= 0:
+        return separator + len(CONTENT_LENGTH_SEPARATOR)
+    frame_size = separator + len(CONTENT_LENGTH_SEPARATOR) + content_length
+    return frame_size if len(buffer) >= frame_size else None
+
+
+def _enqueue_complete_frames(buffer: bytearray, pending: deque[PendingFrame], *, stdin_eof: bool = False) -> None:
+    while buffer:
+        frame_size = _content_length_frame_size(buffer)
+        if frame_size is None:
+            if bytes(buffer[:32]).lower().startswith(b"content-length:"):
+                if not stdin_eof:
+                    return
+                frame_size = len(buffer)
+            else:
+                newline = buffer.find(b"\n")
+                if newline == -1:
+                    if not stdin_eof:
+                        return
+                    frame_size = len(buffer)
+                else:
+                    frame_size = newline + 1
+        pending.append(PendingFrame(bytes(buffer[:frame_size])))
+        del buffer[:frame_size]
+
+
 def run_bridge(
     config: BridgeConfig,
     *,
@@ -112,7 +178,8 @@ def run_bridge(
     previous_stdin_blocking = os.get_blocking(stdin_fd)
     os.set_blocking(stdin_fd, False)
 
-    pending: deque[memoryview] = deque()
+    pending: deque[PendingFrame] = deque()
+    input_buffer = bytearray()
     pending_bytes = 0
     sock: socket.socket | None = None
     connected = False
@@ -120,6 +187,8 @@ def run_bridge(
     connect_started_at: float | None = None
     next_connect_at = 0.0
     reconnect_delay = config.reconnect_ms / 1000
+    stdin_eof = False
+    eof_idle_deadline: float | None = None
 
     def disconnect(schedule: bool = True) -> None:
         nonlocal sock, connected, connecting, connect_started_at, next_connect_at, reconnect_delay
@@ -128,6 +197,8 @@ def run_bridge(
         connected = False
         connecting = False
         connect_started_at = None
+        for frame in pending:
+            frame.reset()
         if schedule:
             next_connect_at, reconnect_delay = _schedule_reconnect(time.monotonic(), reconnect_delay, config)
 
@@ -165,12 +236,14 @@ def run_bridge(
     try:
         while True:
             now = time.monotonic()
+            if stdin_eof and not pending and eof_idle_deadline is not None and now >= eof_idle_deadline:
+                return 0
             if connecting and _connect_timed_out(connect_started_at, now, config):
                 disconnect(schedule=True)
                 now = time.monotonic()
             start_connect(now)
 
-            readers = [stdin_fd]
+            readers = [] if stdin_eof else [stdin_fd]
             writers: list[int] = []
             sock_fd: int | None = None
             if sock is not None:
@@ -182,6 +255,11 @@ def run_bridge(
             timeout = 0.05
             if sock is None:
                 timeout = max(0.0, min(0.05, next_connect_at - now))
+            if stdin_eof and not pending:
+                eof_idle_deadline = eof_idle_deadline or (now + config.stdin_eof_drain_ms / 1000)
+                timeout = max(0.0, min(timeout, eof_idle_deadline - now))
+            else:
+                eof_idle_deadline = None
 
             try:
                 readable, writable, _ = select.select(readers, writers, [], timeout)
@@ -198,7 +276,9 @@ def run_bridge(
                 if chunk is None:
                     continue
                 if chunk == b"":
-                    return 0
+                    stdin_eof = True
+                    _enqueue_complete_frames(input_buffer, pending, stdin_eof=True)
+                    continue
                 if pending_bytes + len(chunk) > config.max_pending_bytes:
                     stderr.write(
                         (
@@ -207,8 +287,9 @@ def run_bridge(
                     )
                     stderr.flush()
                     return 1
-                pending.append(memoryview(chunk))
+                input_buffer.extend(chunk)
                 pending_bytes += len(chunk)
+                _enqueue_complete_frames(input_buffer, pending)
 
             if sock is None or sock_fd is None:
                 continue
@@ -222,9 +303,9 @@ def run_bridge(
 
             if sock is not None and connected and sock_fd in writable:
                 while pending:
-                    view = pending[0]
+                    frame = pending[0]
                     try:
-                        sent = sock.send(view)
+                        sent = sock.send(frame.remaining())
                     except (BlockingIOError, InterruptedError):
                         break
                     except OSError:
@@ -233,11 +314,10 @@ def run_bridge(
                     if sent == 0:
                         disconnect(schedule=True)
                         break
-                    pending_bytes -= sent
-                    if sent == len(view):
+                    if frame.advance(sent):
+                        pending_bytes -= len(frame.data)
                         pending.popleft()
                     else:
-                        pending[0] = view[sent:]
                         break
 
             if sock is None or sock_fd is None:
@@ -255,6 +335,8 @@ def run_bridge(
                     disconnect(schedule=True)
                     continue
                 _write_all(stdout_fd, data)
+                if stdin_eof and not pending:
+                    eof_idle_deadline = time.monotonic() + config.stdin_eof_drain_ms / 1000
     finally:
         disconnect(schedule=False)
         os.set_blocking(stdin_fd, previous_stdin_blocking)

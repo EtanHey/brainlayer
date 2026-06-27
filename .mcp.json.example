@@ -1,6 +1,7 @@
 {
   "_comment": "Run: ~/Gits/orchestrator/scripts/mcp-setup.sh ~/Gits/brainlayer",
-  "_comment2": "brainlayer-mcp-stdio-bridge: reconnecting stdio bridge to the BrainBar daemon socket",
+  "_comment2": "brainlayer-mcp-stdio-bridge reconnects stdio to the BrainBar daemon socket; defaults to /tmp/brainbar.sock and supports BRAINLAYER_MCP_SOCKET.",
+  "_comment3": "If a GUI-launched client cannot find the command, replace it with an absolute path such as /opt/homebrew/bin/brainlayer-mcp-stdio-bridge.",
   "mcpServers": {
     "brainlayer": {
       "command": "brainlayer-mcp-stdio-bridge"

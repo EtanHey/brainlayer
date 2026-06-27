@@ -1,4 +1,5 @@
 {
+  "_comment": "Requires BrainBar running; bridge defaults to /tmp/brainbar.sock and supports BRAINLAYER_MCP_SOCKET. If Claude Code is launched from the macOS GUI and cannot resolve this command, replace it with /opt/homebrew/bin/brainlayer-mcp-stdio-bridge or the absolute path from `command -v brainlayer-mcp-stdio-bridge`.",
   "mcpServers": {
     "brainlayer": {
       "command": "brainlayer-mcp-stdio-bridge"

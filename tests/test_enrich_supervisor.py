@@ -1,3 +1,4 @@
+import fcntl
 import logging
 import os
 import plistlib
@@ -88,6 +89,84 @@ def test_supervisor_uses_readonly_store_when_enrichment_queue_writes_enabled(tmp
 
     assert init_args == [(tmp_path / "brainlayer.db", True)]
     assert result.cycles == 1
+
+
+def test_direct_write_supervisor_pass_holds_queue_lock(tmp_path, monkeypatch):
+    from brainlayer import enrichment_controller as controller
+
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "0")
+    observed = []
+
+    class FakeVectorStore:
+        def __init__(self, db_path: Path):
+            self.db_path = db_path
+
+        def close(self):
+            pass
+
+    def assert_queue_lock_held(store, **kwargs):
+        fd = os.open(queue_dir, os.O_RDONLY)
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            observed.append("locked")
+        finally:
+            os.close(fd)
+        return _result(attempted=1, enriched=1)
+
+    result = controller.run_enrich_supervisor(
+        tmp_path / "brainlayer.db",
+        max_cycles=1,
+        vector_store_cls=FakeVectorStore,
+        enrich_fn=assert_queue_lock_held,
+        sleep_fn=lambda seconds: None,
+    )
+
+    assert observed == ["locked"]
+    assert result.cycles == 1
+    assert result.enriched == 1
+
+
+def test_direct_write_supervisor_yields_when_queue_lock_is_busy(tmp_path, monkeypatch):
+    from brainlayer import enrichment_controller as controller
+
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "0")
+    opened = []
+    sleeps = []
+
+    lock_fd = os.open(queue_dir, os.O_RDONLY)
+    fcntl.flock(lock_fd, fcntl.LOCK_EX)
+
+    class FakeVectorStore:
+        def __init__(self, db_path: Path):
+            opened.append(db_path)
+
+        def close(self):
+            pass
+
+    try:
+        result = controller.run_enrich_supervisor(
+            tmp_path / "brainlayer.db",
+            max_cycles=1,
+            idle_poll_seconds=0.25,
+            vector_store_cls=FakeVectorStore,
+            enrich_fn=lambda store, **kwargs: _result(attempted=1, enriched=1),
+            sleep_fn=sleeps.append,
+        )
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
+
+    assert opened == []
+    assert sleeps == []
+    assert result.cycles == 1
+    assert result.attempted == 0
 
 
 def test_enrich_realtime_skips_schema_writer_when_enrichment_queue_writes_enabled(monkeypatch):

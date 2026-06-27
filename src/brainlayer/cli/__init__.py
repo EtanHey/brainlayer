@@ -993,7 +993,9 @@ def _status_queue_file_source(path: Path) -> str:
                 return source
     except (OSError, json.JSONDecodeError, AttributeError, UnicodeDecodeError):
         pass
-    return path.name.split("-", 1)[0] or "unknown"
+    stem = path.stem
+    source = stem.rsplit("-", 1)[0]
+    return source or stem or "unknown"
 
 
 def _status_count_pending_store_lines(db_path: Path) -> int | None:

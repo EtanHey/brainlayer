@@ -38,18 +38,28 @@ final class DashboardTests: XCTestCase {
 
     private var db: BrainDatabase!
     private var tempDBPath: String!
+    private var fallbackReplayRoot: URL!
+    private var restoreFallbackReplayRoot: (() -> Void)!
 
     override func setUp() {
         super.setUp()
         tempDBPath = NSTemporaryDirectory() + "brainbar-dashboard-\(UUID().uuidString).db"
+        fallbackReplayRoot = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("brainbar-dashboard-fallback-root-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: fallbackReplayRoot, withIntermediateDirectories: true)
+        restoreFallbackReplayRoot = setDashboardFallbackReplayGitsRoot(fallbackReplayRoot)
         db = BrainDatabase(path: tempDBPath)
     }
 
     override func tearDown() {
         db.close()
+        restoreFallbackReplayRoot?()
         try? FileManager.default.removeItem(atPath: tempDBPath)
         try? FileManager.default.removeItem(atPath: tempDBPath + "-wal")
         try? FileManager.default.removeItem(atPath: tempDBPath + "-shm")
+        if let fallbackReplayRoot {
+            try? FileManager.default.removeItem(at: fallbackReplayRoot)
+        }
         super.tearDown()
     }
 
@@ -824,6 +834,55 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.pendingStoreFlushRatePerMinute, 0)
     }
 
+    func testDashboardStatsIncludesDocsLocalFallbackReplayDebt() throws {
+        let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pending-stores-dashboard-empty-\(UUID().uuidString).jsonl")
+        let gitsRoot = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("fallback-gits-\(UUID().uuidString)", isDirectory: true)
+        let fallbackPath = gitsRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("pending.md")
+        let restoreQueuePath = setDashboardPendingStoreQueuePath(queuePath)
+        let restoreFallbackRoot = setDashboardFallbackReplayGitsRoot(gitsRoot)
+        defer {
+            restoreQueuePath()
+            restoreFallbackRoot()
+            try? FileManager.default.removeItem(at: queuePath)
+            try? FileManager.default.removeItem(at: gitsRoot)
+        }
+        try FileManager.default.createDirectory(
+            at: fallbackPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        ---
+        intended_brain_store: true
+        importance: 10
+        tags: [fallback-replay]
+        timestamp: 1970-01-01T00:20:00Z
+        retry_attempted: true
+        queued_chunk_id: fallback-queued
+        chunk_id:
+        ---
+        queued fallback body
+        """.write(to: fallbackPath, atomically: true, encoding: .utf8)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+        let summary = DashboardFlowSummary.derive(
+            daemon: nil,
+            stats: stats,
+            now: Date(timeIntervalSince1970: 1_300)
+        )
+        let agentStores = summary.lane(for: .agentStores)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
+        XCTAssertEqual(stats.pendingStoreOldestQueuedAt, Date(timeIntervalSince1970: 1_200))
+        XCTAssertEqual(agentStores.status, .queued)
+        XCTAssertEqual(agentStores.statusText, "1 agent store queued for replay")
+    }
+
     func testSparklineChartPresentationCarriesBucketsAndVoiceOverMetadata() {
         let now = Date(timeIntervalSince1970: 1_764_236_400)
         let presentation = SparklineChartPresentation(
@@ -990,6 +1049,18 @@ final class DashboardTests: XCTestCase {
 
         XCTAssertEqual(larger.tightAxisMax, larger.axisMax)
         XCTAssertEqual(larger.axisMax, 10)
+    }
+
+    func testSparklineCompactMarkersPreferLatestPointForSparseSeries() {
+        let sparse = SparklineChartPresentation(
+            label: "Sparse writes over 30m",
+            values: [0, 1, 0, 1],
+            activityWindowMinutes: 30,
+            fetchedAt: Date(timeIntervalSince1970: 1_764_236_400)
+        )
+
+        XCTAssertEqual(sparse.visiblePointMarkers(for: .primary, compact: false).map(\.bucket), [1, 3])
+        XCTAssertEqual(sparse.visiblePointMarkers(for: .primary, compact: true).map(\.bucket), [3])
     }
 
     func testSparklineTooltipPlacementClampsHorizontally() {
@@ -2112,6 +2183,18 @@ private func setDashboardWatcherHealthPath(_ path: URL) -> () -> Void {
             setenv("BRAINLAYER_WATCHER_HEALTH_PATH", previous, 1)
         } else {
             unsetenv("BRAINLAYER_WATCHER_HEALTH_PATH")
+        }
+    }
+}
+
+private func setDashboardFallbackReplayGitsRoot(_ path: URL) -> () -> Void {
+    let previous = ProcessInfo.processInfo.environment["BRAINBAR_FALLBACK_REPLAY_GITS_ROOT"]
+    setenv("BRAINBAR_FALLBACK_REPLAY_GITS_ROOT", path.path, 1)
+    return {
+        if let previous {
+            setenv("BRAINBAR_FALLBACK_REPLAY_GITS_ROOT", previous, 1)
+        } else {
+            unsetenv("BRAINBAR_FALLBACK_REPLAY_GITS_ROOT")
         }
     }
 }

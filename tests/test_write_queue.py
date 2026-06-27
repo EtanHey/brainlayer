@@ -22,7 +22,7 @@ from brainlayer.mcp.store_handler import (
     _flush_pending_stores,
     _queue_store,
 )
-from brainlayer.queue_io import enqueue_enrichment_updates, enqueue_hook_chunk
+from brainlayer.queue_io import enqueue_enrichment_updates, enqueue_hook_chunk, enqueue_store
 
 # ---------------------------------------------------------------------------
 # _queue_store / _flush_pending_stores unit tests
@@ -581,6 +581,44 @@ class TestFlushPendingStores:
         updated_entry = parse_fallback_file(fallback_path)
         assert updated_entry.frontmatter["chunk_id"] == fallback_chunk_id
         assert inventory_fallbacks(tmp_path, scope_map={}).summary()["green"] is True
+
+    def test_drain_deletes_queue_after_post_commit_fallback_marker_failure(self, tmp_path, monkeypatch):
+        from brainlayer import drain
+
+        db_path = tmp_path / "brainlayer.db"
+        queue_dir = tmp_path / "queue"
+        log_path = tmp_path / "drain.log"
+        fallback_path = tmp_path / "repo" / "docs.local" / "decisions" / "pending.md"
+        fallback_path.parent.mkdir(parents=True)
+        queued = enqueue_store(
+            content="fallback marker commit body",
+            memory_type="note",
+            project="systems",
+            queue_dir=queue_dir,
+            fallback_source_path=str(fallback_path),
+        )
+        monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+
+        def fail_marker_update(*_args, **_kwargs):
+            raise RuntimeError("marker write failed after commit")
+
+        monkeypatch.setattr(drain, "_mark_fallback_replays", fail_marker_update)
+
+        drained = drain.drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=log_path)
+
+        assert drained == 1
+        assert not queued.exists()
+        conn = apsw.Connection(str(db_path))
+        try:
+            assert (
+                conn.execute(
+                    "SELECT COUNT(*) FROM chunks WHERE content = ?", ("fallback marker commit body",)
+                ).fetchone()[0]
+                == 1
+            )
+        finally:
+            conn.close()
+        assert "post-commit fallback replay marker update failed" in log_path.read_text(encoding="utf-8")
 
     def test_drain_preserves_store_queue_when_schema_bootstrap_writer_in_use(self, tmp_path, monkeypatch):
         """Schema bootstrap contention must preserve queued store files for retry."""
@@ -1796,6 +1834,48 @@ def test_burn_drain_preserves_queue_file_when_batch_rolls_back(tmp_path, monkeyp
     finally:
         conn.close()
     assert summary is None
+
+
+def test_burn_drain_deletes_queue_after_post_commit_fallback_marker_failure(tmp_path, monkeypatch):
+    from brainlayer import drain
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "burn.log"
+    fallback_path = tmp_path / "repo" / "docs.local" / "decisions" / "pending.md"
+    fallback_path.parent.mkdir(parents=True)
+    queued = enqueue_store(
+        content="burn fallback marker commit body",
+        memory_type="note",
+        project="systems",
+        queue_dir=queue_dir,
+        fallback_source_path=str(fallback_path),
+    )
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+
+    def fail_marker_update(*_args, **_kwargs):
+        raise RuntimeError("marker write failed after commit")
+
+    monkeypatch.setattr(drain, "_mark_fallback_replays", fail_marker_update)
+
+    result = drain.burn_drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10, log_path=log_path)
+
+    assert result.failed_files == 0
+    assert result.applied_events == 1
+    assert result.files_deleted == 1
+    assert not queued.exists()
+    conn = apsw.Connection(str(db_path))
+    try:
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM chunks WHERE content = ?",
+                ("burn fallback marker commit body",),
+            ).fetchone()[0]
+            == 1
+        )
+    finally:
+        conn.close()
+    assert "post-commit fallback replay marker update failed" in log_path.read_text(encoding="utf-8")
 
 
 def test_burn_drain_rolls_back_provenance_enqueue_with_batch(tmp_path, monkeypatch):

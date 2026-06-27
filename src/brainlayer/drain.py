@@ -432,6 +432,17 @@ def _mark_fallback_replays(markers: list[FallbackReplayMarker], log_path: Path) 
             _log(log_path, f"WARN: stored fallback chunk {marker.chunk_id} but could not mark {marker.path}: {exc}")
 
 
+def _mark_fallback_replays_best_effort(markers: list[FallbackReplayMarker], log_path: Path) -> None:
+    try:
+        _mark_fallback_replays(markers, log_path)
+    except Exception as exc:
+        message = f"WARN: post-commit fallback replay marker update failed: {exc}"
+        try:
+            _log(log_path, message)
+        except Exception:
+            logger.warning(message)
+
+
 def _events_include_store(events: list[dict[str, Any]]) -> bool:
     return any(_event_payload(event).get("kind") == "store_memory" for event in events)
 
@@ -1230,7 +1241,7 @@ def burn_drain_once(
                 if _embedding_enabled():
                     _embed_store_chunks(conn, store_chunk_ids, embed_fn)
                 conn.execute("COMMIT")
-                _mark_fallback_replays(fallback_markers, log_path)
+                _mark_fallback_replays_best_effort(fallback_markers, log_path)
                 result.applied_events += attempt_applied_events
                 result.skipped_verified_stale += attempt_skipped_verified_stale
                 conn.setbusytimeout(_checkpoint_busy_timeout_ms())
@@ -1355,7 +1366,7 @@ def drain_once(
                             collision_ids.append(result.collision_chunk_id)
                         attempt_drained += 1
                     conn.execute("COMMIT")
-                    _mark_fallback_replays(fallback_markers, log_path)
+                    _mark_fallback_replays_best_effort(fallback_markers, log_path)
                     # Best-effort WAL checkpoint. Keep the live writer path PASSIVE:
                     # TRUNCATE can block behind long-lived readers on the live multi-GB
                     # WAL, which stalls queue drain before it can publish health.

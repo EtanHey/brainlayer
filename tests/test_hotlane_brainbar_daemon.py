@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 def _load_hotlane_module():
     importlib.invalidate_caches()
@@ -203,6 +205,81 @@ def test_open_store_readonly_accepts_one_argument_factory():
 
     assert hotlane._open_store(one_argument_factory, Path("/tmp/brainlayer.db"), readonly=True) is store
     assert opened_paths == [Path("/tmp/brainlayer.db")]
+
+
+def test_open_store_readonly_does_not_swallow_constructor_type_errors():
+    hotlane = _load_hotlane_module()
+
+    class BrokenStore:
+        def __init__(self, _path, *, readonly=False):
+            raise TypeError("constructor bug unrelated to readonly")
+
+    with pytest.raises(TypeError, match="constructor bug unrelated to readonly"):
+        hotlane._open_store(BrokenStore, Path("/tmp/brainlayer.db"), readonly=True)
+
+
+def test_split_cycle_bootstraps_missing_db_before_readonly_open(tmp_path):
+    hotlane = _load_hotlane_module()
+    db_path = tmp_path / "missing-brainlayer.db"
+    opened_modes = []
+
+    class FakeStore:
+        def __init__(self, path, *, readonly=False):
+            opened_modes.append(readonly)
+            if readonly and not path.exists():
+                raise RuntimeError("readonly sqlite open cannot create the database")
+            if not readonly:
+                path.touch()
+
+        def close(self):
+            pass
+
+    result = hotlane._run_split_cycle(
+        db_path=db_path,
+        vector_store_cls=FakeStore,
+        embed_fn=lambda _text: [0.0],
+        recent_limit=1,
+        backlog_batch=0,
+        enrich_limit=0,
+        enrich_since_hours=8760,
+        candidate_rows_fn=lambda _store, *, limit: [],
+        pending_rows_fn=lambda _store, *, limit: [],
+    )
+
+    assert result.embedded == 0
+    assert opened_modes == [False, True]
+
+
+def test_write_embedded_vectors_skips_when_content_changed_after_snapshot():
+    hotlane = _load_hotlane_module()
+    events = []
+
+    class FakeCursor:
+        def execute(self, sql, params=()):
+            events.append(("sql", sql.strip().splitlines()[0], params))
+            if sql.strip().startswith("SELECT 1"):
+                assert params == ("chunk-1", "old content")
+                return SimpleNamespace(fetchone=lambda: None)
+            return []
+
+    class FakeConn:
+        def cursor(self):
+            return FakeCursor()
+
+    class FakeStore:
+        db_path = Path("/tmp/brainlayer.db")
+        conn = FakeConn()
+
+        def _upsert_chunk_vector(self, _cursor, chunk_id, embedding):
+            events.append(("upsert", chunk_id, embedding))
+
+    count = hotlane._write_embedded_vectors(
+        FakeStore(),
+        [hotlane.EmbeddedVector("chunk-1", "old content", [0.5])],
+    )
+
+    assert count == 0
+    assert ("upsert", "chunk-1", [0.5]) not in events
 
 
 def test_hotlane_run_advances_enrich_timer_before_failed_cycle():
@@ -456,6 +533,8 @@ def test_hotlane_run_caps_backlog_batch_at_priority_gate_limit(tmp_path):
 def test_hotlane_split_cycle_embeds_before_opening_writer(tmp_path):
     hotlane = _load_hotlane_module()
     events = []
+    db_path = tmp_path / "brainlayer.db"
+    db_path.touch()
 
     class FakeCursor:
         def __init__(self, readonly):
@@ -491,7 +570,7 @@ def test_hotlane_split_cycle_embeds_before_opening_writer(tmp_path):
             events.append(("close", None))
 
     result = hotlane._run_split_cycle(
-        db_path=tmp_path / "brainlayer.db",
+        db_path=db_path,
         vector_store_cls=FakeStore,
         embed_fn=lambda text: events.append(("embed", text)) or [1.0],
         embed_batch_fn=lambda texts: events.append(("embed_batch", tuple(texts))) or [[2.0] for _ in texts],
@@ -572,6 +651,8 @@ def test_hotlane_split_cycle_falls_through_recent_candidates_after_embed_failure
 def test_hotlane_split_cycle_does_not_open_writer_when_no_embedding_or_enrichment_work(tmp_path):
     hotlane = _load_hotlane_module()
     events = []
+    db_path = tmp_path / "brainlayer.db"
+    db_path.touch()
 
     class FakeCursor:
         def execute(self, _sql, _params=()):
@@ -590,7 +671,7 @@ def test_hotlane_split_cycle_does_not_open_writer_when_no_embedding_or_enrichmen
             events.append(("close", None))
 
     result = hotlane._run_split_cycle(
-        db_path=tmp_path / "brainlayer.db",
+        db_path=db_path,
         vector_store_cls=FakeStore,
         embed_fn=lambda _text: [1.0],
         recent_limit=5,

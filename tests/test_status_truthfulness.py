@@ -150,7 +150,7 @@ def test_status_queue_depth_by_source_falls_back_for_invalid_utf8_jsonl(tmp_path
     queue_dir.mkdir()
     (queue_dir / "fallback-replay-123.jsonl").write_bytes(b"\xff\xfe\n")
 
-    assert cli._status_queue_depth_by_source(queue_dir) == {"fallback": 1}
+    assert cli._status_queue_depth_by_source(queue_dir) == {"fallback-replay": 1}
 
 
 def test_status_check_doctor_can_go_green_with_fresh_draining_queue_tail(tmp_path, monkeypatch):

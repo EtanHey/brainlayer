@@ -36,12 +36,17 @@ def main() -> int:
     parser.add_argument(
         "--queue",
         action="store_true",
-        help="With --apply, enqueue pending structured files for the drain instead of direct DB writes.",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--direct-db-write",
+        action="store_true",
+        help="With --apply, bypass the durable queue and write structured files directly to the DB.",
     )
     parser.add_argument(
         "--legacy",
         action="store_true",
-        help="With --apply --queue, also enqueue legacy docs.local/brain-store-fallback markdown files.",
+        help="With --apply, also enqueue legacy docs.local/brain-store-fallback markdown files.",
     )
     parser.add_argument("--limit", type=int, default=100, help="Maximum structured pending files to replay.")
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of text.")
@@ -61,8 +66,8 @@ def main() -> int:
     }
 
     if args.apply:
-        if args.legacy and not args.queue:
-            result["error"] = "--legacy requires --queue to avoid direct DB writes from unstructured fallback files"
+        if args.legacy and args.direct_db_write:
+            result["error"] = "--legacy requires queued replay"
             _emit(result, as_json=args.json)
             return 2
         legacy_entries = (
@@ -73,7 +78,7 @@ def main() -> int:
             result["error"] = f"replay_count {replay_count} exceeds --limit {args.limit}"
             _emit(result, as_json=args.json)
             return 2
-        if args.queue:
+        if not args.direct_db_write:
             replayed = [
                 queue_entry(
                     entry,
@@ -105,12 +110,10 @@ def main() -> int:
                 store.close()
             legacy_replayed = []
         result["replayed"] = [
-            {"path": str(item.path), "chunk_id": item.chunk_id, "error": item.error}
-            for item in replayed
+            {"path": str(item.path), "chunk_id": item.chunk_id, "error": item.error} for item in replayed
         ]
         result["legacy_replayed"] = [
-            {"path": str(item.path), "chunk_id": item.chunk_id, "error": item.error}
-            for item in legacy_replayed
+            {"path": str(item.path), "chunk_id": item.chunk_id, "error": item.error} for item in legacy_replayed
         ]
         if any(item.error for item in [*replayed, *legacy_replayed]):
             result["error"] = "one or more fallback replays failed"

@@ -10,6 +10,7 @@ optional embedding backlog, and enrichment backlog.
 from __future__ import annotations
 
 import argparse
+import inspect
 import logging
 import signal
 import time
@@ -45,6 +46,12 @@ class CycleResult(NamedTuple):
 class EmbedCandidate(NamedTuple):
     chunk_id: str
     content: str
+
+
+class EmbeddedVector(NamedTuple):
+    chunk_id: str
+    content: str
+    embedding: list[float]
 
 
 def _stop(_signum: int, _frame: object) -> None:
@@ -127,7 +134,7 @@ def _embed_candidates(
     *,
     embed_fn: Callable[[str], list[float]],
     embed_batch_fn: Callable[[list[str]], list[list[float]]] | None = None,
-) -> list[tuple[str, list[float]]]:
+) -> list[EmbeddedVector]:
     if not candidates:
         return []
 
@@ -136,14 +143,17 @@ def _embed_candidates(
             embeddings = embed_batch_fn([candidate.content for candidate in candidates])
             if len(embeddings) != len(candidates):
                 raise ValueError(f"batch embedder returned {len(embeddings)} embeddings for {len(candidates)} chunks")
-            return [(candidate.chunk_id, embedding) for candidate, embedding in zip(candidates, embeddings)]
+            return [
+                EmbeddedVector(candidate.chunk_id, candidate.content, embedding)
+                for candidate, embedding in zip(candidates, embeddings)
+            ]
         except Exception as exc:
             LOGGER.warning("Failed to embed hotlane batch: %s", exc)
 
-    embedded: list[tuple[str, list[float]]] = []
+    embedded: list[EmbeddedVector] = []
     for candidate in candidates:
         try:
-            embedded.append((candidate.chunk_id, embed_fn(candidate.content)))
+            embedded.append(EmbeddedVector(candidate.chunk_id, candidate.content, embed_fn(candidate.content)))
         except Exception as exc:
             LOGGER.warning("Failed to embed chunk %s: %s", candidate.chunk_id, exc)
     return embedded
@@ -153,7 +163,7 @@ def _embed_first_candidate(
     candidates: list[EmbedCandidate],
     *,
     embed_fn: Callable[[str], list[float]],
-) -> list[tuple[str, list[float]]]:
+) -> list[EmbeddedVector]:
     for candidate in candidates:
         embedded = _embed_candidates([candidate], embed_fn=embed_fn)
         if embedded:
@@ -161,7 +171,7 @@ def _embed_first_candidate(
     return []
 
 
-def _write_embedded_vectors(store: VectorStore, vectors: list[tuple[str, list[float]]]) -> int:
+def _write_embedded_vectors(store: VectorStore, vectors: list[EmbeddedVector]) -> int:
     if not vectors:
         return 0
 
@@ -171,13 +181,14 @@ def _write_embedded_vectors(store: VectorStore, vectors: list[tuple[str, list[fl
     try:
         cursor.execute("BEGIN IMMEDIATE")
         transaction_started = True
-        for chunk_id, embedding in vectors:
+        for chunk_id, content, embedding in vectors:
             still_eligible = cursor.execute(
                 """
                 SELECT 1
                 FROM chunks c
                 LEFT JOIN chunk_vectors_rowids r ON c.id = r.id
                 WHERE c.id = ?
+                  AND c.content = ?
                   AND r.id IS NULL
                   AND c.content IS NOT NULL
                   AND c.content != ''
@@ -187,7 +198,7 @@ def _write_embedded_vectors(store: VectorStore, vectors: list[tuple[str, list[fl
                   AND COALESCE(c.archived, 0) = 0
                   AND COALESCE(c.status, 'active') = 'active'
                 """,
-                (chunk_id,),
+                (chunk_id, content),
             ).fetchone()
             if not still_eligible:
                 continue
@@ -213,10 +224,33 @@ def _open_store(
     *,
     readonly: bool,
 ) -> VectorStore:
+    if not _callable_accepts_keyword(vector_store_cls, "readonly"):
+        return vector_store_cls(db_path)
     try:
         return vector_store_cls(db_path, readonly=readonly)
-    except TypeError:
+    except TypeError as exc:
+        if not _type_error_rejects_keyword(exc, "readonly"):
+            raise
         return vector_store_cls(db_path)
+
+
+def _callable_accepts_keyword(func: Callable[..., object], keyword: str) -> bool:
+    try:
+        signature = inspect.signature(func)
+    except (TypeError, ValueError):
+        return True
+    return keyword in signature.parameters or any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()
+    )
+
+
+def _type_error_rejects_keyword(exc: TypeError, keyword: str) -> bool:
+    message = str(exc)
+    return keyword in message and (
+        "unexpected keyword argument" in message
+        or "got an unexpected keyword" in message
+        or "invalid keyword argument" in message
+    )
 
 
 def _run_split_cycle(
@@ -239,6 +273,9 @@ def _run_split_cycle(
     pending_rows: list[EmbedCandidate] = []
 
     if recent_limit > 0 or backlog_batch > 0:
+        if not db_path.exists():
+            bootstrap_store = _open_store(vector_store_cls, db_path, readonly=False)
+            bootstrap_store.close()
         read_store = _open_store(vector_store_cls, db_path, readonly=True)
         try:
             if recent_limit > 0:

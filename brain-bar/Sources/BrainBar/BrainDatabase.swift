@@ -29,6 +29,7 @@ final class BrainDatabase: @unchecked Sendable {
     static let maximumTrigramMaintenanceBatchSize = 10_000
     private static let defaultPendingStoreMaxLines = 10_000
     private static let pendingStoreMaxLinesEnv = "BRAINBAR_PENDING_STORES_MAX_LINES"
+    private static let fallbackReplayGitsRootEnv = "BRAINBAR_FALLBACK_REPLAY_GITS_ROOT"
     private static let agentWriteSourceWhereClause = "COALESCE(LOWER(TRIM(source)), '') IN ('mcp', 'manual', 'digest', 'precompact-hook', 'brain_store', 'pending', 'fallback', 'fallback-replay')"
     private static let watcherWriteSourceWhereClause = "COALESCE(LOWER(TRIM(source)), '') IN ('realtime_watcher', 'realtime')"
     private static let lexicalDefenseReplacements: [String: [String]] = [
@@ -350,6 +351,21 @@ final class BrainDatabase: @unchecked Sendable {
     struct PendingStoreQueueSnapshot: Sendable, Equatable {
         let depth: Int
         let oldestQueuedAt: Date?
+
+        func merged(with other: PendingStoreQueueSnapshot) -> PendingStoreQueueSnapshot {
+            let oldest: Date?
+            switch (oldestQueuedAt, other.oldestQueuedAt) {
+            case (.some(let left), .some(let right)):
+                oldest = min(left, right)
+            case (.some(let left), .none):
+                oldest = left
+            case (.none, .some(let right)):
+                oldest = right
+            case (.none, .none):
+                oldest = nil
+            }
+            return PendingStoreQueueSnapshot(depth: depth + other.depth, oldestQueuedAt: oldest)
+        }
     }
 
     /// The three pipeline series (agent stores / JSONL watcher / enrichment)
@@ -1732,7 +1748,7 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     func dashboardStats(activityWindowMinutes: Int = 30, bucketCount: Int = 12) throws -> DashboardStats {
-        let pendingStoreQueue = pendingStoreQueueSnapshot()
+        let pendingStoreQueue = pendingStoreQueueSnapshot().merged(with: Self.fallbackReplayQueueSnapshot())
         let watcherHealth = watcherHealthSnapshot()
         return try withReadTransaction {
             let liveWindowMinutes = 1
@@ -3504,6 +3520,134 @@ final class BrainDatabase: @unchecked Sendable {
             return URL(fileURLWithPath: override)
         }
         return URL(fileURLWithPath: dbPath).deletingLastPathComponent().appendingPathComponent("pending-stores.jsonl")
+    }
+
+    private static func fallbackReplayGitsRoot() -> URL {
+        if let override = ProcessInfo.processInfo.environment[fallbackReplayGitsRootEnv],
+           !override.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return URL(fileURLWithPath: override)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Gits", isDirectory: true)
+    }
+
+    private static func fallbackReplayQueueSnapshot() -> PendingStoreQueueSnapshot {
+        let root = fallbackReplayGitsRoot()
+        let fileManager = FileManager.default
+        guard let repos = try? fileManager.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return PendingStoreQueueSnapshot(depth: 0, oldestQueuedAt: nil)
+        }
+
+        var depth = 0
+        var oldestQueuedAt: Date?
+        func record(_ date: Date?) {
+            depth += 1
+            guard let date else { return }
+            oldestQueuedAt = oldestQueuedAt.map { min($0, date) } ?? date
+        }
+
+        for repo in repos where Self.urlIsDirectory(repo) {
+            let docsLocal = repo.appendingPathComponent("docs.local", isDirectory: true)
+            scanFallbackReplayDirectory(
+                docsLocal.appendingPathComponent("decisions", isDirectory: true),
+                recursive: false,
+                record: record
+            )
+            scanFallbackReplayDirectory(
+                docsLocal.appendingPathComponent("brain-store-fallback", isDirectory: true),
+                recursive: true,
+                record: record
+            )
+        }
+
+        return PendingStoreQueueSnapshot(depth: depth, oldestQueuedAt: oldestQueuedAt)
+    }
+
+    private static func scanFallbackReplayDirectory(
+        _ directory: URL,
+        recursive: Bool,
+        record: (Date?) -> Void
+    ) {
+        let fileManager = FileManager.default
+        if recursive {
+            guard let enumerator = fileManager.enumerator(
+                at: directory,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            ) else {
+                return
+            }
+            for case let file as URL in enumerator where file.pathExtension == "md" {
+                if let timestamp = pendingFallbackReplayTimestamp(at: file) {
+                    record(timestamp)
+                }
+            }
+            return
+        }
+
+        guard let files = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+        for file in files where file.pathExtension == "md" {
+            if let timestamp = pendingFallbackReplayTimestamp(at: file) {
+                record(timestamp)
+            }
+        }
+    }
+
+    private static func pendingFallbackReplayTimestamp(at file: URL) -> Date?? {
+        guard let data = try? Data(contentsOf: file),
+              let text = String(data: data, encoding: .utf8),
+              let frontmatter = fallbackReplayFrontmatter(from: text),
+              isTruthyFrontmatterValue(frontmatter["intended_brain_store"]),
+              isEmptyChunkID(frontmatter["chunk_id"]) else {
+            return nil
+        }
+        return parsePendingStoreQueuedAt(frontmatter["timestamp"] ?? "")
+    }
+
+    private static func fallbackReplayFrontmatter(from text: String) -> [String: String]? {
+        guard text.hasPrefix("---") else { return nil }
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        guard lines.first == "---" else { return nil }
+        var values: [String: String] = [:]
+        for line in lines.dropFirst() {
+            if line == "---" {
+                return values
+            }
+            guard let separator = line.firstIndex(of: ":") else { continue }
+            let key = String(line[..<separator]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let rawValue = String(line[line.index(after: separator)...])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            values[key] = rawValue
+        }
+        return nil
+    }
+
+    private static func isTruthyFrontmatterValue(_ value: String?) -> Bool {
+        switch value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "true", "yes", "1":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func isEmptyChunkID(_ value: String?) -> Bool {
+        let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        return normalized.isEmpty || normalized == "null" || normalized == "~"
+    }
+
+    private static func urlIsDirectory(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
     }
 
     private static func appendPendingStoreLine(_ line: Data, to path: URL) throws {

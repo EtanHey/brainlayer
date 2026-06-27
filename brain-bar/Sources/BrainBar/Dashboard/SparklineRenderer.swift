@@ -232,11 +232,11 @@ struct SparklineChartPresentation: Equatable, Sendable {
     func visiblePointMarkers(for role: SparklineSeriesRole, compact: Bool) -> [SparklineChartPoint] {
         let rolePoints = points(for: role)
         guard let latest = rolePoints.last else { return [] }
-        if shouldEmphasizeSparsePoints(role) {
-            return rolePoints.filter { $0.value > 0 }
-        }
         if compact {
             return [latest]
+        }
+        if shouldEmphasizeSparsePoints(role) {
+            return rolePoints.filter { $0.value > 0 }
         }
         return latest.value > 0 ? [latest] : []
     }
