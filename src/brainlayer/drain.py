@@ -416,9 +416,12 @@ def _fallback_replay_marker(event: dict[str, Any], chunk_id: str) -> FallbackRep
         return None
     raw_origin = event.get("origin_repo_path") or metadata.get("origin_repo_path")
     origin_repo_path = Path(str(raw_origin)).expanduser() if raw_origin else None
+    marker_path = Path(str(raw_path)).expanduser()
+    if origin_repo_path is not None and not marker_path.is_absolute():
+        marker_path = origin_repo_path / marker_path
     project = event.get("project")
     return FallbackReplayMarker(
-        path=Path(str(raw_path)).expanduser(),
+        path=marker_path,
         chunk_id=chunk_id,
         project=str(project) if project else None,
         origin_repo_path=origin_repo_path,
@@ -1025,13 +1028,15 @@ def _quarantine_file(path: Path, log_path: Path, reason: BaseException) -> None:
         _log(log_path, f"skipped poison queue file {path.name}: {reason}; quarantine_failed={exc}")
 
 
-def _unlink_processed_file(path: Path, log_path: Path) -> None:
+def _unlink_processed_file(path: Path, log_path: Path) -> bool:
     try:
         path.unlink()
+        return True
     except FileNotFoundError:
-        pass
+        return True
     except OSError as exc:
         _log(log_path, f"drain committed but could not unlink {path}: {exc}")
+        return False
 
 
 def _is_enrichment_queue_file(path: Path) -> bool:
@@ -1233,10 +1238,11 @@ def burn_drain_once(
                 conn.execute("BEGIN IMMEDIATE")
                 prefetched_state = _prefetch_enrichment_state(conn, all_events)
                 store_chunk_ids: list[str] = []
-                fallback_markers: list[FallbackReplayMarker] = []
+                fallback_markers_by_path: dict[Path, list[FallbackReplayMarker]] = {}
                 attempt_applied_events = 0
                 attempt_skipped_verified_stale = 0
-                for _, events in batch:
+                for path, events in batch:
+                    path_fallback_markers: list[FallbackReplayMarker] = []
                     for event in events:
                         if _is_verified_redundant_enrichment(event, prefetched_state):
                             payload = _event_payload(event)
@@ -1252,7 +1258,9 @@ def burn_drain_once(
                         attempt_applied_events += 1
                         if applied.chunk_id:
                             store_chunk_ids.append(applied.chunk_id)
-                        fallback_markers.extend(applied.fallback_markers)
+                        path_fallback_markers.extend(applied.fallback_markers)
+                    if path_fallback_markers:
+                        fallback_markers_by_path[path] = path_fallback_markers
                 if _embedding_enabled():
                     _embed_store_chunks(conn, store_chunk_ids, embed_fn)
                 conn.execute("COMMIT")
@@ -1291,18 +1299,18 @@ def burn_drain_once(
                 if conn is not None:
                     conn.close()
 
-        queue_cleanup_succeeded = True
+        fallback_markers_to_apply: list[FallbackReplayMarker] = []
         for path, _events in batch:
             try:
                 path.unlink()
                 result.files_deleted += 1
+                fallback_markers_to_apply.extend(fallback_markers_by_path.get(path, []))
             except FileNotFoundError:
                 result.files_deleted += 1
+                fallback_markers_to_apply.extend(fallback_markers_by_path.get(path, []))
             except OSError as exc:
-                queue_cleanup_succeeded = False
                 _log(log_path, f"burn drain committed but could not unlink {path}: {exc}")
-        if queue_cleanup_succeeded:
-            _mark_fallback_replays_best_effort(fallback_markers, log_path)
+        _mark_fallback_replays_best_effort(fallback_markers_to_apply, log_path)
         if result.applied_events or result.skipped_verified_stale:
             _log(
                 log_path,
@@ -1400,11 +1408,13 @@ def drain_once(
                     collisions_dropped += len(collision_ids)
                     for chunk_id in collision_ids:
                         _log(log_path, f"WARN: queued chunk_id {chunk_id} collided with existing row, dropped")
+                    queue_cleanup_succeeded = True
                     if remaining_events:
                         _rewrite_events_file(path, remaining_events)
                     else:
-                        _unlink_processed_file(path, log_path)
-                    _mark_fallback_replays_best_effort(fallback_markers, log_path)
+                        queue_cleanup_succeeded = _unlink_processed_file(path, log_path)
+                    if queue_cleanup_succeeded:
+                        _mark_fallback_replays_best_effort(fallback_markers, log_path)
                     yield_seconds = _post_commit_yield_seconds()
                     if yield_seconds > 0:
                         time.sleep(yield_seconds)

@@ -3637,14 +3637,14 @@ final class BrainDatabase: @unchecked Sendable {
             return countLegacyWithoutFrontmatter ? inferLegacyFallbackTimestamp(from: file) : nil
         }
         let frontmatter = parsed.frontmatter
-        guard
-              isTruthyFrontmatterValue(frontmatter["intended_brain_store"]),
+        let hasIntentFlag = isTruthyFrontmatterValue(frontmatter["intended_brain_store"])
+        guard (hasIntentFlag || countLegacyWithoutFrontmatter),
               isPendingFallbackChunkID(
-                  frontmatter["chunk_id"],
-                  file: file,
-                  originRepoPath: originRepoPath,
-                  frontmatter: frontmatter,
-                  body: parsed.body
+                frontmatter["chunk_id"],
+                file: file,
+                originRepoPath: originRepoPath,
+                frontmatter: frontmatter,
+                body: parsed.body
               ) else {
             return nil
         }
@@ -3728,12 +3728,10 @@ final class BrainDatabase: @unchecked Sendable {
 
     private static func fallbackTimestampLiteral(_ value: String?) -> String {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        switch trimmed.lowercased() {
-        case "", "null", "~":
+        if trimmed.isEmpty {
             return "null"
-        default:
-            return jsonStringLiteral(trimmed)
         }
+        return jsonStringLiteral(trimmed)
     }
 
     private static func relativePath(_ file: URL, to root: URL) -> String {
@@ -3882,6 +3880,11 @@ final class BrainDatabase: @unchecked Sendable {
     private static func parsePendingStoreQueuedAt(_ rawValue: String) -> Date? {
         let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: trimmed) {
+            return date
+        }
         if let date = ISO8601DateFormatter().date(from: trimmed) {
             return date
         }

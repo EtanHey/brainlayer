@@ -1922,6 +1922,119 @@ def test_burn_drain_deletes_queue_after_post_commit_fallback_marker_failure(tmp_
     assert "post-commit fallback replay marker update failed" in log_path.read_text(encoding="utf-8")
 
 
+def test_drain_once_does_not_mark_fallback_when_queue_file_remains(tmp_path, monkeypatch):
+    from brainlayer import drain
+    from brainlayer.fallback_replay import parse_fallback_file
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "drain.log"
+    repo = tmp_path / "repo"
+    fallback_path = repo / "docs.local" / "decisions" / "pending.md"
+    fallback_path.parent.mkdir(parents=True)
+    fallback_path.write_text(
+        "---\nintended_brain_store: true\ntimestamp: 2026-06-27T10:00:00Z\nchunk_id:\n---\nplain drain fallback body\n",
+        encoding="utf-8",
+    )
+    queued = enqueue_store(
+        content="plain drain fallback body",
+        memory_type="note",
+        project="systems",
+        queue_dir=queue_dir,
+        fallback_source_path=str(fallback_path),
+        origin_repo_path=str(repo),
+    )
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+
+    def leave_queue_file(path, log_path):
+        assert path == queued
+        log_path.write_text("synthetic unlink failure\n", encoding="utf-8")
+
+    monkeypatch.setattr(drain, "_unlink_processed_file", leave_queue_file)
+
+    drained = drain.drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10, log_path=log_path)
+
+    assert drained == 1
+    assert queued.exists()
+    updated = parse_fallback_file(fallback_path)
+    assert updated.frontmatter["chunk_id"] is None
+    assert updated.frontmatter.get("queued_chunk_id") is None
+
+
+def test_fallback_replay_marker_anchors_relative_paths_to_origin_repo(tmp_path):
+    from brainlayer.drain import _fallback_replay_marker
+
+    repo = tmp_path / "repo"
+    relative = "docs.local/decisions/pending.md"
+
+    marker = _fallback_replay_marker(
+        {
+            "metadata": {
+                "fallback_source_path": relative,
+                "origin_repo_path": str(repo),
+            },
+            "project": "systems",
+        },
+        "manual-stored",
+    )
+
+    assert marker is not None
+    assert marker.path == repo / relative
+    assert marker.origin_repo_path == repo
+
+
+def test_burn_drain_marks_fallbacks_for_queue_files_deleted_before_cleanup_failure(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from brainlayer import drain
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "burn.log"
+    first_fallback = tmp_path / "repo" / "docs.local" / "decisions" / "first.md"
+    second_fallback = tmp_path / "repo" / "docs.local" / "decisions" / "second.md"
+    first = enqueue_store(
+        content="first committed fallback body",
+        memory_type="note",
+        project="systems",
+        source="aaa-fallback",
+        queue_dir=queue_dir,
+        fallback_source_path=str(first_fallback),
+    )
+    second = enqueue_store(
+        content="second committed fallback body",
+        memory_type="note",
+        project="systems",
+        source="zzz-fallback",
+        queue_dir=queue_dir,
+        fallback_source_path=str(second_fallback),
+    )
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    marked_paths: list[Path] = []
+
+    def record_markers(markers, _log_path):
+        marked_paths.extend(marker.path for marker in markers)
+
+    real_unlink = Path.unlink
+
+    def fail_second_unlink(self, *args, **kwargs):
+        if self == second:
+            raise OSError("synthetic second unlink failure")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(drain, "_mark_fallback_replays", record_markers)
+    monkeypatch.setattr(Path, "unlink", fail_second_unlink)
+
+    result = drain.burn_drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10, log_path=log_path)
+
+    assert result.failed_files == 0
+    assert result.applied_events == 2
+    assert result.files_deleted == 1
+    assert not first.exists()
+    assert second.exists()
+    assert marked_paths == [first_fallback]
+
+
 def test_burn_drain_rolls_back_provenance_enqueue_with_batch(tmp_path, monkeypatch):
     from brainlayer import drain
 

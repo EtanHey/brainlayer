@@ -337,7 +337,10 @@ def run_bridge(
                     if stdin_eof and not pending:
                         eof_idle_deadline = time.monotonic() + config.stdin_eof_drain_ms / 1000
                     continue
-                _write_all(stdout_fd, data)
+                try:
+                    _write_all(stdout_fd, data)
+                except OSError:
+                    return 0
                 if stdin_eof:
                     socket_data_seen_after_stdin_eof = True
                     eof_idle_deadline = time.monotonic() + config.stdin_eof_drain_ms / 1000

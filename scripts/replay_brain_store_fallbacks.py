@@ -97,7 +97,7 @@ def main() -> int:
                             error=f"legacy parse failed: {exc}",
                         )
                     )
-        replay_count = len(pending) + (len(inventory.legacy) if args.legacy else 0)
+        replay_count = len(pending) + (len(legacy_entries) if args.legacy else 0)
         if replay_count > args.limit:
             result["error"] = f"replay_count {replay_count} exceeds --limit {args.limit}"
             _emit(result, as_json=args.json)

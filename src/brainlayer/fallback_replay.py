@@ -78,6 +78,7 @@ def inventory_fallbacks(gits_root: Path, *, scope_map: dict[str, str]) -> Fallba
             try:
                 entry = parse_fallback_file(path, scope_map=scope_map)
             except Exception:
+                legacy.append(path)
                 continue
             if entry.frontmatter.get("intended_brain_store"):
                 structured.append(entry)
@@ -294,8 +295,9 @@ def _latest_entry(entry: FallbackEntry) -> FallbackEntry:
     except Exception:
         return entry
     frontmatter = dict(latest.frontmatter)
-    for key, value in entry.frontmatter.items():
-        frontmatter.setdefault(key, value)
+    if _is_legacy_fallback_path(entry.path):
+        for key, value in entry.frontmatter.items():
+            frontmatter.setdefault(key, value)
     return FallbackEntry(
         path=latest.path,
         frontmatter=frontmatter,
@@ -314,11 +316,17 @@ def _fallback_chunk_matches(entry: FallbackEntry, chunk_id: Any) -> bool:
     return not text.startswith("fallback-") or text == _fallback_chunk_id(entry)
 
 
+def _is_legacy_fallback_path(path: Path) -> bool:
+    return "brain-store-fallback" in path.parts
+
+
 def _write_queue_attempt(entry: FallbackEntry, *, chunk_id: Any) -> None:
     with _fallback_marker_file_lock(entry.path):
         latest = _latest_entry(entry)
         stored = _stored_chunk_id(latest.frontmatter)
         if stored and _fallback_chunk_matches(latest, stored):
+            return
+        if not is_pending_entry(latest):
             return
         if chunk_id and not _fallback_chunk_matches(latest, chunk_id):
             return
@@ -336,6 +344,8 @@ def _write_replay_attempt(entry: FallbackEntry, *, chunk_id: Any) -> None:
         if not chunk_id and stored and _fallback_chunk_matches(latest, stored):
             return
         if chunk_id and not _fallback_chunk_matches(latest, chunk_id):
+            return
+        if not is_pending_entry(latest):
             return
         updated = _frontmatter_with_resolved_project(latest)
         updated["retry_attempted"] = True

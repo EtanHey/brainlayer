@@ -577,6 +577,26 @@ def test_queue_attempt_does_not_clobber_committed_chunk_marker(tmp_path):
     assert "queued_chunk_id" not in updated.frontmatter
 
 
+def test_queue_attempt_does_not_resurrect_removed_structured_intent(tmp_path):
+    from brainlayer.fallback_replay import _fallback_chunk_id, _write_queue_attempt, parse_fallback_file
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    path = _pending_file(repo, "docs.local/decisions/cancelled.md")
+    stale_entry = parse_fallback_file(path)
+    stale_chunk_id = _fallback_chunk_id(stale_entry)
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("intended_brain_store: true\n", ""),
+        encoding="utf-8",
+    )
+
+    _write_queue_attempt(stale_entry, chunk_id=stale_chunk_id)
+
+    updated = parse_fallback_file(path)
+    assert "intended_brain_store" not in updated.frontmatter
+    assert "queued_chunk_id" not in updated.frontmatter
+
+
 def test_fallback_marker_writes_are_serialized_per_file(tmp_path):
     from brainlayer import fallback_replay
     from brainlayer.fallback_replay import _fallback_chunk_id, _write_queue_attempt, parse_fallback_file
@@ -620,6 +640,22 @@ def test_inventory_reports_unparseable_legacy_fallback_files_as_debt(tmp_path):
     path = repo / "docs.local" / "brain-store-fallback" / "bad-frontmatter.md"
     path.parent.mkdir(parents=True)
     path.write_text("---\n: bad yaml\n---\nlegacy body\n", encoding="utf-8")
+
+    inventory = inventory_fallbacks(tmp_path, scope_map={})
+
+    assert inventory.legacy == [path]
+    assert inventory.summary()["legacy_count"] == 1
+    assert inventory.summary()["green"] is False
+
+
+def test_inventory_reports_unparseable_structured_fallback_files_as_debt(tmp_path):
+    from brainlayer.fallback_replay import inventory_fallbacks
+
+    repo = tmp_path / "orchestrator"
+    _git_init(repo)
+    path = repo / "docs.local" / "decisions" / "bad-frontmatter.md"
+    path.parent.mkdir(parents=True)
+    path.write_text("---\n: bad yaml\n---\nstructured body\n", encoding="utf-8")
 
     inventory = inventory_fallbacks(tmp_path, scope_map={})
 
@@ -757,6 +793,8 @@ def test_replay_cli_apply_queue_legacy_reports_malformed_legacy_files(tmp_path, 
             "--apply",
             "--queue",
             "--legacy",
+            "--limit",
+            "1",
             "--gits-root",
             str(tmp_path),
         ],
@@ -767,6 +805,7 @@ def test_replay_cli_apply_queue_legacy_reports_malformed_legacy_files(tmp_path, 
     assert len(calls) == 1
     assert calls[0]["content"] == "valid legacy body\n"
     assert "legacy parse failed" in output
+    assert "replay_count" not in output
 
 
 def test_replay_cli_apply_queue_legacy_marks_legacy_files(tmp_path, monkeypatch):

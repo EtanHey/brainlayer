@@ -195,6 +195,42 @@ def test_stdio_bridge_reconnects_without_process_restart(tmp_path: Path) -> None
         process.wait(timeout=5)
 
 
+def test_stdio_bridge_exits_cleanly_when_stdout_pipe_closes(tmp_path: Path) -> None:
+    del tmp_path
+    socket_path = Path("/tmp") / f"brainlayer-bridge-stdout-closed-{os.getpid()}-{time.monotonic_ns()}.sock"
+    server = RestartableLineServer(socket_path)
+    server.start()
+
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
+        "BRAINLAYER_MCP_SOCKET": str(socket_path),
+        "BRAINLAYER_MCP_RECONNECT_MS": "25",
+        "BRAINLAYER_MCP_MAX_RECONNECT_MS": "50",
+        "BRAINLAYER_MCP_CONNECT_TIMEOUT_MS": "100",
+    }
+    process = subprocess.Popen(
+        [sys.executable, "-m", "brainlayer.mcp_stdio_bridge"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+    )
+    try:
+        _write_json_line(process, {"jsonrpc": "2.0", "id": 1, "method": "ping"})
+        assert process.stdout is not None
+        process.stdout.close()
+        assert process.wait(timeout=5) == 0
+        assert process.stderr is not None
+        stderr = process.stderr.read().decode("utf-8", errors="replace")
+        assert "Traceback" not in stderr
+    finally:
+        server.stop()
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=5)
+
+
 def test_stdio_bridge_flushes_buffered_request_after_stdin_eof(tmp_path: Path) -> None:
     del tmp_path
     socket_path = Path("/tmp") / f"brainlayer-bridge-eof-test-{os.getpid()}-{time.monotonic_ns()}.sock"

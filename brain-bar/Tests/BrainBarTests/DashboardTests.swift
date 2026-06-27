@@ -40,6 +40,13 @@ final class DashboardTests: XCTestCase {
     private var tempDBPath: String!
     private var fallbackReplayRoot: URL!
     private var restoreFallbackReplayRoot: (() -> Void)!
+    private static let fractionalTimestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXXXX"
+        return formatter
+    }()
 
     override func setUp() {
         super.setUp()
@@ -968,9 +975,35 @@ final class DashboardTests: XCTestCase {
         intended_brain_store: true
         importance: 10
         timestamp: null
-        chunk_id: fallback-f815ed1104f14411
+        chunk_id: fallback-c99da95d9166ba2e
         ---
         null timestamp fallback body
+        """.write(to: storedPath, atomically: true, encoding: .utf8)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 0)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+    }
+
+    func testDashboardStatsAcceptsStoredFallbackChunkIDWithTildeTimestamp() throws {
+        let storedPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("tilde-timestamp.md")
+        try FileManager.default.createDirectory(
+            at: storedPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        ---
+        intended_brain_store: true
+        importance: 10
+        timestamp: ~
+        chunk_id: fallback-edf2bca7f184d086
+        ---
+        tilde timestamp fallback body
         """.write(to: storedPath, atomically: true, encoding: .utf8)
 
         let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
@@ -997,6 +1030,37 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
         XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
         XCTAssertEqual(stats.pendingStoreOldestQueuedAt, ISO8601DateFormatter().date(from: "2026-05-29T00:00:00Z"))
+    }
+
+    func testDashboardStatsIncludesParsedLegacyFallbackReplayDebtWithoutIntentFlag() throws {
+        let legacyPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("brain-store-fallback", isDirectory: true)
+            .appendingPathComponent("parsed-legacy.md")
+        try FileManager.default.createDirectory(
+            at: legacyPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        ---
+        memory_type: note
+        timestamp: 2024-01-15T10:30:45.123456+00:00
+        chunk_id:
+        ---
+        parsed legacy fallback body
+        """.write(to: legacyPath, atomically: true, encoding: .utf8)
+        let expected = try XCTUnwrap(Self.fractionalTimestampFormatter.date(from: "2024-01-15T10:30:45.123456+00:00"))
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+        XCTAssertEqual(
+            try XCTUnwrap(stats.pendingStoreOldestQueuedAt).timeIntervalSince1970,
+            expected.timeIntervalSince1970,
+            accuracy: 0.001
+        )
     }
 
     func testSparklineChartPresentationCarriesBucketsAndVoiceOverMetadata() {
@@ -1639,6 +1703,7 @@ final class DashboardTests: XCTestCase {
         defer { collector.stop() }
 
         collector.start()
+        try await waitForCollector(collector) { !$0.isRefreshing && $0.lastDataFetchedAt != nil }
         XCTAssertEqual(collector.stats.chunkCount, 0)
 
         let writer = BrainDatabase(path: tempDBPath)
@@ -1697,7 +1762,7 @@ final class DashboardTests: XCTestCase {
     }
 
     @MainActor
-    func testStatsCollectorSubscribesToBrainBusWithoutPollingDelay() {
+    func testStatsCollectorSubscribesToBrainBusWithoutPollingDelay() async throws {
         let eventSource = RecordingBrainBusEventSource()
         let collector = StatsCollector(
             dbPath: tempDBPath,
@@ -1712,6 +1777,7 @@ final class DashboardTests: XCTestCase {
 
         XCTAssertEqual(eventSource.streamRequestCount, 1)
         XCTAssertLessThan(elapsedMillis, 1_000)
+        try await waitForCollector(collector) { !$0.isRefreshing && $0.lastDataFetchedAt != nil }
     }
 
     @MainActor
