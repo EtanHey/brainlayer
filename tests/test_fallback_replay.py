@@ -416,6 +416,56 @@ def test_queue_entry_recomputes_chunk_id_after_fallback_body_changes(tmp_path):
     assert calls[1]["chunk_id"] == second.chunk_id
 
 
+def test_replay_entry_trusts_returned_fallback_chunk_id_from_direct_store(tmp_path):
+    from brainlayer.fallback_replay import is_pending_entry, parse_fallback_file, queue_entry, replay_entry
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    path = _pending_file(repo, "docs.local/decisions/direct-after-queue.md")
+    queued = queue_entry(parse_fallback_file(path), enqueue_func=lambda **_kwargs: None, replayed_by="phase-1-test")
+
+    result = replay_entry(
+        parse_fallback_file(path),
+        store_func=lambda **_kwargs: {"chunk_id": "fallback-direct-store-id"},
+        replayed_by="phase-1-test",
+    )
+    updated = parse_fallback_file(path)
+
+    assert queued.chunk_id != result.chunk_id
+    assert result.error is None
+    assert updated.frontmatter["chunk_id"] == "fallback-direct-store-id"
+    assert updated.frontmatter["replayed_body_sha256"]
+    assert "queued_chunk_id" not in updated.frontmatter
+    assert is_pending_entry(updated) is False
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "original body stays byte-for-byte\n",
+            "edited after trusted direct replay\n",
+        ),
+        encoding="utf-8",
+    )
+    assert is_pending_entry(parse_fallback_file(path)) is True
+
+
+def test_mark_fallback_stored_handles_legacy_path_metadata(tmp_path):
+    from brainlayer.fallback_replay import _fallback_chunk_id, inventory_fallbacks, legacy_entry_from_path, mark_fallback_stored
+
+    repo = tmp_path / "orchestrator"
+    _git_init(repo)
+    path = repo / "docs.local" / "brain-store-fallback" / "2026-05-29-gen10-boot" / "pending-stores.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# legacy fallback\nBody stays intact.\n", encoding="utf-8")
+    chunk_id = _fallback_chunk_id(legacy_entry_from_path(path, scope_map={}))
+
+    mark_fallback_stored(path, chunk_id=chunk_id, project="orchestrator", origin_repo_path=repo.resolve())
+
+    inventory = inventory_fallbacks(tmp_path, scope_map={})
+    updated = path.read_text(encoding="utf-8")
+    assert inventory.legacy == []
+    assert f"chunk_id: {chunk_id}" in updated
+    assert "legacy_brain_store_fallback: true" in updated
+
+
 def test_queue_entry_serializes_yaml_date_tags_for_jsonl_queue(tmp_path):
     from brainlayer.fallback_replay import parse_fallback_file, queue_entry
 

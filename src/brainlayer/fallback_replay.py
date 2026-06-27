@@ -120,6 +120,9 @@ def is_pending_entry(entry: FallbackEntry) -> bool:
     chunk_id = str(entry.frontmatter.get("chunk_id") or "").strip()
     if not chunk_id:
         return True
+    replayed_body_sha256 = str(entry.frontmatter.get("replayed_body_sha256") or "").strip()
+    if replayed_body_sha256 and replayed_body_sha256 == _body_sha256(entry.body):
+        return False
     if chunk_id.startswith("fallback-") and chunk_id != _fallback_chunk_id(entry):
         return True
     return False
@@ -168,7 +171,7 @@ def replay_entry(
         return ReplayResult(path=entry.path, attempted=True, chunk_id=None, error=error)
 
     try:
-        _write_replay_attempt(entry, chunk_id=chunk_id)
+        _write_replay_attempt(entry, chunk_id=chunk_id, trust_chunk_id=True)
     except Exception as exc:
         return ReplayResult(
             path=entry.path,
@@ -270,6 +273,10 @@ def _fallback_chunk_id(entry: FallbackEntry) -> str:
     return "fallback-" + hashlib.sha256(stable.encode("utf-8")).hexdigest()[:16]
 
 
+def _body_sha256(body: str) -> str:
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
 def mark_fallback_stored(
     path: Path,
     *,
@@ -277,7 +284,7 @@ def mark_fallback_stored(
     project: str | None = None,
     origin_repo_path: Path | None = None,
 ) -> None:
-    entry = parse_fallback_file(path)
+    entry = legacy_entry_from_path(path) if _is_legacy_fallback_path(path) else parse_fallback_file(path)
     if project is not None or origin_repo_path is not None:
         entry = FallbackEntry(
             path=entry.path,
@@ -337,13 +344,13 @@ def _write_queue_attempt(entry: FallbackEntry, *, chunk_id: Any) -> None:
         _write_frontmatter(latest.path, updated, latest.body)
 
 
-def _write_replay_attempt(entry: FallbackEntry, *, chunk_id: Any) -> None:
+def _write_replay_attempt(entry: FallbackEntry, *, chunk_id: Any, trust_chunk_id: bool = False) -> None:
     with _fallback_marker_file_lock(entry.path):
         latest = _latest_entry(entry)
         stored = _stored_chunk_id(latest.frontmatter)
         if not chunk_id and stored and _fallback_chunk_matches(latest, stored):
             return
-        if chunk_id and not _fallback_chunk_matches(latest, chunk_id):
+        if chunk_id and not trust_chunk_id and not _fallback_chunk_matches(latest, chunk_id):
             return
         if not is_pending_entry(latest):
             return
@@ -352,6 +359,8 @@ def _write_replay_attempt(entry: FallbackEntry, *, chunk_id: Any) -> None:
         updated["chunk_id"] = chunk_id or None
         if chunk_id:
             updated.pop("queued_chunk_id", None)
+        if trust_chunk_id and chunk_id:
+            updated["replayed_body_sha256"] = _body_sha256(latest.body)
         _write_frontmatter(latest.path, updated, latest.body)
 
 
