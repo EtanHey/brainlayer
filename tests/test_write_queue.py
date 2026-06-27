@@ -620,6 +620,50 @@ class TestFlushPendingStores:
             conn.close()
         assert "post-commit fallback replay marker update failed" in log_path.read_text(encoding="utf-8")
 
+    def test_drain_keeps_fallback_marker_pending_when_queue_cleanup_fails(self, tmp_path, monkeypatch):
+        from brainlayer import drain
+
+        db_path = tmp_path / "brainlayer.db"
+        queue_dir = tmp_path / "queue"
+        log_path = tmp_path / "drain.log"
+        fallback_path = tmp_path / "repo" / "docs.local" / "decisions" / "pending.md"
+        fallback_path.parent.mkdir(parents=True)
+        fallback_path.write_text(
+            "---\n"
+            "intended_brain_store: true\n"
+            "importance: 8\n"
+            "timestamp: 2026-06-12T19:54:07+03:00\n"
+            "chunk_id:\n"
+            "---\n"
+            "cleanup failure body\n",
+            encoding="utf-8",
+        )
+        queued = enqueue_store(
+            content="cleanup failure body",
+            memory_type="note",
+            project="systems",
+            queue_dir=queue_dir,
+            fallback_source_path=str(fallback_path),
+        )
+        marker_calls = []
+
+        def fail_unlink(_path, _log_path):
+            raise OSError("disk full")
+
+        def record_marker(*args, **kwargs):
+            marker_calls.append((args, kwargs))
+
+        monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+        monkeypatch.setattr(drain, "_unlink_processed_file", fail_unlink)
+        monkeypatch.setattr(drain, "_mark_fallback_replays", record_marker)
+
+        drained = drain.drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=log_path)
+
+        assert drained == 1
+        assert queued.exists()
+        assert marker_calls == []
+        assert "chunk_id:\n" in fallback_path.read_text(encoding="utf-8")
+
     def test_drain_preserves_store_queue_when_schema_bootstrap_writer_in_use(self, tmp_path, monkeypatch):
         """Schema bootstrap contention must preserve queued store files for retry."""
         from brainlayer.vector_store import WriterInUseError

@@ -32,6 +32,12 @@ def main() -> int:
     parser.add_argument("--gits-root", type=Path, default=Path.home() / "Gits")
     parser.add_argument("--scopes", type=Path, default=Path.home() / ".config" / "brainlayer" / "scopes.yaml")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
+    parser.add_argument(
+        "--queue-dir",
+        type=Path,
+        default=None,
+        help="Queue directory for queued replay; defaults to the live queue, or <db parent>/queue for non-default --db.",
+    )
     parser.add_argument("--apply", action="store_true", help="Write pending structured files into BrainLayer.")
     parser.add_argument(
         "--queue",
@@ -79,10 +85,17 @@ def main() -> int:
             _emit(result, as_json=args.json)
             return 2
         if not args.direct_db_write:
+            queue_dir = _queue_dir_for_target_db(args.db, args.queue_dir)
+
+            def enqueue_for_target(**kwargs):
+                if queue_dir is not None:
+                    kwargs["queue_dir"] = queue_dir
+                return enqueue_store(**kwargs)
+
             replayed = [
                 queue_entry(
                     entry,
-                    enqueue_func=enqueue_store,
+                    enqueue_func=enqueue_for_target,
                     replayed_by="brainlayer-replay-fallbacks",
                 )
                 for entry in pending
@@ -90,7 +103,7 @@ def main() -> int:
             legacy_replayed = [
                 queue_legacy_entry(
                     entry,
-                    enqueue_func=enqueue_store,
+                    enqueue_func=enqueue_for_target,
                     replayed_by="brainlayer-replay-fallbacks",
                 )
                 for entry in legacy_entries
@@ -122,6 +135,15 @@ def main() -> int:
 
     _emit(result, as_json=args.json)
     return 0
+
+
+def _queue_dir_for_target_db(db_path: Path, queue_dir: Path | None) -> Path | None:
+    if queue_dir is not None:
+        return queue_dir.expanduser()
+    resolved_db = db_path.expanduser().resolve()
+    if resolved_db == DEFAULT_DB_PATH.expanduser().resolve():
+        return None
+    return resolved_db.parent / "queue"
 
 
 def _emit(result: dict[str, object], *, as_json: bool) -> None:

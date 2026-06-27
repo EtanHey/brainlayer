@@ -343,11 +343,49 @@ def test_queue_entry_enqueues_with_stable_chunk_id_but_keeps_fallback_pending(tm
     assert calls[0]["chunk_id"] == first.chunk_id
     assert calls[0]["fallback_source_path"] == str(path)
     assert calls[0]["origin_repo_path"] == str(repo.resolve())
+    assert updated_entry.frontmatter["project"] == "systems"
     assert updated_entry.frontmatter["queued_chunk_id"] == first.chunk_id
     assert updated_entry.frontmatter["chunk_id"] is None
     assert is_pending_entry(updated_entry) is True
     assert second_entry.frontmatter["queued_chunk_id"] == first.chunk_id
     assert second_entry.frontmatter["chunk_id"] is None
+
+
+def test_mark_fallback_stored_persists_scoped_project_for_chunk_id_parity(tmp_path):
+    from brainlayer.fallback_replay import (
+        is_pending_entry,
+        load_scope_map,
+        mark_fallback_stored,
+        parse_fallback_file,
+        queue_entry,
+    )
+
+    repo = tmp_path / "brainlayer"
+    _git_init(repo)
+    scopes_path = tmp_path / "scopes.yaml"
+    scopes_path.write_text(f'scopes:\n  {repo}: "systems"\n', encoding="utf-8")
+    path = _pending_file(repo, "docs.local/decisions/scoped.md")
+    calls = []
+
+    def enqueue_func(**kwargs):
+        calls.append(kwargs)
+        return tmp_path / "queue" / "fallback-replay.jsonl"
+
+    entry = parse_fallback_file(path, scope_map=load_scope_map(scopes_path))
+    queued = queue_entry(entry, enqueue_func=enqueue_func, replayed_by="phase-1-test")
+    mark_fallback_stored(
+        path,
+        chunk_id=queued.chunk_id or "",
+        project=entry.project,
+        origin_repo_path=entry.origin_repo_path,
+    )
+    updated_entry = parse_fallback_file(path)
+
+    assert calls[0]["project"] == "systems"
+    assert updated_entry.frontmatter["project"] == "systems"
+    assert updated_entry.frontmatter["chunk_id"] == queued.chunk_id
+    assert "queued_chunk_id" not in updated_entry.frontmatter
+    assert is_pending_entry(updated_entry) is False
 
 
 def test_queue_entry_recomputes_chunk_id_after_fallback_body_changes(tmp_path):
@@ -617,6 +655,39 @@ def test_replay_cli_apply_queues_by_default(tmp_path, monkeypatch):
     assert module.main() == 0
     assert calls[0]["content"] == "original body stays byte-for-byte\n"
     assert calls[0]["source"] == "fallback-replay"
+
+
+def test_replay_cli_apply_uses_custom_db_queue_dir_for_queued_replay(tmp_path, monkeypatch):
+    script = Path(__file__).resolve().parents[1] / "scripts" / "replay_brain_store_fallbacks.py"
+    spec = importlib.util.spec_from_file_location("replay_brain_store_fallbacks_custom_queue_test", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    from brainlayer.fallback_replay import parse_fallback_file
+
+    repo = tmp_path / "systems"
+    path = _pending_file(repo, "docs.local/decisions/custom-db-queue.md")
+    entry = parse_fallback_file(path)
+    db_path = tmp_path / "sandbox" / "brainlayer.db"
+    calls = []
+
+    class DummyInventory:
+        structured = [entry]
+        legacy = []
+        pending = [entry]
+
+    monkeypatch.setattr(module, "load_scope_map", lambda _path: {})
+    monkeypatch.setattr(module, "inventory_fallbacks", lambda _root, *, scope_map: DummyInventory())
+    monkeypatch.setattr(module, "enqueue_store", lambda **kwargs: calls.append(kwargs))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["replay_brain_store_fallbacks.py", "--apply", "--gits-root", str(tmp_path), "--db", str(db_path)],
+    )
+
+    assert module.main() == 0
+    assert calls[0]["queue_dir"] == db_path.parent / "queue"
 
 
 def test_replay_cli_apply_queue_legacy_skips_malformed_legacy_files(tmp_path, monkeypatch):

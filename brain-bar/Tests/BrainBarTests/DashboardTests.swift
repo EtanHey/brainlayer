@@ -357,7 +357,7 @@ final class DashboardTests: XCTestCase {
         let source = try brainBarSourceFile("Sources/BrainBar/BrainDatabase.swift")
         let methodRange = try XCTUnwrap(source.range(of: "func dashboardStats("))
         let methodSource = source[methodRange.lowerBound...]
-        let queueSnapshotRange = try XCTUnwrap(methodSource.range(of: "let pendingStoreQueue = pendingStoreQueueSnapshot()"))
+        let queueSnapshotRange = try XCTUnwrap(methodSource.range(of: "let pendingStoreFlushQueue = pendingStoreQueueSnapshot()"))
         let transactionRange = try XCTUnwrap(methodSource.range(of: "try withReadTransaction"))
 
         XCTAssertLessThan(
@@ -830,6 +830,7 @@ final class DashboardTests: XCTestCase {
         let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
 
         XCTAssertEqual(stats.pendingStoreQueueDepth, 2)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 2)
         XCTAssertEqual(stats.pendingStoreOldestQueuedAt, Date(timeIntervalSince1970: 1_000))
         XCTAssertEqual(stats.pendingStoreFlushRatePerMinute, 0)
     }
@@ -878,6 +879,7 @@ final class DashboardTests: XCTestCase {
         let agentStores = summary.lane(for: .agentStores)
 
         XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
         XCTAssertEqual(stats.pendingStoreOldestQueuedAt, Date(timeIntervalSince1970: 1_200))
         XCTAssertEqual(agentStores.status, .queued)
         XCTAssertEqual(agentStores.statusText, "1 agent store queued for replay")
@@ -920,7 +922,35 @@ final class DashboardTests: XCTestCase {
         let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
 
         XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
         XCTAssertEqual(stats.pendingStoreOldestQueuedAt, Date(timeIntervalSince1970: 1_440))
+    }
+
+    func testDashboardStatsAcceptsStoredScopedFallbackChunkIDWhenProjectIsPersisted() throws {
+        let storedPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("scoped.md")
+        try FileManager.default.createDirectory(
+            at: storedPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        ---
+        intended_brain_store: true
+        project: systems
+        importance: 10
+        timestamp: 1970-01-01T00:26:00Z
+        chunk_id: fallback-f7c15c956dca2e7e
+        ---
+        scoped fallback body
+        """.write(to: storedPath, atomically: true, encoding: .utf8)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 0)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
     }
 
     func testDashboardStatsIncludesLegacyFallbackReplayDebtWithoutFrontmatter() throws {
@@ -939,6 +969,7 @@ final class DashboardTests: XCTestCase {
         let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
 
         XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
         XCTAssertEqual(stats.pendingStoreOldestQueuedAt, ISO8601DateFormatter().date(from: "2026-05-29T00:00:00Z"))
     }
 
@@ -1120,6 +1151,17 @@ final class DashboardTests: XCTestCase {
 
         XCTAssertEqual(sparse.visiblePointMarkers(for: .primary, compact: false).map(\.bucket), [1, 3])
         XCTAssertEqual(sparse.visiblePointMarkers(for: .primary, compact: true).map(\.bucket), [3])
+    }
+
+    func testSparklineNonCompactMarkersKeepLatestEndpointWhenLatestBucketIsZero() {
+        let presentation = SparklineChartPresentation(
+            label: "Writes over 30m",
+            values: [3, 2, 0],
+            activityWindowMinutes: 30,
+            fetchedAt: Date(timeIntervalSince1970: 1_764_236_400)
+        )
+
+        XCTAssertEqual(presentation.visiblePointMarkers(for: .primary, compact: false).map(\.bucket), [2])
     }
 
     func testSparklineTooltipPlacementClampsHorizontally() {
@@ -1831,6 +1873,53 @@ final class DashboardTests: XCTestCase {
 
         XCTAssertEqual(collector.stats.pendingStoreQueueDepth, 1)
         XCTAssertEqual(collector.stats.pendingStoreFlushRatePerMinute, 2)
+    }
+
+    @MainActor
+    func testStatsCollectorDoesNotTreatFallbackReplayDebtDropAsStoreFlush() async throws {
+        let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pending-stores-collector-empty-\(UUID().uuidString).jsonl")
+        let restoreQueuePath = setDashboardPendingStoreQueuePath(queuePath)
+        let fallbackPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("collector-pending.md")
+        defer {
+            restoreQueuePath()
+            try? FileManager.default.removeItem(at: queuePath)
+        }
+        try FileManager.default.createDirectory(
+            at: fallbackPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        ---
+        intended_brain_store: true
+        importance: 10
+        timestamp: 1970-01-01T00:27:00Z
+        chunk_id:
+        ---
+        collector fallback body
+        """.write(to: fallbackPath, atomically: true, encoding: .utf8)
+
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
+        )
+        defer { collector.stop() }
+
+        collector.refresh(force: true)
+        try await waitForCollector(collector) { $0.stats.pendingStoreQueueDepth == 1 }
+        XCTAssertEqual(collector.stats.pendingStoreFlushQueueDepth, 0)
+        XCTAssertEqual(collector.stats.pendingStoreFlushRatePerMinute, 0)
+
+        try FileManager.default.removeItem(at: fallbackPath)
+        collector.refresh(force: true)
+        try await waitForCollector(collector) { $0.stats.pendingStoreQueueDepth == 0 }
+
+        XCTAssertEqual(collector.stats.pendingStoreFlushQueueDepth, 0)
+        XCTAssertEqual(collector.stats.pendingStoreFlushRatePerMinute, 0)
     }
 
     @MainActor

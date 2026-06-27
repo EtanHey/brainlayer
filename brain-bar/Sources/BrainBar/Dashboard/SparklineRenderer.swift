@@ -238,7 +238,7 @@ struct SparklineChartPresentation: Equatable, Sendable {
         if shouldEmphasizeSparsePoints(role) {
             return rolePoints.filter { $0.value > 0 }
         }
-        return latest.value > 0 ? [latest] : []
+        return [latest]
     }
 
     func nonZeroFraction(_ role: SparklineSeriesRole) -> Double {

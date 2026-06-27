@@ -263,8 +263,22 @@ def _fallback_chunk_id(entry: FallbackEntry) -> str:
     return "fallback-" + hashlib.sha256(stable.encode("utf-8")).hexdigest()[:16]
 
 
-def mark_fallback_stored(path: Path, *, chunk_id: str) -> None:
+def mark_fallback_stored(
+    path: Path,
+    *,
+    chunk_id: str,
+    project: str | None = None,
+    origin_repo_path: Path | None = None,
+) -> None:
     entry = parse_fallback_file(path)
+    if project is not None or origin_repo_path is not None:
+        entry = FallbackEntry(
+            path=entry.path,
+            frontmatter=entry.frontmatter,
+            body=entry.body,
+            origin_repo_path=origin_repo_path or entry.origin_repo_path,
+            project=project or entry.project,
+        )
     _write_replay_attempt(entry, chunk_id=chunk_id)
 
 
@@ -280,7 +294,7 @@ def _latest_entry(entry: FallbackEntry) -> FallbackEntry:
         path=latest.path,
         frontmatter=frontmatter,
         body=latest.body,
-        origin_repo_path=latest.origin_repo_path,
+        origin_repo_path=entry.origin_repo_path,
         project=entry.project,
     )
 
@@ -296,11 +310,12 @@ def _fallback_chunk_matches(entry: FallbackEntry, chunk_id: Any) -> bool:
 
 def _write_queue_attempt(entry: FallbackEntry, *, chunk_id: Any) -> None:
     latest = _latest_entry(entry)
-    if _stored_chunk_id(latest.frontmatter):
+    stored = _stored_chunk_id(latest.frontmatter)
+    if stored and _fallback_chunk_matches(latest, stored):
         return
     if chunk_id and not _fallback_chunk_matches(latest, chunk_id):
         return
-    updated = dict(latest.frontmatter)
+    updated = _frontmatter_with_resolved_project(latest)
     updated["retry_attempted"] = True
     updated["queued_chunk_id"] = chunk_id
     updated["chunk_id"] = None
@@ -309,16 +324,24 @@ def _write_queue_attempt(entry: FallbackEntry, *, chunk_id: Any) -> None:
 
 def _write_replay_attempt(entry: FallbackEntry, *, chunk_id: Any) -> None:
     latest = _latest_entry(entry)
-    if not chunk_id and _stored_chunk_id(latest.frontmatter):
+    stored = _stored_chunk_id(latest.frontmatter)
+    if not chunk_id and stored and _fallback_chunk_matches(latest, stored):
         return
     if chunk_id and not _fallback_chunk_matches(latest, chunk_id):
         return
-    updated = dict(latest.frontmatter)
+    updated = _frontmatter_with_resolved_project(latest)
     updated["retry_attempted"] = True
     updated["chunk_id"] = chunk_id or None
     if chunk_id:
         updated.pop("queued_chunk_id", None)
     _write_frontmatter(latest.path, updated, latest.body)
+
+
+def _frontmatter_with_resolved_project(entry: FallbackEntry) -> dict[str, Any]:
+    updated = dict(entry.frontmatter)
+    if entry.project and not updated.get("project"):
+        updated["project"] = entry.project
+    return updated
 
 
 def _normalize_tags(value: Any) -> list[Any]:

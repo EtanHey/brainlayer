@@ -282,6 +282,40 @@ def test_write_embedded_vectors_skips_when_content_changed_after_snapshot():
     assert ("upsert", "chunk-1", [0.5]) not in events
 
 
+def test_split_cycle_embeds_all_hot_candidates_before_writer_revalidation(tmp_path):
+    hotlane = _load_hotlane_module()
+    db_path = tmp_path / "brainlayer.db"
+    db_path.touch()
+    vectors_seen = []
+
+    class FakeStore:
+        def close(self):
+            pass
+
+    def write_vectors_fn(_store, vectors):
+        vectors_seen.extend(vectors)
+        return sum(1 for vector in vectors if vector.chunk_id == "hot-fresh")
+
+    result = hotlane._run_split_cycle(
+        db_path=db_path,
+        vector_store_cls=lambda _path, readonly=False: FakeStore(),
+        embed_fn=lambda text: [float(len(text))],
+        recent_limit=2,
+        backlog_batch=0,
+        enrich_limit=0,
+        enrich_since_hours=8760,
+        candidate_rows_fn=lambda _store, *, limit: [
+            hotlane.EmbedCandidate("hot-stale", "stale content"),
+            hotlane.EmbedCandidate("hot-fresh", "fresh content"),
+        ][:limit],
+        pending_rows_fn=lambda _store, *, limit: [],
+        write_vectors_fn=write_vectors_fn,
+    )
+
+    assert [vector.chunk_id for vector in vectors_seen] == ["hot-stale", "hot-fresh"]
+    assert result.embedded == 1
+
+
 def test_hotlane_run_advances_enrich_timer_before_failed_cycle():
     hotlane = _load_hotlane_module()
     scheduled_enrich_limits = []

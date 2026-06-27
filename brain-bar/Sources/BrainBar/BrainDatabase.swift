@@ -136,6 +136,7 @@ final class BrainDatabase: @unchecked Sendable {
         let ftsIndexedChunkCount: Int
         let trigramIndexedChunkCount: Int
         let pendingStoreQueueDepth: Int
+        let pendingStoreFlushQueueDepth: Int
         let pendingStoreOldestQueuedAt: Date?
         let pendingStoreFlushRatePerMinute: Double
         let watcherHealth: WatcherHealth?
@@ -163,6 +164,7 @@ final class BrainDatabase: @unchecked Sendable {
             ftsIndexedChunkCount: Int = 0,
             trigramIndexedChunkCount: Int = 0,
             pendingStoreQueueDepth: Int = 0,
+            pendingStoreFlushQueueDepth: Int? = nil,
             pendingStoreOldestQueuedAt: Date? = nil,
             pendingStoreFlushRatePerMinute: Double = 0,
             watcherHealth: WatcherHealth? = nil
@@ -189,6 +191,7 @@ final class BrainDatabase: @unchecked Sendable {
             self.ftsIndexedChunkCount = ftsIndexedChunkCount
             self.trigramIndexedChunkCount = trigramIndexedChunkCount
             self.pendingStoreQueueDepth = pendingStoreQueueDepth
+            self.pendingStoreFlushQueueDepth = pendingStoreFlushQueueDepth ?? pendingStoreQueueDepth
             self.pendingStoreOldestQueuedAt = pendingStoreOldestQueuedAt
             self.pendingStoreFlushRatePerMinute = pendingStoreFlushRatePerMinute
             self.watcherHealth = watcherHealth
@@ -312,6 +315,7 @@ final class BrainDatabase: @unchecked Sendable {
                 ftsIndexedChunkCount: ftsIndexedChunkCount,
                 trigramIndexedChunkCount: trigramIndexedChunkCount,
                 pendingStoreQueueDepth: pendingStoreQueueDepth,
+                pendingStoreFlushQueueDepth: pendingStoreFlushQueueDepth,
                 pendingStoreOldestQueuedAt: pendingStoreOldestQueuedAt,
                 pendingStoreFlushRatePerMinute: pendingStoreFlushRatePerMinute,
                 watcherHealth: watcherHealth
@@ -342,6 +346,7 @@ final class BrainDatabase: @unchecked Sendable {
                 ftsIndexedChunkCount: ftsIndexedChunkCount,
                 trigramIndexedChunkCount: trigramIndexedChunkCount,
                 pendingStoreQueueDepth: pendingStoreQueueDepth,
+                pendingStoreFlushQueueDepth: pendingStoreFlushQueueDepth,
                 pendingStoreOldestQueuedAt: pendingStoreOldestQueuedAt,
                 pendingStoreFlushRatePerMinute: rate,
                 watcherHealth: watcherHealth
@@ -1749,7 +1754,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     func dashboardStats(activityWindowMinutes: Int = 30, bucketCount: Int = 12) throws -> DashboardStats {
-        let pendingStoreQueue = pendingStoreQueueSnapshot().merged(with: Self.fallbackReplayQueueSnapshot())
+        let pendingStoreFlushQueue = pendingStoreQueueSnapshot()
+        let pendingStoreQueue = pendingStoreFlushQueue.merged(with: Self.fallbackReplayQueueSnapshot())
         let watcherHealth = watcherHealthSnapshot()
         return try withReadTransaction {
             let liveWindowMinutes = 1
@@ -1828,6 +1834,7 @@ final class BrainDatabase: @unchecked Sendable {
                 ftsIndexedChunkCount: signalCounts.ftsIndexedChunkCount,
                 trigramIndexedChunkCount: signalCounts.trigramIndexedChunkCount,
                 pendingStoreQueueDepth: pendingStoreQueue.depth,
+                pendingStoreFlushQueueDepth: pendingStoreFlushQueue.depth,
                 pendingStoreOldestQueuedAt: pendingStoreQueue.oldestQueuedAt,
                 watcherHealth: watcherHealth
             )

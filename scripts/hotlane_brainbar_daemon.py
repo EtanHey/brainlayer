@@ -159,18 +159,6 @@ def _embed_candidates(
     return embedded
 
 
-def _embed_first_candidate(
-    candidates: list[EmbedCandidate],
-    *,
-    embed_fn: Callable[[str], list[float]],
-) -> list[EmbeddedVector]:
-    for candidate in candidates:
-        embedded = _embed_candidates([candidate], embed_fn=embed_fn)
-        if embedded:
-            return embedded
-    return []
-
-
 def _write_embedded_vectors(store: VectorStore, vectors: list[EmbeddedVector]) -> int:
     if not vectors:
         return 0
@@ -287,7 +275,7 @@ def _run_split_cycle(
 
     seen_hot_ids = {candidate.chunk_id for candidate in hot_rows}
     pending_rows = [candidate for candidate in pending_rows if candidate.chunk_id not in seen_hot_ids]
-    vectors = _embed_first_candidate(hot_rows, embed_fn=embed_fn)
+    vectors = _embed_candidates(hot_rows, embed_fn=embed_fn, embed_batch_fn=embed_batch_fn)
     vectors.extend(_embed_candidates(pending_rows, embed_fn=embed_fn, embed_batch_fn=embed_batch_fn))
     if vectors:
         write_store = _open_store(vector_store_cls, db_path, readonly=False)

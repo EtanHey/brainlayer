@@ -189,6 +189,7 @@ def run_bridge(
     reconnect_delay = config.reconnect_ms / 1000
     stdin_eof = False
     eof_idle_deadline: float | None = None
+    socket_data_seen_after_stdin_eof = False
 
     def disconnect(schedule: bool = True) -> None:
         nonlocal sock, connected, connecting, connect_started_at, next_connect_at, reconnect_delay
@@ -255,7 +256,7 @@ def run_bridge(
             timeout = 0.05
             if sock is None:
                 timeout = max(0.0, min(0.05, next_connect_at - now))
-            if stdin_eof and not pending:
+            if stdin_eof and not pending and (sock is None or socket_data_seen_after_stdin_eof):
                 eof_idle_deadline = eof_idle_deadline or (now + config.stdin_eof_drain_ms / 1000)
                 timeout = max(0.0, min(timeout, eof_idle_deadline - now))
             else:
@@ -333,9 +334,12 @@ def run_bridge(
                     continue
                 if not data:
                     disconnect(schedule=True)
+                    if stdin_eof and not pending:
+                        eof_idle_deadline = time.monotonic() + config.stdin_eof_drain_ms / 1000
                     continue
                 _write_all(stdout_fd, data)
-                if stdin_eof and not pending:
+                if stdin_eof:
+                    socket_data_seen_after_stdin_eof = True
                     eof_idle_deadline = time.monotonic() + config.stdin_eof_drain_ms / 1000
     finally:
         disconnect(schedule=False)

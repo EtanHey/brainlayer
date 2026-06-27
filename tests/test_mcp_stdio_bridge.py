@@ -15,8 +15,9 @@ from brainlayer.mcp_stdio_bridge import BridgeConfig, _connect_timed_out
 
 
 class RestartableLineServer:
-    def __init__(self, socket_path: Path) -> None:
+    def __init__(self, socket_path: Path, *, response_delay: float = 0.0) -> None:
         self.socket_path = socket_path
+        self.response_delay = response_delay
         self.generation = 0
         self._listener: socket.socket | None = None
         self._clients: list[socket.socket] = []
@@ -91,6 +92,8 @@ class RestartableLineServer:
                     "id": request["id"],
                     "result": {"generation": generation},
                 }
+                if self.response_delay:
+                    time.sleep(self.response_delay)
                 try:
                     file.write(json.dumps(response).encode("utf-8") + b"\n")
                 except OSError:
@@ -221,6 +224,43 @@ def test_stdio_bridge_flushes_buffered_request_after_stdin_eof(tmp_path: Path) -
         server.start()
 
         assert _read_json_line(process)["result"] == {"generation": 1}
+        process.wait(timeout=5)
+        assert process.returncode == 0
+    finally:
+        server.stop()
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=5)
+
+
+def test_stdio_bridge_waits_for_delayed_backend_response_after_stdin_eof(tmp_path: Path) -> None:
+    del tmp_path
+    socket_path = Path("/tmp") / f"brainlayer-delayed-eof-{os.getpid()}-{time.monotonic_ns()}.sock"
+    server = RestartableLineServer(socket_path, response_delay=0.2)
+    server.start()
+
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
+        "BRAINLAYER_MCP_SOCKET": str(socket_path),
+        "BRAINLAYER_MCP_RECONNECT_MS": "25",
+        "BRAINLAYER_MCP_MAX_RECONNECT_MS": "50",
+        "BRAINLAYER_MCP_CONNECT_TIMEOUT_MS": "100",
+        "BRAINLAYER_MCP_STDIN_EOF_DRAIN_MS": "50",
+    }
+    process = subprocess.Popen(
+        [sys.executable, "-m", "brainlayer.mcp_stdio_bridge"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+    )
+    try:
+        _write_json_line(process, {"jsonrpc": "2.0", "id": 1, "method": "ping"})
+        assert process.stdin is not None
+        process.stdin.close()
+
+        assert _read_json_line(process, timeout=2)["result"] == {"generation": 1}
         process.wait(timeout=5)
         assert process.returncode == 0
     finally:

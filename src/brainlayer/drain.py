@@ -140,6 +140,8 @@ class BurnDrainResult:
 class FallbackReplayMarker:
     path: Path
     chunk_id: str
+    project: str | None = None
+    origin_repo_path: Path | None = None
 
 
 def _default_db_path() -> Path:
@@ -412,7 +414,15 @@ def _fallback_replay_marker(event: dict[str, Any], chunk_id: str) -> FallbackRep
     raw_path = event.get("fallback_source_path") or metadata.get("fallback_source_path")
     if not raw_path:
         return None
-    return FallbackReplayMarker(path=Path(str(raw_path)).expanduser(), chunk_id=chunk_id)
+    raw_origin = event.get("origin_repo_path") or metadata.get("origin_repo_path")
+    origin_repo_path = Path(str(raw_origin)).expanduser() if raw_origin else None
+    project = event.get("project")
+    return FallbackReplayMarker(
+        path=Path(str(raw_path)).expanduser(),
+        chunk_id=chunk_id,
+        project=str(project) if project else None,
+        origin_repo_path=origin_repo_path,
+    )
 
 
 def _mark_fallback_replays(markers: list[FallbackReplayMarker], log_path: Path) -> None:
@@ -427,7 +437,12 @@ def _mark_fallback_replays(markers: list[FallbackReplayMarker], log_path: Path) 
             continue
         seen.add(key)
         try:
-            mark_fallback_stored(marker.path, chunk_id=marker.chunk_id)
+            mark_fallback_stored(
+                marker.path,
+                chunk_id=marker.chunk_id,
+                project=marker.project,
+                origin_repo_path=marker.origin_repo_path,
+            )
         except Exception as exc:
             _log(log_path, f"WARN: stored fallback chunk {marker.chunk_id} but could not mark {marker.path}: {exc}")
 
@@ -1241,7 +1256,6 @@ def burn_drain_once(
                 if _embedding_enabled():
                     _embed_store_chunks(conn, store_chunk_ids, embed_fn)
                 conn.execute("COMMIT")
-                _mark_fallback_replays_best_effort(fallback_markers, log_path)
                 result.applied_events += attempt_applied_events
                 result.skipped_verified_stale += attempt_skipped_verified_stale
                 conn.setbusytimeout(_checkpoint_busy_timeout_ms())
@@ -1277,6 +1291,7 @@ def burn_drain_once(
                 if conn is not None:
                     conn.close()
 
+        queue_cleanup_succeeded = True
         for path, _events in batch:
             try:
                 path.unlink()
@@ -1284,7 +1299,10 @@ def burn_drain_once(
             except FileNotFoundError:
                 result.files_deleted += 1
             except OSError as exc:
+                queue_cleanup_succeeded = False
                 _log(log_path, f"burn drain committed but could not unlink {path}: {exc}")
+        if queue_cleanup_succeeded:
+            _mark_fallback_replays_best_effort(fallback_markers, log_path)
         if result.applied_events or result.skipped_verified_stale:
             _log(
                 log_path,
@@ -1366,7 +1384,6 @@ def drain_once(
                             collision_ids.append(result.collision_chunk_id)
                         attempt_drained += 1
                     conn.execute("COMMIT")
-                    _mark_fallback_replays_best_effort(fallback_markers, log_path)
                     # Best-effort WAL checkpoint. Keep the live writer path PASSIVE:
                     # TRUNCATE can block behind long-lived readers on the live multi-GB
                     # WAL, which stalls queue drain before it can publish health.
@@ -1387,6 +1404,7 @@ def drain_once(
                         _rewrite_events_file(path, remaining_events)
                     else:
                         _unlink_processed_file(path, log_path)
+                    _mark_fallback_replays_best_effort(fallback_markers, log_path)
                     yield_seconds = _post_commit_yield_seconds()
                     if yield_seconds > 0:
                         time.sleep(yield_seconds)
