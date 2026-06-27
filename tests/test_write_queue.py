@@ -582,6 +582,66 @@ class TestFlushPendingStores:
         assert updated_entry.frontmatter["chunk_id"] == fallback_chunk_id
         assert inventory_fallbacks(tmp_path, scope_map={}).summary()["green"] is True
 
+    def test_drain_marks_fallback_source_with_queued_id_after_duplicate_merge(self, tmp_path, monkeypatch):
+        """A duplicate merge returns the canonical DB id but the fallback file still clears by queued id."""
+        from brainlayer import drain
+        from brainlayer.fallback_replay import _fallback_chunk_id, parse_fallback_file
+
+        db_path = tmp_path / "brainlayer.db"
+        queue_dir = tmp_path / "queue"
+        log_path = tmp_path / "drain.log"
+        repo = tmp_path / "systems"
+        fallback_path = repo / "docs.local" / "decisions" / "pending.md"
+        queue_dir.mkdir()
+        fallback_path.parent.mkdir(parents=True)
+        fallback_path.write_text(
+            "---\n"
+            "intended_brain_store: true\n"
+            "importance: 8\n"
+            "timestamp: 2026-06-12T19:54:07+03:00\n"
+            "retry_attempted: true\n"
+            "chunk_id:\n"
+            "---\n"
+            "queued fallback body\n",
+            encoding="utf-8",
+        )
+        fallback_chunk_id = _fallback_chunk_id(parse_fallback_file(fallback_path))
+        fallback_path.write_text(
+            fallback_path.read_text(encoding="utf-8").replace(
+                "chunk_id:\n",
+                f"queued_chunk_id: {fallback_chunk_id}\nchunk_id:\n",
+            ),
+            encoding="utf-8",
+        )
+        queued = queue_dir / "fallback-replay-duplicate.jsonl"
+        queued.write_text(
+            json.dumps(
+                {
+                    "kind": "store_memory",
+                    "chunk_id": fallback_chunk_id,
+                    "content": "queued fallback body\n",
+                    "memory_type": "note",
+                    "project": "systems",
+                    "created_at": "2026-06-12T19:54:07+03:00",
+                    "metadata": {
+                        "fallback_source_path": str(fallback_path),
+                        "origin_repo_path": str(repo),
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+        monkeypatch.setattr(drain, "_insert_or_merge_chunk", lambda _conn, _values: "canonical-existing")
+
+        assert drain.drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=log_path) == 1
+
+        assert not queued.exists()
+        updated_entry = parse_fallback_file(fallback_path)
+        assert updated_entry.frontmatter["chunk_id"] == fallback_chunk_id
+        assert "queued_chunk_id" not in updated_entry.frontmatter
+
     def test_drain_deletes_queue_after_post_commit_fallback_marker_failure(self, tmp_path, monkeypatch):
         from brainlayer import drain
 

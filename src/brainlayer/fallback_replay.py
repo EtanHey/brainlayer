@@ -191,6 +191,10 @@ def queue_entry(
     source: str = "fallback-replay",
 ) -> ReplayResult:
     chunk_id = _fallback_chunk_id(entry)
+    latest = _latest_entry(entry)
+    queued = str(latest.frontmatter.get("queued_chunk_id") or "").strip()
+    if queued == chunk_id and is_pending_entry(latest):
+        return ReplayResult(path=entry.path, attempted=True, chunk_id=chunk_id)
     try:
         enqueue_func(
             content=entry.body,
@@ -373,21 +377,23 @@ def _fallback_marker_file_lock(path: Path):
     with thread_lock:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("a", encoding="utf-8") as lock_file:
+            locked = False
             try:
                 import fcntl
 
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            except (ImportError, OSError):
+                locked = True
+            except ImportError:
                 pass
+            except OSError:
+                raise
             try:
                 yield
             finally:
-                try:
+                if locked:
                     import fcntl
 
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-                except (ImportError, OSError):
-                    pass
 
 
 def _frontmatter_with_resolved_project(entry: FallbackEntry) -> dict[str, Any]:

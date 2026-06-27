@@ -344,6 +344,7 @@ def test_queue_entry_enqueues_with_stable_chunk_id_but_keeps_fallback_pending(tm
     assert calls[0]["chunk_id"] == first.chunk_id
     assert calls[0]["fallback_source_path"] == str(path)
     assert calls[0]["origin_repo_path"] == str(repo.resolve())
+    assert len(calls) == 1
     assert updated_entry.frontmatter["project"] == "systems"
     assert updated_entry.frontmatter["queued_chunk_id"] == first.chunk_id
     assert updated_entry.frontmatter["chunk_id"] is None
@@ -685,6 +686,33 @@ def test_fallback_marker_writes_are_serialized_per_file(tmp_path):
     assert write_done.is_set()
     updated = parse_fallback_file(path)
     assert updated.frontmatter["queued_chunk_id"] == chunk_id
+
+
+def test_fallback_marker_file_lock_fails_closed_on_flock_error(tmp_path, monkeypatch):
+    import fcntl
+
+    from brainlayer.fallback_replay import _fallback_chunk_id, _write_queue_attempt, parse_fallback_file
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    path = _pending_file(repo, "docs.local/decisions/flock-fails.md")
+    entry = parse_fallback_file(path)
+    chunk_id = _fallback_chunk_id(entry)
+
+    def fail_flock(*_args, **_kwargs):
+        raise OSError("synthetic flock failure")
+
+    monkeypatch.setattr(fcntl, "flock", fail_flock)
+
+    try:
+        _write_queue_attempt(entry, chunk_id=chunk_id)
+    except OSError as exc:
+        assert "synthetic flock failure" in str(exc)
+    else:
+        raise AssertionError("fallback marker lock should fail closed when flock fails")
+
+    updated = parse_fallback_file(path)
+    assert "queued_chunk_id" not in updated.frontmatter
 
 
 def test_inventory_reports_unparseable_legacy_fallback_files_as_debt(tmp_path):

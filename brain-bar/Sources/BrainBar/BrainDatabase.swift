@@ -3569,7 +3569,7 @@ final class BrainDatabase: @unchecked Sendable {
                 docsLocal.appendingPathComponent("decisions", isDirectory: true),
                 recursive: false,
                 originRepoPath: repo,
-                countLegacyWithoutFrontmatter: false,
+                countLegacyWithoutFrontmatter: true,
                 record: record
             )
             scanFallbackReplayDirectory(

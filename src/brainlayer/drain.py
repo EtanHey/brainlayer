@@ -700,7 +700,8 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
             )
         else:
             logger.warning("Skipping entity link for unknown entity_id=%s chunk_id=%s", entity_id, chunk_id)
-    marker = _fallback_replay_marker(event, stored_chunk_id)
+    marker_chunk_id = str(event.get("chunk_id") or stored_chunk_id)
+    marker = _fallback_replay_marker(event, marker_chunk_id)
     return ApplyResult(chunk_id=stored_chunk_id, fallback_markers=(marker,) if marker else ())
 
 

@@ -921,6 +921,30 @@ final class DashboardTests: XCTestCase {
         XCTAssertNil(stats.pendingStoreOldestQueuedAt)
     }
 
+    func testDashboardStatsCountsMalformedStructuredFallbackReplayDebt() throws {
+        let pendingPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("malformed.md")
+        try FileManager.default.createDirectory(
+            at: pendingPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        ---
+        : bad yaml
+        ---
+        malformed structured fallback body
+        """.write(to: pendingPath, atomically: true, encoding: .utf8)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+        XCTAssertNil(stats.pendingStoreOldestQueuedAt)
+    }
+
     func testDashboardStatsIncludesStaleFallbackReplayChunkIDDebt() throws {
         let stalePath = fallbackReplayRoot
             .appendingPathComponent("brainlayer", isDirectory: true)

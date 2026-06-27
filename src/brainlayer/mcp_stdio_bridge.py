@@ -10,6 +10,7 @@ the socket is down, and reconnects to the socket.
 from __future__ import annotations
 
 import errno
+import json
 import os
 import select
 import socket
@@ -119,6 +120,15 @@ def _write_all(fd: int, data: bytes) -> None:
         view = view[written:]
 
 
+def _frame_expects_response(data: bytes) -> bool:
+    try:
+        _headers, body = data.split(CONTENT_LENGTH_SEPARATOR, 1)
+        payload = json.loads(body.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        return True
+    return isinstance(payload, dict) and "id" in payload
+
+
 def _content_length_frame_size(buffer: bytearray) -> int | None:
     if not bytes(buffer[:32]).lower().startswith(b"content-length:"):
         return None
@@ -191,6 +201,7 @@ def run_bridge(
     eof_idle_deadline: float | None = None
     socket_data_seen_after_stdin_eof = False
     socket_data_sent_to_backend = False
+    pending_responses = 0
 
     def disconnect(schedule: bool = True) -> None:
         nonlocal sock, connected, connecting, connect_started_at, next_connect_at, reconnect_delay
@@ -260,7 +271,12 @@ def run_bridge(
             if (
                 stdin_eof
                 and not pending
-                and (sock is None or socket_data_seen_after_stdin_eof or not socket_data_sent_to_backend)
+                and (
+                    sock is None
+                    or socket_data_seen_after_stdin_eof
+                    or not socket_data_sent_to_backend
+                    or pending_responses == 0
+                )
             ):
                 eof_idle_deadline = eof_idle_deadline or (now + config.stdin_eof_drain_ms / 1000)
                 timeout = max(0.0, min(timeout, eof_idle_deadline - now))
@@ -322,6 +338,8 @@ def run_bridge(
                         break
                     socket_data_sent_to_backend = True
                     if frame.advance(sent):
+                        if _frame_expects_response(frame.data):
+                            pending_responses += 1
                         pending_bytes -= len(frame.data)
                         pending.popleft()
                     else:
@@ -347,6 +365,7 @@ def run_bridge(
                     _write_all(stdout_fd, data)
                 except OSError:
                     return 0
+                pending_responses = max(0, pending_responses - 1)
                 if stdin_eof:
                     socket_data_seen_after_stdin_eof = True
                     eof_idle_deadline = time.monotonic() + config.stdin_eof_drain_ms / 1000

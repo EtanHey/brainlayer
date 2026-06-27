@@ -349,6 +349,90 @@ def test_stdio_bridge_waits_for_delayed_backend_response_after_stdin_eof(tmp_pat
             process.wait(timeout=5)
 
 
+def test_stdio_bridge_exits_after_notification_only_frame_at_stdin_eof(monkeypatch) -> None:
+    import brainlayer.mcp_stdio_bridge as bridge
+
+    real_socketpair = socket.socketpair
+    sent_payload = bytearray()
+
+    class NotificationSocket:
+        def __init__(self) -> None:
+            self.client, self.peer = real_socketpair()
+
+        def setblocking(self, flag: bool) -> None:
+            self.client.setblocking(flag)
+
+        def connect(self, _path: str) -> None:
+            return None
+
+        def fileno(self) -> int:
+            return self.client.fileno()
+
+        def getsockopt(self, _level: int, _option: int) -> int:
+            return 0
+
+        def send(self, data: bytes | memoryview) -> int:
+            payload = bytes(data)
+            sent_payload.extend(payload)
+            return len(payload)
+
+        def recv(self, size: int) -> bytes:
+            return self.client.recv(size)
+
+        def close(self) -> None:
+            self.client.close()
+            self.peer.close()
+
+    notification_socket = NotificationSocket()
+    monkeypatch.setattr(bridge.socket, "socket", lambda *_args, **_kwargs: notification_socket)
+
+    stdin_r, stdin_w = os.pipe()
+    stdout_r, stdout_w = os.pipe()
+    stderr_r, stderr_w = os.pipe()
+    stdin_reader = os.fdopen(stdin_r, "rb", buffering=0)
+    stdout_writer = os.fdopen(stdout_w, "wb", buffering=0)
+    stderr_writer = os.fdopen(stderr_w, "wb", buffering=0)
+    exit_codes: list[int] = []
+
+    def run() -> None:
+        exit_codes.append(
+            bridge.run_bridge(
+                BridgeConfig(
+                    socket_path="/tmp/brainlayer-bridge-notification.sock",
+                    reconnect_ms=1,
+                    max_reconnect_ms=1,
+                    connect_timeout_ms=50,
+                    stdin_eof_drain_ms=10,
+                ),
+                stdin=stdin_reader,
+                stdout=stdout_writer,
+                stderr=stderr_writer,
+            )
+        )
+
+    body = b'{"jsonrpc":"2.0","method":"notifications/initialized"}'
+    request = b"Content-Length: " + str(len(body)).encode("ascii") + b"\r\n\r\n" + body
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    try:
+        os.write(stdin_w, request)
+        os.close(stdin_w)
+        stdin_w = -1
+        thread.join(timeout=2)
+
+        assert not thread.is_alive()
+        assert bytes(sent_payload) == request
+        assert exit_codes == [0]
+    finally:
+        if stdin_w != -1:
+            os.close(stdin_w)
+        for fd in (stdout_r, stderr_r):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
 def test_stdio_bridge_replays_full_frame_after_partial_socket_send_then_reconnect(monkeypatch) -> None:
     import brainlayer.mcp_stdio_bridge as bridge
 
