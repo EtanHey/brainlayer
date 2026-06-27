@@ -360,6 +360,38 @@ final class DatabaseTests: XCTestCase {
         )
     }
 
+    func testOpenConfigurationCanSkipStartupMigrationsForManagedLiveDatabase() throws {
+        let legacyPath = NSTemporaryDirectory() + "brainbar-skip-migrations-\(UUID().uuidString).db"
+        try sqliteExecWrite(
+            path: legacyPath,
+            sql: """
+                CREATE TABLE chunks (
+                    id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    metadata TEXT NOT NULL DEFAULT '{}',
+                    source_file TEXT NOT NULL DEFAULT 'brainbar'
+                );
+            """
+        )
+        defer {
+            try? FileManager.default.removeItem(atPath: legacyPath)
+            try? FileManager.default.removeItem(atPath: legacyPath + "-wal")
+            try? FileManager.default.removeItem(atPath: legacyPath + "-shm")
+        }
+
+        let managedDB = BrainDatabase(
+            path: legacyPath,
+            openConfiguration: .init(runMigrations: false)
+        )
+        defer { managedDB.close() }
+
+        XCTAssertTrue(managedDB.isOpen)
+        XCTAssertFalse(
+            try sqliteTableColumns(path: legacyPath, table: "chunks").contains("sender"),
+            "Managed live opens must not run startup migrations or DDL that competes with the drain writer."
+        )
+    }
+
     func testStoreRollsBackInsertedChunkWhenPostInsertValidationFails() throws {
         let beforeCount = try sqliteCount(path: tempDBPath, table: "chunks")
         db.failNextStoreAfterInsertForTesting = true

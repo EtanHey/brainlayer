@@ -12,10 +12,12 @@ final class BrainDatabase: @unchecked Sendable {
     struct OpenConfiguration: Sendable, Equatable {
         let busyTimeoutMillis: Int32
         let readOnly: Bool
+        let runMigrations: Bool
 
-        init(busyTimeoutMillis: Int32 = 30_000, readOnly: Bool = false) {
+        init(busyTimeoutMillis: Int32 = 30_000, readOnly: Bool = false, runMigrations: Bool = true) {
             self.busyTimeoutMillis = max(1, busyTimeoutMillis)
             self.readOnly = readOnly
+            self.runMigrations = runMigrations
         }
     }
 
@@ -560,7 +562,11 @@ final class BrainDatabase: @unchecked Sendable {
             // CREATE TABLE IF NOT EXISTS still acquires a RESERVED lock which blocks on watch agent.
             if (try? tableExists("chunks")) == true {
                 NSLog("[BrainBar] Schema already exists — skipping ensureSchema")
-                try ensureMigrations()
+                if openConfiguration.runMigrations {
+                    try ensureMigrations()
+                } else {
+                    NSLog("[BrainBar] Startup migrations disabled for this connection")
+                }
             } else {
                 try ensureSchema()
                 NSLog("[BrainBar] Schema created")
