@@ -20,6 +20,19 @@ DEFAULT_DEPLOY_DRIFT_LABELS = (
     "com.brainlayer.watch",
 )
 
+DEPLOY_DRIFT_IGNORED_EXACT_PATHS = {
+    "README.md",
+    "src/brainlayer/deploy_drift.py",
+    "src/brainlayer/doctor.py",
+    "src/brainlayer/reembed_backfill.py",
+    "scripts/reembed_backfill_loop.py",
+}
+
+DEPLOY_DRIFT_IGNORED_PREFIXES = (
+    "docs/",
+    "tests/",
+)
+
 BRAINLAYER_LABEL_BY_SERVICE = {
     "enrichment": "com.brainlayer.enrichment",
     "drain": "com.brainlayer.drain",
@@ -103,6 +116,23 @@ def commit_is_ancestor(repo_root: Path, ancestor: str, descendant: str) -> bool:
     return result.returncode == 0
 
 
+def changed_files_between(repo_root: Path, old_commit: str, new_commit: str) -> set[str] | None:
+    diff = _git_stdout(repo_root, "diff", "--name-only", f"{old_commit}..{new_commit}")
+    if diff is None:
+        return None
+    return {line.strip() for line in diff.splitlines() if line.strip()}
+
+
+def deploy_drift_changes_require_redeploy(changed_files: set[str] | None) -> bool:
+    if changed_files is None:
+        return True
+    return any(
+        path not in DEPLOY_DRIFT_IGNORED_EXACT_PATHS
+        and not any(path.startswith(prefix) for prefix in DEPLOY_DRIFT_IGNORED_PREFIXES)
+        for path in changed_files
+    )
+
+
 def detect_deploy_drift(label: str, provenance_dir: Path) -> DeployDriftFinding | None:
     provenance_path = provenance_path_for_label(provenance_dir, label)
     try:
@@ -119,6 +149,9 @@ def detect_deploy_drift(label: str, provenance_dir: Path) -> DeployDriftFinding 
     repo_root = Path(repo_root_value).expanduser()
     deployed_commit = git_head(repo_root)
     if not deployed_commit or deployed_commit == launch_commit:
+        return None
+    changed_files = changed_files_between(repo_root, launch_commit, deployed_commit)
+    if not deploy_drift_changes_require_redeploy(changed_files):
         return None
     drift_status = "older" if commit_is_ancestor(repo_root, launch_commit, deployed_commit) else "diverged"
     return DeployDriftFinding(

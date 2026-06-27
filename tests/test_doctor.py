@@ -526,6 +526,52 @@ def test_run_doctor_raises_alarm_when_loaded_daemon_launch_commit_is_older_than_
     assert alarm.value.context["deployed_commit"] == head_commit
 
 
+def test_run_doctor_ignores_deploy_drift_when_only_offline_reembed_utility_changed(tmp_path):
+    from brainlayer.doctor import run_doctor
+
+    db_path = tmp_path / "deploy-drift-reembed-only.db"
+    repo_root = tmp_path / "repo-reembed-only"
+    _build_db(db_path)
+    repo_root.mkdir()
+    _run_git(repo_root, "init")
+    _run_git(repo_root, "config", "user.email", "brainlayer-tests@example.com")
+    _run_git(repo_root, "config", "user.name", "BrainLayer Tests")
+    (repo_root / "README.md").write_text("base\n", encoding="utf-8")
+    _run_git(repo_root, "add", ".")
+    _run_git(repo_root, "commit", "-m", "daemon launch commit")
+    launch_commit = _run_git(repo_root, "rev-parse", "HEAD")
+    reembed_path = repo_root / "src" / "brainlayer" / "reembed_backfill.py"
+    reembed_path.parent.mkdir(parents=True)
+    reembed_path.write_text("DRY_RUN_READONLY = True\n", encoding="utf-8")
+    deploy_drift_path = repo_root / "src" / "brainlayer" / "deploy_drift.py"
+    deploy_drift_path.write_text("STATUS_ONLY = True\n", encoding="utf-8")
+    test_path = repo_root / "tests" / "test_reembed_backfill.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text("def test_reembed():\n    assert True\n", encoding="utf-8")
+    _run_git(repo_root, "add", ".")
+    _run_git(repo_root, "commit", "-m", "offline reembed utility changed")
+    provenance_dir = tmp_path / "daemon-provenance"
+    _write_daemon_provenance(
+        provenance_dir,
+        label="com.brainlayer.enrichment",
+        repo_root=repo_root,
+        launch_commit=launch_commit,
+    )
+    config = _doctor_config(tmp_path, db_path)
+    config.deploy_provenance_dir = provenance_dir
+    config.deploy_drift_labels = ("com.brainlayer.enrichment",)
+
+    result = run_doctor(
+        config,
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+
+    assert result.ok is True
+    assert not [issue for issue in result.issues if issue.code == "deploy_drift"]
+
+
 def test_deploy_drift_git_shellouts_ignore_inherited_git_env(tmp_path, monkeypatch):
     from brainlayer.alarm import BrainLayerAlarm
     from brainlayer.doctor import run_doctor
