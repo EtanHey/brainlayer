@@ -3648,7 +3648,7 @@ final class BrainDatabase: @unchecked Sendable {
               ) else {
             return nil
         }
-        return parsePendingStoreQueuedAt(frontmatter["timestamp"] ?? "")
+        return .some(parsePendingStoreQueuedAt(frontmatter["timestamp"] ?? ""))
     }
 
     private static func fallbackReplayComponents(from text: String) -> (frontmatter: [String: String], body: String)? {

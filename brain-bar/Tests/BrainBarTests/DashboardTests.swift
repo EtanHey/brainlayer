@@ -892,6 +892,35 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(agentStores.statusText, "1 agent store queued for replay")
     }
 
+    func testDashboardStatsCountsPendingFallbackReplayDebtWithoutTimestamp() throws {
+        let pendingPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("missing-timestamp.md")
+        try FileManager.default.createDirectory(
+            at: pendingPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        ---
+        intended_brain_store: true
+        importance: 10
+        tags: [fallback-replay]
+        retry_attempted: true
+        queued_chunk_id: fallback-queued
+        chunk_id:
+        ---
+        queued fallback body without timestamp
+        """.write(to: pendingPath, atomically: true, encoding: .utf8)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+        XCTAssertNil(stats.pendingStoreOldestQueuedAt)
+    }
+
     func testDashboardStatsIncludesStaleFallbackReplayChunkIDDebt() throws {
         let stalePath = fallbackReplayRoot
             .appendingPathComponent("brainlayer", isDirectory: true)

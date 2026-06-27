@@ -63,6 +63,10 @@ class RestartableLineServer:
         except FileNotFoundError:
             pass
 
+    def client_count(self) -> int:
+        with self._clients_lock:
+            return len(self._clients)
+
     def _serve(self) -> None:
         assert self._listener is not None
         while not self._stop.is_set():
@@ -224,6 +228,45 @@ def test_stdio_bridge_exits_cleanly_when_stdout_pipe_closes(tmp_path: Path) -> N
         assert process.stderr is not None
         stderr = process.stderr.read().decode("utf-8", errors="replace")
         assert "Traceback" not in stderr
+    finally:
+        server.stop()
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=5)
+
+
+def test_stdio_bridge_exits_after_stdin_eof_without_pending_frames(tmp_path: Path) -> None:
+    del tmp_path
+    socket_path = Path("/tmp") / f"brainlayer-bridge-empty-eof-{os.getpid()}-{time.monotonic_ns()}.sock"
+    server = RestartableLineServer(socket_path)
+    server.start()
+
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
+        "BRAINLAYER_MCP_SOCKET": str(socket_path),
+        "BRAINLAYER_MCP_RECONNECT_MS": "25",
+        "BRAINLAYER_MCP_MAX_RECONNECT_MS": "50",
+        "BRAINLAYER_MCP_CONNECT_TIMEOUT_MS": "100",
+        "BRAINLAYER_MCP_STDIN_EOF_DRAIN_MS": "50",
+    }
+    process = subprocess.Popen(
+        [sys.executable, "-m", "brainlayer.mcp_stdio_bridge"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+    )
+    try:
+        deadline = time.monotonic() + 2
+        while server.client_count() == 0 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert server.client_count() > 0
+
+        assert process.stdin is not None
+        process.stdin.close()
+
+        assert process.wait(timeout=5) == 0
     finally:
         server.stop()
         if process.poll() is None:
