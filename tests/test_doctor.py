@@ -319,6 +319,7 @@ def _doctor_config(tmp_path: Path, db_path: Path):
         queue_dir=queue_dir,
         watcher_health_path=watcher_health_path,
         drain_health_path=drain_health_path,
+        deploy_provenance_dir=tmp_path / "daemon-provenance",
         queue_movement_sample_seconds=0,
     )
 
@@ -787,10 +788,10 @@ def test_run_doctor_exits_nonzero_when_queue_backlog_is_not_moving(tmp_path):
     assert any(issue.code == "queue_not_moving_with_backlog" for issue in result.issues)
 
 
-def test_run_doctor_treats_recent_drain_heartbeat_as_moving_backlog(tmp_path):
+def test_run_doctor_does_not_treat_recent_drain_heartbeat_as_queue_movement(tmp_path):
     from brainlayer.doctor import run_doctor
 
-    db_path = tmp_path / "queue-slow-but-fresh.db"
+    db_path = tmp_path / "queue-still-but-fresh.db"
     _build_db(db_path)
     config = _doctor_config(tmp_path, db_path)
     config.queue_warning_count = 1
@@ -804,9 +805,9 @@ def test_run_doctor_treats_recent_drain_heartbeat_as_moving_backlog(tmp_path):
         now_fn=lambda: NOW,
     )
 
-    assert result.exit_code == 0
-    assert not [issue for issue in result.issues if issue.code == "queue_not_moving_with_backlog"]
-    assert any(issue.code == "queue_backed_up_but_moving" for issue in result.issues)
+    assert result.exit_code == 1
+    assert any(issue.code == "queue_not_moving_with_backlog" for issue in result.issues)
+    assert not [issue for issue in result.issues if issue.code == "drain_liveness_stalled"]
 
 
 def test_run_doctor_fails_loudly_when_loaded_drain_heartbeat_stale_with_backlog_without_quota(tmp_path, monkeypatch):

@@ -659,11 +659,11 @@ extension DashboardFlowSummary {
 
     private func agentStoreStatus(values: [Int], pendingStoreDepth: Int) -> DashboardFlowLaneStatus {
         let totalEvents = values.reduce(0, +)
-        if (values.last ?? 0) > 0 {
-            return .live
-        }
         if pendingStoreDepth > 0 {
             return .queued
+        }
+        if (values.last ?? 0) > 0 {
+            return .live
         }
         if totalEvents > 0 {
             return .recent

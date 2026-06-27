@@ -496,6 +496,66 @@ def test_hotlane_split_cycle_embeds_before_opening_writer(tmp_path):
     assert ("upsert", "pending-1", [1.0]) in events
 
 
+def test_hotlane_split_cycle_falls_through_recent_candidates_after_embed_failure(tmp_path):
+    hotlane = _load_hotlane_module()
+    events = []
+
+    class FakeCursor:
+        def __init__(self, readonly):
+            self.readonly = readonly
+
+        def execute(self, sql, params=()):
+            if self.readonly:
+                if "c.source_file = 'brainbar-store'" in sql:
+                    return [("hot-bad", "bad content"), ("hot-good", "good content")]
+                return []
+            events.append(("sql", sql.strip().splitlines()[0]))
+            if sql.strip().startswith("SELECT 1"):
+                return SimpleNamespace(fetchone=lambda: (1,))
+            return []
+
+    class FakeConn:
+        def __init__(self, readonly):
+            self.readonly = readonly
+
+        def cursor(self):
+            return FakeCursor(self.readonly)
+
+    class FakeStore:
+        def __init__(self, path, readonly=False):
+            self.db_path = path
+            self.conn = FakeConn(readonly)
+            events.append(("open", readonly))
+
+        def _upsert_chunk_vector(self, _cursor, chunk_id, embedding):
+            events.append(("upsert", chunk_id, embedding))
+
+        def close(self):
+            events.append(("close", None))
+
+    def embed_fn(text):
+        events.append(("embed", text))
+        if text == "bad content":
+            raise RuntimeError("transient embed failure")
+        return [3.0]
+
+    result = hotlane._run_split_cycle(
+        db_path=tmp_path / "brainlayer.db",
+        vector_store_cls=FakeStore,
+        embed_fn=embed_fn,
+        recent_limit=5,
+        backlog_batch=0,
+        enrich_limit=0,
+        enrich_since_hours=8760,
+    )
+
+    assert result.embedded == 1
+    assert ("embed", "bad content") in events
+    assert ("embed", "good content") in events
+    assert ("upsert", "hot-good", [3.0]) in events
+    assert ("upsert", "hot-bad", [3.0]) not in events
+
+
 def test_hotlane_split_cycle_does_not_open_writer_when_no_embedding_or_enrichment_work(tmp_path):
     hotlane = _load_hotlane_module()
     events = []

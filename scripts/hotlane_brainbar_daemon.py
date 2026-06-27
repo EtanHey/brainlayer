@@ -135,13 +135,8 @@ def _embed_candidates(
         try:
             embeddings = embed_batch_fn([candidate.content for candidate in candidates])
             if len(embeddings) != len(candidates):
-                raise ValueError(
-                    f"batch embedder returned {len(embeddings)} embeddings for {len(candidates)} chunks"
-                )
-            return [
-                (candidate.chunk_id, embedding)
-                for candidate, embedding in zip(candidates, embeddings)
-            ]
+                raise ValueError(f"batch embedder returned {len(embeddings)} embeddings for {len(candidates)} chunks")
+            return [(candidate.chunk_id, embedding) for candidate, embedding in zip(candidates, embeddings)]
         except Exception as exc:
             LOGGER.warning("Failed to embed hotlane batch: %s", exc)
 
@@ -152,6 +147,18 @@ def _embed_candidates(
         except Exception as exc:
             LOGGER.warning("Failed to embed chunk %s: %s", candidate.chunk_id, exc)
     return embedded
+
+
+def _embed_first_candidate(
+    candidates: list[EmbedCandidate],
+    *,
+    embed_fn: Callable[[str], list[float]],
+) -> list[tuple[str, list[float]]]:
+    for candidate in candidates:
+        embedded = _embed_candidates([candidate], embed_fn=embed_fn)
+        if embedded:
+            return embedded
+    return []
 
 
 def _write_embedded_vectors(store: VectorStore, vectors: list[tuple[str, list[float]]]) -> int:
@@ -237,7 +244,7 @@ def _run_split_cycle(
         read_store = _open_store(vector_store_cls, db_path, readonly=True)
         try:
             if recent_limit > 0:
-                hot_rows = candidate_rows_fn(read_store, limit=recent_limit)[:1]
+                hot_rows = candidate_rows_fn(read_store, limit=recent_limit)
             if backlog_batch > 0:
                 pending_rows = pending_rows_fn(read_store, limit=backlog_batch)
         finally:
@@ -245,7 +252,7 @@ def _run_split_cycle(
 
     seen_hot_ids = {candidate.chunk_id for candidate in hot_rows}
     pending_rows = [candidate for candidate in pending_rows if candidate.chunk_id not in seen_hot_ids]
-    vectors = _embed_candidates(hot_rows, embed_fn=embed_fn)
+    vectors = _embed_first_candidate(hot_rows, embed_fn=embed_fn)
     vectors.extend(_embed_candidates(pending_rows, embed_fn=embed_fn, embed_batch_fn=embed_batch_fn))
     if vectors:
         write_store = _open_store(vector_store_cls, db_path, readonly=False)
@@ -393,7 +400,9 @@ def run(
                 cycle_backlog_batch = 0
                 cycle_enrich_limit = 0
             else:
-                cycle_backlog_batch = backlog_batch if backlog_batch > 0 and now - last_backlog >= backlog_interval else 0
+                cycle_backlog_batch = (
+                    backlog_batch if backlog_batch > 0 and now - last_backlog >= backlog_interval else 0
+                )
                 cycle_enrich_limit = (
                     enrich_limit
                     if not enrich_disabled and enrich_limit > 0 and now - last_enrich >= enrich_interval

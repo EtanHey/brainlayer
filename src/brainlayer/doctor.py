@@ -474,8 +474,10 @@ def run_doctor(
             sample_now,
             config.drain_liveness_stale_seconds,
         )
-        drain_moving = queue_count == 0 or drain_total_moving or recent_drain_heartbeat
-        drain_liveness_moving = drain_total_moving or _counter_increased(drain_cycles, next_drain_cycles)
+        drain_moving = queue_count == 0 or drain_total_moving
+        drain_liveness_moving = (
+            drain_total_moving or _counter_increased(drain_cycles, next_drain_cycles) or recent_drain_heartbeat
+        )
         drain_total = next_drain_health.get("drained_total", drain_total)
         drain_cycles = next_drain_health.get("drain_cycles", drain_cycles)
         if queue_count > 0:
