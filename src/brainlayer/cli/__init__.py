@@ -991,7 +991,7 @@ def _status_queue_file_source(path: Path) -> str:
             source = str(data.get("source") or "").strip()
             if source:
                 return source
-    except (OSError, json.JSONDecodeError, AttributeError):
+    except (OSError, json.JSONDecodeError, AttributeError, UnicodeDecodeError):
         pass
     return path.name.split("-", 1)[0] or "unknown"
 

@@ -145,6 +145,14 @@ def test_status_queue_depth_by_source_reads_hyphenated_jsonl_source(tmp_path):
     }
 
 
+def test_status_queue_depth_by_source_falls_back_for_invalid_utf8_jsonl(tmp_path):
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    (queue_dir / "fallback-replay-123.jsonl").write_bytes(b"\xff\xfe\n")
+
+    assert cli._status_queue_depth_by_source(queue_dir) == {"fallback": 1}
+
+
 def test_status_check_doctor_can_go_green_with_fresh_draining_queue_tail(tmp_path, monkeypatch):
     db_path = tmp_path / "brainlayer.db"
     queue_dir = tmp_path / "queue"

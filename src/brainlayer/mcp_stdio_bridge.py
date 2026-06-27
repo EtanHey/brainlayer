@@ -81,6 +81,21 @@ def _close_socket(sock: socket.socket | None) -> None:
         pass
 
 
+def _write_all(fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    while view:
+        try:
+            written = os.write(fd, view)
+        except InterruptedError:
+            continue
+        except BlockingIOError:
+            select.select([], [fd], [])
+            continue
+        if written == 0:
+            raise BrokenPipeError("stdout write returned 0 bytes")
+        view = view[written:]
+
+
 def run_bridge(
     config: BridgeConfig,
     *,
@@ -239,7 +254,7 @@ def run_bridge(
                 if not data:
                     disconnect(schedule=True)
                     continue
-                os.write(stdout_fd, data)
+                _write_all(stdout_fd, data)
     finally:
         disconnect(schedule=False)
         os.set_blocking(stdin_fd, previous_stdin_blocking)

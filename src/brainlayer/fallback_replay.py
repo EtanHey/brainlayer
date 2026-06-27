@@ -113,9 +113,14 @@ def parse_fallback_file(path: Path, *, scope_map: dict[str, str] | None = None) 
 
 
 def is_pending_entry(entry: FallbackEntry) -> bool:
-    return (
-        bool(entry.frontmatter.get("intended_brain_store")) and not str(entry.frontmatter.get("chunk_id") or "").strip()
-    )
+    if not entry.frontmatter.get("intended_brain_store"):
+        return False
+    chunk_id = str(entry.frontmatter.get("chunk_id") or "").strip()
+    if not chunk_id:
+        return True
+    if chunk_id.startswith("fallback-") and chunk_id != _fallback_chunk_id(entry):
+        return True
+    return False
 
 
 def replay_entry(
@@ -180,7 +185,7 @@ def queue_entry(
     replayed_by: str,
     source: str = "fallback-replay",
 ) -> ReplayResult:
-    chunk_id = str(entry.frontmatter.get("chunk_id") or "").strip() or _fallback_chunk_id(entry)
+    chunk_id = _fallback_chunk_id(entry)
     try:
         enqueue_func(
             content=entry.body,
@@ -209,7 +214,7 @@ def queue_entry(
         return ReplayResult(path=entry.path, attempted=True, chunk_id=None, error=str(exc))
 
     try:
-        _write_replay_attempt(entry, chunk_id=chunk_id)
+        _write_queue_attempt(entry, chunk_id=chunk_id)
     except Exception as exc:
         return ReplayResult(
             path=entry.path,
@@ -263,10 +268,25 @@ def _fallback_chunk_id(entry: FallbackEntry) -> str:
     return "fallback-" + hashlib.sha256(stable.encode("utf-8")).hexdigest()[:16]
 
 
+def mark_fallback_stored(path: Path, *, chunk_id: str) -> None:
+    entry = parse_fallback_file(path)
+    _write_replay_attempt(entry, chunk_id=chunk_id)
+
+
+def _write_queue_attempt(entry: FallbackEntry, *, chunk_id: Any) -> None:
+    updated = dict(entry.frontmatter)
+    updated["retry_attempted"] = True
+    updated["queued_chunk_id"] = chunk_id
+    updated["chunk_id"] = None
+    _write_frontmatter(entry.path, updated, entry.body)
+
+
 def _write_replay_attempt(entry: FallbackEntry, *, chunk_id: Any) -> None:
     updated = dict(entry.frontmatter)
     updated["retry_attempted"] = True
     updated["chunk_id"] = chunk_id or None
+    if chunk_id:
+        updated.pop("queued_chunk_id", None)
     _write_frontmatter(entry.path, updated, entry.body)
 
 

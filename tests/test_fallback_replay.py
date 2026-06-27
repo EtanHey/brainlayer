@@ -298,8 +298,27 @@ def test_inventory_fallbacks_reports_structured_pending_and_legacy_debt(tmp_path
     assert summary["legacy_sample"] == [str(legacy)]
 
 
-def test_queue_entry_enqueues_with_stable_chunk_id_and_updates_frontmatter(tmp_path):
-    from brainlayer.fallback_replay import parse_fallback_file, queue_entry
+def test_inventory_treats_stale_fallback_chunk_id_as_pending(tmp_path):
+    from brainlayer.fallback_replay import _fallback_chunk_id, inventory_fallbacks, parse_fallback_file
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    path = _pending_file(repo, "docs.local/decisions/edited-after-queue.md")
+    old_chunk_id = _fallback_chunk_id(parse_fallback_file(path))
+    path.write_text(
+        path.read_text(encoding="utf-8")
+        .replace("chunk_id:\n", f"chunk_id: {old_chunk_id}\n")
+        .replace("original body stays byte-for-byte\n", "edited body should still be pending\n"),
+        encoding="utf-8",
+    )
+
+    inventory = inventory_fallbacks(tmp_path, scope_map={})
+
+    assert [entry.path for entry in inventory.pending] == [path]
+
+
+def test_queue_entry_enqueues_with_stable_chunk_id_but_keeps_fallback_pending(tmp_path):
+    from brainlayer.fallback_replay import is_pending_entry, parse_fallback_file, queue_entry
 
     repo = tmp_path / "systems"
     _git_init(repo)
@@ -314,6 +333,7 @@ def test_queue_entry_enqueues_with_stable_chunk_id_and_updates_frontmatter(tmp_p
     first = queue_entry(entry, enqueue_func=enqueue_func, replayed_by="phase-1-test")
     updated_entry = parse_fallback_file(path)
     second = queue_entry(updated_entry, enqueue_func=enqueue_func, replayed_by="phase-1-test")
+    second_entry = parse_fallback_file(path)
 
     assert first.error is None
     assert first.chunk_id is not None
@@ -323,7 +343,38 @@ def test_queue_entry_enqueues_with_stable_chunk_id_and_updates_frontmatter(tmp_p
     assert calls[0]["chunk_id"] == first.chunk_id
     assert calls[0]["fallback_source_path"] == str(path)
     assert calls[0]["origin_repo_path"] == str(repo.resolve())
-    assert "chunk_id: " + first.chunk_id in path.read_text(encoding="utf-8")
+    assert updated_entry.frontmatter["queued_chunk_id"] == first.chunk_id
+    assert updated_entry.frontmatter["chunk_id"] is None
+    assert is_pending_entry(updated_entry) is True
+    assert second_entry.frontmatter["queued_chunk_id"] == first.chunk_id
+    assert second_entry.frontmatter["chunk_id"] is None
+
+
+def test_queue_entry_recomputes_chunk_id_after_fallback_body_changes(tmp_path):
+    from brainlayer.fallback_replay import parse_fallback_file, queue_entry
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    path = _pending_file(repo, "docs.local/decisions/edited.md")
+    calls = []
+
+    def enqueue_func(**kwargs):
+        calls.append(kwargs)
+        return tmp_path / "queue" / "fallback-replay.jsonl"
+
+    first = queue_entry(parse_fallback_file(path), enqueue_func=enqueue_func, replayed_by="phase-1-test")
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "original body stays byte-for-byte\n",
+            "edited fallback body must receive a fresh queue id\n",
+        ),
+        encoding="utf-8",
+    )
+    second = queue_entry(parse_fallback_file(path), enqueue_func=enqueue_func, replayed_by="phase-1-test")
+
+    assert first.chunk_id != second.chunk_id
+    assert calls[0]["chunk_id"] == first.chunk_id
+    assert calls[1]["chunk_id"] == second.chunk_id
 
 
 def test_queue_entry_serializes_yaml_date_tags_for_jsonl_queue(tmp_path):

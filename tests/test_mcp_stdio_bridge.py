@@ -126,6 +126,26 @@ def test_connect_timeout_uses_configured_milliseconds() -> None:
     assert _connect_timed_out(10.0, 10.101, config)
 
 
+def test_write_all_preserves_complete_frame_after_partial_stdout_write(monkeypatch) -> None:
+    import brainlayer.mcp_stdio_bridge as bridge
+
+    writes: list[bytes] = []
+    limits = iter([7, 3, 1024])
+
+    def short_write(fd: int, data: bytes | memoryview) -> int:
+        assert fd == 99
+        chunk = bytes(data)
+        written = min(next(limits), len(chunk))
+        writes.append(chunk[:written])
+        return written
+
+    monkeypatch.setattr(bridge.os, "write", short_write)
+
+    bridge._write_all(99, b'{"jsonrpc":"2.0","id":1,"result":"large-response"}\n')
+
+    assert b"".join(writes) == b'{"jsonrpc":"2.0","id":1,"result":"large-response"}\n'
+
+
 def test_stdio_bridge_reconnects_without_process_restart(tmp_path: Path) -> None:
     del tmp_path
     socket_path = Path("/tmp") / f"brainlayer-bridge-test-{os.getpid()}-{time.monotonic_ns()}.sock"
