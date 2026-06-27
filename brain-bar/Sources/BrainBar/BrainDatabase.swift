@@ -3719,11 +3719,21 @@ final class BrainDatabase: @unchecked Sendable {
             + "\"body\":\(jsonStringLiteral(body)),"
             + "\"path\":\(jsonStringLiteral(relativePath(file, to: originRepoPath))),"
             + "\"project\":\(jsonStringLiteral(project)),"
-            + "\"timestamp\":\(frontmatter["timestamp"].map(jsonStringLiteral) ?? "null")"
+            + "\"timestamp\":\(fallbackTimestampLiteral(frontmatter["timestamp"]))"
             + "}"
         let digest = SHA256.hash(data: Data(stable.utf8))
         let prefix = digest.prefix(8).map { String(format: "%02x", $0) }.joined()
         return "fallback-\(prefix)"
+    }
+
+    private static func fallbackTimestampLiteral(_ value: String?) -> String {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        switch trimmed.lowercased() {
+        case "", "null", "~":
+            return "null"
+        default:
+            return jsonStringLiteral(trimmed)
+        }
     }
 
     private static func relativePath(_ file: URL, to root: URL) -> String {

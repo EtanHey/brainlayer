@@ -17,7 +17,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,6 +46,7 @@ DEFAULT_ENRICH_WATCHER_IDLE_SECONDS = 5.0
 DEFAULT_ENRICH_DAILY_USD_CAP = 5.0
 ENRICH_DAILY_COST_COUNTER_FILENAME = "enrich-daily-cost.json"
 _DEFAULT_CHUNK_ORIGIN = object()
+_ENRICHMENT_QUEUE_WRITES_OVERRIDE = threading.local()
 
 # Gemini Developer API paid-tier text prices per 1M tokens for gemini-2.5-flash-lite.
 GEMINI_FLASH_LITE_TEXT_PRICES_USD_PER_1M = {
@@ -369,35 +370,6 @@ def _durable_queue_has_backlog() -> bool:
         return False
 
 
-def _try_acquire_supervisor_queue_lock() -> int | None:
-    """Acquire the drain queue lane for direct supervisor DB writes, if free."""
-    from .queue_io import get_queue_dir
-
-    queue_dir = get_queue_dir().expanduser()
-    queue_dir.mkdir(parents=True, exist_ok=True)
-    fd = os.open(queue_dir, os.O_RDONLY)
-    try:
-        import fcntl
-
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        os.close(fd)
-        return None
-    except Exception:
-        os.close(fd)
-        raise
-    return fd
-
-
-def _release_supervisor_queue_lock(fd: int) -> None:
-    try:
-        import fcntl
-
-        fcntl.flock(fd, fcntl.LOCK_UN)
-    finally:
-        os.close(fd)
-
-
 def _sleep_or_wait_for_stop(stop_event: threading.Event | None, seconds: float, sleep_fn) -> None:
     if seconds <= 0:
         return
@@ -490,27 +462,20 @@ def run_enrich_supervisor(
 
     db_path = Path(db_path)
     stats = EnrichmentSupervisorResult()
-    while stop_event is None or not stop_event.is_set():
-        if max_cycles is not None and stats.cycles >= max_cycles:
-            break
+    force_queued_writes = not _enrichment_writes_queued_enabled()
+    if force_queued_writes:
+        logger.warning(
+            "Enrich supervisor forcing queued enrichment writes; direct DB writes are reserved for explicit one-shot runs"
+        )
+    supervisor_write_mode = _override_enrichment_queue_writes(True) if force_queued_writes else nullcontext()
+    with supervisor_write_mode:
+        while stop_event is None or not stop_event.is_set():
+            if max_cycles is not None and stats.cycles >= max_cycles:
+                break
 
-        direct_write_queue_lock_fd: int | None = None
-        if not _enrichment_writes_queued_enabled():
-            direct_write_queue_lock_fd = _try_acquire_supervisor_queue_lock()
-            if direct_write_queue_lock_fd is None:
-                stats.cycles += 1
-                logger.info("Enrich supervisor yielding while durable queue drain lane is busy")
-                if max_cycles is None or stats.cycles < max_cycles:
-                    _sleep_or_wait_for_stop(stop_event, idle_poll_seconds, sleep_fn)
-                continue
-
-        try:
             if _durable_queue_has_backlog():
                 stats.cycles += 1
                 logger.info("Enrich supervisor yielding while durable write queue has backlog")
-                if direct_write_queue_lock_fd is not None:
-                    _release_supervisor_queue_lock(direct_write_queue_lock_fd)
-                    direct_write_queue_lock_fd = None
                 if max_cycles is None or stats.cycles < max_cycles:
                     _sleep_or_wait_for_stop(stop_event, idle_poll_seconds, sleep_fn)
                 continue
@@ -525,9 +490,6 @@ def run_enrich_supervisor(
                 error = f"supervisor-open: {exc}"
                 stats.errors.append(error)
                 logger.exception("Enrich supervisor store open failed; continuing")
-                if direct_write_queue_lock_fd is not None:
-                    _release_supervisor_queue_lock(direct_write_queue_lock_fd)
-                    direct_write_queue_lock_fd = None
                 if max_cycles is None or stats.cycles < max_cycles:
                     _sleep_or_wait_for_stop(stop_event, idle_poll_seconds, sleep_fn)
                 continue
@@ -545,9 +507,6 @@ def run_enrich_supervisor(
                 error = f"supervisor: {exc}"
                 stats.errors.append(error)
                 logger.exception("Enrich supervisor cycle failed; continuing")
-                if direct_write_queue_lock_fd is not None:
-                    _release_supervisor_queue_lock(direct_write_queue_lock_fd)
-                    direct_write_queue_lock_fd = None
                 if max_cycles is None or stats.cycles < max_cycles:
                     _sleep_or_wait_for_stop(stop_event, idle_poll_seconds, sleep_fn)
                 continue
@@ -578,9 +537,6 @@ def run_enrich_supervisor(
                     stats.failed_cycles += 1
                     stats.errors.append(f"supervisor-idle-backlog-open: {exc}")
                     logger.exception("Enrich supervisor idle-backlog store open failed; continuing")
-                    if direct_write_queue_lock_fd is not None:
-                        _release_supervisor_queue_lock(direct_write_queue_lock_fd)
-                        direct_write_queue_lock_fd = None
                     if max_cycles is None or stats.cycles < max_cycles:
                         _sleep_or_wait_for_stop(stop_event, idle_poll_seconds, sleep_fn)
                     continue
@@ -600,9 +556,6 @@ def run_enrich_supervisor(
                     stats.failed_cycles += 1
                     stats.errors.append(f"supervisor-idle-backlog: {exc}")
                     logger.exception("Enrich supervisor idle-backlog pass failed; continuing")
-                    if direct_write_queue_lock_fd is not None:
-                        _release_supervisor_queue_lock(direct_write_queue_lock_fd)
-                        direct_write_queue_lock_fd = None
                     if max_cycles is None or stats.cycles < max_cycles:
                         _sleep_or_wait_for_stop(stop_event, idle_poll_seconds, sleep_fn)
                     continue
@@ -622,13 +575,7 @@ def run_enrich_supervisor(
                 and (max_cycles is None or stats.cycles < max_cycles)
             ):
                 logger.info("Enrich supervisor queue empty; sleeping %.1fs", idle_poll_seconds)
-                if direct_write_queue_lock_fd is not None:
-                    _release_supervisor_queue_lock(direct_write_queue_lock_fd)
-                    direct_write_queue_lock_fd = None
                 _sleep_or_wait_for_stop(stop_event, idle_poll_seconds, sleep_fn)
-        finally:
-            if direct_write_queue_lock_fd is not None:
-                _release_supervisor_queue_lock(direct_write_queue_lock_fd)
     return stats
 
 
@@ -725,7 +672,26 @@ def _arbitrated_writes_enabled() -> bool:
 
 
 def _enrichment_writes_queued_enabled() -> bool:
+    override = getattr(_ENRICHMENT_QUEUE_WRITES_OVERRIDE, "enabled", None)
+    if override is not None:
+        return bool(override)
     return os.environ.get("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "1").lower() not in {"0", "false", "no"}
+
+
+@contextmanager
+def _override_enrichment_queue_writes(enabled: bool):
+    previous = getattr(_ENRICHMENT_QUEUE_WRITES_OVERRIDE, "enabled", None)
+    _ENRICHMENT_QUEUE_WRITES_OVERRIDE.enabled = enabled
+    try:
+        yield
+    finally:
+        if previous is None:
+            try:
+                delattr(_ENRICHMENT_QUEUE_WRITES_OVERRIDE, "enabled")
+            except AttributeError:
+                pass
+        else:
+            _ENRICHMENT_QUEUE_WRITES_OVERRIDE.enabled = previous
 
 
 def _open_enrich_supervisor_store(vector_store_cls, db_path: Path):

@@ -14,6 +14,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from brainlayer.fallback_replay import (
+    ReplayResult,
     inventory_fallbacks,
     legacy_entry_from_path,
     load_scope_map,
@@ -54,7 +55,12 @@ def main() -> int:
         action="store_true",
         help="With --apply, also enqueue legacy docs.local/brain-store-fallback markdown files.",
     )
-    parser.add_argument("--limit", type=int, default=100, help="Maximum structured pending files to replay.")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=100,
+        help="Maximum structured pending and legacy fallback files to replay.",
+    )
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of text.")
     args = parser.parse_args()
 
@@ -76,10 +82,22 @@ def main() -> int:
             result["error"] = "--legacy requires queued replay"
             _emit(result, as_json=args.json)
             return 2
-        legacy_entries = (
-            [legacy_entry_from_path(path, scope_map=scope_map) for path in inventory.legacy] if args.legacy else []
-        )
-        replay_count = len(pending) + len(legacy_entries)
+        legacy_entries = []
+        legacy_replayed = []
+        if args.legacy:
+            for path in inventory.legacy:
+                try:
+                    legacy_entries.append(legacy_entry_from_path(path, scope_map=scope_map))
+                except Exception as exc:
+                    legacy_replayed.append(
+                        ReplayResult(
+                            path=path,
+                            attempted=True,
+                            chunk_id=None,
+                            error=f"legacy parse failed: {exc}",
+                        )
+                    )
+        replay_count = len(pending) + (len(inventory.legacy) if args.legacy else 0)
         if replay_count > args.limit:
             result["error"] = f"replay_count {replay_count} exceeds --limit {args.limit}"
             _emit(result, as_json=args.json)
@@ -100,14 +118,14 @@ def main() -> int:
                 )
                 for entry in pending
             ]
-            legacy_replayed = [
+            legacy_replayed.extend(
                 queue_legacy_entry(
                     entry,
                     enqueue_func=enqueue_for_target,
                     replayed_by="brainlayer-replay-fallbacks",
                 )
                 for entry in legacy_entries
-            ]
+            )
         else:
             store = VectorStore(args.db)
             try:

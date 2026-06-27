@@ -4,6 +4,7 @@ import importlib.util
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 
@@ -576,7 +577,42 @@ def test_queue_attempt_does_not_clobber_committed_chunk_marker(tmp_path):
     assert "queued_chunk_id" not in updated.frontmatter
 
 
-def test_inventory_skips_unparseable_legacy_fallback_files(tmp_path):
+def test_fallback_marker_writes_are_serialized_per_file(tmp_path):
+    from brainlayer import fallback_replay
+    from brainlayer.fallback_replay import _fallback_chunk_id, _write_queue_attempt, parse_fallback_file
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    path = _pending_file(repo, "docs.local/decisions/serialized.md")
+    entry = parse_fallback_file(path)
+    chunk_id = _fallback_chunk_id(entry)
+    lock_held = threading.Event()
+    release_lock = threading.Event()
+    write_done = threading.Event()
+
+    def hold_lock():
+        with fallback_replay._fallback_marker_file_lock(path):
+            lock_held.set()
+            release_lock.wait(timeout=2)
+
+    holder = threading.Thread(target=hold_lock)
+    holder.start()
+    assert lock_held.wait(timeout=1)
+
+    writer = threading.Thread(target=lambda: (_write_queue_attempt(entry, chunk_id=chunk_id), write_done.set()))
+    writer.start()
+    assert not write_done.wait(timeout=0.1)
+
+    release_lock.set()
+    holder.join(timeout=1)
+    writer.join(timeout=1)
+
+    assert write_done.is_set()
+    updated = parse_fallback_file(path)
+    assert updated.frontmatter["queued_chunk_id"] == chunk_id
+
+
+def test_inventory_reports_unparseable_legacy_fallback_files_as_debt(tmp_path):
     from brainlayer.fallback_replay import inventory_fallbacks
 
     repo = tmp_path / "orchestrator"
@@ -587,8 +623,9 @@ def test_inventory_skips_unparseable_legacy_fallback_files(tmp_path):
 
     inventory = inventory_fallbacks(tmp_path, scope_map={})
 
-    assert inventory.legacy == []
-    assert inventory.summary()["legacy_count"] == 0
+    assert inventory.legacy == [path]
+    assert inventory.summary()["legacy_count"] == 1
+    assert inventory.summary()["green"] is False
 
 
 def test_replay_cli_apply_exits_nonzero_when_any_replay_errors(tmp_path, monkeypatch):
@@ -690,7 +727,7 @@ def test_replay_cli_apply_uses_custom_db_queue_dir_for_queued_replay(tmp_path, m
     assert calls[0]["queue_dir"] == db_path.parent / "queue"
 
 
-def test_replay_cli_apply_queue_legacy_skips_malformed_legacy_files(tmp_path, monkeypatch):
+def test_replay_cli_apply_queue_legacy_reports_malformed_legacy_files(tmp_path, monkeypatch, capsys):
     script = Path(__file__).resolve().parents[1] / "scripts" / "replay_brain_store_fallbacks.py"
     spec = importlib.util.spec_from_file_location("replay_brain_store_fallbacks_legacy_malformed_test", script)
     assert spec is not None and spec.loader is not None
@@ -725,9 +762,11 @@ def test_replay_cli_apply_queue_legacy_skips_malformed_legacy_files(tmp_path, mo
         ],
     )
 
-    assert module.main() == 0
+    assert module.main() == 1
+    output = capsys.readouterr().out
     assert len(calls) == 1
     assert calls[0]["content"] == "valid legacy body\n"
+    assert "legacy parse failed" in output
 
 
 def test_replay_cli_apply_queue_legacy_marks_legacy_files(tmp_path, monkeypatch):

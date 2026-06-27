@@ -7,12 +7,17 @@ import json
 import os
 import re
 import subprocess
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable
 
 import yaml
+
+_FALLBACK_LOCKS_LOCK = threading.Lock()
+_FALLBACK_LOCKS: dict[Path, threading.Lock] = {}
 
 
 @dataclass(frozen=True)
@@ -83,6 +88,7 @@ def inventory_fallbacks(gits_root: Path, *, scope_map: dict[str, str]) -> Fallba
                 try:
                     entry = legacy_entry_from_path(path, scope_map=scope_map)
                 except Exception:
+                    legacy.append(path)
                     continue
                 if entry.frontmatter.get("intended_brain_store") and not is_pending_entry(entry):
                     continue
@@ -309,32 +315,60 @@ def _fallback_chunk_matches(entry: FallbackEntry, chunk_id: Any) -> bool:
 
 
 def _write_queue_attempt(entry: FallbackEntry, *, chunk_id: Any) -> None:
-    latest = _latest_entry(entry)
-    stored = _stored_chunk_id(latest.frontmatter)
-    if stored and _fallback_chunk_matches(latest, stored):
-        return
-    if chunk_id and not _fallback_chunk_matches(latest, chunk_id):
-        return
-    updated = _frontmatter_with_resolved_project(latest)
-    updated["retry_attempted"] = True
-    updated["queued_chunk_id"] = chunk_id
-    updated["chunk_id"] = None
-    _write_frontmatter(latest.path, updated, latest.body)
+    with _fallback_marker_file_lock(entry.path):
+        latest = _latest_entry(entry)
+        stored = _stored_chunk_id(latest.frontmatter)
+        if stored and _fallback_chunk_matches(latest, stored):
+            return
+        if chunk_id and not _fallback_chunk_matches(latest, chunk_id):
+            return
+        updated = _frontmatter_with_resolved_project(latest)
+        updated["retry_attempted"] = True
+        updated["queued_chunk_id"] = chunk_id
+        updated["chunk_id"] = None
+        _write_frontmatter(latest.path, updated, latest.body)
 
 
 def _write_replay_attempt(entry: FallbackEntry, *, chunk_id: Any) -> None:
-    latest = _latest_entry(entry)
-    stored = _stored_chunk_id(latest.frontmatter)
-    if not chunk_id and stored and _fallback_chunk_matches(latest, stored):
-        return
-    if chunk_id and not _fallback_chunk_matches(latest, chunk_id):
-        return
-    updated = _frontmatter_with_resolved_project(latest)
-    updated["retry_attempted"] = True
-    updated["chunk_id"] = chunk_id or None
-    if chunk_id:
-        updated.pop("queued_chunk_id", None)
-    _write_frontmatter(latest.path, updated, latest.body)
+    with _fallback_marker_file_lock(entry.path):
+        latest = _latest_entry(entry)
+        stored = _stored_chunk_id(latest.frontmatter)
+        if not chunk_id and stored and _fallback_chunk_matches(latest, stored):
+            return
+        if chunk_id and not _fallback_chunk_matches(latest, chunk_id):
+            return
+        updated = _frontmatter_with_resolved_project(latest)
+        updated["retry_attempted"] = True
+        updated["chunk_id"] = chunk_id or None
+        if chunk_id:
+            updated.pop("queued_chunk_id", None)
+        _write_frontmatter(latest.path, updated, latest.body)
+
+
+@contextmanager
+def _fallback_marker_file_lock(path: Path):
+    lock_path = path.with_name(f".{path.name}.lock")
+    resolved_lock_path = lock_path.resolve()
+    with _FALLBACK_LOCKS_LOCK:
+        thread_lock = _FALLBACK_LOCKS.setdefault(resolved_lock_path, threading.Lock())
+    with thread_lock:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a", encoding="utf-8") as lock_file:
+            try:
+                import fcntl
+
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            except (ImportError, OSError):
+                pass
+            try:
+                yield
+            finally:
+                try:
+                    import fcntl
+
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                except (ImportError, OSError):
+                    pass
 
 
 def _frontmatter_with_resolved_project(entry: FallbackEntry) -> dict[str, Any]:

@@ -953,6 +953,32 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
     }
 
+    func testDashboardStatsAcceptsStoredFallbackChunkIDWithNullTimestamp() throws {
+        let storedPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("null-timestamp.md")
+        try FileManager.default.createDirectory(
+            at: storedPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        ---
+        intended_brain_store: true
+        importance: 10
+        timestamp: null
+        chunk_id: fallback-f815ed1104f14411
+        ---
+        null timestamp fallback body
+        """.write(to: storedPath, atomically: true, encoding: .utf8)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 0)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+    }
+
     func testDashboardStatsIncludesLegacyFallbackReplayDebtWithoutFrontmatter() throws {
         let legacyPath = fallbackReplayRoot
             .appendingPathComponent("brainlayer", isDirectory: true)
