@@ -639,7 +639,16 @@ final class MCPRouter: @unchecked Sendable {
         }
 
         let targetIdentity = "chunk:\(chunkID)"
-        let before = db.pendingStoreQueueSnapshot()
+        guard let before = db.pendingStoreQueueSnapshotIfReadable() else {
+            reschedulePendingStoreDrain(
+                db: db,
+                chunkID: chunkID,
+                drainKey: drainKey,
+                delay: delay,
+                flushedAny: false
+            )
+            return
+        }
         guard before.identityKeys.contains(targetIdentity) else {
             finishPendingStoreDrain(drainKey)
             return
@@ -649,15 +658,40 @@ final class MCPRouter: @unchecked Sendable {
             busyTimeoutMillis: mcpStoreBusyTimeoutMillis,
             retries: mcpStoreRetries
         )
-        let after = db.pendingStoreQueueSnapshot()
+        guard let after = db.pendingStoreQueueSnapshotIfReadable() else {
+            reschedulePendingStoreDrain(
+                db: db,
+                chunkID: chunkID,
+                drainKey: drainKey,
+                delay: delay,
+                flushedAny: !flushedStores.isEmpty
+            )
+            return
+        }
         guard after.identityKeys.contains(targetIdentity) else {
             finishPendingStoreDrain(drainKey)
             return
         }
 
-        let nextDelay = flushedStores.isEmpty
-            ? min(pendingStoreDrainMaxDelay, max(pendingStoreDrainInitialDelay, delay * 2.0))
-            : pendingStoreDrainInitialDelay
+        reschedulePendingStoreDrain(
+            db: db,
+            chunkID: chunkID,
+            drainKey: drainKey,
+            delay: delay,
+            flushedAny: !flushedStores.isEmpty
+        )
+    }
+
+    private static func reschedulePendingStoreDrain(
+        db: BrainDatabase,
+        chunkID: String,
+        drainKey: String,
+        delay: TimeInterval,
+        flushedAny: Bool
+    ) {
+        let nextDelay = flushedAny
+            ? pendingStoreDrainInitialDelay
+            : min(pendingStoreDrainMaxDelay, max(pendingStoreDrainInitialDelay, delay * 2.0))
         pendingStoreDrainQueue.asyncAfter(deadline: .now() + nextDelay) {
             drainPendingStoreTarget(db: db, chunkID: chunkID, drainKey: drainKey, delay: nextDelay)
         }

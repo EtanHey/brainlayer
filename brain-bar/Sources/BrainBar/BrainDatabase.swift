@@ -3907,9 +3907,9 @@ final class BrainDatabase: @unchecked Sendable {
     private static func jsonPayloadIsStoreQueueItem(_ payload: [String: Any]) -> Bool {
         if let kind = payload["kind"] as? String {
             switch kind {
-            case "store_memory", "watcher_chunk", "hook_chunk":
+            case "store_memory":
                 return true
-            case "enrichment_update":
+            case "enrichment_update", "watcher_chunk", "hook_chunk":
                 return false
             default:
                 return false
@@ -4006,40 +4006,48 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     func pendingStoreQueueSnapshot() -> PendingStoreQueueSnapshot {
+        pendingStoreQueueSnapshotIfReadable() ?? PendingStoreQueueSnapshot(depth: 0, oldestQueuedAt: nil)
+    }
+
+    func pendingStoreQueueSnapshotIfReadable() -> PendingStoreQueueSnapshot? {
+        do {
+            return try pendingStoreQueueSnapshotStrict()
+        } catch {
+            NSLog("[BrainBar] Failed to inspect pending stores queue: %@", String(describing: error))
+            return nil
+        }
+    }
+
+    private func pendingStoreQueueSnapshotStrict() throws -> PendingStoreQueueSnapshot {
         let path = pendingStorePath()
         Self.pendingStoreFileLock.lock()
         defer { Self.pendingStoreFileLock.unlock() }
 
-        do {
-            return try Self.withPendingStoreProcessLock(for: path) {
-                guard FileManager.default.fileExists(atPath: path.path),
-                      let data = Self.readPendingStoreData(at: path) else {
-                    return PendingStoreQueueSnapshot(depth: 0, oldestQueuedAt: nil)
-                }
-
-                let lines = Self.pendingStoreLines(from: data)
-                guard !lines.isEmpty else {
-                    return PendingStoreQueueSnapshot(depth: 0, oldestQueuedAt: nil)
-                }
-
-                let decoder = JSONDecoder()
-                var identityKeys = Set<String>()
-                let oldest = lines.compactMap { line -> Date? in
-                    guard let item = try? decoder.decode(PendingStoreItem.self, from: line) else {
-                        return nil
-                    }
-                    if let identity = Self.normalizedChunkIdentityKey(item.chunkID) {
-                        identityKeys.insert(identity)
-                    }
-                    guard let queuedAt = item.queuedAt else { return nil }
-                    return Self.parsePendingStoreQueuedAt(queuedAt)
-                }.min()
-
-                return PendingStoreQueueSnapshot(depth: lines.count, oldestQueuedAt: oldest, identityKeys: identityKeys)
+        return try Self.withPendingStoreProcessLock(for: path) {
+            guard FileManager.default.fileExists(atPath: path.path) else {
+                return PendingStoreQueueSnapshot(depth: 0, oldestQueuedAt: nil)
             }
-        } catch {
-            NSLog("[BrainBar] Failed to inspect pending stores queue: %@", String(describing: error))
-            return PendingStoreQueueSnapshot(depth: 0, oldestQueuedAt: nil)
+            let data = try Data(contentsOf: path)
+
+            let lines = Self.pendingStoreLines(from: data)
+            guard !lines.isEmpty else {
+                return PendingStoreQueueSnapshot(depth: 0, oldestQueuedAt: nil)
+            }
+
+            let decoder = JSONDecoder()
+            var identityKeys = Set<String>()
+            let oldest = lines.compactMap { line -> Date? in
+                guard let item = try? decoder.decode(PendingStoreItem.self, from: line) else {
+                    return nil
+                }
+                if let identity = Self.normalizedChunkIdentityKey(item.chunkID) {
+                    identityKeys.insert(identity)
+                }
+                guard let queuedAt = item.queuedAt else { return nil }
+                return Self.parsePendingStoreQueuedAt(queuedAt)
+            }.min()
+
+            return PendingStoreQueueSnapshot(depth: lines.count, oldestQueuedAt: oldest, identityKeys: identityKeys)
         }
     }
 
