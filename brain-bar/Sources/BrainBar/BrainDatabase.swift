@@ -4,6 +4,7 @@
 // BrainLayer database so agent state and chunk writes share one durable store.
 
 import Darwin
+import CryptoKit
 import Foundation
 import SQLite3
 
@@ -3554,11 +3555,15 @@ final class BrainDatabase: @unchecked Sendable {
             scanFallbackReplayDirectory(
                 docsLocal.appendingPathComponent("decisions", isDirectory: true),
                 recursive: false,
+                originRepoPath: repo,
+                countLegacyWithoutFrontmatter: false,
                 record: record
             )
             scanFallbackReplayDirectory(
                 docsLocal.appendingPathComponent("brain-store-fallback", isDirectory: true),
                 recursive: true,
+                originRepoPath: repo,
+                countLegacyWithoutFrontmatter: true,
                 record: record
             )
         }
@@ -3569,6 +3574,8 @@ final class BrainDatabase: @unchecked Sendable {
     private static func scanFallbackReplayDirectory(
         _ directory: URL,
         recursive: Bool,
+        originRepoPath: URL,
+        countLegacyWithoutFrontmatter: Bool,
         record: (Date?) -> Void
     ) {
         let fileManager = FileManager.default
@@ -3581,7 +3588,11 @@ final class BrainDatabase: @unchecked Sendable {
                 return
             }
             for case let file as URL in enumerator where file.pathExtension == "md" {
-                if let timestamp = pendingFallbackReplayTimestamp(at: file) {
+                if let timestamp = pendingFallbackReplayTimestamp(
+                    at: file,
+                    originRepoPath: originRepoPath,
+                    countLegacyWithoutFrontmatter: countLegacyWithoutFrontmatter
+                ) {
                     record(timestamp)
                 }
             }
@@ -3596,32 +3607,59 @@ final class BrainDatabase: @unchecked Sendable {
             return
         }
         for file in files where file.pathExtension == "md" {
-            if let timestamp = pendingFallbackReplayTimestamp(at: file) {
+            if let timestamp = pendingFallbackReplayTimestamp(
+                at: file,
+                originRepoPath: originRepoPath,
+                countLegacyWithoutFrontmatter: countLegacyWithoutFrontmatter
+            ) {
                 record(timestamp)
             }
         }
     }
 
-    private static func pendingFallbackReplayTimestamp(at file: URL) -> Date?? {
+    private static func pendingFallbackReplayTimestamp(
+        at file: URL,
+        originRepoPath: URL,
+        countLegacyWithoutFrontmatter: Bool
+    ) -> Date?? {
         guard let data = try? Data(contentsOf: file),
-              let text = String(data: data, encoding: .utf8),
-              let frontmatter = fallbackReplayFrontmatter(from: text),
+              let text = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        guard let parsed = fallbackReplayComponents(from: text) else {
+            return countLegacyWithoutFrontmatter ? inferLegacyFallbackTimestamp(from: file) : nil
+        }
+        let frontmatter = parsed.frontmatter
+        guard
               isTruthyFrontmatterValue(frontmatter["intended_brain_store"]),
-              isEmptyChunkID(frontmatter["chunk_id"]) else {
+              isPendingFallbackChunkID(
+                  frontmatter["chunk_id"],
+                  file: file,
+                  originRepoPath: originRepoPath,
+                  frontmatter: frontmatter,
+                  body: parsed.body
+              ) else {
             return nil
         }
         return parsePendingStoreQueuedAt(frontmatter["timestamp"] ?? "")
     }
 
-    private static func fallbackReplayFrontmatter(from text: String) -> [String: String]? {
-        guard text.hasPrefix("---") else { return nil }
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-        guard lines.first == "---" else { return nil }
+    private static func fallbackReplayComponents(from text: String) -> (frontmatter: [String: String], body: String)? {
+        let pattern = #"\A---\r?\n(.*?)(?:\r?\n---(?:\r?\n|\z))(.*)\z"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else {
+            return nil
+        }
+        let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = regex.firstMatch(in: text, range: fullRange),
+              match.numberOfRanges == 3,
+              let frontmatterRange = Range(match.range(at: 1), in: text),
+              let bodyRange = Range(match.range(at: 2), in: text) else {
+            return nil
+        }
+        let frontmatterText = String(text[frontmatterRange])
         var values: [String: String] = [:]
-        for line in lines.dropFirst() {
-            if line == "---" {
-                return values
-            }
+        let lines = frontmatterText.split(separator: "\n", omittingEmptySubsequences: false)
+        for line in lines {
             guard let separator = line.firstIndex(of: ":") else { continue }
             let key = String(line[..<separator]).trimmingCharacters(in: .whitespacesAndNewlines)
             let rawValue = String(line[line.index(after: separator)...])
@@ -3629,7 +3667,7 @@ final class BrainDatabase: @unchecked Sendable {
                 .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
             values[key] = rawValue
         }
-        return nil
+        return (values, String(text[bodyRange]))
     }
 
     private static func isTruthyFrontmatterValue(_ value: String?) -> Bool {
@@ -3641,9 +3679,96 @@ final class BrainDatabase: @unchecked Sendable {
         }
     }
 
-    private static func isEmptyChunkID(_ value: String?) -> Bool {
+    private static func isPendingFallbackChunkID(
+        _ value: String?,
+        file: URL,
+        originRepoPath: URL,
+        frontmatter: [String: String],
+        body: String
+    ) -> Bool {
         let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        return normalized.isEmpty || normalized == "null" || normalized == "~"
+        if normalized.isEmpty || normalized == "null" || normalized == "~" {
+            return true
+        }
+        if normalized.hasPrefix("fallback-") {
+            return normalized != fallbackChunkID(
+                file: file,
+                originRepoPath: originRepoPath,
+                frontmatter: frontmatter,
+                body: body
+            )
+        }
+        return false
+    }
+
+    private static func fallbackChunkID(
+        file: URL,
+        originRepoPath: URL,
+        frontmatter: [String: String],
+        body: String
+    ) -> String {
+        let project = frontmatter["project"] ?? frontmatter["scope"] ?? originRepoPath.lastPathComponent
+        let stable = "{"
+            + "\"body\":\(jsonStringLiteral(body)),"
+            + "\"path\":\(jsonStringLiteral(relativePath(file, to: originRepoPath))),"
+            + "\"project\":\(jsonStringLiteral(project)),"
+            + "\"timestamp\":\(frontmatter["timestamp"].map(jsonStringLiteral) ?? "null")"
+            + "}"
+        let digest = SHA256.hash(data: Data(stable.utf8))
+        let prefix = digest.prefix(8).map { String(format: "%02x", $0) }.joined()
+        return "fallback-\(prefix)"
+    }
+
+    private static func relativePath(_ file: URL, to root: URL) -> String {
+        let filePath = file.standardizedFileURL.path
+        let rootPath = root.standardizedFileURL.path
+        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        if filePath.hasPrefix(prefix) {
+            return String(filePath.dropFirst(prefix.count))
+        }
+        return file.lastPathComponent
+    }
+
+    private static func inferLegacyFallbackTimestamp(from file: URL) -> Date?? {
+        guard let range = file.path.range(of: #"20\d{2}-\d{2}-\d{2}"#, options: .regularExpression) else {
+            return .some(nil)
+        }
+        return parsePendingStoreQueuedAt("\(file.path[range])T00:00:00Z")
+    }
+
+    private static func jsonStringLiteral(_ value: String) -> String {
+        var output = "\""
+        for scalar in value.unicodeScalars {
+            switch scalar.value {
+            case 0x08:
+                output += "\\b"
+            case 0x09:
+                output += "\\t"
+            case 0x0A:
+                output += "\\n"
+            case 0x0C:
+                output += "\\f"
+            case 0x0D:
+                output += "\\r"
+            case 0x22:
+                output += "\\\""
+            case 0x5C:
+                output += "\\\\"
+            case 0x00..<0x20:
+                output += String(format: "\\u%04x", scalar.value)
+            case 0x20...0x7E:
+                output.unicodeScalars.append(scalar)
+            case 0x7F...0xFFFF:
+                output += String(format: "\\u%04x", scalar.value)
+            default:
+                let adjusted = scalar.value - 0x10000
+                let high = 0xD800 + (adjusted >> 10)
+                let low = 0xDC00 + (adjusted & 0x3FF)
+                output += String(format: "\\u%04x\\u%04x", high, low)
+            }
+        }
+        output += "\""
+        return output
     }
 
     private static func urlIsDirectory(_ url: URL) -> Bool {

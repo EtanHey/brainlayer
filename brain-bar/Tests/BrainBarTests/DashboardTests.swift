@@ -883,6 +883,65 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(agentStores.statusText, "1 agent store queued for replay")
     }
 
+    func testDashboardStatsIncludesStaleFallbackReplayChunkIDDebt() throws {
+        let stalePath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("stale.md")
+        let storedPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("stored.md")
+        try FileManager.default.createDirectory(
+            at: stalePath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        ---
+        intended_brain_store: true
+        importance: 10
+        timestamp: 1970-01-01T00:24:00Z
+        chunk_id: fallback-stale-edited-body
+        ---
+        edited fallback body
+        """.write(to: stalePath, atomically: true, encoding: .utf8)
+        try """
+        ---
+        intended_brain_store: true
+        importance: 10
+        timestamp: 1970-01-01T00:25:00Z
+        chunk_id: fallback-bf4489e94479ad32
+        ---
+        stored fallback body
+        """.write(to: storedPath, atomically: true, encoding: .utf8)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
+        XCTAssertEqual(stats.pendingStoreOldestQueuedAt, Date(timeIntervalSince1970: 1_440))
+    }
+
+    func testDashboardStatsIncludesLegacyFallbackReplayDebtWithoutFrontmatter() throws {
+        let legacyPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("brain-store-fallback", isDirectory: true)
+            .appendingPathComponent("2026-05-29-gen10-boot", isDirectory: true)
+            .appendingPathComponent("pending-stores.md")
+        try FileManager.default.createDirectory(
+            at: legacyPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try "legacy fallback body\n".write(to: legacyPath, atomically: true, encoding: .utf8)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
+        XCTAssertEqual(stats.pendingStoreOldestQueuedAt, ISO8601DateFormatter().date(from: "2026-05-29T00:00:00Z"))
+    }
+
     func testSparklineChartPresentationCarriesBucketsAndVoiceOverMetadata() {
         let now = Date(timeIntervalSince1970: 1_764_236_400)
         let presentation = SparklineChartPresentation(
