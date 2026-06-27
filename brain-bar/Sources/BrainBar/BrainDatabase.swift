@@ -33,6 +33,7 @@ final class BrainDatabase: @unchecked Sendable {
     private static let defaultPendingStoreMaxLines = 10_000
     private static let pendingStoreMaxLinesEnv = "BRAINBAR_PENDING_STORES_MAX_LINES"
     private static let fallbackReplayGitsRootEnv = "BRAINBAR_FALLBACK_REPLAY_GITS_ROOT"
+    private static let brainLayerQueueDirEnv = "BRAINLAYER_QUEUE_DIR"
     private static let agentWriteSourceWhereClause = "COALESCE(LOWER(TRIM(source)), '') IN ('mcp', 'manual', 'digest', 'precompact-hook', 'brain_store', 'pending', 'fallback', 'fallback-replay')"
     private static let watcherWriteSourceWhereClause = "COALESCE(LOWER(TRIM(source)), '') IN ('realtime_watcher', 'realtime')"
     private static let lexicalDefenseReplacements: [String: [String]] = [
@@ -359,6 +360,13 @@ final class BrainDatabase: @unchecked Sendable {
     struct PendingStoreQueueSnapshot: Sendable, Equatable {
         let depth: Int
         let oldestQueuedAt: Date?
+        let identityKeys: Set<String>
+
+        init(depth: Int, oldestQueuedAt: Date?, identityKeys: Set<String> = []) {
+            self.depth = depth
+            self.oldestQueuedAt = oldestQueuedAt
+            self.identityKeys = identityKeys
+        }
 
         func merged(with other: PendingStoreQueueSnapshot) -> PendingStoreQueueSnapshot {
             let oldest: Date?
@@ -372,7 +380,12 @@ final class BrainDatabase: @unchecked Sendable {
             case (.none, .none):
                 oldest = nil
             }
-            return PendingStoreQueueSnapshot(depth: depth + other.depth, oldestQueuedAt: oldest)
+            let duplicateCount = identityKeys.intersection(other.identityKeys).count
+            return PendingStoreQueueSnapshot(
+                depth: max(0, depth + other.depth - duplicateCount),
+                oldestQueuedAt: oldest,
+                identityKeys: identityKeys.union(other.identityKeys)
+            )
         }
     }
 
@@ -972,7 +985,7 @@ final class BrainDatabase: @unchecked Sendable {
             if results.count >= limit { break }
         }
 
-        if results.count < limit {
+        if results.count < limit, (try? tableExists("chunks_fts_trigram")) == true {
             for expandedQuery in expandedQueries {
                 let trigramQuery = sanitizeTrigramFTS5Query(expandedQuery)
                 guard !trigramQuery.isEmpty else { continue }
@@ -1761,7 +1774,9 @@ final class BrainDatabase: @unchecked Sendable {
 
     func dashboardStats(activityWindowMinutes: Int = 30, bucketCount: Int = 12) throws -> DashboardStats {
         let pendingStoreFlushQueue = pendingStoreQueueSnapshot()
-        let pendingStoreQueue = pendingStoreFlushQueue.merged(with: Self.fallbackReplayQueueSnapshot())
+        let pendingStoreQueue = pendingStoreFlushQueue
+            .merged(with: Self.fallbackReplayQueueSnapshot())
+            .merged(with: Self.durableStoreQueueSnapshot())
         let watcherHealth = watcherHealthSnapshot()
         return try withReadTransaction {
             let liveWindowMinutes = 1
@@ -3536,12 +3551,49 @@ final class BrainDatabase: @unchecked Sendable {
         return URL(fileURLWithPath: dbPath).deletingLastPathComponent().appendingPathComponent("pending-stores.jsonl")
     }
 
+    private static func durableStoreQueuePath() -> URL {
+        if let override = ProcessInfo.processInfo.environment[brainLayerQueueDirEnv],
+           !override.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return URL(fileURLWithPath: override)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".brainlayer", isDirectory: true)
+            .appendingPathComponent("queue", isDirectory: true)
+    }
+
     private static func fallbackReplayGitsRoot() -> URL {
         if let override = ProcessInfo.processInfo.environment[fallbackReplayGitsRootEnv],
            !override.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return URL(fileURLWithPath: override)
         }
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Gits", isDirectory: true)
+    }
+
+    private static func durableStoreQueueSnapshot() -> PendingStoreQueueSnapshot {
+        let queueDir = durableStoreQueuePath()
+        let fileManager = FileManager.default
+        guard let files = try? fileManager.contentsOfDirectory(
+            at: queueDir,
+            includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return PendingStoreQueueSnapshot(depth: 0, oldestQueuedAt: nil)
+        }
+
+        var depth = 0
+        var oldestQueuedAt: Date?
+        var identityKeys = Set<String>()
+        for file in files where file.pathExtension == "jsonl" && urlIsRegularFile(file) {
+            depth += 1
+            if let values = try? file.resourceValues(forKeys: [.contentModificationDateKey]),
+               let modified = values.contentModificationDate {
+                oldestQueuedAt = oldestQueuedAt.map { min($0, modified) } ?? modified
+            }
+            if let key = queueFileIdentityKey(file) {
+                identityKeys.insert(key)
+            }
+        }
+        return PendingStoreQueueSnapshot(depth: depth, oldestQueuedAt: oldestQueuedAt, identityKeys: identityKeys)
     }
 
     private static func fallbackReplayQueueSnapshot() -> PendingStoreQueueSnapshot {
@@ -3557,8 +3609,12 @@ final class BrainDatabase: @unchecked Sendable {
 
         var depth = 0
         var oldestQueuedAt: Date?
-        func record(_ date: Date?) {
+        var identityKeys = Set<String>()
+        func record(_ date: Date?, _ identityKey: String?) {
             depth += 1
+            if let identityKey {
+                identityKeys.insert(identityKey)
+            }
             guard let date else { return }
             oldestQueuedAt = oldestQueuedAt.map { min($0, date) } ?? date
         }
@@ -3583,7 +3639,7 @@ final class BrainDatabase: @unchecked Sendable {
             )
         }
 
-        return PendingStoreQueueSnapshot(depth: depth, oldestQueuedAt: oldestQueuedAt)
+        return PendingStoreQueueSnapshot(depth: depth, oldestQueuedAt: oldestQueuedAt, identityKeys: identityKeys)
     }
 
     private static func scanFallbackReplayDirectory(
@@ -3592,7 +3648,7 @@ final class BrainDatabase: @unchecked Sendable {
         originRepoPath: URL,
         countParsedWithoutIntent: Bool,
         countUnparseableAsDebt: Bool,
-        record: (Date?) -> Void
+        record: (Date?, String?) -> Void
     ) {
         let fileManager = FileManager.default
         if recursive {
@@ -3604,13 +3660,13 @@ final class BrainDatabase: @unchecked Sendable {
                 return
             }
             for case let file as URL in enumerator where file.pathExtension == "md" {
-                if let timestamp = pendingFallbackReplayTimestamp(
+                if let pending = pendingFallbackReplayRecord(
                     at: file,
                     originRepoPath: originRepoPath,
                     countParsedWithoutIntent: countParsedWithoutIntent,
                     countUnparseableAsDebt: countUnparseableAsDebt
                 ) {
-                    record(timestamp)
+                    record(pending.queuedAt, pending.identityKey)
                 }
             }
             return
@@ -3624,29 +3680,30 @@ final class BrainDatabase: @unchecked Sendable {
             return
         }
         for file in files where file.pathExtension == "md" {
-            if let timestamp = pendingFallbackReplayTimestamp(
+            if let pending = pendingFallbackReplayRecord(
                 at: file,
                 originRepoPath: originRepoPath,
                 countParsedWithoutIntent: countParsedWithoutIntent,
                 countUnparseableAsDebt: countUnparseableAsDebt
             ) {
-                record(timestamp)
+                record(pending.queuedAt, pending.identityKey)
             }
         }
     }
 
-    private static func pendingFallbackReplayTimestamp(
+    private static func pendingFallbackReplayRecord(
         at file: URL,
         originRepoPath: URL,
         countParsedWithoutIntent: Bool,
         countUnparseableAsDebt: Bool
-    ) -> Date?? {
+    ) -> (queuedAt: Date?, identityKey: String?)? {
         guard let data = try? Data(contentsOf: file),
               let text = String(data: data, encoding: .utf8) else {
             return nil
         }
         guard let parsed = fallbackReplayComponents(from: text) else {
-            return countUnparseableAsDebt ? inferLegacyFallbackTimestamp(from: file) : nil
+            guard countUnparseableAsDebt else { return nil }
+            return (inferLegacyFallbackTimestamp(from: file), normalizedPathIdentityKey(file))
         }
         let frontmatter = parsed.frontmatter
         let hasIntentFlag = isTruthyFrontmatterValue(frontmatter["intended_brain_store"])
@@ -3660,7 +3717,10 @@ final class BrainDatabase: @unchecked Sendable {
               ) else {
             return nil
         }
-        return .some(parsePendingStoreQueuedAt(frontmatter["timestamp"] ?? ""))
+        return (
+            parsePendingStoreQueuedAt(frontmatter["timestamp"] ?? ""),
+            fallbackReplayIdentityKey(frontmatter: frontmatter, file: file)
+        )
     }
 
     private static func fallbackReplayComponents(from text: String) -> (frontmatter: [String: String], body: String)? {
@@ -3769,11 +3829,54 @@ final class BrainDatabase: @unchecked Sendable {
         return file.lastPathComponent
     }
 
-    private static func inferLegacyFallbackTimestamp(from file: URL) -> Date?? {
+    private static func inferLegacyFallbackTimestamp(from file: URL) -> Date? {
         guard let range = file.path.range(of: #"20\d{2}-\d{2}-\d{2}"#, options: .regularExpression) else {
-            return .some(nil)
+            return nil
         }
         return parsePendingStoreQueuedAt("\(file.path[range])T00:00:00Z")
+    }
+
+    private static func fallbackReplayIdentityKey(frontmatter: [String: String], file: URL) -> String? {
+        for key in ["queued_chunk_id", "chunk_id"] {
+            if let identity = normalizedChunkIdentityKey(frontmatter[key]) {
+                return identity
+            }
+        }
+        return normalizedPathIdentityKey(file)
+    }
+
+    private static func queueFileIdentityKey(_ file: URL) -> String? {
+        guard let data = try? Data(contentsOf: file) else {
+            return normalizedPathIdentityKey(file)
+        }
+        for line in pendingStoreLines(from: data) {
+            if let identity = jsonLineChunkIdentityKey(line) {
+                return identity
+            }
+        }
+        return normalizedPathIdentityKey(file)
+    }
+
+    private static func jsonLineChunkIdentityKey(_ line: Data) -> String? {
+        guard let payload = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+              let value = payload["chunk_id"] else {
+            return nil
+        }
+        return normalizedChunkIdentityKey(String(describing: value))
+    }
+
+    private static func normalizedChunkIdentityKey(_ value: String?) -> String? {
+        let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !normalized.isEmpty,
+              normalized.lowercased() != "null",
+              normalized != "~" else {
+            return nil
+        }
+        return "chunk:\(normalized)"
+    }
+
+    private static func normalizedPathIdentityKey(_ file: URL) -> String {
+        "path:\(file.standardizedFileURL.path)"
     }
 
     private static func jsonStringLiteral(_ value: String) -> String {
@@ -3813,6 +3916,10 @@ final class BrainDatabase: @unchecked Sendable {
 
     private static func urlIsDirectory(_ url: URL) -> Bool {
         (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+    }
+
+    private static func urlIsRegularFile(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
     }
 
     private static func appendPendingStoreLine(_ line: Data, to path: URL) throws {
@@ -3860,15 +3967,19 @@ final class BrainDatabase: @unchecked Sendable {
                 }
 
                 let decoder = JSONDecoder()
+                var identityKeys = Set<String>()
                 let oldest = lines.compactMap { line -> Date? in
-                    guard let item = try? decoder.decode(PendingStoreItem.self, from: line),
-                          let queuedAt = item.queuedAt else {
+                    guard let item = try? decoder.decode(PendingStoreItem.self, from: line) else {
                         return nil
                     }
+                    if let identity = Self.normalizedChunkIdentityKey(item.chunkID) {
+                        identityKeys.insert(identity)
+                    }
+                    guard let queuedAt = item.queuedAt else { return nil }
                     return Self.parsePendingStoreQueuedAt(queuedAt)
                 }.min()
 
-                return PendingStoreQueueSnapshot(depth: lines.count, oldestQueuedAt: oldest)
+                return PendingStoreQueueSnapshot(depth: lines.count, oldestQueuedAt: oldest, identityKeys: identityKeys)
             }
         } catch {
             NSLog("[BrainBar] Failed to inspect pending stores queue: %@", String(describing: error))

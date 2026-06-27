@@ -56,6 +56,12 @@ class PendingFrame:
         self.offset = 0
 
 
+@dataclass(frozen=True)
+class InFlightFrame:
+    data: bytes
+    request_id: object
+
+
 def _positive_int(value: str | None, default: int) -> int:
     if not value:
         return default
@@ -120,13 +126,44 @@ def _write_all(fd: int, data: bytes) -> None:
         view = view[written:]
 
 
-def _frame_expects_response(data: bytes) -> bool:
+def _frame_payload(data: bytes) -> object | None:
     try:
-        _headers, body = data.split(CONTENT_LENGTH_SEPARATOR, 1)
+        if bytes(data[:32]).lower().startswith(b"content-length:"):
+            _headers, body = data.split(CONTENT_LENGTH_SEPARATOR, 1)
+        else:
+            body = data.strip()
         payload = json.loads(body.decode("utf-8"))
     except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
-        return True
-    return isinstance(payload, dict) and "id" in payload
+        return None
+    return payload
+
+
+def _frame_response_id(data: bytes) -> object | None:
+    payload = _frame_payload(data)
+    if not isinstance(payload, dict) or "id" not in payload:
+        return None
+    return payload["id"]
+
+
+def _frame_expects_response(data: bytes) -> bool:
+    return _frame_response_id(data) is not None
+
+
+def _jsonrpc_error_for_frame(frame: InFlightFrame) -> bytes:
+    body = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": frame.request_id,
+            "error": {
+                "code": -32000,
+                "message": "BrainLayer backend disconnected before responding; request was not acknowledged",
+            },
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    if bytes(frame.data[:32]).lower().startswith(b"content-length:"):
+        return b"Content-Length: " + str(len(body)).encode("ascii") + b"\r\n\r\n" + body
+    return body + b"\n"
 
 
 def _content_length_frame_size(buffer: bytearray) -> int | None:
@@ -152,20 +189,23 @@ def _content_length_frame_size(buffer: bytearray) -> int | None:
     return frame_size if len(buffer) >= frame_size else None
 
 
-def _consume_complete_backend_frames(buffer: bytearray) -> int:
-    complete = 0
+def _consume_complete_backend_response_ids(buffer: bytearray) -> list[object]:
+    response_ids: list[object] = []
     while buffer:
         frame_size = _content_length_frame_size(buffer)
         if frame_size is None:
             if bytes(buffer[:32]).lower().startswith(b"content-length:"):
-                return complete
+                return response_ids
             newline = buffer.find(b"\n")
             if newline == -1:
-                return complete
+                return response_ids
             frame_size = newline + 1
-        complete += 1
+        frame = bytes(buffer[:frame_size])
+        response_id = _frame_response_id(frame)
+        if response_id is not None:
+            response_ids.append(response_id)
         del buffer[:frame_size]
-    return complete
+    return response_ids
 
 
 def _enqueue_complete_frames(buffer: bytearray, pending: deque[PendingFrame], *, stdin_eof: bool = False) -> None:
@@ -208,6 +248,7 @@ def run_bridge(
     input_buffer = bytearray()
     pending_bytes = 0
     backend_response_buffer = bytearray()
+    in_flight: deque[InFlightFrame] = deque()
     sock: socket.socket | None = None
     connected = False
     connecting = False
@@ -217,18 +258,31 @@ def run_bridge(
     stdin_eof = False
     eof_idle_deadline: float | None = None
     eof_response_deadline: float | None = None
-    socket_data_seen_after_stdin_eof = False
-    socket_data_sent_to_backend = False
     pending_responses = 0
+    stdout_failed = False
+
+    def fail_in_flight_requests() -> None:
+        nonlocal pending_responses, stdout_failed
+        while in_flight:
+            frame = in_flight.popleft()
+            try:
+                _write_all(stdout_fd, _jsonrpc_error_for_frame(frame))
+            except OSError:
+                stdout_failed = True
+                in_flight.clear()
+                pending_responses = 0
+                return
+        pending_responses = 0
 
     def disconnect(schedule: bool = True) -> None:
-        nonlocal sock, connected, connecting, connect_started_at, next_connect_at, reconnect_delay, pending_responses
+        nonlocal sock, connected, connecting, connect_started_at, next_connect_at, reconnect_delay
+        if schedule:
+            fail_in_flight_requests()
         _close_socket(sock)
         sock = None
         connected = False
         connecting = False
         connect_started_at = None
-        pending_responses = 0
         for frame in pending:
             frame.reset()
         if schedule:
@@ -267,6 +321,8 @@ def run_bridge(
 
     try:
         while True:
+            if stdout_failed:
+                return 0
             now = time.monotonic()
             if (
                 stdin_eof
@@ -287,7 +343,8 @@ def run_bridge(
             if connecting and _connect_timed_out(connect_started_at, now, config):
                 disconnect(schedule=True)
                 now = time.monotonic()
-            start_connect(now)
+            if not (stdin_eof and not pending and pending_responses == 0):
+                start_connect(now)
 
             readers = [] if stdin_eof else [stdin_fd]
             writers: list[int] = []
@@ -370,10 +427,11 @@ def run_bridge(
                     if sent == 0:
                         disconnect(schedule=True)
                         break
-                    socket_data_sent_to_backend = True
                     if frame.advance(sent):
-                        if _frame_expects_response(frame.data):
+                        request_id = _frame_response_id(frame.data)
+                        if request_id is not None:
                             pending_responses += 1
+                            in_flight.append(InFlightFrame(data=frame.data, request_id=request_id))
                         pending_bytes -= len(frame.data)
                         pending.popleft()
                     else:
@@ -400,11 +458,17 @@ def run_bridge(
                 except OSError:
                     return 0
                 backend_response_buffer.extend(data)
-                completed_responses = _consume_complete_backend_frames(backend_response_buffer)
-                if completed_responses:
-                    pending_responses = max(0, pending_responses - completed_responses)
+                completed_response_ids = _consume_complete_backend_response_ids(backend_response_buffer)
+                for response_id in completed_response_ids:
+                    matched = False
+                    for frame in list(in_flight):
+                        if frame.request_id == response_id:
+                            in_flight.remove(frame)
+                            matched = True
+                            break
+                    if matched:
+                        pending_responses = max(0, pending_responses - 1)
                 if stdin_eof:
-                    socket_data_seen_after_stdin_eof = True
                     if pending_responses == 0:
                         eof_idle_deadline = time.monotonic() + config.stdin_eof_drain_ms / 1000
     finally:

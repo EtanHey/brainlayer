@@ -352,8 +352,7 @@ def _write_queue_attempt(entry: FallbackEntry, *, chunk_id: Any, queue_path: Any
         updated = _frontmatter_with_resolved_project(latest)
         updated["retry_attempted"] = True
         updated["queued_chunk_id"] = chunk_id
-        if queue_path:
-            updated["queued_queue_path"] = str(queue_path)
+        updated["queued_queue_path"] = str(queue_path) if queue_path else None
         updated["chunk_id"] = None
         _write_frontmatter(latest.path, updated, latest.body)
 

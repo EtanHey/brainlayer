@@ -384,6 +384,36 @@ def test_queue_entry_requeues_when_recorded_queue_file_is_missing(tmp_path):
     assert Path(updated.frontmatter["queued_queue_path"]).exists()
 
 
+def test_queue_entry_clears_stale_queue_path_when_requeue_returns_no_path(tmp_path):
+    from brainlayer.fallback_replay import parse_fallback_file, queue_entry
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    path = _pending_file(repo, "docs.local/decisions/missing-queue-file-no-new-path.md")
+    calls = []
+
+    def enqueue_func(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            queue_path = tmp_path / "queue" / "fallback-replay.jsonl"
+            queue_path.parent.mkdir(parents=True, exist_ok=True)
+            queue_path.write_text("queued\n", encoding="utf-8")
+            return queue_path
+        return None
+
+    first = queue_entry(parse_fallback_file(path), enqueue_func=enqueue_func, replayed_by="phase-1-test")
+    first_queue_path = Path(parse_fallback_file(path).frontmatter["queued_queue_path"])
+    first_queue_path.unlink()
+
+    second = queue_entry(parse_fallback_file(path), enqueue_func=enqueue_func, replayed_by="phase-1-test")
+    updated = parse_fallback_file(path)
+
+    assert first.chunk_id == second.chunk_id
+    assert len(calls) == 2
+    assert updated.frontmatter["queued_chunk_id"] == first.chunk_id
+    assert updated.frontmatter.get("queued_queue_path") is None
+
+
 def test_mark_fallback_stored_persists_scoped_project_for_chunk_id_parity(tmp_path):
     from brainlayer.fallback_replay import (
         is_pending_entry,

@@ -901,6 +901,77 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(results.first?["chunk_id"] as? String, "test-chunk-1")
     }
 
+    func testSearchSkipsTrigramFallbackWhenTableMissingAndMigrationsDisabled() throws {
+        let legacyPath = NSTemporaryDirectory() + "brainbar-no-trigram-\(UUID().uuidString).db"
+        try sqliteExecWrite(
+            path: legacyPath,
+            sql: """
+                CREATE TABLE chunks (
+                    id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    metadata TEXT NOT NULL DEFAULT '{}',
+                    source_file TEXT NOT NULL DEFAULT 'brainbar',
+                    project TEXT,
+                    content_type TEXT DEFAULT 'assistant_text',
+                    char_count INTEGER DEFAULT 0,
+                    source TEXT DEFAULT 'claude_code',
+                    conversation_id TEXT,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    tags TEXT DEFAULT '[]',
+                    summary TEXT,
+                    importance REAL DEFAULT 5,
+                    superseded_by TEXT,
+                    aggregated_into TEXT,
+                    archived_at TEXT,
+                    archived INTEGER DEFAULT 0,
+                    status TEXT DEFAULT 'active'
+                );
+                CREATE VIRTUAL TABLE chunks_fts USING fts5(
+                    content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id UNINDEXED,
+                    prefix='2 3 4',
+                    tokenize='unicode61 remove_diacritics 2'
+                );
+                INSERT INTO chunks (
+                    id, content, metadata, source_file, project, content_type,
+                    char_count, source, conversation_id, tags, summary, importance, status
+                )
+                VALUES (
+                    'legacy-no-trigram-row',
+                    'Primary FTS row mentions NoTrigramNeedle',
+                    '{}',
+                    'brainbar',
+                    'brainlayer',
+                    'assistant_text',
+                    39,
+                    'mcp',
+                    'legacy-session',
+                    '["schema"]',
+                    'Legacy summary',
+                    5,
+                    'active'
+                );
+                INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
+                VALUES ('Primary FTS row mentions NoTrigramNeedle', 'Legacy summary', '["schema"]', NULL, NULL, NULL, 'legacy-no-trigram-row');
+            """
+        )
+        defer {
+            try? FileManager.default.removeItem(atPath: legacyPath)
+            try? FileManager.default.removeItem(atPath: legacyPath + "-wal")
+            try? FileManager.default.removeItem(atPath: legacyPath + "-shm")
+        }
+        let legacy = BrainDatabase(
+            path: legacyPath,
+            openConfiguration: .init(readOnly: false, runMigrations: false)
+        )
+        defer { legacy.close() }
+        XCTAssertTrue(legacy.isOpen)
+        XCTAssertFalse(try legacy.tableExists("chunks_fts_trigram"))
+
+        let results = try legacy.search(query: "NoTrigramNeedle", limit: 10)
+
+        XCTAssertEqual(results.first?["chunk_id"] as? String, "legacy-no-trigram-row")
+    }
+
     func testFTSSearchLongNaturalLanguageQueryUsesRecallMode() throws {
         try db.insertChunk(
             id: "sonnet-role-rule",

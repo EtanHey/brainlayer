@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from brainlayer.mcp_stdio_bridge import BridgeConfig, _connect_timed_out
+from brainlayer.mcp_stdio_bridge import BridgeConfig, _connect_timed_out, _consume_complete_backend_response_ids
 
 
 class RestartableLineServer:
@@ -155,6 +155,63 @@ def _read_exact(process: subprocess.Popen[bytes], expected_length: int, timeout:
     if len(data) != expected_length:
         raise AssertionError(f"timed out waiting for bridge response, partial={data!r}")
     return bytes(data)
+
+
+def _read_fd_until(fd: int, predicate, timeout: float = 5.0) -> bytes:
+    deadline = time.monotonic() + timeout
+    data = bytearray()
+    while time.monotonic() < deadline and not predicate(bytes(data)):
+        readable, _, _ = select.select([fd], [], [], 0.05)
+        if fd in readable:
+            chunk = os.read(fd, 1024)
+            if not chunk:
+                break
+            data.extend(chunk)
+    return bytes(data)
+
+
+def _read_content_length_payload(fd: int, timeout: float = 5.0) -> dict[str, Any]:
+    header_data = _read_fd_until(fd, lambda data: b"\r\n\r\n" in data, timeout=timeout)
+    separator = header_data.find(b"\r\n\r\n")
+    assert separator != -1, header_data
+    headers = header_data[:separator].decode("ascii")
+    body = bytearray(header_data[separator + 4 :])
+    content_length = None
+    for line in headers.split("\r\n"):
+        name, _, value = line.partition(":")
+        if name.lower() == "content-length":
+            content_length = int(value.strip())
+            break
+    assert content_length is not None
+    if len(body) < content_length:
+        remaining = content_length - len(body)
+        body.extend(
+            _read_fd_until(
+                fd,
+                lambda data: len(data) >= remaining,
+                timeout=timeout,
+            )
+        )
+    assert len(body) >= content_length
+    return json.loads(bytes(body[:content_length]).decode("utf-8"))
+
+
+def test_backend_frame_counter_ignores_notifications_without_ids() -> None:
+    notification_body = b'{"jsonrpc":"2.0","method":"notifications/progress","params":{"token":"x"}}'
+    response_body = b'{"jsonrpc":"2.0","id":1,"result":{"ok":true}}'
+    buffer = bytearray(
+        b"Content-Length: "
+        + str(len(notification_body)).encode("ascii")
+        + b"\r\n\r\n"
+        + notification_body
+        + b"Content-Length: "
+        + str(len(response_body)).encode("ascii")
+        + b"\r\n\r\n"
+        + response_body
+    )
+
+    assert _consume_complete_backend_response_ids(buffer) == [1]
+    assert buffer == b""
 
 
 def test_connect_timeout_uses_configured_milliseconds() -> None:
@@ -461,6 +518,100 @@ def test_stdio_bridge_exits_after_notification_only_frame_at_stdin_eof(monkeypat
                 pass
 
 
+def test_stdio_bridge_ignores_unmatched_backend_response_id_before_eof_drain(monkeypatch) -> None:
+    import brainlayer.mcp_stdio_bridge as bridge
+
+    real_socketpair = socket.socketpair
+    sent_payload = bytearray()
+    unrelated_response = b'{"jsonrpc":"2.0","id":999,"result":{"ignored":true}}\n'
+    matched_response = b'{"jsonrpc":"2.0","id":7,"result":{"ok":true}}\n'
+
+    class OutOfOrderSocket:
+        def __init__(self) -> None:
+            self.client, self.peer = real_socketpair()
+            self.responded = False
+
+        def setblocking(self, flag: bool) -> None:
+            self.client.setblocking(flag)
+
+        def connect(self, _path: str) -> None:
+            return None
+
+        def fileno(self) -> int:
+            return self.client.fileno()
+
+        def getsockopt(self, _level: int, _option: int) -> int:
+            return 0
+
+        def send(self, data: bytes | memoryview) -> int:
+            payload = bytes(data)
+            sent_payload.extend(payload)
+            if len(sent_payload) >= len(request) and not self.responded:
+                self.peer.sendall(unrelated_response)
+                time.sleep(0.03)
+                self.peer.sendall(matched_response)
+                self.responded = True
+            return len(payload)
+
+        def recv(self, size: int) -> bytes:
+            return self.client.recv(size)
+
+        def close(self) -> None:
+            self.client.close()
+            self.peer.close()
+
+    out_of_order_socket = OutOfOrderSocket()
+    monkeypatch.setattr(bridge.socket, "socket", lambda *_args, **_kwargs: out_of_order_socket)
+
+    stdin_r, stdin_w = os.pipe()
+    stdout_r, stdout_w = os.pipe()
+    stderr_r, stderr_w = os.pipe()
+    stdin_reader = os.fdopen(stdin_r, "rb", buffering=0)
+    stdout_writer = os.fdopen(stdout_w, "wb", buffering=0)
+    stderr_writer = os.fdopen(stderr_w, "wb", buffering=0)
+    exit_codes: list[int] = []
+
+    def run() -> None:
+        exit_codes.append(
+            bridge.run_bridge(
+                BridgeConfig(
+                    socket_path="/tmp/brainlayer-bridge-unmatched-response.sock",
+                    reconnect_ms=1,
+                    max_reconnect_ms=1,
+                    connect_timeout_ms=50,
+                    stdin_eof_drain_ms=10,
+                ),
+                stdin=stdin_reader,
+                stdout=stdout_writer,
+                stderr=stderr_writer,
+            )
+        )
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    body = b'{"jsonrpc":"2.0","id":7,"method":"ping"}'
+    request = b"Content-Length: " + str(len(body)).encode("ascii") + b"\r\n\r\n" + body
+    try:
+        os.write(stdin_w, request)
+        os.close(stdin_w)
+        stdin_w = -1
+        output = _read_fd_until(stdout_r, lambda data: matched_response in data, timeout=2)
+        thread.join(timeout=2)
+
+        assert not thread.is_alive()
+        assert unrelated_response in output
+        assert matched_response in output
+        assert exit_codes == [0]
+    finally:
+        if stdin_w != -1:
+            os.close(stdin_w)
+        for fd in (stdout_r, stderr_r):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
 def test_stdio_bridge_replays_full_frame_after_partial_socket_send_then_reconnect(monkeypatch) -> None:
     import brainlayer.mcp_stdio_bridge as bridge
 
@@ -651,6 +802,96 @@ def test_stdio_bridge_waits_for_complete_content_length_response_after_stdin_eof
         if process.poll() is None:
             process.terminate()
             process.wait(timeout=5)
+
+
+def test_stdio_bridge_returns_error_when_backend_disconnects_after_full_send(monkeypatch) -> None:
+    import brainlayer.mcp_stdio_bridge as bridge
+
+    real_socketpair = socket.socketpair
+    request_received = threading.Event()
+
+    class DisconnectAfterSendSocket:
+        def __init__(self) -> None:
+            self.client, self.peer = real_socketpair()
+
+        def setblocking(self, flag: bool) -> None:
+            self.client.setblocking(flag)
+
+        def connect(self, _path: str) -> None:
+            return None
+
+        def fileno(self) -> int:
+            return self.client.fileno()
+
+        def getsockopt(self, _level: int, _option: int) -> int:
+            return 0
+
+        def send(self, data: bytes | memoryview) -> int:
+            request_received.set()
+            self.peer.close()
+            return len(bytes(data))
+
+        def recv(self, size: int) -> bytes:
+            return self.client.recv(size)
+
+        def close(self) -> None:
+            self.client.close()
+            try:
+                self.peer.close()
+            except OSError:
+                pass
+
+    drop_socket = DisconnectAfterSendSocket()
+    monkeypatch.setattr(bridge.socket, "socket", lambda *_args, **_kwargs: drop_socket)
+
+    stdin_r, stdin_w = os.pipe()
+    stdout_r, stdout_w = os.pipe()
+    stderr_r, stderr_w = os.pipe()
+    stdin_reader = os.fdopen(stdin_r, "rb", buffering=0)
+    stdout_writer = os.fdopen(stdout_w, "wb", buffering=0)
+    stderr_writer = os.fdopen(stderr_w, "wb", buffering=0)
+    exit_codes: list[int] = []
+
+    def run() -> None:
+        exit_codes.append(
+            bridge.run_bridge(
+                BridgeConfig(
+                    socket_path="/tmp/brainlayer-bridge-drop-after-send.sock",
+                    reconnect_ms=1,
+                    max_reconnect_ms=1,
+                    connect_timeout_ms=50,
+                    stdin_eof_drain_ms=10,
+                ),
+                stdin=stdin_reader,
+                stdout=stdout_writer,
+                stderr=stderr_writer,
+            )
+        )
+
+    body = b'{"jsonrpc":"2.0","id":9,"method":"ping"}'
+    request = b"Content-Length: " + str(len(body)).encode("ascii") + b"\r\n\r\n" + body
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    try:
+        os.write(stdin_w, request)
+        os.close(stdin_w)
+        stdin_w = -1
+        assert request_received.wait(timeout=1)
+        received = _read_content_length_payload(stdout_r, timeout=2)
+        thread.join(timeout=2)
+
+        assert received["id"] == 9
+        assert received["error"]["code"] == -32000
+        assert not thread.is_alive()
+        assert exit_codes == [0]
+    finally:
+        if stdin_w != -1:
+            os.close(stdin_w)
+        for fd in (stdout_r, stderr_r):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 def test_stdio_bridge_exits_when_backend_never_replies_after_stdin_eof(monkeypatch) -> None:
