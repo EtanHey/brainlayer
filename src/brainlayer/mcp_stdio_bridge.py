@@ -152,6 +152,22 @@ def _content_length_frame_size(buffer: bytearray) -> int | None:
     return frame_size if len(buffer) >= frame_size else None
 
 
+def _consume_complete_backend_frames(buffer: bytearray) -> int:
+    complete = 0
+    while buffer:
+        frame_size = _content_length_frame_size(buffer)
+        if frame_size is None:
+            if bytes(buffer[:32]).lower().startswith(b"content-length:"):
+                return complete
+            newline = buffer.find(b"\n")
+            if newline == -1:
+                return complete
+            frame_size = newline + 1
+        complete += 1
+        del buffer[:frame_size]
+    return complete
+
+
 def _enqueue_complete_frames(buffer: bytearray, pending: deque[PendingFrame], *, stdin_eof: bool = False) -> None:
     while buffer:
         frame_size = _content_length_frame_size(buffer)
@@ -191,6 +207,7 @@ def run_bridge(
     pending: deque[PendingFrame] = deque()
     input_buffer = bytearray()
     pending_bytes = 0
+    backend_response_buffer = bytearray()
     sock: socket.socket | None = None
     connected = False
     connecting = False
@@ -199,17 +216,19 @@ def run_bridge(
     reconnect_delay = config.reconnect_ms / 1000
     stdin_eof = False
     eof_idle_deadline: float | None = None
+    eof_response_deadline: float | None = None
     socket_data_seen_after_stdin_eof = False
     socket_data_sent_to_backend = False
     pending_responses = 0
 
     def disconnect(schedule: bool = True) -> None:
-        nonlocal sock, connected, connecting, connect_started_at, next_connect_at, reconnect_delay
+        nonlocal sock, connected, connecting, connect_started_at, next_connect_at, reconnect_delay, pending_responses
         _close_socket(sock)
         sock = None
         connected = False
         connecting = False
         connect_started_at = None
+        pending_responses = 0
         for frame in pending:
             frame.reset()
         if schedule:
@@ -249,7 +268,21 @@ def run_bridge(
     try:
         while True:
             now = time.monotonic()
-            if stdin_eof and not pending and eof_idle_deadline is not None and now >= eof_idle_deadline:
+            if (
+                stdin_eof
+                and not pending
+                and pending_responses == 0
+                and eof_idle_deadline is not None
+                and now >= eof_idle_deadline
+            ):
+                return 0
+            if (
+                stdin_eof
+                and not pending
+                and pending_responses > 0
+                and eof_response_deadline is not None
+                and now >= eof_response_deadline
+            ):
                 return 0
             if connecting and _connect_timed_out(connect_started_at, now, config):
                 disconnect(schedule=True)
@@ -268,20 +301,21 @@ def run_bridge(
             timeout = 0.05
             if sock is None:
                 timeout = max(0.0, min(0.05, next_connect_at - now))
-            if (
-                stdin_eof
-                and not pending
-                and (
-                    sock is None
-                    or socket_data_seen_after_stdin_eof
-                    or not socket_data_sent_to_backend
-                    or pending_responses == 0
-                )
-            ):
+            if stdin_eof and not pending and pending_responses == 0:
                 eof_idle_deadline = eof_idle_deadline or (now + config.stdin_eof_drain_ms / 1000)
                 timeout = max(0.0, min(timeout, eof_idle_deadline - now))
+                eof_response_deadline = None
+            elif stdin_eof and not pending and pending_responses > 0:
+                response_wait_seconds = max(
+                    config.connect_timeout_ms / 1000,
+                    (config.stdin_eof_drain_ms / 1000) * 10,
+                )
+                eof_response_deadline = eof_response_deadline or (now + response_wait_seconds)
+                timeout = max(0.0, min(timeout, eof_response_deadline - now))
+                eof_idle_deadline = None
             else:
                 eof_idle_deadline = None
+                eof_response_deadline = None
 
             try:
                 readable, writable, _ = select.select(readers, writers, [], timeout)
@@ -365,10 +399,14 @@ def run_bridge(
                     _write_all(stdout_fd, data)
                 except OSError:
                     return 0
-                pending_responses = max(0, pending_responses - 1)
+                backend_response_buffer.extend(data)
+                completed_responses = _consume_complete_backend_frames(backend_response_buffer)
+                if completed_responses:
+                    pending_responses = max(0, pending_responses - completed_responses)
                 if stdin_eof:
                     socket_data_seen_after_stdin_eof = True
-                    eof_idle_deadline = time.monotonic() + config.stdin_eof_drain_ms / 1000
+                    if pending_responses == 0:
+                        eof_idle_deadline = time.monotonic() + config.stdin_eof_drain_ms / 1000
     finally:
         disconnect(schedule=False)
         os.set_blocking(stdin_fd, previous_stdin_blocking)

@@ -328,7 +328,10 @@ def test_queue_entry_enqueues_with_stable_chunk_id_but_keeps_fallback_pending(tm
 
     def enqueue_func(**kwargs):
         calls.append(kwargs)
-        return tmp_path / "queue" / "fallback-replay.jsonl"
+        queue_path = tmp_path / "queue" / "fallback-replay.jsonl"
+        queue_path.parent.mkdir(parents=True, exist_ok=True)
+        queue_path.write_text("queued\n", encoding="utf-8")
+        return queue_path
 
     entry = parse_fallback_file(path)
     first = queue_entry(entry, enqueue_func=enqueue_func, replayed_by="phase-1-test")
@@ -347,10 +350,38 @@ def test_queue_entry_enqueues_with_stable_chunk_id_but_keeps_fallback_pending(tm
     assert len(calls) == 1
     assert updated_entry.frontmatter["project"] == "systems"
     assert updated_entry.frontmatter["queued_chunk_id"] == first.chunk_id
+    assert updated_entry.frontmatter["queued_queue_path"] == str(tmp_path / "queue" / "fallback-replay.jsonl")
     assert updated_entry.frontmatter["chunk_id"] is None
     assert is_pending_entry(updated_entry) is True
     assert second_entry.frontmatter["queued_chunk_id"] == first.chunk_id
     assert second_entry.frontmatter["chunk_id"] is None
+
+
+def test_queue_entry_requeues_when_recorded_queue_file_is_missing(tmp_path):
+    from brainlayer.fallback_replay import parse_fallback_file, queue_entry
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    path = _pending_file(repo, "docs.local/decisions/missing-queue-file.md")
+    calls = []
+
+    def enqueue_func(**kwargs):
+        calls.append(kwargs)
+        queue_path = tmp_path / "queue" / f"fallback-replay-{len(calls)}.jsonl"
+        queue_path.parent.mkdir(parents=True, exist_ok=True)
+        queue_path.write_text("queued\n", encoding="utf-8")
+        return queue_path
+
+    first = queue_entry(parse_fallback_file(path), enqueue_func=enqueue_func, replayed_by="phase-1-test")
+    first_queue_path = Path(parse_fallback_file(path).frontmatter["queued_queue_path"])
+    first_queue_path.unlink()
+
+    second = queue_entry(parse_fallback_file(path), enqueue_func=enqueue_func, replayed_by="phase-1-test")
+    updated = parse_fallback_file(path)
+
+    assert first.chunk_id == second.chunk_id
+    assert len(calls) == 2
+    assert Path(updated.frontmatter["queued_queue_path"]).exists()
 
 
 def test_mark_fallback_stored_persists_scoped_project_for_chunk_id_parity(tmp_path):
@@ -427,14 +458,14 @@ def test_replay_entry_trusts_returned_fallback_chunk_id_from_direct_store(tmp_pa
 
     result = replay_entry(
         parse_fallback_file(path),
-        store_func=lambda **_kwargs: {"chunk_id": "fallback-direct-store-id"},
+        store_func=lambda **_kwargs: {"chunk_id": "brainbar-direct-store-id"},
         replayed_by="phase-1-test",
     )
     updated = parse_fallback_file(path)
 
     assert queued.chunk_id != result.chunk_id
     assert result.error is None
-    assert updated.frontmatter["chunk_id"] == "fallback-direct-store-id"
+    assert updated.frontmatter["chunk_id"] == "brainbar-direct-store-id"
     assert updated.frontmatter["replayed_body_sha256"]
     assert "queued_chunk_id" not in updated.frontmatter
     assert is_pending_entry(updated) is False

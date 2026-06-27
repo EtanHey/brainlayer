@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import XCTest
 @testable import BrainBar
 @testable import BrainBarLifecycle
@@ -945,6 +946,30 @@ final class DashboardTests: XCTestCase {
         XCTAssertNil(stats.pendingStoreOldestQueuedAt)
     }
 
+    func testDashboardStatsIgnoresNormalDecisionMarkdownWithoutFallbackIntent() throws {
+        let decisionPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("ordinary-decision.md")
+        try FileManager.default.createDirectory(
+            at: decisionPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        ---
+        title: ordinary decision
+        timestamp: 1970-01-01T00:21:00Z
+        ---
+        normal decision note, not a BrainLayer fallback replay item
+        """.write(to: decisionPath, atomically: true, encoding: .utf8)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 0)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+    }
+
     func testDashboardStatsIncludesStaleFallbackReplayChunkIDDebt() throws {
         let stalePath = fallbackReplayRoot
             .appendingPathComponent("brainlayer", isDirectory: true)
@@ -1063,6 +1088,49 @@ final class DashboardTests: XCTestCase {
 
         XCTAssertEqual(stats.pendingStoreQueueDepth, 0)
         XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+    }
+
+    func testDashboardStatsHonorsTrustedReplayBodyHash() throws {
+        let storedPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("trusted-direct.md")
+        try FileManager.default.createDirectory(
+            at: storedPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let body = "trusted direct replay body\n"
+        let bodyHash = SHA256.hash(data: Data(body.utf8)).map { String(format: "%02x", $0) }.joined()
+        let storedText = """
+        ---
+        intended_brain_store: true
+        importance: 10
+        timestamp: 1970-01-01T00:27:00Z
+        chunk_id: brainbar-direct-store-id
+        replayed_body_sha256: \(bodyHash)
+        ---
+        """ + "\n" + body
+        try storedText.write(to: storedPath, atomically: true, encoding: .utf8)
+
+        var stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 0)
+
+        let editedText = """
+        ---
+        intended_brain_store: true
+        importance: 10
+        timestamp: 1970-01-01T00:27:00Z
+        chunk_id: brainbar-direct-store-id
+        replayed_body_sha256: \(bodyHash)
+        ---
+        """ + "\n" + "edited trusted direct replay body\n"
+        try editedText.write(to: storedPath, atomically: true, encoding: .utf8)
+
+        stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+        XCTAssertEqual(stats.pendingStoreOldestQueuedAt, Date(timeIntervalSince1970: 1_620))
     }
 
     func testDashboardStatsIncludesLegacyFallbackReplayDebtWithoutFrontmatter() throws {

@@ -121,8 +121,8 @@ def is_pending_entry(entry: FallbackEntry) -> bool:
     if not chunk_id:
         return True
     replayed_body_sha256 = str(entry.frontmatter.get("replayed_body_sha256") or "").strip()
-    if replayed_body_sha256 and replayed_body_sha256 == _body_sha256(entry.body):
-        return False
+    if replayed_body_sha256:
+        return replayed_body_sha256 != _body_sha256(entry.body)
     if chunk_id.startswith("fallback-") and chunk_id != _fallback_chunk_id(entry):
         return True
     return False
@@ -193,10 +193,11 @@ def queue_entry(
     chunk_id = _fallback_chunk_id(entry)
     latest = _latest_entry(entry)
     queued = str(latest.frontmatter.get("queued_chunk_id") or "").strip()
-    if queued == chunk_id and is_pending_entry(latest):
+    queued_path = _queued_queue_path(latest)
+    if queued == chunk_id and is_pending_entry(latest) and (queued_path is None or queued_path.exists()):
         return ReplayResult(path=entry.path, attempted=True, chunk_id=chunk_id)
     try:
-        enqueue_func(
+        queue_path = enqueue_func(
             content=entry.body,
             memory_type=str(entry.frontmatter.get("memory_type") or "note"),
             project=entry.project,
@@ -223,7 +224,7 @@ def queue_entry(
         return ReplayResult(path=entry.path, attempted=True, chunk_id=None, error=str(exc))
 
     try:
-        _write_queue_attempt(entry, chunk_id=chunk_id)
+        _write_queue_attempt(entry, chunk_id=chunk_id, queue_path=queue_path)
     except Exception as exc:
         return ReplayResult(
             path=entry.path,
@@ -331,7 +332,14 @@ def _is_legacy_fallback_path(path: Path) -> bool:
     return "brain-store-fallback" in path.parts
 
 
-def _write_queue_attempt(entry: FallbackEntry, *, chunk_id: Any) -> None:
+def _queued_queue_path(entry: FallbackEntry) -> Path | None:
+    value = str(entry.frontmatter.get("queued_queue_path") or "").strip()
+    if not value:
+        return None
+    return Path(value).expanduser()
+
+
+def _write_queue_attempt(entry: FallbackEntry, *, chunk_id: Any, queue_path: Any = None) -> None:
     with _fallback_marker_file_lock(entry.path):
         latest = _latest_entry(entry)
         stored = _stored_chunk_id(latest.frontmatter)
@@ -344,6 +352,8 @@ def _write_queue_attempt(entry: FallbackEntry, *, chunk_id: Any) -> None:
         updated = _frontmatter_with_resolved_project(latest)
         updated["retry_attempted"] = True
         updated["queued_chunk_id"] = chunk_id
+        if queue_path:
+            updated["queued_queue_path"] = str(queue_path)
         updated["chunk_id"] = None
         _write_frontmatter(latest.path, updated, latest.body)
 

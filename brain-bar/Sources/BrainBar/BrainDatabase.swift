@@ -3569,14 +3569,16 @@ final class BrainDatabase: @unchecked Sendable {
                 docsLocal.appendingPathComponent("decisions", isDirectory: true),
                 recursive: false,
                 originRepoPath: repo,
-                countLegacyWithoutFrontmatter: true,
+                countParsedWithoutIntent: false,
+                countUnparseableAsDebt: true,
                 record: record
             )
             scanFallbackReplayDirectory(
                 docsLocal.appendingPathComponent("brain-store-fallback", isDirectory: true),
                 recursive: true,
                 originRepoPath: repo,
-                countLegacyWithoutFrontmatter: true,
+                countParsedWithoutIntent: true,
+                countUnparseableAsDebt: true,
                 record: record
             )
         }
@@ -3588,7 +3590,8 @@ final class BrainDatabase: @unchecked Sendable {
         _ directory: URL,
         recursive: Bool,
         originRepoPath: URL,
-        countLegacyWithoutFrontmatter: Bool,
+        countParsedWithoutIntent: Bool,
+        countUnparseableAsDebt: Bool,
         record: (Date?) -> Void
     ) {
         let fileManager = FileManager.default
@@ -3604,7 +3607,8 @@ final class BrainDatabase: @unchecked Sendable {
                 if let timestamp = pendingFallbackReplayTimestamp(
                     at: file,
                     originRepoPath: originRepoPath,
-                    countLegacyWithoutFrontmatter: countLegacyWithoutFrontmatter
+                    countParsedWithoutIntent: countParsedWithoutIntent,
+                    countUnparseableAsDebt: countUnparseableAsDebt
                 ) {
                     record(timestamp)
                 }
@@ -3623,7 +3627,8 @@ final class BrainDatabase: @unchecked Sendable {
             if let timestamp = pendingFallbackReplayTimestamp(
                 at: file,
                 originRepoPath: originRepoPath,
-                countLegacyWithoutFrontmatter: countLegacyWithoutFrontmatter
+                countParsedWithoutIntent: countParsedWithoutIntent,
+                countUnparseableAsDebt: countUnparseableAsDebt
             ) {
                 record(timestamp)
             }
@@ -3633,18 +3638,19 @@ final class BrainDatabase: @unchecked Sendable {
     private static func pendingFallbackReplayTimestamp(
         at file: URL,
         originRepoPath: URL,
-        countLegacyWithoutFrontmatter: Bool
+        countParsedWithoutIntent: Bool,
+        countUnparseableAsDebt: Bool
     ) -> Date?? {
         guard let data = try? Data(contentsOf: file),
               let text = String(data: data, encoding: .utf8) else {
             return nil
         }
         guard let parsed = fallbackReplayComponents(from: text) else {
-            return countLegacyWithoutFrontmatter ? inferLegacyFallbackTimestamp(from: file) : nil
+            return countUnparseableAsDebt ? inferLegacyFallbackTimestamp(from: file) : nil
         }
         let frontmatter = parsed.frontmatter
         let hasIntentFlag = isTruthyFrontmatterValue(frontmatter["intended_brain_store"])
-        guard (hasIntentFlag || countLegacyWithoutFrontmatter),
+        guard (hasIntentFlag || countParsedWithoutIntent),
               isPendingFallbackChunkID(
                 frontmatter["chunk_id"],
                 file: file,
@@ -3675,6 +3681,9 @@ final class BrainDatabase: @unchecked Sendable {
         for line in lines {
             guard let separator = line.firstIndex(of: ":") else { continue }
             let key = String(line[..<separator]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if key.isEmpty {
+                return nil
+            }
             let rawValue = String(line[line.index(after: separator)...])
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
@@ -3700,6 +3709,12 @@ final class BrainDatabase: @unchecked Sendable {
         body: String
     ) -> Bool {
         let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let replayedBodySHA = frontmatter["replayed_body_sha256"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        if !replayedBodySHA.isEmpty {
+            return replayedBodySHA != bodySHA256(body)
+        }
         if normalized.isEmpty || normalized == "null" || normalized == "~" {
             return true
         }
@@ -3712,6 +3727,10 @@ final class BrainDatabase: @unchecked Sendable {
             )
         }
         return false
+    }
+
+    private static func bodySHA256(_ body: String) -> String {
+        SHA256.hash(data: Data(body.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     private static func fallbackChunkID(
