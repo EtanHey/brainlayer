@@ -237,6 +237,49 @@ def test_reembed_backfill_cli_dry_run_reports_pending_count(tmp_path):
     assert "Unvectored active chunks: 1" in result.stdout
 
 
+def test_run_reembed_backfill_dry_run_opens_readonly_store(tmp_path, monkeypatch):
+    from brainlayer import reembed_backfill
+    from brainlayer.reembed_backfill import run_reembed_backfill
+
+    opened_readonly: list[bool] = []
+    closed = False
+
+    class FakeCursor:
+        def execute(self, sql, *_args, **_kwargs):
+            self.sql = str(sql)
+            return self
+
+        def __iter__(self):
+            return iter([])
+
+        def fetchone(self):
+            return [0]
+
+    class FakeConn:
+        def cursor(self):
+            return FakeCursor()
+
+    class FakeStore:
+        def __init__(self, db_path, readonly=False):
+            opened_readonly.append(readonly)
+            if not readonly:
+                raise AssertionError("dry-run must not acquire the writer pidfile")
+            self.conn = FakeConn()
+
+        def close(self):
+            nonlocal closed
+            closed = True
+
+    monkeypatch.setattr(reembed_backfill, "VectorStore", FakeStore)
+
+    result = run_reembed_backfill(db_path=tmp_path / "backfill.db", dry_run=True)
+
+    assert opened_readonly == [True]
+    assert closed is True
+    assert result.before_count == 0
+    assert result.after_count == 0
+
+
 def test_heavy_ml_mutex_ignores_agent_prompt_text(monkeypatch):
     from brainlayer import reembed_backfill
 

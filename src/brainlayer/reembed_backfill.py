@@ -223,7 +223,7 @@ def run_reembed_backfill(
     The run is resumable because each batch is selected with a LEFT JOIN against
     `chunk_vectors`; reruns skip rows that already received vectors.
     """
-    store = VectorStore(db_path)
+    store = VectorStore(Path(db_path), readonly=dry_run)
     start = time.monotonic()
     processed = 0
     failed = 0
