@@ -1,0 +1,1334 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Persistent memory for AI agents — search, think, recall across every conversation">
+      
+      
+      
+        <link rel="canonical" href="https://etanhey.github.io/brainlayer/plans/2026-06-02-phoenix-eval-integration/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/logo.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Phoenix Eval Integration — Design Doc - BrainLayer</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#phoenix-eval-integration-design-doc" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="BrainLayer" class="md-header__button md-logo" aria-label="BrainLayer" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            BrainLayer
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Phoenix Eval Integration — Design Doc
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/EtanHey/brainlayer" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    EtanHey/brainlayer
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="BrainLayer" class="md-nav__button md-logo" aria-label="BrainLayer" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="logo">
+
+    </a>
+    BrainLayer
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/EtanHey/brainlayer" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    EtanHey/brainlayer
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../mcp-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../enrichment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Enrichment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../kg-spec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    KG Specification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../data-locations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Locations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../enrichment-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Enrichment Runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../local-models-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local Models
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../mcp-config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Config
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decisions
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Decisions
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0000-template/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR Template
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0001-sqlite-vec-over-dedicated-vector-db/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0001: sqlite-vec
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0002-reciprocal-rank-fusion-for-hybrid-search/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0002: RRF Hybrid Search
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../roadmap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roadmap
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#0-tldr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0. TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-our-data-phoenix-datasets-experiments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Our data → Phoenix datasets + experiments
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. Our data → Phoenix datasets + experiments">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1a-labeled-retrieval-set-phoenix-dataset-the-human-label-inspection-surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1a. Labeled retrieval set → Phoenix Dataset (the human-label / inspection surface)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1b-abcde-benchmark-phoenix-experiments-variant-comparison" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1b. ABCDE benchmark → Phoenix Experiments (variant comparison)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-sandbox-from-brainlayer-hard-isolation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Sandbox from BrainLayer (hard isolation)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-phone-access-layer-compute-stays-on-the-mac" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Phone-access layer (compute stays on the Mac)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-air-gapped-confirmation-for-etan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Air-gapped confirmation (for Etan)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-clean-display-query-retrieved-context-per-metric-passfail" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Clean display: query + retrieved-context + per-metric pass/fail
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-reconcile-promptfoo-deviation-found-tonight" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. RECONCILE: promptfoo deviation (found tonight)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-reconcile-etans-eval-ui-observations-folded-into-the-phoenix-design" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. RECONCILE: Etan's eval-UI observations (folded into the Phoenix design)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-build-plan-delegated-to-codex-xhigh-gated-by-lead" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Build plan (delegated to Codex xhigh — gated by LEAD)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        References
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="phoenix-eval-integration-design-doc">Phoenix Eval Integration — Design Doc</h1>
+<blockquote>
+<p>Author: brainlayerClaude-LEAD-v6 · 2026-06-02
+Status: <strong>DESIGN (gate-before-build)</strong>. The BUILD is delegated to a fresh Codex (xhigh) and gated by LEAD.
+Decision context: Etan picked <strong>Arize Phoenix</strong> as the local retrieval-eval platform (see <code>/tmp/eval_platform_comparison.md</code>, v5's cited comparison; Phoenix = top pick on all 4 needs + strongest privacy + lowest setup).</p>
+</blockquote>
+<hr />
+<h2 id="0-tldr">0. TL;DR</h2>
+<p>Stand up <strong>Arize Phoenix self-hosted at <code>localhost:6006</code></strong> as a <strong>read-only eval viewer</strong> over our existing ABCDE retrieval data. Phoenix gets its <strong>own storage</strong> (its SQLite/Postgres volume) — it <strong>never</strong> touches the BrainLayer DB and <strong>never</strong> calls <code>brain_store</code>. We push two things into it:</p>
+<ol>
+<li><strong>A labeled dataset</strong> (51 queries → returned chunks → relevance labels) so Etan can see <strong>query + retrieved context + per-metric pass/fail</strong> cleanly.</li>
+<li><strong>Experiments</strong> comparing ABCDE variants <strong>A / C / E</strong> on <code>recall@{1,5,10}</code>, <code>MRR</code>, <code>nDCG@10</code> over the n=893 benchmark — as side-by-side experiment runs.</li>
+</ol>
+<p>Pure retrieval metrics = <strong>ZERO network</strong> (air-gapped). The only optional egress is an LLM-judge relevance pass, which uses a provider key we already hold (Nebius/Grok). Phone access: recommend a <strong>Tailscale tunnel to <code>localhost:6006</code></strong> for live viewing, with <strong>agent-html static snapshots</strong> as the zero-trust fallback.</p>
+<p><strong>Plus two reconciliations folded in (§6, §7):</strong> the <em>promptfoo</em> UI Etan saw tonight (a deviation from the Phoenix standard), and the query-vs-description / truncation / only-failing display confusion (a quirk of that promptfoo tool, fixed by Phoenix's layout).</p>
+<hr />
+<h2 id="1-our-data-phoenix-datasets-experiments">1. Our data → Phoenix datasets + experiments</h2>
+<p>Phoenix's model: a <strong>Dataset</strong> is a versioned set of examples (input → expected → metadata); an <strong>Experiment</strong> runs a task over a dataset and attaches <strong>evaluators</strong> (scores) per example; the UI diffs experiments and supports <strong>human annotations</strong>. We map our two artifacts onto this directly.</p>
+<h3 id="1a-labeled-retrieval-set-phoenix-dataset-the-human-label-inspection-surface">1a. Labeled retrieval set → Phoenix <strong>Dataset</strong> (the human-label / inspection surface)</h3>
+<p>Source: <code>/tmp/labeled_eval_candidates.json</code> — <strong>51 queries</strong>, each with <code>returned_chunks[]</code> (machine-proposed labels). Distribution: <strong>236 <code>relevant</code> + 20 <code>not</code></strong> chunk labels; <strong>5 queries flagged <code>suspected_miss</code></strong>, <strong>8 <code>suspected_misorder</code></strong>.</p>
+<p>Per-query record shape (verified):
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>{ &quot;query&quot;: &quot;...&quot;,                       # the search string sent to the retriever
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  &quot;returned_chunks&quot;: [
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    { &quot;id&quot;: &quot;brainbar-7f14a516-78a&quot;,
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>      &quot;snippet&quot;: &quot;...&quot;,                 # retrieved context (what the user actually grades)
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>      &quot;machine_label&quot;: &quot;relevant&quot;|&quot;not&quot;,
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>      &quot;why&quot;: &quot;token overlap 0.86 ...&quot; } ],
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>  &quot;suspected_miss&quot;: bool, &quot;suspected_misorder&quot;: bool, &quot;notes&quot;: &quot;...&quot; }
+</code></pre></div></p>
+<p><strong>Mapping → one Phoenix dataset <code>brainlayer-labeled-51</code>:</strong>
+- <strong>example input</strong> = <code>query</code> (the retriever input — keep this distinct from any human label; see §7).
+- <strong>example output / reference</strong> = the ordered <code>returned_chunks</code> (id + snippet + <code>why</code>), rendered as the <strong>retrieved context</strong> block.
+- <strong>metadata</strong> = <code>machine_label</code> per chunk, <code>suspected_miss</code>, <code>suspected_misorder</code>, <code>notes</code>, <code>n_chunks</code>.
+- <strong>annotations</strong> = Etan's human relevance label per chunk (Phoenix human-annotation UI), which <strong>supersedes</strong> <code>machine_label</code>. This is the "is this chunk actually relevant?" pass.</p>
+<p>This is the surface that answers Etan's confusion: each row shows <strong>query</strong> (input) + <strong>retrieved chunks</strong> (context, full snippet, not truncated) + <strong>per-chunk label</strong> and <strong>per-query flags</strong>, and <strong>all rows are navigable</strong> (not just failures).</p>
+<h3 id="1b-abcde-benchmark-phoenix-experiments-variant-comparison">1b. ABCDE benchmark → Phoenix <strong>Experiments</strong> (variant comparison)</h3>
+<p>Source: <code>/tmp/retrieval_benchmark_results.json</code> (aggregate metrics, n=893) + raw rows <code>~/Gits/brainlayer-abcde/eval_results/abcde_enrich_nebius.jsonl</code> (<strong>2624 ok / 2679 — PERSONAL, stays local</strong>).</p>
+<p>Verified <code>meta</code>: <code>n_chunks=893</code>, method = pure-python term-overlap×idf self-retrieval (queries = top-12 raw-content tokens, variant-agnostic; gold = source chunk). <strong>Caveat baked into meta:</strong> self-retrieval favors verbatim-copying variants — real quality needs the LLM-judge pass (parked).</p>
+<p>Verified <code>per_variant[A..E]</code> keys: <code>ok_chunks, scored_queries, indexed_coverage, recall@1, recall@5, recall@10, mrr, ndcg@10</code>. Example (A): recall@1 <strong>0.620</strong>, recall@5 0.849, recall@10 0.917, MRR 0.726, nDCG@10 0.769.</p>
+<p><strong>Mapping → Phoenix experiments, one per variant we care about (A / C / E):</strong>
+- Build a <strong>dataset <code>brainlayer-abcde-893</code></strong> from the n=893 gold pairs (query tokens → gold chunk id), metadata-only (no full personal text needed for the metric — the metric is id-match).
+- Each <strong>variant = one experiment run</strong> over that dataset; the <strong>task</strong> = "retrieve top-k for this query under variant V"; the <strong>evaluators</strong> = <code>recall@1/5/10</code>, <code>MRR</code>, <code>nDCG@10</code> (Phoenix native retrieval evals: nDCG@k / precision@k / hit).
+- Phoenix's <strong>experiment-diff</strong> view then shows <strong>A vs C vs E side-by-side</strong> per metric — exactly the comparison the headline result needs.</p>
+<p><strong>Headline to preserve in the UI (from boot):</strong> E (hyde-structure) consistently best but <strong>MODEST</strong> — E&gt;C&gt;A within ~3% (recall@1 E 0.638 / C 0.625 / A 0.620). The n=24 micro (C 0.96 vs A 0.61) <strong>OVERSTATED</strong> it — small-corpus artifact. The Phoenix experiment-diff makes the "modest, not dramatic" truth visually obvious (overlapping bars), which is the honest framing.</p>
+<blockquote>
+<p><strong>Ingest path, two options for the Codex (gate on whichever is cleaner):</strong>
+(a) <strong>Pre-computed provider</strong> (fastest, mirrors what already works): a thin task fn that <em>replays</em> our precomputed <code>returned_chunks</code> per query — no live retrieval call, deterministic, fully offline. Recommended for v1.
+(b) <strong>Live retrieval task</strong>: task fn calls BrainLayer's retriever (read-only <code>brain_search</code>-equivalent) at eval time. Higher fidelity but couples Phoenix runs to the live DB; defer to v2.</p>
+</blockquote>
+<hr />
+<h2 id="2-sandbox-from-brainlayer-hard-isolation">2. Sandbox from BrainLayer (hard isolation)</h2>
+<p><strong>Requirement: Phoenix must not read or write the BrainLayer DB, and must never <code>brain_store</code>.</strong></p>
+<ul>
+<li><strong>Storage:</strong> Phoenix self-host uses its <strong>own</strong> persistence — a dedicated Docker volume (Postgres) or a local SQLite file under a Phoenix-only working dir (e.g. <code>~/.local/share/phoenix/</code>). <strong>Never</strong> point <code>PHOENIX_SQL_DATABASE_URL</code> at <code>~/.local/share/brainlayer/brainlayer.db</code>.</li>
+<li><strong>Data flow is one-way and snapshot-based:</strong> we <em>export</em> JSON snapshots (the 51-query set; the n=893 aggregate + id-only gold pairs) from <code>/tmp</code> artifacts into Phoenix datasets. BrainLayer is the source; Phoenix is a downstream read-only mirror. No process writes back to BrainLayer.</li>
+<li><strong>No MCP write tools in the Phoenix path.</strong> The Codex build gets <strong>read-only</strong> data files; it does <strong>not</strong> import <code>vector_store.py</code> write paths and does <strong>not</strong> call any <code>brain_*</code> mutate tool.</li>
+<li><strong>Process isolation:</strong> Phoenix runs in its own container / venv. It does not share BrainLayer's socket (<code>/tmp/brainlayer.sock</code>), enrichment lock, or WAL. Zero contention with the indexer/enrichment workers (respects the CLAUDE.md bulk-op safety rules by simply never touching the DB).</li>
+</ul>
+<p>Net: a leak is structurally impossible because Phoenix has no handle to the BrainLayer DB and no write tool.</p>
+<hr />
+<h2 id="3-phone-access-layer-compute-stays-on-the-mac">3. Phone-access layer (compute stays on the Mac)</h2>
+<p>Phoenix UI binds <code>localhost:6006</code> on the Mac. Three ways to reach it from a phone:</p>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>What Etan gets</th>
+<th>Privacy posture</th>
+<th>Effort</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>(a) Tailscale tunnel</strong> ⭐</td>
+<td><strong>LIVE</strong> Phoenix UI on phone (annotate, diff experiments) over the tailnet</td>
+<td>Data never leaves Etan's devices; WireGuard E2E, no public exposure</td>
+<td><strong>Low</strong> (already-common in this ecosystem)</td>
+</tr>
+<tr>
+<td>(b) agent-html / Lakebed <strong>static snapshots</strong></td>
+<td><strong>Read-only</strong> rendered tables/charts on phone, published as static HTML</td>
+<td>Snapshot is a derived view; <strong>must scrub personal chunk text before publish</strong></td>
+<td>Low-Med</td>
+</tr>
+<tr>
+<td>(c) MCP endpoint</td>
+<td>Query eval results via an MCP tool from any Claude surface</td>
+<td>Stays in the agent layer; no browser</td>
+<td>Med (build a tool)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Recommendation: (a) Tailscale</strong> for live interaction (Etan can actually <em>annotate</em> relevance from the phone, which (b) can't do), with <strong>(b) static snapshots as the zero-trust fallback</strong> for quick read-only glances and for sharing a frozen result. (c) is a nice-to-have later, not v1.</p>
+<p><strong>Guardrail for (b):</strong> static snapshots of the <strong>labeled-51</strong> set contain personal chunk snippets → snapshots must be <strong>metric/aggregate-only</strong> OR scrubbed. The <strong>893 experiment-diff</strong> (id-match metrics, no full text) is safe to snapshot as-is. This mirrors the live PII-incident lesson (§ parked) — never publish raw personal chunk text.</p>
+<hr />
+<h2 id="4-air-gapped-confirmation-for-etan">4. Air-gapped confirmation (for Etan)</h2>
+<ul>
+<li><strong>Pure retrieval metrics</strong> (<code>recall@k</code>, <code>MRR</code>, <code>nDCG@10</code>) over our own labels/gold = <strong>ZERO network</strong>. Phoenix self-host is explicitly air-gappable ("fully air-gapped, nothing sent to Arize" — <code>arize.com/docs/phoenix/self-hosting</code>). Disable any usage telemetry env flag at boot to be belt-and-suspenders.</li>
+<li><strong>The ONLY optional egress</strong> is the <strong>LLM-judge relevance scoring</strong> (faithfulness/usefulness) — and that's opt-in, calling a provider <strong>we</strong> pick with <strong>our</strong> key (Nebius working / Grok ~$1 left). Smoke-first the key before any metered judge run (boot rule). The deterministic metric path needs <strong>no</strong> key at all.</li>
+<li>Verify post-boot: <code>lsof -i -P | grep phoenix</code> should show only <code>localhost:6006</code> listeners, no outbound — confirm during the build gate.</li>
+</ul>
+<hr />
+<h2 id="5-clean-display-query-retrieved-context-per-metric-passfail">5. Clean display: query + retrieved-context + per-metric pass/fail</h2>
+<p>This is the explicit ask. Phoenix's example/experiment view must render, per row:
+1. <strong>Query</strong> — labeled "Query (retriever input)": the exact search string sent to the retriever (vectorized + FTS).
+2. <strong>Retrieved context</strong> — the ordered chunks (id, importance, type, full snippet, retrieval <code>why</code>), <strong>not truncated</strong>, scrollable.
+3. <strong>Per-metric pass/fail</strong> — each evaluator (<code>recall@1</code>, <code>hit</code>, <code>nDCG@10</code>, human-relevance) shown as its own column with a clear pass/fail/score, <strong>all rows navigable</strong> regardless of pass/fail.</p>
+<p>The <code>provider.js</code> rendering already built in <code>brainlayer-eval-ui</code> (renders id + machine_label + importance + type + tags + key_facts + summary + full_text per chunk) is a <strong>good content template</strong> to port into the Phoenix task fn — we reuse the rendering, drop the promptfoo harness (§6).</p>
+<hr />
+<h2 id="6-reconcile-promptfoo-deviation-found-tonight">6. RECONCILE: promptfoo deviation (found tonight)</h2>
+<p><strong>Finding: an agent stood up a <code>promptfoo</code> eval UI — this is a deviation from the Phoenix standard.</strong></p>
+<ul>
+<li><strong>Location:</strong> <code>~/Gits/brainlayer-eval-ui/</code> (separate repo). Created <strong>today 2026-06-02, 12:16–12:20</strong>.</li>
+<li><strong>Contents:</strong> <code>package.json</code> → <code>promptfoo@^0.121.13</code>; <code>promptfooconfig.json</code> (26 KB, "BrainLayer ABCDE Retrieval Grading — human relevance labeling", 51 tests); <code>provider.js</code> (custom provider that <strong>replays</strong> precomputed BrainLayer retrieval results — <strong>no LLM calls</strong>); <code>data/eval_dataset.json</code> (627 KB, <strong>personal chunk text — local only</strong>); <code>node_modules/</code>.</li>
+<li><strong>It ran:</strong> a task output shows <code>Port 15500 is already in use. Do you have another Promptfoo instance running?</code> → <code>promptfoo view</code> was launched. This is the eval UI Etan saw tonight.</li>
+<li><strong>Risk: LOW / contained.</strong> The repo is <strong>local-only</strong>: <code>master</code> has <strong>no commits</strong>, <strong>no remote</strong>, everything untracked. The 627 KB personal dataset has <strong>not</strong> left the machine. No public exposure (unlike the PR #430 incident). But it does hold raw personal chunks on disk in a stray repo.</li>
+</ul>
+<p><strong>Disposition (LEAD recommendation):</strong>
+- ✅ <strong>Standardize on Arize Phoenix</strong> (Etan's pick). promptfoo was a quick-and-dirty local grading harness, not the chosen platform.
+- ♻️ <strong>Salvage, don't trash:</strong> port <code>provider.js</code>'s chunk-rendering and reuse <code>data/eval_dataset.json</code> as a Phoenix dataset source. The <em>data</em> is good; only the <em>harness</em> changes.
+- 🧹 <strong>Retire <code>brainlayer-eval-ui</code></strong> once Phoenix replays the same 51 set — and <strong>scrub <code>data/eval_dataset.json</code></strong> (personal text) or move it under <code>docs.local/</code> (gitignored) so it's not a loose personal-data repo. <strong>Ask Etan before deleting</strong> (personal-data rule).
+- 📌 No git history to purge (no commits, no remote) — cleanup is just <code>rm -rf</code> after Phoenix parity + Etan OK.</p>
+<p><strong>Why it confused the picture:</strong> it's a <em>second</em> eval UI living outside the brainlayer repo, named <code>brainlayer-eval-ui</code>, so "I thought we were using Phoenix" is exactly right — we <em>are</em>; this was an unsanctioned detour.</p>
+<hr />
+<h2 id="7-reconcile-etans-eval-ui-observations-folded-into-the-phoenix-design">7. RECONCILE: Etan's eval-UI observations (folded into the Phoenix design)</h2>
+<p>Etan saw, in the promptfoo UI: (1) <strong>"query" and "description" nearly identical</strong>, some descriptions <strong>cut mid</strong>; (2) could <strong>only navigate FAILING cases</strong>. Root causes, verified against <code>promptfooconfig.json</code>/<code>provider.js</code>:</p>
+<ul>
+<li><strong>query == description:</strong> In <code>promptfooconfig.json</code> <strong>every test sets <code>description</code> = the <code>query</code> string verbatim</strong> (e.g. both = <code>"gen-6 orc SESSION CHECKPOINT 2026-06-01 ETAN DECISIONS"</code>). They look identical <strong>because they are the same string</strong> — the generator used the query as the human label.</li>
+<li><strong>Clarification for Etan:</strong> <strong><code>query</code></strong> = the search string sent to the retriever (vectorized + FTS). <strong><code>description</code></strong> = a human label <em>of the test case</em>. They only collide here because whoever generated the config set the label = the query. In Phoenix we'll label the column <strong>"Query (retriever input)"</strong> and keep any human description as a <em>distinct</em> optional field, so they never masquerade as each other.</li>
+<li><strong>descriptions cut mid:</strong> promptfoo's web table <strong>truncates</strong> the description column. A <strong>display quirk of that tool</strong>, not missing data — the full string is present in the config. Phoenix renders the full query + scrollable context (§5).</li>
+<li><strong>only FAILING cases navigable:</strong> <code>promptfooconfig.json</code> injects synthetic <strong>always-fail</strong> assertions on flagged rows — <code>false /* ZERO-CHUNK GAP */</code> and <code>false /* SUSPECTED MISS */</code>. So the only "failures" promptfoo surfaces are the <strong>auto-flagged</strong> rows (the 5 misses / 8 misorders), and promptfoo's UI lets you filter to failures. That's a <strong>filter/assertion artifact</strong>, not "passing cases are hidden." Phoenix shows <strong>all 51 rows</strong>, every metric as its own pass/fail column, navigable regardless of outcome.</li>
+</ul>
+<p>Net: all three are <strong>display/harness quirks of promptfoo</strong>, fully explained, and <strong>designed away</strong> by the Phoenix layout in §5.</p>
+<hr />
+<h2 id="8-build-plan-delegated-to-codex-xhigh-gated-by-lead">8. Build plan (delegated to Codex xhigh — gated by LEAD)</h2>
+<p><strong>Scope for the worker (v1, read-only, offline-first):</strong>
+1. Phoenix self-host at <code>localhost:6006</code>, <strong>own storage</strong> (Phoenix-only volume/dir), telemetry off, sandboxed from BrainLayer DB (§2).
+2. Loader script: <code>/tmp/labeled_eval_candidates.json</code> → dataset <code>brainlayer-labeled-51</code> (input=query, context=chunks, metadata=labels/flags), human-annotation enabled.
+3. Loader script: n=893 aggregate + id-only gold → dataset <code>brainlayer-abcde-893</code>; <strong>experiments A / C / E</strong> with native <code>recall@k</code>/<code>nDCG@10</code>/<code>hit</code> evaluators; experiment-diff view.
+4. Reuse <code>brainlayer-eval-ui/provider.js</code> chunk-rendering for the context block (§5); <strong>drop promptfoo</strong>.
+5. Verify air-gap: <code>lsof</code> shows only localhost listener, no outbound on the metric path (§4).
+6. <strong>Do NOT</strong> wire any <code>brain_*</code> write tool; <strong>do NOT</strong> open the BrainLayer DB; <strong>do NOT</strong> commit personal data (<code>eval_results/*.jsonl</code>, <code>data/eval_dataset.json</code> stay local/gitignored).</p>
+<p><strong>Gate (LEAD verifies before "done"):</strong> (a) <code>localhost:6006</code> up, datasets + experiments visible; (b) a row shows query + full context + per-metric columns, all 51 navigable; (c) <code>lsof</code> clean (no egress on metric path); (d) no BrainLayer DB handle, no <code>brain_store</code> call, no personal data staged for commit; (e) A/C/E diff reproduces the modest E&gt;C&gt;A (~3%) headline.</p>
+<p><strong>Out of scope v1 (parked):</strong> LLM-judge quality pass (needs Research-B kappa floors + metered key smoke-first); live-retrieval task fn (§1b option b); MCP endpoint (§3c); Tailscale wiring (Etan device-side).</p>
+<hr />
+<h2 id="references">References</h2>
+<ul>
+<li><code>/tmp/eval_platform_comparison.md</code> — cited platform comparison (Phoenix top pick).</li>
+<li><code>/tmp/labeled_eval_candidates.json</code> — 51-query labeled set (236 relevant / 20 not; 5 miss / 8 misorder).</li>
+<li><code>/tmp/retrieval_benchmark_results.json</code> — n=893 per-variant metrics (A..E).</li>
+<li><code>~/Gits/brainlayer-abcde/eval_results/abcde_enrich_nebius.jsonl</code> — raw rows (2624 ok, PERSONAL, local-only).</li>
+<li><code>~/Gits/brainlayer-eval-ui/</code> — the promptfoo deviation (local, uncommitted) — salvage data, retire harness.</li>
+<li>Phoenix self-host / air-gap / retrieval evals: arize.com/docs/phoenix/self-hosting · /deployment-options/docker · /cookbook/evaluation/evaluate-rag</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+  <div class="ecosystem-links">
+    <a href="https://brainlayer.etanheyman.com">BrainLayer</a>
+    <span class="sep">/</span>
+    <a href="https://voicelayer.etanheyman.com">VoiceLayer</a>
+    <span class="sep">/</span>
+    <a href="https://cmuxlayer.etanheyman.com">cmuxLayer</a>
+    <span class="sep">/</span>
+    <a href="https://github.com/EtanHey">Golems</a>
+  </div>
+  
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+  
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  <script>
+    // Inject back-to-site link into the header, after the title
+    (function() {
+      var title = document.querySelector('.md-header__title');
+      if (!title) return;
+      var link = document.createElement('a');
+      link.href = 'https://brainlayer.etanheyman.com';
+      link.className = 'header-back';
+      link.innerHTML = '&larr; Site';
+      title.after(link);
+    })();
+  </script>
+
+  </body>
+</html>
