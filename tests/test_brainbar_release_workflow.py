@@ -124,9 +124,44 @@ def _assert_signing_decode_is_macos_safe(job: dict) -> None:
 
 def _assert_launchagents_are_packaged(job: dict) -> None:
     runs = "\n".join(_step_run(step) for step in job.get("steps", []) if isinstance(step, dict))
+    assert "AppIcon.icns" in runs, "BrainBar.app must package the menu bar app icon resource"
     assert "Contents/Resources/LaunchAgents" in runs, "BrainBar.app must package launch agent templates"
     assert "com.brainlayer.brainbar.plist" in runs, "BrainBar.app must include the UI launch agent plist"
     assert "com.brainlayer.brainbar-daemon.plist" in runs, "BrainBar.app must include the daemon launch agent plist"
+
+
+def _assert_gatekeeper_ready_release_contract(job: dict) -> None:
+    runs = "\n".join(_step_run(step) for step in job.get("steps", []) if isinstance(step, dict))
+    assert "::warning title=BrainBar signing skipped" not in runs, (
+        "BrainBar release workflow must not upload unsigned app zips when Developer ID secrets are missing"
+    )
+    assert "::warning title=BrainBar notarization skipped" not in runs, (
+        "BrainBar release workflow must not upload unnotarized app zips when notary secrets are missing"
+    )
+    assert "exit 1" in runs and "BrainBar signing unavailable" in runs, (
+        "BrainBar release workflow must fail closed when Developer ID signing secrets are missing"
+    )
+    assert "exit 1" in runs and "BrainBar notarization unavailable" in runs, (
+        "BrainBar release workflow must fail closed when notary secrets are missing"
+    )
+    assert "codesign --verify --deep --strict --verbose=4 dist/BrainBar.app" in runs, (
+        "BrainBar release workflow must verify the signed app resource seal before notarization"
+    )
+    assert "xcrun stapler validate dist/BrainBar.app" in runs, (
+        "BrainBar release workflow must validate the stapled notarization ticket"
+    )
+    assert "spctl --assess --type execute --verbose=4 dist/BrainBar.app" in runs, (
+        "BrainBar release workflow must require Gatekeeper acceptance before packaging"
+    )
+    assert 'ditto -x -k dist/BrainBar.zip "$verify_dir"' in runs, (
+        "BrainBar release workflow must unpack the final zip before publishing"
+    )
+    assert 'codesign --verify --deep --strict --verbose=4 "$verify_dir/BrainBar.app"' in runs, (
+        "BrainBar release workflow must verify the packaged app signature before publishing"
+    )
+    assert 'spctl --assess --type execute --verbose=4 "$verify_dir/BrainBar.app"' in runs, (
+        "BrainBar release workflow must require Gatekeeper acceptance on the packaged app before publishing"
+    )
 
 
 def _assert_action_refs_are_pinned(job: dict) -> None:
@@ -158,6 +193,7 @@ def _assert_release_workflow_contract(workflow: dict) -> None:
     _assert_version_stamp(job)
     _assert_signing_decode_is_macos_safe(job)
     _assert_launchagents_are_packaged(job)
+    _assert_gatekeeper_ready_release_contract(job)
     _assert_no_zip_guardrail_before_release(job)
 
 
@@ -181,3 +217,14 @@ def test_release_workflow_without_no_zip_guardrail_fails_contract() -> None:
 
     with pytest.raises(AssertionError, match="missing or empty"):
         _assert_no_zip_guardrail_before_release(job)
+
+
+def test_release_workflow_with_signing_skip_fails_contract() -> None:
+    workflow = deepcopy(_load_workflow())
+    job = _release_job(workflow)
+    for step in job.get("steps", []):
+        if isinstance(step, dict) and step.get("name") == "Import Developer ID certificate":
+            step["run"] += "\necho '::warning title=BrainBar signing skipped::bad'\n"
+
+    with pytest.raises(AssertionError, match="unsigned app zips"):
+        _assert_gatekeeper_ready_release_contract(job)

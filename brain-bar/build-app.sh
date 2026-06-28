@@ -647,6 +647,7 @@ echo "[build-app] Signing..."
 codesign --force --deep --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_DIR"
 
 echo "[build-app] Verifying signature..."
+codesign --verify --deep --strict --verbose=4 "$APP_DIR"
 if ! codesign -dv --verbose=4 "$APP_DIR" 2>&1 | grep -F "Authority=$SIGN_IDENTITY" >/dev/null; then
     echo "[build-app] ERROR: Installed app is not signed with $SIGN_IDENTITY"
     codesign -dv --verbose=4 "$APP_DIR" 2>&1
