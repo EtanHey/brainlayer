@@ -315,9 +315,11 @@ private struct BrainBarDashboardView: View {
     let hotkeyStatus: String
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var previousAllCommitBuckets: [Int] = []
     @State private var previousWriteBuckets: [Int] = []
     @State private var previousWatcherBuckets: [Int] = []
     @State private var previousEnrichmentBuckets: [Int] = []
+    @State private var allCommitPulseRevision = 0
     @State private var writePulseRevision = 0
     @State private var watcherPulseRevision = 0
     @State private var enrichmentPulseRevision = 0
@@ -326,9 +328,10 @@ private struct BrainBarDashboardView: View {
     @State private var vectorSignalDetailExpanded = false
     @State private var vectorSignalRowFrame: CGRect = .zero
     @State private var vectorSignalRootFrame: CGRect = .zero
-    /// ONE shared timeframe for ALL pipeline graphs (agent / watcher /
-    /// enrichment). Selecting 3h/24h re-fetches REAL DB history for that window
-    /// via the collector and feeds every chart at once — no per-card expand.
+    /// ONE shared timeframe for ALL pipeline graphs (all commits / agent /
+    /// watcher / enrichment). Selecting 3h/24h re-fetches REAL DB history for
+    /// that window via the collector and feeds every chart at once — no
+    /// per-card expand.
     @State private var selectedTimeframe: PipelineTimeframe = .live
     @State private var vectorDetailHeight: CGFloat = 0
 
@@ -427,9 +430,20 @@ private struct BrainBarDashboardView: View {
             }
         }
         .onAppear {
+            previousAllCommitBuckets = collector.stats.recentActivityBuckets
             previousWriteBuckets = collector.stats.recentAgentWriteBuckets
             previousWatcherBuckets = collector.stats.recentWatcherWriteBuckets
             previousEnrichmentBuckets = collector.stats.recentEnrichmentBuckets
+        }
+        .onChange(of: collector.stats.recentActivityBuckets) { _, newBuckets in
+            if BrainBarPipelinePulseGate.shouldPulse(
+                previous: previousAllCommitBuckets,
+                current: newBuckets,
+                timeframe: selectedTimeframe
+            ) {
+                allCommitPulseRevision += 1
+            }
+            previousAllCommitBuckets = newBuckets
         }
         .onChange(of: collector.stats.recentAgentWriteBuckets) { _, newBuckets in
             if BrainBarLivePulse.shouldPulse(previous: previousWriteBuckets, current: newBuckets) {
@@ -620,7 +634,7 @@ private struct BrainBarDashboardView: View {
                 HStack(alignment: .center, spacing: 12) {
                     BrainBarSectionLabel(
                         "Ingest",
-                        caption: "What is landing — agent stores and the JSONL watcher — plus how well each retrieval signal covers it."
+                        caption: "What is landing — all committed chunks, agent MCP stores, and the JSONL watcher — plus retrieval signal coverage."
                     )
                     Spacer(minLength: 8)
                     sharedTimeframeSelector
@@ -629,7 +643,7 @@ private struct BrainBarDashboardView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     BrainBarSectionLabel(
                         "Ingest",
-                        caption: "What is landing — agent stores and the JSONL watcher — plus how well each retrieval signal covers it."
+                        caption: "What is landing — all committed chunks, agent MCP stores, and the JSONL watcher — plus retrieval signal coverage."
                     )
                     sharedTimeframeSelector
                 }
@@ -661,10 +675,10 @@ private struct BrainBarDashboardView: View {
         )
     }
 
-    /// BAND 1 — the two separately-scaled write cards, ALWAYS visible at resting
+    /// BAND 1 — the separately-scaled write cards, ALWAYS visible at resting
     /// height. Stacked full-width is primary because full horizontal resolution
-    /// is what makes the low-amplitude agent series legible. Clicking a card no
-    /// longer collapses it or its sibling.
+    /// is what makes low-amplitude series legible. Clicking a card no longer
+    /// collapses it or its siblings.
     @ViewBuilder
     private func writeCardsBand(layout: BrainBarDashboardLayout) -> some View {
         let fetchedAt = collector.lastDataFetchedAt ?? Date()
@@ -672,14 +686,32 @@ private struct BrainBarDashboardView: View {
 
         ViewThatFits(in: .horizontal) {
             VStack(alignment: .leading, spacing: 12) {
+                allCommitsCard(layout: layout, restingHeight: restingHeight, fetchedAt: fetchedAt)
                 agentStoresCard(layout: layout, restingHeight: restingHeight, fetchedAt: fetchedAt)
                 watcherCard(layout: layout, restingHeight: restingHeight, fetchedAt: fetchedAt)
             }
             VStack(alignment: .leading, spacing: 12) {
+                allCommitsCard(layout: layout, restingHeight: restingHeight, fetchedAt: fetchedAt)
                 agentStoresCard(layout: layout, restingHeight: restingHeight, fetchedAt: fetchedAt)
                 watcherCard(layout: layout, restingHeight: restingHeight, fetchedAt: fetchedAt)
             }
         }
+    }
+
+    private func allCommitsCard(
+        layout: BrainBarDashboardLayout,
+        restingHeight: CGFloat,
+        fetchedAt: Date
+    ) -> some View {
+        BrainBarPipelineSeriesCard(
+            series: .allCommits,
+            lane: pipelineFlowSummary.lane(for: .allCommits),
+            pulseRevision: allCommitPulseRevision,
+            compact: layout.compactCards,
+            chartHeight: restingHeight,
+            fetchedAt: fetchedAt,
+            timeframe: selectedTimeframe
+        )
     }
 
     private func agentStoresCard(
@@ -1561,6 +1593,17 @@ enum PipelineTimeframe: String, CaseIterable, Identifiable {
     }
 }
 
+enum BrainBarPipelinePulseGate {
+    static func shouldPulse(
+        previous: [Int],
+        current: [Int],
+        timeframe: PipelineTimeframe
+    ) -> Bool {
+        guard timeframe == .live else { return false }
+        return BrainBarLivePulse.shouldPulse(previous: previous, current: current)
+    }
+}
+
 /// The single shared Live/3h/24h selector that drives every pipeline graph.
 /// Replaces the removed per-card 30m/3h/24h picker. A small spinner appears
 /// while a wider window is being fetched from the DB.
@@ -1614,7 +1657,7 @@ struct BrainBarSharedTimeframeSelector: View {
     }
 }
 
-/// A single-series pipeline card (Agent stores / JSONL watcher / Enrichment).
+/// A single-series pipeline card (All commits / Agent MCP stores / JSONL watcher / Enrichment).
 ///
 /// Unlike `BrainBarFlowLaneCard` (kept for legacy `ingress`/diagnostics callers),
 /// this card plots exactly ONE series so `SparklineChartPresentation.maxValue`
@@ -1891,7 +1934,7 @@ private struct BrainBarPipelinePanelPreviewView: View {
                 HStack(alignment: .center, spacing: 12) {
                     BrainBarSectionLabel(
                         "Ingest",
-                        caption: "What is landing — agent stores and the JSONL watcher — plus how well each retrieval signal covers it."
+                        caption: "What is landing — all committed chunks, agent MCP stores, and the JSONL watcher — plus retrieval signal coverage."
                     )
                     Spacer(minLength: 8)
                     BrainBarSharedTimeframeSelector(selection: $selectedTimeframe)
@@ -1899,10 +1942,12 @@ private struct BrainBarPipelinePanelPreviewView: View {
 
                 ViewThatFits(in: .horizontal) {
                     VStack(alignment: .leading, spacing: 12) {
+                        seriesCard(.allCommits, layout: layout, restingHeight: restingHeight)
                         seriesCard(.agentStores, layout: layout, restingHeight: restingHeight)
                         seriesCard(.jsonlWatcher, layout: layout, restingHeight: restingHeight)
                     }
                     VStack(alignment: .leading, spacing: 12) {
+                        seriesCard(.allCommits, layout: layout, restingHeight: restingHeight)
                         seriesCard(.agentStores, layout: layout, restingHeight: restingHeight)
                         seriesCard(.jsonlWatcher, layout: layout, restingHeight: restingHeight)
                     }

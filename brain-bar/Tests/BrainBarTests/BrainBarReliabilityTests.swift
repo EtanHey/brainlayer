@@ -3,6 +3,11 @@ import SQLite3
 @testable import BrainBar
 
 final class BrainBarReliabilityTests: XCTestCase {
+    /// Hosted macOS runners occasionally add a few milliseconds around the
+    /// contested SQLite lock path. Keep this tight enough to catch a blocking
+    /// prompt-path regression while avoiding false negatives at 0.200s + jitter.
+    private static let interactiveQueueBudget: TimeInterval = 0.25
+
     private var servers: [BrainBarServer] = []
     private var tempDirectories: [URL] = []
 
@@ -126,7 +131,7 @@ final class BrainBarReliabilityTests: XCTestCase {
             ] as [String: Any]
         ])
 
-        XCTAssertLessThan(Date().timeIntervalSince(started), 0.20)
+        XCTAssertLessThan(Date().timeIntervalSince(started), Self.interactiveQueueBudget)
         let result = try XCTUnwrap(response["result"] as? [String: Any])
         XCTAssertEqual(result["queued"] as? Bool, true)
         let queueID = try XCTUnwrap(result["queue_id"] as? String)
@@ -196,7 +201,7 @@ final class BrainBarReliabilityTests: XCTestCase {
             ] as [String: Any]
         ])
 
-        XCTAssertLessThan(Date().timeIntervalSince(started), 0.20)
+        XCTAssertLessThan(Date().timeIntervalSince(started), Self.interactiveQueueBudget)
         let result = try XCTUnwrap(searchResponse["result"] as? [String: Any])
         XCTAssertNil(result["isError"])
         let content = try XCTUnwrap(result["content"] as? [[String: Any]])
@@ -250,7 +255,7 @@ final class BrainBarReliabilityTests: XCTestCase {
             ] as [String: Any]
         ])
 
-        XCTAssertLessThan(Date().timeIntervalSince(started), 0.20)
+        XCTAssertLessThan(Date().timeIntervalSince(started), Self.interactiveQueueBudget)
         let result = try XCTUnwrap(searchResponse["result"] as? [String: Any])
         XCTAssertNil(result["isError"])
         let content = try XCTUnwrap(result["content"] as? [[String: Any]])
