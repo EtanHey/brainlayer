@@ -319,6 +319,7 @@ def _doctor_config(tmp_path: Path, db_path: Path):
         queue_dir=queue_dir,
         watcher_health_path=watcher_health_path,
         drain_health_path=drain_health_path,
+        deploy_provenance_dir=tmp_path / "daemon-provenance",
         queue_movement_sample_seconds=0,
     )
 
@@ -773,6 +774,7 @@ def test_run_doctor_exits_nonzero_when_queue_backlog_is_not_moving(tmp_path):
     db_path = tmp_path / "queue-stalled.db"
     _build_db(db_path)
     config = _doctor_config(tmp_path, db_path)
+    config.queue_warning_count = 1
     (config.queue_dir / "pending.jsonl").write_text('{"kind":"watcher_chunk"}\n', encoding="utf-8")
 
     result = run_doctor(
@@ -784,6 +786,28 @@ def test_run_doctor_exits_nonzero_when_queue_backlog_is_not_moving(tmp_path):
 
     assert result.exit_code == 1
     assert any(issue.code == "queue_not_moving_with_backlog" for issue in result.issues)
+
+
+def test_run_doctor_does_not_treat_recent_drain_heartbeat_as_queue_movement(tmp_path):
+    from brainlayer.doctor import run_doctor
+
+    db_path = tmp_path / "queue-still-but-fresh.db"
+    _build_db(db_path)
+    config = _doctor_config(tmp_path, db_path)
+    config.queue_warning_count = 1
+    (config.queue_dir / "pending.jsonl").write_text('{"kind":"watcher_chunk"}\n', encoding="utf-8")
+    _write_drain_health(config.drain_health_path, updated_at=NOW - timedelta(minutes=2), drained_total=40)
+
+    result = run_doctor(
+        config,
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+
+    assert result.exit_code == 1
+    assert any(issue.code == "queue_not_moving_with_backlog" for issue in result.issues)
+    assert not [issue for issue in result.issues if issue.code == "drain_liveness_stalled"]
 
 
 def test_run_doctor_fails_loudly_when_loaded_drain_heartbeat_stale_with_backlog_without_quota(tmp_path, monkeypatch):

@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import XCTest
 @testable import BrainBar
 @testable import BrainBarLifecycle
@@ -38,18 +39,45 @@ final class DashboardTests: XCTestCase {
 
     private var db: BrainDatabase!
     private var tempDBPath: String!
+    private var fallbackReplayRoot: URL!
+    private var restoreFallbackReplayRoot: (() -> Void)!
+    private var durableQueueRoot: URL!
+    private var restoreDurableQueueRoot: (() -> Void)!
+    private static let fractionalTimestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXXXX"
+        return formatter
+    }()
 
     override func setUp() {
         super.setUp()
         tempDBPath = NSTemporaryDirectory() + "brainbar-dashboard-\(UUID().uuidString).db"
+        fallbackReplayRoot = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("brainbar-dashboard-fallback-root-\(UUID().uuidString)", isDirectory: true)
+        durableQueueRoot = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("brainbar-dashboard-durable-queue-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: fallbackReplayRoot, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: durableQueueRoot, withIntermediateDirectories: true)
+        restoreFallbackReplayRoot = setDashboardFallbackReplayGitsRoot(fallbackReplayRoot)
+        restoreDurableQueueRoot = setDashboardDurableStoreQueuePath(durableQueueRoot)
         db = BrainDatabase(path: tempDBPath)
     }
 
     override func tearDown() {
         db.close()
+        restoreFallbackReplayRoot?()
+        restoreDurableQueueRoot?()
         try? FileManager.default.removeItem(atPath: tempDBPath)
         try? FileManager.default.removeItem(atPath: tempDBPath + "-wal")
         try? FileManager.default.removeItem(atPath: tempDBPath + "-shm")
+        if let fallbackReplayRoot {
+            try? FileManager.default.removeItem(at: fallbackReplayRoot)
+        }
+        if let durableQueueRoot {
+            try? FileManager.default.removeItem(at: durableQueueRoot)
+        }
         super.tearDown()
     }
 
@@ -347,7 +375,7 @@ final class DashboardTests: XCTestCase {
         let source = try brainBarSourceFile("Sources/BrainBar/BrainDatabase.swift")
         let methodRange = try XCTUnwrap(source.range(of: "func dashboardStats("))
         let methodSource = source[methodRange.lowerBound...]
-        let queueSnapshotRange = try XCTUnwrap(methodSource.range(of: "let pendingStoreQueue = pendingStoreQueueSnapshot()"))
+        let queueSnapshotRange = try XCTUnwrap(methodSource.range(of: "let pendingStoreFlushQueue = pendingStoreQueueSnapshot()"))
         let transactionRange = try XCTUnwrap(methodSource.range(of: "try withReadTransaction"))
 
         XCTAssertLessThan(
@@ -820,8 +848,571 @@ final class DashboardTests: XCTestCase {
         let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
 
         XCTAssertEqual(stats.pendingStoreQueueDepth, 2)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 2)
         XCTAssertEqual(stats.pendingStoreOldestQueuedAt, Date(timeIntervalSince1970: 1_000))
         XCTAssertEqual(stats.pendingStoreFlushRatePerMinute, 0)
+    }
+
+    func testDashboardStatsIncludesDocsLocalFallbackReplayDebt() throws {
+        let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pending-stores-dashboard-empty-\(UUID().uuidString).jsonl")
+        let gitsRoot = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("fallback-gits-\(UUID().uuidString)", isDirectory: true)
+        let fallbackPath = gitsRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("pending.md")
+        let restoreQueuePath = setDashboardPendingStoreQueuePath(queuePath)
+        let restoreFallbackRoot = setDashboardFallbackReplayGitsRoot(gitsRoot)
+        defer {
+            restoreQueuePath()
+            restoreFallbackRoot()
+            try? FileManager.default.removeItem(at: queuePath)
+            try? FileManager.default.removeItem(at: gitsRoot)
+        }
+        try FileManager.default.createDirectory(
+            at: fallbackPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        ---
+        intended_brain_store: true
+        importance: 10
+        tags: [fallback-replay]
+        timestamp: 1970-01-01T00:20:00Z
+        retry_attempted: true
+        queued_chunk_id: fallback-queued
+        chunk_id:
+        ---
+        queued fallback body
+        """.write(to: fallbackPath, atomically: true, encoding: .utf8)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+        let summary = DashboardFlowSummary.derive(
+            daemon: nil,
+            stats: stats,
+            now: Date(timeIntervalSince1970: 1_300)
+        )
+        let agentStores = summary.lane(for: .agentStores)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+        XCTAssertEqual(stats.pendingStoreOldestQueuedAt, Date(timeIntervalSince1970: 1_200))
+        XCTAssertEqual(agentStores.status, .queued)
+        XCTAssertEqual(agentStores.statusText, "1 agent store queued for replay")
+    }
+
+    func testDashboardStatsIncludesDurableStoreQueueDepth() throws {
+        let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pending-stores-dashboard-empty-\(UUID().uuidString).jsonl")
+        let durableQueue = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("brainlayer-durable-queue-\(UUID().uuidString)", isDirectory: true)
+        let restoreQueuePath = setDashboardPendingStoreQueuePath(queuePath)
+        let restoreDurableQueue = setDashboardDurableStoreQueuePath(durableQueue)
+        defer {
+            restoreQueuePath()
+            restoreDurableQueue()
+            try? FileManager.default.removeItem(at: queuePath)
+            try? FileManager.default.removeItem(at: durableQueue)
+        }
+        try FileManager.default.createDirectory(at: durableQueue, withIntermediateDirectories: true)
+        try """
+        {"kind":"store_memory","chunk_id":"durable-one","content":"queued one"}
+        """.write(
+            to: durableQueue.appendingPathComponent("fallback-replay-1.jsonl"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try """
+        {"kind":"store_memory","chunk_id":"durable-two","content":"queued two"}
+        """.write(
+            to: durableQueue.appendingPathComponent("fallback-replay-2.jsonl"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 2)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+    }
+
+    func testDashboardStatsCountsDurableStoreQueueLinesAndSkipsNonStoreEvents() throws {
+        let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pending-stores-dashboard-filtered-\(UUID().uuidString).jsonl")
+        let durableQueue = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("brainlayer-durable-filtered-\(UUID().uuidString)", isDirectory: true)
+        let restoreQueuePath = setDashboardPendingStoreQueuePath(queuePath)
+        let restoreDurableQueue = setDashboardDurableStoreQueuePath(durableQueue)
+        defer {
+            restoreQueuePath()
+            restoreDurableQueue()
+            try? FileManager.default.removeItem(at: queuePath)
+            try? FileManager.default.removeItem(at: durableQueue)
+        }
+        try FileManager.default.createDirectory(at: durableQueue, withIntermediateDirectories: true)
+        try """
+        {"kind":"store_memory","chunk_id":"durable-one","content":"queued one"}
+        {"kind":"enrichment_update","chunk_id":"enrich-one","summary":"queued enrichment"}
+        {"kind":"watcher_chunk","chunk_id":"watcher-one","content":"watcher ingestion is not an agent store"}
+        {"kind":"hook_chunk","chunk_id":"hook-one","content":"hook ingestion is not an agent store"}
+        {"chunk_id":"legacy-store-one","content":"legacy pending store","memory_type":"note"}
+        {"chunk_id":"legacy-watcher-one","content":"legacy realtime hook row without kind is not an agent store"}
+        {"kind":"store_memory","chunk_id":"durable-two","content":"queued two"}
+        """.write(
+            to: durableQueue.appendingPathComponent("mixed-batch.jsonl"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 3)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+    }
+
+    func testDashboardStatsDeduplicatesSameFallbackAcrossQueues() throws {
+        let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pending-stores-dashboard-duplicate-\(UUID().uuidString).jsonl")
+        let durableQueue = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("brainlayer-durable-duplicate-\(UUID().uuidString)", isDirectory: true)
+        let fallbackPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("duplicate.md")
+        let restoreQueuePath = setDashboardPendingStoreQueuePath(queuePath)
+        let restoreDurableQueue = setDashboardDurableStoreQueuePath(durableQueue)
+        defer {
+            restoreQueuePath()
+            restoreDurableQueue()
+            try? FileManager.default.removeItem(at: queuePath)
+            try? FileManager.default.removeItem(at: durableQueue)
+        }
+        try FileManager.default.createDirectory(at: durableQueue, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: fallbackPath.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try """
+        {"content":"queued duplicate","tags":["queue"],"importance":5,"source":"mcp","queued_at":"1970-01-01T00:30:00Z","chunk_id":"fallback-shared"}
+        """.write(to: queuePath, atomically: true, encoding: .utf8)
+        try """
+        {"kind":"store_memory","chunk_id":"fallback-shared","content":"queued duplicate"}
+        """.write(
+            to: durableQueue.appendingPathComponent("fallback-replay-shared.jsonl"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try """
+        ---
+        intended_brain_store: true
+        importance: 10
+        timestamp: 1970-01-01T00:31:00Z
+        retry_attempted: true
+        queued_chunk_id: fallback-shared
+        chunk_id:
+        ---
+        queued duplicate fallback body
+        """.write(to: fallbackPath, atomically: true, encoding: .utf8)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 1)
+        XCTAssertEqual(stats.pendingStoreOldestQueuedAt, Date(timeIntervalSince1970: 1_800))
+    }
+
+    func testDashboardStatsDeduplicatesUnmarkedFallbackAgainstDurableFallbackChunkID() throws {
+        let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pending-stores-dashboard-derived-\(UUID().uuidString).jsonl")
+        let durableQueue = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("brainlayer-durable-derived-\(UUID().uuidString)", isDirectory: true)
+        let fallbackPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("derived.md")
+        let restoreQueuePath = setDashboardPendingStoreQueuePath(queuePath)
+        let restoreDurableQueue = setDashboardDurableStoreQueuePath(durableQueue)
+        defer {
+            restoreQueuePath()
+            restoreDurableQueue()
+            try? FileManager.default.removeItem(at: queuePath)
+            try? FileManager.default.removeItem(at: durableQueue)
+        }
+        try FileManager.default.createDirectory(at: durableQueue, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: fallbackPath.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let body = "derived duplicate fallback body\n"
+        let fallbackText = """
+        ---
+        intended_brain_store: true
+        importance: 10
+        timestamp: 1970-01-01T00:32:00Z
+        chunk_id:
+        ---
+        """ + "\n" + body
+        try fallbackText.write(to: fallbackPath, atomically: true, encoding: .utf8)
+        let fallbackID = dashboardFallbackChunkID(
+            file: fallbackPath,
+            originRepoPath: fallbackReplayRoot.appendingPathComponent("brainlayer", isDirectory: true),
+            project: "brainlayer",
+            timestamp: "1970-01-01T00:32:00Z",
+            body: body
+        )
+        try """
+        {"kind":"store_memory","chunk_id":"\(fallbackID)","content":"derived duplicate fallback body"}
+        """.write(
+            to: durableQueue.appendingPathComponent("fallback-replay-derived.jsonl"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+    }
+
+    func testDashboardStatsCountsPendingFallbackReplayDebtWithoutTimestamp() throws {
+        let pendingPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("missing-timestamp.md")
+        try FileManager.default.createDirectory(
+            at: pendingPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        ---
+        intended_brain_store: true
+        importance: 10
+        tags: [fallback-replay]
+        retry_attempted: true
+        queued_chunk_id: fallback-queued
+        chunk_id:
+        ---
+        queued fallback body without timestamp
+        """.write(to: pendingPath, atomically: true, encoding: .utf8)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+        XCTAssertNil(stats.pendingStoreOldestQueuedAt)
+    }
+
+    func testDashboardStatsCountsMalformedStructuredFallbackReplayDebt() throws {
+        let pendingPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("malformed.md")
+        try FileManager.default.createDirectory(
+            at: pendingPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        ---
+        : bad yaml
+        ---
+        malformed structured fallback body
+        """.write(to: pendingPath, atomically: true, encoding: .utf8)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+        XCTAssertNil(stats.pendingStoreOldestQueuedAt)
+    }
+
+    func testDashboardStatsIgnoresNormalDecisionMarkdownWithoutFallbackIntent() throws {
+        let decisionPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("ordinary-decision.md")
+        try FileManager.default.createDirectory(
+            at: decisionPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        ---
+        title: ordinary decision
+        timestamp: 1970-01-01T00:21:00Z
+        ---
+        normal decision note, not a BrainLayer fallback replay item
+        """.write(to: decisionPath, atomically: true, encoding: .utf8)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 0)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+    }
+
+    func testDashboardStatsIgnoresDecisionMarkdownWithoutFrontmatter() throws {
+        let decisionPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("plain.md")
+        try FileManager.default.createDirectory(
+            at: decisionPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try "plain decision note without fallback frontmatter\n".write(
+            to: decisionPath,
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 0)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+    }
+
+    func testDashboardStatsIncludesStaleFallbackReplayChunkIDDebt() throws {
+        let stalePath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("stale.md")
+        let storedPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("stored.md")
+        try FileManager.default.createDirectory(
+            at: stalePath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        ---
+        intended_brain_store: true
+        importance: 10
+        timestamp: 1970-01-01T00:24:00Z
+        chunk_id: fallback-stale-edited-body
+        ---
+        edited fallback body
+        """.write(to: stalePath, atomically: true, encoding: .utf8)
+        try """
+        ---
+        intended_brain_store: true
+        importance: 10
+        timestamp: 1970-01-01T00:25:00Z
+        chunk_id: fallback-bf4489e94479ad32
+        ---
+        stored fallback body
+        """.write(to: storedPath, atomically: true, encoding: .utf8)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+        XCTAssertEqual(stats.pendingStoreOldestQueuedAt, Date(timeIntervalSince1970: 1_440))
+    }
+
+    func testDashboardStatsAcceptsStoredScopedFallbackChunkIDWhenProjectIsPersisted() throws {
+        let storedPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("scoped.md")
+        try FileManager.default.createDirectory(
+            at: storedPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        ---
+        intended_brain_store: true
+        project: systems
+        importance: 10
+        timestamp: 1970-01-01T00:26:00Z
+        chunk_id: fallback-f7c15c956dca2e7e
+        ---
+        scoped fallback body
+        """.write(to: storedPath, atomically: true, encoding: .utf8)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 0)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+    }
+
+    func testDashboardStatsAcceptsStoredFallbackChunkIDWithNullTimestamp() throws {
+        let storedPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("null-timestamp.md")
+        try FileManager.default.createDirectory(
+            at: storedPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        ---
+        intended_brain_store: true
+        importance: 10
+        timestamp: null
+        chunk_id: fallback-c99da95d9166ba2e
+        ---
+        null timestamp fallback body
+        """.write(to: storedPath, atomically: true, encoding: .utf8)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 0)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+    }
+
+    func testDashboardStatsAcceptsStoredFallbackChunkIDWithTildeTimestamp() throws {
+        let storedPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("tilde-timestamp.md")
+        try FileManager.default.createDirectory(
+            at: storedPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        ---
+        intended_brain_store: true
+        importance: 10
+        timestamp: ~
+        chunk_id: fallback-edf2bca7f184d086
+        ---
+        tilde timestamp fallback body
+        """.write(to: storedPath, atomically: true, encoding: .utf8)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 0)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+    }
+
+    func testDashboardStatsHonorsTrustedReplayBodyHash() throws {
+        let storedPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("trusted-direct.md")
+        try FileManager.default.createDirectory(
+            at: storedPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let body = "trusted direct replay body\n"
+        let bodyHash = SHA256.hash(data: Data(body.utf8)).map { String(format: "%02x", $0) }.joined()
+        let storedText = """
+        ---
+        intended_brain_store: true
+        importance: 10
+        timestamp: 1970-01-01T00:27:00Z
+        chunk_id: brainbar-direct-store-id
+        replayed_body_sha256: \(bodyHash)
+        ---
+        """ + "\n" + body
+        try storedText.write(to: storedPath, atomically: true, encoding: .utf8)
+
+        var stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 0)
+
+        let editedText = """
+        ---
+        intended_brain_store: true
+        importance: 10
+        timestamp: 1970-01-01T00:27:00Z
+        chunk_id: brainbar-direct-store-id
+        replayed_body_sha256: \(bodyHash)
+        ---
+        """ + "\n" + "edited trusted direct replay body\n"
+        try editedText.write(to: storedPath, atomically: true, encoding: .utf8)
+
+        stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+        XCTAssertEqual(stats.pendingStoreOldestQueuedAt, Date(timeIntervalSince1970: 1_620))
+    }
+
+    func testDashboardStatsTreatsBlankChunkIDAsPendingBeforeTrustedReplayHash() throws {
+        let storedPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("partial-trusted-direct.md")
+        try FileManager.default.createDirectory(
+            at: storedPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let body = "partial trusted direct replay body\n"
+        let bodyHash = SHA256.hash(data: Data(body.utf8)).map { String(format: "%02x", $0) }.joined()
+        let storedText = """
+        ---
+        intended_brain_store: true
+        importance: 10
+        timestamp: 1970-01-01T00:28:00Z
+        chunk_id:
+        replayed_body_sha256: \(bodyHash)
+        ---
+        """ + "\n" + body
+        try storedText.write(to: storedPath, atomically: true, encoding: .utf8)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+        XCTAssertEqual(stats.pendingStoreOldestQueuedAt, Date(timeIntervalSince1970: 1_680))
+    }
+
+    func testDashboardStatsIncludesLegacyFallbackReplayDebtWithoutFrontmatter() throws {
+        let legacyPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("brain-store-fallback", isDirectory: true)
+            .appendingPathComponent("2026-05-29-gen10-boot", isDirectory: true)
+            .appendingPathComponent("pending-stores.md")
+        try FileManager.default.createDirectory(
+            at: legacyPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try "legacy fallback body\n".write(to: legacyPath, atomically: true, encoding: .utf8)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+        XCTAssertEqual(stats.pendingStoreOldestQueuedAt, ISO8601DateFormatter().date(from: "2026-05-29T00:00:00Z"))
+    }
+
+    func testDashboardStatsIncludesParsedLegacyFallbackReplayDebtWithoutIntentFlag() throws {
+        let legacyPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("brain-store-fallback", isDirectory: true)
+            .appendingPathComponent("parsed-legacy.md")
+        try FileManager.default.createDirectory(
+            at: legacyPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        ---
+        memory_type: note
+        timestamp: 2024-01-15T10:30:45.123456+00:00
+        chunk_id:
+        ---
+        parsed legacy fallback body
+        """.write(to: legacyPath, atomically: true, encoding: .utf8)
+        let expected = try XCTUnwrap(Self.fractionalTimestampFormatter.date(from: "2024-01-15T10:30:45.123456+00:00"))
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+        XCTAssertEqual(
+            try XCTUnwrap(stats.pendingStoreOldestQueuedAt).timeIntervalSince1970,
+            expected.timeIntervalSince1970,
+            accuracy: 0.001
+        )
     }
 
     func testSparklineChartPresentationCarriesBucketsAndVoiceOverMetadata() {
@@ -879,6 +1470,36 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(
             presentation.bucketLabel(for: 11),
             "\(Self.shortTime(now.addingTimeInterval(-bucketWidth)))-\(Self.shortTime(now))"
+        )
+    }
+
+    func testSparklineChartPresentationLabelsLongBucketsInHours() {
+        let now = Date(timeIntervalSince1970: 1_764_236_400)
+        let presentation = SparklineChartPresentation(
+            label: "JSONL watcher over Last 24h",
+            values: Array(repeating: 0, count: 12),
+            activityWindowMinutes: 1_440,
+            fetchedAt: now
+        )
+
+        XCTAssertEqual(presentation.relativeBucketLabel(for: 8), "8h-6h ago")
+        XCTAssertEqual(presentation.relativeBucketLabel(for: 11), "last 2h")
+    }
+
+    func testSparklinePresentationMarksLatestNonZeroBucketEvenWhenPeakCrushesScale() {
+        let presentation = SparklineChartPresentation(
+            label: "JSONL watcher over Last 24h",
+            values: [0, 0, 280, 590, 496, 763, 8_284, 2_065, 42, 0, 0, 70],
+            activityWindowMinutes: 1_440
+        )
+
+        XCTAssertEqual(
+            presentation.visiblePointMarkers(for: .primary, compact: false).map(\.bucket),
+            [11]
+        )
+        XCTAssertEqual(
+            presentation.visiblePointMarkers(for: .primary, compact: false).map(\.value),
+            [70]
         )
     }
 
@@ -960,6 +1581,29 @@ final class DashboardTests: XCTestCase {
 
         XCTAssertEqual(larger.tightAxisMax, larger.axisMax)
         XCTAssertEqual(larger.axisMax, 10)
+    }
+
+    func testSparklineCompactMarkersPreferLatestPointForSparseSeries() {
+        let sparse = SparklineChartPresentation(
+            label: "Sparse writes over 30m",
+            values: [0, 1, 0, 1],
+            activityWindowMinutes: 30,
+            fetchedAt: Date(timeIntervalSince1970: 1_764_236_400)
+        )
+
+        XCTAssertEqual(sparse.visiblePointMarkers(for: .primary, compact: false).map(\.bucket), [1, 3])
+        XCTAssertEqual(sparse.visiblePointMarkers(for: .primary, compact: true).map(\.bucket), [3])
+    }
+
+    func testSparklineNonCompactMarkersKeepLatestEndpointWhenLatestBucketIsZero() {
+        let presentation = SparklineChartPresentation(
+            label: "Writes over 30m",
+            values: [3, 2, 0],
+            activityWindowMinutes: 30,
+            fetchedAt: Date(timeIntervalSince1970: 1_764_236_400)
+        )
+
+        XCTAssertEqual(presentation.visiblePointMarkers(for: .primary, compact: false).map(\.bucket), [2])
     }
 
     func testSparklineTooltipPlacementClampsHorizontally() {
@@ -1411,6 +2055,7 @@ final class DashboardTests: XCTestCase {
         defer { collector.stop() }
 
         collector.start()
+        try await waitForCollector(collector) { !$0.isRefreshing && $0.lastDataFetchedAt != nil }
         XCTAssertEqual(collector.stats.chunkCount, 0)
 
         let writer = BrainDatabase(path: tempDBPath)
@@ -1469,7 +2114,7 @@ final class DashboardTests: XCTestCase {
     }
 
     @MainActor
-    func testStatsCollectorSubscribesToBrainBusWithoutPollingDelay() {
+    func testStatsCollectorSubscribesToBrainBusWithoutPollingDelay() async throws {
         let eventSource = RecordingBrainBusEventSource()
         let collector = StatsCollector(
             dbPath: tempDBPath,
@@ -1484,6 +2129,7 @@ final class DashboardTests: XCTestCase {
 
         XCTAssertEqual(eventSource.streamRequestCount, 1)
         XCTAssertLessThan(elapsedMillis, 1_000)
+        try await waitForCollector(collector) { !$0.isRefreshing && $0.lastDataFetchedAt != nil }
     }
 
     @MainActor
@@ -1671,6 +2317,53 @@ final class DashboardTests: XCTestCase {
 
         XCTAssertEqual(collector.stats.pendingStoreQueueDepth, 1)
         XCTAssertEqual(collector.stats.pendingStoreFlushRatePerMinute, 2)
+    }
+
+    @MainActor
+    func testStatsCollectorDoesNotTreatFallbackReplayDebtDropAsStoreFlush() async throws {
+        let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pending-stores-collector-empty-\(UUID().uuidString).jsonl")
+        let restoreQueuePath = setDashboardPendingStoreQueuePath(queuePath)
+        let fallbackPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("collector-pending.md")
+        defer {
+            restoreQueuePath()
+            try? FileManager.default.removeItem(at: queuePath)
+        }
+        try FileManager.default.createDirectory(
+            at: fallbackPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        ---
+        intended_brain_store: true
+        importance: 10
+        timestamp: 1970-01-01T00:27:00Z
+        chunk_id:
+        ---
+        collector fallback body
+        """.write(to: fallbackPath, atomically: true, encoding: .utf8)
+
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
+        )
+        defer { collector.stop() }
+
+        collector.refresh(force: true)
+        try await waitForCollector(collector) { $0.stats.pendingStoreQueueDepth == 1 }
+        XCTAssertEqual(collector.stats.pendingStoreFlushQueueDepth, 0)
+        XCTAssertEqual(collector.stats.pendingStoreFlushRatePerMinute, 0)
+
+        try FileManager.default.removeItem(at: fallbackPath)
+        collector.refresh(force: true)
+        try await waitForCollector(collector) { $0.stats.pendingStoreQueueDepth == 0 }
+
+        XCTAssertEqual(collector.stats.pendingStoreFlushQueueDepth, 0)
+        XCTAssertEqual(collector.stats.pendingStoreFlushRatePerMinute, 0)
     }
 
     @MainActor
@@ -2084,6 +2777,93 @@ private func setDashboardWatcherHealthPath(_ path: URL) -> () -> Void {
             unsetenv("BRAINLAYER_WATCHER_HEALTH_PATH")
         }
     }
+}
+
+private func setDashboardFallbackReplayGitsRoot(_ path: URL) -> () -> Void {
+    let previous = ProcessInfo.processInfo.environment["BRAINBAR_FALLBACK_REPLAY_GITS_ROOT"]
+    setenv("BRAINBAR_FALLBACK_REPLAY_GITS_ROOT", path.path, 1)
+    return {
+        if let previous {
+            setenv("BRAINBAR_FALLBACK_REPLAY_GITS_ROOT", previous, 1)
+        } else {
+            unsetenv("BRAINBAR_FALLBACK_REPLAY_GITS_ROOT")
+        }
+    }
+}
+
+private func setDashboardDurableStoreQueuePath(_ path: URL) -> () -> Void {
+    let previous = ProcessInfo.processInfo.environment["BRAINLAYER_QUEUE_DIR"]
+    setenv("BRAINLAYER_QUEUE_DIR", path.path, 1)
+    return {
+        if let previous {
+            setenv("BRAINLAYER_QUEUE_DIR", previous, 1)
+        } else {
+            unsetenv("BRAINLAYER_QUEUE_DIR")
+        }
+    }
+}
+
+private func dashboardFallbackChunkID(
+    file: URL,
+    originRepoPath: URL,
+    project: String,
+    timestamp: String?,
+    body: String
+) -> String {
+    let stable = "{"
+        + "\"body\":\(dashboardJSONStringLiteral(body)),"
+        + "\"path\":\(dashboardJSONStringLiteral(dashboardRelativePath(file, to: originRepoPath))),"
+        + "\"project\":\(dashboardJSONStringLiteral(project)),"
+        + "\"timestamp\":\(timestamp.map(dashboardJSONStringLiteral) ?? "null")"
+        + "}"
+    let digest = SHA256.hash(data: Data(stable.utf8))
+    let prefix = digest.prefix(8).map { String(format: "%02x", $0) }.joined()
+    return "fallback-\(prefix)"
+}
+
+private func dashboardRelativePath(_ file: URL, to root: URL) -> String {
+    let filePath = file.standardizedFileURL.path
+    let rootPath = root.standardizedFileURL.path
+    let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+    if filePath.hasPrefix(prefix) {
+        return String(filePath.dropFirst(prefix.count))
+    }
+    return file.lastPathComponent
+}
+
+private func dashboardJSONStringLiteral(_ value: String) -> String {
+    var output = "\""
+    for scalar in value.unicodeScalars {
+        switch scalar.value {
+        case 0x08:
+            output += "\\b"
+        case 0x09:
+            output += "\\t"
+        case 0x0A:
+            output += "\\n"
+        case 0x0C:
+            output += "\\f"
+        case 0x0D:
+            output += "\\r"
+        case 0x22:
+            output += "\\\""
+        case 0x5C:
+            output += "\\\\"
+        case 0x00..<0x20:
+            output += String(format: "\\u%04x", scalar.value)
+        case 0x20...0x7E:
+            output.unicodeScalars.append(scalar)
+        case 0x7F...0xFFFF:
+            output += String(format: "\\u%04x", scalar.value)
+        default:
+            let adjusted = scalar.value - 0x10000
+            let high = 0xD800 + (adjusted >> 10)
+            let low = 0xDC00 + (adjusted & 0x3FF)
+            output += String(format: "\\u%04x\\u%04x", high, low)
+        }
+    }
+    output += "\""
+    return output
 }
 
 private func brainBarSourceFile(_ relativePath: String, testFilePath: StaticString = #filePath) throws -> String {

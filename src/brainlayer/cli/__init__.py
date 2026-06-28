@@ -975,11 +975,27 @@ def _status_queue_depth_by_source(queue_path: Path) -> dict[str, int] | None:
             return {}
         counts: dict[str, int] = {}
         for path in queue_path.glob("*.jsonl"):
-            source = path.name.split("-", 1)[0] or "unknown"
+            source = _status_queue_file_source(path)
             counts[source] = counts.get(source, 0) + 1
         return dict(sorted(counts.items()))
     except OSError:
         return None
+
+
+def _status_queue_file_source(path: Path) -> str:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            first_line = handle.readline().strip()
+        if first_line:
+            data = json.loads(first_line)
+            source = str(data.get("source") or "").strip()
+            if source:
+                return source
+    except (OSError, json.JSONDecodeError, AttributeError, UnicodeDecodeError):
+        pass
+    stem = path.stem
+    source = stem.rsplit("-", 1)[0]
+    return source or stem or "unknown"
 
 
 def _status_count_pending_store_lines(db_path: Path) -> int | None:
@@ -990,6 +1006,29 @@ def _status_count_pending_store_lines(db_path: Path) -> int | None:
         return len([line for line in pending_path.read_text(encoding="utf-8").splitlines() if line.strip()])
     except OSError:
         return None
+
+
+def _status_fallback_replay(gits_root: Path, scopes_path: Path) -> dict[str, Any]:
+    from ..fallback_replay import inventory_fallbacks, load_scope_map
+
+    try:
+        inventory = inventory_fallbacks(gits_root.expanduser(), scope_map=load_scope_map(scopes_path.expanduser()))
+    except Exception as exc:
+        return {
+            "green": False,
+            "status": "error",
+            "error": str(exc),
+            "structured_count": None,
+            "pending_count": None,
+            "legacy_count": None,
+            "pending_sample": [],
+            "legacy_sample": [],
+        }
+    payload = inventory.summary(sample_limit=20)
+    payload["status"] = "clear" if payload["green"] else "debt"
+    payload["gits_root"] = str(gits_root.expanduser())
+    payload["scopes"] = str(scopes_path.expanduser())
+    return payload
 
 
 def _status_expected_watch_providers() -> list[str]:
@@ -1046,7 +1085,9 @@ def _status_issue_to_dict(issue: object) -> dict[str, Any]:
     }
 
 
-def _status_doctor_gate(doctor_result: object | None, doctor_error: str | None) -> tuple[dict[str, Any], dict[str, Any]]:
+def _status_doctor_gate(
+    doctor_result: object | None, doctor_error: str | None
+) -> tuple[dict[str, Any], dict[str, Any]]:
     if doctor_error is not None:
         doctor_gate = {
             "checked": True,
@@ -1174,6 +1215,16 @@ def status_command(
         "--check-doctor",
         help="Run the doctor probe gate, including vector roundtrip, before computing operational_green.",
     ),
+    fallback_gits_root: Path = typer.Option(
+        Path("~/Gits"),
+        "--fallback-gits-root",
+        help="Repo root scanned for docs.local BrainLayer fallback replay debt.",
+    ),
+    fallback_scopes: Path = typer.Option(
+        Path("~/.config/brainlayer/scopes.yaml"),
+        "--fallback-scopes",
+        help="Scopes file used to attribute docs.local fallback replay debt.",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
     """Show a lightweight BrainLayer transport status snapshot."""
@@ -1239,12 +1290,14 @@ def status_command(
     doctor_gate, vector_roundtrip = _status_doctor_gate(doctor_result, doctor_error)
     queue_health = _status_queue_health_with_doctor(queue_health, doctor_gate)
     queue_green = queue_health["green"] is True if check_doctor else queue_depth == 0
+    fallback_replay = _status_fallback_replay(fallback_gits_root, fallback_scopes)
     operational_green = all(
         (
             db_path.exists(),
             queue_green,
             unembedded == 0,
             pending_store_lines == 0,
+            fallback_replay.get("green") is True,
             not watcher_missing_providers,
             watcher_freshness["fresh"] is True,
             watcher_alerting is False,
@@ -1271,6 +1324,7 @@ def status_command(
         "watcher_missing_providers": watcher_missing_providers,
         "doctor_gate": doctor_gate,
         "vector_roundtrip": vector_roundtrip,
+        "fallback_replay": fallback_replay,
         "operational_green": operational_green,
     }
     if json_output:
@@ -1280,6 +1334,11 @@ def status_command(
     rprint(f"[bold]DB:[/] {payload['db']} ({'present' if payload['db_exists'] else 'missing'})")
     rprint(f"[bold]Queue depth:[/] {queue_depth if queue_depth is not None else 'unknown'}")
     rprint(f"[bold]Pending store lines:[/] {pending_store_lines if pending_store_lines is not None else 'unknown'}")
+    rprint(
+        "[bold]Fallback replay debt:[/] "
+        f"{fallback_replay.get('pending_count', 'unknown')} pending structured, "
+        f"{fallback_replay.get('legacy_count', 'unknown')} legacy"
+    )
     rprint(f"[bold]Unembedded chunks:[/] {unembedded if unembedded is not None else 'unknown'}")
     if watcher_missing_providers:
         rprint(f"[bold]Watcher missing providers:[/] {', '.join(watcher_missing_providers)}")
@@ -3071,10 +3130,7 @@ def watch_backfill(
             provider = watcher.provider_for_file(path)
             provider_counts[provider] = provider_counts.get(provider, 0) + 1
         provider_summary = " ".join(f"{provider}={count}" for provider, count in sorted(provider_counts.items()))
-        rprint(
-            f"candidate_files={len(files)} {provider_summary} processed_entries=0 "
-            f"registry={registry_path}"
-        )
+        rprint(f"candidate_files={len(files)} {provider_summary} processed_entries=0 registry={registry_path}")
         return
 
     watcher = JSONLWatcher(

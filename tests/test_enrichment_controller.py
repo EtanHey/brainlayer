@@ -44,6 +44,11 @@ def _fake_gemini_client(response_text='{"summary":"sum","tags":["python"]}'):
     return FakeClient()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_enrich_cost_counter(monkeypatch, tmp_path):
+    monkeypatch.setenv("BRAINLAYER_ENRICH_COST_DIR", str(tmp_path / "enrich-cost"))
+
+
 def _patch_realtime_deps(monkeypatch, controller, store, response_text=None):
     """Common monkeypatching for realtime enrichment tests."""
     monkeypatch.setattr(controller, "build_external_prompt", MagicMock(return_value=("prompt", SimpleNamespace())))
@@ -170,6 +175,7 @@ def test_enrich_supervisor_opens_readonly_store_when_writes_are_queued(monkeypat
     from brainlayer import enrichment_controller as controller
 
     monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "1")
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
     opened = []
 
     class FakeStore:
@@ -200,6 +206,7 @@ def test_enrich_supervisor_releases_store_between_cycles_when_writes_are_queued(
     from brainlayer import enrichment_controller as controller
 
     monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "1")
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
     opened = []
     closed = []
 
@@ -271,10 +278,50 @@ def test_enrich_supervisor_yields_writer_so_drain_can_advance_between_cycles(mon
     assert drain_heartbeats == [1]
 
 
+def test_enrich_supervisor_yields_without_opening_store_when_durable_queue_has_backlog(monkeypatch, tmp_path):
+    from brainlayer import enrichment_controller as controller
+
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    (queue_dir / "watcher-1.jsonl").write_text('{"kind":"watcher_chunk"}\n', encoding="utf-8")
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+
+    opened = []
+    sleeps = []
+
+    class FakeStore:
+        def __init__(self, db_path, readonly=False):
+            opened.append((db_path, readonly))
+
+        def close(self):
+            pass
+
+    result = controller.run_enrich_supervisor(
+        tmp_path / "supervisor.db",
+        max_cycles=2,
+        idle_poll_seconds=0.25,
+        sleep_fn=lambda seconds: sleeps.append(seconds),
+        vector_store_cls=FakeStore,
+        enrich_fn=lambda _store, **_kwargs: controller.EnrichmentResult(
+            mode="realtime",
+            attempted=1,
+            enriched=1,
+            skipped=0,
+            failed=0,
+            errors=[],
+        ),
+    )
+
+    assert result.cycles == 2
+    assert opened == []
+    assert sleeps == [0.25]
+
+
 def test_enrich_supervisor_checkpoints_wal_after_each_cycle(monkeypatch, tmp_path):
     from brainlayer import enrichment_controller as controller
 
     monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "1")
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
     db_path = tmp_path / "supervisor.db"
     checkpoints = []
 

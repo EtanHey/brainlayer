@@ -42,17 +42,14 @@ def test_plugin_manifest_has_brainlayer_identity():
     assert "version" in manifest
 
 
-def test_plugin_mcp_config_points_at_brainbar_socket():
+def test_plugin_mcp_config_uses_reconnecting_brainbar_bridge():
     mcp_config = _load_json(PLUGIN_MCP_PATH)
 
-    assert mcp_config == {
-        "mcpServers": {
-            "brainlayer": {
-                "command": "socat",
-                "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"],
-            }
-        }
-    }
+    assert mcp_config["mcpServers"]["brainlayer"]["command"] == "brainlayer-mcp-stdio-bridge"
+    assert "BrainBar" in mcp_config["_comment"]
+    assert "/tmp/brainbar.sock" in mcp_config["_comment"]
+    assert "BRAINLAYER_MCP_SOCKET" in mcp_config["_comment"]
+    assert "absolute path" in mcp_config["_comment"]
 
 
 def test_hooks_register_phase2_lifecycle_events():

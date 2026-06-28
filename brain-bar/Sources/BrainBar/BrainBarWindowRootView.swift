@@ -1664,6 +1664,12 @@ private struct BrainBarPipelineSeriesCard: View {
         DashboardMetricFormatter.windowLabel(minutes: timeframe.windowMinutes)
     }
 
+    private var latestBucketCaptionText: String? {
+        let latest = lane.values.last ?? 0
+        guard latest > 0 else { return nil }
+        return "latest: \(DashboardMetricFormatter.axisTickString(latest))"
+    }
+
     private var accent: Color { Color.brainBar(nsColor: lane.accentColor) }
 
     var body: some View {
@@ -1714,6 +1720,16 @@ private struct BrainBarPipelineSeriesCard: View {
                 Text("·")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Color.brainBarTextSecondary.opacity(0.45))
+                if let latestBucketCaptionText {
+                    Text(latestBucketCaptionText)
+                        .font(.system(size: 11, weight: .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(accent.opacity(0.88))
+                        .lineLimit(1)
+                    Text("·")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Color.brainBarTextSecondary.opacity(0.45))
+                }
                 Text("window: \(timeframeWindowText)")
                     .font(.system(size: 11, weight: .semibold))
                     .monospacedDigit()

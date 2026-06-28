@@ -54,10 +54,18 @@ final class InjectionStoreTests: XCTestCase {
             tokenCount: 22
         )
 
-        try await Task.sleep(for: .milliseconds(250))
+        var firstQuery: String?
+        var firstChunkIDs: [String]?
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            firstQuery = await MainActor.run { store.events.first?.query }
+            firstChunkIDs = await MainActor.run { store.events.first?.chunkIDs }
+            if firstQuery == "new event" {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
 
-        let firstQuery = await MainActor.run { store.events.first?.query }
-        let firstChunkIDs = await MainActor.run { store.events.first?.chunkIDs }
         XCTAssertEqual(firstQuery, "new event")
         XCTAssertEqual(firstChunkIDs, ["chunk-a", "chunk-b"])
     }

@@ -1,6 +1,6 @@
 [project]
 name = "brainlayer"
-version = "1.4.0"
+version = "1.4.1"
 description = "Persistent memory MCP server for AI agents — 13 tools, semantic search, knowledge graph, on-device SQLite"
 license = {text = "Apache-2.0"}
 readme = "README.md"
@@ -97,6 +97,7 @@ Issues = "https://github.com/EtanHey/brainlayer/issues"
 [project.scripts]
 brainlayer = "brainlayer.cli:app"
 brainlayer-mcp = "brainlayer.mcp:serve"
+brainlayer-mcp-stdio-bridge = "brainlayer.mcp_stdio_bridge:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -129,6 +130,15 @@ exclude = [
 ]
 
 [tool.hatch.build.targets.sdist]
+only-include = [
+    "src/brainlayer",
+    "scripts/launchd",
+    "README.md",
+    "LICENSE",
+    "server.json",
+]
 exclude = [
+    "docs.local/**",
+    "brain-bar/docs.local/**",
     "src/brainlayer/dashboard/**",
 ]

@@ -344,7 +344,7 @@ final class StatsCollector: ObservableObject {
         let finishDaemon = daemonMonitor.sample() ?? nextDaemon
         switch result {
         case .success(let nextStats):
-            let queueFlushRate = recordPendingStoreQueueDepth(nextStats.pendingStoreQueueDepth, now: snapshotTime)
+            let queueFlushRate = recordPendingStoreQueueDepth(nextStats.pendingStoreFlushQueueDepth, now: snapshotTime)
             stats = nextStats.withPendingStoreFlushRate(queueFlushRate)
             daemon = finishDaemon
             state = PipelineState.derive(daemon: finishDaemon, stats: stats)

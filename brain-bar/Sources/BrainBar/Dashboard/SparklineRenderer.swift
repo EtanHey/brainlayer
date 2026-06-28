@@ -229,6 +229,18 @@ struct SparklineChartPresentation: Equatable, Sendable {
         return (1...2).contains(total)
     }
 
+    func visiblePointMarkers(for role: SparklineSeriesRole, compact: Bool) -> [SparklineChartPoint] {
+        let rolePoints = points(for: role)
+        guard let latest = rolePoints.last else { return [] }
+        if compact {
+            return [latest]
+        }
+        if shouldEmphasizeSparsePoints(role) {
+            return rolePoints.filter { $0.value > 0 }
+        }
+        return [latest]
+    }
+
     func nonZeroFraction(_ role: SparklineSeriesRole) -> Double {
         let rolePoints = points(for: role)
         guard !rolePoints.isEmpty else { return 0 }
@@ -296,6 +308,14 @@ struct SparklineChartPresentation: Equatable, Sendable {
     }
 
     private static func durationLabel(seconds: Int) -> String {
+        let hours = seconds / 3600
+        let minutesAfterHours = (seconds % 3600) / 60
+        if hours > 0 {
+            if minutesAfterHours == 0 {
+                return "\(hours)h"
+            }
+            return "\(hours)h \(minutesAfterHours)m"
+        }
         let minutes = seconds / 60
         let remainingSeconds = seconds % 60
         if remainingSeconds == 0 {
@@ -556,19 +576,28 @@ struct SparklineChart: View {
                             y: !compact && role == .primary ? 1 : 0
                         )
 
-                        if compact {
-                            ForEach(visiblePointMarkers(for: role)) { point in
-                                Circle()
-                                    .fill(color(for: role))
-                                    .frame(width: 4.4, height: 4.4)
-                                    .position(
-                                        self.point(
-                                            for: point,
-                                            bucketCount: presentation.points(for: role).count,
-                                            in: plotFrame
-                                        )
+                        ForEach(presentation.visiblePointMarkers(for: role, compact: compact)) { point in
+                            Circle()
+                                .fill(color(for: role))
+                                .frame(width: compact ? 4.4 : 6.5, height: compact ? 4.4 : 6.5)
+                                .overlay {
+                                    if !compact {
+                                        Circle()
+                                            .stroke(Color.brainBarBackgroundRaised.opacity(0.9), lineWidth: 1.25)
+                                    }
+                                }
+                                .shadow(
+                                    color: !compact ? color(for: role).opacity(0.45) : .clear,
+                                    radius: !compact ? 4 : 0,
+                                    y: !compact ? 1 : 0
+                                )
+                                .position(
+                                    self.point(
+                                        for: point,
+                                        bucketCount: presentation.points(for: role).count,
+                                        in: plotFrame
                                     )
-                            }
+                                )
                         }
                     }
                 }
@@ -625,15 +654,6 @@ struct SparklineChart: View {
                 }
             }
         }
-    }
-
-    private func visiblePointMarkers(for role: SparklineSeriesRole) -> [SparklineChartPoint] {
-        let points = presentation.points(for: role)
-        guard let last = points.last else { return [] }
-        if presentation.shouldEmphasizeSparsePoints(role) {
-            return points.filter { $0.value > 0 }
-        }
-        return [last]
     }
 
     private func point(for point: SparklineChartPoint, bucketCount: Int, in plotFrame: CGRect) -> CGPoint {

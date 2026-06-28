@@ -22,7 +22,7 @@ from brainlayer.mcp.store_handler import (
     _flush_pending_stores,
     _queue_store,
 )
-from brainlayer.queue_io import enqueue_enrichment_updates, enqueue_hook_chunk
+from brainlayer.queue_io import enqueue_enrichment_updates, enqueue_hook_chunk, enqueue_store
 
 # ---------------------------------------------------------------------------
 # _queue_store / _flush_pending_stores unit tests
@@ -31,6 +31,32 @@ from brainlayer.queue_io import enqueue_enrichment_updates, enqueue_hook_chunk
 
 class TestQueueStore:
     """JSONL queue for buffering writes when DB is locked."""
+
+    def test_drain_installs_busy_timeout_hook_first(self, monkeypatch):
+        """Drain must set busy_timeout before APSW best-practice PRAGMAs run."""
+        from brainlayer import drain
+
+        def existing_hook(_conn):
+            return None
+
+        original_hooks = list(apsw.connection_hooks)
+        try:
+            apsw.connection_hooks[:] = [existing_hook, drain._set_drain_busy_timeout_hook]
+            drain._install_drain_busy_timeout_hook()
+
+            calls = []
+
+            class FakeConnection:
+                def setbusytimeout(self, timeout_ms):
+                    calls.append(timeout_ms)
+
+            monkeypatch.setenv("BRAINLAYER_DRAIN_BUSY_TIMEOUT_MS", "1234")
+            apsw.connection_hooks[0](FakeConnection())
+
+            assert apsw.connection_hooks == [drain._set_drain_busy_timeout_hook, existing_hook]
+            assert calls == [1234]
+        finally:
+            apsw.connection_hooks[:] = original_hooks
 
     def test_queue_store_writes_jsonl(self, tmp_path):
         """_queue_store writes to the unified arbitration queue."""
@@ -521,6 +547,271 @@ class TestFlushPendingStores:
             "fresh queued store should create schema before replay",
             "test",
         )
+
+    def test_drain_marks_fallback_source_after_store_commit(self, tmp_path, monkeypatch):
+        """Fallback replay debt clears only after the queued store lands in the DB."""
+        from brainlayer.fallback_replay import _fallback_chunk_id, inventory_fallbacks, parse_fallback_file
+
+        db_path = tmp_path / "brainlayer.db"
+        queue_dir = tmp_path / "queue"
+        log_path = tmp_path / "drain.log"
+        repo = tmp_path / "systems"
+        fallback_path = repo / "docs.local" / "decisions" / "pending.md"
+        queue_dir.mkdir()
+        fallback_path.parent.mkdir(parents=True)
+        fallback_path.write_text(
+            "---\n"
+            "intended_brain_store: true\n"
+            "importance: 8\n"
+            "tags: [fallback-replay]\n"
+            "timestamp: 2026-06-12T19:54:07+03:00\n"
+            "retry_attempted: true\n"
+            "chunk_id:\n"
+            "---\n"
+            "queued fallback body\n",
+            encoding="utf-8",
+        )
+        fallback_chunk_id = _fallback_chunk_id(parse_fallback_file(fallback_path))
+        fallback_path.write_text(
+            fallback_path.read_text(encoding="utf-8").replace(
+                "chunk_id:\n",
+                f"queued_chunk_id: {fallback_chunk_id}\nchunk_id:\n",
+            ),
+            encoding="utf-8",
+        )
+        queued = queue_dir / "fallback-replay-1.jsonl"
+        queued.write_text(
+            json.dumps(
+                {
+                    "kind": "store_memory",
+                    "chunk_id": fallback_chunk_id,
+                    "content": "queued fallback body\n",
+                    "memory_type": "note",
+                    "project": "systems",
+                    "created_at": "2026-06-12T19:54:07+03:00",
+                    "metadata": {
+                        "fallback_source_path": str(fallback_path),
+                        "origin_repo_path": str(repo),
+                        "replayed_by": "phase-1-test",
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+
+        assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=log_path) == 1
+
+        assert not queued.exists()
+        updated_entry = parse_fallback_file(fallback_path)
+        assert updated_entry.frontmatter["chunk_id"] == fallback_chunk_id
+        assert inventory_fallbacks(tmp_path, scope_map={}).summary()["green"] is True
+
+    def test_drain_deduplicates_duplicate_fallback_store_queue_files_by_chunk_id(self, tmp_path, monkeypatch):
+        """Downstream ingestion is idempotent even if replay queued the same fallback twice."""
+        from brainlayer.fallback_replay import _fallback_chunk_id, parse_fallback_file
+
+        db_path = tmp_path / "brainlayer.db"
+        queue_dir = tmp_path / "queue"
+        log_path = tmp_path / "drain.log"
+        repo = tmp_path / "systems"
+        fallback_path = repo / "docs.local" / "decisions" / "pending.md"
+        queue_dir.mkdir()
+        fallback_path.parent.mkdir(parents=True)
+        fallback_path.write_text(
+            "---\n"
+            "intended_brain_store: true\n"
+            "importance: 8\n"
+            "timestamp: 2026-06-12T19:54:07+03:00\n"
+            "retry_attempted: true\n"
+            "chunk_id:\n"
+            "---\n"
+            "queued fallback body\n",
+            encoding="utf-8",
+        )
+        fallback_chunk_id = _fallback_chunk_id(parse_fallback_file(fallback_path))
+        fallback_path.write_text(
+            fallback_path.read_text(encoding="utf-8").replace(
+                "chunk_id:\n",
+                f"queued_chunk_id: {fallback_chunk_id}\nchunk_id:\n",
+            ),
+            encoding="utf-8",
+        )
+        payload = {
+            "kind": "store_memory",
+            "chunk_id": fallback_chunk_id,
+            "content": "queued fallback body\n",
+            "memory_type": "note",
+            "project": "systems",
+            "created_at": "2026-06-12T19:54:07+03:00",
+            "metadata": {
+                "fallback_source_path": str(fallback_path),
+                "origin_repo_path": str(repo),
+                "replayed_by": "phase-1-test",
+            },
+        }
+        first = queue_dir / "fallback-replay-1.jsonl"
+        second = queue_dir / "fallback-replay-2.jsonl"
+        first.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        second.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+
+        assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=2, log_path=log_path) == 2
+
+        assert not first.exists()
+        assert not second.exists()
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute(
+                "SELECT id, content, seen_count FROM chunks WHERE id = ?",
+                (fallback_chunk_id,),
+            ).fetchall()
+        assert rows == [(fallback_chunk_id, "queued fallback body", 2)]
+        updated_entry = parse_fallback_file(fallback_path)
+        assert updated_entry.frontmatter["chunk_id"] == fallback_chunk_id
+        assert "queued_chunk_id" not in updated_entry.frontmatter
+
+    def test_drain_marks_fallback_source_with_queued_id_after_duplicate_merge(self, tmp_path, monkeypatch):
+        """A duplicate merge returns the canonical DB id but the fallback file still clears by queued id."""
+        from brainlayer import drain
+        from brainlayer.fallback_replay import _fallback_chunk_id, parse_fallback_file
+
+        db_path = tmp_path / "brainlayer.db"
+        queue_dir = tmp_path / "queue"
+        log_path = tmp_path / "drain.log"
+        repo = tmp_path / "systems"
+        fallback_path = repo / "docs.local" / "decisions" / "pending.md"
+        queue_dir.mkdir()
+        fallback_path.parent.mkdir(parents=True)
+        fallback_path.write_text(
+            "---\n"
+            "intended_brain_store: true\n"
+            "importance: 8\n"
+            "timestamp: 2026-06-12T19:54:07+03:00\n"
+            "retry_attempted: true\n"
+            "chunk_id:\n"
+            "---\n"
+            "queued fallback body\n",
+            encoding="utf-8",
+        )
+        fallback_chunk_id = _fallback_chunk_id(parse_fallback_file(fallback_path))
+        fallback_path.write_text(
+            fallback_path.read_text(encoding="utf-8").replace(
+                "chunk_id:\n",
+                f"queued_chunk_id: {fallback_chunk_id}\nchunk_id:\n",
+            ),
+            encoding="utf-8",
+        )
+        queued = queue_dir / "fallback-replay-duplicate.jsonl"
+        queued.write_text(
+            json.dumps(
+                {
+                    "kind": "store_memory",
+                    "chunk_id": fallback_chunk_id,
+                    "content": "queued fallback body\n",
+                    "memory_type": "note",
+                    "project": "systems",
+                    "created_at": "2026-06-12T19:54:07+03:00",
+                    "metadata": {
+                        "fallback_source_path": str(fallback_path),
+                        "origin_repo_path": str(repo),
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+        monkeypatch.setattr(drain, "_insert_or_merge_chunk", lambda _conn, _values: "canonical-existing")
+
+        assert drain.drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=log_path) == 1
+
+        assert not queued.exists()
+        updated_entry = parse_fallback_file(fallback_path)
+        assert updated_entry.frontmatter["chunk_id"] == fallback_chunk_id
+        assert "queued_chunk_id" not in updated_entry.frontmatter
+
+    def test_drain_deletes_queue_after_post_commit_fallback_marker_failure(self, tmp_path, monkeypatch):
+        from brainlayer import drain
+
+        db_path = tmp_path / "brainlayer.db"
+        queue_dir = tmp_path / "queue"
+        log_path = tmp_path / "drain.log"
+        fallback_path = tmp_path / "repo" / "docs.local" / "decisions" / "pending.md"
+        fallback_path.parent.mkdir(parents=True)
+        queued = enqueue_store(
+            content="fallback marker commit body",
+            memory_type="note",
+            project="systems",
+            queue_dir=queue_dir,
+            fallback_source_path=str(fallback_path),
+        )
+        monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+
+        def fail_marker_update(*_args, **_kwargs):
+            raise RuntimeError("marker write failed after commit")
+
+        monkeypatch.setattr(drain, "_mark_fallback_replays", fail_marker_update)
+
+        drained = drain.drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=log_path)
+
+        assert drained == 1
+        assert not queued.exists()
+        conn = apsw.Connection(str(db_path))
+        try:
+            assert (
+                conn.execute(
+                    "SELECT COUNT(*) FROM chunks WHERE content = ?", ("fallback marker commit body",)
+                ).fetchone()[0]
+                == 1
+            )
+        finally:
+            conn.close()
+        assert "post-commit fallback replay marker update failed" in log_path.read_text(encoding="utf-8")
+
+    def test_drain_keeps_fallback_marker_pending_when_queue_cleanup_fails(self, tmp_path, monkeypatch):
+        from brainlayer import drain
+
+        db_path = tmp_path / "brainlayer.db"
+        queue_dir = tmp_path / "queue"
+        log_path = tmp_path / "drain.log"
+        fallback_path = tmp_path / "repo" / "docs.local" / "decisions" / "pending.md"
+        fallback_path.parent.mkdir(parents=True)
+        fallback_path.write_text(
+            "---\n"
+            "intended_brain_store: true\n"
+            "importance: 8\n"
+            "timestamp: 2026-06-12T19:54:07+03:00\n"
+            "chunk_id:\n"
+            "---\n"
+            "cleanup failure body\n",
+            encoding="utf-8",
+        )
+        queued = enqueue_store(
+            content="cleanup failure body",
+            memory_type="note",
+            project="systems",
+            queue_dir=queue_dir,
+            fallback_source_path=str(fallback_path),
+        )
+        marker_calls = []
+
+        def fail_unlink(_path, _log_path):
+            raise OSError("disk full")
+
+        def record_marker(*args, **kwargs):
+            marker_calls.append((args, kwargs))
+
+        monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+        monkeypatch.setattr(drain, "_unlink_processed_file", fail_unlink)
+        monkeypatch.setattr(drain, "_mark_fallback_replays", record_marker)
+
+        drained = drain.drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=log_path)
+
+        assert drained == 1
+        assert queued.exists()
+        assert marker_calls == []
+        assert "chunk_id:\n" in fallback_path.read_text(encoding="utf-8")
 
     def test_drain_preserves_store_queue_when_schema_bootstrap_writer_in_use(self, tmp_path, monkeypatch):
         """Schema bootstrap contention must preserve queued store files for retry."""
@@ -1736,6 +2027,161 @@ def test_burn_drain_preserves_queue_file_when_batch_rolls_back(tmp_path, monkeyp
     finally:
         conn.close()
     assert summary is None
+
+
+def test_burn_drain_deletes_queue_after_post_commit_fallback_marker_failure(tmp_path, monkeypatch):
+    from brainlayer import drain
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "burn.log"
+    fallback_path = tmp_path / "repo" / "docs.local" / "decisions" / "pending.md"
+    fallback_path.parent.mkdir(parents=True)
+    queued = enqueue_store(
+        content="burn fallback marker commit body",
+        memory_type="note",
+        project="systems",
+        queue_dir=queue_dir,
+        fallback_source_path=str(fallback_path),
+    )
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+
+    def fail_marker_update(*_args, **_kwargs):
+        raise RuntimeError("marker write failed after commit")
+
+    monkeypatch.setattr(drain, "_mark_fallback_replays", fail_marker_update)
+
+    result = drain.burn_drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10, log_path=log_path)
+
+    assert result.failed_files == 0
+    assert result.applied_events == 1
+    assert result.files_deleted == 1
+    assert not queued.exists()
+    conn = apsw.Connection(str(db_path))
+    try:
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM chunks WHERE content = ?",
+                ("burn fallback marker commit body",),
+            ).fetchone()[0]
+            == 1
+        )
+    finally:
+        conn.close()
+    assert "post-commit fallback replay marker update failed" in log_path.read_text(encoding="utf-8")
+
+
+def test_drain_once_does_not_mark_fallback_when_queue_file_remains(tmp_path, monkeypatch):
+    from brainlayer import drain
+    from brainlayer.fallback_replay import parse_fallback_file
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "drain.log"
+    repo = tmp_path / "repo"
+    fallback_path = repo / "docs.local" / "decisions" / "pending.md"
+    fallback_path.parent.mkdir(parents=True)
+    fallback_path.write_text(
+        "---\nintended_brain_store: true\ntimestamp: 2026-06-27T10:00:00Z\nchunk_id:\n---\nplain drain fallback body\n",
+        encoding="utf-8",
+    )
+    queued = enqueue_store(
+        content="plain drain fallback body",
+        memory_type="note",
+        project="systems",
+        queue_dir=queue_dir,
+        fallback_source_path=str(fallback_path),
+        origin_repo_path=str(repo),
+    )
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+
+    def leave_queue_file(path, log_path):
+        assert path == queued
+        log_path.write_text("synthetic unlink failure\n", encoding="utf-8")
+
+    monkeypatch.setattr(drain, "_unlink_processed_file", leave_queue_file)
+
+    drained = drain.drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10, log_path=log_path)
+
+    assert drained == 1
+    assert queued.exists()
+    updated = parse_fallback_file(fallback_path)
+    assert updated.frontmatter["chunk_id"] is None
+    assert updated.frontmatter.get("queued_chunk_id") is None
+
+
+def test_fallback_replay_marker_anchors_relative_paths_to_origin_repo(tmp_path):
+    from brainlayer.drain import _fallback_replay_marker
+
+    repo = tmp_path / "repo"
+    relative = "docs.local/decisions/pending.md"
+
+    marker = _fallback_replay_marker(
+        {
+            "metadata": {
+                "fallback_source_path": relative,
+                "origin_repo_path": str(repo),
+            },
+            "project": "systems",
+        },
+        "manual-stored",
+    )
+
+    assert marker is not None
+    assert marker.path == repo / relative
+    assert marker.origin_repo_path == repo
+
+
+def test_burn_drain_marks_fallbacks_for_queue_files_deleted_before_cleanup_failure(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from brainlayer import drain
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "burn.log"
+    first_fallback = tmp_path / "repo" / "docs.local" / "decisions" / "first.md"
+    second_fallback = tmp_path / "repo" / "docs.local" / "decisions" / "second.md"
+    first = enqueue_store(
+        content="first committed fallback body",
+        memory_type="note",
+        project="systems",
+        source="aaa-fallback",
+        queue_dir=queue_dir,
+        fallback_source_path=str(first_fallback),
+    )
+    second = enqueue_store(
+        content="second committed fallback body",
+        memory_type="note",
+        project="systems",
+        source="zzz-fallback",
+        queue_dir=queue_dir,
+        fallback_source_path=str(second_fallback),
+    )
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    marked_paths: list[Path] = []
+
+    def record_markers(markers, _log_path):
+        marked_paths.extend(marker.path for marker in markers)
+
+    real_unlink = Path.unlink
+
+    def fail_second_unlink(self, *args, **kwargs):
+        if self == second:
+            raise OSError("synthetic second unlink failure")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(drain, "_mark_fallback_replays", record_markers)
+    monkeypatch.setattr(Path, "unlink", fail_second_unlink)
+
+    result = drain.burn_drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10, log_path=log_path)
+
+    assert result.failed_files == 0
+    assert result.applied_events == 2
+    assert result.files_deleted == 1
+    assert not first.exists()
+    assert second.exists()
+    assert marked_paths == [first_fallback]
 
 
 def test_burn_drain_rolls_back_provenance_enqueue_with_batch(tmp_path, monkeypatch):

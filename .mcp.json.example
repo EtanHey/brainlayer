@@ -1,10 +1,10 @@
 {
   "_comment": "Run: ~/Gits/orchestrator/scripts/mcp-setup.sh ~/Gits/brainlayer",
-  "_comment2": "brainlayer-socat: BrainBar daemon on Unix socket (replaces 9 Python processes)",
+  "_comment2": "brainlayer-mcp-stdio-bridge reconnects stdio to the BrainBar daemon socket; defaults to /tmp/brainbar.sock and supports BRAINLAYER_MCP_SOCKET.",
+  "_comment3": "If a GUI-launched client cannot find the command, replace it with an absolute path such as /opt/homebrew/bin/brainlayer-mcp-stdio-bridge.",
   "mcpServers": {
     "brainlayer": {
-      "command": "socat",
-      "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]
+      "command": "brainlayer-mcp-stdio-bridge"
     },
     "voicelayer": {
       "command": "voicelayer-mcp"

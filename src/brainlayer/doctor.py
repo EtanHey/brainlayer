@@ -184,6 +184,20 @@ def _is_retryable_probe_writer_conflict(reason: str) -> bool:
     )
 
 
+def _health_updated_recently(health: dict[str, Any], now: datetime, max_age_seconds: float) -> bool:
+    raw_updated_at = health.get("updated_at")
+    if not isinstance(raw_updated_at, str) or not raw_updated_at:
+        return False
+    try:
+        updated_at = datetime.fromisoformat(raw_updated_at.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=UTC)
+    age_seconds = max(0.0, now.timestamp() - updated_at.astimezone(UTC).timestamp())
+    return age_seconds < max(0.0, max_age_seconds)
+
+
 def _roundtrip_probe(db_path: Path, timeout_seconds: float) -> tuple[bool, float, str]:
     started = time.monotonic()
     chunk_id = f"doctor-probe-{uuid.uuid4().hex}"
@@ -454,8 +468,16 @@ def run_doctor(
         next_drain_total = next_drain_health.get("drained_total")
         next_drain_cycles = next_drain_health.get("drain_cycles")
         drain_total_moving = _counter_increased(drain_total, next_drain_total)
+        sample_now = now_fn()
+        recent_drain_heartbeat = _health_updated_recently(
+            next_drain_health,
+            sample_now,
+            config.drain_liveness_stale_seconds,
+        )
         drain_moving = queue_count == 0 or drain_total_moving
-        drain_liveness_moving = drain_total_moving or _counter_increased(drain_cycles, next_drain_cycles)
+        drain_liveness_moving = (
+            drain_total_moving or _counter_increased(drain_cycles, next_drain_cycles) or recent_drain_heartbeat
+        )
         drain_total = next_drain_health.get("drained_total", drain_total)
         drain_cycles = next_drain_health.get("drain_cycles", drain_cycles)
         if queue_count > 0:
@@ -468,7 +490,7 @@ def run_doctor(
             queue_count=queue_count,
             enrichment_backlog=result.enrichment_backlog,
             drain_health=next_drain_health,
-            now=now_fn(),
+            now=sample_now,
             stale_seconds=config.drain_liveness_stale_seconds,
             enrich_cost_counter_path=config.db_path.expanduser().parent / ENRICH_DAILY_COST_COUNTER_FILENAME,
         )

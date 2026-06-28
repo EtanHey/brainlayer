@@ -340,7 +340,10 @@ final class BrainBarServer: @unchecked Sendable {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let db = BrainDatabase(
                 path: dbPath,
-                openConfiguration: .init(busyTimeoutMillis: busyTimeoutMillis)
+                openConfiguration: .init(
+                    busyTimeoutMillis: busyTimeoutMillis,
+                    runMigrations: false
+                )
             )
             let readDB = db.isOpen
                 ? BrainDatabase(

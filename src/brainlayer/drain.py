@@ -60,6 +60,22 @@ def _drain_busy_timeout_ms() -> int:
     return timeout_ms
 
 
+def _set_drain_busy_timeout_hook(conn: apsw.Connection) -> None:
+    """Install drain busy_timeout before APSW connection best-practice hooks run."""
+    conn.setbusytimeout(_drain_busy_timeout_ms())
+
+
+def _install_drain_busy_timeout_hook() -> None:
+    try:
+        apsw.connection_hooks.remove(_set_drain_busy_timeout_hook)
+    except ValueError:
+        pass
+    apsw.connection_hooks.insert(0, _set_drain_busy_timeout_hook)
+
+
+_install_drain_busy_timeout_hook()
+
+
 def _checkpoint_busy_timeout_ms() -> int:
     try:
         timeout_ms = int(
@@ -123,6 +139,7 @@ def _drain_open_retry_delay_seconds(attempt: int) -> float:
 class ApplyResult:
     chunk_id: str | None = None
     collision_chunk_id: str | None = None
+    fallback_markers: tuple[FallbackReplayMarker, ...] = ()
 
 
 @dataclass
@@ -133,6 +150,14 @@ class BurnDrainResult:
     files_deleted: int = 0
     failed_files: int = 0
     checkpoints: int = 0
+
+
+@dataclass(frozen=True)
+class FallbackReplayMarker:
+    path: Path
+    chunk_id: str
+    project: str | None = None
+    origin_repo_path: Path | None = None
 
 
 def _default_db_path() -> Path:
@@ -399,6 +424,59 @@ def _event_payload(event: dict[str, Any]) -> dict[str, Any]:
     return {"kind": "unknown", **event}
 
 
+def _fallback_replay_marker(event: dict[str, Any], chunk_id: str) -> FallbackReplayMarker | None:
+    raw_metadata = event.get("metadata")
+    metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
+    raw_path = event.get("fallback_source_path") or metadata.get("fallback_source_path")
+    if not raw_path:
+        return None
+    raw_origin = event.get("origin_repo_path") or metadata.get("origin_repo_path")
+    origin_repo_path = Path(str(raw_origin)).expanduser() if raw_origin else None
+    marker_path = Path(str(raw_path)).expanduser()
+    if origin_repo_path is not None and not marker_path.is_absolute():
+        marker_path = origin_repo_path / marker_path
+    project = event.get("project")
+    return FallbackReplayMarker(
+        path=marker_path,
+        chunk_id=chunk_id,
+        project=str(project) if project else None,
+        origin_repo_path=origin_repo_path,
+    )
+
+
+def _mark_fallback_replays(markers: list[FallbackReplayMarker], log_path: Path) -> None:
+    if not markers:
+        return
+    from .fallback_replay import mark_fallback_stored
+
+    seen: set[tuple[Path, str]] = set()
+    for marker in markers:
+        key = (marker.path, marker.chunk_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            mark_fallback_stored(
+                marker.path,
+                chunk_id=marker.chunk_id,
+                project=marker.project,
+                origin_repo_path=marker.origin_repo_path,
+            )
+        except Exception as exc:
+            _log(log_path, f"WARN: stored fallback chunk {marker.chunk_id} but could not mark {marker.path}: {exc}")
+
+
+def _mark_fallback_replays_best_effort(markers: list[FallbackReplayMarker], log_path: Path) -> None:
+    try:
+        _mark_fallback_replays(markers, log_path)
+    except Exception as exc:
+        message = f"WARN: post-commit fallback replay marker update failed: {exc}"
+        try:
+            _log(log_path, message)
+        except Exception:
+            logger.warning(message)
+
+
 def _events_include_store(events: list[dict[str, Any]]) -> bool:
     return any(_event_payload(event).get("kind") == "store_memory" for event in events)
 
@@ -600,7 +678,8 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
                 },
             )
             _apply_store_supersedes(conn, supersedes, chunk_id)
-            return ApplyResult(chunk_id=chunk_id)
+            marker = _fallback_replay_marker(event, chunk_id)
+            return ApplyResult(chunk_id=chunk_id, fallback_markers=(marker,) if marker else ())
         return ApplyResult(collision_chunk_id=chunk_id)
     stored_chunk_id = _insert_or_merge_chunk(
         conn,
@@ -637,7 +716,9 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
             )
         else:
             logger.warning("Skipping entity link for unknown entity_id=%s chunk_id=%s", entity_id, chunk_id)
-    return ApplyResult(chunk_id=stored_chunk_id)
+    marker_chunk_id = str(event.get("chunk_id") or stored_chunk_id)
+    marker = _fallback_replay_marker(event, marker_chunk_id)
+    return ApplyResult(chunk_id=stored_chunk_id, fallback_markers=(marker,) if marker else ())
 
 
 def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
@@ -964,13 +1045,15 @@ def _quarantine_file(path: Path, log_path: Path, reason: BaseException) -> None:
         _log(log_path, f"skipped poison queue file {path.name}: {reason}; quarantine_failed={exc}")
 
 
-def _unlink_processed_file(path: Path, log_path: Path) -> None:
+def _unlink_processed_file(path: Path, log_path: Path) -> bool:
     try:
         path.unlink()
+        return True
     except FileNotFoundError:
-        pass
+        return True
     except OSError as exc:
         _log(log_path, f"drain committed but could not unlink {path}: {exc}")
+        return False
 
 
 def _is_enrichment_queue_file(path: Path) -> bool:
@@ -1172,9 +1255,11 @@ def burn_drain_once(
                 conn.execute("BEGIN IMMEDIATE")
                 prefetched_state = _prefetch_enrichment_state(conn, all_events)
                 store_chunk_ids: list[str] = []
+                fallback_markers_by_path: dict[Path, list[FallbackReplayMarker]] = {}
                 attempt_applied_events = 0
                 attempt_skipped_verified_stale = 0
-                for _, events in batch:
+                for path, events in batch:
+                    path_fallback_markers: list[FallbackReplayMarker] = []
                     for event in events:
                         if _is_verified_redundant_enrichment(event, prefetched_state):
                             payload = _event_payload(event)
@@ -1190,6 +1275,9 @@ def burn_drain_once(
                         attempt_applied_events += 1
                         if applied.chunk_id:
                             store_chunk_ids.append(applied.chunk_id)
+                        path_fallback_markers.extend(applied.fallback_markers)
+                    if path_fallback_markers:
+                        fallback_markers_by_path[path] = path_fallback_markers
                 if _embedding_enabled():
                     _embed_store_chunks(conn, store_chunk_ids, embed_fn)
                 conn.execute("COMMIT")
@@ -1228,14 +1316,18 @@ def burn_drain_once(
                 if conn is not None:
                     conn.close()
 
+        fallback_markers_to_apply: list[FallbackReplayMarker] = []
         for path, _events in batch:
             try:
                 path.unlink()
                 result.files_deleted += 1
+                fallback_markers_to_apply.extend(fallback_markers_by_path.get(path, []))
             except FileNotFoundError:
                 result.files_deleted += 1
+                fallback_markers_to_apply.extend(fallback_markers_by_path.get(path, []))
             except OSError as exc:
                 _log(log_path, f"burn drain committed but could not unlink {path}: {exc}")
+        _mark_fallback_replays_best_effort(fallback_markers_to_apply, log_path)
         if result.applied_events or result.skipped_verified_stale:
             _log(
                 log_path,
@@ -1297,6 +1389,7 @@ def drain_once(
                 attempt_drained = 0
                 collision_ids: list[str] = []
                 store_chunk_ids: list[str] = []
+                fallback_markers: list[FallbackReplayMarker] = []
                 try:
                     conn = _open_connection(db_path)
                     _ensure_enrichment_update_schema(conn)
@@ -1307,6 +1400,7 @@ def drain_once(
                         result = _apply_event(conn, event)
                         if result.chunk_id:
                             store_chunk_ids.append(result.chunk_id)
+                            fallback_markers.extend(result.fallback_markers)
                             content = str(_event_payload(event).get("content") or "").strip()
                             embedding_bytes = precomputed_embeddings.get(content)
                             if embedding_bytes:
@@ -1331,10 +1425,13 @@ def drain_once(
                     collisions_dropped += len(collision_ids)
                     for chunk_id in collision_ids:
                         _log(log_path, f"WARN: queued chunk_id {chunk_id} collided with existing row, dropped")
+                    queue_cleanup_succeeded = True
                     if remaining_events:
                         _rewrite_events_file(path, remaining_events)
                     else:
-                        _unlink_processed_file(path, log_path)
+                        queue_cleanup_succeeded = _unlink_processed_file(path, log_path)
+                    if queue_cleanup_succeeded:
+                        _mark_fallback_replays_best_effort(fallback_markers, log_path)
                     yield_seconds = _post_commit_yield_seconds()
                     if yield_seconds > 0:
                         time.sleep(yield_seconds)

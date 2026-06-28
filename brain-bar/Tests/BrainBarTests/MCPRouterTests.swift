@@ -1912,6 +1912,133 @@ No results found.
         lockHeld = false
     }
 
+    func testBrainStoreQueuedCurrentWriteDrainsAfterLockClearsWithoutAnotherCall() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        let restoreQueuePath = setPendingStoreQueuePath(queuePath)
+        defer { restoreQueuePath() }
+
+        let dbPath = tempDir.appendingPathComponent("brainbar.db").path
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+
+        var lockDB: OpaquePointer?
+        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
+        XCTAssertEqual(sqlite3_open_v2(dbPath, &lockDB, flags, nil), SQLITE_OK)
+        let lockHandle = try XCTUnwrap(lockDB)
+        defer { sqlite3_close(lockHandle) }
+        XCTAssertEqual(sqlite3_exec(lockHandle, "BEGIN IMMEDIATE", nil, nil, nil), SQLITE_OK)
+        var lockHeld = true
+        defer {
+            if lockHeld {
+                sqlite3_exec(lockHandle, "ROLLBACK", nil, nil, nil)
+            }
+        }
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+
+        let queuedContent = "Queued current write should drain after the writer lock clears"
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 221,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_store",
+                "arguments": [
+                    "content": queuedContent,
+                    "tags": ["queue-fallback"],
+                    "importance": 7
+                ] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertNil(result["isError"])
+        XCTAssertEqual(result["queued"] as? Bool, true)
+        let chunkID = try XCTUnwrap(result["chunk_id"] as? String)
+        XCTAssertEqual(try readSinglePendingStorePayload(queuePath: queuePath)?["chunk_id"] as? String, chunkID)
+
+        sqlite3_exec(lockHandle, "ROLLBACK", nil, nil, nil)
+        lockHeld = false
+
+        let deadline = Date().addingTimeInterval(1.5)
+        var storedContents: [String] = []
+        while Date() < deadline {
+            storedContents = (try? chunkContents(path: dbPath)) ?? []
+            if storedContents.contains(queuedContent) {
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+
+        XCTAssertTrue(
+            storedContents.contains(queuedContent),
+            "queued brain_store should drain after the transient writer lock clears without requiring another brain_store call"
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: queuePath.path))
+    }
+
+    func testDeferredBrainStoreDrainRetriesAfterTransientQueueReadFailure() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        let restoreQueuePath = setPendingStoreQueuePath(queuePath)
+        defer { restoreQueuePath() }
+
+        let dbPath = tempDir.appendingPathComponent("brainbar.db").path
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+        db.failNextStoreWithBusyForTesting = true
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+
+        let queuedContent = "Queued current write survives one unreadable pending store queue snapshot"
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 222,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_store",
+                "arguments": [
+                    "content": queuedContent,
+                    "tags": ["queue-fallback"],
+                    "importance": 7
+                ] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertEqual(result["queued"] as? Bool, true)
+        let queuedText = try String(contentsOf: queuePath, encoding: .utf8)
+
+        try FileManager.default.removeItem(at: queuePath)
+        try FileManager.default.createDirectory(at: queuePath, withIntermediateDirectories: false)
+        Thread.sleep(forTimeInterval: 0.35)
+        try FileManager.default.removeItem(at: queuePath)
+        try queuedText.write(to: queuePath, atomically: true, encoding: .utf8)
+
+        let deadline = Date().addingTimeInterval(2.0)
+        var storedContents: [String] = []
+        while Date() < deadline {
+            storedContents = (try? chunkContents(path: dbPath)) ?? []
+            if storedContents.contains(queuedContent) {
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+
+        XCTAssertTrue(
+            storedContents.contains(queuedContent),
+            "deferred drain should retry instead of treating an unreadable queue snapshot as an empty queue"
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: queuePath.path))
+    }
+
     func testBrainStoreFlushesPendingQueueAfterSuccessfulStore() throws {
         let tempDir = makeTempTestDirectory()
         defer { try? FileManager.default.removeItem(at: tempDir) }

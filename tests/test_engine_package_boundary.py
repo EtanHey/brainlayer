@@ -17,15 +17,25 @@ def test_pyproject_declares_pure_engine_package_boundary() -> None:
     assert payload["project"]["scripts"] == {
         "brainlayer": "brainlayer.cli:app",
         "brainlayer-mcp": "brainlayer.mcp:serve",
+        "brainlayer-mcp-stdio-bridge": "brainlayer.mcp_stdio_bridge:main",
     }
     assert wheel_config["packages"] == ["src/brainlayer"]
     assert "src/brainlayer/cli" not in wheel_config.get("exclude", [])
     assert "src/brainlayer/cli_new.py" not in wheel_config.get("exclude", [])
     assert wheel_config["force-include"]["scripts/launchd"] == "brainlayer/launchd"
     assert "src/brainlayer/dashboard" in wheel_config["exclude"]
+    assert sdist_config["only-include"] == [
+        "src/brainlayer",
+        "scripts/launchd",
+        "README.md",
+        "LICENSE",
+        "server.json",
+    ]
     assert "src/brainlayer/cli/**" not in sdist_config.get("exclude", [])
     assert "src/brainlayer/cli_new.py" not in sdist_config.get("exclude", [])
     assert "src/brainlayer/dashboard/**" in sdist_config["exclude"]
+    assert "docs.local/**" in sdist_config["exclude"]
+    assert "brain-bar/docs.local/**" in sdist_config["exclude"]
 
 
 def test_engine_suite_selection_is_explicit_and_excludes_root_surfaces() -> None:
