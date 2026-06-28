@@ -957,6 +957,7 @@ final class DashboardTests: XCTestCase {
         {"kind":"enrichment_update","chunk_id":"enrich-one","summary":"queued enrichment"}
         {"kind":"watcher_chunk","chunk_id":"watcher-one","content":"watcher ingestion is not an agent store"}
         {"kind":"hook_chunk","chunk_id":"hook-one","content":"hook ingestion is not an agent store"}
+        {"chunk_id":"legacy-watcher-one","content":"legacy realtime hook row without kind is not an agent store"}
         {"kind":"store_memory","chunk_id":"durable-two","content":"queued two"}
         """.write(
             to: durableQueue.appendingPathComponent("mixed-batch.jsonl"),

@@ -811,6 +811,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     func close() {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         if let db {
             sqlite3_close(db)
             self.db = nil
@@ -2486,8 +2488,10 @@ final class BrainDatabase: @unchecked Sendable {
         _ sql: String,
         binds: (OpaquePointer) -> Void
     ) throws {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
-        try runWriteStatement(on: db, sql: sql, retries: 3, bind: binds)
+        try runWriteStatementLocked(on: db, sql: sql, retries: 3, bind: binds)
     }
 
     private func execute(_ sql: String, retries: Int = 0, retryDelayMillis: UInt32 = 250) throws {
@@ -3914,9 +3918,6 @@ final class BrainDatabase: @unchecked Sendable {
             default:
                 return false
             }
-        }
-        if let content = payload["content"] as? String {
-            return !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
         return false
     }

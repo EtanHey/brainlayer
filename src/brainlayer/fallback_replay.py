@@ -195,13 +195,14 @@ def queue_entry(
         chunk_id = _fallback_chunk_id(latest)
         queued = str(latest.frontmatter.get("queued_chunk_id") or "").strip()
         queued_path = _queued_queue_path(latest)
-        if queued == chunk_id and is_pending_entry(latest) and (queued_path is None or queued_path.exists()):
+        pending = is_pending_entry(latest)
+        if queued == chunk_id and pending and (queued_path is None or queued_path.exists()):
             return ReplayResult(path=entry.path, attempted=True, chunk_id=chunk_id)
 
         stored = _stored_chunk_id(latest.frontmatter)
-        if stored and _fallback_chunk_matches(latest, stored):
+        if stored and not pending and _fallback_chunk_matches(latest, stored):
             return ReplayResult(path=entry.path, attempted=True, chunk_id=stored)
-        if not is_pending_entry(latest):
+        if not pending:
             return ReplayResult(path=entry.path, attempted=False, chunk_id=None)
 
         try:
@@ -354,10 +355,11 @@ def _write_queue_attempt(entry: FallbackEntry, *, chunk_id: Any, queue_path: Any
 
 def _write_queue_attempt_locked(entry: FallbackEntry, *, chunk_id: Any, queue_path: Any = None) -> None:
     latest = _latest_entry(entry)
+    pending = is_pending_entry(latest)
     stored = _stored_chunk_id(latest.frontmatter)
-    if stored and _fallback_chunk_matches(latest, stored):
+    if stored and not pending and _fallback_chunk_matches(latest, stored):
         return
-    if not is_pending_entry(latest):
+    if not pending:
         return
     if chunk_id and not _fallback_chunk_matches(latest, chunk_id):
         return
@@ -376,12 +378,13 @@ def _write_replay_attempt(entry: FallbackEntry, *, chunk_id: Any, trust_chunk_id
 
 def _write_replay_attempt_locked(entry: FallbackEntry, *, chunk_id: Any, trust_chunk_id: bool = False) -> None:
     latest = _latest_entry(entry)
+    pending = is_pending_entry(latest)
     stored = _stored_chunk_id(latest.frontmatter)
-    if not chunk_id and stored and _fallback_chunk_matches(latest, stored):
+    if not chunk_id and not pending and stored and _fallback_chunk_matches(latest, stored):
         return
     if chunk_id and not trust_chunk_id and not _fallback_chunk_matches(latest, chunk_id):
         return
-    if not is_pending_entry(latest):
+    if not pending:
         return
     updated = _frontmatter_with_resolved_project(latest)
     updated["retry_attempted"] = True

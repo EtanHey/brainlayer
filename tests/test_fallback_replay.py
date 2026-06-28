@@ -506,7 +506,28 @@ def test_replay_entry_trusts_returned_fallback_chunk_id_from_direct_store(tmp_pa
         ),
         encoding="utf-8",
     )
-    assert is_pending_entry(parse_fallback_file(path)) is True
+    edited = parse_fallback_file(path)
+    assert is_pending_entry(edited) is True
+
+    requeued_calls = []
+
+    def requeue_func(**kwargs):
+        requeued_calls.append(kwargs)
+        queue_path = tmp_path / "queue" / "edited-direct.jsonl"
+        queue_path.parent.mkdir(parents=True, exist_ok=True)
+        queue_path.write_text("queued\n", encoding="utf-8")
+        return queue_path
+
+    requeued = queue_entry(edited, enqueue_func=requeue_func, replayed_by="phase-1-test")
+    requeued_entry = parse_fallback_file(path)
+
+    assert requeued.error is None
+    assert requeued.chunk_id is not None
+    assert requeued.chunk_id.startswith("fallback-")
+    assert requeued.chunk_id != result.chunk_id
+    assert requeued_calls[0]["chunk_id"] == requeued.chunk_id
+    assert requeued_entry.frontmatter["chunk_id"] is None
+    assert requeued_entry.frontmatter["queued_chunk_id"] == requeued.chunk_id
 
 
 def test_mark_fallback_stored_handles_legacy_path_metadata(tmp_path):
