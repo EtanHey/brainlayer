@@ -63,6 +63,7 @@ jobs:
           rm -rf "$PWD/dist"
           mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources" "$launchagents_dir"
           cp brain-bar/bundle/Info.plist "$plist"
+          cp brain-bar/bundle/AppIcon.icns "$app_dir/Contents/Resources/AppIcon.icns"
           cp "$bin_dir/BrainBar" "$app_dir/Contents/MacOS/BrainBar"
           cp "$bin_dir/BrainBarDaemon" "$app_dir/Contents/MacOS/BrainBarDaemon"
           cp brain-bar/bundle/com.brainlayer.brainbar.plist "$launchagents_dir/com.brainlayer.brainbar.plist"

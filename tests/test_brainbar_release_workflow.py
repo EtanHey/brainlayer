@@ -124,6 +124,7 @@ def _assert_signing_decode_is_macos_safe(job: dict) -> None:
 
 def _assert_launchagents_are_packaged(job: dict) -> None:
     runs = "\n".join(_step_run(step) for step in job.get("steps", []) if isinstance(step, dict))
+    assert "AppIcon.icns" in runs, "BrainBar.app must package the menu bar app icon resource"
     assert "Contents/Resources/LaunchAgents" in runs, "BrainBar.app must package launch agent templates"
     assert "com.brainlayer.brainbar.plist" in runs, "BrainBar.app must include the UI launch agent plist"
     assert "com.brainlayer.brainbar-daemon.plist" in runs, "BrainBar.app must include the daemon launch agent plist"
