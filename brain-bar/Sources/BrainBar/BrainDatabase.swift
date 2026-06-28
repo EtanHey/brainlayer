@@ -3919,7 +3919,13 @@ final class BrainDatabase: @unchecked Sendable {
                 return false
             }
         }
-        return false
+        guard let content = payload["content"] as? String,
+              !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let memoryType = payload["memory_type"] as? String,
+              !memoryType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+        return true
     }
 
     private static func normalizedChunkIdentityKey(_ value: String?) -> String? {

@@ -357,6 +357,38 @@ def test_queue_entry_enqueues_with_stable_chunk_id_but_keeps_fallback_pending(tm
     assert second_entry.frontmatter["chunk_id"] is None
 
 
+def test_queue_entry_persists_relative_queue_path_as_absolute(tmp_path, monkeypatch):
+    from brainlayer.fallback_replay import parse_fallback_file, queue_entry
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    path = _pending_file(repo, "docs.local/decisions/relative-queue-path.md")
+    first_cwd = tmp_path / "first-cwd"
+    second_cwd = tmp_path / "second-cwd"
+    first_cwd.mkdir()
+    second_cwd.mkdir()
+    calls = []
+
+    def enqueue_func(**kwargs):
+        calls.append(kwargs)
+        queue_path = Path("queue") / "fallback-replay.jsonl"
+        queue_path.parent.mkdir(parents=True, exist_ok=True)
+        queue_path.write_text("queued\n", encoding="utf-8")
+        return queue_path
+
+    monkeypatch.chdir(first_cwd)
+    first = queue_entry(parse_fallback_file(path), enqueue_func=enqueue_func, replayed_by="phase-1-test")
+    stored_queue_path = Path(parse_fallback_file(path).frontmatter["queued_queue_path"])
+
+    monkeypatch.chdir(second_cwd)
+    second = queue_entry(parse_fallback_file(path), enqueue_func=enqueue_func, replayed_by="phase-1-test")
+
+    assert stored_queue_path.is_absolute()
+    assert stored_queue_path.exists()
+    assert first.chunk_id == second.chunk_id
+    assert len(calls) == 1
+
+
 def test_queue_entry_requeues_when_recorded_queue_file_is_missing(tmp_path):
     from brainlayer.fallback_replay import parse_fallback_file, queue_entry
 
@@ -528,6 +560,38 @@ def test_replay_entry_trusts_returned_fallback_chunk_id_from_direct_store(tmp_pa
     assert requeued_calls[0]["chunk_id"] == requeued.chunk_id
     assert requeued_entry.frontmatter["chunk_id"] is None
     assert requeued_entry.frontmatter["queued_chunk_id"] == requeued.chunk_id
+
+
+def test_replay_entry_reports_error_when_fallback_body_changes_during_store(tmp_path):
+    from brainlayer.fallback_replay import is_pending_entry, parse_fallback_file, queue_entry, replay_entry
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    path = _pending_file(repo, "docs.local/decisions/concurrent-edit.md")
+    queued = queue_entry(parse_fallback_file(path), enqueue_func=lambda **_kwargs: None, replayed_by="phase-1-test")
+
+    def store_func(**_kwargs):
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "original body stays byte-for-byte\n",
+                "edited during replay must remain pending\n",
+            ),
+            encoding="utf-8",
+        )
+        return {"chunk_id": queued.chunk_id}
+
+    result = replay_entry(parse_fallback_file(path), store_func=store_func, replayed_by="phase-1-test")
+    updated = parse_fallback_file(path)
+
+    assert result.attempted is True
+    assert result.chunk_id == queued.chunk_id
+    assert result.error == (
+        f"stored chunk_id={queued.chunk_id} but failed to update fallback frontmatter: "
+        "fallback body changed before replay writeback"
+    )
+    assert updated.frontmatter["chunk_id"] is None
+    assert updated.frontmatter["queued_chunk_id"] == queued.chunk_id
+    assert is_pending_entry(updated) is True
 
 
 def test_mark_fallback_stored_handles_legacy_path_metadata(tmp_path):

@@ -957,6 +957,7 @@ final class DashboardTests: XCTestCase {
         {"kind":"enrichment_update","chunk_id":"enrich-one","summary":"queued enrichment"}
         {"kind":"watcher_chunk","chunk_id":"watcher-one","content":"watcher ingestion is not an agent store"}
         {"kind":"hook_chunk","chunk_id":"hook-one","content":"hook ingestion is not an agent store"}
+        {"chunk_id":"legacy-store-one","content":"legacy pending store","memory_type":"note"}
         {"chunk_id":"legacy-watcher-one","content":"legacy realtime hook row without kind is not an agent store"}
         {"kind":"store_memory","chunk_id":"durable-two","content":"queued two"}
         """.write(
@@ -967,7 +968,7 @@ final class DashboardTests: XCTestCase {
 
         let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
 
-        XCTAssertEqual(stats.pendingStoreQueueDepth, 2)
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 3)
         XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
     }
 

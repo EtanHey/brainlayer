@@ -348,6 +348,12 @@ def _queued_queue_path(entry: FallbackEntry) -> Path | None:
     return Path(value).expanduser()
 
 
+def _resolved_queue_path(queue_path: Any) -> str | None:
+    if not queue_path:
+        return None
+    return str(Path(queue_path).expanduser().resolve())
+
+
 def _write_queue_attempt(entry: FallbackEntry, *, chunk_id: Any, queue_path: Any = None) -> None:
     with _fallback_marker_file_lock(entry.path):
         _write_queue_attempt_locked(entry, chunk_id=chunk_id, queue_path=queue_path)
@@ -366,7 +372,7 @@ def _write_queue_attempt_locked(entry: FallbackEntry, *, chunk_id: Any, queue_pa
     updated = _frontmatter_with_resolved_project(latest)
     updated["retry_attempted"] = True
     updated["queued_chunk_id"] = chunk_id
-    updated["queued_queue_path"] = str(queue_path) if queue_path else None
+    updated["queued_queue_path"] = _resolved_queue_path(queue_path)
     updated["chunk_id"] = None
     _write_frontmatter(latest.path, updated, latest.body)
 
@@ -382,8 +388,12 @@ def _write_replay_attempt_locked(entry: FallbackEntry, *, chunk_id: Any, trust_c
     stored = _stored_chunk_id(latest.frontmatter)
     if not chunk_id and not pending and stored and _fallback_chunk_matches(latest, stored):
         return
-    if chunk_id and not trust_chunk_id and not _fallback_chunk_matches(latest, chunk_id):
+    if chunk_id and not pending:
         return
+    if chunk_id and latest.body != entry.body:
+        raise RuntimeError("fallback body changed before replay writeback")
+    if chunk_id and not trust_chunk_id and not _fallback_chunk_matches(latest, chunk_id):
+        raise RuntimeError("fallback chunk marker changed before replay writeback")
     if not pending:
         return
     updated = _frontmatter_with_resolved_project(latest)
