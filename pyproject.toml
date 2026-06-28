@@ -1,6 +1,6 @@
 [project]
 name = "brainlayer"
-version = "1.4.1"
+version = "1.4.2"
 description = "Persistent memory MCP server for AI agents — 13 tools, semantic search, knowledge graph, on-device SQLite"
 license = {text = "Apache-2.0"}
 readme = "README.md"

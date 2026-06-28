@@ -618,6 +618,8 @@ final class DashboardTests: XCTestCase {
         XCTAssertTrue(app.contains("startDaemonWatchdog"))
         XCTAssertTrue(server.contains("startDaemonHeartbeatOnQueue"))
         XCTAssertTrue(daemon.contains("startUIWatchdog"))
+        XCTAssertTrue(daemon.contains("withExtendedLifetime(server)"))
+        XCTAssertTrue(daemon.contains("withExtendedLifetime(uiWatchdog)"))
     }
 
     func testWatchdogPolicyMarksMissingAndStaleHeartbeatUnhealthy() throws {
