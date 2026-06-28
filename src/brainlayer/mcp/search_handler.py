@@ -3,10 +3,12 @@
 import asyncio
 import glob
 import json
+import math
 import os
 import platform
 import re
 import socket
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -35,6 +37,7 @@ _ORIGIN_ORDER_LABEL = "- Order: origin (earliest among expanded hybrid candidate
 _HELPER_SOCKET_GLOB = "/tmp/brainbar-hybrid-*.sock"
 _HELPER_SOCKET_TIMEOUT_SECONDS = 2.0
 _DEFAULT_EMBED_TIMEOUT_MS = 1000.0
+_EMBED_IN_FLIGHT = threading.Lock()
 
 from ._format import format_kg_search, format_recalled_context, format_search_results, format_stats
 from ._shared import (
@@ -67,7 +70,7 @@ def _embed_timeout_ms() -> float:
         value = float(raw)
     except (TypeError, ValueError):
         return _DEFAULT_EMBED_TIMEOUT_MS
-    if not value or value < 0:
+    if not math.isfinite(value) or value <= 0:
         return _DEFAULT_EMBED_TIMEOUT_MS
     return min(value, 30_000.0)
 
@@ -1783,40 +1786,87 @@ async def _search(
         query_embedding = None
         search_mode = "hybrid"
         fallback_reason = None
-        try:
-            embed_timeout_ms = _embed_timeout_ms()
-            query_embedding = await asyncio.wait_for(
-                loop.run_in_executor(
-                    None,
-                    lambda: _get_embedding_model().embed_query(query),
-                ),
-                timeout=embed_timeout_ms / 1000.0,
-            )
-        except TimeoutError as exc:
+        embed_timeout_ms = _embed_timeout_ms()
+        if not _EMBED_IN_FLIGHT.acquire(blocking=False):
             search_mode = "fts_fallback"
-            fallback_reason = "embed_timeout"
+            fallback_reason = "embed_busy"
             search_profile.emit(
                 profile_scope,
                 "embed",
                 profile_query_id,
                 search_profile.dur_ms(embed_started),
-                error=exc.__class__.__name__,
-                timeout_ms=embed_timeout_ms,
-                fallback="fts_fallback",
-            )
-        except Exception as exc:
-            search_mode = "fts_fallback"
-            fallback_reason = f"embed_error:{exc.__class__.__name__}"
-            search_profile.emit(
-                profile_scope,
-                "embed",
-                profile_query_id,
-                search_profile.dur_ms(embed_started),
-                error=exc.__class__.__name__,
+                error="EmbedBusy",
                 fallback="fts_fallback",
             )
         else:
-            search_profile.emit(profile_scope, "embed", profile_query_id, search_profile.dur_ms(embed_started))
+            embed_state = {"started": False, "released": False}
+            embed_state_lock = threading.Lock()
+
+            def release_embed_lock_once() -> None:
+                should_release = False
+                with embed_state_lock:
+                    if not embed_state["released"]:
+                        embed_state["released"] = True
+                        should_release = True
+                if should_release:
+                    _EMBED_IN_FLIGHT.release()
+
+            def release_if_embed_never_started() -> None:
+                should_release = False
+                with embed_state_lock:
+                    if not embed_state["started"] and not embed_state["released"]:
+                        embed_state["released"] = True
+                        should_release = True
+                if should_release:
+                    _EMBED_IN_FLIGHT.release()
+
+            def embed_query_guarded() -> list[float] | None:
+                with embed_state_lock:
+                    if embed_state["released"]:
+                        return None
+                    embed_state["started"] = True
+                try:
+                    return _get_embedding_model().embed_query(query)
+                finally:
+                    release_embed_lock_once()
+
+            try:
+                try:
+                    embed_future = loop.run_in_executor(None, embed_query_guarded)
+                except Exception:
+                    release_embed_lock_once()
+                    raise
+                query_embedding = await asyncio.wait_for(embed_future, timeout=embed_timeout_ms / 1000.0)
+            except asyncio.CancelledError:
+                release_if_embed_never_started()
+                raise
+            except asyncio.TimeoutError as exc:
+                release_if_embed_never_started()
+                search_mode = "fts_fallback"
+                fallback_reason = "embed_timeout"
+                search_profile.emit(
+                    profile_scope,
+                    "embed",
+                    profile_query_id,
+                    search_profile.dur_ms(embed_started),
+                    error=exc.__class__.__name__,
+                    timeout_ms=embed_timeout_ms,
+                    fallback="fts_fallback",
+                )
+            except Exception as exc:
+                release_if_embed_never_started()
+                search_mode = "fts_fallback"
+                fallback_reason = f"embed_error:{exc.__class__.__name__}"
+                search_profile.emit(
+                    profile_scope,
+                    "embed",
+                    profile_query_id,
+                    search_profile.dur_ms(embed_started),
+                    error=exc.__class__.__name__,
+                    fallback="fts_fallback",
+                )
+            else:
+                search_profile.emit(profile_scope, "embed", profile_query_id, search_profile.dur_ms(embed_started))
 
         if source == "all":
             source_filter = None
@@ -1895,8 +1945,12 @@ async def _search(
             )
 
         if not results["documents"][0]:
-            empty = {"query": query, "total": 0, "results": []}
-            return ([TextContent(type="text", text="No results found.")], empty)
+            empty = {"query": query, "total": 0, "results": [], "search_mode": search_mode}
+            text = "No results found."
+            if fallback_reason:
+                empty["fallback_reason"] = fallback_reason
+                text = f"No results found. Search mode: FTS fallback ({fallback_reason}); vector embedding was skipped."
+            return ([TextContent(type="text", text=text)], empty)
 
         results = store.enrich_results_with_session_context(results)
         if order == "origin":
