@@ -118,6 +118,8 @@ final class BrainDatabaseWindowedBucketsTests: XCTestCase {
 
         // 1) The windows must NOT be identical — this is the core "not just a
         //    relabel" assertion. Real older data comes back as the window widens.
+        XCTAssertNotEqual(live.allWriteBuckets, day.allWriteBuckets,
+                          "24h all-commit buckets must differ from 30m")
         XCTAssertNotEqual(live.agentWriteBuckets, day.agentWriteBuckets,
                           "24h agent buckets must differ from 30m (historical data must come back)")
         XCTAssertNotEqual(live.watcherWriteBuckets, day.watcherWriteBuckets,
@@ -130,6 +132,7 @@ final class BrainDatabaseWindowedBucketsTests: XCTestCase {
 
         // 2) Live (30m) sees only the in-window rows.
         //    Agent: agent-live-1(5m) + agent-live-2(20m) = 2.
+        XCTAssertEqual(live.allWriteTotal, 3, "30m all commits = two agent writes + one watcher write")
         XCTAssertEqual(live.agentTotal, 2, "30m agent window = agent-live-1 + agent-live-2")
         XCTAssertEqual(live.watcherTotal, 1, "30m watcher window = watcher-live-1")
         XCTAssertEqual(live.enrichmentTotal, 1, "30m enrichment window = enrich-live-1 (enriched 12m ago)")
@@ -137,6 +140,7 @@ final class BrainDatabaseWindowedBucketsTests: XCTestCase {
         // 3) Wider windows strictly CONTAIN MORE than the live window.
         //    24h agent: agent-live-1/2 + agent-old-1/2/3 + enrich-live-1(90m,mcp)
         //    + enrich-old-1(800m,mcp) = 7.
+        XCTAssertEqual(day.allWriteTotal, 10, "24h all commits count every chunk source, not only split card allowlists")
         XCTAssertEqual(day.agentTotal, 7, "24h agent window pulls in all 7 agent-source writes")
         XCTAssertGreaterThan(day.agentTotal, live.agentTotal,
                              "24h agent total must exceed 30m agent total")
@@ -150,6 +154,7 @@ final class BrainDatabaseWindowedBucketsTests: XCTestCase {
         // 4) 3h sits between live and day — monotonic widening, real data.
         //    3h agent: agent-live-1/2 + agent-old-1(45m) + agent-old-2(120m)
         //    + enrich-live-1(90m,mcp) = 5.
+        XCTAssertEqual(threeHour.allWriteTotal, 7, "3h all commits includes agent, watcher, and enrichment-source chunks")
         XCTAssertEqual(threeHour.agentTotal, 5, "3h agent window = 2 live + agent-old-1 + agent-old-2 + enrich-live-1")
         XCTAssertGreaterThan(threeHour.agentTotal, live.agentTotal)
         XCTAssertLessThan(threeHour.agentTotal, day.agentTotal)
@@ -161,13 +166,33 @@ final class BrainDatabaseWindowedBucketsTests: XCTestCase {
     func testEmptyWindowAndZeroBucketsAreSafe() throws {
         let now = Date()
         let zeroBuckets = try db.pipelineWindowBuckets(activityWindowMinutes: 1_440, bucketCount: 0, now: now)
+        XCTAssertTrue(zeroBuckets.allWriteBuckets.isEmpty)
         XCTAssertTrue(zeroBuckets.agentWriteBuckets.isEmpty)
 
         let emptyDB = try db.pipelineWindowBuckets(activityWindowMinutes: 180, bucketCount: 12, now: now)
+        XCTAssertEqual(emptyDB.allWriteTotal, 0)
         XCTAssertEqual(emptyDB.agentTotal, 0)
         XCTAssertEqual(emptyDB.watcherTotal, 0)
         XCTAssertEqual(emptyDB.enrichmentTotal, 0)
+        XCTAssertEqual(emptyDB.allWriteBuckets.count, 12)
         XCTAssertEqual(emptyDB.agentWriteBuckets.count, 12)
+    }
+
+    func testWindowedAllCommitsCountsSourcesOutsideAgentAndWatcherAllowlists() throws {
+        XCTAssertTrue(try db.tableExists("chunks"))
+
+        let now = Date()
+        try insertWrite(id: "agent-mcp", source: "mcp", createdAt: now.addingTimeInterval(-4 * 60))
+        try insertWrite(id: "watcher-realtime", source: "realtime_watcher", createdAt: now.addingTimeInterval(-3 * 60))
+        try insertWrite(id: "backup-jsonl", source: "jsonl_backup", createdAt: now.addingTimeInterval(-2 * 60))
+        try insertWrite(id: "codex-cli", source: "codex_cli", createdAt: now.addingTimeInterval(-1 * 60))
+
+        let buckets = try db.pipelineWindowBuckets(activityWindowMinutes: 30, bucketCount: 6, now: now)
+
+        XCTAssertEqual(buckets.allWriteTotal, 4)
+        XCTAssertEqual(buckets.agentTotal, 1)
+        XCTAssertEqual(buckets.watcherTotal, 1)
+        XCTAssertEqual(buckets.allWriteTotal - buckets.agentTotal - buckets.watcherTotal, 2)
     }
 
     func testWatcherWindowBucketsUseIngestionLivenessInsteadOfTranscriptCreatedAt() throws {

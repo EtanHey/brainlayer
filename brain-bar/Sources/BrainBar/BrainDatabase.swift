@@ -216,6 +216,10 @@ final class BrainDatabase: @unchecked Sendable {
             recentEnrichmentBuckets.reduce(0, +)
         }
 
+        var pendingStoreReplayDebtDepth: Int {
+            max(pendingStoreQueueDepth - pendingStoreFlushQueueDepth, 0)
+        }
+
         var writeRatePerMinute: Double {
             guard activityWindowMinutes > 0 else { return 0 }
             return Double(recentWriteCount) / Double(activityWindowMinutes)
@@ -299,10 +303,7 @@ final class BrainDatabase: @unchecked Sendable {
                 enrichmentPercent: enrichmentPercent,
                 enrichmentRatePerMinute: enrichmentRatePerMinute,
                 databaseSizeBytes: databaseSizeBytes,
-                recentActivityBuckets: zip(
-                    buckets.agentWriteBuckets,
-                    buckets.watcherWriteBuckets
-                ).map(+),
+                recentActivityBuckets: buckets.allWriteBuckets,
                 recentAgentWriteBuckets: buckets.agentWriteBuckets,
                 recentWatcherWriteBuckets: buckets.watcherWriteBuckets,
                 recentEnrichmentBuckets: buckets.enrichmentBuckets,
@@ -389,7 +390,7 @@ final class BrainDatabase: @unchecked Sendable {
         }
     }
 
-    /// The three pipeline series (agent stores / JSONL watcher / enrichment)
+    /// The pipeline series (all commits / agent stores / JSONL watcher / enrichment)
     /// bucketed over an ARBITRARY window — the data primitive behind the shared
     /// Live(30m)/3h/24h selector. Unlike `DashboardStats` (which is pinned to the
     /// resting window), this is a lightweight windowed re-fetch the dashboard
@@ -398,10 +399,12 @@ final class BrainDatabase: @unchecked Sendable {
     struct PipelineWindowBuckets: Sendable, Equatable {
         let activityWindowMinutes: Int
         let bucketCount: Int
+        let allWriteBuckets: [Int]
         let agentWriteBuckets: [Int]
         let watcherWriteBuckets: [Int]
         let enrichmentBuckets: [Int]
 
+        var allWriteTotal: Int { allWriteBuckets.reduce(0, +) }
         var agentTotal: Int { agentWriteBuckets.reduce(0, +) }
         var watcherTotal: Int { watcherWriteBuckets.reduce(0, +) }
         var enrichmentTotal: Int { enrichmentBuckets.reduce(0, +) }
@@ -1880,12 +1883,18 @@ final class BrainDatabase: @unchecked Sendable {
                 return PipelineWindowBuckets(
                     activityWindowMinutes: activityWindowMinutes,
                     bucketCount: bucketCount,
+                    allWriteBuckets: Array(repeating: 0, count: max(bucketCount, 0)),
                     agentWriteBuckets: Array(repeating: 0, count: max(bucketCount, 0)),
                     watcherWriteBuckets: Array(repeating: 0, count: max(bucketCount, 0)),
                     enrichmentBuckets: Array(repeating: 0, count: max(bucketCount, 0))
                 )
             }
 
+            let allWriteBuckets = try recentActivityBuckets(
+                activityWindowMinutes: activityWindowMinutes,
+                bucketCount: bucketCount,
+                now: now
+            )
             let agentWriteBuckets = try recentWriteBuckets(
                 whereClause: Self.agentWriteSourceWhereClause,
                 activityWindowMinutes: activityWindowMinutes,
@@ -1906,6 +1915,7 @@ final class BrainDatabase: @unchecked Sendable {
             return PipelineWindowBuckets(
                 activityWindowMinutes: activityWindowMinutes,
                 bucketCount: bucketCount,
+                allWriteBuckets: allWriteBuckets,
                 agentWriteBuckets: agentWriteBuckets,
                 watcherWriteBuckets: watcherWriteBuckets,
                 enrichmentBuckets: enrichmentBuckets

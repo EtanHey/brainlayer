@@ -86,6 +86,30 @@ final class BrainBarUXLogicTests: XCTestCase {
         )
     }
 
+    func testPipelinePulseGateIgnoresLiveBucketChangesWhileWindowedTimeframeIsSelected() {
+        XCTAssertTrue(
+            BrainBarPipelinePulseGate.shouldPulse(
+                previous: [0, 0, 0],
+                current: [0, 0, 1],
+                timeframe: .live
+            )
+        )
+        XCTAssertFalse(
+            BrainBarPipelinePulseGate.shouldPulse(
+                previous: [0, 0, 0],
+                current: [0, 0, 1],
+                timeframe: .threeHour
+            )
+        )
+        XCTAssertFalse(
+            BrainBarPipelinePulseGate.shouldPulse(
+                previous: [0, 0, 0],
+                current: [0, 0, 1],
+                timeframe: .day
+            )
+        )
+    }
+
     func testDashboardMetricFormatterReportsApproximateLastCompletionAge() {
         let now = Date(timeIntervalSince1970: 1_000_000)
 
@@ -201,8 +225,120 @@ final class BrainBarUXLogicTests: XCTestCase {
 
         XCTAssertEqual(summary.ingress.status, .live)
         XCTAssertEqual(agentLane.status, .idle)
-        XCTAssertEqual(agentLane.statusText, "No agent-store writes")
-        XCTAssertEqual(agentLane.lastEventText, "No agent-store writes in Last 30m")
+        XCTAssertEqual(agentLane.statusText, "No agent MCP stores")
+        XCTAssertEqual(agentLane.lastEventText, "No agent MCP stores in Last 30m")
+    }
+
+    func testWatcherOnlyBurstShowsAllCommitsWhileAgentLaneStaysIdle() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let stats = DashboardStats(
+            chunkCount: 120,
+            enrichedChunkCount: 120,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 100,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 4_096,
+            recentActivityBuckets: [0, 0, 0, 460],
+            recentAgentWriteBuckets: [0, 0, 0, 0],
+            recentWatcherWriteBuckets: [0, 0, 0, 454],
+            recentEnrichmentBuckets: [0, 0, 0, 0],
+            activityWindowMinutes: 60,
+            bucketCount: 4,
+            liveWindowMinutes: 1,
+            lastWriteAt: now.addingTimeInterval(-15),
+            watcherHealth: DashboardStats.WatcherHealth(
+                alerting: false,
+                filesTracked: 12,
+                maxOffsetLagBytes: 0,
+                activeEntriesPerMinute: 0,
+                realtimeInsertsPerMinute: 454,
+                updatedAt: now
+            )
+        )
+
+        let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
+        let allCommitsLane = summary.lane(for: .allCommits)
+        let agentLane = summary.lane(for: .agentStores)
+        let watcherLane = summary.lane(for: .jsonlWatcher)
+
+        XCTAssertEqual(allCommitsLane.status, .live)
+        XCTAssertEqual(allCommitsLane.values, [0, 0, 0, 460])
+        XCTAssertEqual(allCommitsLane.volumeText, "460 in 1h")
+        XCTAssertEqual(agentLane.status, .idle)
+        XCTAssertEqual(agentLane.statusText, "No agent MCP stores")
+        XCTAssertEqual(watcherLane.status, .live)
+    }
+
+    func testFallbackReplayDebtDoesNotForceAgentLaneQueuedWhileWatcherCommitsAreLive() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let stats = DashboardStats(
+            chunkCount: 120,
+            enrichedChunkCount: 120,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 100,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 4_096,
+            recentActivityBuckets: [0, 0, 0, 12],
+            recentAgentWriteBuckets: [0, 0, 0, 0],
+            recentWatcherWriteBuckets: [0, 0, 0, 12],
+            recentEnrichmentBuckets: [0, 0, 0, 0],
+            activityWindowMinutes: 60,
+            bucketCount: 4,
+            liveWindowMinutes: 1,
+            lastWriteAt: now.addingTimeInterval(-15),
+            pendingStoreQueueDepth: 3,
+            pendingStoreFlushQueueDepth: 0,
+            pendingStoreOldestQueuedAt: now.addingTimeInterval(-120),
+            pendingStoreFlushRatePerMinute: 0,
+            watcherHealth: DashboardStats.WatcherHealth(
+                alerting: false,
+                filesTracked: 12,
+                maxOffsetLagBytes: 0,
+                activeEntriesPerMinute: 0,
+                realtimeInsertsPerMinute: 12,
+                updatedAt: now
+            )
+        )
+
+        let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
+        let agentLane = summary.lane(for: .agentStores)
+
+        XCTAssertEqual(summary.lane(for: .allCommits).status, .live)
+        XCTAssertEqual(summary.lane(for: .jsonlWatcher).status, .live)
+        XCTAssertEqual(agentLane.status, .idle)
+        XCTAssertEqual(agentLane.statusText, "No agent MCP stores")
+        XCTAssertEqual(summary.queue.storeReplayDebtDepth, 3)
+        XCTAssertEqual(summary.queue.storeDepthText, "3 replay debt")
+    }
+
+    func testAgentFlushQueueDoesNotMaskCommittedAgentStores() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let stats = DashboardStats(
+            chunkCount: 120,
+            enrichedChunkCount: 120,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 100,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 4_096,
+            recentActivityBuckets: [0, 0, 0, 2],
+            recentAgentWriteBuckets: [0, 0, 0, 2],
+            recentWatcherWriteBuckets: [0, 0, 0, 0],
+            recentEnrichmentBuckets: [0, 0, 0, 0],
+            activityWindowMinutes: 60,
+            bucketCount: 4,
+            liveWindowMinutes: 1,
+            pendingStoreQueueDepth: 5,
+            pendingStoreFlushQueueDepth: 5,
+            pendingStoreOldestQueuedAt: now.addingTimeInterval(-120),
+            pendingStoreFlushRatePerMinute: 0
+        )
+
+        let agentLane = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now).lane(for: .agentStores)
+
+        XCTAssertEqual(agentLane.status, .live)
+        XCTAssertEqual(agentLane.statusText, "Agent MCP stores live now")
+        XCTAssertEqual(agentLane.volumeText, "2 in 1h, 5 flush queued")
+        XCTAssertEqual(agentLane.lastEventText, "2 agent MCP stores in latest bucket; 5 flush queued")
     }
 
     func testAgentStoresLaneShowsPendingReplayDebtWhenCommittedGraphIsZero() {
@@ -222,6 +358,7 @@ final class BrainBarUXLogicTests: XCTestCase {
             bucketCount: 4,
             liveWindowMinutes: 1,
             pendingStoreQueueDepth: 5,
+            pendingStoreFlushQueueDepth: 5,
             pendingStoreOldestQueuedAt: now.addingTimeInterval(-120),
             pendingStoreFlushRatePerMinute: 0
         )
@@ -229,9 +366,9 @@ final class BrainBarUXLogicTests: XCTestCase {
         let agentLane = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now).lane(for: .agentStores)
 
         XCTAssertEqual(agentLane.status, .queued)
-        XCTAssertEqual(agentLane.statusText, "5 agent stores queued for replay")
-        XCTAssertEqual(agentLane.volumeText, "0 in 1h, 5 queued")
-        XCTAssertEqual(agentLane.lastEventText, "5 agent stores queued for replay")
+        XCTAssertEqual(agentLane.statusText, "5 agent MCP stores flush queued")
+        XCTAssertEqual(agentLane.volumeText, "0 in 1h, 5 flush queued")
+        XCTAssertEqual(agentLane.lastEventText, "5 agent MCP stores flush queued")
     }
 
     func testAgentStoresLaneShowsQueuedReplayDebtBeforeLiveWrites() {
@@ -251,16 +388,17 @@ final class BrainBarUXLogicTests: XCTestCase {
             bucketCount: 4,
             liveWindowMinutes: 1,
             pendingStoreQueueDepth: 5,
+            pendingStoreFlushQueueDepth: 5,
             pendingStoreOldestQueuedAt: now.addingTimeInterval(-120),
             pendingStoreFlushRatePerMinute: 0
         )
 
         let agentLane = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now).lane(for: .agentStores)
 
-        XCTAssertEqual(agentLane.status, .queued)
-        XCTAssertEqual(agentLane.statusText, "5 agent stores queued for replay")
-        XCTAssertEqual(agentLane.volumeText, "2 in 1h, 5 queued")
-        XCTAssertEqual(agentLane.lastEventText, "5 agent stores queued for replay; 2 committed in Last 1h")
+        XCTAssertEqual(agentLane.status, .live)
+        XCTAssertEqual(agentLane.statusText, "Agent MCP stores live now")
+        XCTAssertEqual(agentLane.volumeText, "2 in 1h, 5 flush queued")
+        XCTAssertEqual(agentLane.lastEventText, "2 agent MCP stores in latest bucket; 5 flush queued")
     }
 
     func testJsonlWatcherLaneMarksFlatGraphBrokenWhenHealthSeesActiveJsonl() {

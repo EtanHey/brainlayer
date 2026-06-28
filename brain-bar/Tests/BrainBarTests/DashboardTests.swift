@@ -306,6 +306,37 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.recentActivityBuckets, [0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 8])
     }
 
+    func testDashboardFlowSummarySurfacesAllCommittedChunksAsOwnLane() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let stats = DashboardStats(
+            chunkCount: 9,
+            enrichedChunkCount: 0,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 0,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 0,
+            recentActivityBuckets: [0, 0, 0, 9],
+            recentAgentWriteBuckets: [0, 0, 0, 0],
+            recentWatcherWriteBuckets: [0, 0, 0, 8],
+            recentEnrichmentBuckets: [0, 0, 0, 0],
+            activityWindowMinutes: 60,
+            bucketCount: 4,
+            liveWindowMinutes: 1,
+            lastWriteAt: now.addingTimeInterval(-15)
+        )
+
+        let allCommitsLane = DashboardFlowSummary
+            .derive(daemon: nil, stats: stats, now: now)
+            .lane(for: .allCommits)
+
+        XCTAssertEqual(allCommitsLane.name, "All commits")
+        XCTAssertEqual(allCommitsLane.values, [0, 0, 0, 9])
+        XCTAssertEqual(allCommitsLane.status, .live)
+        XCTAssertEqual(allCommitsLane.statusText, "All commits live now")
+        XCTAssertEqual(allCommitsLane.volumeText, "9 in 1h")
+        XCTAssertEqual(allCommitsLane.sparklineLabel, "All committed chunks over Last 1h")
+    }
+
     func testDashboardFlowLabelsWriteSeriesBySourcePath() {
         let stats = DashboardStats(
             chunkCount: 9,
@@ -323,7 +354,7 @@ final class DashboardTests: XCTestCase {
 
         let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: Date(timeIntervalSince1970: 1_764_236_400))
 
-        XCTAssertEqual(summary.ingress.primarySeriesLabel, "Agent stores")
+        XCTAssertEqual(summary.ingress.primarySeriesLabel, "Agent MCP stores")
         XCTAssertEqual(summary.ingress.secondarySeriesLabel, "JSONL watcher")
         XCTAssertNil(summary.ingress.tertiarySeriesLabel)
         XCTAssertTrue(summary.ingress.tertiaryValues.isEmpty)
@@ -900,9 +931,13 @@ final class DashboardTests: XCTestCase {
 
         XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
         XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+        XCTAssertEqual(stats.pendingStoreReplayDebtDepth, 1)
         XCTAssertEqual(stats.pendingStoreOldestQueuedAt, Date(timeIntervalSince1970: 1_200))
-        XCTAssertEqual(agentStores.status, .queued)
-        XCTAssertEqual(agentStores.statusText, "1 agent store queued for replay")
+        XCTAssertEqual(summary.queue.storeReplayDebtDepth, 1)
+        XCTAssertEqual(summary.queue.storeDepthText, "1 replay debt")
+        XCTAssertEqual(summary.queue.detail, "1 replay debt, oldest 2m.")
+        XCTAssertEqual(agentStores.status, .idle)
+        XCTAssertEqual(agentStores.statusText, "No agent MCP stores")
     }
 
     func testDashboardStatsIncludesDurableStoreQueueDepth() throws {
@@ -1531,14 +1566,14 @@ final class DashboardTests: XCTestCase {
             label: "Writes over 30m",
             values: [0, 1, 0],
             secondaryValues: [0, 0, 0],
-            primarySeriesLabel: "Agent stores",
+            primarySeriesLabel: "Agent MCP stores",
             secondarySeriesLabel: "JSONL watcher",
             activityWindowMinutes: 30,
             fetchedAt: Date(timeIntervalSince1970: 1_764_236_400)
         )
 
-        XCTAssertEqual(presentation.visibleSeriesLabels, ["Agent stores"])
-        XCTAssertEqual(presentation.legendEntries.map(\.label), ["Agent stores", "JSONL watcher"])
+        XCTAssertEqual(presentation.visibleSeriesLabels, ["Agent MCP stores"])
+        XCTAssertEqual(presentation.legendEntries.map(\.label), ["Agent MCP stores", "JSONL watcher"])
         XCTAssertEqual(presentation.legendEntries.map(\.isActive), [true, false])
     }
 
@@ -1547,7 +1582,7 @@ final class DashboardTests: XCTestCase {
             label: "Writes over 30m",
             values: [0, 0, 0],
             secondaryValues: [0, 0, 0],
-            primarySeriesLabel: "Agent stores",
+            primarySeriesLabel: "Agent MCP stores",
             secondarySeriesLabel: "JSONL watcher",
             activityWindowMinutes: 30,
             fetchedAt: Date(timeIntervalSince1970: 1_764_236_400)
