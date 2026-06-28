@@ -509,6 +509,7 @@ def test_build_app_runs_hardened_codesign_and_notarization_when_profile_is_avail
     assert "--options runtime" in codesign_calls
     assert "--timestamp " in codesign_calls or codesign_calls.rstrip().endswith("--timestamp")
     assert "--timestamp=none" not in codesign_calls
+    assert "--verify --deep --strict --verbose=4" in codesign_calls
     notarytool_call = notarytool_log.read_text(encoding="utf-8")
     notarytool_parts = notarytool_call.split()
     assert notarytool_parts[0] == "submit"

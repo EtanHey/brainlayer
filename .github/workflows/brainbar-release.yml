@@ -101,16 +101,13 @@ jobs:
           if [ -z "$BRAINBAR_DEVELOPER_ID_CERTIFICATE_BASE64" ] \
             || [ -z "$BRAINBAR_DEVELOPER_ID_CERTIFICATE_PASSWORD" ] \
             || [ -z "$BRAINBAR_DEVELOPER_ID_APPLICATION" ]; then
-            echo "::warning title=BrainBar signing skipped::Developer ID signing secrets are not fully configured; BrainBar.zip will contain an unsigned app."
+            echo "::error title=BrainBar signing unavailable::Developer ID signing secrets are required before BrainBar.zip can be released."
             {
               echo "## BrainBar signing"
               echo ""
-              echo "SIGNING SKIPPED: Developer ID secrets are not fully configured. The uploaded BrainBar.zip contains an unsigned app."
+              echo "SIGNING FAILED: Developer ID secrets are not fully configured. BrainBar.zip was not released."
             } >> "$GITHUB_STEP_SUMMARY"
-            echo "signed=false" >> "$GITHUB_OUTPUT"
-            echo "BRAINBAR_SIGNING_STATUS=unsigned - Developer ID signing secrets were missing" >> "$GITHUB_ENV"
-            echo "BRAINBAR_NOTARIZATION_STATUS=skipped - signing was skipped" >> "$GITHUB_ENV"
-            exit 0
+            exit 1
           fi
 
           keychain_password="${BRAINBAR_SIGNING_KEYCHAIN_PASSWORD:-$(uuidgen)}"
@@ -139,6 +136,7 @@ jobs:
         run: |
           set -euo pipefail
           codesign --force --deep --options runtime --timestamp --sign "$BRAINBAR_SIGNING_IDENTITY" dist/BrainBar.app
+          codesign --verify --deep --strict --verbose=4 dist/BrainBar.app
           codesign -dv --verbose=4 dist/BrainBar.app
 
       - name: Notarize BrainBar.app
@@ -153,14 +151,13 @@ jobs:
           if [ -z "$BRAINBAR_NOTARY_APPLE_ID" ] \
             || [ -z "$BRAINBAR_NOTARY_PASSWORD" ] \
             || [ -z "$BRAINBAR_NOTARY_TEAM_ID" ]; then
-            echo "::warning title=BrainBar notarization skipped::Notary secrets are not fully configured; signed BrainBar.app will be packaged without notarization."
+            echo "::error title=BrainBar notarization unavailable::Notary secrets are required before BrainBar.zip can be released."
             {
               echo "## BrainBar notarization"
               echo ""
-              echo "NOTARIZATION SKIPPED: notary secrets are not fully configured. The uploaded BrainBar.zip is signed but not notarized."
+              echo "NOTARIZATION FAILED: notary secrets are not fully configured. BrainBar.zip was not released."
             } >> "$GITHUB_STEP_SUMMARY"
-            echo "BRAINBAR_NOTARIZATION_STATUS=skipped - notary secrets were missing" >> "$GITHUB_ENV"
-            exit 0
+            exit 1
           fi
 
           notary_zip="$RUNNER_TEMP/BrainBar-notary.zip"
@@ -171,6 +168,9 @@ jobs:
             --team-id "$BRAINBAR_NOTARY_TEAM_ID" \
             --wait
           xcrun stapler staple dist/BrainBar.app
+          xcrun stapler validate dist/BrainBar.app
+          codesign --verify --deep --strict --verbose=4 dist/BrainBar.app
+          spctl --assess --type execute --verbose=4 dist/BrainBar.app
           echo "BRAINBAR_NOTARIZATION_STATUS=notarized and stapled" >> "$GITHUB_ENV"
 
       - name: Package BrainBar.zip
@@ -187,6 +187,17 @@ jobs:
             exit 1
           fi
           echo "BrainBar.zip size: $(stat -f%z dist/BrainBar.zip) bytes"
+
+      - name: Verify packaged BrainBar.zip
+        run: |
+          set -euo pipefail
+          verify_dir="$RUNNER_TEMP/brainbar-zip-verify"
+          rm -rf "$verify_dir"
+          mkdir -p "$verify_dir"
+          ditto -x -k dist/BrainBar.zip "$verify_dir"
+          codesign --verify --deep --strict --verbose=4 "$verify_dir/BrainBar.app"
+          xcrun stapler validate "$verify_dir/BrainBar.app"
+          spctl --assess --type execute --verbose=4 "$verify_dir/BrainBar.app"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
