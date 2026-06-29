@@ -188,6 +188,9 @@ shift || true
 case "$tool" in
   notarytool)
     printf '%s\n' "$*" >> "${BRAINBAR_FAKE_NOTARYTOOL_LOG:-/dev/null}"
+    if [[ "${BRAINBAR_FAKE_NOTARYTOOL_FAIL:-0}" == "1" ]]; then
+      exit 42
+    fi
     ;;
   stapler)
     printf '%s\n' "$*" >> "${BRAINBAR_FAKE_STAPLER_LOG:-/dev/null}"
@@ -199,6 +202,9 @@ exit 0
     (tool_dir / "spctl").write_text(
         """#!/usr/bin/env bash
 printf '%s\n' "$*" >> "${BRAINBAR_FAKE_SPCTL_LOG:-/dev/null}"
+if [[ -n "${BRAINBAR_FAKE_RESIDENT_APP:-}" && "$*" == *"${BRAINBAR_FAKE_RESIDENT_APP}"* && "${BRAINBAR_FAKE_RESIDENT_SPCTL_FAIL:-0}" == "1" ]]; then
+  exit 1
+fi
 if [[ "${BRAINBAR_FAKE_SPCTL_FAIL:-0}" == "1" ]]; then
   exit 1
 fi
@@ -519,6 +525,150 @@ def test_build_app_runs_hardened_codesign_and_notarization_when_profile_is_avail
     assert "--wait" in notarytool_call
     assert stapler_log.read_text(encoding="utf-8").startswith("staple ")
     assert "-a -vvv" in spctl_log.read_text(encoding="utf-8")
+
+
+def test_build_app_refuses_to_clobber_notarized_resident_with_unnotarized_rebuild(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    resident_apps = tmp_path / "Applications"
+    resident_app = resident_apps / "BrainBar.app"
+    resident_app.mkdir(parents=True)
+    tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
+    spctl_log = tmp_path / "spctl.log"
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+        extra_env={
+            **_fake_build_env(tmp_path, tool_dir, bin_dir),
+            "BRAINBAR_APP_DIR": f"{resident_app}/",
+            "BRAINBAR_PROTECTED_APPLICATIONS_DIR": str(resident_apps),
+            "BRAINBAR_FAKE_SPCTL_LOG": str(spctl_log),
+        },
+    )
+
+    assert result.returncode == 1
+    assert f"Refusing to replace notarized {resident_app} with an unnotarized local rebuild" in result.stderr
+    assert "BRAINBAR_NOTARY_PROFILE=notary-layers" in result.stderr
+    assert "brew reinstall --cask etanhey/layers/brainbar" in result.stderr
+    spctl_calls = spctl_log.read_text(encoding="utf-8")
+    assert "--assess --type execute" in spctl_calls
+    assert str(resident_app) in spctl_calls
+
+
+def test_build_app_refuses_equivalent_protected_resident_path(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    resident_apps = tmp_path / "Applications"
+    resident_app = resident_apps / "BrainBar.app"
+    resident_app.mkdir(parents=True)
+    linked_apps = tmp_path / "LinkedApplications"
+    linked_apps.symlink_to(resident_apps, target_is_directory=True)
+    tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
+    spctl_log = tmp_path / "spctl.log"
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+        extra_env={
+            **_fake_build_env(tmp_path, tool_dir, bin_dir),
+            "BRAINBAR_APP_DIR": str(linked_apps / "BrainBar.app"),
+            "BRAINBAR_PROTECTED_APPLICATIONS_DIR": str(resident_apps),
+            "BRAINBAR_FAKE_SPCTL_LOG": str(spctl_log),
+        },
+    )
+
+    assert result.returncode == 1
+    assert "Refusing to replace notarized" in result.stderr
+    assert str(resident_app) in spctl_log.read_text(encoding="utf-8")
+
+
+def test_build_app_keeps_notarized_resident_when_notarization_fails(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    (home / "Library" / "LaunchAgents").mkdir(parents=True)
+    resident_apps = tmp_path / "Applications"
+    resident_app = resident_apps / "BrainBar.app"
+    marker = resident_app / "Contents" / "resident-marker"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("keep", encoding="utf-8")
+    _prepare_bundle_inputs(repo)
+    _install_fake_venv_python(repo, import_brainlayer_succeeds=True)
+    tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+        dry_run=False,
+        extra_args=["--force-dirty"],
+        extra_env={
+            **_fake_build_env(tmp_path, tool_dir, bin_dir),
+            "BRAINBAR_APP_DIR": str(resident_app),
+            "BRAINBAR_PROTECTED_APPLICATIONS_DIR": str(resident_apps),
+            "BRAINBAR_NOTARY_PROFILE": "notary-layers",
+            "BRAINBAR_FAKE_NOTARYTOOL_FAIL": "1",
+        },
+    )
+
+    assert result.returncode != 0
+    assert marker.read_text(encoding="utf-8") == "keep"
+    assert "Protected resident rebuild will stage" in result.stdout
+
+
+def test_build_app_allows_notarized_resident_rebuild_when_notary_profile_is_set(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    resident_apps = tmp_path / "Applications"
+    resident_app = resident_apps / "BrainBar.app"
+    resident_app.mkdir(parents=True)
+    tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+        extra_env={
+            **_fake_build_env(tmp_path, tool_dir, bin_dir),
+            "BRAINBAR_APP_DIR": f"{resident_app}/",
+            "BRAINBAR_PROTECTED_APPLICATIONS_DIR": str(resident_apps),
+            "BRAINBAR_NOTARY_PROFILE": "notary-layers",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[build-app] Dry run OK" in result.stdout
+
+
+def test_build_app_allows_dev_app_dir_when_resident_is_notarized(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    resident_apps = tmp_path / "Applications"
+    resident_app = resident_apps / "BrainBar.app"
+    resident_app.mkdir(parents=True)
+    dev_app = tmp_path / "dist" / "BrainBar.app"
+    tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+        extra_env={
+            **_fake_build_env(tmp_path, tool_dir, bin_dir),
+            "BRAINBAR_APP_DIR": str(dev_app),
+            "BRAINBAR_PROTECTED_APPLICATIONS_DIR": str(resident_apps),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert str(dev_app) in result.stdout
 
 
 def test_build_app_submits_before_requiring_post_notary_spctl_acceptance(tmp_path: Path) -> None:

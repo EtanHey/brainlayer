@@ -58,6 +58,7 @@ BRAINBAR_NOTARY_TEAM_ID="${BRAINBAR_NOTARY_TEAM_ID:-PPN23G925Y}"
 BRAINBAR_NOTARY_KEY="${BRAINBAR_NOTARY_KEY:-}"
 BRAINBAR_NOTARY_KEY_ID="${BRAINBAR_NOTARY_KEY_ID:-}"
 BRAINBAR_NOTARY_ISSUER="${BRAINBAR_NOTARY_ISSUER:-}"
+BRAINBAR_PROTECTED_APPLICATIONS_DIR="${BRAINBAR_PROTECTED_APPLICATIONS_DIR:-/Applications}"
 UI_PLIST_LABEL="com.brainlayer.brainbar"
 DAEMON_PLIST_LABEL="com.brainlayer.brainbar-daemon"
 UI_PLIST_FILENAME="$UI_PLIST_LABEL.plist"
@@ -100,6 +101,117 @@ sanitize_branch_name() {
 
 dev_bundle_apps_dir() {
     printf '%s\n' "$HOME/Applications"
+}
+
+normalize_app_dir_path() {
+    while [ "$APP_DIR" != "/" ] && [[ "$APP_DIR" == */ ]]; do
+        APP_DIR="${APP_DIR%/}"
+    done
+}
+
+canonical_compare_path() {
+    local path="$1"
+    local dir
+    local base
+    while [ "$path" != "/" ] && [[ "$path" == */ ]]; do
+        path="${path%/}"
+    done
+    if [ -d "$path" ]; then
+        (cd "$path" && pwd -P)
+        return
+    fi
+    dir="$(dirname "$path")"
+    base="$(basename "$path")"
+    if [ -d "$dir" ]; then
+        printf '%s/%s\n' "$(cd "$dir" && pwd -P)" "$base"
+        return
+    fi
+    printf '%s\n' "$path"
+}
+
+protected_resident_app_path() {
+    local apps_dir="$BRAINBAR_PROTECTED_APPLICATIONS_DIR"
+    while [ "$apps_dir" != "/" ] && [[ "$apps_dir" == */ ]]; do
+        apps_dir="${apps_dir%/}"
+    done
+    printf '%s\n' "$apps_dir/BrainBar.app"
+}
+
+app_dir_targets_protected_resident() {
+    [ "$(canonical_compare_path "$APP_DIR")" = "$(canonical_compare_path "$(protected_resident_app_path)")" ]
+}
+
+notary_credentials_available() {
+    if [ -n "$BRAINBAR_NOTARY_PROFILE" ]; then
+        return 0
+    fi
+    if [ -n "$BRAINBAR_NOTARY_APPLE_ID" ] && [ -n "$BRAINBAR_NOTARY_PASSWORD" ] && [ -n "$BRAINBAR_NOTARY_TEAM_ID" ]; then
+        return 0
+    fi
+    if [ -n "$BRAINBAR_NOTARY_KEY" ] && [ -n "$BRAINBAR_NOTARY_KEY_ID" ] && [ -n "$BRAINBAR_NOTARY_ISSUER" ]; then
+        return 0
+    fi
+    return 1
+}
+
+protect_notarized_resident_before_rebuild() {
+    local resident_path
+    if ! app_dir_targets_protected_resident || [ ! -d "$APP_DIR" ]; then
+        return 0
+    fi
+    resident_path="$(protected_resident_app_path)"
+
+    if ! spctl --assess --type execute "$resident_path" >/dev/null 2>&1; then
+        if ! notary_credentials_available; then
+            echo "[build-app] WARNING: Notary credentials not configured; resident rebuild will install an unnotarized app." >&2
+        fi
+        return 0
+    fi
+
+    if notary_credentials_available; then
+        return 0
+    fi
+
+    echo "[build-app] ERROR: Refusing to replace notarized $(protected_resident_app_path) with an unnotarized local rebuild." >&2
+    echo "[build-app] Set BRAINBAR_NOTARY_PROFILE=notary-layers or use Homebrew: brew reinstall --cask etanhey/layers/brainbar" >&2
+    return 1
+}
+
+PROTECTED_RESIDENT_STAGED_BUILD=0
+PROTECTED_RESIDENT_FINAL_APP_DIR=""
+PROTECTED_RESIDENT_STAGING_ROOT=""
+
+cleanup_protected_resident_staging() {
+    if [ -n "$PROTECTED_RESIDENT_STAGING_ROOT" ] && [ -d "$PROTECTED_RESIDENT_STAGING_ROOT" ]; then
+        rm -rf "$PROTECTED_RESIDENT_STAGING_ROOT"
+    fi
+}
+
+stage_protected_resident_rebuild() {
+    if [ "$DRY_RUN" -eq 1 ] || ! app_dir_targets_protected_resident || ! notary_credentials_available; then
+        return 0
+    fi
+
+    local tmp_parent
+    tmp_parent="${TMPDIR:-/tmp}"
+    PROTECTED_RESIDENT_STAGED_BUILD=1
+    PROTECTED_RESIDENT_FINAL_APP_DIR="$(protected_resident_app_path)"
+    PROTECTED_RESIDENT_STAGING_ROOT="$(mktemp -d "${tmp_parent%/}/brainbar-resident-rebuild.XXXXXX")"
+    APP_DIR="$PROTECTED_RESIDENT_STAGING_ROOT/BrainBar.app"
+    trap cleanup_protected_resident_staging EXIT
+    echo "[build-app] Protected resident rebuild will stage at $APP_DIR before replacing $PROTECTED_RESIDENT_FINAL_APP_DIR"
+}
+
+promote_protected_resident_rebuild() {
+    if [ "$PROTECTED_RESIDENT_STAGED_BUILD" -ne 1 ]; then
+        return 0
+    fi
+
+    echo "[build-app] Replacing protected resident app after successful signing and notarization..."
+    rm -rf "$PROTECTED_RESIDENT_FINAL_APP_DIR"
+    mkdir -p "$(dirname "$PROTECTED_RESIDENT_FINAL_APP_DIR")"
+    mv "$APP_DIR" "$PROTECTED_RESIDENT_FINAL_APP_DIR"
+    APP_DIR="$PROTECTED_RESIDENT_FINAL_APP_DIR"
 }
 
 safe_branch_is_checked_out_anywhere() {
@@ -289,6 +401,7 @@ if [ "$CURRENT_REPO_ROOT" != "$CANONICAL_REPO_ROOT" ]; then
 else
     APP_DIR="${BRAINBAR_APP_DIR:-$HOME/Applications/BrainBar.app}"
 fi
+normalize_app_dir_path
 
 DIRTY_STATUS="$(git -C "$CURRENT_REPO_ROOT" status --porcelain --untracked-files=all)"
 if [ -n "$DIRTY_STATUS" ] && [ "$FORCE_DIRTY" -ne 1 ]; then
@@ -297,6 +410,9 @@ if [ -n "$DIRTY_STATUS" ] && [ "$FORCE_DIRTY" -ne 1 ]; then
     printf '%s\n' "$DIRTY_STATUS" >&2
     exit 1
 fi
+
+protect_notarized_resident_before_rebuild
+stage_protected_resident_rebuild
 
 if [ "$DEV_BUNDLE_BUILD" -eq 0 ] && [ "$DRY_RUN" -eq 1 ]; then
     cleanup_stale_dev_bundles
@@ -476,19 +592,6 @@ wait_for_socket() {
     return 1
 }
 
-notary_credentials_available() {
-    if [ -n "$BRAINBAR_NOTARY_PROFILE" ]; then
-        return 0
-    fi
-    if [ -n "$BRAINBAR_NOTARY_APPLE_ID" ] && [ -n "$BRAINBAR_NOTARY_PASSWORD" ] && [ -n "$BRAINBAR_NOTARY_TEAM_ID" ]; then
-        return 0
-    fi
-    if [ -n "$BRAINBAR_NOTARY_KEY" ] && [ -n "$BRAINBAR_NOTARY_KEY_ID" ] && [ -n "$BRAINBAR_NOTARY_ISSUER" ]; then
-        return 0
-    fi
-    return 1
-}
-
 notarytool_auth_args() {
     if [ -n "$BRAINBAR_NOTARY_PROFILE" ]; then
         printf '%s\0%s\0' "--keychain-profile" "$BRAINBAR_NOTARY_PROFILE"
@@ -655,6 +758,7 @@ if ! codesign -dv --verbose=4 "$APP_DIR" 2>&1 | grep -F "Authority=$SIGN_IDENTIT
 fi
 verify_spctl_assessment "Developer ID signing"
 notarize_and_staple
+promote_protected_resident_rebuild
 
 # Register URL scheme with Launch Services (ensures brainbar:// works after rebuild)
 "$LSREGISTER" -R "$APP_DIR"
