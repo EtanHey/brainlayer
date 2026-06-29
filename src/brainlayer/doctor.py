@@ -54,6 +54,16 @@ DEFAULT_QUEUE_MOVEMENT_SAMPLE_SECONDS = 10.0
 DOCTOR_PROBE_PROJECT = "brainlayer-doctor"
 
 
+def default_version_check_path() -> Path:
+    current_tree_script = Path(__file__).resolve().parents[2] / "scripts" / "brainlayer-version-check.sh"
+    if current_tree_script.is_file():
+        return current_tree_script
+    repo_script = Path.home() / "Gits" / "brainlayer" / "scripts" / "brainlayer-version-check.sh"
+    if repo_script.is_file():
+        return repo_script
+    return current_tree_script
+
+
 @dataclass(frozen=True)
 class DoctorIssue:
     code: str
@@ -84,6 +94,9 @@ class DoctorConfig:
     deploy_provenance_dir: Path = field(default_factory=default_deploy_provenance_dir)
     deploy_drift_labels: tuple[str, ...] = DEFAULT_DEPLOY_DRIFT_LABELS
     deploy_drift_enabled: bool = True
+    version_check_enabled: bool = True
+    version_check_required: bool = False
+    version_check_path: Path = field(default_factory=default_version_check_path)
 
 
 @dataclass
@@ -317,6 +330,59 @@ def _check_deploy_drift(
         )
 
 
+def _check_brainbar_version_consistency(
+    result: DoctorResult,
+    *,
+    version_check_path: Path,
+    version_check_required: bool,
+    command_runner: CommandRunner,
+) -> None:
+    if not version_check_path.is_file():
+        severity = "fatal" if version_check_required else "warning"
+        result.issues.append(
+            DoctorIssue(
+                "brainbar_version_check_missing",
+                severity,
+                f"BrainBar version check script not found: {version_check_path}",
+                {"path": str(version_check_path)},
+            )
+        )
+        return
+
+    try:
+        check = command_runner(["bash", str(version_check_path)])
+    except Exception as exc:
+        result.issues.append(
+            DoctorIssue(
+                "brainbar_version_check_failed",
+                "fatal",
+                f"BrainBar version consistency check could not run: {exc}",
+                {"path": str(version_check_path), "exception": repr(exc)},
+            )
+        )
+        return
+    returncode = int(getattr(check, "returncode", 0) or 0)
+    if returncode == 0:
+        return
+
+    stderr = str(getattr(check, "stderr", "") or "").strip()
+    stdout = str(getattr(check, "stdout", "") or "").strip()
+    detail = stderr or stdout or f"exit {returncode}"
+    result.issues.append(
+        DoctorIssue(
+            "brainbar_version_check_failed",
+            "fatal",
+            f"BrainBar version consistency check failed: {detail}",
+            {
+                "path": str(version_check_path),
+                "exit_code": returncode,
+                "stdout": stdout,
+                "stderr": stderr,
+            },
+        )
+    )
+
+
 def run_doctor(
     config: DoctorConfig,
     *,
@@ -332,6 +398,14 @@ def run_doctor(
 
     def warning(code: str, message: str, **details: Any) -> None:
         result.issues.append(DoctorIssue(code, "warning", message, details))
+
+    if config.version_check_enabled:
+        _check_brainbar_version_consistency(
+            result,
+            version_check_path=config.version_check_path,
+            version_check_required=config.version_check_required,
+            command_runner=command_runner,
+        )
 
     store: VectorStore | None = None
     try:

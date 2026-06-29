@@ -321,6 +321,7 @@ def _doctor_config(tmp_path: Path, db_path: Path):
         drain_health_path=drain_health_path,
         deploy_provenance_dir=tmp_path / "daemon-provenance",
         queue_movement_sample_seconds=0,
+        version_check_enabled=False,
     )
 
 
@@ -340,6 +341,94 @@ def test_run_doctor_exits_zero_on_healthy_fixture(tmp_path):
     assert result.exit_code == 0
     assert result.ok is True
     assert not [issue for issue in result.issues if issue.severity == "fatal"]
+
+
+def test_run_doctor_fails_loudly_when_brainbar_version_check_fails(tmp_path):
+    from brainlayer.doctor import run_doctor
+
+    db_path = tmp_path / "healthy.db"
+    _build_db(db_path)
+    version_check = tmp_path / "brainlayer-version-check.sh"
+    version_check.write_text(
+        "#!/usr/bin/env bash\necho '[brainlayer-version-check] ERROR: cask drift' >&2\nexit 1\n",
+        encoding="utf-8",
+    )
+    version_check.chmod(0o755)
+    config = _doctor_config(tmp_path, db_path)
+    config.version_check_enabled = True
+    config.version_check_path = version_check
+
+    def command_runner(args: list[str]) -> SimpleNamespace:
+        if args[:2] == ["launchctl", "print"]:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        assert args == ["bash", str(version_check)]
+        return SimpleNamespace(returncode=1, stdout="", stderr="[brainlayer-version-check] ERROR: cask drift\n")
+
+    result = run_doctor(
+        config,
+        ps_output_fn=_hotlane_ps,
+        command_runner=command_runner,
+        now_fn=lambda: NOW,
+    )
+
+    issue = next(issue for issue in result.issues if issue.code == "brainbar_version_check_failed")
+    assert result.exit_code == 1
+    assert result.ok is False
+    assert issue.severity == "fatal"
+    assert "cask drift" in issue.message
+
+
+def test_run_doctor_warns_when_brainbar_version_check_script_is_missing(tmp_path):
+    from brainlayer.doctor import run_doctor
+
+    db_path = tmp_path / "healthy.db"
+    _build_db(db_path)
+    config = _doctor_config(tmp_path, db_path)
+    config.version_check_enabled = True
+    config.version_check_path = tmp_path / "missing-version-check.sh"
+
+    result = run_doctor(
+        config,
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+
+    issue = next(issue for issue in result.issues if issue.code == "brainbar_version_check_missing")
+    assert issue.severity == "warning"
+    assert result.exit_code == 0
+    assert result.ok is True
+
+
+def test_run_doctor_reports_brainbar_version_check_runner_exception(tmp_path):
+    from brainlayer.doctor import run_doctor
+
+    db_path = tmp_path / "healthy.db"
+    _build_db(db_path)
+    version_check = tmp_path / "brainlayer-version-check.sh"
+    version_check.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    version_check.chmod(0o755)
+    config = _doctor_config(tmp_path, db_path)
+    config.version_check_enabled = True
+    config.version_check_path = version_check
+
+    def command_runner(args: list[str]) -> SimpleNamespace:
+        if args[:2] == ["launchctl", "print"]:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        assert args == ["bash", str(version_check)]
+        raise RuntimeError("runner unavailable")
+
+    result = run_doctor(
+        config,
+        ps_output_fn=_hotlane_ps,
+        command_runner=command_runner,
+        now_fn=lambda: NOW,
+    )
+
+    issue = next(issue for issue in result.issues if issue.code == "brainbar_version_check_failed")
+    assert issue.severity == "fatal"
+    assert result.exit_code == 1
+    assert "runner unavailable" in issue.message
 
 
 def test_roundtrip_probe_ignores_projectless_keyword_competitors(tmp_path):
