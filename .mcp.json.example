@@ -9,7 +9,7 @@
     "voicelayer": {
       "command": "voicelayer-mcp"
     },
-    "cmux": {
+    "cmuxlayer": {
       "command": "node",
       "args": [
         "/Users/etanheyman/Gits/orchestrator/tools/cmux-mcp/dist/index.js"
