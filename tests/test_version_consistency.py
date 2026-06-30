@@ -121,8 +121,19 @@ def test_version_check_fails_loudly_when_latest_git_tag_drifts(tmp_path: Path) -
     assert "latest git tag is 'v0.0.0'" in result.stderr
 
 
-def test_version_check_reports_controlled_error_outside_git_checkout(tmp_path: Path) -> None:
+def test_version_check_reports_controlled_error_outside_git_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     fixture_root, tap_root, _package_version = _copy_version_fixture(tmp_path)
+    repo_git_path = REPO_ROOT / ".git"
+    if repo_git_path.is_file():
+        git_dir = repo_git_path.read_text(encoding="utf-8").strip().removeprefix("gitdir: ")
+    else:
+        git_dir = str(repo_git_path)
+    if not Path(git_dir).is_absolute():
+        git_dir = str(repo_git_path.parent / git_dir)
+    monkeypatch.setenv("GIT_DIR", git_dir)
+    monkeypatch.setenv("GIT_WORK_TREE", str(REPO_ROOT))
 
     result = _run(fixture_root, tap_root)
 
