@@ -190,6 +190,40 @@ def _state_matches(entry: Any, candidate: JsonlCandidate) -> bool:
     return entry.get("mtime") == candidate.mtime and entry.get("size") == candidate.size
 
 
+def _backup_unit_key(candidate: JsonlCandidate) -> tuple[int, str]:
+    path = candidate.path.as_posix()
+    for sidecar_suffix in ("-wal", "-shm"):
+        if path.endswith(f".db{sidecar_suffix}"):
+            return (candidate.root_index, path[: -len(sidecar_suffix)])
+    return (candidate.root_index, path)
+
+
+def _select_backup_candidates(
+    candidates: list[JsonlCandidate],
+    *,
+    state: dict[str, Any],
+    now: float,
+    active_skip_seconds: int,
+) -> tuple[list[JsonlCandidate], list[JsonlCandidate], int]:
+    grouped: dict[tuple[int, str], list[JsonlCandidate]] = {}
+    for candidate in candidates:
+        grouped.setdefault(_backup_unit_key(candidate), []).append(candidate)
+
+    changed: list[JsonlCandidate] = []
+    active: list[JsonlCandidate] = []
+    covered = 0
+    state_files = state.get("files", {})
+    for backup_unit in grouped.values():
+        if any(now - candidate.mtime < active_skip_seconds for candidate in backup_unit):
+            active.extend(backup_unit)
+            continue
+        if all(_state_matches(state_files.get(candidate.path.as_posix()), candidate) for candidate in backup_unit):
+            covered += len(backup_unit)
+            continue
+        changed.extend(backup_unit)
+    return changed, active, covered
+
+
 def _archive_name(candidate: JsonlCandidate) -> str:
     try:
         relative = candidate.path.relative_to(candidate.root)
@@ -200,6 +234,14 @@ def _archive_name(candidate: JsonlCandidate) -> str:
 
 def _forever_enabled() -> bool:
     return os.environ.get("BRAINLAYER_JSONL_FOREVER", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _upload_forever_files(
@@ -214,17 +256,17 @@ def _upload_forever_files(
     staging_dir.mkdir(parents=True, exist_ok=True)
     uploaded: list[dict[str, Any]] = []
     for candidate in candidates:
-        digest = hashlib.sha256()
-        with candidate.path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-        forever_name = f"{digest.hexdigest()}{candidate.path.suffix or '.bin'}"
         with tempfile.TemporaryDirectory(prefix=".forever-", dir=staging_dir) as tmp_dir:
-            temp_path = Path(tmp_dir) / forever_name
+            suffix = candidate.path.suffix or ".bin"
+            temp_path = Path(tmp_dir) / f"payload{suffix}"
             shutil.copyfile(candidate.path, temp_path)
+            sha256 = _sha256_file(temp_path)
+            forever_name = f"{sha256}{suffix}"
+            forever_path = Path(tmp_dir) / forever_name
+            os.replace(temp_path, forever_path)
             folder_parts = [*forever_folder_parts, f"source-{candidate.root_index}"]
             folder_id = backup_daily.ensure_drive_folder_chain(service, folder_parts)
-            drive_file = backup_daily.upload_file_to_drive_raw(temp_path, folder_id, credentials)
+            drive_file = backup_daily.upload_file_to_drive_raw(forever_path, folder_id, credentials)
             file_id = drive_file.get("id")
             if not file_id:
                 raise RuntimeError(f"Drive forever upload response missing file id: {drive_file!r}")
@@ -232,13 +274,13 @@ def _upload_forever_files(
                 service,
                 file_id=file_id,
                 expected_name=forever_name,
-                expected_size=temp_path.stat().st_size,
+                expected_size=forever_path.stat().st_size,
             )
             uploaded.append(
                 {
                     "source": candidate.path.as_posix(),
                     "drive_file": drive_file,
-                    "sha256": digest.hexdigest(),
+                    "sha256": sha256,
                     "folder_parts": folder_parts,
                 }
             )
@@ -343,19 +385,12 @@ def run_backup(
     state_path = Path(state_path).expanduser()
     state = _load_state(state_path)
     candidates = _discover_jsonl_candidates(roots)
-
-    changed: list[JsonlCandidate] = []
-    active: list[JsonlCandidate] = []
-    covered = 0
-    for candidate in candidates:
-        if now - candidate.mtime < active_skip_seconds:
-            active.append(candidate)
-            continue
-        entry = state.get("files", {}).get(candidate.path.as_posix())
-        if _state_matches(entry, candidate):
-            covered += 1
-            continue
-        changed.append(candidate)
+    changed, active, covered = _select_backup_candidates(
+        candidates,
+        state=state,
+        now=now,
+        active_skip_seconds=active_skip_seconds,
+    )
 
     if not changed:
         result: dict[str, Any] = {
@@ -406,25 +441,27 @@ def run_backup(
 
     result.update(verify_jsonl_bundle(archive_path, expected_file_count=len(changed)))
     if result["verified"] and upload:
-        if _forever_enabled():
-            forever_files = _upload_forever_files(
-                changed,
-                service=service,
-                credentials=credentials,
-                staging_dir=staging_dir,
-                forever_folder_parts=forever_folder_parts,
-            )
-            result["forever_files"] = forever_files
-            result["forever_uploaded_file_count"] = len(forever_files)
         _atomic_write_json(state_path, _update_state_for_uploaded(state, changed))
-        deleted = backup_daily.prune_drive_backups(
-            service,
-            folder_parts=folder_parts,
-            retention_policy=JSONL_RETENTION,
-        )
-        result["retention_deleted"] = deleted
-        archive_path.unlink(missing_ok=True)
-        result["local_archive_removed"] = True
+        try:
+            deleted = backup_daily.prune_drive_backups(
+                service,
+                folder_parts=folder_parts,
+                retention_policy=JSONL_RETENTION,
+            )
+            result["retention_deleted"] = deleted
+            if _forever_enabled():
+                forever_files = _upload_forever_files(
+                    changed,
+                    service=service,
+                    credentials=credentials,
+                    staging_dir=staging_dir,
+                    forever_folder_parts=forever_folder_parts,
+                )
+                result["forever_files"] = forever_files
+                result["forever_uploaded_file_count"] = len(forever_files)
+        finally:
+            archive_path.unlink(missing_ok=True)
+            result["local_archive_removed"] = True
 
     _append_json_log(log_path, result)
     _enqueue_run_summary(result, queue_dir=queue_dir)
