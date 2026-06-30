@@ -88,6 +88,7 @@ class DoctorConfig:
     enrichment_label: str = DEFAULT_ENRICHMENT_LABEL
     recent_window_hours: int = DEFAULT_RECENT_WINDOW_HOURS
     roundtrip_timeout_seconds: float = DEFAULT_ROUNDTRIP_TIMEOUT_SECONDS
+    roundtrip_probe_enabled: bool = True
     queue_warning_count: int = DEFAULT_QUEUE_WARNING_COUNT
     queue_movement_sample_seconds: float = DEFAULT_QUEUE_MOVEMENT_SAMPLE_SECONDS
     drain_liveness_stale_seconds: float = DEFAULT_DRAIN_LIVENESS_STALE_SECONDS
@@ -458,15 +459,16 @@ def run_doctor(
         except Exception as exc:
             fatal("vector_parity_failed", f"could not check vector parity: {exc}")
 
-        ok, latency, reason = _roundtrip_probe(config.db_path, config.roundtrip_timeout_seconds)
-        result.roundtrip_latency_seconds = round(latency, 4)
-        if not ok:
-            fatal(
-                "roundtrip_vector_probe_failed",
-                "store-to-hybrid vector round-trip did not return the probe",
-                latency_seconds=result.roundtrip_latency_seconds,
-                reason=reason,
-            )
+        if config.roundtrip_probe_enabled:
+            ok, latency, reason = _roundtrip_probe(config.db_path, config.roundtrip_timeout_seconds)
+            result.roundtrip_latency_seconds = round(latency, 4)
+            if not ok:
+                fatal(
+                    "roundtrip_vector_probe_failed",
+                    "store-to-hybrid vector round-trip did not return the probe",
+                    latency_seconds=result.roundtrip_latency_seconds,
+                    reason=reason,
+                )
 
     try:
         result.enrichment_backlog = _enrichment_backlog(config.db_path)

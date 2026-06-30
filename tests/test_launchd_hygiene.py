@@ -7,6 +7,10 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from typer.testing import CliRunner
+
+from brainlayer.cli import app
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOG_ROOT = "__HOME__/Library/Logs/brainlayer/"
 RENDERED_LOG_ROOT = "/Users/etanheyman/Library/Logs/brainlayer/"
@@ -123,6 +127,87 @@ def test_active_daemon_launchd_hygiene_matrix():
 def test_all_script_launchd_plists_have_common_hygiene():
     for path in sorted((REPO_ROOT / "scripts/launchd").glob("com.brainlayer.*.plist")):
         _assert_common_hygiene(plistlib.loads(path.read_bytes()))
+
+
+def test_drain_launchagent_uses_stable_brainlayer_shim():
+    drain = _load("scripts/launchd/com.brainlayer.drain.plist")
+
+    assert drain["ProgramArguments"][:5] == [
+        "__BRAINLAYER_ENV_RUN__",
+        "/usr/bin/env",
+        "BRAINLAYER_DRAIN_EMBED=0",
+        "__BRAINLAYER_BIN__",
+        "drain",
+    ]
+    assert "--daemon" in drain["ProgramArguments"]
+    assert "BRAINLAYER_DRAIN_EMBED" not in drain["EnvironmentVariables"]
+    assert "__PYTHON_BIN__" not in drain["ProgramArguments"]
+    assert "-m" not in drain["ProgramArguments"]
+    assert "brainlayer.drain" not in drain["ProgramArguments"]
+
+
+def test_drain_launchagent_embed_override_survives_env_file_loading(tmp_path):
+    loader = REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh"
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("BRAINLAYER_DRAIN_EMBED=1\n", encoding="utf-8")
+    env_file.chmod(0o600)
+
+    result = subprocess.run(
+        [
+            str(loader),
+            "/usr/bin/env",
+            "BRAINLAYER_DRAIN_EMBED=0",
+            "/bin/sh",
+            "-c",
+            'test "$BRAINLAYER_DRAIN_EMBED" = "0"',
+        ],
+        env={
+            **os.environ,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_SERVICE": "drain",
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_drain_cli_daemon_records_launch_provenance(monkeypatch):
+    from brainlayer import deploy_drift, drain, parent_death
+
+    calls = []
+    monkeypatch.setattr(parent_death, "install_parent_death_watcher", lambda: calls.append("parent-death"))
+    monkeypatch.setattr(deploy_drift, "record_launch_from_environment", lambda: calls.append("provenance"))
+    monkeypatch.setattr(
+        drain, "run_daemon", lambda interval, batch_size: calls.append(("daemon", interval, batch_size))
+    )
+
+    result = CliRunner().invoke(app, ["drain", "--daemon", "--interval", "0", "--batch-size", "7"])
+
+    assert result.exit_code == 0
+    assert calls == ["parent-death", "provenance", ("daemon", 0.0, 7)]
+
+
+def test_p0_counter_launchagent_uses_brainlayer_console_shim():
+    p0 = _load("scripts/launchd/com.brainlayer.p0-counter.plist")
+
+    assert p0["ProgramArguments"] == [
+        "__BRAINLAYER_ENV_RUN__",
+        "__BRAINLAYER_BIN__",
+        "p0-counter",
+    ]
+    assert p0["StartCalendarInterval"] == {"Hour": 5, "Minute": 0}
+    assert "RunAtLoad" not in p0
+    assert "StartInterval" not in p0
+    assert "/usr/bin/python3" not in p0["ProgramArguments"]
+    assert "__BRAINLAYER_PYTHON__" not in p0["ProgramArguments"]
+    assert "__PYTHON_BIN__" not in p0["ProgramArguments"]
+    assert "-m" not in p0["ProgramArguments"]
+    assert "brainlayer.p0_longitudinal_count" not in p0["ProgramArguments"]
+    assert "__BRAINLAYER_DIR__" not in p0["ProgramArguments"]
 
 
 def test_index_launchagent_runs_nightly_without_keepalive_or_run_at_load():

@@ -3,6 +3,7 @@
 import hashlib
 import json
 import logging
+import math
 import os
 import re as _re
 import shlex
@@ -12,6 +13,7 @@ import sys
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Annotated, Any, Optional
 
 import typer
@@ -875,6 +877,158 @@ def _run_doctor_cli(config):
     return run_doctor(config)
 
 
+DEFAULT_STATUS_DOCTOR_TIMEOUT_SECONDS = 12.0
+DEFAULT_STATUS_DOCTOR_ROUNDTRIP_TIMEOUT_SECONDS = 3.0
+DEFAULT_STATUS_DOCTOR_QUEUE_SAMPLE_SECONDS = 1.0
+DEFAULT_STATUS_SQLITE_PROGRESS_TIMEOUT_SECONDS = 2.0
+
+
+class StatusDoctorTimeoutError(TimeoutError):
+    pass
+
+
+_STATUS_DOCTOR_CHILD_CODE = r"""
+import json
+import os
+import sys
+from pathlib import Path
+
+from brainlayer.doctor import DoctorConfig, run_doctor
+
+
+def _float_env(name):
+    return float(os.environ[name])
+
+
+def _bool_env(name):
+    return os.environ[name].lower() in {"1", "true", "yes", "on"}
+
+
+try:
+    config = DoctorConfig(
+        db_path=Path(os.environ["BRAINLAYER_STATUS_DOCTOR_DB"]),
+        queue_dir=Path(os.environ["BRAINLAYER_STATUS_DOCTOR_QUEUE_DIR"]),
+        watcher_health_path=Path(os.environ["BRAINLAYER_STATUS_DOCTOR_WATCHER_HEALTH"]),
+        drain_health_path=Path(os.environ["BRAINLAYER_STATUS_DOCTOR_DRAIN_HEALTH"]),
+        roundtrip_timeout_seconds=_float_env("BRAINLAYER_STATUS_DOCTOR_ROUNDTRIP_TIMEOUT_SECONDS"),
+        roundtrip_probe_enabled=_bool_env("BRAINLAYER_STATUS_DOCTOR_ROUNDTRIP_PROBE_ENABLED"),
+        queue_movement_sample_seconds=_float_env("BRAINLAYER_STATUS_DOCTOR_QUEUE_SAMPLE_SECONDS"),
+    )
+    print(json.dumps(run_doctor(config).to_dict(), sort_keys=True))
+except BaseException as exc:
+    print(json.dumps({"__status_doctor_error__": f"{type(exc).__name__}: {exc}"}), file=sys.stdout)
+    raise SystemExit(2)
+"""
+
+
+def _positive_float_env(name: str, default: float) -> float:
+    try:
+        value = float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 and math.isfinite(value) else default
+
+
+def _status_doctor_timeout_seconds() -> float:
+    return _positive_float_env("BRAINLAYER_STATUS_DOCTOR_TIMEOUT_SECONDS", DEFAULT_STATUS_DOCTOR_TIMEOUT_SECONDS)
+
+
+def _status_doctor_roundtrip_timeout_seconds() -> float:
+    return _positive_float_env(
+        "BRAINLAYER_STATUS_DOCTOR_ROUNDTRIP_TIMEOUT_SECONDS",
+        DEFAULT_STATUS_DOCTOR_ROUNDTRIP_TIMEOUT_SECONDS,
+    )
+
+
+def _status_doctor_queue_sample_seconds() -> float:
+    return _positive_float_env(
+        "BRAINLAYER_STATUS_DOCTOR_QUEUE_SAMPLE_SECONDS",
+        DEFAULT_STATUS_DOCTOR_QUEUE_SAMPLE_SECONDS,
+    )
+
+
+def _status_sqlite_progress_timeout_seconds() -> float:
+    return _positive_float_env(
+        "BRAINLAYER_STATUS_SQLITE_PROGRESS_TIMEOUT_SECONDS",
+        DEFAULT_STATUS_SQLITE_PROGRESS_TIMEOUT_SECONDS,
+    )
+
+
+def _status_doctor_result_from_payload(payload: dict[str, Any]) -> SimpleNamespace:
+    issues = [
+        SimpleNamespace(
+            code=str(issue.get("code", "unknown")),
+            severity=str(issue.get("severity", "unknown")),
+            message=str(issue.get("message", "")),
+            details=issue.get("details", {}) or {},
+        )
+        for issue in payload.get("issues", [])
+        if isinstance(issue, dict)
+    ]
+    return SimpleNamespace(
+        ok=bool(payload.get("ok", False)),
+        exit_code=int(payload.get("exit_code", 1 if not payload.get("ok") else 0)),
+        issues=issues,
+        roundtrip_latency_seconds=payload.get("roundtrip_latency_seconds"),
+    )
+
+
+def _status_doctor_child_env(config) -> dict[str, str]:
+    env = os.environ.copy()
+    env.update(
+        {
+            "BRAINLAYER_STATUS_DOCTOR_DB": str(config.db_path),
+            "BRAINLAYER_STATUS_DOCTOR_QUEUE_DIR": str(config.queue_dir),
+            "BRAINLAYER_STATUS_DOCTOR_WATCHER_HEALTH": str(config.watcher_health_path),
+            "BRAINLAYER_STATUS_DOCTOR_DRAIN_HEALTH": str(config.drain_health_path),
+            "BRAINLAYER_STATUS_DOCTOR_ROUNDTRIP_TIMEOUT_SECONDS": str(config.roundtrip_timeout_seconds),
+            "BRAINLAYER_STATUS_DOCTOR_ROUNDTRIP_PROBE_ENABLED": "1" if config.roundtrip_probe_enabled else "0",
+            "BRAINLAYER_STATUS_DOCTOR_QUEUE_SAMPLE_SECONDS": str(config.queue_movement_sample_seconds),
+        }
+    )
+    return env
+
+
+def _status_doctor_payload_from_stdout(stdout: str) -> dict[str, Any]:
+    for line in reversed(stdout.splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("doctor returned a malformed verdict") from exc
+        if not isinstance(payload, dict):
+            raise RuntimeError("doctor returned a malformed verdict")
+        return payload
+    raise RuntimeError("doctor exited without a verdict")
+
+
+def _run_status_doctor_cli(config, *, timeout_seconds: float | None = None):
+    timeout = timeout_seconds if timeout_seconds is not None else _status_doctor_timeout_seconds()
+    command = [sys.executable, "-c", _STATUS_DOCTOR_CHILD_CODE]
+    try:
+        completed = subprocess.run(
+            command,
+            env=_status_doctor_child_env(config),
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise StatusDoctorTimeoutError(f"doctor timed out after {timeout:g}s") from exc
+    try:
+        payload = _status_doctor_payload_from_stdout(completed.stdout)
+    except RuntimeError as exc:
+        stderr = completed.stderr.strip()
+        detail = f": {stderr}" if stderr else ""
+        raise RuntimeError(f"{exc} (exit code {completed.returncode}){detail}") from exc
+    if "__status_doctor_error__" in payload:
+        raise RuntimeError(str(payload["__status_doctor_error__"]))
+    return _status_doctor_result_from_payload(payload)
+
+
 @app.command("doctor")
 def doctor_command(
     db: Optional[Path] = typer.Option(None, "--db", help="Path to brainlayer.db"),
@@ -941,6 +1095,15 @@ def drain_command(
         typer.echo(json.dumps(result.__dict__, sort_keys=True))
         return
     if daemon:
+        from ..parent_death import install_parent_death_watcher
+
+        install_parent_death_watcher()
+        try:
+            from ..deploy_drift import record_launch_from_environment
+
+            record_launch_from_environment()
+        except Exception:
+            logging.getLogger(__name__).debug("Failed to record drain launch provenance", exc_info=True)
         run_daemon(interval=interval, batch_size=batch_size)
         return
 
@@ -948,24 +1111,48 @@ def drain_command(
     typer.echo(str(drained))
 
 
+@app.command("p0-counter")
+def p0_counter_command() -> None:
+    """Run the daily P0 longitudinal counter once."""
+    from ..p0_longitudinal_count import main as run_p0_counter
+
+    raise typer.Exit(code=run_p0_counter())
+
+
 def _status_count_unembedded(db_path: Path) -> int | None:
     if not db_path.exists():
         return None
     uri = f"file:{db_path}?mode=ro"
     with sqlite3.connect(uri, uri=True, timeout=1.0) as conn:
-        row = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM chunks c
-            LEFT JOIN chunk_vectors_rowids r ON c.id = r.id
-            WHERE r.id IS NULL
-              AND c.content IS NOT NULL
-              AND c.content != ''
-              AND (c.archived_at IS NULL OR c.archived_at = '')
-              AND c.superseded_by IS NULL
-              AND c.aggregated_into IS NULL
-            """
-        ).fetchone()
+        conn.execute("PRAGMA query_only = ON")
+        conn.execute("PRAGMA busy_timeout = 1000")
+        deadline = time.monotonic() + _status_sqlite_progress_timeout_seconds()
+
+        def progress() -> int:
+            return 1 if time.monotonic() >= deadline else 0
+
+        progress_setter = getattr(conn, "set_progress_handler", None)
+        if progress_setter is not None:
+            progress_setter(progress, 1000)
+        try:
+            row = conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM chunks c
+                LEFT JOIN chunk_vectors_rowids r ON c.id = r.id
+                WHERE r.id IS NULL
+                  AND c.content IS NOT NULL
+                  AND c.content != ''
+                  AND (c.archived_at IS NULL OR c.archived_at = '')
+                  AND c.superseded_by IS NULL
+                  AND c.aggregated_into IS NULL
+                """
+            ).fetchone()
+        except sqlite3.Error:
+            return None
+        finally:
+            if progress_setter is not None:
+                progress_setter(None, 0)
     return int(row[0]) if row else None
 
 
@@ -1086,7 +1273,11 @@ def _status_issue_to_dict(issue: object) -> dict[str, Any]:
 
 
 def _status_doctor_gate(
-    doctor_result: object | None, doctor_error: str | None
+    doctor_result: object | None,
+    doctor_error: str | None,
+    doctor_error_code: str = "status_doctor_failed",
+    *,
+    roundtrip_probe_enabled: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if doctor_error is not None:
         doctor_gate = {
@@ -1095,19 +1286,27 @@ def _status_doctor_gate(
             "error": doctor_error,
             "issues": [
                 {
-                    "code": "status_doctor_failed",
+                    "code": doctor_error_code,
                     "severity": "fatal",
                     "message": doctor_error,
                     "details": {},
                 }
             ],
         }
-        vector_roundtrip = {
-            "checked": True,
-            "status": "failed",
-            "issue": doctor_gate["issues"][0],
-            "latency_seconds": None,
-        }
+        if roundtrip_probe_enabled:
+            vector_roundtrip = {
+                "checked": True,
+                "status": "failed",
+                "issue": doctor_gate["issues"][0],
+                "latency_seconds": None,
+            }
+        else:
+            vector_roundtrip = {
+                "checked": False,
+                "status": "not_checked_status_doctor_error",
+                "blocked_by": doctor_gate["issues"][0],
+                "green_gate": "Run `brainlayer doctor --json` for a full vector roundtrip probe.",
+            }
         return doctor_gate, vector_roundtrip
 
     if doctor_result is None:
@@ -1131,10 +1330,12 @@ def _status_doctor_gate(
         "issues": issues,
     }
     vector_roundtrip = {
-        "checked": True,
-        "status": "failed" if roundtrip_issue else "passed",
+        "checked": latency is not None or roundtrip_issue is not None,
+        "status": "failed" if roundtrip_issue else ("passed" if latency is not None else "skipped_by_status_doctor"),
         "latency_seconds": latency,
     }
+    if latency is None and roundtrip_issue is None:
+        vector_roundtrip["green_gate"] = "Run `brainlayer doctor --json` for the write-probe vector roundtrip."
     if roundtrip_issue:
         vector_roundtrip["issue"] = roundtrip_issue
     return doctor_gate, vector_roundtrip
@@ -1213,7 +1414,7 @@ def status_command(
     check_doctor: bool = typer.Option(
         False,
         "--check-doctor",
-        help="Run the doctor probe gate, including vector roundtrip, before computing operational_green.",
+        help="Run the bounded read-mostly doctor gate before computing operational_green.",
     ),
     fallback_gits_root: Path = typer.Option(
         Path("~/Gits"),
@@ -1273,21 +1474,34 @@ def status_command(
     )
     doctor_result = None
     doctor_error = None
+    doctor_error_code = "status_doctor_failed"
+    doctor_roundtrip_probe_enabled = False
     if check_doctor:
         from ..doctor import DoctorConfig
 
         try:
-            doctor_result = _run_doctor_cli(
+            doctor_result = _run_status_doctor_cli(
                 DoctorConfig(
                     db_path=db_path,
                     queue_dir=queue_path,
                     watcher_health_path=watcher_health,
                     drain_health_path=drain_health,
+                    roundtrip_timeout_seconds=_status_doctor_roundtrip_timeout_seconds(),
+                    roundtrip_probe_enabled=doctor_roundtrip_probe_enabled,
+                    queue_movement_sample_seconds=_status_doctor_queue_sample_seconds(),
                 )
             )
+        except TimeoutError as exc:
+            doctor_error = str(exc)
+            doctor_error_code = "status_doctor_timeout"
         except Exception as exc:
             doctor_error = str(exc)
-    doctor_gate, vector_roundtrip = _status_doctor_gate(doctor_result, doctor_error)
+    doctor_gate, vector_roundtrip = _status_doctor_gate(
+        doctor_result,
+        doctor_error,
+        doctor_error_code,
+        roundtrip_probe_enabled=doctor_roundtrip_probe_enabled,
+    )
     queue_health = _status_queue_health_with_doctor(queue_health, doctor_gate)
     queue_green = queue_health["green"] is True if check_doctor else queue_depth == 0
     fallback_replay = _status_fallback_replay(fallback_gits_root, fallback_scopes)

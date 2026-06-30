@@ -13,6 +13,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "brainlayer-version-check.sh"
 
 
+def _clean_git_env() -> dict[str, str]:
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
 def _copy_version_fixture(tmp_path: Path) -> tuple[Path, Path, str]:
     fixture_root = tmp_path / "brainlayer"
     tap_root = tmp_path / "homebrew-layers"
@@ -51,15 +55,60 @@ def _run(
     tap_root: Path,
     *,
     git_tag: str | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = {
-        **os.environ,
+        **_clean_git_env(),
         "BRAINLAYER_VERSION_CHECK_REPO_ROOT": str(fixture_root),
         "BRAINLAYER_VERSION_CHECK_TAP_ROOT": str(tap_root),
+        **(extra_env or {}),
     }
     if git_tag is not None:
         env["BRAINLAYER_VERSION_CHECK_GIT_TAG"] = git_tag
     return subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, env=env, timeout=30)
+
+
+def _repo_git_env() -> dict[str, str]:
+    git_dir = subprocess.check_output(
+        ["git", "-C", str(REPO_ROOT), "rev-parse", "--git-dir"],
+        text=True,
+        env=_clean_git_env(),
+    ).strip()
+    git_dir_path = Path(git_dir)
+    if not git_dir_path.is_absolute():
+        git_dir_path = REPO_ROOT / git_dir_path
+    return {
+        "GIT_DIR": str(git_dir_path),
+        "GIT_WORK_TREE": str(REPO_ROOT),
+        "GIT_INDEX_FILE": str(git_dir_path / "index"),
+        "GIT_PREFIX": "hooks/",
+        "GIT_CONFIG_COUNT": "1",
+    }
+
+
+def _init_git_repo(path: Path, tag: str) -> None:
+    env = _clean_git_env()
+    subprocess.run(["git", "-C", str(path), "init"], check=True, capture_output=True, text=True, env=env)
+    subprocess.run(["git", "-C", str(path), "add", "."], check=True, capture_output=True, text=True, env=env)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(path),
+            "-c",
+            "user.name=BrainLayer Tests",
+            "-c",
+            "user.email=tests@example.invalid",
+            "commit",
+            "-m",
+            "fixture",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    subprocess.run(["git", "-C", str(path), "tag", tag], check=True, capture_output=True, text=True, env=env)
 
 
 def test_version_check_passes_when_release_metadata_matches(tmp_path: Path) -> None:
@@ -140,3 +189,35 @@ def test_version_check_reports_controlled_error_outside_git_checkout(
     assert result.returncode == 1
     assert "latest git tag could not be determined" in result.stderr
     assert "fatal:" not in result.stderr
+
+
+def test_version_check_ignores_parent_git_env_outside_git_checkout(tmp_path: Path) -> None:
+    fixture_root, tap_root, _package_version = _copy_version_fixture(tmp_path)
+
+    result = _run(fixture_root, tap_root, extra_env=_repo_git_env())
+
+    assert result.returncode == 1
+    assert "latest git tag could not be determined" in result.stderr
+    assert "fatal:" not in result.stderr
+
+
+def test_version_check_ignores_parent_git_env_inside_valid_checkout(tmp_path: Path) -> None:
+    fixture_root, tap_root, package_version = _copy_version_fixture(tmp_path)
+    _init_git_repo(fixture_root, f"v{package_version}")
+
+    result = _run(fixture_root, tap_root, extra_env=_repo_git_env())
+
+    assert result.returncode == 0, result.stderr
+    assert f"PASS: BrainLayer/BrainBar {package_version} release metadata is consistent" in result.stdout
+
+
+def test_version_check_scrubs_all_git_local_env_vars_declared_by_git() -> None:
+    git_local_vars = subprocess.check_output(
+        ["git", "rev-parse", "--local-env-vars"],
+        text=True,
+        env=_clean_git_env(),
+    ).splitlines()
+    script = SCRIPT.read_text(encoding="utf-8")
+
+    missing = [name for name in git_local_vars if name not in script]
+    assert missing == []

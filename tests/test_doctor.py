@@ -343,6 +343,31 @@ def test_run_doctor_exits_zero_on_healthy_fixture(tmp_path):
     assert not [issue for issue in result.issues if issue.severity == "fatal"]
 
 
+def test_run_doctor_can_skip_roundtrip_probe_for_bounded_status_gate(tmp_path, monkeypatch):
+    import brainlayer.doctor as doctor
+
+    db_path = tmp_path / "healthy-read-mostly.db"
+    _build_db(db_path)
+    config = _doctor_config(tmp_path, db_path)
+    config.roundtrip_probe_enabled = False
+
+    def fail_roundtrip(*_args, **_kwargs):
+        raise AssertionError("bounded status doctor must not run the write roundtrip probe")
+
+    monkeypatch.setattr(doctor, "_roundtrip_probe", fail_roundtrip)
+
+    result = doctor.run_doctor(
+        config,
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+
+    assert result.exit_code == 0
+    assert result.roundtrip_latency_seconds is None
+    assert not [issue for issue in result.issues if issue.code == "roundtrip_vector_probe_failed"]
+
+
 def test_run_doctor_fails_loudly_when_brainbar_version_check_fails(tmp_path):
     from brainlayer.doctor import run_doctor
 

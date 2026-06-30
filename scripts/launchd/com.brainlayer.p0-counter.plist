@@ -3,17 +3,12 @@
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>com.brainlayer.drain</string>
+	<string>com.brainlayer.p0-counter</string>
 	<key>ProgramArguments</key>
 	<array>
 		<string>__BRAINLAYER_ENV_RUN__</string>
-		<string>/usr/bin/env</string>
-		<string>BRAINLAYER_DRAIN_EMBED=0</string>
 		<string>__BRAINLAYER_BIN__</string>
-		<string>drain</string>
-		<string>--daemon</string>
-		<string>--batch-size</string>
-		<string>50</string>
+		<string>p0-counter</string>
 	</array>
 	<key>EnvironmentVariables</key>
 	<dict>
@@ -26,20 +21,19 @@
 		<key>BRAINLAYER_ENV_FILE</key>
 		<string>__BRAINLAYER_ENV_FILE__</string>
 		<key>BRAINLAYER_LAUNCHD_SERVICE</key>
-		<string>drain</string>
+		<string>p0-counter</string>
 	</dict>
 	<key>StandardOutPath</key>
-	<string>__HOME__/Library/Logs/brainlayer/drain.out.log</string>
+	<string>__HOME__/Library/Logs/brainlayer/p0-counter.out.log</string>
 	<key>StandardErrorPath</key>
-	<string>__HOME__/Library/Logs/brainlayer/drain.err.log</string>
-	<key>KeepAlive</key>
-	<true/>
-	<key>RunAtLoad</key>
-	<true/>
-	<key>ThrottleInterval</key>
-	<integer>10</integer>
-	<key>Nice</key>
-	<integer>10</integer>
+	<string>__HOME__/Library/Logs/brainlayer/p0-counter.err.log</string>
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Hour</key>
+		<integer>5</integer>
+		<key>Minute</key>
+		<integer>0</integer>
+	</dict>
 	<key>ProcessType</key>
 	<string>Background</string>
 	<key>ExitTimeOut</key>

@@ -320,6 +320,7 @@ def test_git_shellout_tests_scrub_inherited_git_env():
         "test_doctor.py",
         "test_git_learning.py",
         "test_kg_judge.py",
+        "test_version_consistency.py",
     }
     for text in git_shellout_files.values():
         assert 'if not key.startswith("GIT_")' in text
