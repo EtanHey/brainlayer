@@ -327,6 +327,7 @@ def test_jsonl_forever_upload_uses_separate_folder_and_rolling_prune_only(tmp_pa
     assert uploaded[0][0].name == "claude-jsonl-2026-06-30.tar.gz"
     assert uploaded[1][0].name.endswith(".db")
     assert uploaded[1][2] == source_file.read_bytes()
+    assert jsonl_backup.DEFAULT_FOLDER_PARTS in folder_calls
     assert jsonl_backup.DEFAULT_FOREVER_FOLDER_PARTS + ["source-0"] in folder_calls
     assert pruned_folder_parts == [jsonl_backup.DEFAULT_FOLDER_PARTS]
     assert jsonl_backup.DEFAULT_FOREVER_FOLDER_PARTS not in pruned_folder_parts
@@ -378,6 +379,53 @@ def test_jsonl_forever_hashes_the_staged_copy_before_upload(tmp_path, monkeypatc
     assert uploaded[1][0].name == f"{staged_digest}.db"
     assert uploaded[1][1] == b"staged bytes"
     assert result["forever_files"][0]["sha256"] == staged_digest
+    assert "source" not in result["forever_files"][0]
+    assert result["forever_files"][0]["source_root_index"] == 0
+    assert result["forever_files"][0]["source_suffix"] == ".db"
+
+
+def test_jsonl_forever_upload_caches_source_folder_lookup_per_root(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    now = time.time()
+    source_root = tmp_path / "sessions"
+    for name in ("one.jsonl", "two.jsonl"):
+        _write_jsonl(source_root / name, mtime=now - 3600)
+    folder_calls: list[list[str]] = []
+    uploaded: list[Path] = []
+
+    monkeypatch.setenv("BRAINLAYER_JSONL_FOREVER", "1")
+    monkeypatch.setattr(jsonl_backup.backup_daily, "get_drive_credentials", lambda *args, **kwargs: object())
+    monkeypatch.setattr(jsonl_backup.backup_daily, "build_drive_service", lambda *args, **kwargs: object())
+
+    def fake_ensure(service, folder_parts):  # noqa: ARG001
+        folder_calls.append(list(folder_parts))
+        return "folder-" + "-".join(folder_parts[-2:])
+
+    def fake_upload(file_path, folder_id, credentials):  # noqa: ARG001
+        path = Path(file_path)
+        uploaded.append(path)
+        return {"id": f"drive-{len(uploaded)}", "name": path.name, "size": str(path.stat().st_size)}
+
+    monkeypatch.setattr(jsonl_backup.backup_daily, "ensure_drive_folder_chain", fake_ensure)
+    monkeypatch.setattr(jsonl_backup.backup_daily, "upload_file_to_drive_raw", fake_upload)
+    monkeypatch.setattr(jsonl_backup.backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
+    monkeypatch.setattr(jsonl_backup.backup_daily, "prune_drive_backups", lambda *args, **kwargs: [])
+
+    result = jsonl_backup.run_backup(
+        source_roots=[source_root],
+        state_path=tmp_path / "state.json",
+        staging_dir=tmp_path / "staging",
+        log_path=tmp_path / "jsonl-backup.log",
+        queue_dir=tmp_path / "queue",
+        date_stamp="2026-06-30",
+        now=now,
+        upload=True,
+    )
+
+    assert result["forever_uploaded_file_count"] == 2
+    assert len(uploaded) == 3
+    assert folder_calls.count(jsonl_backup.DEFAULT_FOREVER_FOLDER_PARTS + ["source-0"]) == 1
 
 
 def test_jsonl_backup_persists_daily_state_when_forever_upload_fails(tmp_path, monkeypatch):

@@ -255,6 +255,7 @@ def _upload_forever_files(
     staging_dir = Path(staging_dir).expanduser()
     staging_dir.mkdir(parents=True, exist_ok=True)
     uploaded: list[dict[str, Any]] = []
+    folder_ids_by_root_index: dict[int, str] = {}
     for candidate in candidates:
         with tempfile.TemporaryDirectory(prefix=".forever-", dir=staging_dir) as tmp_dir:
             suffix = candidate.path.suffix or ".bin"
@@ -265,7 +266,10 @@ def _upload_forever_files(
             forever_path = Path(tmp_dir) / forever_name
             os.replace(temp_path, forever_path)
             folder_parts = [*forever_folder_parts, f"source-{candidate.root_index}"]
-            folder_id = backup_daily.ensure_drive_folder_chain(service, folder_parts)
+            folder_id = folder_ids_by_root_index.get(candidate.root_index)
+            if folder_id is None:
+                folder_id = backup_daily.ensure_drive_folder_chain(service, folder_parts)
+                folder_ids_by_root_index[candidate.root_index] = folder_id
             drive_file = backup_daily.upload_file_to_drive_raw(forever_path, folder_id, credentials)
             file_id = drive_file.get("id")
             if not file_id:
@@ -278,7 +282,8 @@ def _upload_forever_files(
             )
             uploaded.append(
                 {
-                    "source": candidate.path.as_posix(),
+                    "source_root_index": candidate.root_index,
+                    "source_suffix": suffix,
                     "drive_file": drive_file,
                     "sha256": sha256,
                     "folder_parts": folder_parts,
