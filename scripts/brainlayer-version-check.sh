@@ -101,22 +101,45 @@ extract_cask_version() {
     ' "$1"
 }
 
+GIT_LOCAL_ENV_VARS=(
+    GIT_ALTERNATE_OBJECT_DIRECTORIES
+    GIT_CONFIG
+    GIT_CONFIG_PARAMETERS
+    GIT_CONFIG_COUNT
+    GIT_OBJECT_DIRECTORY
+    GIT_DIR
+    GIT_WORK_TREE
+    GIT_IMPLICIT_WORK_TREE
+    GIT_GRAFT_FILE
+    GIT_INDEX_FILE
+    GIT_NO_REPLACE_OBJECTS
+    GIT_REPLACE_REF_BASE
+    GIT_PREFIX
+    GIT_SHALLOW_FILE
+    GIT_COMMON_DIR
+)
+
+git_package_root() {
+    local -a env_args=()
+    local name
+
+    for name in "${GIT_LOCAL_ENV_VARS[@]}"; do
+        env_args+=(-u "$name")
+    done
+
+    env "${env_args[@]}" git -C "$PACKAGE_ROOT" "$@"
+}
+
 latest_git_tag() {
     if [[ -n "${BRAINLAYER_VERSION_CHECK_GIT_TAG:-}" ]]; then
         printf '%s\n' "$BRAINLAYER_VERSION_CHECK_GIT_TAG"
         return
     fi
-    local git_env_var
-    while IFS= read -r git_env_var; do
-        if [[ -n "$git_env_var" ]]; then
-            unset "$git_env_var"
-        fi
-    done < <(git rev-parse --local-env-vars 2>/dev/null || true)
-    if ! git -C "$PACKAGE_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+    if ! git_package_root rev-parse --git-dir >/dev/null 2>&1; then
         printf '\n'
         return
     fi
-    git -C "$PACKAGE_ROOT" tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname 2>/dev/null | head -n 1
+    git_package_root tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname 2>/dev/null | head -n 1
 }
 
 if [[ -z "$TAP_ROOT" ]]; then

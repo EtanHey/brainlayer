@@ -1,22 +1,21 @@
 from __future__ import annotations
 
-import importlib.util
+import json
+import os
 import sqlite3
+import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
 
-def _load_counter_module():
-    module_path = Path(__file__).resolve().parents[1] / "scripts" / "p0_longitudinal_count.py"
-    spec = importlib.util.spec_from_file_location("p0_longitudinal_count", module_path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
+from brainlayer import p0_longitudinal_count as counter
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_p0_counter_normalizes_created_at_offsets(tmp_path):
-    counter = _load_counter_module()
     db_path = tmp_path / "counter.db"
     with sqlite3.connect(db_path) as conn:
         conn.execute("CREATE TABLE chunks (created_at TEXT, content TEXT)")
@@ -31,7 +30,6 @@ def test_p0_counter_normalizes_created_at_offsets(tmp_path):
 
 
 def test_p0_counter_counts_spaced_brain_search_box(tmp_path):
-    counter = _load_counter_module()
     db_path = tmp_path / "counter.db"
     with sqlite3.connect(db_path) as conn:
         conn.execute("CREATE TABLE chunks (created_at TEXT, content TEXT)")
@@ -46,7 +44,6 @@ def test_p0_counter_counts_spaced_brain_search_box(tmp_path):
 
 
 def test_p0_counter_counts_leading_whitespace_brain_search_box(tmp_path):
-    counter = _load_counter_module()
     db_path = tmp_path / "counter.db"
     with sqlite3.connect(db_path) as conn:
         conn.execute("CREATE TABLE chunks (created_at TEXT, content TEXT)")
@@ -60,8 +57,54 @@ def test_p0_counter_counts_leading_whitespace_brain_search_box(tmp_path):
     assert rows == [{"day": "2026-05-16", "new_audit_chunks": 1}]
 
 
+def test_p0_counter_counts_entity_mcp_boxes(tmp_path):
+    db_path = tmp_path / "counter.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE chunks (created_at TEXT, content TEXT)")
+        for content in ("┌─entity: Etan", "┌─ entity: Etan", "┌─ entity search: Etan"):
+            conn.execute(
+                "INSERT INTO chunks (created_at, content) VALUES (?, ?)",
+                ("2026-05-16T14:00:00+00:00", content),
+            )
+
+    rows = counter.run_count(db_path)
+
+    assert rows == [{"day": "2026-05-16", "new_audit_chunks": 3}]
+
+
+def test_p0_counter_wrapper_runs_from_source_checkout_without_install(tmp_path):
+    db_path = tmp_path / "counter.db"
+    output_dir = tmp_path / "reports"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE chunks (created_at TEXT, content TEXT)")
+        conn.execute(
+            "INSERT INTO chunks (created_at, content) VALUES (?, ?)",
+            ("2026-05-16T14:00:00+00:00", '┌─ brain_search: "audit recursion" ─ 1 result'),
+        )
+
+    env = {
+        **os.environ,
+        "BRAINLAYER_DB": str(db_path),
+        "BRAINLAYER_P0_COUNTER_DIR": str(output_dir),
+        "PYTHONPATH": "",
+    }
+    result = subprocess.run(
+        [sys.executable, "-S", str(REPO_ROOT / "scripts" / "p0_longitudinal_count.py")],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["total_new_audit_chunks"] == 1
+    assert Path(payload["output_path"]).is_file()
+
+
 def test_p0_counter_cutoff_uses_since_parameter(tmp_path):
-    counter = _load_counter_module()
     db_path = tmp_path / "counter.db"
     with sqlite3.connect(db_path) as conn:
         conn.execute("CREATE TABLE chunks (created_at TEXT, content TEXT)")
@@ -75,8 +118,41 @@ def test_p0_counter_cutoff_uses_since_parameter(tmp_path):
     assert rows == []
 
 
+def test_p0_counter_payload_surfaces_sqlite_error_without_positive_verdict(tmp_path):
+    db_path = tmp_path / "counter.db"
+    db_path.write_bytes(b"")
+
+    since_utc = datetime.fromisoformat(counter.SINCE).astimezone(timezone.utc)
+    payload = counter.build_payload(db_path, now=since_utc + timedelta(days=8))
+
+    with pytest.raises(sqlite3.OperationalError, match="no such table: chunks"):
+        counter.run_count(db_path)
+    assert payload["rows"] == []
+    assert payload["total_new_audit_chunks"] == 0
+    assert "no such table: chunks" in payload["count_error"]
+    assert payload["verdict_ready"] is False
+    assert payload["structural_fix_p_lt_0_001"] is False
+    assert payload["brain_store_verdict_content"] is None
+
+
+def test_p0_counter_main_writes_diagnostic_json_for_missing_db(tmp_path, monkeypatch, capsys):
+    db_path = tmp_path / "missing.db"
+    output_dir = tmp_path / "reports"
+    monkeypatch.setenv("BRAINLAYER_DB", str(db_path))
+    monkeypatch.setenv("BRAINLAYER_P0_COUNTER_DIR", str(output_dir))
+
+    exit_code = counter.main()
+
+    assert exit_code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["db_path"] == str(db_path)
+    assert payload["count_error"]
+    assert Path(payload["output_path"]).is_file()
+    persisted = json.loads(Path(payload["output_path"]).read_text(encoding="utf-8"))
+    assert persisted["count_error"] == payload["count_error"]
+
+
 def test_p0_counter_verdict_waits_for_full_168_hours(tmp_path):
-    counter = _load_counter_module()
     db_path = tmp_path / "counter.db"
     with sqlite3.connect(db_path) as conn:
         conn.execute("CREATE TABLE chunks (created_at TEXT, content TEXT)")
@@ -90,7 +166,6 @@ def test_p0_counter_verdict_waits_for_full_168_hours(tmp_path):
 
 
 def test_p0_counter_verdict_ready_after_full_168_hours(tmp_path):
-    counter = _load_counter_module()
     db_path = tmp_path / "counter.db"
     with sqlite3.connect(db_path) as conn:
         conn.execute("CREATE TABLE chunks (created_at TEXT, content TEXT)")

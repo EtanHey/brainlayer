@@ -56,7 +56,7 @@ def test_brainlayer_cli_exposes_transport_commands(monkeypatch) -> None:
 
     from brainlayer.cli import app
 
-    for args in (["drain", "--help"], ["status", "--help"]):
+    for args in (["drain", "--help"], ["p0-counter", "--help"], ["status", "--help"]):
         result = CliRunner().invoke(app, args)
 
         assert result.exit_code == 0, result.stdout
@@ -346,8 +346,13 @@ def test_config_loader_ignores_unreadable_user_env(monkeypatch, tmp_path: Path) 
 
 
 def test_launchd_repo_only_wrappers_are_not_used_by_packaged_plists() -> None:
-    assert _plist_args("drain")[:3] == ["__BRAINLAYER_ENV_RUN__", "__PYTHON_BIN__", "-m"]
-    assert _plist_args("drain")[3] == "brainlayer.drain"
+    assert _plist_args("drain")[:5] == [
+        "__BRAINLAYER_ENV_RUN__",
+        "/usr/bin/env",
+        "BRAINLAYER_DRAIN_EMBED=0",
+        "__BRAINLAYER_BIN__",
+        "drain",
+    ]
     assert _plist_args("maintenance-nightly")[:3] == ["__BRAINLAYER_ENV_RUN__", "__PYTHON_BIN__", "-m"]
     assert _plist_args("maintenance-nightly")[3] == "brainlayer.maintenance"
     assert _plist_args("maintenance-weekly")[:3] == ["__BRAINLAYER_ENV_RUN__", "__PYTHON_BIN__", "-m"]
@@ -395,6 +400,7 @@ def test_launchd_installer_preflights_all_before_loading_without_google_key(tmp_
         },
         capture_output=True,
         text=True,
+        timeout=30,
         check=False,
     )
 
@@ -447,6 +453,63 @@ def test_launchd_installer_renders_brainlayer_python_override(tmp_path: Path) ->
     rendered = home / "Library" / "LaunchAgents" / "com.brainlayer.backup-daily.plist"
     assert f"<string>{brainlayer_python}</string>" in rendered.read_text(encoding="utf-8")
     assert "__BRAINLAYER_PYTHON__" not in rendered.read_text(encoding="utf-8")
+
+
+def test_packaged_launchd_installer_renders_p0_counter_console_shim(tmp_path: Path) -> None:
+    launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
+    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("BRAINLAYER_ENRICH_ENABLED=0\n", encoding="utf-8")
+    env_file.chmod(0o600)
+
+    result = subprocess.run(
+        [str(launchd_dir / "install.sh"), "p0-counter"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": "/usr/bin/python3",
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    rendered = home / "Library" / "LaunchAgents" / "com.brainlayer.p0-counter.plist"
+    plist = plistlib.loads(rendered.read_bytes())
+    assert plist["ProgramArguments"] == [
+        str(home / ".local" / "lib" / "brainlayer" / "brainlayer-env-run.sh"),
+        sys.executable,
+        "p0-counter",
+    ]
+    content = rendered.read_text(encoding="utf-8")
+    assert "__BRAINLAYER_BIN__" not in content
+    assert "__BRAINLAYER_PYTHON__" not in content
+    assert "/usr/bin/python3" not in content
+    assert "brainlayer.p0_longitudinal_count" not in content
+    assert "site-packages/scripts/p0_longitudinal_count.py" not in content
+    assert "scripts/p0_longitudinal_count.py" not in content
 
 
 def test_launchd_installer_renders_launchd_dir_for_maintenance_resume(tmp_path: Path) -> None:
