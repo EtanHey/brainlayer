@@ -5,7 +5,7 @@ from typer.testing import CliRunner
 from brainlayer.cli import app
 
 
-def test_watch_backfill_dry_run_reports_cursor_agent_transcripts_without_writing(tmp_path):
+def test_watch_backfill_dry_run_excludes_cursor_agent_transcripts(tmp_path):
     transcript = tmp_path / ".cursor" / "projects" / "repo" / "agent-transcripts" / "agent-session.jsonl"
     unrelated = tmp_path / ".cursor" / "projects" / "repo" / "state.jsonl"
     transcript.parent.mkdir(parents=True)
@@ -27,13 +27,40 @@ def test_watch_backfill_dry_run_reports_cursor_agent_transcripts_without_writing
     )
 
     assert result.exit_code == 0
-    assert "candidate_files=1" in result.output
-    assert "cursor-agent-transcripts=1" in result.output
+    assert "candidate_files=0" in result.output
+    assert "cursor-agent-transcripts=1" not in result.output
     assert "processed_entries=0" in result.output
     assert not (tmp_path / "offsets.json").exists()
 
 
-def test_watch_backfill_flushes_final_partial_batch_and_is_idempotent(tmp_path):
+def test_watch_backfill_dry_run_excludes_codex_and_gemini_sessions(tmp_path):
+    codex_transcript = tmp_path / ".codex" / "sessions" / "2026" / "07" / "worker.jsonl"
+    gemini_transcript = tmp_path / ".gemini" / "sessions" / "worker.jsonl"
+    for path in (codex_transcript, gemini_transcript):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"role": "user", "content": "worker transcript line"}) + "\n")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "watch-backfill",
+            "--home",
+            str(tmp_path),
+            "--registry",
+            str(tmp_path / "offsets.json"),
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "candidate_files=0" in result.output
+    assert "codex=1" not in result.output
+    assert "gemini=1" not in result.output
+    assert "processed_entries=0" in result.output
+    assert not (tmp_path / "offsets.json").exists()
+
+
+def test_watch_backfill_skips_cursor_agent_transcripts_without_queueing(tmp_path):
     transcript = tmp_path / ".cursor" / "projects" / "repo" / "agent-transcripts" / "agent-session.jsonl"
     registry = tmp_path / "offsets.json"
     queue_dir = tmp_path / "queue"
@@ -67,13 +94,10 @@ def test_watch_backfill_flushes_final_partial_batch_and_is_idempotent(tmp_path):
     )
 
     assert first.exit_code == 0, first.output
-    assert "processed_entries=1" in first.output
+    assert "processed_entries=0" in first.output
     queue_files = list(queue_dir.glob("watcher-*.jsonl"))
-    assert len(queue_files) == 1
-    queued = [json.loads(line) for line in queue_files[0].read_text().splitlines()]
-    assert queued[0]["kind"] == "watcher_chunk"
-    assert "cursor agent transcript line" in queued[0]["content"]
-    assert registry.exists()
+    assert queue_files == []
+    assert not registry.exists()
 
     second = CliRunner().invoke(
         app,
@@ -91,4 +115,4 @@ def test_watch_backfill_flushes_final_partial_batch_and_is_idempotent(tmp_path):
 
     assert second.exit_code == 0, second.output
     assert "processed_entries=0" in second.output
-    assert len(list(queue_dir.glob("watcher-*.jsonl"))) == 1
+    assert list(queue_dir.glob("watcher-*.jsonl")) == []

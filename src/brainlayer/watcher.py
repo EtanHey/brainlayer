@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .alarm import BrainLayerAlarm, raise_alarm
+from .ingest_denylist import is_denylisted
 
 logger = logging.getLogger(__name__)
 
@@ -542,6 +543,9 @@ class JSONLWatcher:
                 self.registry.set(filepath, offset, inode)
 
     def provider_for_file(self, filepath: str) -> str:
+        if is_denylisted(filepath):
+            return "unknown"
+
         provider = self._file_providers.get(filepath)
         if provider:
             return provider
@@ -570,6 +574,8 @@ class JSONLWatcher:
                     for f in files:
                         if f.is_file():
                             path = str(f)
+                            if is_denylisted(path):
+                                continue
                             try:
                                 mtime = f.stat().st_mtime
                             except OSError as e:
@@ -768,7 +774,18 @@ class JSONLWatcher:
         try:
             files = self._discover_jsonl_files()
 
+            for filepath in list(self._tailers):
+                if is_denylisted(filepath):
+                    self._tailers.pop(filepath, None)
+                    self._file_providers.pop(filepath, None)
+                    self.registry.remove(filepath)
+
             for filepath in files:
+                if is_denylisted(filepath):
+                    self._tailers.pop(filepath, None)
+                    self._file_providers.pop(filepath, None)
+                    self.registry.remove(filepath)
+                    continue
                 try:
                     tailer = self._ensure_tailer(filepath)
                     new_lines = tailer.read_new_lines(max_lines=self.max_lines_per_file)
