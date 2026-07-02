@@ -17,7 +17,7 @@ import time
 import apsw
 
 from brainlayer.vector_store import VectorStore
-from brainlayer.watcher import JSONLTailer, JSONLWatcher
+from brainlayer.watcher import JSONLTailer, JSONLWatcher, default_watch_roots
 from brainlayer.watcher_bridge import (
     _extract_claude_conversation_id,
     _extract_project_from_source,
@@ -448,6 +448,93 @@ class TestFlushCallback:
 
 
 class TestFullPipeline:
+    def test_watcher_denylist_blocks_agent_transcript_roots_before_db_insert(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.delenv("BRAINLAYER_INGEST_DENYLIST", raising=False)
+        db_path = tmp_path / "test.db"
+        VectorStore(db_path).close()
+
+        denylisted = {
+            "claude": tmp_path / ".claude" / "projects" / "proj" / "session-123" / "subagents" / "agent-a111.jsonl",
+            "codex": tmp_path / ".codex" / "sessions" / "2026" / "07" / "02" / "worker.jsonl",
+            "cursor": tmp_path
+            / ".cursor"
+            / "projects"
+            / "repo"
+            / "agent-transcripts"
+            / "agent-session"
+            / "agent-session.jsonl",
+            "gemini": tmp_path / ".gemini" / "sessions" / "worker.jsonl",
+        }
+        for provider, path in denylisted.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(
+                    _make_jsonl_entry(
+                        text=(
+                            f"BL10SHOULDNOTINDEX{provider.upper()} source denylist sentinel. "
+                            "This assistant response explains durable watcher ingestion and contains enough "
+                            "substantial technical detail for classification and chunking."
+                        ),
+                        entry_type="assistant",
+                    )
+                )
+                + "\n"
+            )
+
+        control = tmp_path / ".claude" / "projects" / "proj" / "direct-session.jsonl"
+        control.write_text(
+            json.dumps(
+                _make_jsonl_entry(
+                    text=(
+                        "BL10CONTROLINDEXES genuine direct Claude session sentinel. "
+                        "This assistant response explains durable watcher ingestion and contains enough "
+                        "substantial technical detail for classification and chunking."
+                    ),
+                    entry_type="assistant",
+                )
+            )
+            + "\n"
+        )
+
+        flush = create_flush_callback(db_path, arbitrated=False)
+        watcher = JSONLWatcher(
+            watch_roots=default_watch_roots(home=tmp_path),
+            registry_path=tmp_path / "offsets.json",
+            on_flush=flush,
+            batch_size=1,
+        )
+        watcher.poll_once()
+        watcher.indexer.flush()
+
+        conn = sqlite3.connect(str(db_path))
+        try:
+            denylist_globs = [
+                str(tmp_path / ".claude" / "projects") + "/*/*/subagents/*",
+                str(tmp_path / ".codex" / "sessions") + "/*",
+                str(tmp_path / ".cursor") + "/*/agent-transcripts/*",
+                str(tmp_path / ".gemini" / "sessions") + "/*",
+            ]
+            for glob in denylist_globs:
+                assert conn.execute("SELECT count(*) FROM chunks WHERE source_file GLOB ?", (glob,)).fetchone()[0] == 0
+            for provider in denylisted:
+                assert (
+                    conn.execute(
+                        "SELECT count(*) FROM chunks_fts WHERE chunks_fts MATCH ?",
+                        (f'"BL10SHOULDNOTINDEX{provider.upper()}"',),
+                    ).fetchone()[0]
+                    == 0
+                )
+            assert (
+                conn.execute(
+                    "SELECT count(*) FROM chunks_fts WHERE chunks_fts MATCH ?",
+                    ('"BL10CONTROLINDEXES"',),
+                ).fetchone()[0]
+                >= 1
+            )
+        finally:
+            conn.close()
+
     def test_watcher_to_db(self, tmp_path):
         db_path = tmp_path / "test.db"
         VectorStore(db_path).close()
