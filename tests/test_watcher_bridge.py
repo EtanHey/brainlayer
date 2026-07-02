@@ -16,6 +16,7 @@ import time
 
 import apsw
 
+from brainlayer.dedupe import normalized_exact_hash
 from brainlayer.vector_store import VectorStore
 from brainlayer.watcher import JSONLTailer, JSONLWatcher
 from brainlayer.watcher_bridge import (
@@ -169,6 +170,32 @@ class TestProjectExtraction:
 
 
 class TestFlushCallback:
+    def test_flush_scrubs_secrets_before_hash_and_persistence(self, tmp_path, monkeypatch):
+        db_path = tmp_path / "test.db"
+        queue_dir = tmp_path / "queue"
+        VectorStore(db_path).close()
+        monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+
+        secret = "sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        raw_text = f"{_LONG_TEXT}. Provider token: {secret}"
+        scrubbed_text = raw_text.replace(secret, "[REDACTED:anthropic]")
+        source_file = tmp_path / "projects" / "-Users-test-Gits-myproject" / "session.jsonl"
+        flush = create_flush_callback(db_path, arbitrated=True)
+        entry = _make_jsonl_entry(text=raw_text, entry_type="assistant")
+        entry["_source_file"] = str(source_file)
+
+        inserted = flush([entry])
+
+        queued_files = list(queue_dir.glob("watcher-*.jsonl"))
+        queued = json.loads(queued_files[0].read_text(encoding="utf-8"))
+        expected_hash = normalized_exact_hash(scrubbed_text)[:16]
+        raw_hash = normalized_exact_hash(raw_text)[:16]
+        assert inserted == 1
+        assert queued["content"] == scrubbed_text
+        assert secret not in queued["content"]
+        assert queued["chunk_id"] == f"rt-session-{expected_hash}"
+        assert queued["chunk_id"] != f"rt-session-{raw_hash}"
+
     def test_arbitrated_flush_enqueues_watcher_chunks_without_db_write(self, tmp_path, monkeypatch):
         db_path = tmp_path / "test.db"
         queue_dir = tmp_path / "queue"
