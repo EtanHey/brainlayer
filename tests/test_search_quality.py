@@ -317,6 +317,7 @@ class TestPostRRFReranking:
             query_embedding=emb,
             query_text="database optimization",
             n_results=2,
+            importance_rerank=True,
         )
         ids = results["ids"][0]
         assert len(ids) == 2
@@ -347,6 +348,7 @@ class TestPostRRFReranking:
             query_embedding=emb,
             query_text="authentication flow",
             n_results=2,
+            recency_rerank=True,
         )
         ids = results["ids"][0]
         assert len(ids) == 2
