@@ -30,6 +30,7 @@ from .paths import get_db_path
 from .pipeline.chunk import chunk_content
 from .pipeline.classify import classify_content
 from .pipeline.correction_detection import build_correction_tags
+from .pipeline.secret_scrub import scrub_secrets
 from .queue_io import enqueue_watcher_chunk
 from .vector_store import VectorStore
 
@@ -358,6 +359,8 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
 
             for chunk in chunks:
                 clean_content = _strip_system_reminders(chunk.content)
+                secret_scrub_result = scrub_secrets(clean_content)
+                clean_content = secret_scrub_result.text
                 content_hash = normalized_exact_hash(clean_content)[:16]
                 file_stem = Path(source_file).stem
                 chunk_id = f"rt-{file_stem[:8]}-{content_hash}"
@@ -374,6 +377,12 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
 
                 conversation_id = chunk.metadata.get("session_id") or file_stem
                 metadata = dict(chunk.metadata)
+                if secret_scrub_result.redactions:
+                    metadata["secret_scrub_redactions"] = sorted(
+                        {redaction.provider for redaction in secret_scrub_result.redactions}
+                    )
+                if secret_scrub_result.quarantine:
+                    metadata["secret_scrub_quarantine_count"] = len(secret_scrub_result.quarantine)
                 if claude_conversation_id:
                     metadata["claude_conversation_id"] = claude_conversation_id
                 tags = None
