@@ -162,9 +162,9 @@ def test_round_trip_ignores_stale_chunk_fts_rowids(tmp_path: Path) -> None:
             source_file=denied_source,
             content="stale rowids exact fts sentinel",
         )
-        other_rowid = store.conn.cursor().execute(
-            "SELECT rowid FROM chunks_fts WHERE chunk_id = 'other-knowledge'"
-        ).fetchone()[0]
+        other_rowid = (
+            store.conn.cursor().execute("SELECT rowid FROM chunks_fts WHERE chunk_id = 'other-knowledge'").fetchone()[0]
+        )
         store.conn.cursor().execute(
             "UPDATE chunk_fts_rowids SET fts_rowid = ? WHERE chunk_id = 'claude-subagent'",
             (other_rowid,),
