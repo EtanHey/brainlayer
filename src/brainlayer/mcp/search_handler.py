@@ -21,7 +21,7 @@ from mcp.types import TextContent
 from .. import search_profile, telemetry
 from .._helpers import _escape_fts5_query, _is_sqlite_busy_error
 from ..chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, is_precompact_checkpoint_content
-from ..content_class import content_class_is_default_hidden, normalize_content_class, query_signals_operational_intent
+from ..content_class import content_class_is_default_hidden, normalize_content_class
 from ..lexical_defense import _normalize_surface, load_lexical_defense_dictionary
 from ..search_repo import _is_audit_recursion_metadata, _metadata_matches_project_scope
 
@@ -560,12 +560,7 @@ def _exact_chunk_lookup_result(
     chunk_class = normalize_content_class(chunk.get("content_class"))
     if content_class_filter and chunk_class != normalize_content_class(content_class_filter):
         return _empty_exact_chunk_lookup_result(query)
-    if (
-        not content_class_filter
-        and not include_operational
-        and not query_signals_operational_intent(query)
-        and content_class_is_default_hidden(chunk_class)
-    ):
+    if not include_operational and content_class_is_default_hidden(chunk_class):
         return _empty_exact_chunk_lookup_result(query)
     if importance_min is not None:
         chunk_importance = chunk.get("importance")
@@ -1034,12 +1029,7 @@ async def _brain_search_dispatch(
             if content_class_filter and chunk_class != normalize_content_class(content_class_filter):
                 empty = {"query": query, "total": 0, "results": []}
                 return ([TextContent(type="text", text="No results found.")], empty)
-            if (
-                not content_class_filter
-                and not include_operational
-                and not query_signals_operational_intent(query)
-                and content_class_is_default_hidden(chunk_class)
-            ):
+            if not include_operational and content_class_is_default_hidden(chunk_class):
                 empty = {"query": query, "total": 0, "results": []}
                 return ([TextContent(type="text", text="No results found.")], empty)
         return await _context(

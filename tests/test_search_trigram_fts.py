@@ -51,14 +51,15 @@ def test_fts_update_triggers_delete_by_mapped_rowid(tmp_path):
             for row in store.conn.cursor().execute(
                 """
                 SELECT name, sql FROM sqlite_master
-                WHERE type = 'trigger' AND name IN ('chunks_fts_update', 'chunks_fts_trigram_update')
+                WHERE type = 'trigger' AND name = 'chunks_fts_update'
                 """
             )
         }
-        assert "DELETE FROM chunks_fts WHERE chunk_id = old.id" not in trigger_sql["chunks_fts_update"]
-        assert "DELETE FROM chunks_fts_trigram WHERE chunk_id = old.id" not in trigger_sql["chunks_fts_trigram_update"]
-        assert "chunk_fts_rowids" in trigger_sql["chunks_fts_update"]
-        assert "chunk_fts_rowids" in trigger_sql["chunks_fts_trigram_update"]
+        update_trigger = trigger_sql["chunks_fts_update"]
+        assert "DELETE FROM chunks_fts WHERE chunk_id = old.id" not in update_trigger
+        assert "DELETE FROM chunks_fts_trigram WHERE chunk_id = old.id" not in update_trigger
+        assert "chunk_fts_rowids" in update_trigger
+        assert "trigram_rowid" in update_trigger
 
         store.update_enrichment("chunk-rowid", summary="fresh rowid summary", tags=["rowid"])
 

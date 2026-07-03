@@ -67,6 +67,8 @@ _DEFAULT_READ_BUSY_TIMEOUT_MS = 5_000
 _MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 _WRITE_BUSY_TIMEOUT_STATE = threading.local()
 _NO_EXEC_TRACE = object()
+_KNOWLEDGE_FTS_CLASS_SQL = "COALESCE(content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark')"
+_OPERATIONAL_FTS_CLASS_SQL = "COALESCE(content_class, 'knowledge') = 'operational'"
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -1009,12 +1011,21 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
 
         if _needs_fts_rebuild:
             cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_insert")
+            cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_operational_insert")
             cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_delete")
+            cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_operational_delete")
             cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_update")
+            cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_operational_update")
             cursor.execute("DROP TABLE IF EXISTS chunks_fts")
+            cursor.execute("DROP TABLE IF EXISTS chunks_fts_operational")
 
         cursor.execute(f"""
             CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+                {_FTS5_COLUMNS}
+            )
+        """)
+        cursor.execute(f"""
+            CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts_operational USING fts5(
                 {_FTS5_COLUMNS}
             )
         """)
@@ -1029,9 +1040,13 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             CREATE TABLE IF NOT EXISTS chunk_fts_rowids (
                 chunk_id TEXT PRIMARY KEY,
                 fts_rowid INTEGER,
-                trigram_rowid INTEGER
+                trigram_rowid INTEGER,
+                operational_rowid INTEGER
             )
         """)
+        rowid_cols = {row[1] for row in cursor.execute("PRAGMA table_info(chunk_fts_rowids)")}
+        if "operational_rowid" not in rowid_cols:
+            cursor.execute("ALTER TABLE chunk_fts_rowids ADD COLUMN operational_rowid INTEGER")
         cursor.execute("""
             INSERT OR IGNORE INTO chunk_fts_rowids(chunk_id, fts_rowid)
             SELECT chunk_id, rowid FROM chunks_fts WHERE chunk_id IS NOT NULL
@@ -1041,13 +1056,18 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             SELECT chunk_id, rowid FROM chunks_fts_trigram WHERE chunk_id IS NOT NULL
             ON CONFLICT(chunk_id) DO UPDATE SET trigram_rowid = excluded.trigram_rowid
         """)
+        cursor.execute("""
+            INSERT INTO chunk_fts_rowids(chunk_id, operational_rowid)
+            SELECT chunk_id, rowid FROM chunks_fts_operational WHERE chunk_id IS NOT NULL
+            ON CONFLICT(chunk_id) DO UPDATE SET operational_rowid = excluded.operational_rowid
+        """)
 
         # FTS5 sync triggers — keep summary/tags/resolved_query in sync
         cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_insert")
         cursor.execute("""
             CREATE TRIGGER IF NOT EXISTS chunks_fts_insert AFTER INSERT ON chunks BEGIN
                 INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
-                VALUES (
+                SELECT
                     new.content,
                     new.summary,
                     new.tags,
@@ -1055,17 +1075,39 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     new.key_facts,
                     new.resolved_queries,
                     new.id
-                );
+                WHERE COALESCE(new.content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark');
                 INSERT INTO chunk_fts_rowids(chunk_id, fts_rowid)
-                VALUES (new.id, last_insert_rowid())
+                SELECT new.id, last_insert_rowid()
+                WHERE COALESCE(new.content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark')
                 ON CONFLICT(chunk_id) DO UPDATE SET fts_rowid = excluded.fts_rowid;
+            END
+        """)
+        cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_operational_insert")
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS chunks_fts_operational_insert AFTER INSERT ON chunks BEGIN
+                INSERT INTO chunks_fts_operational(
+                    content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id
+                )
+                SELECT
+                    new.content,
+                    new.summary,
+                    new.tags,
+                    new.resolved_query,
+                    new.key_facts,
+                    new.resolved_queries,
+                    new.id
+                WHERE COALESCE(new.content_class, 'knowledge') = 'operational';
+                INSERT INTO chunk_fts_rowids(chunk_id, operational_rowid)
+                SELECT new.id, last_insert_rowid()
+                WHERE COALESCE(new.content_class, 'knowledge') = 'operational'
+                ON CONFLICT(chunk_id) DO UPDATE SET operational_rowid = excluded.operational_rowid;
             END
         """)
         cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_trigram_insert")
         cursor.execute("""
             CREATE TRIGGER IF NOT EXISTS chunks_fts_trigram_insert AFTER INSERT ON chunks BEGIN
                 INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
-                VALUES (
+                SELECT
                     new.content,
                     new.summary,
                     new.tags,
@@ -1073,9 +1115,10 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     new.key_facts,
                     new.resolved_queries,
                     new.id
-                );
+                WHERE COALESCE(new.content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark');
                 INSERT INTO chunk_fts_rowids(chunk_id, trigram_rowid)
-                VALUES (new.id, last_insert_rowid())
+                SELECT new.id, last_insert_rowid()
+                WHERE COALESCE(new.content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark')
                 ON CONFLICT(chunk_id) DO UPDATE SET trigram_rowid = excluded.trigram_rowid;
             END
         """)
@@ -1086,6 +1129,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 WHERE rowid = (SELECT fts_rowid FROM chunk_fts_rowids WHERE chunk_id = old.id);
                 DELETE FROM chunks_fts_trigram
                 WHERE rowid = (SELECT trigram_rowid FROM chunk_fts_rowids WHERE chunk_id = old.id);
+                DELETE FROM chunks_fts_operational
+                WHERE rowid = (SELECT operational_rowid FROM chunk_fts_rowids WHERE chunk_id = old.id);
                 DELETE FROM chunk_fts_rowids WHERE chunk_id = old.id;
             END
         """)
@@ -1096,38 +1141,25 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 WHERE rowid = (SELECT fts_rowid FROM chunk_fts_rowids WHERE chunk_id = old.id);
                 DELETE FROM chunks_fts_trigram
                 WHERE rowid = (SELECT trigram_rowid FROM chunk_fts_rowids WHERE chunk_id = old.id);
+                DELETE FROM chunks_fts_operational
+                WHERE rowid = (SELECT operational_rowid FROM chunk_fts_rowids WHERE chunk_id = old.id);
                 DELETE FROM chunk_fts_rowids WHERE chunk_id = old.id;
             END
         """)
+        cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_operational_delete")
         cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_update")
         cursor.execute("""
             CREATE TRIGGER IF NOT EXISTS chunks_fts_update
-            AFTER UPDATE OF content, summary, tags, resolved_query, key_facts, resolved_queries ON chunks BEGIN
+            AFTER UPDATE OF content, summary, tags, resolved_query, key_facts, resolved_queries, content_class ON chunks BEGIN
                 DELETE FROM chunks_fts
                 WHERE rowid = (SELECT fts_rowid FROM chunk_fts_rowids WHERE chunk_id = old.id);
-                INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
-                VALUES (
-                    new.content,
-                    new.summary,
-                    new.tags,
-                    new.resolved_query,
-                    new.key_facts,
-                    new.resolved_queries,
-                    new.id
-                );
-                INSERT INTO chunk_fts_rowids(chunk_id, fts_rowid)
-                VALUES (new.id, last_insert_rowid())
-                ON CONFLICT(chunk_id) DO UPDATE SET fts_rowid = excluded.fts_rowid;
-            END
-        """)
-        cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_trigram_update")
-        cursor.execute("""
-            CREATE TRIGGER IF NOT EXISTS chunks_fts_trigram_update
-            AFTER UPDATE OF content, summary, tags, resolved_query, key_facts, resolved_queries ON chunks BEGIN
+                DELETE FROM chunks_fts_operational
+                WHERE rowid = (SELECT operational_rowid FROM chunk_fts_rowids WHERE chunk_id = old.id);
                 DELETE FROM chunks_fts_trigram
                 WHERE rowid = (SELECT trigram_rowid FROM chunk_fts_rowids WHERE chunk_id = old.id);
-                INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
-                VALUES (
+                DELETE FROM chunk_fts_rowids WHERE chunk_id = old.id;
+                INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
+                SELECT
                     new.content,
                     new.summary,
                     new.tags,
@@ -1135,12 +1167,47 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     new.key_facts,
                     new.resolved_queries,
                     new.id
-                );
+                WHERE COALESCE(new.content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark');
+                INSERT INTO chunk_fts_rowids(chunk_id, fts_rowid)
+                SELECT new.id, last_insert_rowid()
+                WHERE COALESCE(new.content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark')
+                ON CONFLICT(chunk_id) DO UPDATE SET fts_rowid = excluded.fts_rowid;
+
+                INSERT INTO chunks_fts_operational(
+                    content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id
+                )
+                SELECT
+                    new.content,
+                    new.summary,
+                    new.tags,
+                    new.resolved_query,
+                    new.key_facts,
+                    new.resolved_queries,
+                    new.id
+                WHERE COALESCE(new.content_class, 'knowledge') = 'operational';
+                INSERT INTO chunk_fts_rowids(chunk_id, operational_rowid)
+                SELECT new.id, last_insert_rowid()
+                WHERE COALESCE(new.content_class, 'knowledge') = 'operational'
+                ON CONFLICT(chunk_id) DO UPDATE SET operational_rowid = excluded.operational_rowid;
+
+                INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
+                SELECT
+                    new.content,
+                    new.summary,
+                    new.tags,
+                    new.resolved_query,
+                    new.key_facts,
+                    new.resolved_queries,
+                    new.id
+                WHERE COALESCE(new.content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark');
                 INSERT INTO chunk_fts_rowids(chunk_id, trigram_rowid)
-                VALUES (new.id, last_insert_rowid())
+                SELECT new.id, last_insert_rowid()
+                WHERE COALESCE(new.content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark')
                 ON CONFLICT(chunk_id) DO UPDATE SET trigram_rowid = excluded.trigram_rowid;
             END
         """)
+        cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_operational_update")
+        cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_trigram_update")
 
         self._schema_user_version = cursor.execute("PRAGMA user_version").fetchone()[0]
         if os.environ.get("BRAINLAYER_REPAIR") == "1":
@@ -1721,14 +1788,39 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
               AND expired_at IS NULL
         """)
 
-        # FTS5 backfill check — populate from chunks if FTS is empty (fresh rebuild or first run)
+        # FTS5 backfill check — populate routed indexes if empty (fresh rebuild or first run).
         fts_count = list(cursor.execute("SELECT COUNT(*) FROM chunks_fts"))[0][0]
-        chunk_count = list(cursor.execute("SELECT COUNT(*) FROM chunks"))[0][0]
-        if chunk_count > 0 and fts_count == 0:
+        operational_fts_count = list(cursor.execute("SELECT COUNT(*) FROM chunks_fts_operational"))[0][0]
+        visible_chunk_count = list(cursor.execute(f"SELECT COUNT(*) FROM chunks WHERE {_KNOWLEDGE_FTS_CLASS_SQL}"))[0][
+            0
+        ]
+        operational_chunk_count = list(
+            cursor.execute(f"SELECT COUNT(*) FROM chunks WHERE {_OPERATIONAL_FTS_CLASS_SQL}")
+        )[0][0]
+        if visible_chunk_count > 0 and fts_count == 0:
             cursor.execute("""
                 INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
                 SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id FROM chunks
+                WHERE COALESCE(content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark')
             """)
+        if operational_chunk_count > 0 and operational_fts_count == 0:
+            cursor.execute("""
+                INSERT INTO chunks_fts_operational(
+                    content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id
+                )
+                SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id FROM chunks
+                WHERE COALESCE(content_class, 'knowledge') = 'operational'
+            """)
+        cursor.execute("""
+            INSERT INTO chunk_fts_rowids(chunk_id, fts_rowid)
+            SELECT chunk_id, rowid FROM chunks_fts WHERE chunk_id IS NOT NULL
+            ON CONFLICT(chunk_id) DO UPDATE SET fts_rowid = excluded.fts_rowid
+        """)
+        cursor.execute("""
+            INSERT INTO chunk_fts_rowids(chunk_id, operational_rowid)
+            SELECT chunk_id, rowid FROM chunks_fts_operational WHERE chunk_id IS NOT NULL
+            ON CONFLICT(chunk_id) DO UPDATE SET operational_rowid = excluded.operational_rowid
+        """)
 
         existing_cols = {row[1] for row in cursor.execute("PRAGMA table_info(chunks)")}
         self._has_invalid_at = "invalid_at" in existing_cols
@@ -1799,15 +1891,50 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 cursor.execute("PRAGMA wal_checkpoint(FULL)")
                 cursor.execute("BEGIN IMMEDIATE")
                 transaction_started = True
+                cursor.execute("DELETE FROM chunks_fts")
+                cursor.execute("""
+                    INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
+                    SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id FROM chunks
+                    WHERE COALESCE(content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark')
+                """)
+                repaired["chunks_fts"] = cursor.execute("SELECT COUNT(*) FROM chunks_fts").fetchone()[0]
+                cursor.execute("DELETE FROM chunks_fts_operational")
+                cursor.execute("""
+                    INSERT INTO chunks_fts_operational(
+                        content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id
+                    )
+                    SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id FROM chunks
+                    WHERE COALESCE(content_class, 'knowledge') = 'operational'
+                """)
+                repaired["chunks_fts_operational"] = cursor.execute(
+                    "SELECT COUNT(*) FROM chunks_fts_operational"
+                ).fetchone()[0]
                 if rebuild_trigram:
                     cursor.execute("DELETE FROM chunks_fts_trigram")
                     cursor.execute("""
                         INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
                         SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id FROM chunks
+                        WHERE COALESCE(content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark')
                     """)
                     repaired["chunks_fts_trigram"] = cursor.execute(
                         "SELECT COUNT(*) FROM chunks_fts_trigram"
                     ).fetchone()[0]
+                cursor.execute("DELETE FROM chunk_fts_rowids")
+                cursor.execute("""
+                    INSERT INTO chunk_fts_rowids(chunk_id, fts_rowid)
+                    SELECT chunk_id, rowid FROM chunks_fts WHERE chunk_id IS NOT NULL
+                """)
+                cursor.execute("""
+                    INSERT INTO chunk_fts_rowids(chunk_id, operational_rowid)
+                    SELECT chunk_id, rowid FROM chunks_fts_operational WHERE chunk_id IS NOT NULL
+                    ON CONFLICT(chunk_id) DO UPDATE SET operational_rowid = excluded.operational_rowid
+                """)
+                if rebuild_trigram:
+                    cursor.execute("""
+                        INSERT INTO chunk_fts_rowids(chunk_id, trigram_rowid)
+                        SELECT chunk_id, rowid FROM chunks_fts_trigram WHERE chunk_id IS NOT NULL
+                        ON CONFLICT(chunk_id) DO UPDATE SET trigram_rowid = excluded.trigram_rowid
+                    """)
                 cursor.execute("COMMIT")
                 transaction_started = False
                 cursor.execute("PRAGMA wal_checkpoint(FULL)")
@@ -1853,24 +1980,65 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             return
 
     def _get_fts5_counts(self) -> tuple[int, int]:
-        """Read chunks and FTS counts using a single query on the readonly path."""
+        """Read FTS-eligible chunk and knowledge FTS counts using a single query."""
         row = (
             self._read_cursor()
-            .execute("SELECT (SELECT COUNT(*) FROM chunks), (SELECT COUNT(*) FROM chunks_fts)")
+            .execute(
+                f"""
+                SELECT
+                    (SELECT COUNT(*) FROM chunks WHERE {_KNOWLEDGE_FTS_CLASS_SQL}),
+                    (SELECT COUNT(*) FROM chunks_fts)
+                """
+            )
             .fetchone()
         )
         return int(row[0]), int(row[1])
 
+    def _get_fts5_health_counts(self) -> tuple[int, int, int, int]:
+        """Read expected/actual counts for both routed FTS indexes."""
+        row = (
+            self._read_cursor()
+            .execute(
+                f"""
+                SELECT
+                    (SELECT COUNT(*) FROM chunks WHERE {_KNOWLEDGE_FTS_CLASS_SQL}),
+                    (SELECT COUNT(*) FROM chunks_fts),
+                    (SELECT COUNT(*) FROM chunks WHERE {_OPERATIONAL_FTS_CLASS_SQL}),
+                    (SELECT COUNT(*) FROM chunks_fts_operational)
+                """
+            )
+            .fetchone()
+        )
+        return int(row[0]), int(row[1]), int(row[2]), int(row[3])
+
     @staticmethod
-    def _build_fts5_health_result(chunk_count: int, fts_count: int, severity: str) -> Dict[str, Any]:
+    def _build_fts5_health_result(
+        chunk_count: int,
+        fts_count: int,
+        severity: str,
+        *,
+        operational_chunk_count: int = 0,
+        operational_fts_count: int = 0,
+    ) -> Dict[str, Any]:
         """Shape a health payload from count data."""
-        desync_pct = 0.0
+        knowledge_desync_pct = 0.0
         if chunk_count > 0:
-            desync_pct = round(abs(chunk_count - fts_count) * 100.0 / chunk_count, 2)
+            knowledge_desync_pct = round(abs(chunk_count - fts_count) * 100.0 / chunk_count, 2)
+        operational_desync_pct = 0.0
+        if operational_chunk_count > 0:
+            operational_desync_pct = round(
+                abs(operational_chunk_count - operational_fts_count) * 100.0 / operational_chunk_count,
+                2,
+            )
+        desync_pct = max(knowledge_desync_pct, operational_desync_pct)
         return {
             "synced": desync_pct <= 1.0,
             "chunk_count": chunk_count,
             "fts_count": fts_count,
+            "operational_chunk_count": operational_chunk_count,
+            "operational_fts_count": operational_fts_count,
+            "knowledge_desync_pct": knowledge_desync_pct,
+            "operational_desync_pct": operational_desync_pct,
             "desync_pct": desync_pct,
             "severity": severity,
         }
@@ -1882,35 +2050,73 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         if cache_ttl_seconds > 0 and cache.get("expires_at", 0) > now:
             return dict(cache["result"])
 
-        chunk_count, fts_count = self._get_fts5_counts()
-        desync_pct = 0.0 if chunk_count == 0 else abs(chunk_count - fts_count) * 100.0 / chunk_count
+        chunk_count, fts_count, operational_chunk_count, operational_fts_count = self._get_fts5_health_counts()
+        knowledge_desync_pct = 0.0 if chunk_count == 0 else abs(chunk_count - fts_count) * 100.0 / chunk_count
+        operational_desync_pct = (
+            0.0
+            if operational_chunk_count == 0
+            else abs(operational_chunk_count - operational_fts_count) * 100.0 / operational_chunk_count
+        )
+        desync_pct = max(knowledge_desync_pct, operational_desync_pct)
 
         if desync_pct > 20.0 and auto_rebuild:
             self._log_health_event(
                 "fts5_desync_critical",
                 "emergency",
-                {"chunk_count": chunk_count, "fts_count": fts_count, "desync_pct": round(desync_pct, 2)},
+                {
+                    "chunk_count": chunk_count,
+                    "fts_count": fts_count,
+                    "operational_chunk_count": operational_chunk_count,
+                    "operational_fts_count": operational_fts_count,
+                    "desync_pct": round(desync_pct, 2),
+                },
             )
             rebuild_result = self.rebuild_fts5()
             result = {
                 "synced": rebuild_result["success"],
                 "chunk_count": rebuild_result["chunk_count"],
                 "fts_count": rebuild_result["fts_count"],
+                "operational_chunk_count": rebuild_result["operational_chunk_count"],
+                "operational_fts_count": rebuild_result["operational_fts_count"],
                 "desync_pct": rebuild_result["desync_pct"],
                 "severity": "emergency",
                 "rebuild_triggered": True,
             }
         elif desync_pct > 20.0:
-            result = self._build_fts5_health_result(chunk_count, fts_count, "emergency")
+            result = self._build_fts5_health_result(
+                chunk_count,
+                fts_count,
+                "emergency",
+                operational_chunk_count=operational_chunk_count,
+                operational_fts_count=operational_fts_count,
+            )
             result["rebuild_triggered"] = False
         elif desync_pct > 5.0:
-            result = self._build_fts5_health_result(chunk_count, fts_count, "critical")
+            result = self._build_fts5_health_result(
+                chunk_count,
+                fts_count,
+                "critical",
+                operational_chunk_count=operational_chunk_count,
+                operational_fts_count=operational_fts_count,
+            )
             self._log_health_event("fts5_desync_critical", "critical", result)
         elif desync_pct > 1.0:
-            result = self._build_fts5_health_result(chunk_count, fts_count, "warning")
+            result = self._build_fts5_health_result(
+                chunk_count,
+                fts_count,
+                "warning",
+                operational_chunk_count=operational_chunk_count,
+                operational_fts_count=operational_fts_count,
+            )
             self._log_health_event("fts5_desync_warning", "warning", result)
         else:
-            result = self._build_fts5_health_result(chunk_count, fts_count, "info")
+            result = self._build_fts5_health_result(
+                chunk_count,
+                fts_count,
+                "info",
+                operational_chunk_count=operational_chunk_count,
+                operational_fts_count=operational_fts_count,
+            )
 
         if cache_ttl_seconds > 0:
             self._fts5_health_cache = {"result": dict(result), "expires_at": now + cache_ttl_seconds}
@@ -1959,12 +2165,12 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         cursor = self.conn.cursor()
         cursor.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('integrity-check')")
 
-        total_chunks = cursor.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        total_chunks = cursor.execute(f"SELECT COUNT(*) FROM chunks WHERE {_KNOWLEDGE_FTS_CLASS_SQL}").fetchone()[0]
         spot_check_count = min(100, total_chunks)
         sample_ids = [
             row[0]
             for row in cursor.execute(
-                "SELECT id FROM chunks ORDER BY random() LIMIT ?",
+                f"SELECT id FROM chunks WHERE {_KNOWLEDGE_FTS_CLASS_SQL} ORDER BY random() LIMIT ?",
                 (spot_check_count,),
             )
         ]
@@ -2003,14 +2209,29 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         self._log_health_event("fts5_rebuild", "emergency", {"db_path": str(self.db_path)})
         cursor = self.conn.cursor()
         cursor.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
+        cursor.execute("INSERT INTO chunks_fts_operational(chunks_fts_operational) VALUES('rebuild')")
         if getattr(self, "_trigram_fts_available", False):
             cursor.execute("INSERT INTO chunks_fts_trigram(chunks_fts_trigram) VALUES('rebuild')")
         chunk_count, fts_count = self._get_fts5_counts()
         if chunk_count != fts_count:
             cursor.execute("DELETE FROM chunks_fts")
             cursor.execute("""
-                INSERT INTO chunks_fts(content, summary, tags, resolved_query, chunk_id)
-                SELECT content, summary, tags, resolved_query, id FROM chunks
+                INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
+                SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id FROM chunks
+                WHERE COALESCE(content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark')
+            """)
+        operational_chunk_count = cursor.execute(
+            f"SELECT COUNT(*) FROM chunks WHERE {_OPERATIONAL_FTS_CLASS_SQL}"
+        ).fetchone()[0]
+        operational_count = cursor.execute("SELECT COUNT(*) FROM chunks_fts_operational").fetchone()[0]
+        if operational_chunk_count != operational_count:
+            cursor.execute("DELETE FROM chunks_fts_operational")
+            cursor.execute("""
+                INSERT INTO chunks_fts_operational(
+                    content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id
+                )
+                SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id FROM chunks
+                WHERE COALESCE(content_class, 'knowledge') = 'operational'
             """)
         if getattr(self, "_trigram_fts_available", False):
             trigram_count = cursor.execute("SELECT COUNT(*) FROM chunks_fts_trigram").fetchone()[0]
@@ -2019,27 +2240,55 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 cursor.execute("""
                     INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
                     SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id FROM chunks
+                    WHERE COALESCE(content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark')
                 """)
+        cursor.execute("DELETE FROM chunk_fts_rowids")
+        cursor.execute("""
+            INSERT INTO chunk_fts_rowids(chunk_id, fts_rowid)
+            SELECT chunk_id, rowid FROM chunks_fts WHERE chunk_id IS NOT NULL
+        """)
+        cursor.execute("""
+            INSERT INTO chunk_fts_rowids(chunk_id, operational_rowid)
+            SELECT chunk_id, rowid FROM chunks_fts_operational WHERE chunk_id IS NOT NULL
+            ON CONFLICT(chunk_id) DO UPDATE SET operational_rowid = excluded.operational_rowid
+        """)
+        if getattr(self, "_trigram_fts_available", False):
+            cursor.execute("""
+                INSERT INTO chunk_fts_rowids(chunk_id, trigram_rowid)
+                SELECT chunk_id, rowid FROM chunks_fts_trigram WHERE chunk_id IS NOT NULL
+                ON CONFLICT(chunk_id) DO UPDATE SET trigram_rowid = excluded.trigram_rowid
+            """)
         try:
             cursor.execute("PRAGMA wal_checkpoint(PASSIVE)")
         except apsw.Error:
             pass
 
         self._fts5_health_cache = {}
-        chunk_count, fts_count = self._get_fts5_counts()
+        chunk_count, fts_count, operational_chunk_count, operational_fts_count = self._get_fts5_health_counts()
         trigram_count = None
         fts_desync_pct = 0.0 if chunk_count == 0 else round(abs(chunk_count - fts_count) * 100.0 / chunk_count, 2)
+        operational_desync_pct = (
+            0.0
+            if operational_chunk_count == 0
+            else round(abs(operational_chunk_count - operational_fts_count) * 100.0 / operational_chunk_count, 2)
+        )
         trigram_desync_pct = 0.0
         if getattr(self, "_trigram_fts_available", False):
             trigram_count = cursor.execute("SELECT COUNT(*) FROM chunks_fts_trigram").fetchone()[0]
             trigram_desync_pct = (
                 0.0 if chunk_count == 0 else round(abs(chunk_count - trigram_count) * 100.0 / chunk_count, 2)
             )
-        desync_pct = max(fts_desync_pct, trigram_desync_pct)
+        desync_pct = max(fts_desync_pct, operational_desync_pct, trigram_desync_pct)
         return {
-            "success": chunk_count == fts_count and (trigram_count is None or chunk_count == trigram_count),
+            "success": (
+                chunk_count == fts_count
+                and operational_chunk_count == operational_fts_count
+                and (trigram_count is None or chunk_count == trigram_count)
+            ),
             "chunk_count": chunk_count,
             "fts_count": fts_count,
+            "operational_chunk_count": operational_chunk_count,
+            "operational_fts_count": operational_fts_count,
             "trigram_count": trigram_count,
             "desync_pct": desync_pct,
         }
