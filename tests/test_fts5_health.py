@@ -17,15 +17,22 @@ def store(tmp_path):
     s.close()
 
 
-def _insert_chunk(store: VectorStore, chunk_id: str, content: str | None = None) -> None:
+def _insert_chunk(
+    store: VectorStore,
+    chunk_id: str,
+    content: str | None = None,
+    *,
+    content_class: str = "knowledge",
+) -> None:
     """Insert a chunk and let triggers populate FTS rows."""
     text = content or f"content for {chunk_id}"
     cursor = store.conn.cursor()
     cursor.execute(
         """
         INSERT INTO chunks (
-            id, content, metadata, source_file, project, content_type, char_count, source, tags, summary
-        ) VALUES (?, ?, ?, 'test.jsonl', 'brainlayer', 'assistant_text', ?, 'test', ?, ?)
+            id, content, metadata, source_file, project, content_type, char_count, source, tags, summary,
+            content_class
+        ) VALUES (?, ?, ?, 'test.jsonl', 'brainlayer', 'assistant_text', ?, 'test', ?, ?, ?)
         """,
         (
             chunk_id,
@@ -34,6 +41,7 @@ def _insert_chunk(store: VectorStore, chunk_id: str, content: str | None = None)
             len(text),
             json.dumps(["fts5", "health"]),
             text[:50],
+            content_class,
         ),
     )
 
@@ -79,6 +87,24 @@ class TestFTS5HealthMonitoring:
         assert result["fts_count"] == 98
         assert result["desync_pct"] == pytest.approx(2.0)
         assert result["severity"] == "warning"
+
+    def test_check_fts5_health_detects_operational_index_desync(self, store):
+        """Operational FTS desync should fail health even when knowledge FTS is synced."""
+        _insert_chunk(store, "knowledge-chunk", "knowledge synced content")
+        _insert_chunk(
+            store,
+            "operational-chunk",
+            "operational synced content",
+            content_class="operational",
+        )
+        store.conn.cursor().execute("DELETE FROM chunks_fts_operational WHERE chunk_id = 'operational-chunk'")
+
+        result = store.check_fts5_health(cache_ttl_seconds=0, auto_rebuild=False)
+
+        assert result["synced"] is False
+        assert result["operational_chunk_count"] == 1
+        assert result["operational_fts_count"] == 0
+        assert result["severity"] == "emergency"
 
     def test_check_fts5_health_desync_critical(self, store):
         """A 10% desync should surface as critical."""
@@ -158,6 +184,29 @@ class TestFTS5HealthMonitoring:
         assert result["fts_count"] == 6
         assert result["trigram_count"] == 6
         assert result["desync_pct"] == 0.0
+
+    def test_repair_fts_rebuilds_knowledge_operational_and_trigram_indexes(self, store):
+        """Explicit repair should restore every routed FTS table."""
+        _insert_chunk(store, "knowledge-chunk", "knowledge repair content")
+        _insert_chunk(
+            store,
+            "operational-chunk",
+            "operational repair content",
+            content_class="operational",
+        )
+        cursor = store.conn.cursor()
+        cursor.execute("DELETE FROM chunks_fts")
+        cursor.execute("DELETE FROM chunks_fts_operational")
+        cursor.execute("DELETE FROM chunks_fts_trigram")
+        cursor.execute("DELETE FROM chunk_fts_rowids")
+
+        result = store.repair_fts()
+
+        assert result["chunks_fts"] == 1
+        assert result["chunks_fts_operational"] == 1
+        assert result["chunks_fts_trigram"] == 1
+        assert cursor.execute("SELECT chunk_id FROM chunks_fts").fetchone() == ("knowledge-chunk",)
+        assert cursor.execute("SELECT chunk_id FROM chunks_fts_operational").fetchone() == ("operational-chunk",)
 
     def test_health_events_logged(self, store):
         """Non-OK checks should append rows to health_events."""

@@ -19,7 +19,7 @@ from . import search_profile
 from ._helpers import _escape_fts5_query, _is_sqlite_busy_error, serialize_f32
 from .agent_profiles import boost_weight, source_weight, validate_agent_profile
 from .chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, is_precompact_checkpoint_content
-from .content_class import DEFAULT_CONTENT_CLASS, normalize_content_class, query_signals_operational_intent
+from .content_class import DEFAULT_CONTENT_CLASS, normalize_content_class
 from .dedupe import resolve_chunk_id
 from .ingest_guard import recursive_mcp_output_reason
 from .scoping import ConsumerScope
@@ -353,7 +353,8 @@ def _content_class_where(
             DEFAULT_CONTENT_CLASS,
             normalize_content_class(content_class_filter),
         ]
-    if include_operational or query_signals_operational_intent(query_text):
+    del query_text
+    if include_operational:
         return None, []
     return f"COALESCE({column_expr}, ?) NOT IN ('operational', 'test', 'benchmark')", [DEFAULT_CONTENT_CLASS]
 
@@ -2072,6 +2073,8 @@ class SearchMixin:
                         progress_setter(None, 0)
 
             fts_results = _fetch_fts_rows("chunks_fts", timeout_ms=fts_timeout_ms)
+            if include_operational:
+                fts_results.extend(_fetch_fts_rows("chunks_fts_operational", timeout_ms=fts_timeout_ms))
             if getattr(self, "_trigram_fts_available", False) and not brainbar_helper_fast_profile:
                 trigram_fts_results = _fetch_fts_rows("chunks_fts_trigram")
         search_profile.emit(

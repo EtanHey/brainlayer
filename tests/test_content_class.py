@@ -43,6 +43,15 @@ def _insert_chunk(
         )
 
 
+def _fts_ids(store: VectorStore, table_name: str) -> list[str]:
+    return [
+        row[0]
+        for row in store.conn.cursor().execute(
+            f"SELECT chunk_id FROM {table_name} ORDER BY chunk_id"  # noqa: S608 - test-controlled table names
+        )
+    ]
+
+
 def test_content_class_schema_defaults_to_knowledge(tmp_path: Path) -> None:
     store = VectorStore(tmp_path / "content-class-schema.db")
     try:
@@ -64,6 +73,129 @@ def test_content_class_schema_defaults_to_knowledge(tmp_path: Path) -> None:
         store.close()
 
     assert row == ("knowledge",)
+
+
+def test_fts_routes_operational_out_of_knowledge_index_and_skips_cold_classes(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path / "content-class-fts-routing.db")
+    try:
+        _insert_chunk(
+            store,
+            chunk_id="knowledge-doc",
+            content="durable knowledge routing sentinel",
+            content_class="knowledge",
+        )
+        _insert_chunk(
+            store,
+            chunk_id="operational-doc",
+            content="[BL-LEAD tick] status-only coordination routing sentinel",
+            content_class="operational",
+        )
+        _insert_chunk(
+            store,
+            chunk_id="test-doc",
+            content="ad-hoc eval test query routing sentinel",
+            content_class="test",
+        )
+        _insert_chunk(
+            store,
+            chunk_id="benchmark-doc",
+            content="BrainLayer Search Benchmark diagnostic routing sentinel",
+            content_class="benchmark",
+        )
+
+        knowledge_fts_ids = _fts_ids(store, "chunks_fts")
+        operational_fts_ids = _fts_ids(store, "chunks_fts_operational")
+    finally:
+        store.close()
+
+    assert knowledge_fts_ids == ["knowledge-doc"]
+    assert operational_fts_ids == ["operational-doc"]
+
+
+def test_knowledge_fts_rows_match_knowledge_only_build_when_operational_and_cold_rows_exist(tmp_path: Path) -> None:
+    mixed_store = VectorStore(tmp_path / "mixed-fts-routing.db")
+    isolated_store = VectorStore(tmp_path / "knowledge-only-fts-routing.db")
+    try:
+        _insert_chunk(
+            mixed_store,
+            chunk_id="knowledge-doc",
+            content="durable avgdl sentinel exactmatch",
+            content_class="knowledge",
+        )
+        _insert_chunk(
+            mixed_store,
+            chunk_id="operational-doc",
+            content="[BL-LEAD tick] status-only exactmatch",
+            content_class="operational",
+        )
+        _insert_chunk(
+            mixed_store,
+            chunk_id="benchmark-doc",
+            content="BrainLayer Search Benchmark diagnostic exactmatch",
+            content_class="benchmark",
+        )
+        _insert_chunk(
+            isolated_store,
+            chunk_id="knowledge-doc",
+            content="durable avgdl sentinel exactmatch",
+            content_class="knowledge",
+        )
+
+        mixed_rows = list(
+            mixed_store.conn.cursor().execute(
+                "SELECT chunk_id, content, summary, tags, resolved_query, key_facts, resolved_queries "
+                "FROM chunks_fts ORDER BY chunk_id"
+            )
+        )
+        isolated_rows = list(
+            isolated_store.conn.cursor().execute(
+                "SELECT chunk_id, content, summary, tags, resolved_query, key_facts, resolved_queries "
+                "FROM chunks_fts ORDER BY chunk_id"
+            )
+        )
+        mixed_avg_len = sum(len(row[1] or "") for row in mixed_rows) / len(mixed_rows)
+        isolated_avg_len = sum(len(row[1] or "") for row in isolated_rows) / len(isolated_rows)
+    finally:
+        mixed_store.close()
+        isolated_store.close()
+
+    assert mixed_rows == isolated_rows
+    assert mixed_avg_len - isolated_avg_len == 0
+
+
+def test_operational_fts_rows_require_explicit_include_operational(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path / "operational-fts-search.db")
+    try:
+        _insert_chunk(
+            store,
+            chunk_id="operational-doc",
+            content="[BL-LEAD tick] status-only coordination explicitoperational",
+            content_class="operational",
+        )
+        store._trigram_fts_available = False
+
+        default_results = store.hybrid_search(
+            query_embedding=None,
+            query_text="explicitoperational",
+            n_results=5,
+        )
+        intent_only_results = store.hybrid_search(
+            query_embedding=None,
+            query_text="operational status explicitoperational",
+            n_results=5,
+        )
+        included_results = store.hybrid_search(
+            query_embedding=None,
+            query_text="explicitoperational",
+            n_results=5,
+            include_operational=True,
+        )
+    finally:
+        store.close()
+
+    assert default_results["ids"][0] == []
+    assert intent_only_results["ids"][0] == []
+    assert included_results["ids"][0] == ["operational-doc"]
 
 
 @pytest.mark.parametrize(
@@ -306,6 +438,7 @@ def test_hybrid_search_excludes_operational_and_test_by_default(tmp_path: Path) 
             query_embedding=query_embedding,
             query_text="exactmatch",
             n_results=5,
+            include_operational=True,
             content_class_filter="operational",
         )
     finally:
@@ -318,7 +451,7 @@ def test_hybrid_search_excludes_operational_and_test_by_default(tmp_path: Path) 
     assert class_filter_results["ids"][0] == ["operational-semantic"]
 
 
-def test_hybrid_search_auto_includes_operational_for_status_intent(tmp_path: Path) -> None:
+def test_hybrid_search_requires_explicit_operational_include_for_status_intent(tmp_path: Path) -> None:
     store = VectorStore(tmp_path / "content-class-status-intent.db")
     query_embedding = _embed(0.3)
     try:
@@ -332,15 +465,22 @@ def test_hybrid_search_auto_includes_operational_for_status_intent(tmp_path: Pat
         store.build_binary_index()
         store._trigram_fts_available = False
 
-        results = store.hybrid_search(
+        default_results = store.hybrid_search(
             query_embedding=query_embedding,
             query_text="operational status heartbeat exactstatus",
             n_results=3,
         )
+        included_results = store.hybrid_search(
+            query_embedding=query_embedding,
+            query_text="operational status heartbeat exactstatus",
+            n_results=3,
+            include_operational=True,
+        )
     finally:
         store.close()
 
-    assert results["ids"][0] == ["operational-status"]
+    assert default_results["ids"][0] == []
+    assert included_results["ids"][0] == ["operational-status"]
 
 
 class RecordingSearchStore:
@@ -446,3 +586,54 @@ def test_dry_run_backfill_reports_counts_and_samples_without_updating(tmp_path: 
         "person-visible": "knowledge",
         "personal-visible": "knowledge",
     }
+
+
+def test_migrate_fts_isolation_dry_run_and_apply_moves_existing_mixed_rows(tmp_path: Path) -> None:
+    module_path = Path(__file__).resolve().parents[1] / "scripts" / "migrate_fts_operational_isolation.py"
+    spec = importlib.util.spec_from_file_location("migrate_fts_operational_isolation", module_path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    db_path = tmp_path / "mixed-existing-fts.db"
+    store = VectorStore(db_path)
+    try:
+        _insert_chunk(
+            store,
+            chunk_id="knowledge-doc",
+            content="durable migration knowledge exactmigrate",
+            content_class="knowledge",
+        )
+        _insert_chunk(
+            store,
+            chunk_id="operational-doc",
+            content="[BL-LEAD tick] migration operational exactmigrate",
+            content_class="operational",
+        )
+        _insert_chunk(
+            store,
+            chunk_id="benchmark-doc",
+            content="BrainLayer Search Benchmark diagnostic exactmigrate",
+            content_class="benchmark",
+        )
+        cursor = store.conn.cursor()
+        cursor.execute("DELETE FROM chunks_fts")
+        cursor.execute("DELETE FROM chunks_fts_operational")
+        cursor.execute("DELETE FROM chunks_fts_trigram")
+        cursor.execute("DELETE FROM chunk_fts_rowids")
+        cursor.execute("""
+            INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
+            SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id FROM chunks
+        """)
+    finally:
+        store.close()
+
+    dry_run = module.migrate_fts_isolation(db_path, dry_run=True, batch_size=2)
+    assert dry_run["dry_run"] is True
+    assert dry_run["before"]["knowledge_fts_operational_rows"] == 1
+    assert dry_run["after"] is None
+
+    apply_report = module.migrate_fts_isolation(db_path, dry_run=False, batch_size=2)
+    assert apply_report["after"]["knowledge_fts_ids"] == ["knowledge-doc"]
+    assert apply_report["after"]["operational_fts_ids"] == ["operational-doc"]
+    assert apply_report["after"]["cold_fts_ids"] == []
