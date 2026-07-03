@@ -458,6 +458,7 @@ def test_coach_consumer_scope_uses_personal_lane_and_recency_checkpoints(store):
         query_text="latest coach personal checkpoint",
         n_results=5,
         consumer_scope=ConsumerScope.for_coach(),
+        recency_rerank=True,
     )
 
     assert _ids(results)[:2] == ["new-personal-checkpoint", "old-personal-checkpoint"]

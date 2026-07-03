@@ -155,7 +155,7 @@ def test_hybrid_search_agent_profile_applies_orc_weights(tmp_path: Path) -> None
         store._trigram_fts_available = False
         store.set_agent_profile(
             "orcClaude",
-            {"boost_weights": {"fts": 3.0, "vector": 0.5}},
+            {"boost_weights": {"fts": 0.25, "vector": 4.0}},
             notes="test profile",
         )
         _hybrid_cache.clear()
@@ -177,8 +177,8 @@ def test_hybrid_search_agent_profile_applies_orc_weights(tmp_path: Path) -> None
         store.close()
         _hybrid_cache.clear()
 
-    assert default_results["ids"][0][0] == "vector-only"
-    assert profiled_results["ids"][0][0] == "fts-only"
+    assert default_results["ids"][0][0] == "fts-only"
+    assert profiled_results["ids"][0][0] == "vector-only"
 
 
 def test_hybrid_search_agent_profile_scales_recency_intent_neutral_point(monkeypatch, tmp_path: Path) -> None:
@@ -223,6 +223,7 @@ def test_hybrid_search_agent_profile_scales_recency_intent_neutral_point(monkeyp
             query_text="latest needle phrase",
             n_results=2,
             agent_id="recencyTest",
+            recency_rerank=True,
         )
     finally:
         store.close()

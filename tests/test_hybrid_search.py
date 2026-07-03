@@ -1,13 +1,21 @@
 """Tests for binary-quantized RRF hybrid search."""
 
 import json
+import math
 import uuid
+from datetime import datetime, timezone
 
 import apsw
 import pytest
 
+import brainlayer.search_repo as search_repo
 from brainlayer._helpers import serialize_f32
-from brainlayer.search_repo import _contains_precompact_or_quarantined_meta, _has_recency_intent, _hybrid_cache
+from brainlayer.search_repo import (
+    RRF_VECTOR_ALPHA,
+    _contains_precompact_or_quarantined_meta,
+    _has_recency_intent,
+    _hybrid_cache,
+)
 from brainlayer.vector_store import VectorStore
 
 
@@ -196,6 +204,114 @@ class TestHybridSearch:
         ids = results["ids"][0]
         assert ids[0] == "both", ids
         assert set(ids) == {"both", "fts-only", "vec-only"}
+
+    def test_hybrid_search_weighted_rrf_uses_vector_alpha(self, store, monkeypatch):
+        query_embedding = _embed("weighted rrf alpha control")
+        _insert_chunk(
+            store,
+            chunk_id="vector-only",
+            content="semantic neighbor without lexical tokens",
+            embedding=query_embedding,
+        )
+        _insert_chunk(
+            store,
+            chunk_id="lexical-only",
+            content="weighted rrf alpha control exact keyword hit",
+            embedding=_embed("distant lexical"),
+        )
+        store.build_binary_index()
+        monkeypatch.setattr(store, "_trigram_fts_available", False)
+
+        results = store.hybrid_search(
+            query_embedding=query_embedding,
+            query_text="weighted rrf alpha control",
+            n_results=2,
+        )
+
+        assert 0.0 < RRF_VECTOR_ALPHA < 0.5
+        assert results["ids"][0] == ["lexical-only", "vector-only"]
+
+    def test_hybrid_search_default_does_not_apply_recency_or_importance_boost(self, store, monkeypatch):
+        monkeypatch.setattr(search_repo, "RRF_VECTOR_ALPHA", 0.5)
+        query_embedding = _embed("neutral rerank evidence")
+        _insert_chunk(
+            store,
+            chunk_id="old-important",
+            content="neutral rerank evidence padded old important exact hit with extra words",
+            embedding=query_embedding,
+            importance=10.0,
+            created_at="2020-01-01T00:00:00Z",
+        )
+        _insert_chunk(
+            store,
+            chunk_id="fresh-low",
+            content="neutral rerank evidence",
+            embedding=[value + 0.00001 for value in query_embedding],
+            importance=0.0,
+            created_at="2999-01-01T00:00:00Z",
+        )
+        store.build_binary_index()
+        monkeypatch.setattr(store, "_trigram_fts_available", False)
+        captured_scores: dict[str, float] = {}
+
+        def capture_scores(scored, *, n_results):
+            captured_scores.update({chunk_id: score for score, chunk_id, *_rest in scored})
+            return scored
+
+        monkeypatch.setattr(store, "_mmr_rerank_scored_results", capture_scores)
+
+        store.hybrid_search(
+            query_embedding=query_embedding,
+            query_text="neutral rerank evidence",
+            n_results=2,
+        )
+
+        assert captured_scores["old-important"] == pytest.approx(captured_scores["fresh-low"])
+
+    def test_hybrid_search_opt_in_recency_and_importance_rerank_change_scores(self, store, monkeypatch):
+        monkeypatch.setattr(search_repo, "RRF_VECTOR_ALPHA", 0.5)
+        query_embedding = _embed("opt in rerank evidence")
+        _insert_chunk(
+            store,
+            chunk_id="old-important",
+            content="opt in rerank evidence padded old important exact hit with extra words",
+            embedding=query_embedding,
+            importance=10.0,
+            created_at="2020-01-01T00:00:00Z",
+        )
+        _insert_chunk(
+            store,
+            chunk_id="fresh-low",
+            content="opt in rerank evidence",
+            embedding=[value + 0.00001 for value in query_embedding],
+            importance=0.0,
+            created_at="2999-01-01T00:00:00Z",
+        )
+        store.build_binary_index()
+        monkeypatch.setattr(store, "_trigram_fts_available", False)
+        captured_scores: dict[str, float] = {}
+
+        def capture_scores(scored, *, n_results):
+            captured_scores.update({chunk_id: score for score, chunk_id, *_rest in scored})
+            return scored
+
+        monkeypatch.setattr(store, "_mmr_rerank_scored_results", capture_scores)
+
+        store.hybrid_search(
+            query_embedding=query_embedding,
+            query_text="opt in rerank evidence",
+            n_results=2,
+            recency_rerank=True,
+            importance_rerank=True,
+        )
+
+        base_rrf = 0.5 / 60.0 + 0.5 / 61.0
+        old_age_days = (
+            datetime.now(timezone.utc) - datetime.fromisoformat("2020-01-01T00:00:00+00:00")
+        ).total_seconds() / 86400
+        old_recency_boost = 0.7 + 0.3 * math.exp(-0.023 * old_age_days)
+        assert captured_scores["old-important"] == pytest.approx(base_rrf * 1.5 * old_recency_boost)
+        assert captured_scores["fresh-low"] == pytest.approx(base_rrf)
 
     def test_hybrid_search_fts_only_fallback(self, store):
         _insert_chunk(
@@ -510,6 +626,7 @@ class TestHybridSearch:
             query_text="latest work",
             n_results=5,
             entity_id="person-a",
+            recency_rerank=True,
         )
 
         assert "recent-a" in results["ids"][0]
@@ -539,6 +656,7 @@ class TestHybridSearch:
             query_text="latest work",
             n_results=5,
             sentiment_filter="positive",
+            recency_rerank=True,
         )
 
         assert "recent-positive" in results["ids"][0]
@@ -572,6 +690,7 @@ class TestHybridSearch:
             query_text="latest work",
             n_results=5,
             content_type_filter="ai_code",
+            recency_rerank=True,
         )
 
         assert "recent-ai-code" in results["ids"][0]
@@ -602,6 +721,7 @@ class TestHybridSearch:
             query_embedding=_embed("latest unrelated"),
             query_text="latest unrelated",
             n_results=5,
+            recency_rerank=True,
         )
 
         assert "stale-boundary" not in results["ids"][0]
@@ -636,6 +756,7 @@ class TestHybridSearch:
             query_text="latest unrelated",
             n_results=5,
             date_to=date_to,
+            recency_rerank=True,
         )
 
         assert "recent-before-date-to" in results["ids"][0]
@@ -675,6 +796,7 @@ class TestHybridSearch:
             query_embedding=_embed("latest unrelated"),
             query_text="latest unrelated",
             n_results=5,
+            recency_rerank=True,
         )
 
         assert busy_cursor.busy_count == 1
@@ -714,6 +836,7 @@ class TestHybridSearch:
             query_embedding=_embed("latest arbitration mutex"),
             query_text="latest arbitration mutex",
             n_results=5,
+            recency_rerank=True,
         )
 
         assert captured_scores["exact-fts-hit"] > captured_scores["recent-only"]

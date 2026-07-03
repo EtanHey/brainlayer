@@ -35,6 +35,7 @@ from .scoping import ConsumerScope
 # - Copy-on-read: callers enrich and mutate result metadata after search.
 _HYBRID_CACHE_TTL = 60.0  # seconds
 _HYBRID_CACHE_MAX = 128  # max entries (LRU eviction)
+RRF_VECTOR_ALPHA = 0.25
 _MMR_CANDIDATE_LIMIT = 50
 _DEFAULT_MMR_LAMBDA = 0.7
 try:
@@ -304,6 +305,8 @@ def _hybrid_cache_key(
     include_audit: bool = False,
     include_operational: bool = False,
     content_class_filter: Optional[str] = None,
+    recency_rerank: bool = False,
+    importance_rerank: bool = False,
 ) -> tuple:
     return (
         store_key,
@@ -329,6 +332,8 @@ def _hybrid_cache_key(
         include_audit,
         include_operational,
         normalize_content_class(content_class_filter) if content_class_filter else None,
+        recency_rerank,
+        importance_rerank,
     )
 
 
@@ -1743,6 +1748,9 @@ class SearchMixin:
         profile_scope: str = "search.repo",
         brainbar_helper_fast_profile: bool = False,
         consumer_scope: ConsumerScope | None = None,
+        *,
+        recency_rerank: bool = False,
+        importance_rerank: bool = False,
     ) -> Dict[str, List]:
         """Hybrid search combining semantic (vector) + keyword (FTS5) via Reciprocal Rank Fusion.
 
@@ -1787,6 +1795,8 @@ class SearchMixin:
             include_audit,
             include_operational,
             content_class_filter,
+            recency_rerank,
+            importance_rerank,
         ) + (
             fts_query_override,
             kg_boost,
@@ -2114,7 +2124,7 @@ class SearchMixin:
         _ingest_keyword_rows(trigram_fts_results, trigram_ranks)
 
         recency_intent = _has_recency_intent(query_text)
-        if recency_intent and not date_from:
+        if recency_rerank and recency_intent and not date_from:
             recent_extra = []
             recent_params: list = []
             project_clause, project_params = _project_scope_where("project", project_filter, consumer_scope)
@@ -2269,13 +2279,14 @@ class SearchMixin:
             sem_entry = semantic_by_id.get(cid)
             fts_rank = fts_ranks.get(cid)
             trigram_rank = trigram_ranks.get(cid)
+            lexical_leg_weight = 1.0 - RRF_VECTOR_ALPHA
 
             if sem_entry is not None:
-                score += 1.0 / (k + sem_entry["rank"])
+                score += RRF_VECTOR_ALPHA / (k + sem_entry["rank"])
             if fts_rank is not None:
-                score += 1.0 / (k + fts_rank)
+                score += lexical_leg_weight / (k + fts_rank)
             if trigram_rank is not None:
-                score += 1.0 / (k + trigram_rank)
+                score += lexical_leg_weight / (k + trigram_rank)
 
             # Get data — prefer semantic (has distance)
             if sem_entry is not None:
@@ -2358,7 +2369,7 @@ class SearchMixin:
             if stored_profile:
                 agent_profile = stored_profile["profile"]
 
-        # Post-RRF boost: importance and recency adjustments
+        # Post-RRF boost: optional importance and recency adjustments
         now = datetime.now(timezone.utc)
         for i, (score, cid, doc, meta, dist) in enumerate(scored):
             boost = 1.0
@@ -2368,13 +2379,13 @@ class SearchMixin:
 
             # Importance boost: scale 0-10 → 1.0-1.5x multiplier
             imp = meta.get("importance")
-            if imp is not None and isinstance(imp, (int, float)):
+            if importance_rerank and imp is not None and isinstance(imp, (int, float)):
                 importance_boost = 1.0 + min(max(float(imp), 0), 10) / 20.0
                 boost *= _profiled_multiplier(importance_boost, agent_profile, "importance")
 
             # Recency boost: exponential decay with 30-day half-life
             created = meta.get("created_at")
-            if created and isinstance(created, str):
+            if recency_rerank and created and isinstance(created, str):
                 try:
                     dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
                     if dt.tzinfo is None:
