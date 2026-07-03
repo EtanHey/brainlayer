@@ -60,6 +60,11 @@ brainlayer enrich
 - All scripts and CLI use `paths.py` for DB path resolution
 - Concurrency: retry on `SQLITE_BUSY`; each worker uses its own connection
 
+## P1 Pipeline Contracts
+- BL-10 source denylist is implemented in `src/brainlayer/ingest_denylist.py`. Default excluded agent-output roots are `~/.claude/projects/*/**/subagents/**`, `~/.claude/projects/**/wf_*/**`, `~/.codex/sessions/**`, `~/.cursor/**/agent-transcripts/**`, and `~/.gemini/sessions/**`; direct/control Claude sessions still ingest through normal roots.
+- Go-forward secret scrubbing runs in `src/brainlayer/pipeline/secret_scrub.py` from `src/brainlayer/watcher_bridge.py` before chunk persistence. Provider-prefixed and labeled high-entropy secrets are redacted; unlabeled high-entropy tokens are recorded in quarantine metadata.
+- MCP search uses a fixed-size readonly WAL `VectorStore` pool in `src/brainlayer/mcp/_shared.py`. `BRAINLAYER_READ_POOL_SIZE` defaults to 8, or 4 on detected Apple M1; M1 machines can keep the lower override explicitly. Checkout beyond the fixed pool blocks up to `BRAINLAYER_READ_BUSY_TIMEOUT_MS`, and startup rejects `pool_size * BRAINLAYER_READ_CACHE_KB` above about 768MB.
+
 <!-- ARCHITECTURE: classification preserves ai_code/stack_trace/user_message verbatim; skips noise; AST-aware chunking via tree-sitter; never split stack traces -->
 ## Classification & Chunking Rules
 - Preserve verbatim: `ai_code`, `stack_trace`, `user_message`

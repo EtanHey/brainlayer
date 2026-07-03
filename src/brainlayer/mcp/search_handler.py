@@ -10,6 +10,7 @@ import re
 import socket
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,7 @@ from ._shared import (
     _query_signals_current_context,
     _query_signals_recall,
     _query_signals_think,
+    _search_store_checkout,
     logger,
 )
 from ._shared import (
@@ -62,6 +64,19 @@ from ._shared import (
 def _get_vector_store():
     """Compatibility hook for tests; search handlers use the readonly store by default."""
     return _get_search_vector_store()
+
+
+_DEFAULT_GET_VECTOR_STORE = _get_vector_store
+
+
+@contextmanager
+def _vector_store_checkout():
+    """Checkout a readonly search store while preserving test monkeypatch hooks."""
+    if _get_vector_store is _DEFAULT_GET_VECTOR_STORE:
+        with _search_store_checkout() as store:
+            yield store
+    else:
+        yield _get_vector_store()
 
 
 def _embed_timeout_ms() -> float:
@@ -988,8 +1003,8 @@ async def _brain_search_dispatch(
         )
 
     if chunk_id is not None:
-        store = _get_vector_store()
-        chunk = store.get_chunk(chunk_id)
+        with _vector_store_checkout() as store:
+            chunk = store.get_chunk(chunk_id)
         if isinstance(chunk, dict) and not _metadata_matches_project_scope(
             {"project": chunk.get("project")},
             project,
@@ -1153,32 +1168,32 @@ async def _brain_search_dispatch(
             consumer_scope=consumer_scope,
         )
 
-    store = _get_vector_store()
     effective_source = None if source == "all" else source
-    exact_chunk_hit = _exact_chunk_lookup_result(
-        query,
-        store,
-        detail,
-        project=project,
-        content_type=content_type,
-        tag=tag,
-        importance_min=importance_min,
-        date_from=date_from,
-        date_to=date_to,
-        source=effective_source,
-        intent=intent,
-        sentiment=sentiment,
-        source_filter=source_filter,
-        correction_category=correction_category,
-        include_checkpoints=include_checkpoints,
-        include_audit=include_audit,
-        include_operational=include_operational,
-        content_class_filter=content_class_filter,
-        consumer_scope=consumer_scope,
-    )
-    if exact_chunk_hit is not None:
-        return exact_chunk_hit
-    fts_query_override = _expanded_fts_query(query, store)
+    with _vector_store_checkout() as store:
+        exact_chunk_hit = _exact_chunk_lookup_result(
+            query,
+            store,
+            detail,
+            project=project,
+            content_type=content_type,
+            tag=tag,
+            importance_min=importance_min,
+            date_from=date_from,
+            date_to=date_to,
+            source=effective_source,
+            intent=intent,
+            sentiment=sentiment,
+            source_filter=source_filter,
+            correction_category=correction_category,
+            include_checkpoints=include_checkpoints,
+            include_audit=include_audit,
+            include_operational=include_operational,
+            content_class_filter=content_class_filter,
+            consumer_scope=consumer_scope,
+        )
+        if exact_chunk_hit is not None:
+            return exact_chunk_hit
+        fts_query_override = _expanded_fts_query(query, store)
     source_file_filter_like = _source_file_like_pattern(origin_file_path)
 
     # Entity-aware routing: detect known entity names in query.
@@ -1201,14 +1216,19 @@ async def _brain_search_dispatch(
             source_file_filter_like,
         ]
     )
-    detected_entities = _detect_entities(query, store) if not has_active_filters else []
+    if has_active_filters:
+        detected_entities = []
+    else:
+        with _vector_store_checkout() as store:
+            detected_entities = _detect_entities(query, store)
     if detected_entities:
         entity_name = detected_entities[0]["name"]
 
         # Path 1: Pure SQL KG facts (no embedding model needed, always runs)
-        fact_items = _kg_facts_sql(
-            store, entity_name, include_checkpoints=include_checkpoints, include_audit=include_audit
-        )
+        with _vector_store_checkout() as store:
+            fact_items = _kg_facts_sql(
+                store, entity_name, include_checkpoints=include_checkpoints, include_audit=include_audit
+            )
 
         # Path 2: Try full hybrid search (embedding + vector + KG)
         structured_results = []
@@ -1240,20 +1260,21 @@ async def _brain_search_dispatch(
             query_embedding = await loop.run_in_executor(None, model.embed_query, query)
             kg_n_results = _origin_candidate_count(num_results) if order == "origin" else num_results
 
-            kg_results = store.kg_hybrid_search(
-                query_embedding=query_embedding,
-                query_text=query,
-                n_results=kg_n_results,
-                entity_name=entity_name,
-                project_filter=normalized_project,
-                include_checkpoints=include_checkpoints,
-                include_audit=include_audit,
-                include_operational=include_operational,
-                content_class_filter=content_class_filter,
-                agent_id=agent_id,
-                brainbar_helper_fast_profile=brainbar_helper_fast_profile,
-                consumer_scope=consumer_scope,
-            )
+            with _vector_store_checkout() as store:
+                kg_results = store.kg_hybrid_search(
+                    query_embedding=query_embedding,
+                    query_text=query,
+                    n_results=kg_n_results,
+                    entity_name=entity_name,
+                    project_filter=normalized_project,
+                    include_checkpoints=include_checkpoints,
+                    include_audit=include_audit,
+                    include_operational=include_operational,
+                    content_class_filter=content_class_filter,
+                    agent_id=agent_id,
+                    brainbar_helper_fast_profile=brainbar_helper_fast_profile,
+                    consumer_scope=consumer_scope,
+                )
             chunk_results = kg_results.get("chunks", {})
             if order == "origin" and chunk_results.get("ids") and chunk_results["ids"][0]:
                 chunk_results = _sort_hybrid_results_by_origin(chunk_results, num_results)
@@ -1440,23 +1461,23 @@ async def _brain_resume(session_id: str | None = None, lookback_days: int = 7):
             params.extend([session_id, session_like, session_like])
         params.append(20)
 
-        store = _get_vector_store()
-        if not getattr(store, "_has_chunk_origin", True):
-            structured = {"session_id": session_id, "lookback_days": days, "total": 0, "results": []}
-            return ([TextContent(type="text", text="No PreCompact checkpoints found.")], structured)
+        with _vector_store_checkout() as store:
+            if not getattr(store, "_has_chunk_origin", True):
+                structured = {"session_id": session_id, "lookback_days": days, "total": 0, "results": []}
+                return ([TextContent(type="text", text="No PreCompact checkpoints found.")], structured)
 
-        rows = await _execute_resume_query_with_retry(
-            store,
-            f"""
-                SELECT id, content, source_file, project, content_type, created_at,
-                       source, conversation_id, summary, importance
-                FROM chunks
-                WHERE {" AND ".join(where_clauses)}
-                ORDER BY COALESCE(created_at, '') DESC
-                LIMIT ?
-                """,
-            params,
-        )
+            rows = await _execute_resume_query_with_retry(
+                store,
+                f"""
+                    SELECT id, content, source_file, project, content_type, created_at,
+                           source, conversation_id, summary, importance
+                    FROM chunks
+                    WHERE {" AND ".join(where_clauses)}
+                    ORDER BY COALESCE(created_at, '') DESC
+                    LIMIT ?
+                    """,
+                params,
+            )
 
         structured_results = [
             {
@@ -1771,14 +1792,13 @@ async def _search(
             num_results = 100
         hybrid_n_results = _origin_candidate_count(num_results) if order == "origin" else num_results
 
-        store = _get_vector_store()
-
-        if store.count() == 0:
-            empty = {"query": query, "total": 0, "results": []}
-            return (
-                [TextContent(type="text", text="Knowledge base is empty. Run 'brainlayer index' to populate it.")],
-                empty,
-            )
+        with _vector_store_checkout() as store:
+            if store.count() == 0:
+                empty = {"query": query, "total": 0, "results": []}
+                return (
+                    [TextContent(type="text", text="Knowledge base is empty. Run 'brainlayer index' to populate it.")],
+                    empty,
+                )
 
         normalized_project = _normalize_project_name(project)
         loop = asyncio.get_running_loop()
@@ -1888,35 +1908,36 @@ async def _search(
         try:
             for attempt in range(_RETRY_MAX_ATTEMPTS):
                 try:
-                    results = store.hybrid_search(
-                        query_embedding=query_embedding,
-                        query_text=query,
-                        fts_query_override=fts_query_override,
-                        n_results=hybrid_n_results,
-                        project_filter=normalized_project,
-                        content_type_filter=content_type,
-                        source_filter=source_filter,
-                        tag_filter=tag,
-                        intent_filter=intent,
-                        importance_min=importance_min,
-                        date_from=date_from,
-                        date_to=date_to,
-                        sentiment_filter=sentiment,
-                        entity_id=entity_id,
-                        agent_id=agent_id,
-                        source_filter_like=source_filter_like,
-                        source_file_filter_like=source_file_filter_like,
-                        correction_category=correction_category,
-                        include_checkpoints=include_checkpoints,
-                        include_audit=include_audit,
-                        include_operational=include_operational,
-                        content_class_filter=content_class_filter,
-                        kg_boost=_kg_boost_enabled(),
-                        profile_query_id=profile_query_id,
-                        profile_scope=profile_scope,
-                        brainbar_helper_fast_profile=brainbar_helper_fast_profile,
-                        consumer_scope=consumer_scope,
-                    )
+                    with _vector_store_checkout() as store:
+                        results = store.hybrid_search(
+                            query_embedding=query_embedding,
+                            query_text=query,
+                            fts_query_override=fts_query_override,
+                            n_results=hybrid_n_results,
+                            project_filter=normalized_project,
+                            content_type_filter=content_type,
+                            source_filter=source_filter,
+                            tag_filter=tag,
+                            intent_filter=intent,
+                            importance_min=importance_min,
+                            date_from=date_from,
+                            date_to=date_to,
+                            sentiment_filter=sentiment,
+                            entity_id=entity_id,
+                            agent_id=agent_id,
+                            source_filter_like=source_filter_like,
+                            source_file_filter_like=source_file_filter_like,
+                            correction_category=correction_category,
+                            include_checkpoints=include_checkpoints,
+                            include_audit=include_audit,
+                            include_operational=include_operational,
+                            content_class_filter=content_class_filter,
+                            kg_boost=_kg_boost_enabled(),
+                            profile_query_id=profile_query_id,
+                            profile_scope=profile_scope,
+                            brainbar_helper_fast_profile=brainbar_helper_fast_profile,
+                            consumer_scope=consumer_scope,
+                        )
                     break
                 except Exception as e:
                     is_lock = isinstance(e, apsw.BusyError) or "locked" in str(e).lower() or "busy" in str(e).lower()
@@ -1952,7 +1973,8 @@ async def _search(
                 text = f"No results found. Search mode: FTS fallback ({fallback_reason}); vector embedding was skipped."
             return ([TextContent(type="text", text=text)], empty)
 
-        results = store.enrich_results_with_session_context(results)
+        with _vector_store_checkout() as store:
+            results = store.enrich_results_with_session_context(results)
         if order == "origin":
             results = _sort_hybrid_results_by_origin(results, num_results)
 
@@ -2119,8 +2141,8 @@ async def _stats():
 async def _list_projects() -> list[TextContent]:
     """List all projects."""
     try:
-        store = _get_vector_store()
-        stats = store.get_stats()
+        with _vector_store_checkout() as store:
+            stats = store.get_stats()
         if not stats["projects"]:
             return [TextContent(type="text", text="No projects indexed yet.")]
         output = "## Indexed Projects\n\n"
@@ -2142,15 +2164,15 @@ async def _context(
 ) -> list[TextContent]:
     """Get surrounding conversation context for a chunk."""
     try:
-        store = _get_vector_store()
-        result = store.get_context(
-            chunk_id,
-            before=before,
-            after=after,
-            include_checkpoints=include_checkpoints,
-            include_audit=include_audit,
-            consumer_scope=consumer_scope,
-        )
+        with _vector_store_checkout() as store:
+            result = store.get_context(
+                chunk_id,
+                before=before,
+                after=after,
+                include_checkpoints=include_checkpoints,
+                include_audit=include_audit,
+                consumer_scope=consumer_scope,
+            )
         if result.get("error"):
             return _error_result(f"Unknown chunk_id '{chunk_id[:20]}...'. Use chunk_id from brainlayer_search results.")
         if not result.get("context"):
@@ -2181,9 +2203,9 @@ async def _file_timeline(
 ) -> list[TextContent]:
     """Get interaction timeline for a file."""
     try:
-        store = _get_vector_store()
         prefilter_project = _prefilter_project_for_consumer_scope(project, consumer_scope)
-        interactions = store.get_file_timeline(file_path, project=prefilter_project, limit=limit)
+        with _vector_store_checkout() as store:
+            interactions = store.get_file_timeline(file_path, project=prefilter_project, limit=limit)
         interactions = _filter_rows_for_consumer_scope(interactions, project, consumer_scope)
         if not interactions:
             return [TextContent(type="text", text=f"No interactions found for '{file_path}'.")]
@@ -2203,8 +2225,8 @@ async def _file_timeline(
 async def _operations(session_id: str) -> list[TextContent]:
     """Get operations for a session."""
     try:
-        store = _get_vector_store()
-        ops = store.get_session_operations(session_id)
+        with _vector_store_checkout() as store:
+            ops = store.get_session_operations(session_id)
         if not ops:
             return [TextContent(type="text", text=f"No operations for session '{session_id[:8]}...'.")]
         output_parts = [f"## Operations: {session_id[:8]}...\n", f"Found {len(ops)} operations:\n"]
@@ -2226,9 +2248,9 @@ async def _regression(
 ) -> list[TextContent]:
     """Analyze a file for regressions."""
     try:
-        store = _get_vector_store()
         prefilter_project = _prefilter_project_for_consumer_scope(project, consumer_scope)
-        result = store.get_file_regression(file_path, project=prefilter_project)
+        with _vector_store_checkout() as store:
+            result = store.get_file_regression(file_path, project=prefilter_project)
         result = _filter_regression_for_consumer_scope(result, project, consumer_scope)
         if not result["timeline"]:
             return [TextContent(type="text", text=f"No interactions found for '{file_path}'.")]
@@ -2256,9 +2278,12 @@ async def _plan_links(
 ) -> list[TextContent]:
     """Query plan-linked sessions."""
     try:
-        store = _get_vector_store()
+        with _vector_store_checkout() as store:
+            if session_id:
+                ctx = store.get_session_context(session_id)
+            else:
+                ctx = None
         if session_id:
-            ctx = store.get_session_context(session_id)
             if not ctx:
                 return [TextContent(type="text", text=f"No context for session '{session_id[:8]}'.")]
             parts = [
@@ -2271,7 +2296,9 @@ async def _plan_links(
             ]
             return [TextContent(type="text", text="\n".join(parts))]
 
-        sessions = store.get_sessions_by_plan(plan_name=plan_name, project=project)
+        with _vector_store_checkout() as store:
+            sessions = store.get_sessions_by_plan(plan_name=plan_name, project=project)
+            stats = store.get_plan_linking_stats()
         if not sessions:
             msg = f"No sessions linked to plan '{plan_name}'." if plan_name else "No plan-linked sessions found."
             return [TextContent(type="text", text=msg)]
@@ -2286,7 +2313,6 @@ async def _plan_links(
             plan = s.get("plan_name") or ""
             started = (s.get("started_at") or "")[:19]
             parts.append(f"- {sid} | {plan}/{phase} | {branch} {pr} | {started}")
-        stats = store.get_plan_linking_stats()
         parts.append(f"\nTotal: {stats['linked_sessions']}/{stats['total_sessions']} linked")
         return [TextContent(type="text", text="\n".join(parts))]
     except Exception as e:
@@ -2305,7 +2331,6 @@ async def _think(
     try:
         from ..engine import think
 
-        store = _get_vector_store()
         model = _get_embedding_model()
         loop = asyncio.get_running_loop()
 
@@ -2314,19 +2339,20 @@ async def _think(
 
         normalized_project = _normalize_project_name(project)
         prefilter_project = _prefilter_project_for_consumer_scope(normalized_project, consumer_scope)
-        result = await loop.run_in_executor(
-            None,
-            lambda: think(
-                context=context,
-                store=store,
-                embed_fn=_embed,
-                project=prefilter_project,
-                max_results=max_results,
-                include_audit=include_audit,
-                agent_id=agent_id,
-                consumer_scope=consumer_scope,
-            ),
-        )
+        with _vector_store_checkout() as store:
+            result = await loop.run_in_executor(
+                None,
+                lambda: think(
+                    context=context,
+                    store=store,
+                    embed_fn=_embed,
+                    project=prefilter_project,
+                    max_results=max_results,
+                    include_audit=include_audit,
+                    agent_id=agent_id,
+                    consumer_scope=consumer_scope,
+                ),
+            )
         result = _filter_think_result_for_consumer_scope(result, normalized_project, consumer_scope)
         structured = {
             "query": result.query,
@@ -2354,7 +2380,6 @@ async def _recall(
     try:
         from ..engine import recall
 
-        store = _get_vector_store()
         model = _get_embedding_model()
         normalized_project = _normalize_project_name(project)
         prefilter_project = _prefilter_project_for_consumer_scope(normalized_project, consumer_scope)
@@ -2363,20 +2388,21 @@ async def _recall(
         def _embed(text: str) -> list[float]:
             return model.embed_query(text)
 
-        result = await loop.run_in_executor(
-            None,
-            lambda: recall(
-                store=store,
-                embed_fn=_embed,
-                file_path=file_path,
-                topic=topic,
-                project=prefilter_project,
-                max_results=max_results,
-                include_audit=include_audit,
-                agent_id=agent_id,
-                consumer_scope=consumer_scope,
-            ),
-        )
+        with _vector_store_checkout() as store:
+            result = await loop.run_in_executor(
+                None,
+                lambda: recall(
+                    store=store,
+                    embed_fn=_embed,
+                    file_path=file_path,
+                    topic=topic,
+                    project=prefilter_project,
+                    max_results=max_results,
+                    include_audit=include_audit,
+                    agent_id=agent_id,
+                    consumer_scope=consumer_scope,
+                ),
+            )
         result = _filter_recall_result_for_consumer_scope(result, normalized_project, consumer_scope)
         structured = {
             "target": result.target,
@@ -2415,10 +2441,10 @@ async def _sessions(
     try:
         from ..engine import format_sessions, sessions
 
-        store = _get_vector_store()
         normalized_project = _normalize_project_name(project)
         prefilter_project = _prefilter_project_for_consumer_scope(normalized_project, consumer_scope)
-        result = sessions(store=store, project=prefilter_project, days=days, limit=limit)
+        with _vector_store_checkout() as store:
+            result = sessions(store=store, project=prefilter_project, days=days, limit=limit)
         result = _filter_sessions_for_consumer_scope(result, normalized_project, consumer_scope)
         return [TextContent(type="text", text=format_sessions(result, days=days))]
     except Exception as e:
@@ -2428,8 +2454,8 @@ async def _sessions(
 async def _session_summary(session_id: str):
     """Get enriched session summary."""
     try:
-        store = _get_vector_store()
-        enrichment = store.get_session_enrichment(session_id)
+        with _vector_store_checkout() as store:
+            enrichment = store.get_session_enrichment(session_id)
         if not enrichment:
             return [
                 TextContent(
@@ -2492,8 +2518,8 @@ async def _current_context(hours: int = 24, project: str | None = None, consumer
     try:
         from ..engine import current_context
 
-        store = _get_vector_store()
-        result = current_context(store=store, hours=hours)
+        with _vector_store_checkout() as store:
+            result = current_context(store=store, hours=hours)
         result = _filter_current_context_for_consumer_scope(result, project, consumer_scope)
         structured = {
             "active_projects": result.active_projects,

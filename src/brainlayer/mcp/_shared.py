@@ -2,8 +2,12 @@
 
 import logging
 import os
+import platform
+import queue
 import re
+import subprocess
 import threading
+from contextlib import contextmanager
 
 import apsw
 from mcp.types import CallToolResult, TextContent
@@ -13,10 +17,14 @@ logger = logging.getLogger(__name__)
 # Lazy-loaded globals with thread-safe initialization
 _vector_store = None
 _search_vector_store = None
+_search_vector_store_pool = None
+_search_vector_store_pool_handles = []
 _embedding_model = None
 _store_lock = threading.Lock()
 _search_store_lock = threading.Lock()
 _model_lock = threading.Lock()
+
+_READ_POOL_RAM_CLAMP_KB = 768 * 1024
 
 _SEARCH_REQUIRED_TABLES = {"chunks", "chunk_vectors"}
 _SEARCH_REQUIRED_CHUNK_COLUMNS = {
@@ -74,6 +82,78 @@ def _bootstrap_search_store(db_path) -> None:
     bootstrap_store.close()
 
 
+def _detected_default_read_pool_size() -> int:
+    """Return the platform default for the readonly WAL pool."""
+    if platform.system() == "Darwin":
+        try:
+            brand = subprocess.run(
+                ["sysctl", "-n", "machdep.cpu.brand_string"],
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=0.5,
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            brand = ""
+        if "Apple M1" in brand:
+            return 4
+    return 8
+
+
+def _read_pool_size() -> int:
+    raw = os.environ.get("BRAINLAYER_READ_POOL_SIZE")
+    if raw is None:
+        return _detected_default_read_pool_size()
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return _detected_default_read_pool_size()
+    return value if value > 0 else _detected_default_read_pool_size()
+
+
+def _assert_read_pool_ram_clamp(pool_size: int) -> None:
+    from ..vector_store import _read_cache_size_kb
+
+    read_cache_kb = abs(_read_cache_size_kb())
+    total_kb = pool_size * read_cache_kb
+    if total_kb > _READ_POOL_RAM_CLAMP_KB:
+        raise ValueError(
+            "read pool RAM clamp exceeded: "
+            f"pool_size={pool_size} * read_cache_kb={read_cache_kb} = {total_kb}KB "
+            f"> {_READ_POOL_RAM_CLAMP_KB}KB. Lower BRAINLAYER_READ_POOL_SIZE or BRAINLAYER_READ_CACHE_KB."
+        )
+
+
+def _initialize_search_vector_store_pool() -> None:
+    """Pre-open the fixed readonly VectorStore pool."""
+    global _search_vector_store, _search_vector_store_pool, _search_vector_store_pool_handles
+
+    from ..paths import get_db_path
+    from ..vector_store import VectorStore
+
+    db_path = get_db_path()
+    pool_size = _read_pool_size()
+    _assert_read_pool_ram_clamp(pool_size)
+    _bootstrap_search_store(db_path)
+
+    handles = []
+    try:
+        for _ in range(pool_size):
+            handles.append(VectorStore(db_path, readonly=True))
+    except Exception:
+        for store in handles:
+            store.close()
+        raise
+
+    pool: queue.Queue = queue.Queue(maxsize=pool_size)
+    for store in handles:
+        pool.put(store)
+
+    _search_vector_store_pool_handles = handles
+    _search_vector_store = handles[0]
+    _search_vector_store_pool = pool
+
+
 def _get_vector_store(timeout: float | None = None):
     """Get or initialize the global VectorStore (thread-safe)."""
     global _vector_store
@@ -93,18 +173,45 @@ def _get_vector_store(timeout: float | None = None):
 
 
 def _get_search_vector_store():
-    """Get or initialize the read-only VectorStore for search-only handlers."""
-    global _search_vector_store
-    if _search_vector_store is None:
+    """Get or initialize one read-only VectorStore for compatibility callers."""
+    if _search_vector_store_pool is None:
         with _search_store_lock:
-            if _search_vector_store is None:
-                from ..paths import get_db_path
-                from ..vector_store import VectorStore
-
-                db_path = get_db_path()
-                _bootstrap_search_store(db_path)
-                _search_vector_store = VectorStore(db_path, readonly=True)
+            if _search_vector_store_pool is None:
+                _initialize_search_vector_store_pool()
     return _search_vector_store
+
+
+@contextmanager
+def _search_store_checkout():
+    """Checkout a bounded readonly VectorStore handle and return it to the pool."""
+    if _search_vector_store_pool is None:
+        with _search_store_lock:
+            if _search_vector_store_pool is None:
+                _initialize_search_vector_store_pool()
+
+    from ..vector_store import _read_busy_timeout_ms
+
+    try:
+        store = _search_vector_store_pool.get(timeout=_read_busy_timeout_ms() / 1000.0)
+    except queue.Empty as exc:
+        raise apsw.BusyError("timed out waiting for read pool checkout") from exc
+
+    try:
+        yield store
+    finally:
+        _search_vector_store_pool.put(store)
+
+
+def _close_search_vector_store() -> None:
+    """Close and reset the readonly search pool."""
+    global _search_vector_store, _search_vector_store_pool, _search_vector_store_pool_handles
+    with _search_store_lock:
+        handles = list(_search_vector_store_pool_handles)
+        _search_vector_store = None
+        _search_vector_store_pool = None
+        _search_vector_store_pool_handles = []
+    for store in handles:
+        store.close()
 
 
 def _get_embedding_model():
