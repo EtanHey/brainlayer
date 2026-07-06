@@ -10,7 +10,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -33,6 +33,7 @@ DEFAULT_WATCH_LABEL = "com.brainlayer.watch"
 DEFAULT_DRAIN_LABEL = "com.brainlayer.drain"
 DEFAULT_HEALTH_CHECK_LABEL = "com.brainlayer.health-check"
 DEFAULT_ENRICHMENT_LABEL = "com.brainlayer.enrichment"
+DEFAULT_INDEX_LABEL = "com.brainlayer.index"
 DEFAULT_BACKLOG_BATCH = 4
 DEFAULT_HEAL_MIN_CONSECUTIVE_FAILURES = 2
 DEFAULT_HEAL_CIRCUIT_BREAKER_LIMIT = 3
@@ -69,6 +70,7 @@ class HealthCheckConfig:
     drain_label: str = DEFAULT_DRAIN_LABEL
     health_check_label: str = DEFAULT_HEALTH_CHECK_LABEL
     enrichment_label: str = DEFAULT_ENRICHMENT_LABEL
+    index_label: str = DEFAULT_INDEX_LABEL
     watch_plist_path: Path = field(
         default_factory=lambda: Path("~/Library/LaunchAgents/com.brainlayer.watch.plist").expanduser()
     )
@@ -119,6 +121,14 @@ class HotlaneProcess:
     backlog_batch: int
 
 
+@dataclass(frozen=True)
+class LockHolder:
+    pid: int
+    command: str
+    db_path: str
+    held_ticks: int = 0
+
+
 @dataclass
 class HealthCheckResult:
     checked_at: str
@@ -130,6 +140,7 @@ class HealthCheckResult:
     missing_vectors: int | None = None
     previous_missing_vectors: int | None = None
     stalled_ticks: int = 0
+    lock_holder: LockHolder | None = None
     canary_ok: bool = False
     canary_result_count: int | None = None
 
@@ -255,6 +266,138 @@ def parse_hotlane_processes(ps_output: str) -> list[HotlaneProcess]:
     return processes
 
 
+def _command_for_pid(ps_output: str, pid: int) -> str:
+    for line in ps_output.splitlines():
+        stripped = line.strip()
+        match = re.match(r"(?P<pid>\d+)\s+(?P<command>.+)", stripped)
+        if match and int(match.group("pid")) == pid:
+            return match.group("command")
+    return ""
+
+
+def _read_writer_lock_holder(db_path: Path, ps_output: str) -> LockHolder | None:
+    from .vector_store import VectorStore
+
+    store = object.__new__(VectorStore)
+    store.db_path = db_path.expanduser()
+    try:
+        pidfile = store._writer_pidfile_path()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    fd = VectorStore._open_writer_pidfile_readonly(pidfile)
+    if fd is None:
+        return None
+    try:
+        owner_pid, owner_start_time, owner_db_path = VectorStore._read_writer_pidfile_record_fd(fd)
+    finally:
+        os.close(fd)
+    if owner_db_path is not None and not store._pidfile_db_path_matches(owner_db_path):
+        return None
+    if owner_pid is None or not store._pidfile_owner_matches(owner_pid, owner_start_time):
+        return None
+    try:
+        resolved_db_path = (
+            str(Path(owner_db_path).expanduser().resolve()) if owner_db_path else str(store.db_path.resolve())
+        )
+    except (OSError, RuntimeError, ValueError):
+        resolved_db_path = str(store.db_path.expanduser())
+    return LockHolder(
+        pid=owner_pid,
+        command=_command_for_pid(ps_output, owner_pid),
+        db_path=resolved_db_path,
+    )
+
+
+def _text_has_sqlite_busy_signal(value: Any) -> bool:
+    text = str(value).lower()
+    return (
+        "sqlite_busy" in text
+        or "writerinuseerror" in text
+        or "database is locked" in text
+        or "database table is locked" in text
+        or "database is busy" in text
+    )
+
+
+def _drain_health_has_sqlite_busy_signal(payload: dict[str, Any]) -> bool:
+    for value in payload.values():
+        if isinstance(value, dict):
+            if _drain_health_has_sqlite_busy_signal(value):
+                return True
+        elif isinstance(value, list):
+            if any(_text_has_sqlite_busy_signal(item) for item in value):
+                return True
+        elif _text_has_sqlite_busy_signal(value):
+            return True
+    return False
+
+
+def _same_lock_holder_ticks(state: dict[str, Any], lock_holder: LockHolder | None, *, drain_starved: bool) -> int:
+    if lock_holder is None or not drain_starved:
+        return 0
+    previous_pid = state.get("lock_holder_pid")
+    previous_ticks = state.get("lock_holder_held_ticks")
+    prior_ticks = previous_ticks if isinstance(previous_ticks, int) else 0
+    return prior_ticks + 1 if previous_pid == lock_holder.pid else 1
+
+
+def _known_lock_holder_labels(config: HealthCheckConfig) -> tuple[str, ...]:
+    labels = [
+        config.index_label,
+        config.enrichment_label,
+        config.watch_label,
+        config.drain_label,
+        config.hotlane_label,
+    ]
+    return tuple(dict.fromkeys(label for label in labels if label))
+
+
+def _launchd_print_mentions_pid(stdout: str, pid: int) -> bool:
+    return re.search(rf"\bpid\s*=\s*{pid}\b", stdout) is not None
+
+
+def _command_implies_lock_holder_label(command: str, config: HealthCheckConfig) -> str | None:
+    if not command:
+        return None
+    if "hotlane_brainbar_daemon.py" in command:
+        return config.hotlane_label
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        parts = command.split()
+    commands = {
+        "index": config.index_label,
+        "enrich": config.enrichment_label,
+        "watch": config.watch_label,
+        "drain": config.drain_label,
+    }
+    for index, part in enumerate(parts[:-1]):
+        if Path(part).name == "brainlayer":
+            label = commands.get(parts[index + 1])
+            if label:
+                return label
+    return None
+
+
+def _known_lock_holder_label(
+    holder: LockHolder,
+    config: HealthCheckConfig,
+    command_runner: CommandRunner,
+) -> str | None:
+    for label in _known_lock_holder_labels(config):
+        result = command_runner(["launchctl", "print", _launchd_target(label)])
+        if _command_returncode(result) != 0:
+            continue
+        if _launchd_print_mentions_pid(_command_stdout(result), holder.pid):
+            return label
+    return _command_implies_lock_holder_label(holder.command, config)
+
+
+def _holder_message(holder: LockHolder) -> str:
+    command = holder.command or "<unknown>"
+    return f"holder pid={holder.pid} command={command} db_path={holder.db_path}"
+
+
 def count_missing_embeddings(db_path: Path) -> int:
     uri = f"file:{db_path.expanduser()}?mode=ro"
     conn = sqlite3.connect(uri, uri=True, timeout=5)
@@ -371,15 +514,26 @@ def _heal_key(label: str, issue_code: str) -> str:
     return f"{label}:{issue_code}"
 
 
+def _heal_notification_message(action: str, issue_code: str, details: dict[str, Any]) -> str:
+    lock_holder = details.get("lock_holder")
+    if isinstance(lock_holder, dict):
+        pid = lock_holder.get("pid")
+        command = lock_holder.get("command") or "<unknown>"
+        return f"{action} for {issue_code}: holder pid={pid} command={command}"
+    return f"{action} for {issue_code}"
+
+
 def _apply_heals(
     *,
     result: HealthCheckResult,
     issue_labels: dict[str, tuple[str, Path]],
+    issue_details: dict[str, dict[str, Any]] | None = None,
     previous_failures: dict[str, int],
     previous_tripped: set[str],
     config: HealthCheckConfig,
     command_runner: CommandRunner,
 ) -> tuple[dict[str, int], set[str]]:
+    issue_details = issue_details or {}
     current_issue_codes = {issue.code for issue in result.issues}
     heal_failures: dict[str, int] = {}
     tripped = set(previous_tripped)
@@ -403,6 +557,7 @@ def _apply_heals(
     for issue_code, (label, plist_path) in issue_labels.items():
         key = _heal_key(label, issue_code)
         consecutive_failures = heal_failures.get(key, 0)
+        details = issue_details.get(issue_code, {})
         if consecutive_failures >= breaker_limit:
             if issue_code in bootstrap_issue_codes:
                 action = _bootstrap_if_absent(label, plist_path, command_runner)
@@ -421,9 +576,18 @@ def _apply_heals(
                         "label": label,
                         "issue_code": issue_code,
                         "consecutive_failures": consecutive_failures,
+                        **details,
                     }
                 )
-                _push_notification("BrainLayer heal escalation", f"{label} {issue_code} failed repeatedly")
+                message = (
+                    _heal_notification_message(label, issue_code, details)
+                    if details
+                    else f"{label} {issue_code} failed repeatedly"
+                )
+                _push_notification(
+                    "BrainLayer heal escalation",
+                    message,
+                )
             continue
         if consecutive_failures >= threshold:
             action = (
@@ -448,9 +612,13 @@ def _apply_heals(
                         "issue_code": issue_code,
                         "action": action,
                         "consecutive_failures": consecutive_failures,
+                        **details,
                     }
                 )
-                _push_notification("BrainLayer heal action", f"{action} for {issue_code}")
+                _push_notification(
+                    "BrainLayer heal action",
+                    _heal_notification_message(action, issue_code, details),
+                )
     return heal_failures, tripped
 
 
@@ -533,6 +701,8 @@ def _plist_for_label(config: HealthCheckConfig, label: str) -> Path:
         return config.health_check_plist_path
     if label == config.enrichment_label:
         return config.enrichment_plist_path
+    if label == config.index_label:
+        return Path(f"~/Library/LaunchAgents/{label}.plist").expanduser()
     if label == config.hotlane_label:
         return Path(f"~/Library/LaunchAgents/{label}.plist").expanduser()
     if label == config.brainbar_daemon_label:
@@ -554,6 +724,7 @@ def run_health_check(
     previous_heal_failures = _previous_heal_failures(state)
     previous_tripped = _previous_tripped_heals(state)
     heal_issue_labels: dict[str, tuple[str, Path]] = {}
+    heal_issue_details: dict[str, dict[str, Any]] = {}
 
     def add_issue(code: str, severity: str, message: str) -> None:
         result.issues.append(HealthIssue(code, severity, message))
@@ -566,7 +737,10 @@ def run_health_check(
             }
         )
 
-    hotlane_processes = parse_hotlane_processes(ps_output_fn())
+    ps_output = ps_output_fn()
+    lock_holder = _read_writer_lock_holder(config.db_path, ps_output)
+    result.lock_holder = lock_holder
+    hotlane_processes = parse_hotlane_processes(ps_output)
     result.hotlane_running = bool(hotlane_processes)
     if not hotlane_processes:
         add_issue("hotlane_dead", "critical", "hotlane BrainBar embedding daemon is not running")
@@ -724,6 +898,7 @@ def run_health_check(
     drain_health = _load_json(config.drain_health_path)
     drain_total = drain_health.get("drained_total")
     previous_drain_total = state.get("drain_drained_total")
+    drain_starved = _drain_health_has_sqlite_busy_signal(drain_health)
     if queue_count > 0 and isinstance(drain_total, int) and drain_total == previous_drain_total:
         add_issue(
             "drain_no_progress",
@@ -731,10 +906,44 @@ def run_health_check(
             f"drain drained_total flat at {drain_total} while queue_count={queue_count}",
         )
         heal_issue_labels["drain_no_progress"] = (config.drain_label, config.drain_plist_path)
+        drain_starved = True
+
+    lock_holder_held_ticks = _same_lock_holder_ticks(state, lock_holder, drain_starved=drain_starved)
+    if lock_holder is not None:
+        result.lock_holder = replace(lock_holder, held_ticks=lock_holder_held_ticks)
+    lock_holder_wedge = (
+        result.lock_holder is not None and drain_starved and lock_holder_held_ticks >= config.max_stalled_ticks
+    )
+    if lock_holder_wedge and result.lock_holder is not None:
+        holder = result.lock_holder
+        add_issue(
+            "lock_holder_wedge",
+            "critical",
+            f"write-lock holder wedge detected after {holder.held_ticks} checks: {_holder_message(holder)}",
+        )
+        holder_details = {"lock_holder": asdict(holder)}
+        heal_issue_details["lock_holder_wedge"] = holder_details
+        for victim_issue_code in ("drain_no_progress", "queue_backed_up"):
+            heal_issue_labels.pop(victim_issue_code, None)
+        if config.heal:
+            _emit_heal_event(
+                {
+                    "_type": "lock_holder_wedge",
+                    **holder_details,
+                }
+            )
+            _push_notification("BrainLayer lock-holder wedge", _holder_message(holder))
+            holder_label = _known_lock_holder_label(holder, config, command_runner)
+            if holder_label:
+                heal_issue_labels["lock_holder_wedge"] = (
+                    holder_label,
+                    _plist_for_label(config, holder_label),
+                )
 
     heal_failures, heal_tripped = _apply_heals(
         result=result,
         issue_labels=heal_issue_labels,
+        issue_details=heal_issue_details,
         previous_failures=previous_heal_failures,
         previous_tripped=previous_tripped,
         config=config,
@@ -751,6 +960,14 @@ def run_health_check(
         state_payload["watcher_poll_count"] = watcher_poll_count
     if isinstance(drain_total, int):
         state_payload["drain_drained_total"] = drain_total
+    if result.lock_holder is not None:
+        state_payload["lock_holder_pid"] = result.lock_holder.pid
+        state_payload["lock_holder_db_path"] = result.lock_holder.db_path
+        state_payload["lock_holder_held_ticks"] = result.lock_holder.held_ticks
+    else:
+        state_payload.pop("lock_holder_pid", None)
+        state_payload.pop("lock_holder_db_path", None)
+        state_payload["lock_holder_held_ticks"] = 0
     if pause_payload:
         state_payload["pause_sentinel"] = pause_payload
     _write_state(config.state_path, state_payload)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
 import os
@@ -13,6 +14,7 @@ import pytest
 
 import brainlayer.health_check as health_check
 from brainlayer.health_check import HealthCheckConfig, run_health_check
+from brainlayer.vector_store import VectorStore
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -81,6 +83,23 @@ def _make_db(path: Path, *, total: int, vector_rows: int) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+def _expected_writer_pidfile(pidfile_dir: Path, db_path: Path) -> Path:
+    resolved_path = db_path.resolve()
+    path_hash = hashlib.sha256(str(resolved_path).encode("utf-8")).hexdigest()[:16]
+    return pidfile_dir / f"brainlayer-writer-{path_hash}-{resolved_path.name}.pid"
+
+
+def _write_writer_pidfile(pidfile_dir: Path, db_path: Path, *, pid: int, start_time: str | None = None) -> Path:
+    pidfile_dir.mkdir(parents=True, exist_ok=True)
+    lines = [str(pid)]
+    if start_time is not None:
+        lines.append(f"start_time={start_time}")
+    lines.append(f"db_path={db_path.resolve()}")
+    pidfile = _expected_writer_pidfile(pidfile_dir, db_path)
+    pidfile.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return pidfile
 
 
 def _ok_canary(_socket_path: Path, _query: str, _timeout_seconds: float) -> dict:
@@ -200,6 +219,266 @@ def test_missing_embeddings_not_draining_after_two_ticks(tmp_path):
     saved = json.loads(state_path.read_text(encoding="utf-8"))
     assert saved["missing_vectors"] == 2
     assert saved["stalled_ticks"] == 2
+
+
+def test_lock_holder_wedge_flags_live_holder_when_drain_is_starved(tmp_path, monkeypatch):
+    db_path = tmp_path / "brainlayer.db"
+    state_path = tmp_path / "health-state.json"
+    drain_health_path = tmp_path / "drain-health.json"
+    queue_dir = tmp_path / "queue"
+    pidfile_dir = tmp_path / "pidfiles"
+    queue_dir.mkdir()
+    _make_db(db_path, total=1, vector_rows=1)
+    drain_health_path.write_text(json.dumps({"drained_total": 10}), encoding="utf-8")
+    (queue_dir / "blocked.jsonl").write_text("{}\n", encoding="utf-8")
+    holder_pid = os.getpid()
+    _write_writer_pidfile(pidfile_dir, db_path, pid=holder_pid, start_time="holder-start")
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(pidfile_dir))
+    monkeypatch.setattr(VectorStore, "_pid_start_time", staticmethod(lambda _pid: "holder-start"))
+    state_path.write_text(
+        json.dumps(
+            {
+                "drain_drained_total": 10,
+                "lock_holder_pid": holder_pid,
+                "lock_holder_held_ticks": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_health_check(
+        HealthCheckConfig(
+            db_path=db_path,
+            state_path=state_path,
+            drain_health_path=drain_health_path,
+            queue_dir=queue_dir,
+            max_stalled_ticks=2,
+        ),
+        ps_output_fn=lambda: (
+            "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 4\n"
+            f"{holder_pid} /opt/homebrew/bin/brainlayer index\n"
+        ),
+        socket_request_fn=_ok_canary,
+        command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        now_fn=lambda: datetime(2026, 7, 6, 9, 0, tzinfo=UTC),
+    )
+
+    payload = result.to_dict()
+    assert payload["lock_holder"] == {
+        "pid": holder_pid,
+        "command": "/opt/homebrew/bin/brainlayer index",
+        "db_path": str(db_path.resolve()),
+        "held_ticks": 2,
+    }
+    issue_codes = [issue.code for issue in result.issues]
+    assert "drain_no_progress" in issue_codes
+    assert "lock_holder_wedge" in issue_codes
+    assert any(str(holder_pid) in issue.message and "brainlayer index" in issue.message for issue in result.issues)
+
+
+@pytest.mark.parametrize(
+    ("pid", "recorded_start_time", "current_start_time"),
+    [
+        (999999, "old-process", "old-process"),
+        (os.getpid(), "old-process", "current-process"),
+    ],
+)
+def test_lock_holder_stale_pidfile_is_ignored_without_false_wedge(
+    tmp_path, monkeypatch, pid, recorded_start_time, current_start_time
+):
+    db_path = tmp_path / "brainlayer.db"
+    state_path = tmp_path / "health-state.json"
+    drain_health_path = tmp_path / "drain-health.json"
+    queue_dir = tmp_path / "queue"
+    pidfile_dir = tmp_path / "pidfiles"
+    queue_dir.mkdir()
+    _make_db(db_path, total=1, vector_rows=1)
+    drain_health_path.write_text(json.dumps({"drained_total": 10}), encoding="utf-8")
+    (queue_dir / "blocked.jsonl").write_text("{}\n", encoding="utf-8")
+    _write_writer_pidfile(pidfile_dir, db_path, pid=pid, start_time=recorded_start_time)
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(pidfile_dir))
+    monkeypatch.setattr(VectorStore, "_pid_start_time", staticmethod(lambda _pid: current_start_time))
+    state_path.write_text(
+        json.dumps(
+            {
+                "drain_drained_total": 10,
+                "lock_holder_pid": pid,
+                "lock_holder_held_ticks": 10,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_health_check(
+        HealthCheckConfig(
+            db_path=db_path,
+            state_path=state_path,
+            drain_health_path=drain_health_path,
+            queue_dir=queue_dir,
+            max_stalled_ticks=2,
+        ),
+        ps_output_fn=lambda: (
+            "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 4\n"
+            f"{pid} /opt/homebrew/bin/brainlayer index\n"
+        ),
+        socket_request_fn=_ok_canary,
+        command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        now_fn=lambda: datetime(2026, 7, 6, 9, 5, tzinfo=UTC),
+    )
+
+    assert result.to_dict()["lock_holder"] is None
+    assert "lock_holder_wedge" not in [issue.code for issue in result.issues]
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+    assert saved["lock_holder_held_ticks"] == 0
+
+
+def test_lock_holder_wedge_heal_targets_known_holder_label_and_respects_circuit_breaker(tmp_path, monkeypatch):
+    db_path = tmp_path / "brainlayer.db"
+    state_path = tmp_path / "health-state.json"
+    drain_health_path = tmp_path / "drain-health.json"
+    queue_dir = tmp_path / "queue"
+    pidfile_dir = tmp_path / "pidfiles"
+    queue_dir.mkdir()
+    _make_db(db_path, total=1, vector_rows=1)
+    drain_health_path.write_text(json.dumps({"drained_total": 10}), encoding="utf-8")
+    (queue_dir / "blocked.jsonl").write_text("{}\n", encoding="utf-8")
+    holder_pid = os.getpid()
+    _write_writer_pidfile(pidfile_dir, db_path, pid=holder_pid, start_time="holder-start")
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(pidfile_dir))
+    monkeypatch.setattr(VectorStore, "_pid_start_time", staticmethod(lambda _pid: "holder-start"))
+    notifications: list[tuple[str, str]] = []
+    events: list[dict] = []
+    monkeypatch.setattr(
+        health_check, "_push_notification", lambda title, message: notifications.append((title, message))
+    )
+    monkeypatch.setattr(health_check, "_emit_heal_event", events.append)
+
+    def ps_output() -> str:
+        return (
+            "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 4\n"
+            f"{holder_pid} /opt/homebrew/bin/brainlayer index\n"
+        )
+
+    commands: list[list[str]] = []
+
+    def command_runner(args: list[str]):
+        commands.append(args)
+        if args[:2] == ["launchctl", "print"] and "com.brainlayer.index" in args[2]:
+            return SimpleNamespace(returncode=0, stdout=f"pid = {holder_pid}\n", stderr="")
+        if args[:2] == ["launchctl", "print"]:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    state_path.write_text(
+        json.dumps(
+            {
+                "drain_drained_total": 10,
+                "lock_holder_pid": holder_pid,
+                "lock_holder_held_ticks": 1,
+                "heal_failures": {"com.brainlayer.index:lock_holder_wedge": 1},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_health_check(
+        HealthCheckConfig(
+            db_path=db_path,
+            state_path=state_path,
+            drain_health_path=drain_health_path,
+            queue_dir=queue_dir,
+            heal=True,
+            max_stalled_ticks=2,
+            heal_min_consecutive_failures=2,
+            heal_circuit_breaker_limit=3,
+        ),
+        ps_output_fn=ps_output,
+        socket_request_fn=_ok_canary,
+        command_runner=command_runner,
+        now_fn=lambda: datetime(2026, 7, 6, 9, 10, tzinfo=UTC),
+    )
+
+    kickstarts = [command for command in commands if command[:3] == ["launchctl", "kickstart", "-k"]]
+    assert len(kickstarts) == 1
+    assert "com.brainlayer.index" in " ".join(kickstarts[0])
+    assert "com.brainlayer.drain" not in " ".join(kickstarts[0])
+    assert "kickstart:com.brainlayer.index" in result.actions
+    assert any(str(holder_pid) in message and "brainlayer index" in message for _title, message in notifications)
+    assert any(
+        event.get("_type") == "heal" and event.get("lock_holder", {}).get("pid") == holder_pid for event in events
+    )
+
+    commands.clear()
+    state_path.write_text(
+        json.dumps(
+            {
+                "drain_drained_total": 10,
+                "lock_holder_pid": holder_pid,
+                "lock_holder_held_ticks": 1,
+                "heal_failures": {"com.brainlayer.index:lock_holder_wedge": 3},
+                "heal_tripped": ["com.brainlayer.index:lock_holder_wedge"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    run_health_check(
+        HealthCheckConfig(
+            db_path=db_path,
+            state_path=state_path,
+            drain_health_path=drain_health_path,
+            queue_dir=queue_dir,
+            heal=True,
+            max_stalled_ticks=2,
+            heal_min_consecutive_failures=2,
+            heal_circuit_breaker_limit=3,
+        ),
+        ps_output_fn=ps_output,
+        socket_request_fn=_ok_canary,
+        command_runner=command_runner,
+        now_fn=lambda: datetime(2026, 7, 6, 9, 15, tzinfo=UTC),
+    )
+
+    assert not [command for command in commands if command[:3] == ["launchctl", "kickstart", "-k"]]
+
+
+def test_lock_holder_without_starved_drain_reports_holder_but_no_wedge(tmp_path, monkeypatch):
+    db_path = tmp_path / "brainlayer.db"
+    state_path = tmp_path / "health-state.json"
+    drain_health_path = tmp_path / "drain-health.json"
+    queue_dir = tmp_path / "queue"
+    pidfile_dir = tmp_path / "pidfiles"
+    queue_dir.mkdir()
+    _make_db(db_path, total=1, vector_rows=1)
+    drain_health_path.write_text(json.dumps({"drained_total": 11}), encoding="utf-8")
+    holder_pid = os.getpid()
+    _write_writer_pidfile(pidfile_dir, db_path, pid=holder_pid, start_time="holder-start")
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(pidfile_dir))
+    monkeypatch.setattr(VectorStore, "_pid_start_time", staticmethod(lambda _pid: "holder-start"))
+    state_path.write_text(json.dumps({"drain_drained_total": 10}), encoding="utf-8")
+
+    result = run_health_check(
+        HealthCheckConfig(
+            db_path=db_path,
+            state_path=state_path,
+            drain_health_path=drain_health_path,
+            queue_dir=queue_dir,
+            max_stalled_ticks=2,
+        ),
+        ps_output_fn=lambda: (
+            "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 4\n"
+            f"{holder_pid} /opt/homebrew/bin/brainlayer index\n"
+        ),
+        socket_request_fn=_ok_canary,
+        command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        now_fn=lambda: datetime(2026, 7, 6, 9, 20, tzinfo=UTC),
+    )
+
+    assert result.ok is True
+    payload = result.to_dict()
+    assert payload["lock_holder"]["pid"] == holder_pid
+    assert payload["lock_holder"]["held_ticks"] == 0
+    assert "lock_holder_wedge" not in [issue.code for issue in result.issues]
 
 
 def test_missing_embeddings_climb_resets_stall_counter(tmp_path):
