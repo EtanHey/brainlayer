@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import random
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,6 +34,7 @@ FTS_SELECT_COLUMNS = "content, summary, tags, resolved_query, key_facts, resolve
 FTS_STATE_COLUMNS = "rowid, content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id"
 QUARANTINE_MANIFEST_TABLE = "retro_self_pollution_quarantine_manifest"
 DEFAULT_ESTIMATE = 244_152
+RETRIEVABILITY_TOKEN_RE = re.compile(r"[A-Za-z0-9]{4,}")
 
 
 def _utc_now() -> str:
@@ -87,6 +89,31 @@ def _placeholders(values: list[Any]) -> str:
     if not values:
         raise ValueError("values must not be empty")
     return ", ".join("?" for _ in values)
+
+
+def _like_exact(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _retrievability_query(content: str) -> str:
+    seen: set[str] = set()
+    tokens: list[str] = []
+    for match in RETRIEVABILITY_TOKEN_RE.finditer(content):
+        token = match.group(0)
+        normalized = token.casefold()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        tokens.append(token)
+    tokens.sort(key=lambda value: (-len(value), value.casefold()))
+    return " ".join(tokens[:3])
+
+
+def _flat_result_ids(search_result: dict[str, Any]) -> list[str]:
+    ids = search_result.get("ids") or [[]]
+    if not ids:
+        return []
+    return list(ids[0] or [])
 
 
 def _drop_fts_triggers(cursor: apsw.Cursor) -> None:
@@ -638,6 +665,142 @@ def run_revert_proof(
     }
 
 
+def run_retrievability_proof(
+    db_path: str | Path,
+    chunk_ids: list[str],
+    *,
+    sample_size: int = 100,
+    random_seed: int = 0,
+    n_results: int = 50,
+) -> dict[str, Any]:
+    db_path = _path(db_path)
+    unique_ids = sorted(dict.fromkeys(chunk_ids))
+    if sample_size < 0:
+        raise ValueError("sample_size must be non-negative")
+    if n_results <= 0:
+        raise ValueError("n_results must be positive")
+    sample_count = min(sample_size, len(unique_ids))
+    rng = random.Random(random_seed)
+    sample_ids = sorted(rng.sample(unique_ids, sample_count)) if sample_count else []
+    chunks: dict[str, Any] = {}
+
+    conn = apsw.Connection(str(db_path), flags=apsw.SQLITE_OPEN_READONLY)
+    try:
+        cursor = conn.cursor()
+        store = VectorStore(db_path, readonly=True)
+        try:
+            for chunk_id in sample_ids:
+                row = cursor.execute(
+                    """
+                    SELECT id, content, content_class, project, source_file
+                    FROM chunks
+                    WHERE id = ?
+                    """,
+                    (chunk_id,),
+                ).fetchone()
+                if row is None:
+                    chunks[chunk_id] = {
+                        "chunk_row_exists": False,
+                        "content_class": None,
+                        "default_fts_rows": 0,
+                        "operational_fts_rows": 0,
+                        "default_search_absent": False,
+                        "operational_search_present": False,
+                        "expand_fetchable": False,
+                        "passed": False,
+                        "error": "missing chunk row",
+                    }
+                    continue
+
+                content = row[1] or ""
+                query = _retrievability_query(content)
+                project = row[3]
+                source_file = row[4] or ""
+                search_kwargs: dict[str, Any] = {}
+                if project:
+                    search_kwargs["project_filter"] = project
+                if source_file:
+                    search_kwargs["source_file_filter_like"] = _like_exact(source_file)
+
+                default_result_ids = []
+                operational_result_ids = []
+                if query:
+                    default_result_ids = _flat_result_ids(
+                        store.hybrid_search(
+                            query_embedding=None,
+                            query_text=query,
+                            n_results=n_results,
+                            **search_kwargs,
+                        )
+                    )
+                    operational_result_ids = _flat_result_ids(
+                        store.hybrid_search(
+                            query_embedding=None,
+                            query_text=query,
+                            n_results=n_results,
+                            include_operational=True,
+                            **search_kwargs,
+                        )
+                    )
+
+                context = store.get_context(
+                    chunk_id,
+                    before=0,
+                    after=0,
+                    include_checkpoints=True,
+                    include_audit=True,
+                )
+                target = context.get("target") or {}
+                default_fts_rows = cursor.execute(
+                    "SELECT COUNT(*) FROM chunks_fts WHERE chunk_id = ?",
+                    (chunk_id,),
+                ).fetchone()[0]
+                operational_fts_rows = cursor.execute(
+                    "SELECT COUNT(*) FROM chunks_fts_operational WHERE chunk_id = ?",
+                    (chunk_id,),
+                ).fetchone()[0]
+                default_search_absent = chunk_id not in default_result_ids
+                operational_search_present = chunk_id in operational_result_ids
+                expand_fetchable = target.get("id") == chunk_id
+                chunk_passed = (
+                    row[2] == "operational"
+                    and default_fts_rows == 0
+                    and operational_fts_rows > 0
+                    and bool(query)
+                    and default_search_absent
+                    and operational_search_present
+                    and expand_fetchable
+                )
+                chunks[chunk_id] = {
+                    "chunk_row_exists": True,
+                    "content_class": row[2],
+                    "query": query,
+                    "default_result_ids": default_result_ids,
+                    "operational_result_ids": operational_result_ids,
+                    "default_fts_rows": default_fts_rows,
+                    "operational_fts_rows": operational_fts_rows,
+                    "default_search_absent": default_search_absent,
+                    "operational_search_present": operational_search_present,
+                    "expand_fetchable": expand_fetchable,
+                    "passed": chunk_passed,
+                }
+        finally:
+            store.close()
+    finally:
+        conn.close()
+
+    failed_ids = [chunk_id for chunk_id, proof in chunks.items() if not proof["passed"]]
+    return {
+        "db_path": str(db_path),
+        "sample_size": len(sample_ids),
+        "sample_ids": sample_ids,
+        "total_input_ids": len(unique_ids),
+        "chunks": chunks,
+        "failed_ids": failed_ids,
+        "passed": len(failed_ids) == 0,
+    }
+
+
 def run_apply(
     db_path: str | Path,
     *,
@@ -656,16 +819,38 @@ def run_apply(
     if not dry_run["audit"]["stop_gate_passed"]:
         raise RuntimeError("STOP gate failed: direct/control-session chunks are classified into quarantine set")
     ids = select_quarantine_ids(db_path)
+    snapshot_apply_report = apply_quarantine_ids(
+        backup_path,
+        ids,
+        batch_size=batch_size,
+        checkpoint_every=checkpoint_every,
+        run_id=f"pre-apply-retrievability-{_utc_now()}",
+    )
+    pre_apply_retrievability_proof = run_retrievability_proof(backup_path, ids)
+    if not pre_apply_retrievability_proof["passed"]:
+        raise RuntimeError(
+            "pre-apply retrievability proof failed for quarantined chunks: "
+            + ", ".join(pre_apply_retrievability_proof["failed_ids"][:10])
+        )
     apply_report = apply_quarantine_ids(
         db_path,
         ids,
         batch_size=batch_size,
         checkpoint_every=checkpoint_every,
     )
+    retrievability_proof = run_retrievability_proof(db_path, ids)
+    if not retrievability_proof["passed"]:
+        raise RuntimeError(
+            "post-apply retrievability proof failed for quarantined chunks: "
+            + ", ".join(retrievability_proof["failed_ids"][:10])
+        )
     after = run_dry_run(db_path)
     return {
         "dry_run_before": dry_run,
+        "snapshot_apply": snapshot_apply_report,
+        "pre_apply_retrievability_proof": pre_apply_retrievability_proof,
         "apply": apply_report,
+        "retrievability_proof": retrievability_proof,
         "dry_run_after": after,
         "backup_path": str(backup_path),
     }
