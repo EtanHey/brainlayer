@@ -3199,6 +3199,90 @@ def export_obsidian(
         store.close()
 
 
+class _RewindArchiveBatcher:
+    """Buffer and flush watcher rewind archival updates in batches."""
+
+    def __init__(
+        self,
+        db_path: Path,
+        batch_size: int,
+        flush_interval_ms: int,
+        vector_store_factory=None,
+    ) -> None:
+        self.db_path = db_path
+        self.batch_size = max(1, int(batch_size))
+        self.flush_interval_ms = max(1, int(flush_interval_ms))
+        self._vector_store_factory = vector_store_factory
+        self._vector_store = None
+        self._pending_session_ids: set[str] = set()
+        self._last_flush_at = time.perf_counter()
+        self.archived_total = 0
+
+    def _get_vector_store(self):
+        if self._vector_store is None:
+            from ..vector_store import VectorStore
+
+            factory = self._vector_store_factory or VectorStore
+            self._vector_store = factory(self.db_path)
+        return self._vector_store
+
+    def add(self, session_id: str) -> None:
+        if not session_id:
+            return
+        self._pending_session_ids.add(session_id)
+
+    @property
+    def pending_count(self) -> int:
+        return len(self._pending_session_ids)
+
+    def flush(self, reason: str) -> int:
+        if not self._pending_session_ids:
+            self._last_flush_at = time.perf_counter()
+            return 0
+
+        vector_store = self._get_vector_store()
+        cursor = vector_store.conn.cursor()
+        placeholders = ",".join("?" for _ in self._pending_session_ids)
+        now = datetime.now(UTC).isoformat()
+        params = [now, *sorted(self._pending_session_ids)]
+        cursor.execute(
+            f"""
+            UPDATE chunks
+               SET archived_at = ?, value_type = 'ARCHIVED'
+             WHERE source = 'realtime_watcher'
+               AND archived_at IS NULL
+               AND conversation_id IN ({placeholders})
+            """,
+            params,
+        )
+        affected = vector_store.conn.changes()
+        vector_store.conn.commit()
+        self.archived_total += affected
+        if affected > 0:
+            rprint(
+                f"  Archived {affected} chunks from {len(self._pending_session_ids)} sessions after rewind ({reason})"
+            )
+        self._pending_session_ids.clear()
+        self._last_flush_at = time.perf_counter()
+        return affected
+
+    def maybe_flush(self, reason: str) -> int:
+        now = time.perf_counter()
+        if not self._pending_session_ids:
+            return 0
+        if len(self._pending_session_ids) >= self.batch_size:
+            return self.flush(f"batch={self.batch_size}")
+        elapsed_ms = int((now - self._last_flush_at) * 1000)
+        if elapsed_ms >= self.flush_interval_ms:
+            return self.flush(reason)
+        return 0
+
+    def close(self) -> None:
+        if self._vector_store is not None:
+            self._vector_store.close()
+            self._vector_store = None
+
+
 @app.command()
 def watch(
     source: Optional[list[Path]] = typer.Option(
@@ -3251,30 +3335,35 @@ def watch(
     rprint()
 
     on_flush = create_flush_callback(db_path, arbitrated=True)
+    rewind_archive_batch_size = 50
+    rewind_archive_interval_ms = flush_interval * 3
+    if env_batch := os.environ.get("BRAINLAYER_REWIND_ARCHIVE_BATCH"):
+        try:
+            rewind_archive_batch_size = max(1, int(env_batch))
+        except ValueError:
+            rprint(
+                f"[yellow]Invalid BRAINLAYER_REWIND_ARCHIVE_BATCH={env_batch}, using default {rewind_archive_batch_size}[/]"
+            )
+    if env_interval := os.environ.get("BRAINLAYER_REWIND_ARCHIVE_INTERVAL_MS"):
+        try:
+            rewind_archive_interval_ms = max(1, int(env_interval))
+        except ValueError:
+            rprint(
+                f"[yellow]Invalid BRAINLAYER_REWIND_ARCHIVE_INTERVAL_MS={env_interval}, using default {rewind_archive_interval_ms}ms[/]"
+            )
+
+    rewind_archiver = _RewindArchiveBatcher(
+        db_path=db_path,
+        batch_size=rewind_archive_batch_size,
+        flush_interval_ms=rewind_archive_interval_ms,
+    )
 
     def on_rewind(filepath: str, session_id: str, old_offset: int, new_offset: int):
         """Handle checkpoint restore — soft-archive chunks from reverted timeline."""
-        from ..vector_store import VectorStore as _VS
-
         rprint(f"[bold yellow]Rewind detected:[/] {session_id} ({old_offset}→{new_offset})")
+        rewind_archiver.add(session_id)
         try:
-            s = _VS(db_path)
-            cursor = s.conn.cursor()
-            # Mark realtime_watcher chunks from this session as archived
-            from datetime import datetime, timezone
-
-            now = datetime.now(timezone.utc).isoformat()
-            cursor.execute(
-                """UPDATE chunks SET archived_at = ?, value_type = 'ARCHIVED'
-                   WHERE source = 'realtime_watcher'
-                     AND conversation_id = ?
-                     AND archived_at IS NULL""",
-                (now, session_id),
-            )
-            affected = s.conn.changes()
-            if affected > 0:
-                rprint(f"  Archived {affected} chunks from reverted timeline")
-            s.close()
+            rewind_archiver.maybe_flush(f"interval={rewind_archive_interval_ms}ms")
         except Exception as e:
             rprint(f"  [red]Failed to archive reverted chunks: {e}[/]")
 
@@ -3297,7 +3386,11 @@ def watch(
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
 
-    watcher.start()
+    try:
+        watcher.start()
+    finally:
+        rewind_archiver.flush("shutdown")
+        rewind_archiver.close()
     rprint(f"[bold green]Done.[/] Total flushed: {watcher.indexer.total_flushed}")
 
 
