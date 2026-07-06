@@ -819,6 +819,19 @@ def run_apply(
     if not dry_run["audit"]["stop_gate_passed"]:
         raise RuntimeError("STOP gate failed: direct/control-session chunks are classified into quarantine set")
     ids = select_quarantine_ids(db_path)
+    snapshot_apply_report = apply_quarantine_ids(
+        backup_path,
+        ids,
+        batch_size=batch_size,
+        checkpoint_every=checkpoint_every,
+        run_id=f"pre-apply-retrievability-{_utc_now()}",
+    )
+    pre_apply_retrievability_proof = run_retrievability_proof(backup_path, ids)
+    if not pre_apply_retrievability_proof["passed"]:
+        raise RuntimeError(
+            "pre-apply retrievability proof failed for quarantined chunks: "
+            + ", ".join(pre_apply_retrievability_proof["failed_ids"][:10])
+        )
     apply_report = apply_quarantine_ids(
         db_path,
         ids,
@@ -828,12 +841,14 @@ def run_apply(
     retrievability_proof = run_retrievability_proof(db_path, ids)
     if not retrievability_proof["passed"]:
         raise RuntimeError(
-            "retrievability proof failed for quarantined chunks: "
+            "post-apply retrievability proof failed for quarantined chunks: "
             + ", ".join(retrievability_proof["failed_ids"][:10])
         )
     after = run_dry_run(db_path)
     return {
         "dry_run_before": dry_run,
+        "snapshot_apply": snapshot_apply_report,
+        "pre_apply_retrievability_proof": pre_apply_retrievability_proof,
         "apply": apply_report,
         "retrievability_proof": retrievability_proof,
         "dry_run_after": after,

@@ -197,8 +197,10 @@ def test_run_apply_refuses_when_retrievability_proof_fails(tmp_path: Path, monke
     finally:
         store.close()
 
+    proof_paths = []
+
     def fail_retrievability_proof(db_path_arg, chunk_ids):
-        assert db_path_arg == db_path
+        proof_paths.append(db_path_arg)
         assert chunk_ids == ["codex-session"]
         return {"passed": False, "failed_ids": ["codex-session"]}
 
@@ -211,6 +213,24 @@ def test_run_apply_refuses_when_retrievability_proof_fails(tmp_path: Path, monke
             confirm_workers_stopped=True,
             confirm_watcher_paused=True,
         )
+
+    assert proof_paths == [backup_path]
+    conn = apsw.Connection(str(db_path), flags=apsw.SQLITE_OPEN_READONLY)
+    try:
+        cursor = conn.cursor()
+        row = cursor.execute(
+            "SELECT content_class, provenance_class FROM chunks WHERE id = 'codex-session'"
+        ).fetchone()
+        default_fts_rows = cursor.execute("SELECT COUNT(*) FROM chunks_fts WHERE chunk_id = 'codex-session'").fetchone()
+        operational_fts_rows = cursor.execute(
+            "SELECT COUNT(*) FROM chunks_fts_operational WHERE chunk_id = 'codex-session'"
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row == ("knowledge", "RAW-ETAN-DIRECT")
+    assert default_fts_rows == (1,)
+    assert operational_fts_rows == (0,)
 
 
 def test_round_trip_ignores_stale_chunk_fts_rowids(tmp_path: Path) -> None:
