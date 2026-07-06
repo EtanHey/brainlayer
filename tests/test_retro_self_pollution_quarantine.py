@@ -218,9 +218,7 @@ def test_run_apply_refuses_when_retrievability_proof_fails(tmp_path: Path, monke
     conn = apsw.Connection(str(db_path), flags=apsw.SQLITE_OPEN_READONLY)
     try:
         cursor = conn.cursor()
-        row = cursor.execute(
-            "SELECT content_class, provenance_class FROM chunks WHERE id = 'codex-session'"
-        ).fetchone()
+        row = cursor.execute("SELECT content_class, provenance_class FROM chunks WHERE id = 'codex-session'").fetchone()
         default_fts_rows = cursor.execute("SELECT COUNT(*) FROM chunks_fts WHERE chunk_id = 'codex-session'").fetchone()
         operational_fts_rows = cursor.execute(
             "SELECT COUNT(*) FROM chunks_fts_operational WHERE chunk_id = 'codex-session'"
