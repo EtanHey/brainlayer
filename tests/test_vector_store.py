@@ -1,8 +1,16 @@
 """Tests for vector_store.py — date filtering, search metadata, schema."""
 
+import os
+
 import pytest
 
-pytestmark = pytest.mark.integration
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        os.environ.get("BRAINLAYER_RUN_LIVE_VECTOR_STORE_TESTS") != "1",
+        reason="requires explicit opt-in because this module opens the production-sized DEFAULT_DB_PATH",
+    ),
+]
 
 from brainlayer.paths import DEFAULT_DB_PATH
 from brainlayer.vector_store import VectorStore

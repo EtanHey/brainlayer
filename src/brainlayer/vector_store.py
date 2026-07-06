@@ -64,6 +64,7 @@ from .tag_normalization import ensure_tag_tombstone_schema
 
 _DEFAULT_BUSY_TIMEOUT_MS = 30_000
 _DEFAULT_READ_BUSY_TIMEOUT_MS = 5_000
+_DEFAULT_INDEX_TXN_BATCH = 250
 _MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 _WRITE_BUSY_TIMEOUT_STATE = threading.local()
 _NO_EXEC_TRACE = object()
@@ -83,6 +84,10 @@ def _positive_int_env(name: str, default: int) -> int:
 
 def _read_busy_timeout_ms() -> int:
     return _positive_int_env("BRAINLAYER_READ_BUSY_TIMEOUT_MS", _DEFAULT_READ_BUSY_TIMEOUT_MS)
+
+
+def _index_txn_batch_size() -> int:
+    return _positive_int_env("BRAINLAYER_INDEX_TXN_BATCH", _DEFAULT_INDEX_TXN_BATCH)
 
 
 def _write_busy_deadline() -> float | None:
@@ -2371,164 +2376,169 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         if not valid_pairs and rejected_error is not None:
             raise rejected_error
 
-        for attempt in range(5):
-            cursor = self.conn.cursor()
-            transaction_started = False
-            try:
-                cursor.execute("BEGIN IMMEDIATE")
-                transaction_started = True
-                for chunk, embedding in valid_pairs:
-                    chunk_id = chunk["id"]
-                    created_at = chunk.get("created_at") or datetime.now(timezone.utc).isoformat()
-                    chunk = {**chunk, "created_at": created_at}
-                    tags_value = chunk.get("tags")
-                    tags_json = json.dumps(tags_value) if isinstance(tags_value, (list, dict)) else tags_value
-                    duplicate, dedupe_fields = find_duplicate(
-                        self.conn,
-                        chunk_id=chunk_id,
-                        content=chunk["content"],
-                        created_at=created_at,
-                        project=chunk.get("project"),
-                        content_type=chunk.get("content_type"),
-                    )
-                    if duplicate is not None:
-                        duplicate_row_exists = cursor.execute(
-                            "SELECT 1 FROM chunks WHERE id = ?", (chunk_id,)
-                        ).fetchone()
-                        content_changed = merge_duplicate_chunk(
+        batch_size = _index_txn_batch_size()
+        for start in range(0, len(valid_pairs), batch_size):
+            sub_batch = valid_pairs[start : start + batch_size]
+            for attempt in range(5):
+                cursor = self.conn.cursor()
+                transaction_started = False
+                try:
+                    cursor.execute("BEGIN IMMEDIATE")
+                    transaction_started = True
+                    for chunk, embedding in sub_batch:
+                        chunk_id = chunk["id"]
+                        created_at = chunk.get("created_at") or datetime.now(timezone.utc).isoformat()
+                        chunk = {**chunk, "created_at": created_at}
+                        tags_value = chunk.get("tags")
+                        tags_json = json.dumps(tags_value) if isinstance(tags_value, (list, dict)) else tags_value
+                        duplicate, dedupe_fields = find_duplicate(
                             self.conn,
-                            canonical_id=duplicate.canonical_chunk_id,
-                            duplicate_id=chunk_id,
+                            chunk_id=chunk_id,
+                            content=chunk["content"],
+                            created_at=created_at,
+                            project=chunk.get("project"),
+                            content_type=chunk.get("content_type"),
+                        )
+                        if duplicate is not None:
+                            duplicate_row_exists = cursor.execute(
+                                "SELECT 1 FROM chunks WHERE id = ?", (chunk_id,)
+                            ).fetchone()
+                            content_changed = merge_duplicate_chunk(
+                                self.conn,
+                                canonical_id=duplicate.canonical_chunk_id,
+                                duplicate_id=chunk_id,
+                                incoming={
+                                    **chunk,
+                                    "tags": tags_json,
+                                    "created_at": created_at,
+                                    "last_seen_at": chunk.get("last_seen_at") or created_at,
+                                },
+                                mechanism=duplicate.mechanism,
+                                hamming_distance_value=duplicate.hamming_distance,
+                                archive_existing_duplicate=duplicate_row_exists is not None,
+                            )
+                            if content_changed:
+                                merged_embedding = self._blend_chunk_vector(
+                                    cursor, duplicate.canonical_chunk_id, embedding
+                                )
+                                self._upsert_chunk_vector(cursor, duplicate.canonical_chunk_id, merged_embedding)
+                            elif not self._chunk_vector_exists(cursor, duplicate.canonical_chunk_id):
+                                self._upsert_chunk_vector(cursor, duplicate.canonical_chunk_id, embedding)
+                            continue
+                        if merge_existing_chunk_seen(
+                            self.conn,
+                            chunk_id=chunk_id,
                             incoming={
                                 **chunk,
                                 "tags": tags_json,
                                 "created_at": created_at,
                                 "last_seen_at": chunk.get("last_seen_at") or created_at,
                             },
-                            mechanism=duplicate.mechanism,
-                            hamming_distance_value=duplicate.hamming_distance,
-                            archive_existing_duplicate=duplicate_row_exists is not None,
-                        )
-                        if content_changed:
-                            merged_embedding = self._blend_chunk_vector(cursor, duplicate.canonical_chunk_id, embedding)
-                            self._upsert_chunk_vector(cursor, duplicate.canonical_chunk_id, merged_embedding)
-                        elif not self._chunk_vector_exists(cursor, duplicate.canonical_chunk_id):
-                            self._upsert_chunk_vector(cursor, duplicate.canonical_chunk_id, embedding)
-                        continue
-                    if merge_existing_chunk_seen(
-                        self.conn,
-                        chunk_id=chunk_id,
-                        incoming={
-                            **chunk,
-                            "tags": tags_json,
-                            "created_at": created_at,
-                            "last_seen_at": chunk.get("last_seen_at") or created_at,
-                        },
-                    ):
-                        if not self._chunk_vector_exists(cursor, chunk_id):
-                            self._upsert_chunk_vector(cursor, chunk_id, embedding)
-                        continue
+                        ):
+                            if not self._chunk_vector_exists(cursor, chunk_id):
+                                self._upsert_chunk_vector(cursor, chunk_id, embedding)
+                            continue
 
-                    cursor.execute(
-                        """
-                        INSERT INTO chunks
-                        (id, content, metadata, source_file, project,
-                         content_type, value_type, char_count, source, created_at,
-                         conversation_id, position, sender, chunk_origin, tags, importance,
-                         half_life_days, seen_count, last_seen_at, dedupe_hash, simhash,
-                         simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3,
-                         brick_id, source_uri, status, ingested_at, topic_cluster)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(id) DO UPDATE SET
-                            content = excluded.content,
-                            metadata = excluded.metadata,
-                            source_file = excluded.source_file,
-                            project = excluded.project,
-                            content_type = excluded.content_type,
-                            value_type = excluded.value_type,
-                            char_count = excluded.char_count,
-                            source = excluded.source,
-                            created_at = COALESCE(chunks.created_at, excluded.created_at),
-                            conversation_id = COALESCE(excluded.conversation_id, chunks.conversation_id),
-                            position = COALESCE(excluded.position, chunks.position),
-                            sender = COALESCE(excluded.sender, chunks.sender),
-                            tags = COALESCE(excluded.tags, chunks.tags),
-                            importance = COALESCE(excluded.importance, chunks.importance),
-                            half_life_days = MAX(COALESCE(chunks.half_life_days, 30.0), COALESCE(excluded.half_life_days, 30.0)),
-                            seen_count = COALESCE(chunks.seen_count, 1),
-                            last_seen_at = COALESCE(chunks.last_seen_at, excluded.last_seen_at),
-                            dedupe_hash = excluded.dedupe_hash,
-                            simhash = excluded.simhash,
-                            simhash_band_0 = excluded.simhash_band_0,
-                            simhash_band_1 = excluded.simhash_band_1,
-                            simhash_band_2 = excluded.simhash_band_2,
-                            simhash_band_3 = excluded.simhash_band_3,
-                            brick_id = COALESCE(chunks.brick_id, excluded.brick_id),
-                            source_uri = COALESCE(excluded.source_uri, chunks.source_uri),
-                            status = CASE
-                                WHEN excluded.status IS NOT NULL AND excluded.status != 'active' THEN excluded.status
-                                WHEN chunks.status IS NULL THEN COALESCE(excluded.status, 'active')
-                                ELSE chunks.status
-                            END,
-                            ingested_at = COALESCE(chunks.ingested_at, excluded.ingested_at),
-                            topic_cluster = COALESCE(excluded.topic_cluster, chunks.topic_cluster),
-                            chunk_origin = CASE
-                                WHEN excluded.content != chunks.content
-                                    THEN COALESCE(excluded.chunk_origin, 'unknown')
-                                WHEN excluded.chunk_origin IS NOT NULL AND excluded.chunk_origin != 'unknown'
-                                    THEN excluded.chunk_origin
-                                WHEN chunks.chunk_origin IS NULL
-                                    THEN COALESCE(excluded.chunk_origin, 'unknown')
-                                ELSE chunks.chunk_origin
-                            END
-                    """,
-                        (
-                            chunk_id,
-                            chunk["content"],
-                            json.dumps(chunk["metadata"]),
-                            chunk["source_file"],
-                            chunk.get("project"),
-                            chunk.get("content_type"),
-                            chunk.get("value_type"),
-                            chunk.get("char_count", 0),
-                            chunk.get("source", "claude_code"),
-                            chunk.get("created_at"),
-                            chunk.get("conversation_id"),
-                            chunk.get("position"),
-                            chunk.get("sender"),
-                            detect_chunk_origin(chunk.get("content"), chunk.get("chunk_origin")),
-                            tags_json,
-                            float(chunk["importance"]) if chunk.get("importance") is not None else None,
-                            float(chunk["half_life_days"]) if chunk.get("half_life_days") is not None else None,
-                            int(chunk.get("seen_count") or 1),
-                            chunk.get("last_seen_at") or created_at,
-                            dedupe_fields.dedupe_hash,
-                            dedupe_fields.simhash,
-                            dedupe_fields.bands[0],
-                            dedupe_fields.bands[1],
-                            dedupe_fields.bands[2],
-                            dedupe_fields.bands[3],
-                            chunk.get("brick_id", chunk_id),
-                            chunk.get("source_uri") or chunk["source_file"],
-                            chunk.get("status", "active"),
-                            chunk.get("ingested_at") or int(time.time()),
-                            chunk.get("topic_cluster"),
-                        ),
-                    )
-                    self._upsert_chunk_vector(cursor, chunk_id, embedding)
-                cursor.execute("COMMIT")
-                transaction_started = False
-                break
-            except apsw.BusyError:
-                if transaction_started:
-                    cursor.execute("ROLLBACK")
-                if attempt == 4:
+                        cursor.execute(
+                            """
+                            INSERT INTO chunks
+                            (id, content, metadata, source_file, project,
+                             content_type, value_type, char_count, source, created_at,
+                             conversation_id, position, sender, chunk_origin, tags, importance,
+                             half_life_days, seen_count, last_seen_at, dedupe_hash, simhash,
+                             simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3,
+                             brick_id, source_uri, status, ingested_at, topic_cluster)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(id) DO UPDATE SET
+                                content = excluded.content,
+                                metadata = excluded.metadata,
+                                source_file = excluded.source_file,
+                                project = excluded.project,
+                                content_type = excluded.content_type,
+                                value_type = excluded.value_type,
+                                char_count = excluded.char_count,
+                                source = excluded.source,
+                                created_at = COALESCE(chunks.created_at, excluded.created_at),
+                                conversation_id = COALESCE(excluded.conversation_id, chunks.conversation_id),
+                                position = COALESCE(excluded.position, chunks.position),
+                                sender = COALESCE(excluded.sender, chunks.sender),
+                                tags = COALESCE(excluded.tags, chunks.tags),
+                                importance = COALESCE(excluded.importance, chunks.importance),
+                                half_life_days = MAX(COALESCE(chunks.half_life_days, 30.0), COALESCE(excluded.half_life_days, 30.0)),
+                                seen_count = COALESCE(chunks.seen_count, 1),
+                                last_seen_at = COALESCE(chunks.last_seen_at, excluded.last_seen_at),
+                                dedupe_hash = excluded.dedupe_hash,
+                                simhash = excluded.simhash,
+                                simhash_band_0 = excluded.simhash_band_0,
+                                simhash_band_1 = excluded.simhash_band_1,
+                                simhash_band_2 = excluded.simhash_band_2,
+                                simhash_band_3 = excluded.simhash_band_3,
+                                brick_id = COALESCE(chunks.brick_id, excluded.brick_id),
+                                source_uri = COALESCE(excluded.source_uri, chunks.source_uri),
+                                status = CASE
+                                    WHEN excluded.status IS NOT NULL AND excluded.status != 'active' THEN excluded.status
+                                    WHEN chunks.status IS NULL THEN COALESCE(excluded.status, 'active')
+                                    ELSE chunks.status
+                                END,
+                                ingested_at = COALESCE(chunks.ingested_at, excluded.ingested_at),
+                                topic_cluster = COALESCE(excluded.topic_cluster, chunks.topic_cluster),
+                                chunk_origin = CASE
+                                    WHEN excluded.content != chunks.content
+                                        THEN COALESCE(excluded.chunk_origin, 'unknown')
+                                    WHEN excluded.chunk_origin IS NOT NULL AND excluded.chunk_origin != 'unknown'
+                                        THEN excluded.chunk_origin
+                                    WHEN chunks.chunk_origin IS NULL
+                                        THEN COALESCE(excluded.chunk_origin, 'unknown')
+                                    ELSE chunks.chunk_origin
+                                END
+                        """,
+                            (
+                                chunk_id,
+                                chunk["content"],
+                                json.dumps(chunk["metadata"]),
+                                chunk["source_file"],
+                                chunk.get("project"),
+                                chunk.get("content_type"),
+                                chunk.get("value_type"),
+                                chunk.get("char_count", 0),
+                                chunk.get("source", "claude_code"),
+                                chunk.get("created_at"),
+                                chunk.get("conversation_id"),
+                                chunk.get("position"),
+                                chunk.get("sender"),
+                                detect_chunk_origin(chunk.get("content"), chunk.get("chunk_origin")),
+                                tags_json,
+                                float(chunk["importance"]) if chunk.get("importance") is not None else None,
+                                float(chunk["half_life_days"]) if chunk.get("half_life_days") is not None else None,
+                                int(chunk.get("seen_count") or 1),
+                                chunk.get("last_seen_at") or created_at,
+                                dedupe_fields.dedupe_hash,
+                                dedupe_fields.simhash,
+                                dedupe_fields.bands[0],
+                                dedupe_fields.bands[1],
+                                dedupe_fields.bands[2],
+                                dedupe_fields.bands[3],
+                                chunk.get("brick_id", chunk_id),
+                                chunk.get("source_uri") or chunk["source_file"],
+                                chunk.get("status", "active"),
+                                chunk.get("ingested_at") or int(time.time()),
+                                chunk.get("topic_cluster"),
+                            ),
+                        )
+                        self._upsert_chunk_vector(cursor, chunk_id, embedding)
+                    cursor.execute("COMMIT")
+                    transaction_started = False
+                    break
+                except apsw.BusyError:
+                    if transaction_started:
+                        cursor.execute("ROLLBACK")
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.1 * (2**attempt))
+                except Exception:
+                    if transaction_started:
+                        cursor.execute("ROLLBACK")
                     raise
-                time.sleep(0.1 * (2**attempt))
-            except Exception:
-                if transaction_started:
-                    cursor.execute("ROLLBACK")
-                raise
 
         from .search_repo import clear_hybrid_search_cache
 
