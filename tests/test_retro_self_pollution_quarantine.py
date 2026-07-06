@@ -123,6 +123,9 @@ def test_quarantine_unquarantine_round_trip_restores_chunk_and_fts_rows(tmp_path
             "SELECT content_class, provenance_class FROM chunks WHERE id = 'claude-subagent'"
         ).fetchone()
         knowledge_rows = cursor.execute("SELECT chunk_id FROM chunks_fts WHERE chunk_id = 'claude-subagent'").fetchall()
+        trigram_rows = cursor.execute(
+            "SELECT chunk_id FROM chunks_fts_trigram WHERE chunk_id = 'claude-subagent'"
+        ).fetchall()
         operational_rows = cursor.execute(
             "SELECT chunk_id FROM chunks_fts_operational WHERE chunk_id = 'claude-subagent'"
         ).fetchall()
@@ -131,6 +134,7 @@ def test_quarantine_unquarantine_round_trip_restores_chunk_and_fts_rows(tmp_path
 
     assert row == ("operational", "AGENT-INFERENCE")
     assert knowledge_rows == []
+    assert trigram_rows == []
     assert operational_rows == [("claude-subagent",)]
 
     revert_report = script.unquarantine_ids(db_path, ["claude-subagent"], run_id="test-run")
@@ -139,10 +143,16 @@ def test_quarantine_unquarantine_round_trip_restores_chunk_and_fts_rows(tmp_path
     restored_store = VectorStore(db_path)
     try:
         after = script.capture_restore_state(restored_store.conn.cursor(), ["claude-subagent"])
+        after_trigram_rows = (
+            restored_store.conn.cursor()
+            .execute("SELECT chunk_id FROM chunks_fts_trigram WHERE chunk_id = 'claude-subagent'")
+            .fetchall()
+        )
     finally:
         restored_store.close()
 
     assert after == before
+    assert after_trigram_rows == [("claude-subagent",)]
 
 
 def test_quarantine_retrievability_proof_excludes_default_but_preserves_operational_paths(
