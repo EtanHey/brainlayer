@@ -7,6 +7,7 @@ from pathlib import Path
 from types import ModuleType
 
 import apsw
+import pytest
 
 from brainlayer.vector_store import VectorStore
 
@@ -142,6 +143,74 @@ def test_quarantine_unquarantine_round_trip_restores_chunk_and_fts_rows(tmp_path
         restored_store.close()
 
     assert after == before
+
+
+def test_quarantine_retrievability_proof_excludes_default_but_preserves_operational_paths(
+    tmp_path: Path,
+) -> None:
+    script = _load_script()
+    db_path = tmp_path / "retrievability.db"
+    denied_source = tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent-a1.jsonl"
+    store = VectorStore(db_path)
+    try:
+        _insert_chunk(
+            store,
+            chunk_id="claude-subagent",
+            source_file=denied_source,
+            content="retrievability invariant exactsentinel",
+            provenance_class="RAW-ETAN-DIRECT",
+        )
+    finally:
+        store.close()
+
+    quarantine_report = script.apply_quarantine_ids(db_path, ["claude-subagent"], batch_size=1, run_id="proof-run")
+    assert quarantine_report["quarantined"] == 1
+
+    proof = script.run_retrievability_proof(db_path, ["claude-subagent"])
+
+    assert proof["passed"] is True
+    assert proof["sample_size"] == 1
+    assert proof["sample_ids"] == ["claude-subagent"]
+    chunk_proof = proof["chunks"]["claude-subagent"]
+    assert chunk_proof["default_search_absent"] is True
+    assert chunk_proof["operational_search_present"] is True
+    assert chunk_proof["expand_fetchable"] is True
+    assert chunk_proof["chunk_row_exists"] is True
+    assert chunk_proof["content_class"] == "operational"
+    assert chunk_proof["operational_fts_rows"] == 1
+    assert chunk_proof["default_fts_rows"] == 0
+
+
+def test_run_apply_refuses_when_retrievability_proof_fails(tmp_path: Path, monkeypatch) -> None:
+    script = _load_script()
+    db_path = tmp_path / "apply-proof-gate.db"
+    backup_path = tmp_path / "apply-proof-gate-backup.db"
+    denied_source = tmp_path / ".codex" / "sessions" / "worker.jsonl"
+    store = VectorStore(db_path)
+    try:
+        _insert_chunk(
+            store,
+            chunk_id="codex-session",
+            source_file=denied_source,
+            content="apply gate proof sentinel",
+        )
+    finally:
+        store.close()
+
+    def fail_retrievability_proof(db_path_arg, chunk_ids):
+        assert db_path_arg == db_path
+        assert chunk_ids == ["codex-session"]
+        return {"passed": False, "failed_ids": ["codex-session"]}
+
+    monkeypatch.setattr(script, "run_retrievability_proof", fail_retrievability_proof)
+
+    with pytest.raises(RuntimeError, match="retrievability proof failed"):
+        script.run_apply(
+            db_path,
+            backup_path=backup_path,
+            confirm_workers_stopped=True,
+            confirm_watcher_paused=True,
+        )
 
 
 def test_round_trip_ignores_stale_chunk_fts_rowids(tmp_path: Path) -> None:
