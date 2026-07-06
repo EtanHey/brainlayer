@@ -33,6 +33,7 @@ FTS_COLUMNS = "content, summary, tags, resolved_query, key_facts, resolved_queri
 FTS_SELECT_COLUMNS = "content, summary, tags, resolved_query, key_facts, resolved_queries, id"
 FTS_STATE_COLUMNS = "rowid, content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id"
 QUARANTINE_MANIFEST_TABLE = "retro_self_pollution_quarantine_manifest"
+RECONCILE_CHUNK_ID_TABLE = "_retro_quarantine_reconcile_chunk_ids"
 DEFAULT_ESTIMATE = 244_152
 RETRIEVABILITY_TOKEN_RE = re.compile(r"[A-Za-z0-9]{4,}")
 
@@ -193,7 +194,7 @@ def _recreate_fts_triggers(db_path: Path) -> None:
 
 
 def _checkpoint(cursor: apsw.Cursor) -> None:
-    cursor.execute("PRAGMA wal_checkpoint(FULL)")
+    cursor.execute("PRAGMA wal_checkpoint(PASSIVE)")
 
 
 def _optimize_fts(cursor: apsw.Cursor) -> None:
@@ -373,17 +374,53 @@ def _record_manifest(cursor: apsw.Cursor, chunk_ids: list[str], *, run_id: str, 
         )
 
 
-def _delete_fts_rows(cursor: apsw.Cursor, chunk_ids: list[str]) -> None:
+def _delete_fts_rows(
+    cursor: apsw.Cursor,
+    chunk_ids: list[str],
+    table_names: tuple[str, ...] = ("chunks_fts", "chunks_fts_operational", "chunks_fts_trigram"),
+) -> None:
     placeholders = _placeholders(chunk_ids)
-    for table_name in ("chunks_fts", "chunks_fts_operational", "chunks_fts_trigram"):
+    for table_name in table_names:
         cursor.execute(f"DELETE FROM {table_name} WHERE chunk_id IN ({placeholders})", chunk_ids)
+    updates = []
+    if "chunks_fts" in table_names:
+        updates.append("fts_rowid = NULL")
+    if "chunks_fts_trigram" in table_names:
+        updates.append("trigram_rowid = NULL")
+    if "chunks_fts_operational" in table_names:
+        updates.append("operational_rowid = NULL")
+    if updates:
+        cursor.execute(
+            f"""
+            UPDATE chunk_fts_rowids
+            SET {", ".join(updates)}
+            WHERE chunk_id IN ({placeholders})
+            """,
+            chunk_ids,
+        )
+
+
+def _load_chunk_ids_reconcile_table(cursor: apsw.Cursor, chunk_ids: list[str]) -> None:
+    cursor.execute(f"CREATE TEMP TABLE {RECONCILE_CHUNK_ID_TABLE}(chunk_id TEXT PRIMARY KEY)")
+    cursor.executemany(
+        f"INSERT OR IGNORE INTO {RECONCILE_CHUNK_ID_TABLE}(chunk_id) VALUES (?)",
+        [(chunk_id,) for chunk_id in chunk_ids],
+    )
+
+
+def _clear_trigram_fts(cursor: apsw.Cursor) -> None:
+    cursor.execute(
+        f"""
+        DELETE FROM chunks_fts_trigram
+        WHERE chunk_id IN (SELECT chunk_id FROM {RECONCILE_CHUNK_ID_TABLE})
+        """
+    )
     cursor.execute(
         f"""
         UPDATE chunk_fts_rowids
-        SET fts_rowid = NULL, trigram_rowid = NULL, operational_rowid = NULL
-        WHERE chunk_id IN ({placeholders})
-        """,
-        chunk_ids,
+        SET trigram_rowid = NULL
+        WHERE chunk_id IN (SELECT chunk_id FROM {RECONCILE_CHUNK_ID_TABLE})
+        """
     )
 
 
@@ -447,6 +484,7 @@ def apply_quarantine_ids(
     if not chunk_ids:
         return {"quarantined": 0, "run_id": run_id or ""}
 
+    chunk_ids = list(dict.fromkeys(chunk_ids))
     db_path = _path(db_path)
     if bootstrap_schema:
         _recreate_fts_triggers(db_path)
@@ -459,11 +497,12 @@ def apply_quarantine_ids(
     timestamp = _utc_now()
     batches_since_checkpoint = 0
     try:
+        _load_chunk_ids_reconcile_table(cursor, chunk_ids)
         for ids in _batch(chunk_ids, batch_size):
             placeholders = _placeholders(ids)
             cursor.execute("BEGIN IMMEDIATE")
             _record_manifest(cursor, ids, run_id=run_id, timestamp=timestamp)
-            _delete_fts_rows(cursor, ids)
+            _delete_fts_rows(cursor, ids, table_names=("chunks_fts", "chunks_fts_operational"))
             cursor.execute(
                 f"""
                 UPDATE chunks
@@ -479,11 +518,15 @@ def apply_quarantine_ids(
             if batches_since_checkpoint >= checkpoint_every:
                 _checkpoint(cursor)
                 batches_since_checkpoint = 0
+        cursor.execute("BEGIN IMMEDIATE")
+        _clear_trigram_fts(cursor)
+        cursor.execute("COMMIT")
     except Exception:
         if not conn.getautocommit():
             cursor.execute("ROLLBACK")
         raise
     finally:
+        cursor.execute(f"DROP TABLE IF EXISTS {RECONCILE_CHUNK_ID_TABLE}")
         conn.close()
 
     if finalize:
