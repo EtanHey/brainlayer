@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import apsw
 import pytest
@@ -39,6 +41,104 @@ def _insert_chunk(
             '2026-07-03T00:00:00Z', ?, ?)""",
         (chunk_id, content, str(source_file), len(content), content_class, provenance_class),
     )
+
+
+def _copy_sqlite_db(source: Path, destination: Path) -> None:
+    for suffix in ("", "-wal", "-shm"):
+        source_path = Path(f"{source}{suffix}")
+        if source_path.exists():
+            destination_path = Path(f"{destination}{suffix}")
+            destination_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_path, destination_path)
+
+
+def _snapshot_apply_state(
+    script: ModuleType, db_path: str | Path, *, run_id: str, chunk_ids: list[str]
+) -> dict[str, Any]:
+    conn = apsw.Connection(str(db_path), flags=apsw.SQLITE_OPEN_READONLY)
+    try:
+        cursor = conn.cursor()
+        state: dict[str, Any] = {}
+        for chunk_id in sorted(chunk_ids):
+            chunk_row = cursor.execute(
+                "SELECT id, content_class, provenance_class FROM chunks WHERE id = ?",
+                (chunk_id,),
+            ).fetchone()
+            if chunk_row is None:
+                raise ValueError(f"missing chunk in snapshot: {chunk_id}")
+            membership = {
+                table: cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE chunk_id = ?", (chunk_id,)).fetchone()[0]
+                for table in ("chunks_fts", "chunks_fts_operational", "chunks_fts_trigram")
+            }
+            manifest = cursor.execute(
+                f"""
+                SELECT original_content_class, original_provenance_class,
+                       original_fts_rowid, original_trigram_rowid, original_operational_rowid
+                FROM {script.QUARANTINE_MANIFEST_TABLE}
+                WHERE chunk_id = ? AND run_id = ?
+                """,
+                (chunk_id, run_id),
+            ).fetchone()
+            state[chunk_id] = {"chunk": chunk_row, "membership": membership, "manifest": manifest}
+        return state
+    finally:
+        conn.close()
+
+
+def _simulate_incremental_apply(script: ModuleType, db_path: str | Path, chunk_ids: list[str], *, run_id: str) -> None:
+    if not chunk_ids:
+        return
+    chunk_ids = list(dict.fromkeys(chunk_ids))
+    conn = apsw.Connection(str(db_path))
+    try:
+        cursor = conn.cursor()
+        script._recreate_fts_triggers(Path(db_path))
+        script._checkpoint(cursor)
+        script._drop_fts_triggers(cursor)
+        script._ensure_manifest(cursor)
+        script._load_chunk_ids_reconcile_table(cursor, chunk_ids)
+        cursor.execute("BEGIN IMMEDIATE")
+        script._record_manifest(cursor, run_id=run_id, timestamp="sim-legacy")
+        for batch_ids in script._batch(chunk_ids, 5_000):
+            placeholders = script._placeholders(batch_ids)
+            script._delete_fts_rows(cursor, batch_ids, table_names=("chunks_fts", "chunks_fts_operational"))
+            cursor.execute(
+                f"""
+                UPDATE chunks
+                SET content_class = 'operational',
+                    provenance_class = ?
+                WHERE id IN ({placeholders})
+                """,
+                ("AGENT-INFERENCE", *batch_ids),
+            )
+            cursor.execute(
+                f"""
+                INSERT INTO chunks_fts_operational({script.FTS_COLUMNS})
+                SELECT {script.FTS_SELECT_COLUMNS}
+                FROM chunks
+                WHERE id IN ({placeholders})
+                ORDER BY id
+                """,
+                batch_ids,
+            )
+            cursor.execute(
+                f"""
+                INSERT INTO chunk_fts_rowids(chunk_id, operational_rowid)
+                SELECT chunk_id, rowid FROM chunks_fts_operational
+                WHERE chunk_id IN ({placeholders})
+                ON CONFLICT(chunk_id) DO UPDATE SET operational_rowid = excluded.operational_rowid
+                """,
+                batch_ids,
+            )
+        cursor.execute(
+            f"""
+            DELETE FROM chunks_fts_trigram
+            WHERE chunk_id IN (SELECT chunk_id FROM {script.RECONCILE_CHUNK_ID_TABLE})
+            """
+        )
+        cursor.execute("COMMIT")
+    finally:
+        conn.close()
 
 
 def test_dry_run_uses_denylist_and_preserves_direct_sessions(tmp_path: Path) -> None:
@@ -153,6 +253,102 @@ def test_quarantine_unquarantine_round_trip_restores_chunk_and_fts_rows(tmp_path
 
     assert after == before
     assert after_trigram_rows == [("claude-subagent",)]
+
+
+def test_apply_rebuild_mode_matches_incremental_behavior_on_fixture(tmp_path: Path) -> None:
+    script = _load_script()
+    base_db = tmp_path / "parity-base.db"
+    denied_source = tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent-a1.jsonl"
+    denied_source_two = tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent-a2.jsonl"
+    permitted_source = tmp_path / "notes" / "memory.md"
+    store = VectorStore(base_db)
+    try:
+        _insert_chunk(
+            store,
+            chunk_id="denied-knowledge",
+            source_file=denied_source,
+            content="denied knowledge sentinel",
+            content_class="knowledge",
+        )
+        _insert_chunk(
+            store,
+            chunk_id="denied-operational",
+            source_file=denied_source_two,
+            content="denied operational sentinel",
+            content_class="operational",
+        )
+        _insert_chunk(
+            store,
+            chunk_id="preserved-knowledge",
+            source_file=permitted_source,
+            content="preserved knowledge sentinel",
+        )
+        _insert_chunk(
+            store,
+            chunk_id="preserved-operational",
+            source_file=permitted_source,
+            content="preserved operational sentinel",
+            content_class="operational",
+            provenance_class="RAW-ETAN-DIRECT",
+        )
+        _insert_chunk(
+            store,
+            chunk_id="preserved-test",
+            source_file=permitted_source,
+            content="preserved test sentinel",
+            content_class="test",
+            provenance_class="RAW-ETAN-DIRECT",
+        )
+        denied_ids = script.select_quarantine_ids(base_db)
+    finally:
+        store.close()
+
+    run_id = "parity-run"
+    legacy_db = tmp_path / "parity-legacy.db"
+    rebuild_db = tmp_path / "parity-rebuild.db"
+    _copy_sqlite_db(base_db, legacy_db)
+    _copy_sqlite_db(base_db, rebuild_db)
+    all_ids = sorted(
+        [
+            "denied-knowledge",
+            "denied-operational",
+            "preserved-knowledge",
+            "preserved-operational",
+            "preserved-test",
+        ]
+    )
+
+    _simulate_incremental_apply(script, legacy_db, denied_ids, run_id=run_id)
+    rebuild_report = script.apply_quarantine_ids(rebuild_db, denied_ids, run_id=run_id)
+
+    incremental_state = _snapshot_apply_state(script, legacy_db, run_id=run_id, chunk_ids=all_ids)
+    rebuilt_state = _snapshot_apply_state(script, rebuild_db, run_id=run_id, chunk_ids=all_ids)
+    baseline_state = _snapshot_apply_state(script, base_db, run_id="baseline", chunk_ids=all_ids)
+    assert incremental_state == rebuilt_state
+    assert rebuild_report["run_id"] == run_id
+    for chunk_id in all_ids:
+        expected_chunk = baseline_state[chunk_id]["chunk"]
+        if chunk_id in denied_ids:
+            assert rebuilt_state[chunk_id]["chunk"][1] == "operational"
+            assert rebuilt_state[chunk_id]["membership"]["chunks_fts"] == 0
+            assert rebuilt_state[chunk_id]["membership"]["chunks_fts_trigram"] == 0
+            assert rebuilt_state[chunk_id]["membership"]["chunks_fts_operational"] == 1
+            assert rebuilt_state[chunk_id]["manifest"] is not None
+        else:
+            assert rebuilt_state[chunk_id]["chunk"] == expected_chunk
+            assert rebuilt_state[chunk_id]["membership"] == baseline_state[chunk_id]["membership"]
+            assert rebuilt_state[chunk_id]["manifest"] is None
+
+    script.unquarantine_ids(rebuild_db, denied_ids, run_id=run_id)
+    restored_conn = apsw.Connection(str(rebuild_db), flags=apsw.SQLITE_OPEN_READONLY)
+    baseline_conn = apsw.Connection(str(base_db), flags=apsw.SQLITE_OPEN_READONLY)
+    try:
+        restored = script.capture_restore_state(restored_conn.cursor(), all_ids)
+        baseline = script.capture_restore_state(baseline_conn.cursor(), all_ids)
+    finally:
+        restored_conn.close()
+        baseline_conn.close()
+    assert restored == baseline
 
 
 def test_quarantine_retrievability_proof_excludes_default_but_preserves_operational_paths(
