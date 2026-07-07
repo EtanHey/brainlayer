@@ -68,7 +68,11 @@ def _under_provider_sessions(path: Path, provider_dir: str) -> bool:
 
 def _under_cursor_agent_transcripts(path: Path) -> bool:
     parts = path.parts
-    return ".cursor" in parts and "agent-transcripts" in parts
+    try:
+        cursor_index = parts.index(".cursor")
+    except ValueError:
+        return False
+    return "agent-transcripts" in parts[cursor_index + 1 :]
 
 
 def _project_segment(path: Path) -> str | None:
@@ -86,7 +90,7 @@ def _repo_from_project_segment(segment: str | None) -> str | None:
     for marker in ("-Gits-", "--config-"):
         if marker not in normalized:
             continue
-        repo = normalized.rsplit(marker, 1)[-1].strip("-").split("-", 1)[0]
+        repo = normalized.rsplit(marker, 1)[-1].strip("-")
         return repo.casefold() if repo else None
     return normalized.rsplit("-", 1)[-1].casefold() if normalized else None
 

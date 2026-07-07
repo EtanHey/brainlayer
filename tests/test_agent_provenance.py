@@ -66,12 +66,34 @@ def test_classifies_fleet_and_product_subagents_by_transferable_project_token(tm
             / "agent-a25d6b3aa6880db8e.jsonl"
         )
     )
+    hyphenated_fleet = classify_provenance(
+        str(
+            home
+            / ".claude"
+            / "projects"
+            / "-Users-someone-Gits-skill-creator"
+            / "session"
+            / "subagents"
+            / "agent-fleet.jsonl"
+        )
+    )
     product = classify_provenance(
         str(
             home
             / ".claude"
             / "projects"
             / "-Users-someone-Gits-domica"
+            / "session"
+            / "subagents"
+            / "agent-product.jsonl"
+        )
+    )
+    product_with_fleet_prefix = classify_provenance(
+        str(
+            home
+            / ".claude"
+            / "projects"
+            / "-Users-someone-Gits-golems-packages-coach"
             / "session"
             / "subagents"
             / "agent-product.jsonl"
@@ -90,8 +112,22 @@ def test_classifies_fleet_and_product_subagents_by_transferable_project_token(tm
     )
 
     assert (fleet.provenance_tag, fleet.search_policy) == ("fleet-subagent", "KEEP")
+    assert (hyphenated_fleet.provenance_tag, hyphenated_fleet.search_policy) == ("fleet-subagent", "KEEP")
     assert (product.provenance_tag, product.search_policy) == ("product-subagent", "KEEP")
+    assert (product_with_fleet_prefix.provenance_tag, product_with_fleet_prefix.search_policy) == (
+        "product-subagent",
+        "KEEP",
+    )
     assert (mehayom.provenance_tag, mehayom.search_policy) == ("product-subagent", "KEEP")
+
+
+def test_cursor_agent_transcripts_requires_cursor_ancestor(tmp_path: Path) -> None:
+    reversed_segments = tmp_path / "agent-transcripts" / "archive" / ".cursor" / "rules.jsonl"
+
+    decision = classify_provenance(str(reversed_segments))
+
+    assert decision.provenance_tag == "unknown"
+    assert decision.search_policy == "KEEP"
 
 
 def test_direct_claude_sessions_stay_keep_and_never_isolate_or_out(tmp_path: Path) -> None:
