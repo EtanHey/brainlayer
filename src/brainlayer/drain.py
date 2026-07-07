@@ -743,26 +743,31 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
         return ApplyResult()
     tags = event.get("tags")
     ingested_at = int(time.time())
+    values = {
+        "id": chunk_id,
+        "content": content,
+        "metadata": json.dumps(event.get("metadata") or {}),
+        "source_file": source_file,
+        "project": event.get("project"),
+        "content_type": event.get("content_type") or "assistant_text",
+        "value_type": event.get("value_type") or "high",
+        "char_count": len(content),
+        "source": "realtime_watcher",
+        "created_at": event.get("created_at") or datetime.now(timezone.utc).isoformat(),
+        "ingested_at": ingested_at,
+        "conversation_id": event.get("conversation_id"),
+        "sender": event.get("sender"),
+        "tags": json.dumps(tags) if tags else None,
+        "content_hash": _content_hash(content),
+        "chunk_origin": detect_chunk_origin(content, event.get("chunk_origin")),
+    }
+    if event.get("content_class"):
+        values["content_class"] = event.get("content_class")
+    if event.get("provenance_class"):
+        values["provenance_class"] = event.get("provenance_class")
     stored_chunk_id = _insert_or_merge_chunk(
         conn,
-        {
-            "id": chunk_id,
-            "content": content,
-            "metadata": json.dumps(event.get("metadata") or {}),
-            "source_file": source_file,
-            "project": event.get("project"),
-            "content_type": event.get("content_type") or "assistant_text",
-            "value_type": event.get("value_type") or "high",
-            "char_count": len(content),
-            "source": "realtime_watcher",
-            "created_at": event.get("created_at") or datetime.now(timezone.utc).isoformat(),
-            "ingested_at": ingested_at,
-            "conversation_id": event.get("conversation_id"),
-            "sender": event.get("sender"),
-            "tags": json.dumps(tags) if tags else None,
-            "content_hash": _content_hash(content),
-            "chunk_origin": detect_chunk_origin(content, event.get("chunk_origin")),
-        },
+        values,
     )
     _refresh_realtime_watcher_ingested_at(conn, stored_chunk_id, ingested_at)
     _record_watcher_liveness(conn, stored_chunk_id, ingested_at)

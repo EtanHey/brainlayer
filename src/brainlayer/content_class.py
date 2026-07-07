@@ -6,8 +6,8 @@ import re
 from typing import Any
 
 DEFAULT_CONTENT_CLASS = "knowledge"
-CONTENT_CLASS_VALUES = frozenset({"knowledge", "decision", "operational", "test", "benchmark"})
-DEFAULT_HIDDEN_CONTENT_CLASSES = frozenset({"operational", "test", "benchmark"})
+CONTENT_CLASS_VALUES = frozenset({"knowledge", "decision", "operational", "test", "benchmark", "cold"})
+DEFAULT_HIDDEN_CONTENT_CLASSES = frozenset({"operational", "test", "benchmark", "cold"})
 _OPERATIONAL_RESIDUAL_TRIVIAL_MAX_CHARS = 20
 
 _DECISION_RE = re.compile(

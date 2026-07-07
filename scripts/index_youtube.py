@@ -84,11 +84,13 @@ def get_transcript_via_api(video_id: str) -> list[dict] | None:
         for entry in fetched:
             text = entry.text.strip()
             if text and text not in ("[Music]", "[Applause]", "[Laughter]"):
-                segments.append({
-                    "text": text,
-                    "start": entry.start,
-                    "duration": entry.duration,
-                })
+                segments.append(
+                    {
+                        "text": text,
+                        "start": entry.start,
+                        "duration": entry.duration,
+                    }
+                )
         return segments if segments else None
     except Exception as e:
         log.warning(f"  youtube-transcript-api failed: {e}")
@@ -98,6 +100,7 @@ def get_transcript_via_api(video_id: str) -> list[dict] | None:
 # ---------------------------------------------------------------------------
 # Transcript extraction via yt-dlp (fallback)
 # ---------------------------------------------------------------------------
+
 
 def extract_video_info(video_url: str) -> dict[str, Any] | None:
     """Extract metadata + subtitles for a single video.
@@ -128,8 +131,8 @@ def get_transcript_via_download(video_url: str) -> list[dict] | None:
     Uses yt-dlp's built-in download mechanism which handles rate limits
     better than fetching subtitle URLs directly.
     """
-    import tempfile
     import glob as glob_mod
+    import tempfile
 
     with tempfile.TemporaryDirectory() as tmpdir:
         opts = {
@@ -195,8 +198,10 @@ def get_transcript_from_info(info: dict) -> list[dict] | None:
 def _get_ssl_context():
     """Get SSL context with proper certificates (fixes macOS cert issues)."""
     import ssl
+
     try:
         import certifi
+
         return ssl.create_default_context(cafile=certifi.where())
     except ImportError:
         return ssl.create_default_context()
@@ -213,11 +218,13 @@ def _parse_json3_file(path: str) -> list[dict] | None:
                 continue
             text = "".join(s.get("utf8", "") for s in event["segs"]).strip()
             if text and text not in ("[Music]", "[Applause]", "[Laughter]"):
-                segments.append({
-                    "text": text,
-                    "start": event.get("tStartMs", 0) / 1000.0,
-                    "duration": event.get("dDurationMs", 0) / 1000.0,
-                })
+                segments.append(
+                    {
+                        "text": text,
+                        "start": event.get("tStartMs", 0) / 1000.0,
+                        "duration": event.get("dDurationMs", 0) / 1000.0,
+                    }
+                )
         return segments if segments else None
     except Exception as e:
         log.warning(f"json3 file parse failed: {e}")
@@ -242,8 +249,7 @@ def _parse_vtt_text(vtt_text: str) -> list[dict] | None:
     i = 0
     while i < len(lines):
         match = re.match(
-            r"(\d{2}):(\d{2}):(\d{2})[.,](\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})[.,](\d{3})",
-            lines[i].strip()
+            r"(\d{2}):(\d{2}):(\d{2})[.,](\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})[.,](\d{3})", lines[i].strip()
         )
         if match:
             h, m, s, ms = int(match[1]), int(match[2]), int(match[3]), int(match[4])
@@ -260,11 +266,13 @@ def _parse_vtt_text(vtt_text: str) -> list[dict] | None:
                 i += 1
             text = " ".join(text_lines)
             if text:
-                segments.append({
-                    "text": text,
-                    "start": start,
-                    "duration": end - start,
-                })
+                segments.append(
+                    {
+                        "text": text,
+                        "start": start,
+                        "duration": end - start,
+                    }
+                )
         i += 1
     return segments if segments else None
 
@@ -272,6 +280,7 @@ def _parse_vtt_text(vtt_text: str) -> list[dict] | None:
 def _fetch_json3_transcript(url: str) -> list[dict] | None:
     """Fetch and parse json3 subtitle format (URL-based fallback)."""
     import urllib.request
+
     try:
         ctx = _get_ssl_context()
         with urllib.request.urlopen(url, timeout=30, context=ctx) as resp:
@@ -282,11 +291,13 @@ def _fetch_json3_transcript(url: str) -> list[dict] | None:
                 continue
             text = "".join(s.get("utf8", "") for s in event["segs"]).strip()
             if text and text not in ("[Music]", "[Applause]", "[Laughter]"):
-                segments.append({
-                    "text": text,
-                    "start": event.get("tStartMs", 0) / 1000.0,
-                    "duration": event.get("dDurationMs", 0) / 1000.0,
-                })
+                segments.append(
+                    {
+                        "text": text,
+                        "start": event.get("tStartMs", 0) / 1000.0,
+                        "duration": event.get("dDurationMs", 0) / 1000.0,
+                    }
+                )
         return segments if segments else None
     except Exception as e:
         log.warning(f"json3 fetch failed: {e}")
@@ -296,6 +307,7 @@ def _fetch_json3_transcript(url: str) -> list[dict] | None:
 def _fetch_vtt_transcript(url: str) -> list[dict] | None:
     """Fetch and parse VTT subtitle format (URL-based fallback)."""
     import urllib.request
+
     try:
         ctx = _get_ssl_context()
         with urllib.request.urlopen(url, timeout=30, context=ctx) as resp:
@@ -309,6 +321,7 @@ def _fetch_vtt_transcript(url: str) -> list[dict] | None:
 # ---------------------------------------------------------------------------
 # Channel / playlist listing
 # ---------------------------------------------------------------------------
+
 
 def list_channel_videos(channel_id: str) -> list[dict]:
     """Get all video URLs + basic metadata from a channel."""
@@ -326,11 +339,13 @@ def list_channel_videos(channel_id: str) -> list[dict]:
         videos = []
         for entry in entries:
             if entry and entry.get("id"):
-                videos.append({
-                    "id": entry["id"],
-                    "title": entry.get("title", "Unknown"),
-                    "url": f"https://www.youtube.com/watch?v={entry['id']}",
-                })
+                videos.append(
+                    {
+                        "id": entry["id"],
+                        "title": entry.get("title", "Unknown"),
+                        "url": f"https://www.youtube.com/watch?v={entry['id']}",
+                    }
+                )
         return videos
     except Exception as e:
         log.error(f"Failed to list channel {channel_id}: {e}")
@@ -353,11 +368,13 @@ def list_playlist_videos(playlist_id: str) -> list[dict]:
         videos = []
         for entry in entries:
             if entry and entry.get("id"):
-                videos.append({
-                    "id": entry["id"],
-                    "title": entry.get("title", "Unknown"),
-                    "url": f"https://www.youtube.com/watch?v={entry['id']}",
-                })
+                videos.append(
+                    {
+                        "id": entry["id"],
+                        "title": entry.get("title", "Unknown"),
+                        "url": f"https://www.youtube.com/watch?v={entry['id']}",
+                    }
+                )
         return videos
     except Exception as e:
         log.error(f"Failed to list playlist {playlist_id}: {e}")
@@ -367,6 +384,7 @@ def list_playlist_videos(playlist_id: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Chunking
 # ---------------------------------------------------------------------------
+
 
 def chunk_transcript(
     segments: list[dict],
@@ -402,10 +420,7 @@ def _chunk_by_chapters(
         ch_title = chapter.get("title", "")
 
         # Gather segments in this chapter
-        chapter_segs = [
-            s for s in segments
-            if ch_start <= s["start"] < ch_end
-        ]
+        chapter_segs = [s for s in segments if ch_start <= s["start"] < ch_end]
         if not chapter_segs:
             continue
 
@@ -457,13 +472,15 @@ def _sliding_window(
         }
         if chapter_title:
             meta["chapter"] = chapter_title
-        chunks.append(Chunk(
-            content=content,
-            content_type=ContentType.ASSISTANT_TEXT,
-            value=ContentValue.MEDIUM,
-            metadata=meta,
-            char_count=len(content),
-        ))
+        chunks.append(
+            Chunk(
+                content=content,
+                content_type=ContentType.ASSISTANT_TEXT,
+                value=ContentValue.MEDIUM,
+                metadata=meta,
+                char_count=len(content),
+            )
+        )
 
     for seg in segments:
         text = seg.get("text", "").strip()
@@ -498,12 +515,11 @@ def _sliding_window(
 # Indexing
 # ---------------------------------------------------------------------------
 
+
 def get_indexed_video_ids(store: VectorStore) -> set[str]:
     """Get set of video IDs already in the DB."""
     cursor = store.conn.cursor()
-    rows = list(cursor.execute(
-        "SELECT DISTINCT source_file FROM chunks WHERE source = 'youtube'"
-    ))
+    rows = list(cursor.execute("SELECT DISTINCT source_file FROM chunks WHERE source = 'youtube'"))
     ids = set()
     for row in rows:
         sf = row[0]
@@ -582,20 +598,22 @@ def index_single_video(
         if upload_date and len(upload_date) == 8:
             created_at = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:8]}T00:00:00+00:00"
 
-        chunk_data.append({
-            "id": f"{source_file}:{i}",
-            "content": c.content,
-            "metadata": meta,
-            "source_file": source_file,
-            "project": project,
-            "content_type": c.content_type.value,
-            "value_type": c.value.value,
-            "char_count": c.char_count,
-            "source": "youtube",
-            "conversation_id": source_file,
-            "position": i,
-            "created_at": created_at,
-        })
+        chunk_data.append(
+            {
+                "id": f"{source_file}:{i}",
+                "content": c.content,
+                "metadata": meta,
+                "source_file": source_file,
+                "project": project,
+                "content_type": c.content_type.value,
+                "value_type": c.value.value,
+                "char_count": c.char_count,
+                "source": "youtube",
+                "conversation_id": source_file,
+                "position": i,
+                "created_at": created_at,
+            }
+        )
         embeddings.append(ec.embedding)
 
     # Upsert
@@ -607,6 +625,7 @@ def index_single_video(
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def load_diarized_transcript(path: Path) -> list[dict]:
     """Load a WhisperX diarized JSON and convert to indexing segments.
@@ -628,11 +647,13 @@ def load_diarized_transcript(path: Path) -> list[dict]:
             text = f"{speaker}: {text}"
         start = seg.get("start", 0)
         end = seg.get("end", start)
-        result.append({
-            "text": text,
-            "start": start,
-            "duration": end - start,
-        })
+        result.append(
+            {
+                "text": text,
+                "start": start,
+                "duration": end - start,
+            }
+        )
     return result
 
 
@@ -641,15 +662,12 @@ def delete_video_chunks(store: VectorStore, video_id: str) -> int:
     source_file = f"youtube:{video_id}"
     cursor = store.conn.cursor()
     # Count first
-    count = list(cursor.execute(
-        "SELECT COUNT(*) FROM chunks WHERE source_file = ?", (source_file,)
-    ))[0][0]
+    count = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE source_file = ?", (source_file,)))[0][0]
     if count == 0:
         return 0
     # Delete from vectors first (FK dependency)
     cursor.execute(
-        "DELETE FROM chunk_vectors WHERE chunk_id IN "
-        "(SELECT id FROM chunks WHERE source_file = ?)",
+        "DELETE FROM chunk_vectors WHERE chunk_id IN (SELECT id FROM chunks WHERE source_file = ?)",
         (source_file,),
     )
     cursor.execute("DELETE FROM chunks WHERE source_file = ?", (source_file,))
@@ -658,9 +676,7 @@ def delete_video_chunks(store: VectorStore, video_id: str) -> int:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Index YouTube transcripts into BrainLayer"
-    )
+    parser = argparse.ArgumentParser(description="Index YouTube transcripts into BrainLayer")
     parser.add_argument("url", nargs="?", help="Single video URL")
     parser.add_argument("--channel", help="YouTube channel ID (index all videos)")
     parser.add_argument("--playlist", help="YouTube playlist ID")
@@ -668,14 +684,10 @@ def main():
     parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH, help="BrainLayer DB path")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be indexed")
     parser.add_argument("--resume", action="store_true", help="Skip already-indexed videos")
-    parser.add_argument("--delay", type=float, default=DELAY_BETWEEN_VIDEOS,
-                        help="Delay between videos (seconds)")
-    parser.add_argument("--limit", type=int, default=0,
-                        help="Max videos to process (0=all)")
-    parser.add_argument("--diarized-transcript", type=Path,
-                        help="Path to WhisperX diarized JSON (single video only)")
-    parser.add_argument("--replace", action="store_true",
-                        help="Delete existing chunks before re-indexing")
+    parser.add_argument("--delay", type=float, default=DELAY_BETWEEN_VIDEOS, help="Delay between videos (seconds)")
+    parser.add_argument("--limit", type=int, default=0, help="Max videos to process (0=all)")
+    parser.add_argument("--diarized-transcript", type=Path, help="Path to WhisperX diarized JSON (single video only)")
+    parser.add_argument("--replace", action="store_true", help="Delete existing chunks before re-indexing")
     args = parser.parse_args()
 
     if not args.url and not args.channel and not args.playlist:
@@ -735,20 +747,22 @@ def main():
                     created_at = None
                     if upload_date and len(upload_date) == 8:
                         created_at = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:8]}T00:00:00+00:00"
-                    chunk_data.append({
-                        "id": f"{source_file}:{i}",
-                        "content": c.content,
-                        "metadata": meta,
-                        "source_file": source_file,
-                        "project": args.project,
-                        "content_type": c.content_type.value,
-                        "value_type": c.value.value,
-                        "char_count": c.char_count,
-                        "source": "youtube",
-                        "conversation_id": source_file,
-                        "position": i,
-                        "created_at": created_at,
-                    })
+                    chunk_data.append(
+                        {
+                            "id": f"{source_file}:{i}",
+                            "content": c.content,
+                            "metadata": meta,
+                            "source_file": source_file,
+                            "project": args.project,
+                            "content_type": c.content_type.value,
+                            "value_type": c.value.value,
+                            "char_count": c.char_count,
+                            "source": "youtube",
+                            "conversation_id": source_file,
+                            "position": i,
+                            "created_at": created_at,
+                        }
+                    )
                     embeddings.append(ec.embedding)
                 total_chunks = store.upsert_chunks(chunk_data, embeddings)
                 log.info(f"  Indexed {total_chunks} chunks for '{title}'")
@@ -769,18 +783,18 @@ def main():
         log.info(f"Found {len(videos)} videos")
 
         if args.limit > 0:
-            videos = videos[:args.limit]
+            videos = videos[: args.limit]
             log.info(f"Limiting to {args.limit} videos")
 
         for i, video in enumerate(videos):
             vid = video["id"]
 
             if vid in indexed_ids:
-                log.info(f"[{i+1}/{len(videos)}] SKIP (already indexed): {video['title']}")
+                log.info(f"[{i + 1}/{len(videos)}] SKIP (already indexed): {video['title']}")
                 skipped += 1
                 continue
 
-            log.info(f"[{i+1}/{len(videos)}] Processing: {video['title']}")
+            log.info(f"[{i + 1}/{len(videos)}] Processing: {video['title']}")
             try:
                 n = index_single_video(video["url"], store, args.project, args.dry_run)
                 if n > 0:

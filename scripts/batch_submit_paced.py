@@ -4,17 +4,24 @@ Bypasses VectorStore entirely to avoid DB lock issues with BrainBar.
 
 Usage: GOOGLE_API_KEY=... python3 scripts/batch_submit_paced.py [--delay 45] [--max-retries 5]
 """
-import glob, json, os, sys, time
+
+import glob
+import json
+import os
+import sys
+import time
 from pathlib import Path
 
 try:
     import google.generativeai as genai
 except ImportError:
-    print("pip install google-generativeai"); sys.exit(1)
+    print("pip install google-generativeai")
+    sys.exit(1)
 
 API_KEY = os.environ.get("GOOGLE_API_KEY")
 if not API_KEY:
-    print("ERROR: GOOGLE_API_KEY required"); sys.exit(1)
+    print("ERROR: GOOGLE_API_KEY required")
+    sys.exit(1)
 
 genai.configure(api_key=API_KEY)
 
@@ -51,18 +58,18 @@ for i, fpath in enumerate(batch_files):
     with open(fpath) as f:
         chunks = sum(1 for _ in f)
 
-    print(f"[{i+1}/{len(batch_files)}] {fname} ({chunks} chunks)")
+    print(f"[{i + 1}/{len(batch_files)}] {fname} ({chunks} chunks)")
 
     # Upload file
     for attempt in range(MAX_RETRIES):
         try:
-            print(f"  Uploading...", end="", flush=True)
+            print("  Uploading...", end="", flush=True)
             uploaded = genai.upload_file(fpath)
             print(f" ok ({uploaded.name})")
             break
         except Exception as e:
             wait = min(30 * (attempt + 1), 300)
-            print(f" 429, waiting {wait}s (attempt {attempt+1}/{MAX_RETRIES})")
+            print(f" 429, waiting {wait}s (attempt {attempt + 1}/{MAX_RETRIES})")
             time.sleep(wait)
     else:
         print(f"  FAILED upload after {MAX_RETRIES} retries, skipping")
@@ -72,7 +79,7 @@ for i, fpath in enumerate(batch_files):
     # Create batch job
     for attempt in range(MAX_RETRIES):
         try:
-            print(f"  Creating batch job...", end="", flush=True)
+            print("  Creating batch job...", end="", flush=True)
             job = genai.batches.create(
                 model=f"models/{MODEL}",
                 src=uploaded.uri,
@@ -86,7 +93,7 @@ for i, fpath in enumerate(batch_files):
         except Exception as e:
             if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
                 wait = min(60 * (attempt + 1), 600)
-                print(f" 429, waiting {wait}s (attempt {attempt+1}/{MAX_RETRIES})")
+                print(f" 429, waiting {wait}s (attempt {attempt + 1}/{MAX_RETRIES})")
                 time.sleep(wait)
             else:
                 print(f" ERROR: {e}")

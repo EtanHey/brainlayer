@@ -52,13 +52,15 @@ def get_mcp_processes():
             # Don't include ourselves
             if pid == os.getpid():
                 continue
-            results.append({
-                "pid": pid,
-                "ppid": ppid,
-                "etime": etime,
-                "command": cmd,
-                "age_seconds": parse_etime(etime),
-            })
+            results.append(
+                {
+                    "pid": pid,
+                    "ppid": ppid,
+                    "etime": etime,
+                    "command": cmd,
+                    "age_seconds": parse_etime(etime),
+                }
+            )
     return results
 
 
@@ -146,8 +148,9 @@ def main():
     parser = argparse.ArgumentParser(description="Clean up stale MCP processes")
     parser.add_argument("--kill", action="store_true", help="Actually kill (default: dry-run)")
     parser.add_argument("--json", action="store_true", help="JSON output (for hooks)")
-    parser.add_argument("--max-age", type=int, default=MAX_AGE_HOURS,
-                        help=f"Max age in hours (default: {MAX_AGE_HOURS})")
+    parser.add_argument(
+        "--max-age", type=int, default=MAX_AGE_HOURS, help=f"Max age in hours (default: {MAX_AGE_HOURS})"
+    )
     args = parser.parse_args()
 
     _set_max_age(args.max_age)
@@ -156,12 +159,16 @@ def main():
     stale, active = classify_stale(procs)
 
     if args.json:
-        print(json.dumps({
-            "stale_count": len(stale),
-            "active_count": len(active),
-            "killed": len(stale) if args.kill else 0,
-            "stale": [{"pid": p["pid"], "reason": p["reason"], "age_s": p["age_seconds"]} for p in stale],
-        }))
+        print(
+            json.dumps(
+                {
+                    "stale_count": len(stale),
+                    "active_count": len(active),
+                    "killed": len(stale) if args.kill else 0,
+                    "stale": [{"pid": p["pid"], "reason": p["reason"], "age_s": p["age_seconds"]} for p in stale],
+                }
+            )
+        )
         if args.kill:
             kill_processes(stale, dry_run=False)
         return

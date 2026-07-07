@@ -28,12 +28,8 @@ def backfill():
 
     # Check current state
     total = list(cursor.execute("SELECT COUNT(*) FROM chunks"))[0][0]
-    conv_filled = list(cursor.execute(
-        "SELECT COUNT(*) FROM chunks WHERE conversation_id IS NOT NULL"
-    ))[0][0]
-    pos_filled = list(cursor.execute(
-        "SELECT COUNT(*) FROM chunks WHERE position IS NOT NULL"
-    ))[0][0]
+    conv_filled = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE conversation_id IS NOT NULL"))[0][0]
+    pos_filled = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE position IS NOT NULL"))[0][0]
 
     print(f"Total chunks: {total:,}", flush=True)
     print(f"conversation_id filled: {conv_filled:,}", flush=True)
@@ -46,9 +42,7 @@ def backfill():
             UPDATE chunks SET conversation_id = source_file
             WHERE conversation_id IS NULL
         """)
-        conv_filled = list(cursor.execute(
-            "SELECT COUNT(*) FROM chunks WHERE conversation_id IS NOT NULL"
-        ))[0][0]
+        conv_filled = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE conversation_id IS NOT NULL"))[0][0]
         print(f"  conversation_id filled: {conv_filled:,}/{total:,}", flush=True)
 
     # Step 2: Backfill position — process per source_file group
@@ -56,42 +50,42 @@ def backfill():
         print("\nBackfilling position (per source_file)...", flush=True)
 
         # Get distinct source_files that need backfill
-        source_files = list(cursor.execute("""
+        source_files = list(
+            cursor.execute("""
             SELECT DISTINCT source_file FROM chunks WHERE position IS NULL
-        """))
+        """)
+        )
         print(f"  {len(source_files)} source files to process", flush=True)
 
         updated = 0
         for i, (sf,) in enumerate(source_files):
             # Get chunk IDs ordered by rowid within this source_file
-            chunk_ids = list(cursor.execute("""
+            chunk_ids = list(
+                cursor.execute(
+                    """
                 SELECT id FROM chunks
                 WHERE source_file = ? AND position IS NULL
                 ORDER BY rowid
-            """, (sf,)))
+            """,
+                    (sf,),
+                )
+            )
 
             # Batch UPDATE with position
             for pos, (chunk_id,) in enumerate(chunk_ids):
-                cursor.execute(
-                    "UPDATE chunks SET position = ? WHERE id = ?",
-                    (pos, chunk_id)
-                )
+                cursor.execute("UPDATE chunks SET position = ? WHERE id = ?", (pos, chunk_id))
 
             updated += len(chunk_ids)
             if (i + 1) % 500 == 0:
-                print(f"  {i+1}/{len(source_files)} files, {updated:,} chunks", flush=True)
+                print(f"  {i + 1}/{len(source_files)} files, {updated:,} chunks", flush=True)
 
         print(f"  Done: {updated:,} chunks positioned", flush=True)
 
     # Verify
-    conv_final = list(cursor.execute(
-        "SELECT COUNT(*) FROM chunks WHERE conversation_id IS NOT NULL"
-    ))[0][0]
-    pos_final = list(cursor.execute(
-        "SELECT COUNT(*) FROM chunks WHERE position IS NOT NULL"
-    ))[0][0]
+    conv_final = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE conversation_id IS NOT NULL"))[0][0]
+    pos_final = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE position IS NOT NULL"))[0][0]
 
-    print(f"\nFinal state:")
+    print("\nFinal state:")
     print(f"  conversation_id: {conv_final:,}/{total:,}")
     print(f"  position: {pos_final:,}/{total:,}")
     print("Done.", flush=True)

@@ -9,7 +9,6 @@ import json
 import random
 import re
 import sys
-from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -114,13 +113,15 @@ def sample_chunks(store: VectorStore, n: int = SAMPLE_SIZE) -> list[dict]:
     cursor = store.conn.cursor()
 
     # Get distribution
-    groups = list(cursor.execute("""
+    groups = list(
+        cursor.execute("""
         SELECT project, content_type, COUNT(*) as cnt
         FROM chunks
         WHERE project IS NOT NULL AND content_type IS NOT NULL
         GROUP BY project, content_type
         ORDER BY cnt DESC
-    """))
+    """)
+    )
 
     # Allocate samples proportionally (minimum 1 per group, cap at 20)
     total = sum(g[2] for g in groups)
@@ -144,23 +145,30 @@ def sample_chunks(store: VectorStore, n: int = SAMPLE_SIZE) -> list[dict]:
     # Sample from each group
     samples = []
     for proj, ct, alloc in allocations:
-        rows = list(cursor.execute("""
+        rows = list(
+            cursor.execute(
+                """
             SELECT id, content, metadata, source_file, project, content_type
             FROM chunks
             WHERE project = ? AND content_type = ?
             ORDER BY RANDOM()
             LIMIT ?
-        """, (proj, ct, alloc)))
+        """,
+                (proj, ct, alloc),
+            )
+        )
 
         for row in rows:
-            samples.append({
-                "id": row[0],
-                "content": row[1][:2000],  # Truncate for labeling
-                "metadata": json.loads(row[2]) if row[2] else {},
-                "source_file": row[3],
-                "project": row[4],
-                "content_type": row[5],
-            })
+            samples.append(
+                {
+                    "id": row[0],
+                    "content": row[1][:2000],  # Truncate for labeling
+                    "metadata": json.loads(row[2]) if row[2] else {},
+                    "source_file": row[3],
+                    "project": row[4],
+                    "content_type": row[5],
+                }
+            )
 
     random.shuffle(samples)
     return samples[:n]
@@ -185,11 +193,7 @@ def main():
     # Pre-label
     labeled = 0
     for sample in samples:
-        tags = heuristic_labels(
-            sample["content"],
-            sample.get("metadata", {}),
-            sample.get("project", "")
-        )
+        tags = heuristic_labels(sample["content"], sample.get("metadata", {}), sample.get("project", ""))
         # Merge content_type as metadata
         meta = sample.get("metadata", {})
         meta["content_type"] = sample.get("content_type", "")
@@ -206,9 +210,9 @@ def main():
     with open(OUTPUT, "w") as f:
         json.dump(samples, f, indent=2, ensure_ascii=False)
 
-    print(f"\nPre-labeled: {labeled}/{len(samples)} chunks ({labeled*100//len(samples)}%)")
+    print(f"\nPre-labeled: {labeled}/{len(samples)} chunks ({labeled * 100 // len(samples)}%)")
     print(f"Output: {OUTPUT}")
-    print(f"\nNext: python scripts/label-chunks.py")
+    print("\nNext: python scripts/label-chunks.py")
 
     store.close()
 

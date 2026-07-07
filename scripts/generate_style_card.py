@@ -12,16 +12,11 @@ The output contains personal communication patterns — do NOT commit it.
 """
 
 import argparse
-import json
-import random
 import sys
-from datetime import datetime
 from pathlib import Path
 
 # Add src to path for development installs
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-from brainlayer.vector_store import VectorStore
 
 
 def get_user_messages(db_path: Path, min_chars: int = 10, sample_size: int = 20000) -> list[str]:
@@ -32,14 +27,19 @@ def get_user_messages(db_path: Path, min_chars: int = 10, sample_size: int = 200
     cursor = conn.cursor()
 
     # Get user messages (sender = 'human' or content_type = 'user_message')
-    rows = list(cursor.execute("""
+    rows = list(
+        cursor.execute(
+            """
         SELECT content, source, char_count
         FROM chunks
         WHERE (sender = 'human' OR content_type = 'user_message')
           AND char_count >= ?
         ORDER BY RANDOM()
         LIMIT ?
-    """, [min_chars, sample_size * 2]))  # Over-sample, then dedupe
+    """,
+            [min_chars, sample_size * 2],
+        )
+    )  # Over-sample, then dedupe
 
     conn.close()
 
@@ -60,14 +60,16 @@ def get_user_messages(db_path: Path, min_chars: int = 10, sample_size: int = 200
 def main():
     parser = argparse.ArgumentParser(description="Generate communication style card from BrainLayer data")
     from brainlayer.paths import DEFAULT_DB_PATH
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH,
-                        help="Path to BrainLayer database")
-    parser.add_argument("--output-dir", type=Path, default=None,
-                        help="Output directory (default: ~/.local/share/brainlayer/storage/style/)")
-    parser.add_argument("--sample-size", type=int, default=20000,
-                        help="Number of messages to sample (default: 20000)")
-    parser.add_argument("--min-chars", type=int, default=10,
-                        help="Minimum message length in chars (default: 10)")
+
+    parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH, help="Path to BrainLayer database")
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Output directory (default: ~/.local/share/brainlayer/storage/style/)",
+    )
+    parser.add_argument("--sample-size", type=int, default=20000, help="Number of messages to sample (default: 20000)")
+    parser.add_argument("--min-chars", type=int, default=10, help="Minimum message length in chars (default: 10)")
     args = parser.parse_args()
 
     if not args.db.exists():
@@ -92,14 +94,17 @@ def main():
 
     # Source distribution
     import apsw
+
     conn = apsw.Connection(str(args.db), flags=apsw.SQLITE_OPEN_READONLY)
-    source_counts = dict(conn.cursor().execute("""
+    source_counts = dict(
+        conn.cursor().execute("""
         SELECT COALESCE(source, 'unknown'), COUNT(*)
         FROM chunks
         WHERE sender = 'human' OR content_type = 'user_message'
         GROUP BY source
         ORDER BY COUNT(*) DESC
-    """))
+    """)
+    )
     conn.close()
     print("\nSource distribution:")
     for source, count in source_counts.items():
@@ -109,6 +114,7 @@ def main():
     print("\nRunning semantic style analysis...")
     try:
         from brainlayer.pipeline.semantic_style import analyze_semantic_style
+
         analysis = analyze_semantic_style(messages, output_dir=output_dir)
         print(f"\nStyle card saved to: {output_dir}")
         print(f"Topics found: {len(analysis.topic_clusters)}")

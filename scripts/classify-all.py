@@ -68,11 +68,16 @@ def main():
 
     while offset < total:
         # Fetch batch
-        rows = list(cursor.execute("""
+        rows = list(
+            cursor.execute(
+                """
             SELECT id, content FROM chunks
             ORDER BY rowid
             LIMIT ? OFFSET ?
-        """, (BATCH_SIZE, offset)))
+        """,
+                (BATCH_SIZE, offset),
+            )
+        )
 
         if not rows:
             break
@@ -89,7 +94,7 @@ def main():
             tags = []
             confidences = []
 
-            if hasattr(preds, 'tolist'):
+            if hasattr(preds, "tolist"):
                 preds = preds.tolist()
 
             if isinstance(preds, list):
@@ -105,10 +110,13 @@ def main():
 
             avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
 
-            cursor.execute("""
+            cursor.execute(
+                """
                 UPDATE chunks SET tags = ?, tag_confidence = ?
                 WHERE id = ?
-            """, (json.dumps(tags), avg_confidence, chunk_id))
+            """,
+                (json.dumps(tags), avg_confidence, chunk_id),
+            )
 
         classified += len(rows)
         offset += BATCH_SIZE
@@ -119,21 +127,21 @@ def main():
             remaining = (total - classified) / rate if rate > 0 else 0
             print(
                 f"  {classified:,}/{total:,} "
-                f"({classified*100//total}%) "
+                f"({classified * 100 // total}%) "
                 f"— {rate:.0f} chunks/s "
-                f"— ~{remaining/60:.1f} min remaining",
-                flush=True
+                f"— ~{remaining / 60:.1f} min remaining",
+                flush=True,
             )
 
     elapsed = time.time() - start_time
-    print(f"\nDone: {classified:,} chunks classified in {elapsed/60:.1f} min")
+    print(f"\nDone: {classified:,} chunks classified in {elapsed / 60:.1f} min")
 
     # Stats
     tagged = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE tags IS NOT NULL AND tags != '[]'"))[0][0]
     low_conf = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE tag_confidence < 0.6"))[0][0]
     print(f"Tagged (non-empty): {tagged:,}")
     print(f"Low confidence (<0.6): {low_conf:,}")
-    print(f"\nNext: brainlayer review")
+    print("\nNext: brainlayer review")
 
     store.close()
 

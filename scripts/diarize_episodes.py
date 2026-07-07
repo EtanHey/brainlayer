@@ -33,7 +33,6 @@ import logging
 import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 logging.basicConfig(
@@ -85,10 +84,15 @@ def download_audio(video_id: str, output_dir: Path) -> Path:
     log.info(f"  Downloading audio for {video_id}...")
     cmd = [
         "yt-dlp",
-        "-x", "--audio-format", "wav",
-        "--output", str(output_path),
-        "--cookies-from-browser", "brave",
-        "--remote-components", "ejs:github",
+        "-x",
+        "--audio-format",
+        "wav",
+        "--output",
+        str(output_path),
+        "--cookies-from-browser",
+        "brave",
+        "--remote-components",
+        "ejs:github",
         f"https://www.youtube.com/watch?v={video_id}",
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -118,9 +122,7 @@ def diarize_audio(audio_path: Path, hf_token: str) -> list[dict]:
     try:
         import whisperx
     except ImportError:
-        raise RuntimeError(
-            "WhisperX not installed. Run: pip install git+https://github.com/m-bain/whisperx.git"
-        )
+        raise RuntimeError("WhisperX not installed. Run: pip install git+https://github.com/m-bain/whisperx.git")
 
     import torch
 
@@ -155,11 +157,13 @@ def diarize_audio(audio_path: Path, hf_token: str) -> list[dict]:
 
         # 2. Align
         log.info("  Aligning...")
-        model_a, metadata = whisperx.load_align_model(
-            language_code=result["language"], device=device
-        )
+        model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=device)
         result = whisperx.align(
-            result["segments"], model_a, metadata, audio, device,
+            result["segments"],
+            model_a,
+            metadata,
+            audio,
+            device,
             return_char_alignments=False,
         )
         del model_a
@@ -173,9 +177,8 @@ def diarize_audio(audio_path: Path, hf_token: str) -> list[dict]:
     # 3. Diarize
     log.info("  Diarizing...")
     from whisperx.diarize import DiarizationPipeline
-    diarize_model = DiarizationPipeline(
-        token=hf_token, device="cpu"
-    )
+
+    diarize_model = DiarizationPipeline(token=hf_token, device="cpu")
     diarize_segments = diarize_model(audio)
     result = whisperx.assign_word_speakers(diarize_segments, result)
 
@@ -271,7 +274,8 @@ def reindex_episode(video_id: str, diarized_path: Path) -> int:
         sys.executable,
         str(script_path),
         f"https://www.youtube.com/watch?v={video_id}",
-        "--diarized-transcript", str(diarized_path),
+        "--diarized-transcript",
+        str(diarized_path),
         "--replace",
     ]
 
@@ -300,7 +304,7 @@ def process_episode(
     guest = episode["guest"]
     title = episode["title"]
 
-    log.info(f"\n{'='*60}")
+    log.info(f"\n{'=' * 60}")
     log.info(f"Processing: {title} ({video_id})")
     log.info(f"Guest: {guest}")
 
@@ -359,14 +363,13 @@ def process_episode(
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Diarize Huberman guest episodes and re-index in BrainLayer"
-    )
+    parser = argparse.ArgumentParser(description="Diarize Huberman guest episodes and re-index in BrainLayer")
     parser.add_argument("--video-id", help="Process single episode by video ID")
     parser.add_argument("--dry-run", action="store_true", help="Download + diarize only, skip re-index")
     parser.add_argument("--skip-download", action="store_true", help="Skip audio download (reuse existing)")
-    parser.add_argument("--batch-size", type=int, default=3,
-                        help="Max episodes per batch (default 3, for thermal safety)")
+    parser.add_argument(
+        "--batch-size", type=int, default=3, help="Max episodes per batch (default 3, for thermal safety)"
+    )
     args = parser.parse_args()
 
     # Get HF token
@@ -384,7 +387,7 @@ def main():
             log.error(f"Video ID {args.video_id} not in episode list")
             sys.exit(1)
     else:
-        episodes = EPISODES[:args.batch_size]
+        episodes = EPISODES[: args.batch_size]
         log.info(f"Processing batch of {len(episodes)} / {len(EPISODES)} episodes")
 
     # Process
@@ -397,7 +400,7 @@ def main():
         else:
             failed += 1
 
-    log.info(f"\n{'='*60}")
+    log.info(f"\n{'=' * 60}")
     log.info(f"Done! Succeeded: {succeeded}, Failed: {failed}")
     if len(EPISODES) > len(episodes):
         remaining = len(EPISODES) - len(episodes)

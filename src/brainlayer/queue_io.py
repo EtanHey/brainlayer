@@ -104,24 +104,31 @@ def enqueue_watcher_chunk(
     sender: str | None = None,
     tags: list[str] | None = None,
     chunk_origin: str | None = None,
+    content_class: str | None = None,
+    provenance_class: str | None = None,
     queue_dir: Path | None = None,
 ) -> Path:
+    event = {
+        "kind": "watcher_chunk",
+        "chunk_id": chunk_id,
+        "content": content,
+        "metadata": metadata,
+        "source_file": source_file,
+        "project": project,
+        "content_type": content_type,
+        "value_type": value_type,
+        "created_at": created_at,
+        "conversation_id": conversation_id,
+        "sender": sender,
+        "tags": tags,
+        "chunk_origin": chunk_origin,
+    }
+    if content_class is not None:
+        event["content_class"] = content_class
+    if provenance_class is not None:
+        event["provenance_class"] = provenance_class
     return enqueue_jsonl(
-        {
-            "kind": "watcher_chunk",
-            "chunk_id": chunk_id,
-            "content": content,
-            "metadata": metadata,
-            "source_file": source_file,
-            "project": project,
-            "content_type": content_type,
-            "value_type": value_type,
-            "created_at": created_at,
-            "conversation_id": conversation_id,
-            "sender": sender,
-            "tags": tags,
-            "chunk_origin": chunk_origin,
-        },
+        event,
         source="watcher",
         queue_dir=queue_dir,
     )

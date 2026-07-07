@@ -109,13 +109,15 @@ def backfill_from_jsonl(store, uuid_to_path, manifest_timestamps):
     """Backfill created_at from JSONL files — original path, archive, or manifest."""
     cursor = store.conn.cursor()
 
-    files = list(cursor.execute("""
+    files = list(
+        cursor.execute("""
         SELECT DISTINCT source_file, COUNT(*) as cnt
         FROM chunks
         WHERE created_at IS NULL AND source_file IS NOT NULL
         GROUP BY source_file
         ORDER BY cnt DESC
-    """))
+    """)
+    )
 
     total_updated = 0
     from_original = 0
@@ -152,10 +154,13 @@ def backfill_from_jsonl(store, uuid_to_path, manifest_timestamps):
             files_missing += 1
             continue
 
-        cursor.execute("""
+        cursor.execute(
+            """
             UPDATE chunks SET created_at = ?
             WHERE source_file = ? AND created_at IS NULL
-        """, [timestamp, source_file])
+        """,
+            [timestamp, source_file],
+        )
         updated = store.conn.changes()
         total_updated += updated
 
@@ -183,11 +188,13 @@ def backfill_from_mtime(store):
     """Use source file modification time for remaining NULL chunks (if file exists)."""
     cursor = store.conn.cursor()
 
-    remaining = list(cursor.execute("""
+    remaining = list(
+        cursor.execute("""
         SELECT DISTINCT source_file
         FROM chunks
         WHERE created_at IS NULL AND source_file IS NOT NULL
-    """))
+    """)
+    )
 
     total_updated = 0
     for (source_file,) in remaining:
@@ -196,10 +203,13 @@ def backfill_from_mtime(store):
         try:
             mtime = os.path.getmtime(source_file)
             ts = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
-            cursor.execute("""
+            cursor.execute(
+                """
                 UPDATE chunks SET created_at = ?
                 WHERE source_file = ? AND created_at IS NULL
-            """, [ts, source_file])
+            """,
+                [ts, source_file],
+            )
             total_updated += store.conn.changes()
         except OSError:
             continue
@@ -222,9 +232,11 @@ def backfill_from_interpolation(store):
     cursor = store.conn.cursor()
 
     # Build "date ladder" from chunks that have created_at
-    ladder = list(cursor.execute("""
+    ladder = list(
+        cursor.execute("""
         SELECT rowid, created_at FROM chunks WHERE created_at IS NOT NULL ORDER BY rowid
-    """))
+    """)
+    )
 
     if not ladder:
         print("  No anchor points available for interpolation")
@@ -236,13 +248,15 @@ def backfill_from_interpolation(store):
     print(f"  Using {len(ladder):,} anchor points (rowid {ladder_rowids[0]:,} - {ladder_rowids[-1]:,})")
 
     # Get source_file groups that still need dates
-    source_groups = list(cursor.execute("""
+    source_groups = list(
+        cursor.execute("""
         SELECT source_file, MIN(rowid) as min_r, MAX(rowid) as max_r, COUNT(*) as cnt
         FROM chunks
         WHERE created_at IS NULL AND source_file IS NOT NULL
         GROUP BY source_file
         ORDER BY min_r
-    """))
+    """)
+    )
 
     total_updated = 0
     for sf, min_r, max_r, cnt in source_groups:
@@ -260,10 +274,13 @@ def backfill_from_interpolation(store):
         date_only = est_date[:10] if len(est_date) >= 10 else est_date
         estimated_ts = f"{date_only}T00:00:00+00:00"
 
-        cursor.execute("""
+        cursor.execute(
+            """
             UPDATE chunks SET created_at = ?
             WHERE source_file = ? AND created_at IS NULL
-        """, [estimated_ts, sf])
+        """,
+            [estimated_ts, sf],
+        )
         total_updated += store.conn.changes()
 
     print(f"  Interpolation backfill: {total_updated:,} chunks estimated from nearby anchors")
@@ -305,7 +322,7 @@ def main():
     # Final stats
     has_date = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE created_at IS NOT NULL"))[0][0]
     still_null = total - has_date
-    print(f"\nDone! {has_date:,}/{total:,} chunks have created_at ({has_date*100/total:.1f}%)")
+    print(f"\nDone! {has_date:,}/{total:,} chunks have created_at ({has_date * 100 / total:.1f}%)")
     if still_null > 0:
         print(f"Still missing: {still_null:,} chunks")
 

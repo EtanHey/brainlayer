@@ -17,7 +17,6 @@ import argparse
 import json
 import shutil
 import sys
-from datetime import datetime
 from pathlib import Path
 
 # Ensure project root is on sys.path so we can import brainlayer
@@ -214,7 +213,7 @@ def main():
     report = run_dedup(db_path, dry_run=args.dry_run)
 
     # Write report to stdout as JSON for scripting
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("REPORT:")
     print(json.dumps(report, indent=2))
 

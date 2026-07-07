@@ -29,17 +29,16 @@ import os
 import signal
 import sys
 import time
-from datetime import datetime, timezone
 from glob import glob
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import List
 
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from brainlayer.vector_store import VectorStore
 from brainlayer.paths import get_db_path
 from brainlayer.pipeline.enrichment import parse_enrichment
+from brainlayer.vector_store import VectorStore
 
 # ── Config ──────────────────────────────────────────────────────────────
 
@@ -52,7 +51,7 @@ MAX_RPM = 1500  # Stay safely under 2000 RPM limit
 RATE_LIMIT_DELAY = 60.0 / MAX_RPM  # ~0.04s between requests
 
 # Gemini 2.5 Flash pricing
-COST_PER_M_INPUT = 0.15   # $/1M input tokens
+COST_PER_M_INPUT = 0.15  # $/1M input tokens
 COST_PER_M_OUTPUT = 0.60  # $/1M output tokens
 
 # ── Globals for graceful shutdown ───────────────────────────────────────
@@ -73,6 +72,7 @@ signal.signal(signal.SIGTERM, handle_signal)
 
 # ── Gemini client ──────────────────────────────────────────────────────
 
+
 def get_genai_client():
     """Get a google.genai Client."""
     try:
@@ -90,6 +90,7 @@ def get_genai_client():
 
 
 # ── Rate limiter ───────────────────────────────────────────────────────
+
 
 class RateLimiter:
     """Token bucket rate limiter for RPM."""
@@ -110,6 +111,7 @@ class RateLimiter:
 
 # ── Worker ─────────────────────────────────────────────────────────────
 
+
 async def process_chunk(
     client,
     chunk_id: str,
@@ -127,9 +129,7 @@ async def process_chunk(
     async with semaphore:
         # Check if already enriched (auto-resume)
         cursor = store.conn.cursor()
-        existing = list(cursor.execute(
-            "SELECT enriched_at FROM chunks WHERE id = ?", [chunk_id]
-        ))
+        existing = list(cursor.execute("SELECT enriched_at FROM chunks WHERE id = ?", [chunk_id]))
         if existing and existing[0][0] is not None:
             total_stats["skipped"] += 1
             return "skipped"
@@ -219,6 +219,7 @@ async def process_chunk(
 
 # ── Main ───────────────────────────────────────────────────────────────
 
+
 async def run_stream(
     db_path: Path,
     jsonl_files: List[Path],
@@ -247,9 +248,7 @@ async def run_stream(
     cursor = store.conn.cursor()
     unenriched = []
     for chunk_id, prompt in chunks:
-        existing = list(cursor.execute(
-            "SELECT enriched_at FROM chunks WHERE id = ?", [chunk_id]
-        ))
+        existing = list(cursor.execute("SELECT enriched_at FROM chunks WHERE id = ?", [chunk_id]))
         if not existing or existing[0][0] is None:
             unenriched.append((chunk_id, prompt))
 
@@ -265,7 +264,7 @@ async def run_stream(
     est_cost = (est_input * COST_PER_M_INPUT + est_output * COST_PER_M_OUTPUT) / 1_000_000
     est_minutes = len(unenriched) / MAX_RPM
     print(f"Estimated cost: ${est_cost:.2f}")
-    print(f"Estimated time: {est_minutes:.0f} min ({est_minutes/60:.1f} hours) at {MAX_RPM} RPM")
+    print(f"Estimated time: {est_minutes:.0f} min ({est_minutes / 60:.1f} hours) at {MAX_RPM} RPM")
 
     if dry_run:
         print("\n[DRY RUN] Not processing.")
@@ -291,11 +290,8 @@ async def run_stream(
         if shutdown_requested:
             break
 
-        batch = unenriched[batch_start:batch_start + batch_size]
-        tasks = [
-            process_chunk(client, chunk_id, prompt, store, rate_limiter, semaphore)
-            for chunk_id, prompt in batch
-        ]
+        batch = unenriched[batch_start : batch_start + batch_size]
+        tasks = [process_chunk(client, chunk_id, prompt, store, rate_limiter, semaphore) for chunk_id, prompt in batch]
         await asyncio.gather(*tasks)
 
         # Progress report
@@ -305,8 +301,7 @@ async def run_stream(
         remaining = len(unenriched) - processed
         eta_min = remaining / rpm if rpm > 0 else 0
         cost_so_far = (
-            total_stats["input_tokens"] * COST_PER_M_INPUT +
-            total_stats["output_tokens"] * COST_PER_M_OUTPUT
+            total_stats["input_tokens"] * COST_PER_M_INPUT + total_stats["output_tokens"] * COST_PER_M_OUTPUT
         ) / 1_000_000
 
         print(
@@ -318,19 +313,18 @@ async def run_stream(
     # Final summary
     elapsed = time.time() - start_time
     cost = (
-        total_stats["input_tokens"] * COST_PER_M_INPUT +
-        total_stats["output_tokens"] * COST_PER_M_OUTPUT
+        total_stats["input_tokens"] * COST_PER_M_INPUT + total_stats["output_tokens"] * COST_PER_M_OUTPUT
     ) / 1_000_000
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("STREAM ENRICHMENT COMPLETE" + (" (interrupted)" if shutdown_requested else ""))
     print(f"  Success: {total_stats['success']:,}")
     print(f"  Failed:  {total_stats['failed']:,}")
     print(f"  Skipped: {total_stats['skipped']:,}")
     print(f"  Tokens:  {total_stats['input_tokens']:,} in / {total_stats['output_tokens']:,} out")
     print(f"  Cost:    ${cost:.2f}")
-    print(f"  Time:    {elapsed/60:.1f} min")
-    print(f"{'='*60}")
+    print(f"  Time:    {elapsed / 60:.1f} min")
+    print(f"{'=' * 60}")
 
     # Log usage to Supabase
     supabase_url = os.environ.get("SUPABASE_URL", "")
@@ -338,6 +332,7 @@ async def run_stream(
     if supabase_url and supabase_key and total_stats["success"] > 0:
         try:
             import requests
+
             requests.post(
                 f"{supabase_url}/rest/v1/llm_usage",
                 headers={
@@ -364,6 +359,7 @@ async def run_stream(
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────
+
 
 def main():
     parser = argparse.ArgumentParser(description="Stream enrichment via regular Gemini API")

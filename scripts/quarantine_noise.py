@@ -185,17 +185,18 @@ def _fetch_candidates(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         {
             "precompact_content": "%[precompact checkpoint]%",
             "precompact_tag": "%precompact%",
-            "precompact_wrapped": "%content=\"[precompact checkpoint]%",
+            "precompact_wrapped": '%content="[precompact checkpoint]%',
         }
     )
     precompact_id_like_clauses = [
-        "id LIKE :precompact_id_like_" + re.sub(r"[^a-z0-9]", "", prefix)
-        for prefix in PRECOMPACT_ID_PREFIXES
+        "id LIKE :precompact_id_like_" + re.sub(r"[^a-z0-9]", "", prefix) for prefix in PRECOMPACT_ID_PREFIXES
     ]
-    params.update({
-        f"precompact_id_like_{re.sub(r'[^a-z0-9]', '', prefix)}": f"brainbar-{prefix}%"
-        for prefix in PRECOMPACT_ID_PREFIXES
-    })
+    params.update(
+        {
+            f"precompact_id_like_{re.sub(r'[^a-z0-9]', '', prefix)}": f"brainbar-{prefix}%"
+            for prefix in PRECOMPACT_ID_PREFIXES
+        }
+    )
     where_parts.append(f"({' OR '.join(precompact_id_like_clauses)})")
 
     select_parts = [
@@ -341,7 +342,9 @@ def _apply_quarantine(conn: sqlite3.Connection, rows: list[dict[str, Any]]) -> d
     return {"updated": updated, "tags_added": tags_added}
 
 
-def _build_output(candidates: list[dict[str, Any]], dry_run: bool, stats: dict[str, int | float], result: dict[str, int | bool]) -> dict[str, Any]:
+def _build_output(
+    candidates: list[dict[str, Any]], dry_run: bool, stats: dict[str, int | float], result: dict[str, int | bool]
+) -> dict[str, Any]:
     return {
         "mode": "dry_run" if dry_run else "apply",
         "candidates": candidates,
@@ -392,15 +395,17 @@ def run(argv: list[str] | None = None) -> int:
 
         if not candidate_rows:
             if args.json:
-                print(json.dumps(
-                    _build_output(
-                        candidates=[],
-                        dry_run=not args.apply,
-                        stats=summary,
-                        result={"updated": 0, "tags_added": 0},
-                    ),
-                    indent=2,
-                ))
+                print(
+                    json.dumps(
+                        _build_output(
+                            candidates=[],
+                            dry_run=not args.apply,
+                            stats=summary,
+                            result={"updated": 0, "tags_added": 0},
+                        ),
+                        indent=2,
+                    )
+                )
             else:
                 print("No candidates found.")
             return 0

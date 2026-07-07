@@ -325,7 +325,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset", default=DEFAULT_DATASET)
     parser.add_argument("--experiment", default=DEFAULT_EXPERIMENT)
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--dry-run", action="store_true", default=True, help="Print sanitized payload shape; send nothing")
+    mode.add_argument(
+        "--dry-run", action="store_true", default=True, help="Print sanitized payload shape; send nothing"
+    )
     mode.add_argument("--send", action="store_false", dest="dry_run", help="Send redacted records to Braintrust")
     return parser.parse_args()
 

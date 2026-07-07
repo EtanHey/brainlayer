@@ -22,8 +22,10 @@ from typing import Any
 
 import apsw
 
+from .agent_provenance import classify_provenance, effective_visibility
 from .chunk_origin import detect_chunk_origin
 from .claude_paths import extract_claude_conversation_id as _extract_claude_conversation_id
+from .content_class import classify_content_class
 from .dedupe import find_duplicate, merge_duplicate_chunk, merge_existing_chunk_seen, normalized_exact_hash
 from .ingest_guard import recursive_mcp_output_reason
 from .paths import get_db_path
@@ -241,6 +243,14 @@ def _extract_project_from_source(source_file: str) -> str | None:
     return None
 
 
+def _content_class_for_visibility(base_content_class: str, visibility: str) -> str:
+    if visibility == "default":
+        return base_content_class
+    if visibility == "operational":
+        return "operational"
+    return "cold"
+
+
 # ── Flush callback ───────────────────────────────────────────────────────────
 
 
@@ -303,6 +313,8 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
             sender: Any,
             tags: str | None,
             chunk_origin: str | None,
+            content_class: str,
+            provenance_class: str,
         ) -> None:
             enqueue_watcher_chunk(
                 chunk_id=chunk_id,
@@ -317,6 +329,8 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                 sender=sender,
                 tags=json.loads(tags) if tags else None,
                 chunk_origin=chunk_origin,
+                content_class=content_class,
+                provenance_class=provenance_class,
             )
 
         for entry in entries:
@@ -391,6 +405,25 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                     if correction_tags:
                         tags = json.dumps(correction_tags)
                 chunk_origin = detect_chunk_origin(clean_content)
+                base_content_class = classify_content_class(
+                    clean_content,
+                    content_type=chunk.content_type.value,
+                    tags=json.loads(tags) if tags else None,
+                    source="realtime_watcher",
+                    source_file=source_file,
+                    project=project,
+                )
+                provenance_decision = classify_provenance(
+                    source_file,
+                    base_content_class,
+                    content=clean_content,
+                )
+                visibility = effective_visibility(provenance_decision, base_content_class)
+                content_class = _content_class_for_visibility(base_content_class, visibility)
+                provenance_class = provenance_decision.provenance_tag
+                metadata["provenance_tag"] = provenance_decision.provenance_tag
+                metadata["provenance_search_policy"] = provenance_decision.search_policy
+                metadata["provenance_effective_visibility"] = visibility
 
                 if arbitrated:
                     try:
@@ -407,6 +440,8 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                             sender=metadata.get("sender"),
                             tags=tags,
                             chunk_origin=chunk_origin,
+                            content_class=content_class,
+                            provenance_class=provenance_class,
                         )
                     except Exception:
                         entry_confirmed = False
@@ -477,9 +512,9 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                     created_at, conversation_id, sender, tags, chunk_origin,
                                     seen_count, last_seen_at, dedupe_hash, simhash,
                                     simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3,
-                                    ingested_at)
+                                    ingested_at, content_class, provenance_class)
                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                                           ?)""",
+                                           ?, ?, ?)""",
                                 (
                                     chunk_id,
                                     clean_content,
@@ -504,6 +539,8 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                     dedupe_fields.bands[2],
                                     dedupe_fields.bands[3],
                                     ingested_at,
+                                    content_class,
+                                    provenance_class,
                                 ),
                             )
                             changed = store.conn.changes() > 0
@@ -535,6 +572,8 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                         sender=metadata.get("sender"),
                                         tags=tags,
                                         chunk_origin=chunk_origin,
+                                        content_class=content_class,
+                                        provenance_class=provenance_class,
                                     )
                                 except Exception:
                                     logger.exception("spill_failed chunk_id=%s source_file=%s", chunk_id, source_file)

@@ -15,7 +15,7 @@ from brainlayer.vector_store import VectorStore
 DB_PATH = get_db_path()
 
 # Hebrew character range
-HEBREW_RE = re.compile(r'[\u0590-\u05FF]')
+HEBREW_RE = re.compile(r"[\u0590-\u05FF]")
 
 
 def detect_source(project, content_type, metadata: dict) -> str:
@@ -70,7 +70,7 @@ def detect_language(content: str) -> str:
     if not content:
         return "en"
     hebrew_chars = len(HEBREW_RE.findall(content))
-    total_alpha = len(re.findall(r'[a-zA-Z\u0590-\u05FF]', content))
+    total_alpha = len(re.findall(r"[a-zA-Z\u0590-\u05FF]", content))
     if total_alpha == 0:
         return "en"
     ratio = hebrew_chars / total_alpha
@@ -94,7 +94,7 @@ def main():
     # Check how many already tagged
     already = conn.execute("SELECT COUNT(*) FROM chunks WHERE source IS NOT NULL").fetchone()[0]
     if already > 0:
-        print(f"Already tagged: {already} ({already*100//total}%)")
+        print(f"Already tagged: {already} ({already * 100 // total}%)")
         if "--force" not in sys.argv:
             print("Use --force to re-tag all")
             return
@@ -103,11 +103,14 @@ def main():
     updated = 0
 
     for offset in range(0, total, batch_size):
-        rows = conn.execute("""
+        rows = conn.execute(
+            """
             SELECT id, content, project, content_type, metadata
             FROM chunks
             LIMIT ? OFFSET ?
-        """, (batch_size, offset)).fetchall()
+        """,
+            (batch_size, offset),
+        ).fetchall()
 
         for row in rows:
             chunk_id, content, project, content_type, metadata_str = row
@@ -120,10 +123,13 @@ def main():
             sender = detect_sender(source, content_type, metadata)
             language = detect_language(content or "")
 
-            conn.execute("""
+            conn.execute(
+                """
                 UPDATE chunks SET source = ?, sender = ?, language = ?
                 WHERE id = ?
-            """, (source, sender, language, chunk_id))
+            """,
+                (source, sender, language, chunk_id),
+            )
 
         updated += len(rows)
         pct = updated * 100 // total

@@ -76,7 +76,9 @@ def main():
     new_relations = after["relations"] - before["relations"]
     new_links = after["links"] - before["links"]
 
-    print(f"\nProcessed {stats['chunks_processed']} chunks in {elapsed:.1f}s ({elapsed/len(chunks)*1000:.0f}ms/chunk)")
+    print(
+        f"\nProcessed {stats['chunks_processed']} chunks in {elapsed:.1f}s ({elapsed / len(chunks) * 1000:.0f}ms/chunk)"
+    )
     print(f"  Entities found: {stats['entities_found']} (new: {new_entities})")
     print(f"  Relations found: {stats['relations_found']} (new: {new_relations})")
     print(f"  Entity-chunk links: +{new_links}")

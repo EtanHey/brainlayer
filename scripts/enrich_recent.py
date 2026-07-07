@@ -4,8 +4,8 @@ import json
 import os
 import sys
 import time
-import apsw
 
+import apsw
 from google import genai
 from google.genai import types
 
@@ -69,7 +69,9 @@ def main():
     cursor = conn.cursor()
 
     # Select recent chunks without faceted tags, ordered by importance desc
-    rows = list(cursor.execute("""
+    rows = list(
+        cursor.execute(
+            """
         SELECT id, content, tags, importance
         FROM chunks
         WHERE created_at > datetime('now', '-7 days')
@@ -78,7 +80,10 @@ def main():
           AND char_count < 4000
         ORDER BY importance DESC NULLS LAST, created_at DESC
         LIMIT ?
-    """, (MAX_CHUNKS,)))
+    """,
+            (MAX_CHUNKS,),
+        )
+    )
 
     print(f"Found {len(rows)} chunks to enrich (capped at {MAX_CHUNKS})")
     if not rows:
@@ -146,20 +151,21 @@ def main():
 
             # Update chunk
             cursor.execute(
-                "UPDATE chunks SET tags = ?, tag_confidence = ? WHERE id = ?",
-                (tags_json, confidence, chunk_id)
+                "UPDATE chunks SET tags = ?, tag_confidence = ? WHERE id = ?", (tags_json, confidence, chunk_id)
             )
             enriched += 1
 
             # Collect samples
             if len(samples) < 10:
-                samples.append({
-                    "id": chunk_id[:40],
-                    "topics": topics,
-                    "activity": activity,
-                    "domains": domains,
-                    "confidence": confidence,
-                })
+                samples.append(
+                    {
+                        "id": chunk_id[:40],
+                        "topics": topics,
+                        "activity": activity,
+                        "domains": domains,
+                        "confidence": confidence,
+                    }
+                )
 
         except Exception as e:
             errors += 1
@@ -170,7 +176,7 @@ def main():
         if (i + 1) % 10 == 0:
             elapsed = time.time() - start
             rate = (i + 1) / elapsed
-            print(f"  [{i+1}/{len(rows)}] {rate:.1f}/sec, enriched={enriched}, errors={errors}")
+            print(f"  [{i + 1}/{len(rows)}] {rate:.1f}/sec, enriched={enriched}, errors={errors}")
 
         # Commit every BATCH_COMMIT
         if enriched > 0 and enriched % BATCH_COMMIT == 0:
@@ -180,7 +186,7 @@ def main():
 
     elapsed = time.time() - start
     print(f"\nDone in {elapsed:.0f}s — enriched {enriched}, errors {errors}")
-    print(f"\nSample results:")
+    print("\nSample results:")
     for s in samples:
         print(f"  {s['id']:40s} topics={s['topics']}, {s['activity']}, {s['domains']}, conf={s['confidence']}")
 

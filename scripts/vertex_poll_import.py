@@ -7,19 +7,18 @@ Usage:
 """
 
 import json
-import os
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from brainlayer.vector_store import VectorStore
 from brainlayer.paths import DEFAULT_DB_PATH
 from brainlayer.pipeline.enrichment import parse_enrichment
+from brainlayer.vector_store import VectorStore
 
 # ── Config ──────────────────────────────────────────────────────────────
 
@@ -36,6 +35,7 @@ LOCATION = "us-central1"
 
 def get_client():
     from google import genai
+
     return genai.Client(vertexai=True, project=PROJECT, location=LOCATION)
 
 
@@ -59,10 +59,7 @@ def download_results(job_id):
     """Download batch results from GCS output directory."""
     # Vertex AI writes results to output/prediction-model-*-of-*
     # List all output files for this job
-    result = subprocess.run(
-        [str(GSUTIL), "ls", f"{GCS_OUTPUT}/"],
-        capture_output=True, text=True
-    )
+    result = subprocess.run([str(GSUTIL), "ls", f"{GCS_OUTPUT}/"], capture_output=True, text=True)
 
     if result.returncode != 0:
         print(f"  Error listing GCS: {result.stderr[:200]}")
@@ -82,10 +79,7 @@ def download_results(job_id):
         if not gcs_file.endswith("/"):  # Skip directories
             local_path = local_dir / gcs_file.split("/")[-1]
             if not local_path.exists():
-                subprocess.run(
-                    [str(GSUTIL), "cp", gcs_file, str(local_path)],
-                    capture_output=True
-                )
+                subprocess.run([str(GSUTIL), "cp", gcs_file, str(local_path)], capture_output=True)
 
             if local_path.exists():
                 with open(local_path) as f:
@@ -112,9 +106,7 @@ def import_results_to_db(store, results):
             continue
 
         # Skip already enriched
-        existing = list(cursor.execute(
-            "SELECT enriched_at FROM chunks WHERE id = ?", [chunk_id]
-        ))
+        existing = list(cursor.execute("SELECT enriched_at FROM chunks WHERE id = ?", [chunk_id]))
         if existing and existing[0][0] is not None:
             skipped += 1
             continue
@@ -195,7 +187,9 @@ def main():
         failed = sum(1 for s in states.values() if "FAILED" in s["state"])
 
         now = datetime.now().strftime("%H:%M:%S")
-        print(f"\n[{now}] Poll #{poll_num + 1}: {pending} pending, {running} running, {succeeded} done, {failed} failed")
+        print(
+            f"\n[{now}] Poll #{poll_num + 1}: {pending} pending, {running} running, {succeeded} done, {failed} failed"
+        )
 
         if status_only:
             for jid, info in states.items():
@@ -246,11 +240,13 @@ def main():
 
     # Final summary
     stats = store.get_enrichment_stats()
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("VERTEX AI BATCH ENRICHMENT COMPLETE")
-    print(f"  Imported: {total_imported['success']:,} ok, {total_imported['failed']:,} fail, {total_imported['skipped']:,} skip")
+    print(
+        f"  Imported: {total_imported['success']:,} ok, {total_imported['failed']:,} fail, {total_imported['skipped']:,} skip"
+    )
     print(f"  Enrichment: {stats['enriched']:,}/{stats['total_chunks']:,} ({stats['percent']}%)")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     notify("Enrichment Done", f"Imported {total_imported['success']:,} chunks. DB at {stats['percent']}% enriched.")
     store.close()
@@ -261,8 +257,10 @@ def main():
         try:
             result = subprocess.run(
                 [sys.executable, "-m", "brainlayer.cli", "brain-export"],
-                capture_output=True, text=True, timeout=600,
-                cwd=str(Path(__file__).resolve().parent.parent)
+                capture_output=True,
+                text=True,
+                timeout=600,
+                cwd=str(Path(__file__).resolve().parent.parent),
             )
             if result.returncode == 0:
                 print(f"  Brain export done: {result.stdout.strip()[-200:]}")

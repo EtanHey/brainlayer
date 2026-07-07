@@ -50,13 +50,14 @@ def main():
         "hook": hook_results,
         "combined_score_pct": round(
             (search_results["pass_count"] + hook_results["pass_count"])
-            / (search_results["total"] + hook_results["total"]) * 100,
+            / (search_results["total"] + hook_results["total"])
+            * 100,
             1,
         ),
     }
 
     # Print summary
-    print(f"\n=== brain_search quality ===")
+    print("\n=== brain_search quality ===")
     print(f"Score: {search_results['pass_count']}/{search_results['total']} ({search_results['score_pct']}%)")
     if prev:
         prev_pct = prev.get("search", {}).get("score_pct", 0)
@@ -69,7 +70,7 @@ def main():
         if not case["passed"]:
             print(f"       top: {case['top_snippet'][:70]!r}")
 
-    print(f"\n=== hook entity injection ===")
+    print("\n=== hook entity injection ===")
     print(f"Score: {hook_results['pass_count']}/{hook_results['total']} ({hook_results['score_pct']}%)")
     if prev:
         prev_hook_pct = prev.get("hook", {}).get("score_pct", 0)

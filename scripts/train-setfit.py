@@ -9,8 +9,8 @@ Takes ~5 min on M2 Mac.
 
 import json
 import sys
-from pathlib import Path
 from collections import Counter
+from pathlib import Path
 
 DATA_FILE = Path(__file__).parent.parent / "data" / "labeled-samples.json"
 MODEL_DIR = Path(__file__).parent.parent / "data" / "models" / "setfit-tagger"
@@ -76,8 +76,8 @@ def main():
 
     # Import SetFit
     try:
-        from setfit import SetFitModel, Trainer, TrainingArguments
         from datasets import Dataset
+        from setfit import SetFitModel, Trainer, TrainingArguments
     except ImportError:
         print("Missing deps: pip install setfit datasets")
         sys.exit(1)
@@ -154,7 +154,7 @@ def main():
         json.dump(meta, f, indent=2)
 
     print(f"\nModel saved: {MODEL_DIR}")
-    print(f"Next: python scripts/classify-all.py")
+    print("Next: python scripts/classify-all.py")
 
 
 if __name__ == "__main__":
