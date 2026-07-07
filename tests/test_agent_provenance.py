@@ -164,6 +164,23 @@ def test_recon_agent_signature_is_out_and_has_precedence_over_fleet_subagent(tmp
     assert decision.search_policy == "OUT"
 
 
+def test_recon_agent_signature_does_not_match_plain_weave_verb(tmp_path: Path) -> None:
+    direct_session = (
+        tmp_path / "home" / ".claude" / "projects" / "-Users-etanheyman-Gits-brainlayer" / "4220c177-8816-446d.jsonl"
+    )
+
+    decision = classify_provenance(
+        str(direct_session),
+        content="Weave together the launch notes into one summary.",
+    )
+
+    assert has_recon_agent_signature("/weave run the recon")
+    assert has_recon_agent_signature("Send this to the weave agent.")
+    assert not has_recon_agent_signature("Weave together the launch notes into one summary.")
+    assert decision.provenance_tag == "direct-session"
+    assert decision.search_policy == "KEEP"
+
+
 def test_effective_visibility_preserves_keep_knowledge_and_decision_but_isolates_operational(
     tmp_path: Path,
 ) -> None:

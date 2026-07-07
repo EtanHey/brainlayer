@@ -21,7 +21,7 @@ SearchPolicy = Literal["KEEP", "ISOLATE", "OUT"]
 EffectiveVisibility = Literal["default", "operational", "cold"]
 
 RECON_BRAIN_WORKER_RE = re.compile(r"\bbrain[-_ ]?worker\b", re.IGNORECASE)
-RECON_WEAVE_RE = re.compile(r"(?<!\w)/(?:weave)\b|\bweave(?:\s+worker|\s+agent|\s+recon)?\b", re.IGNORECASE)
+RECON_WEAVE_RE = re.compile(r"(?<!\w)/weave\b|\bweave[-_ ]+(?:worker|agent|recon)\b", re.IGNORECASE)
 RECON_SESSION_MINER_RE = re.compile(r"\bsession[-_ ]?miner\b", re.IGNORECASE)
 RECON_AGENT_SIGNATURES = (
     RECON_BRAIN_WORKER_RE,
