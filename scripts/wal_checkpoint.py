@@ -20,7 +20,13 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from brainlayer.wal_checkpoint import run_wal_checkpoint
+from brainlayer.wal_checkpoint import (  # noqa: F401
+    checkpoint,
+    format_size,
+    get_wal_size,
+    resolve_db_path,
+    run_wal_checkpoint,
+)
 
 
 def main():
