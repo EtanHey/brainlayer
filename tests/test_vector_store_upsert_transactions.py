@@ -3,6 +3,7 @@ from __future__ import annotations
 import apsw
 import pytest
 
+import brainlayer.vector_store as vector_store
 from brainlayer.vector_store import VectorStore
 
 
@@ -64,6 +65,12 @@ def test_upsert_chunks_commits_large_batches_in_bounded_transactions(isolated_st
     assert isolated_store.conn.cursor().execute("SELECT COUNT(*) FROM chunks").fetchone() == (5,)
 
 
+def test_index_txn_batch_env_uses_dedicated_cap(monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_INDEX_TXN_BATCH", str(vector_store._MAX_INDEX_TXN_BATCH + 1))
+
+    assert vector_store._index_txn_batch_size() == vector_store._DEFAULT_INDEX_TXN_BATCH
+
+
 def test_upsert_chunks_preserves_dedupe_and_repeat_upsert_shape(isolated_store, monkeypatch):
     monkeypatch.setenv("BRAINLAYER_INDEX_TXN_BATCH", "2")
     duplicate_content = "Repeat bounded transaction dedupe content should collapse"
@@ -118,3 +125,36 @@ def test_busy_sub_batch_retries_without_replaying_committed_sub_batches(isolated
         "chunk-3": 1,
     }
     assert isolated_store.conn.cursor().execute("SELECT COUNT(*) FROM chunks").fetchone() == (4,)
+
+
+def test_failed_later_sub_batch_invalidates_after_prior_commit(isolated_store, monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_INDEX_TXN_BATCH", "2")
+    cleared_paths: list[object] = []
+    invalidated_filtered_counts = 0
+
+    def fake_clear_hybrid_search_cache(db_path=None):
+        cleared_paths.append(db_path)
+
+    def fake_invalidate_filtered_count_caches():
+        nonlocal invalidated_filtered_counts
+        invalidated_filtered_counts += 1
+
+    def trace(_cursor, statement, bindings):
+        if _is_insert_chunk_statement(str(statement)) and bindings and bindings[0] == "chunk-2":
+            raise RuntimeError("simulated permanent second sub-batch failure")
+        return True
+
+    monkeypatch.setattr("brainlayer.search_repo.clear_hybrid_search_cache", fake_clear_hybrid_search_cache)
+    monkeypatch.setattr(isolated_store, "_invalidate_filtered_count_caches", fake_invalidate_filtered_count_caches)
+    isolated_store.conn.setexectrace(trace)
+
+    with pytest.raises(RuntimeError, match="permanent second sub-batch failure"):
+        isolated_store.upsert_chunks(
+            [_chunk(f"chunk-{index}") for index in range(4)],
+            [_embedding(index) for index in range(4)],
+        )
+
+    cursor = isolated_store.conn.cursor()
+    assert cursor.execute("SELECT id FROM chunks ORDER BY id").fetchall() == [("chunk-0",), ("chunk-1",)]
+    assert cleared_paths == [isolated_store.db_path]
+    assert invalidated_filtered_counts == 1

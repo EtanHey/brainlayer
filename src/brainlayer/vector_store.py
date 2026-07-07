@@ -66,18 +66,19 @@ _DEFAULT_BUSY_TIMEOUT_MS = 30_000
 _DEFAULT_READ_BUSY_TIMEOUT_MS = 5_000
 _DEFAULT_INDEX_TXN_BATCH = 250
 _MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
+_MAX_INDEX_TXN_BATCH = 10_000
 _WRITE_BUSY_TIMEOUT_STATE = threading.local()
 _NO_EXEC_TRACE = object()
 _KNOWLEDGE_FTS_CLASS_SQL = "COALESCE(content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark')"
 _OPERATIONAL_FTS_CLASS_SQL = "COALESCE(content_class, 'knowledge') = 'operational'"
 
 
-def _positive_int_env(name: str, default: int) -> int:
+def _positive_int_env(name: str, default: int, *, max_value: int = _MAX_APSW_BUSY_TIMEOUT_MS) -> int:
     try:
         value = int(os.environ.get(name, str(default)))
     except (TypeError, ValueError):
         return default
-    if value <= 0 or value > _MAX_APSW_BUSY_TIMEOUT_MS:
+    if value <= 0 or value > max_value:
         return default
     return value
 
@@ -87,7 +88,7 @@ def _read_busy_timeout_ms() -> int:
 
 
 def _index_txn_batch_size() -> int:
-    return _positive_int_env("BRAINLAYER_INDEX_TXN_BATCH", _DEFAULT_INDEX_TXN_BATCH)
+    return _positive_int_env("BRAINLAYER_INDEX_TXN_BATCH", _DEFAULT_INDEX_TXN_BATCH, max_value=_MAX_INDEX_TXN_BATCH)
 
 
 def _write_busy_deadline() -> float | None:
@@ -2356,7 +2357,13 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
     # ── Chunk CRUD ──────────────────────────────────────────────────────
 
     def upsert_chunks(self, chunks: List[Dict[str, Any]], embeddings: List[List[float]]) -> int:
-        """Upsert chunks with embeddings, returning the number of input chunks processed."""
+        """Upsert chunks with embeddings, returning the number of input chunks processed.
+
+        Large calls commit in bounded sub-batches. If a later sub-batch fails after
+        earlier sub-batches commit, the committed chunks are intentionally not
+        replayed on retry; callers should retry the failed call with the same
+        inputs to converge via the existing dedupe/replay-tolerant paths.
+        """
         if len(chunks) != len(embeddings):
             raise ValueError("Chunks and embeddings must have same length")
 
@@ -2376,6 +2383,13 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         if not valid_pairs and rejected_error is not None:
             raise rejected_error
 
+        def invalidate_upsert_caches() -> None:
+            from .search_repo import clear_hybrid_search_cache
+
+            clear_hybrid_search_cache(getattr(self, "db_path", None))
+            self._invalidate_filtered_count_caches()
+
+        committed_any = False
         batch_size = _index_txn_batch_size()
         for start in range(0, len(valid_pairs), batch_size):
             sub_batch = valid_pairs[start : start + batch_size]
@@ -2528,22 +2542,24 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                         self._upsert_chunk_vector(cursor, chunk_id, embedding)
                     cursor.execute("COMMIT")
                     transaction_started = False
+                    committed_any = True
                     break
                 except apsw.BusyError:
                     if transaction_started:
                         cursor.execute("ROLLBACK")
                     if attempt == 4:
+                        if committed_any:
+                            invalidate_upsert_caches()
                         raise
                     time.sleep(0.1 * (2**attempt))
                 except Exception:
                     if transaction_started:
                         cursor.execute("ROLLBACK")
+                    if committed_any:
+                        invalidate_upsert_caches()
                     raise
 
-        from .search_repo import clear_hybrid_search_cache
-
-        clear_hybrid_search_cache(getattr(self, "db_path", None))
-        self._invalidate_filtered_count_caches()
+        invalidate_upsert_caches()
 
         return len(valid_pairs)
 
