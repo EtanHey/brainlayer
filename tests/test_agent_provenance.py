@@ -183,6 +183,28 @@ def test_recon_agent_signature_does_not_match_plain_weave_verb(tmp_path: Path) -
     assert decision.search_policy == "KEEP"
 
 
+def test_recon_path_signature_is_scoped_to_agent_transcript_roots(tmp_path: Path) -> None:
+    normal_project = tmp_path / "home" / "Gits" / "weave" / "notes" / "memory.md"
+    direct_weave_repo_session = (
+        tmp_path / "home" / ".claude" / "projects" / "-Users-etanheyman-Gits-weave" / "session.jsonl"
+    )
+    recon_subagent = (
+        tmp_path
+        / "home"
+        / ".claude"
+        / "projects"
+        / "-Users-etanheyman-Gits-brainlayer"
+        / "session"
+        / "subagents"
+        / "session-miner"
+        / "agent.jsonl"
+    )
+
+    assert classify_provenance(str(normal_project)).search_policy == "KEEP"
+    assert classify_provenance(str(direct_weave_repo_session)).provenance_tag == "direct-session"
+    assert classify_provenance(str(recon_subagent)).provenance_tag == "recon-agent"
+
+
 def test_effective_visibility_preserves_keep_knowledge_and_decision_but_isolates_operational(
     tmp_path: Path,
 ) -> None:

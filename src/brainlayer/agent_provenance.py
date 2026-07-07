@@ -118,7 +118,19 @@ def has_recon_agent_signature(content: str | None) -> bool:
 
 
 def _has_recon_path_signature(path: Path) -> bool:
-    return any(part in {"brain-worker", "session-miner", "weave"} for part in path.parts)
+    markers = {"brain-worker", "session-miner", "weave"}
+    parts = path.parts
+    marker_indexes = [index for index, part in enumerate(parts) if part in markers]
+    if not marker_indexes:
+        return False
+
+    root_indexes: list[int] = []
+    if "subagents" in parts:
+        root_indexes.append(parts.index("subagents"))
+    if _under_cursor_agent_transcripts(path):
+        root_indexes.append(parts.index("agent-transcripts"))
+
+    return any(marker_index > root_index for marker_index in marker_indexes for root_index in root_indexes)
 
 
 def classify_provenance(
