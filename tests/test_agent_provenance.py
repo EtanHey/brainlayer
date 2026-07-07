@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import apsw
@@ -232,3 +234,26 @@ def test_report_summarizes_tags_policies_and_effective_visibility_without_real_d
     }
     assert report["policies"] == {"KEEP": 2, "ISOLATE": 1, "OUT": 1}
     assert report["effective_visibility"] == {"cold": 1, "default": 2, "operational": 1}
+
+
+def test_report_script_bootstraps_src_when_run_directly(tmp_path: Path) -> None:
+    fake_apsw = tmp_path / "apsw.py"
+    fake_apsw.write_text("", encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-S",
+            "scripts/provenance_classify_report.py",
+            "--help",
+        ],
+        check=False,
+        cwd=Path(__file__).resolve().parents[1],
+        env={"PYTHONPATH": str(tmp_path)},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Read-only provenance classifier report" in result.stdout
