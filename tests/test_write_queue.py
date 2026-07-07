@@ -138,6 +138,25 @@ class TestQueueStore:
         assert item["provenance_class"] == "cursor-gather"
         assert item["content_class"] == "operational"
 
+    def test_enqueue_watcher_chunk_omits_empty_provenance_routing_fields(self, tmp_path):
+        path = enqueue_watcher_chunk(
+            chunk_id="rt-no-provenance-fields",
+            content="queued watcher chunk without explicit provenance routing fields",
+            metadata={},
+            source_file="/tmp/session.jsonl",
+            project="repo",
+            content_type="assistant_text",
+            value_type="medium",
+            created_at="2026-07-08T12:00:00Z",
+            conversation_id="session",
+            queue_dir=tmp_path,
+        )
+
+        item = json.loads(path.read_text())
+
+        assert "provenance_class" not in item
+        assert "content_class" not in item
+
     def test_drain_preserves_hook_event_created_at_and_project(self, tmp_path, monkeypatch):
         """Hook/realtime queue events must replay reservation metadata, not flush time."""
         from brainlayer.vector_store import VectorStore
@@ -248,6 +267,45 @@ class TestQueueStore:
 
         assert drained == 1
         assert row == ("operational", "cursor-gather", 0, 1)
+
+    def test_drain_classifies_legacy_watcher_event_without_routing_fields(self, tmp_path, monkeypatch):
+        """Legacy watcher queue files without explicit routing fields still use classifier fallback."""
+        from brainlayer.vector_store import VectorStore
+
+        db_path = tmp_path / "watcher-legacy-classification.db"
+        queue_dir = tmp_path / "queue"
+        VectorStore(db_path).close()
+        monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+        event = {
+            "kind": "watcher_chunk",
+            "chunk_id": "rt-session-legacy-classification",
+            "content": "smoke test query should remain hidden from default FTS after old queued watcher replay",
+            "metadata": {"session_id": "session-legacy-classification"},
+            "project": "brainlayer",
+            "source_file": "/tmp/session.jsonl",
+            "content_type": "assistant_text",
+            "value_type": "medium",
+            "created_at": "2026-07-08T12:00:00Z",
+            "conversation_id": "session-legacy-classification",
+        }
+        queue_dir.mkdir()
+        (queue_dir / "watcher-legacy-classification.jsonl").write_text(json.dumps(event) + "\n")
+
+        drained = drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=tmp_path / "drain.log")
+
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT content_class,
+                       (SELECT COUNT(*) FROM chunks_fts WHERE chunk_id = chunks.id),
+                       (SELECT COUNT(*) FROM chunks_fts_operational WHERE chunk_id = chunks.id)
+                FROM chunks WHERE id = ?
+                """,
+                (event["chunk_id"],),
+            ).fetchone()
+
+        assert drained == 1
+        assert row == ("test", 0, 0)
 
     def test_drain_refreshes_ingested_at_for_duplicate_arbitrated_watcher_chunk(self, tmp_path, monkeypatch):
         """Duplicate watcher chunks still count as fresh durable watcher ingestion."""
