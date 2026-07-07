@@ -69,7 +69,7 @@ _MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 _MAX_INDEX_TXN_BATCH = 10_000
 _WRITE_BUSY_TIMEOUT_STATE = threading.local()
 _NO_EXEC_TRACE = object()
-_KNOWLEDGE_FTS_CLASS_SQL = "COALESCE(content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark')"
+_KNOWLEDGE_FTS_CLASS_SQL = "COALESCE(content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark', 'cold')"
 _OPERATIONAL_FTS_CLASS_SQL = "COALESCE(content_class, 'knowledge') = 'operational'"
 
 
@@ -1081,10 +1081,10 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     new.key_facts,
                     new.resolved_queries,
                     new.id
-                WHERE COALESCE(new.content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark');
+                WHERE COALESCE(new.content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark', 'cold');
                 INSERT INTO chunk_fts_rowids(chunk_id, fts_rowid)
                 SELECT new.id, last_insert_rowid()
-                WHERE COALESCE(new.content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark')
+                WHERE COALESCE(new.content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark', 'cold')
                 ON CONFLICT(chunk_id) DO UPDATE SET fts_rowid = excluded.fts_rowid;
             END
         """)
@@ -1121,10 +1121,10 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     new.key_facts,
                     new.resolved_queries,
                     new.id
-                WHERE COALESCE(new.content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark');
+                WHERE COALESCE(new.content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark', 'cold');
                 INSERT INTO chunk_fts_rowids(chunk_id, trigram_rowid)
                 SELECT new.id, last_insert_rowid()
-                WHERE COALESCE(new.content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark')
+                WHERE COALESCE(new.content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark', 'cold')
                 ON CONFLICT(chunk_id) DO UPDATE SET trigram_rowid = excluded.trigram_rowid;
             END
         """)
@@ -1173,10 +1173,10 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     new.key_facts,
                     new.resolved_queries,
                     new.id
-                WHERE COALESCE(new.content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark');
+                WHERE COALESCE(new.content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark', 'cold');
                 INSERT INTO chunk_fts_rowids(chunk_id, fts_rowid)
                 SELECT new.id, last_insert_rowid()
-                WHERE COALESCE(new.content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark')
+                WHERE COALESCE(new.content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark', 'cold')
                 ON CONFLICT(chunk_id) DO UPDATE SET fts_rowid = excluded.fts_rowid;
 
                 INSERT INTO chunks_fts_operational(
@@ -1205,10 +1205,10 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     new.key_facts,
                     new.resolved_queries,
                     new.id
-                WHERE COALESCE(new.content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark');
+                WHERE COALESCE(new.content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark', 'cold');
                 INSERT INTO chunk_fts_rowids(chunk_id, trigram_rowid)
                 SELECT new.id, last_insert_rowid()
-                WHERE COALESCE(new.content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark')
+                WHERE COALESCE(new.content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark', 'cold')
                 ON CONFLICT(chunk_id) DO UPDATE SET trigram_rowid = excluded.trigram_rowid;
             END
         """)
@@ -1807,7 +1807,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             cursor.execute("""
                 INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
                 SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id FROM chunks
-                WHERE COALESCE(content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark')
+                WHERE COALESCE(content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark', 'cold')
             """)
         if operational_chunk_count > 0 and operational_fts_count == 0:
             cursor.execute("""
@@ -1901,7 +1901,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 cursor.execute("""
                     INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
                     SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id FROM chunks
-                    WHERE COALESCE(content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark')
+                    WHERE COALESCE(content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark', 'cold')
                 """)
                 repaired["chunks_fts"] = cursor.execute("SELECT COUNT(*) FROM chunks_fts").fetchone()[0]
                 cursor.execute("DELETE FROM chunks_fts_operational")
@@ -1920,7 +1920,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     cursor.execute("""
                         INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
                         SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id FROM chunks
-                        WHERE COALESCE(content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark')
+                        WHERE COALESCE(content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark', 'cold')
                     """)
                     repaired["chunks_fts_trigram"] = cursor.execute(
                         "SELECT COUNT(*) FROM chunks_fts_trigram"
@@ -2224,7 +2224,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             cursor.execute("""
                 INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
                 SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id FROM chunks
-                WHERE COALESCE(content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark')
+                WHERE COALESCE(content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark', 'cold')
             """)
         operational_chunk_count = cursor.execute(
             f"SELECT COUNT(*) FROM chunks WHERE {_OPERATIONAL_FTS_CLASS_SQL}"
@@ -2246,7 +2246,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 cursor.execute("""
                     INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
                     SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id FROM chunks
-                    WHERE COALESCE(content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark')
+                    WHERE COALESCE(content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark', 'cold')
                 """)
         cursor.execute("DELETE FROM chunk_fts_rowids")
         cursor.execute("""

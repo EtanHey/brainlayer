@@ -104,6 +104,8 @@ def enqueue_watcher_chunk(
     sender: str | None = None,
     tags: list[str] | None = None,
     chunk_origin: str | None = None,
+    content_class: str | None = None,
+    provenance_class: str | None = None,
     queue_dir: Path | None = None,
 ) -> Path:
     return enqueue_jsonl(
@@ -121,6 +123,8 @@ def enqueue_watcher_chunk(
             "sender": sender,
             "tags": tags,
             "chunk_origin": chunk_origin,
+            "content_class": content_class,
+            "provenance_class": provenance_class,
         },
         source="watcher",
         queue_dir=queue_dir,

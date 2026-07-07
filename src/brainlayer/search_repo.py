@@ -356,7 +356,7 @@ def _content_class_where(
     del query_text
     if include_operational:
         return None, []
-    return f"COALESCE({column_expr}, ?) NOT IN ('operational', 'test', 'benchmark')", [DEFAULT_CONTENT_CLASS]
+    return f"COALESCE({column_expr}, ?) NOT IN ('operational', 'test', 'benchmark', 'cold')", [DEFAULT_CONTENT_CLASS]
 
 
 def _content_class_expr(store: Any, alias: str | None = None) -> str:

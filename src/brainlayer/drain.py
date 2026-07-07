@@ -760,6 +760,8 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
             "conversation_id": event.get("conversation_id"),
             "sender": event.get("sender"),
             "tags": json.dumps(tags) if tags else None,
+            "content_class": event.get("content_class"),
+            "provenance_class": event.get("provenance_class"),
             "content_hash": _content_hash(content),
             "chunk_origin": detect_chunk_origin(content, event.get("chunk_origin")),
         },

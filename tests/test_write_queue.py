@@ -22,7 +22,7 @@ from brainlayer.mcp.store_handler import (
     _flush_pending_stores,
     _queue_store,
 )
-from brainlayer.queue_io import enqueue_enrichment_updates, enqueue_hook_chunk, enqueue_store
+from brainlayer.queue_io import enqueue_enrichment_updates, enqueue_hook_chunk, enqueue_store, enqueue_watcher_chunk
 
 # ---------------------------------------------------------------------------
 # _queue_store / _flush_pending_stores unit tests
@@ -117,6 +117,27 @@ class TestQueueStore:
 
         assert item["provenance_class"] == "RAW-ETAN-DIRECT"
 
+    def test_enqueue_watcher_chunk_preserves_provenance_routing_fields(self, tmp_path):
+        path = enqueue_watcher_chunk(
+            chunk_id="rt-provenance-fields",
+            content="queued watcher chunk should carry provenance routing fields",
+            metadata={},
+            source_file="/tmp/.cursor/projects/repo/agent-transcripts/session.jsonl",
+            project="repo",
+            content_type="assistant_text",
+            value_type="medium",
+            created_at="2026-07-08T12:00:00Z",
+            conversation_id="session",
+            provenance_class="cursor-gather",
+            content_class="operational",
+            queue_dir=tmp_path,
+        )
+
+        item = json.loads(path.read_text())
+
+        assert item["provenance_class"] == "cursor-gather"
+        assert item["content_class"] == "operational"
+
     def test_drain_preserves_hook_event_created_at_and_project(self, tmp_path, monkeypatch):
         """Hook/realtime queue events must replay reservation metadata, not flush time."""
         from brainlayer.vector_store import VectorStore
@@ -186,6 +207,47 @@ class TestQueueStore:
         assert row[0] == "2026-06-06T20:04:14Z"
         assert before - 5 <= row[1] <= after + 5
         assert row[2] == "realtime_watcher"
+
+    def test_drain_persists_watcher_provenance_routing_fields(self, tmp_path, monkeypatch):
+        """Arbitrated watcher chunks must keep provenance-derived routing fields."""
+        from brainlayer.vector_store import VectorStore
+
+        db_path = tmp_path / "watcher-provenance-routing.db"
+        queue_dir = tmp_path / "queue"
+        VectorStore(db_path).close()
+        monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+        event = {
+            "kind": "watcher_chunk",
+            "chunk_id": "rt-session-provenance-routing",
+            "content": "queued cursor gather transcript should route to operational FTS only",
+            "metadata": {"session_id": "session-provenance-routing"},
+            "project": "brainlayer",
+            "source_file": "/tmp/.cursor/projects/brainlayer/agent-transcripts/session.jsonl",
+            "content_type": "assistant_text",
+            "value_type": "medium",
+            "created_at": "2026-07-08T12:00:00Z",
+            "conversation_id": "session-provenance-routing",
+            "provenance_class": "cursor-gather",
+            "content_class": "operational",
+        }
+        queue_dir.mkdir()
+        (queue_dir / "watcher-provenance-routing.jsonl").write_text(json.dumps(event) + "\n")
+
+        drained = drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=tmp_path / "drain.log")
+
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT content_class, provenance_class,
+                       (SELECT COUNT(*) FROM chunks_fts WHERE chunk_id = chunks.id),
+                       (SELECT COUNT(*) FROM chunks_fts_operational WHERE chunk_id = chunks.id)
+                FROM chunks WHERE id = ?
+                """,
+                (event["chunk_id"],),
+            ).fetchone()
+
+        assert drained == 1
+        assert row == ("operational", "cursor-gather", 0, 1)
 
     def test_drain_refreshes_ingested_at_for_duplicate_arbitrated_watcher_chunk(self, tmp_path, monkeypatch):
         """Duplicate watcher chunks still count as fresh durable watcher ingestion."""
