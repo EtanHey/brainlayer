@@ -26,7 +26,7 @@ import math
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import yaml
 
@@ -66,12 +66,14 @@ def classify_health_level(score: float) -> int:
 def _get_entity_field_values(store, entity_id: str) -> Dict[str, Any]:
     """Extract all known field values for an entity from its row + metadata."""
     cursor = store._read_cursor()
-    row = list(cursor.execute(
-        """SELECT id, entity_type, name, metadata, description,
+    row = list(
+        cursor.execute(
+            """SELECT id, entity_type, name, metadata, description,
                   canonical_name, confidence, importance, entity_subtype, status
            FROM kg_entities WHERE id = ?""",
-        (entity_id,),
-    ))
+            (entity_id,),
+        )
+    )
     if not row:
         return {}
 
@@ -98,29 +100,21 @@ def _get_entity_field_values(store, entity_id: str) -> Dict[str, Any]:
 def _count_relationships(store, entity_id: str) -> int:
     """Count total relationships (incoming + outgoing) for an entity."""
     cursor = store._read_cursor()
-    out_count = list(cursor.execute(
-        "SELECT COUNT(*) FROM kg_relations WHERE source_id = ?", (entity_id,)
-    ))[0][0]
-    in_count = list(cursor.execute(
-        "SELECT COUNT(*) FROM kg_relations WHERE target_id = ?", (entity_id,)
-    ))[0][0]
+    out_count = list(cursor.execute("SELECT COUNT(*) FROM kg_relations WHERE source_id = ?", (entity_id,)))[0][0]
+    in_count = list(cursor.execute("SELECT COUNT(*) FROM kg_relations WHERE target_id = ?", (entity_id,)))[0][0]
     return out_count + in_count
 
 
 def _count_chunks(store, entity_id: str) -> int:
     """Count chunks linked to an entity."""
     cursor = store._read_cursor()
-    return list(cursor.execute(
-        "SELECT COUNT(*) FROM kg_entity_chunks WHERE entity_id = ?", (entity_id,)
-    ))[0][0]
+    return list(cursor.execute("SELECT COUNT(*) FROM kg_entity_chunks WHERE entity_id = ?", (entity_id,)))[0][0]
 
 
 def _get_entity_updated_at(store, entity_id: str) -> Optional[str]:
     """Get the most recent updated_at for an entity."""
     cursor = store._read_cursor()
-    row = list(cursor.execute(
-        "SELECT updated_at FROM kg_entities WHERE id = ?", (entity_id,)
-    ))
+    row = list(cursor.execute("SELECT updated_at FROM kg_entities WHERE id = ?", (entity_id,)))
     if row and row[0][0]:
         return row[0][0]
     return None
@@ -144,33 +138,21 @@ def score_entity(
 
     # 1. Required field coverage (40%)
     if required_fields:
-        populated_required = sum(
-            1 for f in required_fields
-            if fields.get(f) is not None and fields.get(f) != ""
-        )
+        populated_required = sum(1 for f in required_fields if fields.get(f) is not None and fields.get(f) != "")
         required_score = populated_required / len(required_fields)
     else:
         required_score = 1.0
 
-    missing_required = [
-        f for f in required_fields
-        if fields.get(f) is None or fields.get(f) == ""
-    ]
+    missing_required = [f for f in required_fields if fields.get(f) is None or fields.get(f) == ""]
 
     # 2. Expected field coverage (25%)
     if expected_fields:
-        populated_expected = sum(
-            1 for f in expected_fields
-            if fields.get(f) is not None and fields.get(f) != ""
-        )
+        populated_expected = sum(1 for f in expected_fields if fields.get(f) is not None and fields.get(f) != "")
         expected_score = populated_expected / len(expected_fields)
     else:
         expected_score = 1.0
 
-    missing_expected = [
-        f for f in expected_fields
-        if fields.get(f) is None or fields.get(f) == ""
-    ]
+    missing_expected = [f for f in expected_fields if fields.get(f) is None or fields.get(f) == ""]
 
     # 3. Relationship density (15%) — relative to contract minimum
     relationship_count = _count_relationships(store, entity_id)
@@ -199,11 +181,7 @@ def score_entity(
 
     # Weighted combination
     completeness_score = (
-        0.40 * required_score
-        + 0.25 * expected_score
-        + 0.15 * rel_score
-        + 0.10 * chunk_score
-        + 0.10 * recency_score
+        0.40 * required_score + 0.25 * expected_score + 0.15 * rel_score + 0.10 * chunk_score + 0.10 * recency_score
     )
 
     # Clamp to [0, 1]
@@ -225,9 +203,7 @@ def score_all_entities(store, contracts: Dict[str, Dict[str, Any]]) -> int:
     Returns number of entities scored.
     """
     cursor = store._read_cursor()
-    entities = list(cursor.execute(
-        "SELECT id, entity_type, name FROM kg_entities"
-    ))
+    entities = list(cursor.execute("SELECT id, entity_type, name FROM kg_entities"))
 
     scored = 0
     write_cursor = store.conn.cursor()
@@ -237,10 +213,12 @@ def score_all_entities(store, contracts: Dict[str, Dict[str, Any]]) -> int:
         contract = contracts.get(entity_type)
         if contract is None:
             # Try parent type from hierarchy
-            parent_row = list(cursor.execute(
-                "SELECT parent_type FROM entity_type_hierarchy WHERE child_type = ?",
-                (entity_type,),
-            ))
+            parent_row = list(
+                cursor.execute(
+                    "SELECT parent_type FROM entity_type_hierarchy WHERE child_type = ?",
+                    (entity_type,),
+                )
+            )
             if parent_row:
                 contract = contracts.get(parent_row[0][1] if len(parent_row[0]) > 1 else parent_row[0][0])
         if contract is None:
@@ -309,9 +287,7 @@ def main():
         # Print summary
         cursor = store._read_cursor()
         for level in range(5, 0, -1):
-            count = list(cursor.execute(
-                "SELECT COUNT(*) FROM entity_health WHERE health_level = ?", (level,)
-            ))[0][0]
+            count = list(cursor.execute("SELECT COUNT(*) FROM entity_health WHERE health_level = ?", (level,)))[0][0]
             labels = {5: "Very Detailed", 4: "Detailed", 3: "Moderate", 2: "Basic", 1: "Stub"}
             print(f"  Level {level} ({labels[level]}): {count} entities")
     finally:

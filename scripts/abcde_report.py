@@ -152,7 +152,9 @@ def build_report(input_path: Path | str = DEFAULT_INPUT, *, tick_usd: float = TI
     totals_line = _format_totals(variants.values())
     read_paragraph = _format_read(variants.values())
     markdown = "\n\n".join(("# ABCDE Enrichment Results Summary", table, totals_line, read_paragraph)) + "\n"
-    return Report(variants=variants, table=table, totals_line=totals_line, read_paragraph=read_paragraph, markdown=markdown)
+    return Report(
+        variants=variants, table=table, totals_line=totals_line, read_paragraph=read_paragraph, markdown=markdown
+    )
 
 
 def write_report(report: Report, output_path: Path | str = DEFAULT_OUTPUT) -> None:
@@ -258,8 +260,7 @@ def _schema_notes(summaries: Sequence[VariantSummary]) -> str:
         and variant_a.mean_resolved_queries == 3.0
     ):
         notes.append(
-            "Variant A fails schema_gate only on the missing legacy `resolved_query` key; "
-            "it has `resolved_queries` x3."
+            "Variant A fails schema_gate only on the missing legacy `resolved_query` key; it has `resolved_queries` x3."
         )
 
     variant_b = by_variant.get("B")

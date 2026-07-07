@@ -15,11 +15,11 @@ from pathlib import Path
 
 from prompt_toolkit import prompt
 from prompt_toolkit.completion import FuzzyWordCompleter
+from rich import box
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
-from rich import box
 
 DATA_FILE = Path(__file__).parent.parent / "data" / "labeled-samples.json"
 TAXONOMY_FILE = Path(__file__).parent.parent / "src" / "brainlayer" / "taxonomy.json"
@@ -53,7 +53,7 @@ def render_chunk(sample: dict, idx: int, total: int, taxonomy: dict):
 
     # Header
     reviewed = sum(1 for s in load_samples() if s.get("reviewed"))
-    console.print(f"[bold blue]BrainLayer Label Studio[/] — Chunk {idx+1}/{total} ({reviewed} reviewed)")
+    console.print(f"[bold blue]BrainLayer Label Studio[/] — Chunk {idx + 1}/{total} ({reviewed} reviewed)")
     console.print()
 
     # Chunk metadata
@@ -68,11 +68,23 @@ def render_chunk(sample: dict, idx: int, total: int, taxonomy: dict):
     # Content
     content = sample.get("content", "")[:1200]
     if not content.strip():
-        console.print(Panel("[bold red]⚠ EMPTY CONTENT[/] — use 'meta/empty' or 's' to skip",
-                            title="Content", box=box.ROUNDED, expand=True))
+        console.print(
+            Panel(
+                "[bold red]⚠ EMPTY CONTENT[/] — use 'meta/empty' or 's' to skip",
+                title="Content",
+                box=box.ROUNDED,
+                expand=True,
+            )
+        )
     elif len(content.strip()) < 20:
-        console.print(Panel(content + "\n\n[dim](very short — consider meta/empty or meta/noise)[/]",
-                            title="Content", box=box.ROUNDED, expand=True))
+        console.print(
+            Panel(
+                content + "\n\n[dim](very short — consider meta/empty or meta/noise)[/]",
+                title="Content",
+                box=box.ROUNDED,
+                expand=True,
+            )
+        )
     else:
         console.print(Panel(content, title="Content", box=box.ROUNDED, expand=True))
 
@@ -193,6 +205,7 @@ def _fuzzy_match(query: str, options: list[str]) -> str | None:
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--start-from", type=int, default=0, help="Resume from chunk N")
     args = parser.parse_args()
@@ -206,7 +219,7 @@ def main():
 
     total = len(samples)
     reviewed = sum(1 for s in samples if s.get("reviewed"))
-    console.print(f"[bold blue]BrainLayer Label Studio[/]")
+    console.print("[bold blue]BrainLayer Label Studio[/]")
     console.print(f"Samples: {total} | Reviewed: {reviewed} | Remaining: {total - reviewed}")
     console.print(f"Taxonomy: {len(taxonomy)} labels\n")
 
@@ -257,7 +270,7 @@ def main():
         if labels:
             console.print(f"  [green]Saved: {', '.join(labels)}[/]")
         else:
-            console.print(f"  [dim]Saved: (no labels)[/]")
+            console.print("  [dim]Saved: (no labels)[/]")
 
         idx += 1
 
@@ -265,7 +278,7 @@ def main():
         save_samples(samples)
 
     console.print(f"\n[bold green]All {total} chunks reviewed![/]")
-    console.print(f"Next: python scripts/train-setfit.py")
+    console.print("Next: python scripts/train-setfit.py")
 
 
 if __name__ == "__main__":

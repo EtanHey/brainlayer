@@ -53,6 +53,7 @@ def _run_pipeline(
 
     if pipeline == "fts5":
         with ReadOnlyBenchmarkStore(db_path) as store:
+
             def _fts_query(query_id: str, query_text: str):
                 deadline = time.monotonic() + (query_timeout_ms / 1000.0)
                 store.conn.set_progress_handler(lambda: 1 if time.monotonic() >= deadline else 0, 1000)

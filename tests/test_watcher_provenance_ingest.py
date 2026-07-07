@@ -31,14 +31,7 @@ def _single_inserted_row(db_path: Path) -> tuple[str, str, dict, int, int]:
 
 def test_direct_session_ingest_stays_default_visible_and_never_operational_or_cold(tmp_path):
     db_path = tmp_path / "brainlayer.db"
-    source_file = (
-        tmp_path
-        / "home"
-        / ".claude"
-        / "projects"
-        / "-Users-anyone-Gits-brainlayer"
-        / "direct-session.jsonl"
-    )
+    source_file = tmp_path / "home" / ".claude" / "projects" / "-Users-anyone-Gits-brainlayer" / "direct-session.jsonl"
     text = "Decision: keep direct control session notes searchable in the normal knowledge index for safety."
     flush = create_flush_callback(db_path=db_path, arbitrated=False)
 
@@ -59,13 +52,7 @@ def test_direct_session_ingest_stays_default_visible_and_never_operational_or_co
 def test_cursor_agent_transcript_ingest_is_tagged_and_routed_operational(tmp_path):
     db_path = tmp_path / "brainlayer.db"
     source_file = (
-        tmp_path
-        / "home"
-        / ".cursor"
-        / "projects"
-        / "brainlayer"
-        / "agent-transcripts"
-        / "cursor-gather.jsonl"
+        tmp_path / "home" / ".cursor" / "projects" / "brainlayer" / "agent-transcripts" / "cursor-gather.jsonl"
     )
     text = "This gather agent transcript found implementation notes that should not alter knowledge BM25 statistics."
     flush = create_flush_callback(db_path=db_path, arbitrated=False)

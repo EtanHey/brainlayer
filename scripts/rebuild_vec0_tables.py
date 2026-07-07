@@ -7,6 +7,7 @@ recreates it, and re-inserts the vectors.
 
 IMPORTANT: Stop all writers (enrichment, watcher) before running.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -47,21 +48,15 @@ def batched(values: Iterable[str], batch_size: int) -> Iterator[list[str]]:
 
 
 def iter_valid_chunk_ids(conn, rowids_table: str) -> Iterator[str]:
-    for row in conn.execute(
-        f"SELECT id FROM {rowids_table} WHERE id IN (SELECT id FROM chunks)"
-    ):
+    for row in conn.execute(f"SELECT id FROM {rowids_table} WHERE id IN (SELECT id FROM chunks)"):
         yield row[0]
 
 
 def read_embedding_or_raise(conn, vec_table: str, chunk_id: str):
     try:
-        row = conn.execute(
-            f"SELECT embedding FROM {vec_table} WHERE chunk_id = ?", (chunk_id,)
-        ).fetchone()
+        row = conn.execute(f"SELECT embedding FROM {vec_table} WHERE chunk_id = ?", (chunk_id,)).fetchone()
     except Exception as exc:  # pragma: no cover - exercised via tests with fake conn
-        raise RuntimeError(
-            f"Failed to read embedding for {chunk_id} from {vec_table}"
-        ) from exc
+        raise RuntimeError(f"Failed to read embedding for {chunk_id} from {vec_table}") from exc
     if row is None:
         raise RuntimeError(f"Missing embedding for {chunk_id} in {vec_table}")
     return row[0]
@@ -69,9 +64,7 @@ def read_embedding_or_raise(conn, vec_table: str, chunk_id: str):
 
 def ensure_restore_succeeded(errors: int, backup_table: str, label: str) -> None:
     if errors:
-        raise RuntimeError(
-            f"Failed to restore {label} ({errors} errors); backup preserved in {backup_table}"
-        )
+        raise RuntimeError(f"Failed to restore {label} ({errors} errors); backup preserved in {backup_table}")
 
 
 def rebuild_float32(conn):
@@ -80,9 +73,7 @@ def rebuild_float32(conn):
     print("=" * 60, flush=True)
 
     # Count valid entries
-    count = conn.execute(
-        "SELECT COUNT(*) FROM chunk_vectors_rowids WHERE id IN (SELECT id FROM chunks)"
-    ).fetchone()[0]
+    count = conn.execute("SELECT COUNT(*) FROM chunk_vectors_rowids WHERE id IN (SELECT id FROM chunks)").fetchone()[0]
     print(f"Valid vectors to preserve: {count:,}", flush=True)
 
     # Step 1: Extract valid vectors to a temp table
@@ -113,7 +104,7 @@ def rebuild_float32(conn):
     if inserted != count:
         raise RuntimeError(f"Backed up {inserted} float vectors but expected {count}")
 
-    print(f"Step 1 done: {inserted:,} vectors backed up in {time.time()-t0:.1f}s")
+    print(f"Step 1 done: {inserted:,} vectors backed up in {time.time() - t0:.1f}s")
 
     # Step 2: Drop the vec0 table (drops all shadow tables)
     print("Step 2: Dropping old vec0 table...", flush=True)
@@ -187,9 +178,7 @@ def rebuild_binary(conn):
     """)
 
     inserted = 0
-    for batch_ids in batched(
-        iter_valid_chunk_ids(conn, "chunk_vectors_binary_rowids"), BATCH_SIZE
-    ):
+    for batch_ids in batched(iter_valid_chunk_ids(conn, "chunk_vectors_binary_rowids"), BATCH_SIZE):
         for cid in batch_ids:
             embedding = read_embedding_or_raise(conn, "chunk_vectors_binary", cid)
             conn.execute(
@@ -205,7 +194,7 @@ def rebuild_binary(conn):
     if inserted != count:
         raise RuntimeError(f"Backed up {inserted} binary vectors but expected {count}")
 
-    print(f"Step 1 done: {inserted:,} vectors backed up in {time.time()-t0:.1f}s")
+    print(f"Step 1 done: {inserted:,} vectors backed up in {time.time() - t0:.1f}s")
 
     # Step 2: Drop
     print("Step 2: Dropping old vec0 binary table...", flush=True)

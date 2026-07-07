@@ -8,8 +8,6 @@ Usage:
 """
 
 import argparse
-import json
-from pathlib import Path
 
 from brainlayer.paths import DEFAULT_DB_PATH
 from brainlayer.vector_store import VectorStore
@@ -74,7 +72,7 @@ def main():
         )
     )
     if recent:
-        print(f"\nRecent commits:")
+        print("\nRecent commits:")
         for hash_, msg, phase, proj, outcome, ts in recent:
             ts_short = (ts or "")[:19]
             print(f"  {hash_[:8]} {msg[:50]:<50} {phase or '':<15} {outcome or '':<10} {ts_short}")

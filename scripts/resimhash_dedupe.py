@@ -11,7 +11,6 @@ if str(SRC_DIR) not in sys.path:
 
 from brainlayer.dedupe import resimhash_main
 
-
 if __name__ == "__main__":
     if hasattr(os, "nice"):
         try:

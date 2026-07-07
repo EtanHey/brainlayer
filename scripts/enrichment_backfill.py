@@ -15,12 +15,12 @@ warnings.warn(
     stacklevel=2,
 )
 
+import argparse
 import json
 import os
+import sqlite3
 import sys
 import time
-import sqlite3
-import argparse
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -81,7 +81,7 @@ def enrich_chunk(content):
             contents=PROMPT.replace("{chunk_content}", content[:2000]),
             config={
                 "response_mime_type": "application/json",
-            }
+            },
         )
         return json.loads(response.text)
     except json.JSONDecodeError:
@@ -146,8 +146,7 @@ def main():
 
             if not args.test:
                 db.execute(
-                    "UPDATE chunks SET tags = ?, tag_confidence = ? WHERE rowid = ?",
-                    (merged, confidence, rowid)
+                    "UPDATE chunks SET tags = ?, tag_confidence = ? WHERE rowid = ?", (merged, confidence, rowid)
                 )
 
             done += 1
@@ -177,7 +176,7 @@ def main():
         db.commit()
 
     elapsed = time.time() - t0
-    print(f"\nDone: {done}/{total} enriched, {errors} errors, {elapsed:.0f}s ({done/elapsed:.1f}/sec)", flush=True)
+    print(f"\nDone: {done}/{total} enriched, {errors} errors, {elapsed:.0f}s ({done / elapsed:.1f}/sec)", flush=True)
     db.close()
 
 

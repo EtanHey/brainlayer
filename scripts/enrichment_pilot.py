@@ -11,8 +11,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from google import genai
 from google.genai import types
-from src.brainlayer.vector_store import VectorStore
+
 from src.brainlayer.paths import get_db_path
+from src.brainlayer.vector_store import VectorStore
 
 # ── Config ──────────────────────────────────────────────────────────────────
 API_KEY = os.environ.get("GOOGLE_API_KEY")
@@ -72,46 +73,56 @@ def select_chunks(store):
     chunks = []
 
     # Gold validation: chunks with brain_store tags (up to 26)
-    gold = list(cursor.execute(
-        "SELECT id, content, source, tags, char_count FROM chunks "
-        "WHERE tags LIKE '%brain_store%' AND char_count > 30 LIMIT 26"
-    ))
+    gold = list(
+        cursor.execute(
+            "SELECT id, content, source, tags, char_count FROM chunks "
+            "WHERE tags LIKE '%brain_store%' AND char_count > 30 LIMIT 26"
+        )
+    )
     chunks.extend(gold)
     gold_ids = {r[0] for r in gold}
     print(f"Gold validation chunks: {len(gold)}")
 
     # claude_code: mix of lengths (short, medium, long)
-    for length_range, limit in [("AND char_count BETWEEN 50 AND 200", 15),
-                                 ("AND char_count BETWEEN 200 AND 1000", 15),
-                                 ("AND char_count BETWEEN 1000 AND 5000", 10)]:
-        rows = list(cursor.execute(
-            f"SELECT id, content, source, tags, char_count FROM chunks "
-            f"WHERE source = 'claude_code' {length_range} AND id NOT IN ({','.join('?' for _ in gold_ids)}) "
-            f"ORDER BY RANDOM() LIMIT ?",
-            list(gold_ids) + [limit]
-        ))
+    for length_range, limit in [
+        ("AND char_count BETWEEN 50 AND 200", 15),
+        ("AND char_count BETWEEN 200 AND 1000", 15),
+        ("AND char_count BETWEEN 1000 AND 5000", 10),
+    ]:
+        rows = list(
+            cursor.execute(
+                f"SELECT id, content, source, tags, char_count FROM chunks "
+                f"WHERE source = 'claude_code' {length_range} AND id NOT IN ({','.join('?' for _ in gold_ids)}) "
+                f"ORDER BY RANDOM() LIMIT ?",
+                list(gold_ids) + [limit],
+            )
+        )
         chunks.extend(rows)
         for r in rows:
             gold_ids.add(r[0])
 
     # youtube
-    rows = list(cursor.execute(
-        f"SELECT id, content, source, tags, char_count FROM chunks "
-        f"WHERE source = 'youtube' AND char_count > 50 AND id NOT IN ({','.join('?' for _ in gold_ids)}) "
-        f"ORDER BY RANDOM() LIMIT 15",
-        list(gold_ids)
-    ))
+    rows = list(
+        cursor.execute(
+            f"SELECT id, content, source, tags, char_count FROM chunks "
+            f"WHERE source = 'youtube' AND char_count > 50 AND id NOT IN ({','.join('?' for _ in gold_ids)}) "
+            f"ORDER BY RANDOM() LIMIT 15",
+            list(gold_ids),
+        )
+    )
     chunks.extend(rows)
     for r in rows:
         gold_ids.add(r[0])
 
     # whatsapp
-    rows = list(cursor.execute(
-        f"SELECT id, content, source, tags, char_count FROM chunks "
-        f"WHERE source = 'whatsapp' AND char_count > 10 AND id NOT IN ({','.join('?' for _ in gold_ids)}) "
-        f"ORDER BY RANDOM() LIMIT 10",
-        list(gold_ids)
-    ))
+    rows = list(
+        cursor.execute(
+            f"SELECT id, content, source, tags, char_count FROM chunks "
+            f"WHERE source = 'whatsapp' AND char_count > 10 AND id NOT IN ({','.join('?' for _ in gold_ids)}) "
+            f"ORDER BY RANDOM() LIMIT 10",
+            list(gold_ids),
+        )
+    )
     chunks.extend(rows)
     for r in rows:
         gold_ids.add(r[0])
@@ -119,12 +130,14 @@ def select_chunks(store):
     # manual (brain_store entries without brain_store tag)
     remaining = 100 - len(chunks)
     if remaining > 0:
-        rows = list(cursor.execute(
-            f"SELECT id, content, source, tags, char_count FROM chunks "
-            f"WHERE source = 'manual' AND id NOT IN ({','.join('?' for _ in gold_ids)}) "
-            f"ORDER BY RANDOM() LIMIT ?",
-            list(gold_ids) + [remaining]
-        ))
+        rows = list(
+            cursor.execute(
+                f"SELECT id, content, source, tags, char_count FROM chunks "
+                f"WHERE source = 'manual' AND id NOT IN ({','.join('?' for _ in gold_ids)}) "
+                f"ORDER BY RANDOM() LIMIT ?",
+                list(gold_ids) + [remaining],
+            )
+        )
         chunks.extend(rows)
 
     return chunks[:100]
@@ -224,13 +237,15 @@ def analyze_results(results, chunks_meta):
                 old_list = []
             new_topics = r["parsed"].get("b_topics", [])
             if old_list or new_topics:
-                tag_comparison.append({
-                    "chunk_id": r["chunk_id"][:40],
-                    "source": r["source"],
-                    "old": old_list[:5] if old_list else [],
-                    "new": new_topics,
-                    "confidence": r["parsed"].get("e_confidence", 0),
-                })
+                tag_comparison.append(
+                    {
+                        "chunk_id": r["chunk_id"][:40],
+                        "source": r["source"],
+                        "old": old_list[:5] if old_list else [],
+                        "new": new_topics,
+                        "confidence": r["parsed"].get("e_confidence", 0),
+                    }
+                )
 
     return {
         "total": len(results),
@@ -253,15 +268,15 @@ def write_report(stats, results_path):
     lines = [
         "# Enrichment Pilot Results — Faceted Tag Prompt v2",
         "",
-        f"> **Date:** 2026-03-19",
-        f"> **Model:** Gemini 2.5 Flash",
+        "> **Date:** 2026-03-19",
+        "> **Model:** Gemini 2.5 Flash",
         f"> **Chunks tested:** {stats['total']}",
         "",
         "---",
         "",
         "## Summary",
         "",
-        f"- **Valid JSON responses:** {stats['valid_json']}/{stats['total']} ({stats['valid_json']/stats['total']*100:.1f}%)",
+        f"- **Valid JSON responses:** {stats['valid_json']}/{stats['total']} ({stats['valid_json'] / stats['total'] * 100:.1f}%)",
         f"- **Parse failures:** {stats['invalid_json']}",
         f"- **Unique topic tags generated:** {stats['unique_topics']}",
         f"- **Average confidence:** {stats['avg_confidence']:.3f}",
@@ -277,76 +292,88 @@ def write_report(stats, results_path):
     for bucket, count in stats["confidence_dist"].items():
         lines.append(f"| {bucket} | {count} |")
 
-    lines.extend([
-        "",
-        "---",
-        "",
-        "## Topic Tags (top 30)",
-        "",
-        "| Tag | Count |",
-        "|-----|-------|",
-    ])
+    lines.extend(
+        [
+            "",
+            "---",
+            "",
+            "## Topic Tags (top 30)",
+            "",
+            "| Tag | Count |",
+            "|-----|-------|",
+        ]
+    )
     for tag, count in stats["topic_freq"].items():
         lines.append(f"| `{tag}` | {count} |")
 
-    lines.extend([
-        "",
-        "---",
-        "",
-        "## Activity Distribution",
-        "",
-        "| Activity | Count |",
-        "|----------|-------|",
-    ])
+    lines.extend(
+        [
+            "",
+            "---",
+            "",
+            "## Activity Distribution",
+            "",
+            "| Activity | Count |",
+            "|----------|-------|",
+        ]
+    )
     for act, count in stats["activity_freq"].items():
         lines.append(f"| `{act}` | {count} |")
 
-    lines.extend([
-        "",
-        "---",
-        "",
-        "## Domain Distribution",
-        "",
-        "| Domain | Count |",
-        "|--------|-------|",
-    ])
+    lines.extend(
+        [
+            "",
+            "---",
+            "",
+            "## Domain Distribution",
+            "",
+            "| Domain | Count |",
+            "|--------|-------|",
+        ]
+    )
     for dom, count in stats["domain_freq"].items():
         lines.append(f"| `{dom}` | {count} |")
 
-    lines.extend([
-        "",
-        "---",
-        "",
-        "## Tag Comparison: Old vs New (sample)",
-        "",
-        "| Source | Old Tags | New Topics | Confidence |",
-        "|--------|----------|------------|------------|",
-    ])
+    lines.extend(
+        [
+            "",
+            "---",
+            "",
+            "## Tag Comparison: Old vs New (sample)",
+            "",
+            "| Source | Old Tags | New Topics | Confidence |",
+            "|--------|----------|------------|------------|",
+        ]
+    )
     for comp in stats["tag_comparisons"]:
         old_str = ", ".join(comp["old"][:3]) if comp["old"] else "(none)"
         new_str = ", ".join(comp["new"][:3]) if comp["new"] else "(none)"
         lines.append(f"| {comp['source']} | {old_str} | {new_str} | {comp['confidence']:.2f} |")
 
     if stats["errors"]:
-        lines.extend([
-            "",
-            "---",
-            "",
-            "## Errors",
-            "",
-        ])
+        lines.extend(
+            [
+                "",
+                "---",
+                "",
+                "## Errors",
+                "",
+            ]
+        )
         for err in stats["errors"][:10]:
             lines.append(f"- {err}")
 
-    lines.extend([
-        "",
-        "---",
-        "",
-        "## Verdict",
-        "",
-        "**TODO:** Fill in after reviewing results.",
-        "",
-    ])
+    lines.extend(
+        [
+            "",
+            "---",
+            "",
+            "## Verdict",
+            "",
+            "**TODO:** Fill in after reviewing results.",
+            "",
+        ]
+    )
 
     results_path.parent.mkdir(parents=True, exist_ok=True)
     results_path.write_text("\n".join(lines))
@@ -373,24 +400,26 @@ def main():
     start = time.time()
     for i, (chunk_id, content, source, old_tags, char_count) in enumerate(chunks):
         parsed, error = call_gemini(client, content)
-        results.append({
-            "chunk_id": chunk_id,
-            "source": source,
-            "old_tags": old_tags,
-            "char_count": char_count,
-            "parsed": parsed,
-            "error": error,
-        })
+        results.append(
+            {
+                "chunk_id": chunk_id,
+                "source": source,
+                "old_tags": old_tags,
+                "char_count": char_count,
+                "parsed": parsed,
+                "error": error,
+            }
+        )
         if (i + 1) % 10 == 0:
             elapsed = time.time() - start
             rate = (i + 1) / elapsed
-            print(f"  [{i+1}/100] {rate:.1f} chunks/sec, elapsed {elapsed:.0f}s")
+            print(f"  [{i + 1}/100] {rate:.1f} chunks/sec, elapsed {elapsed:.0f}s")
         # Rate limit: 15 RPM for free tier, but flash should be higher
         # Small delay to be safe
         time.sleep(0.5)
 
     elapsed = time.time() - start
-    print(f"\nCompleted {len(results)} chunks in {elapsed:.0f}s ({len(results)/elapsed:.1f}/sec)")
+    print(f"\nCompleted {len(results)} chunks in {elapsed:.0f}s ({len(results) / elapsed:.1f}/sec)")
 
     # Save raw JSON FIRST (before analysis, so data is never lost)
     raw_path = RESULTS_PATH.with_suffix(".json")
@@ -406,9 +435,9 @@ def main():
     write_report(stats, RESULTS_PATH)
 
     # Print summary
-    print(f"\n{'='*60}")
-    print(f"PILOT SUMMARY")
-    print(f"{'='*60}")
+    print(f"\n{'=' * 60}")
+    print("PILOT SUMMARY")
+    print(f"{'=' * 60}")
     print(f"Valid JSON: {stats['valid_json']}/{stats['total']}")
     print(f"Unique topics: {stats['unique_topics']}")
     print(f"Avg confidence: {stats['avg_confidence']:.3f}")

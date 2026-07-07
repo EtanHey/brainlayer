@@ -54,6 +54,7 @@ def should_activate(hook_input):
 
     return True, light
 
+
 # Map cwd basenames to BrainLayer project names where they differ
 PROJECT_ALIASES = {
     "etanheyman.com": "etanheyman-com",
@@ -150,6 +151,7 @@ def load_scoped_projects():
     except Exception:
         _scoped_projects_cache = _SCOPED_PROJECTS_FALLBACK
         return _scoped_projects_cache
+
 
 DB_PATHS = [
     os.path.expanduser("~/.local/share/zikaron/zikaron.db"),

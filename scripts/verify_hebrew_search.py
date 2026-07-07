@@ -12,7 +12,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import apsw
-import numpy as np
 import sqlite_vec
 from sentence_transformers import SentenceTransformer
 
@@ -25,14 +24,16 @@ MODEL = "BAAI/bge-m3"
 def search(cursor, query_embedding, n=5):
     """Search chunk_vectors for nearest neighbors."""
     query_bytes = struct.pack(f"{len(query_embedding)}f", *query_embedding)
-    results = list(cursor.execute(
-        """SELECT c.id, c.content, c.source, c.language, v.distance
+    results = list(
+        cursor.execute(
+            """SELECT c.id, c.content, c.source, c.language, v.distance
            FROM chunk_vectors v
            JOIN chunks c ON v.chunk_id = c.id
            WHERE v.embedding MATCH ? AND k = ?
            ORDER BY v.distance""",
-        (query_bytes, n),
-    ))
+            (query_bytes, n),
+        )
+    )
     return results
 
 
@@ -59,9 +60,9 @@ def main():
         ("מסד נתונים מיגרציה", "Hebrew query for DB migration"),
     ]
 
-    print(f"\n{'='*80}")
-    print(f"Hebrew Search Quality Verification (BGE-M3)")
-    print(f"{'='*80}")
+    print(f"\n{'=' * 80}")
+    print("Hebrew Search Quality Verification (BGE-M3)")
+    print(f"{'=' * 80}")
 
     all_pass = True
     for query_text, description in queries:
@@ -78,16 +79,16 @@ def main():
 
         for i, (cid, content, source, lang, dist) in enumerate(results):
             content_preview = (content or "")[:100].replace("\n", " ")
-            print(f"  {i+1}. [dist={dist:.3f}] [{source or '?'}] {content_preview}")
+            print(f"  {i + 1}. [dist={dist:.3f}] [{source or '?'}] {content_preview}")
 
         # Basic sanity: Hebrew queries should return at least some whatsapp results
         if "Hebrew" in description and "English" not in description:
             whatsapp_count = sum(1 for _, _, src, _, _ in results if src == "whatsapp")
             if whatsapp_count == 0:
-                print(f"  WARNING: No WhatsApp results for Hebrew query!")
+                print("  WARNING: No WhatsApp results for Hebrew query!")
 
     conn.close()
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print("Verification complete" + (" - all checks passed" if all_pass else " - some issues found"))
 
 

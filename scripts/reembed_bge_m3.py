@@ -21,7 +21,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import apsw
-import numpy as np
 import sqlite_vec
 from sentence_transformers import SentenceTransformer
 
@@ -71,14 +70,14 @@ def main():
     if args.dry_run:
         vec_count = list(cursor.execute("SELECT COUNT(*) FROM chunk_vectors"))[0][0]
         logger.info(f"Existing vectors: {vec_count}")
-        logger.info(f"Estimated time at 59 texts/sec: {total/59/60:.0f} minutes")
+        logger.info(f"Estimated time at 59 texts/sec: {total / 59 / 60:.0f} minutes")
         return
 
     # Load model
     logger.info(f"Loading {MODEL_NAME}...")
     t0 = time.time()
     model = SentenceTransformer(MODEL_NAME)
-    logger.info(f"Model loaded in {time.time()-t0:.1f}s, dim={model.get_sentence_embedding_dimension()}")
+    logger.info(f"Model loaded in {time.time() - t0:.1f}s, dim={model.get_sentence_embedding_dimension()}")
 
     # Process in batches using rowid ordering for deterministic resume
     processed = 0
@@ -88,10 +87,12 @@ def main():
 
     while True:
         # Fetch batch of chunks
-        rows = list(cursor.execute(
-            "SELECT id, content FROM chunks ORDER BY rowid LIMIT ? OFFSET ?",
-            (batch_size, offset),
-        ))
+        rows = list(
+            cursor.execute(
+                "SELECT id, content FROM chunks ORDER BY rowid LIMIT ? OFFSET ?",
+                (batch_size, offset),
+            )
+        )
 
         if not rows:
             break
@@ -100,7 +101,7 @@ def main():
         texts = []
         for _, content in rows:
             if content and len(content) > MAX_CHARS:
-                content = content[:MAX_CHARS - 50] + "..."
+                content = content[: MAX_CHARS - 50] + "..."
             texts.append(content or "")
 
         # Embed batch
@@ -139,16 +140,16 @@ def main():
             eta = (total - processed - args.start_offset) / rate if rate > 0 else 0
             logger.info(
                 f"Progress: {processed + args.start_offset}/{total} "
-                f"({(processed + args.start_offset)/total*100:.1f}%) "
+                f"({(processed + args.start_offset) / total * 100:.1f}%) "
                 f"| {rate:.0f} chunks/sec "
-                f"| ETA: {eta/60:.0f} min "
+                f"| ETA: {eta / 60:.0f} min "
                 f"| skipped: {skipped}"
             )
 
     elapsed = time.time() - start_time
     logger.info(
-        f"Done! Processed {processed} chunks in {elapsed/60:.1f} minutes "
-        f"({processed/elapsed:.0f} chunks/sec). Skipped: {skipped}"
+        f"Done! Processed {processed} chunks in {elapsed / 60:.1f} minutes "
+        f"({processed / elapsed:.0f} chunks/sec). Skipped: {skipped}"
     )
 
     # Verify

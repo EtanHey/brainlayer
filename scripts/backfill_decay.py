@@ -12,9 +12,7 @@ def main() -> None:
     args = parser.parse_args()
 
     stats = backfill_decay_fields(args.db, dry_run=args.dry_run)
-    print(
-        f"backfill_decay updated_rows={stats['updated_rows']} dry_run={args.dry_run} db={args.db}"
-    )
+    print(f"backfill_decay updated_rows={stats['updated_rows']} dry_run={args.dry_run} db={args.db}")
 
 
 if __name__ == "__main__":

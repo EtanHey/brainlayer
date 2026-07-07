@@ -62,8 +62,7 @@ def sample_chunks(n: int, *, min_chars: int = 80, seed: int | None = None) -> li
     finally:
         con.close()
     return [
-        {"id": r[0], "content": r[1], "project": r[2] or "unknown",
-         "content_type": r[3] or "unknown", "source": r[4]}
+        {"id": r[0], "content": r[1], "project": r[2] or "unknown", "content_type": r[3] or "unknown", "source": r[4]}
         for r in rows
     ]
 
@@ -109,16 +108,26 @@ def main() -> None:
     ap.add_argument("--run", action="store_true", help="Full run with budget-sized N.")
     ap.add_argument("--n", type=int, default=0, help="Explicit chunk count for --run (overrides auto-size).")
     ap.add_argument("--max-usd", type=float, default=4.20, help="Hard cumulative spend ceiling (USD).")
-    ap.add_argument("--avg-usd-per-call", type=float, default=0.0,
-                    help="Measured avg $/call from smoke; used to auto-size N for --run.")
+    ap.add_argument(
+        "--avg-usd-per-call",
+        type=float,
+        default=0.0,
+        help="Measured avg $/call from smoke; used to auto-size N for --run.",
+    )
     ap.add_argument("--variants", default="", help="Comma-separated variant ids to run, e.g. A,C,E (default: all).")
     ap.add_argument("--concurrency", type=int, default=1, help="Concurrent backend calls (default: 1).")
-    ap.add_argument("--max-calls", type=int, default=0, help="Hard cap on successful+failed backend calls (0 = unlimited).")
+    ap.add_argument(
+        "--max-calls", type=int, default=0, help="Hard cap on successful+failed backend calls (0 = unlimited)."
+    )
     ap.add_argument("--base-url", default="https://api.x.ai/v1")
     ap.add_argument("--model", default=DEFAULT_MODEL, help="Backend model sent to the OpenAI-compatible API.")
     ap.add_argument("--tick-usd", type=float, default=DEFAULT_TICK_USD)
-    ap.add_argument("--fallback-usd-per-1m", type=float, default=DEFAULT_FALLBACK_USD_PER_1M,
-                    help="Fallback blended USD per 1M tokens when backend omits cost ticks.")
+    ap.add_argument(
+        "--fallback-usd-per-1m",
+        type=float,
+        default=DEFAULT_FALLBACK_USD_PER_1M,
+        help="Fallback blended USD per 1M tokens when backend omits cost ticks.",
+    )
     ap.add_argument("--min-chars", type=int, default=80)
     ap.add_argument("--out", default="/tmp/abcde_enrich.jsonl")
     args = ap.parse_args()
@@ -131,11 +140,23 @@ def main() -> None:
 
     if args.smoke > 0:
         chunks = sample_chunks(args.smoke, min_chars=args.min_chars)
-        print(f"SMOKE: {len(chunks)} chunks × {len(variants)} variants = {len(chunks)*len(variants)} calls", file=sys.stderr)
+        print(
+            f"SMOKE: {len(chunks)} chunks × {len(variants)} variants = {len(chunks) * len(variants)} calls",
+            file=sys.stderr,
+        )
         t0 = time.time()
-        stats = run_batch(chunks, variants, sanitizer, chat_fn, output_path=args.out,
-                          max_usd=args.max_usd, max_calls=max_calls, tick_usd=args.tick_usd,
-                          fallback_usd_per_1m=args.fallback_usd_per_1m, concurrency=args.concurrency)
+        stats = run_batch(
+            chunks,
+            variants,
+            sanitizer,
+            chat_fn,
+            output_path=args.out,
+            max_usd=args.max_usd,
+            max_calls=max_calls,
+            tick_usd=args.tick_usd,
+            fallback_usd_per_1m=args.fallback_usd_per_1m,
+            concurrency=args.concurrency,
+        )
         out = stats.as_dict()
         out["wall_seconds"] = round(time.time() - t0, 1)
         out["per_variant"] = {}  # filled below
@@ -151,12 +172,24 @@ def main() -> None:
         else:
             raise SystemExit("--run needs --n or --avg-usd-per-call")
         chunks = sample_chunks(n, min_chars=args.min_chars)
-        print(f"RUN: N={len(chunks)} chunks × {len(variants)} variants = {len(chunks)*len(variants)} calls "
-              f"(max_usd={args.max_usd}, max_calls={max_calls or 'unlimited'})", file=sys.stderr)
+        print(
+            f"RUN: N={len(chunks)} chunks × {len(variants)} variants = {len(chunks) * len(variants)} calls "
+            f"(max_usd={args.max_usd}, max_calls={max_calls or 'unlimited'})",
+            file=sys.stderr,
+        )
         t0 = time.time()
-        stats = run_batch(chunks, variants, sanitizer, chat_fn, output_path=args.out,
-                          max_usd=args.max_usd, max_calls=max_calls, tick_usd=args.tick_usd,
-                          fallback_usd_per_1m=args.fallback_usd_per_1m, concurrency=args.concurrency)
+        stats = run_batch(
+            chunks,
+            variants,
+            sanitizer,
+            chat_fn,
+            output_path=args.out,
+            max_usd=args.max_usd,
+            max_calls=max_calls,
+            tick_usd=args.tick_usd,
+            fallback_usd_per_1m=args.fallback_usd_per_1m,
+            concurrency=args.concurrency,
+        )
         out = stats.as_dict()
         out["wall_seconds"] = round(time.time() - t0, 1)
         out["output_jsonl"] = args.out
