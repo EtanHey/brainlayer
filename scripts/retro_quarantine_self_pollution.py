@@ -13,9 +13,10 @@ import os
 import random
 import re
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 import apsw
 
@@ -31,11 +32,41 @@ from brainlayer.vector_store import VectorStore
 
 FTS_COLUMNS = "content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id"
 FTS_SELECT_COLUMNS = "content, summary, tags, resolved_query, key_facts, resolved_queries, id"
-FTS_STATE_COLUMNS = "rowid, content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id"
+FTS_SELECT_COLUMNS_QUALIFIED = "c.content, c.summary, c.tags, c.resolved_query, c.key_facts, c.resolved_queries, c.id"
+FTS_STATE_COLUMN_NAMES = (
+    "rowid",
+    "content",
+    "summary",
+    "tags",
+    "resolved_query",
+    "key_facts",
+    "resolved_queries",
+    "chunk_id",
+)
+FTS_STATE_COLUMNS = ", ".join(FTS_STATE_COLUMN_NAMES)
+FTS_ROWID_COLUMNS = {
+    "chunks_fts": "fts_rowid",
+    "chunks_fts_operational": "operational_rowid",
+    "chunks_fts_trigram": "trigram_rowid",
+}
+FTS_RESERVED_ROWID_TABLES = {
+    "chunks_fts": "_retro_reserved_chunks_fts_rowids",
+    "chunks_fts_trigram": "_retro_reserved_chunks_fts_trigram_rowids",
+}
+FTS_DELETE_ROWID_TABLES = {
+    "chunks_fts": "_retro_delete_chunks_fts_rowids",
+    "chunks_fts_operational": "_retro_delete_chunks_fts_operational_rowids",
+    "chunks_fts_trigram": "_retro_delete_chunks_fts_trigram_rowids",
+}
+FTS_RESERVED_CHUNK_ID_PREFIX = "__retro_quarantine_reserved__:"
 QUARANTINE_MANIFEST_TABLE = "retro_self_pollution_quarantine_manifest"
 RECONCILE_CHUNK_ID_TABLE = "_retro_quarantine_reconcile_chunk_ids"
+APPLY_CHUNK_ID_TABLE = "_retro_quarantine_apply_chunk_ids"
 DEFAULT_ESTIMATE = 244_152
 RETRIEVABILITY_TOKEN_RE = re.compile(r"[A-Za-z0-9]{4,}")
+NON_OPERATIONAL_FTS_CLASS_SQL = (
+    "COALESCE(content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark', 'cold')"
+)
 
 
 def _utc_now() -> str:
@@ -48,6 +79,18 @@ def _quote_sqlite_string(value: str) -> str:
 
 def _path(value: str | Path) -> Path:
     return Path(value).expanduser()
+
+
+@contextmanager
+def _operation_writer_lock(db_path: Path) -> Iterator[None]:
+    store = VectorStore.__new__(VectorStore)
+    store.db_path = db_path
+    store._writer_pidfile_acquired = False
+    store._acquire_writer_pidfile()
+    try:
+        yield
+    finally:
+        store._release_writer_pidfile()
 
 
 def _provider(source_file: str) -> str:
@@ -130,6 +173,16 @@ def _drop_fts_triggers(cursor: apsw.Cursor) -> None:
         "chunks_fts_trigram_update",
     ):
         cursor.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
+
+
+def _table_exists(cursor: apsw.Cursor, table_name: str) -> bool:
+    return (
+        cursor.execute(
+            "SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name = ?",
+            (table_name,),
+        ).fetchone()
+        is not None
+    )
 
 
 def _ensure_manifest(cursor: apsw.Cursor) -> None:
@@ -333,13 +386,10 @@ def capture_restore_state(cursor: apsw.Cursor, chunk_ids: list[str]) -> dict[str
             raise ValueError(f"missing chunk: {chunk_id}")
         fts_rows = {}
         for table_name in ("chunks_fts", "chunks_fts_operational", "chunks_fts_trigram"):
-            fts_rows[table_name] = [
-                tuple(row)
-                for row in cursor.execute(
-                    f"SELECT {FTS_STATE_COLUMNS} FROM {table_name} WHERE chunk_id = ? ORDER BY rowid",
-                    (chunk_id,),
-                )
-            ]
+            if not _table_exists(cursor, table_name):
+                fts_rows[table_name] = []
+                continue
+            fts_rows[table_name] = _select_fts_state_rows(cursor, table_name=table_name, chunk_id=chunk_id)
         state[chunk_id] = {
             "chunk": tuple(chunk),
             "fts": fts_rows,
@@ -347,30 +397,153 @@ def capture_restore_state(cursor: apsw.Cursor, chunk_ids: list[str]) -> dict[str
     return state
 
 
-def _record_manifest(cursor: apsw.Cursor, chunk_ids: list[str], *, run_id: str, timestamp: str) -> None:
-    for chunk_id in chunk_ids:
-        row = cursor.execute(
-            """
-            SELECT c.content_class,
-                   c.provenance_class,
-                   (SELECT rowid FROM chunks_fts WHERE chunk_id = c.id ORDER BY rowid LIMIT 1),
-                   (SELECT rowid FROM chunks_fts_trigram WHERE chunk_id = c.id ORDER BY rowid LIMIT 1),
-                   (SELECT rowid FROM chunks_fts_operational WHERE chunk_id = c.id ORDER BY rowid LIMIT 1)
-            FROM chunks c
-            WHERE c.id = ?
+def _qualified_columns(alias: str, columns: tuple[str, ...]) -> str:
+    return ", ".join(f"{alias}.{column}" for column in columns)
+
+
+def _select_fts_state_rows(cursor: apsw.Cursor, *, table_name: str, chunk_id: str) -> list[tuple[Any, ...]]:
+    rowid_column = FTS_ROWID_COLUMNS[table_name]
+    chunk_id_rows = _select_fts_state_rows_by_chunk_id(cursor, table_name=table_name, chunk_id=chunk_id)
+    rowid_row = cursor.execute(
+        f"SELECT {rowid_column} FROM chunk_fts_rowids WHERE chunk_id = ?",
+        (chunk_id,),
+    ).fetchone()
+    if rowid_row is None or rowid_row[0] is None:
+        return chunk_id_rows
+    rows = [
+        tuple(row)
+        for row in cursor.execute(
+            f"""
+            SELECT {_qualified_columns("f", FTS_STATE_COLUMN_NAMES)}
+            FROM chunk_fts_rowids r
+            INNER JOIN {table_name} f
+                ON f.rowid = r.{rowid_column}
+               AND f.chunk_id = r.chunk_id
+            WHERE r.chunk_id = ?
+            ORDER BY f.rowid
             """,
             (chunk_id,),
+        )
+    ]
+    if rows:
+        by_rowid = {row[0]: row for row in rows}
+        by_rowid.update({row[0]: row for row in chunk_id_rows})
+        return [by_rowid[rowid] for rowid in sorted(by_rowid)]
+
+    # Legacy repair tests intentionally corrupt chunk_fts_rowids. Fall back when
+    # the map is missing, null, or stale so restore proofs snapshot reality.
+    return chunk_id_rows
+
+
+def _select_fts_state_rows_by_chunk_id(cursor: apsw.Cursor, *, table_name: str, chunk_id: str) -> list[tuple[Any, ...]]:
+    return [
+        tuple(row)
+        for row in cursor.execute(
+            f"SELECT {FTS_STATE_COLUMNS} FROM {table_name} WHERE chunk_id = ? ORDER BY rowid",
+            (chunk_id,),
+        )
+    ]
+
+
+def _record_manifest(
+    cursor: apsw.Cursor,
+    chunk_ids: list[str] | None = None,
+    *,
+    run_id: str,
+    timestamp: str,
+    include_trigram: bool = True,
+) -> None:
+    loaded_temp_table = False
+    if chunk_ids is not None:
+        _load_chunk_ids_reconcile_table(cursor, chunk_ids)
+        loaded_temp_table = True
+    trigram_rowid_expr = (
+        "CASE WHEN t.chunk_id IS NULL THEN NULL ELSE r.trigram_rowid END" if include_trigram else "NULL"
+    )
+    trigram_join = (
+        """
+            LEFT JOIN chunks_fts_trigram t
+                ON t.rowid = r.trigram_rowid
+               AND t.chunk_id = c.id
+        """
+        if include_trigram
+        else ""
+    )
+    try:
+        missing = cursor.execute(
+            f"""
+            SELECT r.chunk_id
+            FROM {RECONCILE_CHUNK_ID_TABLE} r
+            LEFT JOIN chunks c ON c.id = r.chunk_id
+            WHERE c.id IS NULL
+            """,
         ).fetchone()
-        if row is None:
-            raise ValueError(f"missing chunk: {chunk_id}")
+        if missing is not None:
+            raise ValueError(f"missing chunk: {missing[0]}")
         cursor.execute(
             f"""
-            INSERT OR REPLACE INTO {QUARANTINE_MANIFEST_TABLE} (
+            INSERT OR IGNORE INTO {QUARANTINE_MANIFEST_TABLE} (
                 run_id, chunk_id, original_content_class, original_provenance_class,
                 original_fts_rowid, original_trigram_rowid, original_operational_rowid, quarantined_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            )
+            SELECT
+                ?,
+                c.id,
+                c.content_class,
+                c.provenance_class,
+                CASE WHEN f.chunk_id IS NULL THEN NULL ELSE r.fts_rowid END,
+                {trigram_rowid_expr},
+                CASE WHEN o.chunk_id IS NULL THEN NULL ELSE r.operational_rowid END,
+                ?
+            FROM {RECONCILE_CHUNK_ID_TABLE} q
+            INNER JOIN chunks c ON c.id = q.chunk_id
+            LEFT JOIN chunk_fts_rowids r ON r.chunk_id = c.id
+            LEFT JOIN chunks_fts f
+                ON f.rowid = r.fts_rowid
+               AND f.chunk_id = c.id
+            {trigram_join}
+            LEFT JOIN chunks_fts_operational o
+                ON o.rowid = r.operational_rowid
+               AND o.chunk_id = c.id
             """,
-            (run_id, chunk_id, row[0], row[1], row[2], row[3], row[4], timestamp),
+            (run_id, timestamp),
+        )
+    finally:
+        if loaded_temp_table:
+            cursor.execute(f"DROP TABLE IF EXISTS {RECONCILE_CHUNK_ID_TABLE}")
+
+
+def _delete_fts_rows_for_reconcile(
+    cursor: apsw.Cursor,
+    *,
+    table_names: tuple[str, ...] = ("chunks_fts", "chunks_fts_operational", "chunks_fts_trigram"),
+) -> None:
+    for table_name in table_names:
+        delete_rowids_table = FTS_DELETE_ROWID_TABLES[table_name]
+        cursor.execute(
+            f"""
+            DELETE FROM {table_name}
+            WHERE rowid IN (
+                SELECT d.rowid
+                FROM {delete_rowids_table} d
+                INNER JOIN {RECONCILE_CHUNK_ID_TABLE} q ON q.chunk_id = d.chunk_id
+            )
+            """
+        )
+    updates = []
+    if "chunks_fts" in table_names:
+        updates.append("fts_rowid = NULL")
+    if "chunks_fts_trigram" in table_names:
+        updates.append("trigram_rowid = NULL")
+    if "chunks_fts_operational" in table_names:
+        updates.append("operational_rowid = NULL")
+    if updates:
+        cursor.execute(
+            f"""
+            UPDATE chunk_fts_rowids
+            SET {", ".join(updates)}
+            WHERE chunk_id IN (SELECT chunk_id FROM {RECONCILE_CHUNK_ID_TABLE})
+            """
         )
 
 
@@ -401,11 +574,43 @@ def _delete_fts_rows(
 
 
 def _load_chunk_ids_reconcile_table(cursor: apsw.Cursor, chunk_ids: list[str]) -> None:
+    cursor.execute(f"DROP TABLE IF EXISTS {RECONCILE_CHUNK_ID_TABLE}")
     cursor.execute(f"CREATE TEMP TABLE {RECONCILE_CHUNK_ID_TABLE}(chunk_id TEXT PRIMARY KEY)")
     cursor.executemany(
         f"INSERT OR IGNORE INTO {RECONCILE_CHUNK_ID_TABLE}(chunk_id) VALUES (?)",
         [(chunk_id,) for chunk_id in chunk_ids],
     )
+
+
+def _load_apply_chunk_ids_table(cursor: apsw.Cursor, chunk_ids: list[str]) -> None:
+    cursor.execute(f"DROP TABLE IF EXISTS {APPLY_CHUNK_ID_TABLE}")
+    cursor.execute(f"CREATE TEMP TABLE {APPLY_CHUNK_ID_TABLE}(chunk_id TEXT PRIMARY KEY)")
+    cursor.executemany(
+        f"INSERT OR IGNORE INTO {APPLY_CHUNK_ID_TABLE}(chunk_id) VALUES (?)",
+        [(chunk_id,) for chunk_id in chunk_ids],
+    )
+
+
+def _load_delete_fts_rowid_tables(cursor: apsw.Cursor, *, table_names: tuple[str, ...]) -> None:
+    for table_name in table_names:
+        delete_rowids_table = FTS_DELETE_ROWID_TABLES[table_name]
+        cursor.execute(f"DROP TABLE IF EXISTS {delete_rowids_table}")
+        cursor.execute(f"CREATE TEMP TABLE {delete_rowids_table}(rowid INTEGER PRIMARY KEY, chunk_id TEXT NOT NULL)")
+        cursor.execute(f"CREATE INDEX {delete_rowids_table}_chunk_id_idx ON {delete_rowids_table}(chunk_id)")
+        cursor.execute(
+            f"""
+            INSERT OR IGNORE INTO {delete_rowids_table}(rowid, chunk_id)
+            SELECT f.rowid, f.chunk_id
+            FROM {table_name} f
+            INNER JOIN {APPLY_CHUNK_ID_TABLE} q ON q.chunk_id = f.chunk_id
+            WHERE f.chunk_id IS NOT NULL
+            """
+        )
+
+
+def _drop_delete_fts_rowid_tables(cursor: apsw.Cursor, *, table_names: tuple[str, ...]) -> None:
+    for table_name in table_names:
+        cursor.execute(f"DROP TABLE IF EXISTS {FTS_DELETE_ROWID_TABLES[table_name]}")
 
 
 def _clear_trigram_fts(cursor: apsw.Cursor) -> None:
@@ -424,27 +629,248 @@ def _clear_trigram_fts(cursor: apsw.Cursor) -> None:
     )
 
 
-def _insert_operational_fts(cursor: apsw.Cursor, chunk_ids: list[str]) -> None:
-    placeholders = _placeholders(chunk_ids)
+def _insert_operational_fts(cursor: apsw.Cursor) -> None:
     cursor.execute(
         f"""
         INSERT INTO chunks_fts_operational({FTS_COLUMNS})
         SELECT {FTS_SELECT_COLUMNS}
         FROM chunks
-        WHERE id IN ({placeholders})
+        WHERE id IN (SELECT chunk_id FROM {RECONCILE_CHUNK_ID_TABLE})
         ORDER BY id
-        """,
-        chunk_ids,
+        """
     )
     cursor.execute(
         f"""
         INSERT INTO chunk_fts_rowids(chunk_id, operational_rowid)
         SELECT chunk_id, rowid
         FROM chunks_fts_operational
-        WHERE chunk_id IN ({placeholders})
+        WHERE chunk_id IN (SELECT chunk_id FROM {RECONCILE_CHUNK_ID_TABLE})
         ON CONFLICT(chunk_id) DO UPDATE SET operational_rowid = excluded.operational_rowid
+        """
+    )
+
+
+def _load_manifest_fts_rowid_reservations(
+    cursor: apsw.Cursor,
+    *,
+    table_name: str,
+    manifest_rowid_column: str,
+) -> str:
+    reserved_rowids_table = FTS_RESERVED_ROWID_TABLES[table_name]
+    cursor.execute(f"DROP TABLE IF EXISTS {reserved_rowids_table}")
+    cursor.execute(f"CREATE TEMP TABLE {reserved_rowids_table}(rowid INTEGER PRIMARY KEY)")
+    cursor.execute(
+        f"""
+        INSERT OR IGNORE INTO {reserved_rowids_table}(rowid)
+        SELECT DISTINCT m.{manifest_rowid_column}
+        FROM {QUARANTINE_MANIFEST_TABLE} m
+        LEFT JOIN {table_name} f
+            ON f.rowid = m.{manifest_rowid_column}
+           AND f.chunk_id = m.chunk_id
+        WHERE m.{manifest_rowid_column} IS NOT NULL
+          AND f.rowid IS NULL
+        """
+    )
+    return reserved_rowids_table
+
+
+def _reserve_manifest_fts_rowids(
+    cursor: apsw.Cursor,
+    *,
+    table_name: str,
+    reserved_rowids_table: str,
+) -> None:
+    cursor.execute(
+        f"""
+        INSERT OR IGNORE INTO {table_name}(rowid, {FTS_COLUMNS})
+        SELECT
+            r.rowid,
+            '', NULL, NULL, NULL, NULL, NULL,
+            ?
+        FROM {reserved_rowids_table} r
+        ORDER BY r.rowid
         """,
-        chunk_ids,
+        (f"{FTS_RESERVED_CHUNK_ID_PREFIX}{table_name}",),
+    )
+
+
+def _delete_manifest_fts_rowid_reservations(
+    cursor: apsw.Cursor,
+    *,
+    table_name: str,
+    reserved_rowids_table: str,
+) -> None:
+    cursor.execute(
+        f"""
+        DELETE FROM {table_name}
+        WHERE rowid IN (SELECT rowid FROM {reserved_rowids_table})
+        AND chunk_id = ?
+        """,
+        (f"{FTS_RESERVED_CHUNK_ID_PREFIX}{table_name}",),
+    )
+
+
+def _rebuild_knowledge_fts(cursor: apsw.Cursor, *, run_id: str) -> None:
+    reserved_rowids_table = _load_manifest_fts_rowid_reservations(
+        cursor,
+        table_name="chunks_fts",
+        manifest_rowid_column="original_fts_rowid",
+    )
+    try:
+        cursor.execute("DELETE FROM chunks_fts")
+        _reserve_manifest_fts_rowids(
+            cursor,
+            table_name="chunks_fts",
+            reserved_rowids_table=reserved_rowids_table,
+        )
+        cursor.execute(
+            f"""
+            INSERT INTO chunks_fts(rowid, {FTS_COLUMNS})
+            SELECT r.fts_rowid, {FTS_SELECT_COLUMNS_QUALIFIED}
+            FROM chunks c
+            INNER JOIN chunk_fts_rowids r ON r.chunk_id = c.id
+            WHERE {NON_OPERATIONAL_FTS_CLASS_SQL}
+              AND r.fts_rowid IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM {reserved_rowids_table} reserved
+                  WHERE reserved.rowid = r.fts_rowid
+              )
+            ORDER BY r.fts_rowid
+            """
+        )
+        cursor.execute(
+            f"""
+            INSERT INTO chunks_fts({FTS_COLUMNS})
+            SELECT {FTS_SELECT_COLUMNS_QUALIFIED}
+            FROM chunks c
+            LEFT JOIN chunk_fts_rowids r ON r.chunk_id = c.id
+            WHERE {NON_OPERATIONAL_FTS_CLASS_SQL}
+              AND (
+                  r.fts_rowid IS NULL
+                  OR EXISTS (
+                      SELECT 1
+                      FROM {reserved_rowids_table} reserved
+                      WHERE reserved.rowid = r.fts_rowid
+                  )
+              )
+            ORDER BY c.id
+            """
+        )
+        _delete_manifest_fts_rowid_reservations(
+            cursor,
+            table_name="chunks_fts",
+            reserved_rowids_table=reserved_rowids_table,
+        )
+    finally:
+        cursor.execute(f"DROP TABLE IF EXISTS {reserved_rowids_table}")
+
+
+def _rebuild_trigram_fts(cursor: apsw.Cursor, *, run_id: str) -> None:
+    reserved_rowids_table = _load_manifest_fts_rowid_reservations(
+        cursor,
+        table_name="chunks_fts_trigram",
+        manifest_rowid_column="original_trigram_rowid",
+    )
+    try:
+        cursor.execute("DELETE FROM chunks_fts_trigram")
+        _reserve_manifest_fts_rowids(
+            cursor,
+            table_name="chunks_fts_trigram",
+            reserved_rowids_table=reserved_rowids_table,
+        )
+        cursor.execute(
+            f"""
+            INSERT INTO chunks_fts_trigram(rowid, {FTS_COLUMNS})
+            SELECT r.trigram_rowid, {FTS_SELECT_COLUMNS_QUALIFIED}
+            FROM chunks c
+            INNER JOIN chunk_fts_rowids r ON r.chunk_id = c.id
+            WHERE {NON_OPERATIONAL_FTS_CLASS_SQL}
+              AND r.trigram_rowid IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM {reserved_rowids_table} reserved
+                  WHERE reserved.rowid = r.trigram_rowid
+              )
+            ORDER BY r.trigram_rowid
+            """
+        )
+        cursor.execute(
+            f"""
+            INSERT INTO chunks_fts_trigram({FTS_COLUMNS})
+            SELECT {FTS_SELECT_COLUMNS_QUALIFIED}
+            FROM chunks c
+            LEFT JOIN chunk_fts_rowids r ON r.chunk_id = c.id
+            WHERE {NON_OPERATIONAL_FTS_CLASS_SQL}
+              AND (
+                  r.trigram_rowid IS NULL
+                  OR EXISTS (
+                      SELECT 1
+                      FROM {reserved_rowids_table} reserved
+                      WHERE reserved.rowid = r.trigram_rowid
+                  )
+              )
+            ORDER BY c.id
+            """
+        )
+        _delete_manifest_fts_rowid_reservations(
+            cursor,
+            table_name="chunks_fts_trigram",
+            reserved_rowids_table=reserved_rowids_table,
+        )
+    finally:
+        cursor.execute(f"DROP TABLE IF EXISTS {reserved_rowids_table}")
+
+
+def _rebuild_chunk_fts_rowids(cursor: apsw.Cursor, *, include_trigram: bool) -> None:
+    cursor.execute("DELETE FROM chunk_fts_rowids")
+    cursor.execute("""
+        INSERT OR IGNORE INTO chunk_fts_rowids(chunk_id, fts_rowid)
+        SELECT chunk_id, rowid FROM chunks_fts WHERE chunk_id IS NOT NULL
+        ORDER BY rowid
+    """)
+    cursor.execute("""
+        INSERT INTO chunk_fts_rowids(chunk_id, operational_rowid)
+        SELECT chunk_id, rowid FROM chunks_fts_operational WHERE chunk_id IS NOT NULL
+        ON CONFLICT(chunk_id) DO UPDATE SET operational_rowid = excluded.operational_rowid
+    """)
+    if include_trigram:
+        cursor.execute("""
+            INSERT INTO chunk_fts_rowids(chunk_id, trigram_rowid)
+            SELECT chunk_id, rowid FROM chunks_fts_trigram WHERE chunk_id IS NOT NULL
+            ON CONFLICT(chunk_id) DO UPDATE SET trigram_rowid = excluded.trigram_rowid
+        """)
+
+
+def _upsert_chunk_fts_rowids(
+    cursor: apsw.Cursor,
+    *,
+    chunk_id: str,
+    fts_rowid: int | None,
+    trigram_rowid: int | None,
+    operational_rowid: int | None,
+    has_trigram_rowid: bool,
+    has_operational_rowid: bool,
+) -> None:
+    columns = ["chunk_id", "fts_rowid"]
+    values: list[Any] = [chunk_id, fts_rowid]
+    updates = ["fts_rowid = excluded.fts_rowid"]
+    if has_trigram_rowid:
+        columns.append("trigram_rowid")
+        values.append(trigram_rowid)
+        updates.append("trigram_rowid = excluded.trigram_rowid")
+    if has_operational_rowid:
+        columns.append("operational_rowid")
+        values.append(operational_rowid)
+        updates.append("operational_rowid = excluded.operational_rowid")
+    placeholders = ", ".join("?" for _ in columns)
+    cursor.execute(
+        f"""
+        INSERT INTO chunk_fts_rowids({", ".join(columns)})
+        VALUES ({placeholders})
+        ON CONFLICT(chunk_id) DO UPDATE SET {", ".join(updates)}
+        """,
+        values,
     )
 
 
@@ -486,59 +912,75 @@ def apply_quarantine_ids(
 
     chunk_ids = list(dict.fromkeys(chunk_ids))
     db_path = _path(db_path)
-    if bootstrap_schema:
-        _recreate_fts_triggers(db_path)
     run_id = run_id or f"retro-self-pollution-{_utc_now()}"
-    conn = apsw.Connection(str(db_path))
-    cursor = conn.cursor()
-    _checkpoint(cursor)
-    _drop_fts_triggers(cursor)
-    _ensure_manifest(cursor)
-    timestamp = _utc_now()
-    batches_since_checkpoint = 0
-    try:
-        _load_chunk_ids_reconcile_table(cursor, chunk_ids)
-        for ids in _batch(chunk_ids, batch_size):
-            placeholders = _placeholders(ids)
-            cursor.execute("BEGIN IMMEDIATE")
-            _record_manifest(cursor, ids, run_id=run_id, timestamp=timestamp)
-            _delete_fts_rows(cursor, ids, table_names=("chunks_fts", "chunks_fts_operational"))
-            cursor.execute(
-                f"""
-                UPDATE chunks
-                SET content_class = 'operational',
-                    provenance_class = ?
-                WHERE id IN ({placeholders})
-                """,
-                (AGENT_INFERENCE, *ids),
-            )
-            _insert_operational_fts(cursor, ids)
-            cursor.execute("COMMIT")
-            batches_since_checkpoint += 1
-            if batches_since_checkpoint >= checkpoint_every:
-                _checkpoint(cursor)
-                batches_since_checkpoint = 0
-        cursor.execute("BEGIN IMMEDIATE")
-        _clear_trigram_fts(cursor)
-        cursor.execute("COMMIT")
-    except Exception:
-        if not conn.getautocommit():
-            cursor.execute("ROLLBACK")
-        raise
-    finally:
-        cursor.execute(f"DROP TABLE IF EXISTS {RECONCILE_CHUNK_ID_TABLE}")
-        conn.close()
 
-    if finalize:
-        _recreate_fts_triggers(db_path)
+    with _operation_writer_lock(db_path):
+        if bootstrap_schema:
+            _recreate_fts_triggers(db_path)
         conn = apsw.Connection(str(db_path))
+        cursor = conn.cursor()
+        _checkpoint(cursor)
+        _drop_fts_triggers(cursor)
+        _ensure_manifest(cursor)
+        timestamp = _utc_now()
+        include_trigram = _table_exists(cursor, "chunks_fts_trigram")
+        table_names = ["chunks_fts", "chunks_fts_operational"]
+        if include_trigram:
+            table_names.append("chunks_fts_trigram")
+        batches_since_checkpoint = 0
         try:
-            cursor = conn.cursor()
-            _checkpoint(cursor)
-            _optimize_fts(cursor)
-            _checkpoint(cursor)
+            cursor.execute("BEGIN IMMEDIATE")
+            _rebuild_chunk_fts_rowids(cursor, include_trigram=include_trigram)
+            _load_apply_chunk_ids_table(cursor, chunk_ids)
+            _load_delete_fts_rowid_tables(cursor, table_names=tuple(table_names))
+            cursor.execute("COMMIT")
+            for ids in _batch(chunk_ids, batch_size):
+                _load_chunk_ids_reconcile_table(cursor, ids)
+                cursor.execute("BEGIN IMMEDIATE")
+                _record_manifest(cursor, run_id=run_id, timestamp=timestamp, include_trigram=include_trigram)
+                _delete_fts_rows_for_reconcile(cursor, table_names=tuple(table_names))
+                cursor.execute(
+                    f"""
+                    UPDATE chunks
+                    SET content_class = 'operational',
+                        provenance_class = ?
+                    WHERE id IN (SELECT chunk_id FROM {RECONCILE_CHUNK_ID_TABLE})
+                    """,
+                    (AGENT_INFERENCE,),
+                )
+                _insert_operational_fts(cursor)
+                cursor.execute("COMMIT")
+                cursor.execute(f"DROP TABLE IF EXISTS {RECONCILE_CHUNK_ID_TABLE}")
+                batches_since_checkpoint += 1
+                if batches_since_checkpoint >= checkpoint_every:
+                    _checkpoint(cursor)
+                    batches_since_checkpoint = 0
+            cursor.execute("BEGIN IMMEDIATE")
+            _rebuild_knowledge_fts(cursor, run_id=run_id)
+            if include_trigram:
+                _rebuild_trigram_fts(cursor, run_id=run_id)
+            _rebuild_chunk_fts_rowids(cursor, include_trigram=include_trigram)
+            cursor.execute("COMMIT")
+        except Exception:
+            if not conn.getautocommit():
+                cursor.execute("ROLLBACK")
+            raise
         finally:
+            cursor.execute(f"DROP TABLE IF EXISTS {RECONCILE_CHUNK_ID_TABLE}")
+            _drop_delete_fts_rowid_tables(cursor, table_names=tuple(table_names))
+            cursor.execute(f"DROP TABLE IF EXISTS {APPLY_CHUNK_ID_TABLE}")
             conn.close()
+
+        if finalize:
+            _recreate_fts_triggers(db_path)
+            conn = apsw.Connection(str(db_path))
+            try:
+                cursor = conn.cursor()
+                _checkpoint(cursor)
+                _optimize_fts(cursor)
+                _checkpoint(cursor)
+            finally:
+                conn.close()
     return {"quarantined": len(chunk_ids), "run_id": run_id}
 
 
@@ -558,94 +1000,101 @@ def unquarantine_ids(
         return {"restored": 0, "run_id": run_id}
 
     db_path = _path(db_path)
-    if bootstrap_schema:
-        _recreate_fts_triggers(db_path)
-    conn = apsw.Connection(str(db_path))
-    cursor = conn.cursor()
-    _checkpoint(cursor)
-    _drop_fts_triggers(cursor)
-    _ensure_manifest(cursor)
     restored = 0
-    batches_since_checkpoint = 0
-    try:
-        for ids in _batch(chunk_ids, batch_size):
-            cursor.execute("BEGIN IMMEDIATE")
-            _delete_fts_rows(cursor, ids)
-            for chunk_id in ids:
-                manifest = cursor.execute(
-                    f"""
-                    SELECT original_content_class, original_provenance_class,
-                           original_fts_rowid, original_trigram_rowid, original_operational_rowid
-                    FROM {QUARANTINE_MANIFEST_TABLE}
-                    WHERE chunk_id = ? AND run_id = ?
-                    """,
-                    (chunk_id, run_id),
-                ).fetchone()
-                if manifest is None:
-                    raise ValueError(f"missing quarantine manifest row for {chunk_id!r} in run {run_id!r}")
-                original_content_class, original_provenance_class = manifest[0], manifest[1]
-                cursor.execute(
-                    "UPDATE chunks SET content_class = ?, provenance_class = ? WHERE id = ?",
-                    (original_content_class, original_provenance_class, chunk_id),
-                )
-                fts_rowid = None
-                trigram_rowid = None
-                operational_rowid = None
-                if manifest[2] is not None:
-                    fts_rowid = _insert_fts_row(
-                        cursor,
-                        table_name="chunks_fts",
-                        chunk_id=chunk_id,
-                        rowid=manifest[2],
-                    )
-                if manifest[3] is not None:
-                    trigram_rowid = _insert_fts_row(
-                        cursor,
-                        table_name="chunks_fts_trigram",
-                        chunk_id=chunk_id,
-                        rowid=manifest[3],
-                    )
-                if manifest[4] is not None:
-                    operational_rowid = _insert_fts_row(
-                        cursor,
-                        table_name="chunks_fts_operational",
-                        chunk_id=chunk_id,
-                        rowid=manifest[4],
-                    )
-                cursor.execute(
-                    """
-                    INSERT INTO chunk_fts_rowids(chunk_id, fts_rowid, trigram_rowid, operational_rowid)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(chunk_id) DO UPDATE SET
-                        fts_rowid = excluded.fts_rowid,
-                        trigram_rowid = excluded.trigram_rowid,
-                        operational_rowid = excluded.operational_rowid
-                    """,
-                    (chunk_id, fts_rowid, trigram_rowid, operational_rowid),
-                )
-                restored += 1
-            cursor.execute("COMMIT")
-            batches_since_checkpoint += 1
-            if batches_since_checkpoint >= checkpoint_every:
-                _checkpoint(cursor)
-                batches_since_checkpoint = 0
-    except Exception:
-        if not conn.getautocommit():
-            cursor.execute("ROLLBACK")
-        raise
-    finally:
-        conn.close()
 
-    if finalize:
-        _recreate_fts_triggers(db_path)
+    with _operation_writer_lock(db_path):
+        if bootstrap_schema:
+            _recreate_fts_triggers(db_path)
         conn = apsw.Connection(str(db_path))
+        cursor = conn.cursor()
+        _checkpoint(cursor)
+        _drop_fts_triggers(cursor)
+        _ensure_manifest(cursor)
+        include_trigram = _table_exists(cursor, "chunks_fts_trigram")
+        table_names = ["chunks_fts", "chunks_fts_operational"]
+        if include_trigram:
+            table_names.append("chunks_fts_trigram")
+        rowid_cols = {row[1] for row in cursor.execute("PRAGMA table_info(chunk_fts_rowids)")}
+        has_trigram_rowid = "trigram_rowid" in rowid_cols
+        has_operational_rowid = "operational_rowid" in rowid_cols
+        batches_since_checkpoint = 0
         try:
-            cursor = conn.cursor()
-            _checkpoint(cursor)
-            _optimize_fts(cursor)
-            _checkpoint(cursor)
+            for ids in _batch(chunk_ids, batch_size):
+                cursor.execute("BEGIN IMMEDIATE")
+                _delete_fts_rows(cursor, ids, table_names=tuple(table_names))
+                for chunk_id in ids:
+                    manifest = cursor.execute(
+                        f"""
+                        SELECT original_content_class, original_provenance_class,
+                               original_fts_rowid, original_trigram_rowid, original_operational_rowid
+                        FROM {QUARANTINE_MANIFEST_TABLE}
+                        WHERE chunk_id = ? AND run_id = ?
+                        """,
+                        (chunk_id, run_id),
+                    ).fetchone()
+                    if manifest is None:
+                        raise ValueError(f"missing quarantine manifest row for {chunk_id!r} in run {run_id!r}")
+                    original_content_class, original_provenance_class = manifest[0], manifest[1]
+                    cursor.execute(
+                        "UPDATE chunks SET content_class = ?, provenance_class = ? WHERE id = ?",
+                        (original_content_class, original_provenance_class, chunk_id),
+                    )
+                    fts_rowid = None
+                    trigram_rowid = None
+                    operational_rowid = None
+                    if manifest[2] is not None:
+                        fts_rowid = _insert_fts_row(
+                            cursor,
+                            table_name="chunks_fts",
+                            chunk_id=chunk_id,
+                            rowid=manifest[2],
+                        )
+                    if include_trigram and manifest[3] is not None:
+                        trigram_rowid = _insert_fts_row(
+                            cursor,
+                            table_name="chunks_fts_trigram",
+                            chunk_id=chunk_id,
+                            rowid=manifest[3],
+                        )
+                    if manifest[4] is not None:
+                        operational_rowid = _insert_fts_row(
+                            cursor,
+                            table_name="chunks_fts_operational",
+                            chunk_id=chunk_id,
+                            rowid=manifest[4],
+                        )
+                    _upsert_chunk_fts_rowids(
+                        cursor,
+                        chunk_id=chunk_id,
+                        fts_rowid=fts_rowid,
+                        trigram_rowid=trigram_rowid,
+                        operational_rowid=operational_rowid,
+                        has_trigram_rowid=has_trigram_rowid,
+                        has_operational_rowid=has_operational_rowid,
+                    )
+                    restored += 1
+                cursor.execute("COMMIT")
+                batches_since_checkpoint += 1
+                if batches_since_checkpoint >= checkpoint_every:
+                    _checkpoint(cursor)
+                    batches_since_checkpoint = 0
+        except Exception:
+            if not conn.getautocommit():
+                cursor.execute("ROLLBACK")
+            raise
         finally:
             conn.close()
+
+        if finalize:
+            _recreate_fts_triggers(db_path)
+            conn = apsw.Connection(str(db_path))
+            try:
+                cursor = conn.cursor()
+                _checkpoint(cursor)
+                _optimize_fts(cursor)
+                _checkpoint(cursor)
+            finally:
+                conn.close()
     return {"restored": restored, "run_id": run_id}
 
 
