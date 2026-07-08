@@ -1185,6 +1185,70 @@ def test_apply_removes_duplicate_target_operational_fts_rows(tmp_path: Path) -> 
     assert operational_rows == (1,)
 
 
+def test_apply_removes_duplicate_target_default_fts_rows_before_rebuild(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    script = _load_script()
+    db_path = tmp_path / "duplicate-target-default-before-rebuild.db"
+    denied_source = tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent-a1.jsonl"
+    store = VectorStore(db_path)
+    try:
+        _insert_chunk(
+            store,
+            chunk_id="denied-knowledge",
+            source_file=denied_source,
+            content="denied duplicate default before rebuild sentinel",
+        )
+        for table_name in ("chunks_fts", "chunks_fts_trigram"):
+            for _ in range(2):
+                store.conn.cursor().execute(f"""
+                    INSERT INTO {table_name}(
+                        content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id
+                    )
+                    SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id
+                    FROM chunks
+                    WHERE id = 'denied-knowledge'
+                """)
+    finally:
+        store.close()
+
+    def stop_before_rebuild(cursor, *, run_id):
+        raise RuntimeError("stop before rebuild")
+
+    monkeypatch.setattr(script, "_rebuild_knowledge_fts", stop_before_rebuild)
+
+    with pytest.raises(RuntimeError, match="stop before rebuild"):
+        script.apply_quarantine_ids(
+            db_path,
+            ["denied-knowledge"],
+            run_id="duplicate-default-before-rebuild-run",
+            batch_size=1,
+            finalize=False,
+        )
+
+    conn = apsw.Connection(str(db_path), flags=apsw.SQLITE_OPEN_READONLY)
+    try:
+        cursor = conn.cursor()
+        chunk_row = cursor.execute(
+            "SELECT content_class, provenance_class FROM chunks WHERE id = 'denied-knowledge'"
+        ).fetchone()
+        default_rows = cursor.execute("SELECT COUNT(*) FROM chunks_fts WHERE chunk_id = 'denied-knowledge'").fetchone()
+        trigram_rows = cursor.execute(
+            "SELECT COUNT(*) FROM chunks_fts_trigram WHERE chunk_id = 'denied-knowledge'"
+        ).fetchone()
+        operational_rows = cursor.execute(
+            "SELECT COUNT(*) FROM chunks_fts_operational WHERE chunk_id = 'denied-knowledge'"
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert chunk_row == ("operational", script.AGENT_INFERENCE)
+    assert default_rows == (0,)
+    assert trigram_rows == (0,)
+    assert operational_rows == (1,)
+
+
 def test_quarantine_retrievability_proof_excludes_default_but_preserves_operational_paths(
     tmp_path: Path,
 ) -> None:

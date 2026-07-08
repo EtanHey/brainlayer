@@ -53,9 +53,15 @@ FTS_RESERVED_ROWID_TABLES = {
     "chunks_fts": "_retro_reserved_chunks_fts_rowids",
     "chunks_fts_trigram": "_retro_reserved_chunks_fts_trigram_rowids",
 }
+FTS_DELETE_ROWID_TABLES = {
+    "chunks_fts": "_retro_delete_chunks_fts_rowids",
+    "chunks_fts_operational": "_retro_delete_chunks_fts_operational_rowids",
+    "chunks_fts_trigram": "_retro_delete_chunks_fts_trigram_rowids",
+}
 FTS_RESERVED_CHUNK_ID_PREFIX = "__retro_quarantine_reserved__:"
 QUARANTINE_MANIFEST_TABLE = "retro_self_pollution_quarantine_manifest"
 RECONCILE_CHUNK_ID_TABLE = "_retro_quarantine_reconcile_chunk_ids"
+APPLY_CHUNK_ID_TABLE = "_retro_quarantine_apply_chunk_ids"
 DEFAULT_ESTIMATE = 244_152
 RETRIEVABILITY_TOKEN_RE = re.compile(r"[A-Za-z0-9]{4,}")
 NON_OPERATIONAL_FTS_CLASS_SQL = (
@@ -513,26 +519,17 @@ def _delete_fts_rows_for_reconcile(
     table_names: tuple[str, ...] = ("chunks_fts", "chunks_fts_operational", "chunks_fts_trigram"),
 ) -> None:
     for table_name in table_names:
-        rowid_column = FTS_ROWID_COLUMNS[table_name]
+        delete_rowids_table = FTS_DELETE_ROWID_TABLES[table_name]
         cursor.execute(
             f"""
             DELETE FROM {table_name}
             WHERE rowid IN (
-                SELECT r.{rowid_column}
-                FROM chunk_fts_rowids r
-                INNER JOIN {RECONCILE_CHUNK_ID_TABLE} q ON q.chunk_id = r.chunk_id
-                WHERE r.{rowid_column} IS NOT NULL
+                SELECT d.rowid
+                FROM {delete_rowids_table} d
+                INNER JOIN {RECONCILE_CHUNK_ID_TABLE} q ON q.chunk_id = d.chunk_id
             )
-            AND chunk_id IN (SELECT chunk_id FROM {RECONCILE_CHUNK_ID_TABLE})
             """
         )
-        if table_name == "chunks_fts_operational":
-            cursor.execute(
-                f"""
-                DELETE FROM {table_name}
-                WHERE chunk_id IN (SELECT chunk_id FROM {RECONCILE_CHUNK_ID_TABLE})
-                """
-            )
     updates = []
     if "chunks_fts" in table_names:
         updates.append("fts_rowid = NULL")
@@ -583,6 +580,37 @@ def _load_chunk_ids_reconcile_table(cursor: apsw.Cursor, chunk_ids: list[str]) -
         f"INSERT OR IGNORE INTO {RECONCILE_CHUNK_ID_TABLE}(chunk_id) VALUES (?)",
         [(chunk_id,) for chunk_id in chunk_ids],
     )
+
+
+def _load_apply_chunk_ids_table(cursor: apsw.Cursor, chunk_ids: list[str]) -> None:
+    cursor.execute(f"DROP TABLE IF EXISTS {APPLY_CHUNK_ID_TABLE}")
+    cursor.execute(f"CREATE TEMP TABLE {APPLY_CHUNK_ID_TABLE}(chunk_id TEXT PRIMARY KEY)")
+    cursor.executemany(
+        f"INSERT OR IGNORE INTO {APPLY_CHUNK_ID_TABLE}(chunk_id) VALUES (?)",
+        [(chunk_id,) for chunk_id in chunk_ids],
+    )
+
+
+def _load_delete_fts_rowid_tables(cursor: apsw.Cursor, *, table_names: tuple[str, ...]) -> None:
+    for table_name in table_names:
+        delete_rowids_table = FTS_DELETE_ROWID_TABLES[table_name]
+        cursor.execute(f"DROP TABLE IF EXISTS {delete_rowids_table}")
+        cursor.execute(f"CREATE TEMP TABLE {delete_rowids_table}(rowid INTEGER PRIMARY KEY, chunk_id TEXT NOT NULL)")
+        cursor.execute(f"CREATE INDEX {delete_rowids_table}_chunk_id_idx ON {delete_rowids_table}(chunk_id)")
+        cursor.execute(
+            f"""
+            INSERT OR IGNORE INTO {delete_rowids_table}(rowid, chunk_id)
+            SELECT f.rowid, f.chunk_id
+            FROM {table_name} f
+            INNER JOIN {APPLY_CHUNK_ID_TABLE} q ON q.chunk_id = f.chunk_id
+            WHERE f.chunk_id IS NOT NULL
+            """
+        )
+
+
+def _drop_delete_fts_rowid_tables(cursor: apsw.Cursor, *, table_names: tuple[str, ...]) -> None:
+    for table_name in table_names:
+        cursor.execute(f"DROP TABLE IF EXISTS {FTS_DELETE_ROWID_TABLES[table_name]}")
 
 
 def _clear_trigram_fts(cursor: apsw.Cursor) -> None:
@@ -903,6 +931,8 @@ def apply_quarantine_ids(
         try:
             cursor.execute("BEGIN IMMEDIATE")
             _rebuild_chunk_fts_rowids(cursor, include_trigram=include_trigram)
+            _load_apply_chunk_ids_table(cursor, chunk_ids)
+            _load_delete_fts_rowid_tables(cursor, table_names=tuple(table_names))
             cursor.execute("COMMIT")
             for ids in _batch(chunk_ids, batch_size):
                 _load_chunk_ids_reconcile_table(cursor, ids)
@@ -937,6 +967,8 @@ def apply_quarantine_ids(
             raise
         finally:
             cursor.execute(f"DROP TABLE IF EXISTS {RECONCILE_CHUNK_ID_TABLE}")
+            _drop_delete_fts_rowid_tables(cursor, table_names=tuple(table_names))
+            cursor.execute(f"DROP TABLE IF EXISTS {APPLY_CHUNK_ID_TABLE}")
             conn.close()
 
         if finalize:
