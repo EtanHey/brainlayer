@@ -509,6 +509,105 @@ def test_apply_rebuild_mode_checkpoints_each_real_batch(tmp_path: Path, monkeypa
     assert checkpoint_calls == 4
 
 
+def test_apply_without_trigram_table_records_manifest_without_trigram_rowid(tmp_path: Path) -> None:
+    script = _load_script()
+    db_path = tmp_path / "no-trigram.db"
+    source_file = tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent-a1.jsonl"
+    conn = apsw.Connection(str(db_path))
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE chunks (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                metadata TEXT NOT NULL,
+                source_file TEXT NOT NULL,
+                project TEXT,
+                content_type TEXT,
+                value_type TEXT,
+                char_count INTEGER,
+                source TEXT,
+                created_at TEXT,
+                content_class TEXT,
+                provenance_class TEXT,
+                summary TEXT,
+                tags TEXT,
+                resolved_query TEXT,
+                key_facts TEXT,
+                resolved_queries TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE VIRTUAL TABLE chunks_fts USING fts5(
+                content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id UNINDEXED
+            )
+        """)
+        cursor.execute("""
+            CREATE VIRTUAL TABLE chunks_fts_operational USING fts5(
+                content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id UNINDEXED
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE chunk_fts_rowids (
+                chunk_id TEXT PRIMARY KEY,
+                fts_rowid INTEGER,
+                operational_rowid INTEGER
+            )
+        """)
+        cursor.execute(
+            """INSERT INTO chunks (
+                id, content, metadata, source_file, project, content_type, char_count, source,
+                created_at, content_class, provenance_class
+            ) VALUES (?, 'legacy no trigram sentinel', '{}', ?, 'retro-test', 'note', 26,
+                'claude_code', '2026-07-03T00:00:00Z', 'knowledge', 'RAW-ETAN-DIRECT')""",
+            ("legacy-denylisted", str(source_file)),
+        )
+        cursor.execute("""
+            INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
+            SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id FROM chunks
+        """)
+        cursor.execute("""
+            INSERT INTO chunk_fts_rowids(chunk_id, fts_rowid)
+            SELECT chunk_id, rowid FROM chunks_fts
+        """)
+    finally:
+        conn.close()
+
+    report = script.apply_quarantine_ids(
+        db_path,
+        ["legacy-denylisted"],
+        run_id="no-trigram-run",
+        bootstrap_schema=False,
+        finalize=False,
+    )
+
+    conn = apsw.Connection(str(db_path), flags=apsw.SQLITE_OPEN_READONLY)
+    try:
+        cursor = conn.cursor()
+        manifest = cursor.execute(
+            f"""
+            SELECT original_fts_rowid, original_trigram_rowid, original_operational_rowid
+            FROM {script.QUARANTINE_MANIFEST_TABLE}
+            WHERE run_id = 'no-trigram-run' AND chunk_id = 'legacy-denylisted'
+            """
+        ).fetchone()
+        row = cursor.execute(
+            "SELECT content_class, provenance_class FROM chunks WHERE id = 'legacy-denylisted'"
+        ).fetchone()
+        default_rows = cursor.execute("SELECT COUNT(*) FROM chunks_fts WHERE chunk_id = 'legacy-denylisted'").fetchone()
+        operational_rows = cursor.execute(
+            "SELECT COUNT(*) FROM chunks_fts_operational WHERE chunk_id = 'legacy-denylisted'"
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert report["quarantined"] == 1
+    assert manifest == (1, None, None)
+    assert row == ("operational", "AGENT-INFERENCE")
+    assert default_rows == (0,)
+    assert operational_rows == (1,)
+
+
 def test_quarantine_retrievability_proof_excludes_default_but_preserves_operational_paths(
     tmp_path: Path,
 ) -> None:

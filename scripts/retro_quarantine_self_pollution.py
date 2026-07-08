@@ -362,6 +362,9 @@ def capture_restore_state(cursor: apsw.Cursor, chunk_ids: list[str]) -> dict[str
             raise ValueError(f"missing chunk: {chunk_id}")
         fts_rows = {}
         for table_name in ("chunks_fts", "chunks_fts_operational", "chunks_fts_trigram"):
+            if not _table_exists(cursor, table_name):
+                fts_rows[table_name] = []
+                continue
             fts_rows[table_name] = _select_fts_state_rows(cursor, table_name=table_name, chunk_id=chunk_id)
         state[chunk_id] = {
             "chunk": tuple(chunk),
@@ -417,11 +420,24 @@ def _record_manifest(
     *,
     run_id: str,
     timestamp: str,
+    include_trigram: bool = True,
 ) -> None:
     loaded_temp_table = False
     if chunk_ids is not None:
         _load_chunk_ids_reconcile_table(cursor, chunk_ids)
         loaded_temp_table = True
+    trigram_rowid_expr = (
+        "CASE WHEN t.chunk_id IS NULL THEN NULL ELSE r.trigram_rowid END" if include_trigram else "NULL"
+    )
+    trigram_join = (
+        """
+            LEFT JOIN chunks_fts_trigram t
+                ON t.rowid = r.trigram_rowid
+               AND t.chunk_id = c.id
+        """
+        if include_trigram
+        else ""
+    )
     try:
         missing = cursor.execute(
             f"""
@@ -445,7 +461,7 @@ def _record_manifest(
                 c.content_class,
                 c.provenance_class,
                 CASE WHEN f.chunk_id IS NULL THEN NULL ELSE r.fts_rowid END,
-                CASE WHEN t.chunk_id IS NULL THEN NULL ELSE r.trigram_rowid END,
+                {trigram_rowid_expr},
                 CASE WHEN o.chunk_id IS NULL THEN NULL ELSE r.operational_rowid END,
                 ?
             FROM {RECONCILE_CHUNK_ID_TABLE} q
@@ -454,9 +470,7 @@ def _record_manifest(
             LEFT JOIN chunks_fts f
                 ON f.rowid = r.fts_rowid
                AND f.chunk_id = c.id
-            LEFT JOIN chunks_fts_trigram t
-                ON t.rowid = r.trigram_rowid
-               AND t.chunk_id = c.id
+            {trigram_join}
             LEFT JOIN chunks_fts_operational o
                 ON o.rowid = r.operational_rowid
                AND o.chunk_id = c.id
@@ -706,7 +720,7 @@ def apply_quarantine_ids(
         for ids in _batch(chunk_ids, batch_size):
             _load_chunk_ids_reconcile_table(cursor, ids)
             cursor.execute("BEGIN IMMEDIATE")
-            _record_manifest(cursor, run_id=run_id, timestamp=timestamp)
+            _record_manifest(cursor, run_id=run_id, timestamp=timestamp, include_trigram=include_trigram)
             _delete_fts_rows_for_reconcile(cursor, table_names=tuple(table_names))
             cursor.execute(
                 f"""
