@@ -367,6 +367,69 @@ def test_capture_restore_state_uses_indexed_fts_rowid_lookup_plan(tmp_path: Path
     _assert_uses_indexed_rowid_map(details)
 
 
+def test_rebuild_fts_uses_indexed_reserved_rowid_table_for_manifest_probes(tmp_path: Path) -> None:
+    script = _load_script()
+    db_path = tmp_path / "rebuild-reserved-plan.db"
+    denied_source = tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent-a1.jsonl"
+    permitted_source = tmp_path / "notes" / "memory.md"
+    store = VectorStore(db_path)
+    try:
+        _insert_chunk(
+            store,
+            chunk_id="denied-knowledge",
+            source_file=denied_source,
+            content="reserved plan denied sentinel",
+        )
+        _insert_chunk(
+            store,
+            chunk_id="preserved-knowledge",
+            source_file=permitted_source,
+            content="reserved plan preserved sentinel",
+        )
+        cursor = store.conn.cursor()
+        script._ensure_manifest(cursor)
+        script._record_manifest(cursor, ["denied-knowledge"], run_id="reserved-plan-run", timestamp="plan")
+
+        captured: list[str] = []
+
+        def trace(_cursor, statement, bindings):
+            if (
+                isinstance(statement, str)
+                and " reserved" in statement
+                and "FROM _retro_reserved_chunks_fts" in statement
+            ):
+                captured.append(statement)
+            return True
+
+        store.conn.setexectrace(trace)
+        try:
+            script._rebuild_knowledge_fts(cursor, run_id="reserved-plan-run")
+            script._rebuild_trigram_fts(cursor, run_id="reserved-plan-run")
+        finally:
+            store.conn.setexectrace(None)
+
+        reserved_table = script._load_manifest_fts_rowid_reservations(
+            cursor,
+            table_name="chunks_fts",
+            manifest_rowid_column="original_fts_rowid",
+        )
+        try:
+            details = _explain_details(
+                cursor,
+                f"SELECT 1 FROM {reserved_table} reserved WHERE reserved.rowid = ?",
+                (1,),
+            )
+        finally:
+            cursor.execute(f"DROP TABLE IF EXISTS {reserved_table}")
+    finally:
+        store.close()
+
+    joined = "\n".join(details)
+    assert captured
+    assert all(script.QUARANTINE_MANIFEST_TABLE not in statement for statement in captured)
+    assert "SEARCH reserved USING INTEGER PRIMARY KEY" in joined
+
+
 def test_apply_rebuild_mode_matches_incremental_behavior_on_fixture(tmp_path: Path) -> None:
     script = _load_script()
     base_db = tmp_path / "parity-base.db"
@@ -943,6 +1006,50 @@ def test_rebuild_reserves_prior_run_manifest_rowids(tmp_path: Path) -> None:
     assert repaired_rowids[1] not in {None, old_trigram_rowid}
 
 
+def test_rebuild_does_not_reserve_restored_prior_run_manifest_rowids(tmp_path: Path) -> None:
+    script = _load_script()
+    db_path = tmp_path / "restored-prior-run-rowids.db"
+    denied_source = tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent-a1.jsonl"
+    store = VectorStore(db_path)
+    try:
+        _insert_chunk(
+            store,
+            chunk_id="old-denied",
+            source_file=denied_source,
+            content="restored old denied rowid sentinel",
+        )
+        _insert_chunk(
+            store,
+            chunk_id="new-denied",
+            source_file=denied_source,
+            content="new denied after restored old sentinel",
+        )
+        cursor = store.conn.cursor()
+        old_fts_rowid = cursor.execute("SELECT rowid FROM chunks_fts WHERE chunk_id = 'old-denied'").fetchone()[0]
+        old_trigram_rowid = cursor.execute(
+            "SELECT rowid FROM chunks_fts_trigram WHERE chunk_id = 'old-denied'"
+        ).fetchone()[0]
+    finally:
+        store.close()
+
+    script.apply_quarantine_ids(db_path, ["old-denied"], run_id="old-run", finalize=False)
+    script.unquarantine_ids(db_path, ["old-denied"], run_id="old-run", finalize=False)
+    script.apply_quarantine_ids(db_path, ["new-denied"], run_id="new-run", finalize=False)
+
+    conn = apsw.Connection(str(db_path), flags=apsw.SQLITE_OPEN_READONLY)
+    try:
+        cursor = conn.cursor()
+        current_fts_rowid = cursor.execute("SELECT rowid FROM chunks_fts WHERE chunk_id = 'old-denied'").fetchone()[0]
+        current_trigram_rowid = cursor.execute(
+            "SELECT rowid FROM chunks_fts_trigram WHERE chunk_id = 'old-denied'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert current_fts_rowid == old_fts_rowid
+    assert current_trigram_rowid == old_trigram_rowid
+
+
 def test_capture_restore_state_includes_orphan_fts_rows_without_rowid_map(tmp_path: Path) -> None:
     script = _load_script()
     db_path = tmp_path / "orphan-fts-state.db"
@@ -962,6 +1069,31 @@ def test_capture_restore_state_includes_orphan_fts_rows_without_rowid_map(tmp_pa
 
     assert before["orphan-default"]["fts"]["chunks_fts"]
     assert before["orphan-default"]["fts"]["chunks_fts_trigram"]
+
+
+def test_capture_restore_state_includes_duplicate_fts_rows_with_valid_rowid_map(tmp_path: Path) -> None:
+    script = _load_script()
+    db_path = tmp_path / "duplicate-fts-state.db"
+    denied_source = tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent-a1.jsonl"
+    store = VectorStore(db_path)
+    try:
+        _insert_chunk(
+            store,
+            chunk_id="duplicate-default",
+            source_file=denied_source,
+            content="duplicate capture fts sentinel",
+        )
+        store.conn.cursor().execute("""
+            INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
+            SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id
+            FROM chunks
+            WHERE id = 'duplicate-default'
+        """)
+        before = script.capture_restore_state(store.conn.cursor(), ["duplicate-default"])
+    finally:
+        store.close()
+
+    assert len(before["duplicate-default"]["fts"]["chunks_fts"]) == 2
 
 
 def test_rebuild_chunk_fts_rowids_tolerates_duplicate_default_fts_rows(tmp_path: Path) -> None:
