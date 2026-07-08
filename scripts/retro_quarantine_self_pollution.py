@@ -48,6 +48,7 @@ FTS_ROWID_COLUMNS = {
     "chunks_fts_operational": "operational_rowid",
     "chunks_fts_trigram": "trigram_rowid",
 }
+FTS_RESERVED_CHUNK_ID_PREFIX = "__retro_quarantine_reserved__:"
 QUARANTINE_MANIFEST_TABLE = "retro_self_pollution_quarantine_manifest"
 RECONCILE_CHUNK_ID_TABLE = "_retro_quarantine_reconcile_chunk_ids"
 DEFAULT_ESTIMATE = 244_152
@@ -590,8 +591,58 @@ def _insert_operational_fts(cursor: apsw.Cursor) -> None:
     )
 
 
-def _rebuild_knowledge_fts(cursor: apsw.Cursor) -> None:
+def _reserve_manifest_fts_rowids(
+    cursor: apsw.Cursor,
+    *,
+    table_name: str,
+    manifest_rowid_column: str,
+    run_id: str,
+) -> None:
+    cursor.execute(
+        f"""
+        INSERT OR IGNORE INTO {table_name}(rowid, {FTS_COLUMNS})
+        SELECT DISTINCT
+            m.{manifest_rowid_column},
+            '', NULL, NULL, NULL, NULL, NULL,
+            ?
+        FROM {QUARANTINE_MANIFEST_TABLE} m
+        WHERE m.run_id = ?
+          AND m.{manifest_rowid_column} IS NOT NULL
+        """,
+        (f"{FTS_RESERVED_CHUNK_ID_PREFIX}{table_name}", run_id),
+    )
+
+
+def _delete_manifest_fts_rowid_reservations(
+    cursor: apsw.Cursor,
+    *,
+    table_name: str,
+    manifest_rowid_column: str,
+    run_id: str,
+) -> None:
+    cursor.execute(
+        f"""
+        DELETE FROM {table_name}
+        WHERE rowid IN (
+            SELECT m.{manifest_rowid_column}
+            FROM {QUARANTINE_MANIFEST_TABLE} m
+            WHERE m.run_id = ?
+              AND m.{manifest_rowid_column} IS NOT NULL
+        )
+        AND chunk_id = ?
+        """,
+        (run_id, f"{FTS_RESERVED_CHUNK_ID_PREFIX}{table_name}"),
+    )
+
+
+def _rebuild_knowledge_fts(cursor: apsw.Cursor, *, run_id: str) -> None:
     cursor.execute("DELETE FROM chunks_fts")
+    _reserve_manifest_fts_rowids(
+        cursor,
+        table_name="chunks_fts",
+        manifest_rowid_column="original_fts_rowid",
+        run_id=run_id,
+    )
     cursor.execute(
         f"""
         INSERT INTO chunks_fts(rowid, {FTS_COLUMNS})
@@ -600,8 +651,15 @@ def _rebuild_knowledge_fts(cursor: apsw.Cursor) -> None:
         INNER JOIN chunk_fts_rowids r ON r.chunk_id = c.id
         WHERE {NON_OPERATIONAL_FTS_CLASS_SQL}
           AND r.fts_rowid IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1
+              FROM {QUARANTINE_MANIFEST_TABLE} m
+              WHERE m.run_id = ?
+                AND m.original_fts_rowid = r.fts_rowid
+          )
         ORDER BY r.fts_rowid
-        """
+        """,
+        (run_id,),
     )
     cursor.execute(
         f"""
@@ -610,14 +668,35 @@ def _rebuild_knowledge_fts(cursor: apsw.Cursor) -> None:
         FROM chunks c
         LEFT JOIN chunk_fts_rowids r ON r.chunk_id = c.id
         WHERE {NON_OPERATIONAL_FTS_CLASS_SQL}
-          AND r.fts_rowid IS NULL
+          AND (
+              r.fts_rowid IS NULL
+              OR EXISTS (
+                  SELECT 1
+                  FROM {QUARANTINE_MANIFEST_TABLE} m
+                  WHERE m.run_id = ?
+                    AND m.original_fts_rowid = r.fts_rowid
+              )
+          )
         ORDER BY c.id
-        """
+        """,
+        (run_id,),
+    )
+    _delete_manifest_fts_rowid_reservations(
+        cursor,
+        table_name="chunks_fts",
+        manifest_rowid_column="original_fts_rowid",
+        run_id=run_id,
     )
 
 
-def _rebuild_trigram_fts(cursor: apsw.Cursor) -> None:
+def _rebuild_trigram_fts(cursor: apsw.Cursor, *, run_id: str) -> None:
     cursor.execute("DELETE FROM chunks_fts_trigram")
+    _reserve_manifest_fts_rowids(
+        cursor,
+        table_name="chunks_fts_trigram",
+        manifest_rowid_column="original_trigram_rowid",
+        run_id=run_id,
+    )
     cursor.execute(
         f"""
         INSERT INTO chunks_fts_trigram(rowid, {FTS_COLUMNS})
@@ -626,8 +705,15 @@ def _rebuild_trigram_fts(cursor: apsw.Cursor) -> None:
         INNER JOIN chunk_fts_rowids r ON r.chunk_id = c.id
         WHERE {NON_OPERATIONAL_FTS_CLASS_SQL}
           AND r.trigram_rowid IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1
+              FROM {QUARANTINE_MANIFEST_TABLE} m
+              WHERE m.run_id = ?
+                AND m.original_trigram_rowid = r.trigram_rowid
+          )
         ORDER BY r.trigram_rowid
-        """
+        """,
+        (run_id,),
     )
     cursor.execute(
         f"""
@@ -636,9 +722,24 @@ def _rebuild_trigram_fts(cursor: apsw.Cursor) -> None:
         FROM chunks c
         LEFT JOIN chunk_fts_rowids r ON r.chunk_id = c.id
         WHERE {NON_OPERATIONAL_FTS_CLASS_SQL}
-          AND r.trigram_rowid IS NULL
+          AND (
+              r.trigram_rowid IS NULL
+              OR EXISTS (
+                  SELECT 1
+                  FROM {QUARANTINE_MANIFEST_TABLE} m
+                  WHERE m.run_id = ?
+                    AND m.original_trigram_rowid = r.trigram_rowid
+              )
+          )
         ORDER BY c.id
-        """
+        """,
+        (run_id,),
+    )
+    _delete_manifest_fts_rowid_reservations(
+        cursor,
+        table_name="chunks_fts_trigram",
+        manifest_rowid_column="original_trigram_rowid",
+        run_id=run_id,
     )
 
 
@@ -739,9 +840,9 @@ def apply_quarantine_ids(
                 _checkpoint(cursor)
                 batches_since_checkpoint = 0
         cursor.execute("BEGIN IMMEDIATE")
-        _rebuild_knowledge_fts(cursor)
+        _rebuild_knowledge_fts(cursor, run_id=run_id)
         if include_trigram:
-            _rebuild_trigram_fts(cursor)
+            _rebuild_trigram_fts(cursor, run_id=run_id)
         _rebuild_chunk_fts_rowids(cursor, include_trigram=include_trigram)
         cursor.execute("COMMIT")
     except Exception:

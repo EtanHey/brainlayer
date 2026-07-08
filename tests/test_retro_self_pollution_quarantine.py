@@ -608,6 +608,76 @@ def test_apply_without_trigram_table_records_manifest_without_trigram_rowid(tmp_
     assert operational_rows == (1,)
 
 
+def test_rebuild_reserves_manifest_rowids_when_repairing_missing_fts_rows(tmp_path: Path) -> None:
+    script = _load_script()
+    db_path = tmp_path / "reserved-rowids.db"
+    denied_source = tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent-a1.jsonl"
+    permitted_source = tmp_path / "notes" / "memory.md"
+    store = VectorStore(db_path)
+    try:
+        _insert_chunk(
+            store,
+            chunk_id="denied-knowledge",
+            source_file=denied_source,
+            content="denied rowid reservation sentinel",
+        )
+        _insert_chunk(
+            store,
+            chunk_id="preserved-missing-fts",
+            source_file=permitted_source,
+            content="preserved missing fts repair sentinel",
+        )
+        cursor = store.conn.cursor()
+        original_fts_rowid = cursor.execute(
+            "SELECT rowid FROM chunks_fts WHERE chunk_id = 'denied-knowledge'"
+        ).fetchone()[0]
+        original_trigram_rowid = cursor.execute(
+            "SELECT rowid FROM chunks_fts_trigram WHERE chunk_id = 'denied-knowledge'"
+        ).fetchone()[0]
+        cursor.execute("DELETE FROM chunks_fts WHERE chunk_id = 'preserved-missing-fts'")
+        cursor.execute("DELETE FROM chunks_fts_trigram WHERE chunk_id = 'preserved-missing-fts'")
+        cursor.execute("DELETE FROM chunk_fts_rowids WHERE chunk_id = 'preserved-missing-fts'")
+    finally:
+        store.close()
+
+    script.apply_quarantine_ids(
+        db_path,
+        ["denied-knowledge"],
+        run_id="reserved-rowids-run",
+        finalize=False,
+    )
+    script.unquarantine_ids(
+        db_path,
+        ["denied-knowledge"],
+        run_id="reserved-rowids-run",
+        finalize=False,
+    )
+
+    conn = apsw.Connection(str(db_path), flags=apsw.SQLITE_OPEN_READONLY)
+    try:
+        cursor = conn.cursor()
+        restored_fts_rowid = cursor.execute(
+            "SELECT rowid FROM chunks_fts WHERE chunk_id = 'denied-knowledge'"
+        ).fetchone()[0]
+        restored_trigram_rowid = cursor.execute(
+            "SELECT rowid FROM chunks_fts_trigram WHERE chunk_id = 'denied-knowledge'"
+        ).fetchone()[0]
+        repaired_rowids = cursor.execute(
+            """
+            SELECT fts_rowid, trigram_rowid
+            FROM chunk_fts_rowids
+            WHERE chunk_id = 'preserved-missing-fts'
+            """
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert restored_fts_rowid == original_fts_rowid
+    assert restored_trigram_rowid == original_trigram_rowid
+    assert repaired_rowids[0] != original_fts_rowid
+    assert repaired_rowids[1] != original_trigram_rowid
+
+
 def test_quarantine_retrievability_proof_excludes_default_but_preserves_operational_paths(
     tmp_path: Path,
 ) -> None:
