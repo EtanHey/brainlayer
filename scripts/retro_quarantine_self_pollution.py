@@ -31,11 +31,30 @@ from brainlayer.vector_store import VectorStore
 
 FTS_COLUMNS = "content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id"
 FTS_SELECT_COLUMNS = "content, summary, tags, resolved_query, key_facts, resolved_queries, id"
-FTS_STATE_COLUMNS = "rowid, content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id"
+FTS_SELECT_COLUMNS_QUALIFIED = "c.content, c.summary, c.tags, c.resolved_query, c.key_facts, c.resolved_queries, c.id"
+FTS_STATE_COLUMN_NAMES = (
+    "rowid",
+    "content",
+    "summary",
+    "tags",
+    "resolved_query",
+    "key_facts",
+    "resolved_queries",
+    "chunk_id",
+)
+FTS_STATE_COLUMNS = ", ".join(FTS_STATE_COLUMN_NAMES)
+FTS_ROWID_COLUMNS = {
+    "chunks_fts": "fts_rowid",
+    "chunks_fts_operational": "operational_rowid",
+    "chunks_fts_trigram": "trigram_rowid",
+}
 QUARANTINE_MANIFEST_TABLE = "retro_self_pollution_quarantine_manifest"
 RECONCILE_CHUNK_ID_TABLE = "_retro_quarantine_reconcile_chunk_ids"
 DEFAULT_ESTIMATE = 244_152
 RETRIEVABILITY_TOKEN_RE = re.compile(r"[A-Za-z0-9]{4,}")
+NON_OPERATIONAL_FTS_CLASS_SQL = (
+    "COALESCE(content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark', 'cold')"
+)
 
 
 def _utc_now() -> str:
@@ -130,6 +149,16 @@ def _drop_fts_triggers(cursor: apsw.Cursor) -> None:
         "chunks_fts_trigram_update",
     ):
         cursor.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
+
+
+def _table_exists(cursor: apsw.Cursor, table_name: str) -> bool:
+    return (
+        cursor.execute(
+            "SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name = ?",
+            (table_name,),
+        ).fetchone()
+        is not None
+    )
 
 
 def _ensure_manifest(cursor: apsw.Cursor) -> None:
@@ -333,13 +362,7 @@ def capture_restore_state(cursor: apsw.Cursor, chunk_ids: list[str]) -> dict[str
             raise ValueError(f"missing chunk: {chunk_id}")
         fts_rows = {}
         for table_name in ("chunks_fts", "chunks_fts_operational", "chunks_fts_trigram"):
-            fts_rows[table_name] = [
-                tuple(row)
-                for row in cursor.execute(
-                    f"SELECT {FTS_STATE_COLUMNS} FROM {table_name} WHERE chunk_id = ? ORDER BY rowid",
-                    (chunk_id,),
-                )
-            ]
+            fts_rows[table_name] = _select_fts_state_rows(cursor, table_name=table_name, chunk_id=chunk_id)
         state[chunk_id] = {
             "chunk": tuple(chunk),
             "fts": fts_rows,
@@ -347,30 +370,137 @@ def capture_restore_state(cursor: apsw.Cursor, chunk_ids: list[str]) -> dict[str
     return state
 
 
-def _record_manifest(cursor: apsw.Cursor, chunk_ids: list[str], *, run_id: str, timestamp: str) -> None:
-    for chunk_id in chunk_ids:
-        row = cursor.execute(
-            """
-            SELECT c.content_class,
-                   c.provenance_class,
-                   (SELECT rowid FROM chunks_fts WHERE chunk_id = c.id ORDER BY rowid LIMIT 1),
-                   (SELECT rowid FROM chunks_fts_trigram WHERE chunk_id = c.id ORDER BY rowid LIMIT 1),
-                   (SELECT rowid FROM chunks_fts_operational WHERE chunk_id = c.id ORDER BY rowid LIMIT 1)
-            FROM chunks c
-            WHERE c.id = ?
+def _qualified_columns(alias: str, columns: tuple[str, ...]) -> str:
+    return ", ".join(f"{alias}.{column}" for column in columns)
+
+
+def _select_fts_state_rows(cursor: apsw.Cursor, *, table_name: str, chunk_id: str) -> list[tuple[Any, ...]]:
+    rowid_column = FTS_ROWID_COLUMNS[table_name]
+    rowid_row = cursor.execute(
+        f"SELECT {rowid_column} FROM chunk_fts_rowids WHERE chunk_id = ?",
+        (chunk_id,),
+    ).fetchone()
+    if rowid_row is None or rowid_row[0] is None:
+        return []
+    rows = [
+        tuple(row)
+        for row in cursor.execute(
+            f"""
+            SELECT {_qualified_columns("f", FTS_STATE_COLUMN_NAMES)}
+            FROM chunk_fts_rowids r
+            INNER JOIN {table_name} f
+                ON f.rowid = r.{rowid_column}
+               AND f.chunk_id = r.chunk_id
+            WHERE r.chunk_id = ?
+            ORDER BY f.rowid
             """,
             (chunk_id,),
+        )
+    ]
+    if rows:
+        return rows
+
+    # Legacy repair tests intentionally corrupt chunk_fts_rowids. Fall back only
+    # when a non-null map entry is stale so restore proofs still snapshot reality.
+    return [
+        tuple(row)
+        for row in cursor.execute(
+            f"SELECT {FTS_STATE_COLUMNS} FROM {table_name} WHERE chunk_id = ? ORDER BY rowid",
+            (chunk_id,),
+        )
+    ]
+
+
+def _record_manifest(
+    cursor: apsw.Cursor,
+    chunk_ids: list[str] | None = None,
+    *,
+    run_id: str,
+    timestamp: str,
+) -> None:
+    loaded_temp_table = False
+    if chunk_ids is not None:
+        _load_chunk_ids_reconcile_table(cursor, chunk_ids)
+        loaded_temp_table = True
+    try:
+        missing = cursor.execute(
+            f"""
+            SELECT r.chunk_id
+            FROM {RECONCILE_CHUNK_ID_TABLE} r
+            LEFT JOIN chunks c ON c.id = r.chunk_id
+            WHERE c.id IS NULL
+            """,
         ).fetchone()
-        if row is None:
-            raise ValueError(f"missing chunk: {chunk_id}")
+        if missing is not None:
+            raise ValueError(f"missing chunk: {missing[0]}")
         cursor.execute(
             f"""
             INSERT OR REPLACE INTO {QUARANTINE_MANIFEST_TABLE} (
                 run_id, chunk_id, original_content_class, original_provenance_class,
                 original_fts_rowid, original_trigram_rowid, original_operational_rowid, quarantined_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            )
+            SELECT
+                ?,
+                c.id,
+                c.content_class,
+                c.provenance_class,
+                CASE WHEN f.chunk_id IS NULL THEN NULL ELSE r.fts_rowid END,
+                CASE WHEN t.chunk_id IS NULL THEN NULL ELSE r.trigram_rowid END,
+                CASE WHEN o.chunk_id IS NULL THEN NULL ELSE r.operational_rowid END,
+                ?
+            FROM {RECONCILE_CHUNK_ID_TABLE} q
+            INNER JOIN chunks c ON c.id = q.chunk_id
+            LEFT JOIN chunk_fts_rowids r ON r.chunk_id = c.id
+            LEFT JOIN chunks_fts f
+                ON f.rowid = r.fts_rowid
+               AND f.chunk_id = c.id
+            LEFT JOIN chunks_fts_trigram t
+                ON t.rowid = r.trigram_rowid
+               AND t.chunk_id = c.id
+            LEFT JOIN chunks_fts_operational o
+                ON o.rowid = r.operational_rowid
+               AND o.chunk_id = c.id
             """,
-            (run_id, chunk_id, row[0], row[1], row[2], row[3], row[4], timestamp),
+            (run_id, timestamp),
+        )
+    finally:
+        if loaded_temp_table:
+            cursor.execute(f"DROP TABLE IF EXISTS {RECONCILE_CHUNK_ID_TABLE}")
+
+
+def _delete_fts_rows_for_reconcile(
+    cursor: apsw.Cursor,
+    *,
+    table_names: tuple[str, ...] = ("chunks_fts", "chunks_fts_operational", "chunks_fts_trigram"),
+) -> None:
+    for table_name in table_names:
+        rowid_column = FTS_ROWID_COLUMNS[table_name]
+        cursor.execute(
+            f"""
+            DELETE FROM {table_name}
+            WHERE rowid IN (
+                SELECT r.{rowid_column}
+                FROM chunk_fts_rowids r
+                INNER JOIN {RECONCILE_CHUNK_ID_TABLE} q ON q.chunk_id = r.chunk_id
+                WHERE r.{rowid_column} IS NOT NULL
+            )
+            AND chunk_id IN (SELECT chunk_id FROM {RECONCILE_CHUNK_ID_TABLE})
+            """
+        )
+    updates = []
+    if "chunks_fts" in table_names:
+        updates.append("fts_rowid = NULL")
+    if "chunks_fts_trigram" in table_names:
+        updates.append("trigram_rowid = NULL")
+    if "chunks_fts_operational" in table_names:
+        updates.append("operational_rowid = NULL")
+    if updates:
+        cursor.execute(
+            f"""
+            UPDATE chunk_fts_rowids
+            SET {", ".join(updates)}
+            WHERE chunk_id IN (SELECT chunk_id FROM {RECONCILE_CHUNK_ID_TABLE})
+            """
         )
 
 
@@ -401,6 +531,7 @@ def _delete_fts_rows(
 
 
 def _load_chunk_ids_reconcile_table(cursor: apsw.Cursor, chunk_ids: list[str]) -> None:
+    cursor.execute(f"DROP TABLE IF EXISTS {RECONCILE_CHUNK_ID_TABLE}")
     cursor.execute(f"CREATE TEMP TABLE {RECONCILE_CHUNK_ID_TABLE}(chunk_id TEXT PRIMARY KEY)")
     cursor.executemany(
         f"INSERT OR IGNORE INTO {RECONCILE_CHUNK_ID_TABLE}(chunk_id) VALUES (?)",
@@ -424,28 +555,96 @@ def _clear_trigram_fts(cursor: apsw.Cursor) -> None:
     )
 
 
-def _insert_operational_fts(cursor: apsw.Cursor, chunk_ids: list[str]) -> None:
-    placeholders = _placeholders(chunk_ids)
+def _insert_operational_fts(cursor: apsw.Cursor) -> None:
     cursor.execute(
         f"""
         INSERT INTO chunks_fts_operational({FTS_COLUMNS})
         SELECT {FTS_SELECT_COLUMNS}
         FROM chunks
-        WHERE id IN ({placeholders})
+        WHERE id IN (SELECT chunk_id FROM {RECONCILE_CHUNK_ID_TABLE})
         ORDER BY id
-        """,
-        chunk_ids,
+        """
     )
     cursor.execute(
         f"""
         INSERT INTO chunk_fts_rowids(chunk_id, operational_rowid)
         SELECT chunk_id, rowid
         FROM chunks_fts_operational
-        WHERE chunk_id IN ({placeholders})
+        WHERE chunk_id IN (SELECT chunk_id FROM {RECONCILE_CHUNK_ID_TABLE})
         ON CONFLICT(chunk_id) DO UPDATE SET operational_rowid = excluded.operational_rowid
-        """,
-        chunk_ids,
+        """
     )
+
+
+def _rebuild_knowledge_fts(cursor: apsw.Cursor) -> None:
+    cursor.execute("DELETE FROM chunks_fts")
+    cursor.execute(
+        f"""
+        INSERT INTO chunks_fts(rowid, {FTS_COLUMNS})
+        SELECT r.fts_rowid, {FTS_SELECT_COLUMNS_QUALIFIED}
+        FROM chunks c
+        INNER JOIN chunk_fts_rowids r ON r.chunk_id = c.id
+        WHERE {NON_OPERATIONAL_FTS_CLASS_SQL}
+          AND r.fts_rowid IS NOT NULL
+        ORDER BY r.fts_rowid
+        """
+    )
+    cursor.execute(
+        f"""
+        INSERT INTO chunks_fts({FTS_COLUMNS})
+        SELECT {FTS_SELECT_COLUMNS_QUALIFIED}
+        FROM chunks c
+        LEFT JOIN chunk_fts_rowids r ON r.chunk_id = c.id
+        WHERE {NON_OPERATIONAL_FTS_CLASS_SQL}
+          AND r.fts_rowid IS NULL
+        ORDER BY c.id
+        """
+    )
+
+
+def _rebuild_trigram_fts(cursor: apsw.Cursor) -> None:
+    cursor.execute("DELETE FROM chunks_fts_trigram")
+    cursor.execute(
+        f"""
+        INSERT INTO chunks_fts_trigram(rowid, {FTS_COLUMNS})
+        SELECT r.trigram_rowid, {FTS_SELECT_COLUMNS_QUALIFIED}
+        FROM chunks c
+        INNER JOIN chunk_fts_rowids r ON r.chunk_id = c.id
+        WHERE {NON_OPERATIONAL_FTS_CLASS_SQL}
+          AND r.trigram_rowid IS NOT NULL
+        ORDER BY r.trigram_rowid
+        """
+    )
+    cursor.execute(
+        f"""
+        INSERT INTO chunks_fts_trigram({FTS_COLUMNS})
+        SELECT {FTS_SELECT_COLUMNS_QUALIFIED}
+        FROM chunks c
+        LEFT JOIN chunk_fts_rowids r ON r.chunk_id = c.id
+        WHERE {NON_OPERATIONAL_FTS_CLASS_SQL}
+          AND r.trigram_rowid IS NULL
+        ORDER BY c.id
+        """
+    )
+
+
+def _rebuild_chunk_fts_rowids(cursor: apsw.Cursor, *, include_trigram: bool) -> None:
+    cursor.execute("DELETE FROM chunk_fts_rowids")
+    cursor.execute("""
+        INSERT INTO chunk_fts_rowids(chunk_id, fts_rowid)
+        SELECT chunk_id, rowid FROM chunks_fts WHERE chunk_id IS NOT NULL
+    """)
+    cursor.execute("""
+        INSERT INTO chunk_fts_rowids(chunk_id, operational_rowid)
+        SELECT chunk_id, rowid FROM chunks_fts_operational WHERE chunk_id IS NOT NULL
+        ON CONFLICT(chunk_id) DO UPDATE SET operational_rowid = excluded.operational_rowid
+    """)
+    if include_trigram:
+        cursor.execute("""
+            INSERT INTO chunk_fts_rowids(chunk_id, trigram_rowid)
+            SELECT chunk_id, rowid FROM chunks_fts_trigram WHERE chunk_id IS NOT NULL
+            ON CONFLICT(chunk_id) DO UPDATE SET trigram_rowid = excluded.trigram_rowid
+        """)
 
 
 def _insert_fts_row(
@@ -495,31 +694,41 @@ def apply_quarantine_ids(
     _drop_fts_triggers(cursor)
     _ensure_manifest(cursor)
     timestamp = _utc_now()
+    include_trigram = _table_exists(cursor, "chunks_fts_trigram")
+    table_names = ["chunks_fts", "chunks_fts_operational"]
+    if include_trigram:
+        table_names.append("chunks_fts_trigram")
     batches_since_checkpoint = 0
     try:
-        _load_chunk_ids_reconcile_table(cursor, chunk_ids)
+        cursor.execute("BEGIN IMMEDIATE")
+        _rebuild_chunk_fts_rowids(cursor, include_trigram=include_trigram)
+        cursor.execute("COMMIT")
         for ids in _batch(chunk_ids, batch_size):
-            placeholders = _placeholders(ids)
+            _load_chunk_ids_reconcile_table(cursor, ids)
             cursor.execute("BEGIN IMMEDIATE")
-            _record_manifest(cursor, ids, run_id=run_id, timestamp=timestamp)
-            _delete_fts_rows(cursor, ids, table_names=("chunks_fts", "chunks_fts_operational"))
+            _record_manifest(cursor, run_id=run_id, timestamp=timestamp)
+            _delete_fts_rows_for_reconcile(cursor, table_names=tuple(table_names))
             cursor.execute(
                 f"""
                 UPDATE chunks
                 SET content_class = 'operational',
                     provenance_class = ?
-                WHERE id IN ({placeholders})
+                WHERE id IN (SELECT chunk_id FROM {RECONCILE_CHUNK_ID_TABLE})
                 """,
-                (AGENT_INFERENCE, *ids),
+                (AGENT_INFERENCE,),
             )
-            _insert_operational_fts(cursor, ids)
+            _insert_operational_fts(cursor)
             cursor.execute("COMMIT")
+            cursor.execute(f"DROP TABLE IF EXISTS {RECONCILE_CHUNK_ID_TABLE}")
             batches_since_checkpoint += 1
             if batches_since_checkpoint >= checkpoint_every:
                 _checkpoint(cursor)
                 batches_since_checkpoint = 0
         cursor.execute("BEGIN IMMEDIATE")
-        _clear_trigram_fts(cursor)
+        _rebuild_knowledge_fts(cursor)
+        if include_trigram:
+            _rebuild_trigram_fts(cursor)
+        _rebuild_chunk_fts_rowids(cursor, include_trigram=include_trigram)
         cursor.execute("COMMIT")
     except Exception:
         if not conn.getautocommit():
