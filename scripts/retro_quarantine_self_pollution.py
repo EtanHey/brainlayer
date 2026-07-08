@@ -13,9 +13,10 @@ import os
 import random
 import re
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 import apsw
 
@@ -68,6 +69,18 @@ def _quote_sqlite_string(value: str) -> str:
 
 def _path(value: str | Path) -> Path:
     return Path(value).expanduser()
+
+
+@contextmanager
+def _operation_writer_lock(db_path: Path) -> Iterator[None]:
+    store = VectorStore.__new__(VectorStore)
+    store.db_path = db_path
+    store._writer_pidfile_acquired = False
+    store._acquire_writer_pidfile()
+    try:
+        yield
+    finally:
+        store._release_writer_pidfile()
 
 
 def _provider(source_file: str) -> str:
@@ -456,7 +469,7 @@ def _record_manifest(
             raise ValueError(f"missing chunk: {missing[0]}")
         cursor.execute(
             f"""
-            INSERT OR REPLACE INTO {QUARANTINE_MANIFEST_TABLE} (
+            INSERT OR IGNORE INTO {QUARANTINE_MANIFEST_TABLE} (
                 run_id, chunk_id, original_content_class, original_provenance_class,
                 original_fts_rowid, original_trigram_rowid, original_operational_rowid, quarantined_at
             )
@@ -607,7 +620,6 @@ def _reserve_manifest_fts_rowids(
     *,
     table_name: str,
     manifest_rowid_column: str,
-    run_id: str,
 ) -> None:
     cursor.execute(
         f"""
@@ -617,10 +629,9 @@ def _reserve_manifest_fts_rowids(
             '', NULL, NULL, NULL, NULL, NULL,
             ?
         FROM {QUARANTINE_MANIFEST_TABLE} m
-        WHERE m.run_id = ?
-          AND m.{manifest_rowid_column} IS NOT NULL
+        WHERE m.{manifest_rowid_column} IS NOT NULL
         """,
-        (f"{FTS_RESERVED_CHUNK_ID_PREFIX}{table_name}", run_id),
+        (f"{FTS_RESERVED_CHUNK_ID_PREFIX}{table_name}",),
     )
 
 
@@ -629,7 +640,6 @@ def _delete_manifest_fts_rowid_reservations(
     *,
     table_name: str,
     manifest_rowid_column: str,
-    run_id: str,
 ) -> None:
     cursor.execute(
         f"""
@@ -637,12 +647,11 @@ def _delete_manifest_fts_rowid_reservations(
         WHERE rowid IN (
             SELECT m.{manifest_rowid_column}
             FROM {QUARANTINE_MANIFEST_TABLE} m
-            WHERE m.run_id = ?
-              AND m.{manifest_rowid_column} IS NOT NULL
+            WHERE m.{manifest_rowid_column} IS NOT NULL
         )
         AND chunk_id = ?
         """,
-        (run_id, f"{FTS_RESERVED_CHUNK_ID_PREFIX}{table_name}"),
+        (f"{FTS_RESERVED_CHUNK_ID_PREFIX}{table_name}",),
     )
 
 
@@ -652,7 +661,6 @@ def _rebuild_knowledge_fts(cursor: apsw.Cursor, *, run_id: str) -> None:
         cursor,
         table_name="chunks_fts",
         manifest_rowid_column="original_fts_rowid",
-        run_id=run_id,
     )
     cursor.execute(
         f"""
@@ -665,12 +673,10 @@ def _rebuild_knowledge_fts(cursor: apsw.Cursor, *, run_id: str) -> None:
           AND NOT EXISTS (
               SELECT 1
               FROM {QUARANTINE_MANIFEST_TABLE} m
-              WHERE m.run_id = ?
-                AND m.original_fts_rowid = r.fts_rowid
+              WHERE m.original_fts_rowid = r.fts_rowid
           )
         ORDER BY r.fts_rowid
-        """,
-        (run_id,),
+        """
     )
     cursor.execute(
         f"""
@@ -684,19 +690,16 @@ def _rebuild_knowledge_fts(cursor: apsw.Cursor, *, run_id: str) -> None:
               OR EXISTS (
                   SELECT 1
                   FROM {QUARANTINE_MANIFEST_TABLE} m
-                  WHERE m.run_id = ?
-                    AND m.original_fts_rowid = r.fts_rowid
+                  WHERE m.original_fts_rowid = r.fts_rowid
               )
           )
         ORDER BY c.id
-        """,
-        (run_id,),
+        """
     )
     _delete_manifest_fts_rowid_reservations(
         cursor,
         table_name="chunks_fts",
         manifest_rowid_column="original_fts_rowid",
-        run_id=run_id,
     )
 
 
@@ -706,7 +709,6 @@ def _rebuild_trigram_fts(cursor: apsw.Cursor, *, run_id: str) -> None:
         cursor,
         table_name="chunks_fts_trigram",
         manifest_rowid_column="original_trigram_rowid",
-        run_id=run_id,
     )
     cursor.execute(
         f"""
@@ -719,12 +721,10 @@ def _rebuild_trigram_fts(cursor: apsw.Cursor, *, run_id: str) -> None:
           AND NOT EXISTS (
               SELECT 1
               FROM {QUARANTINE_MANIFEST_TABLE} m
-              WHERE m.run_id = ?
-                AND m.original_trigram_rowid = r.trigram_rowid
+              WHERE m.original_trigram_rowid = r.trigram_rowid
           )
         ORDER BY r.trigram_rowid
-        """,
-        (run_id,),
+        """
     )
     cursor.execute(
         f"""
@@ -738,19 +738,16 @@ def _rebuild_trigram_fts(cursor: apsw.Cursor, *, run_id: str) -> None:
               OR EXISTS (
                   SELECT 1
                   FROM {QUARANTINE_MANIFEST_TABLE} m
-                  WHERE m.run_id = ?
-                    AND m.original_trigram_rowid = r.trigram_rowid
+                  WHERE m.original_trigram_rowid = r.trigram_rowid
               )
           )
         ORDER BY c.id
-        """,
-        (run_id,),
+        """
     )
     _delete_manifest_fts_rowid_reservations(
         cursor,
         table_name="chunks_fts_trigram",
         manifest_rowid_column="original_trigram_rowid",
-        run_id=run_id,
     )
 
 
@@ -844,69 +841,71 @@ def apply_quarantine_ids(
 
     chunk_ids = list(dict.fromkeys(chunk_ids))
     db_path = _path(db_path)
-    if bootstrap_schema:
-        _recreate_fts_triggers(db_path)
     run_id = run_id or f"retro-self-pollution-{_utc_now()}"
-    conn = apsw.Connection(str(db_path))
-    cursor = conn.cursor()
-    _checkpoint(cursor)
-    _drop_fts_triggers(cursor)
-    _ensure_manifest(cursor)
-    timestamp = _utc_now()
-    include_trigram = _table_exists(cursor, "chunks_fts_trigram")
-    table_names = ["chunks_fts", "chunks_fts_operational"]
-    if include_trigram:
-        table_names.append("chunks_fts_trigram")
-    batches_since_checkpoint = 0
-    try:
-        cursor.execute("BEGIN IMMEDIATE")
-        _rebuild_chunk_fts_rowids(cursor, include_trigram=include_trigram)
-        cursor.execute("COMMIT")
-        for ids in _batch(chunk_ids, batch_size):
-            _load_chunk_ids_reconcile_table(cursor, ids)
-            cursor.execute("BEGIN IMMEDIATE")
-            _record_manifest(cursor, run_id=run_id, timestamp=timestamp, include_trigram=include_trigram)
-            _delete_fts_rows_for_reconcile(cursor, table_names=tuple(table_names))
-            cursor.execute(
-                f"""
-                UPDATE chunks
-                SET content_class = 'operational',
-                    provenance_class = ?
-                WHERE id IN (SELECT chunk_id FROM {RECONCILE_CHUNK_ID_TABLE})
-                """,
-                (AGENT_INFERENCE,),
-            )
-            _insert_operational_fts(cursor)
-            cursor.execute("COMMIT")
-            cursor.execute(f"DROP TABLE IF EXISTS {RECONCILE_CHUNK_ID_TABLE}")
-            batches_since_checkpoint += 1
-            if batches_since_checkpoint >= checkpoint_every:
-                _checkpoint(cursor)
-                batches_since_checkpoint = 0
-        cursor.execute("BEGIN IMMEDIATE")
-        _rebuild_knowledge_fts(cursor, run_id=run_id)
-        if include_trigram:
-            _rebuild_trigram_fts(cursor, run_id=run_id)
-        _rebuild_chunk_fts_rowids(cursor, include_trigram=include_trigram)
-        cursor.execute("COMMIT")
-    except Exception:
-        if not conn.getautocommit():
-            cursor.execute("ROLLBACK")
-        raise
-    finally:
-        cursor.execute(f"DROP TABLE IF EXISTS {RECONCILE_CHUNK_ID_TABLE}")
-        conn.close()
 
-    if finalize:
-        _recreate_fts_triggers(db_path)
+    with _operation_writer_lock(db_path):
+        if bootstrap_schema:
+            _recreate_fts_triggers(db_path)
         conn = apsw.Connection(str(db_path))
+        cursor = conn.cursor()
+        _checkpoint(cursor)
+        _drop_fts_triggers(cursor)
+        _ensure_manifest(cursor)
+        timestamp = _utc_now()
+        include_trigram = _table_exists(cursor, "chunks_fts_trigram")
+        table_names = ["chunks_fts", "chunks_fts_operational"]
+        if include_trigram:
+            table_names.append("chunks_fts_trigram")
+        batches_since_checkpoint = 0
         try:
-            cursor = conn.cursor()
-            _checkpoint(cursor)
-            _optimize_fts(cursor)
-            _checkpoint(cursor)
+            cursor.execute("BEGIN IMMEDIATE")
+            _rebuild_chunk_fts_rowids(cursor, include_trigram=include_trigram)
+            cursor.execute("COMMIT")
+            for ids in _batch(chunk_ids, batch_size):
+                _load_chunk_ids_reconcile_table(cursor, ids)
+                cursor.execute("BEGIN IMMEDIATE")
+                _record_manifest(cursor, run_id=run_id, timestamp=timestamp, include_trigram=include_trigram)
+                _delete_fts_rows_for_reconcile(cursor, table_names=tuple(table_names))
+                cursor.execute(
+                    f"""
+                    UPDATE chunks
+                    SET content_class = 'operational',
+                        provenance_class = ?
+                    WHERE id IN (SELECT chunk_id FROM {RECONCILE_CHUNK_ID_TABLE})
+                    """,
+                    (AGENT_INFERENCE,),
+                )
+                _insert_operational_fts(cursor)
+                cursor.execute("COMMIT")
+                cursor.execute(f"DROP TABLE IF EXISTS {RECONCILE_CHUNK_ID_TABLE}")
+                batches_since_checkpoint += 1
+                if batches_since_checkpoint >= checkpoint_every:
+                    _checkpoint(cursor)
+                    batches_since_checkpoint = 0
+            cursor.execute("BEGIN IMMEDIATE")
+            _rebuild_knowledge_fts(cursor, run_id=run_id)
+            if include_trigram:
+                _rebuild_trigram_fts(cursor, run_id=run_id)
+            _rebuild_chunk_fts_rowids(cursor, include_trigram=include_trigram)
+            cursor.execute("COMMIT")
+        except Exception:
+            if not conn.getautocommit():
+                cursor.execute("ROLLBACK")
+            raise
         finally:
+            cursor.execute(f"DROP TABLE IF EXISTS {RECONCILE_CHUNK_ID_TABLE}")
             conn.close()
+
+        if finalize:
+            _recreate_fts_triggers(db_path)
+            conn = apsw.Connection(str(db_path))
+            try:
+                cursor = conn.cursor()
+                _checkpoint(cursor)
+                _optimize_fts(cursor)
+                _checkpoint(cursor)
+            finally:
+                conn.close()
     return {"quarantined": len(chunk_ids), "run_id": run_id}
 
 
@@ -926,99 +925,101 @@ def unquarantine_ids(
         return {"restored": 0, "run_id": run_id}
 
     db_path = _path(db_path)
-    if bootstrap_schema:
-        _recreate_fts_triggers(db_path)
-    conn = apsw.Connection(str(db_path))
-    cursor = conn.cursor()
-    _checkpoint(cursor)
-    _drop_fts_triggers(cursor)
-    _ensure_manifest(cursor)
     restored = 0
-    include_trigram = _table_exists(cursor, "chunks_fts_trigram")
-    table_names = ["chunks_fts", "chunks_fts_operational"]
-    if include_trigram:
-        table_names.append("chunks_fts_trigram")
-    rowid_cols = {row[1] for row in cursor.execute("PRAGMA table_info(chunk_fts_rowids)")}
-    has_trigram_rowid = "trigram_rowid" in rowid_cols
-    has_operational_rowid = "operational_rowid" in rowid_cols
-    batches_since_checkpoint = 0
-    try:
-        for ids in _batch(chunk_ids, batch_size):
-            cursor.execute("BEGIN IMMEDIATE")
-            _delete_fts_rows(cursor, ids, table_names=tuple(table_names))
-            for chunk_id in ids:
-                manifest = cursor.execute(
-                    f"""
-                    SELECT original_content_class, original_provenance_class,
-                           original_fts_rowid, original_trigram_rowid, original_operational_rowid
-                    FROM {QUARANTINE_MANIFEST_TABLE}
-                    WHERE chunk_id = ? AND run_id = ?
-                    """,
-                    (chunk_id, run_id),
-                ).fetchone()
-                if manifest is None:
-                    raise ValueError(f"missing quarantine manifest row for {chunk_id!r} in run {run_id!r}")
-                original_content_class, original_provenance_class = manifest[0], manifest[1]
-                cursor.execute(
-                    "UPDATE chunks SET content_class = ?, provenance_class = ? WHERE id = ?",
-                    (original_content_class, original_provenance_class, chunk_id),
-                )
-                fts_rowid = None
-                trigram_rowid = None
-                operational_rowid = None
-                if manifest[2] is not None:
-                    fts_rowid = _insert_fts_row(
-                        cursor,
-                        table_name="chunks_fts",
-                        chunk_id=chunk_id,
-                        rowid=manifest[2],
-                    )
-                if include_trigram and manifest[3] is not None:
-                    trigram_rowid = _insert_fts_row(
-                        cursor,
-                        table_name="chunks_fts_trigram",
-                        chunk_id=chunk_id,
-                        rowid=manifest[3],
-                    )
-                if manifest[4] is not None:
-                    operational_rowid = _insert_fts_row(
-                        cursor,
-                        table_name="chunks_fts_operational",
-                        chunk_id=chunk_id,
-                        rowid=manifest[4],
-                    )
-                _upsert_chunk_fts_rowids(
-                    cursor,
-                    chunk_id=chunk_id,
-                    fts_rowid=fts_rowid,
-                    trigram_rowid=trigram_rowid,
-                    operational_rowid=operational_rowid,
-                    has_trigram_rowid=has_trigram_rowid,
-                    has_operational_rowid=has_operational_rowid,
-                )
-                restored += 1
-            cursor.execute("COMMIT")
-            batches_since_checkpoint += 1
-            if batches_since_checkpoint >= checkpoint_every:
-                _checkpoint(cursor)
-                batches_since_checkpoint = 0
-    except Exception:
-        if not conn.getautocommit():
-            cursor.execute("ROLLBACK")
-        raise
-    finally:
-        conn.close()
 
-    if finalize:
-        _recreate_fts_triggers(db_path)
+    with _operation_writer_lock(db_path):
+        if bootstrap_schema:
+            _recreate_fts_triggers(db_path)
         conn = apsw.Connection(str(db_path))
+        cursor = conn.cursor()
+        _checkpoint(cursor)
+        _drop_fts_triggers(cursor)
+        _ensure_manifest(cursor)
+        include_trigram = _table_exists(cursor, "chunks_fts_trigram")
+        table_names = ["chunks_fts", "chunks_fts_operational"]
+        if include_trigram:
+            table_names.append("chunks_fts_trigram")
+        rowid_cols = {row[1] for row in cursor.execute("PRAGMA table_info(chunk_fts_rowids)")}
+        has_trigram_rowid = "trigram_rowid" in rowid_cols
+        has_operational_rowid = "operational_rowid" in rowid_cols
+        batches_since_checkpoint = 0
         try:
-            cursor = conn.cursor()
-            _checkpoint(cursor)
-            _optimize_fts(cursor)
-            _checkpoint(cursor)
+            for ids in _batch(chunk_ids, batch_size):
+                cursor.execute("BEGIN IMMEDIATE")
+                _delete_fts_rows(cursor, ids, table_names=tuple(table_names))
+                for chunk_id in ids:
+                    manifest = cursor.execute(
+                        f"""
+                        SELECT original_content_class, original_provenance_class,
+                               original_fts_rowid, original_trigram_rowid, original_operational_rowid
+                        FROM {QUARANTINE_MANIFEST_TABLE}
+                        WHERE chunk_id = ? AND run_id = ?
+                        """,
+                        (chunk_id, run_id),
+                    ).fetchone()
+                    if manifest is None:
+                        raise ValueError(f"missing quarantine manifest row for {chunk_id!r} in run {run_id!r}")
+                    original_content_class, original_provenance_class = manifest[0], manifest[1]
+                    cursor.execute(
+                        "UPDATE chunks SET content_class = ?, provenance_class = ? WHERE id = ?",
+                        (original_content_class, original_provenance_class, chunk_id),
+                    )
+                    fts_rowid = None
+                    trigram_rowid = None
+                    operational_rowid = None
+                    if manifest[2] is not None:
+                        fts_rowid = _insert_fts_row(
+                            cursor,
+                            table_name="chunks_fts",
+                            chunk_id=chunk_id,
+                            rowid=manifest[2],
+                        )
+                    if include_trigram and manifest[3] is not None:
+                        trigram_rowid = _insert_fts_row(
+                            cursor,
+                            table_name="chunks_fts_trigram",
+                            chunk_id=chunk_id,
+                            rowid=manifest[3],
+                        )
+                    if manifest[4] is not None:
+                        operational_rowid = _insert_fts_row(
+                            cursor,
+                            table_name="chunks_fts_operational",
+                            chunk_id=chunk_id,
+                            rowid=manifest[4],
+                        )
+                    _upsert_chunk_fts_rowids(
+                        cursor,
+                        chunk_id=chunk_id,
+                        fts_rowid=fts_rowid,
+                        trigram_rowid=trigram_rowid,
+                        operational_rowid=operational_rowid,
+                        has_trigram_rowid=has_trigram_rowid,
+                        has_operational_rowid=has_operational_rowid,
+                    )
+                    restored += 1
+                cursor.execute("COMMIT")
+                batches_since_checkpoint += 1
+                if batches_since_checkpoint >= checkpoint_every:
+                    _checkpoint(cursor)
+                    batches_since_checkpoint = 0
+        except Exception:
+            if not conn.getautocommit():
+                cursor.execute("ROLLBACK")
+            raise
         finally:
             conn.close()
+
+        if finalize:
+            _recreate_fts_triggers(db_path)
+            conn = apsw.Connection(str(db_path))
+            try:
+                cursor = conn.cursor()
+                _checkpoint(cursor)
+                _optimize_fts(cursor)
+                _checkpoint(cursor)
+            finally:
+                conn.close()
     return {"restored": restored, "run_id": run_id}
 
 

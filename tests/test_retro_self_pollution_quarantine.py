@@ -4,6 +4,7 @@ import importlib.util
 import shutil
 import subprocess
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -184,7 +185,7 @@ def _captured_plan_details(
 def _assert_uses_indexed_rowid_map(details: list[str]) -> None:
     joined = "\n".join(details)
     assert "chunk_fts_rowids" in joined
-    assert "SEARCH" in joined
+    assert any("SEARCH" in detail and "chunk_fts_rowids" in detail for detail in details), joined
     assert "SCAN chunks_fts VIRTUAL TABLE" not in joined
     assert "SCAN chunks_fts_trigram VIRTUAL TABLE" not in joined
     assert "SCAN chunks_fts_operational VIRTUAL TABLE" not in joined
@@ -509,6 +510,108 @@ def test_apply_rebuild_mode_checkpoints_each_real_batch(tmp_path: Path, monkeypa
     assert checkpoint_calls == 4
 
 
+def test_apply_uses_operation_writer_lock_while_triggers_are_disabled(tmp_path: Path, monkeypatch) -> None:
+    script = _load_script()
+    db_path = tmp_path / "apply-writer-lock.db"
+    denied_source = tmp_path / ".codex" / "sessions" / "worker.jsonl"
+    store = VectorStore(db_path)
+    try:
+        _insert_chunk(store, chunk_id="denied-lock", source_file=denied_source)
+    finally:
+        store.close()
+
+    events: list[str] = []
+    lock_active = False
+
+    @contextmanager
+    def fake_operation_writer_lock(path):
+        nonlocal lock_active
+        assert Path(path) == db_path
+        events.append("lock:acquire")
+        lock_active = True
+        try:
+            yield
+        finally:
+            events.append("lock:release")
+            lock_active = False
+
+    original_recreate_fts_triggers = script._recreate_fts_triggers
+    original_drop_fts_triggers = script._drop_fts_triggers
+
+    def checked_recreate_fts_triggers(path: Path) -> None:
+        events.append(f"recreate:{lock_active}")
+        assert lock_active
+        original_recreate_fts_triggers(path)
+
+    def checked_drop_fts_triggers(cursor) -> None:
+        events.append(f"drop:{lock_active}")
+        assert lock_active
+        original_drop_fts_triggers(cursor)
+
+    monkeypatch.setattr(script, "_operation_writer_lock", fake_operation_writer_lock, raising=False)
+    monkeypatch.setattr(script, "_recreate_fts_triggers", checked_recreate_fts_triggers)
+    monkeypatch.setattr(script, "_drop_fts_triggers", checked_drop_fts_triggers)
+
+    script.apply_quarantine_ids(db_path, ["denied-lock"], run_id="apply-lock-run", finalize=False)
+
+    assert events[0] == "lock:acquire"
+    assert "recreate:True" in events
+    assert "drop:True" in events
+    assert events[-1] == "lock:release"
+
+
+def test_unquarantine_uses_operation_writer_lock_while_triggers_are_disabled(tmp_path: Path, monkeypatch) -> None:
+    script = _load_script()
+    db_path = tmp_path / "unquarantine-writer-lock.db"
+    denied_source = tmp_path / ".codex" / "sessions" / "worker.jsonl"
+    store = VectorStore(db_path)
+    try:
+        _insert_chunk(store, chunk_id="denied-lock", source_file=denied_source)
+    finally:
+        store.close()
+
+    script.apply_quarantine_ids(db_path, ["denied-lock"], run_id="unquarantine-lock-run", finalize=False)
+
+    events: list[str] = []
+    lock_active = False
+
+    @contextmanager
+    def fake_operation_writer_lock(path):
+        nonlocal lock_active
+        assert Path(path) == db_path
+        events.append("lock:acquire")
+        lock_active = True
+        try:
+            yield
+        finally:
+            events.append("lock:release")
+            lock_active = False
+
+    original_recreate_fts_triggers = script._recreate_fts_triggers
+    original_drop_fts_triggers = script._drop_fts_triggers
+
+    def checked_recreate_fts_triggers(path: Path) -> None:
+        events.append(f"recreate:{lock_active}")
+        assert lock_active
+        original_recreate_fts_triggers(path)
+
+    def checked_drop_fts_triggers(cursor) -> None:
+        events.append(f"drop:{lock_active}")
+        assert lock_active
+        original_drop_fts_triggers(cursor)
+
+    monkeypatch.setattr(script, "_operation_writer_lock", fake_operation_writer_lock, raising=False)
+    monkeypatch.setattr(script, "_recreate_fts_triggers", checked_recreate_fts_triggers)
+    monkeypatch.setattr(script, "_drop_fts_triggers", checked_drop_fts_triggers)
+
+    script.unquarantine_ids(db_path, ["denied-lock"], run_id="unquarantine-lock-run", finalize=False)
+
+    assert events[0] == "lock:acquire"
+    assert "recreate:True" in events
+    assert "drop:True" in events
+    assert events[-1] == "lock:release"
+
+
 def test_apply_without_trigram_table_records_manifest_without_trigram_rowid(tmp_path: Path) -> None:
     script = _load_script()
     db_path = tmp_path / "no-trigram.db"
@@ -632,6 +735,64 @@ def test_apply_without_trigram_table_records_manifest_without_trigram_rowid(tmp_
     assert restored_default_rows == (1,)
 
 
+def test_retry_same_run_preserves_initial_manifest_originals(tmp_path: Path) -> None:
+    script = _load_script()
+    db_path = tmp_path / "retry-manifest.db"
+    denied_source = tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent-a1.jsonl"
+    store = VectorStore(db_path)
+    try:
+        _insert_chunk(
+            store,
+            chunk_id="denied-one",
+            source_file=denied_source,
+            content="retry manifest one sentinel",
+        )
+        _insert_chunk(
+            store,
+            chunk_id="denied-two",
+            source_file=denied_source,
+            content="retry manifest two sentinel",
+        )
+    finally:
+        store.close()
+
+    script.apply_quarantine_ids(db_path, ["denied-one"], run_id="retry-run", batch_size=1, finalize=False)
+    script.apply_quarantine_ids(
+        db_path,
+        ["denied-one", "denied-two"],
+        run_id="retry-run",
+        batch_size=1,
+        finalize=False,
+    )
+    script.unquarantine_ids(
+        db_path,
+        ["denied-one", "denied-two"],
+        run_id="retry-run",
+        batch_size=1,
+        finalize=False,
+    )
+
+    conn = apsw.Connection(str(db_path), flags=apsw.SQLITE_OPEN_READONLY)
+    try:
+        rows = {
+            row[0]: (row[1], row[2])
+            for row in conn.cursor().execute(
+                """
+                SELECT id, content_class, provenance_class
+                FROM chunks
+                WHERE id IN ('denied-one', 'denied-two')
+                """
+            )
+        }
+    finally:
+        conn.close()
+
+    assert rows == {
+        "denied-one": ("knowledge", "RAW-ETAN-DIRECT"),
+        "denied-two": ("knowledge", "RAW-ETAN-DIRECT"),
+    }
+
+
 def test_rebuild_reserves_manifest_rowids_when_repairing_missing_fts_rows(tmp_path: Path) -> None:
     script = _load_script()
     db_path = tmp_path / "reserved-rowids.db"
@@ -698,8 +859,88 @@ def test_rebuild_reserves_manifest_rowids_when_repairing_missing_fts_rows(tmp_pa
 
     assert restored_fts_rowid == original_fts_rowid
     assert restored_trigram_rowid == original_trigram_rowid
+    assert repaired_rowids is not None
+    assert repaired_rowids[0] is not None
+    assert repaired_rowids[1] is not None
     assert repaired_rowids[0] != original_fts_rowid
     assert repaired_rowids[1] != original_trigram_rowid
+
+
+def test_rebuild_reserves_prior_run_manifest_rowids(tmp_path: Path) -> None:
+    script = _load_script()
+    db_path = tmp_path / "prior-run-reserved-rowids.db"
+    denied_source = tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent-a1.jsonl"
+    permitted_source = tmp_path / "notes" / "memory.md"
+    store = VectorStore(db_path)
+    try:
+        _insert_chunk(
+            store,
+            chunk_id="new-denied",
+            source_file=denied_source,
+            content="new denied rowid sentinel",
+        )
+        _insert_chunk(
+            store,
+            chunk_id="preserved-existing",
+            source_file=permitted_source,
+            content="preserved existing rowid sentinel",
+        )
+        _insert_chunk(
+            store,
+            chunk_id="old-denied",
+            source_file=denied_source,
+            content="old denied rowid sentinel",
+        )
+        _insert_chunk(
+            store,
+            chunk_id="preserved-missing-fts",
+            source_file=permitted_source,
+            content="prior run missing fts repair sentinel",
+        )
+        cursor = store.conn.cursor()
+        old_fts_rowid = cursor.execute("SELECT rowid FROM chunks_fts WHERE chunk_id = 'old-denied'").fetchone()[0]
+        old_trigram_rowid = cursor.execute(
+            "SELECT rowid FROM chunks_fts_trigram WHERE chunk_id = 'old-denied'"
+        ).fetchone()[0]
+    finally:
+        store.close()
+
+    script.apply_quarantine_ids(db_path, ["old-denied"], run_id="old-run", finalize=False)
+
+    conn = apsw.Connection(str(db_path))
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM chunks_fts WHERE chunk_id = 'preserved-missing-fts'")
+        cursor.execute("DELETE FROM chunks_fts_trigram WHERE chunk_id = 'preserved-missing-fts'")
+        cursor.execute("DELETE FROM chunk_fts_rowids WHERE chunk_id = 'preserved-missing-fts'")
+    finally:
+        conn.close()
+
+    script.apply_quarantine_ids(db_path, ["new-denied"], run_id="new-run", finalize=False)
+    script.unquarantine_ids(db_path, ["old-denied"], run_id="old-run", finalize=False)
+
+    conn = apsw.Connection(str(db_path), flags=apsw.SQLITE_OPEN_READONLY)
+    try:
+        cursor = conn.cursor()
+        restored_fts_rowid = cursor.execute("SELECT rowid FROM chunks_fts WHERE chunk_id = 'old-denied'").fetchone()[0]
+        restored_trigram_rowid = cursor.execute(
+            "SELECT rowid FROM chunks_fts_trigram WHERE chunk_id = 'old-denied'"
+        ).fetchone()[0]
+        repaired_rowids = cursor.execute(
+            """
+            SELECT fts_rowid, trigram_rowid
+            FROM chunk_fts_rowids
+            WHERE chunk_id = 'preserved-missing-fts'
+            """
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert restored_fts_rowid == old_fts_rowid
+    assert restored_trigram_rowid == old_trigram_rowid
+    assert repaired_rowids is not None
+    assert repaired_rowids[0] not in {None, old_fts_rowid}
+    assert repaired_rowids[1] not in {None, old_trigram_rowid}
 
 
 def test_capture_restore_state_includes_orphan_fts_rows_without_rowid_map(tmp_path: Path) -> None:
