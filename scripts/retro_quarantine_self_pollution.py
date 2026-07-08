@@ -385,7 +385,7 @@ def _select_fts_state_rows(cursor: apsw.Cursor, *, table_name: str, chunk_id: st
         (chunk_id,),
     ).fetchone()
     if rowid_row is None or rowid_row[0] is None:
-        return []
+        return _select_fts_state_rows_by_chunk_id(cursor, table_name=table_name, chunk_id=chunk_id)
     rows = [
         tuple(row)
         for row in cursor.execute(
@@ -404,8 +404,12 @@ def _select_fts_state_rows(cursor: apsw.Cursor, *, table_name: str, chunk_id: st
     if rows:
         return rows
 
-    # Legacy repair tests intentionally corrupt chunk_fts_rowids. Fall back only
-    # when a non-null map entry is stale so restore proofs still snapshot reality.
+    # Legacy repair tests intentionally corrupt chunk_fts_rowids. Fall back when
+    # the map is missing, null, or stale so restore proofs snapshot reality.
+    return _select_fts_state_rows_by_chunk_id(cursor, table_name=table_name, chunk_id=chunk_id)
+
+
+def _select_fts_state_rows_by_chunk_id(cursor: apsw.Cursor, *, table_name: str, chunk_id: str) -> list[tuple[Any, ...]]:
     return [
         tuple(row)
         for row in cursor.execute(
@@ -502,6 +506,13 @@ def _delete_fts_rows_for_reconcile(
             AND chunk_id IN (SELECT chunk_id FROM {RECONCILE_CHUNK_ID_TABLE})
             """
         )
+        if table_name == "chunks_fts_operational":
+            cursor.execute(
+                f"""
+                DELETE FROM {table_name}
+                WHERE chunk_id IN (SELECT chunk_id FROM {RECONCILE_CHUNK_ID_TABLE})
+                """
+            )
     updates = []
     if "chunks_fts" in table_names:
         updates.append("fts_rowid = NULL")
@@ -746,8 +757,9 @@ def _rebuild_trigram_fts(cursor: apsw.Cursor, *, run_id: str) -> None:
 def _rebuild_chunk_fts_rowids(cursor: apsw.Cursor, *, include_trigram: bool) -> None:
     cursor.execute("DELETE FROM chunk_fts_rowids")
     cursor.execute("""
-        INSERT INTO chunk_fts_rowids(chunk_id, fts_rowid)
+        INSERT OR IGNORE INTO chunk_fts_rowids(chunk_id, fts_rowid)
         SELECT chunk_id, rowid FROM chunks_fts WHERE chunk_id IS NOT NULL
+        ORDER BY rowid
     """)
     cursor.execute("""
         INSERT INTO chunk_fts_rowids(chunk_id, operational_rowid)
@@ -760,6 +772,38 @@ def _rebuild_chunk_fts_rowids(cursor: apsw.Cursor, *, include_trigram: bool) -> 
             SELECT chunk_id, rowid FROM chunks_fts_trigram WHERE chunk_id IS NOT NULL
             ON CONFLICT(chunk_id) DO UPDATE SET trigram_rowid = excluded.trigram_rowid
         """)
+
+
+def _upsert_chunk_fts_rowids(
+    cursor: apsw.Cursor,
+    *,
+    chunk_id: str,
+    fts_rowid: int | None,
+    trigram_rowid: int | None,
+    operational_rowid: int | None,
+    has_trigram_rowid: bool,
+    has_operational_rowid: bool,
+) -> None:
+    columns = ["chunk_id", "fts_rowid"]
+    values: list[Any] = [chunk_id, fts_rowid]
+    updates = ["fts_rowid = excluded.fts_rowid"]
+    if has_trigram_rowid:
+        columns.append("trigram_rowid")
+        values.append(trigram_rowid)
+        updates.append("trigram_rowid = excluded.trigram_rowid")
+    if has_operational_rowid:
+        columns.append("operational_rowid")
+        values.append(operational_rowid)
+        updates.append("operational_rowid = excluded.operational_rowid")
+    placeholders = ", ".join("?" for _ in columns)
+    cursor.execute(
+        f"""
+        INSERT INTO chunk_fts_rowids({", ".join(columns)})
+        VALUES ({placeholders})
+        ON CONFLICT(chunk_id) DO UPDATE SET {", ".join(updates)}
+        """,
+        values,
+    )
 
 
 def _insert_fts_row(
@@ -890,11 +934,18 @@ def unquarantine_ids(
     _drop_fts_triggers(cursor)
     _ensure_manifest(cursor)
     restored = 0
+    include_trigram = _table_exists(cursor, "chunks_fts_trigram")
+    table_names = ["chunks_fts", "chunks_fts_operational"]
+    if include_trigram:
+        table_names.append("chunks_fts_trigram")
+    rowid_cols = {row[1] for row in cursor.execute("PRAGMA table_info(chunk_fts_rowids)")}
+    has_trigram_rowid = "trigram_rowid" in rowid_cols
+    has_operational_rowid = "operational_rowid" in rowid_cols
     batches_since_checkpoint = 0
     try:
         for ids in _batch(chunk_ids, batch_size):
             cursor.execute("BEGIN IMMEDIATE")
-            _delete_fts_rows(cursor, ids)
+            _delete_fts_rows(cursor, ids, table_names=tuple(table_names))
             for chunk_id in ids:
                 manifest = cursor.execute(
                     f"""
@@ -922,7 +973,7 @@ def unquarantine_ids(
                         chunk_id=chunk_id,
                         rowid=manifest[2],
                     )
-                if manifest[3] is not None:
+                if include_trigram and manifest[3] is not None:
                     trigram_rowid = _insert_fts_row(
                         cursor,
                         table_name="chunks_fts_trigram",
@@ -936,16 +987,14 @@ def unquarantine_ids(
                         chunk_id=chunk_id,
                         rowid=manifest[4],
                     )
-                cursor.execute(
-                    """
-                    INSERT INTO chunk_fts_rowids(chunk_id, fts_rowid, trigram_rowid, operational_rowid)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(chunk_id) DO UPDATE SET
-                        fts_rowid = excluded.fts_rowid,
-                        trigram_rowid = excluded.trigram_rowid,
-                        operational_rowid = excluded.operational_rowid
-                    """,
-                    (chunk_id, fts_rowid, trigram_rowid, operational_rowid),
+                _upsert_chunk_fts_rowids(
+                    cursor,
+                    chunk_id=chunk_id,
+                    fts_rowid=fts_rowid,
+                    trigram_rowid=trigram_rowid,
+                    operational_rowid=operational_rowid,
+                    has_trigram_rowid=has_trigram_rowid,
+                    has_operational_rowid=has_operational_rowid,
                 )
                 restored += 1
             cursor.execute("COMMIT")

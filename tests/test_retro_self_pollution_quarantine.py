@@ -607,6 +607,30 @@ def test_apply_without_trigram_table_records_manifest_without_trigram_rowid(tmp_
     assert default_rows == (0,)
     assert operational_rows == (1,)
 
+    revert = script.unquarantine_ids(
+        db_path,
+        ["legacy-denylisted"],
+        run_id="no-trigram-run",
+        bootstrap_schema=False,
+        finalize=False,
+    )
+
+    conn = apsw.Connection(str(db_path), flags=apsw.SQLITE_OPEN_READONLY)
+    try:
+        cursor = conn.cursor()
+        restored = cursor.execute(
+            "SELECT content_class, provenance_class FROM chunks WHERE id = 'legacy-denylisted'"
+        ).fetchone()
+        restored_default_rows = cursor.execute(
+            "SELECT COUNT(*) FROM chunks_fts WHERE chunk_id = 'legacy-denylisted'"
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert revert["restored"] == 1
+    assert restored == ("knowledge", "RAW-ETAN-DIRECT")
+    assert restored_default_rows == (1,)
+
 
 def test_rebuild_reserves_manifest_rowids_when_repairing_missing_fts_rows(tmp_path: Path) -> None:
     script = _load_script()
@@ -676,6 +700,116 @@ def test_rebuild_reserves_manifest_rowids_when_repairing_missing_fts_rows(tmp_pa
     assert restored_trigram_rowid == original_trigram_rowid
     assert repaired_rowids[0] != original_fts_rowid
     assert repaired_rowids[1] != original_trigram_rowid
+
+
+def test_capture_restore_state_includes_orphan_fts_rows_without_rowid_map(tmp_path: Path) -> None:
+    script = _load_script()
+    db_path = tmp_path / "orphan-fts-state.db"
+    denied_source = tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent-a1.jsonl"
+    store = VectorStore(db_path)
+    try:
+        _insert_chunk(
+            store,
+            chunk_id="orphan-default",
+            source_file=denied_source,
+            content="orphan default fts sentinel",
+        )
+        store.conn.cursor().execute("DELETE FROM chunk_fts_rowids WHERE chunk_id = 'orphan-default'")
+        before = script.capture_restore_state(store.conn.cursor(), ["orphan-default"])
+    finally:
+        store.close()
+
+    assert before["orphan-default"]["fts"]["chunks_fts"]
+    assert before["orphan-default"]["fts"]["chunks_fts_trigram"]
+
+
+def test_rebuild_chunk_fts_rowids_tolerates_duplicate_default_fts_rows(tmp_path: Path) -> None:
+    script = _load_script()
+    db_path = tmp_path / "duplicate-default-rowids.db"
+    denied_source = tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent-a1.jsonl"
+    permitted_source = tmp_path / "notes" / "memory.md"
+    store = VectorStore(db_path)
+    try:
+        _insert_chunk(
+            store,
+            chunk_id="denied-knowledge",
+            source_file=denied_source,
+            content="denied duplicate default sentinel",
+        )
+        _insert_chunk(
+            store,
+            chunk_id="preserved-duplicate",
+            source_file=permitted_source,
+            content="preserved duplicate default sentinel",
+        )
+        store.conn.cursor().execute("""
+            INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
+            SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id
+            FROM chunks
+            WHERE id = 'preserved-duplicate'
+        """)
+    finally:
+        store.close()
+
+    report = script.apply_quarantine_ids(
+        db_path,
+        ["denied-knowledge"],
+        run_id="duplicate-default-run",
+        finalize=False,
+    )
+
+    assert report["quarantined"] == 1
+
+
+def test_apply_removes_duplicate_target_operational_fts_rows(tmp_path: Path) -> None:
+    script = _load_script()
+    db_path = tmp_path / "duplicate-target-operational.db"
+    denied_source = tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent-a1.jsonl"
+    store = VectorStore(db_path)
+    try:
+        _insert_chunk(
+            store,
+            chunk_id="denied-knowledge",
+            source_file=denied_source,
+            content="denied duplicate operational sentinel",
+        )
+        for _ in range(2):
+            store.conn.cursor().execute("""
+                INSERT INTO chunks_fts_operational(
+                    content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id
+                )
+                SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id
+                FROM chunks
+                WHERE id = 'denied-knowledge'
+            """)
+        store.conn.cursor().execute("""
+            UPDATE chunk_fts_rowids
+            SET operational_rowid = (
+                SELECT MIN(rowid) FROM chunks_fts_operational WHERE chunk_id = 'denied-knowledge'
+            )
+            WHERE chunk_id = 'denied-knowledge'
+        """)
+    finally:
+        store.close()
+
+    script.apply_quarantine_ids(
+        db_path,
+        ["denied-knowledge"],
+        run_id="duplicate-operational-run",
+        finalize=False,
+    )
+
+    conn = apsw.Connection(str(db_path), flags=apsw.SQLITE_OPEN_READONLY)
+    try:
+        operational_rows = (
+            conn.cursor()
+            .execute("SELECT COUNT(*) FROM chunks_fts_operational WHERE chunk_id = 'denied-knowledge'")
+            .fetchone()
+        )
+    finally:
+        conn.close()
+
+    assert operational_rows == (1,)
 
 
 def test_quarantine_retrievability_proof_excludes_default_but_preserves_operational_paths(
