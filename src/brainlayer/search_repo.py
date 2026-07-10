@@ -121,6 +121,10 @@ AUDIT_RECURSION_TAG_PATTERNS = (
 _hybrid_cache: "OrderedDict[tuple, tuple[dict, float]]" = OrderedDict()
 
 
+def _env_flag_enabled(name: str) -> bool:
+    return os.environ.get(name, "").strip().casefold() in {"1", "true", "yes", "on"}
+
+
 def _has_recency_intent(query_text: str) -> bool:
     """Return true when recency words appear as terms, not substrings."""
     return bool(_RECENCY_SINGLE_TERM_RE.search(query_text) or _RECENCY_THIS_WEEK_RE.search(query_text))
@@ -1764,6 +1768,8 @@ class SearchMixin:
         Cache is module-level LRU (128 entries) with defensive copy-on-read.
         """
 
+        recency_rerank = recency_rerank or _env_flag_enabled("BRAINLAYER_SCORE_RECENCY_DECAY")
+        importance_rerank = importance_rerank or _env_flag_enabled("BRAINLAYER_SCORE_IMPORTANCE_BOOST")
         project_filter = _effective_project_filter(project_filter, consumer_scope)
         source_filter = _effective_source_filter(source_filter, consumer_scope)
         include_checkpoints = _effective_include_checkpoints(include_checkpoints, consumer_scope)

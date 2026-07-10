@@ -232,6 +232,8 @@ class TestHybridSearch:
         assert results["ids"][0] == ["lexical-only", "vector-only"]
 
     def test_hybrid_search_default_does_not_apply_recency_or_importance_boost(self, store, monkeypatch):
+        monkeypatch.delenv("BRAINLAYER_SCORE_IMPORTANCE_BOOST", raising=False)
+        monkeypatch.delenv("BRAINLAYER_SCORE_RECENCY_DECAY", raising=False)
         monkeypatch.setattr(search_repo, "RRF_VECTOR_ALPHA", 0.5)
         query_embedding = _embed("neutral rerank evidence")
         _insert_chunk(
@@ -268,7 +270,95 @@ class TestHybridSearch:
 
         assert captured_scores["old-important"] == pytest.approx(captured_scores["fresh-low"])
 
+    def test_hybrid_search_importance_score_boost_env_opt_in(self, store, monkeypatch):
+        monkeypatch.setenv("BRAINLAYER_SCORE_IMPORTANCE_BOOST", "1")
+        monkeypatch.delenv("BRAINLAYER_SCORE_RECENCY_DECAY", raising=False)
+        monkeypatch.setattr(search_repo, "RRF_VECTOR_ALPHA", 0.5)
+        query_embedding = _embed("importance env rerank evidence")
+        _insert_chunk(
+            store,
+            chunk_id="high-importance",
+            content="importance env rerank evidence padded exact hit with extra words",
+            embedding=query_embedding,
+            importance=10.0,
+            created_at="2020-01-01T00:00:00Z",
+        )
+        _insert_chunk(
+            store,
+            chunk_id="low-importance",
+            content="importance env rerank evidence",
+            embedding=[value + 0.00001 for value in query_embedding],
+            importance=0.0,
+            created_at="2020-01-01T00:00:00Z",
+        )
+        store.build_binary_index()
+        monkeypatch.setattr(store, "_trigram_fts_available", False)
+        captured_scores: dict[str, float] = {}
+
+        def capture_scores(scored, *, n_results):
+            captured_scores.update({chunk_id: score for score, chunk_id, *_rest in scored})
+            return scored
+
+        monkeypatch.setattr(store, "_mmr_rerank_scored_results", capture_scores)
+
+        store.hybrid_search(
+            query_embedding=query_embedding,
+            query_text="importance env rerank evidence",
+            n_results=2,
+        )
+
+        base_rrf = 0.5 / 60.0 + 0.5 / 61.0
+        assert captured_scores["high-importance"] == pytest.approx(base_rrf * 1.5)
+        assert captured_scores["low-importance"] == pytest.approx(base_rrf)
+
+    def test_hybrid_search_recency_score_boost_env_opt_in(self, store, monkeypatch):
+        monkeypatch.delenv("BRAINLAYER_SCORE_IMPORTANCE_BOOST", raising=False)
+        monkeypatch.setenv("BRAINLAYER_SCORE_RECENCY_DECAY", "1")
+        monkeypatch.setattr(search_repo, "RRF_VECTOR_ALPHA", 0.5)
+        query_embedding = _embed("recency env rerank evidence")
+        _insert_chunk(
+            store,
+            chunk_id="old-result",
+            content="recency env rerank evidence padded exact hit with extra words",
+            embedding=query_embedding,
+            importance=5.0,
+            created_at="2020-01-01T00:00:00Z",
+        )
+        _insert_chunk(
+            store,
+            chunk_id="fresh-result",
+            content="recency env rerank evidence",
+            embedding=[value + 0.00001 for value in query_embedding],
+            importance=5.0,
+            created_at="2999-01-01T00:00:00Z",
+        )
+        store.build_binary_index()
+        monkeypatch.setattr(store, "_trigram_fts_available", False)
+        captured_scores: dict[str, float] = {}
+
+        def capture_scores(scored, *, n_results):
+            captured_scores.update({chunk_id: score for score, chunk_id, *_rest in scored})
+            return scored
+
+        monkeypatch.setattr(store, "_mmr_rerank_scored_results", capture_scores)
+
+        store.hybrid_search(
+            query_embedding=query_embedding,
+            query_text="recency env rerank evidence",
+            n_results=2,
+        )
+
+        base_rrf = 0.5 / 60.0 + 0.5 / 61.0
+        old_age_days = (
+            datetime.now(timezone.utc) - datetime.fromisoformat("2020-01-01T00:00:00+00:00")
+        ).total_seconds() / 86400
+        old_recency_boost = 0.7 + 0.3 * math.exp(-0.023 * old_age_days)
+        assert captured_scores["old-result"] == pytest.approx(base_rrf * old_recency_boost)
+        assert captured_scores["fresh-result"] == pytest.approx(base_rrf)
+
     def test_hybrid_search_opt_in_recency_and_importance_rerank_change_scores(self, store, monkeypatch):
+        monkeypatch.delenv("BRAINLAYER_SCORE_IMPORTANCE_BOOST", raising=False)
+        monkeypatch.delenv("BRAINLAYER_SCORE_RECENCY_DECAY", raising=False)
         monkeypatch.setattr(search_repo, "RRF_VECTOR_ALPHA", 0.5)
         query_embedding = _embed("opt in rerank evidence")
         _insert_chunk(
