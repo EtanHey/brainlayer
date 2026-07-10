@@ -181,6 +181,7 @@ def think(
     include_audit: bool = False,
     agent_id: str | None = None,
     consumer_scope: Any | None = None,
+    warm_rrf: bool = False,
 ) -> ThinkResult:
     """Given current task context, retrieve relevant past knowledge.
 
@@ -212,6 +213,7 @@ def think(
         include_audit=include_audit,
         agent_id=agent_id,
         consumer_scope=consumer_scope,
+        warm_rrf=warm_rrf,
     )
 
     if not results["documents"][0]:
@@ -248,6 +250,7 @@ def recall(
     include_audit: bool = False,
     agent_id: str | None = None,
     consumer_scope: Any | None = None,
+    warm_rrf: bool = False,
 ) -> RecallResult:
     """Proactive smart retrieval based on file or topic.
 
@@ -290,6 +293,7 @@ def recall(
                 include_audit=include_audit,
                 agent_id=agent_id,
                 consumer_scope=consumer_scope,
+                warm_rrf=warm_rrf,
             )
             for doc, meta in zip(search_results["documents"][0], search_results["metadatas"][0]):
                 result.related_chunks.append(
@@ -314,6 +318,7 @@ def recall(
             include_audit=include_audit,
             agent_id=agent_id,
             consumer_scope=consumer_scope,
+            warm_rrf=warm_rrf,
         )
         for doc, meta in zip(search_results["documents"][0], search_results["metadatas"][0]):
             result.related_chunks.append(

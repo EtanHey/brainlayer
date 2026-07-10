@@ -2456,6 +2456,7 @@ async def _think(
                     include_audit=include_audit,
                     agent_id=agent_id,
                     consumer_scope=consumer_scope,
+                    warm_rrf=True,
                 ),
             )
         result = _filter_think_result_for_consumer_scope(result, normalized_project, consumer_scope)
@@ -2506,6 +2507,7 @@ async def _recall(
                     include_audit=include_audit,
                     agent_id=agent_id,
                     consumer_scope=consumer_scope,
+                    warm_rrf=True,
                 ),
             )
         result = _filter_recall_result_for_consumer_scope(result, normalized_project, consumer_scope)

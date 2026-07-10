@@ -284,6 +284,38 @@ class TestHybridSearch:
 
         assert results["ids"][0] == []
 
+    def test_warm_fts_fallback_preserves_fts_rank_when_alpha_is_one(self, store, monkeypatch):
+        monkeypatch.setenv("BRAINLAYER_RRF_ALPHA", "1.0")
+        _insert_chunk(
+            store,
+            chunk_id="exact-fts",
+            content="alpha fallback",
+            embedding=_embed("distant exact"),
+        )
+        _insert_chunk(
+            store,
+            chunk_id="verbose-fts",
+            content="alpha fallback with several unrelated padding words",
+            embedding=_embed("distant verbose"),
+        )
+        captured: list[tuple] = []
+
+        def capture_ranked(scored, *, n_results):
+            captured.extend(scored)
+            return scored
+
+        monkeypatch.setattr(store, "_mmr_rerank_scored_results", capture_ranked)
+
+        store.hybrid_search(
+            query_embedding=None,
+            query_text="alpha fallback",
+            n_results=2,
+            warm_rrf=True,
+        )
+
+        assert [item[1] for item in captured] == ["exact-fts", "verbose-fts"]
+        assert captured[0][0] > captured[1][0] > 0.0
+
     def test_hybrid_search_default_does_not_apply_recency_or_importance_boost(self, store, monkeypatch):
         monkeypatch.delenv("BRAINLAYER_SCORE_IMPORTANCE_BOOST", raising=False)
         monkeypatch.delenv("BRAINLAYER_SCORE_RECENCY_DECAY", raising=False)
@@ -408,6 +440,24 @@ class TestHybridSearch:
         old_recency_boost = 0.7 + 0.3 * math.exp(-0.023 * old_age_days)
         assert captured_scores["old-result"] == pytest.approx(base_rrf * old_recency_boost)
         assert captured_scores["fresh-result"] == pytest.approx(base_rrf)
+
+    def test_recency_decay_env_does_not_enable_recent_candidate_fallback(self, store, monkeypatch):
+        monkeypatch.setenv("BRAINLAYER_SCORE_RECENCY_DECAY", "1")
+        _insert_chunk(
+            store,
+            chunk_id="recent-unrelated",
+            content="fresh notes without query overlap",
+            embedding=_embed("unrelated recent content"),
+            created_at="2999-01-01T00:00:00Z",
+        )
+
+        results = store.hybrid_search(
+            query_embedding=None,
+            query_text="latest deployment status",
+            n_results=5,
+        )
+
+        assert results["ids"][0] == []
 
     def test_hybrid_search_opt_in_recency_and_importance_rerank_change_scores(self, store, monkeypatch):
         monkeypatch.delenv("BRAINLAYER_SCORE_IMPORTANCE_BOOST", raising=False)

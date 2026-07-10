@@ -446,6 +446,7 @@ async def test_brain_search_mcp_threads_agent_id_to_hybrid_search(monkeypatch):
 
     assert store.hybrid_kwargs is not None
     assert store.hybrid_kwargs["agent_id"] == "codex-test-agent"
+    assert store.hybrid_kwargs["warm_rrf"] is True
 
 
 @pytest.mark.asyncio
@@ -840,6 +841,7 @@ async def test_brain_search_think_route_threads_agent_id_to_hybrid_search(monkey
 
     assert store.hybrid_kwargs is not None
     assert store.hybrid_kwargs["agent_id"] == "codex-test-agent"
+    assert store.hybrid_kwargs["warm_rrf"] is True
 
 
 @pytest.mark.asyncio
@@ -861,3 +863,4 @@ async def test_brain_search_recall_route_threads_agent_id_to_hybrid_search(monke
 
     assert store.hybrid_kwargs is not None
     assert store.hybrid_kwargs["agent_id"] == "codex-test-agent"
+    assert store.hybrid_kwargs["warm_rrf"] is True
