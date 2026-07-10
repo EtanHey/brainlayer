@@ -111,9 +111,14 @@ def format_search_results(
         chunk_id = r.get("chunk_id")
         if include_chunk_id and chunk_id:
             lines.append(f"- ID: {chunk_id}")
+        if r.get("fan_out_provenance"):
+            lines.append(f"- Fan-out scopes: {', '.join(r['fan_out_provenance'])}")
         lines.append(f"- Source: {source}")
         lines.append(f"- Date: {date}")
-        lines.append(f"- Preview: {preview}")
+        if detail == "full":
+            lines.extend(["- Content:", "", str(r.get("content") or r.get("snippet") or summary)])
+        else:
+            lines.append(f"- Preview: {preview}")
 
     return "\n".join(lines)
 

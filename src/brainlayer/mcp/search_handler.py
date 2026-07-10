@@ -23,6 +23,7 @@ from .._helpers import _escape_fts5_query, _is_sqlite_busy_error
 from ..chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, is_precompact_checkpoint_content
 from ..content_class import content_class_is_default_hidden, normalize_content_class
 from ..lexical_defense import _normalize_surface, load_lexical_defense_dictionary
+from ..search_fanout import run_fan_out
 from ..search_repo import _is_audit_recursion_metadata, _metadata_matches_project_scope
 
 # Retry settings for DB lock resilience on reads
@@ -818,6 +819,7 @@ async def _brain_search(
     profile_scope: str = "search.mcp",
     allow_helper_route: bool = True,
     brainbar_helper_fast_profile: bool = False,
+    fan_out: bool = False,
 ):
     """Unified search dispatcher -- routes to the right internal handler."""
     if search_profile.enabled() and profile_query_id is None:
@@ -826,6 +828,7 @@ async def _brain_search(
     try:
         if (
             allow_helper_route
+            and not fan_out
             and order == "relevance"
             and _helper_route_enabled()
             and _should_try_helper_route(
@@ -908,6 +911,7 @@ async def _brain_search(
             profile_query_id=profile_query_id,
             profile_scope=profile_scope,
             brainbar_helper_fast_profile=brainbar_helper_fast_profile,
+            fan_out=fan_out,
         )
     finally:
         search_profile.emit(profile_scope, "brain_search", profile_query_id, search_profile.dur_ms(profile_started))
@@ -944,6 +948,7 @@ async def _brain_search_dispatch(
     profile_query_id: str | None = None,
     profile_scope: str = "search.mcp",
     brainbar_helper_fast_profile: bool = False,
+    fan_out: bool = False,
 ):
     if detail not in _VALID_SEARCH_DETAILS:
         return _error_result(f"Invalid detail='{detail}'. Must be one of: {sorted(_VALID_SEARCH_DETAILS)}")
@@ -953,8 +958,11 @@ async def _brain_search_dispatch(
         return _error_result(
             f"num_results={num_results} must be between {_MIN_PUBLIC_NUM_RESULTS} and {_MAX_PUBLIC_NUM_RESULTS}"
         )
+    if fan_out and order != "relevance":
+        return _error_result("fan_out requires order='relevance'")
+    if fan_out and any(value is not None for value in (file_path, chunk_id, entity_id)):
+        return _error_result("fan_out supports generic query search only; omit file_path, chunk_id, and entity_id")
 
-    consumer_scope = None
     if project is None:
         try:
             from ..scoping import resolve_project_scope
@@ -962,10 +970,12 @@ async def _brain_search_dispatch(
             project = resolve_project_scope()
         except Exception:
             logger.debug("Project auto-scope failed, proceeding without scope")
+    requested_project = project
     from ..scoping import resolve_consumer_scope
 
     consumer_scope = resolve_consumer_scope(project=project, consumer=consumer, include_checkpoints=include_checkpoints)
     project = consumer_scope.project_filter
+    fan_out_project = project or _normalize_project_name(requested_project) or requested_project
     include_checkpoints = consumer_scope.include_checkpoints
 
     if entity_id is not None:
@@ -1041,7 +1051,7 @@ async def _brain_search_dispatch(
             consumer_scope=consumer_scope,
         )
 
-    allow_file_route = order == "relevance"
+    allow_file_route = order == "relevance" and not fan_out
     origin_file_path = file_path if order == "origin" else None
 
     if allow_file_route and file_path is not None and _query_has_regression_signal(query):
@@ -1082,7 +1092,7 @@ async def _brain_search_dispatch(
             merged_text.extend(recall_result)
         return merged_text
 
-    extracted_file = _extract_file_path(query)
+    extracted_file = None if fan_out else _extract_file_path(query)
     if extracted_file:
         if allow_file_route:
             return await _brain_search(
@@ -1115,7 +1125,7 @@ async def _brain_search_dispatch(
             )
         origin_file_path = origin_file_path or extracted_file
 
-    allow_smart_route = order == "relevance"
+    allow_smart_route = order == "relevance" and not fan_out
 
     if allow_smart_route and _query_signals_current_context(query):
         ctx = await _current_context(hours=24, project=project, consumer_scope=consumer_scope)
@@ -1185,6 +1195,35 @@ async def _brain_search_dispatch(
             return exact_chunk_hit
         fts_query_override = _expanded_fts_query(query, store)
     source_file_filter_like = _source_file_like_pattern(origin_file_path)
+
+    if fan_out:
+        return await _fan_out_search(
+            query=query,
+            project=fan_out_project,
+            content_type=content_type,
+            source=source,
+            tag=tag,
+            intent=intent,
+            importance_min=importance_min,
+            date_from=date_from,
+            date_to=date_to,
+            sentiment=sentiment,
+            agent_id=agent_id,
+            num_results=num_results,
+            detail=detail,
+            fts_query_override=fts_query_override,
+            source_filter_like=source_filter,
+            source_file_filter_like=source_file_filter_like,
+            correction_category=correction_category,
+            include_checkpoints=include_checkpoints,
+            include_audit=include_audit,
+            include_operational=include_operational,
+            content_class_filter=content_class_filter,
+            profile_query_id=profile_query_id,
+            profile_scope=profile_scope,
+            brainbar_helper_fast_profile=brainbar_helper_fast_profile,
+            consumer_scope=consumer_scope,
+        )
 
     # Entity-aware routing: detect known entity names in query.
     # Path 1: Pure SQL KG lookup (no embeddings, always works).
@@ -1403,6 +1442,74 @@ async def _brain_search_dispatch(
     return result
 
 
+async def _fan_out_search(
+    *,
+    query: str,
+    project: str | None,
+    content_type: str | None,
+    source: str | None,
+    tag: str | None,
+    intent: str | None,
+    importance_min: float | None,
+    date_from: str | None,
+    date_to: str | None,
+    sentiment: str | None,
+    agent_id: str | None,
+    num_results: int,
+    detail: str,
+    fts_query_override: str | None,
+    source_filter_like: str | None,
+    source_file_filter_like: str | None,
+    correction_category: str | None,
+    include_checkpoints: bool,
+    include_audit: bool,
+    include_operational: bool,
+    content_class_filter: str | None,
+    profile_query_id: str | None,
+    profile_scope: str,
+    brainbar_helper_fast_profile: bool,
+    consumer_scope: Any | None,
+):
+    structured = await run_fan_out(
+        search=_search,
+        query=query,
+        num_results=num_results,
+        project=project,
+        date_from=date_from,
+        tag=tag,
+        base_kwargs={
+            "project": project,
+            "content_type": content_type,
+            "source": source,
+            "tag": tag,
+            "intent": intent,
+            "importance_min": importance_min,
+            "date_from": date_from,
+            "date_to": date_to,
+            "sentiment": sentiment,
+            "agent_id": agent_id,
+            "detail": detail,
+            "fts_query_override": fts_query_override,
+            "source_filter_like": source_filter_like,
+            "source_file_filter_like": source_file_filter_like,
+            "correction_category": correction_category,
+            "include_checkpoints": include_checkpoints,
+            "include_audit": include_audit,
+            "include_operational": include_operational,
+            "content_class_filter": content_class_filter,
+            "profile_query_id": profile_query_id,
+            "profile_scope": profile_scope,
+            "brainbar_helper_fast_profile": brainbar_helper_fast_profile,
+            "consumer_scope": consumer_scope,
+        },
+    )
+    text = format_search_results(query, structured["results"], structured["total"], detail=detail)
+    if structured["degraded"]:
+        reasons = "; ".join(f"{item['scope']}: {item['reason']}" for item in structured["degraded_scopes"])
+        text += f"\n\n⚠ Fan-out degraded — {reasons}"
+    return ([TextContent(type="text", text=text)], structured)
+
+
 def _escape_like_pattern(value: str) -> str:
     """Escape user text for a literal SQLite LIKE pattern."""
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -1609,6 +1716,7 @@ async def _brain_recall(
     include_audit: bool = False,
     include_operational: bool = False,
     content_class_filter: str | None = None,
+    fan_out: bool = False,
 ):
     """Unified recall dispatcher -- routes to session/context/search/entity handlers.
 
@@ -1647,6 +1755,7 @@ async def _brain_recall(
             project = resolve_project_scope()
         except Exception:
             logger.debug("Project auto-scope failed, proceeding without scope")
+    requested_project = project
     from ..scoping import resolve_consumer_scope
 
     consumer_scope = resolve_consumer_scope(
@@ -1664,7 +1773,7 @@ async def _brain_recall(
             return _error_result("query is required for mode=search")
         return await _brain_search(
             query=query,
-            project=project,
+            project=requested_project if fan_out else project,
             consumer=consumer,
             file_path=file_path,
             chunk_id=chunk_id,
@@ -1690,6 +1799,7 @@ async def _brain_recall(
             include_audit=include_audit,
             include_operational=include_operational,
             content_class_filter=content_class_filter,
+            fan_out=fan_out,
         )
 
     if resolved_mode == "entity":

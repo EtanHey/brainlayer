@@ -566,6 +566,11 @@ async def list_tools() -> list[Tool]:
                             "enum": ["knowledge", "decision", "operational", "test", "benchmark"],
                             "description": "Restrict search to one content_class. Defaults to visible knowledge/decision classes.",
                         },
+                        "fan_out": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Run bounded deterministic scoped fan-out (max 4 searches / 40 candidates). Generic relevance queries only; incompatible with order='origin', file_path, chunk_id, and entity_id.",
+                        },
                         "detail": {
                             "type": "string",
                             "enum": ["compact", "full"],
@@ -1353,6 +1358,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 include_audit=arguments.get("include_audit", False),
                 include_operational=arguments.get("include_operational", False),
                 content_class_filter=arguments.get("content_class"),
+                fan_out=arguments.get("fan_out", False),
             )
         )
 
