@@ -9,9 +9,9 @@
 [![Tests](https://img.shields.io/badge/tests-1%2C848%20Python%20%2B%2054%20Swift-brightgreen.svg)](#testing)
 [![Website](https://img.shields.io/badge/site-brainlayer.etanheyman.com-d4956a.svg)](https://brainlayer.etanheyman.com)
 
-Every architecture decision, every debugging session, every preference you've expressed — **gone between sessions.** You repeat yourself constantly. Your agent rediscovers bugs it already fixed.
+Every architecture decision, every debugging session, every preference you've expressed — **gone between sessions.** You repeat yourself constantly. Your agents rediscover bugs they already fixed, and re-make choices the team already reasoned through.
 
-BrainLayer gives any MCP-compatible AI agent persistent memory across conversations. One SQLite file. No cloud. No Docker. Just `pip install`.
+BrainLayer gives any MCP-compatible AI agent persistent memory across conversations — and gives a whole **fleet** of agents a shared organizational memory: what one agent learns (a fix, a decision, what eroded and why) becomes experience the others inherit before they repeat the mistake. One SQLite file. No cloud. No Docker. Just `pip install`.
 
 ```text
 "What approach did I use for auth last month?"     →  brain_search

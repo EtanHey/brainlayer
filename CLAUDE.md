@@ -1,11 +1,13 @@
-<!-- IDENTITY: brainlayer, owner=EtanHey, purpose=local private knowledge pipeline for Claude Code sessions (index, search, enrich, visualize) -->
-# BrainLayer (זיכרון) - Local Knowledge Pipeline
+<!-- IDENTITY: brainlayer, owner=EtanHey, purpose=the fleet's organizational memory — Etan's prompts+intent AND the agents' work-history (what worked where, what eroded why), indexed/searchable/enriched -->
+# BrainLayer (זיכרון) - Fleet Organizational Memory
 
-> Memory for Claude Code conversations: index, search, enrich, and visualize sessions.
+> The fleet's memory: Etan's prompts + intent AND the agents' work-history — what was tried, what worked where, what eroded and why — searchable across every session.
 
 ## Purpose (WHY)
-- Build a local, private knowledge base from Claude Code sessions.
-- Provide fast search, context retrieval, and exports for downstream tools.
+- BrainLayer is the FLEET's organizational memory — not one person's private notebook.
+- It captures BOTH sides of the work: Etan's prompts + intent, AND the agents' work-history — what was tried, what worked where, what eroded and why.
+- So any agent inherits the fleet's accumulated experience: search prior decisions, skip re-solving already-fixed bugs, and see WHY a past choice was made before repeating a mistake.
+- Fast search, context retrieval, and exports for downstream tools.
 
 ---
 
