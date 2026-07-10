@@ -419,6 +419,35 @@ async def test_call_tool_fan_out_preserves_orchestrator_requested_project(monkey
 
 
 @pytest.mark.asyncio
+async def test_call_tool_fan_out_keeps_unscoped_orchestrator_global(monkeypatch):
+    sentinel = ([TextContent(type="text", text="fan-out")], {"fan_out": True})
+
+    monkeypatch.setattr("brainlayer.mcp.search_handler._helper_route_enabled", lambda: False)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: object())
+    monkeypatch.setattr("brainlayer.mcp.search_handler._exact_chunk_lookup_result", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._expanded_fts_query", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("brainlayer.scoping.resolve_project_scope", lambda: "brainlayer")
+    fan_out_search = AsyncMock(return_value=sentinel)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._fan_out_search", fan_out_search)
+
+    result = await call_tool(
+        "brain_search",
+        {
+            "query": "architecture decision",
+            "consumer": "orchestrator",
+            "source": "all",
+            "fan_out": True,
+        },
+    )
+
+    assert result == sentinel
+    call = fan_out_search.await_args.kwargs
+    assert call["project"] is None
+    assert call["consumer_scope"].role == "orchestrator"
+    assert call["consumer_scope"].project_filter is None
+
+
+@pytest.mark.asyncio
 async def test_brain_search_fan_out_bypasses_smart_think_routing(monkeypatch):
     sentinel = ([TextContent(type="text", text="fan-out")], {"fan_out": True})
 

@@ -963,6 +963,7 @@ async def _brain_search_dispatch(
     if fan_out and any(value is not None for value in (file_path, chunk_id, entity_id)):
         return _error_result("fan_out supports generic query search only; omit file_path, chunk_id, and entity_id")
 
+    explicit_project = project
     if project is None:
         try:
             from ..scoping import resolve_project_scope
@@ -981,7 +982,10 @@ async def _brain_search_dispatch(
         include_checkpoints=include_checkpoints,
     )
     project = consumer_scope.project_filter
-    fan_out_project = project or fan_out_project
+    if fan_out and consumer_scope.role == "orchestrator" and explicit_project is None:
+        fan_out_project = None
+    else:
+        fan_out_project = project or fan_out_project
     include_checkpoints = consumer_scope.include_checkpoints
 
     if entity_id is not None:
@@ -1754,6 +1758,7 @@ async def _brain_recall(
             }
         )
 
+    explicit_project = project
     if project is None and resolved_mode != "sessions":
         try:
             from ..scoping import resolve_project_scope
@@ -1777,9 +1782,10 @@ async def _brain_recall(
     if resolved_mode == "search":
         if not query:
             return _error_result("query is required for mode=search")
+        fan_out_search_project = explicit_project if consumer_scope.role == "orchestrator" else requested_project
         return await _brain_search(
             query=query,
-            project=requested_project if fan_out else project,
+            project=fan_out_search_project if fan_out else project,
             consumer=consumer,
             file_path=file_path,
             chunk_id=chunk_id,
