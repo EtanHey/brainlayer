@@ -76,7 +76,7 @@ def test_cli_search_does_not_spawn_or_contact_daemon_process(tmp_path: Path) -> 
     assert _daemon_pids() == []
 
 
-def test_cli_stats_bootstraps_missing_db_before_readonly(tmp_path: Path) -> None:
+def test_cli_stats_missing_db_fails_closed_without_bootstrap(tmp_path: Path) -> None:
     db_path = tmp_path / "brainlayer.db"
 
     env = os.environ.copy()
@@ -94,13 +94,13 @@ def test_cli_stats_bootstraps_missing_db_before_readonly(tmp_path: Path) -> None
         check=False,
     )
 
-    assert result.returncode == 0, result.stderr + result.stdout
-    assert db_path.exists()
-    assert "Total Chunks" in result.stdout
+    assert result.returncode == 1
+    assert "migrate-store <copy.db>" in result.stdout
+    assert not db_path.exists()
     assert _daemon_pids() == []
 
 
-def test_cli_stats_bootstraps_empty_existing_db_before_readonly(tmp_path: Path) -> None:
+def test_cli_stats_empty_existing_db_fails_closed_without_bootstrap(tmp_path: Path) -> None:
     db_path = tmp_path / "brainlayer.db"
     db_path.touch()
 
@@ -119,8 +119,9 @@ def test_cli_stats_bootstraps_empty_existing_db_before_readonly(tmp_path: Path) 
         check=False,
     )
 
-    assert result.returncode == 0, result.stderr + result.stdout
-    assert "Total Chunks" in result.stdout
+    assert result.returncode == 1
+    assert "migrate-store <copy.db>" in result.stdout
+    assert db_path.stat().st_size == 0
     assert _daemon_pids() == []
 
 
@@ -130,11 +131,11 @@ def test_cli_search_opens_vectorstore_readonly_directly(monkeypatch: pytest.Monk
 
     db_path = tmp_path / "brainlayer.db"
     _seed_empty_db(db_path)
-    calls: list[tuple[Path, bool]] = []
+    calls: list[Path] = []
 
     class SpyStore:
-        def __init__(self, path: Path, readonly: bool = False):
-            calls.append((Path(path), readonly))
+        def __init__(self, path: Path):
+            calls.append(Path(path))
 
         def hybrid_search(self, **kwargs):
             return {"ids": [["chunk-1"]], "documents": [["foo result"]], "metadatas": [[{}]], "distances": [[0.1]]}
@@ -147,13 +148,13 @@ def test_cli_search_opens_vectorstore_readonly_directly(monkeypatch: pytest.Monk
             return [0.0] * 8
 
     monkeypatch.setenv("BRAINLAYER_DB", str(db_path))
-    monkeypatch.setattr(cli_new, "VectorStore", SpyStore)
+    monkeypatch.setattr(cli_new, "ReadonlyStore", SpyStore)
     monkeypatch.setattr(cli_new, "get_embedding_model", lambda: SpyModel())
 
     result = CliRunner().invoke(app, ["search", "foo", "--num", "1"])
 
     assert result.exit_code == 0, result.output
-    assert calls == [(db_path, True)]
+    assert calls == [db_path]
 
 
 def test_cli_search_agent_flag_threads_to_hybrid_search(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -165,8 +166,8 @@ def test_cli_search_agent_flag_threads_to_hybrid_search(monkeypatch: pytest.Monk
     hybrid_calls: list[dict] = []
 
     class SpyStore:
-        def __init__(self, _path: Path, readonly: bool = False):
-            self.readonly = readonly
+        def __init__(self, _path: Path):
+            pass
 
         def hybrid_search(self, **kwargs):
             hybrid_calls.append(kwargs)
@@ -180,7 +181,7 @@ def test_cli_search_agent_flag_threads_to_hybrid_search(monkeypatch: pytest.Monk
             return [0.0] * 8
 
     monkeypatch.setenv("BRAINLAYER_DB", str(db_path))
-    monkeypatch.setattr(cli_new, "VectorStore", SpyStore)
+    monkeypatch.setattr(cli_new, "ReadonlyStore", SpyStore)
     monkeypatch.setattr(cli_new, "get_embedding_model", lambda: SpyModel())
 
     result = CliRunner().invoke(app, ["search", "--agent", "codex-test-agent", "foo", "--num", "1"])
@@ -195,11 +196,11 @@ def test_cli_stats_p95_under_200ms_with_direct_readonly_store(monkeypatch: pytes
 
     db_path = tmp_path / "brainlayer.db"
     _seed_empty_db(db_path)
-    calls: list[tuple[Path, bool]] = []
+    calls: list[Path] = []
 
     class FastStatsStore:
-        def __init__(self, path: Path, readonly: bool = False):
-            calls.append((Path(path), readonly))
+        def __init__(self, path: Path):
+            calls.append(Path(path))
 
         def get_stats(self):
             return {"total_chunks": 0, "projects": [], "content_types": []}
@@ -208,7 +209,7 @@ def test_cli_stats_p95_under_200ms_with_direct_readonly_store(monkeypatch: pytes
             pass
 
     monkeypatch.setenv("BRAINLAYER_DB", str(db_path))
-    monkeypatch.setattr(cli_new, "VectorStore", FastStatsStore)
+    monkeypatch.setattr(cli_new, "ReadonlyStore", FastStatsStore)
 
     runner = CliRunner()
     durations: list[float] = []
@@ -220,7 +221,7 @@ def test_cli_stats_p95_under_200ms_with_direct_readonly_store(monkeypatch: pytes
 
     p95 = sorted(durations)[math.ceil(len(durations) * 0.95) - 1]
     assert p95 < _cli_stats_p95_budget_seconds()
-    assert calls == [(db_path, True)] * 10
+    assert calls == [db_path] * 10
 
 
 def test_daemon_and_client_modules_are_gone() -> None:

@@ -8,6 +8,7 @@ from typing import Callable, List, Optional
 from .claude_paths import extract_claude_conversation_id as _extract_claude_conversation_id
 from .embeddings import embed_chunks
 from .pipeline.chunk import Chunk
+from .runtime_store import ReadonlyStore, open_writer_store
 from .system_prompt_guard import looks_like_system_prompt
 from .vector_store import IndexDeadlineExceeded, VectorStore
 
@@ -23,6 +24,7 @@ def index_chunks_to_sqlite(
     db_path: Path = DEFAULT_DB_PATH,
     on_progress: Optional[Callable[[int, int], None]] = None,
     deadline_monotonic: float | None = None,
+    store: VectorStore | None = None,
 ) -> int:
     """Index chunks to sqlite-vec database."""
     if not chunks:
@@ -115,12 +117,15 @@ def index_chunks_to_sqlite(
 
         embeddings.append(ec.embedding)
 
-    # Store in database
-    with VectorStore(db_path) as store:
+    # A complete CLI index run injects one shared runtime store. Standalone
+    # callers still get one bounded runtime open for this adapter invocation.
+    if store is not None:
         return store.upsert_chunks(chunk_data, embeddings, deadline_monotonic=deadline_monotonic)
+    with open_writer_store(db_path) as opened_store:
+        return opened_store.upsert_chunks(chunk_data, embeddings, deadline_monotonic=deadline_monotonic)
 
 
 def get_stats(db_path: Path = DEFAULT_DB_PATH) -> dict:
     """Get database statistics."""
-    with VectorStore(db_path) as store:
+    with ReadonlyStore(db_path) as store:
         return store.get_stats()

@@ -338,6 +338,9 @@ class _NoopWriterSpan:
     def complete(self, *, rows_touched: int | None = None) -> None:
         return
 
+    def add_metadata(self, **_metadata: Any) -> None:
+        return
+
     def finish(
         self,
         outcome: str,
@@ -363,6 +366,7 @@ class _WriterSpan:
         span_kind: str,
         transaction_mode: str,
         metadata: dict[str, Any] | None,
+        sample_fts: bool,
     ) -> None:
         self.conn = conn
         self.db_path = Path(db_path)
@@ -375,6 +379,7 @@ class _WriterSpan:
         self.span_kind = span_kind
         self.transaction_mode = transaction_mode
         self.metadata = dict(metadata or {})
+        self.sample_fts = sample_fts
         self.txn_id = uuid.uuid4().hex
         self.started_at = _utc_now()
         self.started_monotonic = _MONOTONIC()
@@ -401,10 +406,11 @@ class _WriterSpan:
             return 0
 
     def __enter__(self):
-        try:
-            self.fts_segments_before = _fts_segment_counts(self.conn, self.db_path)
-        except Exception:
-            self.fts_segments_before = {}
+        if self.sample_fts:
+            try:
+                self.fts_segments_before = _fts_segment_counts(self.conn, self.db_path)
+            except Exception:
+                self.fts_segments_before = {}
         try:
             self.conn.trace_v2(_TRACE_MASK, self._trace, id=self._trace_id)
             self._trace_installed = True
@@ -530,6 +536,9 @@ class _WriterSpan:
         self._outcome = "completed"
         self._rows_touched = rows_touched
 
+    def add_metadata(self, **metadata: Any) -> None:
+        self.metadata.update(metadata)
+
     def finish(
         self,
         outcome: str,
@@ -551,10 +560,13 @@ class _WriterSpan:
                 self.conn.trace_v2(_TRACE_MASK, None, id=self._trace_id)
             except Exception:
                 pass
-        try:
-            fts_segments = _fts_segment_counts(self.conn, self.db_path)
-        except Exception:
-            fts_segments = dict(self.fts_segments_before)
+        if self.sample_fts:
+            try:
+                fts_segments = _fts_segment_counts(self.conn, self.db_path)
+            except Exception:
+                fts_segments = dict(self.fts_segments_before)
+        else:
+            fts_segments = {}
         wal_bytes_after, wal_frames_after = _wal_metrics(self.db_path)
         changed_rows = max(0, self._total_changes() - self._total_changes_before)
         with self._lock:
@@ -600,6 +612,7 @@ def writer_span(
     span_kind: str = "transaction",
     transaction_mode: str = "explicit",
     metadata: dict[str, Any] | None = None,
+    sample_fts: bool = True,
 ):
     """Create a fail-open observer; the caller retains transaction ownership."""
     if not telemetry_enabled():
@@ -617,6 +630,7 @@ def writer_span(
             span_kind=span_kind,
             transaction_mode=transaction_mode,
             metadata=metadata,
+            sample_fts=sample_fts,
         )
     except Exception:
         return _NoopWriterSpan()

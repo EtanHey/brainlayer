@@ -7,6 +7,7 @@ import pytest
 
 from brainlayer._helpers import serialize_f32
 from brainlayer.mcp import _shared, search_handler
+from brainlayer.runtime_store import ReadonlyStore, SchemaFingerprintMismatch
 from brainlayer.search_repo import _hybrid_cache
 from brainlayer.vector_store import VectorStore
 
@@ -180,25 +181,19 @@ def test_explicit_readonly_does_not_create_parent_directory(tmp_path, monkeypatc
     assert not db_path.parent.exists()
 
 
-def test_search_vector_store_bootstraps_missing_db_then_reopens_readonly(tmp_path, monkeypatch):
+def test_search_vector_store_missing_db_fails_closed_without_bootstrap(tmp_path, monkeypatch):
     db_path = tmp_path / "fresh" / "brainlayer.db"
     monkeypatch.setenv("BRAINLAYER_DB", str(db_path))
     monkeypatch.setenv("BRAINLAYER_READ_POOL_SIZE", "2")
 
-    store = _shared._get_search_vector_store()
-    try:
-        assert db_path.exists()
-        assert store._readonly is True
-        assert store.count() == 0
-        with pytest.raises(apsw.ReadOnlyError):
-            store.conn.cursor().execute(
-                "INSERT INTO chunks (id, content, metadata, source_file) VALUES ('x', 'x', '{}', 'x')"
-            )
-    finally:
-        _shared._close_search_vector_store()
+    with pytest.raises(SchemaFingerprintMismatch, match="does not exist"):
+        _shared._get_search_vector_store()
+
+    assert not db_path.exists()
+    assert not db_path.parent.exists()
 
 
-def test_search_vector_store_bootstraps_stale_schema_then_reopens_readonly(tmp_path, monkeypatch):
+def test_search_vector_store_stale_schema_fails_closed_without_migration(tmp_path, monkeypatch):
     db_path = tmp_path / "stale.db"
     conn = apsw.Connection(str(db_path))
     conn.cursor().execute(
@@ -226,17 +221,13 @@ def test_search_vector_store_bootstraps_stale_schema_then_reopens_readonly(tmp_p
     monkeypatch.setenv("BRAINLAYER_DB", str(db_path))
     monkeypatch.setenv("BRAINLAYER_READ_POOL_SIZE", "2")
 
-    store = _shared._get_search_vector_store()
-    try:
-        columns = {row[1] for row in store.conn.cursor().execute("PRAGMA table_info(chunks)")}
-        assert {"status", "archived", "summary", "resolved_queries", "chunk_origin"}.issubset(columns)
-        assert store._readonly is True
-        with pytest.raises(apsw.ReadOnlyError):
-            store.conn.cursor().execute(
-                "INSERT INTO chunks (id, content, metadata, source_file) VALUES ('x', 'x', '{}', 'x')"
-            )
-    finally:
-        _shared._close_search_vector_store()
+    with pytest.raises(SchemaFingerprintMismatch, match="missing or wrong-type objects"):
+        _shared._get_search_vector_store()
+
+    inspector = apsw.Connection(str(db_path))
+    columns = {row[1] for row in inspector.cursor().execute("PRAGMA table_info(chunks)")}
+    inspector.close()
+    assert not {"status", "archived", "summary", "resolved_queries"} & columns
 
 
 def test_search_store_bootstrap_required_for_partial_kg_schema(tmp_path):
@@ -269,6 +260,7 @@ def test_search_store_pool_preopens_fixed_readonly_handles(tmp_path, monkeypatch
         id(store) for store in _shared._search_vector_store_pool.queue
     }
     assert all(store._readonly for store in _shared._search_vector_store_pool_handles)
+    assert all(type(store) is ReadonlyStore for store in _shared._search_vector_store_pool_handles)
 
 
 def test_search_store_checkout_deserializes_slow_reads(tmp_path, monkeypatch):

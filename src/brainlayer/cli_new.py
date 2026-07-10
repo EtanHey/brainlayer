@@ -12,16 +12,16 @@ from rich.console import Console
 from rich.table import Table
 
 from .paths import get_db_path
-from .vector_store import VectorStore
+from .runtime_store import ReadonlyStore
 
 console = Console()
 
 
 @contextmanager
-def _readonly_store() -> Iterator[VectorStore]:
+def _readonly_store() -> Iterator[ReadonlyStore]:
     db_path = get_db_path()
     _ensure_readonly_db_ready(db_path)
-    store = VectorStore(db_path, readonly=True)
+    store = ReadonlyStore(db_path)
     try:
         yield store
     finally:
@@ -29,14 +29,11 @@ def _readonly_store() -> Iterator[VectorStore]:
 
 
 def _ensure_readonly_db_ready(db_path: Path) -> None:
-    if _has_readonly_schema(db_path):
-        return
-
-    bootstrap_store = VectorStore(db_path)
-    try:
-        pass
-    finally:
-        bootstrap_store.close()
+    if not _has_readonly_schema(db_path):
+        raise RuntimeError(
+            "BrainLayer schema is missing or stale; migrate an offline copy with "
+            "'brainlayer migrate-store <copy.db>' and use the gated atomic-swap flow"
+        )
 
 
 def _has_readonly_schema(db_path: Path) -> bool:
@@ -186,14 +183,15 @@ def stats_command() -> None:
         raise typer.Exit(1)
 
 
-def migrate_command() -> None:
-    """Migrate from ChromaDB to sqlite-vec."""
+def migrate_command(sqlite_path: Path) -> None:
+    """Migrate from ChromaDB to an explicit offline sqlite-vec copy."""
     try:
         from .migrate import migrate_from_chromadb
+        from .runtime_store import resolve_offline_database_path
 
         rprint("[bold blue]זיכרון[/] - Migration Tool\n")
 
-        sqlite_path = get_db_path()
+        sqlite_path = resolve_offline_database_path(sqlite_path)
 
         if sqlite_path.exists():
             response = typer.confirm("sqlite-vec database already exists. Overwrite?")
@@ -201,9 +199,11 @@ def migrate_command() -> None:
                 rprint("Migration cancelled")
                 return
             sqlite_path.unlink()
+            for suffix in ("-shm", "-wal"):
+                sqlite_path.with_name(sqlite_path.name + suffix).unlink(missing_ok=True)
 
         with console.status("[bold green]Migrating data..."):
-            success = migrate_from_chromadb()
+            success = migrate_from_chromadb(sqlite_path)
 
         if success:
             rprint("[bold green]✓[/] Migration completed successfully!")
