@@ -2323,6 +2323,14 @@ class SearchMixin:
         if not warm_rrf:
             all_chunk_ids |= set(trigram_ranks.keys())
 
+        # A degraded single-leg search must retain that leg's rank signal even
+        # when the configured fusion weight assigns it zero weight.
+        fusion_alpha = rrf_vector_alpha
+        if warm_rrf and not semantic_by_id:
+            fusion_alpha = 0.0
+        elif warm_rrf and not fts_ranks:
+            fusion_alpha = 1.0
+
         scored = []
         match_features_by_id: dict[str, dict[str, bool]] = {}
         for cid in all_chunk_ids:
@@ -2334,7 +2342,7 @@ class SearchMixin:
                 semantic_rank=sem_entry["rank"] if sem_entry is not None else None,
                 fts_rank=fts_rank,
                 k=k,
-                alpha=rrf_vector_alpha,
+                alpha=fusion_alpha,
             )
             if not warm_rrf and trigram_rank is not None:
                 score += (1.0 - RRF_VECTOR_ALPHA) / (k + trigram_rank)
