@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import json
+import time as stdlib_time
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from brainlayer.store import store_memory
+import brainlayer.vector_store as vector_store
 from brainlayer.vector_store import VectorStore
 
 
@@ -85,6 +90,49 @@ def test_upsert_chunks_emits_one_span_per_pr570_sub_batch(tmp_path, monkeypatch)
     assert all(event["lane"] == "batch" for event in events)
     assert all(event["outcome"] == "commit" for event in events)
     assert all(event["duration_ms"] >= 0 for event in events)
+
+
+def test_upsert_deadline_interrupt_records_rollback_telemetry(tmp_path, monkeypatch):
+    log_path = _configure(monkeypatch, tmp_path)
+    monkeypatch.setenv("BRAINLAYER_INDEX_TXN_BATCH", "1")
+    monkeypatch.setattr(vector_store, "_INDEX_DEADLINE_PROGRESS_STEPS", 1, raising=False)
+    store = VectorStore(tmp_path / "brainlayer.db")
+    log_path.unlink()
+    inside_insert = False
+
+    def trace(_cursor, statement, bindings):
+        nonlocal inside_insert
+        normalized = " ".join(str(statement).upper().split())
+        if "INSERT INTO CHUNKS" in normalized and bindings and bindings[0] == "deadline-chunk":
+            inside_insert = True
+        return True
+
+    store.conn.setexectrace(trace)
+    monkeypatch.setattr(
+        vector_store,
+        "time",
+        SimpleNamespace(
+            monotonic=lambda: 101.0 if inside_insert else 100.0,
+            sleep=stdlib_time.sleep,
+            time=stdlib_time.time,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="index deadline exceeded"):
+        store.upsert_chunks(
+            [_chunk("deadline-chunk")],
+            [_embedding(1)],
+            deadline_monotonic=100.5,
+        )
+
+    assert store.conn.in_transaction is False
+    assert store.conn.cursor().execute("SELECT COUNT(*) FROM chunks").fetchone() == (0,)
+    store.close()
+
+    events = _finished(log_path, "upsert_chunks")
+    assert len(events) == 1
+    assert events[0]["outcome"] == "rollback"
+    assert events[0]["error"] == "IndexDeadlineExceeded: index deadline exceeded"
 
 
 def test_direct_store_memory_emits_interactive_transaction_span(tmp_path, monkeypatch):
