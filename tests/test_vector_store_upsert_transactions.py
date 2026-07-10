@@ -65,6 +65,83 @@ def test_upsert_chunks_commits_large_batches_in_bounded_transactions(isolated_st
     assert isolated_store.conn.cursor().execute("SELECT COUNT(*) FROM chunks").fetchone() == (5,)
 
 
+def test_upsert_chunks_deadline_stops_after_committed_sub_batch(isolated_store, monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_INDEX_TXN_BATCH", "2")
+    monkeypatch.setattr(vector_store, "_INDEX_DEADLINE_PROGRESS_STEPS", 1_000_000_000)
+    monotonic_values = iter([100.0, 101.0])
+    monkeypatch.setattr(vector_store.time, "monotonic", lambda: next(monotonic_values))
+
+    with pytest.raises(RuntimeError, match="index deadline exceeded") as exc_info:
+        isolated_store.upsert_chunks(
+            [_chunk(f"chunk-{index}") for index in range(4)],
+            [_embedding(index) for index in range(4)],
+            deadline_monotonic=100.5,
+        )
+
+    assert exc_info.value.processed_count == 2
+    assert isolated_store.conn.cursor().execute("SELECT id FROM chunks ORDER BY id").fetchall() == [
+        ("chunk-0",),
+        ("chunk-1",),
+    ]
+
+
+def test_upsert_chunks_deadline_interrupts_and_rolls_back_active_sub_batch(isolated_store, monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_INDEX_TXN_BATCH", "2")
+    monkeypatch.setattr(vector_store, "_INDEX_DEADLINE_PROGRESS_STEPS", 1, raising=False)
+    inside_insert = False
+    statements: list[str] = []
+
+    def trace(_cursor, statement, bindings):
+        nonlocal inside_insert
+        normalized = " ".join(str(statement).upper().split())
+        statements.append(normalized)
+        if _is_insert_chunk_statement(normalized) and bindings and bindings[0] == "chunk-2":
+            inside_insert = True
+        return True
+
+    isolated_store.conn.setexectrace(trace)
+    monkeypatch.setattr(vector_store.time, "monotonic", lambda: 101.0 if inside_insert else 100.0)
+
+    with pytest.raises(RuntimeError, match="index deadline exceeded") as exc_info:
+        isolated_store.upsert_chunks(
+            [_chunk(f"chunk-{index}") for index in range(4)],
+            [_embedding(index) for index in range(4)],
+            deadline_monotonic=100.5,
+        )
+
+    assert exc_info.value.processed_count == 2
+    assert isolated_store.conn.in_transaction is False
+    assert isolated_store.conn.cursor().execute("SELECT id FROM chunks ORDER BY id").fetchall() == [
+        ("chunk-0",),
+        ("chunk-1",),
+    ]
+
+
+def test_upsert_chunks_clears_deadline_handler_before_error_rollback(isolated_store, monkeypatch):
+    monkeypatch.setattr(vector_store, "_INDEX_DEADLINE_PROGRESS_STEPS", 1)
+    deadline_expired = False
+
+    def trace(_cursor, statement, bindings):
+        nonlocal deadline_expired
+        if _is_insert_chunk_statement(str(statement)) and bindings and bindings[0] == "chunk-0":
+            deadline_expired = True
+            raise RuntimeError("simulated non-interrupt write failure")
+        return True
+
+    isolated_store.conn.setexectrace(trace)
+    monkeypatch.setattr(vector_store.time, "monotonic", lambda: 101.0 if deadline_expired else 100.0)
+
+    with pytest.raises(RuntimeError, match="simulated non-interrupt write failure"):
+        isolated_store.upsert_chunks(
+            [_chunk("chunk-0")],
+            [_embedding(0)],
+            deadline_monotonic=100.5,
+        )
+
+    assert isolated_store.conn.in_transaction is False
+    assert isolated_store.conn.cursor().execute("SELECT COUNT(*) FROM chunks").fetchone() == (0,)
+
+
 def test_index_txn_batch_env_uses_dedicated_cap(monkeypatch):
     monkeypatch.setenv("BRAINLAYER_INDEX_TXN_BATCH", str(vector_store._MAX_INDEX_TXN_BATCH + 1))
 

@@ -15,6 +15,7 @@ import time
 from unittest.mock import MagicMock
 
 import numpy as np
+import pytest
 
 from brainlayer.embeddings import (
     MAX_QUERY_CHARS,
@@ -39,6 +40,21 @@ def _make_chunk(content: str, chunk_id: str = "test-chunk") -> Chunk:
 def _fake_encode(texts, **kwargs):
     """Return deterministic 1024-dim vectors for each text."""
     return np.array([[float(i) / 1000.0] * 1024 for i in range(len(texts))])
+
+
+def test_embedding_progress_callback_exceptions_propagate():
+    chunk = _make_chunk("Progress callback cancellation")
+    model = EmbeddingModel.__new__(EmbeddingModel)
+    model.model_name = "test"
+    mock_st = MagicMock()
+    mock_st.encode.side_effect = _fake_encode
+    model._model = mock_st
+
+    def stop_after_batch(_completed, _total):
+        raise RuntimeError("stop after embedding batch")
+
+    with pytest.raises(RuntimeError, match="stop after embedding batch"):
+        model.embed_chunks([chunk], on_progress=stop_after_batch)
 
 
 # ── Tests ────────────────────────────────────────────────────────
