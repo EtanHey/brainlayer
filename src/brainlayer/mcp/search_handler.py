@@ -973,9 +973,15 @@ async def _brain_search_dispatch(
     requested_project = project
     from ..scoping import resolve_consumer_scope
 
-    consumer_scope = resolve_consumer_scope(project=project, consumer=consumer, include_checkpoints=include_checkpoints)
+    fan_out_project = _normalize_project_name(requested_project) or requested_project
+    scope_project = fan_out_project if fan_out else project
+    consumer_scope = resolve_consumer_scope(
+        project=scope_project,
+        consumer=consumer,
+        include_checkpoints=include_checkpoints,
+    )
     project = consumer_scope.project_filter
-    fan_out_project = project or _normalize_project_name(requested_project) or requested_project
+    fan_out_project = project or fan_out_project
     include_checkpoints = consumer_scope.include_checkpoints
 
     if entity_id is not None:
