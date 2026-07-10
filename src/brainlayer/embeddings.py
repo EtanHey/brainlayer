@@ -89,12 +89,12 @@ class EmbeddingModel:
                 for chunk, embedding in zip(batch_chunks, embeddings):
                     results.append(EmbeddedChunk(chunk=chunk, embedding=embedding.tolist()))
 
-                if on_progress:
-                    on_progress(len(results), total)
-
             except Exception as e:
                 logger.error(f"Failed to embed batch: {e}")
                 continue
+
+            if on_progress:
+                on_progress(len(results), total)
 
         return results
 

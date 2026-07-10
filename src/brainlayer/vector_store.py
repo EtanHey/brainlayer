@@ -65,12 +65,21 @@ from .tag_normalization import ensure_tag_tombstone_schema
 _DEFAULT_BUSY_TIMEOUT_MS = 30_000
 _DEFAULT_READ_BUSY_TIMEOUT_MS = 5_000
 _DEFAULT_INDEX_TXN_BATCH = 250
+_INDEX_DEADLINE_PROGRESS_STEPS = 1000
 _MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 _MAX_INDEX_TXN_BATCH = 10_000
 _WRITE_BUSY_TIMEOUT_STATE = threading.local()
 _NO_EXEC_TRACE = object()
 _KNOWLEDGE_FTS_CLASS_SQL = "COALESCE(content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark', 'cold')"
 _OPERATIONAL_FTS_CLASS_SQL = "COALESCE(content_class, 'knowledge') = 'operational'"
+
+
+class IndexDeadlineExceeded(RuntimeError):
+    """Raised outside a write transaction when an index deadline expires."""
+
+    def __init__(self, processed_count: int) -> None:
+        super().__init__("index deadline exceeded")
+        self.processed_count = processed_count
 
 
 def _positive_int_env(name: str, default: int, *, max_value: int = _MAX_APSW_BUSY_TIMEOUT_MS) -> int:
@@ -2356,7 +2365,13 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
 
     # ── Chunk CRUD ──────────────────────────────────────────────────────
 
-    def upsert_chunks(self, chunks: List[Dict[str, Any]], embeddings: List[List[float]]) -> int:
+    def upsert_chunks(
+        self,
+        chunks: List[Dict[str, Any]],
+        embeddings: List[List[float]],
+        *,
+        deadline_monotonic: float | None = None,
+    ) -> int:
         """Upsert chunks with embeddings, returning the number of input chunks processed.
 
         Large calls commit in bounded sub-batches. If a later sub-batch fails after
@@ -2390,12 +2405,50 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             self._invalidate_filtered_count_caches()
 
         committed_any = False
+        processed_count = 0
         batch_size = _index_txn_batch_size()
+
+        def raise_if_deadline_exceeded() -> None:
+            if deadline_monotonic is None or time.monotonic() < deadline_monotonic:
+                return
+            if committed_any:
+                invalidate_upsert_caches()
+            raise IndexDeadlineExceeded(processed_count)
+
         for start in range(0, len(valid_pairs), batch_size):
+            raise_if_deadline_exceeded()
             sub_batch = valid_pairs[start : start + batch_size]
             for attempt in range(5):
                 cursor = self.conn.cursor()
                 transaction_started = False
+                deadline_state = {"expired": False}
+                progress_handler_id = object()
+                progress_handler_installed = False
+
+                def clear_deadline_progress_handler() -> None:
+                    nonlocal progress_handler_installed
+                    if not progress_handler_installed:
+                        return
+                    self.conn.set_progress_handler(None, id=progress_handler_id)
+                    progress_handler_installed = False
+
+                def rollback_active_transaction() -> None:
+                    clear_deadline_progress_handler()
+                    if transaction_started and self.conn.in_transaction:
+                        cursor.execute("ROLLBACK")
+
+                if deadline_monotonic is not None:
+
+                    def stop_expired_statement() -> bool:
+                        deadline_state["expired"] = time.monotonic() >= deadline_monotonic
+                        return deadline_state["expired"]
+
+                    self.conn.set_progress_handler(
+                        stop_expired_statement,
+                        _INDEX_DEADLINE_PROGRESS_STEPS,
+                        id=progress_handler_id,
+                    )
+                    progress_handler_installed = True
                 try:
                     cursor.execute("BEGIN IMMEDIATE")
                     transaction_started = True
@@ -2543,21 +2596,30 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     cursor.execute("COMMIT")
                     transaction_started = False
                     committed_any = True
+                    processed_count += len(sub_batch)
                     break
+                except apsw.InterruptError:
+                    rollback_active_transaction()
+                    if committed_any:
+                        invalidate_upsert_caches()
+                    if deadline_state["expired"]:
+                        raise IndexDeadlineExceeded(processed_count)
+                    raise
                 except apsw.BusyError:
-                    if transaction_started:
-                        cursor.execute("ROLLBACK")
+                    rollback_active_transaction()
                     if attempt == 4:
                         if committed_any:
                             invalidate_upsert_caches()
                         raise
                     time.sleep(0.1 * (2**attempt))
                 except Exception:
-                    if transaction_started:
-                        cursor.execute("ROLLBACK")
+                    rollback_active_transaction()
                     if committed_any:
                         invalidate_upsert_caches()
                     raise
+                finally:
+                    clear_deadline_progress_handler()
+            raise_if_deadline_exceeded()
 
         invalidate_upsert_caches()
 

@@ -40,12 +40,23 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+_DEFAULT_INDEX_MAX_RUNTIME_S = 1800.0
 agent_profile_app = typer.Typer(help="Manage per-agent search ranking profiles")
 app.add_typer(agent_profile_app, name="agent-profile")
 provenance_app = typer.Typer(help="Resolve provenance conflicts and pending confirmations")
 app.add_typer(provenance_app, name="provenance")
 sandbox_app = typer.Typer(help="Manage isolated sandbox BrainLayer databases")
 app.add_typer(sandbox_app, name="sandbox")
+
+
+def _index_max_runtime_s() -> float:
+    try:
+        value = float(os.environ.get("BRAINLAYER_INDEX_MAX_RUNTIME_S", _DEFAULT_INDEX_MAX_RUNTIME_S))
+    except (TypeError, ValueError):
+        return _DEFAULT_INDEX_MAX_RUNTIME_S
+    if not math.isfinite(value) or value <= 0:
+        return _DEFAULT_INDEX_MAX_RUNTIME_S
+    return value
 
 
 def _launchd_target(label: str) -> str:
@@ -3486,6 +3497,7 @@ def index_fast(
         from ..pipeline.chunk import chunk_content
         from ..pipeline.classify import classify_content
         from ..pipeline.extract import parse_jsonl
+        from ..vector_store import IndexDeadlineExceeded
 
         if not source.exists():
             rprint(f"[bold red]Error:[/] Source directory not found: {source}")
@@ -3510,7 +3522,12 @@ def index_fast(
         rprint(f"[bold blue]זיכרון[/] - Fast Indexing: [bold]{len(jsonl_files)}[/] files")
 
         total_chunks = 0
+        files_completed = 0
+        current_file: Path | None = None
         start_time = time.time()
+        start_monotonic = time.monotonic()
+        max_runtime_s = _index_max_runtime_s()
+        deadline_monotonic = start_monotonic + max_runtime_s
 
         with Progress(
             SpinnerColumn(),
@@ -3525,12 +3542,17 @@ def index_fast(
             task = progress.add_task("Processing files...", total=len(jsonl_files))
 
             for i, jsonl_file in enumerate(jsonl_files):
+                current_file = jsonl_file
+                if time.monotonic() >= deadline_monotonic:
+                    raise IndexDeadlineExceeded(processed_count=0)
                 raw_proj = jsonl_file.parent.name if jsonl_file.parent != source else None
                 proj_name = _normalize_project_name(raw_proj) if raw_proj else None
 
                 # Parse, classify, and chunk each entry
                 all_chunks = []
                 for entry in parse_jsonl(jsonl_file):
+                    if time.monotonic() >= deadline_monotonic:
+                        raise IndexDeadlineExceeded(processed_count=0)
                     classified = classify_content(entry)
                     if classified is not None:  # Skip noise entries
                         chunks = chunk_content(classified)
@@ -3546,8 +3568,12 @@ def index_fast(
                         source_file=str(jsonl_file),
                         project=proj_name,
                         on_progress=progress_callback,
+                        deadline_monotonic=deadline_monotonic,
                     )
                     total_chunks += indexed
+                files_completed = i + 1
+                if time.monotonic() >= deadline_monotonic:
+                    raise IndexDeadlineExceeded(processed_count=0)
 
                 # Update progress
                 elapsed = time.time() - start_time
@@ -3585,6 +3611,23 @@ def index_fast(
         except Exception as e:
             rprint(f"[dim]Supabase stats sync skipped: {e}[/]")
 
+    except IndexDeadlineExceeded as exc:
+        from ..alarm import build_alarm, emit_alarm
+
+        committed_chunks = total_chunks + exc.processed_count
+        alarm = build_alarm(
+            "INDEX_RUNTIME_EXCEEDED",
+            "brainlayer index exceeded its maximum runtime and stopped at a transaction boundary",
+            {
+                "max_runtime_s": max_runtime_s,
+                "elapsed_s": round(max(0.0, time.monotonic() - start_monotonic), 3),
+                "committed_chunks": committed_chunks,
+                "files_completed": files_completed,
+                "source_file": str(current_file) if current_file else None,
+            },
+        )
+        emit_alarm(alarm)
+        raise typer.Exit(alarm.exit_code) from exc
     except typer.Exit:
         raise
     except Exception as e:

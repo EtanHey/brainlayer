@@ -1,6 +1,7 @@
 """New indexing pipeline using sqlite-vec and sentence-transformers."""
 
 import logging
+import time
 from pathlib import Path
 from typing import Callable, List, Optional
 
@@ -8,7 +9,7 @@ from .claude_paths import extract_claude_conversation_id as _extract_claude_conv
 from .embeddings import embed_chunks
 from .pipeline.chunk import Chunk
 from .system_prompt_guard import looks_like_system_prompt
-from .vector_store import VectorStore
+from .vector_store import IndexDeadlineExceeded, VectorStore
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,7 @@ def index_chunks_to_sqlite(
     project: Optional[str] = None,
     db_path: Path = DEFAULT_DB_PATH,
     on_progress: Optional[Callable[[int, int], None]] = None,
+    deadline_monotonic: float | None = None,
 ) -> int:
     """Index chunks to sqlite-vec database."""
     if not chunks:
@@ -40,7 +42,16 @@ def index_chunks_to_sqlite(
         return 0
 
     # Generate embeddings
-    embedded_chunks = embed_chunks(filtered_chunks, on_progress=on_progress)
+    def embedding_progress(completed: int, total: int) -> None:
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            raise IndexDeadlineExceeded(processed_count=0)
+        if on_progress is not None:
+            on_progress(completed, total)
+
+    embedded_chunks = embed_chunks(
+        filtered_chunks,
+        on_progress=embedding_progress if deadline_monotonic is not None else on_progress,
+    )
 
     if not embedded_chunks:
         return 0
@@ -106,7 +117,7 @@ def index_chunks_to_sqlite(
 
     # Store in database
     with VectorStore(db_path) as store:
-        return store.upsert_chunks(chunk_data, embeddings)
+        return store.upsert_chunks(chunk_data, embeddings, deadline_monotonic=deadline_monotonic)
 
 
 def get_stats(db_path: Path = DEFAULT_DB_PATH) -> dict:
