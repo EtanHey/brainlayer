@@ -41,6 +41,7 @@ def _run_drill(
     *,
     label_loaded: bool,
     state_mtime: int | None,
+    pause_active: bool = False,
     curl_hangs: bool = False,
     osascript_hangs: bool = False,
     use_fake_wait_sleep: bool = False,
@@ -51,7 +52,11 @@ def _run_drill(
     state_path = tmp_path / "health-check-state.json"
     health_plist_path = tmp_path / "com.example.brainlayer-health-check.plist"
     tier0_log_path = tmp_path / "logs" / "tier0-watchdog.log"
+    pause_sentinel_path = tmp_path / "pause.sentinel"
     health_plist_path.write_text("fixture\n", encoding="utf-8")
+
+    if pause_active:
+        pause_sentinel_path.write_text("{}\n", encoding="utf-8")
 
     if state_mtime is not None:
         state_path.write_text("{}\n", encoding="utf-8")
@@ -128,6 +133,7 @@ def _run_drill(
         "TIER0_NOTIFY_TIMEOUT_SECONDS": "1",
         "TIER0_NOW_EPOCH": str(NOW_EPOCH),
         "TIER0_OSASCRIPT": str(fake_bin / "osascript"),
+        "TIER0_PAUSE_SENTINEL_PATH": str(pause_sentinel_path),
         "TIER0_SLEEP": str(fake_bin / "wait-sleep") if use_fake_wait_sleep else "/bin/sleep",
         "TIER0_STALE_SECONDS": str(STALE_SECONDS),
         "TIER0_STATE_PATH": str(state_path),
@@ -213,6 +219,14 @@ def test_d4_loaded_label_and_fresh_state_do_nothing(tmp_path: Path) -> None:
         f"launchctl:print {DOMAIN}/{LABEL}",
         f"stat:-f %m {tmp_path / 'health-check-state.json'}",
     ]
+    assert result.tier0_log == ""
+
+
+def test_intentional_pause_sentinel_suppresses_alert_and_recovery(tmp_path: Path) -> None:
+    result = _run_drill(tmp_path, label_loaded=False, state_mtime=None, pause_active=True)
+
+    assert result.process.returncode == 0, result.process.stdout + result.process.stderr
+    assert result.events == []
     assert result.tier0_log == ""
 
 

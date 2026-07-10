@@ -23,6 +23,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ACTION="${1:-all}"
 
 stable_brainlayer_path() {
     local value="${1:-}"
@@ -65,18 +66,25 @@ BRAINLAYER_ENV_FILE="${BRAINLAYER_ENV_FILE:-$HOME/.config/brainlayer/brainlayer.
 BRAINLAYER_ENV_RUN="$BRAINLAYER_LIB_DIR/brainlayer-env-run.sh"
 TIER0_WATCHDOG_DST="$BRAINLAYER_LIB_DIR/tier0-watchdog.sh"
 
-if [ -z "$PYTHON_BIN" ]; then
-    echo "ERROR: python3 not found in PATH"
-    echo "Install Python 3 or set PYTHON_BIN=/path/to/python3"
-    exit 1
-fi
+case "$ACTION" in
+    tier0|tier0-watchdog)
+        # The Tier-0 path intentionally has no Python/BrainLayer dependency.
+        ;;
+    *)
+        if [ -z "$PYTHON_BIN" ]; then
+            echo "ERROR: python3 not found in PATH"
+            echo "Install Python 3 or set PYTHON_BIN=/path/to/python3"
+            exit 1
+        fi
 
-if [ ! -x "$BRAINLAYER_BIN" ]; then
-    echo "ERROR: brainlayer binary not found at $BRAINLAYER_BIN"
-    echo "Install with: pip install -e . (from brainlayer repo)"
-    echo "Or set BRAINLAYER_BIN=/path/to/brainlayer"
-    exit 1
-fi
+        if [ ! -x "$BRAINLAYER_BIN" ]; then
+            echo "ERROR: brainlayer binary not found at $BRAINLAYER_BIN"
+            echo "Install with: pip install -e . (from brainlayer repo)"
+            echo "Or set BRAINLAYER_BIN=/path/to/brainlayer"
+            exit 1
+        fi
+        ;;
+esac
 
 mkdir -p "$LAUNCH_DIR" "$LOG_DIR" "$LOG_DIR/brainlayer" "$BRAINLAYER_LOG_DIR" "$BRAINLAYER_LIB_DIR"
 mkdir -p "$HOME/.brainlayer/logs" "$HOME/.brainlayer/queue"
@@ -316,7 +324,7 @@ remove_plist() {
     echo "Removed: com.brainlayer.${name}"
 }
 
-case "${1:-all}" in
+case "$ACTION" in
     index)
         install_plist index
         ;;

@@ -542,10 +542,8 @@ def test_packaged_launchd_installer_installs_tier0_watchdog_without_env_runner(t
         [str(launchd_dir / "install.sh"), "tier0-watchdog"],
         env={
             **os.environ,
-            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "PATH": f"{fake_bin}:/usr/bin:/bin",
             "HOME": str(home),
-            "BRAINLAYER_BIN": sys.executable,
-            "PYTHON_BIN": sys.executable,
             "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
         },
         capture_output=True,

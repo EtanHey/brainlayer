@@ -24,12 +24,20 @@ if [ -z "${TIER0_DOMAIN:-}" ]; then
 fi
 
 TIER0_STATE_PATH=${TIER0_STATE_PATH:-$HOME/.local/share/brainlayer/health-check-state.json}
+TIER0_PAUSE_SENTINEL_PATH=${TIER0_PAUSE_SENTINEL_PATH:-$HOME/.local/share/brainlayer/pause.sentinel}
 TIER0_HEALTH_PLIST_PATH=${TIER0_HEALTH_PLIST_PATH:-$HOME/Library/LaunchAgents/com.brainlayer.health-check.plist}
 TIER0_LOG_PATH=${TIER0_LOG_PATH:-$HOME/.local/share/brainlayer/logs/tier0-watchdog.log}
 TIER0_NOTIFY_ENDPOINT=${TIER0_NOTIFY_ENDPOINT:-http://localhost:3847/notify}
 TIER0_STALE_SECONDS=${TIER0_STALE_SECONDS:-1200}
 TIER0_ALERT_TIMEOUT_SECONDS=${TIER0_ALERT_TIMEOUT_SECONDS:-3}
 TIER0_NOTIFY_TIMEOUT_SECONDS=${TIER0_NOTIFY_TIMEOUT_SECONDS:-3}
+
+# brainlayer pause owns this sentinel. Recovery while it exists would undo an
+# intentional service pause, so the watchdog must remain quiet until resume
+# removes it.
+if [ -f "$TIER0_PAUSE_SENTINEL_PATH" ]; then
+    exit 0
+fi
 
 require_positive_integer() {
     variable_name=$1
