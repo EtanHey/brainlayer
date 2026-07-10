@@ -409,6 +409,24 @@ class TestHybridSearch:
         assert captured_scores["old-result"] == pytest.approx(base_rrf * old_recency_boost)
         assert captured_scores["fresh-result"] == pytest.approx(base_rrf)
 
+    def test_recency_decay_env_does_not_enable_recent_candidate_fallback(self, store, monkeypatch):
+        monkeypatch.setenv("BRAINLAYER_SCORE_RECENCY_DECAY", "1")
+        _insert_chunk(
+            store,
+            chunk_id="recent-unrelated",
+            content="fresh notes without query overlap",
+            embedding=_embed("unrelated recent content"),
+            created_at="2999-01-01T00:00:00Z",
+        )
+
+        results = store.hybrid_search(
+            query_embedding=None,
+            query_text="latest deployment status",
+            n_results=5,
+        )
+
+        assert results["ids"][0] == []
+
     def test_hybrid_search_opt_in_recency_and_importance_rerank_change_scores(self, store, monkeypatch):
         monkeypatch.delenv("BRAINLAYER_SCORE_IMPORTANCE_BOOST", raising=False)
         monkeypatch.delenv("BRAINLAYER_SCORE_RECENCY_DECAY", raising=False)
