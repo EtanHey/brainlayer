@@ -80,6 +80,13 @@ def isolate_backup_daily_log(monkeypatch, tmp_path):
     monkeypatch.setenv("BRAINLAYER_BACKUP_LOG_PROVENANCE", "pytest")
 
 
+@pytest.fixture(autouse=True)
+def isolate_writer_telemetry(monkeypatch, tmp_path):
+    """Keep writer tests from touching the live telemetry log or heartbeat directory."""
+    monkeypatch.setenv("BRAINLAYER_WRITER_TELEMETRY_PATH", str(tmp_path / "writer-telemetry.jsonl"))
+    monkeypatch.setenv("BRAINLAYER_WRITER_HEARTBEAT_DIR", str(tmp_path / "writer-heartbeats"))
+
+
 @pytest.fixture
 def test_user() -> str:
     """Username for path-based tests.

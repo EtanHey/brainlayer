@@ -47,6 +47,7 @@ from .ingest_guard import reject_recursive_mcp_output
 from .memory_types import VALID_MEMORY_TYPES
 from .system_prompt_guard import looks_like_system_prompt
 from .vector_store import VectorStore
+from .writer_telemetry import start_writer_span
 
 logger = logging.getLogger(__name__)
 
@@ -219,6 +220,14 @@ def store_memory(
     for attempt in range(5):
         cursor = store.conn.cursor()
         transaction_started = False
+        telemetry_span = start_writer_span(
+            store.conn,
+            db_path=store.db_path,
+            producer="mcp",
+            lane="interactive",
+            operation="store_memory",
+            rows_planned=1,
+        )
         try:
             _set_busy_timeout_for_deadline(store.conn, busy_deadline)
             cursor.execute("BEGIN IMMEDIATE")
@@ -364,16 +373,19 @@ def store_memory(
                 )
             cursor.execute("COMMIT")
             transaction_started = False
+            telemetry_span.finish("commit")
             break
-        except apsw.BusyError:
+        except apsw.BusyError as exc:
             if transaction_started:
                 cursor.execute("ROLLBACK")
+            telemetry_span.finish("rollback", error=f"{type(exc).__name__}: {exc}")
             if not retry_on_busy or attempt == 4:
                 raise
             _sleep_before_busy_retry(0.1 * (2**attempt), busy_deadline)
-        except Exception:
+        except Exception as exc:
             if transaction_started:
                 cursor.execute("ROLLBACK")
+            telemetry_span.finish("rollback", error=f"{type(exc).__name__}: {exc}")
             raise
 
     if pending_reembed is not None and embed_fn is not None:
@@ -382,6 +394,14 @@ def store_memory(
         for attempt in range(5):
             cursor = store.conn.cursor()
             transaction_started = False
+            telemetry_span = start_writer_span(
+                store.conn,
+                db_path=store.db_path,
+                producer="mcp",
+                lane="interactive",
+                operation="store_memory_reembed",
+                rows_planned=1,
+            )
             try:
                 _set_busy_timeout_for_deadline(store.conn, busy_deadline)
                 cursor.execute("BEGIN IMMEDIATE")
@@ -389,16 +409,19 @@ def store_memory(
                 store._upsert_chunk_vector(cursor, reembed_chunk_id, merged_embedding)
                 cursor.execute("COMMIT")
                 transaction_started = False
+                telemetry_span.finish("commit")
                 break
-            except apsw.BusyError:
+            except apsw.BusyError as exc:
                 if transaction_started:
                     cursor.execute("ROLLBACK")
+                telemetry_span.finish("rollback", error=f"{type(exc).__name__}: {exc}")
                 if not retry_on_busy or attempt == 4:
                     raise
                 _sleep_before_busy_retry(0.1 * (2**attempt), busy_deadline)
-            except Exception:
+            except Exception as exc:
                 if transaction_started:
                     cursor.execute("ROLLBACK")
+                telemetry_span.finish("rollback", error=f"{type(exc).__name__}: {exc}")
                 raise
 
     from .search_repo import clear_hybrid_search_cache

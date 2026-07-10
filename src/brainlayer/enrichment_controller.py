@@ -33,6 +33,7 @@ from .pipeline.write_queue import WriteQueue
 from .provenance import derive_provenance_class
 from .provenance_autosupersede import auto_supersede
 from .provenance_integration import enqueue_provenance_resolution_for_entities
+from .writer_telemetry import start_writer_span
 
 logger = logging.getLogger(__name__)
 
@@ -1478,7 +1479,7 @@ def _generate_content_with_rate_limit(
     return response
 
 
-def _apply_enrichment(
+def _apply_enrichment_impl(
     store,
     chunk: dict[str, Any],
     enrichment: dict[str, Any],
@@ -1557,6 +1558,43 @@ def _apply_enrichment(
             promote_chunk_raw_entities(store, chunk["id"])
         except Exception:
             logger.debug("raw entity KG promotion skipped for %s", chunk["id"], exc_info=True)
+
+
+def _apply_enrichment(
+    store,
+    chunk: dict[str, Any],
+    enrichment: dict[str, Any],
+    *,
+    chunk_origin: str | None = None,
+    enrichment_model: str | None = None,
+    enrichment_backend: str | None = None,
+) -> None:
+    try:
+        owns_transaction = bool(store.conn.getautocommit())
+    except Exception:
+        owns_transaction = True
+    telemetry_span = start_writer_span(
+        store.conn,
+        db_path=getattr(store, "db_path", None),
+        producer="enrichment",
+        lane="enrichment",
+        operation="apply",
+        rows_planned=1,
+        transaction_mode="savepoint",
+    )
+    try:
+        _apply_enrichment_impl(
+            store,
+            chunk,
+            enrichment,
+            chunk_origin=chunk_origin,
+            enrichment_model=enrichment_model,
+            enrichment_backend=enrichment_backend,
+        )
+    except Exception as exc:
+        telemetry_span.finish("rollback", error=f"{type(exc).__name__}: {exc}")
+        raise
+    telemetry_span.finish("commit" if owns_transaction else "completed")
 
 
 def _enrich_single_chunk(

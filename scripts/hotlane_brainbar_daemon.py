@@ -31,6 +31,7 @@ from brainlayer.enrichment_controller import (
 from brainlayer.paths import get_db_path
 from brainlayer.store import embed_hot_chunk, embed_pending_chunks
 from brainlayer.vector_store import VectorStore
+from brainlayer.writer_telemetry import start_writer_span
 
 LOGGER = logging.getLogger("brainlayer.hotlane_brainbar")
 STOP = False
@@ -255,6 +256,14 @@ def _write_embedded_vectors(store_or_path: VectorStore | Path | str, vectors: li
 
     transaction_started = False
     count = 0
+    telemetry_span = start_writer_span(
+        cursor.connection if hasattr(cursor, "connection") else (conn or store.conn),
+        db_path=db_path,
+        producer="hotlane",
+        lane="hotlane",
+        operation="write_vectors",
+        rows_planned=len(vectors),
+    )
     try:
         cursor.execute("BEGIN IMMEDIATE")
         transaction_started = True
@@ -283,9 +292,11 @@ def _write_embedded_vectors(store_or_path: VectorStore | Path | str, vectors: li
             count += 1
         cursor.execute("COMMIT")
         transaction_started = False
-    except Exception:
+        telemetry_span.finish("commit", rows_touched=count)
+    except Exception as exc:
         if transaction_started:
             cursor.execute("ROLLBACK")
+        telemetry_span.finish("rollback", error=f"{type(exc).__name__}: {exc}")
         raise
     finally:
         if conn is not None:
