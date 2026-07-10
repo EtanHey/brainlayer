@@ -15,6 +15,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from .drain_liveness import (
+    DEFAULT_DRAIN_LIVENESS_STALE_SECONDS,
+    ENRICH_DAILY_COST_COUNTER_FILENAME,
+    STALLED_CODE,
+    check_drain_liveness,
+)
 from .launchd_primitive import (
     LaunchdVerificationError,
     install_and_verify_launchagent,
@@ -91,6 +97,10 @@ class HealthCheckConfig:
         default_factory=lambda: Path("~/.local/share/brainlayer/drain-health.json").expanduser()
     )
     queue_dir: Path = field(default_factory=lambda: Path("~/.brainlayer/queue").expanduser())
+    pending_stores_path: Path = field(
+        default_factory=lambda: Path("~/.local/share/brainlayer/pending-stores.jsonl").expanduser()
+    )
+    drain_liveness_stale_seconds: float = DEFAULT_DRAIN_LIVENESS_STALE_SECONDS
     source_jsonl_globs: list[str] = field(
         default_factory=lambda: [str(root.resolved_path / "**" / "*.jsonl") for root in default_watch_roots()]
     )
@@ -423,6 +433,32 @@ def count_missing_embeddings(db_path: Path) -> int:
         conn.close()
 
 
+def _enrichment_backlog(db_path: Path) -> int:
+    uri = f"file:{db_path.expanduser()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, timeout=5)
+    try:
+        conn.execute("PRAGMA query_only = ON")
+        row = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM chunks
+            WHERE enriched_at IS NULL
+              AND enrich_status IS NULL
+              AND COALESCE(char_count, length(content), 0) >= 50
+              AND content IS NOT NULL
+              AND content != ''
+              AND archived_at IS NULL
+              AND superseded_by IS NULL
+              AND aggregated_into IS NULL
+              AND COALESCE(archived, 0) = 0
+              AND COALESCE(status, 'active') = 'active'
+            """
+        ).fetchone()
+        return int(row[0] if row else 0)
+    finally:
+        conn.close()
+
+
 def _load_state(path: Path) -> dict[str, Any]:
     try:
         return json.loads(path.expanduser().read_text(encoding="utf-8"))
@@ -692,6 +728,14 @@ def _queue_stats(queue_dir: Path, now: datetime) -> tuple[int, int, float | None
     return count, total_bytes, oldest
 
 
+def _pending_stores_count(path: Path) -> int:
+    try:
+        with path.expanduser().open(encoding="utf-8") as pending_stores:
+            return sum(1 for line in pending_stores if line.strip())
+    except FileNotFoundError:
+        return 0
+
+
 def _plist_for_label(config: HealthCheckConfig, label: str) -> Path:
     if label == config.watch_label:
         return config.watch_plist_path
@@ -830,6 +874,7 @@ def run_health_check(
                 if action.startswith(("bootstrap:", "bootstrap_failed:", "launchctl-unavailable:")):
                     result.actions.append(action)
 
+    drain_loaded: bool | None = None
     for label, issue_code, message in (
         (config.watch_label, "watch_unloaded", "watch launchd label is not loaded"),
         (config.drain_label, "drain_unloaded", "drain launchd label is not loaded"),
@@ -839,6 +884,8 @@ def run_health_check(
         if not label:
             continue
         loaded = _launchd_label_loaded(label, command_runner)
+        if issue_code == "drain_unloaded":
+            drain_loaded = loaded
         if loaded is False:
             add_issue(issue_code, "critical", message)
             heal_issue_labels[issue_code] = (label, _plist_for_label(config, label))
@@ -857,6 +904,15 @@ def run_health_check(
                 result.actions.append("resume_failed:stale-pause-sentinel")
 
     queue_count, queue_bytes, queue_oldest_age = _queue_stats(config.queue_dir, now)
+    try:
+        pending_stores_count = _pending_stores_count(config.pending_stores_path)
+    except OSError as exc:
+        pending_stores_count = 0
+        add_issue(
+            "pending_stores_count_failed",
+            "critical",
+            f"could not count pending stores: {exc}",
+        )
     if queue_count >= config.queue_auto_heal_count:
         severity = "critical" if queue_count >= config.queue_page_count else "warning"
         add_issue(
@@ -899,6 +955,30 @@ def run_health_check(
     drain_total = drain_health.get("drained_total")
     previous_drain_total = state.get("drain_drained_total")
     drain_starved = _drain_health_has_sqlite_busy_signal(drain_health)
+    try:
+        enrichment_backlog = _enrichment_backlog(config.db_path)
+    except Exception as exc:
+        enrichment_backlog = 0
+        add_issue(
+            "enrichment_backlog_count_failed",
+            "critical",
+            f"could not count enrichment backlog: {exc}",
+        )
+    drain_liveness_issue = check_drain_liveness(
+        drain_label=config.drain_label,
+        drain_loaded=drain_loaded,
+        queue_count=queue_count + pending_stores_count,
+        enrichment_backlog=enrichment_backlog,
+        drain_health=drain_health,
+        now=now,
+        stale_seconds=config.drain_liveness_stale_seconds,
+        enrich_cost_counter_path=config.db_path.expanduser().parent / ENRICH_DAILY_COST_COUNTER_FILENAME,
+    )
+    if drain_liveness_issue is not None:
+        severity = "critical" if drain_liveness_issue.code == STALLED_CODE else drain_liveness_issue.severity
+        add_issue(drain_liveness_issue.code, severity, drain_liveness_issue.message)
+        if drain_liveness_issue.code == STALLED_CODE:
+            drain_starved = True
     if queue_count > 0 and isinstance(drain_total, int) and drain_total == previous_drain_total:
         add_issue(
             "drain_no_progress",

@@ -41,6 +41,17 @@ def _isolate_default_live_paths(tmp_path_factory, monkeypatch):
 
     monkeypatch.setattr(health_check, "_queue_stats", _isolated_queue_stats)
 
+    absent_pending_stores = tmp_path_factory.mktemp("hc-pending-stores") / "pending-stores.jsonl"
+    live_pending_stores_default = Path("~/.local/share/brainlayer/pending-stores.jsonl").expanduser()
+    real_pending_stores_count = health_check._pending_stores_count
+
+    def _isolated_pending_stores_count(path):
+        if path.expanduser() == live_pending_stores_default:
+            path = absent_pending_stores
+        return real_pending_stores_count(path)
+
+    monkeypatch.setattr(health_check, "_pending_stores_count", _isolated_pending_stores_count)
+
     absent_sentinel = tmp_path_factory.mktemp("hc-sentinel") / "pause.sentinel"
     live_sentinel_default = Path("~/.local/share/brainlayer/pause.sentinel").expanduser()
     real_pause_state = health_check._pause_sentinel_state
@@ -68,7 +79,10 @@ def _make_db(path: Path, *, total: int, vector_rows: int) -> None:
                 superseded_by TEXT,
                 aggregated_into TEXT,
                 archived INTEGER DEFAULT 0,
-                status TEXT DEFAULT 'active'
+                status TEXT DEFAULT 'active',
+                enriched_at TEXT,
+                enrich_status TEXT,
+                char_count INTEGER
             );
             CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY);
             """
@@ -274,6 +288,188 @@ def test_lock_holder_wedge_flags_live_holder_when_drain_is_starved(tmp_path, mon
     assert "drain_no_progress" in issue_codes
     assert "lock_holder_wedge" in issue_codes
     assert any(str(holder_pid) in issue.message and "brainlayer index" in issue.message for issue in result.issues)
+
+
+def _run_frozen_drain_liveness_scenario(
+    tmp_path,
+    monkeypatch,
+    *,
+    heartbeat_age: timedelta,
+    pending_store_count: int,
+    quota_blocked_enrichment: bool = False,
+    heal: bool = False,
+    command_runner=None,
+):
+    db_path = tmp_path / "brainlayer.db"
+    state_path = tmp_path / "health-state.json"
+    drain_health_path = tmp_path / "drain-health.json"
+    queue_dir = tmp_path / "queue"
+    pending_stores_path = tmp_path / "pending-stores.jsonl"
+    pidfile_dir = tmp_path / "pidfiles"
+    queue_dir.mkdir()
+    _make_db(db_path, total=1, vector_rows=1)
+    if quota_blocked_enrichment:
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "UPDATE chunks SET content = ?, char_count = ?",
+                ("x" * 60, 60),
+            )
+        (db_path.parent / "enrich-daily-cost.json").write_text(
+            json.dumps({"date": "2026-07-10", "spent_usd": 5.0}),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("BRAINLAYER_ENRICH_DAILY_USD_CAP", "5.0")
+    now = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+    drain_health_path.write_text(
+        json.dumps(
+            {
+                "drained_total": 10,
+                "drain_cycles": 4,
+                "updated_at": (now - heartbeat_age).isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    pending_stores_path.write_text('{"content":"pending"}\n' * pending_store_count, encoding="utf-8")
+    holder_pid = os.getpid()
+    _write_writer_pidfile(pidfile_dir, db_path, pid=holder_pid, start_time="holder-start")
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(pidfile_dir))
+    monkeypatch.setattr(VectorStore, "_pid_start_time", staticmethod(lambda _pid: "holder-start"))
+    state_path.write_text(
+        json.dumps(
+            {
+                "drain_drained_total": 10,
+                "lock_holder_pid": holder_pid,
+                "lock_holder_held_ticks": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    if command_runner is None:
+
+        def command_runner(_args):
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    result = run_health_check(
+        HealthCheckConfig(
+            db_path=db_path,
+            state_path=state_path,
+            drain_health_path=drain_health_path,
+            queue_dir=queue_dir,
+            pending_stores_path=pending_stores_path,
+            heal=heal,
+            heal_min_consecutive_failures=1,
+            max_stalled_ticks=2,
+        ),
+        ps_output_fn=lambda: (
+            "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 4\n"
+            f"{holder_pid} /opt/homebrew/bin/brainlayer index\n"
+        ),
+        socket_request_fn=_ok_canary,
+        command_runner=command_runner,
+        now_fn=lambda: now,
+    )
+    return result, holder_pid
+
+
+def test_frozen_drain_with_pending_stores_heals_live_index_lock_holder(tmp_path, monkeypatch):
+    commands: list[list[str]] = []
+
+    def command_runner(args: list[str]):
+        commands.append(args)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    result, _holder_pid = _run_frozen_drain_liveness_scenario(
+        tmp_path,
+        monkeypatch,
+        heartbeat_age=timedelta(minutes=10),
+        pending_store_count=2,
+        heal=True,
+        command_runner=command_runner,
+    )
+
+    issue_codes = [issue.code for issue in result.issues]
+    assert "drain_liveness_stalled" in issue_codes
+    assert "lock_holder_wedge" in issue_codes
+    assert "kickstart:com.brainlayer.index" in result.actions
+    kickstarts = [command for command in commands if command[:3] == ["launchctl", "kickstart", "-k"]]
+    assert len(kickstarts) == 1
+    assert "com.brainlayer.index" in " ".join(kickstarts[0])
+    assert "com.brainlayer.drain" not in " ".join(kickstarts[0])
+
+
+def test_frozen_drain_without_backlog_does_not_wedge_lock_holder(tmp_path, monkeypatch):
+    result, _holder_pid = _run_frozen_drain_liveness_scenario(
+        tmp_path,
+        monkeypatch,
+        heartbeat_age=timedelta(minutes=10),
+        pending_store_count=0,
+    )
+
+    issue_codes = [issue.code for issue in result.issues]
+    assert "drain_liveness_stalled" not in issue_codes
+    assert "lock_holder_wedge" not in issue_codes
+
+
+def test_frozen_drain_quota_blocker_does_not_wedge_lock_holder(tmp_path, monkeypatch):
+    result, _holder_pid = _run_frozen_drain_liveness_scenario(
+        tmp_path,
+        monkeypatch,
+        heartbeat_age=timedelta(minutes=10),
+        pending_store_count=0,
+        quota_blocked_enrichment=True,
+    )
+
+    issue_codes = [issue.code for issue in result.issues]
+    assert "drain_liveness_quota_blocked" in issue_codes
+    assert "drain_liveness_stalled" not in issue_codes
+    assert "lock_holder_wedge" not in issue_codes
+
+
+def test_fresh_drain_heartbeat_does_not_wedge_lock_holder(tmp_path, monkeypatch):
+    result, _holder_pid = _run_frozen_drain_liveness_scenario(
+        tmp_path,
+        monkeypatch,
+        heartbeat_age=timedelta(seconds=30),
+        pending_store_count=2,
+    )
+
+    issue_codes = [issue.code for issue in result.issues]
+    assert "drain_liveness_stalled" not in issue_codes
+    assert "lock_holder_wedge" not in issue_codes
+
+
+def test_pending_store_backlog_read_failure_is_reported(tmp_path, monkeypatch):
+    def fail_pending_store_read(_path):
+        raise PermissionError("pending stores unreadable")
+
+    monkeypatch.setattr(health_check, "_pending_stores_count", fail_pending_store_read)
+
+    result, _holder_pid = _run_frozen_drain_liveness_scenario(
+        tmp_path,
+        monkeypatch,
+        heartbeat_age=timedelta(seconds=30),
+        pending_store_count=1,
+    )
+
+    assert "pending_stores_count_failed" in [issue.code for issue in result.issues]
+
+
+def test_enrichment_backlog_query_failure_is_reported(tmp_path, monkeypatch):
+    def fail_enrichment_backlog(_path):
+        raise sqlite3.OperationalError("enrichment backlog unavailable")
+
+    monkeypatch.setattr(health_check, "_enrichment_backlog", fail_enrichment_backlog)
+
+    result, _holder_pid = _run_frozen_drain_liveness_scenario(
+        tmp_path,
+        monkeypatch,
+        heartbeat_age=timedelta(seconds=30),
+        pending_store_count=0,
+    )
+
+    assert "enrichment_backlog_count_failed" in [issue.code for issue in result.issues]
 
 
 @pytest.mark.parametrize(
