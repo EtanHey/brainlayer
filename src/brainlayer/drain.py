@@ -32,6 +32,7 @@ from .dedupe import (
 from .ingest_guard import recursive_mcp_output_reason
 from .paths import get_db_path
 from .provenance_integration import enqueue_provenance_resolution_for_entities
+from .writer_telemetry import start_writer_span
 
 logger = logging.getLogger(__name__)
 
@@ -1065,6 +1066,30 @@ def _is_enrichment_queue_file(path: Path) -> bool:
     return path.name.startswith("enrichment-")
 
 
+def _queue_telemetry(paths: list[Path], events: list[dict[str, Any]]) -> dict[str, Any]:
+    sources = sorted({str(event.get("source") or "").strip() for event in events} - {""})
+    kinds = {str(event.get("kind") or "").strip() for event in events}
+    if "store_memory" in kinds:
+        lane = "interactive"
+    elif kinds & {"watcher_chunk", "hook_chunk"}:
+        lane = "realtime"
+    elif kinds == {"enrichment_update"}:
+        lane = "enrichment"
+    else:
+        lane = "background"
+    mtimes: list[float] = []
+    for path in paths:
+        try:
+            mtimes.append(path.stat().st_mtime)
+        except OSError:
+            continue
+    return {
+        "lane": lane,
+        "queue_source": ",".join(sources) if sources else "unknown",
+        "queue_wait_ms": max(0.0, (time.time() - min(mtimes)) * 1000.0) if mtimes else None,
+    }
+
+
 def _has_high_priority_queue_files(queue_dir: Path) -> bool:
     try:
         return any(not _is_enrichment_queue_file(path) for path in queue_dir.glob("*.jsonl"))
@@ -1244,6 +1269,7 @@ def burn_drain_once(
             return result
 
         all_events = [event for _, events in batch for event in events]
+        queue_telemetry = _queue_telemetry([path for path, _events in batch], all_events)
         batch_includes_store = _events_include_store(all_events)
         if batch_includes_store and not _ensure_drain_db_schema_preserving_queue(
             db_path,
@@ -1254,6 +1280,16 @@ def burn_drain_once(
             return result
         for schema_attempt in range(2):
             conn = _open_connection(db_path)
+            telemetry_span = start_writer_span(
+                conn,
+                db_path=db_path,
+                producer="drain",
+                lane=queue_telemetry["lane"],
+                operation="burn_apply",
+                rows_planned=len(all_events),
+                queue_wait_ms=queue_telemetry["queue_wait_ms"],
+                queue_source=queue_telemetry["queue_source"],
+            )
             try:
                 _ensure_enrichment_update_schema(conn)
                 _ensure_watcher_liveness_schema(conn)
@@ -1286,6 +1322,7 @@ def burn_drain_once(
                 if _embedding_enabled():
                     _embed_store_chunks(conn, store_chunk_ids, embed_fn)
                 conn.execute("COMMIT")
+                telemetry_span.finish("commit", rows_touched=attempt_applied_events)
                 result.applied_events += attempt_applied_events
                 result.skipped_verified_stale += attempt_skipped_verified_stale
                 conn.setbusytimeout(_checkpoint_busy_timeout_ms())
@@ -1302,6 +1339,7 @@ def burn_drain_once(
                     conn.execute("ROLLBACK")
                 except Exception:
                     pass
+                telemetry_span.finish("rollback", error=f"{type(exc).__name__}: {exc}")
                 if batch_includes_store and _is_missing_chunks_error(exc) and schema_attempt == 0:
                     conn.close()
                     conn = None
@@ -1379,6 +1417,7 @@ def drain_once(
                 continue
             events_to_apply = events[: _max_events_per_transaction()]
             remaining_events = events[len(events_to_apply) :]
+            queue_telemetry = _queue_telemetry([path], events_to_apply)
             events_include_store = _events_include_store(events_to_apply)
             if events_include_store and not _ensure_drain_db_schema_preserving_queue(
                 db_path,
@@ -1391,12 +1430,23 @@ def drain_once(
             precomputed_embeddings = _precompute_event_embeddings(events_to_apply, embed_fn)
             for attempt in range(5):
                 conn: apsw.Connection | None = None
+                telemetry_span = None
                 attempt_drained = 0
                 collision_ids: list[str] = []
                 store_chunk_ids: list[str] = []
                 fallback_markers: list[FallbackReplayMarker] = []
                 try:
                     conn = _open_connection(db_path)
+                    telemetry_span = start_writer_span(
+                        conn,
+                        db_path=db_path,
+                        producer="drain",
+                        lane=queue_telemetry["lane"],
+                        operation="apply_file",
+                        rows_planned=len(events_to_apply),
+                        queue_wait_ms=queue_telemetry["queue_wait_ms"],
+                        queue_source=queue_telemetry["queue_source"],
+                    )
                     _ensure_enrichment_update_schema(conn)
                     _ensure_watcher_liveness_schema(conn)
                     conn.execute("BEGIN IMMEDIATE")
@@ -1414,6 +1464,7 @@ def drain_once(
                             collision_ids.append(result.collision_chunk_id)
                         attempt_drained += 1
                     conn.execute("COMMIT")
+                    telemetry_span.finish("commit", rows_touched=attempt_drained)
                     # Best-effort WAL checkpoint. Keep the live writer path PASSIVE:
                     # TRUNCATE can block behind long-lived readers on the live multi-GB
                     # WAL, which stalls queue drain before it can publish health.
@@ -1449,6 +1500,8 @@ def drain_once(
                             conn.execute("ROLLBACK")
                         except Exception:
                             pass
+                    if telemetry_span is not None:
+                        telemetry_span.finish("rollback", error=f"{type(exc).__name__}: {exc}")
                     if _is_busy_error(exc) and attempt < 4:
                         delay = 0.05 * (2**attempt)
                         _log(log_path, f"drain busy; retrying in {delay:.2f}s")

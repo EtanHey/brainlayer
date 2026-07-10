@@ -61,6 +61,7 @@ from .kg_repo import KGMixin
 from .search_repo import SearchMixin
 from .session_repo import SessionMixin
 from .tag_normalization import ensure_tag_tombstone_schema
+from .writer_telemetry import start_writer_span
 
 _DEFAULT_BUSY_TIMEOUT_MS = 30_000
 _DEFAULT_READ_BUSY_TIMEOUT_MS = 5_000
@@ -661,9 +662,11 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 raise last_err or apsw.BusyError("write busy deadline exceeded")
             try:
                 self._init_db()
+                self._finish_init_writer_telemetry("completed")
                 self._restore_default_write_busy_timeout()
                 return
             except apsw.Error as e:
+                self._finish_init_writer_telemetry("error", error=f"{type(e).__name__}: {e}")
                 if not _is_retryable_init_error(e):
                     raise
                 last_err = e
@@ -681,7 +684,16 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     if remaining <= 0 or delay >= remaining:
                         raise last_err
                 time.sleep(delay)
+            except BaseException as exc:
+                self._finish_init_writer_telemetry("error", error=f"{type(exc).__name__}: {exc}")
+                raise
         raise last_err  # type: ignore[misc]
+
+    def _finish_init_writer_telemetry(self, outcome: str, *, error: str | None = None) -> None:
+        span = getattr(self, "_init_writer_telemetry_span", None)
+        self._init_writer_telemetry_span = None
+        if span is not None:
+            span.finish(outcome, error=error)
 
     def _restore_default_write_busy_timeout(self) -> None:
         conn = getattr(self, "conn", None)
@@ -710,6 +722,16 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         self.conn.enableloadextension(True)
         self.conn.loadextension(sqlite_vec.loadable_path())
         self.conn.enableloadextension(False)
+
+        self._init_writer_telemetry_span = start_writer_span(
+            self.conn,
+            db_path=self.db_path,
+            producer="vector_store",
+            lane="maintenance",
+            operation="init",
+            span_kind="writer_operation",
+            transaction_mode="implicit_per_statement",
+        )
 
         cursor = self.conn.cursor()
 
@@ -2449,6 +2471,14 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                         id=progress_handler_id,
                     )
                     progress_handler_installed = True
+                telemetry_span = start_writer_span(
+                    self.conn,
+                    db_path=self.db_path,
+                    producer="index",
+                    lane="batch",
+                    operation="upsert_chunks",
+                    rows_planned=len(sub_batch),
+                )
                 try:
                     cursor.execute("BEGIN IMMEDIATE")
                     transaction_started = True
@@ -2595,25 +2625,34 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                         self._upsert_chunk_vector(cursor, chunk_id, embedding)
                     cursor.execute("COMMIT")
                     transaction_started = False
+                    telemetry_span.finish("commit")
                     committed_any = True
                     processed_count += len(sub_batch)
                     break
-                except apsw.InterruptError:
+                except apsw.InterruptError as exc:
                     rollback_active_transaction()
                     if committed_any:
                         invalidate_upsert_caches()
                     if deadline_state["expired"]:
-                        raise IndexDeadlineExceeded(processed_count)
+                        deadline_error = IndexDeadlineExceeded(processed_count)
+                        telemetry_span.finish(
+                            "rollback",
+                            error=f"{type(deadline_error).__name__}: {deadline_error}",
+                        )
+                        raise deadline_error from exc
+                    telemetry_span.finish("rollback", error=f"{type(exc).__name__}: {exc}")
                     raise
-                except apsw.BusyError:
+                except apsw.BusyError as exc:
                     rollback_active_transaction()
+                    telemetry_span.finish("rollback", error=f"{type(exc).__name__}: {exc}")
                     if attempt == 4:
                         if committed_any:
                             invalidate_upsert_caches()
                         raise
                     time.sleep(0.1 * (2**attempt))
-                except Exception:
+                except Exception as exc:
                     rollback_active_transaction()
+                    telemetry_span.finish("rollback", error=f"{type(exc).__name__}: {exc}")
                     if committed_any:
                         invalidate_upsert_caches()
                     raise

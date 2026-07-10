@@ -33,6 +33,7 @@ from rich.table import Table
 
 from ..config import DEFAULT_REALTIME_ENRICH_SINCE_HOURS
 from ..paths import get_db_path
+from ..writer_telemetry import start_writer_span
 
 app = typer.Typer(
     name="brainlayer",
@@ -57,6 +58,25 @@ def _index_max_runtime_s() -> float:
     if not math.isfinite(value) or value <= 0:
         return _DEFAULT_INDEX_MAX_RUNTIME_S
     return value
+
+
+@app.command("writer-telemetry")
+def writer_telemetry_command(
+    action: Annotated[str, typer.Argument(help="Read mode: tail or summary.")] = "summary",
+    lines: int = typer.Option(100, "--lines", min=1, help="Maximum newest JSONL lines to read."),
+    path: Path | None = typer.Option(None, "--path", help="Telemetry JSONL path; defaults to the configured sink."),
+) -> None:
+    """Read local writer telemetry without opening the BrainLayer database."""
+    from ..writer_telemetry import summarize_events, tail_event_lines
+
+    if action == "tail":
+        for line in tail_event_lines(path, lines=lines):
+            typer.echo(line)
+        return
+    if action == "summary":
+        typer.echo(json.dumps(summarize_events(path, lines=lines), sort_keys=True))
+        return
+    raise typer.BadParameter("action must be 'tail' or 'summary'", param_hint="action")
 
 
 def _launchd_target(label: str) -> str:
@@ -3256,18 +3276,34 @@ class _RewindArchiveBatcher:
         placeholders = ",".join("?" for _ in self._pending_session_ids)
         now = datetime.now(UTC).isoformat()
         params = [now, *sorted(self._pending_session_ids)]
-        cursor.execute(
-            f"""
-            UPDATE chunks
-               SET archived_at = ?, value_type = 'ARCHIVED'
-             WHERE source = 'realtime_watcher'
-               AND archived_at IS NULL
-               AND conversation_id IN ({placeholders})
-            """,
-            params,
+        telemetry_span = start_writer_span(
+            vector_store.conn,
+            db_path=self.db_path,
+            producer="watcher",
+            lane="realtime",
+            operation="rewind_archive",
+            metadata={
+                "flush_reason": reason,
+                "sessions_planned": len(self._pending_session_ids),
+            },
         )
-        affected = vector_store.conn.changes()
-        vector_store.conn.commit()
+        try:
+            cursor.execute(
+                f"""
+                UPDATE chunks
+                   SET archived_at = ?, value_type = 'ARCHIVED'
+                 WHERE source = 'realtime_watcher'
+                   AND archived_at IS NULL
+                   AND conversation_id IN ({placeholders})
+                """,
+                params,
+            )
+            affected = vector_store.conn.changes()
+            vector_store.conn.commit()
+        except Exception as exc:
+            telemetry_span.finish("error", error=f"{type(exc).__name__}: {exc}")
+            raise
+        telemetry_span.finish("commit", rows_touched=affected)
         self.archived_total += affected
         if affected > 0:
             rprint(
