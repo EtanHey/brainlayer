@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 import apsw
@@ -108,6 +109,54 @@ def test_writer_span_emits_start_end_metrics_and_clears_heartbeat(tmp_path, monk
     assert "chunks_fts" in finished["fts_segments"]
     assert any(statement["normalized_sql"].startswith("INSERT INTO chunks") for statement in finished["statements"])
     assert all(statement["max_duration_ms"] >= 0 for statement in finished["statements"])
+
+
+def test_finishing_span_wins_race_with_stale_heartbeat_flush(tmp_path, monkeypatch):
+    import brainlayer.writer_telemetry as writer_telemetry
+
+    _log_path, heartbeat_dir = _configure_paths(monkeypatch, tmp_path)
+    monkeypatch.setenv("BRAINLAYER_WRITER_TELEMETRY_HEARTBEAT_INTERVAL_MS", "1000")
+    db_path = tmp_path / "brainlayer.db"
+    conn = apsw.Connection(str(db_path))
+    conn.execute("CREATE TABLE chunks(id TEXT PRIMARY KEY)")
+    span = writer_telemetry.start_writer_span(
+        conn,
+        db_path=db_path,
+        producer="index",
+        lane="batch",
+        operation="upsert_chunks",
+    )
+    heartbeat_path = next(heartbeat_dir.glob("writer-txn-*.json"))
+    stale_flush_entered = threading.Event()
+    release_stale_flush = threading.Event()
+    finish_returned = threading.Event()
+    original_atomic_write = writer_telemetry._atomic_write_json
+
+    def delayed_atomic_write(path, payload):
+        stale_flush_entered.set()
+        assert release_stale_flush.wait(3.0)
+        return original_atomic_write(path, payload)
+
+    monkeypatch.setattr(writer_telemetry, "_atomic_write_json", delayed_atomic_write)
+    stale_flush = threading.Thread(target=writer_telemetry._flush_heartbeat, args=(heartbeat_path,))
+    stale_flush.start()
+    assert stale_flush_entered.wait(1.0)
+
+    def finish_span() -> None:
+        span.finish("commit")
+        finish_returned.set()
+
+    finisher = threading.Thread(target=finish_span)
+    finisher.start()
+    finish_returned.wait(0.1)
+    release_stale_flush.set()
+    stale_flush.join(timeout=3.0)
+    finisher.join(timeout=3.0)
+
+    assert not stale_flush.is_alive()
+    assert not finisher.is_alive()
+    assert not heartbeat_path.exists()
+    conn.close()
 
 
 def test_writer_span_records_rollback_without_masking_writer_result(tmp_path, monkeypatch):

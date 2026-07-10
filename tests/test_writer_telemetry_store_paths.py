@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from brainlayer.store import store_memory
 import brainlayer.vector_store as vector_store
+from brainlayer.store import store_memory
 from brainlayer.vector_store import VectorStore
 
 

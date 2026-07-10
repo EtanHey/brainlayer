@@ -17,6 +17,7 @@ from typing import Any
 
 import apsw
 
+_MONOTONIC = time.monotonic
 _FALSE_VALUES = {"0", "false", "no", "off"}
 _DEFAULT_MAX_BYTES = 10 * 1024 * 1024
 _DEFAULT_BACKUPS = 3
@@ -26,6 +27,7 @@ _TRACE_MASK = apsw.SQLITE_TRACE_STMT | apsw.SQLITE_TRACE_PROFILE
 _SINK_LOCK = threading.Lock()
 _ACTIVE_LOCK = threading.Lock()
 _ACTIVE_SPANS: dict[Path, dict[str, _WriterSpan]] = {}
+_HEARTBEAT_PATH_LOCKS: dict[Path, threading.Lock] = {}
 _HEARTBEAT_THREAD: threading.Thread | None = None
 _FTS_CACHE_LOCK = threading.Lock()
 _FTS_CACHE: dict[Path, tuple[float, dict[str, int]]] = {}
@@ -209,7 +211,7 @@ def _wal_metrics(db_path: Path) -> tuple[int, int]:
 
 
 def _fts_segment_counts(conn: apsw.Connection, db_path: Path) -> dict[str, int]:
-    now = time.monotonic()
+    now = _MONOTONIC()
     ttl = _float_env(
         "BRAINLAYER_WRITER_TELEMETRY_FTS_SAMPLE_TTL_SECONDS",
         _DEFAULT_FTS_SAMPLE_TTL_SECONDS,
@@ -262,21 +264,27 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> bool:
         return False
 
 
+def _heartbeat_path_lock(path: Path) -> threading.Lock:
+    with _ACTIVE_LOCK:
+        return _HEARTBEAT_PATH_LOCKS.setdefault(path, threading.Lock())
+
+
 def _flush_heartbeat(path: Path) -> None:
     try:
-        with _ACTIVE_LOCK:
-            spans = list(_ACTIVE_SPANS.get(path, {}).values())
-        if not spans:
-            path.unlink(missing_ok=True)
-            return
-        _atomic_write_json(
-            path,
-            {
-                "updated_at": _utc_now(),
-                "executor_pid": os.getpid(),
-                "active_transactions": [span.heartbeat_payload() for span in spans],
-            },
-        )
+        with _heartbeat_path_lock(path):
+            with _ACTIVE_LOCK:
+                spans = list(_ACTIVE_SPANS.get(path, {}).values())
+            if not spans:
+                path.unlink(missing_ok=True)
+                return
+            _atomic_write_json(
+                path,
+                {
+                    "updated_at": _utc_now(),
+                    "executor_pid": os.getpid(),
+                    "active_transactions": [span.heartbeat_payload() for span in spans],
+                },
+            )
     except Exception:
         return
 
@@ -369,7 +377,7 @@ class _WriterSpan:
         self.metadata = dict(metadata or {})
         self.txn_id = uuid.uuid4().hex
         self.started_at = _utc_now()
-        self.started_monotonic = time.monotonic()
+        self.started_monotonic = _MONOTONIC()
         self._total_changes_before = self._total_changes()
         self.wal_bytes_before, self.wal_frames_before = _wal_metrics(self.db_path)
         self.fts_segments_before: dict[str, int] = {}
@@ -432,7 +440,7 @@ class _WriterSpan:
                     "fingerprint": fingerprint.digest,
                     "normalized_sql": fingerprint.normalized[:500],
                     "started_at": _utc_now(),
-                    "started_monotonic": time.monotonic(),
+                    "started_monotonic": _MONOTONIC(),
                     "trigger": False,
                 }
                 with self._lock:
@@ -496,7 +504,7 @@ class _WriterSpan:
         return event
 
     def heartbeat_payload(self) -> dict[str, Any]:
-        now = time.monotonic()
+        now = _MONOTONIC()
         with self._lock:
             current = dict(self._current_statement or {})
         started = current.get("started_monotonic")
@@ -554,7 +562,7 @@ class _WriterSpan:
         finished = {
             **self._base_event("txn_finished"),
             "finished_at": _utc_now(),
-            "duration_ms": max(0.0, (time.monotonic() - self.started_monotonic) * 1000.0),
+            "duration_ms": max(0.0, (_MONOTONIC() - self.started_monotonic) * 1000.0),
             "outcome": self._outcome or "completed",
             "error": self._error,
             "rows_touched": self._rows_touched if self._rows_touched is not None else changed_rows,
