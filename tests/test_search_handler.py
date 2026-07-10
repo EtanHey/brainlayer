@@ -217,8 +217,10 @@ async def test_brain_search_falls_back_to_fts_when_embedding_times_out(monkeypat
 
         assert elapsed < 0.5
         assert store.hybrid_kwargs["query_embedding"] is None
+        assert store.hybrid_kwargs["warm_rrf"] is True
         assert structured["search_mode"] == "fts_fallback"
         assert structured["fallback_reason"] == "embed_timeout"
+        assert structured["degraded"] is True
         assert [item["chunk_id"] for item in structured["results"]] == ["fts-fallback-hit"]
         assert "FTS fallback" in content[0].text
     finally:
@@ -240,8 +242,10 @@ async def test_brain_search_falls_back_to_fts_when_embedding_raises(monkeypatch)
     )
 
     assert store.hybrid_kwargs["query_embedding"] is None
+    assert store.hybrid_kwargs["warm_rrf"] is True
     assert structured["search_mode"] == "fts_fallback"
     assert structured["fallback_reason"] == "embed_error:RuntimeError"
+    assert structured["degraded"] is True
     assert [item["chunk_id"] for item in structured["results"]] == ["fts-fallback-hit"]
 
 
@@ -261,8 +265,10 @@ async def test_brain_search_uses_hybrid_when_embedding_is_fast(monkeypatch):
     )
 
     assert store.hybrid_kwargs["query_embedding"] == [0.1, 0.2, 0.3]
+    assert store.hybrid_kwargs["warm_rrf"] is True
     assert structured["search_mode"] == "hybrid"
     assert "fallback_reason" not in structured
+    assert "degraded" not in structured
     assert [item["chunk_id"] for item in structured["results"]] == ["hybrid-hit"]
 
 
@@ -408,8 +414,10 @@ async def test_brain_search_empty_fts_fallback_includes_fallback_metadata(monkey
     )
 
     assert store.hybrid_kwargs["query_embedding"] is None
+    assert store.hybrid_kwargs["warm_rrf"] is True
     assert structured["search_mode"] == "fts_fallback"
     assert structured["fallback_reason"] == "embed_error:RuntimeError"
+    assert structured["degraded"] is True
     assert structured["total"] == 0
     assert structured["results"] == []
     assert "Search mode: FTS fallback (embed_error:RuntimeError)" in content[0].text
@@ -783,6 +791,7 @@ async def test_brain_search_entity_route_threads_agent_id_to_kg_hybrid_search(mo
 
     assert store.kg_hybrid_kwargs is not None
     assert store.kg_hybrid_kwargs["agent_id"] == "codex-test-agent"
+    assert store.kg_hybrid_kwargs["warm_rrf"] is True
 
 
 @pytest.mark.asyncio

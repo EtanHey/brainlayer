@@ -1264,6 +1264,7 @@ async def _brain_search_dispatch(
                     agent_id=agent_id,
                     brainbar_helper_fast_profile=brainbar_helper_fast_profile,
                     consumer_scope=consumer_scope,
+                    warm_rrf=True,
                 )
             chunk_results = kg_results.get("chunks", {})
             if order == "origin" and chunk_results.get("ids") and chunk_results["ids"][0]:
@@ -1927,6 +1928,7 @@ async def _search(
                             profile_scope=profile_scope,
                             brainbar_helper_fast_profile=brainbar_helper_fast_profile,
                             consumer_scope=consumer_scope,
+                            warm_rrf=True,
                         )
                     break
                 except Exception as e:
@@ -1960,6 +1962,7 @@ async def _search(
             text = "No results found."
             if fallback_reason:
                 empty["fallback_reason"] = fallback_reason
+                empty["degraded"] = True
                 text = f"No results found. Search mode: FTS fallback ({fallback_reason}); vector embedding was skipped."
             return ([TextContent(type="text", text=text)], empty)
 
@@ -2000,6 +2003,7 @@ async def _search(
             }
             if fallback_reason:
                 structured["fallback_reason"] = fallback_reason
+                structured["degraded"] = True
             if order == "origin":
                 structured["order"] = order
                 structured["order_scope"] = _ORIGIN_ORDER_SCOPE
@@ -2096,6 +2100,7 @@ async def _search(
         }
         if fallback_reason:
             structured["fallback_reason"] = fallback_reason
+            structured["degraded"] = True
         if order == "origin":
             structured["order"] = order
             structured["order_scope"] = _ORIGIN_ORDER_SCOPE
