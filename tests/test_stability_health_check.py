@@ -347,7 +347,9 @@ def _run_frozen_drain_liveness_scenario(
     )
 
     if command_runner is None:
-        command_runner = lambda _args: SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        def command_runner(_args):
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     result = run_health_check(
         HealthCheckConfig(
