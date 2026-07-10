@@ -20,15 +20,17 @@
    `stat` executables and runs `/bin/sh scripts/tier0-watchdog.sh` with only
    temporary paths and a deterministic epoch.
 2. Add D1 for an unloaded label and assert alert events precede bootstrap and
-   kickstart events.
+   kickstart events, with a nonzero watchdog exit.
 3. Add D2 for a stale state file and assert alert events precede kickstart, with
-   no bootstrap.
+   no bootstrap and a nonzero watchdog exit.
 4. Add D3 with a hanging curl stub and a one-second alert-process timeout; assert
-   the Tier-0 log and osascript still alert before kickstart.
+   the Tier-0 log and osascript still alert before kickstart and the watchdog
+   exits nonzero.
 5. Add D4 for a loaded label and fresh state and assert exit zero with no alert,
    bootstrap, or kickstart.
 6. Add a separate missing-state regression that asserts alerting and direct
-   kickstart without bootstrap; do not count it as a fifth exit-gate drill.
+   kickstart without bootstrap plus a nonzero exit; do not count it as a fifth
+   exit-gate drill.
 7. Assert the exact user-domain `print`, `bootstrap`, and `kickstart` argument
    forms in the applicable drills.
 8. Assert the notify request uses `POST http://localhost:3847/notify`,

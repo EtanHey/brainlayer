@@ -31,10 +31,11 @@ channel before any recovery action:
 2. display a macOS notification with `osascript`;
 3. POST the alert to the local notify endpoint with a short timeout.
 
-All three alert processes are dispatched before recovery and bounded by
-`TIER0_ALERT_TIMEOUT_SECONDS` (default three seconds); timed-out processes are
-terminated. The HTTP request also uses curl's three-second max-time. The default
-endpoint is `http://localhost:3847/notify`, with `Content-Type:
+All three alert processes are dispatched before recovery and share one
+`TIER0_ALERT_TIMEOUT_SECONDS` deadline (default three seconds); processes still
+running when it expires are terminated and reaped. The HTTP request also uses
+curl's three-second max-time. The default endpoint is
+`http://localhost:3847/notify`, with `Content-Type:
 application/json` and a constant JSON object containing `title`, `body`, and
 `source` fields. Keeping the JSON constant avoids shell interpolation and JSON
 escaping hazards. Curl accepts only successful HTTP responses (`-f`) but every
@@ -65,8 +66,8 @@ The four drills cover:
   cannot delay recovery indefinitely;
 - loaded label plus fresh state: no alerts and no recovery.
 
-A separate regression covers a missing state file and asserts direct kickstart
-without bootstrap. It is not one of the four named exit-gate drills.
+Separate regressions cover a missing state file, a future-dated state mtime, and
+the shared alert deadline. They are not part of the four named exit-gate drills.
 
 ## Alternatives Considered
 

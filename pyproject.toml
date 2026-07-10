@@ -124,15 +124,19 @@ markers = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/brainlayer"]
-force-include = {"scripts/launchd" = "brainlayer/launchd"}
 exclude = [
     "src/brainlayer/dashboard",
 ]
+
+[tool.hatch.build.targets.wheel.force-include]
+"scripts/launchd" = "brainlayer/launchd"
+"scripts/tier0-watchdog.sh" = "brainlayer/launchd/tier0-watchdog.sh"
 
 [tool.hatch.build.targets.sdist]
 only-include = [
     "src/brainlayer",
     "scripts/launchd",
+    "scripts/tier0-watchdog.sh",
     "README.md",
     "LICENSE",
     "server.json",

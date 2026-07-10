@@ -16,6 +16,7 @@ LOG_ROOT = "__HOME__/Library/Logs/brainlayer/"
 RENDERED_LOG_ROOT = "/Users/etanheyman/Library/Logs/brainlayer/"
 REQUIRED_PATH_PARTS = ["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
 DEV_SRC_PATH_RE = re.compile(r"/Users/[^:\s]+/Gits/[^:\s]+/src(?:$|:)")
+ENV_RUN_EXEMPT_LABELS = {"com.brainlayer.tier0-watchdog"}
 
 
 def _load(path: str) -> dict:
@@ -233,7 +234,10 @@ def test_canonical_launchagent_env_has_no_concrete_dev_src_paths():
 
 def test_script_launchagents_use_installed_package_imports():
     for path in sorted((REPO_ROOT / "scripts/launchd").glob("com.brainlayer.*.plist")):
-        _assert_uses_installed_package_not_source_path(path, plistlib.loads(path.read_bytes()))
+        plist = plistlib.loads(path.read_bytes())
+        if plist["Label"] in ENV_RUN_EXEMPT_LABELS:
+            continue
+        _assert_uses_installed_package_not_source_path(path, plist)
 
 
 def test_enrichment_launchagent_sources_standard_env_file_without_embedded_google_key():
@@ -255,6 +259,12 @@ def test_all_script_launchagents_source_unified_config_file():
         args = plist["ProgramArguments"]
         env = plist["EnvironmentVariables"]
         service = plist["Label"].removeprefix("com.brainlayer.")
+
+        if plist["Label"] in ENV_RUN_EXEMPT_LABELS:
+            assert args == ["/bin/sh", "__TIER0_WATCHDOG_SCRIPT__"], str(path)
+            assert "BRAINLAYER_ENV_FILE" not in env, str(path)
+            assert "BRAINLAYER_LAUNCHD_SERVICE" not in env, str(path)
+            continue
 
         assert args[0] == "__BRAINLAYER_ENV_RUN__", str(path)
         assert env["BRAINLAYER_ENV_FILE"] == "__BRAINLAYER_ENV_FILE__", str(path)

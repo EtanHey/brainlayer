@@ -16,6 +16,7 @@
 #   ./scripts/launchd/install.sh jsonl-backup # Install daily JSONL backup only
 #   ./scripts/launchd/install.sh maintenance  # Install recurring maintenance jobs
 #   ./scripts/launchd/install.sh health-check # Install stability health check only
+#   ./scripts/launchd/install.sh tier0-watchdog # Install /bin/sh meta-watchdog only
 #   ./scripts/launchd/install.sh hotlane      # Install BrainBar hotlane embed/enrich daemon only
 #   ./scripts/launchd/install.sh p0-counter   # Install daily P0 longitudinal counter only
 #   ./scripts/launchd/install.sh remove       # Unload and remove all
@@ -62,6 +63,7 @@ PYTHON_BIN="$(stable_brainlayer_path "${PYTHON_BIN:-$(command -v python3)}")"
 BRAINLAYER_PYTHON="$(stable_brainlayer_path "${BRAINLAYER_PYTHON:-$PYTHON_BIN}")"
 BRAINLAYER_ENV_FILE="${BRAINLAYER_ENV_FILE:-$HOME/.config/brainlayer/brainlayer.env}"
 BRAINLAYER_ENV_RUN="$BRAINLAYER_LIB_DIR/brainlayer-env-run.sh"
+TIER0_WATCHDOG_DST="$BRAINLAYER_LIB_DIR/tier0-watchdog.sh"
 
 if [ -z "$PYTHON_BIN" ]; then
     echo "ERROR: python3 not found in PATH"
@@ -266,6 +268,46 @@ install_jsonl_backup_script() {
     echo "Installed: $dst"
 }
 
+install_tier0_watchdog() {
+    local script_src="$SCRIPT_DIR/tier0-watchdog.sh"
+    local plist_src="$SCRIPT_DIR/com.brainlayer.tier0-watchdog.plist"
+    local plist_dst="$LAUNCH_DIR/com.brainlayer.tier0-watchdog.plist"
+    local escaped_home
+    local escaped_tier0_watchdog_dst
+
+    if [ ! -f "$script_src" ]; then
+        script_src="$SCRIPT_DIR/../tier0-watchdog.sh"
+    fi
+    if [ ! -f "$script_src" ]; then
+        echo "ERROR: tier0-watchdog.sh not found beside or above $SCRIPT_DIR"
+        return 1
+    fi
+    if [ ! -f "$plist_src" ]; then
+        echo "ERROR: $plist_src not found"
+        return 1
+    fi
+
+    escaped_home="$(
+        printf '%s' "$HOME" \
+            | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/[\\&|]/\\&/g'
+    )" || return 1
+    escaped_tier0_watchdog_dst="$(
+        printf '%s' "$TIER0_WATCHDOG_DST" \
+            | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/[\\&|]/\\&/g'
+    )" || return 1
+
+    install -m 0755 "$script_src" "$TIER0_WATCHDOG_DST" || return 1
+    sed \
+        -e "s|__HOME__|$escaped_home|g" \
+        -e "s|__TIER0_WATCHDOG_SCRIPT__|$escaped_tier0_watchdog_dst|g" \
+        "$plist_src" > "$plist_dst" || return 1
+
+    echo "Installed: $TIER0_WATCHDOG_DST"
+    echo "Installed: $plist_dst"
+    echo "  Logs: $LOG_DIR/ and $BRAINLAYER_LOG_DIR/"
+    load_plist tier0-watchdog
+}
+
 remove_plist() {
     local name="$1"
     local dst="$LAUNCH_DIR/com.brainlayer.${name}.plist"
@@ -327,6 +369,9 @@ case "${1:-all}" in
     health-check)
         install_plist health-check
         ;;
+    tier0|tier0-watchdog)
+        install_tier0_watchdog
+        ;;
     hotlane|hotlane-brainbar)
         verify_gemini_env_file
         install_plist hotlane-brainbar
@@ -364,6 +409,9 @@ case "${1:-all}" in
         if ! install_many maintenance-nightly maintenance-weekly health-check p0-counter; then
             failures=1
         fi
+        if ! install_tier0_watchdog; then
+            failures=1
+        fi
         # Remove old enrich plist only after the replacement enrichment service loads.
         if [ "$enrichment_ok" -eq 1 ]; then
             remove_plist enrich 2>/dev/null || true
@@ -386,13 +434,15 @@ case "${1:-all}" in
         remove_plist maintenance-nightly 2>/dev/null || true
         remove_plist maintenance-weekly 2>/dev/null || true
         remove_plist health-check 2>/dev/null || true
+        remove_plist tier0-watchdog 2>/dev/null || true
         remove_plist hotlane-brainbar 2>/dev/null || true
         remove_plist p0-counter 2>/dev/null || true
         rm -f "$BRAINLAYER_LIB_DIR/backup-daily.sh"
         rm -f "$BRAINLAYER_LIB_DIR/jsonl-backup.sh"
+        rm -f "$TIER0_WATCHDOG_DST"
         ;;
     *)
-        echo "Usage: $0 [index|watch|enrich|enrichment|decay|drain|hotlane|repair-fts|load [name]|unload [name]|checkpoint|backup|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|p0-counter|all|remove]"
+        echo "Usage: $0 [index|watch|enrich|enrichment|decay|drain|hotlane|repair-fts|load [name]|unload [name]|checkpoint|backup|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|tier0-watchdog|p0-counter|all|remove]"
         exit 1
         ;;
 esac
