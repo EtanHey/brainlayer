@@ -338,6 +338,7 @@ def _hybrid_cache_key(
     include_operational: bool = False,
     content_class_filter: Optional[str] = None,
     recency_rerank: bool = False,
+    recency_decay: bool = False,
     importance_rerank: bool = False,
     warm_rrf: bool = False,
     rrf_vector_alpha: float = RRF_VECTOR_ALPHA,
@@ -367,6 +368,7 @@ def _hybrid_cache_key(
         include_operational,
         normalize_content_class(content_class_filter) if content_class_filter else None,
         recency_rerank,
+        recency_decay,
         importance_rerank,
         warm_rrf,
         rrf_vector_alpha,
@@ -1801,7 +1803,7 @@ class SearchMixin:
         Cache is module-level LRU (128 entries) with defensive copy-on-read.
         """
 
-        recency_rerank = recency_rerank or _env_flag_enabled("BRAINLAYER_SCORE_RECENCY_DECAY")
+        recency_decay = recency_rerank or _env_flag_enabled("BRAINLAYER_SCORE_RECENCY_DECAY")
         importance_rerank = importance_rerank or _env_flag_enabled("BRAINLAYER_SCORE_IMPORTANCE_BOOST")
         rrf_vector_alpha = _rrf_vector_alpha() if warm_rrf else RRF_VECTOR_ALPHA
         project_filter = _effective_project_filter(project_filter, consumer_scope)
@@ -1837,6 +1839,7 @@ class SearchMixin:
             include_operational,
             content_class_filter,
             recency_rerank,
+            recency_decay,
             importance_rerank,
             warm_rrf,
             rrf_vector_alpha,
@@ -2434,7 +2437,7 @@ class SearchMixin:
 
             # Recency boost: exponential decay with 30-day half-life
             created = meta.get("created_at")
-            if recency_rerank and created and isinstance(created, str):
+            if recency_decay and created and isinstance(created, str):
                 try:
                     dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
                     if dt.tzinfo is None:
