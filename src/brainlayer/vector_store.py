@@ -204,11 +204,32 @@ def _set_busy_timeout_hook(conn: apsw.Connection) -> None:
     conn.setbusytimeout(timeout_ms)
 
 
-# Register busy_timeout hook BEFORE bestpractice hooks so it fires first.
-# bestpractice.apply() adds hooks that run PRAGMA optimize inside Connection(),
-# which needs busy_timeout active or it crashes under contention.
+# Register busy_timeout hook BEFORE best-practice hooks so it fires first.
+# RuntimeStore temporarily suppresses connection_wal/connection_optimize while
+# its APSW connection is constructed.  Those hooks mutate the database before
+# a caller can install telemetry, which violates the runtime-open contract.
 apsw.connection_hooks.insert(0, _set_busy_timeout_hook)
-apsw.bestpractice.apply(apsw.bestpractice.recommended)
+_CONNECTION_HOOK_STATE = threading.local()
+_CONNECTION_MAINTENANCE_HOOKS = {
+    apsw.bestpractice.connection_optimize,
+    apsw.bestpractice.connection_wal,
+}
+
+
+def _apply_brainlayer_best_practices(connection: apsw.Connection) -> None:
+    skip_maintenance = bool(getattr(_CONNECTION_HOOK_STATE, "skip_maintenance", False))
+    for hook in apsw.bestpractice.recommended:
+        if not hook.__name__.startswith("connection_"):
+            continue
+        if skip_maintenance and hook in _CONNECTION_MAINTENANCE_HOOKS:
+            continue
+        hook(connection)
+
+
+for _best_practice in apsw.bestpractice.recommended:
+    if not _best_practice.__name__.startswith("connection_"):
+        _best_practice()
+apsw.connection_hooks.append(_apply_brainlayer_best_practices)
 
 
 def _int_env(name: str, default: int) -> int:
@@ -283,9 +304,22 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
     _INIT_DB_LOCKS_LOCK = threading.Lock()
 
     def __init__(self, db_path: Path, readonly: bool = False):
+        self._initialize_instance_state(db_path, readonly=readonly, create_parent=not readonly)
+        if self._readonly:
+            self._init_readonly_db()
+        else:
+            self._acquire_writer_pidfile()
+            try:
+                with self._init_db_thread_lock():
+                    self._init_db_with_retry()
+            except Exception:
+                self._release_writer_pidfile()
+                raise
+
+    def _initialize_instance_state(self, db_path: Path, *, readonly: bool, create_parent: bool) -> None:
         self.db_path = db_path
         self._writer_pidfile_acquired = False
-        if not readonly:
+        if create_parent:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._fts5_health_cache: dict[str, Any] = {}
         self._retrieval_strengthening_pending: dict[str, dict[str, float]] = {}
@@ -297,16 +331,6 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         self._audit_recursion_count_cache: int | None = None
         self._audit_recursion_count_cache_data_version: int | None = None
         self._readonly = readonly or (self.db_path.exists() and not os.access(self.db_path, os.W_OK))
-        if self._readonly:
-            self._init_readonly_db()
-        else:
-            self._acquire_writer_pidfile()
-            try:
-                with self._init_db_thread_lock():
-                    self._init_db_with_retry()
-            except Exception:
-                self._release_writer_pidfile()
-                raise
 
     def _init_db_thread_lock(self) -> threading.Lock:
         """Serialize same-process schema init for a DB path."""

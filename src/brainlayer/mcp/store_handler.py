@@ -54,12 +54,14 @@ def _store_busy_deadline() -> float:
 
 
 def _is_lock_error(exc: BaseException) -> bool:
+    from ..runtime_store import SchemaFingerprintMismatch
     from ..vector_store import WriterInUseError
 
     text = str(exc).lower()
     return (
         isinstance(exc, apsw.BusyError)
         or isinstance(exc, WriterInUseError)
+        or isinstance(exc, SchemaFingerprintMismatch)
         or "locked" in text
         or "busy" in text
         or "sqlite prepare failed" in text
@@ -901,11 +903,11 @@ async def _store(
         db_path = store.db_path
 
         def _background_embed_and_flush():
-            from ..vector_store import VectorStore as _VS
+            from ..runtime_store import open_writer_store
 
             bg_store = None
             try:
-                bg_store = _VS(db_path)
+                bg_store = open_writer_store(db_path)
                 model = _get_embedding_model()
                 embed_fn = model.embed_query
                 if embed_hot_chunk(store=bg_store, embed_fn=embed_fn, chunk_id=chunk_id):

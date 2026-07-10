@@ -101,6 +101,34 @@ async def test_busy_queue_fallback_returns_queued_chunk_id(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_schema_fingerprint_mismatch_fails_closed_to_durable_queue(tmp_path):
+    """A stale runtime schema must preserve the producer write as a queued intent."""
+    from brainlayer.mcp.store_handler import _store
+    from brainlayer.runtime_store import SchemaFingerprintMismatch
+
+    queue_dir = tmp_path / "queue"
+    mismatch = SchemaFingerprintMismatch(
+        "runtime schema fingerprint mismatch",
+        actual_fingerprint="0" * 64,
+    )
+
+    with (
+        patch("brainlayer.mcp.store_handler._get_vector_store", side_effect=mismatch),
+        patch("brainlayer.queue_io.get_queue_dir", return_value=queue_dir),
+    ):
+        texts, structured = await _store(
+            content="schema mismatch must preserve this write",
+            memory_type="note",
+            project="brainlayer",
+        )
+
+    assert structured["queued"] is True
+    assert structured["status"] == "DEFERRED"
+    assert len(list(queue_dir.glob("mcp-*.jsonl"))) == 1
+    assert any("DEFERRED" in item.text for item in texts)
+
+
+@pytest.mark.asyncio
 async def test_busy_queue_fallback_returns_loud_deferred_receipt(tmp_path):
     """DB-busy fallback is a structured DEFERRED receipt, not quiet success."""
     from brainlayer.mcp.store_handler import _store
@@ -253,6 +281,9 @@ async def test_store_saves_normally_when_uncontended(tmp_path, monkeypatch):
     db_path = tmp_path / "brainlayer.db"
     queue_dir = tmp_path / "queue"
     started_threads = []
+    from brainlayer.runtime_store import OfflineMigrator
+
+    OfflineMigrator(db_path).close()
 
     class NoopThread:
         def __init__(self, *, target, daemon):
@@ -339,6 +370,7 @@ async def test_store_busy_budget_defers_promptly_and_pending_flush_replays(tmp_p
         raise apsw.BusyError("database is locked")
 
     monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "100")
+    monkeypatch.setenv("BRAINLAYER_RUNTIME_STORE", "legacy")
     monkeypatch.setattr("brainlayer.mcp.store_handler._retry_delay", 0.001)
 
     with (
@@ -636,6 +668,7 @@ async def test_store_busy_budget_restores_cold_vector_store_write_timeout(tmp_pa
         self.conn.setbusytimeout(vector_store_module._write_busy_timeout_ms())
 
     monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "100")
+    monkeypatch.setenv("BRAINLAYER_RUNTIME_STORE", "legacy")
     monkeypatch.setattr(_shared, "_vector_store", None)
     monkeypatch.setattr("brainlayer.paths.get_db_path", lambda: db_path)
     monkeypatch.setattr(VectorStore, "_INIT_MAX_RETRIES", 1)

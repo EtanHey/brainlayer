@@ -12,6 +12,13 @@ from brainlayer.pipeline.chunk import Chunk, chunk_content
 from brainlayer.pipeline.classify import ClassifiedContent, ContentType, classify_content
 from brainlayer.vector_store import VectorStore
 
+
+def _migrate_runtime_copy(db_path):
+    from brainlayer.runtime_store import OfflineMigrator
+
+    OfflineMigrator(db_path).close()
+
+
 # ── classify_content should extract session_id ──
 
 
@@ -159,6 +166,7 @@ class TestIndexPopulatesContext:
         from unittest.mock import patch
 
         db_path = tmp_path / "test.db"
+        _migrate_runtime_copy(db_path)
 
         # Create chunks with session_id in metadata
         chunks = [
@@ -225,6 +233,7 @@ class TestIndexPopulatesContext:
         from unittest.mock import patch
 
         db_path = tmp_path / "test.db"
+        _migrate_runtime_copy(db_path)
 
         chunks = []
         for i in range(5):
@@ -264,6 +273,7 @@ class TestIndexPopulatesContext:
         from unittest.mock import patch
 
         db_path = tmp_path / "test.db"
+        _migrate_runtime_copy(db_path)
 
         chunk = Chunk(
             content="A message without session ID metadata for some reason or another here",
@@ -303,6 +313,7 @@ class TestIndexPopulatesContext:
         from unittest.mock import patch
 
         db_path = tmp_path / "test.db"
+        _migrate_runtime_copy(db_path)
         from brainlayer.pipeline.classify import ContentValue
 
         chunks = [
@@ -347,6 +358,7 @@ class TestIndexPopulatesContext:
         from unittest.mock import patch
 
         db_path = tmp_path / "test.db"
+        _migrate_runtime_copy(db_path)
         from brainlayer.pipeline.classify import ContentValue
 
         chunks = [
@@ -396,6 +408,7 @@ class TestGetContextWorks:
     def _make_store_with_conversation(self, tmp_path):
         """Create a store with a 5-chunk conversation."""
         db_path = tmp_path / "test.db"
+        _migrate_runtime_copy(db_path)
         store = VectorStore(db_path)
         cursor = store.conn.cursor()
 
@@ -502,6 +515,7 @@ class TestFullPipelineIntegration:
         self._write_jsonl(jsonl_path, entries)
 
         db_path = tmp_path / "test.db"
+        _migrate_runtime_copy(db_path)
 
         # Mock embeddings to avoid loading model
         with patch("brainlayer.index_new.embed_chunks") as mock_embed:

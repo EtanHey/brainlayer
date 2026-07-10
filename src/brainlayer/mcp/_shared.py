@@ -72,16 +72,6 @@ def _search_store_needs_bootstrap(db_path) -> bool:
             conn.close()
 
 
-def _bootstrap_search_store(db_path) -> None:
-    if not _search_store_needs_bootstrap(db_path):
-        return
-
-    from ..vector_store import VectorStore
-
-    bootstrap_store = VectorStore(db_path)
-    bootstrap_store.close()
-
-
 def _detected_default_read_pool_size() -> int:
     """Return the platform default for the readonly WAL pool."""
     if platform.system() == "Darwin":
@@ -129,17 +119,15 @@ def _initialize_search_vector_store_pool() -> None:
     global _search_vector_store, _search_vector_store_pool, _search_vector_store_pool_handles
 
     from ..paths import get_db_path
-    from ..vector_store import VectorStore
+    from ..runtime_store import ReadonlyStore
 
     db_path = get_db_path()
     pool_size = _read_pool_size()
     _assert_read_pool_ram_clamp(pool_size)
-    _bootstrap_search_store(db_path)
-
     handles = []
     try:
         for _ in range(pool_size):
-            handles.append(VectorStore(db_path, readonly=True))
+            handles.append(ReadonlyStore(db_path))
     except Exception:
         for store in handles:
             store.close()
@@ -164,9 +152,9 @@ def _get_vector_store(timeout: float | None = None):
         try:
             if _vector_store is None:
                 from ..paths import get_db_path
-                from ..vector_store import VectorStore
+                from ..runtime_store import open_writer_store
 
-                _vector_store = VectorStore(get_db_path())
+                _vector_store = open_writer_store(get_db_path())
         finally:
             _store_lock.release()
     return _vector_store

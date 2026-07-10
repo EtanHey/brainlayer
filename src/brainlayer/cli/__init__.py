@@ -2379,11 +2379,29 @@ def serve() -> None:
 
 
 @app.command("migrate")
-def migrate() -> None:
-    """Migrate from ChromaDB to sqlite-vec (one-time)."""
+def migrate(
+    db_path: Path = typer.Argument(..., help="Explicit offline database copy to receive ChromaDB data."),
+) -> None:
+    """Migrate ChromaDB into an explicit offline sqlite-vec copy."""
     from ..cli_new import migrate_command
 
-    migrate_command()
+    migrate_command(db_path)
+
+
+@app.command("migrate-store")
+def migrate_store(
+    db_path: Path = typer.Argument(..., help="Explicit offline database copy to initialize or migrate."),
+) -> None:
+    """Apply schema migrations to an offline copy, never canonical production."""
+    from ..runtime_store import OfflineMigrator
+
+    try:
+        store = OfflineMigrator(db_path)
+        store.close()
+    except PermissionError as exc:
+        rprint(f"[bold red]Migration refused:[/] {exc}")
+        raise typer.Exit(1) from exc
+    rprint(f"[green]Migrated offline copy:[/] {db_path}")
 
 
 @app.command("consolidate")
@@ -2669,16 +2687,21 @@ def wal_checkpoint(
 
 
 @app.command("repair-fts")
-def repair_fts() -> None:
-    """Explicitly rebuild FTS maintenance tables outside normal startup."""
-    from ..paths import get_db_path
-    from ..vector_store import VectorStore
+def repair_fts(
+    db_path: Path = typer.Argument(..., help="Explicit offline database copy to repair."),
+) -> None:
+    """Rebuild FTS maintenance tables on an offline copy only."""
+    from ..runtime_store import OfflineMigrator
 
-    store = VectorStore(get_db_path())
     try:
-        result = store.repair_fts(rebuild_trigram=True)
-    finally:
-        store.close()
+        store = OfflineMigrator(db_path)
+        try:
+            result = store.repair_fts(rebuild_trigram=True)
+        finally:
+            store.close()
+    except PermissionError as exc:
+        rprint(f"[bold red]Repair refused:[/] {exc}")
+        raise typer.Exit(1) from exc
     console.print_json(data=result)
 
 
@@ -3530,9 +3553,11 @@ def index_fast(
         )
 
         from ..index_new import index_chunks_to_sqlite
+        from ..paths import get_db_path
         from ..pipeline.chunk import chunk_content
         from ..pipeline.classify import classify_content
         from ..pipeline.extract import parse_jsonl
+        from ..runtime_store import ReadonlyStore, open_writer_store
         from ..vector_store import IndexDeadlineExceeded
 
         if not source.exists():
@@ -3565,16 +3590,19 @@ def index_fast(
         max_runtime_s = _index_max_runtime_s()
         deadline_monotonic = start_monotonic + max_runtime_s
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            TaskProgressColumn(),
-            TimeElapsedColumn(),
-            TimeRemainingColumn(),
-            console=console,
-        ) as progress:
+        with (
+            open_writer_store(get_db_path()) as runtime_store,
+            Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                MofNCompleteColumn(),
+                TaskProgressColumn(),
+                TimeElapsedColumn(),
+                TimeRemainingColumn(),
+                console=console,
+            ) as progress,
+        ):
             task = progress.add_task("Processing files...", total=len(jsonl_files))
 
             for i, jsonl_file in enumerate(jsonl_files):
@@ -3605,6 +3633,7 @@ def index_fast(
                         project=proj_name,
                         on_progress=progress_callback,
                         deadline_monotonic=deadline_monotonic,
+                        store=runtime_store,
                     )
                     total_chunks += indexed
                 files_completed = i + 1
@@ -3638,9 +3667,7 @@ def index_fast(
             )
 
             if SUPABASE_URL and SUPABASE_SERVICE_KEY:
-                from ..vector_store import VectorStore
-
-                store = VectorStore(DEFAULT_DB_PATH)
+                store = ReadonlyStore(DEFAULT_DB_PATH)
                 _sync_stats_to_supabase(store)
                 store.close()
                 rprint("[dim]Synced enrichment stats to Supabase[/]")

@@ -1,5 +1,6 @@
 """Migration script to convert ChromaDB data to sqlite-vec."""
 
+import argparse
 import logging
 import os
 import sys
@@ -17,18 +18,17 @@ except ImportError:
     CHROMADB_AVAILABLE = False
 
 from .embeddings import get_embedding_model
-from .paths import get_db_path
-from .vector_store import VectorStore
+from .runtime_store import OfflineMigrator, ReadonlyStore, resolve_offline_database_path
 
 logger = logging.getLogger(__name__)
 
 # Paths
 CHROMADB_PATH = Path.home() / ".local" / "share" / "brainlayer" / "chromadb.backup"
-SQLITE_PATH = get_db_path()
 
 
-def migrate_from_chromadb() -> bool:
+def migrate_from_chromadb(sqlite_path: Path) -> bool:
     """Migrate data from ChromaDB to sqlite-vec."""
+    sqlite_path = resolve_offline_database_path(sqlite_path)
     if not CHROMADB_AVAILABLE:
         print("ChromaDB not available, skipping migration")
         return False
@@ -54,8 +54,8 @@ def migrate_from_chromadb() -> bool:
         print(f"Found {len(collections)} collections with {total_all} total chunks: {collection_names}")
 
         # Create sqlite-vec store
-        print(f"Creating sqlite-vec database at {SQLITE_PATH}")
-        vector_store = VectorStore(SQLITE_PATH)
+        print(f"Creating sqlite-vec database at {sqlite_path}")
+        vector_store = OfflineMigrator(sqlite_path)
 
         # Lazy-load embedding model only if needed
         embedding_model = None
@@ -157,7 +157,7 @@ def migrate_from_chromadb() -> bool:
         vector_store.close()
 
         # Verify migration
-        vector_store = VectorStore(SQLITE_PATH)
+        vector_store = ReadonlyStore(sqlite_path)
         final_count = vector_store.count()
         vector_store.close()
 
@@ -174,24 +174,28 @@ def migrate_from_chromadb() -> bool:
 def main():
     """Main migration entry point."""
     logging.basicConfig(level=logging.INFO)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("sqlite_path", type=Path, help="Explicit offline sqlite-vec copy target")
+    args = parser.parse_args()
+    sqlite_path = resolve_offline_database_path(args.sqlite_path)
 
     print("זיכרון - Migration Tool")
     print("=" * 50)
 
-    if SQLITE_PATH.exists():
-        response = input(f"sqlite-vec database already exists at {SQLITE_PATH}. Overwrite? (y/N): ")
+    if sqlite_path.exists():
+        response = input(f"sqlite-vec database already exists at {sqlite_path}. Overwrite? (y/N): ")
         if response.lower() != "y":
             print("Migration cancelled")
             return
 
         # Remove existing database and WAL/SHM files
-        SQLITE_PATH.unlink()
+        sqlite_path.unlink()
         for suffix in ["-shm", "-wal"]:
-            p = SQLITE_PATH.parent / (SQLITE_PATH.name + suffix)
+            p = sqlite_path.parent / (sqlite_path.name + suffix)
             if p.exists():
                 p.unlink()
 
-    success = migrate_from_chromadb()
+    success = migrate_from_chromadb(sqlite_path)
 
     if success:
         print("\nMigration completed successfully!")
