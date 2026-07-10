@@ -125,6 +125,34 @@ def _env_flag_enabled(name: str) -> bool:
     return os.environ.get(name, "").strip().casefold() in {"1", "true", "yes", "on"}
 
 
+def _rrf_vector_alpha() -> float:
+    raw = os.environ.get("BRAINLAYER_RRF_ALPHA")
+    if raw is None:
+        return RRF_VECTOR_ALPHA
+    try:
+        alpha = float(raw)
+    except (TypeError, ValueError):
+        return RRF_VECTOR_ALPHA
+    if not math.isfinite(alpha):
+        return RRF_VECTOR_ALPHA
+    return max(0.0, min(1.0, alpha))
+
+
+def _weighted_rrf_score(
+    *,
+    semantic_rank: int | None,
+    fts_rank: int | None,
+    k: int,
+    alpha: float,
+) -> float:
+    score = 0.0
+    if semantic_rank is not None:
+        score += alpha / (k + semantic_rank)
+    if fts_rank is not None:
+        score += (1.0 - alpha) / (k + fts_rank)
+    return score
+
+
 def _has_recency_intent(query_text: str) -> bool:
     """Return true when recency words appear as terms, not substrings."""
     return bool(_RECENCY_SINGLE_TERM_RE.search(query_text) or _RECENCY_THIS_WEEK_RE.search(query_text))
@@ -311,6 +339,8 @@ def _hybrid_cache_key(
     content_class_filter: Optional[str] = None,
     recency_rerank: bool = False,
     importance_rerank: bool = False,
+    warm_rrf: bool = False,
+    rrf_vector_alpha: float = RRF_VECTOR_ALPHA,
 ) -> tuple:
     return (
         store_key,
@@ -338,6 +368,8 @@ def _hybrid_cache_key(
         normalize_content_class(content_class_filter) if content_class_filter else None,
         recency_rerank,
         importance_rerank,
+        warm_rrf,
+        rrf_vector_alpha,
     )
 
 
@@ -1756,6 +1788,7 @@ class SearchMixin:
         *,
         recency_rerank: bool = False,
         importance_rerank: bool = False,
+        warm_rrf: bool = False,
     ) -> Dict[str, List]:
         """Hybrid search combining semantic (vector) + keyword (FTS5) via Reciprocal Rank Fusion.
 
@@ -1770,6 +1803,7 @@ class SearchMixin:
 
         recency_rerank = recency_rerank or _env_flag_enabled("BRAINLAYER_SCORE_RECENCY_DECAY")
         importance_rerank = importance_rerank or _env_flag_enabled("BRAINLAYER_SCORE_IMPORTANCE_BOOST")
+        rrf_vector_alpha = _rrf_vector_alpha() if warm_rrf else RRF_VECTOR_ALPHA
         project_filter = _effective_project_filter(project_filter, consumer_scope)
         source_filter = _effective_source_filter(source_filter, consumer_scope)
         include_checkpoints = _effective_include_checkpoints(include_checkpoints, consumer_scope)
@@ -1804,6 +1838,8 @@ class SearchMixin:
             content_class_filter,
             recency_rerank,
             importance_rerank,
+            warm_rrf,
+            rrf_vector_alpha,
         ) + (
             fts_query_override,
             kg_boost,
@@ -2081,7 +2117,7 @@ class SearchMixin:
             fts_results = _fetch_fts_rows("chunks_fts", timeout_ms=fts_timeout_ms)
             if include_operational:
                 fts_results.extend(_fetch_fts_rows("chunks_fts_operational", timeout_ms=fts_timeout_ms))
-            if getattr(self, "_trigram_fts_available", False) and not brainbar_helper_fast_profile:
+            if getattr(self, "_trigram_fts_available", False) and not brainbar_helper_fast_profile and not warm_rrf:
                 trigram_fts_results = _fetch_fts_rows("chunks_fts_trigram")
         search_profile.emit(
             profile_scope,
@@ -2278,8 +2314,11 @@ class SearchMixin:
                     "dist": semantic["distances"][0][i],
                 }
 
-        # Union of all chunk_ids from both sources
-        all_chunk_ids = set(semantic_by_id.keys()) | set(fts_ranks.keys()) | set(trigram_ranks.keys())
+        # Warm interactive RRF has exactly two legs. Other consumers keep the
+        # legacy trigram candidate leg until they migrate independently.
+        all_chunk_ids = set(semantic_by_id.keys()) | set(fts_ranks.keys())
+        if not warm_rrf:
+            all_chunk_ids |= set(trigram_ranks.keys())
 
         scored = []
         match_features_by_id: dict[str, dict[str, bool]] = {}
@@ -2288,14 +2327,14 @@ class SearchMixin:
             sem_entry = semantic_by_id.get(cid)
             fts_rank = fts_ranks.get(cid)
             trigram_rank = trigram_ranks.get(cid)
-            lexical_leg_weight = 1.0 - RRF_VECTOR_ALPHA
-
-            if sem_entry is not None:
-                score += RRF_VECTOR_ALPHA / (k + sem_entry["rank"])
-            if fts_rank is not None:
-                score += lexical_leg_weight / (k + fts_rank)
-            if trigram_rank is not None:
-                score += lexical_leg_weight / (k + trigram_rank)
+            score = _weighted_rrf_score(
+                semantic_rank=sem_entry["rank"] if sem_entry is not None else None,
+                fts_rank=fts_rank,
+                k=k,
+                alpha=rrf_vector_alpha,
+            )
+            if not warm_rrf and trigram_rank is not None:
+                score += (1.0 - RRF_VECTOR_ALPHA) / (k + trigram_rank)
 
             # Get data — prefer semantic (has distance)
             if sem_entry is not None:
@@ -2368,8 +2407,9 @@ class SearchMixin:
             match_features_by_id[cid] = {
                 "vector": sem_entry is not None,
                 "fts": fts_rank is not None,
-                "trigram": trigram_rank is not None,
             }
+            if not warm_rrf:
+                match_features_by_id[cid]["trigram"] = trigram_rank is not None
             scored.append((score, cid, doc, meta, dist))
 
         agent_profile = None

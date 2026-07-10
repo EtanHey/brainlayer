@@ -206,6 +206,7 @@ class TestHybridSearch:
         assert set(ids) == {"both", "fts-only", "vec-only"}
 
     def test_hybrid_search_weighted_rrf_uses_vector_alpha(self, store, monkeypatch):
+        monkeypatch.delenv("BRAINLAYER_RRF_ALPHA", raising=False)
         query_embedding = _embed("weighted rrf alpha control")
         _insert_chunk(
             store,
@@ -226,10 +227,62 @@ class TestHybridSearch:
             query_embedding=query_embedding,
             query_text="weighted rrf alpha control",
             n_results=2,
+            warm_rrf=True,
         )
 
         assert 0.0 < RRF_VECTOR_ALPHA < 0.5
         assert results["ids"][0] == ["lexical-only", "vector-only"]
+
+        monkeypatch.setenv("BRAINLAYER_RRF_ALPHA", "1.0")
+        overridden = store.hybrid_search(
+            query_embedding=query_embedding,
+            query_text="weighted rrf alpha control",
+            n_results=2,
+            warm_rrf=True,
+        )
+
+        assert overridden["ids"][0] == ["vector-only", "lexical-only"]
+
+    def test_weighted_rrf_two_leg_math_is_deterministic(self):
+        score = search_repo._weighted_rrf_score(
+            semantic_rank=2,
+            fts_rank=5,
+            k=60,
+            alpha=0.25,
+        )
+
+        assert score == pytest.approx(0.25 / 62 + 0.75 / 65)
+
+    def test_rrf_alpha_env_override(self, monkeypatch):
+        monkeypatch.setenv("BRAINLAYER_RRF_ALPHA", "0.4")
+
+        assert search_repo._rrf_vector_alpha() == pytest.approx(0.4)
+
+    def test_rrf_alpha_nonfinite_override_uses_default(self, monkeypatch):
+        monkeypatch.setenv("BRAINLAYER_RRF_ALPHA", "nan")
+
+        assert search_repo._rrf_vector_alpha() == pytest.approx(RRF_VECTOR_ALPHA)
+
+    def test_warm_weighted_rrf_drops_trigram_fusion_leg(self, store):
+        _insert_chunk(
+            store,
+            chunk_id="trigram-only",
+            content="stalker-golem queue note",
+            embedding=_embed("distant vector"),
+        )
+        store.build_binary_index()
+        cursor = store.conn.cursor()
+        cursor.execute("DELETE FROM chunk_vectors")
+        cursor.execute("DELETE FROM chunk_vectors_binary")
+
+        results = store.hybrid_search(
+            query_embedding=_embed("nothing close"),
+            query_text="alker-go",
+            n_results=5,
+            warm_rrf=True,
+        )
+
+        assert results["ids"][0] == []
 
     def test_hybrid_search_default_does_not_apply_recency_or_importance_boost(self, store, monkeypatch):
         monkeypatch.delenv("BRAINLAYER_SCORE_IMPORTANCE_BOOST", raising=False)
