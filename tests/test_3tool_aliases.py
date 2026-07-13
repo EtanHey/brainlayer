@@ -27,6 +27,7 @@ def _use_full_palette_for_legacy_contracts(monkeypatch):
 
     monkeypatch.setattr(mcp_server, "_tool_palette", ToolPalette("full"))
 
+
 # ── Smart Mode Detection ─────────────────────────────────────────────────────
 
 

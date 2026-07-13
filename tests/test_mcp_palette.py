@@ -50,9 +50,7 @@ def test_python_palette_expands_once_and_dispatches_deferred_tools(monkeypatch):
     assert first.structuredContent == {
         "expanded": True,
         "already_expanded": False,
-        "registered_tools": [
-            tool.name for tool in _full_tool_definitions() if tool.name not in CORE_TOOL_NAMES
-        ],
+        "registered_tools": [tool.name for tool in _full_tool_definitions() if tool.name not in CORE_TOOL_NAMES],
     }
     assert len(asyncio.run(list_tools())) == 13
 
