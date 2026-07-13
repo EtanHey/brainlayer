@@ -203,6 +203,32 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertLessThanOrEqual(data.count, 1_500)
     }
 
+    func testCorePaletteExpandsOnceAndDispatchesDeferredTools() throws {
+        let router = MCPRouter(profile: "core")
+
+        XCTAssertEqual(listedToolNames(router), Self.coreToolNames)
+        let deferredBeforeExpansion = router.handle(toolCall(id: 20, name: "brain_tags", arguments: [:]))
+        XCTAssertEqual((deferredBeforeExpansion["error"] as? [String: Any])?["code"] as? Int, -32601)
+
+        let firstExpansion = router.handle(toolCall(id: 21, name: "expand_palette", arguments: [:]))
+        let firstResult = try XCTUnwrap(firstExpansion["result"] as? [String: Any])
+        XCTAssertEqual(firstResult["expanded"] as? Bool, true)
+        XCTAssertEqual(firstResult["already_expanded"] as? Bool, false)
+        XCTAssertEqual((firstResult["registered_tools"] as? [String])?.count, 13)
+        XCTAssertEqual(listedToolNames(router), MCPRouter.toolDefinitions.compactMap { $0["name"] as? String })
+
+        let deferredAfterExpansion = router.handle(toolCall(id: 22, name: "brain_tags", arguments: [:]))
+        XCTAssertNil(deferredAfterExpansion["error"])
+        XCTAssertNotNil(deferredAfterExpansion["result"])
+
+        let secondExpansion = router.handle(toolCall(id: 23, name: "expand_palette", arguments: [:]))
+        let secondResult = try XCTUnwrap(secondExpansion["result"] as? [String: Any])
+        XCTAssertEqual(secondResult["expanded"] as? Bool, false)
+        XCTAssertEqual(secondResult["already_expanded"] as? Bool, true)
+        XCTAssertEqual(secondResult["registered_tools"] as? [String], [])
+        XCTAssertEqual(listedToolNames(router).count, 17)
+    }
+
     func testToolsListReturnsAllTools() throws {
         let router = MCPRouter(profile: "full")
         let request: [String: Any] = [

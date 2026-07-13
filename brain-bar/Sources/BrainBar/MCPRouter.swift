@@ -121,6 +121,7 @@ final class MCPRouter: @unchecked Sendable {
     private let dbPath: String?
     private let hybridSearchBudget: TimeInterval
     private let toolProfile: ToolProfile
+    private let paletteLock = NSLock()
     private var paletteExpanded = false
     let entityCache = EntityCache()
     private static let defaultStringMaxLength = 256
@@ -182,7 +183,11 @@ final class MCPRouter: @unchecked Sendable {
     }
 
     private var exposedToolDefinitions: [[String: Any]] {
-        if toolProfile == .full || paletteExpanded {
+        paletteLock.lock()
+        let expanded = paletteExpanded
+        paletteLock.unlock()
+
+        if toolProfile == .full || expanded {
             return Self.toolDefinitions
         }
 
@@ -215,6 +220,36 @@ final class MCPRouter: @unchecked Sendable {
             return array.map(removingDescriptions(from:))
         }
         return value
+    }
+
+    private func expandPalette() -> ToolOutput {
+        paletteLock.lock()
+        defer { paletteLock.unlock() }
+
+        guard !paletteExpanded else {
+            return ToolOutput(
+                text: "BrainLayer tool palette is already expanded.",
+                metadata: [
+                    "expanded": false,
+                    "already_expanded": true,
+                    "registered_tools": [String](),
+                ]
+            )
+        }
+
+        let deferredNames = Self.toolDefinitions.compactMap { definition -> String? in
+            guard let name = definition["name"] as? String else { return nil }
+            return Self.coreToolNames.contains(name) ? nil : name
+        }
+        paletteExpanded = true
+        return ToolOutput(
+            text: "Expanded BrainLayer tool palette.",
+            metadata: [
+                "expanded": true,
+                "already_expanded": false,
+                "registered_tools": deferredNames,
+            ]
+        )
     }
 
     /// Inject database for tool handlers + load entity cache.
@@ -330,6 +365,13 @@ final class MCPRouter: @unchecked Sendable {
 
         let arguments = params["arguments"] as? [String: Any] ?? [:]
 
+        if toolName == "expand_palette" {
+            guard toolProfile == .core else {
+                return jsonRPCError(id: id, code: -32601, message: "Unknown tool: \(toolName)")
+            }
+            return toolCallResult(id: id, output: expandPalette())
+        }
+
         // Check tool exists
         guard exposedToolDefinitions.contains(where: { ($0["name"] as? String) == toolName }) else {
             return jsonRPCError(id: id, code: -32601, message: "Unknown tool: \(toolName)")
@@ -339,19 +381,7 @@ final class MCPRouter: @unchecked Sendable {
         do {
             try Self.validate(arguments: arguments, for: toolName)
             let output = try dispatchTool(name: toolName, arguments: arguments)
-            var result: [String: Any] = [
-                "content": [
-                    ["type": "text", "text": output.text]
-                ]
-            ]
-            for (key, value) in output.metadata {
-                result[key] = value
-            }
-            return [
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": result
-            ]
+            return toolCallResult(id: id, output: output)
         } catch {
             return [
                 "jsonrpc": "2.0",
@@ -364,6 +394,22 @@ final class MCPRouter: @unchecked Sendable {
                 ] as [String: Any]
             ]
         }
+    }
+
+    private func toolCallResult(id: Any, output: ToolOutput) -> [String: Any] {
+        var result: [String: Any] = [
+            "content": [
+                ["type": "text", "text": output.text]
+            ]
+        ]
+        for (key, value) in output.metadata {
+            result[key] = value
+        }
+        return [
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": result,
+        ]
     }
 
     private func dispatchTool(name: String, arguments: [String: Any]) throws -> ToolOutput {
