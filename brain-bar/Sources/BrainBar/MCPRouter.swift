@@ -10,6 +10,32 @@
 import Foundation
 
 final class MCPRouter: @unchecked Sendable {
+    private enum ToolProfile {
+        case core
+        case full
+    }
+
+    private static let profileEnvironmentKey = "BRAINLAYER_MCP_PROFILE"
+    private static let coreToolNames: Set<String> = [
+        "brain_search",
+        "brain_store",
+        "brain_recall",
+        "brain_expand",
+    ]
+    private static let coreToolDescriptions: [String: String] = [
+        "brain_search": "Search memory.",
+        "brain_store": "Store memory.",
+        "brain_recall": "Recall context.",
+        "brain_expand": "Expand chunk.",
+    ]
+    nonisolated(unsafe) private static let expandPaletteToolDefinition: [String: Any] = [
+        "name": "expand_palette",
+        "description": "Expose all tools.",
+        "inputSchema": [
+            "type": "object",
+        ] as [String: Any],
+    ]
+
     // Keep contested MCP writes interactive: make one short attempt, then queue
     // for replay so brain_store returns well under the 1s prompt-queue budget.
     // Longer contention handling belongs in the deferred single-writer/backpressure
@@ -94,6 +120,8 @@ final class MCPRouter: @unchecked Sendable {
     private let hybridSearchClient: HybridSearchClientProtocol?
     private let dbPath: String?
     private let hybridSearchBudget: TimeInterval
+    private let toolProfile: ToolProfile
+    private var paletteExpanded = false
     let entityCache = EntityCache()
     private static let defaultStringMaxLength = 256
     private static let defaultStringArrayMaxItems = 100
@@ -121,13 +149,72 @@ final class MCPRouter: @unchecked Sendable {
     ]
 
     init(
+        profile: String? = nil,
         hybridSearchClient: HybridSearchClientProtocol? = nil,
         hybridSearchBudget: TimeInterval = 0.8,
         dbPath: String? = nil
     ) {
+        self.toolProfile = Self.resolveToolProfile(profile)
         self.hybridSearchClient = hybridSearchClient
         self.hybridSearchBudget = max(0.001, hybridSearchBudget)
         self.dbPath = dbPath
+    }
+
+    private static func resolveToolProfile(_ explicitProfile: String?) -> ToolProfile {
+        let environmentProfile = ProcessInfo.processInfo.environment[profileEnvironmentKey]
+        let rawProfile = explicitProfile ?? environmentProfile
+        let normalized = rawProfile?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+
+        switch normalized {
+        case "full", "operator":
+            return .full
+        case "", "core":
+            return .core
+        default:
+            if explicitProfile == nil, let rawProfile = environmentProfile {
+                let message = "BrainBar: unknown \(profileEnvironmentKey)=\(rawProfile); using core profile\n"
+                FileHandle.standardError.write(Data(message.utf8))
+            }
+            return .core
+        }
+    }
+
+    private var exposedToolDefinitions: [[String: Any]] {
+        if toolProfile == .full || paletteExpanded {
+            return Self.toolDefinitions
+        }
+
+        let coreDefinitions = Self.toolDefinitions.filter { definition in
+            guard let name = definition["name"] as? String else { return false }
+            return Self.coreToolNames.contains(name)
+        }.map(Self.compactCoreToolDefinition)
+        return coreDefinitions + [Self.expandPaletteToolDefinition]
+    }
+
+    private static func compactCoreToolDefinition(_ definition: [String: Any]) -> [String: Any] {
+        guard let name = definition["name"] as? String else { return definition }
+
+        var compact: [String: Any] = ["name": name]
+        compact["description"] = coreToolDescriptions[name]
+        if let inputSchema = definition["inputSchema"] as? [String: Any] {
+            compact["inputSchema"] = removingDescriptions(from: inputSchema)
+        }
+        return compact
+    }
+
+    private static func removingDescriptions(from value: Any) -> Any {
+        if let dictionary = value as? [String: Any] {
+            return dictionary.reduce(into: [String: Any]()) { result, entry in
+                guard entry.key != "description" else { return }
+                result[entry.key] = removingDescriptions(from: entry.value)
+            }
+        }
+        if let array = value as? [Any] {
+            return array.map(removingDescriptions(from:))
+        }
+        return value
     }
 
     /// Inject database for tool handlers + load entity cache.
@@ -204,7 +291,7 @@ final class MCPRouter: @unchecked Sendable {
             "result": [
                 "protocolVersion": "2024-11-05",
                 "capabilities": [
-                    "tools": ["listChanged": false],
+                    "tools": ["listChanged": true],
                     "experimental": [
                         "claude/channel": [:] as [String: Any]
                     ]
@@ -224,7 +311,7 @@ final class MCPRouter: @unchecked Sendable {
             "jsonrpc": "2.0",
             "id": id,
             "result": [
-                "tools": Self.toolDefinitions
+                "tools": exposedToolDefinitions
             ]
         ]
     }
@@ -244,7 +331,7 @@ final class MCPRouter: @unchecked Sendable {
         let arguments = params["arguments"] as? [String: Any] ?? [:]
 
         // Check tool exists
-        guard Self.toolDefinitions.contains(where: { ($0["name"] as? String) == toolName }) else {
+        guard exposedToolDefinitions.contains(where: { ($0["name"] as? String) == toolName }) else {
             return jsonRPCError(id: id, code: -32601, message: "Unknown tool: \(toolName)")
         }
 
