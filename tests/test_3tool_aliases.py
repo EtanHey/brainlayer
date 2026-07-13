@@ -14,7 +14,18 @@ Covers:
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from brainlayer.mcp.search_handler import _brain_recall, _smart_detect_mode
+
+
+@pytest.fixture(autouse=True)
+def _use_full_palette_for_legacy_contracts(monkeypatch):
+    """This module verifies handlers retained behind the explicit full profile."""
+    import brainlayer.mcp as mcp_server
+    from brainlayer.mcp.palette import ToolPalette
+
+    monkeypatch.setattr(mcp_server, "_tool_palette", ToolPalette("full"))
 
 # ── Smart Mode Detection ─────────────────────────────────────────────────────
 

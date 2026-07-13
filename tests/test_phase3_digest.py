@@ -287,23 +287,20 @@ def test_digest_content_applies_faceted_enrichment_and_marks_chunk_enriched(tmp_
 
 
 def test_brain_digest_tool_exists():
-    """brain_digest tool is registered in MCP server."""
-    import asyncio
+    """brain_digest tool is registered in the full MCP profile."""
 
-    from brainlayer.mcp import list_tools
+    from brainlayer.mcp import _full_tool_definitions
 
-    tools = asyncio.run(list_tools())
+    tools = _full_tool_definitions()
     tool_names = [t.name for t in tools]
     assert "brain_digest" in tool_names
 
 
 def test_brain_digest_schema_has_required_fields():
     """brain_digest tool exposes digest fields and mode-based enrich controls."""
-    import asyncio
+    from brainlayer.mcp import _full_tool_definitions
 
-    from brainlayer.mcp import list_tools
-
-    tools = asyncio.run(list_tools())
+    tools = _full_tool_definitions()
     digest = next(t for t in tools if t.name == "brain_digest")
     props = digest.inputSchema.get("properties", {})
     assert "content" in props
@@ -315,11 +312,9 @@ def test_brain_digest_schema_has_required_fields():
 
 def test_brain_digest_description_teaches_routing():
     """brain_digest description explains when to use it and how it differs from brain_store."""
-    import asyncio
+    from brainlayer.mcp import _full_tool_definitions
 
-    from brainlayer.mcp import list_tools
-
-    tools = asyncio.run(list_tools())
+    tools = _full_tool_definitions()
     digest = next(t for t in tools if t.name == "brain_digest")
     desc = digest.description.lower()
 
@@ -336,23 +331,20 @@ def test_brain_digest_description_teaches_routing():
 
 
 def test_brain_entity_tool_exists():
-    """brain_entity tool is registered in MCP server."""
-    import asyncio
+    """brain_entity tool is registered in the full MCP profile."""
 
-    from brainlayer.mcp import list_tools
+    from brainlayer.mcp import _full_tool_definitions
 
-    tools = asyncio.run(list_tools())
+    tools = _full_tool_definitions()
     tool_names = [t.name for t in tools]
     assert "brain_entity" in tool_names
 
 
 def test_brain_entity_schema():
     """brain_entity keeps query in properties even when optional."""
-    import asyncio
+    from brainlayer.mcp import _full_tool_definitions
 
-    from brainlayer.mcp import list_tools
-
-    tools = asyncio.run(list_tools())
+    tools = _full_tool_definitions()
     entity_tool = next(t for t in tools if t.name == "brain_entity")
     props = entity_tool.inputSchema.get("properties", {})
     assert "query" in props

@@ -67,9 +67,9 @@ class TestToolAnnotationsPresent:
     """Every tool MUST have ToolAnnotations with readOnlyHint, destructiveHint, idempotentHint."""
 
     def _get_tools(self):
-        from brainlayer.mcp import list_tools
+        from brainlayer.mcp import _full_tool_definitions
 
-        return asyncio.run(list_tools())
+        return _full_tool_definitions()
 
     def test_all_tools_have_annotations(self):
         """Every expected tool must have a non-None annotations field."""

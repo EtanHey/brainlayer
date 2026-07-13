@@ -122,9 +122,9 @@ class TestEntityTypeEnumAlignment:
 
     async def test_mcp_entity_enum_matches_canonical(self):
         """brain_entity entity_type enum must match the MCP schema contract."""
-        from brainlayer.mcp import list_tools
+        from brainlayer.mcp import _full_tool_definitions
 
-        tools = await list_tools()
+        tools = _full_tool_definitions()
         entity_tool = next(t for t in tools if t.name == "brain_entity")
         schema = entity_tool.inputSchema
         mcp_enum = schema["properties"]["entity_type"]["enum"]
