@@ -12,9 +12,12 @@ final class SocketIntegrationTests: XCTestCase {
     var server: BrainBarServer!
     var db: BrainDatabase!
     var tempDBPath: String!
+    var originalMCPProfile: String?
 
     override func setUp() {
         super.setUp()
+        originalMCPProfile = ProcessInfo.processInfo.environment["BRAINLAYER_MCP_PROFILE"]
+        setenv("BRAINLAYER_MCP_PROFILE", "full", 1)
         tempDBPath = NSTemporaryDirectory() + "brainbar-integration-\(UUID().uuidString).db"
         db = BrainDatabase(path: tempDBPath)
         server = BrainBarServer(socketPath: testSocketPath, dbPath: tempDBPath, database: db)
@@ -28,6 +31,11 @@ final class SocketIntegrationTests: XCTestCase {
         try? FileManager.default.removeItem(atPath: tempDBPath)
         try? FileManager.default.removeItem(atPath: tempDBPath + "-wal")
         try? FileManager.default.removeItem(atPath: tempDBPath + "-shm")
+        if let originalMCPProfile {
+            setenv("BRAINLAYER_MCP_PROFILE", originalMCPProfile, 1)
+        } else {
+            unsetenv("BRAINLAYER_MCP_PROFILE")
+        }
         super.tearDown()
     }
 
