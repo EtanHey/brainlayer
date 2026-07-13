@@ -80,9 +80,9 @@ async def test_brain_digest_missing_content_with_mode_digest_errors():
 
 
 def test_brain_digest_input_schema_includes_mode_and_limit():
-    from brainlayer.mcp import list_tools
+    from brainlayer.mcp import _full_tool_definitions
 
-    tools = asyncio.run(list_tools())
+    tools = _full_tool_definitions()
     digest = next(t for t in tools if t.name == "brain_digest")
     props = digest.inputSchema["properties"]
 
