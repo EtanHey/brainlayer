@@ -17,18 +17,30 @@ Pinned shared surfaces:
 
 ## 2. BrainBar MCP Router Over `/tmp/brainbar.sock`
 
-BrainBar is the MCP surface of record. Its router dispatches 17 tools at `brain-bar/Sources/BrainBar/MCPRouter.swift:195` and defines the tool schemas at `brain-bar/Sources/BrainBar/MCPRouter.swift:950`.
+BrainBar is the MCP surface of record. Its router keeps 17 canonical definitions and dispatch handlers in `brain-bar/Sources/BrainBar/MCPRouter.swift`.
 
 Canonical BrainBar tools:
 
 `brain_search`, `brain_store`, `brain_get_person`, `brain_recall`, `brain_entity`, `brain_digest`, `brain_update`, `brain_expand`, `brain_tags`, `brain_supersede`, `brain_archive`, `brain_enrich`, `brain_subscribe`, `brain_unsubscribe`, `brain_ack`, `brain_maintenance_rebuild_trigram`, `brain_backup_vacuum_into`.
 
-Python `src/brainlayer/mcp/` remains the secondary transport with 13 tools defined at `src/brainlayer/mcp/__init__.py:387`, `src/brainlayer/mcp/__init__.py:543`, `src/brainlayer/mcp/__init__.py:568`, `src/brainlayer/mcp/__init__.py:672`, `src/brainlayer/mcp/__init__.py:701`, `src/brainlayer/mcp/__init__.py:862`, `src/brainlayer/mcp/__init__.py:905`, `src/brainlayer/mcp/__init__.py:974`, `src/brainlayer/mcp/__init__.py:999`, `src/brainlayer/mcp/__init__.py:1042`, `src/brainlayer/mcp/__init__.py:1080`, `src/brainlayer/mcp/__init__.py:1113`, and `src/brainlayer/mcp/__init__.py:1135`.
+Python `src/brainlayer/mcp/` remains the secondary transport with 13 canonical definitions built by `_full_tool_definitions()` in `src/brainlayer/mcp/__init__.py`.
 
 Differences:
 
 - BrainBar-only: `brain_subscribe`, `brain_unsubscribe`, `brain_ack`, `brain_maintenance_rebuild_trigram`, `brain_backup_vacuum_into`.
 - Python-only: `brain_resume`.
+
+### MCP palette profiles
+
+Both transports resolve `BRAINLAYER_MCP_PROFILE` once per server session:
+
+- missing, blank, `core`, or an unknown value exposes `brain_search`, `brain_store`, `brain_recall`, `brain_expand`, and the `expand_palette` control tool;
+- `full` and `operator` expose the transport's complete canonical inventory and omit the redundant control;
+- unknown values fail closed to core rather than exposing operator tools.
+
+BrainBar's core declarations are compact projections of the canonical definitions: names and validation-relevant input-schema fields remain, verbose description/annotation metadata is omitted or shortened, and full/operator definitions stay byte-for-byte unchanged. Python core mode selects the existing `Tool` objects directly. Neither transport deletes or renames a canonical handler.
+
+Calling `expand_palette` in a core session exposes the complete inventory for subsequent `tools/list` and `tools/call` requests. The first receipt contains `expanded: true`, `already_expanded: false`, and the newly registered names; later calls are successful no-ops with `already_expanded: true`. BrainBar advertises `tools.listChanged = true`; clients refresh on the next `tools/list` because this router seam does not push a notification.
 
 ## 3. Hybrid Helper Subprocess And Socket
 

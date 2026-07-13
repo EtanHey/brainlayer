@@ -8,7 +8,6 @@ import brainlayer.mcp as mcp_module
 from brainlayer.mcp import _full_tool_definitions, call_tool, list_tools
 from brainlayer.mcp.palette import CORE_TOOL_NAMES, ToolPalette
 
-
 CORE_WITH_CONTROL = (*CORE_TOOL_NAMES, "expand_palette")
 
 

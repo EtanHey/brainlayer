@@ -47,7 +47,7 @@ The resident core is exactly:
 
 `MCPRouter` receives an optional profile override for deterministic tests and otherwise reads `BRAINLAYER_MCP_PROFILE` during initialization. It stores a boolean expanded state behind the router instance.
 
-`tools/list` selects definitions from the immutable canonical `toolDefinitions` array. Core selection preserves canonical schema objects byte-for-byte and appends a minimal `expand_palette` definition. Full/operator selection returns all 17 canonical definitions and omits the redundant control.
+`tools/list` derives compact core declarations from the immutable canonical `toolDefinitions` array and appends a minimal `expand_palette` definition. The projection keeps names and validation-relevant input-schema fields while removing verbose nested descriptions/annotations and shortening top-level descriptions. This was required because the current in-repo Core 4 serialized to 3,722 bytes even though the older live-front audit payload was 1,263 bytes. Full/operator selection returns all 17 canonical definitions byte-for-byte and omits the redundant control.
 
 `tools/call` validates against the currently exposed definitions. A deferred tool called before expansion receives the existing unknown-tool JSON-RPC error. `expand_palette` is handled without touching the database, flips the session once, and returns an idempotent structured receipt containing `expanded`, `already_expanded`, and the newly exposed names. Subsequent calls are successful no-ops.
 
@@ -63,7 +63,7 @@ The existing `call_tool` branches remain intact. A profile exposure guard reject
 
 - No database, schema, migration, search, or write-path code changes.
 - No canonical tool definition or handler is deleted.
-- Core schemas are selected from the existing definitions rather than copied, preventing schema drift.
+- Core schemas are mechanically projected from the existing definitions, keeping validation-relevant fields tied to the canonical source while dropping only boot-cost metadata.
 - Full/operator output is contract-compatible with today's complete inventory.
 - `brain_expand` remains resident despite its Python deprecation notice because the live corpus and handoff explicitly require Core 4 for this release.
 - Unknown profiles fail closed to core.

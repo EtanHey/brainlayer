@@ -52,7 +52,7 @@ In `MCPRouter.swift`:
 - add `BRAINLAYER_MCP_PROFILE` resolution in `init`, with an optional explicit profile for tests;
 - represent `core`, `full`, and `operator` without modifying `toolDefinitions`;
 - add one router-local `paletteExpanded` boolean;
-- compute `exposedToolDefinitions` as Core 4 plus a minimal control definition, or all 17 canonical definitions;
+- compute compact core projections from the canonical Core 4 (preserving validation fields while dropping verbose descriptive metadata) plus a minimal control definition, or all 17 canonical definitions unchanged;
 - make `handleToolsList` return `exposedToolDefinitions`;
 - make the existing call guard validate against exposed definitions;
 - set `tools.listChanged` to true.
