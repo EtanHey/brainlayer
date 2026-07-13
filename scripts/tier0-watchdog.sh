@@ -12,6 +12,7 @@ TIER0_ID=${TIER0_ID:-/usr/bin/id}
 TIER0_SLEEP=${TIER0_SLEEP:-/bin/sleep}
 TIER0_DIRNAME=${TIER0_DIRNAME:-/usr/bin/dirname}
 TIER0_MKDIR=${TIER0_MKDIR:-/bin/mkdir}
+TIER0_GREP=${TIER0_GREP:-/usr/bin/grep}
 
 TIER0_LABEL=${TIER0_LABEL:-com.brainlayer.health-check}
 if [ -z "${TIER0_DOMAIN:-}" ]; then
@@ -193,6 +194,10 @@ if [ "$label_loaded" -eq 1 ]; then
                 fi
                 ;;
         esac
+        if [ -z "$failure_reason" ] && "$TIER0_GREP" -Eq '"slow_check"[[:space:]]*:[[:space:]]*true' "$TIER0_STATE_PATH" 2>/dev/null; then
+            failure_reason=state_slow_check
+            failure_key=state_slow_check
+        fi
     fi
 fi
 

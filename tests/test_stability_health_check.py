@@ -349,6 +349,83 @@ def test_missing_embedding_count_interrupts_at_internal_deadline(tmp_path, monke
     assert callbacks[0]() == 1
 
 
+def test_source_recent_returns_at_deadline_when_glob_iteration_stalls(tmp_path, monkeypatch):
+    import glob
+    import threading
+    import time
+
+    release_glob = threading.Event()
+
+    def stalled_glob(*_args, **_kwargs):
+        release_glob.wait()
+        yield str(tmp_path / "event.jsonl")
+
+    monkeypatch.setattr(glob, "iglob", stalled_glob)
+    outcome: dict[str, object] = {}
+
+    def call_source_recent() -> None:
+        try:
+            health_check._source_recent(
+                HealthCheckConfig(source_jsonl_globs=(str(tmp_path / "**" / "*.jsonl"),)),
+                datetime(2026, 7, 13, 9, 0, tzinfo=UTC),
+                60,
+                deadline_at=time.monotonic() + 0.05,
+            )
+        except Exception as exc:
+            outcome["error"] = exc
+
+    caller = threading.Thread(target=call_source_recent)
+    caller.start()
+    caller.join(timeout=0.25)
+    returned_before_release = not caller.is_alive()
+    release_glob.set()
+    caller.join(timeout=1)
+
+    assert returned_before_release is True
+    assert isinstance(outcome.get("error"), health_check.HealthCheckDeadlineExceeded)
+
+
+def test_ps_snapshot_failure_does_not_heal_a_running_daemon_as_dead(tmp_path):
+    db_path = tmp_path / "brainlayer.db"
+    state_path = tmp_path / "health-state.json"
+    _make_db(db_path, total=1, vector_rows=1)
+    commands: list[list[str]] = []
+
+    def command_runner(args):
+        commands.append(args)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    result = run_health_check(
+        HealthCheckConfig(
+            db_path=db_path,
+            state_path=state_path,
+            heal=True,
+            heal_min_consecutive_failures=1,
+        ),
+        ps_output_fn=lambda: None,
+        socket_request_fn=_ok_canary,
+        command_runner=command_runner,
+        now_fn=lambda: datetime(2026, 7, 13, 9, 0, tzinfo=UTC),
+    )
+
+    issue_codes = {issue.code for issue in result.issues}
+    assert "process_snapshot_failed" in issue_codes
+    assert "hotlane_dead" not in issue_codes
+    assert not any(
+        args[:3] == ["launchctl", "kickstart", "-k"] and args[-1].endswith("/com.brainlayer.hotlane")
+        for args in commands
+    )
+
+
+def test_default_ps_output_marks_timeout_as_unavailable(monkeypatch):
+    def timeout(*_args, **_kwargs):
+        raise health_check.subprocess.TimeoutExpired(cmd=["ps"], timeout=5)
+
+    monkeypatch.setattr(health_check.subprocess, "run", timeout)
+
+    assert health_check._default_ps_output() is None
+
+
 def test_lock_holder_wedge_flags_live_holder_when_drain_is_starved(tmp_path, monkeypatch):
     db_path = tmp_path / "brainlayer.db"
     state_path = tmp_path / "health-state.json"

@@ -10,6 +10,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
@@ -204,7 +205,7 @@ CommandRunner = Callable[[list[str]], Any]
 SocketRequestFn = Callable[[Path, str, float], dict[str, Any]]
 
 
-def _default_ps_output() -> str:
+def _default_ps_output() -> str | None:
     try:
         result = subprocess.run(
             ["ps", "axo", "pid=,command="],
@@ -213,9 +214,9 @@ def _default_ps_output() -> str:
             check=False,
             timeout=5,
         )
-        return result.stdout
+        return result.stdout if result.returncode == 0 else None
     except (FileNotFoundError, subprocess.TimeoutExpired):
-        return ""
+        return None
 
 
 def _default_command_runner(args: list[str]) -> subprocess.CompletedProcess[str]:
@@ -802,17 +803,41 @@ def _source_recent(
 ) -> bool:
     import glob
 
-    cutoff = now.timestamp() - window_seconds
-    for pattern in config.source_jsonl_globs:
-        for raw_path in glob.iglob(str(Path(pattern).expanduser()), recursive=True):
-            if deadline_at is not None and monotonic_fn() >= deadline_at:
-                raise HealthCheckDeadlineExceeded("health-check deadline exceeded during source_recent")
-            try:
-                if Path(raw_path).stat().st_mtime >= cutoff:
-                    return True
-            except OSError:
-                continue
-    return False
+    def scan() -> bool:
+        cutoff = now.timestamp() - window_seconds
+        for pattern in config.source_jsonl_globs:
+            for raw_path in glob.iglob(str(Path(pattern).expanduser()), recursive=True):
+                try:
+                    if Path(raw_path).stat().st_mtime >= cutoff:
+                        return True
+                except OSError:
+                    continue
+        return False
+
+    if deadline_at is None:
+        return scan()
+
+    remaining = deadline_at - monotonic_fn()
+    if remaining <= 0:
+        raise HealthCheckDeadlineExceeded("health-check deadline exceeded during source_recent")
+
+    completed = threading.Event()
+    outcome: dict[str, Any] = {}
+
+    def bounded_scan() -> None:
+        try:
+            outcome["value"] = scan()
+        except Exception as exc:
+            outcome["error"] = exc
+        finally:
+            completed.set()
+
+    threading.Thread(target=bounded_scan, name="brainlayer-health-source-scan", daemon=True).start()
+    if not completed.wait(timeout=remaining):
+        raise HealthCheckDeadlineExceeded("health-check deadline exceeded during source_recent")
+    if error := outcome.get("error"):
+        raise error
+    return bool(outcome.get("value", False))
 
 
 def _queue_stats(queue_dir: Path, now: datetime) -> tuple[int, int, float | None]:
@@ -864,7 +889,7 @@ def _plist_for_label(config: HealthCheckConfig, label: str) -> Path:
 def run_health_check(
     config: HealthCheckConfig,
     *,
-    ps_output_fn: Callable[[], str] = _default_ps_output,
+    ps_output_fn: Callable[[], str | None] = _default_ps_output,
     socket_request_fn: SocketRequestFn = send_brainbar_search_canary,
     command_runner: CommandRunner = _default_command_runner,
     now_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -911,21 +936,32 @@ def run_health_check(
         return finish_slow(stage, f"health-check exceeded {config.max_duration_seconds:.0f}s during {stage}")
 
     ps_output = ps_output_fn()
-    lock_holder = _read_writer_lock_holder(config.db_path, ps_output)
-    result.lock_holder = lock_holder
-    hotlane_processes = parse_hotlane_processes(ps_output)
-    result.hotlane_running = bool(hotlane_processes)
-    if not hotlane_processes:
-        add_issue("hotlane_dead", "critical", "hotlane BrainBar embedding daemon is not running")
-        heal_issue_labels["hotlane_dead"] = (config.hotlane_label, _plist_for_label(config, config.hotlane_label))
+    lock_holder = None
+    if ps_output is None:
+        add_issue(
+            "process_snapshot_failed",
+            "critical",
+            "could not read the process table; daemon liveness and writer ownership were not evaluated",
+        )
     else:
-        result.backlog_batch = min(process.backlog_batch for process in hotlane_processes)
-        if any(process.backlog_batch <= 0 for process in hotlane_processes):
-            add_issue("hotlane_backlog_disabled", "critical", "--backlog-batch is 0; embeddings will not drain")
-            heal_issue_labels["hotlane_backlog_disabled"] = (
+        lock_holder = _read_writer_lock_holder(config.db_path, ps_output)
+        result.lock_holder = lock_holder
+        hotlane_processes = parse_hotlane_processes(ps_output)
+        result.hotlane_running = bool(hotlane_processes)
+        if not hotlane_processes:
+            add_issue("hotlane_dead", "critical", "hotlane BrainBar embedding daemon is not running")
+            heal_issue_labels["hotlane_dead"] = (
                 config.hotlane_label,
                 _plist_for_label(config, config.hotlane_label),
             )
+        else:
+            result.backlog_batch = min(process.backlog_batch for process in hotlane_processes)
+            if any(process.backlog_batch <= 0 for process in hotlane_processes):
+                add_issue("hotlane_backlog_disabled", "critical", "--backlog-batch is 0; embeddings will not drain")
+                heal_issue_labels["hotlane_backlog_disabled"] = (
+                    config.hotlane_label,
+                    _plist_for_label(config, config.hotlane_label),
+                )
 
     previous_missing = state.get("missing_vectors")
     result.previous_missing_vectors = int(previous_missing) if isinstance(previous_missing, int) else None

@@ -39,9 +39,10 @@ The command writes the latest successfully measured missing-vector count to
 `~/.local/share/brainlayer/health-check-state.json`; a timed-out tick preserves
 the previous count and marks the state as slow.
 
-The independent Tier-0 watchdog treats that state as stale after 900 seconds.
-Its first alert is immediate; repeat alerts for the same failure class are
-suppressed for 1,800 seconds while recovery attempts continue.
+The independent Tier-0 watchdog treats `slow_check: true` as unhealthy even
+when the state file was just refreshed, and treats any state as stale after 900
+seconds. Its first alert is immediate; repeat alerts for the same failure class
+are suppressed for 1,800 seconds while recovery attempts continue.
 
 ## Logs
 

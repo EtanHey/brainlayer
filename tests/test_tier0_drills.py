@@ -48,6 +48,7 @@ def _run_drill(
     last_alert_epoch: int | None = None,
     last_alert_reason: str = "",
     repeat_alert_seconds: int = 1_800,
+    state_contents: str = "{}\n",
 ) -> DrillResult:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -65,7 +66,7 @@ def _run_drill(
         )
 
     if state_mtime is not None:
-        state_path.write_text("{}\n", encoding="utf-8")
+        state_path.write_text(state_contents, encoding="utf-8")
 
     _write_executable(
         fake_bin / "launchctl",
@@ -278,6 +279,21 @@ def test_future_state_mtime_alerts_and_kickstarts(tmp_path: Path) -> None:
     _assert_alert_contract(result)
     assert not any(event.startswith("launchctl:bootstrap ") for event in result.events)
     assert "state_mtime_future offset=60s" in result.tier0_log
+
+
+def test_fresh_slow_check_state_alerts_and_kickstarts(tmp_path: Path) -> None:
+    result = _run_drill(
+        tmp_path,
+        label_loaded=True,
+        state_mtime=NOW_EPOCH - 60,
+        state_contents='{"slow_check": true, "slow_check_stage": "missing_embeddings"}\n',
+    )
+
+    assert result.process.returncode == 1, result.process.stdout + result.process.stderr
+    _assert_alert_contract(result)
+    assert not any(event.startswith("launchctl:bootstrap ") for event in result.events)
+    assert "state_slow_check" in result.tier0_log
+    assert result.alert_state == f"{NOW_EPOCH}\tstate_slow_check\n"
 
 
 def test_alert_fanout_uses_one_shared_deadline(tmp_path: Path) -> None:
