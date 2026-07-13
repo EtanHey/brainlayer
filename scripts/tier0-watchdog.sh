@@ -26,8 +26,10 @@ fi
 TIER0_STATE_PATH=${TIER0_STATE_PATH:-$HOME/.local/share/brainlayer/health-check-state.json}
 TIER0_HEALTH_PLIST_PATH=${TIER0_HEALTH_PLIST_PATH:-$HOME/Library/LaunchAgents/com.brainlayer.health-check.plist}
 TIER0_LOG_PATH=${TIER0_LOG_PATH:-$HOME/.local/share/brainlayer/logs/tier0-watchdog.log}
+TIER0_ALERT_STATE_PATH=${TIER0_ALERT_STATE_PATH:-$HOME/.local/share/brainlayer/tier0-watchdog-alert-state}
 TIER0_NOTIFY_ENDPOINT=${TIER0_NOTIFY_ENDPOINT:-http://localhost:3847/notify}
-TIER0_STALE_SECONDS=${TIER0_STALE_SECONDS:-1200}
+TIER0_STALE_SECONDS=${TIER0_STALE_SECONDS:-900}
+TIER0_REPEAT_ALERT_SECONDS=${TIER0_REPEAT_ALERT_SECONDS:-1800}
 TIER0_ALERT_TIMEOUT_SECONDS=${TIER0_ALERT_TIMEOUT_SECONDS:-3}
 TIER0_NOTIFY_TIMEOUT_SECONDS=${TIER0_NOTIFY_TIMEOUT_SECONDS:-3}
 
@@ -54,6 +56,7 @@ require_epoch() {
 }
 
 require_positive_integer TIER0_STALE_SECONDS "$TIER0_STALE_SECONDS"
+require_positive_integer TIER0_REPEAT_ALERT_SECONDS "$TIER0_REPEAT_ALERT_SECONDS"
 require_positive_integer TIER0_ALERT_TIMEOUT_SECONDS "$TIER0_ALERT_TIMEOUT_SECONDS"
 require_positive_integer TIER0_NOTIFY_TIMEOUT_SECONDS "$TIER0_NOTIFY_TIMEOUT_SECONDS"
 
@@ -121,33 +124,71 @@ alert_all_channels() {
     wait_for_alerts "$log_pid" "$osascript_pid" "$curl_pid"
 }
 
+should_alert() {
+    failure_key=$1
+    if [ ! -f "$TIER0_ALERT_STATE_PATH" ]; then
+        return 0
+    fi
+
+    last_alert_epoch=
+    last_failure_key=
+    IFS="$(printf '\t')" read -r last_alert_epoch last_failure_key < "$TIER0_ALERT_STATE_PATH" || return 0
+    case "$last_alert_epoch" in
+        ''|*[!0-9]*) return 0 ;;
+    esac
+    if [ "$last_failure_key" != "$failure_key" ] || [ "$last_alert_epoch" -gt "$now_epoch" ]; then
+        return 0
+    fi
+    alert_age=$((now_epoch - last_alert_epoch))
+    [ "$alert_age" -ge "$TIER0_REPEAT_ALERT_SECONDS" ]
+}
+
+record_alert() {
+    failure_key=$1
+    alert_state_dir=$($TIER0_DIRNAME "$TIER0_ALERT_STATE_PATH" 2>/dev/null) || return 1
+    "$TIER0_MKDIR" -p "$alert_state_dir" 2>/dev/null || return 1
+    printf '%s\t%s\n' "$now_epoch" "$failure_key" > "$TIER0_ALERT_STATE_PATH"
+}
+
+reset_alert_cooldown() {
+    if [ -f "$TIER0_ALERT_STATE_PATH" ]; then
+        printf '0\tok\n' > "$TIER0_ALERT_STATE_PATH"
+    fi
+}
+
 target="$TIER0_DOMAIN/$TIER0_LABEL"
 failure_reason=
+failure_key=
 label_loaded=0
 
 if "$TIER0_LAUNCHCTL" print "$target" >/dev/null 2>&1; then
     label_loaded=1
 else
     failure_reason=label_unloaded
+    failure_key=label_unloaded
 fi
 
 if [ "$label_loaded" -eq 1 ]; then
     if [ ! -f "$TIER0_STATE_PATH" ]; then
         failure_reason=state_missing
+        failure_key=state_missing
     else
         state_mtime=$($TIER0_STAT -f %m "$TIER0_STATE_PATH" 2>/dev/null) || state_mtime=
         case "$state_mtime" in
             ''|*[!0-9]*)
                 failure_reason=state_mtime_unreadable
+                failure_key=state_mtime_unreadable
                 ;;
             *)
                 if [ "$state_mtime" -gt "$now_epoch" ]; then
                     future_offset=$((state_mtime - now_epoch))
                     failure_reason="state_mtime_future offset=${future_offset}s"
+                    failure_key=state_mtime_future
                 else
                     state_age=$((now_epoch - state_mtime))
                     if [ "$state_age" -ge "$TIER0_STALE_SECONDS" ]; then
                         failure_reason="state_stale age=${state_age}s threshold=${TIER0_STALE_SECONDS}s"
+                        failure_key=state_stale
                     fi
                 fi
                 ;;
@@ -156,11 +197,15 @@ if [ "$label_loaded" -eq 1 ]; then
 fi
 
 if [ -z "$failure_reason" ]; then
+    reset_alert_cooldown
     exit 0
 fi
 
-# Detection and all alert attempts intentionally precede every recovery command.
-alert_all_channels "$failure_reason"
+# Detection and all due alert attempts intentionally precede every recovery command.
+if should_alert "$failure_key"; then
+    alert_all_channels "$failure_reason"
+    record_alert "$failure_key" || :
+fi
 
 if [ "$label_loaded" -eq 0 ]; then
     "$TIER0_LAUNCHCTL" bootstrap "$TIER0_DOMAIN" "$TIER0_HEALTH_PLIST_PATH" >/dev/null 2>&1 || :

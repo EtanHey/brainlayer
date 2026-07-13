@@ -25,6 +25,7 @@ class DrillResult:
     process: subprocess.CompletedProcess[str]
     events: list[str]
     tier0_log: str
+    alert_state: str
 
 
 def _write_executable(path: Path, contents: str) -> None:
@@ -44,6 +45,9 @@ def _run_drill(
     curl_hangs: bool = False,
     osascript_hangs: bool = False,
     use_fake_wait_sleep: bool = False,
+    last_alert_epoch: int | None = None,
+    last_alert_reason: str = "",
+    repeat_alert_seconds: int = 1_800,
 ) -> DrillResult:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -51,7 +55,14 @@ def _run_drill(
     state_path = tmp_path / "health-check-state.json"
     health_plist_path = tmp_path / "com.example.brainlayer-health-check.plist"
     tier0_log_path = tmp_path / "logs" / "tier0-watchdog.log"
+    alert_state_path = tmp_path / "tier0-watchdog-alert-state"
     health_plist_path.write_text("fixture\n", encoding="utf-8")
+
+    if last_alert_epoch is not None:
+        alert_state_path.write_text(
+            f"{last_alert_epoch}\t{last_alert_reason}\n",
+            encoding="utf-8",
+        )
 
     if state_mtime is not None:
         state_path.write_text("{}\n", encoding="utf-8")
@@ -117,6 +128,7 @@ def _run_drill(
         "FAKE_LAUNCHCTL_PRINT_EXIT": "0" if label_loaded else "113",
         "FAKE_STATE_MTIME": str(state_mtime or 0),
         "TIER0_ALERT_TIMEOUT_SECONDS": "1",
+        "TIER0_ALERT_STATE_PATH": str(alert_state_path),
         "TIER0_CURL": str(fake_bin / "curl"),
         "TIER0_DOMAIN": DOMAIN,
         "TIER0_DRILL_EVENTS": str(events_path),
@@ -126,6 +138,7 @@ def _run_drill(
         "TIER0_LOG_PATH": str(tier0_log_path),
         "TIER0_NOTIFY_ENDPOINT": NOTIFY_ENDPOINT,
         "TIER0_NOTIFY_TIMEOUT_SECONDS": "1",
+        "TIER0_REPEAT_ALERT_SECONDS": str(repeat_alert_seconds),
         "TIER0_NOW_EPOCH": str(NOW_EPOCH),
         "TIER0_OSASCRIPT": str(fake_bin / "osascript"),
         "TIER0_SLEEP": str(fake_bin / "wait-sleep") if use_fake_wait_sleep else "/bin/sleep",
@@ -143,7 +156,8 @@ def _run_drill(
     )
     events = events_path.read_text(encoding="utf-8").splitlines() if events_path.exists() else []
     tier0_log = tier0_log_path.read_text(encoding="utf-8") if tier0_log_path.exists() else ""
-    return DrillResult(process=process, events=events, tier0_log=tier0_log)
+    alert_state = alert_state_path.read_text(encoding="utf-8") if alert_state_path.exists() else ""
+    return DrillResult(process=process, events=events, tier0_log=tier0_log, alert_state=alert_state)
 
 
 def _assert_alert_contract(result: DrillResult) -> None:
@@ -188,6 +202,24 @@ def test_d2_stale_state_alerts_before_direct_kickstart(tmp_path: Path) -> None:
     _assert_alert_contract(result)
     assert not any(event.startswith("launchctl:bootstrap ") for event in result.events)
     assert f"state_stale age={STALE_SECONDS + 1}s threshold={STALE_SECONDS}s" in result.tier0_log
+    assert result.alert_state == f"{NOW_EPOCH}\tstate_stale\n"
+
+
+def test_repeat_stale_alert_is_suppressed_during_cooldown_but_recovery_still_runs(tmp_path: Path) -> None:
+    result = _run_drill(
+        tmp_path,
+        label_loaded=True,
+        state_mtime=NOW_EPOCH - STALE_SECONDS - 1,
+        last_alert_epoch=NOW_EPOCH - 300,
+        last_alert_reason="state_stale",
+    )
+
+    assert result.process.returncode == 1
+    assert not any(event.startswith("osascript:") for event in result.events)
+    assert not any(event.startswith("curl:") for event in result.events)
+    assert result.tier0_log == ""
+    assert any(event == f"launchctl:kickstart -k {DOMAIN}/{LABEL}" for event in result.events)
+    assert result.alert_state == f"{NOW_EPOCH - 300}\tstate_stale\n"
 
 
 def test_d3_hanging_notify_endpoint_cannot_suppress_local_alert_or_heal(tmp_path: Path) -> None:
@@ -214,6 +246,19 @@ def test_d4_loaded_label_and_fresh_state_do_nothing(tmp_path: Path) -> None:
         f"stat:-f %m {tmp_path / 'health-check-state.json'}",
     ]
     assert result.tier0_log == ""
+
+
+def test_fresh_state_resets_prior_incident_alert_cooldown(tmp_path: Path) -> None:
+    result = _run_drill(
+        tmp_path,
+        label_loaded=True,
+        state_mtime=NOW_EPOCH - 60,
+        last_alert_epoch=NOW_EPOCH - 300,
+        last_alert_reason="state_stale",
+    )
+
+    assert result.process.returncode == 0
+    assert result.alert_state == "0\tok\n"
 
 
 def test_missing_state_alerts_and_kickstarts_without_bootstrap(tmp_path: Path) -> None:
@@ -257,6 +302,11 @@ def test_tier0_launchagent_uses_bin_sh_without_python_wrapper() -> None:
     assert plist["ProgramArguments"] == ["/bin/sh", "__TIER0_WATCHDOG_SCRIPT__"]
     assert plist["StartInterval"] == 300
     assert plist["RunAtLoad"] is True
+    assert plist["EnvironmentVariables"]["TIER0_STALE_SECONDS"] == "900"
+    assert plist["EnvironmentVariables"]["TIER0_REPEAT_ALERT_SECONDS"] == "1800"
+    assert plist["EnvironmentVariables"]["TIER0_ALERT_STATE_PATH"] == (
+        "__HOME__/.local/share/brainlayer/tier0-watchdog-alert-state"
+    )
     args = " ".join(plist["ProgramArguments"])
     assert "ENV_RUN" not in args
     assert "PYTHON" not in args.upper()

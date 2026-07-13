@@ -562,6 +562,11 @@ def test_packaged_launchd_installer_installs_tier0_watchdog_without_env_runner(t
     rendered = home / "Library" / "LaunchAgents" / "com.brainlayer.tier0-watchdog.plist"
     plist = plistlib.loads(rendered.read_bytes())
     assert plist["ProgramArguments"] == ["/bin/sh", str(installed_script)]
+    assert plist["EnvironmentVariables"]["TIER0_STALE_SECONDS"] == "900"
+    assert plist["EnvironmentVariables"]["TIER0_REPEAT_ALERT_SECONDS"] == "1800"
+    assert plist["EnvironmentVariables"]["TIER0_ALERT_STATE_PATH"] == str(
+        home / ".local" / "share" / "brainlayer" / "tier0-watchdog-alert-state"
+    )
     rendered_content = rendered.read_text(encoding="utf-8")
     assert "__TIER0_WATCHDOG_SCRIPT__" not in rendered_content
     assert "brainlayer-env-run" not in rendered_content

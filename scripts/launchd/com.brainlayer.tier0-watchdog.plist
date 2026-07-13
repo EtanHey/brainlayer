@@ -15,6 +15,12 @@
 		<string>__HOME__</string>
 		<key>PATH</key>
 		<string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<key>TIER0_ALERT_STATE_PATH</key>
+		<string>__HOME__/.local/share/brainlayer/tier0-watchdog-alert-state</string>
+		<key>TIER0_REPEAT_ALERT_SECONDS</key>
+		<string>1800</string>
+		<key>TIER0_STALE_SECONDS</key>
+		<string>900</string>
 	</dict>
 	<key>StandardOutPath</key>
 	<string>__HOME__/Library/Logs/brainlayer/tier0-watchdog.out.log</string>

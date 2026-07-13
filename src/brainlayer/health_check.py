@@ -10,6 +10,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import time
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -43,7 +44,44 @@ DEFAULT_INDEX_LABEL = "com.brainlayer.index"
 DEFAULT_BACKLOG_BATCH = 4
 DEFAULT_HEAL_MIN_CONSECUTIVE_FAILURES = 2
 DEFAULT_HEAL_CIRCUIT_BREAKER_LIMIT = 3
+DEFAULT_MAX_DURATION_SECONDS = 45.0
 HEAL_MIN_CONSECUTIVE_FAILURES_ENV = "BRAINLAYER_HEAL_MIN_CONSECUTIVE_FAILURES"
+
+MISSING_EMBEDDINGS_SQL = """
+    SELECT COUNT(*)
+    FROM chunks c
+    JOIN (
+        SELECT id FROM chunks
+        EXCEPT
+        SELECT id FROM chunk_vectors_rowids
+    ) missing ON missing.id = c.id
+    WHERE c.content IS NOT NULL
+      AND c.content != ''
+      AND c.archived_at IS NULL
+      AND c.superseded_by IS NULL
+      AND c.aggregated_into IS NULL
+      AND COALESCE(c.archived, 0) = 0
+      AND COALESCE(c.status, 'active') = 'active'
+"""
+
+ENRICHMENT_BACKLOG_SQL = """
+    SELECT COUNT(*)
+    FROM chunks
+    WHERE enriched_at IS NULL
+      AND enrich_status IS NULL
+      AND COALESCE(char_count, length(content), 0) >= 50
+      AND content IS NOT NULL
+      AND content != ''
+      AND archived_at IS NULL
+      AND superseded_by IS NULL
+      AND aggregated_into IS NULL
+      AND COALESCE(archived, 0) = 0
+      AND COALESCE(status, 'active') = 'active'
+"""
+
+
+class HealthCheckDeadlineExceeded(RuntimeError):
+    """Raised when a read-only health query consumes the check's time budget."""
 
 
 def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
@@ -113,6 +151,7 @@ class HealthCheckConfig:
     queue_page_oldest_seconds: int = 4 * 60 * 60
     queue_page_bytes: int = 2 * 1024 * 1024 * 1024
     heal_circuit_breaker_limit: int = DEFAULT_HEAL_CIRCUIT_BREAKER_LIMIT
+    max_duration_seconds: float = DEFAULT_MAX_DURATION_SECONDS
     heal: bool = False
     socket_timeout_seconds: float = 5.0
     max_stalled_ticks: int = 2
@@ -153,6 +192,9 @@ class HealthCheckResult:
     lock_holder: LockHolder | None = None
     canary_ok: bool = False
     canary_result_count: int | None = None
+    duration_seconds: float = 0.0
+    slow_check: bool = False
+    slow_check_stage: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -163,15 +205,28 @@ SocketRequestFn = Callable[[Path, str, float], dict[str, Any]]
 
 
 def _default_ps_output() -> str:
-    result = subprocess.run(["ps", "axo", "pid=,command="], text=True, capture_output=True, check=False)
-    return result.stdout
+    try:
+        result = subprocess.run(
+            ["ps", "axo", "pid=,command="],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=5,
+        )
+        return result.stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return ""
 
 
 def _default_command_runner(args: list[str]) -> subprocess.CompletedProcess[str]:
     try:
-        return subprocess.run(args, text=True, capture_output=True, check=False)
+        return subprocess.run(args, text=True, capture_output=True, check=False, timeout=5)
     except FileNotFoundError as exc:
         return subprocess.CompletedProcess(args=args, returncode=127, stdout="", stderr=str(exc))
+    except subprocess.TimeoutExpired as exc:
+        return subprocess.CompletedProcess(
+            args=args, returncode=124, stdout=exc.stdout or "", stderr="command timed out"
+        )
 
 
 def _command_returncode(result: Any) -> int:
@@ -194,6 +249,28 @@ def _kickstart(label: str, command_runner: CommandRunner) -> str:
     target = _launchd_target(label)
     command_runner(["launchctl", "kickstart", "-k", target])
     return f"kickstart:{label}"
+
+
+def _launchd_process_state(label: str, command_runner: CommandRunner) -> tuple[int, str] | None:
+    launchd_result = command_runner(["launchctl", "print", _launchd_target(label)])
+    if _command_returncode(launchd_result) != 0:
+        return None
+    match = re.search(r"\bpid\s*=\s*(\d+)\b", _command_stdout(launchd_result))
+    if match is None:
+        return None
+    pid = int(match.group(1))
+    ps_result = command_runner(["ps", "-o", "state=", "-p", str(pid)])
+    if _command_returncode(ps_result) != 0:
+        return None
+    process_state = _command_stdout(ps_result).strip().splitlines()
+    if not process_state:
+        return None
+    return pid, process_state[0].strip()
+
+
+def _state_is_uninterruptible(process_state: str) -> bool:
+    normalized = process_state.upper()
+    return "U" in normalized or normalized.startswith("D")
 
 
 def _bootstrap_if_absent(label: str, plist_path: Path, command_runner: CommandRunner) -> str:
@@ -408,55 +485,59 @@ def _holder_message(holder: LockHolder) -> str:
     return f"holder pid={holder.pid} command={command} db_path={holder.db_path}"
 
 
-def count_missing_embeddings(db_path: Path) -> int:
+def _read_only_count(
+    db_path: Path,
+    sql: str,
+    *,
+    stage: str,
+    deadline_at: float | None = None,
+    monotonic_fn: Callable[[], float] = time.monotonic,
+) -> int:
     uri = f"file:{db_path.expanduser()}?mode=ro"
     conn = sqlite3.connect(uri, uri=True, timeout=5)
     try:
         conn.execute("PRAGMA query_only = ON")
-        row = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM chunks c
-            LEFT JOIN chunk_vectors_rowids r ON r.id = c.id
-            WHERE r.id IS NULL
-              AND c.content IS NOT NULL
-              AND c.content != ''
-              AND c.archived_at IS NULL
-              AND c.superseded_by IS NULL
-              AND c.aggregated_into IS NULL
-              AND COALESCE(c.archived, 0) = 0
-              AND COALESCE(c.status, 'active') = 'active'
-            """
-        ).fetchone()
+        if deadline_at is not None:
+            conn.set_progress_handler(lambda: int(monotonic_fn() >= deadline_at), 1_000)
+        try:
+            row = conn.execute(sql).fetchone()
+        except sqlite3.OperationalError as exc:
+            if deadline_at is not None and "interrupted" in str(exc).lower():
+                raise HealthCheckDeadlineExceeded(f"health-check deadline exceeded during {stage}") from exc
+            raise
         return int(row[0] if row else 0)
     finally:
         conn.close()
 
 
-def _enrichment_backlog(db_path: Path) -> int:
-    uri = f"file:{db_path.expanduser()}?mode=ro"
-    conn = sqlite3.connect(uri, uri=True, timeout=5)
-    try:
-        conn.execute("PRAGMA query_only = ON")
-        row = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM chunks
-            WHERE enriched_at IS NULL
-              AND enrich_status IS NULL
-              AND COALESCE(char_count, length(content), 0) >= 50
-              AND content IS NOT NULL
-              AND content != ''
-              AND archived_at IS NULL
-              AND superseded_by IS NULL
-              AND aggregated_into IS NULL
-              AND COALESCE(archived, 0) = 0
-              AND COALESCE(status, 'active') = 'active'
-            """
-        ).fetchone()
-        return int(row[0] if row else 0)
-    finally:
-        conn.close()
+def count_missing_embeddings(
+    db_path: Path,
+    *,
+    deadline_at: float | None = None,
+    monotonic_fn: Callable[[], float] = time.monotonic,
+) -> int:
+    return _read_only_count(
+        db_path,
+        MISSING_EMBEDDINGS_SQL,
+        stage="missing_embeddings",
+        deadline_at=deadline_at,
+        monotonic_fn=monotonic_fn,
+    )
+
+
+def _enrichment_backlog(
+    db_path: Path,
+    *,
+    deadline_at: float | None = None,
+    monotonic_fn: Callable[[], float] = time.monotonic,
+) -> int:
+    return _read_only_count(
+        db_path,
+        ENRICHMENT_BACKLOG_SQL,
+        stage="enrichment_backlog",
+        deadline_at=deadline_at,
+        monotonic_fn=monotonic_fn,
+    )
 
 
 def _load_state(path: Path) -> dict[str, Any]:
@@ -626,11 +707,28 @@ def _apply_heals(
                 )
             continue
         if consecutive_failures >= threshold:
-            action = (
-                _bootstrap_if_absent(label, plist_path, command_runner)
-                if issue_code in bootstrap_issue_codes
-                else _kickstart(label, command_runner)
-            )
+            if issue_code in bootstrap_issue_codes:
+                action = _bootstrap_if_absent(label, plist_path, command_runner)
+            else:
+                process = _launchd_process_state(label, command_runner)
+                if process is not None and _state_is_uninterruptible(process[1]):
+                    pid, process_state = process
+                    action = f"heal_backoff:{label}:{issue_code}:pid={pid}:state={process_state}"
+                    if action not in result.actions:
+                        result.actions.append(action)
+                        _emit_heal_event(
+                            {
+                                "_type": "heal_backoff",
+                                "label": label,
+                                "issue_code": issue_code,
+                                "consecutive_failures": consecutive_failures,
+                                "pid": pid,
+                                "process_state": process_state,
+                                **details,
+                            }
+                        )
+                    continue
+                action = _kickstart(label, command_runner)
             if action.startswith("bootstrap:"):
                 tripped.discard(key)
                 heal_failures.pop(key, None)
@@ -694,12 +792,21 @@ def _pause_sentinel_state(config: HealthCheckConfig, now: datetime) -> tuple[dic
     return payload, not stale, stale
 
 
-def _source_recent(config: HealthCheckConfig, now: datetime, window_seconds: int) -> bool:
+def _source_recent(
+    config: HealthCheckConfig,
+    now: datetime,
+    window_seconds: int,
+    *,
+    deadline_at: float | None = None,
+    monotonic_fn: Callable[[], float] = time.monotonic,
+) -> bool:
     import glob
 
     cutoff = now.timestamp() - window_seconds
     for pattern in config.source_jsonl_globs:
         for raw_path in glob.iglob(str(Path(pattern).expanduser()), recursive=True):
+            if deadline_at is not None and monotonic_fn() >= deadline_at:
+                raise HealthCheckDeadlineExceeded("health-check deadline exceeded during source_recent")
             try:
                 if Path(raw_path).stat().st_mtime >= cutoff:
                     return True
@@ -761,7 +868,10 @@ def run_health_check(
     socket_request_fn: SocketRequestFn = send_brainbar_search_canary,
     command_runner: CommandRunner = _default_command_runner,
     now_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
+    monotonic_fn: Callable[[], float] = time.monotonic,
 ) -> HealthCheckResult:
+    started_monotonic = monotonic_fn()
+    deadline_at = started_monotonic + max(1.0, config.max_duration_seconds)
     now = now_fn()
     result = HealthCheckResult(checked_at=now.isoformat(), ok=True)
     state = _load_state(config.state_path)
@@ -780,6 +890,25 @@ def run_health_check(
                 "message": message[:500],
             }
         )
+
+    def finish_slow(stage: str, message: str) -> HealthCheckResult:
+        result.slow_check = True
+        result.slow_check_stage = stage
+        result.duration_seconds = max(0.0, monotonic_fn() - started_monotonic)
+        add_issue("slow_check", "critical", message)
+        state_payload: dict[str, Any] = dict(state)
+        state_payload["ts"] = now.isoformat()
+        state_payload["slow_check"] = True
+        state_payload["slow_check_stage"] = stage
+        state_payload["duration_seconds"] = result.duration_seconds
+        _write_state(config.state_path, state_payload)
+        result.ok = False
+        return result
+
+    def deadline_reached(stage: str) -> HealthCheckResult | None:
+        if monotonic_fn() < deadline_at:
+            return None
+        return finish_slow(stage, f"health-check exceeded {config.max_duration_seconds:.0f}s during {stage}")
 
     ps_output = ps_output_fn()
     lock_holder = _read_writer_lock_holder(config.db_path, ps_output)
@@ -801,13 +930,29 @@ def run_health_check(
     previous_missing = state.get("missing_vectors")
     result.previous_missing_vectors = int(previous_missing) if isinstance(previous_missing, int) else None
     try:
-        result.missing_vectors = count_missing_embeddings(config.db_path)
+        result.missing_vectors = count_missing_embeddings(
+            config.db_path,
+            deadline_at=deadline_at,
+            monotonic_fn=monotonic_fn,
+        )
+    except HealthCheckDeadlineExceeded as exc:
+        return finish_slow("missing_embeddings", str(exc))
+    except sqlite3.OperationalError as exc:
+        if "interrupted" in str(exc).lower():
+            return finish_slow("missing_embeddings", "health-check deadline interrupted missing_embeddings")
+        add_issue(
+            "missing_embeddings_count_failed",
+            "critical",
+            f"could not count missing embeddings: {exc}",
+        )
     except Exception as exc:
         add_issue(
             "missing_embeddings_count_failed",
             "critical",
             f"could not count missing embeddings: {exc}",
         )
+    if slow_result := deadline_reached("missing_embeddings"):
+        return slow_result
 
     stalled_ticks = 0
     if result.missing_vectors is not None:
@@ -861,6 +1006,8 @@ def run_health_check(
             config.brainbar_daemon_label,
             _plist_for_label(config, config.brainbar_daemon_label),
         )
+    if slow_result := deadline_reached("brain_search_canary"):
+        return slow_result
 
     if config.heal:
         for label in (
@@ -889,6 +1036,8 @@ def run_health_check(
         if loaded is False:
             add_issue(issue_code, "critical", message)
             heal_issue_labels[issue_code] = (label, _plist_for_label(config, label))
+    if slow_result := deadline_reached("launchd_status"):
+        return slow_result
 
     pause_payload, pause_active, pause_stale = _pause_sentinel_state(config, now)
     if pause_stale:
@@ -927,11 +1076,22 @@ def run_health_check(
         or (queue_oldest_age is not None and queue_oldest_age >= config.queue_page_oldest_seconds)
     ):
         _push_notification("BrainLayer queue backlog", f"queue_count={queue_count} queue_bytes={queue_bytes}")
+    if slow_result := deadline_reached("queue_stats"):
+        return slow_result
 
     watcher_health = _load_json(config.watcher_health_path)
     watcher_poll_count = watcher_health.get("poll_count")
     previous_watcher_poll_count = state.get("watcher_poll_count")
-    source_recent = _source_recent(config, now, config.max_offsets_age_seconds)
+    try:
+        source_recent = _source_recent(
+            config,
+            now,
+            config.max_offsets_age_seconds,
+            deadline_at=deadline_at,
+            monotonic_fn=monotonic_fn,
+        )
+    except HealthCheckDeadlineExceeded as exc:
+        return finish_slow("source_recent", str(exc))
     offsets_age = _path_age_seconds(config.offsets_path, now)
     watcher_health_age = _path_age_seconds(config.watcher_health_path, now)
     if (
@@ -956,7 +1116,22 @@ def run_health_check(
     previous_drain_total = state.get("drain_drained_total")
     drain_starved = _drain_health_has_sqlite_busy_signal(drain_health)
     try:
-        enrichment_backlog = _enrichment_backlog(config.db_path)
+        enrichment_backlog = _enrichment_backlog(
+            config.db_path,
+            deadline_at=deadline_at,
+            monotonic_fn=monotonic_fn,
+        )
+    except HealthCheckDeadlineExceeded as exc:
+        return finish_slow("enrichment_backlog", str(exc))
+    except sqlite3.OperationalError as exc:
+        if "interrupted" in str(exc).lower():
+            return finish_slow("enrichment_backlog", "health-check deadline interrupted enrichment_backlog")
+        enrichment_backlog = 0
+        add_issue(
+            "enrichment_backlog_count_failed",
+            "critical",
+            f"could not count enrichment backlog: {exc}",
+        )
     except Exception as exc:
         enrichment_backlog = 0
         add_issue(
@@ -964,6 +1139,8 @@ def run_health_check(
             "critical",
             f"could not count enrichment backlog: {exc}",
         )
+    if slow_result := deadline_reached("enrichment_backlog"):
+        return slow_result
     drain_liveness_issue = check_drain_liveness(
         drain_label=config.drain_label,
         drain_loaded=drain_loaded,
@@ -1050,6 +1227,20 @@ def run_health_check(
         state_payload["lock_holder_held_ticks"] = 0
     if pause_payload:
         state_payload["pause_sentinel"] = pause_payload
+    result.duration_seconds = max(0.0, monotonic_fn() - started_monotonic)
+    result.slow_check = result.duration_seconds >= config.max_duration_seconds
+    state_payload["duration_seconds"] = result.duration_seconds
+    state_payload["slow_check"] = result.slow_check
+    if result.slow_check:
+        result.slow_check_stage = "finalize"
+        state_payload["slow_check_stage"] = result.slow_check_stage
+        add_issue(
+            "slow_check",
+            "critical",
+            f"health-check exceeded {config.max_duration_seconds:.0f}s before state write",
+        )
+    else:
+        state_payload.pop("slow_check_stage", None)
     _write_state(config.state_path, state_payload)
     result.ok = not result.issues
     return result
