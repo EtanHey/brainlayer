@@ -51,7 +51,7 @@ In `MCPRouter.swift`:
 
 - add `BRAINLAYER_MCP_PROFILE` resolution in `init`, with an optional explicit profile for tests;
 - represent `core`, `full`, and `operator` without modifying `toolDefinitions`;
-- add one router-local `paletteExpanded` boolean;
+- add a lock-safe `PaletteSession`, use one router-local default for direct callers, and attach a distinct session to each BrainBar socket client;
 - compute compact core projections from the canonical Core 4 (preserving validation fields while dropping verbose descriptive metadata) plus a minimal control definition, or all 17 canonical definitions unchanged;
 - make `handleToolsList` return `exposedToolDefinitions`;
 - make the existing call guard validate against exposed definitions;

@@ -119,6 +119,74 @@ final class SocketIntegrationTests: XCTestCase {
         }
     }
 
+    func testCorePaletteExpansionIsIsolatedPerSocketClient() throws {
+        restartServer(profile: "core")
+        let firstFD = try connectClient()
+        defer { close(firstFD) }
+        let secondFD = try connectClient()
+        defer { close(secondFD) }
+        try initializeClient(fd: firstFD, name: "first-core-client")
+        try initializeClient(fd: secondFD, name: "second-core-client")
+
+        let coreNames: Set<String> = [
+            "brain_search", "brain_store", "brain_recall", "brain_expand", "expand_palette",
+        ]
+        XCTAssertEqual(Set(try listedToolNames(on: firstFD, id: 2)), coreNames)
+        XCTAssertEqual(Set(try listedToolNames(on: secondFD, id: 2)), coreNames)
+
+        try sendMCPRequest(on: firstFD, request: [
+            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": ["name": "expand_palette", "arguments": [:] as [String: Any]],
+        ])
+        let expansion = try readMCPMessage(fd: firstFD)
+        XCTAssertEqual((expansion["result"] as? [String: Any])?["expanded"] as? Bool, true)
+
+        XCTAssertEqual(try listedToolNames(on: firstFD, id: 4).count, 17)
+        XCTAssertEqual(Set(try listedToolNames(on: secondFD, id: 3)), coreNames)
+    }
+
+    func testCoreProfileRejectsServerHandledToolsUntilExpansion() throws {
+        restartServer(profile: "core")
+        let fd = try connectClient()
+        defer { close(fd) }
+        try initializeClient(fd: fd, name: "core-subscription-client")
+
+        let serverHandledTools: [(name: String, arguments: [String: Any])] = [
+            ("brain_subscribe", ["agent_id": "core-agent", "tags": ["agent-message"]]),
+            ("brain_unsubscribe", ["agent_id": "core-agent", "tags": ["agent-message"]]),
+            ("brain_ack", ["agent_id": "core-agent", "seq": 1]),
+        ]
+        for (offset, tool) in serverHandledTools.enumerated() {
+            try sendMCPRequest(on: fd, request: [
+                "jsonrpc": "2.0", "id": 2 + offset, "method": "tools/call",
+                "params": ["name": tool.name, "arguments": tool.arguments] as [String: Any],
+            ])
+            let deferred = try readMCPMessage(fd: fd)
+            XCTAssertEqual(
+                (deferred["error"] as? [String: Any])?["code"] as? Int,
+                -32601,
+                "\(tool.name) should stay deferred until this client expands its palette"
+            )
+        }
+
+        try sendMCPRequest(on: fd, request: [
+            "jsonrpc": "2.0", "id": 5, "method": "tools/call",
+            "params": ["name": "expand_palette", "arguments": [:] as [String: Any]],
+        ])
+        _ = try readMCPMessage(fd: fd)
+
+        try sendMCPRequest(on: fd, request: [
+            "jsonrpc": "2.0", "id": 6, "method": "tools/call",
+            "params": [
+                "name": "brain_subscribe",
+                "arguments": ["agent_id": "core-agent", "tags": ["agent-message"]] as [String: Any],
+            ],
+        ])
+        let expanded = try readMCPMessage(fd: fd)
+        XCTAssertNil(expanded["error"])
+        XCTAssertNotNil(expanded["result"])
+    }
+
     func testRawLineToolsListCompactsForClaudeExtensionLimit() throws {
         let fd = try connectClient()
         defer { close(fd) }
@@ -881,6 +949,23 @@ final class SocketIntegrationTests: XCTestCase {
     }
 
     // MARK: - Helper
+
+    private func restartServer(profile: String) {
+        server.stop()
+        setenv("BRAINLAYER_MCP_PROFILE", profile, 1)
+        server = BrainBarServer(socketPath: testSocketPath, dbPath: tempDBPath, database: db)
+        server.start()
+        XCTAssertTrue(waitForSocket(at: testSocketPath), "Server should bind \(testSocketPath)")
+    }
+
+    private func listedToolNames(on fd: Int32, id: Int) throws -> [String] {
+        try sendMCPRequest(on: fd, request: [
+            "jsonrpc": "2.0", "id": id, "method": "tools/list",
+        ])
+        let response = try readMCPMessage(fd: fd)
+        let tools = (response["result"] as? [String: Any])?["tools"] as? [[String: Any]]
+        return tools?.compactMap { $0["name"] as? String } ?? []
+    }
 
     private func waitForSocket(at path: String, timeout: TimeInterval = 3.0) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)

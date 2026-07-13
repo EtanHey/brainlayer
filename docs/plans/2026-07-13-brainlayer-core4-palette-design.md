@@ -14,7 +14,7 @@ Both transports therefore need the same profile semantics, but each keeps its ex
 
 ### 1. Stateful per-session palette with one-shot expansion (chosen)
 
-Each server instance resolves `BRAINLAYER_MCP_PROFILE` once at construction/import time. `core` lists the Core 4 plus `expand_palette`; `full` and `operator` list the transport's complete canonical inventory. Calling `expand_palette` changes only that server instance to full and makes subsequent `tools/list` calls return the full inventory.
+Each server process resolves `BRAINLAYER_MCP_PROFILE` once at construction/import time. `core` lists the Core 4 plus `expand_palette`; `full` and `operator` list the transport's complete canonical inventory. BrainBar tracks expansion per socket client, while the Python stdio server has one module session. Calling `expand_palette` changes only that MCP session to full and makes its subsequent `tools/list` calls return the full inventory.
 
 This directly mirrors cmuxlayer's proven seam, meets the boot budget, and supports a mid-session upgrade. The trade-off is a small amount of instance state and a `tools/list_changed` capability declaration even though BrainBar does not currently push that notification.
 
@@ -49,7 +49,7 @@ The resident core is exactly:
 
 `tools/list` derives compact core declarations from the immutable canonical `toolDefinitions` array and appends a minimal `expand_palette` definition. The projection keeps names and validation-relevant input-schema fields while removing verbose nested descriptions/annotations and shortening top-level descriptions. This was required because the current in-repo Core 4 serialized to 3,722 bytes even though the older live-front audit payload was 1,263 bytes. Full/operator selection returns all 17 canonical definitions byte-for-byte and omits the redundant control.
 
-`tools/call` validates against the currently exposed definitions. A deferred tool called before expansion receives the existing unknown-tool JSON-RPC error. `expand_palette` is handled without touching the database, flips the session once, and returns an idempotent structured receipt containing `expanded`, `already_expanded`, and the newly exposed names. Subsequent calls are successful no-ops.
+`tools/call` validates against the currently exposed definitions. A deferred tool called before expansion receives the existing unknown-tool JSON-RPC error, including BrainBar's server-handled subscription tools. `expand_palette` is handled without touching the database, flips the client session once, and returns an idempotent structured receipt containing `expanded`, `already_expanded`, and the newly exposed names. Subsequent calls are successful no-ops. BrainBar keeps the expansion state in each `ClientState`; direct router users receive one router-local default session.
 
 `initialize` advertises `tools.listChanged = true` because the list can change during a session. BrainBar's request/response router has no server-push channel at this seam, so clients discover the new list on the next `tools/list`; the expansion response makes that contract explicit.
 
