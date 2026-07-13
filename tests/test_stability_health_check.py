@@ -84,7 +84,7 @@ def _make_db(path: Path, *, total: int, vector_rows: int) -> None:
                 enrich_status TEXT,
                 char_count INTEGER
             );
-            CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY);
+            CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY, chunk_id INTEGER);
             """
         )
         for index in range(total):
@@ -202,6 +202,44 @@ def test_any_zero_backlog_batch_alarms_when_multiple_hotlanes_are_running(tmp_pa
     assert "com.brainlayer.hotlane-brainbar" in " ".join(kickstarts[0])
 
 
+def test_uninterruptible_launchd_process_backs_off_instead_of_kickstarting(tmp_path, monkeypatch):
+    db_path = tmp_path / "brainlayer.db"
+    state_path = tmp_path / "health-state.json"
+    _make_db(db_path, total=1, vector_rows=1)
+    commands: list[list[str]] = []
+    events: list[dict] = []
+    monkeypatch.setattr(health_check, "_emit_heal_event", events.append)
+
+    def command_runner(args: list[str]):
+        commands.append(args)
+        if args[:2] == ["launchctl", "print"] and "hotlane-brainbar" in args[-1]:
+            return SimpleNamespace(returncode=0, stdout="pid = 123\n", stderr="")
+        if args[:3] == ["ps", "-o", "state="]:
+            return SimpleNamespace(returncode=0, stdout="UN\n", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    result = run_health_check(
+        HealthCheckConfig(
+            db_path=db_path,
+            state_path=state_path,
+            heal=True,
+            heal_min_consecutive_failures=1,
+            heal_circuit_breaker_limit=3,
+        ),
+        ps_output_fn=lambda: "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 0\n",
+        socket_request_fn=_ok_canary,
+        command_runner=command_runner,
+        now_fn=lambda: datetime(2026, 7, 13, 9, 5, tzinfo=UTC),
+    )
+
+    assert not [command for command in commands if command[:3] == ["launchctl", "kickstart", "-k"]]
+    assert "heal_backoff:com.brainlayer.hotlane-brainbar:hotlane_backlog_disabled:pid=123:state=UN" in result.actions
+    assert any(
+        event.get("_type") == "heal_backoff" and event.get("pid") == 123 and event.get("process_state") == "UN"
+        for event in events
+    )
+
+
 def test_missing_embeddings_not_draining_after_two_ticks(tmp_path):
     db_path = tmp_path / "brainlayer.db"
     state_path = tmp_path / "health-state.json"
@@ -233,6 +271,159 @@ def test_missing_embeddings_not_draining_after_two_ticks(tmp_path):
     saved = json.loads(state_path.read_text(encoding="utf-8"))
     assert saved["missing_vectors"] == 2
     assert saved["stalled_ticks"] == 2
+
+
+def test_missing_embedding_query_scans_covering_id_indexes_before_chunk_payloads(tmp_path):
+    db_path = tmp_path / "brainlayer.db"
+    _make_db(db_path, total=5, vector_rows=3)
+
+    with sqlite3.connect(db_path) as conn:
+        plan = conn.execute("EXPLAIN QUERY PLAN " + health_check.MISSING_EMBEDDINGS_SQL).fetchall()
+
+    details = [str(row[-1]) for row in plan]
+    assert any("chunks USING COVERING INDEX" in detail for detail in details)
+    assert any("chunk_vectors_rowids USING COVERING INDEX" in detail for detail in details)
+    assert "SCAN c" not in details
+
+
+def test_interrupted_missing_embedding_count_writes_slow_state_and_returns_early(tmp_path, monkeypatch):
+    db_path = tmp_path / "brainlayer.db"
+    state_path = tmp_path / "health-state.json"
+    _make_db(db_path, total=1, vector_rows=1)
+    canary_called = False
+
+    def interrupted_count(_db_path, **_kwargs):
+        raise sqlite3.OperationalError("interrupted")
+
+    def canary(*_args):
+        nonlocal canary_called
+        canary_called = True
+        return _ok_canary(*_args)
+
+    monkeypatch.setattr(health_check, "count_missing_embeddings", interrupted_count)
+
+    result = run_health_check(
+        HealthCheckConfig(db_path=db_path, state_path=state_path, max_duration_seconds=45),
+        ps_output_fn=lambda: "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 4\n",
+        socket_request_fn=canary,
+        command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        now_fn=lambda: datetime(2026, 7, 13, 9, 0, tzinfo=UTC),
+    )
+
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+    assert result.slow_check is True
+    assert result.slow_check_stage == "missing_embeddings"
+    assert saved["slow_check"] is True
+    assert saved["slow_check_stage"] == "missing_embeddings"
+    assert saved["ts"] == "2026-07-13T09:00:00+00:00"
+    assert canary_called is False
+
+
+def test_missing_embedding_count_interrupts_at_internal_deadline(tmp_path, monkeypatch):
+    db_path = tmp_path / "brainlayer.db"
+    _make_db(db_path, total=1, vector_rows=0)
+    callbacks = []
+
+    class DeadlineConnection:
+        def execute(self, sql):
+            if sql == "PRAGMA query_only = ON":
+                return self
+            raise sqlite3.OperationalError("interrupted")
+
+        def set_progress_handler(self, callback, _instructions):
+            callbacks.append(callback)
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(health_check.sqlite3, "connect", lambda *_args, **_kwargs: DeadlineConnection())
+
+    with pytest.raises(RuntimeError, match="deadline"):
+        health_check.count_missing_embeddings(
+            db_path,
+            deadline_at=1.0,
+            monotonic_fn=lambda: 2.0,
+        )
+
+    assert len(callbacks) == 1
+    assert callbacks[0]() == 1
+
+
+def test_source_recent_returns_at_deadline_when_glob_iteration_stalls(tmp_path, monkeypatch):
+    import glob
+    import threading
+    import time
+
+    release_glob = threading.Event()
+
+    def stalled_glob(*_args, **_kwargs):
+        release_glob.wait()
+        yield str(tmp_path / "event.jsonl")
+
+    monkeypatch.setattr(glob, "iglob", stalled_glob)
+    outcome: dict[str, object] = {}
+
+    def call_source_recent() -> None:
+        try:
+            health_check._source_recent(
+                HealthCheckConfig(source_jsonl_globs=(str(tmp_path / "**" / "*.jsonl"),)),
+                datetime(2026, 7, 13, 9, 0, tzinfo=UTC),
+                60,
+                deadline_at=time.monotonic() + 0.05,
+            )
+        except Exception as exc:
+            outcome["error"] = exc
+
+    caller = threading.Thread(target=call_source_recent)
+    caller.start()
+    caller.join(timeout=0.25)
+    returned_before_release = not caller.is_alive()
+    release_glob.set()
+    caller.join(timeout=1)
+
+    assert returned_before_release is True
+    assert isinstance(outcome.get("error"), health_check.HealthCheckDeadlineExceeded)
+
+
+def test_ps_snapshot_failure_does_not_heal_a_running_daemon_as_dead(tmp_path):
+    db_path = tmp_path / "brainlayer.db"
+    state_path = tmp_path / "health-state.json"
+    _make_db(db_path, total=1, vector_rows=1)
+    commands: list[list[str]] = []
+
+    def command_runner(args):
+        commands.append(args)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    result = run_health_check(
+        HealthCheckConfig(
+            db_path=db_path,
+            state_path=state_path,
+            heal=True,
+            heal_min_consecutive_failures=1,
+        ),
+        ps_output_fn=lambda: None,
+        socket_request_fn=_ok_canary,
+        command_runner=command_runner,
+        now_fn=lambda: datetime(2026, 7, 13, 9, 0, tzinfo=UTC),
+    )
+
+    issue_codes = {issue.code for issue in result.issues}
+    assert "process_snapshot_failed" in issue_codes
+    assert "hotlane_dead" not in issue_codes
+    assert not any(
+        args[:3] == ["launchctl", "kickstart", "-k"] and args[-1].endswith("/com.brainlayer.hotlane")
+        for args in commands
+    )
+
+
+def test_default_ps_output_marks_timeout_as_unavailable(monkeypatch):
+    def timeout(*_args, **_kwargs):
+        raise health_check.subprocess.TimeoutExpired(cmd=["ps"], timeout=5)
+
+    monkeypatch.setattr(health_check.subprocess, "run", timeout)
+
+    assert health_check._default_ps_output() is None
 
 
 def test_lock_holder_wedge_flags_live_holder_when_drain_is_starved(tmp_path, monkeypatch):

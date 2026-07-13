@@ -387,7 +387,7 @@ def _check_brainbar_version_consistency(
 def run_doctor(
     config: DoctorConfig,
     *,
-    ps_output_fn: Callable[[], str] = _default_ps_output,
+    ps_output_fn: Callable[[], str | None] = _default_ps_output,
     command_runner: CommandRunner = _default_command_runner,
     now_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> DoctorResult:
@@ -500,10 +500,17 @@ def run_doctor(
             command_runner=command_runner,
         )
 
-    hotlane_processes = parse_hotlane_processes(ps_output_fn())
-    result.hotlane_running = bool(hotlane_processes)
-    if not hotlane_processes:
-        fatal("hotlane_dead", "hot-lane embedding process is not running")
+    ps_output = ps_output_fn()
+    if ps_output is None:
+        fatal(
+            "process_snapshot_failed",
+            "could not read the process table; hot-lane daemon liveness was not evaluated",
+        )
+    else:
+        hotlane_processes = parse_hotlane_processes(ps_output)
+        result.hotlane_running = bool(hotlane_processes)
+        if not hotlane_processes:
+            fatal("hotlane_dead", "hot-lane embedding process is not running")
 
     if result.enrichment_backlog and result.enrichment_backlog > 0:
         warning(
