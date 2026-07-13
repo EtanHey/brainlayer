@@ -1,6 +1,5 @@
 """Tests for brain_digest MCP mode routing."""
 
-import asyncio
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
