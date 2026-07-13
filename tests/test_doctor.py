@@ -343,6 +343,26 @@ def test_run_doctor_exits_zero_on_healthy_fixture(tmp_path):
     assert not [issue for issue in result.issues if issue.severity == "fatal"]
 
 
+def test_run_doctor_reports_unavailable_process_snapshot_without_false_daemon_death(tmp_path):
+    from brainlayer.doctor import run_doctor
+
+    db_path = tmp_path / "healthy.db"
+    _build_db(db_path)
+
+    result = run_doctor(
+        _doctor_config(tmp_path, db_path),
+        ps_output_fn=lambda: None,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+
+    issue_codes = {issue.code for issue in result.issues}
+    assert result.exit_code == 1
+    assert result.ok is False
+    assert "process_snapshot_failed" in issue_codes
+    assert "hotlane_dead" not in issue_codes
+
+
 def test_run_doctor_can_skip_roundtrip_probe_for_bounded_status_gate(tmp_path, monkeypatch):
     import brainlayer.doctor as doctor
 
