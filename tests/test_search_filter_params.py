@@ -803,9 +803,9 @@ class TestBrainResumeSchema:
     """Verify the explicit checkpoint resume tool is exposed."""
 
     def test_brain_resume_tool_schema(self):
-        from brainlayer.mcp import list_tools
+        from brainlayer.mcp import _full_tool_definitions
 
-        tools = asyncio.run(list_tools())
+        tools = _full_tool_definitions()
         brain_resume = next(tool for tool in tools if tool.name == "brain_resume")
         props = brain_resume.inputSchema["properties"]
 

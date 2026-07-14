@@ -1,6 +1,4 @@
-import asyncio
-
-from brainlayer.mcp import list_tools
+from brainlayer.mcp import _full_tool_definitions
 
 ACTIVE_TOOL_NAMES = {
     "brain_search",
@@ -13,7 +11,7 @@ ACTIVE_TOOL_NAMES = {
 
 
 def _tool_descriptions() -> dict[str, str]:
-    tools = asyncio.run(list_tools())
+    tools = _full_tool_definitions()
     return {tool.name: tool.description for tool in tools}
 
 

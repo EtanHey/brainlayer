@@ -28,12 +28,10 @@ def store(tmp_path):
 
 
 def _get_brain_entity_tool():
-    """Extract the brain_entity Tool object from the MCP server tool list."""
-    import asyncio
+    """Extract brain_entity from the explicit full-profile tool definitions."""
+    from brainlayer.mcp import _full_tool_definitions
 
-    from brainlayer.mcp import list_tools
-
-    tools = asyncio.run(list_tools())
+    tools = _full_tool_definitions()
     for tool in tools:
         if tool.name == "brain_entity":
             return tool

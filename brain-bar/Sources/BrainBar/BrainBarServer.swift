@@ -150,6 +150,7 @@ final class BrainBarServer: @unchecked Sendable {
     struct ClientState {
         var source: DispatchSourceRead
         var framing: MCPFraming
+        let paletteSession: MCPRouter.PaletteSession
         /// Whether this client uses Content-Length framing (LSP-style).
         /// false = newline-delimited JSON-RPC (Claude Code v2.1+).
         var usesContentLengthFraming: Bool = true
@@ -441,7 +442,11 @@ final class BrainBarServer: @unchecked Sendable {
         }
         readSource.resume()
 
-        clients[clientFD] = ClientState(source: readSource, framing: MCPFraming())
+        clients[clientFD] = ClientState(
+            source: readSource,
+            framing: MCPFraming(),
+            paletteSession: router.makePaletteSession()
+        )
         NSLog("[BrainBar] Client connected (fd: %d)", clientFD)
         debugLog("CLIENT CONNECTED fd=\(clientFD) (total clients: \(clients.count))")
     }
@@ -493,16 +498,29 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     private func handleMessage(fd: Int32, request: [String: Any]) -> [String: Any] {
+        let paletteSession = clients[fd]?.paletteSession
         if let toolCall = parseToolCall(request) {
             switch toolCall.name {
             case "brain_subscribe":
+                guard let paletteSession,
+                      router.isToolExposed(toolCall.name, session: paletteSession) else {
+                    return router.handle(request, session: paletteSession)
+                }
                 return handleSubscribeTool(fd: fd, id: request["id"], arguments: toolCall.arguments)
             case "brain_unsubscribe":
+                guard let paletteSession,
+                      router.isToolExposed(toolCall.name, session: paletteSession) else {
+                    return router.handle(request, session: paletteSession)
+                }
                 return handleUnsubscribeTool(fd: fd, id: request["id"], arguments: toolCall.arguments)
             case "brain_ack":
+                guard let paletteSession,
+                      router.isToolExposed(toolCall.name, session: paletteSession) else {
+                    return router.handle(request, session: paletteSession)
+                }
                 return handleAckTool(id: request["id"], arguments: toolCall.arguments)
             default:
-                let response = router.handle(request)
+                let response = router.handle(request, session: paletteSession)
                 if toolCall.name == "brain_store", !isToolError(response) {
                     publishStoredChunks(response: response, arguments: toolCall.arguments)
                 }
@@ -520,7 +538,7 @@ final class BrainBarServer: @unchecked Sendable {
                 break
             }
         }
-        return router.handle(request)
+        return router.handle(request, session: paletteSession)
     }
 
     @discardableResult

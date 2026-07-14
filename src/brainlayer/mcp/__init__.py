@@ -1,6 +1,7 @@
 """BrainLayer MCP Server - Model Context Protocol interface for Claude Code."""
 
 import asyncio
+import json
 import logging
 import os
 from copy import deepcopy
@@ -40,6 +41,7 @@ from ._shared import (
 from .enrich_handler import _brain_enrich
 from .entity_handler import _brain_entity as _brain_entity
 from .entity_handler import _brain_get_person
+from .palette import EXPAND_TOOL_NAME, ToolPalette
 from .search_handler import (
     _brain_recall,
     _brain_resume,
@@ -396,9 +398,8 @@ _STORE_OUTPUT_SCHEMA = {
 # --- Tool registration ---
 
 
-@server.list_tools()
-async def list_tools() -> list[Tool]:
-    """List available tools — 3 primary + backward-compat aliases."""
+def _full_tool_definitions() -> list[Tool]:
+    """Build the complete canonical Python MCP tool inventory."""
     return [
         Tool(
             name="brain_search",
@@ -1251,6 +1252,16 @@ async def list_tools() -> list[Tool]:
     ]
 
 
+_tool_palette = ToolPalette()
+_FULL_TOOL_NAMES = tuple(tool.name for tool in _full_tool_definitions())
+
+
+@server.list_tools()
+async def list_tools() -> list[Tool]:
+    """List tools exposed by this server session's palette."""
+    return _tool_palette.expose(_full_tool_definitions())
+
+
 # --- Completions ---
 
 
@@ -1318,6 +1329,18 @@ async def handle_completion(ref, argument) -> CompleteResult:
 @server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]):
     """Handle tool calls — 3 primary tools + backward-compat aliases."""
+
+    if name == EXPAND_TOOL_NAME:
+        if _tool_palette.is_full:
+            return _error_result(f"Unknown tool: {name}")
+        receipt = _tool_palette.expand(_FULL_TOOL_NAMES)
+        return CallToolResult(
+            content=[TextContent(type="text", text=json.dumps(receipt, sort_keys=True))],
+            structuredContent=receipt,
+        )
+
+    if name in _FULL_TOOL_NAMES and not _tool_palette.is_exposed(name):
+        return _error_result(f"Tool not exposed in the core profile: {name}. Call {EXPAND_TOOL_NAME} first.")
 
     # --- New consolidated tools ---
 

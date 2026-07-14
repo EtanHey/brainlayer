@@ -5,11 +5,13 @@ from typing import Any
 
 from mcp import types
 
-from brainlayer.mcp import list_tools, server
+import brainlayer.mcp as mcp_module
+from brainlayer.mcp import _full_tool_definitions, server
+from brainlayer.mcp.palette import ToolPalette
 
 
 def _get_tools():
-    return asyncio.run(list_tools())
+    return _full_tool_definitions()
 
 
 def _iter_string_fields(schema: dict[str, Any], path: str = ""):
@@ -61,7 +63,8 @@ async def _call_brain_digest(arguments: dict[str, Any]):
     return await handler(request)
 
 
-def test_brain_digest_schema_rejects_oversized_content():
+def test_brain_digest_schema_rejects_oversized_content(monkeypatch):
+    monkeypatch.setattr(mcp_module, "_tool_palette", ToolPalette("full"))
     result = asyncio.run(_call_brain_digest({"content": "x" * 200_001})).root
 
     assert result.isError is True

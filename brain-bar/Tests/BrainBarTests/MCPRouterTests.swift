@@ -58,6 +58,27 @@ private func collectStringArrays(in schema: [String: Any], path: String = "") ->
 }
 
 final class MCPRouterTests: XCTestCase {
+    private static let coreToolNames = [
+        "brain_search",
+        "brain_store",
+        "brain_recall",
+        "brain_expand",
+        "expand_palette",
+    ]
+
+    private func listedTools(_ router: MCPRouter) -> [[String: Any]] {
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+        ])
+        return (response["result"] as? [String: Any])?["tools"] as? [[String: Any]] ?? []
+    }
+
+    private func listedToolNames(_ router: MCPRouter) -> [String] {
+        listedTools(router).compactMap { $0["name"] as? String }
+    }
+
     private func assertDeferredBrainStoreReceipt(
         _ result: [String: Any],
         chunkID: String,
@@ -88,7 +109,7 @@ final class MCPRouterTests: XCTestCase {
     // MARK: - Initialize
 
     func testInitializeReturnsProtocolVersion() throws {
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         let request: [String: Any] = [
             "jsonrpc": "2.0",
             "id": 1,
@@ -109,7 +130,8 @@ final class MCPRouterTests: XCTestCase {
 
         // Must declare tool capabilities
         let capabilities = result?["capabilities"] as? [String: Any]
-        XCTAssertNotNil(capabilities?["tools"])
+        let tools = capabilities?["tools"] as? [String: Any]
+        XCTAssertEqual(tools?["listChanged"] as? Bool, true)
         XCTAssertNil(capabilities?["resources"], "Tag resources should not be advertised during initialize")
         let experimental = capabilities?["experimental"] as? [String: Any]
         XCTAssertEqual((experimental?["claude/channel"] as? [String: Any])?.isEmpty, true)
@@ -123,7 +145,7 @@ final class MCPRouterTests: XCTestCase {
 
         try db.insertChunk(id: "tagged-1", content: "Tagged chunk", sessionId: "s1", project: "test", contentType: "assistant_text", importance: 5, tags: "[\"agent-message\"]")
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
 
         let response = router.handle([
@@ -140,8 +162,75 @@ final class MCPRouterTests: XCTestCase {
 
     // MARK: - Tools list
 
+    func testCoreProfilesExposeOnlyCoreFourAndExpansionControl() throws {
+        XCTAssertEqual(listedToolNames(MCPRouter(profile: "core")), Self.coreToolNames)
+        for profile in ["", "   ", "core", "bogus"] {
+            XCTAssertEqual(listedToolNames(MCPRouter(profile: profile)), Self.coreToolNames)
+        }
+    }
+
+    func testEnvironmentProfileControlsDefaultRouter() throws {
+        let environmentKey = "BRAINLAYER_MCP_PROFILE"
+        let originalProfile = ProcessInfo.processInfo.environment[environmentKey]
+        defer {
+            if let originalProfile {
+                setenv(environmentKey, originalProfile, 1)
+            } else {
+                unsetenv(environmentKey)
+            }
+        }
+
+        setenv(environmentKey, "operator", 1)
+        let canonicalNames = MCPRouter.toolDefinitions.compactMap { $0["name"] as? String }
+        XCTAssertEqual(listedToolNames(MCPRouter()), canonicalNames)
+
+        setenv(environmentKey, "core", 1)
+        XCTAssertEqual(listedToolNames(MCPRouter()), Self.coreToolNames)
+    }
+
+    func testFullAndOperatorProfilesPreserveCanonicalInventory() throws {
+        let canonicalNames = MCPRouter.toolDefinitions.compactMap { $0["name"] as? String }
+
+        XCTAssertEqual(canonicalNames.count, 17)
+        XCTAssertEqual(listedToolNames(MCPRouter(profile: "full")), canonicalNames)
+        XCTAssertEqual(listedToolNames(MCPRouter(profile: "operator")), canonicalNames)
+    }
+
+    func testCoreToolsListStaysWithinBootBudget() throws {
+        let tools = listedTools(MCPRouter(profile: "core"))
+        let data = try JSONSerialization.data(withJSONObject: tools, options: [.sortedKeys])
+
+        XCTAssertLessThanOrEqual(data.count, 1_500)
+    }
+
+    func testCorePaletteExpandsOnceAndDispatchesDeferredTools() throws {
+        let router = MCPRouter(profile: "core")
+
+        XCTAssertEqual(listedToolNames(router), Self.coreToolNames)
+        let deferredBeforeExpansion = router.handle(toolCall(id: 20, name: "brain_tags", arguments: [:]))
+        XCTAssertEqual((deferredBeforeExpansion["error"] as? [String: Any])?["code"] as? Int, -32601)
+
+        let firstExpansion = router.handle(toolCall(id: 21, name: "expand_palette", arguments: [:]))
+        let firstResult = try XCTUnwrap(firstExpansion["result"] as? [String: Any])
+        XCTAssertEqual(firstResult["expanded"] as? Bool, true)
+        XCTAssertEqual(firstResult["already_expanded"] as? Bool, false)
+        XCTAssertEqual((firstResult["registered_tools"] as? [String])?.count, 13)
+        XCTAssertEqual(listedToolNames(router), MCPRouter.toolDefinitions.compactMap { $0["name"] as? String })
+
+        let deferredAfterExpansion = router.handle(toolCall(id: 22, name: "brain_tags", arguments: [:]))
+        XCTAssertNil(deferredAfterExpansion["error"])
+        XCTAssertNotNil(deferredAfterExpansion["result"])
+
+        let secondExpansion = router.handle(toolCall(id: 23, name: "expand_palette", arguments: [:]))
+        let secondResult = try XCTUnwrap(secondExpansion["result"] as? [String: Any])
+        XCTAssertEqual(secondResult["expanded"] as? Bool, false)
+        XCTAssertEqual(secondResult["already_expanded"] as? Bool, true)
+        XCTAssertEqual(secondResult["registered_tools"] as? [String], [])
+        XCTAssertEqual(listedToolNames(router).count, 17)
+    }
+
     func testToolsListReturnsAllTools() throws {
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         let request: [String: Any] = [
             "jsonrpc": "2.0",
             "id": 2,
@@ -167,7 +256,7 @@ final class MCPRouterTests: XCTestCase {
     }
 
     func testEncodedToolsListEnvelopeStartsWithJSONRPC() throws {
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         let response = router.handle([
             "jsonrpc": "2.0",
             "id": 2,
@@ -185,7 +274,7 @@ final class MCPRouterTests: XCTestCase {
     }
 
     func testToolsListPreservesCanonicalAnnotations() throws {
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         let response = router.handle([
             "jsonrpc": "2.0",
             "id": 2,
@@ -204,7 +293,7 @@ final class MCPRouterTests: XCTestCase {
     }
 
     func testEachToolHasInputSchema() throws {
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         let request: [String: Any] = [
             "jsonrpc": "2.0",
             "id": 3,
@@ -222,7 +311,7 @@ final class MCPRouterTests: XCTestCase {
     }
 
     func testEachToolHasExpectedAnnotations() throws {
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         let response = router.handle([
             "jsonrpc": "2.0",
             "id": 3,
@@ -315,7 +404,7 @@ final class MCPRouterTests: XCTestCase {
     // MARK: - Tools call
 
     func testToolsCallDispatchesToHandler() throws {
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         let request: [String: Any] = [
             "jsonrpc": "2.0",
             "id": 4,
@@ -363,7 +452,7 @@ final class MCPRouterTests: XCTestCase {
                 ]
             )
         )
-        let router = MCPRouter(hybridSearchClient: helper)
+        let router = MCPRouter(profile: "full", hybridSearchClient: helper)
         router.setDatabase(db)
 
         let response = router.handle([
@@ -422,7 +511,7 @@ final class MCPRouterTests: XCTestCase {
 
         let helperText = "python helper canonical KG/search output"
         let helper = RecordingHybridSearchClient(response: HybridSearchResponse(text: helperText))
-        let router = MCPRouter(hybridSearchClient: helper)
+        let router = MCPRouter(profile: "full", hybridSearchClient: helper)
         router.setDatabase(db)
 
         let response = router.handle([
@@ -460,7 +549,7 @@ final class MCPRouterTests: XCTestCase {
         )
 
         let helper = RecordingHybridSearchClient()
-        let router = MCPRouter(hybridSearchClient: helper)
+        let router = MCPRouter(profile: "full", hybridSearchClient: helper)
         router.setDatabase(db)
 
         let response = router.handle([
@@ -506,7 +595,7 @@ No results found.
 """
             )
         )
-        let router = MCPRouter(hybridSearchClient: helper)
+        let router = MCPRouter(profile: "full", hybridSearchClient: helper)
         router.setDatabase(db)
 
         let response = router.handle(toolCall(id: 179, name: "brain_search", arguments: [
@@ -527,7 +616,7 @@ No results found.
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
         let fullContent = "Sensitive full content must not be echoed in the MCP store response"
 
@@ -574,7 +663,7 @@ No results found.
         )
 
         let helper = RecordingHybridSearchClient()
-        let router = MCPRouter(hybridSearchClient: helper)
+        let router = MCPRouter(profile: "full", hybridSearchClient: helper)
         router.setDatabase(db)
 
         let response = router.handle([
@@ -625,7 +714,7 @@ No results found.
         XCTAssertEqual(try sqlitePragma(handle: readDB.dbHandle, name: "busy_timeout"), "250")
         writeDB.close()
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabases(write: writeDB, read: readDB)
 
         let searchText = try toolText(router.handle(toolCall(id: 301, name: "brain_search", arguments: [
@@ -684,7 +773,7 @@ No results found.
             sql: "UPDATE chunks SET summary = 'Short generated summary' WHERE id = 'expand-full-target'"
         )
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
         let expandText = try toolText(router.handle(toolCall(id: 307, name: "brain_expand", arguments: [
             "chunk_id": "expand-full-target"
@@ -725,7 +814,7 @@ No results found.
         // here and failed with SQLITE_READONLY.
         XCTAssertEqual(try sqlitePragma(handle: readDB.dbHandle, name: "query_only"), "1")
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabases(write: writeDB, read: readDB)
 
         let response = router.handle(toolCall(id: 401, name: "brain_search", arguments: [
@@ -768,7 +857,7 @@ No results found.
             response: HybridSearchResponse(text: "slow helper should not win"),
             delay: 0.50
         )
-        let router = MCPRouter(hybridSearchClient: helper, hybridSearchBudget: 0.05)
+        let router = MCPRouter(profile: "full", hybridSearchClient: helper, hybridSearchBudget: 0.05)
         router.setDatabases(write: writeDB, read: readDB)
 
         let started = Date()
@@ -803,7 +892,7 @@ No results found.
             response: HybridSearchResponse(text: "helper should not be called while warming")
         )
         helper.ready = false
-        let router = MCPRouter(hybridSearchClient: helper)
+        let router = MCPRouter(profile: "full", hybridSearchClient: helper)
         router.setDatabase(db)
 
         let response = router.handle(toolCall(id: 308, name: "brain_search", arguments: [
@@ -836,7 +925,7 @@ No results found.
         let helper = RecordingHybridSearchClient(
             response: HybridSearchResponse(text: "helper should not be called")
         )
-        let router = MCPRouter(hybridSearchClient: helper)
+        let router = MCPRouter(profile: "full", hybridSearchClient: helper)
         router.setDatabase(db)
         let response = router.handle([
             "jsonrpc": "2.0",
@@ -875,7 +964,7 @@ No results found.
         }
         try sqliteExec(path: tempDB, sql: "DELETE FROM chunks_fts_trigram")
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
 
         let response = router.handle([
@@ -910,7 +999,7 @@ No results found.
         defer { db.close() }
         try sqliteExec(path: tempDB, sql: "DROP TABLE IF EXISTS chunks_fts_trigram")
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
 
         let response = router.handle([
@@ -933,7 +1022,7 @@ No results found.
     }
 
     func testToolsCallUnknownToolReturnsError() throws {
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         let request: [String: Any] = [
             "jsonrpc": "2.0",
             "id": 5,
@@ -952,7 +1041,7 @@ No results found.
     }
 
     func testBrainDigestRejectsOversizedContentAtSchemaLayer() throws {
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         let response = router.handle([
             "jsonrpc": "2.0",
             "id": 6,
@@ -975,7 +1064,7 @@ No results found.
     }
 
     func testBrainDigestSchemaExposesProjectAndTitle() throws {
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         let response = router.handle([
             "jsonrpc": "2.0",
             "id": 7,
@@ -999,7 +1088,7 @@ No results found.
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
         let response = router.handle([
             "jsonrpc": "2.0",
@@ -1025,7 +1114,7 @@ No results found.
     }
 
     func testBrainSubscribeToolIsServerHandled() throws {
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         let request: [String: Any] = [
             "jsonrpc": "2.0",
             "id": 7,
@@ -1045,7 +1134,7 @@ No results found.
     }
 
     func testBrainUnsubscribeToolIsServerHandled() throws {
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         let request: [String: Any] = [
             "jsonrpc": "2.0",
             "id": 8,
@@ -1064,7 +1153,7 @@ No results found.
     }
 
     func testBrainAckToolIsServerHandled() throws {
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         let request: [String: Any] = [
             "jsonrpc": "2.0",
             "id": 9,
@@ -1086,7 +1175,7 @@ No results found.
     // MARK: - Unknown method
 
     func testUnknownMethodReturnsError() throws {
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         let request: [String: Any] = [
             "jsonrpc": "2.0",
             "id": 6,
@@ -1111,7 +1200,7 @@ No results found.
         try db.insertChunk(id: "f-1", content: "Socket handling code", sessionId: "s1", project: "brainbar", contentType: "assistant_text", importance: 5)
         try db.insertChunk(id: "f-2", content: "Socket connection code", sessionId: "s2", project: "other-proj", contentType: "assistant_text", importance: 5)
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
         let response = router.handle([
             "jsonrpc": "2.0",
@@ -1142,7 +1231,7 @@ No results found.
 
         try db.insertChunk(id: "detail-1", content: "Socket handling code", sessionId: "s1", project: "brainbar", contentType: "assistant_text", importance: 5)
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
         let response = router.handle([
             "jsonrpc": "2.0",
@@ -1172,7 +1261,7 @@ No results found.
         try db.insertChunk(id: "i-1", content: "Critical security finding", sessionId: "s1", project: "test", contentType: "assistant_text", importance: 9)
         try db.insertChunk(id: "i-2", content: "Security review notes", sessionId: "s2", project: "test", contentType: "assistant_text", importance: 3)
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
         let response = router.handle([
             "jsonrpc": "2.0",
@@ -1204,7 +1293,7 @@ No results found.
         _ = try db.store(content: "Sagit meeting notes", tags: ["meeting"], importance: 6, source: "whatsapp")
         _ = try db.store(content: "Sagit meeting notes", tags: ["meeting"], importance: 6, source: "youtube")
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
         let response = router.handle([
             "jsonrpc": "2.0",
@@ -1242,7 +1331,7 @@ No results found.
             importance: 8
         )
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
         let response = router.handle([
             "jsonrpc": "2.0",
@@ -1279,7 +1368,7 @@ No results found.
         try db.insertEntity(id: "tool-1", type: "tool", name: "Claude Code")
         try db.insertRelation(sourceId: "proj-1", targetId: "tool-1", relationType: "used_by")
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
         let response = router.handle([
             "jsonrpc": "2.0",
@@ -1310,7 +1399,7 @@ No results found.
         try db.insertChunk(id: "s-1", content: "Search result one", sessionId: "session-1", project: "brainlayer", contentType: "assistant_text", importance: 5)
         try db.insertChunk(id: "s-2", content: "Search result two", sessionId: "session-2", project: "orchestrator", contentType: "user_message", importance: 4)
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
         let response = router.handle([
             "jsonrpc": "2.0",
@@ -1345,7 +1434,7 @@ No results found.
             timestamp: "2026-03-31T04:03:00.000Z"
         )
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
         let response = router.handle([
             "jsonrpc": "2.0",
@@ -1382,7 +1471,7 @@ No results found.
         }
         try db.acknowledge(agentID: "agent-1", seq: readSeq)
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
         let response = router.handle([
             "jsonrpc": "2.0",
@@ -1416,7 +1505,7 @@ No results found.
         defer { db.close() }
 
         try db.insertChunk(id: "archive-target", content: "Archive this stale memory", sessionId: "s1", project: "test", contentType: "assistant_text", importance: 5)
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
 
         let archiveResponse = router.handle([
@@ -1454,7 +1543,7 @@ No results found.
 
         try db.insertChunk(id: "old-chunk", content: "TechGym guidance old version", sessionId: "s1", project: "test", contentType: "assistant_text", importance: 5)
         try db.insertChunk(id: "new-chunk", content: "TechGym guidance new version", sessionId: "s2", project: "test", contentType: "assistant_text", importance: 9)
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
 
         let supersedeResponse = router.handle([
@@ -1510,7 +1599,7 @@ No results found.
         try db.insertChunk(id: "mem-sagit-1", content: "Sagit Stern gave the TechGym lecture about search ranking.", sessionId: "s1", project: "test", contentType: "assistant_text", importance: 8)
         try db.linkEntityChunk(entityId: "person-sagit", chunkId: "mem-sagit-1", relevance: 0.9)
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
         let response = router.handle([
             "jsonrpc": "2.0",
@@ -1544,7 +1633,7 @@ No results found.
             importance: 5
         )
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
         let enrichResponse = router.handle([
             "jsonrpc": "2.0",
@@ -1597,7 +1686,7 @@ No results found.
         )
         db.exec("UPDATE chunks SET enrich_status = 'duplicate' WHERE id = 'enrich-duplicate'")
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
         let response = router.handle([
             "jsonrpc": "2.0",
@@ -1630,7 +1719,7 @@ No results found.
             importance: 5
         )
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
         let response = router.handle([
             "jsonrpc": "2.0",
@@ -1662,7 +1751,7 @@ No results found.
             importance: 5
         )
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
         let response = router.handle([
             "jsonrpc": "2.0",
@@ -1688,7 +1777,7 @@ No results found.
 
         let dbPath = tempDir.appendingPathComponent("brainbar.db").path
         let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
-        let router = MCPRouter(dbPath: dbPath)
+        let router = MCPRouter(profile: "full", dbPath: dbPath)
 
         let response = router.handle([
             "jsonrpc": "2.0",
@@ -1744,7 +1833,7 @@ No results found.
         let db = BrainDatabase(path: dbPath)
         db.close()
 
-        let router = MCPRouter(dbPath: dbPath)
+        let router = MCPRouter(profile: "full", dbPath: dbPath)
         router.setDatabase(db)
 
         let response = router.handle([
@@ -1802,7 +1891,7 @@ No results found.
         defer { db.close() }
         db.failNextStoreWithBusyForTesting = true
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
 
         let response = router.handle([
@@ -1876,7 +1965,7 @@ No results found.
             }
         }
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
 
         let started = Date()
@@ -1937,7 +2026,7 @@ No results found.
             }
         }
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
 
         let queuedContent = "Queued current write should drain after the writer lock clears"
@@ -1994,7 +2083,7 @@ No results found.
         defer { db.close() }
         db.failNextStoreWithBusyForTesting = true
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
 
         let queuedContent = "Queued current write survives one unreadable pending store queue snapshot"
@@ -2056,7 +2145,7 @@ No results found.
         let db = BrainDatabase(path: dbPath)
         defer { db.close() }
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
 
         let response = router.handle([
@@ -2108,7 +2197,7 @@ No results found.
         defer { db.close() }
         db.failNextStoreWithBusyForTesting = true
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
 
         let response = router.handle([
@@ -2171,7 +2260,7 @@ No results found.
         let db = BrainDatabase(path: dbPath)
         defer { db.close() }
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
 
         let response = router.handle([
@@ -2225,7 +2314,7 @@ No results found.
         let db = BrainDatabase(path: dbPath)
         defer { db.close() }
 
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         router.setDatabase(db)
 
         let response = router.handle([
@@ -2505,7 +2594,7 @@ No results found.
     // MARK: - Notifications (no id)
 
     func testNotificationDoesNotRequireResponse() {
-        let router = MCPRouter()
+        let router = MCPRouter(profile: "full")
         let request: [String: Any] = [
             "jsonrpc": "2.0",
             "method": "notifications/initialized",

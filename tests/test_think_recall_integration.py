@@ -246,12 +246,11 @@ class TestMCPToolCount:
     """Verify MCP server has correct tool count."""
 
     def test_tool_count(self):
-        """MCP server should have 13 tools including explicit checkpoint resume."""
-        import asyncio
+        """Full MCP profile has 13 tools including explicit checkpoint resume."""
 
-        from brainlayer.mcp import list_tools
+        from brainlayer.mcp import _full_tool_definitions
 
-        tools = asyncio.run(list_tools())
+        tools = _full_tool_definitions()
         assert len(tools) == 13
 
     def test_consolidated_tools_registered(self):

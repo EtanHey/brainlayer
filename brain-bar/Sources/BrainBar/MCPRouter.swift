@@ -10,6 +10,32 @@
 import Foundation
 
 final class MCPRouter: @unchecked Sendable {
+    private enum ToolProfile {
+        case core
+        case full
+    }
+
+    private static let profileEnvironmentKey = "BRAINLAYER_MCP_PROFILE"
+    private static let coreToolNames: Set<String> = [
+        "brain_search",
+        "brain_store",
+        "brain_recall",
+        "brain_expand",
+    ]
+    private static let coreToolDescriptions: [String: String] = [
+        "brain_search": "Search memory.",
+        "brain_store": "Store memory.",
+        "brain_recall": "Recall context.",
+        "brain_expand": "Expand chunk.",
+    ]
+    nonisolated(unsafe) private static let expandPaletteToolDefinition: [String: Any] = [
+        "name": "expand_palette",
+        "description": "Expose all tools.",
+        "inputSchema": [
+            "type": "object",
+        ] as [String: Any],
+    ]
+
     // Keep contested MCP writes interactive: make one short attempt, then queue
     // for replay so brain_store returns well under the 1s prompt-queue budget.
     // Longer contention handling belongs in the deferred single-writer/backpressure
@@ -28,6 +54,25 @@ final class MCPRouter: @unchecked Sendable {
     private static let pendingStoreDrainRegistry = PendingStoreDrainRegistry()
     private static let pendingStoreDrainInitialDelay: TimeInterval = 0.25
     private static let pendingStoreDrainMaxDelay: TimeInterval = 30.0
+
+    final class PaletteSession: @unchecked Sendable {
+        private let lock = NSLock()
+        private var expanded = false
+
+        func isExpanded() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return expanded
+        }
+
+        func expand() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !expanded else { return false }
+            expanded = true
+            return true
+        }
+    }
 
     private struct ToolOutput {
         let text: String
@@ -94,6 +139,8 @@ final class MCPRouter: @unchecked Sendable {
     private let hybridSearchClient: HybridSearchClientProtocol?
     private let dbPath: String?
     private let hybridSearchBudget: TimeInterval
+    private let toolProfile: ToolProfile
+    private let defaultPaletteSession = PaletteSession()
     let entityCache = EntityCache()
     private static let defaultStringMaxLength = 256
     private static let defaultStringArrayMaxItems = 100
@@ -121,13 +168,106 @@ final class MCPRouter: @unchecked Sendable {
     ]
 
     init(
+        profile: String? = nil,
         hybridSearchClient: HybridSearchClientProtocol? = nil,
         hybridSearchBudget: TimeInterval = 0.8,
         dbPath: String? = nil
     ) {
+        self.toolProfile = Self.resolveToolProfile(profile)
         self.hybridSearchClient = hybridSearchClient
         self.hybridSearchBudget = max(0.001, hybridSearchBudget)
         self.dbPath = dbPath
+    }
+
+    private static func resolveToolProfile(_ explicitProfile: String?) -> ToolProfile {
+        let environmentProfile = ProcessInfo.processInfo.environment[profileEnvironmentKey]
+        let rawProfile = explicitProfile ?? environmentProfile
+        let normalized = rawProfile?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+
+        switch normalized {
+        case "full", "operator":
+            return .full
+        case "", "core":
+            return .core
+        default:
+            if explicitProfile == nil, let rawProfile = environmentProfile {
+                let message = "BrainBar: unknown \(profileEnvironmentKey)=\(rawProfile); using core profile\n"
+                FileHandle.standardError.write(Data(message.utf8))
+            }
+            return .core
+        }
+    }
+
+    func makePaletteSession() -> PaletteSession {
+        PaletteSession()
+    }
+
+    private func exposedToolDefinitions(for session: PaletteSession) -> [[String: Any]] {
+        if toolProfile == .full || session.isExpanded() {
+            return Self.toolDefinitions
+        }
+
+        let coreDefinitions = Self.toolDefinitions.filter { definition in
+            guard let name = definition["name"] as? String else { return false }
+            return Self.coreToolNames.contains(name)
+        }.map(Self.compactCoreToolDefinition)
+        return coreDefinitions + [Self.expandPaletteToolDefinition]
+    }
+
+    func isToolExposed(_ name: String, session: PaletteSession) -> Bool {
+        exposedToolDefinitions(for: session).contains { ($0["name"] as? String) == name }
+    }
+
+    private static func compactCoreToolDefinition(_ definition: [String: Any]) -> [String: Any] {
+        guard let name = definition["name"] as? String else { return definition }
+
+        var compact: [String: Any] = ["name": name]
+        compact["description"] = coreToolDescriptions[name]
+        if let inputSchema = definition["inputSchema"] as? [String: Any] {
+            compact["inputSchema"] = removingDescriptions(from: inputSchema)
+        }
+        return compact
+    }
+
+    private static func removingDescriptions(from value: Any) -> Any {
+        if let dictionary = value as? [String: Any] {
+            return dictionary.reduce(into: [String: Any]()) { result, entry in
+                guard entry.key != "description" else { return }
+                result[entry.key] = removingDescriptions(from: entry.value)
+            }
+        }
+        if let array = value as? [Any] {
+            return array.map(removingDescriptions(from:))
+        }
+        return value
+    }
+
+    private func expandPalette(session: PaletteSession) -> ToolOutput {
+        guard session.expand() else {
+            return ToolOutput(
+                text: "BrainLayer tool palette is already expanded.",
+                metadata: [
+                    "expanded": false,
+                    "already_expanded": true,
+                    "registered_tools": [String](),
+                ]
+            )
+        }
+
+        let deferredNames = Self.toolDefinitions.compactMap { definition -> String? in
+            guard let name = definition["name"] as? String else { return nil }
+            return Self.coreToolNames.contains(name) ? nil : name
+        }
+        return ToolOutput(
+            text: "Expanded BrainLayer tool palette.",
+            metadata: [
+                "expanded": true,
+                "already_expanded": false,
+                "registered_tools": deferredNames,
+            ]
+        )
     }
 
     /// Inject database for tool handlers + load entity cache.
@@ -160,7 +300,8 @@ final class MCPRouter: @unchecked Sendable {
 
     /// Handle a parsed JSON-RPC request and return a response.
     /// Returns empty dict for notifications (no id).
-    func handle(_ request: [String: Any]) -> [String: Any] {
+    func handle(_ request: [String: Any], session: PaletteSession? = nil) -> [String: Any] {
+        let paletteSession = session ?? defaultPaletteSession
         guard let method = request["method"] as? String else {
             return jsonRPCError(id: request["id"], code: -32600, message: "Invalid request: missing method")
         }
@@ -181,9 +322,13 @@ final class MCPRouter: @unchecked Sendable {
             // If a client sends this with an id, ack it so it doesn't hang.
             return jsonRPCResult(id: id, result: [:] as [String: Any])
         case "tools/list":
-            return handleToolsList(id: id)
+            return handleToolsList(id: id, session: paletteSession)
         case "tools/call":
-            return handleToolsCall(id: id, params: request["params"] as? [String: Any] ?? [:])
+            return handleToolsCall(
+                id: id,
+                params: request["params"] as? [String: Any] ?? [:],
+                session: paletteSession
+            )
         case "resources/list":
             return handleResourcesList(id: id)
         case "prompts/list":
@@ -204,7 +349,7 @@ final class MCPRouter: @unchecked Sendable {
             "result": [
                 "protocolVersion": "2024-11-05",
                 "capabilities": [
-                    "tools": ["listChanged": false],
+                    "tools": ["listChanged": true],
                     "experimental": [
                         "claude/channel": [:] as [String: Any]
                     ]
@@ -219,12 +364,12 @@ final class MCPRouter: @unchecked Sendable {
 
     // MARK: - tools/list
 
-    private func handleToolsList(id: Any) -> [String: Any] {
+    private func handleToolsList(id: Any, session: PaletteSession) -> [String: Any] {
         return [
             "jsonrpc": "2.0",
             "id": id,
             "result": [
-                "tools": Self.toolDefinitions
+                "tools": exposedToolDefinitions(for: session)
             ]
         ]
     }
@@ -236,15 +381,22 @@ final class MCPRouter: @unchecked Sendable {
 
     // MARK: - tools/call
 
-    private func handleToolsCall(id: Any, params: [String: Any]) -> [String: Any] {
+    private func handleToolsCall(id: Any, params: [String: Any], session: PaletteSession) -> [String: Any] {
         guard let toolName = params["name"] as? String else {
             return jsonRPCError(id: id, code: -32602, message: "Missing tool name")
         }
 
         let arguments = params["arguments"] as? [String: Any] ?? [:]
 
+        if toolName == "expand_palette" {
+            guard toolProfile == .core else {
+                return jsonRPCError(id: id, code: -32601, message: "Unknown tool: \(toolName)")
+            }
+            return toolCallResult(id: id, output: expandPalette(session: session))
+        }
+
         // Check tool exists
-        guard Self.toolDefinitions.contains(where: { ($0["name"] as? String) == toolName }) else {
+        guard isToolExposed(toolName, session: session) else {
             return jsonRPCError(id: id, code: -32601, message: "Unknown tool: \(toolName)")
         }
 
@@ -252,19 +404,7 @@ final class MCPRouter: @unchecked Sendable {
         do {
             try Self.validate(arguments: arguments, for: toolName)
             let output = try dispatchTool(name: toolName, arguments: arguments)
-            var result: [String: Any] = [
-                "content": [
-                    ["type": "text", "text": output.text]
-                ]
-            ]
-            for (key, value) in output.metadata {
-                result[key] = value
-            }
-            return [
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": result
-            ]
+            return toolCallResult(id: id, output: output)
         } catch {
             return [
                 "jsonrpc": "2.0",
@@ -277,6 +417,22 @@ final class MCPRouter: @unchecked Sendable {
                 ] as [String: Any]
             ]
         }
+    }
+
+    private func toolCallResult(id: Any, output: ToolOutput) -> [String: Any] {
+        var result: [String: Any] = [
+            "content": [
+                ["type": "text", "text": output.text]
+            ]
+        ]
+        for (key, value) in output.metadata {
+            result[key] = value
+        }
+        return [
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": result,
+        ]
     }
 
     private func dispatchTool(name: String, arguments: [String: Any]) throws -> ToolOutput {
