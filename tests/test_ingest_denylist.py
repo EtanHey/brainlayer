@@ -113,6 +113,47 @@ def test_unattributed_subagent_is_deferred_until_identity_is_known(monkeypatch, 
     assert not is_denylisted(worker)
 
 
+def test_subagent_attribution_skips_non_object_json_values(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv(BRAINLAYER_INGEST_DENYLIST_ENV, raising=False)
+    worker = tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent.jsonl"
+    worker.parent.mkdir(parents=True)
+    worker.write_text(
+        "null\n"
+        "[]\n"
+        + json.dumps({"attributionAgent": "general-purpose"})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert not is_denylisted(worker)
+
+
+def test_subagent_attribution_is_found_after_legacy_scan_limit(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv(BRAINLAYER_INGEST_DENYLIST_ENV, raising=False)
+    worker = tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent.jsonl"
+    worker.parent.mkdir(parents=True)
+    unattributed = json.dumps({"type": "progress"})
+    worker.write_text(
+        "\n".join([unattributed] * 300 + [json.dumps({"attributionAgent": "general-purpose"})]) + "\n",
+        encoding="utf-8",
+    )
+
+    assert not is_denylisted(worker)
+
+
+def test_explicit_empty_override_disables_default_subagent_policy(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv(BRAINLAYER_INGEST_DENYLIST_ENV, "")
+    worker = _write_subagent(
+        tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent.jsonl",
+        "brain-worker",
+    )
+
+    assert not is_denylisted(worker)
+
+
 def test_explicit_environment_override_can_deny_an_otherwise_allowed_provider(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv(BRAINLAYER_INGEST_DENYLIST_ENV, "~/.codex/sessions/**")

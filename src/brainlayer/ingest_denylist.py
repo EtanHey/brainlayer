@@ -11,7 +11,6 @@ BRAINLAYER_INGEST_DENYLIST_ENV = "BRAINLAYER_INGEST_DENYLIST"
 
 DEFAULT_INGEST_DENYLIST = ("~/.claude/projects/**/wf_*/**",)
 
-_SUBAGENT_ATTRIBUTION_SCAN_LINES = 256
 _SUBAGENT_ATTRIBUTION_CACHE: dict[str, tuple[int, int, str | None]] = {}
 
 
@@ -71,12 +70,12 @@ def _claude_subagent_attribution(path: Path) -> str | None:
     attribution = None
     try:
         with path.open(encoding="utf-8", errors="replace") as handle:
-            for line_number, raw_line in enumerate(handle):
-                if line_number >= _SUBAGENT_ATTRIBUTION_SCAN_LINES:
-                    break
+            for raw_line in handle:
                 try:
                     entry = json.loads(raw_line)
                 except json.JSONDecodeError:
+                    continue
+                if not isinstance(entry, dict):
                     continue
                 raw_attribution = entry.get("attributionAgent")
                 if isinstance(raw_attribution, str) and raw_attribution.strip():
@@ -97,7 +96,7 @@ def is_denylisted(path: str | Path) -> bool:
         for expanded_pattern in _expand_globs(pattern, homes):
             if _match_parts(candidate.parts, expanded_pattern.parts):
                 return True
-    if _is_claude_subagent(candidate):
+    if BRAINLAYER_INGEST_DENYLIST_ENV not in os.environ and _is_claude_subagent(candidate):
         attribution = _claude_subagent_attribution(candidate)
         return attribution is None or attribution == "brain-worker"
     return False
