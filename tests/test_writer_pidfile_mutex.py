@@ -678,7 +678,7 @@ def test_init_retry_zero_budget_reraises_original_busy(monkeypatch):
         raise apsw.BusyError("locked")
 
     monkeypatch.setattr(store, "_init_db", busy_init)
-    monkeypatch.setattr("time.sleep", lambda _delay: None)
+    monkeypatch.setattr("brainlayer.vector_store._sleep", lambda _delay: None)
 
     with pytest.raises(apsw.BusyError, match="locked"):
         store._init_db_with_retry()
@@ -729,7 +729,7 @@ def test_drain_open_retries_busy_error_before_connection_exists(tmp_path, monkey
     monkeypatch.setenv("BRAINLAYER_DRAIN_OPEN_RETRY_MAX_DELAY_MS", "100")
     monkeypatch.setattr(drain.apsw, "Connection", flaky_connection)
     monkeypatch.setattr(drain.sqlite_vec, "loadable_path", lambda: "sqlite_vec")
-    monkeypatch.setattr(drain.time, "sleep", lambda delay: sleep_calls.append(delay))
+    monkeypatch.setattr(drain, "_sleep", lambda delay: sleep_calls.append(delay))
 
     conn = drain._open_connection(tmp_path / "drain.db")
 

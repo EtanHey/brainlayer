@@ -303,7 +303,7 @@ class TestRetryWithBackoff:
             patch.object(enrichment, "MAX_RETRIES", 3),
             patch.object(enrichment, "RETRY_BASE_DELAY", 1.0),
             patch.object(enrichment, "RETRY_MAX_DELAY", 100.0),
-            patch("time.sleep", side_effect=mock_sleep),
+            patch.object(enrichment, "_sleep", side_effect=mock_sleep),
         ):
             enrichment._enrich_one(store, chunk, with_context=False)
 
