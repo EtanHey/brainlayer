@@ -242,9 +242,27 @@ class OffsetRegistry:
         self._data.pop(filepath, None)
         self._dirty = True
 
-    def prune_missing_files(self) -> int:
-        """Drop offsets whose source file no longer exists and return the count."""
-        missing = [filepath for filepath in self._data if not Path(filepath).is_file()]
+    def prune_missing_files(self, active_roots: list[Path]) -> int:
+        """Drop confirmed-deleted offsets under currently available watch roots."""
+        available_roots: list[Path] = []
+        for root in active_roots:
+            candidate_root = Path(os.path.abspath(os.path.expanduser(str(root))))
+            try:
+                if candidate_root.is_dir():
+                    available_roots.append(candidate_root)
+            except OSError:
+                continue
+
+        missing: list[str] = []
+        for filepath in self._data:
+            candidate = Path(os.path.abspath(os.path.expanduser(filepath)))
+            if not any(candidate == root or candidate.is_relative_to(root) for root in available_roots):
+                continue
+            try:
+                if not candidate.is_file():
+                    missing.append(filepath)
+            except OSError:
+                continue
         for filepath in missing:
             self._data.pop(filepath, None)
         if missing:
@@ -783,7 +801,7 @@ class JSONLWatcher:
 
         try:
             if not self._offset_prune_complete:
-                pruned = self.registry.prune_missing_files()
+                pruned = self.registry.prune_missing_files([root.resolved_path for root in self.watch_roots])
                 if pruned:
                     logger.info("Pruned %d deleted files from the offset registry", pruned)
                 self._offset_prune_complete = self.registry.flush()

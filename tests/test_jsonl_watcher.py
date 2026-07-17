@@ -12,6 +12,7 @@ import os
 import sqlite3
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -77,7 +78,7 @@ class TestOffsetRegistry:
         reg.set(str(deleted), 200, 2)
         reg.flush()
 
-        assert reg.prune_missing_files() == 1
+        assert reg.prune_missing_files([tmp_path]) == 1
         assert reg.get(str(existing)) == (100, 1)
         assert reg.get(str(deleted)) == (0, 0)
         assert reg.flush() is True
@@ -85,6 +86,33 @@ class TestOffsetRegistry:
         reloaded = OffsetRegistry(registry_path)
         assert reloaded.get(str(existing)) == (100, 1)
         assert reloaded.get(str(deleted)) == (0, 0)
+
+    def test_prune_missing_files_preserves_offsets_under_unavailable_root(self, tmp_path):
+        unavailable_root = tmp_path / "unmounted"
+        missing = unavailable_root / "session.jsonl"
+        reg = OffsetRegistry(tmp_path / "offsets.json")
+        reg.set(str(missing), 100, 1)
+
+        assert reg.prune_missing_files([unavailable_root]) == 0
+        assert reg.get(str(missing)) == (100, 1)
+
+    def test_prune_missing_files_skips_stat_errors(self, monkeypatch, tmp_path):
+        root = tmp_path / "sessions"
+        root.mkdir()
+        inaccessible = root / "inaccessible.jsonl"
+        reg = OffsetRegistry(tmp_path / "offsets.json")
+        reg.set(str(inaccessible), 100, 1)
+        original_stat = Path.stat
+
+        def fail_inaccessible(path, *args, **kwargs):
+            if path == inaccessible:
+                raise PermissionError("denied")
+            return original_stat(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "stat", fail_inaccessible)
+
+        assert reg.prune_missing_files([root]) == 0
+        assert reg.get(str(inaccessible)) == (100, 1)
 
     def test_load_corrupt_file(self, tmp_path):
         path = tmp_path / "offsets.json"
