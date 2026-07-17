@@ -113,6 +113,59 @@ def test_windowed_flush_does_not_confirm_offsets_when_downstream_returns_none():
     assert windowed.inserted_chunks == 0
 
 
+def test_windowed_flush_stops_before_unconfirmed_matched_entry():
+    windowed = WindowedFlush(
+        lambda _entries: FlushWatermarks(inserted=0),
+        since=datetime(2026, 7, 10, tzinfo=UTC),
+        until=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+
+    result = windowed(
+        [
+            _entry("2026-07-09T23:59:59Z", 100),
+            _entry("2026-07-12T00:00:00Z", 200),
+            _entry("2026-07-16T00:00:00Z", 300),
+        ]
+    )
+
+    assert result == {"/tmp/session.jsonl": 100}
+
+
+def test_windowed_flush_advances_exclusions_after_confirmed_match_until_next_match():
+    windowed = WindowedFlush(
+        lambda _entries: FlushWatermarks({"/tmp/session.jsonl": 200}, inserted=1),
+        since=datetime(2026, 7, 10, tzinfo=UTC),
+        until=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+
+    result = windowed(
+        [
+            _entry("2026-07-12T00:00:00Z", 200),
+            _entry("2026-07-16T00:00:00Z", 300),
+            _entry("2026-07-13T00:00:00Z", 400),
+            _entry("2026-07-16T00:00:00Z", 500),
+        ]
+    )
+
+    assert result == {"/tmp/session.jsonl": 300}
+
+
+def test_normalize_provider_entry_uses_valid_created_at_for_canonical_entry():
+    normalized = normalize_provider_entry(
+        {
+            "type": "assistant",
+            "timestamp": {"invalid": True},
+            "created_at": "2026-07-12T12:00:00Z",
+            "message": {"role": "assistant", "content": "durable decision"},
+        },
+        "claude",
+    )
+
+    assert normalized is not None
+    assert normalized["timestamp"] == "2026-07-12T12:00:00Z"
+    assert normalized["_timestamp_synthesized"] is False
+
+
 def test_window_registry_suffix_preserves_fractional_seconds_without_changing_whole_seconds():
     whole_since = datetime(2026, 7, 10, tzinfo=UTC)
     whole_until = datetime(2026, 7, 16, tzinfo=UTC)

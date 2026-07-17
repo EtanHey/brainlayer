@@ -412,6 +412,28 @@ class TestJSONLWatcher:
         payload = json.loads(health_path.read_text())
         assert payload["poll_count"] == 1
 
+    def test_newly_denylisted_file_preserves_confirmed_registry_offset(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("BRAINLAYER_INGEST_DENYLIST", "")
+        project = self._make_project_dir(tmp_path)
+        transcript = project / "session.jsonl"
+        transcript.write_text('{"type":"user","message":{"role":"user","content":"remember this"}}\n')
+
+        watcher = JSONLWatcher(
+            watch_dir=tmp_path / "projects",
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda items: {str(transcript): items[-1]["_line_end_offset"]},
+            batch_size=1,
+        )
+        assert watcher.poll_once() == 1
+        confirmed = watcher.registry.get(str(transcript))
+        assert confirmed[0] == transcript.stat().st_size
+
+        monkeypatch.setenv("BRAINLAYER_INGEST_DENYLIST", str(transcript))
+        assert watcher.poll_once() == 0
+
+        assert str(transcript) not in watcher._tailers
+        assert watcher.registry.get(str(transcript)) == confirmed
+
     def test_offset_survives_restart(self, tmp_path):
         project = self._make_project_dir(tmp_path)
         f = project / "s1.jsonl"

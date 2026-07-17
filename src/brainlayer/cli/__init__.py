@@ -3527,6 +3527,7 @@ def watch_backfill(
             on_flush=lambda items: None,
             db_path=db_path,
             denylist_predicate=is_legacy_backfill_denylisted if legacy_excluded_only else None,
+            preserve_raw_progress=window is not None,
         )
         files = watcher._discover_jsonl_files()
         if legacy_excluded_only:
@@ -3561,6 +3562,7 @@ def watch_backfill(
         on_flush=windowed_flush or downstream_flush,
         db_path=db_path,
         denylist_predicate=is_legacy_backfill_denylisted if legacy_excluded_only else None,
+        preserve_raw_progress=window is not None,
     )
     processed = 0
     cycles = 0

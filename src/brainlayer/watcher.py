@@ -83,6 +83,15 @@ def _mapping_value(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _first_timestamp(*entries: dict[str, Any]) -> str | None:
+    for entry in entries:
+        for key in ("timestamp", "created_at"):
+            value = entry.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+    return None
+
+
 def normalize_provider_entry(entry: dict[str, Any], provider: str) -> dict[str, Any] | None:
     if not isinstance(entry, dict):
         return None
@@ -90,6 +99,9 @@ def normalize_provider_entry(entry: dict[str, Any], provider: str) -> dict[str, 
     entry_type = entry.get("type")
     if entry_type in {"user", "assistant"} and isinstance(entry.get("message"), dict):
         normalized = dict(entry)
+        source_timestamp = _first_timestamp(entry)
+        normalized["timestamp"] = source_timestamp or datetime.now(timezone.utc).isoformat()
+        normalized["_timestamp_synthesized"] = source_timestamp is None
         normalized["_provider"] = provider
         return normalized
 
@@ -98,9 +110,9 @@ def normalize_provider_entry(entry: dict[str, Any], provider: str) -> dict[str, 
     if provider == "codex" and entry_type == "response_item":
         if not payload_entry or payload_entry.get("type") != "message":
             return None
-        candidate = {**payload_entry, "timestamp": entry.get("timestamp")}
+        candidate = dict(payload_entry)
     elif payload_entry:
-        candidate = {**payload_entry, "timestamp": entry.get("timestamp") or payload_entry.get("timestamp")}
+        candidate = dict(payload_entry)
     else:
         candidate = entry
 
@@ -121,7 +133,7 @@ def normalize_provider_entry(entry: dict[str, Any], provider: str) -> dict[str, 
     if not text:
         return None
 
-    source_timestamp = candidate.get("timestamp") or candidate.get("created_at")
+    source_timestamp = _first_timestamp(entry, candidate)
     return {
         "type": role,
         "message": {"role": role, "content": [{"type": "text", "text": text}]},
@@ -285,7 +297,12 @@ class JSONLTailer:
             return True
         return False
 
-    def read_new_lines(self, max_lines: int | None = None) -> list[dict]:
+    def read_new_lines(
+        self,
+        max_lines: int | None = None,
+        *,
+        include_progress_markers: bool = False,
+    ) -> list[dict]:
         """Read any new complete lines since last call. Returns parsed JSON dicts."""
         # Check for rewind before reading
         self.check_rewind()
@@ -313,6 +330,8 @@ class JSONLTailer:
 
             if not line_data.strip():
                 self.offset += nl_idx + 1
+                if include_progress_markers:
+                    lines.append({"_line_end_offset": self.offset, "_watermark_only": True})
                 continue
 
             try:
@@ -320,8 +339,12 @@ class JSONLTailer:
                 if isinstance(parsed, dict):
                     parsed["_line_end_offset"] = self.offset + nl_idx + 1
                     lines.append(parsed)
+                elif include_progress_markers:
+                    lines.append({"_line_end_offset": self.offset + nl_idx + 1, "_watermark_only": True})
             except (json.JSONDecodeError, UnicodeDecodeError):
                 logger.debug("Skipping corrupt JSONL line at offset %d", self.offset)
+                if include_progress_markers:
+                    lines.append({"_line_end_offset": self.offset + nl_idx + 1, "_watermark_only": True})
 
             self.offset += nl_idx + 1
 
@@ -502,6 +525,7 @@ class JSONLWatcher:
         respect_denylist: bool = True,
         unknown_subagent_is_denylisted: bool = True,
         denylist_predicate: Callable[[str | Path], bool] | None = None,
+        preserve_raw_progress: bool = False,
     ):
         if watch_roots is not None:
             self.watch_roots = [WatchRoot(root.provider, root.path, root.glob_pattern) for root in watch_roots]
@@ -527,6 +551,7 @@ class JSONLWatcher:
         self.respect_denylist = respect_denylist
         self.unknown_subagent_is_denylisted = unknown_subagent_is_denylisted
         self.denylist_predicate = denylist_predicate
+        self.preserve_raw_progress = preserve_raw_progress
         self._tailers: dict[str, JSONLTailer] = {}
         self._file_providers: dict[str, str] = {}
         self._stop = threading.Event()
@@ -607,10 +632,29 @@ class JSONLWatcher:
         provider = self.provider_for_file(filepath)
         normalized = []
         for line in new_lines:
+            if line.get("_watermark_only") is True:
+                normalized.append(
+                    {
+                        "_source_file": filepath,
+                        "_provider": provider,
+                        "_line_end_offset": line["_line_end_offset"],
+                        "_watermark_only": True,
+                    }
+                )
+                continue
             entry = normalize_provider_entry(line, provider)
             if not entry and provider == "claude":
                 entry = dict(line)
             if not entry:
+                if self.preserve_raw_progress and isinstance(line.get("_line_end_offset"), int):
+                    normalized.append(
+                        {
+                            "_source_file": filepath,
+                            "_provider": provider,
+                            "_line_end_offset": line["_line_end_offset"],
+                            "_watermark_only": True,
+                        }
+                    )
                 continue
             entry["_source_file"] = filepath
             entry["_provider"] = provider
@@ -792,17 +836,18 @@ class JSONLWatcher:
                 if self._is_denylisted(filepath):
                     self._tailers.pop(filepath, None)
                     self._file_providers.pop(filepath, None)
-                    self.registry.remove(filepath)
 
             for filepath in files:
                 if self._is_denylisted(filepath):
                     self._tailers.pop(filepath, None)
                     self._file_providers.pop(filepath, None)
-                    self.registry.remove(filepath)
                     continue
                 try:
                     tailer = self._ensure_tailer(filepath)
-                    new_lines = tailer.read_new_lines(max_lines=self.max_lines_per_file)
+                    new_lines = tailer.read_new_lines(
+                        max_lines=self.max_lines_per_file,
+                        include_progress_markers=self.preserve_raw_progress,
+                    )
 
                     # Handle rewind detection (checkpoint restore)
                     if tailer.rewound:

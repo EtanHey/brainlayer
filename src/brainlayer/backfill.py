@@ -100,18 +100,30 @@ class WindowedFlush:
         return self.since <= parsed < self.until
 
     def __call__(self, entries: list[dict]) -> FlushWatermarks | None:
-        matched = [entry for entry in entries if self._matches(entry)]
+        match_flags = [self._matches(entry) for entry in entries]
+        matched = [entry for entry, matches in zip(entries, match_flags, strict=True) if matches]
         downstream_result = self.downstream(matched) if matched else FlushWatermarks()
         self.scanned_entries += len(entries)
         self.matched_entries += len(matched)
         if downstream_result is None:
             return None
         watermarks = dict(downstream_result or {})
-        for entry in entries:
+        by_source: dict[str, list[tuple[int, bool]]] = {}
+        for entry, matches in zip(entries, match_flags, strict=True):
             source_file = entry.get("_source_file")
             offset = entry.get("_line_end_offset")
             if isinstance(source_file, str) and isinstance(offset, int):
-                watermarks[source_file] = max(watermarks.get(source_file, 0), offset)
+                by_source.setdefault(source_file, []).append((offset, matches))
+        for source_file, source_entries in by_source.items():
+            confirmed = int(watermarks.get(source_file, 0))
+            for offset, matches in sorted(source_entries):
+                if offset <= confirmed:
+                    continue
+                if matches:
+                    break
+                confirmed = offset
+            if confirmed > 0:
+                watermarks[source_file] = confirmed
 
         inserted = int(getattr(downstream_result, "inserted", len(matched)))
         downstream_skipped = int(getattr(downstream_result, "skipped", 0))

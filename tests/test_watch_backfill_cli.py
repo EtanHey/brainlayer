@@ -344,6 +344,40 @@ def test_watch_backfill_indexes_only_requested_window_and_is_idempotent(tmp_path
     assert len(list(queue_dir.glob("watcher-*.jsonl"))) == 1
 
 
+def test_watch_backfill_persists_progress_for_rejected_and_malformed_lines(tmp_path, monkeypatch):
+    monkeypatch.delenv("BRAINLAYER_INGEST_DENYLIST", raising=False)
+    transcript = tmp_path / ".codex" / "sessions" / "2026" / "07" / "unsupported.jsonl"
+    registry = tmp_path / "window-offsets.json"
+    queue_dir = tmp_path / "queue"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text('{"type":"unsupported"}\nnot-json\n', encoding="utf-8")
+    args = [
+        "watch-backfill",
+        "--home",
+        str(tmp_path),
+        "--registry",
+        str(registry),
+        "--since",
+        "2026-07-10",
+        "--until",
+        "2026-07-16",
+    ]
+
+    first = CliRunner().invoke(app, args, env={"BRAINLAYER_QUEUE_DIR": str(queue_dir)})
+
+    assert first.exit_code == 0, first.output
+    assert "processed_entries=2" in first.output
+    assert "matched_entries=0" in first.output
+    assert "queued_chunks=0" in first.output
+    registry_payload = json.loads(registry.read_text())
+    assert registry_payload[str(transcript)]["offset"] == transcript.stat().st_size
+
+    second = CliRunner().invoke(app, args, env={"BRAINLAYER_QUEUE_DIR": str(queue_dir)})
+
+    assert second.exit_code == 0, second.output
+    assert "processed_entries=0" in second.output
+
+
 def test_watch_backfill_rejects_legacy_scope_without_window(tmp_path):
     result = CliRunner().invoke(
         app,
