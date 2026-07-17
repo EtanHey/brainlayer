@@ -77,6 +77,27 @@ class TestOffsetRegistry:
         assert any(stat.S_ISREG(mode) for mode in synced_modes)
         assert any(stat.S_ISDIR(mode) for mode in synced_modes)
 
+    def test_flush_uses_windows_byte_lock_when_fcntl_is_unavailable(self, monkeypatch, tmp_path):
+        from brainlayer import watcher as watcher_module
+
+        lock_operations: list[int] = []
+
+        class FakeMsvcrt:
+            LK_NBLCK = 1
+            LK_UNLCK = 2
+
+            @staticmethod
+            def locking(_fd, operation, _byte_count):
+                lock_operations.append(operation)
+
+        monkeypatch.setattr(watcher_module, "fcntl", None)
+        monkeypatch.setattr(watcher_module, "msvcrt", FakeMsvcrt, raising=False)
+        reg = OffsetRegistry(tmp_path / "offsets.json")
+        reg.set("/session.jsonl", 100, 1)
+
+        assert reg.flush() is True
+        assert lock_operations == [FakeMsvcrt.LK_NBLCK, FakeMsvcrt.LK_UNLCK]
+
     def test_flush_does_not_overwrite_corrupt_existing_registry(self, tmp_path):
         registry_path = tmp_path / "offsets.json"
         reg = OffsetRegistry(registry_path)
@@ -235,8 +256,37 @@ class TestOffsetRegistry:
 
         recreated_registry.set(str(deleted), 50, 3)
         assert recreated_registry.flush() is True
+        assert OffsetRegistry(registry_path).get(str(deleted)) == (0, 0)
+
+        recreated_registry.set(str(deleted), 50, 3)
+        assert recreated_registry.flush() is True
 
         assert OffsetRegistry(registry_path).get(str(deleted)) == (50, 3)
+
+    def test_prune_tombstone_blocks_older_different_inode_writer(self, tmp_path):
+        registry_path = tmp_path / "offsets.json"
+        existing = tmp_path / "existing.jsonl"
+        deleted = tmp_path / "deleted.jsonl"
+        existing.write_text('{"id":"kept"}\n')
+
+        initial = OffsetRegistry(registry_path)
+        initial.set(str(existing), 100, 1)
+        initial.set(str(deleted), 200, 2)
+        assert initial.flush() is True
+
+        older_inode_registry = OffsetRegistry(registry_path)
+        replacement_registry = OffsetRegistry(registry_path)
+        replacement_registry.set(str(deleted), 25, 3)
+        assert replacement_registry.flush() is True
+
+        pruning_registry = OffsetRegistry(registry_path)
+        assert pruning_registry.prune_missing_files([tmp_path], [existing]) == 1
+        assert pruning_registry.flush() is True
+
+        older_inode_registry.set(str(deleted), 250, 2)
+        assert older_inode_registry.flush() is True
+
+        assert OffsetRegistry(registry_path).get(str(deleted)) == (0, 0)
 
     def test_registry_loaded_after_tombstone_can_reuse_same_inode(self, tmp_path):
         registry_path = tmp_path / "offsets.json"

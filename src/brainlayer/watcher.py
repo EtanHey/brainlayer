@@ -14,7 +14,7 @@ This is the Python watchdog prototype. The production version will use
 Swift DispatchSource kqueue in BrainBar for sub-1ms notification latency.
 """
 
-import fcntl
+import errno
 import json
 import logging
 import math
@@ -28,6 +28,16 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - exercised via the Windows lock seam
+    fcntl = None  # type: ignore[assignment]
+
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - unavailable on POSIX
+    msvcrt = None  # type: ignore[assignment]
 
 from .alarm import BrainLayerAlarm, raise_alarm
 from .ingest_denylist import is_denylisted
@@ -188,6 +198,37 @@ _OFFSET_TOMBSTONES_KEY = "__brainlayer_offset_tombstones__"
 _OFFSET_TOMBSTONE_RETENTION_S = 24 * 60 * 60
 
 
+def _lock_offset_registry_file(lock_file) -> None:
+    """Acquire an exclusive advisory lock on POSIX or Windows."""
+    if fcntl is not None:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        return
+    if msvcrt is None:
+        raise OSError("no supported offset-registry file lock is available")
+    lock_file.seek(0, os.SEEK_END)
+    if lock_file.tell() == 0:
+        lock_file.write(b"\0")
+        lock_file.flush()
+    lock_file.seek(0)
+    while True:
+        try:
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+            return
+        except OSError as error:
+            if error.errno not in {errno.EACCES, errno.EAGAIN}:
+                raise
+            time.sleep(0.05)
+
+
+def _unlock_offset_registry_file(lock_file) -> None:
+    """Release the platform-specific advisory registry lock."""
+    lock_file.seek(0)
+    if fcntl is not None:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    elif msvcrt is not None:
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+
+
 class OffsetRegistry:
     """Persists file read offsets so we resume after restart.
 
@@ -294,8 +335,8 @@ class OffsetRegistry:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             lock_path = self.path.with_name(f"{self.path.name}.lock")
-            with lock_path.open("a+") as lock_file:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            with lock_path.open("a+b") as lock_file:
+                _lock_offset_registry_file(lock_file)
                 try:
                     try:
                         with self.path.open() as registry_file:
@@ -331,16 +372,7 @@ class OffsetRegistry:
                         tombstone = tombstones.get(filepath)
                         if tombstone is not None:
                             local_generation = self._entry_generation(local_entry)
-                            local_inode = local_entry.get("inode", 0)
-                            tombstone_inode = int(tombstone["inode"])
-                            new_identity = (
-                                isinstance(local_inode, int)
-                                and not isinstance(local_inode, bool)
-                                and local_inode > 0
-                                and tombstone_inode > 0
-                                and local_inode != tombstone_inode
-                            )
-                            if local_generation <= int(tombstone["generation"]) and not new_identity:
+                            if local_generation <= int(tombstone["generation"]):
                                 merged.pop(filepath, None)
                                 continue
                         disk_entry = disk_data.get(filepath)
@@ -367,17 +399,8 @@ class OffsetRegistry:
                     for filepath, tombstone in list(tombstones.items()):
                         disk_entry = merged.get(filepath)
                         if isinstance(disk_entry, dict):
-                            disk_inode = disk_entry.get("inode", 0)
-                            tombstone_inode = int(tombstone["inode"])
                             newer_generation = self._entry_generation(disk_entry) > int(tombstone["generation"])
-                            new_identity = (
-                                isinstance(disk_inode, int)
-                                and not isinstance(disk_inode, bool)
-                                and disk_inode > 0
-                                and tombstone_inode > 0
-                                and disk_inode != tombstone_inode
-                            )
-                            if newer_generation or new_identity:
+                            if newer_generation:
                                 tombstones.pop(filepath, None)
                                 continue
                         merged.pop(filepath, None)
@@ -406,7 +429,7 @@ class OffsetRegistry:
                     self._removed = tombstones
                     self._dirty_paths.clear()
                 finally:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                    _unlock_offset_registry_file(lock_file)
             self._dirty = False
             return True
         except OSError as e:
