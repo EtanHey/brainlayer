@@ -16,7 +16,10 @@ LOG_ROOT = "__HOME__/Library/Logs/brainlayer/"
 RENDERED_LOG_ROOT = "/Users/etanheyman/Library/Logs/brainlayer/"
 REQUIRED_PATH_PARTS = ["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
 DEV_SRC_PATH_RE = re.compile(r"/Users/[^:\s]+/Gits/[^:\s]+/src(?:$|:)")
-ENV_RUN_EXEMPT_LABELS = {"com.brainlayer.tier0-watchdog"}
+ENV_RUN_EXEMPT_LABELS = {
+    "com.brainlayer.throughput-watchdog",
+    "com.brainlayer.tier0-watchdog",
+}
 
 
 def _load(path: str) -> dict:
@@ -100,6 +103,11 @@ def test_active_daemon_launchd_hygiene_matrix():
         "scripts/launchd/com.brainlayer.backup-daily.plist": {
             "ProcessType": "Background",
             "ExitTimeOut": 300,
+            "LowPriorityIO": True,
+        },
+        "scripts/launchd/com.brainlayer.throughput-watchdog.plist": {
+            "ProcessType": "Background",
+            "ExitTimeOut": 30,
             "LowPriorityIO": True,
         },
     }
@@ -261,7 +269,15 @@ def test_all_script_launchagents_source_unified_config_file():
         service = plist["Label"].removeprefix("com.brainlayer.")
 
         if plist["Label"] in ENV_RUN_EXEMPT_LABELS:
-            assert args == ["/bin/sh", "__TIER0_WATCHDOG_SCRIPT__"], str(path)
+            expected_args = {
+                "com.brainlayer.throughput-watchdog": [
+                    "__PYTHON_BIN__",
+                    "__THROUGHPUT_WATCHDOG_SCRIPT__",
+                    "--json",
+                ],
+                "com.brainlayer.tier0-watchdog": ["/bin/sh", "__TIER0_WATCHDOG_SCRIPT__"],
+            }
+            assert args == expected_args[plist["Label"]], str(path)
             assert "BRAINLAYER_ENV_FILE" not in env, str(path)
             assert "BRAINLAYER_LAUNCHD_SERVICE" not in env, str(path)
             continue
@@ -511,6 +527,15 @@ def test_launchd_installer_wires_health_check_target():
     assert "health-check)" in install_source
     assert "install_plist health-check" in install_source
     assert "remove_plist health-check" in install_source
+
+
+def test_launchd_installer_wires_throughput_watchdog_target():
+    install_source = (REPO_ROOT / "scripts/launchd/install.sh").read_text(encoding="utf-8")
+
+    assert "./scripts/launchd/install.sh throughput-watchdog" in install_source
+    assert "throughput-watchdog)" in install_source
+    assert "install_throughput_watchdog" in install_source
+    assert "remove_plist throughput-watchdog" in install_source
 
 
 def test_launchd_installer_uses_bootstrap_not_legacy_load_unload():

@@ -17,6 +17,7 @@
 #   ./scripts/launchd/install.sh maintenance  # Install recurring maintenance jobs
 #   ./scripts/launchd/install.sh health-check # Install stability health check only
 #   ./scripts/launchd/install.sh tier0-watchdog # Install /bin/sh meta-watchdog only
+#   ./scripts/launchd/install.sh throughput-watchdog # Install watcher throughput watchdog only
 #   ./scripts/launchd/install.sh hotlane      # Install BrainBar hotlane embed/enrich daemon only
 #   ./scripts/launchd/install.sh p0-counter   # Install daily P0 longitudinal counter only
 #   ./scripts/launchd/install.sh remove       # Unload and remove all
@@ -64,6 +65,7 @@ BRAINLAYER_PYTHON="$(stable_brainlayer_path "${BRAINLAYER_PYTHON:-$PYTHON_BIN}")
 BRAINLAYER_ENV_FILE="${BRAINLAYER_ENV_FILE:-$HOME/.config/brainlayer/brainlayer.env}"
 BRAINLAYER_ENV_RUN="$BRAINLAYER_LIB_DIR/brainlayer-env-run.sh"
 TIER0_WATCHDOG_DST="$BRAINLAYER_LIB_DIR/tier0-watchdog.sh"
+THROUGHPUT_WATCHDOG_DST="$BRAINLAYER_LIB_DIR/throughput-watchdog.py"
 
 if [ -z "$PYTHON_BIN" ]; then
     echo "ERROR: python3 not found in PATH"
@@ -308,6 +310,49 @@ install_tier0_watchdog() {
     load_plist tier0-watchdog
 }
 
+install_throughput_watchdog() {
+    local script_src="$SCRIPT_DIR/throughput-watchdog.py"
+    local plist_src="$SCRIPT_DIR/com.brainlayer.throughput-watchdog.plist"
+    local plist_dst="$LAUNCH_DIR/com.brainlayer.throughput-watchdog.plist"
+    local escaped_home
+    local escaped_python_bin
+    local escaped_watchdog_dst
+
+    if [ ! -f "$script_src" ]; then
+        echo "ERROR: throughput-watchdog.py not found in $SCRIPT_DIR"
+        return 1
+    fi
+    if [ ! -f "$plist_src" ]; then
+        echo "ERROR: $plist_src not found"
+        return 1
+    fi
+
+    escaped_home="$(
+        printf '%s' "$HOME" \
+            | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/[\\&|]/\\&/g'
+    )" || return 1
+    escaped_watchdog_dst="$(
+        printf '%s' "$THROUGHPUT_WATCHDOG_DST" \
+            | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/[\\&|]/\\&/g'
+    )" || return 1
+    escaped_python_bin="$(
+        printf '%s' "$PYTHON_BIN" \
+            | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/[\\&|]/\\&/g'
+    )" || return 1
+
+    install -m 0755 "$script_src" "$THROUGHPUT_WATCHDOG_DST" || return 1
+    sed \
+        -e "s|__HOME__|$escaped_home|g" \
+        -e "s|__PYTHON_BIN__|$escaped_python_bin|g" \
+        -e "s|__THROUGHPUT_WATCHDOG_SCRIPT__|$escaped_watchdog_dst|g" \
+        "$plist_src" > "$plist_dst" || return 1
+
+    echo "Installed: $THROUGHPUT_WATCHDOG_DST"
+    echo "Installed: $plist_dst"
+    echo "  Logs: $LOG_DIR/ and $BRAINLAYER_LOG_DIR/"
+    load_plist throughput-watchdog
+}
+
 remove_plist() {
     local name="$1"
     local dst="$LAUNCH_DIR/com.brainlayer.${name}.plist"
@@ -372,6 +417,9 @@ case "${1:-all}" in
     tier0|tier0-watchdog)
         install_tier0_watchdog
         ;;
+    throughput-watchdog)
+        install_throughput_watchdog
+        ;;
     hotlane|hotlane-brainbar)
         verify_gemini_env_file
         install_plist hotlane-brainbar
@@ -412,6 +460,9 @@ case "${1:-all}" in
         if ! install_tier0_watchdog; then
             failures=1
         fi
+        if ! install_throughput_watchdog; then
+            failures=1
+        fi
         # Remove old enrich plist only after the replacement enrichment service loads.
         if [ "$enrichment_ok" -eq 1 ]; then
             remove_plist enrich 2>/dev/null || true
@@ -435,14 +486,16 @@ case "${1:-all}" in
         remove_plist maintenance-weekly 2>/dev/null || true
         remove_plist health-check 2>/dev/null || true
         remove_plist tier0-watchdog 2>/dev/null || true
+        remove_plist throughput-watchdog 2>/dev/null || true
         remove_plist hotlane-brainbar 2>/dev/null || true
         remove_plist p0-counter 2>/dev/null || true
         rm -f "$BRAINLAYER_LIB_DIR/backup-daily.sh"
         rm -f "$BRAINLAYER_LIB_DIR/jsonl-backup.sh"
         rm -f "$TIER0_WATCHDOG_DST"
+        rm -f "$THROUGHPUT_WATCHDOG_DST"
         ;;
     *)
-        echo "Usage: $0 [index|watch|enrich|enrichment|decay|drain|hotlane|repair-fts|load [name]|unload [name]|checkpoint|backup|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|tier0-watchdog|p0-counter|all|remove]"
+        echo "Usage: $0 [index|watch|enrich|enrichment|decay|drain|hotlane|repair-fts|load [name]|unload [name]|checkpoint|backup|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|tier0-watchdog|throughput-watchdog|p0-counter|all|remove]"
         exit 1
         ;;
 esac
