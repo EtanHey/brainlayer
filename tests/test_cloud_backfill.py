@@ -276,7 +276,7 @@ def test_submit_only_reuses_existing_exports_without_reexporting(tmp_path, monke
 
     monkeypatch.setattr(cloud_backfill, "export_unenriched_chunks", fake_export)
     monkeypatch.setattr(cloud_backfill, "submit_gemini_batch", fake_submit)
-    monkeypatch.setattr(cloud_backfill.time, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cloud_backfill, "_sleep", lambda *_args, **_kwargs: None)
 
     db_path = tmp_path / "brainlayer.db"
     store = VectorStore(db_path)
@@ -374,7 +374,7 @@ def test_submit_only_exports_new_chunks_when_old_files_are_checkpointed(tmp_path
 
     monkeypatch.setattr(cloud_backfill, "export_unenriched_chunks", fake_export)
     monkeypatch.setattr(cloud_backfill, "submit_gemini_batch", fake_submit)
-    monkeypatch.setattr(cloud_backfill.time, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cloud_backfill, "_sleep", lambda *_args, **_kwargs: None)
 
     store = VectorStore(tmp_path / "brainlayer.db")
     try:

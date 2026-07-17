@@ -43,6 +43,7 @@ import requests
 logger = logging.getLogger(__name__)
 _prompt_signature_emitted = False
 _prompt_signature_lock = threading.Lock()
+_sleep = time.sleep
 
 from ..chunk_origin import CHUNK_ORIGIN_GROQ, CHUNK_ORIGIN_MLX, CHUNK_ORIGIN_OLLAMA
 from ..tag_normalization import (
@@ -186,7 +187,7 @@ def _try_restart_mlx() -> bool:
         )
         # Wait for server to be ready
         for i in range(MLX_RESTART_WAIT):
-            time.sleep(1)
+            _sleep(1)
             if check_backend_health("mlx"):
                 print(f"MLX server restarted successfully after {i + 1}s", file=sys.stderr)
                 return True
@@ -671,7 +672,7 @@ def call_groq(prompt: str, timeout: int = 60) -> Optional[str]:
             now = time.monotonic()
             elapsed = now - _groq_last_call
             if _groq_last_call > 0 and elapsed < GROQ_RATE_LIMIT_DELAY:
-                time.sleep(GROQ_RATE_LIMIT_DELAY - elapsed)
+                _sleep(GROQ_RATE_LIMIT_DELAY - elapsed)
             _groq_last_call = time.monotonic()
 
         start_ms = int(time.time() * 1000)
@@ -1019,7 +1020,7 @@ def _enrich_one(
                 f"  RETRY: chunk {chunk['id'][:12]} attempt {attempt + 2}/{1 + MAX_RETRIES} in {total_delay:.1f}s",
                 file=sys.stderr,
             )
-            time.sleep(total_delay)
+            _sleep(total_delay)
 
     enrichment = parse_enrichment(response)
     if enrichment:
@@ -1415,7 +1416,7 @@ def run_enrichment(
                             f"Backend alive but struggling. Pausing {HEALTH_CHECK_PAUSE}s...",
                             file=sys.stderr,
                         )
-                        time.sleep(HEALTH_CHECK_PAUSE)
+                        _sleep(HEALTH_CHECK_PAUSE)
 
             # Sync stats to Supabase every 5 batches
             if total_processed % (batch_size * 5) < batch_size:
