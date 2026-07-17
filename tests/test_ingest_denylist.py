@@ -119,10 +119,7 @@ def test_subagent_attribution_skips_non_object_json_values(monkeypatch, tmp_path
     worker = tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent.jsonl"
     worker.parent.mkdir(parents=True)
     worker.write_text(
-        "null\n"
-        "[]\n"
-        + json.dumps({"attributionAgent": "general-purpose"})
-        + "\n",
+        "null\n[]\n" + json.dumps({"attributionAgent": "general-purpose"}) + "\n",
         encoding="utf-8",
     )
 

@@ -1,4 +1,5 @@
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 from brainlayer.eval.enrichment_quality_benchmark import (
@@ -14,6 +15,7 @@ from brainlayer.eval.enrichment_quality_benchmark import (
 
 
 def test_select_meaningful_chunks_uses_pure_content_not_existing_enrichment(tmp_path: Path):
+    recent_timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     db_path = tmp_path / "brainlayer.db"
     conn = sqlite3.connect(db_path)
     conn.execute(
@@ -53,7 +55,7 @@ def test_select_meaningful_chunks_uses_pure_content_not_existing_enrichment(tmp_
                 "assistant_text",
                 "claude_code",
                 "session.jsonl",
-                "2026-06-15T10:00:00Z",
+                recent_timestamp,
                 75,
                 None,
                 None,
@@ -70,7 +72,7 @@ def test_select_meaningful_chunks_uses_pure_content_not_existing_enrichment(tmp_
                 "user_text",
                 "claude_code",
                 "session.jsonl",
-                "2026-06-15T10:01:00Z",
+                recent_timestamp,
                 9,
                 "Gemini says this is an important correction decision",
                 '["decision","correction","important"]',
