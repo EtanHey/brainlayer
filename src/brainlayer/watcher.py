@@ -748,6 +748,7 @@ class BatchIndexer:
         self.total_flushed = 0
         self.total_outputs = 0
         self.total_failed_inputs = 0
+        self.total_quarantined_inputs = 0
         self._flush_failures = 0
 
     def add(self, items: list[dict]):
@@ -817,6 +818,7 @@ class BatchIndexer:
         with path.open("w", encoding="utf-8") as handle:
             for entry in entries:
                 handle.write(json.dumps({"reason": str(reason), "entry": entry}, sort_keys=True) + "\n")
+        self.total_quarantined_inputs += len(entries)
         logger.critical("Quarantined %d watcher flush entries at %s after repeated failures", len(entries), path)
 
     def _isolate_failed_flush(self, batch: list[dict], reason: Exception) -> int:

@@ -545,3 +545,47 @@ def test_watch_backfill_rejects_concurrent_run_for_same_registry(tmp_path):
 
     assert result.exit_code == 2
     assert "another backfill is using registry" in result.output
+
+
+def test_watch_backfill_exits_nonzero_when_flush_failure_is_quarantined(tmp_path, monkeypatch):
+    monkeypatch.delenv("BRAINLAYER_INGEST_DENYLIST", raising=False)
+    transcript = tmp_path / ".codex" / "sessions" / "2026" / "07" / "worker.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text(
+        json.dumps(
+            {
+                "role": "user",
+                "content": "quarantine this backfill entry after a synthetic queue failure",
+                "timestamp": "2026-07-12T12:00:00Z",
+            }
+        )
+        + "\n"
+    )
+    monkeypatch.setenv("BRAINLAYER_WATCHER_FLUSH_RETAIN_LIMIT", "1")
+    monkeypatch.setenv("BRAINLAYER_WATCHER_QUARANTINE_DIR", str(tmp_path / "quarantine"))
+
+    flush_calls = []
+
+    def failing_flush(entries):
+        flush_calls.append(entries)
+        raise RuntimeError("synthetic queue failure")
+
+    monkeypatch.setattr("brainlayer.watcher_bridge.create_flush_callback", lambda *_args, **_kwargs: failing_flush)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "watch-backfill",
+            "--home",
+            str(tmp_path),
+            "--registry",
+            str(tmp_path / "offsets.json"),
+            "--max-cycles",
+            "2",
+        ],
+    )
+
+    assert flush_calls, result.output
+    assert list((tmp_path / "quarantine").glob("watcher-flush-*.jsonl"))
+    assert result.exit_code == 1, result.output
+    assert "incomplete=true" in result.output

@@ -3604,7 +3604,11 @@ def watch_backfill(
                 if not made_progress:
                     break
             watcher.indexer.flush()
-            incomplete = watcher.has_pending_input() or watcher.indexer.retained_failed_input_count() > 0
+            incomplete = (
+                watcher.has_pending_input()
+                or watcher.indexer.retained_failed_input_count() > 0
+                or watcher.indexer.total_quarantined_inputs > 0
+            )
             registry_flushed = watcher.registry.flush()
             incomplete = incomplete or not registry_flushed
     except BackfillAlreadyRunning as exc:
