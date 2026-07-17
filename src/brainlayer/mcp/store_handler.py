@@ -33,6 +33,7 @@ _DEFAULT_STORE_BUSY_BUDGET_MS = 400
 _MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 _STORE_BUSY_TIMEOUT_LOCK = threading.Lock()
 _NO_EXEC_TRACE = object()
+_fsync = os.fsync
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -447,7 +448,7 @@ def _atomic_rewrite_pending_store(path, lines: list[str]) -> None:
     with open(tmp, "w") as f:
         f.write("\n".join(lines) + "\n")
         f.flush()
-        os.fsync(f.fileno())
+        _fsync(f.fileno())
     tmp.replace(path)
     _fsync_directory(path.parent)
 
@@ -458,7 +459,7 @@ def _fsync_directory(path) -> None:
     except OSError:
         return
     try:
-        os.fsync(fd)
+        _fsync(fd)
     finally:
         os.close(fd)
 
@@ -500,7 +501,7 @@ def _queue_store(item: dict):
         with open(path, "a") as f:
             f.write(json.dumps(item) + "\n")
             f.flush()
-            os.fsync(f.fileno())
+            _fsync(f.fileno())
 
         # Enforce max size — read, trim oldest, atomic rewrite via tempfile
         try:
