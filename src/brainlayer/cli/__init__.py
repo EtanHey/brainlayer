@@ -3310,7 +3310,10 @@ class _RewindArchiveBatcher:
                 "sessions_planned": len(self._pending_session_ids),
             },
         )
+        transaction_started = False
         try:
+            cursor.execute("BEGIN IMMEDIATE")
+            transaction_started = True
             cursor.execute(
                 f"""
                 UPDATE chunks
@@ -3322,8 +3325,14 @@ class _RewindArchiveBatcher:
                 params,
             )
             affected = vector_store.conn.changes()
-            vector_store.conn.commit()
+            cursor.execute("COMMIT")
+            transaction_started = False
         except Exception as exc:
+            if transaction_started:
+                try:
+                    cursor.execute("ROLLBACK")
+                except Exception:
+                    pass
             telemetry_span.finish("error", error=f"{type(exc).__name__}: {exc}")
             raise
         telemetry_span.finish("commit", rows_touched=affected)

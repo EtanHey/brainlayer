@@ -1,5 +1,9 @@
+import json
 import sqlite3
 import time
+
+import apsw
+import pytest
 
 from brainlayer.cli import _RewindArchiveBatcher
 from brainlayer.vector_store import VectorStore
@@ -92,6 +96,86 @@ def _prepare_rewind_archive_db(tmp_path):
     )
     store.close()
     return db_path
+
+
+def test_rewind_archiver_commits_with_real_apsw_connection(tmp_path):
+    db_path = _prepare_rewind_archive_db(tmp_path)
+    archiver = _RewindArchiveBatcher(
+        db_path=db_path,
+        batch_size=1,
+        flush_interval_ms=60_000,
+    )
+
+    try:
+        archiver.add("s1")
+        assert archiver.flush("rewind") == 2
+    finally:
+        archiver.close()
+
+    with sqlite3.connect(db_path) as conn:
+        archived = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM chunks
+            WHERE conversation_id = 's1'
+              AND source = 'realtime_watcher'
+              AND archived_at IS NOT NULL
+              AND value_type = 'ARCHIVED'
+            """
+        ).fetchone()[0]
+
+    assert archived == 2
+
+
+def test_rewind_archiver_rolls_back_and_preserves_pending_retry(tmp_path, monkeypatch):
+    db_path = _prepare_rewind_archive_db(tmp_path)
+    telemetry_path = tmp_path / "writer-telemetry.jsonl"
+    monkeypatch.setenv("BRAINLAYER_WRITER_TELEMETRY", "1")
+    monkeypatch.setenv("BRAINLAYER_WRITER_TELEMETRY_PATH", str(telemetry_path))
+
+    with VectorStore(db_path) as store:
+        store.conn.execute(
+            """
+            CREATE TRIGGER fail_rewind_archive
+            BEFORE UPDATE OF archived_at ON chunks
+            WHEN NEW.archived_at IS NOT NULL
+            BEGIN
+                SELECT RAISE(ABORT, 'forced rewind archive failure');
+            END
+            """
+        )
+
+    archiver = _RewindArchiveBatcher(
+        db_path=db_path,
+        batch_size=1,
+        flush_interval_ms=60_000,
+    )
+    archiver.add("s1")
+
+    try:
+        with pytest.raises(apsw.ConstraintError, match="forced rewind archive failure"):
+            archiver.flush("rewind")
+
+        assert archiver._get_vector_store().conn.getautocommit() is True
+        assert archiver.pending_count == 1
+        with sqlite3.connect(db_path) as conn:
+            archived = conn.execute(
+                "SELECT COUNT(*) FROM chunks WHERE conversation_id = 's1' AND archived_at IS NOT NULL"
+            ).fetchone()[0]
+        assert archived == 0
+
+        finished_events = [
+            event
+            for event in (json.loads(line) for line in telemetry_path.read_text().splitlines())
+            if event.get("event") == "txn_finished" and event.get("operation") == "rewind_archive"
+        ]
+        assert finished_events[-1]["outcome"] == "error"
+
+        archiver._get_vector_store().conn.execute("DROP TRIGGER fail_rewind_archive")
+        assert archiver.flush("retry") == 2
+        assert archiver.pending_count == 0
+    finally:
+        archiver.close()
 
 
 def test_rewind_archiver_batches_multiple_sessions(tmp_path):
