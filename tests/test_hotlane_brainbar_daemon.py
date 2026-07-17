@@ -282,9 +282,11 @@ def test_write_embedded_vectors_skips_when_content_changed_after_snapshot():
     assert ("upsert", "chunk-1", [0.5]) not in events
 
 
-def test_write_embedded_vectors_commits_each_vector_separately():
+def test_write_embedded_vectors_commits_each_vector_separately(monkeypatch):
     hotlane = _load_hotlane_module()
     statements = []
+    sleeps = []
+    monkeypatch.setattr(hotlane, "_sleep", lambda seconds: sleeps.append(seconds))
 
     class FakeCursor:
         def execute(self, sql, params=()):
@@ -316,6 +318,7 @@ def test_write_embedded_vectors_commits_each_vector_separately():
     assert count == 2
     assert sum(statement == "BEGIN IMMEDIATE" for statement, _params in statements) == 2
     assert sum(statement == "COMMIT" for statement, _params in statements) == 2
+    assert sleeps == [hotlane.VECTOR_WRITE_YIELD_SECONDS]
 
 
 def test_write_embedded_vectors_clears_search_cache_after_partial_commit(monkeypatch):

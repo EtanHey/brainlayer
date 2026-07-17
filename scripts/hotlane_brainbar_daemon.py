@@ -40,6 +40,8 @@ DEFAULT_BACKLOG_BATCH = 4
 MAX_BACKLOG_BATCH = 16
 DEFAULT_HOTLANE_WRITE_BUSY_TIMEOUT_MS = 1000
 MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
+VECTOR_WRITE_YIELD_SECONDS = 0.005
+_sleep = time.sleep
 
 
 class CycleResult(NamedTuple):
@@ -256,7 +258,7 @@ def _write_embedded_vectors(store_or_path: VectorStore | Path | str, vectors: li
 
     count = 0
     try:
-        for chunk_id, content, embedding in vectors:
+        for vector_index, (chunk_id, content, embedding) in enumerate(vectors):
             transaction_started = False
             telemetry_span = start_writer_span(
                 cursor.connection if hasattr(cursor, "connection") else (conn or store.conn),
@@ -295,6 +297,8 @@ def _write_embedded_vectors(store_or_path: VectorStore | Path | str, vectors: li
                 transaction_started = False
                 count += rows_touched
                 telemetry_span.finish("commit", rows_touched=rows_touched)
+                if vector_index < len(vectors) - 1:
+                    _sleep(VECTOR_WRITE_YIELD_SECONDS)
             except Exception as exc:
                 if transaction_started:
                     cursor.execute("ROLLBACK")
