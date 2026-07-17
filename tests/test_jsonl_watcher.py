@@ -539,6 +539,17 @@ class TestJSONLTailer:
         assert lines[0]["id"] == "1"
         assert lines[1]["id"] == "2"
 
+    def test_read_new_lines_bounds_offset_zero_read_bytes(self, tmp_path):
+        transcript = tmp_path / "large.jsonl"
+        transcript.write_bytes(b'{"type":"msg","payload":"xxxxxxxxxxxxxxxx"}\n' * 1_000)
+        tailer = JSONLTailer(str(transcript))
+
+        for _ in range(10):
+            lines = tailer.read_new_lines(max_lines=1, max_read_bytes=256)
+
+            assert len(lines) == 1
+            assert len(tailer._buffer) <= 256
+
     def test_partial_line_buffered(self, tmp_path):
         f = tmp_path / "test.jsonl"
         f.write_bytes(b'{"type":"msg","id":"1"}\n{"partial":')
@@ -715,6 +726,46 @@ class TestJSONLWatcher:
         files = watcher._discover_jsonl_files()
         assert len(files) == 2
         assert all(f.endswith(".jsonl") for f in files)
+
+    def test_discovery_predicate_filters_before_tailer_reads(self, tmp_path):
+        project = self._make_project_dir(tmp_path)
+        legacy = project / "legacy.jsonl"
+        ordinary = project / "ordinary.jsonl"
+        legacy.write_text('{"id":"legacy"}\n')
+        ordinary.write_text('{"id":"ordinary"}\n')
+        watcher = JSONLWatcher(
+            watch_dir=tmp_path / "projects",
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda items: None,
+            discovery_predicate=lambda path: Path(path).name == "legacy.jsonl",
+        )
+
+        assert watcher._discover_jsonl_files() == [str(legacy)]
+
+    @pytest.mark.parametrize("preserve_raw_progress", [False, True])
+    def test_external_watermark_field_remains_transcript_content(self, tmp_path, preserve_raw_progress):
+        source = tmp_path / "projects" / "project" / "session.jsonl"
+        source.parent.mkdir(parents=True)
+        watcher = JSONLWatcher(
+            watch_dir=tmp_path / "projects",
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda items: None,
+            preserve_raw_progress=preserve_raw_progress,
+        )
+
+        normalized = watcher._normalize_lines(
+            str(source),
+            [
+                {
+                    "role": "user",
+                    "content": "real transcript content",
+                    "_watermark_only": True,
+                    "_line_end_offset": 123,
+                }
+            ],
+        )
+
+        assert normalized[0]["message"]["content"][0]["text"] == "real transcript content"
 
     def test_first_poll_prunes_and_flushes_deleted_offset_entries(self, tmp_path):
         project = self._make_project_dir(tmp_path)

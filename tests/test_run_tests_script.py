@@ -242,6 +242,8 @@ def test_changed_only_scope_maps_cli_entrypoint_to_all_cli_tests(tmp_path: Path)
     logged = pytest_log.read_text()
     assert str(test_root / "test_cli_commands.py") in logged
     assert str(test_root / "test_watch_backfill_cli.py") in logged
+    targeted_invocation = next(line for line in logged.splitlines() if str(test_root / "test_cli_commands.py") in line)
+    assert str(test_root / "test_think_recall_integration.py") not in targeted_invocation
     assert "falling back to full pytest unit suite" not in result.stdout
     assert f"{test_root}/ -v" not in logged
 

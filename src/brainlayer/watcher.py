@@ -96,11 +96,22 @@ def _mapping_value(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _valid_timestamp(value: Any) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    candidate = value.strip()
+    try:
+        datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+    except (ValueError, OverflowError):
+        return None
+    return candidate
+
+
 def _first_timestamp(*entries: dict[str, Any]) -> str | None:
     for entry in entries:
         for key in ("timestamp", "created_at"):
-            value = entry.get(key)
-            if isinstance(value, str) and value.strip():
+            value = _valid_timestamp(entry.get(key))
+            if value is not None:
                 return value
     return None
 
@@ -208,6 +219,10 @@ class CoverageWatchdog:
 
 _OFFSET_TOMBSTONES_KEY = "__brainlayer_offset_tombstones__"
 _OFFSET_TOMBSTONE_RETENTION_S = 24 * 60 * 60
+
+
+class _ProgressMarker(dict):
+    """Internal marker type that cannot be spoofed by parsed JSON content."""
 
 
 def _lock_offset_registry_file(lock_file) -> None:
@@ -632,17 +647,25 @@ class JSONLTailer:
         max_lines: int | None = None,
         *,
         include_progress_markers: bool = False,
+        max_read_bytes: int | None = None,
     ) -> list[dict]:
         """Read any new complete lines since last call. Returns parsed JSON dicts."""
         # Check for rewind before reading
         self.check_rewind()
 
-        try:
-            with open(self.filepath, "rb") as f:
-                f.seek(self.offset + len(self._buffer))
-                new_data = f.read()
-        except OSError:
-            return []
+        new_data = b""
+        if b"\n" not in self._buffer:
+            try:
+                with open(self.filepath, "rb") as f:
+                    f.seek(self.offset + len(self._buffer))
+                    if max_read_bytes is None:
+                        new_data = f.read()
+                    else:
+                        read_budget = max(1, max_read_bytes)
+                        remaining_budget = read_budget - len(self._buffer)
+                        new_data = f.read(read_budget if remaining_budget <= 0 else remaining_budget)
+            except OSError:
+                return []
 
         if not new_data and b"\n" not in self._buffer:
             return []
@@ -661,7 +684,7 @@ class JSONLTailer:
             if not line_data.strip():
                 self.offset += nl_idx + 1
                 if include_progress_markers:
-                    lines.append({"_line_end_offset": self.offset, "_watermark_only": True})
+                    lines.append(_ProgressMarker(_line_end_offset=self.offset, _watermark_only=True))
                 continue
 
             try:
@@ -670,11 +693,21 @@ class JSONLTailer:
                     parsed["_line_end_offset"] = self.offset + nl_idx + 1
                     lines.append(parsed)
                 elif include_progress_markers:
-                    lines.append({"_line_end_offset": self.offset + nl_idx + 1, "_watermark_only": True})
+                    lines.append(
+                        _ProgressMarker(
+                            _line_end_offset=self.offset + nl_idx + 1,
+                            _watermark_only=True,
+                        )
+                    )
             except (json.JSONDecodeError, UnicodeDecodeError):
                 logger.debug("Skipping corrupt JSONL line at offset %d", self.offset)
                 if include_progress_markers:
-                    lines.append({"_line_end_offset": self.offset + nl_idx + 1, "_watermark_only": True})
+                    lines.append(
+                        _ProgressMarker(
+                            _line_end_offset=self.offset + nl_idx + 1,
+                            _watermark_only=True,
+                        )
+                    )
 
             self.offset += nl_idx + 1
 
@@ -855,7 +888,10 @@ class JSONLWatcher:
         respect_denylist: bool = True,
         unknown_subagent_is_denylisted: bool = True,
         denylist_predicate: Callable[[str | Path], bool] | None = None,
+        discovery_predicate: Callable[[str | Path], bool] | None = None,
         preserve_raw_progress: bool = False,
+        max_read_bytes_per_file: int | None = None,
+        prune_missing_offsets: bool = True,
     ):
         if watch_roots is not None:
             self.watch_roots = [WatchRoot(root.provider, root.path, root.glob_pattern) for root in watch_roots]
@@ -881,7 +917,10 @@ class JSONLWatcher:
         self.respect_denylist = respect_denylist
         self.unknown_subagent_is_denylisted = unknown_subagent_is_denylisted
         self.denylist_predicate = denylist_predicate
+        self.discovery_predicate = discovery_predicate
         self.preserve_raw_progress = preserve_raw_progress
+        self.max_read_bytes_per_file = max(1, max_read_bytes_per_file) if max_read_bytes_per_file is not None else None
+        self.prune_missing_offsets = prune_missing_offsets
         self._tailers: dict[str, JSONLTailer] = {}
         self._file_providers: dict[str, str] = {}
         self._stop = threading.Event()
@@ -894,7 +933,7 @@ class JSONLWatcher:
         self._health_entries_seen = 0
         self._health_output_at_start = 0
         self.poll_count = 0
-        self._offset_prune_complete = False
+        self._offset_prune_complete = not prune_missing_offsets
 
     def _advance_confirmed_offsets(self, watermarks: dict[str, int]) -> None:
         for filepath, offset in watermarks.items():
@@ -927,6 +966,9 @@ class JSONLWatcher:
             unknown_subagent_is_denylisted=self.unknown_subagent_is_denylisted,
         )
 
+    def _is_discovery_candidate(self, filepath: str) -> bool:
+        return self.discovery_predicate is None or self.discovery_predicate(filepath)
+
     def _discover_jsonl_files(self) -> list[str]:
         """Find all .jsonl files under each watched project, including nested session artifacts."""
         discovered: list[tuple[float, str, str]] = []
@@ -942,16 +984,17 @@ class JSONLWatcher:
                 for base in bases:
                     files = base.glob(root.glob_pattern)
                     for f in files:
-                        if f.is_file():
-                            path = str(f)
-                            if self._is_denylisted(path):
-                                continue
-                            try:
-                                mtime = f.stat().st_mtime
-                            except OSError as e:
-                                logger.debug("Skipping JSONL file during discovery after stat failure: %s: %s", path, e)
-                                continue
-                            discovered.append((mtime, path, root.provider))
+                        path = str(f)
+                        if not self._is_discovery_candidate(path) or self._is_denylisted(path):
+                            continue
+                        if not f.is_file():
+                            continue
+                        try:
+                            mtime = f.stat().st_mtime
+                        except OSError as e:
+                            logger.debug("Skipping JSONL file during discovery after stat failure: %s: %s", path, e)
+                            continue
+                        discovered.append((mtime, path, root.provider))
             except OSError:
                 continue
         discovered.sort(key=lambda item: item[0], reverse=True)
@@ -963,7 +1006,7 @@ class JSONLWatcher:
         provider = self.provider_for_file(filepath)
         normalized = []
         for line in new_lines:
-            if line.get("_watermark_only") is True:
+            if isinstance(line, _ProgressMarker):
                 normalized.append(
                     {
                         "_source_file": filepath,
@@ -1005,6 +1048,27 @@ class JSONLWatcher:
             offset = tailer.offset if tailer else self.registry.get(filepath)[0]
             max_lag = max(max_lag, max(size - offset, 0))
         return max_lag
+
+    def has_pending_input(self) -> bool:
+        """Return whether any discovered source still has a complete unread line."""
+        for filepath in self._discover_jsonl_files():
+            tailer = self._tailers.get(filepath)
+            if tailer is None:
+                offset = self.registry.get(filepath)[0]
+                try:
+                    if os.path.getsize(filepath) > offset:
+                        return True
+                except OSError:
+                    continue
+                continue
+            if b"\n" in tailer._buffer:
+                return True
+            try:
+                if os.path.getsize(filepath) > tailer.offset + len(tailer._buffer):
+                    return True
+            except OSError:
+                continue
+        return False
 
     def _db_realtime_inserts_since_window_start(self) -> int | None:
         if not self.db_path:
@@ -1172,7 +1236,7 @@ class JSONLWatcher:
                 self._offset_prune_complete = self.registry.flush() and self.registry.last_prune_complete
 
             for filepath in list(self._tailers):
-                if self._is_denylisted(filepath):
+                if not self._is_discovery_candidate(filepath) or self._is_denylisted(filepath):
                     self._tailers.pop(filepath, None)
                     self._file_providers.pop(filepath, None)
 
@@ -1186,6 +1250,7 @@ class JSONLWatcher:
                     new_lines = tailer.read_new_lines(
                         max_lines=self.max_lines_per_file,
                         include_progress_markers=self.preserve_raw_progress,
+                        max_read_bytes=self.max_read_bytes_per_file,
                     )
 
                     # Handle rewind detection (checkpoint restore)

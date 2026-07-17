@@ -1,8 +1,19 @@
 import json
 
+import pytest
 from typer.testing import CliRunner
 
 from brainlayer.cli import app
+from brainlayer.paths import get_db_path
+
+
+@pytest.fixture(autouse=True)
+def _isolate_brainlayer_db(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_DB", str(tmp_path / "brainlayer.db"))
+
+
+def test_watch_backfill_tests_use_isolated_database(tmp_path):
+    assert get_db_path() == tmp_path / "brainlayer.db"
 
 
 def test_watch_backfill_dry_run_includes_cursor_agent_transcripts(tmp_path, monkeypatch):
@@ -393,3 +404,144 @@ def test_watch_backfill_rejects_legacy_scope_without_window(tmp_path):
     assert result.exit_code != 0
     assert "--legacy-excluded-only requires" in result.output
     assert "--since and --until" in result.output
+
+
+def test_watch_backfill_legacy_scope_never_reads_or_advances_nonlegacy_files(tmp_path, monkeypatch):
+    monkeypatch.delenv("BRAINLAYER_INGEST_DENYLIST", raising=False)
+    direct = tmp_path / ".claude" / "projects" / "repo" / "direct.jsonl"
+    legacy = tmp_path / ".codex" / "sessions" / "2026" / "07" / "worker.jsonl"
+    direct.parent.mkdir(parents=True)
+    legacy.parent.mkdir(parents=True)
+    direct.write_text('{"type":"unsupported"}\n')
+    legacy.write_text('{"type":"unsupported"}\n')
+    registry = tmp_path / "shared-offsets.json"
+    registry.write_text(
+        json.dumps(
+            {
+                str(direct): {
+                    "offset": 1,
+                    "inode": direct.stat().st_ino,
+                    "mtime": direct.stat().st_mtime,
+                }
+            }
+        )
+    )
+    read_paths = []
+    from brainlayer.watcher import JSONLTailer
+
+    original_read = JSONLTailer.read_new_lines
+
+    def tracking_read(self, *args, **kwargs):
+        read_paths.append(self.filepath)
+        return original_read(self, *args, **kwargs)
+
+    monkeypatch.setattr(JSONLTailer, "read_new_lines", tracking_read)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "watch-backfill",
+            "--home",
+            str(tmp_path),
+            "--registry",
+            str(registry),
+            "--since",
+            "2026-07-10",
+            "--until",
+            "2026-07-16",
+            "--legacy-excluded-only",
+            "--max-cycles",
+            "5",
+        ],
+        env={"BRAINLAYER_QUEUE_DIR": str(tmp_path / "queue")},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert str(direct) not in read_paths
+    assert str(legacy) in read_paths
+    assert json.loads(registry.read_text())[str(direct)]["offset"] == 1
+
+
+def test_watch_backfill_max_cycles_exits_nonzero_while_complete_lines_remain(tmp_path, monkeypatch):
+    monkeypatch.delenv("BRAINLAYER_INGEST_DENYLIST", raising=False)
+    transcript = tmp_path / ".codex" / "sessions" / "2026" / "07" / "worker.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text('{"type":"unsupported"}\n' * 101)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "watch-backfill",
+            "--home",
+            str(tmp_path),
+            "--registry",
+            str(tmp_path / "offsets.json"),
+            "--since",
+            "2026-07-10",
+            "--until",
+            "2026-07-16",
+            "--max-cycles",
+            "1",
+        ],
+        env={"BRAINLAYER_QUEUE_DIR": str(tmp_path / "queue")},
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "incomplete=true" in result.output
+
+
+def test_watch_backfill_caps_each_file_read(tmp_path, monkeypatch):
+    monkeypatch.delenv("BRAINLAYER_INGEST_DENYLIST", raising=False)
+    transcript = tmp_path / ".codex" / "sessions" / "2026" / "07" / "worker.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text('{"type":"unsupported"}\n')
+    from brainlayer.watcher import JSONLTailer
+
+    observed_read_limits = []
+    original_read = JSONLTailer.read_new_lines
+
+    def tracking_read(self, *args, **kwargs):
+        observed_read_limits.append(kwargs.get("max_read_bytes"))
+        return original_read(self, *args, **kwargs)
+
+    monkeypatch.setattr(JSONLTailer, "read_new_lines", tracking_read)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "watch-backfill",
+            "--home",
+            str(tmp_path),
+            "--registry",
+            str(tmp_path / "offsets.json"),
+            "--max-cycles",
+            "2",
+        ],
+        env={"BRAINLAYER_QUEUE_DIR": str(tmp_path / "queue")},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert observed_read_limits
+    assert set(observed_read_limits) == {1_048_576}
+
+
+def test_watch_backfill_rejects_concurrent_run_for_same_registry(tmp_path):
+    from brainlayer.backfill import backfill_run_lock
+
+    registry = tmp_path / "offsets.json"
+    with backfill_run_lock(registry):
+        result = CliRunner().invoke(
+            app,
+            [
+                "watch-backfill",
+                "--home",
+                str(tmp_path),
+                "--registry",
+                str(registry),
+                "--max-cycles",
+                "1",
+            ],
+        )
+
+    assert result.exit_code == 2
+    assert "another backfill is using registry" in result.output

@@ -3502,7 +3502,14 @@ def watch_backfill(
     max_cycles: int = typer.Option(100, "--max-cycles", min=1, help="Maximum poll cycles to run."),
 ) -> None:
     """One-shot replay for watched JSONL roots using the durable queue writer path."""
-    from ..backfill import WindowedFlush, is_legacy_excluded_path, parse_backfill_window, window_registry_suffix
+    from ..backfill import (
+        BackfillAlreadyRunning,
+        WindowedFlush,
+        backfill_run_lock,
+        is_legacy_excluded_path,
+        parse_backfill_window,
+        window_registry_suffix,
+    )
     from ..ingest_denylist import is_legacy_backfill_denylisted
     from ..paths import get_db_path
     from ..watcher import JSONLWatcher, WatchRoot, default_watch_roots
@@ -3528,6 +3535,7 @@ def watch_backfill(
     else:
         registry_path = db_path.parent / "offsets.json"
     watch_roots = [WatchRoot("custom", item) for item in source] if source else default_watch_roots(home=home)
+    discovery_predicate = is_legacy_excluded_path if legacy_excluded_only else None
 
     if dry_run:
         watcher = JSONLWatcher(
@@ -3536,11 +3544,11 @@ def watch_backfill(
             on_flush=lambda items: None,
             db_path=db_path,
             denylist_predicate=is_legacy_backfill_denylisted if legacy_excluded_only else None,
+            discovery_predicate=discovery_predicate,
             preserve_raw_progress=window is not None,
+            prune_missing_offsets=not legacy_excluded_only,
         )
         files = watcher._discover_jsonl_files()
-        if legacy_excluded_only:
-            files = [path for path in files if is_legacy_excluded_path(path)]
         provider_counts: dict[str, int] = {}
         for path in files:
             provider = watcher.provider_for_file(path)
@@ -3554,45 +3562,66 @@ def watch_backfill(
         )
         return
 
-    downstream_flush = create_flush_callback(db_path, arbitrated=True)
-    windowed_flush = (
-        WindowedFlush(
-            downstream_flush,
-            since=window[0],
-            until=window[1],
-            source_predicate=is_legacy_excluded_path if legacy_excluded_only else None,
-        )
-        if window
-        else None
-    )
-    watcher = JSONLWatcher(
-        watch_roots=watch_roots,
-        registry_path=registry_path,
-        on_flush=windowed_flush or downstream_flush,
-        db_path=db_path,
-        denylist_predicate=is_legacy_backfill_denylisted if legacy_excluded_only else None,
-        preserve_raw_progress=window is not None,
-    )
-    processed = 0
-    cycles = 0
-    while cycles < max_cycles:
-        cycles += 1
-        offsets_before = {path: tailer.offset for path, tailer in watcher._tailers.items()}
-        count = watcher.poll_once()
-        processed += count
-        made_progress = any(tailer.offset > offsets_before.get(path, 0) for path, tailer in watcher._tailers.items())
-        if not made_progress:
-            break
-    watcher.indexer.flush()
-    watcher.registry.flush()
+    try:
+        with backfill_run_lock(registry_path):
+            downstream_flush = create_flush_callback(db_path, arbitrated=True)
+            windowed_flush = (
+                WindowedFlush(
+                    downstream_flush,
+                    since=window[0],
+                    until=window[1],
+                    source_predicate=discovery_predicate,
+                )
+                if window
+                else None
+            )
+            watcher = JSONLWatcher(
+                watch_roots=watch_roots,
+                registry_path=registry_path,
+                on_flush=windowed_flush or downstream_flush,
+                db_path=db_path,
+                denylist_predicate=is_legacy_backfill_denylisted if legacy_excluded_only else None,
+                discovery_predicate=discovery_predicate,
+                preserve_raw_progress=window is not None,
+                max_read_bytes_per_file=1_048_576,
+                prune_missing_offsets=not legacy_excluded_only,
+            )
+            processed = 0
+            cycles = 0
+            while cycles < max_cycles:
+                cycles += 1
+                positions_before = {
+                    path: (tailer.offset, tailer.offset + len(tailer._buffer))
+                    for path, tailer in watcher._tailers.items()
+                }
+                count = watcher.poll_once()
+                processed += count
+                made_progress = any(
+                    tailer.offset > positions_before.get(path, (0, 0))[0]
+                    or tailer.offset + len(tailer._buffer) > positions_before.get(path, (0, 0))[1]
+                    for path, tailer in watcher._tailers.items()
+                )
+                if not made_progress:
+                    break
+            watcher.indexer.flush()
+            incomplete = watcher.has_pending_input() or watcher.indexer.retained_failed_input_count() > 0
+            registry_flushed = watcher.registry.flush()
+            incomplete = incomplete or not registry_flushed
+    except BackfillAlreadyRunning as exc:
+        rprint(f"[red]{exc}[/]")
+        raise typer.Exit(code=2) from exc
+
+    incomplete_summary = f" incomplete={'true' if incomplete else 'false'}"
     if windowed_flush:
         rprint(
             f"processed_entries={processed} scanned_entries={windowed_flush.scanned_entries} "
             f"matched_entries={windowed_flush.matched_entries} queued_chunks={windowed_flush.inserted_chunks} "
-            f"cycles={cycles} registry={registry_path}"
+            f"cycles={cycles}{incomplete_summary} registry={registry_path}"
         )
     else:
-        rprint(f"processed_entries={processed} cycles={cycles} registry={registry_path}")
+        rprint(f"processed_entries={processed} cycles={cycles}{incomplete_summary} registry={registry_path}")
+    if incomplete:
+        raise typer.Exit(code=1)
 
 
 @app.command("index-fast", hidden=True)

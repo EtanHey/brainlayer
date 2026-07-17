@@ -1,5 +1,8 @@
 from datetime import UTC, datetime
 
+import pytest
+
+import brainlayer.backfill as backfill
 from brainlayer.backfill import WindowedFlush, is_legacy_excluded_path, parse_backfill_window, window_registry_suffix
 from brainlayer.watcher import normalize_provider_entry
 from brainlayer.watcher_bridge import FlushWatermarks
@@ -166,6 +169,22 @@ def test_normalize_provider_entry_uses_valid_created_at_for_canonical_entry():
     assert normalized["_timestamp_synthesized"] is False
 
 
+def test_normalize_provider_entry_falls_back_from_malformed_timestamp_to_created_at():
+    normalized = normalize_provider_entry(
+        {
+            "type": "assistant",
+            "timestamp": "not-an-iso-timestamp",
+            "created_at": "2026-07-12T12:00:00Z",
+            "message": {"role": "assistant", "content": "durable decision"},
+        },
+        "claude",
+    )
+
+    assert normalized is not None
+    assert normalized["timestamp"] == "2026-07-12T12:00:00Z"
+    assert normalized["_timestamp_synthesized"] is False
+
+
 def test_window_registry_suffix_preserves_fractional_seconds_without_changing_whole_seconds():
     whole_since = datetime(2026, 7, 10, tzinfo=UTC)
     whole_until = datetime(2026, 7, 16, tzinfo=UTC)
@@ -208,3 +227,16 @@ def test_legacy_excluded_path_selects_only_roots_blocked_by_old_policy(tmp_path)
     )
     assert not is_legacy_excluded_path(tmp_path / ".claude" / "projects" / "repo" / "direct.jsonl")
     assert not is_legacy_excluded_path(tmp_path / ".cursor" / "projects" / "repo" / "state.jsonl")
+    assert not is_legacy_excluded_path(tmp_path / ".codex" / "archive" / "sessions" / "worker.jsonl")
+    assert not is_legacy_excluded_path(
+        tmp_path / ".claude" / "cache" / "projects" / "repo" / "subagents" / "worker.jsonl"
+    )
+
+
+def test_backfill_run_lock_rejects_concurrent_registry_owner(tmp_path):
+    registry = tmp_path / "offsets.json"
+
+    with backfill.backfill_run_lock(registry):
+        with pytest.raises(backfill.BackfillAlreadyRunning):
+            with backfill.backfill_run_lock(registry):
+                raise AssertionError("concurrent backfill unexpectedly acquired the run lock")

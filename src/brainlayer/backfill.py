@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import errno
+import fcntl
 from collections.abc import Callable
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Iterator
 
 from .watcher_bridge import FlushWatermarks
 
@@ -41,28 +45,47 @@ def window_registry_suffix(since: datetime, until: datetime) -> str:
     return f"{format_timestamp(since)}-{format_timestamp(until)}"
 
 
-def _contains_ordered(parts: tuple[str, ...], expected: tuple[str, ...]) -> bool:
-    position = 0
-    for part in parts:
-        if part == expected[position]:
-            position += 1
-            if position == len(expected):
-                return True
-    return False
+class BackfillAlreadyRunning(RuntimeError):
+    """Raised when another process owns the same registry-scoped backfill."""
+
+
+@contextmanager
+def backfill_run_lock(registry_path: str | Path) -> Iterator[None]:
+    """Serialize scan, enqueue, and offset persistence for one registry."""
+    registry = Path(registry_path).expanduser()
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = registry.with_name(f"{registry.name}.backfill.lock")
+    with lock_path.open("a+b") as lock_file:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno not in {errno.EACCES, errno.EAGAIN}:
+                raise
+            raise BackfillAlreadyRunning(f"another backfill is using registry {registry}") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _adjacent_pair_indices(parts: tuple[str, ...], first: str, second: str) -> list[int]:
+    return [index for index in range(len(parts) - 1) if parts[index : index + 2] == (first, second)]
 
 
 def is_legacy_excluded_path(path: str | Path) -> bool:
     """Identify roots blocked by the blanket denylist retired in July 2026."""
     parts = Path(path).expanduser().parts
-    return any(
-        _contains_ordered(parts, expected)
-        for expected in (
-            (".claude", "projects", "subagents"),
-            (".codex", "sessions"),
-            (".cursor", "agent-transcripts"),
-            (".gemini", "sessions"),
-        )
-    )
+    if _adjacent_pair_indices(parts, ".codex", "sessions"):
+        return True
+    if _adjacent_pair_indices(parts, ".gemini", "sessions"):
+        return True
+    for cursor_index, part in enumerate(parts):
+        if part == ".cursor" and "agent-transcripts" in parts[cursor_index + 1 :]:
+            return True
+    for claude_index in _adjacent_pair_indices(parts, ".claude", "projects"):
+        if "subagents" in parts[claude_index + 3 :]:
+            return True
+    return False
 
 
 class WindowedFlush:
