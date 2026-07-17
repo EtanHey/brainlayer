@@ -54,7 +54,7 @@ def _patch_realtime_deps(monkeypatch, controller, store, response_text=None):
     monkeypatch.setattr(controller, "build_external_prompt", MagicMock(return_value=("prompt", SimpleNamespace())))
     monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value={"summary": "sum", "tags": ["python"]}))
     monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
-    monkeypatch.setattr(controller.time, "sleep", lambda _: None)
+    monkeypatch.setattr(controller, "_sleep", lambda _: None)
     monkeypatch.setattr(
         controller,
         "_get_gemini_client",
@@ -426,7 +426,7 @@ def test_enrich_realtime_calls_build_external_prompt_for_every_chunk(monkeypatch
     monkeypatch.setattr(controller, "_retry_with_backoff", lambda fn, **kwargs: '{"summary":"sum","tags":["python"]}')
     monkeypatch.setattr(controller, "_get_gemini_client", lambda: MagicMock())
     monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
-    monkeypatch.setattr(controller.time, "sleep", lambda _: None)
+    monkeypatch.setattr(controller, "_sleep", lambda _: None)
 
     controller.enrich_realtime(store, limit=2, since_hours=24)
 
@@ -441,7 +441,7 @@ def test_enrich_realtime_sets_thinking_budget_zero_in_gemini_config(monkeypatch)
     monkeypatch.setattr(controller, "build_external_prompt", MagicMock(return_value=("prompt", SimpleNamespace())))
     monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value={"summary": "sum", "tags": ["python"]}))
     monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
-    monkeypatch.setattr(controller.time, "sleep", lambda _: None)
+    monkeypatch.setattr(controller, "_sleep", lambda _: None)
 
     captured = {}
 
@@ -470,7 +470,7 @@ def test_enrich_realtime_passes_flex_service_tier_in_gemini_config(monkeypatch):
     monkeypatch.setattr(controller, "build_external_prompt", MagicMock(return_value=("prompt", SimpleNamespace())))
     monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value={"summary": "sum", "tags": ["python"]}))
     monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
-    monkeypatch.setattr(controller.time, "sleep", lambda _: None)
+    monkeypatch.setattr(controller, "_sleep", lambda _: None)
 
     captured = {}
 
@@ -548,7 +548,7 @@ def test_enrich_realtime_calls_parse_enrichment_on_response(monkeypatch):
     parse_mock = MagicMock(return_value={"summary": "sum", "tags": ["python"]})
     monkeypatch.setattr(controller, "parse_enrichment", parse_mock)
     monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
-    monkeypatch.setattr(controller.time, "sleep", lambda _: None)
+    monkeypatch.setattr(controller, "_sleep", lambda _: None)
 
     class FakeClient:
         class _Models:
@@ -574,7 +574,7 @@ def test_enrich_realtime_writes_via_update_enrichment_only(monkeypatch):
     monkeypatch.setattr(controller, "build_external_prompt", MagicMock(return_value=("prompt", SimpleNamespace())))
     monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value={"summary": "sum", "tags": ["python"]}))
     monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
-    monkeypatch.setattr(controller.time, "sleep", lambda _: None)
+    monkeypatch.setattr(controller, "_sleep", lambda _: None)
 
     class FakeClient:
         class _Models:
@@ -600,7 +600,7 @@ def test_enrich_realtime_is_idempotent_on_rerun(monkeypatch):
     monkeypatch.setattr(controller, "build_external_prompt", MagicMock(return_value=("prompt", SimpleNamespace())))
     monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value={"summary": "sum", "tags": ["python"]}))
     monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
-    monkeypatch.setattr(controller.time, "sleep", lambda _: None)
+    monkeypatch.setattr(controller, "_sleep", lambda _: None)
 
     class FakeClient:
         class _Models:
@@ -624,7 +624,7 @@ def test_retry_with_backoff_retries_12_times_on_429(monkeypatch):
     from brainlayer import enrichment_controller as controller
 
     sleeps = []
-    monkeypatch.setattr(controller.time, "sleep", sleeps.append)
+    monkeypatch.setattr(controller, "_sleep", sleeps.append)
     monkeypatch.setattr(controller.random, "uniform", lambda a, b: 0.0)
 
     attempts = {"count": 0}
@@ -644,7 +644,7 @@ def test_retry_with_backoff_short_circuits_monthly_spend_cap_429(monkeypatch):
     from brainlayer import enrichment_controller as controller
 
     sleeps = []
-    monkeypatch.setattr(controller.time, "sleep", sleeps.append)
+    monkeypatch.setattr(controller, "_sleep", sleeps.append)
 
     attempts = {"count": 0}
 
@@ -663,7 +663,7 @@ def test_retry_with_backoff_respects_max_delay_cap(monkeypatch):
     from brainlayer import enrichment_controller as controller
 
     sleeps = []
-    monkeypatch.setattr(controller.time, "sleep", sleeps.append)
+    monkeypatch.setattr(controller, "_sleep", sleeps.append)
     monkeypatch.setattr(controller.random, "uniform", lambda a, b: b)
 
     attempts = {"count": 0}
@@ -1128,18 +1128,24 @@ def test_batch_rate_limit_uses_batch_setting(monkeypatch):
     assert observed["acquires"] == [1]
 
 
-def test_realtime_no_sleep_when_rate_zero(monkeypatch):
+def test_realtime_rate_zero_disables_limiter(monkeypatch):
     from brainlayer import enrichment_controller as controller
 
     store = MagicMock()
     store.get_enrichment_candidates.return_value = [_candidate("c1"), _candidate("c2")]
     _patch_realtime_deps(monkeypatch, controller, store)
+    real_get_store_rate_limiter = controller._get_store_rate_limiter
+    observed = {}
 
-    sleeps = []
-    monkeypatch.setattr(controller.time, "sleep", sleeps.append)
+    def observed_get_store_rate_limiter(*args, **kwargs):
+        observed["rate"] = kwargs["rate_per_second"]
+        observed["limiter"] = real_get_store_rate_limiter(*args, **kwargs)
+        return observed["limiter"]
+
+    monkeypatch.setattr(controller, "_get_store_rate_limiter", observed_get_store_rate_limiter)
 
     controller.enrich_realtime(store, limit=2, rate_per_second=0)
-    assert len(sleeps) == 0
+    assert observed == {"rate": 0, "limiter": None}
 
 
 # ── Retry logic tests ────────────────────────────────────────────────────────
@@ -1148,7 +1154,7 @@ def test_realtime_no_sleep_when_rate_zero(monkeypatch):
 def test_retry_succeeds_on_first_try(monkeypatch):
     from brainlayer.enrichment_controller import _retry_with_backoff
 
-    monkeypatch.setattr("brainlayer.enrichment_controller.time.sleep", lambda _: None)
+    monkeypatch.setattr("brainlayer.enrichment_controller._sleep", lambda _: None)
     monkeypatch.setattr("brainlayer.enrichment_controller.random.uniform", lambda a, b: 0.0)
 
     result = _retry_with_backoff(lambda: "ok", max_retries=3)
@@ -1158,7 +1164,7 @@ def test_retry_succeeds_on_first_try(monkeypatch):
 def test_retry_succeeds_after_transient_failure(monkeypatch):
     from brainlayer.enrichment_controller import _retry_with_backoff
 
-    monkeypatch.setattr("brainlayer.enrichment_controller.time.sleep", lambda _: None)
+    monkeypatch.setattr("brainlayer.enrichment_controller._sleep", lambda _: None)
     monkeypatch.setattr("brainlayer.enrichment_controller.random.uniform", lambda a, b: 0.0)
 
     attempts = {"n": 0}
@@ -1177,7 +1183,7 @@ def test_retry_succeeds_after_transient_failure(monkeypatch):
 def test_retry_only_catches_specified_errors(monkeypatch):
     from brainlayer.enrichment_controller import _retry_with_backoff
 
-    monkeypatch.setattr("brainlayer.enrichment_controller.time.sleep", lambda _: None)
+    monkeypatch.setattr("brainlayer.enrichment_controller._sleep", lambda _: None)
     monkeypatch.setattr("brainlayer.enrichment_controller.random.uniform", lambda a, b: 0.0)
 
     with pytest.raises(ValueError):
@@ -1200,7 +1206,7 @@ def test_enrich_realtime_stops_new_calls_when_daily_cap_crosses(monkeypatch, tmp
     monkeypatch.setattr(controller, "build_external_prompt", MagicMock(return_value=("prompt", SimpleNamespace())))
     monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value={"summary": "sum", "tags": ["python"]}))
     monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
-    monkeypatch.setattr(controller.time, "sleep", lambda _: None)
+    monkeypatch.setattr(controller, "_sleep", lambda _: None)
 
     calls = {"count": 0}
 
@@ -1244,7 +1250,7 @@ def test_realtime_counts_failed_on_invalid_enrichment(monkeypatch):
     monkeypatch.setattr(controller, "build_external_prompt", MagicMock(return_value=("prompt", SimpleNamespace())))
     monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value=None))
     monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
-    monkeypatch.setattr(controller.time, "sleep", lambda _: None)
+    monkeypatch.setattr(controller, "_sleep", lambda _: None)
     monkeypatch.setattr(controller, "_get_gemini_client", lambda: _fake_gemini_client("garbage"))
 
     result = controller.enrich_realtime(store, limit=1)
@@ -1260,7 +1266,7 @@ def test_realtime_counts_failed_on_exception(monkeypatch):
     store.get_enrichment_candidates.return_value = [_candidate()]
     monkeypatch.setattr(controller, "build_external_prompt", MagicMock(side_effect=RuntimeError("boom")))
     monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
-    monkeypatch.setattr(controller.time, "sleep", lambda _: None)
+    monkeypatch.setattr(controller, "_sleep", lambda _: None)
     monkeypatch.setattr(controller, "_get_gemini_client", lambda: _fake_gemini_client())
 
     result = controller.enrich_realtime(store, limit=1)

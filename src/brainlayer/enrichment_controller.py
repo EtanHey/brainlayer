@@ -36,6 +36,7 @@ from .provenance_integration import enqueue_provenance_resolution_for_entities
 from .writer_telemetry import start_writer_span
 
 logger = logging.getLogger(__name__)
+_sleep = time.sleep
 
 GEMINI_REALTIME_MODEL = os.environ.get("BRAINLAYER_GEMINI_REALTIME_MODEL", "gemini-2.5-flash-lite")
 DEFAULT_MAX_COMMIT_INTERVAL_MS = 250.0
@@ -664,7 +665,7 @@ def _submit_write(store, name: str, callback, *, yield_after: bool = True) -> An
     result = _get_store_write_queue(store).submit(name, callback).result()
     yield_seconds = _current_post_write_yield_seconds() if yield_after else 0.0
     if yield_seconds > 0:
-        time.sleep(yield_seconds)
+        _sleep(yield_seconds)
     return result
 
 
@@ -1461,7 +1462,7 @@ def _retry_with_backoff(
                 max_retries + 1,
                 sleep_for,
             )
-            time.sleep(sleep_for)
+            _sleep(sleep_for)
 
 
 def _generate_content_with_rate_limit(

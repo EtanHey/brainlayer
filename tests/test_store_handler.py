@@ -461,6 +461,7 @@ async def test_store_busy_budget_restores_timeout_between_concurrent_retries(mon
 async def test_store_busy_budget_bounds_store_memory_inner_retry_loop(tmp_path, monkeypatch):
     """The MCP budget must bound store_memory's internal BEGIN IMMEDIATE retry loop."""
     import brainlayer.store as store_module
+    from brainlayer.mcp import store_handler
     from brainlayer.mcp.store_handler import _store
 
     pending_path = tmp_path / "pending-stores.jsonl"
@@ -499,7 +500,8 @@ async def test_store_busy_budget_bounds_store_memory_inner_retry_loop(tmp_path, 
 
     monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "80")
     monkeypatch.setattr("brainlayer.mcp.store_handler._retry_delay", 0.001)
-    monkeypatch.setattr(store_module.time, "sleep", lambda delay: real_sleep(min(delay, 0.001)))
+    monkeypatch.setattr(store_module, "_sleep", lambda delay: real_sleep(min(delay, 0.001)))
+    monkeypatch.setattr(store_handler, "_fsync", lambda _fd: None)
 
     with (
         patch("brainlayer.mcp.store_handler._get_vector_store", return_value=store),

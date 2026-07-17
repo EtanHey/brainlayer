@@ -24,6 +24,8 @@ from .dedupe import resolve_chunk_id
 from .ingest_guard import recursive_mcp_output_reason
 from .scoping import ConsumerScope
 
+_sleep = time.sleep
+
 # ── hybrid_search result cache ───────────────────────────────────────────────
 # Caches identical (store, query_text, filters) → results for 60s.
 # Warm repeated queries (e.g. hook firing on the same prompt twice) return
@@ -674,7 +676,7 @@ class SearchMixin:
             except apsw.Error as exc:
                 if _is_sqlite_busy_error(exc):
                     if attempt < 2:
-                        time.sleep(0.05 * (2**attempt))
+                        _sleep(0.05 * (2**attempt))
                         continue
                     raise
                 return None
@@ -706,7 +708,7 @@ class SearchMixin:
                 break
             except apsw.Error as exc:
                 if _is_sqlite_busy_error(exc) and attempt < 2:
-                    time.sleep(0.05 * (2**attempt))
+                    _sleep(0.05 * (2**attempt))
                     continue
                 raise
         clear_hybrid_search_cache(getattr(self, "db_path", None))
@@ -745,7 +747,7 @@ class SearchMixin:
                 return audit_count
             except apsw.Error as exc:
                 if _is_sqlite_busy_error(exc) and attempt < 2:
-                    time.sleep(0.05 * (2**attempt))
+                    _sleep(0.05 * (2**attempt))
                     continue
                 if cached_count is not None:
                     return int(cached_count)
@@ -776,7 +778,7 @@ class SearchMixin:
             except (apsw.Error, TypeError, IndexError, ValueError) as exc:
                 if not isinstance(exc, apsw.Error) or not _is_sqlite_busy_error(exc) or attempt == 2:
                     return None
-                time.sleep(0.05 * (2**attempt))
+                _sleep(0.05 * (2**attempt))
         return None
 
     def _checkpoint_filtered_knn_k(
@@ -818,7 +820,7 @@ class SearchMixin:
                     if not isinstance(exc, apsw.Error) or not _is_sqlite_busy_error(exc) or attempt == 2:
                         checkpoint_count = 0
                         break
-                    time.sleep(0.05 * (2**attempt))
+                    _sleep(0.05 * (2**attempt))
 
         if checkpoint_count <= 0:
             return n_results
@@ -2271,7 +2273,7 @@ class SearchMixin:
                 except apsw.Error as exc:
                     if not _is_sqlite_busy_error(exc) or attempt == 2:
                         raise
-                    time.sleep(0.05 * (2**attempt))
+                    _sleep(0.05 * (2**attempt))
             # Recency fallback supplements lexical search, so append ranks after
             # existing FTS hits instead of tying the top exact match at rank 0.
             recent_rank_offset = max(fts_ranks.values(), default=-1) + 1

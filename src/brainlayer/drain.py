@@ -35,6 +35,7 @@ from .provenance_integration import enqueue_provenance_resolution_for_entities
 from .writer_telemetry import start_writer_span
 
 logger = logging.getLogger(__name__)
+_sleep = time.sleep
 
 _DEFAULT_DRAIN_BUSY_TIMEOUT_MS = 30000
 _MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
@@ -202,7 +203,7 @@ def _open_connection(db_path: Path) -> apsw.Connection:
                 max_retries + 1,
                 delay,
             )
-            time.sleep(delay)
+            _sleep(delay)
     else:
         raise RuntimeError("unreachable drain open retry state")
     conn.setbusytimeout(_drain_busy_timeout_ms())
@@ -1490,7 +1491,7 @@ def drain_once(
                         _mark_fallback_replays_best_effort(fallback_markers, log_path)
                     yield_seconds = _post_commit_yield_seconds()
                     if yield_seconds > 0:
-                        time.sleep(yield_seconds)
+                        _sleep(yield_seconds)
                     if _is_enrichment_queue_file(path) and _has_high_priority_queue_files(queue_dir):
                         stop_draining = True
                     break
@@ -1505,7 +1506,7 @@ def drain_once(
                     if _is_busy_error(exc) and attempt < 4:
                         delay = 0.05 * (2**attempt)
                         _log(log_path, f"drain busy; retrying in {delay:.2f}s")
-                        time.sleep(delay)
+                        _sleep(delay)
                         continue
                     if events_include_store and _is_missing_chunks_error(exc) and attempt < 4:
                         if conn is not None:

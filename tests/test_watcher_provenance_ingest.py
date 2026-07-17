@@ -71,10 +71,10 @@ def test_cursor_agent_transcript_ingest_is_tagged_and_routed_operational(tmp_pat
     assert metadata["provenance_effective_visibility"] == "operational"
 
 
-def test_gemini_session_ingest_is_tagged_cold_and_not_fts_indexed(tmp_path):
+def test_gemini_session_ingest_is_searchable_by_default(tmp_path):
     db_path = tmp_path / "brainlayer.db"
     source_file = tmp_path / "home" / ".gemini" / "sessions" / "gemini-session.jsonl"
-    text = "Gemini scratch synthesis should be retained as cold provenance without FTS indexing."
+    text = "Gemini session synthesis should remain available to normal BrainLayer search."
     flush = create_flush_callback(db_path=db_path, arbitrated=False)
 
     result = flush([_entry(source_file, text)])
@@ -82,10 +82,10 @@ def test_gemini_session_ingest_is_tagged_cold_and_not_fts_indexed(tmp_path):
     assert result.inserted == 1
     content_class, provenance_class, metadata, normal_fts_count, operational_fts_count = _single_inserted_row(db_path)
     assert (content_class, provenance_class, normal_fts_count, operational_fts_count) == (
-        "cold",
+        "knowledge",
         "gemini-session",
-        0,
+        1,
         0,
     )
     assert metadata["provenance_tag"] == "gemini-session"
-    assert metadata["provenance_effective_visibility"] == "cold"
+    assert metadata["provenance_effective_visibility"] == "default"

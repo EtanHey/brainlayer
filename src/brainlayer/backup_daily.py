@@ -29,6 +29,8 @@ import requests
 
 from .paths import get_db_path
 
+_sleep = time.sleep
+
 DEFAULT_TOKEN_PATH = Path.home() / ".config" / "google-drive-mcp" / "tokens.json"
 DEFAULT_CLIENT_PATH = Path.home() / ".config" / "google-drive-mcp" / "gcp-oauth.keys.json"
 DEFAULT_FOLDER_PARTS = ["Brain Drive", "06_ARCHIVE", "backups", "brainlayer-db"]
@@ -310,7 +312,7 @@ def request_brainbar_vacuum_into(
                 f"retrying in {retry_backoff_seconds}s",
                 flush=True,
             )
-            time.sleep(retry_backoff_seconds)
+            _sleep(retry_backoff_seconds)
     if last_error is not None:
         raise last_error
 
@@ -497,7 +499,7 @@ def upload_file_to_drive_raw(
                         f"sleeping {sleep_seconds}s",
                         flush=True,
                     )
-                    time.sleep(sleep_seconds)
+                    _sleep(sleep_seconds)
 
     raise RuntimeError("Drive upload ended without final response")
 
