@@ -243,6 +243,25 @@ def test_source_probe_only_treats_recent_registry_tracked_lag_as_pending(tmp_pat
     assert result.untracked_recent_files == 1
 
 
+def test_source_probe_fails_visibly_when_find_cannot_complete(tmp_path: Path, monkeypatch) -> None:
+    module = _load_module()
+    config = _config(module, tmp_path)
+    config.source_roots[0].mkdir(parents=True)
+    config.registry_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=1, stdout=b"", stderr=b"permission denied"),
+    )
+
+    try:
+        module.collect_source_evidence(config, now_epoch=1_000)
+    except RuntimeError as exc:
+        assert "permission denied" in str(exc)
+    else:
+        raise AssertionError("an incomplete source scan must not report idle")
+
+
 def test_highwater_is_scoped_to_realtime_watcher_without_a_count_scan(tmp_path: Path) -> None:
     module = _load_module()
     db_path = tmp_path / "brainlayer.db"

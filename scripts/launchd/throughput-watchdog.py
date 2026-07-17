@@ -192,7 +192,8 @@ def collect_source_evidence(config: Config, now_epoch: int) -> SourceEvidence:
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"recent-source scan exceeded {config.max_scan_seconds:.1f}s") from exc
     if completed.returncode != 0:
-        scan_errors += 1
+        detail = os.fsdecode(completed.stderr).strip()
+        raise RuntimeError(f"recent-source scan failed: {detail or completed.returncode}")
     recent_paths = [Path(os.fsdecode(raw)) for raw in completed.stdout.split(b"\0") if raw]
     if len(recent_paths) > config.max_source_files:
         raise RuntimeError(f"recent-source scan exceeded {config.max_source_files} JSONL files")
@@ -364,6 +365,7 @@ def run_once(
                 alert_fn(config, result)
             except Exception as exc:
                 result.alert_error = str(exc)
+                print(f"throughput-watchdog alert failed: {exc}", file=sys.stderr)
             try:
                 result.action = _restart_watch(config, command_runner)
             except RuntimeError as exc:
