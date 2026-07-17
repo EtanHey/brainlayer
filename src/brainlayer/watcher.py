@@ -198,25 +198,47 @@ class OffsetRegistry:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self._data: dict[str, dict] = {}
-        self._removed: dict[str, float] = {}
+        self._removed: dict[str, dict[str, int | float]] = {}
         self._dirty_paths: set[str] = set()
         self._dirty = False
         self._last_prune_complete = True
         self._load()
 
     @staticmethod
-    def _sanitize_tombstones(raw: object) -> dict[str, float]:
-        """Keep only finite numeric tombstone timestamps keyed by paths."""
+    def _sanitize_tombstones(raw: object) -> dict[str, dict[str, int | float]]:
+        """Load legacy timestamps and validated generation-aware tombstones."""
         if not isinstance(raw, dict):
             return {}
-        return {
-            filepath: float(removed_at)
-            for filepath, removed_at in raw.items()
-            if isinstance(filepath, str)
-            and isinstance(removed_at, (int, float))
-            and not isinstance(removed_at, bool)
-            and math.isfinite(float(removed_at))
-        }
+        sanitized: dict[str, dict[str, int | float]] = {}
+        for filepath, raw_tombstone in raw.items():
+            if not isinstance(filepath, str):
+                continue
+            if isinstance(raw_tombstone, (int, float)) and not isinstance(raw_tombstone, bool):
+                removed_at = float(raw_tombstone)
+                generation = 0
+                inode = 0
+            elif isinstance(raw_tombstone, dict):
+                raw_removed_at = raw_tombstone.get("removed_at")
+                raw_generation = raw_tombstone.get("generation", 0)
+                raw_inode = raw_tombstone.get("inode", 0)
+                if not isinstance(raw_removed_at, (int, float)) or isinstance(raw_removed_at, bool):
+                    continue
+                if not isinstance(raw_generation, int) or isinstance(raw_generation, bool) or raw_generation < 0:
+                    continue
+                if not isinstance(raw_inode, int) or isinstance(raw_inode, bool) or raw_inode < 0:
+                    continue
+                removed_at = float(raw_removed_at)
+                generation = raw_generation
+                inode = raw_inode
+            else:
+                continue
+            if math.isfinite(removed_at):
+                sanitized[filepath] = {
+                    "removed_at": removed_at,
+                    "generation": generation,
+                    "inode": inode,
+                }
+        return sanitized
 
     @staticmethod
     def _entry_generation(entry: object) -> int:
@@ -249,6 +271,9 @@ class OffsetRegistry:
     def set(self, filepath: str, offset: int, inode: int):
         """Update offset for a file."""
         generation = self._entry_generation(self._data.get(filepath))
+        tombstone = self._removed.get(filepath)
+        if tombstone is not None:
+            generation = max(generation, int(tombstone["generation"]) + 1, time.time_ns())
         self._data[filepath] = {
             "offset": offset,
             "inode": inode,
@@ -284,8 +309,16 @@ class OffsetRegistry:
 
                     disk_tombstones = disk_data.pop(_OFFSET_TOMBSTONES_KEY, {})
                     tombstones = self._sanitize_tombstones(disk_tombstones)
-                    for filepath, removed_at in self._removed.items():
-                        tombstones[filepath] = max(removed_at, tombstones.get(filepath, 0))
+                    for filepath, local_tombstone in self._removed.items():
+                        disk_tombstone = tombstones.get(filepath)
+                        if disk_tombstone is None or (
+                            int(local_tombstone["generation"]),
+                            float(local_tombstone["removed_at"]),
+                        ) > (
+                            int(disk_tombstone["generation"]),
+                            float(disk_tombstone["removed_at"]),
+                        ):
+                            tombstones[filepath] = local_tombstone
 
                     merged = dict(disk_data)
                     for filepath in self._dirty_paths:
@@ -293,9 +326,21 @@ class OffsetRegistry:
                         if not isinstance(local_entry, dict):
                             continue
                         local_mtime = local_entry.get("mtime", 0)
-                        if filepath in tombstones and local_mtime <= tombstones[filepath]:
-                            merged.pop(filepath, None)
-                            continue
+                        tombstone = tombstones.get(filepath)
+                        if tombstone is not None:
+                            local_generation = self._entry_generation(local_entry)
+                            local_inode = local_entry.get("inode", 0)
+                            tombstone_inode = int(tombstone["inode"])
+                            new_identity = (
+                                isinstance(local_inode, int)
+                                and not isinstance(local_inode, bool)
+                                and local_inode > 0
+                                and tombstone_inode > 0
+                                and local_inode != tombstone_inode
+                            )
+                            if local_generation <= int(tombstone["generation"]) and not new_identity:
+                                merged.pop(filepath, None)
+                                continue
                         disk_entry = disk_data.get(filepath)
                         if not isinstance(disk_entry, dict):
                             merged[filepath] = local_entry
@@ -317,17 +362,28 @@ class OffsetRegistry:
                         elif local_mtime >= disk_entry.get("mtime", 0):
                             merged[filepath] = local_entry
                             tombstones.pop(filepath, None)
-                    for filepath, removed_at in list(tombstones.items()):
+                    for filepath, tombstone in list(tombstones.items()):
                         disk_entry = merged.get(filepath)
-                        if isinstance(disk_entry, dict) and disk_entry.get("mtime", 0) > removed_at:
-                            tombstones.pop(filepath, None)
-                            continue
+                        if isinstance(disk_entry, dict):
+                            disk_inode = disk_entry.get("inode", 0)
+                            tombstone_inode = int(tombstone["inode"])
+                            newer_generation = self._entry_generation(disk_entry) > int(tombstone["generation"])
+                            new_identity = (
+                                isinstance(disk_inode, int)
+                                and not isinstance(disk_inode, bool)
+                                and disk_inode > 0
+                                and tombstone_inode > 0
+                                and disk_inode != tombstone_inode
+                            )
+                            if newer_generation or new_identity:
+                                tombstones.pop(filepath, None)
+                                continue
                         merged.pop(filepath, None)
                     tombstone_cutoff = time.time() - _OFFSET_TOMBSTONE_RETENTION_S
                     tombstones = {
-                        filepath: removed_at
-                        for filepath, removed_at in tombstones.items()
-                        if isinstance(removed_at, (int, float)) and removed_at >= tombstone_cutoff
+                        filepath: tombstone
+                        for filepath, tombstone in tombstones.items()
+                        if float(tombstone["removed_at"]) >= tombstone_cutoff
                     }
 
                     fd, tmp_path = tempfile.mkstemp(dir=str(self.path.parent), suffix=".tmp")
@@ -362,15 +418,27 @@ class OffsetRegistry:
 
     def remove(self, filepath: str):
         """Remove tracking for a file."""
-        self._data.pop(filepath, None)
-        self._removed[filepath] = time.time()
+        removed_entry = self._data.pop(filepath, None)
+        existing_tombstone = self._removed.get(filepath)
+        entry_generation = self._entry_generation(removed_entry)
+        existing_generation = int(existing_tombstone["generation"]) if existing_tombstone else 0
+        inode = removed_entry.get("inode", 0) if isinstance(removed_entry, dict) else 0
+        if not isinstance(inode, int) or isinstance(inode, bool) or inode < 0:
+            inode = 0
+        self._removed[filepath] = {
+            "removed_at": time.time(),
+            "generation": max(entry_generation + 1, existing_generation, time.time_ns()),
+            "inode": inode or (int(existing_tombstone["inode"]) if existing_tombstone else 0),
+        }
         self._dirty_paths.discard(filepath)
         self._dirty = True
 
     def mark_rewind(self, filepath: str, inode: int) -> int:
         """Start a newer offset generation so a confirmed rewind may move backward."""
         current_generation = self._entry_generation(self._data.get(filepath))
-        generation = max(current_generation + 1, time.time_ns())
+        tombstone = self._removed.get(filepath)
+        tombstone_generation = int(tombstone["generation"]) if tombstone else 0
+        generation = max(current_generation + 1, tombstone_generation + 1, time.time_ns())
         self._data[filepath] = {
             "offset": 0,
             "inode": inode,
@@ -466,17 +534,17 @@ class OffsetRegistry:
                 self._last_prune_complete = False
                 continue
             try:
-                if not candidate.is_file():
-                    missing.append(filepath)
+                candidate_mode = candidate.stat().st_mode
+            except FileNotFoundError:
+                missing.append(filepath)
             except OSError:
                 self._last_prune_complete = False
                 continue
+            else:
+                if not stat.S_ISREG(candidate_mode):
+                    missing.append(filepath)
         for filepath in missing:
-            self._data.pop(filepath, None)
-            self._removed[filepath] = time.time()
-            self._dirty_paths.discard(filepath)
-        if missing:
-            self._dirty = True
+            self.remove(filepath)
         return len(missing)
 
 

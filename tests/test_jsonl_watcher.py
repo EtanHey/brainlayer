@@ -196,6 +196,69 @@ class TestOffsetRegistry:
         assert reloaded.get(str(existing)) == (300, 1)
         assert reloaded.get(str(deleted)) == (0, 0)
 
+    def test_prune_tombstone_blocks_delayed_set_after_prune_flush(self, tmp_path):
+        registry_path = tmp_path / "offsets.json"
+        existing = tmp_path / "existing.jsonl"
+        deleted = tmp_path / "deleted.jsonl"
+        existing.write_text('{"id":"kept"}\n')
+
+        initial = OffsetRegistry(registry_path)
+        initial.set(str(existing), 100, 1)
+        initial.set(str(deleted), 200, 2)
+        assert initial.flush() is True
+
+        pruning_registry = OffsetRegistry(registry_path)
+        delayed_registry = OffsetRegistry(registry_path)
+        assert pruning_registry.prune_missing_files([tmp_path], [existing]) == 1
+        assert pruning_registry.flush() is True
+
+        delayed_registry.set(str(deleted), 250, 2)
+        assert delayed_registry.flush() is True
+
+        assert OffsetRegistry(registry_path).get(str(deleted)) == (0, 0)
+
+    def test_prune_tombstone_allows_recreated_file_with_new_inode(self, tmp_path):
+        registry_path = tmp_path / "offsets.json"
+        existing = tmp_path / "existing.jsonl"
+        deleted = tmp_path / "deleted.jsonl"
+        existing.write_text('{"id":"kept"}\n')
+
+        initial = OffsetRegistry(registry_path)
+        initial.set(str(existing), 100, 1)
+        initial.set(str(deleted), 200, 2)
+        assert initial.flush() is True
+
+        pruning_registry = OffsetRegistry(registry_path)
+        recreated_registry = OffsetRegistry(registry_path)
+        assert pruning_registry.prune_missing_files([tmp_path], [existing]) == 1
+        assert pruning_registry.flush() is True
+
+        recreated_registry.set(str(deleted), 50, 3)
+        assert recreated_registry.flush() is True
+
+        assert OffsetRegistry(registry_path).get(str(deleted)) == (50, 3)
+
+    def test_registry_loaded_after_tombstone_can_reuse_same_inode(self, tmp_path):
+        registry_path = tmp_path / "offsets.json"
+        existing = tmp_path / "existing.jsonl"
+        deleted = tmp_path / "deleted.jsonl"
+        existing.write_text('{"id":"kept"}\n')
+
+        initial = OffsetRegistry(registry_path)
+        initial.set(str(existing), 100, 1)
+        initial.set(str(deleted), 200, 2)
+        assert initial.flush() is True
+
+        pruning_registry = OffsetRegistry(registry_path)
+        assert pruning_registry.prune_missing_files([tmp_path], [existing]) == 1
+        assert pruning_registry.flush() is True
+
+        recreated_registry = OffsetRegistry(registry_path)
+        recreated_registry.set(str(deleted), 50, 2)
+        assert recreated_registry.flush() is True
+
+        assert OffsetRegistry(registry_path).get(str(deleted)) == (50, 2)
+
     def test_prune_tombstone_compacts_without_replaying_unchanged_stale_entries(self, monkeypatch, tmp_path):
         from brainlayer import watcher as watcher_module
 
@@ -327,16 +390,28 @@ class TestOffsetRegistry:
         live_file = root / "live.jsonl"
         live_file.write_text('{"id":"live"}\n')
         inaccessible = root / "inaccessible.jsonl"
+        inaccessible.write_text('{"id":"inaccessible"}\n')
         reg = OffsetRegistry(tmp_path / "offsets.json")
         reg.set(str(inaccessible), 100, 1)
         original_stat = Path.stat
+        original_is_file = Path.is_file
 
         def fail_inaccessible(path, *args, **kwargs):
-            if path == inaccessible:
+            if path.name == inaccessible.name:
                 raise PermissionError("denied")
             return original_stat(path, *args, **kwargs)
 
+        def python_314_is_file(path):
+            if path.name == inaccessible.name:
+                return False
+            return original_is_file(path)
+
+        def lstat_still_succeeds(path, *args, **kwargs):
+            return os.lstat(path)
+
         monkeypatch.setattr(Path, "stat", fail_inaccessible)
+        monkeypatch.setattr(Path, "is_file", python_314_is_file)
+        monkeypatch.setattr(Path, "lstat", lstat_still_succeeds)
 
         assert reg.prune_missing_files([root], [live_file]) == 0
         assert reg.get(str(inaccessible)) == (100, 1)
@@ -361,7 +436,13 @@ class TestOffsetRegistry:
 
         reg = OffsetRegistry(registry_path)
 
-        assert reg._removed == {"/valid.jsonl": 123.0}
+        assert reg._removed == {
+            "/valid.jsonl": {
+                "removed_at": 123.0,
+                "generation": 0,
+                "inode": 0,
+            }
+        }
         reg.set("/string.jsonl", 100, 1)
         assert reg.flush() is True
 
