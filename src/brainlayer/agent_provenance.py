@@ -156,7 +156,7 @@ def classify_provenance(
         return ProvenanceDecision("cursor-gather", "ISOLATE", "Cursor agent-transcripts root")
 
     if _under_provider_sessions(path, ".gemini"):
-        return ProvenanceDecision("gemini-session", "OUT", "Gemini session root")
+        return ProvenanceDecision("gemini-session", "KEEP", "Gemini session root stays searchable")
 
     if _is_subagent(path):
         repo = _repo_from_project_segment(_project_segment(path))

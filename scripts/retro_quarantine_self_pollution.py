@@ -121,7 +121,7 @@ def _is_direct_claude_session(source_file: str) -> bool:
 def _is_denylisted_source(source_file: str | None) -> bool:
     if not source_file or not str(source_file).strip():
         return False
-    return is_denylisted(source_file)
+    return is_denylisted(source_file, unknown_subagent_is_denylisted=False)
 
 
 def _batch(items: list[str], batch_size: int) -> Iterable[list[str]]:

@@ -208,7 +208,17 @@ def test_dry_run_uses_denylist_and_preserves_direct_sessions(tmp_path: Path, mon
         _insert_chunk(
             store,
             chunk_id="claude-subagent",
-            source_file=tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent-a1.jsonl",
+            source_file=(
+                tmp_path
+                / ".claude"
+                / "projects"
+                / "proj"
+                / "session"
+                / "subagents"
+                / "workflows"
+                / "wf_test"
+                / "agent-a1.jsonl"
+            ),
         )
         _insert_chunk(
             store,
@@ -1443,7 +1453,17 @@ def test_revert_proof_runs_only_on_snapshot_path(tmp_path: Path) -> None:
         _insert_chunk(
             store,
             chunk_id="claude-subagent",
-            source_file=tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent-a1.jsonl",
+            source_file=(
+                tmp_path
+                / ".claude"
+                / "projects"
+                / "proj"
+                / "session"
+                / "subagents"
+                / "workflows"
+                / "wf_test"
+                / "agent-a1.jsonl"
+            ),
             content="snapshot revert proof sentinel",
         )
     finally:
@@ -1467,7 +1487,17 @@ def test_revert_proof_runs_only_on_snapshot_path(tmp_path: Path) -> None:
 def test_direct_script_execution_bootstraps_operational_fts_for_legacy_snapshot(tmp_path: Path) -> None:
     db_path = tmp_path / "legacy-source.db"
     snapshot_path = tmp_path / "legacy-snapshot.db"
-    source_file = tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent-a1.jsonl"
+    source_file = (
+        tmp_path
+        / ".claude"
+        / "projects"
+        / "proj"
+        / "session"
+        / "subagents"
+        / "workflows"
+        / "wf_test"
+        / "agent-a1.jsonl"
+    )
     conn = apsw.Connection(str(db_path))
     try:
         cursor = conn.cursor()
