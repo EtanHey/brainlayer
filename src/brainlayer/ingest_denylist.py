@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import json
 import os
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ class _AttributionCacheEntry:
     size: int
     mtime_ns: int
     scanned_offset: int
+    prefix_sha256: str
     attribution: str | None
 
 
@@ -79,30 +81,49 @@ def _claude_subagent_attribution(path: Path) -> str | None:
     same_file = cached is not None and (cached.device, cached.inode) == (stat.st_dev, stat.st_ino)
     if same_file and (cached.size, cached.mtime_ns) == (stat.st_size, stat.st_mtime_ns):
         return cached.attribution
-    if same_file and cached.attribution is not None and stat.st_size > cached.size:
-        _SUBAGENT_ATTRIBUTION_CACHE[cache_key] = _AttributionCacheEntry(
-            stat.st_dev,
-            stat.st_ino,
-            stat.st_size,
-            stat.st_mtime_ns,
-            cached.scanned_offset,
-            cached.attribution,
-        )
-        return cached.attribution
 
-    attribution = None
-    scan_offset = (
-        cached.scanned_offset if same_file and cached.attribution is None and stat.st_size > cached.size else 0
-    )
-    scanned_offset = scan_offset
+    attribution: str | None = None
+    scanned_offset = 0
     final_stat = stat
     try:
         with path.open("rb") as handle:
+            prefix_hasher = hashlib.sha256()
+            prefix_matches = False
+            if same_file and cached.scanned_offset <= stat.st_size:
+                remaining = cached.scanned_offset
+                while remaining:
+                    chunk = handle.read(min(remaining, 64 * 1024))
+                    if not chunk:
+                        break
+                    prefix_hasher.update(chunk)
+                    remaining -= len(chunk)
+                prefix_matches = remaining == 0 and prefix_hasher.hexdigest() == cached.prefix_sha256
+
+            if prefix_matches:
+                scanned_offset = cached.scanned_offset
+                if cached.attribution is not None:
+                    final_stat = os.fstat(handle.fileno())
+                    _SUBAGENT_ATTRIBUTION_CACHE[cache_key] = _AttributionCacheEntry(
+                        final_stat.st_dev,
+                        final_stat.st_ino,
+                        final_stat.st_size,
+                        final_stat.st_mtime_ns,
+                        scanned_offset,
+                        cached.prefix_sha256,
+                        cached.attribution,
+                    )
+                    return cached.attribution
+            else:
+                prefix_hasher = hashlib.sha256()
+                handle.seek(0)
+
+            scan_offset = scanned_offset
             handle.seek(scan_offset)
             for raw_line in handle:
                 line_end = handle.tell()
                 if raw_line.endswith(b"\n"):
                     scanned_offset = line_end
+                    prefix_hasher.update(raw_line)
                 try:
                     entry = json.loads(raw_line.decode("utf-8", errors="replace"))
                 except json.JSONDecodeError:
@@ -112,6 +133,8 @@ def _claude_subagent_attribution(path: Path) -> str | None:
                 raw_attribution = entry.get("attributionAgent")
                 if isinstance(raw_attribution, str) and raw_attribution.strip():
                     attribution = raw_attribution.strip()
+                    if not raw_line.endswith(b"\n"):
+                        prefix_hasher.update(raw_line)
                     scanned_offset = line_end
                     break
             final_stat = os.fstat(handle.fileno())
@@ -124,6 +147,7 @@ def _claude_subagent_attribution(path: Path) -> str | None:
         final_stat.st_size,
         final_stat.st_mtime_ns,
         scanned_offset,
+        prefix_hasher.hexdigest(),
         attribution,
     )
     return attribution
