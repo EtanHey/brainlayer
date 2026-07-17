@@ -983,7 +983,7 @@ class TestHybridSearch:
         busy_cursor = BusyOnceCursor()
         sleeps: list[float] = []
         monkeypatch.setattr(store, "_read_cursor", lambda: busy_cursor)
-        monkeypatch.setattr("time.sleep", sleeps.append)
+        monkeypatch.setattr("brainlayer.search_repo._sleep", sleeps.append)
 
         results = store.hybrid_search(
             query_embedding=_embed("latest unrelated"),
