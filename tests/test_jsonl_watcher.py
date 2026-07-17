@@ -110,6 +110,29 @@ class TestOffsetRegistry:
         assert reloaded.get(str(existing)) == (300, 1)
         assert reloaded.get(str(deleted)) == (0, 0)
 
+    def test_prune_tombstone_blocks_stale_registry_from_resurrecting_deleted_offset(self, tmp_path):
+        registry_path = tmp_path / "offsets.json"
+        existing = tmp_path / "existing.jsonl"
+        deleted = tmp_path / "deleted.jsonl"
+        existing.write_text('{"id":"kept"}\n')
+
+        initial = OffsetRegistry(registry_path)
+        initial.set(str(existing), 100, 1)
+        initial.set(str(deleted), 200, 2)
+        assert initial.flush() is True
+
+        pruning_registry = OffsetRegistry(registry_path)
+        stale_registry = OffsetRegistry(registry_path)
+        assert pruning_registry.prune_missing_files([tmp_path], [existing]) == 1
+        assert pruning_registry.flush() is True
+
+        stale_registry.set(str(existing), 300, 1)
+        assert stale_registry.flush() is True
+
+        reloaded = OffsetRegistry(registry_path)
+        assert reloaded.get(str(existing)) == (300, 1)
+        assert reloaded.get(str(deleted)) == (0, 0)
+
     def test_prune_missing_files_preserves_offsets_under_unavailable_root(self, tmp_path):
         unavailable_root = tmp_path / "unmounted"
         missing = unavailable_root / "session.jsonl"

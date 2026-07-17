@@ -182,6 +182,9 @@ class CoverageWatchdog:
 # ── Offset Registry ──────────────────────────────────────────────────────────
 
 
+_OFFSET_TOMBSTONES_KEY = "__brainlayer_offset_tombstones__"
+
+
 class OffsetRegistry:
     """Persists file read offsets so we resume after restart.
 
@@ -199,9 +202,15 @@ class OffsetRegistry:
     def _load(self):
         try:
             with open(self.path) as f:
-                self._data = json.load(f)
+                loaded = json.load(f)
+            if not isinstance(loaded, dict):
+                loaded = {}
+            tombstones = loaded.pop(_OFFSET_TOMBSTONES_KEY, {})
+            self._data = loaded
+            self._removed = tombstones if isinstance(tombstones, dict) else {}
         except (OSError, json.JSONDecodeError):
             self._data = {}
+            self._removed = {}
 
     def get(self, filepath: str) -> tuple[int, int]:
         """Return (offset, inode) for a file. (0, 0) if unknown."""
@@ -237,27 +246,40 @@ class OffsetRegistry:
                     except (OSError, json.JSONDecodeError):
                         disk_data = {}
 
+                    disk_tombstones = disk_data.pop(_OFFSET_TOMBSTONES_KEY, {})
+                    tombstones = dict(disk_tombstones) if isinstance(disk_tombstones, dict) else {}
+                    for filepath, removed_at in self._removed.items():
+                        tombstones[filepath] = max(removed_at, tombstones.get(filepath, 0))
+
                     merged = dict(disk_data)
                     for filepath, local_entry in self._data.items():
-                        disk_entry = disk_data.get(filepath)
-                        if not isinstance(disk_entry, dict) or local_entry.get("mtime", 0) >= disk_entry.get(
-                            "mtime", 0
-                        ):
-                            merged[filepath] = local_entry
-                    for filepath, removed_at in self._removed.items():
-                        disk_entry = merged.get(filepath)
-                        if not isinstance(disk_entry, dict) or disk_entry.get("mtime", 0) <= removed_at:
+                        local_mtime = local_entry.get("mtime", 0)
+                        if filepath in tombstones and local_mtime <= tombstones[filepath]:
                             merged.pop(filepath, None)
+                            continue
+                        disk_entry = disk_data.get(filepath)
+                        if not isinstance(disk_entry, dict) or local_mtime >= disk_entry.get("mtime", 0):
+                            merged[filepath] = local_entry
+                            tombstones.pop(filepath, None)
+                    for filepath, removed_at in list(tombstones.items()):
+                        disk_entry = merged.get(filepath)
+                        if isinstance(disk_entry, dict) and disk_entry.get("mtime", 0) > removed_at:
+                            tombstones.pop(filepath, None)
+                            continue
+                        merged.pop(filepath, None)
 
                     fd, tmp_path = tempfile.mkstemp(dir=str(self.path.parent), suffix=".tmp")
                     with os.fdopen(fd, "w") as registry_file:
-                        json.dump(merged, registry_file)
+                        persisted = dict(merged)
+                        if tombstones:
+                            persisted[_OFFSET_TOMBSTONES_KEY] = tombstones
+                        json.dump(persisted, registry_file)
                     os.rename(tmp_path, str(self.path))
                     self._data = merged
+                    self._removed = tombstones
                 finally:
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
             self._dirty = False
-            self._removed.clear()
             return True
         except OSError as e:
             logger.warning("Failed to flush offset registry: %s", e)
