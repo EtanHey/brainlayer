@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
 from brainlayer.backfill import WindowedFlush, is_legacy_excluded_path, parse_backfill_window, window_registry_suffix
+from brainlayer.watcher import normalize_provider_entry
 from brainlayer.watcher_bridge import FlushWatermarks
 
 
@@ -55,6 +56,43 @@ def test_windowed_flush_excludes_invalid_timestamps_but_confirms_them():
     )
 
     result = windowed([_entry("not-a-date", 50)])
+
+    assert result == {"/tmp/session.jsonl": 50}
+    assert windowed.matched_entries == 0
+
+
+def test_windowed_flush_excludes_overflowing_timezone_timestamps():
+    windowed = WindowedFlush(
+        lambda entries: FlushWatermarks(inserted=len(entries)),
+        since=datetime(2026, 7, 10, tzinfo=UTC),
+        until=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+
+    result = windowed([_entry("0001-01-01T00:00:00+23:59", 50)])
+
+    assert result == {"/tmp/session.jsonl": 50}
+    assert windowed.matched_entries == 0
+
+
+def test_windowed_flush_rejects_timestamps_synthesized_during_normalization():
+    normalized = normalize_provider_entry(
+        {"role": "user", "content": "historical undated transcript"},
+        "codex",
+    )
+    assert normalized is not None
+    normalized.update(
+        {
+            "_source_file": "/tmp/session.jsonl",
+            "_line_end_offset": 50,
+        }
+    )
+    windowed = WindowedFlush(
+        lambda entries: FlushWatermarks(inserted=len(entries)),
+        since=datetime(2020, 1, 1, tzinfo=UTC),
+        until=datetime(2100, 1, 1, tzinfo=UTC),
+    )
+
+    result = windowed([normalized])
 
     assert result == {"/tmp/session.jsonl": 50}
     assert windowed.matched_entries == 0

@@ -23,7 +23,7 @@ def parse_backfill_window(since: str | None, until: str | None) -> tuple[datetim
     try:
         parsed_since = _parse_utc(since)
         parsed_until = _parse_utc(until)
-    except ValueError as exc:
+    except (ValueError, OverflowError) as exc:
         raise ValueError("--since and --until must be ISO 8601 timestamps") from exc
     if parsed_since >= parsed_until:
         raise ValueError("--since must be earlier than --until")
@@ -87,12 +87,14 @@ class WindowedFlush:
         source_file = entry.get("_source_file")
         if self.source_predicate and (not isinstance(source_file, str) or not self.source_predicate(source_file)):
             return False
+        if entry.get("_timestamp_synthesized") is True:
+            return False
         timestamp = entry.get("timestamp")
         if not isinstance(timestamp, str):
             return False
         try:
             parsed = _parse_utc(timestamp)
-        except ValueError:
+        except (ValueError, OverflowError):
             return False
         return self.since <= parsed < self.until
 

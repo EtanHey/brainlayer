@@ -3513,7 +3513,8 @@ def watch_backfill(
     if registry:
         registry_path = registry.expanduser()
     elif window:
-        registry_path = db_path.parent / f"backfill-offsets-{window_registry_suffix(*window)}.json"
+        scope_suffix = "-legacy-excluded-only" if legacy_excluded_only else ""
+        registry_path = db_path.parent / f"backfill-offsets-{window_registry_suffix(*window)}{scope_suffix}.json"
     else:
         registry_path = db_path.parent / "offsets.json"
     watch_roots = [WatchRoot("custom", item) for item in source] if source else default_watch_roots(home=home)
@@ -3524,6 +3525,7 @@ def watch_backfill(
             registry_path=registry_path,
             on_flush=lambda items: None,
             db_path=db_path,
+            respect_denylist=not legacy_excluded_only,
         )
         files = watcher._discover_jsonl_files()
         if legacy_excluded_only:
@@ -3557,6 +3559,7 @@ def watch_backfill(
         registry_path=registry_path,
         on_flush=windowed_flush or downstream_flush,
         db_path=db_path,
+        respect_denylist=not legacy_excluded_only,
     )
     processed = 0
     cycles = 0

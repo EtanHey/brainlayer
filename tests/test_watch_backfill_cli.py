@@ -91,6 +91,67 @@ def test_watch_backfill_legacy_dry_run_counts_only_legacy_excluded_roots(tmp_pat
     assert "candidate_files=1" in result.output
     assert "codex=1" in result.output
     assert "claude=" not in result.output
+    assert "scope=legacy-excluded-only" in result.output
+    assert "-legacy-excluded-only.json" in result.output
+
+
+def test_watch_backfill_legacy_scope_bypasses_current_subagent_denylist(tmp_path, monkeypatch):
+    monkeypatch.delenv("BRAINLAYER_INGEST_DENYLIST", raising=False)
+    transcript = (
+        tmp_path
+        / ".claude"
+        / "projects"
+        / "repo"
+        / "session"
+        / "subagents"
+        / "agent-worker.jsonl"
+    )
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text(
+        json.dumps(
+            {
+                "type": "assistant",
+                "timestamp": "2026-07-12T12:00:00Z",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "Legacy subagent backfill sentinel records the durable implementation decision, "
+                                "the reason the previous indexing policy excluded this transcript, the exact "
+                                "migration window, and the verification contract needed to replay it safely "
+                                "without discarding the raw JSONL source or advancing offsets before persistence."
+                            ),
+                        }
+                    ],
+                },
+            }
+        )
+        + "\n"
+    )
+    queue_dir = tmp_path / "queue"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "watch-backfill",
+            "--home",
+            str(tmp_path),
+            "--since",
+            "2026-07-10",
+            "--until",
+            "2026-07-16",
+            "--legacy-excluded-only",
+            "--max-cycles",
+            "5",
+        ],
+        env={"BRAINLAYER_QUEUE_DIR": str(queue_dir)},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "matched_entries=1" in result.output
+    assert len(list(queue_dir.glob("watcher-*.jsonl"))) == 1
 
 
 def test_watch_backfill_indexes_cursor_agent_transcripts_once(tmp_path, monkeypatch):

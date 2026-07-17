@@ -121,12 +121,12 @@ def normalize_provider_entry(entry: dict[str, Any], provider: str) -> dict[str, 
     if not text:
         return None
 
+    source_timestamp = candidate.get("timestamp") or candidate.get("created_at")
     return {
         "type": role,
         "message": {"role": role, "content": [{"type": "text", "text": text}]},
-        "timestamp": candidate.get("timestamp")
-        or candidate.get("created_at")
-        or datetime.now(timezone.utc).isoformat(),
+        "timestamp": source_timestamp or datetime.now(timezone.utc).isoformat(),
+        "_timestamp_synthesized": not isinstance(source_timestamp, str) or not source_timestamp.strip(),
         "_provider": provider,
     }
 
@@ -499,6 +499,7 @@ class JSONLWatcher:
         health_path: str | Path | None = None,
         coverage_watchdog: CoverageWatchdog | None = None,
         max_lines_per_file: int = 100,
+        respect_denylist: bool = True,
     ):
         if watch_roots is not None:
             self.watch_roots = [WatchRoot(root.provider, root.path, root.glob_pattern) for root in watch_roots]
@@ -521,6 +522,7 @@ class JSONLWatcher:
         self.poll_interval_s = poll_interval_s
         self.registry_flush_interval_s = registry_flush_interval_s
         self.max_lines_per_file = max(1, max_lines_per_file)
+        self.respect_denylist = respect_denylist
         self._tailers: dict[str, JSONLTailer] = {}
         self._file_providers: dict[str, str] = {}
         self._stop = threading.Event()
@@ -543,7 +545,7 @@ class JSONLWatcher:
                 self.registry.set(filepath, offset, inode)
 
     def provider_for_file(self, filepath: str) -> str:
-        if is_denylisted(filepath):
+        if self._is_denylisted(filepath):
             return "unknown"
 
         provider = self._file_providers.get(filepath)
@@ -556,6 +558,9 @@ class JSONLWatcher:
             if path == root_path or path.is_relative_to(root_path):
                 return root.provider
         return "unknown"
+
+    def _is_denylisted(self, filepath: str) -> bool:
+        return self.respect_denylist and is_denylisted(filepath)
 
     def _discover_jsonl_files(self) -> list[str]:
         """Find all .jsonl files under each watched project, including nested session artifacts."""
@@ -574,7 +579,7 @@ class JSONLWatcher:
                     for f in files:
                         if f.is_file():
                             path = str(f)
-                            if is_denylisted(path):
+                            if self._is_denylisted(path):
                                 continue
                             try:
                                 mtime = f.stat().st_mtime
@@ -775,13 +780,13 @@ class JSONLWatcher:
             files = self._discover_jsonl_files()
 
             for filepath in list(self._tailers):
-                if is_denylisted(filepath):
+                if self._is_denylisted(filepath):
                     self._tailers.pop(filepath, None)
                     self._file_providers.pop(filepath, None)
                     self.registry.remove(filepath)
 
             for filepath in files:
-                if is_denylisted(filepath):
+                if self._is_denylisted(filepath):
                     self._tailers.pop(filepath, None)
                     self._file_providers.pop(filepath, None)
                     self.registry.remove(filepath)
