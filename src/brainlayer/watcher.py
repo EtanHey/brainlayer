@@ -14,6 +14,7 @@ This is the Python watchdog prototype. The production version will use
 Swift DispatchSource kqueue in BrainBar for sub-1ms notification latency.
 """
 
+import fcntl
 import json
 import logging
 import os
@@ -191,6 +192,7 @@ class OffsetRegistry:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self._data: dict[str, dict] = {}
+        self._removed: dict[str, float] = {}
         self._dirty = False
         self._load()
 
@@ -213,6 +215,7 @@ class OffsetRegistry:
             "inode": inode,
             "mtime": time.time(),
         }
+        self._removed.pop(filepath, None)
         self._dirty = True
 
     def flush(self) -> bool:
@@ -222,11 +225,39 @@ class OffsetRegistry:
         tmp_path = None
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_path = tempfile.mkstemp(dir=str(self.path.parent), suffix=".tmp")
-            with os.fdopen(fd, "w") as f:
-                json.dump(self._data, f)
-            os.rename(tmp_path, str(self.path))
+            lock_path = self.path.with_name(f"{self.path.name}.lock")
+            with lock_path.open("a+") as lock_file:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                try:
+                    try:
+                        with self.path.open() as registry_file:
+                            disk_data = json.load(registry_file)
+                        if not isinstance(disk_data, dict):
+                            disk_data = {}
+                    except (OSError, json.JSONDecodeError):
+                        disk_data = {}
+
+                    merged = dict(disk_data)
+                    for filepath, local_entry in self._data.items():
+                        disk_entry = disk_data.get(filepath)
+                        if not isinstance(disk_entry, dict) or local_entry.get("mtime", 0) >= disk_entry.get(
+                            "mtime", 0
+                        ):
+                            merged[filepath] = local_entry
+                    for filepath, removed_at in self._removed.items():
+                        disk_entry = merged.get(filepath)
+                        if not isinstance(disk_entry, dict) or disk_entry.get("mtime", 0) <= removed_at:
+                            merged.pop(filepath, None)
+
+                    fd, tmp_path = tempfile.mkstemp(dir=str(self.path.parent), suffix=".tmp")
+                    with os.fdopen(fd, "w") as registry_file:
+                        json.dump(merged, registry_file)
+                    os.rename(tmp_path, str(self.path))
+                    self._data = merged
+                finally:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
             self._dirty = False
+            self._removed.clear()
             return True
         except OSError as e:
             logger.warning("Failed to flush offset registry: %s", e)
@@ -240,6 +271,7 @@ class OffsetRegistry:
     def remove(self, filepath: str):
         """Remove tracking for a file."""
         self._data.pop(filepath, None)
+        self._removed[filepath] = time.time()
         self._dirty = True
 
     def prune_missing_files(
@@ -281,6 +313,7 @@ class OffsetRegistry:
                 continue
         for filepath in missing:
             self._data.pop(filepath, None)
+            self._removed[filepath] = time.time()
         if missing:
             self._dirty = True
         return len(missing)
