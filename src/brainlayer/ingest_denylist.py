@@ -5,13 +5,25 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 BRAINLAYER_INGEST_DENYLIST_ENV = "BRAINLAYER_INGEST_DENYLIST"
 
 DEFAULT_INGEST_DENYLIST = ("~/.claude/projects/**/wf_*/**",)
 
-_SUBAGENT_ATTRIBUTION_CACHE: dict[str, tuple[int, int, str | None]] = {}
+
+@dataclass(frozen=True)
+class _AttributionCacheEntry:
+    device: int
+    inode: int
+    size: int
+    mtime_ns: int
+    scanned_offset: int
+    attribution: str | None
+
+
+_SUBAGENT_ATTRIBUTION_CACHE: dict[str, _AttributionCacheEntry] = {}
 
 
 def _configured_patterns() -> tuple[str, ...]:
@@ -56,7 +68,7 @@ def _is_claude_subagent(path: Path) -> bool:
 
 
 def _claude_subagent_attribution(path: Path) -> str | None:
-    """Read the first stable worker attribution without rescanning unchanged JSONLs."""
+    """Incrementally read the first stable worker attribution from an appending JSONL."""
     try:
         stat = path.stat()
     except OSError:
@@ -64,15 +76,35 @@ def _claude_subagent_attribution(path: Path) -> str | None:
 
     cache_key = str(path)
     cached = _SUBAGENT_ATTRIBUTION_CACHE.get(cache_key)
-    if cached is not None and cached[:2] == (stat.st_size, stat.st_mtime_ns):
-        return cached[2]
+    same_file = cached is not None and (cached.device, cached.inode) == (stat.st_dev, stat.st_ino)
+    if same_file and (cached.size, cached.mtime_ns) == (stat.st_size, stat.st_mtime_ns):
+        return cached.attribution
+    if same_file and cached.attribution is not None and stat.st_size > cached.size:
+        _SUBAGENT_ATTRIBUTION_CACHE[cache_key] = _AttributionCacheEntry(
+            stat.st_dev,
+            stat.st_ino,
+            stat.st_size,
+            stat.st_mtime_ns,
+            cached.scanned_offset,
+            cached.attribution,
+        )
+        return cached.attribution
 
     attribution = None
+    scan_offset = (
+        cached.scanned_offset if same_file and cached.attribution is None and stat.st_size > cached.size else 0
+    )
+    scanned_offset = scan_offset
+    final_stat = stat
     try:
-        with path.open(encoding="utf-8", errors="replace") as handle:
+        with path.open("rb") as handle:
+            handle.seek(scan_offset)
             for raw_line in handle:
+                line_end = handle.tell()
+                if raw_line.endswith(b"\n"):
+                    scanned_offset = line_end
                 try:
-                    entry = json.loads(raw_line)
+                    entry = json.loads(raw_line.decode("utf-8", errors="replace"))
                 except json.JSONDecodeError:
                     continue
                 if not isinstance(entry, dict):
@@ -80,11 +112,20 @@ def _claude_subagent_attribution(path: Path) -> str | None:
                 raw_attribution = entry.get("attributionAgent")
                 if isinstance(raw_attribution, str) and raw_attribution.strip():
                     attribution = raw_attribution.strip()
+                    scanned_offset = line_end
                     break
+            final_stat = os.fstat(handle.fileno())
     except OSError:
         return None
 
-    _SUBAGENT_ATTRIBUTION_CACHE[cache_key] = (stat.st_size, stat.st_mtime_ns, attribution)
+    _SUBAGENT_ATTRIBUTION_CACHE[cache_key] = _AttributionCacheEntry(
+        final_stat.st_dev,
+        final_stat.st_ino,
+        final_stat.st_size,
+        final_stat.st_mtime_ns,
+        scanned_offset,
+        attribution,
+    )
     return attribution
 
 

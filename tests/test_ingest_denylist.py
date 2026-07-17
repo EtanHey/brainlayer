@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import brainlayer.ingest_denylist as denylist
 from brainlayer.ingest_denylist import BRAINLAYER_INGEST_DENYLIST_ENV, is_denylisted
 
 
@@ -147,6 +148,34 @@ def test_subagent_attribution_is_found_after_legacy_scan_limit(monkeypatch, tmp_
     )
 
     assert not is_denylisted(worker)
+
+
+def test_unattributed_appends_are_scanned_incrementally(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv(BRAINLAYER_INGEST_DENYLIST_ENV, raising=False)
+    denylist._SUBAGENT_ATTRIBUTION_CACHE.clear()
+    worker = tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent.jsonl"
+    worker.parent.mkdir(parents=True)
+    progress = json.dumps({"type": "progress"})
+    worker.write_text("\n".join([progress] * 200) + "\n", encoding="utf-8")
+    real_loads = json.loads
+    calls = 0
+
+    def counting_loads(value):
+        nonlocal calls
+        calls += 1
+        return real_loads(value)
+
+    monkeypatch.setattr(denylist.json, "loads", counting_loads)
+
+    assert is_denylisted(worker)
+    with worker.open("a", encoding="utf-8") as handle:
+        handle.write(progress + "\n")
+    assert is_denylisted(worker)
+    with worker.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"attributionAgent": "general-purpose"}) + "\n")
+    assert not is_denylisted(worker)
+    assert calls == 202
 
 
 def test_explicit_empty_override_disables_default_subagent_policy(monkeypatch, tmp_path):
