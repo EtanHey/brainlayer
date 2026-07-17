@@ -290,21 +290,25 @@ class OffsetRegistry:
             except OSError:
                 continue
 
-        available_roots: list[Path] = []
+        root_availability: dict[Path, bool] = {}
         for root in active_roots:
             candidate_root = Path(os.path.abspath(os.path.expanduser(str(root))))
             try:
-                if candidate_root.is_dir() and any(
+                root_availability[candidate_root] = candidate_root.is_dir() and any(
                     live_file == candidate_root or live_file.is_relative_to(candidate_root) for live_file in live_files
-                ):
-                    available_roots.append(candidate_root)
+                )
             except OSError:
-                continue
+                root_availability[candidate_root] = False
 
         missing: list[str] = []
         for filepath in self._data:
             candidate = Path(os.path.abspath(os.path.expanduser(filepath)))
-            if not any(candidate == root or candidate.is_relative_to(root) for root in available_roots):
+            matching_roots = [root for root in root_availability if candidate == root or candidate.is_relative_to(root)]
+            if not matching_roots:
+                continue
+            most_specific_depth = max(len(root.parts) for root in matching_roots)
+            most_specific_roots = [root for root in matching_roots if len(root.parts) == most_specific_depth]
+            if not any(root_availability[root] for root in most_specific_roots):
                 continue
             try:
                 if not candidate.is_file():

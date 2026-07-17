@@ -129,6 +129,31 @@ class TestOffsetRegistry:
         assert reg.prune_missing_files([empty_mountpoint]) == 0
         assert reg.get(str(missing)) == (100, 1)
 
+    def test_prune_missing_files_does_not_let_parent_authorize_unavailable_nested_root(self, tmp_path):
+        parent_root = tmp_path / "data"
+        nested_root = parent_root / "transcripts"
+        parent_root.mkdir()
+        nested_root.mkdir()
+        live_parent_file = parent_root / "live.jsonl"
+        missing_nested_file = nested_root / "session.jsonl"
+        live_parent_file.write_text('{"id":"live"}\n')
+        reg = OffsetRegistry(tmp_path / "offsets.json")
+        reg.set(str(missing_nested_file), 100, 1)
+
+        assert reg.prune_missing_files([parent_root, nested_root], [live_parent_file]) == 0
+        assert reg.get(str(missing_nested_file)) == (100, 1)
+
+        live_nested_file = nested_root / "sibling.jsonl"
+        live_nested_file.write_text('{"id":"mounted"}\n')
+        assert (
+            reg.prune_missing_files(
+                [parent_root, nested_root],
+                [live_parent_file, live_nested_file],
+            )
+            == 1
+        )
+        assert reg.get(str(missing_nested_file)) == (0, 0)
+
     def test_prune_missing_files_skips_stat_errors(self, monkeypatch, tmp_path):
         root = tmp_path / "sessions"
         root.mkdir()
