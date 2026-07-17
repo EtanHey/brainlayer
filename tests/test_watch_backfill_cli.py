@@ -123,3 +123,90 @@ def test_watch_backfill_indexes_cursor_agent_transcripts_once(tmp_path, monkeypa
     assert second.exit_code == 0, second.output
     assert "processed_entries=0" in second.output
     assert list(queue_dir.glob("watcher-*.jsonl")) == queue_files
+
+
+def test_watch_backfill_indexes_only_requested_window_and_is_idempotent(tmp_path, monkeypatch):
+    monkeypatch.delenv("BRAINLAYER_INGEST_DENYLIST", raising=False)
+    transcript = tmp_path / ".claude" / "projects" / "repo" / "session.jsonl"
+    registry = tmp_path / "window-offsets.json"
+    queue_dir = tmp_path / "queue"
+    transcript.parent.mkdir(parents=True)
+
+    def entry(timestamp: str, token: str) -> str:
+        return json.dumps(
+            {
+                "type": "assistant",
+                "timestamp": timestamp,
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                f"{token} is a substantive backfill sentinel with enough durable technical "
+                                "context to pass classification and chunking thresholds."
+                            ),
+                        }
+                    ],
+                },
+            }
+        )
+
+    transcript.write_text(
+        "\n".join(
+            [
+                entry("2026-07-09T23:59:59Z", "BEFOREWINDOW"),
+                entry("2026-07-12T12:00:00Z", "INSIDEWINDOW"),
+                entry("2026-07-16T00:00:00Z", "AFTERWINDOW"),
+            ]
+        )
+        + "\n"
+    )
+
+    args = [
+        "watch-backfill",
+        "--home",
+        str(tmp_path),
+        "--registry",
+        str(registry),
+        "--since",
+        "2026-07-10",
+        "--until",
+        "2026-07-16",
+    ]
+    first = CliRunner().invoke(
+        app,
+        args,
+        env={"BRAINLAYER_QUEUE_DIR": str(queue_dir)},
+    )
+
+    assert first.exit_code == 0, first.output
+    assert "matched_entries=1" in first.output
+    assert len(list(queue_dir.glob("watcher-*.jsonl"))) == 1
+
+    second = CliRunner().invoke(
+        app,
+        args,
+        env={"BRAINLAYER_QUEUE_DIR": str(queue_dir)},
+    )
+
+    assert second.exit_code == 0, second.output
+    assert "matched_entries=0" in second.output
+    assert len(list(queue_dir.glob("watcher-*.jsonl"))) == 1
+
+
+def test_watch_backfill_rejects_legacy_scope_without_window(tmp_path):
+    result = CliRunner().invoke(
+        app,
+        [
+            "watch-backfill",
+            "--home",
+            str(tmp_path),
+            "--legacy-excluded-only",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--legacy-excluded-only requires" in result.output
+    assert "--since and --until" in result.output

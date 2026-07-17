@@ -1,0 +1,88 @@
+from datetime import UTC, datetime
+
+from brainlayer.backfill import WindowedFlush, is_legacy_excluded_path, parse_backfill_window
+from brainlayer.watcher_bridge import FlushWatermarks
+
+
+def _entry(timestamp: str, offset: int) -> dict:
+    return {
+        "type": "assistant",
+        "timestamp": timestamp,
+        "_source_file": "/tmp/session.jsonl",
+        "_line_end_offset": offset,
+    }
+
+
+def test_windowed_flush_filters_half_open_interval_and_confirms_scanned_offsets():
+    received = []
+
+    def downstream(entries):
+        received.extend(entries)
+        return FlushWatermarks(
+            {"/tmp/session.jsonl": entries[-1]["_line_end_offset"]},
+            inserted=len(entries),
+        )
+
+    windowed = WindowedFlush(
+        downstream,
+        since=datetime(2026, 7, 10, tzinfo=UTC),
+        until=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+
+    result = windowed(
+        [
+            _entry("2026-07-09T23:59:59Z", 100),
+            _entry("2026-07-10T00:00:00Z", 200),
+            _entry("2026-07-15T23:59:59Z", 300),
+            _entry("2026-07-16T00:00:00Z", 400),
+        ]
+    )
+
+    assert [entry["_line_end_offset"] for entry in received] == [200, 300]
+    assert result == {"/tmp/session.jsonl": 400}
+    assert result.inserted == 2
+    assert result.skipped == 2
+    assert windowed.scanned_entries == 4
+    assert windowed.matched_entries == 2
+    assert windowed.inserted_chunks == 2
+
+
+def test_windowed_flush_excludes_invalid_timestamps_but_confirms_them():
+    windowed = WindowedFlush(
+        lambda entries: FlushWatermarks(inserted=len(entries)),
+        since=datetime(2026, 7, 10, tzinfo=UTC),
+        until=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+
+    result = windowed([_entry("not-a-date", 50)])
+
+    assert result == {"/tmp/session.jsonl": 50}
+    assert windowed.matched_entries == 0
+
+
+def test_parse_backfill_window_is_utc_and_rejects_empty_or_reversed_ranges():
+    since, until = parse_backfill_window("2026-07-10", "2026-07-16")
+
+    assert since == datetime(2026, 7, 10, tzinfo=UTC)
+    assert until == datetime(2026, 7, 16, tzinfo=UTC)
+
+    for invalid in ((None, "2026-07-16"), ("2026-07-16", None), ("2026-07-16", "2026-07-10")):
+        try:
+            parse_backfill_window(*invalid)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected invalid window: {invalid}")
+
+
+def test_legacy_excluded_path_selects_only_roots_blocked_by_old_policy(tmp_path):
+    assert is_legacy_excluded_path(tmp_path / ".codex" / "sessions" / "worker.jsonl")
+    assert is_legacy_excluded_path(
+        tmp_path / ".cursor" / "projects" / "repo" / "agent-transcripts" / "session" / "worker.jsonl"
+    )
+    assert is_legacy_excluded_path(tmp_path / ".gemini" / "sessions" / "worker.jsonl")
+    assert is_legacy_excluded_path(
+        tmp_path / ".claude" / "projects" / "repo" / "session" / "subagents" / "agent-worker.jsonl"
+    )
+    assert not is_legacy_excluded_path(tmp_path / ".claude" / "projects" / "repo" / "direct.jsonl")
+    assert not is_legacy_excluded_path(tmp_path / ".cursor" / "projects" / "repo" / "state.jsonl")

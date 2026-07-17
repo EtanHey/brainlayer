@@ -3482,16 +3482,40 @@ def watch_backfill(
         "--registry",
         help="Offset registry path. Defaults to the live BrainLayer offsets file.",
     ),
+    since: Optional[str] = typer.Option(None, "--since", help="Inclusive ISO 8601 entry timestamp."),
+    until: Optional[str] = typer.Option(None, "--until", help="Exclusive ISO 8601 entry timestamp."),
+    legacy_excluded_only: bool = typer.Option(
+        False,
+        "--legacy-excluded-only",
+        help="Replay only transcript roots blocked by the retired blanket denylist.",
+    ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Report files that would be replayed without writing."),
     max_cycles: int = typer.Option(100, "--max-cycles", min=1, help="Maximum poll cycles to run."),
 ) -> None:
     """One-shot replay for watched JSONL roots using the durable queue writer path."""
+    from ..backfill import WindowedFlush, is_legacy_excluded_path, parse_backfill_window, window_registry_suffix
     from ..paths import get_db_path
     from ..watcher import JSONLWatcher, WatchRoot, default_watch_roots
     from ..watcher_bridge import create_flush_callback
 
     db_path = get_db_path()
-    registry_path = registry.expanduser() if registry else db_path.parent / "offsets.json"
+    window = None
+    if since is not None or until is not None:
+        try:
+            window = parse_backfill_window(since, until)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc), param_hint="--since/--until") from exc
+    if legacy_excluded_only and window is None:
+        raise typer.BadParameter(
+            "--legacy-excluded-only requires --since and --until",
+            param_hint="--legacy-excluded-only",
+        )
+    if registry:
+        registry_path = registry.expanduser()
+    elif window:
+        registry_path = db_path.parent / f"backfill-offsets-{window_registry_suffix(*window)}.json"
+    else:
+        registry_path = db_path.parent / "offsets.json"
     watch_roots = [WatchRoot("custom", item) for item in source] if source else default_watch_roots(home=home)
 
     if dry_run:
@@ -3507,26 +3531,51 @@ def watch_backfill(
             provider = watcher.provider_for_file(path)
             provider_counts[provider] = provider_counts.get(provider, 0) + 1
         provider_summary = " ".join(f"{provider}={count}" for provider, count in sorted(provider_counts.items()))
-        rprint(f"candidate_files={len(files)} {provider_summary} processed_entries=0 registry={registry_path}")
+        window_summary = f" window=[{window[0].isoformat()},{window[1].isoformat()})" if window else ""
+        scope_summary = " scope=legacy-excluded-only" if legacy_excluded_only else ""
+        rprint(
+            f"candidate_files={len(files)} {provider_summary} processed_entries=0{window_summary}{scope_summary} "
+            f"registry={registry_path}"
+        )
         return
 
+    downstream_flush = create_flush_callback(db_path, arbitrated=True)
+    windowed_flush = (
+        WindowedFlush(
+            downstream_flush,
+            since=window[0],
+            until=window[1],
+            source_predicate=is_legacy_excluded_path if legacy_excluded_only else None,
+        )
+        if window
+        else None
+    )
     watcher = JSONLWatcher(
         watch_roots=watch_roots,
         registry_path=registry_path,
-        on_flush=create_flush_callback(db_path, arbitrated=True),
+        on_flush=windowed_flush or downstream_flush,
         db_path=db_path,
     )
     processed = 0
     cycles = 0
     while cycles < max_cycles:
         cycles += 1
+        offsets_before = {path: tailer.offset for path, tailer in watcher._tailers.items()}
         count = watcher.poll_once()
-        if count == 0:
-            break
         processed += count
+        made_progress = any(tailer.offset > offsets_before.get(path, 0) for path, tailer in watcher._tailers.items())
+        if not made_progress:
+            break
     watcher.indexer.flush()
     watcher.registry.flush()
-    rprint(f"processed_entries={processed} cycles={cycles} registry={registry_path}")
+    if windowed_flush:
+        rprint(
+            f"processed_entries={processed} scanned_entries={windowed_flush.scanned_entries} "
+            f"matched_entries={windowed_flush.matched_entries} queued_chunks={windowed_flush.inserted_chunks} "
+            f"cycles={cycles} registry={registry_path}"
+        )
+    else:
+        rprint(f"processed_entries={processed} cycles={cycles} registry={registry_path}")
 
 
 @app.command("index-fast", hidden=True)
