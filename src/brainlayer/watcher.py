@@ -242,13 +242,29 @@ class OffsetRegistry:
         self._data.pop(filepath, None)
         self._dirty = True
 
-    def prune_missing_files(self, active_roots: list[Path]) -> int:
-        """Drop confirmed-deleted offsets under currently available watch roots."""
+    def prune_missing_files(
+        self,
+        active_roots: list[Path],
+        active_files: list[str | Path] | None = None,
+    ) -> int:
+        """Drop deleted offsets only when a sibling file proves the root is mounted."""
+        live_files: list[Path] = []
+        candidates = active_files if active_files is not None else list(self._data)
+        for filepath in candidates:
+            candidate = Path(os.path.abspath(os.path.expanduser(str(filepath))))
+            try:
+                if candidate.is_file():
+                    live_files.append(candidate)
+            except OSError:
+                continue
+
         available_roots: list[Path] = []
         for root in active_roots:
             candidate_root = Path(os.path.abspath(os.path.expanduser(str(root))))
             try:
-                if candidate_root.is_dir():
+                if candidate_root.is_dir() and any(
+                    live_file == candidate_root or live_file.is_relative_to(candidate_root) for live_file in live_files
+                ):
                     available_roots.append(candidate_root)
             except OSError:
                 continue
@@ -800,12 +816,15 @@ class JSONLWatcher:
         self.poll_count += 1
 
         try:
+            files = self._discover_jsonl_files()
             if not self._offset_prune_complete:
-                pruned = self.registry.prune_missing_files([root.resolved_path for root in self.watch_roots])
+                pruned = self.registry.prune_missing_files(
+                    [root.resolved_path for root in self.watch_roots],
+                    files,
+                )
                 if pruned:
                     logger.info("Pruned %d deleted files from the offset registry", pruned)
                 self._offset_prune_complete = self.registry.flush()
-            files = self._discover_jsonl_files()
 
             for filepath in list(self._tailers):
                 if is_denylisted(filepath):

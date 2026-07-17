@@ -96,6 +96,16 @@ class TestOffsetRegistry:
         assert reg.prune_missing_files([unavailable_root]) == 0
         assert reg.get(str(missing)) == (100, 1)
 
+    def test_prune_missing_files_preserves_empty_mounted_root(self, tmp_path):
+        empty_mountpoint = tmp_path / "mounted-sessions"
+        empty_mountpoint.mkdir()
+        missing = empty_mountpoint / "session.jsonl"
+        reg = OffsetRegistry(tmp_path / "offsets.json")
+        reg.set(str(missing), 100, 1)
+
+        assert reg.prune_missing_files([empty_mountpoint]) == 0
+        assert reg.get(str(missing)) == (100, 1)
+
     def test_prune_missing_files_skips_stat_errors(self, monkeypatch, tmp_path):
         root = tmp_path / "sessions"
         root.mkdir()
