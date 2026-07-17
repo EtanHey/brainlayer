@@ -242,6 +242,15 @@ class OffsetRegistry:
         self._data.pop(filepath, None)
         self._dirty = True
 
+    def prune_missing_files(self) -> int:
+        """Drop offsets whose source file no longer exists and return the count."""
+        missing = [filepath for filepath in self._data if not Path(filepath).is_file()]
+        for filepath in missing:
+            self._data.pop(filepath, None)
+        if missing:
+            self._dirty = True
+        return len(missing)
+
 
 # ── JSONL Tailer ─────────────────────────────────────────────────────────────
 
@@ -533,6 +542,7 @@ class JSONLWatcher:
         self._health_entries_seen = 0
         self._health_output_at_start = 0
         self.poll_count = 0
+        self._offset_prune_complete = False
 
     def _advance_confirmed_offsets(self, watermarks: dict[str, int]) -> None:
         for filepath, offset in watermarks.items():
@@ -772,6 +782,11 @@ class JSONLWatcher:
         self.poll_count += 1
 
         try:
+            if not self._offset_prune_complete:
+                pruned = self.registry.prune_missing_files()
+                if pruned:
+                    logger.info("Pruned %d deleted files from the offset registry", pruned)
+                self._offset_prune_complete = self.registry.flush()
             files = self._discover_jsonl_files()
 
             for filepath in list(self._tailers):

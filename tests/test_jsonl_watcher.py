@@ -66,6 +66,26 @@ class TestOffsetRegistry:
         offset, inode = reg.get("/a.jsonl")
         assert offset == 0
 
+    def test_prune_missing_files_removes_only_deleted_paths_and_persists(self, tmp_path):
+        registry_path = tmp_path / "offsets.json"
+        existing = tmp_path / "existing.jsonl"
+        deleted = tmp_path / "deleted.jsonl"
+        existing.write_text('{"id":"kept"}\n')
+
+        reg = OffsetRegistry(registry_path)
+        reg.set(str(existing), 100, 1)
+        reg.set(str(deleted), 200, 2)
+        reg.flush()
+
+        assert reg.prune_missing_files() == 1
+        assert reg.get(str(existing)) == (100, 1)
+        assert reg.get(str(deleted)) == (0, 0)
+        assert reg.flush() is True
+
+        reloaded = OffsetRegistry(registry_path)
+        assert reloaded.get(str(existing)) == (100, 1)
+        assert reloaded.get(str(deleted)) == (0, 0)
+
     def test_load_corrupt_file(self, tmp_path):
         path = tmp_path / "offsets.json"
         path.write_text("not json{{{")
@@ -264,6 +284,34 @@ class TestJSONLWatcher:
         files = watcher._discover_jsonl_files()
         assert len(files) == 2
         assert all(f.endswith(".jsonl") for f in files)
+
+    def test_first_poll_prunes_and_flushes_deleted_offset_entries(self, tmp_path):
+        project = self._make_project_dir(tmp_path)
+        existing = project / "existing.jsonl"
+        deleted = project / "deleted.jsonl"
+        existing.write_text('{"id":"existing"}\n')
+        registry_path = tmp_path / "offsets.json"
+        registry_path.write_text(
+            json.dumps(
+                {
+                    str(existing): {"offset": existing.stat().st_size, "inode": existing.stat().st_ino},
+                    str(deleted): {"offset": 100, "inode": 999},
+                }
+            )
+        )
+
+        watcher = JSONLWatcher(
+            watch_dir=tmp_path / "projects",
+            registry_path=registry_path,
+            on_flush=lambda items: None,
+            registry_flush_interval_s=3600,
+        )
+
+        watcher.poll_once()
+
+        persisted = json.loads(registry_path.read_text())
+        assert str(existing) in persisted
+        assert str(deleted) not in persisted
 
     def test_discover_jsonl_files_includes_nested_subagents(self, tmp_path):
         project = self._make_project_dir(tmp_path, "-Users-test-Gits-brainlayer-grill")
