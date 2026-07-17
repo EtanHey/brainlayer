@@ -282,6 +282,88 @@ def test_write_embedded_vectors_skips_when_content_changed_after_snapshot():
     assert ("upsert", "chunk-1", [0.5]) not in events
 
 
+def test_write_embedded_vectors_commits_each_vector_separately(monkeypatch):
+    hotlane = _load_hotlane_module()
+    statements = []
+    sleeps = []
+    monkeypatch.setattr(hotlane, "_sleep", lambda seconds: sleeps.append(seconds))
+
+    class FakeCursor:
+        def execute(self, sql, params=()):
+            statement = " ".join(sql.split())
+            statements.append((statement, params))
+            if statement.startswith("SELECT 1"):
+                return SimpleNamespace(fetchone=lambda: (1,))
+            return []
+
+    class FakeConn:
+        def cursor(self):
+            return FakeCursor()
+
+    class FakeStore:
+        db_path = Path("/tmp/brainlayer.db")
+        conn = FakeConn()
+
+        def _upsert_chunk_vector(self, _cursor, _chunk_id, _embedding):
+            pass
+
+    count = hotlane._write_embedded_vectors(
+        FakeStore(),
+        [
+            hotlane.EmbeddedVector("chunk-1", "content one", [0.1]),
+            hotlane.EmbeddedVector("chunk-2", "content two", [0.2]),
+        ],
+    )
+
+    assert count == 2
+    assert sum(statement == "BEGIN IMMEDIATE" for statement, _params in statements) == 2
+    assert sum(statement == "COMMIT" for statement, _params in statements) == 2
+    assert sleeps == [hotlane.VECTOR_WRITE_YIELD_SECONDS]
+
+
+def test_write_embedded_vectors_clears_search_cache_after_partial_commit(monkeypatch):
+    hotlane = _load_hotlane_module()
+    cleared = []
+    upserted = []
+
+    class FakeCursor:
+        def execute(self, sql, params=()):
+            statement = " ".join(sql.split())
+            if statement.startswith("SELECT 1"):
+                return SimpleNamespace(fetchone=lambda: (1,))
+            return []
+
+    class FakeConn:
+        def cursor(self):
+            return FakeCursor()
+
+    class FakeStore:
+        db_path = Path("/tmp/brainlayer.db")
+        conn = FakeConn()
+
+        def _upsert_chunk_vector(self, _cursor, chunk_id, _embedding):
+            upserted.append(chunk_id)
+            if chunk_id == "chunk-2":
+                raise RuntimeError("second vector failed")
+
+    monkeypatch.setattr(
+        "brainlayer.search_repo.clear_hybrid_search_cache",
+        lambda db_path: cleared.append(db_path),
+    )
+
+    with pytest.raises(RuntimeError, match="second vector failed"):
+        hotlane._write_embedded_vectors(
+            FakeStore(),
+            [
+                hotlane.EmbeddedVector("chunk-1", "content one", [0.1]),
+                hotlane.EmbeddedVector("chunk-2", "content two", [0.2]),
+            ],
+        )
+
+    assert upserted == ["chunk-1", "chunk-2"]
+    assert cleared == [Path("/tmp/brainlayer.db")]
+
+
 def test_write_embedded_vectors_path_upserts_without_vectorstore_writer_pidfile(tmp_path, monkeypatch):
     hotlane = _load_hotlane_module()
     from brainlayer.vector_store import VectorStore
