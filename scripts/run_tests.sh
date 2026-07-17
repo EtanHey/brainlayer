@@ -142,6 +142,13 @@ map_changed_files_to_pytests() {
     changed_files_seen=1
     mapped=0
     case "$changed" in
+      src/brainlayer/watcher.py)
+        test_path="$TEST_ROOT/test_jsonl_watcher.py"
+        if [ -f "$test_path" ]; then
+          append_unique "$test_path"
+          mapped=1
+        fi
+        ;;
       src/brainlayer/mcp/store_handler.py|src/brainlayer/queue_io.py|src/brainlayer/drain.py|src/brainlayer/store.py)
         for rel in test_store_handler.py test_write_queue.py test_brainstore.py; do
           test_path="$TEST_ROOT/$rel"
