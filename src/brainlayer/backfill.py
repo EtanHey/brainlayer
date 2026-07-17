@@ -32,7 +32,12 @@ def parse_backfill_window(since: str | None, until: str | None) -> tuple[datetim
 
 def window_registry_suffix(since: datetime, until: datetime) -> str:
     """Return a stable filesystem-safe name for a backfill interval."""
-    return f"{since:%Y%m%dT%H%M%SZ}-{until:%Y%m%dT%H%M%SZ}"
+    def format_timestamp(value: datetime) -> str:
+        base = f"{value:%Y%m%dT%H%M%S}"
+        fraction = f"{value.microsecond:06d}" if value.microsecond else ""
+        return f"{base}{fraction}Z"
+
+    return f"{format_timestamp(since)}-{format_timestamp(until)}"
 
 
 def _contains_ordered(parts: tuple[str, ...], expected: tuple[str, ...]) -> bool:
@@ -91,9 +96,13 @@ class WindowedFlush:
             return False
         return self.since <= parsed < self.until
 
-    def __call__(self, entries: list[dict]) -> FlushWatermarks:
+    def __call__(self, entries: list[dict]) -> FlushWatermarks | None:
         matched = [entry for entry in entries if self._matches(entry)]
         downstream_result = self.downstream(matched) if matched else FlushWatermarks()
+        self.scanned_entries += len(entries)
+        self.matched_entries += len(matched)
+        if downstream_result is None:
+            return None
         watermarks = dict(downstream_result or {})
         for entry in entries:
             source_file = entry.get("_source_file")
@@ -103,8 +112,6 @@ class WindowedFlush:
 
         inserted = int(getattr(downstream_result, "inserted", len(matched)))
         downstream_skipped = int(getattr(downstream_result, "skipped", 0))
-        self.scanned_entries += len(entries)
-        self.matched_entries += len(matched)
         self.inserted_chunks += inserted
         return FlushWatermarks(
             watermarks,

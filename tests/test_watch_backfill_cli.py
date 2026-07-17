@@ -64,6 +64,35 @@ def test_watch_backfill_dry_run_includes_codex_and_gemini_sessions(tmp_path, mon
     assert not (tmp_path / "offsets.json").exists()
 
 
+def test_watch_backfill_legacy_dry_run_counts_only_legacy_excluded_roots(tmp_path, monkeypatch):
+    monkeypatch.delenv("BRAINLAYER_INGEST_DENYLIST", raising=False)
+    direct = tmp_path / ".claude" / "projects" / "repo" / "direct.jsonl"
+    legacy = tmp_path / ".codex" / "sessions" / "2026" / "07" / "worker.jsonl"
+    for path in (direct, legacy):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"role": "user", "content": "transcript"}) + "\n")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "watch-backfill",
+            "--home",
+            str(tmp_path),
+            "--since",
+            "2026-07-10",
+            "--until",
+            "2026-07-16",
+            "--legacy-excluded-only",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "candidate_files=1" in result.output
+    assert "codex=1" in result.output
+    assert "claude=" not in result.output
+
+
 def test_watch_backfill_indexes_cursor_agent_transcripts_once(tmp_path, monkeypatch):
     monkeypatch.delenv("BRAINLAYER_INGEST_DENYLIST", raising=False)
     transcript = (

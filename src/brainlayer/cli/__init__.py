@@ -3526,6 +3526,8 @@ def watch_backfill(
             db_path=db_path,
         )
         files = watcher._discover_jsonl_files()
+        if legacy_excluded_only:
+            files = [path for path in files if is_legacy_excluded_path(path)]
         provider_counts: dict[str, int] = {}
         for path in files:
             provider = watcher.provider_for_file(path)

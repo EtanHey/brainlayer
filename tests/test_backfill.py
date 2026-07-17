@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from brainlayer.backfill import WindowedFlush, is_legacy_excluded_path, parse_backfill_window
+from brainlayer.backfill import WindowedFlush, is_legacy_excluded_path, parse_backfill_window, window_registry_suffix
 from brainlayer.watcher_bridge import FlushWatermarks
 
 
@@ -58,6 +58,37 @@ def test_windowed_flush_excludes_invalid_timestamps_but_confirms_them():
 
     assert result == {"/tmp/session.jsonl": 50}
     assert windowed.matched_entries == 0
+
+
+def test_windowed_flush_does_not_confirm_offsets_when_downstream_returns_none():
+    windowed = WindowedFlush(
+        lambda _entries: None,
+        since=datetime(2026, 7, 10, tzinfo=UTC),
+        until=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+
+    result = windowed([_entry("2026-07-12T00:00:00Z", 50)])
+
+    assert result is None
+    assert windowed.scanned_entries == 1
+    assert windowed.matched_entries == 1
+    assert windowed.inserted_chunks == 0
+
+
+def test_window_registry_suffix_preserves_fractional_seconds_without_changing_whole_seconds():
+    whole_since = datetime(2026, 7, 10, tzinfo=UTC)
+    whole_until = datetime(2026, 7, 16, tzinfo=UTC)
+    first = window_registry_suffix(
+        whole_since.replace(microsecond=100_000),
+        whole_until.replace(microsecond=200_000),
+    )
+    second = window_registry_suffix(
+        whole_since.replace(microsecond=300_000),
+        whole_until.replace(microsecond=400_000),
+    )
+
+    assert window_registry_suffix(whole_since, whole_until) == "20260710T000000Z-20260716T000000Z"
+    assert first != second
 
 
 def test_parse_backfill_window_is_utc_and_rejects_empty_or_reversed_ranges():
