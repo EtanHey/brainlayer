@@ -3322,7 +3322,6 @@ class _RewindArchiveBatcher:
                 params,
             )
             affected = vector_store.conn.changes()
-            vector_store.conn.commit()
         except Exception as exc:
             telemetry_span.finish("error", error=f"{type(exc).__name__}: {exc}")
             raise

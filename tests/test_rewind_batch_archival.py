@@ -23,15 +23,12 @@ class _CountingCursor:
 
 class _CountingConnection:
     def __init__(self, path, counters: dict[str, int]):
-        self._conn = sqlite3.connect(path)
+        self._conn = sqlite3.connect(path, isolation_level=None)
         self._counters = counters
         self._change_anchor = 0
 
     def cursor(self):
         return _CountingCursor(self._conn.cursor(), self._counters)
-
-    def commit(self) -> None:
-        self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()
@@ -126,6 +123,29 @@ def test_rewind_archiver_batches_multiple_sessions(tmp_path):
     assert ("s1", "manual") not in archived
     conn.close()
     archiver.close()
+
+
+def test_rewind_archiver_flushes_with_production_vector_store(tmp_path):
+    db_path = _prepare_rewind_archive_db(tmp_path)
+    archiver = _RewindArchiveBatcher(
+        db_path=db_path,
+        batch_size=10_000,
+        flush_interval_ms=60_000,
+    )
+    archiver.add("s1")
+
+    try:
+        assert archiver.flush("rewind") == 2
+        assert archiver.pending_count == 0
+    finally:
+        archiver.close()
+
+    conn = sqlite3.connect(db_path)
+    archived = conn.execute(
+        "SELECT COUNT(*) FROM chunks WHERE conversation_id = 's1' AND source = 'realtime_watcher' AND archived_at IS NOT NULL"
+    ).fetchone()[0]
+    conn.close()
+    assert archived == 2
 
 
 def test_rewind_archiver_flushes_on_threshold(tmp_path):

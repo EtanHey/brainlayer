@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from pathlib import Path
 
 import pytest
@@ -40,28 +39,6 @@ def _insert_chunk(store: VectorStore, chunk_id: str, *, conversation_id: str = "
     )
 
 
-class _SqliteConnectionAdapter:
-    def __init__(self, db_path: Path):
-        self._conn = sqlite3.connect(db_path)
-        self._change_anchor = 0
-
-    def __getattr__(self, name):
-        return getattr(self._conn, name)
-
-    def changes(self) -> int:
-        changed = self._conn.total_changes - self._change_anchor
-        self._change_anchor = self._conn.total_changes
-        return changed
-
-
-class _SqliteStoreAdapter:
-    def __init__(self, db_path: Path):
-        self.conn = _SqliteConnectionAdapter(db_path)
-
-    def close(self) -> None:
-        self.conn.close()
-
-
 def test_rewind_archive_flush_emits_watcher_span(tmp_path, monkeypatch):
     log_path = _configure(monkeypatch, tmp_path)
     db_path = tmp_path / "brainlayer.db"
@@ -74,7 +51,6 @@ def test_rewind_archive_flush_emits_watcher_span(tmp_path, monkeypatch):
         db_path,
         batch_size=10,
         flush_interval_ms=1_000,
-        vector_store_factory=_SqliteStoreAdapter,
     )
     batcher.add("session-one")
     batcher.add("session-two")
