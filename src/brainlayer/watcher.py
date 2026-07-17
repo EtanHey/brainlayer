@@ -14,10 +14,13 @@ This is the Python watchdog prototype. The production version will use
 Swift DispatchSource kqueue in BrainBar for sub-1ms notification latency.
 """
 
+import errno
 import json
 import logging
+import math
 import os
 import sqlite3
+import stat
 import tempfile
 import threading
 import time
@@ -25,6 +28,16 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - exercised via the Windows lock seam
+    fcntl = None  # type: ignore[assignment]
+
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - unavailable on POSIX
+    msvcrt = None  # type: ignore[assignment]
 
 from .alarm import BrainLayerAlarm, raise_alarm
 from .ingest_denylist import is_denylisted
@@ -181,6 +194,41 @@ class CoverageWatchdog:
 # ── Offset Registry ──────────────────────────────────────────────────────────
 
 
+_OFFSET_TOMBSTONES_KEY = "__brainlayer_offset_tombstones__"
+_OFFSET_TOMBSTONE_RETENTION_S = 24 * 60 * 60
+
+
+def _lock_offset_registry_file(lock_file) -> None:
+    """Acquire an exclusive advisory lock on POSIX or Windows."""
+    if fcntl is not None:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        return
+    if msvcrt is None:
+        raise OSError("no supported offset-registry file lock is available")
+    lock_file.seek(0, os.SEEK_END)
+    if lock_file.tell() == 0:
+        lock_file.write(b"\0")
+        lock_file.flush()
+    lock_file.seek(0)
+    while True:
+        try:
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+            return
+        except OSError as error:
+            if error.errno not in {errno.EACCES, errno.EAGAIN}:
+                raise
+            time.sleep(0.05)
+
+
+def _unlock_offset_registry_file(lock_file) -> None:
+    """Release the platform-specific advisory registry lock."""
+    lock_file.seek(0)
+    if fcntl is not None:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    elif msvcrt is not None:
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+
+
 class OffsetRegistry:
     """Persists file read offsets so we resume after restart.
 
@@ -191,15 +239,70 @@ class OffsetRegistry:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self._data: dict[str, dict] = {}
+        self._removed: dict[str, dict[str, int | float]] = {}
+        self._dirty_paths: set[str] = set()
         self._dirty = False
+        self._last_prune_complete = True
         self._load()
+
+    @staticmethod
+    def _sanitize_tombstones(raw: object) -> dict[str, dict[str, int | float]]:
+        """Load legacy timestamps and validated generation-aware tombstones."""
+        if not isinstance(raw, dict):
+            return {}
+        sanitized: dict[str, dict[str, int | float]] = {}
+        for filepath, raw_tombstone in raw.items():
+            if not isinstance(filepath, str):
+                continue
+            if isinstance(raw_tombstone, (int, float)) and not isinstance(raw_tombstone, bool):
+                removed_at = float(raw_tombstone)
+                generation = 0
+                inode = 0
+            elif isinstance(raw_tombstone, dict):
+                raw_removed_at = raw_tombstone.get("removed_at")
+                raw_generation = raw_tombstone.get("generation", 0)
+                raw_inode = raw_tombstone.get("inode", 0)
+                if not isinstance(raw_removed_at, (int, float)) or isinstance(raw_removed_at, bool):
+                    continue
+                if not isinstance(raw_generation, int) or isinstance(raw_generation, bool) or raw_generation < 0:
+                    continue
+                if not isinstance(raw_inode, int) or isinstance(raw_inode, bool) or raw_inode < 0:
+                    continue
+                removed_at = float(raw_removed_at)
+                generation = raw_generation
+                inode = raw_inode
+            else:
+                continue
+            if math.isfinite(removed_at):
+                sanitized[filepath] = {
+                    "removed_at": removed_at,
+                    "generation": generation,
+                    "inode": inode,
+                }
+        return sanitized
+
+    @staticmethod
+    def _entry_generation(entry: object) -> int:
+        """Return a validated rewind generation for one registry entry."""
+        if not isinstance(entry, dict):
+            return 0
+        generation = entry.get("generation", 0)
+        if isinstance(generation, int) and not isinstance(generation, bool) and generation >= 0:
+            return generation
+        return 0
 
     def _load(self):
         try:
             with open(self.path) as f:
-                self._data = json.load(f)
+                loaded = json.load(f)
+            if not isinstance(loaded, dict):
+                loaded = {}
+            tombstones = loaded.pop(_OFFSET_TOMBSTONES_KEY, {})
+            self._data = loaded
+            self._removed = self._sanitize_tombstones(tombstones)
         except (OSError, json.JSONDecodeError):
             self._data = {}
+            self._removed = {}
 
     def get(self, filepath: str) -> tuple[int, int]:
         """Return (offset, inode) for a file. (0, 0) if unknown."""
@@ -208,11 +311,20 @@ class OffsetRegistry:
 
     def set(self, filepath: str, offset: int, inode: int):
         """Update offset for a file."""
+        generation = self._entry_generation(self._data.get(filepath))
+        tombstone = self._removed.get(filepath)
+        valid_inode = isinstance(inode, int) and not isinstance(inode, bool) and inode > 0
+        if tombstone is not None and valid_inode:
+            generation = max(generation, int(tombstone["generation"]) + 1, time.time_ns())
         self._data[filepath] = {
             "offset": offset,
             "inode": inode,
             "mtime": time.time(),
+            "generation": generation,
         }
+        if tombstone is None or valid_inode:
+            self._removed.pop(filepath, None)
+        self._dirty_paths.add(filepath)
         self._dirty = True
 
     def flush(self) -> bool:
@@ -222,10 +334,102 @@ class OffsetRegistry:
         tmp_path = None
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_path = tempfile.mkstemp(dir=str(self.path.parent), suffix=".tmp")
-            with os.fdopen(fd, "w") as f:
-                json.dump(self._data, f)
-            os.rename(tmp_path, str(self.path))
+            lock_path = self.path.with_name(f"{self.path.name}.lock")
+            with lock_path.open("a+b") as lock_file:
+                _lock_offset_registry_file(lock_file)
+                try:
+                    try:
+                        with self.path.open() as registry_file:
+                            disk_data = json.load(registry_file)
+                    except FileNotFoundError:
+                        disk_data = {}
+                    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+                        logger.warning("Failed to read offset registry before merge: %s", error)
+                        return False
+                    if not isinstance(disk_data, dict):
+                        logger.warning("Failed to read offset registry before merge: expected a JSON object")
+                        return False
+
+                    disk_tombstones = disk_data.pop(_OFFSET_TOMBSTONES_KEY, {})
+                    tombstones = self._sanitize_tombstones(disk_tombstones)
+                    for filepath, local_tombstone in self._removed.items():
+                        disk_tombstone = tombstones.get(filepath)
+                        if disk_tombstone is None or (
+                            int(local_tombstone["generation"]),
+                            float(local_tombstone["removed_at"]),
+                        ) > (
+                            int(disk_tombstone["generation"]),
+                            float(disk_tombstone["removed_at"]),
+                        ):
+                            tombstones[filepath] = local_tombstone
+
+                    merged = dict(disk_data)
+                    for filepath in self._dirty_paths:
+                        local_entry = self._data.get(filepath)
+                        if not isinstance(local_entry, dict):
+                            continue
+                        local_mtime = local_entry.get("mtime", 0)
+                        tombstone = tombstones.get(filepath)
+                        if tombstone is not None:
+                            local_generation = self._entry_generation(local_entry)
+                            if local_generation <= int(tombstone["generation"]):
+                                merged.pop(filepath, None)
+                                continue
+                        disk_entry = disk_data.get(filepath)
+                        if not isinstance(disk_entry, dict):
+                            merged[filepath] = local_entry
+                            tombstones.pop(filepath, None)
+                            continue
+                        local_generation = self._entry_generation(local_entry)
+                        disk_generation = self._entry_generation(disk_entry)
+                        if local_generation > disk_generation:
+                            merged[filepath] = local_entry
+                            tombstones.pop(filepath, None)
+                            continue
+                        if local_generation < disk_generation:
+                            continue
+                        same_inode = local_entry.get("inode", 0) == disk_entry.get("inode", 0)
+                        if same_inode:
+                            if local_entry.get("offset", 0) >= disk_entry.get("offset", 0):
+                                merged[filepath] = local_entry
+                                tombstones.pop(filepath, None)
+                        elif local_mtime >= disk_entry.get("mtime", 0):
+                            merged[filepath] = local_entry
+                            tombstones.pop(filepath, None)
+                    for filepath, tombstone in list(tombstones.items()):
+                        disk_entry = merged.get(filepath)
+                        if isinstance(disk_entry, dict):
+                            newer_generation = self._entry_generation(disk_entry) > int(tombstone["generation"])
+                            if newer_generation:
+                                tombstones.pop(filepath, None)
+                                continue
+                        merged.pop(filepath, None)
+                    tombstone_cutoff = time.time() - _OFFSET_TOMBSTONE_RETENTION_S
+                    tombstones = {
+                        filepath: tombstone
+                        for filepath, tombstone in tombstones.items()
+                        if float(tombstone["removed_at"]) >= tombstone_cutoff
+                    }
+
+                    fd, tmp_path = tempfile.mkstemp(dir=str(self.path.parent), suffix=".tmp")
+                    with os.fdopen(fd, "w") as registry_file:
+                        persisted = dict(merged)
+                        if tombstones:
+                            persisted[_OFFSET_TOMBSTONES_KEY] = tombstones
+                        json.dump(persisted, registry_file)
+                        registry_file.flush()
+                        os.fsync(registry_file.fileno())
+                    os.replace(tmp_path, self.path)
+                    directory_fd = os.open(self.path.parent, os.O_RDONLY)
+                    try:
+                        os.fsync(directory_fd)
+                    finally:
+                        os.close(directory_fd)
+                    self._data = merged
+                    self._removed = tombstones
+                    self._dirty_paths.clear()
+                finally:
+                    _unlock_offset_registry_file(lock_file)
             self._dirty = False
             return True
         except OSError as e:
@@ -239,8 +443,134 @@ class OffsetRegistry:
 
     def remove(self, filepath: str):
         """Remove tracking for a file."""
-        self._data.pop(filepath, None)
+        removed_entry = self._data.pop(filepath, None)
+        existing_tombstone = self._removed.get(filepath)
+        entry_generation = self._entry_generation(removed_entry)
+        existing_generation = int(existing_tombstone["generation"]) if existing_tombstone else 0
+        inode = removed_entry.get("inode", 0) if isinstance(removed_entry, dict) else 0
+        if not isinstance(inode, int) or isinstance(inode, bool) or inode < 0:
+            inode = 0
+        self._removed[filepath] = {
+            "removed_at": time.time(),
+            "generation": max(entry_generation + 1, existing_generation, time.time_ns()),
+            "inode": inode or (int(existing_tombstone["inode"]) if existing_tombstone else 0),
+        }
+        self._dirty_paths.discard(filepath)
         self._dirty = True
+
+    def mark_rewind(self, filepath: str, inode: int) -> int:
+        """Start a newer offset generation so a confirmed rewind may move backward."""
+        current_generation = self._entry_generation(self._data.get(filepath))
+        tombstone = self._removed.get(filepath)
+        tombstone_generation = int(tombstone["generation"]) if tombstone else 0
+        generation = max(current_generation + 1, tombstone_generation + 1, time.time_ns())
+        self._data[filepath] = {
+            "offset": 0,
+            "inode": inode,
+            "mtime": time.time(),
+            "generation": generation,
+        }
+        self._removed.pop(filepath, None)
+        self._dirty_paths.add(filepath)
+        self._dirty = True
+        return generation
+
+    @staticmethod
+    def _has_unavailable_symlink_ancestor(candidate: Path, root: Path) -> bool:
+        """Return True when a path crosses a symlink whose target is unavailable."""
+        ancestor = candidate
+        while ancestor != root and ancestor.is_relative_to(root):
+            try:
+                ancestor_mode = ancestor.lstat().st_mode
+            except FileNotFoundError:
+                ancestor = ancestor.parent
+                continue
+            except OSError:
+                return True
+            if stat.S_ISLNK(ancestor_mode):
+                try:
+                    target_mode = ancestor.stat().st_mode
+                except OSError:
+                    return True
+                target_type_matches = stat.S_ISREG(target_mode) if ancestor == candidate else stat.S_ISDIR(target_mode)
+                if not target_type_matches:
+                    return True
+            ancestor = ancestor.parent
+        return False
+
+    @staticmethod
+    def _has_live_parent_evidence(candidate: Path, live_files: list[Path]) -> bool:
+        """Require a live transcript in the tracked file's containing directory."""
+        parent = candidate.parent
+        try:
+            if not parent.is_dir():
+                return False
+        except OSError:
+            return False
+        return any(live_file == parent or live_file.is_relative_to(parent) for live_file in live_files)
+
+    @property
+    def last_prune_complete(self) -> bool:
+        """Whether the last prune safely evaluated every tracked root."""
+        return self._last_prune_complete
+
+    def prune_missing_files(
+        self,
+        active_roots: list[Path],
+        active_files: list[str | Path] | None = None,
+    ) -> int:
+        """Drop deleted offsets only when a sibling file proves the root is mounted."""
+        self._last_prune_complete = True
+        live_files: list[Path] = []
+        candidates = active_files if active_files is not None else list(self._data)
+        for filepath in candidates:
+            candidate = Path(os.path.abspath(os.path.expanduser(str(filepath))))
+            try:
+                if candidate.is_file():
+                    live_files.append(candidate)
+            except OSError:
+                continue
+
+        root_availability: dict[Path, bool] = {}
+        for root in active_roots:
+            candidate_root = Path(os.path.abspath(os.path.expanduser(str(root))))
+            try:
+                root_availability[candidate_root] = candidate_root.is_dir() and any(
+                    live_file == candidate_root or live_file.is_relative_to(candidate_root) for live_file in live_files
+                )
+            except OSError:
+                root_availability[candidate_root] = False
+
+        missing: list[str] = []
+        for filepath in self._data:
+            candidate = Path(os.path.abspath(os.path.expanduser(filepath)))
+            matching_roots = [root for root in root_availability if candidate == root or candidate.is_relative_to(root)]
+            if not matching_roots:
+                continue
+            most_specific_depth = max(len(root.parts) for root in matching_roots)
+            most_specific_roots = [root for root in matching_roots if len(root.parts) == most_specific_depth]
+            if not any(root_availability[root] for root in most_specific_roots):
+                self._last_prune_complete = False
+                continue
+            if any(self._has_unavailable_symlink_ancestor(candidate, root) for root in most_specific_roots):
+                self._last_prune_complete = False
+                continue
+            if not self._has_live_parent_evidence(candidate, live_files):
+                self._last_prune_complete = False
+                continue
+            try:
+                candidate_mode = candidate.stat().st_mode
+            except FileNotFoundError:
+                missing.append(filepath)
+            except OSError:
+                self._last_prune_complete = False
+                continue
+            else:
+                if not stat.S_ISREG(candidate_mode):
+                    missing.append(filepath)
+        for filepath in missing:
+            self.remove(filepath)
+        return len(missing)
 
 
 # ── JSONL Tailer ─────────────────────────────────────────────────────────────
@@ -533,6 +863,7 @@ class JSONLWatcher:
         self._health_entries_seen = 0
         self._health_output_at_start = 0
         self.poll_count = 0
+        self._offset_prune_complete = False
 
     def _advance_confirmed_offsets(self, watermarks: dict[str, int]) -> None:
         for filepath, offset in watermarks.items():
@@ -773,6 +1104,14 @@ class JSONLWatcher:
 
         try:
             files = self._discover_jsonl_files()
+            if not self._offset_prune_complete:
+                pruned = self.registry.prune_missing_files(
+                    [root.resolved_path for root in self.watch_roots],
+                    files,
+                )
+                if pruned:
+                    logger.info("Pruned %d deleted files from the offset registry", pruned)
+                self._offset_prune_complete = self.registry.flush() and self.registry.last_prune_complete
 
             for filepath in list(self._tailers):
                 if is_denylisted(filepath):
@@ -793,6 +1132,7 @@ class JSONLWatcher:
                     # Handle rewind detection (checkpoint restore)
                     if tailer.rewound:
                         session_id = Path(filepath).stem
+                        self.registry.mark_rewind(filepath, tailer.get_inode())
                         logger.warning(
                             "Checkpoint restore: %s (offset %d → %d)",
                             session_id,
