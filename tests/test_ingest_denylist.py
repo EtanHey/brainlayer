@@ -182,6 +182,35 @@ def test_unattributed_appends_are_scanned_incrementally(monkeypatch, tmp_path):
     assert calls == 202
 
 
+def test_cached_attribution_is_invalidated_when_same_inode_is_rewritten_larger(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv(BRAINLAYER_INGEST_DENYLIST_ENV, raising=False)
+    denylist._SUBAGENT_ATTRIBUTION_CACHE.clear()
+    worker = _write_subagent(
+        tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent.jsonl",
+        "general-purpose",
+    )
+    assert not is_denylisted(worker)
+    initial_stat = worker.stat()
+
+    worker.write_text(
+        json.dumps(
+            {
+                "type": "assistant",
+                "attributionAgent": "brain-worker",
+                "message": {"role": "assistant", "content": "rewritten" + "x" * 1_000},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    rewritten_stat = worker.stat()
+
+    assert rewritten_stat.st_ino == initial_stat.st_ino
+    assert rewritten_stat.st_size > initial_stat.st_size
+    assert is_denylisted(worker)
+
+
 def test_explicit_empty_override_disables_default_subagent_policy(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv(BRAINLAYER_INGEST_DENYLIST_ENV, "")
