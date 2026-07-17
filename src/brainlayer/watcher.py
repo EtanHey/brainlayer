@@ -272,7 +272,8 @@ class OffsetRegistry:
         """Update offset for a file."""
         generation = self._entry_generation(self._data.get(filepath))
         tombstone = self._removed.get(filepath)
-        if tombstone is not None:
+        valid_inode = isinstance(inode, int) and not isinstance(inode, bool) and inode > 0
+        if tombstone is not None and valid_inode:
             generation = max(generation, int(tombstone["generation"]) + 1, time.time_ns())
         self._data[filepath] = {
             "offset": offset,
@@ -280,7 +281,8 @@ class OffsetRegistry:
             "mtime": time.time(),
             "generation": generation,
         }
-        self._removed.pop(filepath, None)
+        if tombstone is None or valid_inode:
+            self._removed.pop(filepath, None)
         self._dirty_paths.add(filepath)
         self._dirty = True
 

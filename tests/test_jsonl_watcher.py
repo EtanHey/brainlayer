@@ -259,6 +259,27 @@ class TestOffsetRegistry:
 
         assert OffsetRegistry(registry_path).get(str(deleted)) == (50, 2)
 
+    def test_registry_loaded_after_tombstone_rejects_missing_inode(self, tmp_path):
+        registry_path = tmp_path / "offsets.json"
+        existing = tmp_path / "existing.jsonl"
+        deleted = tmp_path / "deleted.jsonl"
+        existing.write_text('{"id":"kept"}\n')
+
+        initial = OffsetRegistry(registry_path)
+        initial.set(str(existing), 100, 1)
+        initial.set(str(deleted), 200, 2)
+        assert initial.flush() is True
+
+        pruning_registry = OffsetRegistry(registry_path)
+        assert pruning_registry.prune_missing_files([tmp_path], [existing]) == 1
+        assert pruning_registry.flush() is True
+
+        unavailable_registry = OffsetRegistry(registry_path)
+        unavailable_registry.set(str(deleted), 50, 0)
+        assert unavailable_registry.flush() is True
+
+        assert OffsetRegistry(registry_path).get(str(deleted)) == (0, 0)
+
     def test_prune_tombstone_compacts_without_replaying_unchanged_stale_entries(self, monkeypatch, tmp_path):
         from brainlayer import watcher as watcher_module
 
