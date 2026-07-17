@@ -256,7 +256,7 @@ def test_brainbar_vacuum_request_retries_closed_socket_with_backoff(tmp_path, mo
         return {"result": {"content": [{"type": "text", "text": '{"status":"ok"}'}]}}
 
     monkeypatch.setattr(backup_daily, "_send_brainbar_json_request", flaky_send)
-    monkeypatch.setattr(backup_daily.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(backup_daily, "_sleep", lambda seconds: sleeps.append(seconds))
 
     backup_daily.request_brainbar_vacuum_into(target, socket_path="/tmp/brainbar.sock")
 
@@ -280,7 +280,7 @@ def test_brainbar_vacuum_request_fails_loud_after_retry_budget(tmp_path, monkeyp
         raise RuntimeError("BrainBar socket closed without response: /tmp/brainbar.sock")
 
     monkeypatch.setattr(backup_daily, "_send_brainbar_json_request", closed_socket)
-    monkeypatch.setattr(backup_daily.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(backup_daily, "_sleep", lambda seconds: sleeps.append(seconds))
 
     with pytest.raises(RuntimeError, match="BrainBar socket closed without response"):
         backup_daily.request_brainbar_vacuum_into(target, socket_path="/tmp/brainbar.sock")
@@ -307,7 +307,7 @@ def test_brainbar_vacuum_request_does_not_retry_global_backup_timeout(tmp_path, 
         raise backup_daily.BackupTimeoutError("backup exceeded configured wall-clock timeout")
 
     monkeypatch.setattr(backup_daily, "_send_brainbar_json_request", timed_out)
-    monkeypatch.setattr(backup_daily.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(backup_daily, "_sleep", lambda seconds: sleeps.append(seconds))
 
     with pytest.raises(backup_daily.BackupTimeoutError):
         backup_daily.request_brainbar_vacuum_into(target, socket_path="/tmp/brainbar.sock")
@@ -329,7 +329,7 @@ def test_brainbar_vacuum_request_accepts_valid_target_after_lost_response(tmp_pa
         raise RuntimeError("BrainBar socket closed without response: /tmp/brainbar.sock")
 
     monkeypatch.setattr(backup_daily, "_send_brainbar_json_request", closed_after_success)
-    monkeypatch.setattr(backup_daily.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(backup_daily, "_sleep", lambda seconds: sleeps.append(seconds))
 
     backup_daily.request_brainbar_vacuum_into(target, socket_path="/tmp/brainbar.sock")
 
@@ -355,7 +355,7 @@ def test_brainbar_vacuum_request_removes_invalid_target_before_retry(tmp_path, m
         return {"result": {"content": [{"type": "text", "text": '{"status":"ok"}'}]}}
 
     monkeypatch.setattr(backup_daily, "_send_brainbar_json_request", invalid_then_success)
-    monkeypatch.setattr(backup_daily.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(backup_daily, "_sleep", lambda seconds: sleeps.append(seconds))
 
     backup_daily.request_brainbar_vacuum_into(target, socket_path="/tmp/brainbar.sock")
 

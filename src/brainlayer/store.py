@@ -50,6 +50,7 @@ from .vector_store import VectorStore
 from .writer_telemetry import start_writer_span
 
 logger = logging.getLogger(__name__)
+_sleep = time.sleep
 
 _MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 
@@ -76,7 +77,7 @@ def _sleep_before_busy_retry(delay: float, busy_deadline: Optional[float]) -> No
         if remaining <= 0 or delay >= remaining:
             raise apsw.BusyError("store busy budget exceeded")
         delay = min(delay, remaining)
-    time.sleep(delay)
+    _sleep(delay)
 
 
 def store_memory(
