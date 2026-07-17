@@ -149,7 +149,7 @@ class TestEnrichSingle:
         failing_client = MagicMock()
         failing_client.models.generate_content.side_effect = Exception("API error")
         monkeypatch.setattr(ctrl, "_get_gemini_client", lambda: failing_client)
-        monkeypatch.setattr(ctrl.time, "sleep", lambda _: None)
+        monkeypatch.setattr(ctrl, "_sleep", lambda _: None)
 
         result = ctrl.enrich_single(store, stored_chunk, max_retries=1)
         assert result is None

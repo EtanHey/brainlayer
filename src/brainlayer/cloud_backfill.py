@@ -49,6 +49,8 @@ from .pipeline.enrichment import (
 from .pipeline.sanitize import Sanitizer
 from .vector_store import VectorStore
 
+_sleep = time.sleep
+
 # ── Config ──────────────────────────────────────────────────────────────
 
 DEFAULT_DB_PATH = get_db_path()
@@ -353,7 +355,7 @@ def save_checkpoint(store: VectorStore, batch_id: str, **kwargs) -> None:
             last_error = exc
             if attempt == CHECKPOINT_WRITE_MAX_RETRIES - 1:
                 break
-            time.sleep(CHECKPOINT_WRITE_BASE_DELAY * (2**attempt))
+            _sleep(CHECKPOINT_WRITE_BASE_DELAY * (2**attempt))
         finally:
             if conn is not None:
                 conn.close()
@@ -793,7 +795,7 @@ def submit_gemini_batch(
             if "429" in err and attempt < max_retries - 1:
                 wait = 30 * (2**attempt)  # 30s, 60s, 120s
                 print(f"  429 RESOURCE_EXHAUSTED — waiting {wait}s before retry...")
-                time.sleep(wait)
+                _sleep(wait)
             else:
                 print(f"  FAILED: {err[:120]}")
                 if store:
@@ -841,7 +843,7 @@ def poll_gemini_batch(batch_name: str, timeout_hours: float = 25) -> Dict[str, A
             return status
 
         print(f"  State: {status.get('raw_state', state)} — waiting {poll_interval:.0f}s...")
-        time.sleep(poll_interval)
+        _sleep(poll_interval)
 
         # Gradually increase poll interval (max 5 min)
         poll_interval = min(poll_interval * 1.2, 300)
@@ -1175,7 +1177,7 @@ def run_full_backfill(
                 batch_names.append(batch_name)
             else:
                 print(f"  [WARN] Submission failed for {jsonl_path}, skipping")
-            time.sleep(2)  # Brief pause between submissions
+            _sleep(2)  # Brief pause between submissions
 
         if not batch_names:
             print("\nNo batch jobs submitted successfully.")
