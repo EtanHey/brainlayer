@@ -142,6 +142,14 @@ map_changed_files_to_pytests() {
     changed_files_seen=1
     mapped=0
     case "$changed" in
+      src/brainlayer/cli/__init__.py)
+        for test_path in "$TEST_ROOT"/test_cli*.py "$TEST_ROOT"/test_watch_backfill_cli.py; do
+          if [ -f "$test_path" ] && ! is_real_db_test_file "$test_path"; then
+            append_unique "$test_path"
+            mapped=1
+          fi
+        done
+        ;;
       src/brainlayer/mcp/store_handler.py|src/brainlayer/queue_io.py|src/brainlayer/drain.py|src/brainlayer/store.py)
         for rel in test_store_handler.py test_write_queue.py test_brainstore.py; do
           test_path="$TEST_ROOT/$rel"
