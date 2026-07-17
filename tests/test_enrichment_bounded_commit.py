@@ -142,7 +142,7 @@ def test_submit_write_yields_after_successful_write(monkeypatch):
 
     monkeypatch.setattr(controller, "_get_store_write_queue", lambda store: ImmediateQueue())
     monkeypatch.setattr(controller, "_current_post_write_yield_seconds", lambda: 0.123)
-    monkeypatch.setattr(controller.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(controller, "_sleep", lambda seconds: sleeps.append(seconds))
 
     result = controller._submit_write(MagicMock(), "apply-enrichment:c0", lambda: "ok")
 
