@@ -10,6 +10,7 @@ Covers:
 import json
 import os
 import sqlite3
+import stat
 import threading
 import time
 from pathlib import Path
@@ -59,6 +60,33 @@ class TestOffsetRegistry:
     def test_flush_noop_when_clean(self, tmp_path):
         reg = OffsetRegistry(tmp_path / "offsets.json")
         assert reg.flush() is True  # no-op, still True
+
+    def test_flush_fsyncs_file_and_parent_directory(self, monkeypatch, tmp_path):
+        synced_modes: list[int] = []
+        real_fsync = os.fsync
+
+        def recording_fsync(fd):
+            synced_modes.append(os.fstat(fd).st_mode)
+            real_fsync(fd)
+
+        monkeypatch.setattr(os, "fsync", recording_fsync)
+        reg = OffsetRegistry(tmp_path / "offsets.json")
+        reg.set("/session.jsonl", 100, 1)
+
+        assert reg.flush() is True
+        assert any(stat.S_ISREG(mode) for mode in synced_modes)
+        assert any(stat.S_ISDIR(mode) for mode in synced_modes)
+
+    def test_flush_does_not_overwrite_corrupt_existing_registry(self, tmp_path):
+        registry_path = tmp_path / "offsets.json"
+        reg = OffsetRegistry(registry_path)
+        reg.set("/session.jsonl", 100, 1)
+        assert reg.flush() is True
+        reg.set("/session.jsonl", 200, 1)
+        registry_path.write_text("{corrupt")
+
+        assert reg.flush() is False
+        assert registry_path.read_text() == "{corrupt"
 
     def test_remove_entry(self, tmp_path):
         reg = OffsetRegistry(tmp_path / "offsets.json")
@@ -125,6 +153,25 @@ class TestOffsetRegistry:
 
         assert OffsetRegistry(registry_path).get("/session.jsonl") == (300, 1)
 
+    def test_newer_rewind_generation_allows_lower_offset_and_blocks_stale_writer(self, tmp_path):
+        registry_path = tmp_path / "offsets.json"
+        initial = OffsetRegistry(registry_path)
+        initial.set("/session.jsonl", 300, 1)
+        assert initial.flush() is True
+
+        rewinding_registry = OffsetRegistry(registry_path)
+        stale_registry = OffsetRegistry(registry_path)
+        generation = rewinding_registry.mark_rewind("/session.jsonl", 1)
+        rewinding_registry.set("/session.jsonl", 100, 1)
+        assert rewinding_registry.flush() is True
+
+        stale_registry.set("/session.jsonl", 400, 1)
+        assert stale_registry.flush() is True
+
+        reloaded = OffsetRegistry(registry_path)
+        assert reloaded.get("/session.jsonl") == (100, 1)
+        assert reloaded._data["/session.jsonl"]["generation"] == generation
+
     def test_prune_tombstone_blocks_stale_registry_from_resurrecting_deleted_offset(self, tmp_path):
         registry_path = tmp_path / "offsets.json"
         existing = tmp_path / "existing.jsonl"
@@ -138,6 +185,7 @@ class TestOffsetRegistry:
 
         pruning_registry = OffsetRegistry(registry_path)
         stale_registry = OffsetRegistry(registry_path)
+        stale_registry.set(str(deleted), 250, 2)
         assert pruning_registry.prune_missing_files([tmp_path], [existing]) == 1
         assert pruning_registry.flush() is True
 
@@ -241,6 +289,38 @@ class TestOffsetRegistry:
         assert reg.prune_missing_files([root], [live_file]) == 0
         assert reg.get(str(missing)) == (100, 1)
 
+    def test_prune_missing_files_preserves_offsets_under_empty_nested_subtree(self, tmp_path):
+        root = tmp_path / "projects"
+        root.mkdir()
+        live_file = root / "live.jsonl"
+        live_file.write_text('{"id":"live"}\n')
+        empty_mountpoint = root / "mounted-project"
+        empty_mountpoint.mkdir()
+        missing = empty_mountpoint / "session.jsonl"
+        reg = OffsetRegistry(tmp_path / "offsets.json")
+        reg.set(str(missing), 100, 1)
+
+        assert reg.prune_missing_files([root], [live_file]) == 0
+        assert reg.get(str(missing)) == (100, 1)
+        assert reg.last_prune_complete is False
+
+    def test_prune_missing_files_preserves_broken_symlink_file(self, tmp_path):
+        root = tmp_path / "projects"
+        root.mkdir()
+        live_file = root / "live.jsonl"
+        live_file.write_text('{"id":"live"}\n')
+        target = tmp_path / "mounted-session.jsonl"
+        target.write_text('{"id":"mounted"}\n')
+        unavailable_file = root / "session.jsonl"
+        unavailable_file.symlink_to(target)
+        reg = OffsetRegistry(tmp_path / "offsets.json")
+        reg.set(str(unavailable_file), 100, 1)
+        target.unlink()
+
+        assert reg.prune_missing_files([root], [live_file]) == 0
+        assert reg.get(str(unavailable_file)) == (100, 1)
+        assert reg.last_prune_complete is False
+
     def test_prune_missing_files_skips_stat_errors(self, monkeypatch, tmp_path):
         root = tmp_path / "sessions"
         root.mkdir()
@@ -260,6 +340,30 @@ class TestOffsetRegistry:
 
         assert reg.prune_missing_files([root], [live_file]) == 0
         assert reg.get(str(inaccessible)) == (100, 1)
+        assert reg.last_prune_complete is False
+
+    def test_malformed_tombstones_are_sanitized(self, tmp_path):
+        from brainlayer import watcher as watcher_module
+
+        registry_path = tmp_path / "offsets.json"
+        registry_path.write_text(
+            json.dumps(
+                {
+                    watcher_module._OFFSET_TOMBSTONES_KEY: {
+                        "/valid.jsonl": 123.0,
+                        "/string.jsonl": "invalid",
+                        "/bool.jsonl": True,
+                        "/nan.jsonl": float("nan"),
+                    }
+                }
+            )
+        )
+
+        reg = OffsetRegistry(registry_path)
+
+        assert reg._removed == {"/valid.jsonl": 123.0}
+        reg.set("/string.jsonl", 100, 1)
+        assert reg.flush() is True
 
     def test_load_corrupt_file(self, tmp_path):
         path = tmp_path / "offsets.json"
@@ -628,6 +732,38 @@ class TestJSONLWatcher:
         offset, _inode = watcher.registry.get(str(f))
         assert offset == len(first_line)
         assert watcher._tailers[str(f)].offset == len(first_line + second_line)
+
+    def test_same_inode_rewind_persists_lower_confirmed_offset(self, tmp_path):
+        project = self._make_project_dir(tmp_path)
+        transcript = project / "s1.jsonl"
+        original = b'{"id":"first"}\n{"id":"second"}\n'
+        rewound = b'{"id":"first"}\n'
+        transcript.write_bytes(original)
+
+        def confirm_all(items):
+            return {item["_source_file"]: item["_line_end_offset"] for item in items}
+
+        registry_path = tmp_path / "offsets.json"
+        watcher = JSONLWatcher(
+            watch_dir=tmp_path / "projects",
+            registry_path=registry_path,
+            on_flush=confirm_all,
+            batch_size=1,
+            registry_flush_interval_s=3600,
+        )
+        assert watcher.poll_once() == 2
+        assert watcher.registry.flush() is True
+        stale_registry = OffsetRegistry(registry_path)
+        original_inode = transcript.stat().st_ino
+
+        transcript.write_bytes(rewound)
+        assert transcript.stat().st_ino == original_inode
+        assert watcher.poll_once() == 1
+        assert watcher.registry.flush() is True
+
+        stale_registry.set(str(transcript), len(original), original_inode)
+        assert stale_registry.flush() is True
+        assert OffsetRegistry(registry_path).get(str(transcript)) == (len(rewound), original_inode)
 
     def test_poll_once_isolates_file_crashes_and_still_flushes_health(self, tmp_path):
         project = self._make_project_dir(tmp_path)

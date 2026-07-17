@@ -17,6 +17,7 @@ Swift DispatchSource kqueue in BrainBar for sub-1ms notification latency.
 import fcntl
 import json
 import logging
+import math
 import os
 import sqlite3
 import stat
@@ -203,6 +204,30 @@ class OffsetRegistry:
         self._last_prune_complete = True
         self._load()
 
+    @staticmethod
+    def _sanitize_tombstones(raw: object) -> dict[str, float]:
+        """Keep only finite numeric tombstone timestamps keyed by paths."""
+        if not isinstance(raw, dict):
+            return {}
+        return {
+            filepath: float(removed_at)
+            for filepath, removed_at in raw.items()
+            if isinstance(filepath, str)
+            and isinstance(removed_at, (int, float))
+            and not isinstance(removed_at, bool)
+            and math.isfinite(float(removed_at))
+        }
+
+    @staticmethod
+    def _entry_generation(entry: object) -> int:
+        """Return a validated rewind generation for one registry entry."""
+        if not isinstance(entry, dict):
+            return 0
+        generation = entry.get("generation", 0)
+        if isinstance(generation, int) and not isinstance(generation, bool) and generation >= 0:
+            return generation
+        return 0
+
     def _load(self):
         try:
             with open(self.path) as f:
@@ -211,7 +236,7 @@ class OffsetRegistry:
                 loaded = {}
             tombstones = loaded.pop(_OFFSET_TOMBSTONES_KEY, {})
             self._data = loaded
-            self._removed = tombstones if isinstance(tombstones, dict) else {}
+            self._removed = self._sanitize_tombstones(tombstones)
         except (OSError, json.JSONDecodeError):
             self._data = {}
             self._removed = {}
@@ -223,10 +248,12 @@ class OffsetRegistry:
 
     def set(self, filepath: str, offset: int, inode: int):
         """Update offset for a file."""
+        generation = self._entry_generation(self._data.get(filepath))
         self._data[filepath] = {
             "offset": offset,
             "inode": inode,
             "mtime": time.time(),
+            "generation": generation,
         }
         self._removed.pop(filepath, None)
         self._dirty_paths.add(filepath)
@@ -246,13 +273,17 @@ class OffsetRegistry:
                     try:
                         with self.path.open() as registry_file:
                             disk_data = json.load(registry_file)
-                        if not isinstance(disk_data, dict):
-                            disk_data = {}
-                    except (OSError, json.JSONDecodeError):
+                    except FileNotFoundError:
                         disk_data = {}
+                    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+                        logger.warning("Failed to read offset registry before merge: %s", error)
+                        return False
+                    if not isinstance(disk_data, dict):
+                        logger.warning("Failed to read offset registry before merge: expected a JSON object")
+                        return False
 
                     disk_tombstones = disk_data.pop(_OFFSET_TOMBSTONES_KEY, {})
-                    tombstones = dict(disk_tombstones) if isinstance(disk_tombstones, dict) else {}
+                    tombstones = self._sanitize_tombstones(disk_tombstones)
                     for filepath, removed_at in self._removed.items():
                         tombstones[filepath] = max(removed_at, tombstones.get(filepath, 0))
 
@@ -269,6 +300,14 @@ class OffsetRegistry:
                         if not isinstance(disk_entry, dict):
                             merged[filepath] = local_entry
                             tombstones.pop(filepath, None)
+                            continue
+                        local_generation = self._entry_generation(local_entry)
+                        disk_generation = self._entry_generation(disk_entry)
+                        if local_generation > disk_generation:
+                            merged[filepath] = local_entry
+                            tombstones.pop(filepath, None)
+                            continue
+                        if local_generation < disk_generation:
                             continue
                         same_inode = local_entry.get("inode", 0) == disk_entry.get("inode", 0)
                         if same_inode:
@@ -297,7 +336,14 @@ class OffsetRegistry:
                         if tombstones:
                             persisted[_OFFSET_TOMBSTONES_KEY] = tombstones
                         json.dump(persisted, registry_file)
-                    os.rename(tmp_path, str(self.path))
+                        registry_file.flush()
+                        os.fsync(registry_file.fileno())
+                    os.replace(tmp_path, self.path)
+                    directory_fd = os.open(self.path.parent, os.O_RDONLY)
+                    try:
+                        os.fsync(directory_fd)
+                    finally:
+                        os.close(directory_fd)
                     self._data = merged
                     self._removed = tombstones
                     self._dirty_paths.clear()
@@ -321,10 +367,25 @@ class OffsetRegistry:
         self._dirty_paths.discard(filepath)
         self._dirty = True
 
+    def mark_rewind(self, filepath: str, inode: int) -> int:
+        """Start a newer offset generation so a confirmed rewind may move backward."""
+        current_generation = self._entry_generation(self._data.get(filepath))
+        generation = max(current_generation + 1, time.time_ns())
+        self._data[filepath] = {
+            "offset": 0,
+            "inode": inode,
+            "mtime": time.time(),
+            "generation": generation,
+        }
+        self._removed.pop(filepath, None)
+        self._dirty_paths.add(filepath)
+        self._dirty = True
+        return generation
+
     @staticmethod
     def _has_unavailable_symlink_ancestor(candidate: Path, root: Path) -> bool:
         """Return True when a path crosses a symlink whose target is unavailable."""
-        ancestor = candidate.parent
+        ancestor = candidate
         while ancestor != root and ancestor.is_relative_to(root):
             try:
                 ancestor_mode = ancestor.lstat().st_mode
@@ -338,10 +399,22 @@ class OffsetRegistry:
                     target_mode = ancestor.stat().st_mode
                 except OSError:
                     return True
-                if not stat.S_ISDIR(target_mode):
+                target_type_matches = stat.S_ISREG(target_mode) if ancestor == candidate else stat.S_ISDIR(target_mode)
+                if not target_type_matches:
                     return True
             ancestor = ancestor.parent
         return False
+
+    @staticmethod
+    def _has_live_parent_evidence(candidate: Path, live_files: list[Path]) -> bool:
+        """Require a live transcript in the tracked file's containing directory."""
+        parent = candidate.parent
+        try:
+            if not parent.is_dir():
+                return False
+        except OSError:
+            return False
+        return any(live_file == parent or live_file.is_relative_to(parent) for live_file in live_files)
 
     @property
     def last_prune_complete(self) -> bool:
@@ -389,10 +462,14 @@ class OffsetRegistry:
             if any(self._has_unavailable_symlink_ancestor(candidate, root) for root in most_specific_roots):
                 self._last_prune_complete = False
                 continue
+            if not self._has_live_parent_evidence(candidate, live_files):
+                self._last_prune_complete = False
+                continue
             try:
                 if not candidate.is_file():
                     missing.append(filepath)
             except OSError:
+                self._last_prune_complete = False
                 continue
         for filepath in missing:
             self._data.pop(filepath, None)
@@ -962,6 +1039,7 @@ class JSONLWatcher:
                     # Handle rewind detection (checkpoint restore)
                     if tailer.rewound:
                         session_id = Path(filepath).stem
+                        self.registry.mark_rewind(filepath, tailer.get_inode())
                         logger.warning(
                             "Checkpoint restore: %s (offset %d → %d)",
                             session_id,
