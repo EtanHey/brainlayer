@@ -1,52 +1,121 @@
+import json
 from pathlib import Path
 
-from brainlayer.ingest_denylist import is_denylisted
+from brainlayer.ingest_denylist import BRAINLAYER_INGEST_DENYLIST_ENV, is_denylisted
 
 
-def test_default_denylist_matches_alternate_home_without_process_home(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path / "real-home"))
+def _write_subagent(path: Path, attribution: str | None) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    entries = [
+        {
+            "type": "user",
+            "agentId": path.stem.removeprefix("agent-"),
+            "message": {"role": "user", "content": "Investigate the assigned task."},
+        }
+    ]
+    if attribution is not None:
+        entries.append(
+            {
+                "type": "assistant",
+                "attributionAgent": attribution,
+                "message": {"role": "assistant", "content": "Attributed worker response."},
+            }
+        )
+    path.write_text("".join(json.dumps(entry) + "\n" for entry in entries), encoding="utf-8")
+    return path
+
+
+def test_default_policy_allows_normal_provider_sessions(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path / "process-home"))
+    monkeypatch.delenv(BRAINLAYER_INGEST_DENYLIST_ENV, raising=False)
     backup_home = tmp_path / "backup-home"
 
-    assert is_denylisted(backup_home / ".codex" / "sessions" / "worker.jsonl")
-    assert is_denylisted(backup_home / ".gemini" / "sessions" / "worker.jsonl")
-    assert is_denylisted(
+    assert not is_denylisted(backup_home / ".codex" / "sessions" / "worker.jsonl")
+    assert not is_denylisted(backup_home / ".gemini" / "sessions" / "worker.jsonl")
+    assert not is_denylisted(
         backup_home / ".cursor" / "projects" / "repo" / "agent-transcripts" / "session" / "worker.jsonl"
     )
-    assert is_denylisted(backup_home / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent-a111.jsonl")
+    assert not is_denylisted(backup_home / ".claude" / "projects" / "proj" / "direct-session.jsonl")
 
 
-def test_default_denylist_is_segment_scoped(monkeypatch, tmp_path):
+def test_default_policy_allows_ordinary_claude_subagents(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv(BRAINLAYER_INGEST_DENYLIST_ENV, raising=False)
+    projects = tmp_path / ".claude" / "projects" / "-Users-test-Gits-brainlayer" / "session-uuid"
 
-    assert not is_denylisted(tmp_path / ".claude" / "projects" / "proj" / "direct-session.jsonl")
-    assert is_denylisted(Path(tmp_path / ".cursor" / "projects" / "repo" / "agent-transcripts" / "worker.jsonl"))
+    explore = _write_subagent(projects / "subagents" / "agent-explore.jsonl", "Explore")
+    general = _write_subagent(projects / "subagents" / "agent-general.jsonl", "general-purpose")
+
+    assert not is_denylisted(explore)
+    assert not is_denylisted(general)
 
 
-def test_brain_worker_subagent_transcript_is_denylisted(monkeypatch, tmp_path):
-    """Regression (Etan flag 2026-07-03): the brain-worker off-grid recon subagent
-    (~/.claude/agents/brain-worker.md) writes its session JSONL like every Agent-tool
-    subagent — under a `subagents/` dir — so it MUST be in the agent-output exclusion set.
-    """
+def test_default_policy_excludes_exact_brain_worker_but_keeps_raw_jsonl(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
-    projects = tmp_path / ".claude" / "projects"
-
-    # brain-worker (and any Agent-tool subagent) transcript path
-    assert is_denylisted(
-        projects / "-Users-etanheyman-Gits-brainlayer" / "session-uuid" / "subagents" / "agent-a25d6b3aa6880db8e.jsonl"
+    monkeypatch.delenv(BRAINLAYER_INGEST_DENYLIST_ENV, raising=False)
+    worker = _write_subagent(
+        tmp_path
+        / ".claude"
+        / "projects"
+        / "-Users-test-Gits-brainlayer"
+        / "session-uuid"
+        / "subagents"
+        / "agent-brain.jsonl",
+        "brain-worker",
     )
-    # workflow subagents nested a level deeper still excluded
-    assert is_denylisted(
-        projects / "-Users-x" / "session-uuid" / "subagents" / "workflows" / "wf_c83ce37d" / "agent-x.jsonl"
+
+    assert is_denylisted(worker)
+    assert worker.exists()
+
+
+def test_default_policy_excludes_workflow_workers_by_path_and_keeps_raw_jsonl(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv(BRAINLAYER_INGEST_DENYLIST_ENV, raising=False)
+    workflow = _write_subagent(
+        tmp_path
+        / ".claude"
+        / "projects"
+        / "-Users-test-Gits-brainlayer"
+        / "session-uuid"
+        / "subagents"
+        / "workflows"
+        / "wf_c83ce37d"
+        / "agent-workflow.jsonl",
+        "workflow-subagent",
     )
 
+    assert is_denylisted(workflow)
+    assert workflow.exists()
 
-def test_direct_control_transcripts_still_ingest(monkeypatch, tmp_path):
-    """Regression (Etan flag 2026-07-03): DIRECT/CONTROL transcripts — a lead's or a
-    top-level worker's own reasoning session — are NOT agent-output roots and MUST keep
-    ingesting. The denylist targets agent-OUTPUT paths only, never direct sessions.
-    """
+
+def test_unattributed_subagent_is_deferred_until_identity_is_known(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
-    projects = tmp_path / ".claude" / "projects"
+    monkeypatch.delenv(BRAINLAYER_INGEST_DENYLIST_ENV, raising=False)
+    worker = _write_subagent(
+        tmp_path / ".claude" / "projects" / "proj" / "session-uuid" / "subagents" / "agent-new.jsonl",
+        None,
+    )
 
-    assert not is_denylisted(projects / "-Users-etanheyman-Gits-brainlayer" / "4220c177-8816-446d.jsonl")
-    assert not is_denylisted(projects / "-Users-x" / "session-uuid" / "session-uuid.jsonl")
+    assert is_denylisted(worker)
+
+    with worker.open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "attributionAgent": "general-purpose",
+                    "message": {"role": "assistant", "content": "Identity is now available."},
+                }
+            )
+            + "\n"
+        )
+
+    assert not is_denylisted(worker)
+
+
+def test_explicit_environment_override_can_deny_an_otherwise_allowed_provider(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv(BRAINLAYER_INGEST_DENYLIST_ENV, "~/.codex/sessions/**")
+
+    assert is_denylisted(tmp_path / ".codex" / "sessions" / "worker.jsonl")
+    assert not is_denylisted(tmp_path / ".gemini" / "sessions" / "worker.jsonl")

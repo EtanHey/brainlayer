@@ -505,10 +505,11 @@ class TestJSONLWatcher:
         assert len(files) == 4
         assert {watcher.provider_for_file(path) for path in files} == {"claude", "codex", "cursor", "gemini"}
 
-    def test_default_roots_denylist_cursor_agent_transcripts(self, tmp_path):
+    def test_default_roots_include_cursor_agent_transcripts(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("BRAINLAYER_INGEST_DENYLIST", raising=False)
         cursor_session = tmp_path / ".cursor" / "sessions" / "session.jsonl"
         cursor_agent_transcript = (
-            tmp_path / ".cursor" / "projects" / "repo" / "agent-transcripts" / "agent-session.jsonl"
+            tmp_path / ".cursor" / "projects" / "repo" / "agent-transcripts" / "agent-session" / "agent-session.jsonl"
         )
         unrelated_project_jsonl = tmp_path / ".cursor" / "projects" / "repo" / "state.jsonl"
         for path in (cursor_session, cursor_agent_transcript, unrelated_project_jsonl):
@@ -524,12 +525,13 @@ class TestJSONLWatcher:
         files = set(watcher._discover_jsonl_files())
 
         assert str(cursor_session) in files
-        assert str(cursor_agent_transcript) not in files
+        assert str(cursor_agent_transcript) in files
         assert str(unrelated_project_jsonl) not in files
         assert watcher.provider_for_file(str(cursor_session)) == "cursor"
-        assert watcher.provider_for_file(str(cursor_agent_transcript)) == "unknown"
+        assert watcher.provider_for_file(str(cursor_agent_transcript)) == "cursor-agent-transcripts"
 
-    def test_default_roots_denylist_codex_and_gemini_sessions(self, tmp_path):
+    def test_default_roots_include_codex_and_gemini_sessions(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("BRAINLAYER_INGEST_DENYLIST", raising=False)
         codex_session = tmp_path / ".codex" / "sessions" / "2026" / "07" / "worker.jsonl"
         gemini_session = tmp_path / ".gemini" / "sessions" / "worker.jsonl"
         for path in (codex_session, gemini_session):
@@ -544,10 +546,10 @@ class TestJSONLWatcher:
 
         files = set(watcher._discover_jsonl_files())
 
-        assert str(codex_session) not in files
-        assert str(gemini_session) not in files
-        assert watcher.provider_for_file(str(codex_session)) == "unknown"
-        assert watcher.provider_for_file(str(gemini_session)) == "unknown"
+        assert str(codex_session) in files
+        assert str(gemini_session) in files
+        assert watcher.provider_for_file(str(codex_session)) == "codex"
+        assert watcher.provider_for_file(str(gemini_session)) == "gemini"
 
     def test_multi_root_discovers_newest_jsonl_files_first(self, tmp_path):
         codex_sessions = tmp_path / "codex" / "sessions"

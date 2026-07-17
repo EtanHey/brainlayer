@@ -3,18 +3,16 @@
 from __future__ import annotations
 
 import fnmatch
+import json
 import os
 from pathlib import Path
 
 BRAINLAYER_INGEST_DENYLIST_ENV = "BRAINLAYER_INGEST_DENYLIST"
 
-DEFAULT_INGEST_DENYLIST = (
-    "~/.claude/projects/*/**/subagents/**",
-    "~/.claude/projects/**/wf_*/**",
-    "~/.codex/sessions/**",
-    "~/.cursor/**/agent-transcripts/**",
-    "~/.gemini/sessions/**",
-)
+DEFAULT_INGEST_DENYLIST = ("~/.claude/projects/**/wf_*/**",)
+
+_SUBAGENT_ATTRIBUTION_SCAN_LINES = 256
+_SUBAGENT_ATTRIBUTION_CACHE: dict[str, tuple[int, int, str | None]] = {}
 
 
 def _configured_patterns() -> tuple[str, ...]:
@@ -53,6 +51,44 @@ def _match_parts(path_parts: tuple[str, ...], pattern_parts: tuple[str, ...]) ->
     return fnmatch.fnmatchcase(path_parts[0], pattern_parts[0]) and _match_parts(path_parts[1:], pattern_parts[1:])
 
 
+def _is_claude_subagent(path: Path) -> bool:
+    parts = path.parts
+    return ".claude" in parts and "projects" in parts and "subagents" in parts
+
+
+def _claude_subagent_attribution(path: Path) -> str | None:
+    """Read the first stable worker attribution without rescanning unchanged JSONLs."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+
+    cache_key = str(path)
+    cached = _SUBAGENT_ATTRIBUTION_CACHE.get(cache_key)
+    if cached is not None and cached[:2] == (stat.st_size, stat.st_mtime_ns):
+        return cached[2]
+
+    attribution = None
+    try:
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            for line_number, raw_line in enumerate(handle):
+                if line_number >= _SUBAGENT_ATTRIBUTION_SCAN_LINES:
+                    break
+                try:
+                    entry = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    continue
+                raw_attribution = entry.get("attributionAgent")
+                if isinstance(raw_attribution, str) and raw_attribution.strip():
+                    attribution = raw_attribution.strip()
+                    break
+    except OSError:
+        return None
+
+    _SUBAGENT_ATTRIBUTION_CACHE[cache_key] = (stat.st_size, stat.st_mtime_ns, attribution)
+    return attribution
+
+
 def is_denylisted(path: str | Path) -> bool:
     """Return True when a source path is under an ingest-denylisted transcript root."""
     candidate = Path(os.path.abspath(os.path.expanduser(str(path))))
@@ -61,4 +97,7 @@ def is_denylisted(path: str | Path) -> bool:
         for expanded_pattern in _expand_globs(pattern, homes):
             if _match_parts(candidate.parts, expanded_pattern.parts):
                 return True
+    if _is_claude_subagent(candidate):
+        attribution = _claude_subagent_attribution(candidate)
+        return attribution is None or attribution == "brain-worker"
     return False

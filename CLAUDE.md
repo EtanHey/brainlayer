@@ -63,7 +63,7 @@ brainlayer enrich
 - Concurrency: retry on `SQLITE_BUSY`; each worker uses its own connection
 
 ## P1 Pipeline Contracts
-- BL-10 source denylist is implemented in `src/brainlayer/ingest_denylist.py`. Default excluded agent-output roots are `~/.claude/projects/*/**/subagents/**`, `~/.claude/projects/**/wf_*/**`, `~/.codex/sessions/**`, `~/.cursor/**/agent-transcripts/**`, and `~/.gemini/sessions/**`; direct/control Claude sessions still ingest through normal roots.
+- BL-10 source denylist is implemented in `src/brainlayer/ingest_denylist.py`. By default, provider sessions and ordinary Claude subagents ingest; only exact `brain-worker` subagents and workflow paths under `wf_*` are excluded. Exclusion never deletes the source JSONL. `BRAINLAYER_INGEST_DENYLIST` remains an explicit deployment override.
 - Go-forward secret scrubbing runs in `src/brainlayer/pipeline/secret_scrub.py` from `src/brainlayer/watcher_bridge.py` before chunk persistence. Provider-prefixed and labeled high-entropy secrets are redacted; unlabeled high-entropy tokens are recorded in quarantine metadata.
 - MCP search uses a fixed-size readonly WAL `VectorStore` pool in `src/brainlayer/mcp/_shared.py`. `BRAINLAYER_READ_POOL_SIZE` defaults to 8, or 4 on detected Apple M1; M1 machines can keep the lower override explicitly. Checkout beyond the fixed pool blocks up to `BRAINLAYER_READ_BUSY_TIMEOUT_MS`, and startup rejects `pool_size * BRAINLAYER_READ_CACHE_KB` above about 768MB.
 

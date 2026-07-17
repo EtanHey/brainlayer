@@ -475,14 +475,38 @@ class TestFlushCallback:
 
 
 class TestFullPipeline:
-    def test_watcher_denylist_blocks_agent_transcript_roots_before_db_insert(self, tmp_path, monkeypatch):
+    def test_watcher_denylist_blocks_only_brain_and_workflow_workers(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.delenv("BRAINLAYER_INGEST_DENYLIST", raising=False)
         db_path = tmp_path / "test.db"
         VectorStore(db_path).close()
 
         denylisted = {
-            "claude": tmp_path / ".claude" / "projects" / "proj" / "session-123" / "subagents" / "agent-a111.jsonl",
+            "brain-worker": tmp_path
+            / ".claude"
+            / "projects"
+            / "proj"
+            / "session-123"
+            / "subagents"
+            / "agent-brain.jsonl",
+            "workflow-worker": tmp_path
+            / ".claude"
+            / "projects"
+            / "proj"
+            / "session-123"
+            / "subagents"
+            / "workflows"
+            / "wf_123"
+            / "agent-workflow.jsonl",
+        }
+        allowed = {
+            "claude-subagent": tmp_path
+            / ".claude"
+            / "projects"
+            / "proj"
+            / "session-123"
+            / "subagents"
+            / "agent-general.jsonl",
             "codex": tmp_path / ".codex" / "sessions" / "2026" / "07" / "02" / "worker.jsonl",
             "cursor": tmp_path
             / ".cursor"
@@ -492,9 +516,11 @@ class TestFullPipeline:
             / "agent-session"
             / "agent-session.jsonl",
             "gemini": tmp_path / ".gemini" / "sessions" / "worker.jsonl",
+            "claude-direct": tmp_path / ".claude" / "projects" / "proj" / "direct-session.jsonl",
         }
         for provider, path in denylisted.items():
             path.parent.mkdir(parents=True, exist_ok=True)
+            attribution = "brain-worker" if provider == "brain-worker" else "workflow-subagent"
             path.write_text(
                 json.dumps(
                     _make_jsonl_entry(
@@ -504,25 +530,30 @@ class TestFullPipeline:
                             "substantial technical detail for classification and chunking."
                         ),
                         entry_type="assistant",
+                        attributionAgent=attribution,
                     )
                 )
                 + "\n"
             )
 
-        control = tmp_path / ".claude" / "projects" / "proj" / "direct-session.jsonl"
-        control.write_text(
-            json.dumps(
-                _make_jsonl_entry(
-                    text=(
-                        "BL10CONTROLINDEXES genuine direct Claude session sentinel. "
-                        "This assistant response explains durable watcher ingestion and contains enough "
-                        "substantial technical detail for classification and chunking."
-                    ),
-                    entry_type="assistant",
+        for provider, path in allowed.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            extra = {"attributionAgent": "general-purpose"} if provider == "claude-subagent" else {}
+            sentinel_provider = provider.replace("-", "").upper()
+            path.write_text(
+                json.dumps(
+                    _make_jsonl_entry(
+                        text=(
+                            f"BL10SHOULDINDEX{sentinel_provider} source allowlist sentinel. "
+                            "This assistant response explains durable watcher ingestion and contains enough "
+                            "substantial technical detail for classification and chunking."
+                        ),
+                        entry_type="assistant",
+                        **extra,
+                    )
                 )
+                + "\n"
             )
-            + "\n"
-        )
 
         flush = create_flush_callback(db_path, arbitrated=False)
         watcher = JSONLWatcher(
@@ -536,15 +567,11 @@ class TestFullPipeline:
 
         conn = sqlite3.connect(str(db_path))
         try:
-            denylist_globs = [
-                str(tmp_path / ".claude" / "projects") + "/*/*/subagents/*",
-                str(tmp_path / ".codex" / "sessions") + "/*",
-                str(tmp_path / ".cursor") + "/*/agent-transcripts/*",
-                str(tmp_path / ".gemini" / "sessions") + "/*",
-            ]
-            for glob in denylist_globs:
-                assert conn.execute("SELECT count(*) FROM chunks WHERE source_file GLOB ?", (glob,)).fetchone()[0] == 0
-            for provider in denylisted:
+            for provider, path in denylisted.items():
+                assert path.exists()
+                assert (
+                    conn.execute("SELECT count(*) FROM chunks WHERE source_file = ?", (str(path),)).fetchone()[0] == 0
+                )
                 assert (
                     conn.execute(
                         "SELECT count(*) FROM chunks_fts WHERE chunks_fts MATCH ?",
@@ -552,10 +579,22 @@ class TestFullPipeline:
                     ).fetchone()[0]
                     == 0
                 )
+            for provider, path in allowed.items():
+                sentinel_provider = provider.replace("-", "").upper()
+                assert (
+                    conn.execute("SELECT count(*) FROM chunks WHERE source_file = ?", (str(path),)).fetchone()[0] >= 1
+                )
+                assert (
+                    conn.execute(
+                        "SELECT count(*) FROM chunks WHERE source_file = ? AND content LIKE ?",
+                        (str(path), f"%BL10SHOULDINDEX{sentinel_provider}%"),
+                    ).fetchone()[0]
+                    >= 1
+                ), provider
             assert (
                 conn.execute(
                     "SELECT count(*) FROM chunks_fts WHERE chunks_fts MATCH ?",
-                    ('"BL10CONTROLINDEXES"',),
+                    ('"BL10SHOULDINDEXCODEX"',),
                 ).fetchone()[0]
                 >= 1
             )
@@ -635,6 +674,7 @@ class TestFullPipeline:
         entry = _make_jsonl_entry(
             text="Nested subagent transcript should be discovered on startup and stored under brainlayer-grill",
             entry_type="assistant",
+            attributionAgent="general-purpose",
         )
         jsonl_file.write_text(json.dumps(entry) + "\n")
 
