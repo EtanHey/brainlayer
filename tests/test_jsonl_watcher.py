@@ -110,6 +110,21 @@ class TestOffsetRegistry:
         assert reloaded.get(str(existing)) == (300, 1)
         assert reloaded.get(str(deleted)) == (0, 0)
 
+    def test_stale_registry_cannot_regress_offset_for_same_inode(self, tmp_path):
+        registry_path = tmp_path / "offsets.json"
+        initial = OffsetRegistry(registry_path)
+        initial.set("/session.jsonl", 50, 1)
+        assert initial.flush() is True
+
+        advancing_registry = OffsetRegistry(registry_path)
+        stale_registry = OffsetRegistry(registry_path)
+        advancing_registry.set("/session.jsonl", 300, 1)
+        assert advancing_registry.flush() is True
+        stale_registry.set("/session.jsonl", 100, 1)
+        assert stale_registry.flush() is True
+
+        assert OffsetRegistry(registry_path).get("/session.jsonl") == (300, 1)
+
     def test_prune_tombstone_blocks_stale_registry_from_resurrecting_deleted_offset(self, tmp_path):
         registry_path = tmp_path / "offsets.json"
         existing = tmp_path / "existing.jsonl"
@@ -131,6 +146,38 @@ class TestOffsetRegistry:
 
         reloaded = OffsetRegistry(registry_path)
         assert reloaded.get(str(existing)) == (300, 1)
+        assert reloaded.get(str(deleted)) == (0, 0)
+
+    def test_prune_tombstone_compacts_without_replaying_unchanged_stale_entries(self, monkeypatch, tmp_path):
+        from brainlayer import watcher as watcher_module
+
+        now = [1_000.0]
+        monkeypatch.setattr(watcher_module.time, "time", lambda: now[0])
+        registry_path = tmp_path / "offsets.json"
+        existing = tmp_path / "existing.jsonl"
+        deleted = tmp_path / "deleted.jsonl"
+        existing.write_text('{"id":"kept"}\n')
+
+        initial = OffsetRegistry(registry_path)
+        initial.set(str(existing), 100, 1)
+        initial.set(str(deleted), 200, 2)
+        assert initial.flush() is True
+        stale_registry = OffsetRegistry(registry_path)
+
+        pruning_registry = OffsetRegistry(registry_path)
+        assert pruning_registry.prune_missing_files([tmp_path], [existing]) == 1
+        assert pruning_registry.flush() is True
+
+        now[0] += 24 * 60 * 60 + 1
+        compacting_registry = OffsetRegistry(registry_path)
+        compacting_registry.set(str(existing), 300, 1)
+        assert compacting_registry.flush() is True
+        assert watcher_module._OFFSET_TOMBSTONES_KEY not in json.loads(registry_path.read_text())
+
+        stale_registry.set(str(existing), 400, 1)
+        assert stale_registry.flush() is True
+        reloaded = OffsetRegistry(registry_path)
+        assert reloaded.get(str(existing)) == (400, 1)
         assert reloaded.get(str(deleted)) == (0, 0)
 
     def test_prune_missing_files_preserves_offsets_under_unavailable_root(self, tmp_path):
@@ -177,9 +224,28 @@ class TestOffsetRegistry:
         )
         assert reg.get(str(missing_nested_file)) == (0, 0)
 
+    def test_prune_missing_files_preserves_offsets_under_broken_symlink_subtree(self, tmp_path):
+        root = tmp_path / "projects"
+        root.mkdir()
+        live_file = root / "live.jsonl"
+        live_file.write_text('{"id":"live"}\n')
+        mounted_volume = tmp_path / "mounted-volume"
+        mounted_volume.mkdir()
+        unavailable_project = root / "unavailable-project"
+        unavailable_project.symlink_to(mounted_volume, target_is_directory=True)
+        missing = unavailable_project / "session.jsonl"
+        reg = OffsetRegistry(tmp_path / "offsets.json")
+        reg.set(str(missing), 100, 1)
+        mounted_volume.rmdir()
+
+        assert reg.prune_missing_files([root], [live_file]) == 0
+        assert reg.get(str(missing)) == (100, 1)
+
     def test_prune_missing_files_skips_stat_errors(self, monkeypatch, tmp_path):
         root = tmp_path / "sessions"
         root.mkdir()
+        live_file = root / "live.jsonl"
+        live_file.write_text('{"id":"live"}\n')
         inaccessible = root / "inaccessible.jsonl"
         reg = OffsetRegistry(tmp_path / "offsets.json")
         reg.set(str(inaccessible), 100, 1)
@@ -192,7 +258,7 @@ class TestOffsetRegistry:
 
         monkeypatch.setattr(Path, "stat", fail_inaccessible)
 
-        assert reg.prune_missing_files([root]) == 0
+        assert reg.prune_missing_files([root], [live_file]) == 0
         assert reg.get(str(inaccessible)) == (100, 1)
 
     def test_load_corrupt_file(self, tmp_path):
@@ -421,6 +487,37 @@ class TestJSONLWatcher:
         persisted = json.loads(registry_path.read_text())
         assert str(existing) in persisted
         assert str(deleted) not in persisted
+
+    def test_poll_retries_pruning_after_unavailable_startup_root(self, tmp_path):
+        root = tmp_path / "projects"
+        root.mkdir()
+        project = root / "project"
+        project.mkdir()
+        deleted = project / "deleted.jsonl"
+        registry_path = tmp_path / "offsets.json"
+        registry_path.write_text(
+            json.dumps(
+                {
+                    str(deleted): {"offset": 100, "inode": 999},
+                }
+            )
+        )
+        watcher = JSONLWatcher(
+            watch_dir=root,
+            registry_path=registry_path,
+            on_flush=lambda items: None,
+            registry_flush_interval_s=3600,
+        )
+
+        watcher.poll_once()
+        assert watcher._offset_prune_complete is False
+
+        live = project / "live.jsonl"
+        live.write_text('{"id":"live"}\n')
+        watcher.poll_once()
+
+        assert watcher._offset_prune_complete is True
+        assert watcher.registry.get(str(deleted)) == (0, 0)
 
     def test_discover_jsonl_files_includes_nested_subagents(self, tmp_path):
         project = self._make_project_dir(tmp_path, "-Users-test-Gits-brainlayer-grill")

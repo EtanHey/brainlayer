@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import sqlite3
+import stat
 import tempfile
 import threading
 import time
@@ -183,6 +184,7 @@ class CoverageWatchdog:
 
 
 _OFFSET_TOMBSTONES_KEY = "__brainlayer_offset_tombstones__"
+_OFFSET_TOMBSTONE_RETENTION_S = 24 * 60 * 60
 
 
 class OffsetRegistry:
@@ -196,7 +198,9 @@ class OffsetRegistry:
         self.path = Path(path)
         self._data: dict[str, dict] = {}
         self._removed: dict[str, float] = {}
+        self._dirty_paths: set[str] = set()
         self._dirty = False
+        self._last_prune_complete = True
         self._load()
 
     def _load(self):
@@ -225,6 +229,7 @@ class OffsetRegistry:
             "mtime": time.time(),
         }
         self._removed.pop(filepath, None)
+        self._dirty_paths.add(filepath)
         self._dirty = True
 
     def flush(self) -> bool:
@@ -252,13 +257,25 @@ class OffsetRegistry:
                         tombstones[filepath] = max(removed_at, tombstones.get(filepath, 0))
 
                     merged = dict(disk_data)
-                    for filepath, local_entry in self._data.items():
+                    for filepath in self._dirty_paths:
+                        local_entry = self._data.get(filepath)
+                        if not isinstance(local_entry, dict):
+                            continue
                         local_mtime = local_entry.get("mtime", 0)
                         if filepath in tombstones and local_mtime <= tombstones[filepath]:
                             merged.pop(filepath, None)
                             continue
                         disk_entry = disk_data.get(filepath)
-                        if not isinstance(disk_entry, dict) or local_mtime >= disk_entry.get("mtime", 0):
+                        if not isinstance(disk_entry, dict):
+                            merged[filepath] = local_entry
+                            tombstones.pop(filepath, None)
+                            continue
+                        same_inode = local_entry.get("inode", 0) == disk_entry.get("inode", 0)
+                        if same_inode:
+                            if local_entry.get("offset", 0) >= disk_entry.get("offset", 0):
+                                merged[filepath] = local_entry
+                                tombstones.pop(filepath, None)
+                        elif local_mtime >= disk_entry.get("mtime", 0):
                             merged[filepath] = local_entry
                             tombstones.pop(filepath, None)
                     for filepath, removed_at in list(tombstones.items()):
@@ -267,6 +284,12 @@ class OffsetRegistry:
                             tombstones.pop(filepath, None)
                             continue
                         merged.pop(filepath, None)
+                    tombstone_cutoff = time.time() - _OFFSET_TOMBSTONE_RETENTION_S
+                    tombstones = {
+                        filepath: removed_at
+                        for filepath, removed_at in tombstones.items()
+                        if isinstance(removed_at, (int, float)) and removed_at >= tombstone_cutoff
+                    }
 
                     fd, tmp_path = tempfile.mkstemp(dir=str(self.path.parent), suffix=".tmp")
                     with os.fdopen(fd, "w") as registry_file:
@@ -277,6 +300,7 @@ class OffsetRegistry:
                     os.rename(tmp_path, str(self.path))
                     self._data = merged
                     self._removed = tombstones
+                    self._dirty_paths.clear()
                 finally:
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
             self._dirty = False
@@ -294,7 +318,35 @@ class OffsetRegistry:
         """Remove tracking for a file."""
         self._data.pop(filepath, None)
         self._removed[filepath] = time.time()
+        self._dirty_paths.discard(filepath)
         self._dirty = True
+
+    @staticmethod
+    def _has_unavailable_symlink_ancestor(candidate: Path, root: Path) -> bool:
+        """Return True when a path crosses a symlink whose target is unavailable."""
+        ancestor = candidate.parent
+        while ancestor != root and ancestor.is_relative_to(root):
+            try:
+                ancestor_mode = ancestor.lstat().st_mode
+            except FileNotFoundError:
+                ancestor = ancestor.parent
+                continue
+            except OSError:
+                return True
+            if stat.S_ISLNK(ancestor_mode):
+                try:
+                    target_mode = ancestor.stat().st_mode
+                except OSError:
+                    return True
+                if not stat.S_ISDIR(target_mode):
+                    return True
+            ancestor = ancestor.parent
+        return False
+
+    @property
+    def last_prune_complete(self) -> bool:
+        """Whether the last prune safely evaluated every tracked root."""
+        return self._last_prune_complete
 
     def prune_missing_files(
         self,
@@ -302,6 +354,7 @@ class OffsetRegistry:
         active_files: list[str | Path] | None = None,
     ) -> int:
         """Drop deleted offsets only when a sibling file proves the root is mounted."""
+        self._last_prune_complete = True
         live_files: list[Path] = []
         candidates = active_files if active_files is not None else list(self._data)
         for filepath in candidates:
@@ -331,6 +384,10 @@ class OffsetRegistry:
             most_specific_depth = max(len(root.parts) for root in matching_roots)
             most_specific_roots = [root for root in matching_roots if len(root.parts) == most_specific_depth]
             if not any(root_availability[root] for root in most_specific_roots):
+                self._last_prune_complete = False
+                continue
+            if any(self._has_unavailable_symlink_ancestor(candidate, root) for root in most_specific_roots):
+                self._last_prune_complete = False
                 continue
             try:
                 if not candidate.is_file():
@@ -340,6 +397,7 @@ class OffsetRegistry:
         for filepath in missing:
             self._data.pop(filepath, None)
             self._removed[filepath] = time.time()
+            self._dirty_paths.discard(filepath)
         if missing:
             self._dirty = True
         return len(missing)
@@ -883,7 +941,7 @@ class JSONLWatcher:
                 )
                 if pruned:
                     logger.info("Pruned %d deleted files from the offset registry", pruned)
-                self._offset_prune_complete = self.registry.flush()
+                self._offset_prune_complete = self.registry.flush() and self.registry.last_prune_complete
 
             for filepath in list(self._tailers):
                 if is_denylisted(filepath):
