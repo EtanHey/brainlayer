@@ -3494,6 +3494,7 @@ def watch_backfill(
 ) -> None:
     """One-shot replay for watched JSONL roots using the durable queue writer path."""
     from ..backfill import WindowedFlush, is_legacy_excluded_path, parse_backfill_window, window_registry_suffix
+    from ..ingest_denylist import is_legacy_backfill_denylisted
     from ..paths import get_db_path
     from ..watcher import JSONLWatcher, WatchRoot, default_watch_roots
     from ..watcher_bridge import create_flush_callback
@@ -3525,7 +3526,7 @@ def watch_backfill(
             registry_path=registry_path,
             on_flush=lambda items: None,
             db_path=db_path,
-            respect_denylist=not legacy_excluded_only,
+            denylist_predicate=is_legacy_backfill_denylisted if legacy_excluded_only else None,
         )
         files = watcher._discover_jsonl_files()
         if legacy_excluded_only:
@@ -3559,7 +3560,7 @@ def watch_backfill(
         registry_path=registry_path,
         on_flush=windowed_flush or downstream_flush,
         db_path=db_path,
-        respect_denylist=not legacy_excluded_only,
+        denylist_predicate=is_legacy_backfill_denylisted if legacy_excluded_only else None,
     )
     processed = 0
     cycles = 0

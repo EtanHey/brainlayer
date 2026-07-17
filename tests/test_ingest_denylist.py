@@ -1,7 +1,11 @@
 import json
 from pathlib import Path
 
-from brainlayer.ingest_denylist import BRAINLAYER_INGEST_DENYLIST_ENV, is_denylisted
+from brainlayer.ingest_denylist import (
+    BRAINLAYER_INGEST_DENYLIST_ENV,
+    is_denylisted,
+    is_legacy_backfill_denylisted,
+)
 
 
 def _write_subagent(path: Path, attribution: str | None) -> Path:
@@ -166,3 +170,38 @@ def test_explicit_environment_override_can_deny_an_otherwise_allowed_provider(mo
 
     assert is_denylisted(tmp_path / ".codex" / "sessions" / "worker.jsonl")
     assert not is_denylisted(tmp_path / ".gemini" / "sessions" / "worker.jsonl")
+
+
+def test_legacy_backfill_retires_only_blanket_patterns(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv(
+        BRAINLAYER_INGEST_DENYLIST_ENV,
+        ",".join(
+            [
+                "~/.claude/projects/*/**/subagents/**",
+                "~/.claude/projects/**/wf_*/**",
+                "~/.codex/sessions/**",
+                "~/.cursor/**/agent-transcripts/**",
+                "~/.gemini/sessions/**",
+                "~/.codex/sessions/**/private/**",
+            ]
+        ),
+    )
+    ordinary = _write_subagent(
+        tmp_path / ".claude" / "projects" / "repo" / "session" / "subagents" / "agent-ordinary.jsonl",
+        None,
+    )
+    brain_worker = _write_subagent(
+        tmp_path / ".claude" / "projects" / "repo" / "session" / "subagents" / "agent-brain.jsonl",
+        "brain-worker",
+    )
+    workflow = _write_subagent(
+        tmp_path / ".claude" / "projects" / "repo" / "wf_test" / "agent-workflow.jsonl",
+        "workflow-worker",
+    )
+
+    assert not is_legacy_backfill_denylisted(ordinary)
+    assert is_legacy_backfill_denylisted(brain_worker)
+    assert is_legacy_backfill_denylisted(workflow)
+    assert not is_legacy_backfill_denylisted(tmp_path / ".codex" / "sessions" / "worker.jsonl")
+    assert is_legacy_backfill_denylisted(tmp_path / ".codex" / "sessions" / "private" / "worker.jsonl")

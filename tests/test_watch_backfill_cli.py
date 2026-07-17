@@ -95,9 +95,74 @@ def test_watch_backfill_legacy_dry_run_counts_only_legacy_excluded_roots(tmp_pat
     assert "-legacy-excluded-only.json" in result.output
 
 
-def test_watch_backfill_legacy_scope_bypasses_current_subagent_denylist(tmp_path, monkeypatch):
+def test_watch_backfill_legacy_scope_keeps_current_denylist(tmp_path, monkeypatch):
     monkeypatch.delenv("BRAINLAYER_INGEST_DENYLIST", raising=False)
-    transcript = tmp_path / ".claude" / "projects" / "repo" / "session" / "subagents" / "agent-worker.jsonl"
+    subagents = tmp_path / ".claude" / "projects" / "repo" / "session" / "subagents"
+    allowed = subagents / "agent-ordinary.jsonl"
+    unattributed = subagents / "agent-historical.jsonl"
+    denied = subagents / "agent-brain-worker.jsonl"
+    workflow = tmp_path / ".claude" / "projects" / "repo" / "wf_test" / "worker.jsonl"
+    for path in (allowed, unattributed, denied, workflow):
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+    def entry(attribution: str | None, label: str | None = None) -> str:
+        worker = label or attribution or "historical-worker"
+        return json.dumps(
+            {
+                "type": "assistant",
+                "timestamp": "2026-07-12T12:00:00Z",
+                **({"attributionAgent": attribution} if attribution else {}),
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                f"Legacy {worker} backfill sentinel records the durable implementation "
+                                "decision, why the retired blanket policy excluded this transcript, the exact "
+                                "migration window, and the verification contract needed to replay it safely."
+                            ),
+                        }
+                    ],
+                },
+            }
+        )
+
+    allowed.write_text(entry("repo-worker") + "\n")
+    unattributed.write_text(entry(None, "historical-worker") + "\n")
+    denied.write_text(entry("brain-worker") + "\n")
+    workflow.write_text(entry("workflow-worker") + "\n")
+    queue_dir = tmp_path / "queue"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "watch-backfill",
+            "--home",
+            str(tmp_path),
+            "--since",
+            "2026-07-10",
+            "--until",
+            "2026-07-16",
+            "--legacy-excluded-only",
+            "--max-cycles",
+            "5",
+        ],
+        env={"BRAINLAYER_QUEUE_DIR": str(queue_dir)},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "matched_entries=2" in result.output
+    queued = "".join(path.read_text() for path in queue_dir.glob("watcher-*.jsonl"))
+    assert queued.count('"kind": "watcher_chunk"') == 2
+    assert "repo-worker" in queued
+    assert "historical-worker" in queued
+    assert "brain-worker" not in queued
+    assert "workflow-worker" not in queued
+
+
+def test_watch_backfill_legacy_scope_honors_configured_denylist(tmp_path, monkeypatch):
+    transcript = tmp_path / ".codex" / "sessions" / "2026" / "07" / "blocked" / "worker.jsonl"
     transcript.parent.mkdir(parents=True)
     transcript.write_text(
         json.dumps(
@@ -110,10 +175,8 @@ def test_watch_backfill_legacy_scope_bypasses_current_subagent_denylist(tmp_path
                         {
                             "type": "text",
                             "text": (
-                                "Legacy subagent backfill sentinel records the durable implementation decision, "
-                                "the reason the previous indexing policy excluded this transcript, the exact "
-                                "migration window, and the verification contract needed to replay it safely "
-                                "without discarding the raw JSONL source or advancing offsets before persistence."
+                                "Configured denylist backfill sentinel records the durable implementation decision, "
+                                "the exact migration window, and the verification contract for a safe replay."
                             ),
                         }
                     ],
@@ -138,12 +201,16 @@ def test_watch_backfill_legacy_scope_bypasses_current_subagent_denylist(tmp_path
             "--max-cycles",
             "5",
         ],
-        env={"BRAINLAYER_QUEUE_DIR": str(queue_dir)},
+        env={
+            "BRAINLAYER_INGEST_DENYLIST": "~/.codex/sessions/**/blocked/**",
+            "BRAINLAYER_QUEUE_DIR": str(queue_dir),
+        },
     )
 
     assert result.exit_code == 0, result.output
-    assert "matched_entries=1" in result.output
-    assert len(list(queue_dir.glob("watcher-*.jsonl"))) == 1
+    assert "processed_entries=0" in result.output
+    assert "matched_entries=0" in result.output
+    assert not list(queue_dir.glob("watcher-*.jsonl"))
 
 
 def test_watch_backfill_indexes_cursor_agent_transcripts_once(tmp_path, monkeypatch):

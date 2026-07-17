@@ -500,6 +500,8 @@ class JSONLWatcher:
         coverage_watchdog: CoverageWatchdog | None = None,
         max_lines_per_file: int = 100,
         respect_denylist: bool = True,
+        unknown_subagent_is_denylisted: bool = True,
+        denylist_predicate: Callable[[str | Path], bool] | None = None,
     ):
         if watch_roots is not None:
             self.watch_roots = [WatchRoot(root.provider, root.path, root.glob_pattern) for root in watch_roots]
@@ -523,6 +525,8 @@ class JSONLWatcher:
         self.registry_flush_interval_s = registry_flush_interval_s
         self.max_lines_per_file = max(1, max_lines_per_file)
         self.respect_denylist = respect_denylist
+        self.unknown_subagent_is_denylisted = unknown_subagent_is_denylisted
+        self.denylist_predicate = denylist_predicate
         self._tailers: dict[str, JSONLTailer] = {}
         self._file_providers: dict[str, str] = {}
         self._stop = threading.Event()
@@ -560,7 +564,12 @@ class JSONLWatcher:
         return "unknown"
 
     def _is_denylisted(self, filepath: str) -> bool:
-        return self.respect_denylist and is_denylisted(filepath)
+        if self.denylist_predicate is not None:
+            return self.respect_denylist and self.denylist_predicate(filepath)
+        return self.respect_denylist and is_denylisted(
+            filepath,
+            unknown_subagent_is_denylisted=self.unknown_subagent_is_denylisted,
+        )
 
     def _discover_jsonl_files(self) -> list[str]:
         """Find all .jsonl files under each watched project, including nested session artifacts."""
