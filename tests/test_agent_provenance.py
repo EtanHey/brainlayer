@@ -30,7 +30,7 @@ def test_classifies_provider_roots_and_workflow_paths(tmp_path: Path) -> None:
         (
             home / ".gemini" / "sessions" / "session.jsonl",
             "gemini-session",
-            "OUT",
+            "KEEP",
         ),
         (
             home
@@ -212,13 +212,13 @@ def test_effective_visibility_preserves_keep_knowledge_and_decision_but_isolates
     isolate = classify_provenance(
         str(tmp_path / ".cursor" / "projects" / "repo" / "agent-transcripts" / "session.jsonl")
     )
-    out = classify_provenance(str(tmp_path / ".gemini" / "sessions" / "session.jsonl"))
+    gemini = classify_provenance(str(tmp_path / ".gemini" / "sessions" / "session.jsonl"))
 
     assert effective_visibility(keep, "knowledge") == "default"
     assert effective_visibility(keep, "decision") == "default"
     assert effective_visibility(keep, "operational") == "operational"
     assert effective_visibility(isolate, "knowledge") == "operational"
-    assert effective_visibility(out, "knowledge") == "cold"
+    assert effective_visibility(gemini, "knowledge") == "default"
 
 
 def test_report_summarizes_tags_policies_and_effective_visibility_without_real_db(tmp_path: Path) -> None:
@@ -254,8 +254,8 @@ def test_report_summarizes_tags_policies_and_effective_visibility_without_real_d
         "direct-session": 1,
         "gemini-session": 1,
     }
-    assert report["policies"] == {"KEEP": 2, "ISOLATE": 1, "OUT": 1}
-    assert report["effective_visibility"] == {"cold": 1, "default": 2, "operational": 1}
+    assert report["policies"] == {"KEEP": 3, "ISOLATE": 1, "OUT": 0}
+    assert report["effective_visibility"] == {"cold": 0, "default": 3, "operational": 1}
 
 
 def test_report_script_bootstraps_src_when_run_directly(tmp_path: Path) -> None:

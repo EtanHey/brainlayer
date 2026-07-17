@@ -113,6 +113,15 @@ def test_unattributed_subagent_is_deferred_until_identity_is_known(monkeypatch, 
     assert not is_denylisted(worker)
 
 
+def test_historical_policy_preserves_unverifiable_subagents(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv(BRAINLAYER_INGEST_DENYLIST_ENV, raising=False)
+    missing_worker = tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent-missing.jsonl"
+
+    assert is_denylisted(missing_worker)
+    assert not is_denylisted(missing_worker, unknown_subagent_is_denylisted=False)
+
+
 def test_subagent_attribution_skips_non_object_json_values(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv(BRAINLAYER_INGEST_DENYLIST_ENV, raising=False)

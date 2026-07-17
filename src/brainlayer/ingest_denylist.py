@@ -88,7 +88,7 @@ def _claude_subagent_attribution(path: Path) -> str | None:
     return attribution
 
 
-def is_denylisted(path: str | Path) -> bool:
+def is_denylisted(path: str | Path, *, unknown_subagent_is_denylisted: bool = True) -> bool:
     """Return True when a source path is under an ingest-denylisted transcript root."""
     candidate = Path(os.path.abspath(os.path.expanduser(str(path))))
     homes = _inferred_homes(candidate)
@@ -98,5 +98,5 @@ def is_denylisted(path: str | Path) -> bool:
                 return True
     if BRAINLAYER_INGEST_DENYLIST_ENV not in os.environ and _is_claude_subagent(candidate):
         attribution = _claude_subagent_attribution(candidate)
-        return attribution is None or attribution == "brain-worker"
+        return (attribution is None and unknown_subagent_is_denylisted) or attribution == "brain-worker"
     return False
