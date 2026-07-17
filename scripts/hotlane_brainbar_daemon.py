@@ -254,58 +254,59 @@ def _write_embedded_vectors(store_or_path: VectorStore | Path | str, vectors: li
                 binary_index_available=binary_index_available,
             )
 
-    transaction_started = False
     count = 0
-    telemetry_span = start_writer_span(
-        cursor.connection if hasattr(cursor, "connection") else (conn or store.conn),
-        db_path=db_path,
-        producer="hotlane",
-        lane="hotlane",
-        operation="write_vectors",
-        rows_planned=len(vectors),
-    )
     try:
-        cursor.execute("BEGIN IMMEDIATE")
-        transaction_started = True
         for chunk_id, content, embedding in vectors:
-            still_eligible = cursor.execute(
-                """
-                SELECT 1
-                FROM chunks c
-                LEFT JOIN chunk_vectors_rowids r ON c.id = r.id
-                WHERE c.id = ?
-                  AND c.content = ?
-                  AND r.id IS NULL
-                  AND c.content IS NOT NULL
-                  AND c.content != ''
-                  AND c.archived_at IS NULL
-                  AND c.superseded_by IS NULL
-                  AND c.aggregated_into IS NULL
-                  AND COALESCE(c.archived, 0) = 0
-                  AND COALESCE(c.status, 'active') = 'active'
-                """,
-                (chunk_id, content),
-            ).fetchone()
-            if not still_eligible:
-                continue
-            upsert_chunk_vector(cursor, chunk_id, embedding)
-            count += 1
-        cursor.execute("COMMIT")
-        transaction_started = False
-        telemetry_span.finish("commit", rows_touched=count)
-    except Exception as exc:
-        if transaction_started:
-            cursor.execute("ROLLBACK")
-        telemetry_span.finish("rollback", error=f"{type(exc).__name__}: {exc}")
-        raise
+            transaction_started = False
+            telemetry_span = start_writer_span(
+                cursor.connection if hasattr(cursor, "connection") else (conn or store.conn),
+                db_path=db_path,
+                producer="hotlane",
+                lane="hotlane",
+                operation="write_vectors",
+                rows_planned=1,
+            )
+            try:
+                cursor.execute("BEGIN IMMEDIATE")
+                transaction_started = True
+                still_eligible = cursor.execute(
+                    """
+                    SELECT 1
+                    FROM chunks c
+                    LEFT JOIN chunk_vectors_rowids r ON c.id = r.id
+                    WHERE c.id = ?
+                      AND c.content = ?
+                      AND r.id IS NULL
+                      AND c.content IS NOT NULL
+                      AND c.content != ''
+                      AND c.archived_at IS NULL
+                      AND c.superseded_by IS NULL
+                      AND c.aggregated_into IS NULL
+                      AND COALESCE(c.archived, 0) = 0
+                      AND COALESCE(c.status, 'active') = 'active'
+                    """,
+                    (chunk_id, content),
+                ).fetchone()
+                rows_touched = 0
+                if still_eligible:
+                    upsert_chunk_vector(cursor, chunk_id, embedding)
+                    rows_touched = 1
+                cursor.execute("COMMIT")
+                transaction_started = False
+                count += rows_touched
+                telemetry_span.finish("commit", rows_touched=rows_touched)
+            except Exception as exc:
+                if transaction_started:
+                    cursor.execute("ROLLBACK")
+                telemetry_span.finish("rollback", error=f"{type(exc).__name__}: {exc}")
+                raise
     finally:
         if conn is not None:
             conn.close()
+        if count:
+            from brainlayer.search_repo import clear_hybrid_search_cache
 
-    if count:
-        from brainlayer.search_repo import clear_hybrid_search_cache
-
-        clear_hybrid_search_cache(db_path)
+            clear_hybrid_search_cache(db_path)
     return count
 
 
