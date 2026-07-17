@@ -32,6 +32,7 @@ def parse_backfill_window(since: str | None, until: str | None) -> tuple[datetim
 
 def window_registry_suffix(since: datetime, until: datetime) -> str:
     """Return a stable filesystem-safe name for a backfill interval."""
+
     def format_timestamp(value: datetime) -> str:
         base = f"{value:%Y%m%dT%H%M%S}"
         fraction = f"{value.microsecond:06d}" if value.microsecond else ""

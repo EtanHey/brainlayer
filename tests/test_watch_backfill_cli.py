@@ -97,15 +97,7 @@ def test_watch_backfill_legacy_dry_run_counts_only_legacy_excluded_roots(tmp_pat
 
 def test_watch_backfill_legacy_scope_bypasses_current_subagent_denylist(tmp_path, monkeypatch):
     monkeypatch.delenv("BRAINLAYER_INGEST_DENYLIST", raising=False)
-    transcript = (
-        tmp_path
-        / ".claude"
-        / "projects"
-        / "repo"
-        / "session"
-        / "subagents"
-        / "agent-worker.jsonl"
-    )
+    transcript = tmp_path / ".claude" / "projects" / "repo" / "session" / "subagents" / "agent-worker.jsonl"
     transcript.parent.mkdir(parents=True)
     transcript.write_text(
         json.dumps(
