@@ -55,7 +55,6 @@ def test_rewind_archive_flush_emits_drain_span(tmp_path, monkeypatch):
     store.close()
     log_path.unlink(missing_ok=True)
     batcher = _RewindArchiveBatcher(
-        db_path,
         batch_size=10,
         flush_interval_ms=1_000,
     )

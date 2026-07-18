@@ -193,6 +193,41 @@ def test_recovery_does_not_kickstart_while_sigkilled_pid_still_owns_the_job(tmp_
     assert not any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands)
 
 
+def test_recovery_does_not_treat_failed_status_poll_as_pid_exit(tmp_path: Path, monkeypatch) -> None:
+    module = _load_module()
+    config = _config(module, tmp_path)
+    commands: list[list[str]] = []
+    print_count = 0
+    kickstarted = False
+
+    def command_runner(args: list[str]):
+        nonlocal print_count, kickstarted
+        commands.append(args)
+        if args[:2] == ["launchctl", "print"]:
+            print_count += 1
+            if print_count <= 2:
+                return SimpleNamespace(returncode=0, stdout="state = running\npid = 4321\n", stderr="")
+            if print_count == 3:
+                return SimpleNamespace(returncode=1, stdout="", stderr="launchctl temporarily unavailable")
+            if kickstarted:
+                return SimpleNamespace(returncode=0, stdout="state = running\npid = 9876\n", stderr="")
+            return SimpleNamespace(returncode=0, stdout="state = exited\n", stderr="")
+        if args[:3] == ["launchctl", "kickstart", "-k"]:
+            kickstarted = True
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(module, "SIGKILL_EXIT_TIMEOUT_SECONDS", 0.0)
+    try:
+        module._restart_watch(config, command_runner, sleep_fn=lambda _seconds: None)
+    except RuntimeError as exc:
+        assert "could not confirm watcher pid 4321 exited" in str(exc)
+    else:
+        raise AssertionError("a failed launchctl poll must not authorize a second writer")
+
+    assert ["/bin/kill", "-9", "4321"] in commands
+    assert not any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands)
+
+
 def test_default_runner_allows_bounded_time_for_uninterruptible_watcher_kickstart(monkeypatch) -> None:
     module = _load_module()
     observed_timeouts: list[int] = []

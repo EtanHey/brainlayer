@@ -414,7 +414,12 @@ def _restart_watch(
                 while True:
                     wait_returncode, wait_output = _command_result(command_runner, ["launchctl", "print", target])
                     last_wait_output = wait_output or str(wait_returncode)
-                    replacement_pid = _launchctl_pid(wait_output) if wait_returncode == 0 else None
+                    if wait_returncode != 0:
+                        if time.monotonic() >= deadline:
+                            raise RuntimeError(f"could not confirm watcher pid {old_pid} exited: {last_wait_output}")
+                        sleep_fn(SIGKILL_POLL_INTERVAL_SECONDS)
+                        continue
+                    replacement_pid = _launchctl_pid(wait_output)
                     if replacement_pid != old_pid:
                         if replacement_pid is not None and _launchctl_running(wait_output):
                             return f"respawn:{config.watch_label}"

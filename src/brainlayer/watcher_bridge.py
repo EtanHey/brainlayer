@@ -454,6 +454,10 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                     assert cursor is not None and store is not None
                     deadline_s = _nonnegative_float_env("BRAINLAYER_WATCHER_WRITE_DEADLINE_S", 15.0)
                     deadline = time.monotonic() + deadline_s
+                    source_end_offset = entry.get("_line_end_offset")
+                    if not isinstance(source_end_offset, int):
+                        source_end_offset = None
+                    source_position_recorded_at = float(time.time()) if source_end_offset is not None else None
                     attempt = 0
                     while True:
                         transaction_started = False
@@ -515,9 +519,10 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                     created_at, conversation_id, sender, tags, chunk_origin,
                                     seen_count, last_seen_at, dedupe_hash, simhash,
                                     simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3,
+                                    source_end_offset, source_last_queued_at,
                                     ingested_at, content_class, provenance_class)
                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                                           ?, ?, ?)""",
+                                           ?, ?, ?, ?, ?)""",
                                 (
                                     chunk_id,
                                     clean_content,
@@ -541,6 +546,8 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                     dedupe_fields.bands[1],
                                     dedupe_fields.bands[2],
                                     dedupe_fields.bands[3],
+                                    source_end_offset,
+                                    source_position_recorded_at,
                                     ingested_at,
                                     content_class,
                                     provenance_class,

@@ -3257,13 +3257,11 @@ class _RewindArchiveBatcher:
 
     def __init__(
         self,
-        db_path: Path,
         batch_size: int,
         flush_interval_ms: int,
         enqueue_batch=None,
         wall_clock=time.time,
     ) -> None:
-        self.db_path = db_path
         self.batch_size = max(1, int(batch_size))
         self.flush_interval_ms = max(1, int(flush_interval_ms))
         if enqueue_batch is None:
@@ -3316,7 +3314,7 @@ class _RewindArchiveBatcher:
         return 0
 
     def close(self) -> None:
-        return None
+        pass
 
 
 @app.command()
@@ -3389,7 +3387,6 @@ def watch(
             )
 
     rewind_archiver = _RewindArchiveBatcher(
-        db_path=db_path,
         batch_size=rewind_archive_batch_size,
         flush_interval_ms=rewind_archive_interval_ms,
     )

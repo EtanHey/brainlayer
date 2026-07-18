@@ -16,7 +16,6 @@ from brainlayer.vector_store import VectorStore
 def test_rewind_batcher_queues_full_offset_intents_without_opening_the_db(tmp_path: Path) -> None:
     queued: list[list[dict[str, object]]] = []
     batcher = _RewindArchiveBatcher(
-        db_path=tmp_path / "must-not-be-opened.db",
         batch_size=2,
         flush_interval_ms=60_000,
         enqueue_batch=lambda events: queued.append(events) or tmp_path / "queued.jsonl",
@@ -62,7 +61,6 @@ def test_rewind_batcher_queue_failure_preserves_pending_for_tick_retry(tmp_path:
         return tmp_path / "queued.jsonl"
 
     batcher = _RewindArchiveBatcher(
-        db_path=tmp_path / "brainlayer.db",
         batch_size=1,
         flush_interval_ms=1,
         enqueue_batch=flaky_enqueue,
