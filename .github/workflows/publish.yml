@@ -15,6 +15,25 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Verify release tag matches package version
+        run: |
+          set -euo pipefail
+          package_version="$({
+            awk '
+              $0 == "[project]" { in_project = 1; next }
+              in_project && /^\[/ { exit }
+              in_project && $1 == "version" && $2 == "=" {
+                gsub(/^"|"$/, "", $3)
+                print $3
+                exit
+              }
+            ' pyproject.toml
+          })"
+          expected_tag="v${package_version}"
+          if [[ -z "$package_version" || "$GITHUB_REF_NAME" != "$expected_tag" ]]; then
+            echo "::error title=Release tag mismatch::Tag '$GITHUB_REF_NAME' must equal '$expected_tag' from pyproject.toml"
+            exit 1
+          fi
       - run: pip install build
       - run: python -m build
       - uses: pypa/gh-action-pypi-publish@release/v1
