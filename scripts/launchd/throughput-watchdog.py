@@ -21,6 +21,8 @@ from typing import Callable
 
 DEFAULT_WATCH_LABEL = "com.brainlayer.watch"
 DEFAULT_NOTIFY_ENDPOINT = "http://localhost:3847/notify"
+DEFAULT_COMMAND_TIMEOUT_SECONDS = 15
+KICKSTART_TIMEOUT_SECONDS = 45
 
 
 @dataclass(frozen=True)
@@ -316,7 +318,10 @@ def collect_source_evidence(config: Config, now_epoch: int) -> SourceEvidence:
 
 
 def _default_command_runner(args: list[str]):
-    return subprocess.run(args, capture_output=True, text=True, timeout=15, check=False)
+    timeout_seconds = (
+        KICKSTART_TIMEOUT_SECONDS if args[:3] == ["launchctl", "kickstart", "-k"] else DEFAULT_COMMAND_TIMEOUT_SECONDS
+    )
+    return subprocess.run(args, capture_output=True, text=True, timeout=timeout_seconds, check=False)
 
 
 def _command_result(command_runner: CommandRunner, args: list[str]) -> tuple[int, str]:

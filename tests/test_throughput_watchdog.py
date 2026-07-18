@@ -5,6 +5,7 @@ import json
 import os
 import plistlib
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -118,6 +119,22 @@ def test_process_alive_zero_throughput_with_pending_bytes_kickstarts_after_thres
         f"command:launchctl kickstart -k gui/{os.getuid()}/com.example.brainlayer.watch",
         f"command:launchctl print gui/{os.getuid()}/com.example.brainlayer.watch",
     ]
+
+
+def test_default_runner_allows_bounded_time_for_uninterruptible_watcher_kickstart(monkeypatch) -> None:
+    module = _load_module()
+    observed_timeouts: list[int] = []
+
+    def fake_run(args, **kwargs):
+        observed_timeouts.append(kwargs["timeout"])
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    module._default_command_runner(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.brainlayer.watch"])
+    module._default_command_runner(["launchctl", "print", f"gui/{os.getuid()}/com.brainlayer.watch"])
+
+    assert observed_timeouts == [45, 15]
 
 
 def test_chunk_progress_or_no_pending_input_resets_stall_counter(tmp_path: Path) -> None:
