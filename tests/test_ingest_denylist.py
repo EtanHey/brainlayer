@@ -39,7 +39,7 @@ def test_default_policy_allows_normal_provider_sessions(monkeypatch, tmp_path):
     assert not is_denylisted(backup_home / ".claude" / "projects" / "proj" / "direct-session.jsonl")
 
 
-def test_default_policy_allows_ordinary_claude_subagents(monkeypatch, tmp_path):
+def test_default_policy_excludes_ordinary_claude_subagents(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv(BRAINLAYER_INGEST_DENYLIST_ENV, raising=False)
     projects = tmp_path / ".claude" / "projects" / "-Users-test-Gits-brainlayer" / "session-uuid"
@@ -47,8 +47,8 @@ def test_default_policy_allows_ordinary_claude_subagents(monkeypatch, tmp_path):
     explore = _write_subagent(projects / "subagents" / "agent-explore.jsonl", "Explore")
     general = _write_subagent(projects / "subagents" / "agent-general.jsonl", "general-purpose")
 
-    assert not is_denylisted(explore)
-    assert not is_denylisted(general)
+    assert is_denylisted(explore)
+    assert is_denylisted(general)
 
 
 def test_default_policy_excludes_exact_brain_worker_but_keeps_raw_jsonl(monkeypatch, tmp_path):
@@ -89,7 +89,7 @@ def test_default_policy_excludes_workflow_workers_by_path_and_keeps_raw_jsonl(mo
     assert workflow.exists()
 
 
-def test_unattributed_subagent_is_deferred_until_identity_is_known(monkeypatch, tmp_path):
+def test_subagent_attribution_becomes_known_after_append(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv(BRAINLAYER_INGEST_DENYLIST_ENV, raising=False)
     worker = _write_subagent(
@@ -97,7 +97,8 @@ def test_unattributed_subagent_is_deferred_until_identity_is_known(monkeypatch, 
         None,
     )
 
-    assert is_denylisted(worker)
+    denylist._SUBAGENT_ATTRIBUTION_CACHE.clear()
+    assert denylist._claude_subagent_attribution(worker) is None
 
     with worker.open("a", encoding="utf-8") as handle:
         handle.write(
@@ -111,13 +112,15 @@ def test_unattributed_subagent_is_deferred_until_identity_is_known(monkeypatch, 
             + "\n"
         )
 
-    assert not is_denylisted(worker)
+    assert denylist._claude_subagent_attribution(worker) == "general-purpose"
 
 
 def test_historical_policy_preserves_unverifiable_subagents(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv(BRAINLAYER_INGEST_DENYLIST_ENV, raising=False)
-    missing_worker = tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent-missing.jsonl"
+    missing_worker = (
+        tmp_path / ".claude" / "historical" / "projects" / "proj" / "session" / "subagents" / "agent-missing.jsonl"
+    )
 
     assert is_denylisted(missing_worker)
     assert not is_denylisted(missing_worker, unknown_subagent_is_denylisted=False)
@@ -133,7 +136,7 @@ def test_subagent_attribution_skips_non_object_json_values(monkeypatch, tmp_path
         encoding="utf-8",
     )
 
-    assert not is_denylisted(worker)
+    assert denylist._claude_subagent_attribution(worker) == "general-purpose"
 
 
 def test_subagent_attribution_is_found_after_legacy_scan_limit(monkeypatch, tmp_path):
@@ -147,7 +150,7 @@ def test_subagent_attribution_is_found_after_legacy_scan_limit(monkeypatch, tmp_
         encoding="utf-8",
     )
 
-    assert not is_denylisted(worker)
+    assert denylist._claude_subagent_attribution(worker) == "general-purpose"
 
 
 def test_unattributed_appends_are_scanned_incrementally(monkeypatch, tmp_path):
@@ -168,13 +171,13 @@ def test_unattributed_appends_are_scanned_incrementally(monkeypatch, tmp_path):
 
     monkeypatch.setattr(denylist.json, "loads", counting_loads)
 
-    assert is_denylisted(worker)
+    assert denylist._claude_subagent_attribution(worker) is None
     with worker.open("a", encoding="utf-8") as handle:
         handle.write(progress + "\n")
-    assert is_denylisted(worker)
+    assert denylist._claude_subagent_attribution(worker) is None
     with worker.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps({"attributionAgent": "general-purpose"}) + "\n")
-    assert not is_denylisted(worker)
+    assert denylist._claude_subagent_attribution(worker) == "general-purpose"
     assert calls == 202
 
 
@@ -186,7 +189,7 @@ def test_cached_attribution_is_invalidated_when_same_inode_is_rewritten_larger(m
         tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent.jsonl",
         "general-purpose",
     )
-    assert not is_denylisted(worker)
+    assert denylist._claude_subagent_attribution(worker) == "general-purpose"
     initial_stat = worker.stat()
 
     worker.write_text(
@@ -204,7 +207,7 @@ def test_cached_attribution_is_invalidated_when_same_inode_is_rewritten_larger(m
 
     assert rewritten_stat.st_ino == initial_stat.st_ino
     assert rewritten_stat.st_size > initial_stat.st_size
-    assert is_denylisted(worker)
+    assert denylist._claude_subagent_attribution(worker) == "brain-worker"
 
 
 def test_explicit_empty_override_disables_default_subagent_policy(monkeypatch, tmp_path):

@@ -11,7 +11,10 @@ from pathlib import Path
 
 BRAINLAYER_INGEST_DENYLIST_ENV = "BRAINLAYER_INGEST_DENYLIST"
 
-DEFAULT_INGEST_DENYLIST = ("~/.claude/projects/**/wf_*/**",)
+DEFAULT_INGEST_DENYLIST = (
+    "~/.claude/projects/**/wf_*/**",
+    "~/.claude/projects/**/subagents/**",
+)
 
 
 @dataclass(frozen=True)
