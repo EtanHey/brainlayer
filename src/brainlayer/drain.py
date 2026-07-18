@@ -415,10 +415,16 @@ def _merge_watcher_source_position(
         return
     existing_offset = row[2]
     incoming_offset = int(incoming["source_end_offset"])
-    merged_offset = incoming_offset if existing_offset is None else min(int(existing_offset), incoming_offset)
+    reactivating = reactivate and row[4] is not None
+    if reactivating:
+        merged_offset = incoming_offset
+    else:
+        merged_offset = incoming_offset if existing_offset is None else min(int(existing_offset), incoming_offset)
     existing_queued_at = row[3]
     incoming_queued_at = incoming.get("source_last_queued_at")
-    if incoming_queued_at is None:
+    if reactivating and incoming_queued_at is not None:
+        merged_queued_at = float(incoming_queued_at)
+    elif incoming_queued_at is None:
         merged_queued_at = existing_queued_at
     elif existing_queued_at is None:
         merged_queued_at = float(incoming_queued_at)
@@ -428,7 +434,7 @@ def _merge_watcher_source_position(
         "source_end_offset": merged_offset,
         "source_last_queued_at": merged_queued_at,
     }
-    if reactivate and row[4] is not None:
+    if reactivating:
         updates["archived_at"] = None
         if "archived" in cols:
             updates["archived"] = 0
@@ -1217,6 +1223,8 @@ def _has_high_priority_queue_files(queue_dir: Path) -> bool:
 
 
 def _queue_file_priority(path: Path) -> tuple[int, str]:
+    if path.name.startswith("watcher-rewind-"):
+        return (-1, path.name)
     return (2 if _is_enrichment_queue_file(path) else 0, path.name)
 
 
