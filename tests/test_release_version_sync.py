@@ -26,9 +26,7 @@ def test_release_versions_stay_in_sync() -> None:
 
 def test_tag_publishers_fail_closed_on_metadata_mismatch() -> None:
     for workflow_name in ("publish.yml", "brainbar-release.yml"):
-        workflow = yaml.safe_load(
-            (REPO_ROOT / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
-        )
+        workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8"))
         steps = next(iter(workflow["jobs"].values()))["steps"]
         gate = next(
             (step for step in steps if step.get("name") == "Verify release tag matches package version"),
