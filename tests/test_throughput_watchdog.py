@@ -36,6 +36,13 @@ def _config(module, tmp_path: Path, *, stall_threshold: int = 3, cooldown_second
     )
 
 
+def _progress(module, chunk_rowid: int, liveness_rowid: int = 0):
+    return module.WatcherProgress(
+        chunk_rowid=chunk_rowid,
+        liveness_rowid=liveness_rowid,
+    )
+
+
 def test_first_observation_establishes_a_baseline_without_restart(tmp_path: Path) -> None:
     module = _load_module()
     config = _config(module, tmp_path)
@@ -44,7 +51,7 @@ def test_first_observation_establishes_a_baseline_without_restart(tmp_path: Path
     result = module.run_once(
         config,
         now_epoch=1_000,
-        highwater_reader=lambda _path: 40,
+        progress_reader=lambda _path: _progress(module, 40),
         source_probe=lambda _config, _now: module.SourceEvidence(2, 120, 3, 999.0),
         command_runner=lambda args: commands.append(args),
     )
@@ -61,7 +68,8 @@ def test_process_alive_zero_throughput_with_pending_bytes_kickstarts_after_thres
 
     def command_runner(args: list[str]):
         command_events.append("command:" + " ".join(args))
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+        stdout = "state = running\npid = 4321\n" if args[:2] == ["launchctl", "print"] else ""
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
 
     def alert_fn(_config, _result):
         command_events.append("alert")
@@ -70,7 +78,7 @@ def test_process_alive_zero_throughput_with_pending_bytes_kickstarts_after_thres
     baseline = module.run_once(
         config,
         now_epoch=1_000,
-        highwater_reader=lambda _path: 40,
+        progress_reader=lambda _path: _progress(module, 40),
         source_probe=lambda _config, _now: evidence,
         command_runner=command_runner,
         alert_fn=alert_fn,
@@ -78,7 +86,7 @@ def test_process_alive_zero_throughput_with_pending_bytes_kickstarts_after_thres
     first = module.run_once(
         config,
         now_epoch=1_060,
-        highwater_reader=lambda _path: 40,
+        progress_reader=lambda _path: _progress(module, 40),
         source_probe=lambda _config, _now: evidence,
         command_runner=command_runner,
         alert_fn=alert_fn,
@@ -86,7 +94,7 @@ def test_process_alive_zero_throughput_with_pending_bytes_kickstarts_after_thres
     second = module.run_once(
         config,
         now_epoch=1_120,
-        highwater_reader=lambda _path: 40,
+        progress_reader=lambda _path: _progress(module, 40),
         source_probe=lambda _config, _now: evidence,
         command_runner=command_runner,
         alert_fn=alert_fn,
@@ -94,7 +102,7 @@ def test_process_alive_zero_throughput_with_pending_bytes_kickstarts_after_thres
     third = module.run_once(
         config,
         now_epoch=1_180,
-        highwater_reader=lambda _path: 40,
+        progress_reader=lambda _path: _progress(module, 40),
         source_probe=lambda _config, _now: evidence,
         command_runner=command_runner,
         alert_fn=alert_fn,
@@ -121,25 +129,25 @@ def test_chunk_progress_or_no_pending_input_resets_stall_counter(tmp_path: Path)
     module.run_once(
         config,
         now_epoch=1_000,
-        highwater_reader=lambda _path: 40,
+        progress_reader=lambda _path: _progress(module, 40),
         source_probe=lambda _config, _now: pending,
     )
     stalled = module.run_once(
         config,
         now_epoch=1_060,
-        highwater_reader=lambda _path: 40,
+        progress_reader=lambda _path: _progress(module, 40),
         source_probe=lambda _config, _now: pending,
     )
     progressed = module.run_once(
         config,
         now_epoch=1_120,
-        highwater_reader=lambda _path: 41,
+        progress_reader=lambda _path: _progress(module, 41),
         source_probe=lambda _config, _now: pending,
     )
     idle_result = module.run_once(
         config,
         now_epoch=1_180,
-        highwater_reader=lambda _path: 41,
+        progress_reader=lambda _path: _progress(module, 41),
         source_probe=lambda _config, _now: idle,
     )
 
@@ -158,7 +166,7 @@ def test_restart_failure_is_visible_and_not_recorded_as_recovered(tmp_path: Path
     module.run_once(
         config,
         now_epoch=1_000,
-        highwater_reader=lambda _path: 40,
+        progress_reader=lambda _path: _progress(module, 40),
         source_probe=lambda _config, _now: evidence,
     )
 
@@ -170,7 +178,7 @@ def test_restart_failure_is_visible_and_not_recorded_as_recovered(tmp_path: Path
     result = module.run_once(
         config,
         now_epoch=1_060,
-        highwater_reader=lambda _path: 40,
+        progress_reader=lambda _path: _progress(module, 40),
         source_probe=lambda _config, _now: evidence,
         command_runner=command_runner,
         alert_fn=lambda _config, _result: None,
@@ -179,8 +187,20 @@ def test_restart_failure_is_visible_and_not_recorded_as_recovered(tmp_path: Path
     assert result.action == "recovery_failed"
     assert "kickstart refused" in result.error
     state = json.loads(config.state_path.read_text(encoding="utf-8"))
-    assert "last_restart_epoch" not in state
+    assert state["last_restart_epoch"] == 1_060
     assert state["last_recovery_error"] == result.error
+
+    commands: list[list[str]] = []
+    cooldown = module.run_once(
+        config,
+        now_epoch=1_120,
+        progress_reader=lambda _path: _progress(module, 40),
+        source_probe=lambda _config, _now: evidence,
+        command_runner=lambda args: commands.append(args),
+        alert_fn=lambda _config, _result: None,
+    )
+    assert cooldown.action == "cooldown"
+    assert not any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands)
 
 
 def test_alert_failure_does_not_block_watcher_recovery(tmp_path: Path) -> None:
@@ -190,7 +210,7 @@ def test_alert_failure_does_not_block_watcher_recovery(tmp_path: Path) -> None:
     module.run_once(
         config,
         now_epoch=1_000,
-        highwater_reader=lambda _path: 40,
+        progress_reader=lambda _path: _progress(module, 40),
         source_probe=lambda _config, _now: evidence,
     )
     commands: list[list[str]] = []
@@ -201,9 +221,16 @@ def test_alert_failure_does_not_block_watcher_recovery(tmp_path: Path) -> None:
     result = module.run_once(
         config,
         now_epoch=1_060,
-        highwater_reader=lambda _path: 40,
+        progress_reader=lambda _path: _progress(module, 40),
         source_probe=lambda _config, _now: evidence,
-        command_runner=lambda args: commands.append(args),
+        command_runner=lambda args: (
+            commands.append(args)
+            or SimpleNamespace(
+                returncode=0,
+                stdout="state = running\npid = 4321\n" if args[:2] == ["launchctl", "print"] else "",
+                stderr="",
+            )
+        ),
         alert_fn=broken_alert,
     )
 
@@ -248,11 +275,11 @@ def test_source_probe_fails_visibly_when_find_cannot_complete(tmp_path: Path, mo
     config = _config(module, tmp_path)
     config.source_roots[0].mkdir(parents=True)
     config.registry_path.write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(
-        module.subprocess,
-        "run",
-        lambda *_args, **_kwargs: SimpleNamespace(returncode=1, stdout=b"", stderr=b"permission denied"),
-    )
+
+    def fail_scan(*_args, **_kwargs):
+        raise RuntimeError("recent-source scan failed: permission denied")
+
+    monkeypatch.setattr(module, "_bounded_nul_paths", fail_scan)
 
     try:
         module.collect_source_evidence(config, now_epoch=1_000)
@@ -262,17 +289,239 @@ def test_source_probe_fails_visibly_when_find_cannot_complete(tmp_path: Path, mo
         raise AssertionError("an incomplete source scan must not report idle")
 
 
-def test_highwater_is_scoped_to_realtime_watcher_without_a_count_scan(tmp_path: Path) -> None:
+def test_bounded_find_streams_and_terminates_before_buffering_unbounded_paths(tmp_path: Path) -> None:
+    module = _load_module()
+    producer = tmp_path / "produce_paths.py"
+    producer.write_text(
+        "import sys, time\nsys.stdout.buffer.write(b'a\\0b\\0c\\0')\nsys.stdout.buffer.flush()\ntime.sleep(30)\n",
+        encoding="utf-8",
+    )
+
+    try:
+        module._bounded_nul_paths(
+            [sys.executable, str(producer)],
+            max_paths=2,
+            timeout_seconds=5,
+        )
+    except RuntimeError as exc:
+        assert "exceeded 2" in str(exc)
+    else:
+        raise AssertionError("the producer must be terminated as soon as the path bound is exceeded")
+
+
+def test_bounded_find_preserves_nonzero_exit_and_timeout_failures(tmp_path: Path) -> None:
+    module = _load_module()
+    failed = tmp_path / "failed_scan.py"
+    failed.write_text(
+        "import sys\nsys.stderr.write('permission denied')\nraise SystemExit(7)\n",
+        encoding="utf-8",
+    )
+    stalled = tmp_path / "stalled_scan.py"
+    stalled.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
+
+    try:
+        module._bounded_nul_paths(
+            [sys.executable, str(failed)],
+            max_paths=2,
+            timeout_seconds=5,
+        )
+    except RuntimeError as exc:
+        assert "permission denied" in str(exc)
+    else:
+        raise AssertionError("a nonzero find exit must fail the probe")
+
+    try:
+        module._bounded_nul_paths(
+            [sys.executable, str(stalled)],
+            max_paths=2,
+            timeout_seconds=0.1,
+        )
+    except RuntimeError as exc:
+        assert "exceeded 0.1s" in str(exc)
+    else:
+        raise AssertionError("a stalled find process must be terminated at the scan timeout")
+
+
+def test_source_probe_fails_closed_when_a_recent_file_cannot_be_statted(tmp_path: Path, monkeypatch) -> None:
+    module = _load_module()
+    config = _config(module, tmp_path)
+    source_root = config.source_roots[0]
+    source_root.mkdir(parents=True)
+    unreadable = source_root / "unreadable.jsonl"
+    unreadable.write_text("{}\n", encoding="utf-8")
+    config.registry_path.write_text("{}", encoding="utf-8")
+    original_stat = Path.stat
+
+    def fail_selected_stat(path: Path, *args, **kwargs):
+        if path == unreadable:
+            raise PermissionError("stat denied")
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", fail_selected_stat)
+
+    try:
+        module.collect_source_evidence(config, now_epoch=int(original_stat(unreadable).st_mtime) + 1)
+    except RuntimeError as exc:
+        assert "stat denied" in str(exc)
+    else:
+        raise AssertionError("partial source evidence must never authorize recovery")
+
+
+def test_progress_tracks_realtime_chunks_and_durable_watcher_liveness(tmp_path: Path) -> None:
     module = _load_module()
     db_path = tmp_path / "brainlayer.db"
     with sqlite3.connect(db_path) as connection:
         connection.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, source TEXT)")
+        connection.execute(
+            "CREATE TABLE watcher_liveness_events (id INTEGER PRIMARY KEY AUTOINCREMENT, chunk_id TEXT, ingested_at INTEGER)"
+        )
         connection.executemany(
             "INSERT INTO chunks(id, source) VALUES (?, ?)",
             [("w1", "realtime_watcher"), ("m1", "mcp"), ("w2", "realtime_watcher")],
         )
+        connection.executemany(
+            "INSERT INTO watcher_liveness_events(chunk_id, ingested_at) VALUES (?, ?)",
+            [("w1", 100), ("manual-canonical", 101)],
+        )
 
-    assert module.read_watcher_highwater(db_path) == 3
+    assert module.read_watcher_progress(db_path) == _progress(module, 3, 2)
+
+
+def test_liveness_progress_prevents_false_restart_for_dedupe_only_ingest(tmp_path: Path) -> None:
+    module = _load_module()
+    config = _config(module, tmp_path, stall_threshold=1)
+    evidence = module.SourceEvidence(1, 20, 1, 999.0)
+    commands: list[list[str]] = []
+    module.run_once(
+        config,
+        now_epoch=1_000,
+        progress_reader=lambda _path: _progress(module, 40, 10),
+        source_probe=lambda _config, _now: evidence,
+    )
+
+    result = module.run_once(
+        config,
+        now_epoch=1_060,
+        progress_reader=lambda _path: _progress(module, 40, 11),
+        source_probe=lambda _config, _now: evidence,
+        command_runner=lambda args: commands.append(args),
+    )
+
+    assert result.action == "progress"
+    assert result.watcher_highwater_delta == 0
+    assert result.watcher_liveness_highwater_delta == 1
+    assert commands == []
+
+
+def test_recovery_requires_kickstarted_job_to_reach_running_state(tmp_path: Path) -> None:
+    module = _load_module()
+    config = _config(module, tmp_path, stall_threshold=1)
+    evidence = module.SourceEvidence(1, 20, 1, 999.0)
+    module.run_once(
+        config,
+        now_epoch=1_000,
+        progress_reader=lambda _path: _progress(module, 40),
+        source_probe=lambda _config, _now: evidence,
+    )
+
+    def command_runner(args: list[str]):
+        stdout = "state = exited\nlast exit code = 1\n" if args[:2] == ["launchctl", "print"] else ""
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    result = module.run_once(
+        config,
+        now_epoch=1_060,
+        progress_reader=lambda _path: _progress(module, 40),
+        source_probe=lambda _config, _now: evidence,
+        command_runner=command_runner,
+        alert_fn=lambda _config, _result: None,
+    )
+
+    assert result.action == "recovery_failed"
+    assert "did not reach running state" in result.error
+
+
+def test_recovery_attempt_is_persisted_before_external_kickstart(tmp_path: Path, monkeypatch) -> None:
+    module = _load_module()
+    config = _config(module, tmp_path, stall_threshold=1)
+    evidence = module.SourceEvidence(1, 20, 1, 999.0)
+    module.run_once(
+        config,
+        now_epoch=1_000,
+        progress_reader=lambda _path: _progress(module, 40),
+        source_probe=lambda _config, _now: evidence,
+    )
+    events: list[str] = []
+    original_write = module._atomic_write_json
+
+    def recording_write(path: Path, payload: dict) -> None:
+        events.append(f"write:{payload.get('last_action')}")
+        original_write(path, payload)
+
+    def command_runner(args: list[str]):
+        events.append("command:" + " ".join(args))
+        stdout = "state = running\npid = 4321\n" if args[:2] == ["launchctl", "print"] else ""
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(module, "_atomic_write_json", recording_write)
+    module.run_once(
+        config,
+        now_epoch=1_060,
+        progress_reader=lambda _path: _progress(module, 40),
+        source_probe=lambda _config, _now: evidence,
+        command_runner=command_runner,
+        alert_fn=lambda _config, _result: None,
+    )
+
+    attempt_index = events.index("write:recovery_attempt")
+    kickstart_index = next(
+        index for index, event in enumerate(events) if event.startswith("command:launchctl kickstart")
+    )
+    assert attempt_index < kickstart_index
+
+
+def test_recovery_attempt_survives_a_post_kickstart_state_write_failure(tmp_path: Path, monkeypatch) -> None:
+    module = _load_module()
+    config = _config(module, tmp_path, stall_threshold=1)
+    evidence = module.SourceEvidence(1, 20, 1, 999.0)
+    module.run_once(
+        config,
+        now_epoch=1_000,
+        progress_reader=lambda _path: _progress(module, 40),
+        source_probe=lambda _config, _now: evidence,
+    )
+    original_write = module._atomic_write_json
+    writes = 0
+
+    def fail_final_write(path: Path, payload: dict) -> None:
+        nonlocal writes
+        writes += 1
+        if writes == 2:
+            raise OSError("disk unavailable after kickstart")
+        original_write(path, payload)
+
+    def command_runner(args: list[str]):
+        stdout = "state = running\npid = 4321\n" if args[:2] == ["launchctl", "print"] else ""
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(module, "_atomic_write_json", fail_final_write)
+    try:
+        module.run_once(
+            config,
+            now_epoch=1_060,
+            progress_reader=lambda _path: _progress(module, 40),
+            source_probe=lambda _config, _now: evidence,
+            command_runner=command_runner,
+            alert_fn=lambda _config, _result: None,
+        )
+    except OSError as exc:
+        assert "disk unavailable" in str(exc)
+    else:
+        raise AssertionError("the final state-write failure must remain visible")
+
+    durable_state = json.loads(config.state_path.read_text(encoding="utf-8"))
+    assert durable_state["last_action"] == "recovery_attempt"
+    assert durable_state["last_restart_epoch"] == 1_060
 
 
 def test_launchagent_runs_every_minute_and_invokes_installed_script() -> None:

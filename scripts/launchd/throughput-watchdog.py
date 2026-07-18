@@ -8,6 +8,7 @@ import fcntl
 import json
 import math
 import os
+import selectors
 import shutil
 import sqlite3
 import subprocess
@@ -50,11 +51,19 @@ class SourceEvidence:
     scan_errors: int = 0
 
 
+@dataclass(frozen=True)
+class WatcherProgress:
+    chunk_rowid: int
+    liveness_rowid: int
+
+
 @dataclass
 class WatchdogResult:
     checked_at_epoch: int
     watcher_highwater_rowid: int
     watcher_highwater_delta: int | None
+    watcher_liveness_highwater_rowid: int
+    watcher_liveness_highwater_delta: int | None
     pending_files: int
     pending_bytes: int
     recent_files: int
@@ -68,7 +77,7 @@ class WatchdogResult:
 
 
 CommandRunner = Callable[[list[str]], object]
-HighwaterReader = Callable[[Path], int]
+ProgressReader = Callable[[Path], WatcherProgress]
 SourceProbe = Callable[[Config, int], SourceEvidence]
 AlertFn = Callable[[Config, WatchdogResult], None]
 
@@ -125,7 +134,7 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
             pass
 
 
-def read_watcher_highwater(db_path: Path) -> int:
+def read_watcher_progress(db_path: Path) -> WatcherProgress:
     database = db_path.expanduser().resolve()
     if not database.is_file():
         raise RuntimeError(f"BrainLayer DB does not exist: {database}")
@@ -133,14 +142,30 @@ def read_watcher_highwater(db_path: Path) -> int:
     try:
         with sqlite3.connect(uri, uri=True, timeout=2.0) as connection:
             connection.execute("PRAGMA query_only = ON")
-            row = connection.execute(
+            chunk_row = connection.execute(
                 "SELECT COALESCE(MAX(rowid), 0) FROM chunks WHERE source = 'realtime_watcher'"
             ).fetchone()
+            has_liveness_table = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'watcher_liveness_events'"
+            ).fetchone()
+            liveness_row = (
+                connection.execute("SELECT COALESCE(MAX(rowid), 0) FROM watcher_liveness_events").fetchone()
+                if has_liveness_table
+                else (0,)
+            )
     except sqlite3.Error as exc:
-        raise RuntimeError(f"watcher high-water query failed: {exc}") from exc
-    if row is None:
-        raise RuntimeError("watcher high-water query returned no row")
-    return int(row[0])
+        raise RuntimeError(f"watcher progress query failed: {exc}") from exc
+    if chunk_row is None or liveness_row is None:
+        raise RuntimeError("watcher progress query returned no row")
+    return WatcherProgress(
+        chunk_rowid=int(chunk_row[0]),
+        liveness_rowid=int(liveness_row[0]),
+    )
+
+
+def read_watcher_highwater(db_path: Path) -> int:
+    """Compatibility helper for callers that only need committed watcher chunks."""
+    return read_watcher_progress(db_path).chunk_rowid
 
 
 def _registry_offset(entry: object, *, current_inode: int) -> int | None:
@@ -153,6 +178,79 @@ def _registry_offset(entry: object, *, current_inode: int) -> int | None:
     if isinstance(registry_inode, int) and registry_inode > 0 and registry_inode != current_inode:
         return 0
     return offset
+
+
+def _stop_process(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=1)
+
+
+def _bounded_nul_paths(command: list[str], *, max_paths: int, timeout_seconds: float) -> list[Path]:
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if process.stdout is None or process.stderr is None:
+        _stop_process(process)
+        raise RuntimeError("recent-source scan did not expose output pipes")
+
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+    selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+    deadline = time.monotonic() + timeout_seconds
+    stdout_buffer = bytearray()
+    stderr_buffer = bytearray()
+    paths: list[Path] = []
+    completed = False
+    try:
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(f"recent-source scan exceeded {timeout_seconds:.1f}s")
+            events = selector.select(timeout=min(remaining, 0.25))
+            if not events:
+                continue
+            for key, _mask in events:
+                chunk = os.read(key.fd, 65_536)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                if key.data == "stderr":
+                    if len(stderr_buffer) < 65_536:
+                        stderr_buffer.extend(chunk[: 65_536 - len(stderr_buffer)])
+                    continue
+                stdout_buffer.extend(chunk)
+                while True:
+                    separator = stdout_buffer.find(0)
+                    if separator < 0:
+                        break
+                    raw_path = bytes(stdout_buffer[:separator])
+                    del stdout_buffer[: separator + 1]
+                    if not raw_path:
+                        continue
+                    paths.append(Path(os.fsdecode(raw_path)))
+                    if len(paths) > max_paths:
+                        raise RuntimeError(f"recent-source scan exceeded {max_paths} JSONL files")
+
+        remaining = max(0.0, deadline - time.monotonic())
+        try:
+            returncode = process.wait(timeout=remaining)
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"recent-source scan exceeded {timeout_seconds:.1f}s") from exc
+        completed = True
+        if returncode != 0:
+            detail = os.fsdecode(bytes(stderr_buffer)).strip()
+            raise RuntimeError(f"recent-source scan failed: {detail or returncode}")
+        if stdout_buffer:
+            raise RuntimeError("recent-source scan returned a non-NUL-terminated path")
+        return paths
+    finally:
+        selector.close()
+        if not completed:
+            _stop_process(process)
 
 
 def collect_source_evidence(config: Config, now_epoch: int) -> SourceEvidence:
@@ -172,40 +270,29 @@ def collect_source_evidence(config: Config, now_epoch: int) -> SourceEvidence:
     if find_binary is None:
         raise RuntimeError("find is required for the bounded recent-source scan")
     recent_minutes = max(1, math.ceil(config.recent_window_seconds / 60))
-    try:
-        completed = subprocess.run(
-            [
-                find_binary,
-                *(str(root) for root in roots),
-                "-type",
-                "f",
-                "-name",
-                "*.jsonl",
-                "-mmin",
-                f"-{recent_minutes}",
-                "-print0",
-            ],
-            capture_output=True,
-            timeout=config.max_scan_seconds,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(f"recent-source scan exceeded {config.max_scan_seconds:.1f}s") from exc
-    if completed.returncode != 0:
-        detail = os.fsdecode(completed.stderr).strip()
-        raise RuntimeError(f"recent-source scan failed: {detail or completed.returncode}")
-    recent_paths = [Path(os.fsdecode(raw)) for raw in completed.stdout.split(b"\0") if raw]
-    if len(recent_paths) > config.max_source_files:
-        raise RuntimeError(f"recent-source scan exceeded {config.max_source_files} JSONL files")
+    recent_paths = _bounded_nul_paths(
+        [
+            find_binary,
+            *(str(root) for root in roots),
+            "-type",
+            "f",
+            "-name",
+            "*.jsonl",
+            "-mmin",
+            f"-{recent_minutes}",
+            "-print0",
+        ],
+        max_paths=config.max_source_files,
+        timeout_seconds=config.max_scan_seconds,
+    )
 
     for source_file in recent_paths:
         if time.monotonic() - started > config.max_scan_seconds:
             raise RuntimeError(f"source evidence exceeded {config.max_scan_seconds:.1f}s")
         try:
             source_stat = source_file.stat()
-        except OSError:
-            scan_errors += 1
-            continue
+        except OSError as exc:
+            raise RuntimeError(f"cannot inspect recent source file {source_file}: {exc}") from exc
         if source_stat.st_mtime < cutoff:
             continue
         recent_files += 1
@@ -263,10 +350,17 @@ def _restart_watch(config: Config, command_runner: CommandRunner) -> str:
     )
     if kickstart_returncode != 0:
         raise RuntimeError(f"launchctl kickstart failed: {kickstart_output or kickstart_returncode}")
-    verify_returncode, verify_output = _command_result(command_runner, ["launchctl", "print", target])
-    if verify_returncode != 0:
-        raise RuntimeError(f"launchctl print after kickstart failed: {verify_output or verify_returncode}")
-    return f"kickstart:{config.watch_label}"
+    last_verify = ""
+    for attempt in range(10):
+        verify_returncode, verify_output = _command_result(command_runner, ["launchctl", "print", target])
+        last_verify = verify_output or str(verify_returncode)
+        if verify_returncode == 0 and any(line.strip() == "state = running" for line in verify_output.splitlines()):
+            return f"kickstart:{config.watch_label}"
+        if attempt < 9:
+            time.sleep(0.2)
+    raise RuntimeError(
+        f"watch label did not reach running state after kickstart: {last_verify or 'no launchctl output'}"
+    )
 
 
 def _best_effort_alert(config: Config, result: WatchdogResult) -> None:
@@ -307,25 +401,33 @@ def run_once(
     config: Config,
     *,
     now_epoch: int | None = None,
-    highwater_reader: HighwaterReader = read_watcher_highwater,
+    progress_reader: ProgressReader = read_watcher_progress,
     source_probe: SourceProbe = collect_source_evidence,
     command_runner: CommandRunner = _default_command_runner,
     alert_fn: AlertFn = _best_effort_alert,
 ) -> WatchdogResult:
     checked_at = int(time.time()) if now_epoch is None else int(now_epoch)
     state = _read_json_object(config.state_path)
-    current_highwater = highwater_reader(config.db_path)
+    current_progress = progress_reader(config.db_path)
+    current_highwater = current_progress.chunk_rowid
+    current_liveness_highwater = current_progress.liveness_rowid
     evidence = source_probe(config, checked_at)
     previous_highwater = state.get("watcher_highwater_rowid")
+    previous_liveness_highwater = state.get("watcher_liveness_highwater_rowid")
     previous_stalled = state.get("stalled_ticks", 0)
     if not isinstance(previous_stalled, int) or previous_stalled < 0:
         previous_stalled = 0
     delta = current_highwater - previous_highwater if isinstance(previous_highwater, int) else None
+    liveness_delta = (
+        current_liveness_highwater - previous_liveness_highwater
+        if isinstance(previous_liveness_highwater, int)
+        else None
+    )
 
-    if delta is None or delta < 0:
+    if delta is None or liveness_delta is None or delta < 0 or liveness_delta < 0:
         action = "baseline"
         stalled_ticks = 0
-    elif delta > 0:
+    elif delta > 0 or liveness_delta > 0:
         action = "progress"
         stalled_ticks = 0
     elif evidence.pending_files == 0:
@@ -339,6 +441,8 @@ def run_once(
         checked_at_epoch=checked_at,
         watcher_highwater_rowid=current_highwater,
         watcher_highwater_delta=delta,
+        watcher_liveness_highwater_rowid=current_liveness_highwater,
+        watcher_liveness_highwater_delta=liveness_delta,
         pending_files=evidence.pending_files,
         pending_bytes=evidence.pending_bytes,
         recent_files=evidence.recent_files,
@@ -366,6 +470,26 @@ def run_once(
             except Exception as exc:
                 result.alert_error = str(exc)
                 print(f"throughput-watchdog alert failed: {exc}", file=sys.stderr)
+            attempt_state = dict(state)
+            attempt_state.update(
+                {
+                    "checked_at_epoch": checked_at,
+                    "watcher_highwater_rowid": current_highwater,
+                    "watcher_liveness_highwater_rowid": current_liveness_highwater,
+                    "pending_files": evidence.pending_files,
+                    "pending_bytes": evidence.pending_bytes,
+                    "recent_files": evidence.recent_files,
+                    "untracked_recent_files": evidence.untracked_recent_files,
+                    "newest_source_mtime": evidence.newest_mtime,
+                    "scan_errors": evidence.scan_errors,
+                    "stalled_ticks": stalled_ticks,
+                    "last_action": "recovery_attempt",
+                    "last_restart_epoch": checked_at,
+                    "restart_attempt_count": int(state.get("restart_attempt_count", 0)) + 1,
+                }
+            )
+            _atomic_write_json(config.state_path, attempt_state)
+            state = attempt_state
             try:
                 result.action = _restart_watch(config, command_runner)
             except RuntimeError as exc:
@@ -379,6 +503,7 @@ def run_once(
         {
             "checked_at_epoch": checked_at,
             "watcher_highwater_rowid": current_highwater,
+            "watcher_liveness_highwater_rowid": current_liveness_highwater,
             "pending_files": evidence.pending_files,
             "pending_bytes": evidence.pending_bytes,
             "recent_files": evidence.recent_files,
@@ -390,7 +515,6 @@ def run_once(
         }
     )
     if result.action.startswith("kickstart:"):
-        next_state["last_restart_epoch"] = checked_at
         next_state["restart_count"] = int(state.get("restart_count", 0)) + 1
         next_state.pop("last_recovery_error", None)
     elif result.action == "recovery_failed":
