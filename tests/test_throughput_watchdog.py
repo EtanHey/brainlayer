@@ -606,3 +606,53 @@ def test_launchagent_runs_every_minute_and_invokes_installed_script() -> None:
     assert plist["EnvironmentVariables"]["BRAINLAYER_ENV_FILE"] == "__BRAINLAYER_ENV_FILE__"
     assert plist["EnvironmentVariables"]["BRAINLAYER_LAUNCHD_SERVICE"] == "watch"
     assert plist["SoftResourceLimits"]["NumberOfFiles"] >= 4096
+
+
+def test_alert_framing_pages_once_per_episode_not_per_kickstart(tmp_path: Path) -> None:
+    """Alert-framing: a chronic wedge sawtooth pages on the FIRST wedge of an
+    episode only, re-paging for a NEW episode after a sustained healthy run."""
+    module = _load_module()
+    config = _config(module, tmp_path, stall_threshold=3, cooldown_seconds=0)
+    alerts: list[int] = []
+
+    def command_runner(args: list[str]):
+        stdout = "state = running\npid = 4321\n" if args[:2] == ["launchctl", "print"] else ""
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    clock = {"t": 1_000}
+
+    def tick(rowid: int, *, pending: bool) -> object:
+        clock["t"] += 60
+        evidence = module.SourceEvidence(2, 120, 3, 999.0) if pending else module.SourceEvidence(0, 0, 0, 999.0)
+        res = module.run_once(
+            config,
+            now_epoch=clock["t"],
+            progress_reader=lambda _p, r=rowid: _progress(module, r, r),
+            source_probe=lambda _c, _n, e=evidence: e,
+            command_runner=command_runner,
+            alert_fn=lambda _c, _r: alerts.append(clock["t"]),
+        )
+        return res
+
+    tick(40, pending=True)                    # baseline
+    tick(40, pending=True)                    # stall 1
+    tick(40, pending=True)                    # stall 2
+    k1 = tick(40, pending=True)               # stall 3 -> kickstart + FIRST alert
+    assert k1.action.startswith("kickstart:")
+    assert len(alerts) == 1                    # episode 1 paged once
+
+    tick(50, pending=True)                    # brief recovery (1 healthy tick, < reset)
+    tick(50, pending=True)                    # stall 1
+    tick(50, pending=True)                    # stall 2
+    k2 = tick(50, pending=True)               # stall 3 -> kickstart, SUPPRESSED (same episode)
+    assert k2.action.startswith("kickstart:")
+    assert len(alerts) == 1                    # sawtooth did NOT re-page
+
+    tick(60, pending=True)                    # sustained recovery: healthy 1
+    tick(70, pending=True)                    # healthy 2
+    tick(80, pending=True)                    # healthy 3 -> episode latch clears
+    tick(80, pending=True)                    # stall 1
+    tick(80, pending=True)                    # stall 2
+    k3 = tick(80, pending=True)               # stall 3 -> kickstart + NEW-episode alert
+    assert k3.action.startswith("kickstart:")
+    assert len(alerts) == 2                    # new episode paged again

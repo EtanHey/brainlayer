@@ -21,6 +21,11 @@ from typing import Callable
 
 DEFAULT_WATCH_LABEL = "com.brainlayer.watch"
 DEFAULT_NOTIFY_ENDPOINT = "http://localhost:3847/notify"
+# Alert-framing (orc law, stalker postmortem): after a wedge episode is paged once,
+# the operator is re-notified for the NEXT episode only — i.e. after this many
+# consecutive healthy (progressing) ticks clear the latch. Prevents a chronic
+# wedge sawtooth from paging on every kickstart.
+_EPISODE_RESET_TICKS = 3
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 15
 KICKSTART_TIMEOUT_SECONDS = 45
 
@@ -491,11 +496,15 @@ def run_once(
         elif config.dry_run:
             result.action = "would_kickstart"
         else:
-            try:
-                alert_fn(config, result)
-            except Exception as exc:
-                result.alert_error = str(exc)
-                print(f"throughput-watchdog alert failed: {exc}", file=sys.stderr)
+            # Alert-framing: page on the FIRST wedge of an episode only — never
+            # per-kick of a chronic sawtooth. The latch clears after a sustained
+            # healthy run (episode reset below). Recovery still runs every tick.
+            if not state.get("episode_alerted"):
+                try:
+                    alert_fn(config, result)
+                except Exception as exc:
+                    result.alert_error = str(exc)
+                    print(f"throughput-watchdog alert failed: {exc}", file=sys.stderr)
             attempt_state = dict(state)
             attempt_state.update(
                 {
@@ -512,6 +521,7 @@ def run_once(
                     "last_action": "recovery_attempt",
                     "last_restart_epoch": checked_at,
                     "restart_attempt_count": int(state.get("restart_attempt_count", 0)) + 1,
+                    "episode_alerted": True,
                 }
             )
             _atomic_write_json(config.state_path, attempt_state)
@@ -549,6 +559,20 @@ def run_once(
         next_state["last_alert_error"] = result.alert_error
     else:
         next_state.pop("last_alert_error", None)
+
+    # Episode reset (alert-framing): clear the first-wedge page latch after a
+    # SUSTAINED healthy run, so the next genuine wedge pages again without
+    # re-paging every cycle of a chronic sawtooth. A kickstart tick is never
+    # "healthy" (its state already advanced the liveness rowid), so the counter
+    # only climbs on real, unassisted watcher progress.
+    prev_liveness = int(state.get("watcher_liveness_highwater_rowid", 0) or 0)
+    if result.stalled_ticks == 0 and current_liveness_highwater > prev_liveness:
+        healthy_ticks = int(state.get("healthy_ticks", 0)) + 1
+        next_state["healthy_ticks"] = healthy_ticks
+        if healthy_ticks >= _EPISODE_RESET_TICKS:
+            next_state["episode_alerted"] = False
+    else:
+        next_state["healthy_ticks"] = 0
     _atomic_write_json(config.state_path, next_state)
     return result
 
