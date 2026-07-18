@@ -308,6 +308,34 @@ def test_source_probe_ignores_unwatched_cursor_project_jsonl(tmp_path: Path) -> 
     assert result.untracked_recent_files == 1
 
 
+def test_source_probe_treats_truncated_tracked_file_as_pending_rewind(tmp_path: Path) -> None:
+    module = _load_module()
+    config = _config(module, tmp_path)
+    config.source_roots[0].mkdir(parents=True)
+    rewound = config.source_roots[0] / "rewound.jsonl"
+    rewound.write_text("new\n", encoding="utf-8")
+    config.registry_path.write_text(
+        json.dumps({str(rewound): {"offset": rewound.stat().st_size + 100}}),
+        encoding="utf-8",
+    )
+
+    result = module.collect_source_evidence(config, now_epoch=1_000)
+
+    assert result.pending_files == 1
+    assert result.pending_bytes == rewound.stat().st_size
+
+
+def test_config_defaults_registry_next_to_selected_database(tmp_path: Path) -> None:
+    module = _load_module()
+    custom_db = tmp_path / "sandbox" / "brainlayer.db"
+
+    args = module._build_parser().parse_args(["--db", str(custom_db)])
+    config = module._config_from_args(args)
+
+    assert config.db_path == custom_db
+    assert config.registry_path == custom_db.parent / "offsets.json"
+
+
 def test_source_probe_fails_visibly_when_find_cannot_complete(tmp_path: Path, monkeypatch) -> None:
     module = _load_module()
     config = _config(module, tmp_path)

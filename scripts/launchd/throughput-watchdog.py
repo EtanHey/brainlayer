@@ -321,7 +321,10 @@ def collect_source_evidence(config: Config, now_epoch: int) -> SourceEvidence:
                 pending_files += 1
                 pending_bytes += source_stat.st_size
             continue
-        if source_stat.st_size > offset:
+        if source_stat.st_size < offset:
+            pending_files += 1
+            pending_bytes += source_stat.st_size
+        elif source_stat.st_size > offset:
             pending_files += 1
             pending_bytes += source_stat.st_size - offset
 
@@ -556,7 +559,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--db", type=Path, default=Path(os.environ.get("BRAINLAYER_DB", home / ".local/share/brainlayer/brainlayer.db"))
     )
-    parser.add_argument("--registry", type=Path, default=home / ".local/share/brainlayer/offsets.json")
+    parser.add_argument("--registry", type=Path)
     parser.add_argument("--state", type=Path, default=home / ".local/share/brainlayer/throughput-watchdog-state.json")
     parser.add_argument("--source-root", action="append", type=Path, dest="source_roots")
     parser.add_argument("--watch-label", default=DEFAULT_WATCH_LABEL)
@@ -574,13 +577,12 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = _build_parser().parse_args(argv)
-    if args.max_scan_seconds <= 0:
-        raise SystemExit("--max-scan-seconds must be positive")
-    config = Config(
-        db_path=args.db,
-        registry_path=args.registry,
+def _config_from_args(args: argparse.Namespace) -> Config:
+    db_path = args.db.expanduser()
+    registry_path = args.registry.expanduser() if args.registry is not None else db_path.parent / "offsets.json"
+    return Config(
+        db_path=db_path,
+        registry_path=registry_path,
         state_path=args.state,
         source_roots=tuple(args.source_roots or _default_source_roots(Path.home())),
         watch_label=args.watch_label,
@@ -594,6 +596,13 @@ def main(argv: list[str] | None = None) -> int:
         log_path=args.log,
         notify_endpoint=args.notify_endpoint,
     )
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
+    if args.max_scan_seconds <= 0:
+        raise SystemExit("--max-scan-seconds must be positive")
+    config = _config_from_args(args)
     lock_path = config.state_path.expanduser().with_suffix(config.state_path.suffix + ".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+b") as lock_file:
