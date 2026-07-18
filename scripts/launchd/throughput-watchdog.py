@@ -562,11 +562,16 @@ def run_once(
 
     # Episode reset (alert-framing): clear the first-wedge page latch after a
     # SUSTAINED healthy run, so the next genuine wedge pages again without
-    # re-paging every cycle of a chronic sawtooth. A kickstart tick is never
-    # "healthy" (its state already advanced the liveness rowid), so the counter
-    # only climbs on real, unassisted watcher progress.
+    # re-paging every cycle of a chronic sawtooth. "Healthy" = real watcher
+    # progress by EITHER measure — chunk highwater OR liveness rowid — because
+    # a DB without watcher_liveness_events reports liveness_rowid==0 forever
+    # while chunks still advance (else the latch would never reset there). A
+    # kickstart tick is never healthy: its own state pre-advances both rowids to
+    # the current values, so neither comparison is strictly-greater on that tick.
+    prev_chunk = int(state.get("watcher_highwater_rowid", 0) or 0)
     prev_liveness = int(state.get("watcher_liveness_highwater_rowid", 0) or 0)
-    if result.stalled_ticks == 0 and current_liveness_highwater > prev_liveness:
+    progressed = current_highwater > prev_chunk or current_liveness_highwater > prev_liveness
+    if result.stalled_ticks == 0 and progressed:
         healthy_ticks = int(state.get("healthy_ticks", 0)) + 1
         next_state["healthy_ticks"] = healthy_ticks
         if healthy_ticks >= _EPISODE_RESET_TICKS:
