@@ -43,7 +43,7 @@ def test_enrich_realtime_processes_chunks(monkeypatch):
     monkeypatch.setattr(controller, "_ensure_content_hash_column", lambda store: True)
     monkeypatch.setattr(controller, "_is_duplicate_content", lambda store, content: False)
     monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
-    monkeypatch.setattr(controller.time, "sleep", lambda _: None)
+    monkeypatch.setattr(controller, "_sleep", lambda _: None)
     monkeypatch.setattr(controller, "_emit_enrichment_start", lambda *args, **kwargs: True)
     monkeypatch.setattr(controller, "_emit_enrichment_complete", lambda *args, **kwargs: True)
     monkeypatch.setattr(controller, "_emit_enrichment_error", lambda *args, **kwargs: True)

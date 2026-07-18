@@ -12,6 +12,7 @@
 
 import XCTest
 import SQLite3
+import Darwin
 @testable import BrainBar
 
 final class BrainDatabaseWindowedBucketsTests: XCTestCase {
@@ -76,6 +77,20 @@ final class BrainDatabaseWindowedBucketsTests: XCTestCase {
                 );
                 INSERT INTO watcher_liveness_events (chunk_id, ingested_at)
                 VALUES ('\(chunkID)', \(Int(ingestedAt.timeIntervalSince1970)));
+            """
+        )
+    }
+
+    private func insertWrite(
+        id: String,
+        source: String,
+        localCreatedAtText: String
+    ) throws {
+        try sqliteExecWriteLocal(
+            path: tempDBPath,
+            sql: """
+                INSERT INTO chunks (id, content, source, created_at, enriched_at, enrich_status, status)
+                VALUES ('\(id)', 'local wall-clock bucket probe \(id)', '\(source)', '\(localCreatedAtText)', NULL, NULL, 'active');
             """
         )
     }
@@ -193,6 +208,41 @@ final class BrainDatabaseWindowedBucketsTests: XCTestCase {
         XCTAssertEqual(buckets.agentTotal, 1)
         XCTAssertEqual(buckets.watcherTotal, 1)
         XCTAssertEqual(buckets.allWriteTotal - buckets.agentTotal - buckets.watcherTotal, 2)
+    }
+
+    func testAgentWindowBucketsCountNaiveLocalWallClockTimestamp() throws {
+        XCTAssertTrue(try db.tableExists("chunks"))
+
+        let previousTimeZone = getenv("TZ").map { String(cString: $0) }
+        XCTAssertEqual(setenv("TZ", "Asia/Jerusalem", 1), 0)
+        tzset()
+        defer {
+            if let previousTimeZone {
+                setenv("TZ", previousTimeZone, 1)
+            } else {
+                unsetenv("TZ")
+            }
+            tzset()
+        }
+
+        let now = Date(timeIntervalSince1970: 1_784_031_600)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "Asia/Jerusalem")
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSSSS"
+        try insertWrite(
+            id: "agent-local-wall-clock",
+            source: "mcp",
+            localCreatedAtText: formatter.string(from: now.addingTimeInterval(-30))
+        )
+
+        let buckets = try db.pipelineWindowBuckets(activityWindowMinutes: 30, bucketCount: 6, now: now)
+
+        XCTAssertEqual(
+            buckets.agentWriteBuckets,
+            [0, 0, 0, 0, 0, 1],
+            "Agent-store metrics must interpret naive local T timestamps as local wall-clock time."
+        )
     }
 
     func testWatcherWindowBucketsUseIngestionLivenessInsteadOfTranscriptCreatedAt() throws {

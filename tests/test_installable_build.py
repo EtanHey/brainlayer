@@ -581,6 +581,72 @@ def test_packaged_launchd_installer_installs_tier0_watchdog_without_env_runner(t
     assert commands.index(bootstrap_command) < commands.index(print_command)
 
 
+def test_packaged_launchd_installer_installs_throughput_watchdog(tmp_path: Path) -> None:
+    launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
+    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    source_script = REPO_ROOT / "scripts" / "launchd" / "throughput-watchdog.py"
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+                "exit 0",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+
+    home = tmp_path / "home&throughput"
+    home.mkdir()
+    env_file = home / ".config" / "brainlayer" / "brainlayer.env"
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text("BRAINLAYER_SYSTEM_ENABLED=1\n", encoding="utf-8")
+    result = subprocess.run(
+        [str(launchd_dir / "install.sh"), "throughput-watchdog"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": sys.executable,
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    installed_script = home / ".local" / "lib" / "brainlayer" / "throughput-watchdog.py"
+    installed_env_runner = home / ".local" / "lib" / "brainlayer" / "brainlayer-env-run.sh"
+    assert installed_script.read_bytes() == source_script.read_bytes()
+    assert os.access(installed_script, os.X_OK)
+    assert os.access(installed_env_runner, os.X_OK)
+
+    rendered = home / "Library" / "LaunchAgents" / "com.brainlayer.throughput-watchdog.plist"
+    plist = plistlib.loads(rendered.read_bytes())
+    assert plist["ProgramArguments"] == [str(installed_env_runner), sys.executable, str(installed_script), "--json"]
+    assert plist["EnvironmentVariables"]["HOME"] == str(home)
+    assert plist["EnvironmentVariables"]["BRAINLAYER_ENV_FILE"] == str(env_file)
+    assert plist["EnvironmentVariables"]["BRAINLAYER_LAUNCHD_SERVICE"] == "watch"
+    assert plist["StartInterval"] == 60
+    assert "__THROUGHPUT_WATCHDOG_SCRIPT__" not in rendered.read_text(encoding="utf-8")
+    assert "__PYTHON_BIN__" not in rendered.read_text(encoding="utf-8")
+
+    domain = f"gui/{os.getuid()}"
+    commands = launchctl_log.read_text(encoding="utf-8").splitlines()
+    assert f"bootstrap {domain} {rendered}" in commands
+    assert f"print {domain}/com.brainlayer.throughput-watchdog" in commands
+
+
 def test_launchd_installer_renders_launchd_dir_for_maintenance_resume(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -1149,3 +1215,5 @@ def test_wheel_contains_cli_and_launchd_templates(tmp_path: Path) -> None:
     assert "brainlayer/launchd/com.brainlayer.enrichment.plist" in listing
     assert "brainlayer/launchd/com.brainlayer.tier0-watchdog.plist" in listing
     assert "brainlayer/launchd/tier0-watchdog.sh" in listing
+    assert "brainlayer/launchd/com.brainlayer.throughput-watchdog.plist" in listing
+    assert "brainlayer/launchd/throughput-watchdog.py" in listing

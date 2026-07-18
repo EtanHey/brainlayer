@@ -48,6 +48,7 @@ def _run_drill(
     last_alert_epoch: int | None = None,
     last_alert_reason: str = "",
     repeat_alert_seconds: int = 1_800,
+    alert_timeout_seconds: int = 3,
     state_contents: str = "{}\n",
 ) -> DrillResult:
     fake_bin = tmp_path / "bin"
@@ -128,7 +129,7 @@ def _run_drill(
         **os.environ,
         "FAKE_LAUNCHCTL_PRINT_EXIT": "0" if label_loaded else "113",
         "FAKE_STATE_MTIME": str(state_mtime or 0),
-        "TIER0_ALERT_TIMEOUT_SECONDS": "1",
+        "TIER0_ALERT_TIMEOUT_SECONDS": str(alert_timeout_seconds),
         "TIER0_ALERT_STATE_PATH": str(alert_state_path),
         "TIER0_CURL": str(fake_bin / "curl"),
         "TIER0_DOMAIN": DOMAIN,
@@ -229,6 +230,7 @@ def test_d3_hanging_notify_endpoint_cannot_suppress_local_alert_or_heal(tmp_path
         label_loaded=True,
         state_mtime=NOW_EPOCH - STALE_SECONDS - 1,
         curl_hangs=True,
+        alert_timeout_seconds=1,
     )
 
     assert result.process.returncode == 1, result.process.stdout + result.process.stderr
@@ -304,6 +306,7 @@ def test_alert_fanout_uses_one_shared_deadline(tmp_path: Path) -> None:
         curl_hangs=True,
         osascript_hangs=True,
         use_fake_wait_sleep=True,
+        alert_timeout_seconds=1,
     )
 
     assert result.process.returncode == 1, result.process.stdout + result.process.stderr

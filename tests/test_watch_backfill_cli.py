@@ -5,8 +5,11 @@ from typer.testing import CliRunner
 from brainlayer.cli import app
 
 
-def test_watch_backfill_dry_run_excludes_cursor_agent_transcripts(tmp_path):
-    transcript = tmp_path / ".cursor" / "projects" / "repo" / "agent-transcripts" / "agent-session.jsonl"
+def test_watch_backfill_dry_run_includes_cursor_agent_transcripts(tmp_path, monkeypatch):
+    monkeypatch.delenv("BRAINLAYER_INGEST_DENYLIST", raising=False)
+    transcript = (
+        tmp_path / ".cursor" / "projects" / "repo" / "agent-transcripts" / "agent-session" / "agent-session.jsonl"
+    )
     unrelated = tmp_path / ".cursor" / "projects" / "repo" / "state.jsonl"
     transcript.parent.mkdir(parents=True)
     transcript.write_text(
@@ -27,13 +30,14 @@ def test_watch_backfill_dry_run_excludes_cursor_agent_transcripts(tmp_path):
     )
 
     assert result.exit_code == 0
-    assert "candidate_files=0" in result.output
-    assert "cursor-agent-transcripts=1" not in result.output
+    assert "candidate_files=1" in result.output
+    assert "cursor-agent-transcripts=1" in result.output
     assert "processed_entries=0" in result.output
     assert not (tmp_path / "offsets.json").exists()
 
 
-def test_watch_backfill_dry_run_excludes_codex_and_gemini_sessions(tmp_path):
+def test_watch_backfill_dry_run_includes_codex_and_gemini_sessions(tmp_path, monkeypatch):
+    monkeypatch.delenv("BRAINLAYER_INGEST_DENYLIST", raising=False)
     codex_transcript = tmp_path / ".codex" / "sessions" / "2026" / "07" / "worker.jsonl"
     gemini_transcript = tmp_path / ".gemini" / "sessions" / "worker.jsonl"
     for path in (codex_transcript, gemini_transcript):
@@ -53,15 +57,18 @@ def test_watch_backfill_dry_run_excludes_codex_and_gemini_sessions(tmp_path):
     )
 
     assert result.exit_code == 0
-    assert "candidate_files=0" in result.output
-    assert "codex=1" not in result.output
-    assert "gemini=1" not in result.output
+    assert "candidate_files=2" in result.output
+    assert "codex=1" in result.output
+    assert "gemini=1" in result.output
     assert "processed_entries=0" in result.output
     assert not (tmp_path / "offsets.json").exists()
 
 
-def test_watch_backfill_skips_cursor_agent_transcripts_without_queueing(tmp_path):
-    transcript = tmp_path / ".cursor" / "projects" / "repo" / "agent-transcripts" / "agent-session.jsonl"
+def test_watch_backfill_indexes_cursor_agent_transcripts_once(tmp_path, monkeypatch):
+    monkeypatch.delenv("BRAINLAYER_INGEST_DENYLIST", raising=False)
+    transcript = (
+        tmp_path / ".cursor" / "projects" / "repo" / "agent-transcripts" / "agent-session" / "agent-session.jsonl"
+    )
     registry = tmp_path / "offsets.json"
     queue_dir = tmp_path / "queue"
     transcript.parent.mkdir(parents=True)
@@ -94,10 +101,10 @@ def test_watch_backfill_skips_cursor_agent_transcripts_without_queueing(tmp_path
     )
 
     assert first.exit_code == 0, first.output
-    assert "processed_entries=0" in first.output
+    assert "processed_entries=1" in first.output
     queue_files = list(queue_dir.glob("watcher-*.jsonl"))
-    assert queue_files == []
-    assert not registry.exists()
+    assert len(queue_files) == 1
+    assert registry.exists()
 
     second = CliRunner().invoke(
         app,
@@ -115,4 +122,4 @@ def test_watch_backfill_skips_cursor_agent_transcripts_without_queueing(tmp_path
 
     assert second.exit_code == 0, second.output
     assert "processed_entries=0" in second.output
-    assert list(queue_dir.glob("watcher-*.jsonl")) == []
+    assert list(queue_dir.glob("watcher-*.jsonl")) == queue_files

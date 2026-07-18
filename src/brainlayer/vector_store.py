@@ -71,6 +71,7 @@ _MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 _MAX_INDEX_TXN_BATCH = 10_000
 _WRITE_BUSY_TIMEOUT_STATE = threading.local()
 _NO_EXEC_TRACE = object()
+_sleep = time.sleep
 _KNOWLEDGE_FTS_CLASS_SQL = "COALESCE(content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark', 'cold')"
 _OPERATIONAL_FTS_CLASS_SQL = "COALESCE(content_class, 'knowledge') = 'operational'"
 
@@ -398,7 +399,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                         return
                     if attempt == max_create_attempts - 1:
                         raise
-                    time.sleep(0.01 * (attempt + 1))
+                    _sleep(0.01 * (attempt + 1))
 
     def _reclaim_stale_writer_pidfiles(self, pidfile: Path) -> None:
         # Legacy pidfiles do not record the database path. Sweep sibling hashes
@@ -707,7 +708,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     remaining = deadline - time.monotonic()
                     if remaining <= 0 or delay >= remaining:
                         raise last_err
-                time.sleep(delay)
+                _sleep(delay)
             except BaseException as exc:
                 self._finish_init_writer_telemetry("error", error=f"{type(exc).__name__}: {exc}")
                 raise
@@ -2005,7 +2006,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     cursor.execute("ROLLBACK")
                 if attempt == 4:
                     raise
-                time.sleep(0.2 * (2**attempt))
+                _sleep(0.2 * (2**attempt))
             except Exception:
                 if transaction_started:
                     cursor.execute("ROLLBACK")
@@ -2673,7 +2674,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                         if committed_any:
                             invalidate_upsert_caches()
                         raise
-                    time.sleep(0.1 * (2**attempt))
+                    _sleep(0.1 * (2**attempt))
                 except Exception as exc:
                     rollback_active_transaction()
                     telemetry_span.finish("rollback", error=f"{type(exc).__name__}: {exc}")
