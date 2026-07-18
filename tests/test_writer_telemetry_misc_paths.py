@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from brainlayer.cli import _RewindArchiveBatcher
+from brainlayer.drain import drain_once
 from brainlayer.enrichment_controller import _apply_enrichment
 from brainlayer.vector_store import VectorStore
 
@@ -32,16 +33,22 @@ def _finished(log_path: Path, operation: str) -> list[dict]:
 def _insert_chunk(store: VectorStore, chunk_id: str, *, conversation_id: str = "session-one") -> None:
     store.conn.execute(
         """
-        INSERT INTO chunks (id, content, metadata, source_file, source, conversation_id, content_type)
-        VALUES (?, ?, '{}', 'watcher.jsonl', 'realtime_watcher', ?, 'assistant_text')
+        INSERT INTO chunks (
+            id, content, metadata, source_file, source, conversation_id, content_type,
+            source_end_offset, source_last_queued_at
+        )
+        VALUES (?, ?, '{}', 'watcher.jsonl', 'realtime_watcher', ?, 'assistant_text', 100, 0)
         """,
         (chunk_id, f"Content for {chunk_id}", conversation_id),
     )
 
 
-def test_rewind_archive_flush_emits_watcher_span(tmp_path, monkeypatch):
+def test_rewind_archive_flush_emits_drain_span(tmp_path, monkeypatch):
     log_path = _configure(monkeypatch, tmp_path)
     db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
     store = VectorStore(db_path)
     _insert_chunk(store, "rewind-one", conversation_id="session-one")
     _insert_chunk(store, "rewind-two", conversation_id="session-two")
@@ -52,20 +59,22 @@ def test_rewind_archive_flush_emits_watcher_span(tmp_path, monkeypatch):
         batch_size=10,
         flush_interval_ms=1_000,
     )
-    batcher.add("session-one")
-    batcher.add("session-two")
+    batcher.add("watcher.jsonl", "session-one", 200, 50)
+    batcher.add("watcher.jsonl", "session-two", 200, 50)
 
     try:
         assert batcher.flush("test") == 2
     finally:
         batcher.close()
 
+    assert _finished(log_path, "rewind_archive") == []
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, log_path=tmp_path / "drain.log") == 2
+
     events = _finished(log_path, "rewind_archive")
     assert len(events) == 1
-    assert events[0]["producer"] == "watcher"
+    assert events[0]["producer"] == "drain"
     assert events[0]["lane"] == "realtime"
-    assert events[0]["rows_planned"] is None
-    assert events[0]["sessions_planned"] == 2
+    assert events[0]["rows_planned"] == 2
     assert events[0]["rows_touched"] == 2
     assert events[0]["outcome"] == "commit"
 

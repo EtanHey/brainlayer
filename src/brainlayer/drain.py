@@ -1204,6 +1204,11 @@ def _queue_telemetry(paths: list[Path], events: list[dict[str, Any]]) -> dict[st
     }
 
 
+def _drain_operation(events: list[dict[str, Any]], default: str) -> str:
+    kinds = {str(_event_payload(event).get("kind") or "").strip() for event in events}
+    return "rewind_archive" if kinds == {"rewind_archive"} else default
+
+
 def _has_high_priority_queue_files(queue_dir: Path) -> bool:
     try:
         return any(not _is_enrichment_queue_file(path) for path in queue_dir.glob("*.jsonl"))
@@ -1399,7 +1404,7 @@ def burn_drain_once(
                 db_path=db_path,
                 producer="drain",
                 lane=queue_telemetry["lane"],
-                operation="burn_apply",
+                operation=_drain_operation(all_events, "burn_apply"),
                 rows_planned=len(all_events),
                 queue_wait_ms=queue_telemetry["queue_wait_ms"],
                 queue_source=queue_telemetry["queue_source"],
@@ -1558,7 +1563,7 @@ def drain_once(
                         db_path=db_path,
                         producer="drain",
                         lane=queue_telemetry["lane"],
-                        operation="apply_file",
+                        operation=_drain_operation(events_to_apply, "apply_file"),
                         rows_planned=len(events_to_apply),
                         queue_wait_ms=queue_telemetry["queue_wait_ms"],
                         queue_source=queue_telemetry["queue_source"],
