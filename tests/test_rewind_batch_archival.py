@@ -142,49 +142,6 @@ def _insert_rewind_row(
     )
 
 
-def test_rewind_archive_drains_before_watcher_backlog(tmp_path: Path, monkeypatch) -> None:
-    db_path = tmp_path / "brainlayer.db"
-    queue_dir = tmp_path / "queue"
-    _prepare_db(db_path)
-    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
-    with sqlite3.connect(db_path) as conn:
-        _insert_rewind_row(conn, chunk_id="reverted", source_end_offset=150)
-        conn.commit()
-
-    watcher_path = enqueue_watcher_chunk(
-        chunk_id="rt-backlog",
-        content="ordinary watcher backlog must not delay a rewind archive intent",
-        metadata={},
-        source_file="/tmp/backlog.jsonl",
-        source_end_offset=50,
-        project="brainlayer",
-        content_type="assistant_text",
-        value_type="high",
-        created_at="2026-07-18T12:00:00Z",
-        conversation_id="backlog",
-        queue_dir=queue_dir,
-    )
-    rewind_path = enqueue_rewind_archive_batch(
-        [
-            {
-                "filepath": "/tmp/session.jsonl",
-                "session_id": "session",
-                "old_offset": 200,
-                "new_offset": 100,
-            }
-        ],
-        queue_dir=queue_dir,
-        detected_at=time.time() + 10,
-    )
-
-    assert watcher_path.name < rewind_path.name
-    assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=tmp_path / "drain.log") == 1
-    assert watcher_path.exists()
-    assert not rewind_path.exists()
-    with sqlite3.connect(db_path) as conn:
-        assert conn.execute("SELECT archived_at IS NOT NULL FROM chunks WHERE id = 'reverted'").fetchone() == (1,)
-
-
 def test_drain_archives_only_reverted_offset_window_and_fails_closed_for_legacy_rows(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -374,16 +374,6 @@ def _launchctl_running(output: str) -> bool:
     return any(line.strip() == "state = running" for line in output.splitlines())
 
 
-def _pid_exists(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except OSError:
-        return True
-    return True
-
-
 def _restart_watch(
     config: Config,
     command_runner: CommandRunner,
@@ -425,8 +415,6 @@ def _restart_watch(
                     wait_returncode, wait_output = _command_result(command_runner, ["launchctl", "print", target])
                     last_wait_output = wait_output or str(wait_returncode)
                     if wait_returncode != 0:
-                        if not _pid_exists(old_pid):
-                            break
                         if time.monotonic() >= deadline:
                             raise RuntimeError(f"could not confirm watcher pid {old_pid} exited: {last_wait_output}")
                         sleep_fn(SIGKILL_POLL_INTERVAL_SECONDS)

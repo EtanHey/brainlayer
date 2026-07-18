@@ -217,7 +217,6 @@ def test_recovery_does_not_treat_failed_status_poll_as_pid_exit(tmp_path: Path, 
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(module, "SIGKILL_EXIT_TIMEOUT_SECONDS", 0.0)
-    monkeypatch.setattr(module.os, "kill", lambda _pid, _signal: None)
     try:
         module._restart_watch(config, command_runner, sleep_fn=lambda _seconds: None)
     except RuntimeError as exc:
@@ -227,43 +226,6 @@ def test_recovery_does_not_treat_failed_status_poll_as_pid_exit(tmp_path: Path, 
 
     assert ["/bin/kill", "-9", "4321"] in commands
     assert not any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands)
-
-
-def test_recovery_kickstarts_after_pid_probe_confirms_exit_during_failed_status_poll(
-    tmp_path: Path, monkeypatch
-) -> None:
-    module = _load_module()
-    config = _config(module, tmp_path)
-    commands: list[list[str]] = []
-    print_count = 0
-    kickstarted = False
-
-    def command_runner(args: list[str]):
-        nonlocal print_count, kickstarted
-        commands.append(args)
-        if args[:2] == ["launchctl", "print"]:
-            print_count += 1
-            if print_count <= 2:
-                return SimpleNamespace(returncode=0, stdout="state = running\npid = 4321\n", stderr="")
-            if kickstarted:
-                return SimpleNamespace(returncode=0, stdout="state = running\npid = 9876\n", stderr="")
-            return SimpleNamespace(returncode=1, stdout="", stderr="service not found")
-        if args[:3] == ["launchctl", "kickstart", "-k"]:
-            kickstarted = True
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    def missing_pid(pid: int, signal_number: int) -> None:
-        assert (pid, signal_number) == (4321, 0)
-        raise ProcessLookupError
-
-    monkeypatch.setattr(module.os, "kill", missing_pid)
-    monkeypatch.setattr(module, "SIGKILL_EXIT_TIMEOUT_SECONDS", 0.0)
-
-    action = module._restart_watch(config, command_runner, sleep_fn=lambda _seconds: None)
-
-    assert action == "kickstart:com.example.brainlayer.watch"
-    assert ["/bin/kill", "-9", "4321"] in commands
-    assert any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands)
 
 
 def test_default_runner_allows_bounded_time_for_uninterruptible_watcher_kickstart(monkeypatch) -> None:

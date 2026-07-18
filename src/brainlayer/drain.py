@@ -1223,8 +1223,6 @@ def _has_high_priority_queue_files(queue_dir: Path) -> bool:
 
 
 def _queue_file_priority(path: Path) -> tuple[int, str]:
-    if path.name.startswith("watcher-rewind-"):
-        return (-1, path.name)
     return (2 if _is_enrichment_queue_file(path) else 0, path.name)
 
 
