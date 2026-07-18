@@ -23,6 +23,8 @@ DEFAULT_WATCH_LABEL = "com.brainlayer.watch"
 DEFAULT_NOTIFY_ENDPOINT = "http://localhost:3847/notify"
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 15
 KICKSTART_TIMEOUT_SECONDS = 45
+SIGKILL_EXIT_TIMEOUT_SECONDS = 45.0
+SIGKILL_POLL_INTERVAL_SECONDS = 0.5
 
 
 @dataclass(frozen=True)
@@ -356,10 +358,31 @@ def _command_result(command_runner: CommandRunner, args: list[str]) -> tuple[int
     return returncode, stderr or stdout
 
 
-def _restart_watch(config: Config, command_runner: CommandRunner) -> str:
+def _launchctl_pid(output: str) -> int | None:
+    for line in output.splitlines():
+        key, separator, value = line.strip().partition("=")
+        if separator and key.strip() == "pid":
+            try:
+                pid = int(value.strip())
+            except ValueError:
+                return None
+            return pid if pid > 1 else None
+    return None
+
+
+def _launchctl_running(output: str) -> bool:
+    return any(line.strip() == "state = running" for line in output.splitlines())
+
+
+def _restart_watch(
+    config: Config,
+    command_runner: CommandRunner,
+    *,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> str:
     domain = f"gui/{os.getuid()}"
     target = f"{domain}/{config.watch_label}"
-    loaded_returncode, _loaded_output = _command_result(command_runner, ["launchctl", "print", target])
+    loaded_returncode, loaded_output = _command_result(command_runner, ["launchctl", "print", target])
     if loaded_returncode != 0:
         plist_path = config.watch_plist_path.expanduser()
         if not plist_path.is_file():
@@ -370,6 +393,38 @@ def _restart_watch(config: Config, command_runner: CommandRunner) -> str:
         )
         if bootstrap_returncode != 0:
             raise RuntimeError(f"launchctl bootstrap failed: {bootstrap_output or bootstrap_returncode}")
+    else:
+        old_pid = _launchctl_pid(loaded_output)
+        if old_pid is not None:
+            validate_returncode, validate_output = _command_result(command_runner, ["launchctl", "print", target])
+            if validate_returncode != 0:
+                raise RuntimeError(
+                    f"could not validate watcher pid {old_pid} before SIGKILL: {validate_output or validate_returncode}"
+                )
+            validated_pid = _launchctl_pid(validate_output)
+            if validated_pid != old_pid:
+                if validated_pid is not None and _launchctl_running(validate_output):
+                    return f"respawn:{config.watch_label}"
+            else:
+                kill_returncode, kill_output = _command_result(command_runner, ["/bin/kill", "-9", str(old_pid)])
+                if kill_returncode != 0:
+                    raise RuntimeError(f"SIGKILL failed for watcher pid {old_pid}: {kill_output or kill_returncode}")
+                deadline = time.monotonic() + SIGKILL_EXIT_TIMEOUT_SECONDS
+                last_wait_output = ""
+                while True:
+                    wait_returncode, wait_output = _command_result(command_runner, ["launchctl", "print", target])
+                    last_wait_output = wait_output or str(wait_returncode)
+                    replacement_pid = _launchctl_pid(wait_output) if wait_returncode == 0 else None
+                    if replacement_pid != old_pid:
+                        if replacement_pid is not None and _launchctl_running(wait_output):
+                            return f"respawn:{config.watch_label}"
+                        break
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError(
+                            f"watcher pid {old_pid} survived SIGKILL for "
+                            f"{SIGKILL_EXIT_TIMEOUT_SECONDS:.0f}s: {last_wait_output}"
+                        )
+                    sleep_fn(SIGKILL_POLL_INTERVAL_SECONDS)
     kickstart_returncode, kickstart_output = _command_result(
         command_runner,
         ["launchctl", "kickstart", "-k", target],
@@ -380,10 +435,10 @@ def _restart_watch(config: Config, command_runner: CommandRunner) -> str:
     for attempt in range(10):
         verify_returncode, verify_output = _command_result(command_runner, ["launchctl", "print", target])
         last_verify = verify_output or str(verify_returncode)
-        if verify_returncode == 0 and any(line.strip() == "state = running" for line in verify_output.splitlines()):
+        if verify_returncode == 0 and _launchctl_running(verify_output):
             return f"kickstart:{config.watch_label}"
         if attempt < 9:
-            time.sleep(0.2)
+            sleep_fn(0.2)
     raise RuntimeError(
         f"watch label did not reach running state after kickstart: {last_verify or 'no launchctl output'}"
     )
@@ -540,7 +595,7 @@ def run_once(
             "last_action": result.action,
         }
     )
-    if result.action.startswith("kickstart:"):
+    if result.action.startswith(("kickstart:", "respawn:")):
         next_state["restart_count"] = int(state.get("restart_count", 0)) + 1
         next_state.pop("last_recovery_error", None)
     elif result.action == "recovery_failed":

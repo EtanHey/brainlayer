@@ -45,6 +45,30 @@ def _progress(module, chunk_rowid: int, liveness_rowid: int = 0):
     )
 
 
+def _successful_recovery_runner(events: list[str] | None = None):
+    print_count = 0
+    kickstarted = False
+
+    def command_runner(args: list[str]):
+        nonlocal print_count, kickstarted
+        if events is not None:
+            events.append("command:" + " ".join(args))
+        if args[:2] == ["launchctl", "print"]:
+            print_count += 1
+            if print_count <= 2:
+                stdout = "state = running\npid = 4321\n"
+            elif kickstarted:
+                stdout = "state = running\npid = 9876\n"
+            else:
+                stdout = "state = exited\n"
+            return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+        if args[:3] == ["launchctl", "kickstart", "-k"]:
+            kickstarted = True
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    return command_runner
+
+
 def test_first_observation_establishes_a_baseline_without_restart(tmp_path: Path) -> None:
     module = _load_module()
     config = _config(module, tmp_path)
@@ -68,10 +92,7 @@ def test_process_alive_zero_throughput_with_pending_bytes_kickstarts_after_thres
     config = _config(module, tmp_path, stall_threshold=3)
     command_events: list[str] = []
 
-    def command_runner(args: list[str]):
-        command_events.append("command:" + " ".join(args))
-        stdout = "state = running\npid = 4321\n" if args[:2] == ["launchctl", "print"] else ""
-        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+    command_runner = _successful_recovery_runner(command_events)
 
     def alert_fn(_config, _result):
         command_events.append("alert")
@@ -117,9 +138,59 @@ def test_process_alive_zero_throughput_with_pending_bytes_kickstarts_after_thres
     assert command_events[0] == "alert"
     assert command_events[1:] == [
         f"command:launchctl print gui/{os.getuid()}/com.example.brainlayer.watch",
+        f"command:launchctl print gui/{os.getuid()}/com.example.brainlayer.watch",
+        "command:/bin/kill -9 4321",
+        f"command:launchctl print gui/{os.getuid()}/com.example.brainlayer.watch",
         f"command:launchctl kickstart -k gui/{os.getuid()}/com.example.brainlayer.watch",
         f"command:launchctl print gui/{os.getuid()}/com.example.brainlayer.watch",
     ]
+
+
+def test_recovery_does_not_sigkill_a_pid_that_changed_during_validation(tmp_path: Path) -> None:
+    module = _load_module()
+    config = _config(module, tmp_path)
+    commands: list[list[str]] = []
+    outputs = iter(
+        [
+            "state = running\npid = 4321\n",
+            "state = running\npid = 9876\n",
+        ]
+    )
+
+    def command_runner(args: list[str]):
+        commands.append(args)
+        stdout = next(outputs) if args[:2] == ["launchctl", "print"] else ""
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    action = module._restart_watch(config, command_runner)
+
+    assert action == "respawn:com.example.brainlayer.watch"
+    assert commands == [
+        ["launchctl", "print", f"gui/{os.getuid()}/com.example.brainlayer.watch"],
+        ["launchctl", "print", f"gui/{os.getuid()}/com.example.brainlayer.watch"],
+    ]
+
+
+def test_recovery_does_not_kickstart_while_sigkilled_pid_still_owns_the_job(tmp_path: Path, monkeypatch) -> None:
+    module = _load_module()
+    config = _config(module, tmp_path)
+    commands: list[list[str]] = []
+
+    def command_runner(args: list[str]):
+        commands.append(args)
+        stdout = "state = running\npid = 4321\n" if args[:2] == ["launchctl", "print"] else ""
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(module, "SIGKILL_EXIT_TIMEOUT_SECONDS", 0.0)
+    try:
+        module._restart_watch(config, command_runner, sleep_fn=lambda _seconds: None)
+    except RuntimeError as exc:
+        assert "survived SIGKILL" in str(exc)
+    else:
+        raise AssertionError("recovery must fail while the lock-holding pid survives SIGKILL")
+
+    assert ["/bin/kill", "-9", "4321"] in commands
+    assert not any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands)
 
 
 def test_default_runner_allows_bounded_time_for_uninterruptible_watcher_kickstart(monkeypatch) -> None:
@@ -231,7 +302,7 @@ def test_alert_failure_does_not_block_watcher_recovery(tmp_path: Path) -> None:
         progress_reader=lambda _path: _progress(module, 40),
         source_probe=lambda _config, _now: evidence,
     )
-    commands: list[list[str]] = []
+    command_events: list[str] = []
 
     def broken_alert(_config, _result):
         raise OSError("notification path unavailable")
@@ -241,20 +312,13 @@ def test_alert_failure_does_not_block_watcher_recovery(tmp_path: Path) -> None:
         now_epoch=1_060,
         progress_reader=lambda _path: _progress(module, 40),
         source_probe=lambda _config, _now: evidence,
-        command_runner=lambda args: (
-            commands.append(args)
-            or SimpleNamespace(
-                returncode=0,
-                stdout="state = running\npid = 4321\n" if args[:2] == ["launchctl", "print"] else "",
-                stderr="",
-            )
-        ),
+        command_runner=_successful_recovery_runner(command_events),
         alert_fn=broken_alert,
     )
 
     assert result.action == "kickstart:com.example.brainlayer.watch"
     assert result.alert_error == "notification path unavailable"
-    assert any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands)
+    assert any(event.startswith("command:launchctl kickstart -k") for event in command_events)
 
 
 def test_source_probe_treats_recent_unregistered_input_as_pending(tmp_path: Path) -> None:
@@ -524,10 +588,7 @@ def test_recovery_attempt_is_persisted_before_external_kickstart(tmp_path: Path,
         events.append(f"write:{payload.get('last_action')}")
         original_write(path, payload)
 
-    def command_runner(args: list[str]):
-        events.append("command:" + " ".join(args))
-        stdout = "state = running\npid = 4321\n" if args[:2] == ["launchctl", "print"] else ""
-        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+    command_runner = _successful_recovery_runner(events)
 
     monkeypatch.setattr(module, "_atomic_write_json", recording_write)
     module.run_once(
@@ -566,9 +627,7 @@ def test_recovery_attempt_survives_a_post_kickstart_state_write_failure(tmp_path
             raise OSError("disk unavailable after kickstart")
         original_write(path, payload)
 
-    def command_runner(args: list[str]):
-        stdout = "state = running\npid = 4321\n" if args[:2] == ["launchctl", "print"] else ""
-        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+    command_runner = _successful_recovery_runner()
 
     monkeypatch.setattr(module, "_atomic_write_json", fail_final_write)
     try:

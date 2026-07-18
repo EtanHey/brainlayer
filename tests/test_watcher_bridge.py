@@ -205,6 +205,7 @@ class TestFlushCallback:
         flush = create_flush_callback(db_path, arbitrated=True)
         entry = _make_jsonl_entry(text=_LONG_TEXT, entry_type="assistant")
         entry["_source_file"] = str(tmp_path / "projects" / "-Users-test-Gits-myproject" / "session.jsonl")
+        entry["_line_end_offset"] = 123
 
         inserted = flush([entry])
 
@@ -214,6 +215,7 @@ class TestFlushCallback:
         conn.close()
         assert inserted == 1
         assert len(queued_files) == 1
+        assert json.loads(queued_files[0].read_text(encoding="utf-8"))["source_end_offset"] == 123
         assert rows == (0,)
 
     def test_direct_write_busy_spills_to_queue_instead_of_silently_dropping(self, tmp_path, monkeypatch):

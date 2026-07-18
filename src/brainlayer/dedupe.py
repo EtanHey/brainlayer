@@ -499,10 +499,12 @@ def merge_duplicate_chunk(
     mechanism: str,
     hamming_distance_value: int | None,
     archive_existing_duplicate: bool = False,
+    ensure_schema: bool = True,
 ) -> bool:
     if canonical_id == duplicate_id:
         return False
-    ensure_dedupe_schema(conn)
+    if ensure_schema:
+        ensure_dedupe_schema(conn)
     cursor = conn.cursor()
     row = cursor.execute(
         """
@@ -617,9 +619,12 @@ def merge_duplicate_chunk(
     return content_changed
 
 
-def merge_existing_chunk_seen(conn: Any, *, chunk_id: str, incoming: dict[str, Any]) -> bool:
+def merge_existing_chunk_seen(
+    conn: Any, *, chunk_id: str, incoming: dict[str, Any], ensure_schema: bool = True
+) -> bool:
     """Merge a repost that generated the same chunk_id as the canonical row."""
-    ensure_dedupe_schema(conn)
+    if ensure_schema:
+        ensure_dedupe_schema(conn)
     cursor = conn.cursor()
     row = cursor.execute(
         """
@@ -690,9 +695,12 @@ def merge_existing_chunk_seen(conn: Any, *, chunk_id: str, incoming: dict[str, A
     return True
 
 
-def merge_existing_chunk_content(conn: Any, *, chunk_id: str, incoming: dict[str, Any]) -> bool:
+def merge_existing_chunk_content(
+    conn: Any, *, chunk_id: str, incoming: dict[str, Any], ensure_schema: bool = True
+) -> bool:
     """Merge a same-id content update without aliasing the chunk to itself."""
-    ensure_dedupe_schema(conn)
+    if ensure_schema:
+        ensure_dedupe_schema(conn)
     cursor = conn.cursor()
     row = cursor.execute(
         """
