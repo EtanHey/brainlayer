@@ -605,6 +605,9 @@ def test_packaged_launchd_installer_installs_throughput_watchdog(tmp_path: Path)
 
     home = tmp_path / "home&throughput"
     home.mkdir()
+    env_file = home / ".config" / "brainlayer" / "brainlayer.env"
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text("BRAINLAYER_SYSTEM_ENABLED=1\n", encoding="utf-8")
     result = subprocess.run(
         [str(launchd_dir / "install.sh"), "throughput-watchdog"],
         env={
@@ -623,13 +626,17 @@ def test_packaged_launchd_installer_installs_throughput_watchdog(tmp_path: Path)
 
     assert result.returncode == 0, result.stdout + result.stderr
     installed_script = home / ".local" / "lib" / "brainlayer" / "throughput-watchdog.py"
+    installed_env_runner = home / ".local" / "lib" / "brainlayer" / "brainlayer-env-run.sh"
     assert installed_script.read_bytes() == source_script.read_bytes()
     assert os.access(installed_script, os.X_OK)
+    assert os.access(installed_env_runner, os.X_OK)
 
     rendered = home / "Library" / "LaunchAgents" / "com.brainlayer.throughput-watchdog.plist"
     plist = plistlib.loads(rendered.read_bytes())
-    assert plist["ProgramArguments"] == [sys.executable, str(installed_script), "--json"]
+    assert plist["ProgramArguments"] == [str(installed_env_runner), sys.executable, str(installed_script), "--json"]
     assert plist["EnvironmentVariables"]["HOME"] == str(home)
+    assert plist["EnvironmentVariables"]["BRAINLAYER_ENV_FILE"] == str(env_file)
+    assert plist["EnvironmentVariables"]["BRAINLAYER_LAUNCHD_SERVICE"] == "watch"
     assert plist["StartInterval"] == 60
     assert "__THROUGHPUT_WATCHDOG_SCRIPT__" not in rendered.read_text(encoding="utf-8")
     assert "__PYTHON_BIN__" not in rendered.read_text(encoding="utf-8")

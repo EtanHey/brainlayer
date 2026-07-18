@@ -7,6 +7,7 @@ import plistlib
 import sqlite3
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -256,7 +257,7 @@ def test_alert_failure_does_not_block_watcher_recovery(tmp_path: Path) -> None:
     assert any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands)
 
 
-def test_source_probe_only_treats_recent_registry_tracked_lag_as_pending(tmp_path: Path) -> None:
+def test_source_probe_treats_recent_unregistered_input_as_pending(tmp_path: Path) -> None:
     module = _load_module()
     config = _config(module, tmp_path)
     source_root = config.source_roots[0]
@@ -282,8 +283,28 @@ def test_source_probe_only_treats_recent_registry_tracked_lag_as_pending(tmp_pat
     result = module.collect_source_evidence(config, now_epoch=1_000)
 
     assert result.recent_files == 3
+    assert result.pending_files == 2
+    assert result.pending_bytes == pending.stat().st_size - 3 + untracked.stat().st_size
+    assert result.untracked_recent_files == 1
+
+
+def test_source_probe_ignores_unwatched_cursor_project_jsonl(tmp_path: Path) -> None:
+    module = _load_module()
+    cursor_projects = tmp_path / ".cursor" / "projects"
+    watched = cursor_projects / "repo" / "agent-transcripts" / "agent" / "session.jsonl"
+    unwatched = cursor_projects / "repo" / "tool-state.jsonl"
+    watched.parent.mkdir(parents=True)
+    unwatched.parent.mkdir(parents=True, exist_ok=True)
+    watched.write_text("watched\n", encoding="utf-8")
+    unwatched.write_text("not watcher input\n", encoding="utf-8")
+    config = replace(_config(module, tmp_path), source_roots=(cursor_projects,))
+    config.registry_path.write_text("{}", encoding="utf-8")
+
+    result = module.collect_source_evidence(config, now_epoch=1_000)
+
+    assert result.recent_files == 1
     assert result.pending_files == 1
-    assert result.pending_bytes == pending.stat().st_size - 3
+    assert result.pending_bytes == watched.stat().st_size
     assert result.untracked_recent_files == 1
 
 
@@ -547,6 +568,13 @@ def test_launchagent_runs_every_minute_and_invokes_installed_script() -> None:
     assert plist["Label"] == "com.brainlayer.throughput-watchdog"
     assert plist["StartInterval"] == 60
     assert plist["RunAtLoad"] is True
-    assert plist["ProgramArguments"] == ["__PYTHON_BIN__", "__THROUGHPUT_WATCHDOG_SCRIPT__", "--json"]
+    assert plist["ProgramArguments"] == [
+        "__BRAINLAYER_ENV_RUN__",
+        "__PYTHON_BIN__",
+        "__THROUGHPUT_WATCHDOG_SCRIPT__",
+        "--json",
+    ]
     assert plist["EnvironmentVariables"]["HOME"] == "__HOME__"
+    assert plist["EnvironmentVariables"]["BRAINLAYER_ENV_FILE"] == "__BRAINLAYER_ENV_FILE__"
+    assert plist["EnvironmentVariables"]["BRAINLAYER_LAUNCHD_SERVICE"] == "watch"
     assert plist["SoftResourceLimits"]["NumberOfFiles"] >= 4096

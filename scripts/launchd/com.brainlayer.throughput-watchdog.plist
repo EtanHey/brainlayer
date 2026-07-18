@@ -6,6 +6,7 @@
 	<string>com.brainlayer.throughput-watchdog</string>
 	<key>ProgramArguments</key>
 	<array>
+		<string>__BRAINLAYER_ENV_RUN__</string>
 		<string>__PYTHON_BIN__</string>
 		<string>__THROUGHPUT_WATCHDOG_SCRIPT__</string>
 		<string>--json</string>
@@ -14,6 +15,10 @@
 	<dict>
 		<key>HOME</key>
 		<string>__HOME__</string>
+		<key>BRAINLAYER_ENV_FILE</key>
+		<string>__BRAINLAYER_ENV_FILE__</string>
+		<key>BRAINLAYER_LAUNCHD_SERVICE</key>
+		<string>watch</string>
 		<key>PATH</key>
 		<string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
 	</dict>

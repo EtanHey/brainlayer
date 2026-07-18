@@ -17,8 +17,10 @@ RENDERED_LOG_ROOT = "/Users/etanheyman/Library/Logs/brainlayer/"
 REQUIRED_PATH_PARTS = ["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
 DEV_SRC_PATH_RE = re.compile(r"/Users/[^:\s]+/Gits/[^:\s]+/src(?:$|:)")
 ENV_RUN_EXEMPT_LABELS = {
-    "com.brainlayer.throughput-watchdog",
     "com.brainlayer.tier0-watchdog",
+}
+PACKAGE_IMPORT_EXEMPT_LABELS = ENV_RUN_EXEMPT_LABELS | {
+    "com.brainlayer.throughput-watchdog",
 }
 
 
@@ -243,7 +245,7 @@ def test_canonical_launchagent_env_has_no_concrete_dev_src_paths():
 def test_script_launchagents_use_installed_package_imports():
     for path in sorted((REPO_ROOT / "scripts/launchd").glob("com.brainlayer.*.plist")):
         plist = plistlib.loads(path.read_bytes())
-        if plist["Label"] in ENV_RUN_EXEMPT_LABELS:
+        if plist["Label"] in PACKAGE_IMPORT_EXEMPT_LABELS:
             continue
         _assert_uses_installed_package_not_source_path(path, plist)
 
@@ -270,11 +272,6 @@ def test_all_script_launchagents_source_unified_config_file():
 
         if plist["Label"] in ENV_RUN_EXEMPT_LABELS:
             expected_args = {
-                "com.brainlayer.throughput-watchdog": [
-                    "__PYTHON_BIN__",
-                    "__THROUGHPUT_WATCHDOG_SCRIPT__",
-                    "--json",
-                ],
                 "com.brainlayer.tier0-watchdog": ["/bin/sh", "__TIER0_WATCHDOG_SCRIPT__"],
             }
             assert args == expected_args[plist["Label"]], str(path)
@@ -284,7 +281,8 @@ def test_all_script_launchagents_source_unified_config_file():
 
         assert args[0] == "__BRAINLAYER_ENV_RUN__", str(path)
         assert env["BRAINLAYER_ENV_FILE"] == "__BRAINLAYER_ENV_FILE__", str(path)
-        assert env["BRAINLAYER_LAUNCHD_SERVICE"] == service, str(path)
+        expected_service = "watch" if plist["Label"] == "com.brainlayer.throughput-watchdog" else service
+        assert env["BRAINLAYER_LAUNCHD_SERVICE"] == expected_service, str(path)
 
 
 def test_launchd_env_loader_exists_and_loads_safe_env_before_exec():

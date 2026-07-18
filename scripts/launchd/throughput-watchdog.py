@@ -182,6 +182,19 @@ def _registry_offset(entry: object, *, current_inode: int) -> int | None:
     return offset
 
 
+def _matches_watcher_input(source_file: Path, source_roots: list[Path]) -> bool:
+    """Mirror the watcher's narrower Cursor projects discovery pattern."""
+    for source_root in source_roots:
+        try:
+            relative = source_file.relative_to(source_root)
+        except ValueError:
+            continue
+        if source_root.name == "projects" and source_root.parent.name == ".cursor":
+            return "agent-transcripts" in relative.parts
+        return True
+    return False
+
+
 def _stop_process(process: subprocess.Popen) -> None:
     if process.poll() is not None:
         return
@@ -291,6 +304,8 @@ def collect_source_evidence(config: Config, now_epoch: int) -> SourceEvidence:
     for source_file in recent_paths:
         if time.monotonic() - started > config.max_scan_seconds:
             raise RuntimeError(f"source evidence exceeded {config.max_scan_seconds:.1f}s")
+        if not _matches_watcher_input(source_file, roots):
+            continue
         try:
             source_stat = source_file.stat()
         except OSError as exc:
@@ -302,6 +317,9 @@ def collect_source_evidence(config: Config, now_epoch: int) -> SourceEvidence:
         offset = _registry_offset(registry.get(str(source_file)), current_inode=source_stat.st_ino)
         if offset is None:
             untracked_recent_files += 1
+            if source_stat.st_size > 0:
+                pending_files += 1
+                pending_bytes += source_stat.st_size
             continue
         if source_stat.st_size > offset:
             pending_files += 1
