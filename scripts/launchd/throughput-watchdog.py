@@ -499,9 +499,15 @@ def run_once(
             # Alert-framing: page on the FIRST wedge of an episode only — never
             # per-kick of a chronic sawtooth. The latch clears after a sustained
             # healthy run (episode reset below). Recovery still runs every tick.
-            if not state.get("episode_alerted"):
+            # The latch is set ONLY when the page actually sent — a transient
+            # notify failure on the first wedge must NOT silence the whole
+            # episode (page-once must never become page-zero); the next tick
+            # retries the alert instead.
+            episode_alerted = bool(state.get("episode_alerted"))
+            if not episode_alerted:
                 try:
                     alert_fn(config, result)
+                    episode_alerted = True
                 except Exception as exc:
                     result.alert_error = str(exc)
                     print(f"throughput-watchdog alert failed: {exc}", file=sys.stderr)
@@ -521,7 +527,7 @@ def run_once(
                     "last_action": "recovery_attempt",
                     "last_restart_epoch": checked_at,
                     "restart_attempt_count": int(state.get("restart_attempt_count", 0)) + 1,
-                    "episode_alerted": True,
+                    "episode_alerted": episode_alerted,
                 }
             )
             _atomic_write_json(config.state_path, attempt_state)

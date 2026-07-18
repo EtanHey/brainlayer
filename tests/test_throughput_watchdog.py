@@ -656,3 +656,43 @@ def test_alert_framing_pages_once_per_episode_not_per_kickstart(tmp_path: Path) 
     k3 = tick(80, pending=True)  # stall 3 -> kickstart + NEW-episode alert
     assert k3.action.startswith("kickstart:")
     assert len(alerts) == 2  # new episode paged again
+
+
+def test_failed_alert_does_not_latch_episode_and_retries(tmp_path: Path) -> None:
+    """A transient notify failure on the first wedge must NOT silence the
+    episode — page-once must never become page-zero; the next wedge retries."""
+    module = _load_module()
+    config = _config(module, tmp_path, stall_threshold=3, cooldown_seconds=0)
+    calls = {"n": 0}
+
+    def command_runner(args):
+        stdout = "state = running\npid = 4321\n" if args[:2] == ["launchctl", "print"] else ""
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    def flaky_alert(_config, _result):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("notify endpoint down")
+
+    clock = {"t": 1_000}
+
+    def tick():
+        clock["t"] += 60
+        return module.run_once(
+            config,
+            now_epoch=clock["t"],
+            progress_reader=lambda _p: _progress(module, 40, 40),
+            source_probe=lambda _c, _n: module.SourceEvidence(2, 120, 3, 999.0),
+            command_runner=command_runner,
+            alert_fn=flaky_alert,
+        )
+
+    tick()  # baseline (establishes highwater; not a stall)
+    tick()  # stall 1
+    tick()  # stall 2
+    tick()  # stall 3 -> kickstart, alert RAISES (call 1), NOT latched
+    assert calls["n"] == 1
+    tick()  # stall 1
+    tick()  # stall 2
+    tick()  # stall 3 -> kickstart, alert RETRIES in same episode (call 2)
+    assert calls["n"] == 2  # retried, not silenced by the earlier failure
