@@ -310,6 +310,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
             value_type: str,
             created_at: str,
             conversation_id: str,
+            source_end_offset: int | None,
             sender: Any,
             tags: str | None,
             chunk_origin: str | None,
@@ -326,6 +327,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                 value_type=value_type,
                 created_at=created_at,
                 conversation_id=conversation_id,
+                source_end_offset=source_end_offset,
                 sender=sender,
                 tags=json.loads(tags) if tags else None,
                 chunk_origin=chunk_origin,
@@ -437,6 +439,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                             value_type=chunk.value.value,
                             created_at=created_at,
                             conversation_id=conversation_id,
+                            source_end_offset=entry.get("_line_end_offset"),
                             sender=metadata.get("sender"),
                             tags=tags,
                             chunk_origin=chunk_origin,
@@ -451,6 +454,10 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                     assert cursor is not None and store is not None
                     deadline_s = _nonnegative_float_env("BRAINLAYER_WATCHER_WRITE_DEADLINE_S", 15.0)
                     deadline = time.monotonic() + deadline_s
+                    source_end_offset = entry.get("_line_end_offset")
+                    if not isinstance(source_end_offset, int):
+                        source_end_offset = None
+                    source_position_recorded_at = float(time.time()) if source_end_offset is not None else None
                     attempt = 0
                     while True:
                         transaction_started = False
@@ -512,9 +519,10 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                     created_at, conversation_id, sender, tags, chunk_origin,
                                     seen_count, last_seen_at, dedupe_hash, simhash,
                                     simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3,
+                                    source_end_offset, source_last_queued_at,
                                     ingested_at, content_class, provenance_class)
                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                                           ?, ?, ?)""",
+                                           ?, ?, ?, ?, ?)""",
                                 (
                                     chunk_id,
                                     clean_content,
@@ -538,6 +546,8 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                     dedupe_fields.bands[1],
                                     dedupe_fields.bands[2],
                                     dedupe_fields.bands[3],
+                                    source_end_offset,
+                                    source_position_recorded_at,
                                     ingested_at,
                                     content_class,
                                     provenance_class,
@@ -569,6 +579,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                         value_type=chunk.value.value,
                                         created_at=created_at,
                                         conversation_id=conversation_id,
+                                        source_end_offset=entry.get("_line_end_offset"),
                                         sender=metadata.get("sender"),
                                         tags=tags,
                                         chunk_origin=chunk_origin,

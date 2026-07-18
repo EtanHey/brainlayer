@@ -820,6 +820,7 @@ class JSONLWatcher:
         registry_path: str | Path | None = None,
         on_flush: Callable[[list[dict]], dict[str, int] | None] | None = None,
         on_rewind: Callable[[str, str, int, int], None] | None = None,
+        on_tick: Callable[[], None] | None = None,
         watch_roots: list[WatchRoot] | None = None,
         db_path: str | Path | None = None,
         poll_interval_s: float = 1.0,
@@ -838,6 +839,7 @@ class JSONLWatcher:
             self.watch_roots = default_watch_roots()
         self.watch_dir = self.watch_roots[0].resolved_path if self.watch_roots else Path(".")
         self.on_rewind = on_rewind
+        self.on_tick = on_tick
         registry = (
             Path(registry_path).expanduser() if registry_path else Path.home() / ".local/share/brainlayer/offsets.json"
         )
@@ -1178,6 +1180,11 @@ class JSONLWatcher:
                     logger.exception("Poll file error: %s", filepath)
 
             self.indexer.tick()
+            if self.on_tick:
+                try:
+                    self.on_tick()
+                except Exception:
+                    logger.exception("Watcher tick callback failed")
             return total_new
         finally:
             # Periodic registry flush

@@ -785,6 +785,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 language TEXT,
                 conversation_id TEXT,
                 position INTEGER,
+                source_end_offset INTEGER,
+                source_last_queued_at REAL,
                 context_summary TEXT,
                 created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
                 provenance_class TEXT,
@@ -884,6 +886,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             ("source_uri", "TEXT"),
             ("status", "TEXT DEFAULT 'active'"),
             ("ingested_at", "INTEGER"),
+            ("source_end_offset", "INTEGER"),
+            ("source_last_queued_at", "REAL"),
             ("topic_cluster", "TEXT"),
         ]:
             if col not in existing_cols:

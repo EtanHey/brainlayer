@@ -524,6 +524,7 @@ class TestQueueStore:
 
         monkeypatch.setattr(drain, "_open_connection", lambda _db_path: FakeConnection())
         monkeypatch.setattr(drain, "_ensure_enrichment_update_schema", lambda _conn: None)
+        monkeypatch.setattr(drain, "_ensure_rewind_archive_schema", lambda _conn: None)
         monkeypatch.setattr(drain, "ensure_dedupe_schema", lambda _conn: None)
         monkeypatch.setattr(drain, "_apply_event", lambda _conn, _event: drain.ApplyResult())
 
@@ -531,6 +532,41 @@ class TestQueueStore:
 
         assert drained == 1
         assert checkpoint_sql == ["PRAGMA wal_checkpoint(PASSIVE)"]
+
+    def test_drain_prepares_all_schema_before_acquiring_immediate_write_lock(self, tmp_path, monkeypatch):
+        """Schema/FTS inspection must not hold the exclusive writer transaction."""
+        from brainlayer import drain
+
+        queue_dir = tmp_path / "queue"
+        queue_dir.mkdir()
+        (queue_dir / "noop.jsonl").write_text(json.dumps({"kind": "noop"}) + "\n", encoding="utf-8")
+        events: list[str] = []
+
+        class FakeConnection:
+            def execute(self, sql, *_args):
+                events.append(sql.strip())
+                return []
+
+            def setbusytimeout(self, _timeout_ms):
+                return None
+
+            def close(self):
+                return None
+
+        monkeypatch.setattr(drain, "_open_connection", lambda _db_path: FakeConnection())
+        monkeypatch.setattr(drain, "_ensure_enrichment_update_schema", lambda _conn: events.append("enrichment-schema"))
+        monkeypatch.setattr(drain, "_ensure_watcher_liveness_schema", lambda _conn: events.append("liveness-schema"))
+        monkeypatch.setattr(drain, "_ensure_rewind_archive_schema", lambda _conn: events.append("rewind-schema"))
+        monkeypatch.setattr(drain, "ensure_dedupe_schema", lambda _conn: events.append("dedupe-schema"))
+        monkeypatch.setattr(drain, "_apply_event", lambda _conn, _event: drain.ApplyResult())
+
+        assert drain_once(db_path=tmp_path / "db.sqlite", queue_dir=queue_dir, batch_size=1) == 1
+
+        begin_index = events.index("BEGIN IMMEDIATE")
+        assert events.index("enrichment-schema") < begin_index
+        assert events.index("liveness-schema") < begin_index
+        assert events.index("rewind-schema") < begin_index
+        assert events.index("dedupe-schema") < begin_index
 
 
 class TestSingleWriterQueue:

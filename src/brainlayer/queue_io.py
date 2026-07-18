@@ -101,6 +101,7 @@ def enqueue_watcher_chunk(
     value_type: str,
     created_at: str,
     conversation_id: str,
+    source_end_offset: int | None = None,
     sender: str | None = None,
     tags: list[str] | None = None,
     chunk_origin: str | None = None,
@@ -123,6 +124,8 @@ def enqueue_watcher_chunk(
         "tags": tags,
         "chunk_origin": chunk_origin,
     }
+    if source_end_offset is not None:
+        event["source_end_offset"] = int(source_end_offset)
     if content_class is not None:
         event["content_class"] = content_class
     if provenance_class is not None:
@@ -132,6 +135,35 @@ def enqueue_watcher_chunk(
         source="watcher",
         queue_dir=queue_dir,
     )
+
+
+def enqueue_rewind_archive_batch(
+    intents: list[dict[str, Any]],
+    *,
+    queue_dir: Path | None = None,
+    detected_at: float | None = None,
+) -> Path:
+    """Durably queue offset-bounded rewind archival for the single writer."""
+    default_detected_at = time.time() if detected_at is None else float(detected_at)
+    events: list[dict[str, Any]] = []
+    for intent in intents:
+        source_file = str(intent.get("filepath") or intent.get("source_file") or "").strip()
+        conversation_id = str(intent.get("session_id") or intent.get("conversation_id") or "").strip()
+        old_offset = int(intent.get("old_offset", 0))
+        new_offset = int(intent.get("new_offset", 0))
+        if not source_file or not conversation_id or old_offset <= new_offset or new_offset < 0:
+            raise ValueError("rewind archive intent requires a file, session, and decreasing nonnegative offsets")
+        events.append(
+            {
+                "kind": "rewind_archive",
+                "source_file": source_file,
+                "conversation_id": conversation_id,
+                "old_offset": old_offset,
+                "new_offset": new_offset,
+                "rewind_detected_at": float(intent.get("rewind_detected_at", default_detected_at)),
+            }
+        )
+    return enqueue_jsonl_batch(events, source="watcher-rewind", queue_dir=queue_dir)
 
 
 def enqueue_hook_chunk(

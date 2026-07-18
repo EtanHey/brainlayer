@@ -281,6 +281,20 @@ def _ensure_enrichment_update_schema(conn: apsw.Connection) -> None:
             cols.add(col)
 
 
+def _ensure_rewind_archive_schema(conn: apsw.Connection) -> None:
+    """Ensure watcher source-position columns before taking the writer lock."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'chunks'").fetchone():
+        return
+    cols = _columns(conn, "chunks")
+    for col, typ in (
+        ("source_end_offset", "INTEGER"),
+        ("source_last_queued_at", "REAL"),
+    ):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE chunks ADD COLUMN {col} {typ}")
+            cols.add(col)
+
+
 def _content_hash(content: str) -> str:
     return hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
 
@@ -332,7 +346,6 @@ def _insert_chunk(conn: apsw.Connection, values: dict[str, Any]) -> None:
 
 
 def _insert_or_merge_chunk(conn: apsw.Connection, values: dict[str, Any]) -> str:
-    ensure_dedupe_schema(conn)
     if "content" in values and "content_class" not in values:
         values = {
             **values,
@@ -355,6 +368,7 @@ def _insert_or_merge_chunk(conn: apsw.Connection, values: dict[str, Any]) -> str
         content_type=values.get("content_type"),
     )
     if duplicate is not None:
+        _merge_watcher_source_position(conn, chunk_id=duplicate.canonical_chunk_id, incoming=values)
         merge_duplicate_chunk(
             conn,
             canonical_id=duplicate.canonical_chunk_id,
@@ -362,16 +376,74 @@ def _insert_or_merge_chunk(conn: apsw.Connection, values: dict[str, Any]) -> str
             incoming=values,
             mechanism=duplicate.mechanism,
             hamming_distance_value=duplicate.hamming_distance,
+            ensure_schema=False,
         )
         return duplicate.canonical_chunk_id
-    if merge_existing_chunk_seen(conn, chunk_id=chunk_id, incoming=values):
+    _merge_watcher_source_position(conn, chunk_id=chunk_id, incoming=values, reactivate=True)
+    if merge_existing_chunk_seen(conn, chunk_id=chunk_id, incoming=values, ensure_schema=False):
         return chunk_id
     existing = conn.execute("SELECT id FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
     if existing:
-        merge_existing_chunk_content(conn, chunk_id=chunk_id, incoming=values)
+        merge_existing_chunk_content(conn, chunk_id=chunk_id, incoming=values, ensure_schema=False)
         return chunk_id
     _insert_chunk(conn, values)
     return chunk_id
+
+
+def _merge_watcher_source_position(
+    conn: apsw.Connection,
+    *,
+    chunk_id: str,
+    incoming: dict[str, Any],
+    reactivate: bool = False,
+) -> None:
+    """Merge same-file watcher provenance without mutating cross-source canonicals."""
+    if incoming.get("source") != "realtime_watcher" or incoming.get("source_end_offset") is None:
+        return
+    cols = _columns(conn, "chunks")
+    required = {"source", "source_file", "source_end_offset", "source_last_queued_at"}
+    if not required.issubset(cols):
+        return
+    row = conn.execute(
+        """
+        SELECT source, source_file, source_end_offset, source_last_queued_at, archived_at
+        FROM chunks WHERE id = ?
+        """,
+        (chunk_id,),
+    ).fetchone()
+    if not row or row[0] != "realtime_watcher" or row[1] != incoming.get("source_file"):
+        return
+    existing_offset = row[2]
+    incoming_offset = int(incoming["source_end_offset"])
+    reactivating = reactivate and row[4] is not None
+    if reactivating:
+        merged_offset = incoming_offset
+    else:
+        merged_offset = incoming_offset if existing_offset is None else min(int(existing_offset), incoming_offset)
+    existing_queued_at = row[3]
+    incoming_queued_at = incoming.get("source_last_queued_at")
+    if reactivating and incoming_queued_at is not None:
+        merged_queued_at = float(incoming_queued_at)
+    elif incoming_queued_at is None:
+        merged_queued_at = existing_queued_at
+    elif existing_queued_at is None:
+        merged_queued_at = float(incoming_queued_at)
+    else:
+        merged_queued_at = max(float(existing_queued_at), float(incoming_queued_at))
+    updates: dict[str, Any] = {
+        "source_end_offset": merged_offset,
+        "source_last_queued_at": merged_queued_at,
+    }
+    if reactivating:
+        updates["archived_at"] = None
+        if "archived" in cols:
+            updates["archived"] = 0
+        if "status" in cols:
+            updates["status"] = "active"
+        if "value_type" in cols:
+            updates["value_type"] = incoming.get("value_type") or "high"
+    assignments = ", ".join(f"{column} = ?" for column in updates)
+    conn.execute(f"UPDATE chunks SET {assignments} WHERE id = ?", [*updates.values(), chunk_id])
 
 
 def _refresh_realtime_watcher_ingested_at(conn: apsw.Connection, chunk_id: str, ingested_at: int) -> None:
@@ -763,6 +835,10 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
         "content_hash": _content_hash(content),
         "chunk_origin": detect_chunk_origin(content, event.get("chunk_origin")),
     }
+    if event.get("source_end_offset") is not None:
+        values["source_end_offset"] = int(event["source_end_offset"])
+    if event.get("queued_at") is not None:
+        values["source_last_queued_at"] = float(event["queued_at"])
     if event.get("content_class"):
         values["content_class"] = event.get("content_class")
     if event.get("provenance_class"):
@@ -774,6 +850,47 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     _refresh_realtime_watcher_ingested_at(conn, stored_chunk_id, ingested_at)
     _record_watcher_liveness(conn, stored_chunk_id, ingested_at)
     return ApplyResult(chunk_id=stored_chunk_id)
+
+
+def _apply_rewind_archive(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
+    source_file = str(event.get("source_file") or "").strip()
+    conversation_id = str(event.get("conversation_id") or "").strip()
+    try:
+        old_offset = int(event.get("old_offset"))
+        new_offset = int(event.get("new_offset"))
+        detected_at = float(event.get("rewind_detected_at"))
+    except (TypeError, ValueError):
+        logger.warning("Skipping malformed rewind archive event")
+        return ApplyResult()
+    if not source_file or not conversation_id or old_offset <= new_offset or new_offset < 0:
+        logger.warning("Skipping malformed rewind archive bounds for %s", source_file or "unknown")
+        return ApplyResult()
+    cols = _columns(conn, "chunks")
+    if not {"source_end_offset", "source_last_queued_at", "archived_at", "value_type"}.issubset(cols):
+        raise RuntimeError("rewind archival schema is incomplete")
+    assignments = ["archived_at = ?", "value_type = 'ARCHIVED'"]
+    params: list[Any] = [datetime.now(timezone.utc).isoformat()]
+    if "archived" in cols:
+        assignments.append("archived = 1")
+    if "status" in cols:
+        assignments.append("status = 'archived'")
+    params.extend([source_file, conversation_id, new_offset, old_offset, detected_at])
+    conn.execute(
+        f"""
+        UPDATE chunks
+        SET {", ".join(assignments)}
+        WHERE source = 'realtime_watcher'
+          AND source_file = ?
+          AND conversation_id = ?
+          AND archived_at IS NULL
+          AND source_end_offset IS NOT NULL
+          AND source_end_offset > ?
+          AND source_end_offset <= ?
+          AND (source_last_queued_at IS NULL OR source_last_queued_at <= ?)
+        """,
+        params,
+    )
+    return ApplyResult()
 
 
 def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
@@ -928,6 +1045,8 @@ def _apply_event(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
         return _apply_hook(conn, event)
     elif kind == "enrichment_update":
         _apply_enrichment(conn, event)
+    elif kind == "rewind_archive":
+        return _apply_rewind_archive(conn, event)
     return ApplyResult()
 
 
@@ -1072,7 +1191,7 @@ def _queue_telemetry(paths: list[Path], events: list[dict[str, Any]]) -> dict[st
     kinds = {str(event.get("kind") or "").strip() for event in events}
     if "store_memory" in kinds:
         lane = "interactive"
-    elif kinds & {"watcher_chunk", "hook_chunk"}:
+    elif kinds & {"watcher_chunk", "hook_chunk", "rewind_archive"}:
         lane = "realtime"
     elif kinds == {"enrichment_update"}:
         lane = "enrichment"
@@ -1089,6 +1208,11 @@ def _queue_telemetry(paths: list[Path], events: list[dict[str, Any]]) -> dict[st
         "queue_source": ",".join(sources) if sources else "unknown",
         "queue_wait_ms": max(0.0, (time.time() - min(mtimes)) * 1000.0) if mtimes else None,
     }
+
+
+def _drain_operation(events: list[dict[str, Any]], default: str) -> str:
+    kinds = {str(_event_payload(event).get("kind") or "").strip() for event in events}
+    return "rewind_archive" if kinds == {"rewind_archive"} else default
 
 
 def _has_high_priority_queue_files(queue_dir: Path) -> bool:
@@ -1286,7 +1410,7 @@ def burn_drain_once(
                 db_path=db_path,
                 producer="drain",
                 lane=queue_telemetry["lane"],
-                operation="burn_apply",
+                operation=_drain_operation(all_events, "burn_apply"),
                 rows_planned=len(all_events),
                 queue_wait_ms=queue_telemetry["queue_wait_ms"],
                 queue_source=queue_telemetry["queue_source"],
@@ -1294,6 +1418,8 @@ def burn_drain_once(
             try:
                 _ensure_enrichment_update_schema(conn)
                 _ensure_watcher_liveness_schema(conn)
+                _ensure_rewind_archive_schema(conn)
+                ensure_dedupe_schema(conn)
                 conn.execute("BEGIN IMMEDIATE")
                 prefetched_state = _prefetch_enrichment_state(conn, all_events)
                 store_chunk_ids: list[str] = []
@@ -1443,15 +1569,16 @@ def drain_once(
                         db_path=db_path,
                         producer="drain",
                         lane=queue_telemetry["lane"],
-                        operation="apply_file",
+                        operation=_drain_operation(events_to_apply, "apply_file"),
                         rows_planned=len(events_to_apply),
                         queue_wait_ms=queue_telemetry["queue_wait_ms"],
                         queue_source=queue_telemetry["queue_source"],
                     )
                     _ensure_enrichment_update_schema(conn)
                     _ensure_watcher_liveness_schema(conn)
-                    conn.execute("BEGIN IMMEDIATE")
+                    _ensure_rewind_archive_schema(conn)
                     ensure_dedupe_schema(conn)
+                    conn.execute("BEGIN IMMEDIATE")
                     for event in events_to_apply:
                         result = _apply_event(conn, event)
                         if result.chunk_id:

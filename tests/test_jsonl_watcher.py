@@ -809,6 +809,18 @@ class TestJSONLWatcher:
         assert len(flushed) == 1
         assert flushed[0]["text"] == "hello"
 
+    def test_poll_once_calls_tick_callback_even_without_new_jsonl_lines(self, tmp_path):
+        ticks: list[str] = []
+        watcher = JSONLWatcher(
+            watch_dir=tmp_path / "empty-projects",
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda _items: None,
+            on_tick=lambda: ticks.append("tick"),
+        )
+
+        assert watcher.poll_once() == 0
+        assert ticks == ["tick"]
+
     def test_poll_twice_no_duplicates(self, tmp_path):
         project = self._make_project_dir(tmp_path)
         (project / "s1.jsonl").write_text('{"id":"1"}\n')

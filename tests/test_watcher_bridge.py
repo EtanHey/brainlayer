@@ -205,6 +205,7 @@ class TestFlushCallback:
         flush = create_flush_callback(db_path, arbitrated=True)
         entry = _make_jsonl_entry(text=_LONG_TEXT, entry_type="assistant")
         entry["_source_file"] = str(tmp_path / "projects" / "-Users-test-Gits-myproject" / "session.jsonl")
+        entry["_line_end_offset"] = 123
 
         inserted = flush([entry])
 
@@ -214,6 +215,7 @@ class TestFlushCallback:
         conn.close()
         assert inserted == 1
         assert len(queued_files) == 1
+        assert json.loads(queued_files[0].read_text(encoding="utf-8"))["source_end_offset"] == 123
         assert rows == (0,)
 
     def test_direct_write_busy_spills_to_queue_instead_of_silently_dropping(self, tmp_path, monkeypatch):
@@ -287,6 +289,29 @@ class TestFlushCallback:
         rows = conn.execute("SELECT id, content, source FROM chunks WHERE source = 'realtime_watcher'").fetchall()
         conn.close()
         assert len(rows) >= 1
+
+    def test_direct_write_persists_offset_bounds_for_rewind_archival(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        VectorStore(db_path).close()
+
+        flush = create_flush_callback(db_path, arbitrated=False)
+        entry = _make_jsonl_entry(text=_LONG_TEXT, entry_type="assistant")
+        entry["_source_file"] = str(tmp_path / "projects" / "test-project" / "session.jsonl")
+        entry["_line_end_offset"] = 123
+
+        before = time.time()
+        flush([entry])
+        after = time.time()
+
+        conn = sqlite3.connect(str(db_path))
+        row = conn.execute(
+            "SELECT source_end_offset, source_last_queued_at FROM chunks WHERE source = 'realtime_watcher'"
+        ).fetchone()
+        conn.close()
+
+        assert row is not None
+        assert row[0] == 123
+        assert before <= row[1] <= after
 
     def test_inserts_claude_conversation_id_metadata(self, tmp_path):
         db_path = tmp_path / "test.db"
