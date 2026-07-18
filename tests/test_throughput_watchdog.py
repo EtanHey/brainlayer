@@ -634,25 +634,25 @@ def test_alert_framing_pages_once_per_episode_not_per_kickstart(tmp_path: Path) 
         )
         return res
 
-    tick(40, pending=True)                    # baseline
-    tick(40, pending=True)                    # stall 1
-    tick(40, pending=True)                    # stall 2
-    k1 = tick(40, pending=True)               # stall 3 -> kickstart + FIRST alert
+    tick(40, pending=True)  # baseline
+    tick(40, pending=True)  # stall 1
+    tick(40, pending=True)  # stall 2
+    k1 = tick(40, pending=True)  # stall 3 -> kickstart + FIRST alert
     assert k1.action.startswith("kickstart:")
-    assert len(alerts) == 1                    # episode 1 paged once
+    assert len(alerts) == 1  # episode 1 paged once
 
-    tick(50, pending=True)                    # brief recovery (1 healthy tick, < reset)
-    tick(50, pending=True)                    # stall 1
-    tick(50, pending=True)                    # stall 2
-    k2 = tick(50, pending=True)               # stall 3 -> kickstart, SUPPRESSED (same episode)
+    tick(50, pending=True)  # brief recovery (1 healthy tick, < reset)
+    tick(50, pending=True)  # stall 1
+    tick(50, pending=True)  # stall 2
+    k2 = tick(50, pending=True)  # stall 3 -> kickstart, SUPPRESSED (same episode)
     assert k2.action.startswith("kickstart:")
-    assert len(alerts) == 1                    # sawtooth did NOT re-page
+    assert len(alerts) == 1  # sawtooth did NOT re-page
 
-    tick(60, pending=True)                    # sustained recovery: healthy 1
-    tick(70, pending=True)                    # healthy 2
-    tick(80, pending=True)                    # healthy 3 -> episode latch clears
-    tick(80, pending=True)                    # stall 1
-    tick(80, pending=True)                    # stall 2
-    k3 = tick(80, pending=True)               # stall 3 -> kickstart + NEW-episode alert
+    tick(60, pending=True)  # sustained recovery: healthy 1
+    tick(70, pending=True)  # healthy 2
+    tick(80, pending=True)  # healthy 3 -> episode latch clears
+    tick(80, pending=True)  # stall 1
+    tick(80, pending=True)  # stall 2
+    k3 = tick(80, pending=True)  # stall 3 -> kickstart + NEW-episode alert
     assert k3.action.startswith("kickstart:")
-    assert len(alerts) == 2                    # new episode paged again
+    assert len(alerts) == 2  # new episode paged again
