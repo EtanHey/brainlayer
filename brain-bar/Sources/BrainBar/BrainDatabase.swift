@@ -351,7 +351,7 @@ final class BrainDatabase: @unchecked Sendable {
                 replayDebtBreakdown: replayDebtBreakdown,
                 watcherProcessProbeResult: watcherProcessProbeResult,
                 watcherRecentDistinctChunkCount: watcherRecentDistinctChunkCount,
-                watcherFlowReadability: watcherFlowReadability
+                watcherFlowReadability: buckets.watcherFlowReadability
             )
         }
 

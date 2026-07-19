@@ -95,6 +95,37 @@ final class BrainDatabaseWindowedBucketsTests: XCTestCase {
         )
     }
 
+    func testWindowedStatsAdoptWatcherReadabilityFromTheSameWindow() {
+        let restingStats = BrainDatabase.DashboardStats(
+            chunkCount: 0,
+            enrichedChunkCount: 0,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 0,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 0,
+            recentActivityBuckets: [0],
+            recentEnrichmentBuckets: [0],
+            watcherFlowReadability: .readable
+        )
+        let windowedBuckets = BrainDatabase.PipelineWindowBuckets(
+            activityWindowMinutes: 180,
+            bucketCount: 1,
+            allWriteBuckets: [0],
+            agentWriteBuckets: [0],
+            watcherWriteBuckets: [0],
+            enrichmentBuckets: [0],
+            watcherFlowReadability: .unreadable("windowed watcher evidence unavailable")
+        )
+
+        let windowedStats = restingStats.withWindowedPipelineBuckets(windowedBuckets)
+
+        XCTAssertEqual(
+            windowedStats.watcherFlowReadability,
+            windowedBuckets.watcherFlowReadability,
+            "Windowed watcher buckets and their readability must come from the same evidence fetch."
+        )
+    }
+
     func testWiderWindowReturnsMoreHistoricalDataThanLiveWindow() throws {
         // Force the schema to exist (constructor opens + ensures schema, but make
         // it explicit so an empty-table call cannot be misread).
