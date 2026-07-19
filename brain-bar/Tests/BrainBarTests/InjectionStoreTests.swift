@@ -269,6 +269,34 @@ final class InjectionStoreTests: XCTestCase {
         XCTAssertEqual(model.state.events.map(\.id), [42])
         XCTAssertEqual(model.state.degradationState, .healthy)
     }
+
+    @MainActor
+    func testInjectionFeedPresentationModelRemainsLoadingUntilInitialEmptyReadCompletes() async throws {
+        let reader = ScriptedInjectionEventReader(
+            versions: [1],
+            eventResults: [.success([])]
+        )
+        let store = InjectionStore(reader: reader)
+        let model = InjectionFeedPresentationModel(throttleInterval: .milliseconds(0))
+
+        XCTAssertEqual(store.loadState, .loading)
+        model.bind(to: store)
+        XCTAssertEqual(model.state.loadState, .loading)
+
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(
+            model.state.loadState,
+            .loading,
+            "Binding alone is not evidence that the injection event read completed."
+        )
+
+        store.refreshForTesting(force: true)
+        try await Task.sleep(for: .milliseconds(20))
+
+        XCTAssertEqual(store.loadState, .loaded)
+        XCTAssertEqual(model.state.loadState, .loaded)
+        XCTAssertTrue(model.state.events.isEmpty)
+    }
 }
 
 private enum ScriptedInjectionError: Error {

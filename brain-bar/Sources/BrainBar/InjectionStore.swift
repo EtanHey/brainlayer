@@ -48,6 +48,7 @@ private func injectionStoreDarwinNotificationCallback(
 final class InjectionStore: ObservableObject {
     @Published private(set) var events: [InjectionEvent] = []
     @Published private(set) var degradationState: DegradationState = .healthy
+    @Published private(set) var loadState: InjectionFeedLoadState = .loading
 
     private enum RecoveryPhase: Equatable {
         case healthy
@@ -251,6 +252,7 @@ final class InjectionStore: ObservableObject {
     }
 
     private func refresh(force: Bool) {
+        defer { loadState = .loaded }
         do {
             let currentDataVersion = try reader.dataVersion()
             let shouldProbeEvents: Bool

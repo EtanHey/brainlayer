@@ -2,16 +2,6 @@ import AppKit
 import Combine
 import SwiftUI
 
-struct InjectionFeedPresentationState: Equatable {
-    let events: [InjectionEvent]
-    let degradationState: DegradationState
-
-    static let empty = InjectionFeedPresentationState(
-        events: [],
-        degradationState: .healthy
-    )
-}
-
 @MainActor
 final class InjectionFeedPresentationModel: ObservableObject {
     @Published private(set) var state: InjectionFeedPresentationState = .empty
@@ -32,19 +22,18 @@ final class InjectionFeedPresentationModel: ObservableObject {
 
         boundStore = store
         cancellables.removeAll()
-        let currentState = InjectionFeedPresentationState(
+        state = InjectionFeedPresentationState(
             events: store.events,
-            degradationState: store.degradationState
+            degradationState: store.degradationState,
+            loadState: store.loadState
         )
-        if state != currentState {
-            state = currentState
-        }
 
-        Publishers.CombineLatest(store.$events, store.$degradationState)
-            .map { events, degradationState in
+        Publishers.CombineLatest3(store.$events, store.$degradationState, store.$loadState)
+            .map { events, degradationState, loadState in
                 InjectionFeedPresentationState(
                     events: events,
-                    degradationState: degradationState
+                    degradationState: degradationState,
+                    loadState: loadState
                 )
             }
             .dropFirst()
@@ -61,7 +50,8 @@ final class InjectionFeedPresentationModel: ObservableObject {
 
 struct InjectionFeedView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    let store: InjectionStore
+    private let store: InjectionStore?
+    private let fixture: InjectionFeedFixture?
     @Binding var filterText: String
     @StateObject private var presentationModel = InjectionFeedPresentationModel()
     @State private var expandedBurstIDs: Set<String> = []
@@ -69,7 +59,33 @@ struct InjectionFeedView: View {
     @State private var copiedContinuationBurstID: String?
     @State private var conversationSelection = InjectionConversationSelection()
     @State private var loadingConversationChunkID: String?
+    @State private var actionReceipt: InjectionActionReceipt? = nil
+    @State private var groupingDisclosureExpanded = false
     @AppStorage("brainbar.injectionFeed.typeFilter") private var typeFilterRaw = InjectionTypeFilter.all.rawValue
+
+    init(store: InjectionStore, filterText: Binding<String>) {
+        self.store = store
+        self.fixture = nil
+        _filterText = filterText
+    }
+
+    init(fixture: InjectionFeedFixture) {
+        self.store = nil
+        self.fixture = fixture
+        _filterText = .constant(fixture.filterText)
+        _expandedBurstIDs = State(initialValue: fixture.expandedBurstIDs)
+        _actionReceipt = State(initialValue: fixture.actionReceipt)
+    }
+
+    init(disconnectedAt now: Date) {
+        self.init(
+            fixture: InjectionFeedFixture(
+                events: [],
+                now: now,
+                connectionState: .disconnected
+            )
+        )
+    }
 
     private let accentPalette: [Color] = [
         .brainBarAccent,
@@ -80,7 +96,14 @@ struct InjectionFeedView: View {
     ]
 
     var body: some View {
+        let presentationState = effectivePresentationState
         let snapshot = makePresentation()
+        let surfaceState = InjectionFeedSurfaceState.resolve(
+            snapshot: snapshot,
+            presentationState: presentationState,
+            connectionState: fixture?.connectionState ?? .connected,
+            filterActive: !filterText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || effectiveTypeFilter != .all
+        )
         GeometryReader { proxy in
             let wideLayout = proxy.size.width >= 960
 
@@ -88,21 +111,26 @@ struct InjectionFeedView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         header(snapshot: snapshot)
-                        overviewStrip(snapshot: snapshot)
+                        if surfaceState.showsContent {
+                            if case .degraded(let reason, true) = surfaceState {
+                                degradationNotice(reason: reason)
+                            }
+                            overviewStrip(snapshot: snapshot)
 
-                        if snapshot.bursts.isEmpty {
-                            emptyState
-                        } else if wideLayout {
-                            HStack(alignment: .top, spacing: 16) {
-                                feedColumn(snapshot: snapshot)
-                                sideRail(snapshot: snapshot)
-                                    .frame(width: 260)
+                            if wideLayout {
+                                HStack(alignment: .top, spacing: 16) {
+                                    feedColumn(snapshot: snapshot)
+                                    sideRail(snapshot: snapshot)
+                                        .frame(width: 260)
+                                }
+                            } else {
+                                VStack(alignment: .leading, spacing: 16) {
+                                    feedColumn(snapshot: snapshot)
+                                    sideRail(snapshot: snapshot)
+                                }
                             }
                         } else {
-                            VStack(alignment: .leading, spacing: 16) {
-                                feedColumn(snapshot: snapshot)
-                                sideRail(snapshot: snapshot)
-                            }
+                            stateCard(surfaceState)
                         }
                     }
                     .padding(20)
@@ -135,15 +163,16 @@ struct InjectionFeedView: View {
                 ConversationLoadingOverlay(onClose: { loadingConversationChunkID = nil })
             }
         }
-        .overlay(alignment: .topTrailing) {
-            if presentationModel.degradationState.isDegraded {
-                DegradationBadge(reason: presentationModel.degradationState.reason)
-                    .padding(.top, 20)
-                    .padding(.trailing, 20)
+        .overlay(alignment: .bottomTrailing) {
+            if let actionReceipt {
+                actionReceiptBadge(actionReceipt)
+                    .padding(20)
             }
         }
         .onAppear {
-            presentationModel.bind(to: store)
+            if let store {
+                presentationModel.bind(to: store)
+            }
         }
     }
 
@@ -152,7 +181,7 @@ struct InjectionFeedView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Injections")
                     .font(.system(size: 26, weight: .semibold, design: .rounded))
-                Text("Retrieval activity over the last hour, grouped into session bursts.")
+                Text("Retrieval activity grouped into literal retrieval bursts.")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.secondary)
             }
@@ -174,6 +203,8 @@ struct InjectionFeedView: View {
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
                             .stroke(Self.filterControlBorderColor, lineWidth: 1)
                     )
+                    .accessibilityIdentifier(Self.filterSearchAccessibilityID)
+                    .accessibilityLabel("Filter retrieval bursts")
 
                 if !filterText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Text("Showing \(snapshot.filteredEvents.count) matching events")
@@ -187,34 +218,33 @@ struct InjectionFeedView: View {
     }
 
     private var filterChips: some View {
-        let activeFilter = InjectionTypeFilter(rawValue: typeFilterRaw) ?? .all
-        return WrappingPillLayout(spacing: 6, lineSpacing: 6) {
+        let activeFilter = effectiveTypeFilter
+        return Picker("Retrieval type", selection: typeFilterBinding) {
             ForEach(InjectionTypeFilter.allCases, id: \.rawValue) { filter in
-                Button {
-                    typeFilterRaw = filter.rawValue
-                } label: {
-                    Text(filter.label)
-                        .font(.system(size: 11, weight: .semibold))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(
-                            Capsule()
-                                .fill(activeFilter == filter ? Self.filterControlSelectedFillColor : Self.filterControlFillColor)
-                        )
-                        .overlay(
-                            Capsule()
-                                .stroke(activeFilter == filter ? Self.filterControlBorderColor : .clear, lineWidth: 1)
-                        )
-                }
-                .buttonStyle(.plain)
+                Text(filter.label).tag(filter.rawValue)
             }
         }
+        .pickerStyle(.menu)
+        .labelsHidden()
+        .accessibilityLabel("Retrieval type: \(activeFilter.label)")
+        .accessibilityIdentifier(Self.filterTypeAccessibilityID)
         .frame(maxWidth: 280, alignment: .trailing)
     }
 
     private func overviewStrip(snapshot: InjectionPresentation.Snapshot) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             InjectionSummaryView(events: snapshot.windowEvents)
+
+            DisclosureGroup(isExpanded: $groupingDisclosureExpanded) {
+                Text(Self.burstGroupingDisclosure)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } label: {
+                Text("Retrieval bursts")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .accessibilityIdentifier(Self.groupingDisclosureAccessibilityID)
 
             HStack(alignment: .center, spacing: 12) {
                 Text("Last 1h")
@@ -290,24 +320,22 @@ struct InjectionFeedView: View {
                         Text(leadEvent?.primaryKind.glyph ?? "📄")
                             .font(.system(size: 16, weight: .bold, design: .rounded))
                             .foregroundStyle(.blue)
-                        Text(burst.summaryTitle)
+                        Text(burst.queryTitle)
                             .font(.system(size: 18, weight: .semibold, design: .rounded))
                             .lineLimit(2)
                     }
-                    if let leadEvent = burst.events.first {
-                        Text(leadEvent.triggeredByText)
+                    if burst.selectedResultSummary.caseInsensitiveCompare(burst.queryTitle) != .orderedSame {
+                        Text("Selected result · \(burst.selectedResultSummary)")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
                     WrappingPillLayout(spacing: 8, lineSpacing: 8) {
-                        chip(text: "Session: \(shortSessionID(burst.sessionID))", tint: .blue)
-                        chip(text: relativeText(for: burst.endDate), tint: .neutral)
-                        chip(text: "\(burst.queryCount) queries", tint: .neutral)
-                        chip(text: "\(burst.tokenCount) tok", tint: .green)
-                        if let leadEvent = burst.events.first {
-                            chip(text: "\(leadEvent.primaryKind.glyph) \(leadEvent.primaryKind.label)", tint: .neutral)
+                        chip(text: burst.sourceLabel, tint: .blue)
+                        if burst.projectLabel != "Project unavailable" {
+                            chip(text: burst.projectLabel, tint: .neutral)
                         }
+                        chip(text: burst.timestampLabel, tint: .neutral)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -316,7 +344,7 @@ struct InjectionFeedView: View {
 
                 VStack(alignment: .trailing, spacing: 8) {
                     VStack(alignment: .trailing, spacing: 2) {
-                        Text("\(burst.chunkCount)")
+                        Text("\(burst.resultCount)")
                             .font(.system(size: 24, weight: .bold, design: .rounded))
                         Text(Self.burstChunkCounterLabel)
                             .font(.system(size: 11, weight: .medium))
@@ -339,6 +367,7 @@ struct InjectionFeedView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(isExpanded ? "Collapse burst" : "Expand burst")
+                    .accessibilityIdentifier("\(Self.burstActionAccessibilityID).expand.\(burst.id)")
 
                     // QA #51: copy a resume command to continue this exact thread.
                     Button {
@@ -353,13 +382,14 @@ struct InjectionFeedView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Copy command to continue this thread")
+                    .accessibilityIdentifier("\(Self.burstActionAccessibilityID).copy.\(burst.id)")
                 }
             }
 
             if isExpanded {
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(burst.events) { event in
-                        eventRow(event)
+                        eventRow(event, selectedResultChunkID: burst.selectedResultProvenance?.chunkID)
                     }
                 }
                 .id(Self.expandedBurstDetailsID(burstID: burst.id))
@@ -369,19 +399,17 @@ struct InjectionFeedView: View {
         }
         .padding(18)
         .background(cardBackground)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Retrieval burst: \(burst.queryTitle), \(burst.resultCount) results, \(burst.timestampLabel)")
     }
 
     private func collapsedChunkPreview(for burst: InjectionPresentation.Burst) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            let previewChunks = InjectionPresentation.previewChunks(for: burst.events, limit: 2)
+            let previewChunks = burst.additionalResultPreviews
             if previewChunks.isEmpty {
-                ForEach(Array(burst.chunkPreviewIDs.enumerated()), id: \.offset) { _, chunkID in
-                    Text(chunkPreviewText(chunkID))
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
+                Text("Additional result details are available when expanded.")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
             } else {
                 ForEach(previewChunks) { chunk in
                     Text("\(chunk.kind.glyph) \(chunk.displayText)")
@@ -392,8 +420,7 @@ struct InjectionFeedView: View {
                 }
             }
 
-            let visibleCount = previewChunks.isEmpty ? burst.chunkPreviewIDs.count : previewChunks.count
-            let remaining = burst.remainingChunkCount(after: visibleCount)
+            let remaining = burst.remainingCollapsedResultCount
             if remaining > 0 {
                 Text("+\(remaining) more")
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
@@ -427,7 +454,7 @@ struct InjectionFeedView: View {
         .background(.regularMaterial)
     }
 
-    private func eventRow(_ event: InjectionEvent) -> some View {
+    private func eventRow(_ event: InjectionEvent, selectedResultChunkID: String?) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
                 Text(InjectionPresentation.shortTime(event.timestamp))
@@ -459,14 +486,24 @@ struct InjectionFeedView: View {
                             .lineLimit(2)
                     }
 
-                    HStack(spacing: 10) {
-                        Text("Session \(shortSessionID(event.sessionID))")
-                        Text("\(event.chunkCount) chunks")
+                    WrappingPillLayout(spacing: 8, lineSpacing: 6) {
+                        Text("Timestamp \(event.timestamp)")
+                        Text("Source \(event.primaryKind.label)")
+                        if !event.claudeProjectPath.isEmpty {
+                            Text("Project \(event.claudeProjectPath)")
+                        }
+                        Text("Session \(event.sessionID)")
+                        Text("Event ID \(event.id)")
+                        if !event.claudeConversationID.isEmpty {
+                            Text("Conversation \(event.claudeConversationID)")
+                        }
+                        Text("Mode \(event.mode)")
+                        Text("\(event.uniqueChunkIDs.count) results")
                         Text("\(event.tokenCount) tok")
-                        Text("\(event.chunks.reduce(0) { $0 + $1.tags.count }) tags")
                     }
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
                     chunkRibbon(for: event)
 
@@ -474,7 +511,7 @@ struct InjectionFeedView: View {
                     // Previously the chunk list hid behind a low-weight "Show hits"
                     // link, so an expanded "3-chunk" burst showed only one.
                     if !event.uniqueChunkIDs.isEmpty {
-                        chunkList(for: event)
+                        chunkList(for: event, selectedResultChunkID: selectedResultChunkID)
                     }
                 }
 
@@ -501,6 +538,7 @@ struct InjectionFeedView: View {
                 .buttonStyle(.plain)
                 .disabled(event.uniqueChunkIDs.isEmpty || loadingConversationChunkID != nil)
                 .accessibilityLabel("Open thread")
+                .accessibilityIdentifier("\(Self.burstActionAccessibilityID).open.\(event.id)")
             }
 
             Rectangle()
@@ -548,22 +586,47 @@ struct InjectionFeedView: View {
         )
     }
 
-    private func chunkList(for event: InjectionEvent) -> some View {
+    private func chunkList(for event: InjectionEvent, selectedResultChunkID: String?) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(event.uniqueChunkIDs.enumerated()), id: \.offset) { _, chunkID in
+                let resultChunk = chunk(for: chunkID, event: event)
+                let provenance = InjectionPresentation.ResultProvenance(
+                    chunkID: chunkID,
+                    eventID: event.id,
+                    sessionID: event.sessionID,
+                    timestamp: event.timestamp,
+                    chunk: resultChunk
+                )
                 Button {
                     openConversation(
                         chunkID: chunkID,
-                        title: chunk(for: chunkID, event: event)?.kind.modalTitle ?? event.modalTitle
+                        title: resultChunk?.kind.modalTitle ?? event.modalTitle
                     )
                 } label: {
-                    HStack(spacing: 8) {
+                    HStack(alignment: .top, spacing: 8) {
                         Circle()
-                            .fill(color(for: chunk(for: chunkID, event: event)?.kind ?? .other))
+                            .fill(color(for: resultChunk?.kind ?? .other))
                             .frame(width: 8, height: 8)
-                        Text(chunkListTitle(chunkID: chunkID, event: event))
-                            .font(.system(size: 10, weight: .medium, design: .monospaced))
-                            .lineLimit(1)
+                            .padding(.top, 4)
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(chunkListTitle(chunkID: chunkID, event: event))
+                                .font(.system(size: 11, weight: .medium))
+                                .lineLimit(2)
+                            WrappingPillLayout(spacing: 6, lineSpacing: 5) {
+                                ForEach(
+                                    provenance.expandedMetadataLabels(
+                                        isSelected: chunkID == selectedResultChunkID
+                                    ),
+                                    id: \.self
+                                ) { label in
+                                    Text(label)
+                                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(2)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                         Spacer()
                         Text("Open thread")
                             .font(.system(size: 10, weight: .semibold))
@@ -586,8 +649,9 @@ struct InjectionFeedView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(snapshot.sessions.prefix(4)) { session in
                         HStack {
-                            Text(session.sessionID)
-                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            Text(session.displayLabel)
+                                .font(.system(size: 11, weight: .semibold))
+                                .lineLimit(2)
                             Spacer()
                             Text("\(session.queryCount)q · \(session.tokenCount) tok")
                                 .font(.system(size: 11, weight: .medium))
@@ -612,8 +676,11 @@ struct InjectionFeedView: View {
 
             sideRailCard(title: "Signals") {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(filterSignalText)
-                        .font(.system(size: 12, weight: .medium))
+                    let trimmedFilter = filterText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmedFilter.isEmpty {
+                        Text("Filtered by “\(trimmedFilter)”")
+                            .font(.system(size: 12, weight: .medium))
+                    }
                     if let highestChunkEvent = snapshot.windowEvents.max(by: { $0.chunkCount < $1.chunkCount }) {
                         Text("Chunk-heavy: \(highestChunkEvent.chunkCount) hits on “\(highestChunkEvent.query)”")
                             .font(.system(size: 11))
@@ -625,33 +692,90 @@ struct InjectionFeedView: View {
         }
     }
 
-    private var emptyState: some View {
+    @ViewBuilder
+    private func stateCard(_ state: InjectionFeedSurfaceState) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("No injections match the current filter.")
-                .font(.system(size: 18, weight: .semibold))
-            Text("Clear the filter or wait for fresh retrieval activity to land.")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.secondary)
+            switch state {
+            case .loading:
+                ProgressView()
+                    .controlSize(.small)
+                Text("Loading retrieval activity")
+                    .font(.system(size: 18, weight: .semibold))
+                Text("Waiting for the first read-only injections snapshot.")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+            case .disconnected:
+                Text("Injection feed disconnected")
+                    .font(.system(size: 18, weight: .semibold))
+                Text("BrainBar has no read-only injection store connection for this session.")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+            case .empty:
+                Text("No retrieval activity yet")
+                    .font(.system(size: 18, weight: .semibold))
+                Text("The feed is connected and healthy; no injections were returned.")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+            case .noMatches:
+                Text("No injections match the current filters")
+                    .font(.system(size: 18, weight: .semibold))
+                Text("Clear the text or type filter to show retrieval activity.")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+            case .degraded(let reason, false):
+                Text("Injection feed read failed")
+                    .font(.system(size: 18, weight: .semibold))
+                Text(reason)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            case .content, .degraded(_, true):
+                EmptyView()
+            }
         }
         .padding(22)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(cardBackground)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(Self.surfaceStateAccessibilityID)
     }
 
-    private func overviewMetric(label: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(label)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.system(size: 22, weight: .bold, design: .rounded))
+    private func degradationNotice(reason: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Feed degraded · showing the last good retrievals")
+                    .font(.system(size: 12, weight: .semibold))
+                Text(reason)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
         }
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.brainBarTextPrimary.opacity(0.05))
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.orange.opacity(0.1))
         )
+    }
+
+    private func actionReceiptBadge(_ receipt: InjectionActionReceipt) -> some View {
+        Label(
+            receipt.message,
+            systemImage: receipt.kind == .success ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+        )
+        .font(.system(size: 11, weight: .semibold))
+        .foregroundStyle(receipt.kind == .success ? Color.green : Color.orange)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(
+            Capsule()
+                .fill(Color.brainBarGlassPrimary)
+                .shadow(color: Color.black.opacity(0.12), radius: 8, y: 3)
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(Self.actionReceiptAccessibilityID)
     }
 
     private func sideRailCard<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
@@ -724,14 +848,6 @@ struct InjectionFeedView: View {
         return "Latest · \(InjectionPresentation.shortTime(first.timestamp))"
     }
 
-    private var filterSignalText: String {
-        let trimmed = filterText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            return "Showing the full retrieval stream."
-        }
-        return "Filtered by “\(trimmed)”"
-    }
-
     private var pageBackground: some View {
         LinearGradient(
             colors: [
@@ -760,7 +876,11 @@ struct InjectionFeedView: View {
         )
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(command, forType: .string)
+        let copied = pasteboard.setString(command, forType: .string)
+        actionReceipt = .copyResult(copied: copied)
+        guard copied else {
+            return
+        }
 
         let update = { copiedContinuationBurstID = burst.id }
         if reduceMotion {
@@ -773,6 +893,9 @@ struct InjectionFeedView: View {
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(2))
             guard copiedContinuationBurstID == burstID else { return }
+            if actionReceipt?.message == "Resume command copied" {
+                actionReceipt = nil
+            }
             if reduceMotion {
                 copiedContinuationBurstID = nil
             } else {
@@ -802,38 +925,26 @@ struct InjectionFeedView: View {
         "expanded-burst-details-\(burstID)"
     }
 
-    private func shortSessionID(_ sessionID: String) -> String {
-        guard sessionID.count > 12 else { return sessionID }
-        let prefix = sessionID.prefix(10)
-        return "\(prefix)…"
+    private var effectivePresentationState: InjectionFeedPresentationState {
+        fixture?.presentationState ?? presentationModel.state
     }
 
-    private func relativeText(for date: Date) -> String {
-        let seconds = max(Date().timeIntervalSince(date), 0)
-        if seconds < 60 {
-            return "just now"
-        }
-        if seconds < 60 * 60 {
-            return "\(Int(seconds / 60))m ago"
-        }
-        if seconds < 24 * 60 * 60 {
-            return "\(Int(seconds / 3600))h ago"
-        }
-        return "\(Int(seconds / 86_400))d ago"
+    private var effectiveTypeFilter: InjectionTypeFilter {
+        fixture?.typeFilter ?? InjectionTypeFilter(rawValue: typeFilterRaw) ?? .all
     }
 
-    private func chunkPreviewText(_ chunkID: String) -> String {
-        let limit = 80
-        guard chunkID.count > limit else { return chunkID }
-        return "\(chunkID.prefix(limit - 1))…"
+    private var typeFilterBinding: Binding<String> {
+        guard let fixture else { return $typeFilterRaw }
+        return .constant(fixture.typeFilter.rawValue)
     }
 
     private func makePresentation(now: Date = Date()) -> InjectionPresentation.Snapshot {
-        InjectionPresentation.snapshot(
-            events: presentationModel.events,
+        let effectiveNow = fixture?.now ?? now
+        return InjectionPresentation.snapshot(
+            events: effectivePresentationState.events,
             filterText: filterText,
-            typeFilter: InjectionTypeFilter(rawValue: typeFilterRaw) ?? .all,
-            now: now,
+            typeFilter: effectiveTypeFilter,
+            now: effectiveNow,
             bucketCount: 24
         )
     }
@@ -858,6 +969,10 @@ struct InjectionFeedView: View {
 
     private func openConversation(chunkID: String, title: String) {
         guard loadingConversationChunkID == nil else { return }
+        guard let store else {
+            actionReceipt = .disconnectedThread
+            return
+        }
         loadingConversationChunkID = chunkID
         Task {
             do {
@@ -865,10 +980,12 @@ struct InjectionFeedView: View {
                 guard loadingConversationChunkID == chunkID else { return }
                 conversationSelection.open(conversation, title: title)
                 loadingConversationChunkID = nil
+                actionReceipt = .threadOpenResult(errorDescription: nil)
             } catch {
                 if loadingConversationChunkID == chunkID {
                     loadingConversationChunkID = nil
                 }
+                actionReceipt = .threadOpenResult(errorDescription: error.localizedDescription)
             }
         }
     }
@@ -927,6 +1044,14 @@ extension InjectionFeedView {
     nonisolated static var filterControlsUseAccentTint: Bool { false }
 
     nonisolated static let burstChunkCounterLabel = "memories surfaced into context"
+    nonisolated static let burstGroupingDisclosure =
+        "Retrieval bursts group the same session and trigger topic while consecutive events remain under 60 minutes."
+    nonisolated static let filterSearchAccessibilityID = "brainbar.injections.filter.search"
+    nonisolated static let filterTypeAccessibilityID = "brainbar.injections.filter.type"
+    nonisolated static let groupingDisclosureAccessibilityID = "brainbar.injections.grouping"
+    nonisolated static let burstActionAccessibilityID = "brainbar.injections.burst.action"
+    nonisolated static let surfaceStateAccessibilityID = "brainbar.injections.state"
+    nonisolated static let actionReceiptAccessibilityID = "brainbar.injections.action.receipt"
 
     static var filterControlFillColor: Color {
         Color.brainBarTextPrimary.opacity(0.06)
