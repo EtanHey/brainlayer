@@ -268,6 +268,72 @@ final class BrainDatabaseWindowedBucketsTests: XCTestCase {
         )
     }
 
+    func testWatcherWindowCountsDistinctChunkOnceAtFirstInWindowIngestWhileSourceSeriesUseCreatedAt() throws {
+        XCTAssertTrue(try db.tableExists("chunks"))
+
+        let now = Date()
+        try insertWrite(
+            id: "old-source-new-ingest",
+            source: "realtime_watcher",
+            createdAt: now.addingTimeInterval(-2 * 60 * 60)
+        )
+        try insertWatcherLiveness(
+            chunkID: "old-source-new-ingest",
+            ingestedAt: now.addingTimeInterval(-20 * 60)
+        )
+        try insertWatcherLiveness(
+            chunkID: "old-source-new-ingest",
+            ingestedAt: now.addingTimeInterval(-5 * 60)
+        )
+        try insertWrite(
+            id: "agent-source-row",
+            source: "mcp",
+            createdAt: now.addingTimeInterval(-10 * 60)
+        )
+        try insertWrite(
+            id: "other-source-row",
+            source: "jsonl_backup",
+            createdAt: now.addingTimeInterval(-5 * 60)
+        )
+
+        let buckets = try db.pipelineWindowBuckets(activityWindowMinutes: 30, bucketCount: 6, now: now)
+
+        XCTAssertEqual(
+            buckets.allWriteTotal,
+            2,
+            "All chunks use chunks.created_at and count chunk rows; the old source row stays outside the source-time window."
+        )
+        XCTAssertEqual(
+            buckets.agentTotal,
+            1,
+            "Agent-origin chunks use chunks.created_at and chunk-row cardinality."
+        )
+        XCTAssertEqual(
+            buckets.watcherWriteBuckets,
+            [0, 0, 1, 0, 0, 0],
+            "Watcher ingestion counts a chunk_id once per selected window and buckets its first qualifying in-window ingested_at."
+        )
+    }
+
+    func testWatcherWindowDoesNotFallBackToChunkSourceTimeWhenLivenessTableIsUnavailable() throws {
+        XCTAssertFalse(try db.tableExists("watcher_liveness_events"))
+
+        let now = Date()
+        try insertWrite(
+            id: "source-time-is-not-watcher-proof",
+            source: "realtime_watcher",
+            createdAt: now.addingTimeInterval(-60)
+        )
+
+        let buckets = try db.pipelineWindowBuckets(activityWindowMinutes: 30, bucketCount: 6, now: now)
+
+        XCTAssertEqual(
+            buckets.watcherWriteBuckets,
+            [0, 0, 0, 0, 0, 0],
+            "Missing watcher-ingest evidence must fail closed; chunks.created_at cannot silently impersonate ingest time."
+        )
+    }
+
     func testPendingSourceReplayCountsAsAgentStoreWrite() throws {
         XCTAssertTrue(try db.tableExists("chunks"))
 

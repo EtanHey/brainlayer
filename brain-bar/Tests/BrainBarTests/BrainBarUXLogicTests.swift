@@ -489,6 +489,129 @@ final class BrainBarUXLogicTests: XCTestCase {
         XCTAssertEqual(watcherLane.statusText, "Watcher health unavailable")
     }
 
+    func testWatcherFlowStateMatrixUsesProcessRecentDistinctFlowAndPendingEvidence() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let running = DaemonHealthSnapshot(
+            pid: 4242,
+            isResponsive: true,
+            rssBytes: 1_024,
+            uptime: 60,
+            openConnections: 1,
+            lastSeenAt: now
+        )
+        let historicalMarker = DashboardStats.WatcherHealth(
+            alerting: false,
+            filesTracked: 12,
+            maxOffsetLagBytes: 0,
+            activeEntriesPerMinute: 0,
+            realtimeInsertsPerMinute: 0,
+            updatedAt: now
+        )
+        let alertingHistoricalMarker = DashboardStats.WatcherHealth(
+            alerting: true,
+            filesTracked: 12,
+            maxOffsetLagBytes: 10_000,
+            activeEntriesPerMinute: 0,
+            realtimeInsertsPerMinute: 0,
+            updatedAt: now.addingTimeInterval(-3_600)
+        )
+
+        func watcherStatusText(
+            process: DaemonHealthSnapshot?,
+            recentDistinctChunks: [Int],
+            pendingDepth: Int,
+            historicalHealth: DashboardStats.WatcherHealth?
+        ) -> String {
+            let stats = DashboardStats(
+                chunkCount: 120,
+                enrichedChunkCount: 120,
+                pendingEnrichmentCount: 0,
+                enrichmentPercent: 100,
+                enrichmentRatePerMinute: 0,
+                databaseSizeBytes: 4_096,
+                recentActivityBuckets: recentDistinctChunks,
+                recentAgentWriteBuckets: Array(repeating: 0, count: recentDistinctChunks.count),
+                recentWatcherWriteBuckets: recentDistinctChunks,
+                recentEnrichmentBuckets: Array(repeating: 0, count: recentDistinctChunks.count),
+                activityWindowMinutes: 1,
+                bucketCount: recentDistinctChunks.count,
+                liveWindowMinutes: 1,
+                pendingStoreQueueDepth: pendingDepth,
+                pendingStoreFlushQueueDepth: pendingDepth,
+                watcherHealth: historicalHealth
+            )
+            return DashboardFlowSummary.derive(daemon: process, stats: stats, now: now)
+                .lane(for: .jsonlWatcher)
+                .statusText
+        }
+
+        XCTAssertEqual(
+            watcherStatusText(
+                process: running,
+                recentDistinctChunks: [0, 0, 0, 1],
+                pendingDepth: 0,
+                historicalHealth: historicalMarker
+            ),
+            "FLOWING"
+        )
+        XCTAssertEqual(
+            watcherStatusText(
+                process: running,
+                recentDistinctChunks: [0, 0, 0, 0],
+                pendingDepth: 2,
+                historicalHealth: historicalMarker
+            ),
+            "STALLED"
+        )
+        XCTAssertEqual(
+            watcherStatusText(
+                process: running,
+                recentDistinctChunks: [0, 0, 0, 0],
+                pendingDepth: 0,
+                historicalHealth: historicalMarker
+            ),
+            "RUNNING · NO RECENT FLOW"
+        )
+        XCTAssertEqual(
+            watcherStatusText(
+                process: nil,
+                recentDistinctChunks: [0, 0, 0, 0],
+                pendingDepth: 0,
+                historicalHealth: historicalMarker
+            ),
+            "OFFLINE"
+        )
+        XCTAssertEqual(
+            watcherStatusText(
+                process: running,
+                recentDistinctChunks: [0, 0, 0, 1],
+                pendingDepth: 0,
+                historicalHealth: alertingHistoricalMarker
+            ),
+            "FLOWING",
+            "watcher-health.json is historical diagnostic context and cannot override current process+flow truth."
+        )
+        XCTAssertEqual(
+            watcherStatusText(
+                process: running,
+                recentDistinctChunks: [0, 0, 0, 0],
+                pendingDepth: 0,
+                historicalHealth: nil
+            ),
+            "RUNNING · FLOW UNVERIFIED"
+        )
+        XCTAssertEqual(
+            watcherStatusText(
+                process: nil,
+                recentDistinctChunks: [0, 0, 0, 0],
+                pendingDepth: 0,
+                historicalHealth: nil
+            ),
+            "UNKNOWN",
+            "Ambiguous process-probe failure plus unavailable flow evidence must fail closed, not claim OFFLINE."
+        )
+    }
+
     func testJsonlWatcherLaneMarksTimestamplessWatcherHealthUnavailable() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let stats = DashboardStats(

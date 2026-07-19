@@ -113,6 +113,33 @@ final class DashboardTests: XCTestCase {
         XCTAssertGreaterThan(stats.databaseSizeBytes, 0)
     }
 
+    func testDashboardEnrichedSuccessfullyExcludesFailedSkippedAndPendingRows() throws {
+        for id in ["enrich-success", "enrich-failed", "enrich-skipped", "enrich-pending"] {
+            try db.insertChunk(
+                id: id,
+                content: "Enrichment truth fixture \(id)",
+                sessionId: "dashboard",
+                project: "brainlayer",
+                contentType: "assistant_text",
+                importance: 5
+            )
+        }
+        db.exec("UPDATE chunks SET enriched_at = datetime('now'), enrich_status = 'success' WHERE id = 'enrich-success'")
+        db.exec("UPDATE chunks SET enrich_status = 'failed' WHERE id = 'enrich-failed'")
+        db.exec("UPDATE chunks SET enrich_status = 'skipped' WHERE id = 'enrich-skipped'")
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
+
+        XCTAssertEqual(stats.chunkCount, 4)
+        XCTAssertEqual(
+            stats.enrichedChunkCount,
+            1,
+            "The ENRICHED SUCCESSFULLY numerator counts only enrich_status='success'."
+        )
+        XCTAssertEqual(stats.pendingEnrichmentCount, 1)
+        XCTAssertEqual(stats.enrichmentPercent, 25, accuracy: 0.001)
+    }
+
     func testDashboardStatsReportsPerSignalCoverageAndBacklogs() throws {
         for id in ["signal-1", "signal-2", "signal-3", "signal-archived"] {
             try db.insertChunk(
@@ -451,6 +478,34 @@ final class DashboardTests: XCTestCase {
         XCTAssertTrue(source.contains("BrainBarDashboardContent("))
         XCTAssertTrue(source.contains("collector.lastDataFetchedAt == nil"))
         XCTAssertTrue(source.contains("Connecting to daemon and loading dashboard data"))
+    }
+
+    func testSnapshotFreshnessHasInjectedClockStrictSixtySecondBoundaryAndIndependentTicker() throws {
+        let collectorSource = try brainBarSourceFile("Sources/BrainBar/Dashboard/StatsCollector.swift")
+        let stateSource = try brainBarSourceFile("Sources/BrainBar/Dashboard/PipelineState.swift")
+        let combined = collectorSource + "\n" + stateSource
+
+        XCTAssertTrue(
+            combined.contains("SnapshotFreshnessState"),
+            "Freshness must be a typed state rather than an implicit lastDataFetchedAt nil check."
+        )
+        XCTAssertTrue(
+            combined.contains("snapshotFreshnessThreshold") && combined.contains("60"),
+            "The named snapshot freshness threshold must be exactly 60 seconds."
+        )
+        XCTAssertTrue(
+            combined.contains("nowProvider") || combined.contains("clock:"),
+            "An injected clock is required to prove the exact 60s versus >60s boundary."
+        )
+        XCTAssertTrue(
+            combined.contains("freshnessTicker") || combined.contains("freshnessTimer"),
+            "Freshness presentation must advance without waiting for a fetch callback."
+        )
+        XCTAssertTrue(
+            combined.contains("> snapshotFreshnessThreshold")
+                || combined.contains("> Self.snapshotFreshnessThreshold"),
+            "Exactly 60 seconds remains LIVE; only age >60 seconds becomes STALE."
+        )
     }
 
     func testDashboardRendersPerSignalCoverageSection() throws {
@@ -1056,6 +1111,65 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
         XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 1)
         XCTAssertEqual(stats.pendingStoreOldestQueuedAt, Date(timeIntervalSince1970: 1_800))
+
+        let detail = DashboardFlowSummary.derive(daemon: nil, stats: stats).queue.detail.lowercased()
+        XCTAssertTrue(detail.contains("pending stores: 1"), "Replay debt must retain its pending-store component.")
+        XCTAssertTrue(detail.contains("durable queue: 1"), "Replay debt must retain its durable-queue component.")
+        XCTAssertTrue(detail.contains("repository fallback: 1"), "Replay debt must retain its repository-fallback component.")
+        XCTAssertTrue(
+            detail.contains("deduplicated total: 1"),
+            "The three source components share one identity and must aggregate to one debt item."
+        )
+    }
+
+    func testDashboardReplayDebtRetainsKnownComponentsAndMarksAggregatePartialWhenInputUnreadable() throws {
+        let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pending-stores-dashboard-partial-\(UUID().uuidString).jsonl")
+        let unreadableQueueInput = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("brainlayer-durable-unreadable-\(UUID().uuidString)")
+        let fallbackPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("known-fallback.md")
+        let restoreQueuePath = setDashboardPendingStoreQueuePath(queuePath)
+        let restoreDurableQueue = setDashboardDurableStoreQueuePath(unreadableQueueInput)
+        defer {
+            restoreQueuePath()
+            restoreDurableQueue()
+            try? FileManager.default.removeItem(at: queuePath)
+            try? FileManager.default.removeItem(at: unreadableQueueInput)
+        }
+
+        try """
+        {"content":"known pending","tags":["queue"],"importance":5,"source":"mcp","queued_at":"1970-01-01T00:30:00Z","chunk_id":"pending-known"}
+        """.write(to: queuePath, atomically: true, encoding: .utf8)
+        try "not a readable queue directory\n".write(
+            to: unreadableQueueInput,
+            atomically: true,
+            encoding: .utf8
+        )
+        try FileManager.default.createDirectory(
+            at: fallbackPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        ---
+        intended_brain_store: true
+        queued_chunk_id: fallback-known
+        chunk_id:
+        timestamp: 1970-01-01T00:31:00Z
+        ---
+        known fallback body
+        """.write(to: fallbackPath, atomically: true, encoding: .utf8)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+        let detail = DashboardFlowSummary.derive(daemon: nil, stats: stats).queue.detail.lowercased()
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 2, "Readable components remain visible when another source is unreadable.")
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 1)
+        XCTAssertTrue(detail.contains("partial"), "The aggregate must disclose that one replay-debt input was unreadable.")
+        XCTAssertTrue(detail.contains("durable"), "The unreadable durable component must be named, not silently treated as empty.")
     }
 
     func testDashboardStatsDeduplicatesUnmarkedFallbackAgainstDurableFallbackChunkID() throws {
@@ -2148,6 +2262,56 @@ final class DashboardTests: XCTestCase {
         try await waitForCollector(collector) { $0.stats.chunkCount == 1 }
 
         XCTAssertEqual(collector.stats.chunkCount, 1)
+    }
+
+    @MainActor
+    func testStatsCollectorFetchErrorRetainsLastGoodSnapshotAndPublishesVisibleFailure() async throws {
+        try db.insertChunk(
+            id: "last-good-survives-error",
+            content: "The last successful dashboard snapshot must survive a later read failure",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
+        )
+        defer { collector.stop() }
+
+        collector.refresh(force: true)
+        try await waitForCollector(collector) { !$0.isRefreshing && $0.lastDataFetchedAt != nil }
+        let lastGoodStats = collector.stats
+        let lastSuccessAt = try XCTUnwrap(collector.lastDataFetchedAt)
+        XCTAssertEqual(lastGoodStats.chunkCount, 1)
+
+        db.close()
+        try FileManager.default.removeItem(atPath: tempDBPath)
+        try? FileManager.default.removeItem(atPath: tempDBPath + "-wal")
+        try? FileManager.default.removeItem(atPath: tempDBPath + "-shm")
+
+        collector.refresh(force: true)
+        try await waitForCollector(collector) { !$0.isRefreshing }
+
+        XCTAssertEqual(
+            collector.stats,
+            lastGoodStats,
+            "A failed refresh retains and dims the last good snapshot instead of fabricating zero values."
+        )
+        XCTAssertEqual(collector.lastDataFetchedAt, lastSuccessAt)
+
+        let collectorSource = try brainBarSourceFile("Sources/BrainBar/Dashboard/StatsCollector.swift")
+        let viewSource = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
+        XCTAssertTrue(
+            collectorSource.contains("lastFetchError") || collectorSource.contains("currentFetchError"),
+            "The collector must publish the unresolved fetch error separately from last-good data."
+        )
+        XCTAssertTrue(
+            viewSource.contains("lastFetchError") || viewSource.contains("currentFetchError"),
+            "The dashboard must make the current fetch failure visible with last-success age."
+        )
     }
 
     @MainActor

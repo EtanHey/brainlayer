@@ -117,6 +117,38 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
         print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
     }
 
+    @MainActor
+    func testOperatorStateFixturesStayIsolatedFromProductionDatabaseAndProcessServices() throws {
+        let collector = BrainBarDashboardFixture.makeCollector()
+        let fields = Dictionary(uniqueKeysWithValues: Mirror(reflecting: collector).children.compactMap { child in
+            child.label.map { ($0, child.value) }
+        })
+
+        XCTAssertEqual(fields["dbPath"] as? String, "/nonexistent/brainbar-fixture.db")
+        XCTAssertEqual(fields["isRunning"] as? Bool, false)
+
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let fixtureSource = try String(
+            contentsOf: packageRoot.appendingPathComponent("Sources/BrainBar/Dashboard/BrainBarDashboardFixture.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(fixtureSource.contains("StatsCollector.fixture("))
+        XCTAssertFalse(fixtureSource.contains(".start()"), "Deterministic fixtures must not start collectors or timers.")
+        XCTAssertFalse(fixtureSource.contains("launchctl"), "Fixture variants must not probe or mutate process services.")
+        XCTAssertFalse(
+            fixtureSource.contains(".local/share/brainlayer/brainlayer.db"),
+            "Fixture variants must never resolve the canonical production database."
+        )
+        XCTAssertTrue(fixtureSource.contains("case loading"), "Snapshot fixtures must cover LOADING.")
+        XCTAssertTrue(fixtureSource.contains("case live"), "Snapshot fixtures must cover LIVE.")
+        XCTAssertTrue(fixtureSource.contains("case stale"), "Snapshot fixtures must cover STALE.")
+        XCTAssertTrue(fixtureSource.contains("case error"), "Snapshot fixtures must cover ERROR with last-good data.")
+    }
+
     // MARK: - Render helpers
 
     @MainActor
