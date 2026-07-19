@@ -147,6 +147,20 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
         XCTAssertTrue(fixtureSource.contains("case live"), "Snapshot fixtures must cover LIVE.")
         XCTAssertTrue(fixtureSource.contains("case stale"), "Snapshot fixtures must cover STALE.")
         XCTAssertTrue(fixtureSource.contains("case error"), "Snapshot fixtures must cover ERROR with last-good data.")
+
+        let loading = BrainBarDashboardFixture.makeCollector(.loading)
+        let live = BrainBarDashboardFixture.makeCollector(.live)
+        let stale = BrainBarDashboardFixture.makeCollector(.stale)
+        let error = BrainBarDashboardFixture.makeCollector(.error)
+        XCTAssertEqual(loading.snapshotFreshnessState, .loading)
+        XCTAssertEqual(live.snapshotFreshnessState, .live(ageSeconds: 0))
+        XCTAssertEqual(stale.snapshotFreshnessState, .stale(ageSeconds: 61))
+        XCTAssertEqual(
+            error.snapshotFreshnessState,
+            .error(message: "Fixture fetch failed", lastSuccessAgeSeconds: 15)
+        )
+        XCTAssertNotNil(error.lastDataFetchedAt)
+        XCTAssertEqual(error.lastFetchError, "Fixture fetch failed")
     }
 
     // MARK: - Render helpers

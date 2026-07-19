@@ -22,11 +22,13 @@ enum BrainBarAppSupport {
         dbPath: String,
         targetPID: pid_t,
         brainBusEvents: BrainBusEventSource? = BrainBusClient(),
+        watcherProcessProbe: any WatcherProcessProbing = LaunchctlWatcherProcessProbe(),
         databaseOpenConfiguration: BrainDatabase.OpenConfiguration = BrainDatabase.OpenConfiguration()
     ) -> StatsCollector {
         StatsCollector(
             dbPath: dbPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: targetPID),
+            watcherProcessProbe: watcherProcessProbe,
             brainBusEvents: brainBusEvents,
             databaseOpenConfiguration: databaseOpenConfiguration
         )

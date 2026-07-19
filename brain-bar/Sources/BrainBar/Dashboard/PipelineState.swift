@@ -3,6 +3,139 @@ import Foundation
 
 typealias DashboardStats = BrainDatabase.DashboardStats
 
+enum MetricClock: String, Sendable, Equatable {
+    case sourceTime
+    case ingestTime
+}
+
+enum MetricCardinality: String, Sendable, Equatable {
+    case chunkRows
+    case distinctChunkIDs
+    case events
+}
+
+struct MetricContract: Sendable, Equatable {
+    let clock: MetricClock
+    let cardinality: MetricCardinality
+}
+
+enum DashboardMetricContract {
+    static let chunkRows = MetricContract(clock: .sourceTime, cardinality: .chunkRows)
+    static let agentOriginChunks = MetricContract(clock: .sourceTime, cardinality: .chunkRows)
+    static let watcherIngestedChunks = MetricContract(clock: .ingestTime, cardinality: .distinctChunkIDs)
+}
+
+enum MetricEvidenceReadability: Sendable, Equatable {
+    case readable
+    case unreadable(String)
+
+    var isReadable: Bool {
+        if case .readable = self { return true }
+        return false
+    }
+}
+
+enum WatcherProcessProbeResult: Sendable, Equatable {
+    case running(pid: pid_t)
+    case absent
+    case failure(String)
+}
+
+enum WatcherFlowState: Sendable, Equatable {
+    case flowing
+    case stalled
+    case runningNoRecentFlow
+    case offline
+    case runningFlowUnverified
+    case unknown
+
+    static func derive(
+        process: WatcherProcessProbeResult,
+        recentDistinctChunkCount: Int,
+        recentFlowReadable: Bool,
+        pendingWorkCount: Int
+    ) -> WatcherFlowState {
+        switch process {
+        case .failure:
+            return .unknown
+        case .absent:
+            return .offline
+        case .running:
+            guard recentFlowReadable else { return .runningFlowUnverified }
+            if recentDistinctChunkCount > 0 { return .flowing }
+            if pendingWorkCount > 0 { return .stalled }
+            return .runningNoRecentFlow
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .flowing: return "FLOWING"
+        case .stalled: return "STALLED"
+        case .runningNoRecentFlow: return "RUNNING · NO RECENT FLOW"
+        case .offline: return "OFFLINE"
+        case .runningFlowUnverified: return "RUNNING · FLOW UNVERIFIED"
+        case .unknown: return "UNKNOWN"
+        }
+    }
+}
+
+enum SnapshotFreshnessState: Sendable, Equatable {
+    case loading
+    case live(ageSeconds: Int)
+    case stale(ageSeconds: Int)
+    case error(message: String, lastSuccessAgeSeconds: Int?)
+
+    static func derive(
+        lastSuccessAt: Date?,
+        isRefreshing: Bool,
+        lastFetchError: String?,
+        now: Date,
+        snapshotFreshnessThreshold: TimeInterval
+    ) -> SnapshotFreshnessState {
+        let ageSeconds = lastSuccessAt.map { max(0, Int(now.timeIntervalSince($0))) }
+        if let lastFetchError {
+            return .error(message: lastFetchError, lastSuccessAgeSeconds: ageSeconds)
+        }
+        if lastSuccessAt == nil && isRefreshing {
+            return .loading
+        }
+        guard let lastSuccessAt else {
+            return .loading
+        }
+        let age = max(0, now.timeIntervalSince(lastSuccessAt))
+        if age > snapshotFreshnessThreshold {
+            return .stale(ageSeconds: Int(age))
+        }
+        return .live(ageSeconds: Int(age))
+    }
+
+    var isLoading: Bool {
+        if case .loading = self { return true }
+        return false
+    }
+
+    var label: String {
+        switch self {
+        case .loading: return "LOADING"
+        case .live: return "LIVE"
+        case .stale: return "STALE"
+        case .error: return "ERROR"
+        }
+    }
+
+    var ageSeconds: Int? {
+        switch self {
+        case .loading:
+            return nil
+        case .live(let ageSeconds), .stale(let ageSeconds):
+            return ageSeconds
+        case .error(_, let lastSuccessAgeSeconds):
+            return lastSuccessAgeSeconds
+        }
+    }
+}
+
 struct DaemonHealthSnapshot: Sendable, Equatable {
     let pid: pid_t
     let isResponsive: Bool
@@ -228,6 +361,7 @@ struct DashboardFlowSummary: Sendable, Equatable {
     let ingress: DashboardFlowLane
     let queue: DashboardQueueSummary
     let enrichment: DashboardFlowLane
+    let watcherFlowState: WatcherFlowState
     let watcherHealth: DashboardStats.WatcherHealth?
     let watcherHealthIsFresh: Bool
 
@@ -247,6 +381,15 @@ struct DashboardFlowSummary: Sendable, Equatable {
         let backlogCount = stats.pendingEnrichmentCount
         let storeOldestAgeSeconds = stats.pendingStoreOldestQueuedAt.map { max(0, Int(now.timeIntervalSince($0).rounded())) }
         let storeHealth = storeQueueHealth(depth: stats.pendingStoreQueueDepth, oldestAgeSeconds: storeOldestAgeSeconds)
+        let watcherProcess = stats.watcherProcessProbeResult
+            ?? daemon.map { WatcherProcessProbeResult.running(pid: $0.pid) }
+            ?? .absent
+        let watcherFlowState = WatcherFlowState.derive(
+            process: watcherProcess,
+            recentDistinctChunkCount: stats.watcherRecentDistinctChunkCount,
+            recentFlowReadable: stats.watcherFlowReadability.isReadable,
+            pendingWorkCount: stats.replayDebtBreakdown.deduplicatedTotal
+        )
 
         let ingressStatus: DashboardFlowLaneStatus
         if writesLive {
@@ -452,6 +595,7 @@ struct DashboardFlowSummary: Sendable, Equatable {
                 tertiarySeriesLabel: nil,
                 tertiaryAccentColor: nil
             ),
+            watcherFlowState: watcherFlowState,
             watcherHealth: stats.watcherHealth,
             watcherHealthIsFresh: stats.watcherHealth?.isFresh(now: now) ?? false
         )
@@ -608,17 +752,17 @@ struct DashboardFlowSummary: Sendable, Equatable {
         windowLabel: String
     ) -> String {
         if storeHealth != .empty {
-            let depth = storeDepthText(
-                totalDepth: storeDepth,
-                flushDepth: storeFlushDepth,
-                replayDebtDepth: storeReplayDebtDepth
-            )
+            let breakdown = stats.replayDebtBreakdown.detailText
             let oldest = storeOldestAgeText(storeOldestAgeSeconds)
             guard storeFlushDepth > 0 else {
-                return "\(depth), \(oldest)."
+                return "\(breakdown); \(oldest)."
             }
             let rate = DashboardMetricFormatter.speedString(ratePerMinute: storeFlushRatePerMinute)
-            return "\(depth), \(oldest), flush draining \(rate) over 60s."
+            return "\(breakdown); \(oldest); pending-store flush draining \(rate) over 60s."
+        }
+
+        if stats.replayDebtBreakdown.isPartial {
+            return "\(stats.replayDebtBreakdown.detailText)."
         }
 
         switch status {
@@ -717,20 +861,11 @@ extension DashboardFlowSummary {
         case .jsonlWatcher:
             let watcherValues = ingress.secondaryValues
             let watcherTotal = watcherValues.reduce(0, +)
-            let watcherStatus = jsonlWatcherStatus(
-                values: watcherValues,
-                health: watcherHealth,
-                healthIsFresh: watcherHealthIsFresh
-            )
-            let watcherStatusText = jsonlWatcherStatusText(
-                status: watcherStatus,
-                totalEvents: watcherTotal,
-                windowLabel: ingress.windowLabel
-            )
+            let watcherStatus = jsonlWatcherStatus(flowState: watcherFlowState)
             return DashboardFlowLane(
                 name: "JSONL watcher",
                 status: watcherStatus,
-                statusText: watcherStatusText,
+                statusText: watcherFlowState.label,
                 windowLabel: ingress.windowLabel,
                 activityWindowMinutes: ingress.activityWindowMinutes,
                 rateText: DashboardMetricFormatter.rateString(
@@ -843,63 +978,16 @@ extension DashboardFlowSummary {
         return "\(totalEvents) agent MCP stores in \(windowLabel)\(queuedSuffix)"
     }
 
-    private func jsonlWatcherStatus(
-        values: [Int],
-        health: DashboardStats.WatcherHealth?,
-        healthIsFresh: Bool
-    ) -> DashboardFlowLaneStatus {
-        let totalEvents = values.reduce(0, +)
-        guard health != nil else {
-            return .unavailable
-        }
-        if !healthIsFresh {
-            return .unavailable
-        }
-        if health?.alerting == true {
-            return .unavailable
-        }
-        if totalEvents == 0,
-           let health,
-           health.activeEntriesPerMinute > 0,
-           health.realtimeInsertsPerMinute <= 0 {
-            return .unavailable
-        }
-        if (values.last ?? 0) > 0 {
+    private func jsonlWatcherStatus(flowState: WatcherFlowState) -> DashboardFlowLaneStatus {
+        switch flowState {
+        case .flowing:
             return .live
-        }
-        if totalEvents > 0 {
-            return .recent
-        }
-        return .idle
-    }
-
-    private func jsonlWatcherStatusText(
-        status: DashboardFlowLaneStatus,
-        totalEvents: Int,
-        windowLabel: String
-    ) -> String {
-        switch status {
-        case .live:
-            return "JSONL watcher live now"
-        case .recent:
-            return "Recent JSONL watcher writes in \(windowLabel.lowercased())"
-        case .unavailable:
-            if watcherHealth == nil {
-                return "Watcher health unavailable"
-            }
-            if !watcherHealthIsFresh {
-                return "Watcher health stale"
-            }
-            if watcherHealth?.alerting == true {
-                return "Watcher coverage alert"
-            }
-            return "Watcher stale: JSONL activity is not landing"
-        case .idle:
-            return totalEvents == 0 ? "No JSONL watcher writes" : "JSONL watcher idle"
-        case .queued:
-            return "JSONL watcher queued"
-        case .draining:
-            return "JSONL watcher draining"
+        case .stalled:
+            return .queued
+        case .runningNoRecentFlow:
+            return .idle
+        case .offline, .runningFlowUnverified, .unknown:
+            return .unavailable
         }
     }
 

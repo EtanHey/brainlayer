@@ -289,7 +289,6 @@ final class DashboardTests: XCTestCase {
                 WHERE id = '\(fixture.id)'
             """)
         }
-
         let stats = try db.dashboardStats(activityWindowMinutes: 60, bucketCount: 12)
 
         XCTAssertEqual(stats.recentEnrichmentBuckets, [0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1])
@@ -323,6 +322,19 @@ final class DashboardTests: XCTestCase {
                 UPDATE chunks
                 SET created_at = datetime('now', '\(Int(fixture.offset)) seconds')
                 WHERE id = '\(fixture.id)'
+            """)
+        }
+        db.exec("""
+            CREATE TABLE watcher_liveness_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chunk_id TEXT NOT NULL,
+                ingested_at INTEGER NOT NULL
+            )
+        """)
+        for fixture in fixtures where fixture.source == "realtime_watcher" || fixture.source == "realtime" {
+            db.exec("""
+                INSERT INTO watcher_liveness_events (chunk_id, ingested_at)
+                VALUES ('\(fixture.id)', CAST(strftime('%s', 'now', '\(Int(fixture.offset)) seconds') AS INTEGER))
             """)
         }
 
@@ -433,7 +445,7 @@ final class DashboardTests: XCTestCase {
         let source = try brainBarSourceFile("Sources/BrainBar/BrainDatabase.swift")
         let methodRange = try XCTUnwrap(source.range(of: "func dashboardStats("))
         let methodSource = source[methodRange.lowerBound...]
-        let queueSnapshotRange = try XCTUnwrap(methodSource.range(of: "let pendingStoreFlushQueue = pendingStoreQueueSnapshot()"))
+        let queueSnapshotRange = try XCTUnwrap(methodSource.range(of: "let replayDebtBreakdown = replayDebtBreakdown()"))
         let transactionRange = try XCTUnwrap(methodSource.range(of: "try withReadTransaction"))
 
         XCTAssertLessThan(
@@ -476,7 +488,7 @@ final class DashboardTests: XCTestCase {
         XCTAssertTrue(source.contains("private struct BrainBarDashboardContent: View"))
         XCTAssertTrue(source.contains("@ObservedObject var collector: StatsCollector"))
         XCTAssertTrue(source.contains("BrainBarDashboardContent("))
-        XCTAssertTrue(source.contains("collector.lastDataFetchedAt == nil"))
+        XCTAssertTrue(source.contains("collector.snapshotFreshnessState.isLoading"))
         XCTAssertTrue(source.contains("Connecting to daemon and loading dashboard data"))
     }
 
@@ -800,7 +812,7 @@ final class DashboardTests: XCTestCase {
         )
     }
 
-    func testDashboardStatsCountsTerminalEnrichmentStatusesAsCovered() throws {
+    func testDashboardStatsCountsOnlySuccessfulEnrichmentAndExposesOtherTerminalStates() throws {
         try db.insertChunk(
             id: "dash-success",
             content: "Successfully enriched chunk",
@@ -828,27 +840,29 @@ final class DashboardTests: XCTestCase {
         db.exec("""
             UPDATE chunks
             SET enriched_at = datetime('now', '-5 minutes'),
-                enrich_status = 'success'
+                enrich_status = ' Success '
             WHERE id = 'dash-success'
         """)
         db.exec("""
             UPDATE chunks
             SET enriched_at = 'skipped:duplicate',
-                enrich_status = 'duplicate'
+                enrich_status = 'skipped'
             WHERE id = 'dash-duplicate'
         """)
         db.exec("""
             UPDATE chunks
             SET enriched_at = NULL,
-                enrich_status = 'noise'
+                enrich_status = 'failed'
             WHERE id = 'dash-noise'
         """)
 
         let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
 
-        XCTAssertEqual(stats.enrichedChunkCount, 3)
+        XCTAssertEqual(stats.enrichedChunkCount, 1)
+        XCTAssertEqual(stats.failedEnrichmentCount, 1)
+        XCTAssertEqual(stats.skippedEnrichmentCount, 1)
         XCTAssertEqual(stats.pendingEnrichmentCount, 0)
-        XCTAssertEqual(stats.enrichmentPercent, 100.0, accuracy: 0.001)
+        XCTAssertEqual(stats.enrichmentPercent, 100.0 / 3.0, accuracy: 0.001)
         XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 1)
         let lastEnrichedAt = try XCTUnwrap(stats.lastEnrichedAt)
         XCTAssertLessThan(abs(lastEnrichedAt.timeIntervalSinceNow + 300), 10)
@@ -990,7 +1004,10 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.pendingStoreOldestQueuedAt, Date(timeIntervalSince1970: 1_200))
         XCTAssertEqual(summary.queue.storeReplayDebtDepth, 1)
         XCTAssertEqual(summary.queue.storeDepthText, "1 replay debt")
-        XCTAssertEqual(summary.queue.detail, "1 replay debt, oldest 2m.")
+        XCTAssertEqual(
+            summary.queue.detail,
+            "pending stores: 0; durable queue: 0; repository fallback: 1; deduplicated total: 1; oldest 2m."
+        )
         XCTAssertEqual(agentStores.status, .idle)
         XCTAssertEqual(agentStores.statusText, "No agent MCP stores")
     }

@@ -107,6 +107,7 @@ final class BrainDatabaseWindowedBucketsTests: XCTestCase {
         try insertWrite(id: "agent-live-1", source: "mcp", createdAt: minutesAgo(5))
         try insertWrite(id: "agent-live-2", source: "brain_store", createdAt: minutesAgo(20))
         try insertWrite(id: "watcher-live-1", source: "realtime_watcher", createdAt: minutesAgo(8))
+        try insertWatcherLiveness(chunkID: "watcher-live-1", ingestedAt: minutesAgo(8))
         try insertWrite(
             id: "enrich-live-1",
             source: "mcp",
@@ -120,6 +121,8 @@ final class BrainDatabaseWindowedBucketsTests: XCTestCase {
         try insertWrite(id: "agent-old-3", source: "digest", createdAt: minutesAgo(600)) // 10h ago
         try insertWrite(id: "watcher-old-1", source: "realtime_watcher", createdAt: minutesAgo(70))
         try insertWrite(id: "watcher-old-2", source: "realtime", createdAt: minutesAgo(300)) // 5h ago
+        try insertWatcherLiveness(chunkID: "watcher-old-1", ingestedAt: minutesAgo(70))
+        try insertWatcherLiveness(chunkID: "watcher-old-2", ingestedAt: minutesAgo(300))
         try insertWrite(
             id: "enrich-old-1",
             source: "mcp",
@@ -199,6 +202,7 @@ final class BrainDatabaseWindowedBucketsTests: XCTestCase {
         let now = Date()
         try insertWrite(id: "agent-mcp", source: "mcp", createdAt: now.addingTimeInterval(-4 * 60))
         try insertWrite(id: "watcher-realtime", source: "realtime_watcher", createdAt: now.addingTimeInterval(-3 * 60))
+        try insertWatcherLiveness(chunkID: "watcher-realtime", ingestedAt: now.addingTimeInterval(-3 * 60))
         try insertWrite(id: "backup-jsonl", source: "jsonl_backup", createdAt: now.addingTimeInterval(-2 * 60))
         try insertWrite(id: "codex-cli", source: "codex_cli", createdAt: now.addingTimeInterval(-1 * 60))
 

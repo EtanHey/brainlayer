@@ -23,6 +23,13 @@ import Foundation
 ///   animations resolve to their final state immediately.
 @MainActor
 enum BrainBarDashboardFixture {
+    enum OperatorState: CaseIterable {
+        case loading
+        case live
+        case stale
+        case error
+    }
+
     /// Fixed "data fetched at" instant. Renders only via `absoluteTimeString`.
     /// 2023-11-14 22:13:20 UTC — an arbitrary but constant epoch.
     static let fetchedAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -86,14 +93,38 @@ enum BrainBarDashboardFixture {
 
     /// A `StatsCollector` pre-loaded with the fixture state and no live wiring
     /// (no DB, no observers, no timers — `start()` is never called).
-    static func makeCollector() -> StatsCollector {
-        StatsCollector.fixture(
+    static func makeCollector(_ operatorState: OperatorState = .live) -> StatsCollector {
+        let freshness: SnapshotFreshnessState
+        let lastDataFetchedAt: Date?
+        let lastFetchError: String?
+        switch operatorState {
+        case .loading:
+            freshness = .loading
+            lastDataFetchedAt = nil
+            lastFetchError = nil
+        case .live:
+            freshness = .live(ageSeconds: 0)
+            lastDataFetchedAt = fetchedAt
+            lastFetchError = nil
+        case .stale:
+            freshness = .stale(ageSeconds: 61)
+            lastDataFetchedAt = fetchedAt
+            lastFetchError = nil
+        case .error:
+            freshness = .error(message: "Fixture fetch failed", lastSuccessAgeSeconds: 15)
+            lastDataFetchedAt = fetchedAt
+            lastFetchError = "Fixture fetch failed"
+        }
+
+        return StatsCollector.fixture(
             stats: stats,
             daemon: daemon,
             agentActivity: agentActivity,
             state: state,
             heartbeat: .empty,
-            lastDataFetchedAt: fetchedAt
+            lastDataFetchedAt: lastDataFetchedAt,
+            lastFetchError: lastFetchError,
+            snapshotFreshnessState: freshness
         )
     }
 }

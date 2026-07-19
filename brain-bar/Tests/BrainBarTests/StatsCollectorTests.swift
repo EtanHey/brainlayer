@@ -51,6 +51,25 @@ final class StatsCollectorTests: XCTestCase {
         guard execRC == SQLITE_OK else { throw NSError(domain: "StatsCollectorTests", code: Int(execRC)) }
     }
 
+    private func insertWatcherLiveness(chunkID: String, minutesAgo: Double) throws {
+        let ingestedAt = Int(Date().addingTimeInterval(-minutesAgo * 60).timeIntervalSince1970)
+        var db: OpaquePointer?
+        let rc = sqlite3_open_v2(tempDBPath, &db, SQLITE_OPEN_READWRITE, nil)
+        guard rc == SQLITE_OK, let db else { throw NSError(domain: "StatsCollectorTests", code: Int(rc)) }
+        defer { sqlite3_close(db) }
+        let sql = """
+            CREATE TABLE IF NOT EXISTS watcher_liveness_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chunk_id TEXT NOT NULL,
+                ingested_at INTEGER NOT NULL
+            );
+            INSERT INTO watcher_liveness_events (chunk_id, ingested_at)
+            VALUES ('\(chunkID)', \(ingestedAt));
+        """
+        let execRC = sqlite3_exec(db, sql, nil, nil, nil)
+        guard execRC == SQLITE_OK else { throw NSError(domain: "StatsCollectorTests", code: Int(execRC)) }
+    }
+
     func testSelectTimeframeLiveClearsWindowedBuckets() async throws {
         let collector = StatsCollector(
             dbPath: tempDBPath,
@@ -79,6 +98,7 @@ final class StatsCollectorTests: XCTestCase {
         try insertWrite(id: "agent-old-1", source: "mcp", minutesAgo: 90)
         try insertWrite(id: "agent-old-2", source: "manual", minutesAgo: 300)
         try insertWrite(id: "watcher-old", source: "realtime_watcher", minutesAgo: 200)
+        try insertWatcherLiveness(chunkID: "watcher-old", minutesAgo: 200)
 
         let collector = StatsCollector(
             dbPath: tempDBPath,

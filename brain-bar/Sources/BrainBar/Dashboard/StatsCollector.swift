@@ -2,6 +2,95 @@ import Combine
 import CoreFoundation
 import Foundation
 
+protocol WatcherProcessProbing {
+    func sample() -> WatcherProcessProbeResult
+}
+
+struct StaticWatcherProcessProbe: WatcherProcessProbing {
+    let result: WatcherProcessProbeResult
+
+    func sample() -> WatcherProcessProbeResult { result }
+}
+
+struct LaunchctlWatcherProcessProbe: WatcherProcessProbing {
+    struct CommandResult: Sendable, Equatable {
+        let terminationStatus: Int32
+        let output: String
+    }
+
+    typealias CommandRunner = ([String]) -> CommandResult
+
+    private let label: String
+    private let commandRunner: CommandRunner
+    private let uidProvider: () -> uid_t
+
+    init(
+        label: String = "com.brainlayer.watch",
+        commandRunner: @escaping CommandRunner = LaunchctlWatcherProcessProbe.run,
+        uidProvider: @escaping () -> uid_t = getuid
+    ) {
+        self.label = label
+        self.commandRunner = commandRunner
+        self.uidProvider = uidProvider
+    }
+
+    func sample() -> WatcherProcessProbeResult {
+        let target = "gui/\(uidProvider())/\(label)"
+        let result = commandRunner(["/bin/launchctl", "print", target])
+        if result.terminationStatus == 0 {
+            if let pid = Self.parsePID(result.output) {
+                return .running(pid: pid)
+            }
+            return .absent
+        }
+
+        let output = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        if result.terminationStatus == 113 || output.localizedCaseInsensitiveContains("could not find service") {
+            return .absent
+        }
+        return .failure(output.isEmpty ? "launchctl exited \(result.terminationStatus)" : output)
+    }
+
+    private static func parsePID(_ output: String) -> pid_t? {
+        for line in output.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.lowercased().hasPrefix("pid") else { continue }
+            let tokens = trimmed.components(separatedBy: CharacterSet.decimalDigits.inverted)
+                .filter { !$0.isEmpty }
+            for token in tokens {
+                guard let value = Int32(token), value > 0 else { continue }
+                return pid_t(value)
+            }
+        }
+        return nil
+    }
+
+    private static func run(_ command: [String]) -> CommandResult {
+        guard let executable = command.first else {
+            return CommandResult(terminationStatus: 1, output: "missing launchctl executable")
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = Array(command.dropFirst())
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+
+        do {
+            try process.run()
+        } catch {
+            return CommandResult(terminationStatus: 1, output: String(describing: error))
+        }
+
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return CommandResult(
+            terminationStatus: process.terminationStatus,
+            output: String(data: data, encoding: .utf8) ?? ""
+        )
+    }
+}
+
 private func statsCollectorDarwinNotificationCallback(
     center: CFNotificationCenter?,
     observer: UnsafeMutableRawPointer?,
@@ -20,6 +109,7 @@ private func statsCollectorDarwinNotificationCallback(
 final class StatsCollector: ObservableObject {
     static let defaultActivityWindowMinutes = 60
     static let defaultBucketCount = 12
+    static let snapshotFreshnessThreshold: TimeInterval = 60
 
     @Published private(set) var stats: DashboardStats
     @Published private(set) var daemon: DaemonHealthSnapshot?
@@ -29,6 +119,8 @@ final class StatsCollector: ObservableObject {
     @Published private(set) var isManualRefreshInProgress = false
     @Published private(set) var hasPendingStatsRefresh = false
     @Published private(set) var lastDataFetchedAt: Date?
+    @Published private(set) var lastFetchError: String?
+    @Published private(set) var snapshotFreshnessState: SnapshotFreshnessState
     @Published private(set) var heartbeat: DashboardHeartbeat
     /// REAL windowed buckets for the shared Live/3h/24h selector. `nil` means
     /// "no wider window selected yet" — the views fall back to the live `stats`
@@ -44,14 +136,18 @@ final class StatsCollector: ObservableObject {
     private let dbPath: String
     private let databaseOpenConfiguration: BrainDatabase.OpenConfiguration
     private let daemonMonitor: DaemonHealthMonitor
+    private let watcherProcessProbe: any WatcherProcessProbing
     private let agentActivityMonitor: AgentActivityMonitor
     private let agentActivitySampleInterval: TimeInterval
     private let statsRefreshCoalesceInterval: TimeInterval
     private let liveStatsRefreshDelay: TimeInterval
     private let autoRefreshInterval: TimeInterval
+    private let freshnessTickerInterval: TimeInterval
+    private let nowProvider: () -> Date
     private let brainBusEvents: BrainBusEventSource?
     private var brainBusTask: Task<Void, Never>?
     private var autoRefreshTask: Task<Void, Never>?
+    private var freshnessTicker: Task<Void, Never>?
     private var pendingStatsRefreshTask: Task<Void, Never>?
     private var pendingStatsRefreshFireAt: Date?
     private var pendingStatsRefreshBypassesCoalescing = false
@@ -68,22 +164,30 @@ final class StatsCollector: ObservableObject {
     init(
         dbPath: String,
         daemonMonitor: DaemonHealthMonitor,
+        watcherProcessProbe: any WatcherProcessProbing = StaticWatcherProcessProbe(
+            result: .failure("watcher process probe not configured")
+        ),
         agentActivityMonitor: AgentActivityMonitor = AgentActivityMonitor(),
         agentActivitySampleInterval: TimeInterval = 5,
         statsRefreshCoalesceInterval: TimeInterval = 5,
         liveStatsRefreshDelay: TimeInterval = 0.2,
         autoRefreshInterval: TimeInterval = 30,
+        freshnessTickerInterval: TimeInterval = 1,
+        nowProvider: @escaping () -> Date = Date.init,
         brainBusEvents: BrainBusEventSource? = nil,
         databaseOpenConfiguration: BrainDatabase.OpenConfiguration = BrainDatabase.OpenConfiguration()
     ) {
         self.dbPath = dbPath
         self.databaseOpenConfiguration = databaseOpenConfiguration
         self.daemonMonitor = daemonMonitor
+        self.watcherProcessProbe = watcherProcessProbe
         self.agentActivityMonitor = agentActivityMonitor
         self.agentActivitySampleInterval = agentActivitySampleInterval
         self.statsRefreshCoalesceInterval = statsRefreshCoalesceInterval
         self.liveStatsRefreshDelay = liveStatsRefreshDelay
         self.autoRefreshInterval = autoRefreshInterval
+        self.freshnessTickerInterval = freshnessTickerInterval
+        self.nowProvider = nowProvider
         self.brainBusEvents = brainBusEvents
         self.stats = DashboardStats(
             chunkCount: 0,
@@ -99,6 +203,8 @@ final class StatsCollector: ObservableObject {
         )
         self.agentActivity = .empty
         self.state = .degraded
+        self.lastFetchError = nil
+        self.snapshotFreshnessState = .loading
         self.heartbeat = .empty
     }
 
@@ -116,6 +222,7 @@ final class StatsCollector: ObservableObject {
         installDarwinObserver()
         requestRefresh(force: true)
         startAutoRefreshLoop()
+        startFreshnessTicker()
         if let brainBusEvents {
             let eventStream = brainBusEvents.events()
             brainBusTask = Task { [weak self] in
@@ -134,6 +241,8 @@ final class StatsCollector: ObservableObject {
         brainBusTask = nil
         autoRefreshTask?.cancel()
         autoRefreshTask = nil
+        freshnessTicker?.cancel()
+        freshnessTicker = nil
         dashboardRefreshTask?.cancel()
         dashboardRefreshTask = nil
         windowedBucketsTask?.cancel()
@@ -159,7 +268,7 @@ final class StatsCollector: ObservableObject {
     }
 
     func manualRefresh() {
-        NSLog("[BrainBar] manual refresh requested at %@", ISO8601DateFormatter().string(from: Date()))
+        NSLog("[BrainBar] manual refresh requested at %@", ISO8601DateFormatter().string(from: nowProvider()))
         pendingStatsRefreshTask?.cancel()
         pendingStatsRefreshTask = nil
         pendingStatsRefreshFireAt = nil
@@ -219,11 +328,13 @@ final class StatsCollector: ObservableObject {
         bypassCoalescing: Bool = false
     ) {
         let nextDaemon = daemonMonitor.sample()
-        let snapshotTime = Date()
+        let nextWatcherProcess = watcherProcessProbe.sample()
+        let snapshotTime = nowProvider()
         refreshAgentActivity(force: force, now: snapshotTime)
 
         if !force, !bypassCoalescing, let coalescedDelay = coalescedStatsRefreshDelay(now: snapshotTime) {
             daemon = nextDaemon
+            stats = stats.withWatcherProcessProbeResult(nextWatcherProcess)
             state = PipelineState.derive(daemon: nextDaemon, stats: stats)
             schedulePendingStatsRefresh(after: coalescedDelay)
             return
@@ -231,6 +342,7 @@ final class StatsCollector: ObservableObject {
 
         if dashboardRefreshTask != nil, trigger != .manual {
             daemon = nextDaemon
+            stats = stats.withWatcherProcessProbeResult(nextWatcherProcess)
             state = PipelineState.derive(daemon: nextDaemon, stats: stats)
             if !force {
                 schedulePendingStatsRefresh(after: statsRefreshCoalesceInterval)
@@ -253,10 +365,12 @@ final class StatsCollector: ObservableObject {
         let startStats = stats
         let startUnix = snapshotTime.timeIntervalSince1970
         isRefreshing = true
+        updateSnapshotFreshness()
         if trigger == .manual {
             isManualRefreshInProgress = true
         }
         daemon = nextDaemon
+        stats = stats.withWatcherProcessProbeResult(nextWatcherProcess)
         state = PipelineState.derive(daemon: nextDaemon, stats: stats)
         logDashboardRefresh(
             timestamp: snapshotTime,
@@ -282,6 +396,7 @@ final class StatsCollector: ObservableObject {
             await self?.finishRequestedRefreshIfCurrent(
                 result: result,
                 daemon: nextDaemon,
+                watcherProcess: nextWatcherProcess,
                 snapshotTime: snapshotTime,
                 startUnix: startUnix,
                 force: force,
@@ -312,6 +427,7 @@ final class StatsCollector: ObservableObject {
     private func finishRequestedRefreshIfCurrent(
         result: Result<DashboardStats, Error>,
         daemon nextDaemon: DaemonHealthSnapshot?,
+        watcherProcess: WatcherProcessProbeResult,
         snapshotTime: Date,
         startUnix: TimeInterval,
         force: Bool,
@@ -322,6 +438,7 @@ final class StatsCollector: ObservableObject {
         finishRequestedRefresh(
             result: result,
             daemon: nextDaemon,
+            watcherProcess: watcherProcess,
             snapshotTime: snapshotTime,
             startUnix: startUnix,
             force: force,
@@ -336,6 +453,7 @@ final class StatsCollector: ObservableObject {
     private func finishRequestedRefresh(
         result: Result<DashboardStats, Error>,
         daemon nextDaemon: DaemonHealthSnapshot?,
+        watcherProcess: WatcherProcessProbeResult,
         snapshotTime: Date,
         startUnix: TimeInterval,
         force: Bool,
@@ -345,35 +463,25 @@ final class StatsCollector: ObservableObject {
         switch result {
         case .success(let nextStats):
             let queueFlushRate = recordPendingStoreQueueDepth(nextStats.pendingStoreFlushQueueDepth, now: snapshotTime)
-            stats = nextStats.withPendingStoreFlushRate(queueFlushRate)
+            stats = nextStats
+                .withPendingStoreFlushRate(queueFlushRate)
+                .withWatcherProcessProbeResult(watcherProcess)
             daemon = finishDaemon
             state = PipelineState.derive(daemon: finishDaemon, stats: stats)
-            lastDataFetchedAt = Date()
+            lastDataFetchedAt = nowProvider()
+            lastFetchError = nil
             if !force {
                 lastNonForcedStatsRefreshAt = snapshotTime
             }
-        case .failure:
+        case .failure(let error):
             daemon = finishDaemon
-            if force {
-                stats = DashboardStats(
-                    chunkCount: 0,
-                    enrichedChunkCount: 0,
-                    pendingEnrichmentCount: 0,
-                    enrichmentPercent: 0,
-                    enrichmentRatePerMinute: 0,
-                    databaseSizeBytes: 0,
-                    recentActivityBuckets: Array(repeating: 0, count: Self.defaultBucketCount),
-                    recentEnrichmentBuckets: Array(repeating: 0, count: Self.defaultBucketCount),
-                    recentWriteFiveMinuteCount: 0,
-                    recentEnrichmentFiveMinuteCount: 0,
-                    activityWindowMinutes: Self.defaultActivityWindowMinutes,
-                    bucketCount: Self.defaultBucketCount
-                )
-            }
+            stats = stats.withWatcherProcessProbeResult(watcherProcess)
+            lastFetchError = String(describing: error)
             state = PipelineState.derive(daemon: finishDaemon, stats: stats)
         }
 
         isRefreshing = false
+        updateSnapshotFreshness()
         hasPendingStatsRefresh = pendingStatsRefreshTask != nil
         if trigger == .manual {
             isManualRefreshInProgress = false
@@ -382,7 +490,7 @@ final class StatsCollector: ObservableObject {
         logDashboardRefresh(
             timestamp: snapshotTime,
             startUnix: startUnix,
-            endUnix: Date().timeIntervalSince1970,
+            endUnix: nowProvider().timeIntervalSince1970,
             rows: stats.chunkCount,
             writes5m: stats.recentWriteFiveMinuteCount,
             enrich5m: stats.recentEnrichmentFiveMinuteCount,
@@ -479,6 +587,32 @@ final class StatsCollector: ObservableObject {
         }
     }
 
+    private func startFreshnessTicker() {
+        freshnessTicker?.cancel()
+        let interval = freshnessTickerInterval
+        freshnessTicker = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .seconds(interval))
+                } catch {
+                    break
+                }
+                guard !Task.isCancelled, let self, !self.isStopped else { break }
+                self.updateSnapshotFreshness()
+            }
+        }
+    }
+
+    private func updateSnapshotFreshness() {
+        snapshotFreshnessState = SnapshotFreshnessState.derive(
+            lastSuccessAt: lastDataFetchedAt,
+            isRefreshing: isRefreshing,
+            lastFetchError: lastFetchError,
+            now: nowProvider(),
+            snapshotFreshnessThreshold: Self.snapshotFreshnessThreshold
+        )
+    }
+
     private func refreshAgentActivity(force: Bool, now: Date) {
         if !force, let lastAgentActivitySampleAt, now.timeIntervalSince(lastAgentActivitySampleAt) < agentActivitySampleInterval {
             return
@@ -511,6 +645,7 @@ final class StatsCollector: ObservableObject {
         switch event.type {
         case .healthTick:
             daemon = daemonMonitor.sample()
+            stats = stats.withWatcherProcessProbeResult(watcherProcessProbe.sample())
             refreshAgentActivity(force: false, now: Date())
             state = PipelineState.derive(daemon: daemon, stats: stats)
         case .queueDepth, .enrichStatus, .lastChunkID, .dbBusy:
@@ -610,7 +745,9 @@ extension StatsCollector {
         agentActivity: AgentActivitySnapshot,
         state: PipelineState,
         heartbeat: DashboardHeartbeat = .empty,
-        lastDataFetchedAt: Date?
+        lastDataFetchedAt: Date?,
+        lastFetchError: String? = nil,
+        snapshotFreshnessState: SnapshotFreshnessState = .live(ageSeconds: 0)
     ) -> StatsCollector {
         // targetPID 0 makes the monitor's sample() return nil; it is never used
         // because start()/requestRefresh() are not called on a fixture.
@@ -624,6 +761,8 @@ extension StatsCollector {
         collector.state = state
         collector.heartbeat = heartbeat
         collector.lastDataFetchedAt = lastDataFetchedAt
+        collector.lastFetchError = lastFetchError
+        collector.snapshotFreshnessState = snapshotFreshnessState
         return collector
     }
 }

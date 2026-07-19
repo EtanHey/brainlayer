@@ -35,7 +35,6 @@ final class BrainDatabase: @unchecked Sendable {
     private static let fallbackReplayGitsRootEnv = "BRAINBAR_FALLBACK_REPLAY_GITS_ROOT"
     private static let brainLayerQueueDirEnv = "BRAINLAYER_QUEUE_DIR"
     private static let agentWriteSourceWhereClause = "COALESCE(LOWER(TRIM(source)), '') IN ('mcp', 'manual', 'digest', 'precompact-hook', 'brain_store', 'pending', 'fallback', 'fallback-replay')"
-    private static let watcherWriteSourceWhereClause = "COALESCE(LOWER(TRIM(source)), '') IN ('realtime_watcher', 'realtime')"
     private static let lexicalDefenseReplacements: [String: [String]] = [
         "hershkovitz": ["Hershkovits"],
         "hershkovits": ["Hershkovitz"]
@@ -119,6 +118,8 @@ final class BrainDatabase: @unchecked Sendable {
 
         let chunkCount: Int
         let enrichedChunkCount: Int
+        let failedEnrichmentCount: Int
+        let skippedEnrichmentCount: Int
         let pendingEnrichmentCount: Int
         let enrichmentPercent: Double
         let enrichmentRatePerMinute: Double
@@ -143,10 +144,16 @@ final class BrainDatabase: @unchecked Sendable {
         let pendingStoreOldestQueuedAt: Date?
         let pendingStoreFlushRatePerMinute: Double
         let watcherHealth: WatcherHealth?
+        let replayDebtBreakdown: ReplayDebtBreakdown
+        let watcherProcessProbeResult: WatcherProcessProbeResult?
+        let watcherRecentDistinctChunkCount: Int
+        let watcherFlowReadability: MetricEvidenceReadability
 
         init(
             chunkCount: Int,
             enrichedChunkCount: Int,
+            failedEnrichmentCount: Int = 0,
+            skippedEnrichmentCount: Int = 0,
             pendingEnrichmentCount: Int,
             enrichmentPercent: Double,
             enrichmentRatePerMinute: Double,
@@ -170,10 +177,16 @@ final class BrainDatabase: @unchecked Sendable {
             pendingStoreFlushQueueDepth: Int? = nil,
             pendingStoreOldestQueuedAt: Date? = nil,
             pendingStoreFlushRatePerMinute: Double = 0,
-            watcherHealth: WatcherHealth? = nil
+            watcherHealth: WatcherHealth? = nil,
+            replayDebtBreakdown: ReplayDebtBreakdown? = nil,
+            watcherProcessProbeResult: WatcherProcessProbeResult? = nil,
+            watcherRecentDistinctChunkCount: Int? = nil,
+            watcherFlowReadability: MetricEvidenceReadability? = nil
         ) {
             self.chunkCount = chunkCount
             self.enrichedChunkCount = enrichedChunkCount
+            self.failedEnrichmentCount = failedEnrichmentCount
+            self.skippedEnrichmentCount = skippedEnrichmentCount
             self.pendingEnrichmentCount = pendingEnrichmentCount
             self.enrichmentPercent = enrichmentPercent
             self.enrichmentRatePerMinute = enrichmentRatePerMinute
@@ -198,6 +211,16 @@ final class BrainDatabase: @unchecked Sendable {
             self.pendingStoreOldestQueuedAt = pendingStoreOldestQueuedAt
             self.pendingStoreFlushRatePerMinute = pendingStoreFlushRatePerMinute
             self.watcherHealth = watcherHealth
+            self.replayDebtBreakdown = replayDebtBreakdown ?? ReplayDebtBreakdown.legacy(
+                totalDepth: pendingStoreQueueDepth,
+                pendingStoreDepth: pendingStoreFlushQueueDepth ?? pendingStoreQueueDepth,
+                oldestQueuedAt: pendingStoreOldestQueuedAt
+            )
+            self.watcherProcessProbeResult = watcherProcessProbeResult
+            self.watcherRecentDistinctChunkCount = watcherRecentDistinctChunkCount
+                ?? self.recentWatcherWriteBuckets.reduce(0, +)
+            self.watcherFlowReadability = watcherFlowReadability
+                ?? (recentWatcherWriteBuckets == nil ? .unreadable("watcher flow evidence not supplied") : .readable)
         }
 
         var recentWriteCount: Int {
@@ -299,6 +322,8 @@ final class BrainDatabase: @unchecked Sendable {
             DashboardStats(
                 chunkCount: chunkCount,
                 enrichedChunkCount: enrichedChunkCount,
+                failedEnrichmentCount: failedEnrichmentCount,
+                skippedEnrichmentCount: skippedEnrichmentCount,
                 pendingEnrichmentCount: pendingEnrichmentCount,
                 enrichmentPercent: enrichmentPercent,
                 enrichmentRatePerMinute: enrichmentRatePerMinute,
@@ -322,7 +347,11 @@ final class BrainDatabase: @unchecked Sendable {
                 pendingStoreFlushQueueDepth: pendingStoreFlushQueueDepth,
                 pendingStoreOldestQueuedAt: pendingStoreOldestQueuedAt,
                 pendingStoreFlushRatePerMinute: pendingStoreFlushRatePerMinute,
-                watcherHealth: watcherHealth
+                watcherHealth: watcherHealth,
+                replayDebtBreakdown: replayDebtBreakdown,
+                watcherProcessProbeResult: watcherProcessProbeResult,
+                watcherRecentDistinctChunkCount: watcherRecentDistinctChunkCount,
+                watcherFlowReadability: watcherFlowReadability
             )
         }
 
@@ -330,6 +359,8 @@ final class BrainDatabase: @unchecked Sendable {
             DashboardStats(
                 chunkCount: chunkCount,
                 enrichedChunkCount: enrichedChunkCount,
+                failedEnrichmentCount: failedEnrichmentCount,
+                skippedEnrichmentCount: skippedEnrichmentCount,
                 pendingEnrichmentCount: pendingEnrichmentCount,
                 enrichmentPercent: enrichmentPercent,
                 enrichmentRatePerMinute: enrichmentRatePerMinute,
@@ -353,7 +384,48 @@ final class BrainDatabase: @unchecked Sendable {
                 pendingStoreFlushQueueDepth: pendingStoreFlushQueueDepth,
                 pendingStoreOldestQueuedAt: pendingStoreOldestQueuedAt,
                 pendingStoreFlushRatePerMinute: rate,
-                watcherHealth: watcherHealth
+                watcherHealth: watcherHealth,
+                replayDebtBreakdown: replayDebtBreakdown,
+                watcherProcessProbeResult: watcherProcessProbeResult,
+                watcherRecentDistinctChunkCount: watcherRecentDistinctChunkCount,
+                watcherFlowReadability: watcherFlowReadability
+            )
+        }
+
+        func withWatcherProcessProbeResult(_ result: WatcherProcessProbeResult) -> DashboardStats {
+            DashboardStats(
+                chunkCount: chunkCount,
+                enrichedChunkCount: enrichedChunkCount,
+                failedEnrichmentCount: failedEnrichmentCount,
+                skippedEnrichmentCount: skippedEnrichmentCount,
+                pendingEnrichmentCount: pendingEnrichmentCount,
+                enrichmentPercent: enrichmentPercent,
+                enrichmentRatePerMinute: enrichmentRatePerMinute,
+                databaseSizeBytes: databaseSizeBytes,
+                recentActivityBuckets: recentActivityBuckets,
+                recentAgentWriteBuckets: recentAgentWriteBuckets,
+                recentWatcherWriteBuckets: recentWatcherWriteBuckets,
+                recentEnrichmentBuckets: recentEnrichmentBuckets,
+                recentWriteFiveMinuteCount: recentWriteFiveMinuteCount,
+                recentEnrichmentFiveMinuteCount: recentEnrichmentFiveMinuteCount,
+                activityWindowMinutes: activityWindowMinutes,
+                bucketCount: bucketCount,
+                liveWindowMinutes: liveWindowMinutes,
+                lastWriteAt: lastWriteAt,
+                lastEnrichedAt: lastEnrichedAt,
+                signalEligibleChunkCount: signalEligibleChunkCount,
+                vectorIndexedChunkCount: vectorIndexedChunkCount,
+                ftsIndexedChunkCount: ftsIndexedChunkCount,
+                trigramIndexedChunkCount: trigramIndexedChunkCount,
+                pendingStoreQueueDepth: pendingStoreQueueDepth,
+                pendingStoreFlushQueueDepth: pendingStoreFlushQueueDepth,
+                pendingStoreOldestQueuedAt: pendingStoreOldestQueuedAt,
+                pendingStoreFlushRatePerMinute: pendingStoreFlushRatePerMinute,
+                watcherHealth: watcherHealth,
+                replayDebtBreakdown: replayDebtBreakdown,
+                watcherProcessProbeResult: result,
+                watcherRecentDistinctChunkCount: watcherRecentDistinctChunkCount,
+                watcherFlowReadability: watcherFlowReadability
             )
         }
     }
@@ -390,6 +462,82 @@ final class BrainDatabase: @unchecked Sendable {
         }
     }
 
+    struct ReplayDebtBreakdown: Sendable, Equatable {
+        enum Source: String, Sendable, Equatable, CaseIterable {
+            case pendingStores
+            case durableQueue
+            case repositoryFallback
+
+            var label: String {
+                switch self {
+                case .pendingStores: return "pending stores"
+                case .durableQueue: return "durable queue"
+                case .repositoryFallback: return "repository fallback"
+                }
+            }
+        }
+
+        struct Component: Sendable, Equatable {
+            let source: Source
+            let snapshot: PendingStoreQueueSnapshot
+            let readability: MetricEvidenceReadability
+        }
+
+        let pendingStores: Component
+        let durableQueue: Component
+        let repositoryFallback: Component
+
+        var components: [Component] {
+            [pendingStores, durableQueue, repositoryFallback]
+        }
+
+        var deduplicatedSnapshot: PendingStoreQueueSnapshot {
+            pendingStores.snapshot
+                .merged(with: durableQueue.snapshot)
+                .merged(with: repositoryFallback.snapshot)
+        }
+
+        var deduplicatedTotal: Int { deduplicatedSnapshot.depth }
+        var oldestQueuedAt: Date? { deduplicatedSnapshot.oldestQueuedAt }
+        var isPartial: Bool { components.contains { !$0.readability.isReadable } }
+        var unreadableSources: [Source] {
+            components.compactMap { $0.readability.isReadable ? nil : $0.source }
+        }
+
+        var detailText: String {
+            var parts = components.map { "\($0.source.label): \($0.snapshot.depth)" }
+            parts.append("deduplicated total: \(deduplicatedTotal)")
+            if isPartial {
+                parts.append("partial; unreadable: \(unreadableSources.map(\.label).joined(separator: ", "))")
+            }
+            return parts.joined(separator: "; ")
+        }
+
+        static func legacy(totalDepth: Int, pendingStoreDepth: Int, oldestQueuedAt: Date?) -> ReplayDebtBreakdown {
+            let pending = PendingStoreQueueSnapshot(
+                depth: pendingStoreDepth,
+                oldestQueuedAt: oldestQueuedAt
+            )
+            let fallback = PendingStoreQueueSnapshot(
+                depth: max(totalDepth - pendingStoreDepth, 0),
+                oldestQueuedAt: oldestQueuedAt
+            )
+            return ReplayDebtBreakdown(
+                pendingStores: Component(source: .pendingStores, snapshot: pending, readability: .readable),
+                durableQueue: Component(
+                    source: .durableQueue,
+                    snapshot: PendingStoreQueueSnapshot(depth: 0, oldestQueuedAt: nil),
+                    readability: .readable
+                ),
+                repositoryFallback: Component(
+                    source: .repositoryFallback,
+                    snapshot: fallback,
+                    readability: .readable
+                )
+            )
+        }
+    }
+
     /// The pipeline series (all commits / agent stores / JSONL watcher / enrichment)
     /// bucketed over an ARBITRARY window — the data primitive behind the shared
     /// Live(30m)/3h/24h selector. Unlike `DashboardStats` (which is pinned to the
@@ -403,11 +551,23 @@ final class BrainDatabase: @unchecked Sendable {
         let agentWriteBuckets: [Int]
         let watcherWriteBuckets: [Int]
         let enrichmentBuckets: [Int]
+        let watcherFlowReadability: MetricEvidenceReadability
+
+        let allWriteContract = DashboardMetricContract.chunkRows
+        let agentWriteContract = DashboardMetricContract.agentOriginChunks
+        let watcherWriteContract = DashboardMetricContract.watcherIngestedChunks
 
         var allWriteTotal: Int { allWriteBuckets.reduce(0, +) }
         var agentTotal: Int { agentWriteBuckets.reduce(0, +) }
         var watcherTotal: Int { watcherWriteBuckets.reduce(0, +) }
         var enrichmentTotal: Int { enrichmentBuckets.reduce(0, +) }
+    }
+
+    private struct WatcherIngestSnapshot {
+        let buckets: [Int]
+        let readability: MetricEvidenceReadability
+
+        var total: Int { buckets.reduce(0, +) }
     }
 
     struct SubscriberRecord: Sendable {
@@ -1778,10 +1938,9 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     func dashboardStats(activityWindowMinutes: Int = 30, bucketCount: Int = 12) throws -> DashboardStats {
-        let pendingStoreFlushQueue = pendingStoreQueueSnapshot()
-        let pendingStoreQueue = pendingStoreFlushQueue
-            .merged(with: Self.fallbackReplayQueueSnapshot())
-            .merged(with: Self.durableStoreQueueSnapshot())
+        let replayDebtBreakdown = replayDebtBreakdown()
+        let pendingStoreFlushQueue = replayDebtBreakdown.pendingStores.snapshot
+        let pendingStoreQueue = replayDebtBreakdown.deduplicatedSnapshot
         let watcherHealth = watcherHealthSnapshot()
         return try withReadTransaction {
             let liveWindowMinutes = 1
@@ -1824,9 +1983,14 @@ final class BrainDatabase: @unchecked Sendable {
                 bucketCount: bucketCount,
                 now: now
             )
-            let recentWatcherWriteBuckets = try recentWatcherWriteBuckets(
+            let recentWatcherIngest = recentWatcherWriteBuckets(
                 activityWindowMinutes: activityWindowMinutes,
                 bucketCount: bucketCount,
+                now: now
+            )
+            let recentWatcherTruth = recentWatcherWriteBuckets(
+                activityWindowMinutes: liveWindowMinutes,
+                bucketCount: 1,
                 now: now
             )
             let recentEnrichmentBuckets = try recentEnrichmentBuckets(
@@ -1840,13 +2004,15 @@ final class BrainDatabase: @unchecked Sendable {
             return DashboardStats(
                 chunkCount: chunkCount,
                 enrichedChunkCount: enrichedChunkCount,
+                failedEnrichmentCount: counts.failedEnrichmentCount,
+                skippedEnrichmentCount: counts.skippedEnrichmentCount,
                 pendingEnrichmentCount: pendingEnrichmentCount,
                 enrichmentPercent: enrichmentPercent,
                 enrichmentRatePerMinute: enrichmentRatePerMinute,
                 databaseSizeBytes: databaseSizeBytes(),
                 recentActivityBuckets: recentActivityBuckets,
                 recentAgentWriteBuckets: recentAgentWriteBuckets,
-                recentWatcherWriteBuckets: recentWatcherWriteBuckets,
+                recentWatcherWriteBuckets: recentWatcherIngest.buckets,
                 recentEnrichmentBuckets: recentEnrichmentBuckets,
                 recentWriteFiveMinuteCount: recentWriteFiveMinuteCount,
                 recentEnrichmentFiveMinuteCount: recentEnrichmentFiveMinuteCount,
@@ -1862,7 +2028,10 @@ final class BrainDatabase: @unchecked Sendable {
                 pendingStoreQueueDepth: pendingStoreQueue.depth,
                 pendingStoreFlushQueueDepth: pendingStoreFlushQueue.depth,
                 pendingStoreOldestQueuedAt: pendingStoreQueue.oldestQueuedAt,
-                watcherHealth: watcherHealth
+                watcherHealth: watcherHealth,
+                replayDebtBreakdown: replayDebtBreakdown,
+                watcherRecentDistinctChunkCount: recentWatcherTruth.total,
+                watcherFlowReadability: recentWatcherTruth.readability
             )
         }
     }
@@ -1886,7 +2055,8 @@ final class BrainDatabase: @unchecked Sendable {
                     allWriteBuckets: Array(repeating: 0, count: max(bucketCount, 0)),
                     agentWriteBuckets: Array(repeating: 0, count: max(bucketCount, 0)),
                     watcherWriteBuckets: Array(repeating: 0, count: max(bucketCount, 0)),
-                    enrichmentBuckets: Array(repeating: 0, count: max(bucketCount, 0))
+                    enrichmentBuckets: Array(repeating: 0, count: max(bucketCount, 0)),
+                    watcherFlowReadability: .readable
                 )
             }
 
@@ -1901,7 +2071,7 @@ final class BrainDatabase: @unchecked Sendable {
                 bucketCount: bucketCount,
                 now: now
             )
-            let watcherWriteBuckets = try recentWatcherWriteBuckets(
+            let watcherIngest = recentWatcherWriteBuckets(
                 activityWindowMinutes: activityWindowMinutes,
                 bucketCount: bucketCount,
                 now: now
@@ -1917,8 +2087,9 @@ final class BrainDatabase: @unchecked Sendable {
                 bucketCount: bucketCount,
                 allWriteBuckets: allWriteBuckets,
                 agentWriteBuckets: agentWriteBuckets,
-                watcherWriteBuckets: watcherWriteBuckets,
-                enrichmentBuckets: enrichmentBuckets
+                watcherWriteBuckets: watcherIngest.buckets,
+                enrichmentBuckets: enrichmentBuckets,
+                watcherFlowReadability: watcherIngest.readability
             )
         }
     }
@@ -2004,10 +2175,18 @@ final class BrainDatabase: @unchecked Sendable {
         return Int(sqlite3_column_int(stmt, 0))
     }
 
-    private func dashboardCounts() throws -> (chunkCount: Int, enrichedChunkCount: Int, pendingEnrichmentCount: Int) {
+    private func dashboardCounts() throws -> (
+        chunkCount: Int,
+        enrichedChunkCount: Int,
+        failedEnrichmentCount: Int,
+        skippedEnrichmentCount: Int,
+        pendingEnrichmentCount: Int
+    ) {
         return (
             chunkCount: try scalarInt("SELECT COUNT(*) FROM chunks"),
-            enrichedChunkCount: try scalarInt("SELECT COUNT(*) FROM chunks WHERE enrich_status IS NOT NULL"),
+            enrichedChunkCount: try scalarInt("SELECT COUNT(*) FROM chunks WHERE LOWER(TRIM(enrich_status)) = 'success'"),
+            failedEnrichmentCount: try scalarInt("SELECT COUNT(*) FROM chunks WHERE LOWER(TRIM(enrich_status)) = 'failed'"),
+            skippedEnrichmentCount: try scalarInt("SELECT COUNT(*) FROM chunks WHERE LOWER(TRIM(enrich_status)) = 'skipped'"),
             pendingEnrichmentCount: try scalarInt("SELECT COUNT(*) FROM chunks WHERE enrich_status IS NULL AND enriched_at IS NULL")
         )
     }
@@ -2094,7 +2273,7 @@ final class BrainDatabase: @unchecked Sendable {
         )
         let lastEnrichedAt = try latestIndexedTimestampEpoch(
             column: "enriched_at",
-            whereClause: "enriched_at IS NOT NULL AND enrich_status = 'success'",
+            whereClause: "enriched_at IS NOT NULL AND LOWER(TRIM(enrich_status)) = 'success'",
             since: recentWindowStart
         )
         return (lastWriteAt: lastWriteAt, lastEnrichedAt: lastEnrichedAt)
@@ -2133,27 +2312,40 @@ final class BrainDatabase: @unchecked Sendable {
         activityWindowMinutes: Int,
         bucketCount: Int,
         now: Date
-    ) throws -> [Int] {
-        guard activityWindowMinutes > 0 else { return Array(repeating: 0, count: bucketCount) }
-
-        if try tableExists("watcher_liveness_events"),
-           let db,
-           try tableColumns(name: "watcher_liveness_events", on: db).contains("ingested_at") {
-            return try indexedUnixEpochBuckets(
-                tableName: "watcher_liveness_events",
-                epochColumn: "ingested_at",
-                activityWindowMinutes: activityWindowMinutes,
-                bucketCount: bucketCount,
-                now: now
-            )
+    ) -> WatcherIngestSnapshot {
+        let empty = Array(repeating: 0, count: max(bucketCount, 0))
+        guard activityWindowMinutes > 0, bucketCount > 0 else {
+            return WatcherIngestSnapshot(buckets: empty, readability: .readable)
         }
 
-        return try recentWriteBuckets(
-            whereClause: Self.watcherWriteSourceWhereClause,
-            activityWindowMinutes: activityWindowMinutes,
-            bucketCount: bucketCount,
-            now: now
-        )
+        do {
+            guard try tableExists("watcher_liveness_events"), let db else {
+                return WatcherIngestSnapshot(
+                    buckets: empty,
+                    readability: .unreadable("watcher_liveness_events table unavailable")
+                )
+            }
+            let columns = try tableColumns(name: "watcher_liveness_events", on: db)
+            guard columns.contains("chunk_id"), columns.contains("ingested_at") else {
+                return WatcherIngestSnapshot(
+                    buckets: empty,
+                    readability: .unreadable("watcher_liveness_events columns unavailable")
+                )
+            }
+            return WatcherIngestSnapshot(
+                buckets: try distinctWatcherIngestBuckets(
+                    activityWindowMinutes: activityWindowMinutes,
+                    bucketCount: bucketCount,
+                    now: now
+                ),
+                readability: .readable
+            )
+        } catch {
+            return WatcherIngestSnapshot(
+                buckets: empty,
+                readability: .unreadable(String(describing: error))
+            )
+        }
     }
 
     private func recentEnrichmentBuckets(activityWindowMinutes: Int, bucketCount: Int, now: Date) throws -> [Int] {
@@ -2161,7 +2353,7 @@ final class BrainDatabase: @unchecked Sendable {
 
         return try indexedTimestampBuckets(
             column: "enriched_at",
-            whereClause: "enriched_at IS NOT NULL AND enrich_status = 'success'",
+            whereClause: "enriched_at IS NOT NULL AND LOWER(TRIM(enrich_status)) = 'success'",
             activityWindowMinutes: activityWindowMinutes,
             bucketCount: bucketCount,
             now: now
@@ -2181,7 +2373,7 @@ final class BrainDatabase: @unchecked Sendable {
         guard windowSeconds > 0 else { return 0 }
         return try indexedTimestampEpochs(
             column: "enriched_at",
-            whereClause: "enriched_at IS NOT NULL AND enrich_status = 'success'",
+            whereClause: "enriched_at IS NOT NULL AND LOWER(TRIM(enrich_status)) = 'success'",
             since: now.addingTimeInterval(-windowSeconds)
         ).count
     }
@@ -2190,7 +2382,7 @@ final class BrainDatabase: @unchecked Sendable {
         guard windowMinutes > 0 else { return 0 }
         let count = Double(try indexedTimestampEpochs(
             column: "enriched_at",
-            whereClause: "enriched_at IS NOT NULL AND enrich_status = 'success'",
+            whereClause: "enriched_at IS NOT NULL AND LOWER(TRIM(enrich_status)) = 'success'",
             since: now.addingTimeInterval(Double(-windowMinutes * 60))
         ).count)
         return count / Double(windowMinutes)
@@ -2227,20 +2419,12 @@ final class BrainDatabase: @unchecked Sendable {
         return buckets
     }
 
-    private func indexedUnixEpochBuckets(
-        tableName: String,
-        epochColumn: String,
+    private func distinctWatcherIngestBuckets(
         activityWindowMinutes: Int,
         bucketCount: Int,
         now: Date
     ) throws -> [Int] {
         guard bucketCount > 0, activityWindowMinutes > 0 else { return Array(repeating: 0, count: max(bucketCount, 0)) }
-        let allowedEpochTables = [
-            "watcher_liveness_events": Set(["ingested_at"]),
-        ]
-        guard allowedEpochTables[tableName]?.contains(epochColumn) == true else {
-            throw DBError.exec(SQLITE_ERROR, "invalid epoch bucket source")
-        }
         guard let db else { throw DBError.notOpen }
 
         let windowDuration = Double(activityWindowMinutes * 60)
@@ -2251,11 +2435,12 @@ final class BrainDatabase: @unchecked Sendable {
         var buckets = Array(repeating: 0, count: bucketCount)
 
         let sql = """
-            SELECT \(epochColumn)
-            FROM \(tableName)
-            WHERE \(epochColumn) >= ?
-              AND \(epochColumn) <= ?
-            ORDER BY \(epochColumn) ASC
+            SELECT MIN(ingested_at) AS first_ingested_at
+            FROM watcher_liveness_events
+            WHERE ingested_at >= ?
+              AND ingested_at <= ?
+            GROUP BY chunk_id
+            ORDER BY first_ingested_at ASC
         """
 
         var stmt: OpaquePointer?
@@ -3583,22 +3768,42 @@ final class BrainDatabase: @unchecked Sendable {
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Gits", isDirectory: true)
     }
 
-    private static func durableStoreQueueSnapshot() -> PendingStoreQueueSnapshot {
+    private static func durableStoreQueueComponent() -> ReplayDebtBreakdown.Component {
         let queueDir = durableStoreQueuePath()
         let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: queueDir.path) else {
+            return ReplayDebtBreakdown.Component(
+                source: .durableQueue,
+                snapshot: PendingStoreQueueSnapshot(depth: 0, oldestQueuedAt: nil),
+                readability: .readable
+            )
+        }
+        guard urlIsDirectory(queueDir) else {
+            return ReplayDebtBreakdown.Component(
+                source: .durableQueue,
+                snapshot: PendingStoreQueueSnapshot(depth: 0, oldestQueuedAt: nil),
+                readability: .unreadable("durable queue path is not a directory")
+            )
+        }
         guard let files = try? fileManager.contentsOfDirectory(
             at: queueDir,
             includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
             options: [.skipsHiddenFiles]
         ) else {
-            return PendingStoreQueueSnapshot(depth: 0, oldestQueuedAt: nil)
+            return ReplayDebtBreakdown.Component(
+                source: .durableQueue,
+                snapshot: PendingStoreQueueSnapshot(depth: 0, oldestQueuedAt: nil),
+                readability: .unreadable("durable queue directory could not be read")
+            )
         }
 
         var depth = 0
         var oldestQueuedAt: Date?
         var identityKeys = Set<String>()
+        var isReadable = true
         for file in files where file.pathExtension == "jsonl" && urlIsRegularFile(file) {
             guard let data = try? Data(contentsOf: file) else {
+                isReadable = false
                 depth += 1
                 identityKeys.insert(normalizedPathIdentityKey(file))
                 if let values = try? file.resourceValues(forKeys: [.contentModificationDateKey]),
@@ -3626,23 +3831,50 @@ final class BrainDatabase: @unchecked Sendable {
                 oldestQueuedAt = oldestQueuedAt.map { min($0, modified) } ?? modified
             }
         }
-        return PendingStoreQueueSnapshot(depth: depth, oldestQueuedAt: oldestQueuedAt, identityKeys: identityKeys)
+        return ReplayDebtBreakdown.Component(
+            source: .durableQueue,
+            snapshot: PendingStoreQueueSnapshot(
+                depth: depth,
+                oldestQueuedAt: oldestQueuedAt,
+                identityKeys: identityKeys
+            ),
+            readability: isReadable ? .readable : .unreadable("one or more durable queue files could not be read")
+        )
     }
 
-    private static func fallbackReplayQueueSnapshot() -> PendingStoreQueueSnapshot {
+    private static func fallbackReplayQueueComponent() -> ReplayDebtBreakdown.Component {
         let root = fallbackReplayGitsRoot()
         let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: root.path) else {
+            return ReplayDebtBreakdown.Component(
+                source: .repositoryFallback,
+                snapshot: PendingStoreQueueSnapshot(depth: 0, oldestQueuedAt: nil),
+                readability: .readable
+            )
+        }
+        guard urlIsDirectory(root) else {
+            return ReplayDebtBreakdown.Component(
+                source: .repositoryFallback,
+                snapshot: PendingStoreQueueSnapshot(depth: 0, oldestQueuedAt: nil),
+                readability: .unreadable("repository fallback root is not a directory")
+            )
+        }
         guard let repos = try? fileManager.contentsOfDirectory(
             at: root,
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         ) else {
-            return PendingStoreQueueSnapshot(depth: 0, oldestQueuedAt: nil)
+            return ReplayDebtBreakdown.Component(
+                source: .repositoryFallback,
+                snapshot: PendingStoreQueueSnapshot(depth: 0, oldestQueuedAt: nil),
+                readability: .unreadable("repository fallback root could not be read")
+            )
         }
 
         var depth = 0
         var oldestQueuedAt: Date?
         var identityKeys = Set<String>()
+        var isReadable = true
         func record(_ date: Date?, _ identityKey: String?) {
             depth += 1
             if let identityKey {
@@ -3654,25 +3886,33 @@ final class BrainDatabase: @unchecked Sendable {
 
         for repo in repos where Self.urlIsDirectory(repo) {
             let docsLocal = repo.appendingPathComponent("docs.local", isDirectory: true)
-            scanFallbackReplayDirectory(
+            isReadable = scanFallbackReplayDirectory(
                 docsLocal.appendingPathComponent("decisions", isDirectory: true),
                 recursive: false,
                 originRepoPath: repo,
                 countParsedWithoutIntent: false,
                 countUnparseableAsDebt: true,
                 record: record
-            )
-            scanFallbackReplayDirectory(
+            ) && isReadable
+            isReadable = scanFallbackReplayDirectory(
                 docsLocal.appendingPathComponent("brain-store-fallback", isDirectory: true),
                 recursive: true,
                 originRepoPath: repo,
                 countParsedWithoutIntent: true,
                 countUnparseableAsDebt: true,
                 record: record
-            )
+            ) && isReadable
         }
 
-        return PendingStoreQueueSnapshot(depth: depth, oldestQueuedAt: oldestQueuedAt, identityKeys: identityKeys)
+        return ReplayDebtBreakdown.Component(
+            source: .repositoryFallback,
+            snapshot: PendingStoreQueueSnapshot(
+                depth: depth,
+                oldestQueuedAt: oldestQueuedAt,
+                identityKeys: identityKeys
+            ),
+            readability: isReadable ? .readable : .unreadable("one or more repository fallback directories could not be read")
+        )
     }
 
     private static func scanFallbackReplayDirectory(
@@ -3682,15 +3922,17 @@ final class BrainDatabase: @unchecked Sendable {
         countParsedWithoutIntent: Bool,
         countUnparseableAsDebt: Bool,
         record: (Date?, String?) -> Void
-    ) {
+    ) -> Bool {
         let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: directory.path) else { return true }
+        guard urlIsDirectory(directory) else { return false }
         if recursive {
             guard let enumerator = fileManager.enumerator(
                 at: directory,
                 includingPropertiesForKeys: [.isRegularFileKey],
                 options: [.skipsHiddenFiles]
             ) else {
-                return
+                return false
             }
             for case let file as URL in enumerator where file.pathExtension == "md" {
                 if let pending = pendingFallbackReplayRecord(
@@ -3702,7 +3944,7 @@ final class BrainDatabase: @unchecked Sendable {
                     record(pending.queuedAt, pending.identityKey)
                 }
             }
-            return
+            return true
         }
 
         guard let files = try? fileManager.contentsOfDirectory(
@@ -3710,7 +3952,7 @@ final class BrainDatabase: @unchecked Sendable {
             includingPropertiesForKeys: [.isRegularFileKey],
             options: [.skipsHiddenFiles]
         ) else {
-            return
+            return false
         }
         for file in files where file.pathExtension == "md" {
             if let pending = pendingFallbackReplayRecord(
@@ -3722,6 +3964,7 @@ final class BrainDatabase: @unchecked Sendable {
                 record(pending.queuedAt, pending.identityKey)
             }
         }
+        return true
     }
 
     private static func pendingFallbackReplayRecord(
@@ -4024,6 +4267,28 @@ final class BrainDatabase: @unchecked Sendable {
 
     func pendingStoreQueueSnapshot() -> PendingStoreQueueSnapshot {
         pendingStoreQueueSnapshotIfReadable() ?? PendingStoreQueueSnapshot(depth: 0, oldestQueuedAt: nil)
+    }
+
+    private func replayDebtBreakdown() -> ReplayDebtBreakdown {
+        let pendingStores: ReplayDebtBreakdown.Component
+        if let snapshot = pendingStoreQueueSnapshotIfReadable() {
+            pendingStores = ReplayDebtBreakdown.Component(
+                source: .pendingStores,
+                snapshot: snapshot,
+                readability: .readable
+            )
+        } else {
+            pendingStores = ReplayDebtBreakdown.Component(
+                source: .pendingStores,
+                snapshot: PendingStoreQueueSnapshot(depth: 0, oldestQueuedAt: nil),
+                readability: .unreadable("pending stores queue could not be read")
+            )
+        }
+        return ReplayDebtBreakdown(
+            pendingStores: pendingStores,
+            durableQueue: Self.durableStoreQueueComponent(),
+            repositoryFallback: Self.fallbackReplayQueueComponent()
+        )
     }
 
     func pendingStoreQueueSnapshotIfReadable() -> PendingStoreQueueSnapshot? {

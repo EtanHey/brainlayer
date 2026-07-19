@@ -162,7 +162,7 @@ private struct BrainBarDashboardContent: View {
     let hotkeyStatus: String
 
     var body: some View {
-        if collector.lastDataFetchedAt == nil {
+        if collector.snapshotFreshnessState.isLoading {
             BrainBarLoadingView(title: "BrainBar", subtitle: "Connecting to daemon and loading dashboard data...")
         } else {
             BrainBarDashboardView(
@@ -568,6 +568,8 @@ private struct BrainBarDashboardView: View {
         HStack(spacing: 8) {
             Image(systemName: "clock")
                 .font(.system(size: 11, weight: .semibold))
+            Text(collector.snapshotFreshnessState.label)
+                .font(.system(size: 11, weight: .bold))
             Text("Data fetched at: \(dataFetchedText)")
                 .font(.system(size: 11, weight: .semibold))
                 .monospacedDigit()
@@ -581,6 +583,11 @@ private struct BrainBarDashboardView: View {
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.secondary)
                 }
+            }
+            if let lastFetchError = collector.lastFetchError {
+                Text("Fetch error: \(lastFetchError)")
+                    .font(.system(size: 11, weight: .semibold))
+                    .lineLimit(1)
             }
             Spacer(minLength: 0)
         }
