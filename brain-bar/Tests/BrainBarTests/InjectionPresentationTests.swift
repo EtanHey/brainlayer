@@ -545,6 +545,10 @@ final class InjectionPresentationTests: XCTestCase {
 
     @MainActor
     private func renderInjectionPNG<V: View>(_ view: V, name: String) throws {
+        guard let renderDirectory = ProcessInfo.processInfo.environment["BRAINBAR_RENDER_DIR"],
+              !renderDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw XCTSkip("Set BRAINBAR_RENDER_DIR to render isolated Injection QA snapshots")
+        }
         let renderer = ImageRenderer(content: view)
         renderer.scale = 2
         guard let image = renderer.nsImage,
@@ -555,11 +559,8 @@ final class InjectionPresentationTests: XCTestCase {
             return
         }
 
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("docs.local/wave3-qa/\(name)")
+        let url = URL(fileURLWithPath: renderDirectory, isDirectory: true)
+            .appendingPathComponent(name)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try png.write(to: url)
         XCTAssertGreaterThan(png.count, 1_000)

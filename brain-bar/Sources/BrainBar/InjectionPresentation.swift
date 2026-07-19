@@ -1,5 +1,120 @@
 import Foundation
 
+enum InjectionFeedLoadState: Equatable {
+    case loading
+    case loaded
+}
+
+enum InjectionFeedConnectionState: Equatable {
+    case connected
+    case disconnected
+}
+
+enum InjectionFeedSurfaceState: Equatable {
+    case loading
+    case disconnected
+    case empty
+    case noMatches
+    case degraded(reason: String, retainsContent: Bool)
+    case content
+
+    var showsContent: Bool {
+        switch self {
+        case .content, .degraded(_, true):
+            return true
+        case .loading, .disconnected, .empty, .noMatches, .degraded(_, false):
+            return false
+        }
+    }
+
+    static func resolve(
+        snapshot: InjectionPresentation.Snapshot,
+        presentationState: InjectionFeedPresentationState,
+        connectionState: InjectionFeedConnectionState,
+        filterActive: Bool
+    ) -> InjectionFeedSurfaceState {
+        guard connectionState == .connected else { return .disconnected }
+        guard presentationState.loadState == .loaded else { return .loading }
+
+        if presentationState.degradationState.isDegraded {
+            return .degraded(
+                reason: presentationState.degradationState.reason ?? "Injection feed read failed.",
+                retainsContent: !snapshot.bursts.isEmpty
+            )
+        }
+        if snapshot.bursts.isEmpty {
+            return filterActive ? .noMatches : .empty
+        }
+        return .content
+    }
+}
+
+struct InjectionFeedPresentationState: Equatable {
+    let events: [InjectionEvent]
+    let degradationState: DegradationState
+    let loadState: InjectionFeedLoadState
+
+    static let empty = InjectionFeedPresentationState(
+        events: [],
+        degradationState: .healthy,
+        loadState: .loading
+    )
+
+    init(
+        events: [InjectionEvent],
+        degradationState: DegradationState,
+        loadState: InjectionFeedLoadState = .loaded
+    ) {
+        self.events = events
+        self.degradationState = degradationState
+        self.loadState = loadState
+    }
+}
+
+struct InjectionActionReceipt: Equatable {
+    enum Kind: Equatable {
+        case success
+        case failure
+    }
+
+    let kind: Kind
+    let message: String
+}
+
+struct InjectionFeedFixture {
+    let presentationState: InjectionFeedPresentationState
+    let connectionState: InjectionFeedConnectionState
+    let now: Date
+    let filterText: String
+    let typeFilter: InjectionTypeFilter
+    let expandedBurstIDs: Set<String>
+    let actionReceipt: InjectionActionReceipt?
+
+    init(
+        events: [InjectionEvent],
+        now: Date,
+        degradationState: DegradationState = .healthy,
+        loadState: InjectionFeedLoadState = .loaded,
+        connectionState: InjectionFeedConnectionState = .connected,
+        filterText: String = "",
+        typeFilter: InjectionTypeFilter = .all,
+        expandedBurstIDs: Set<String> = [],
+        actionReceipt: InjectionActionReceipt? = nil
+    ) {
+        self.presentationState = InjectionFeedPresentationState(
+            events: events,
+            degradationState: degradationState,
+            loadState: loadState
+        )
+        self.connectionState = connectionState
+        self.now = now
+        self.filterText = filterText
+        self.typeFilter = typeFilter
+        self.expandedBurstIDs = expandedBurstIDs
+        self.actionReceipt = actionReceipt
+    }
+}
+
 struct InjectionPresentation {
     struct Snapshot: Equatable {
         let filteredEvents: [InjectionEvent]
@@ -35,6 +150,41 @@ struct InjectionPresentation {
         var queryCount: Int { events.count }
         var chunkCount: Int { events.reduce(0) { $0 + $1.chunkCount } }
         var tokenCount: Int { events.reduce(0) { $0 + $1.tokenCount } }
+        var queryTitle: String {
+            InjectionChunk.elide(events.first?.query ?? topicOrSource, limit: 96)
+        }
+        var selectedResultSummary: String {
+            selectedResultChunk?.displayText ?? summaryTitle
+        }
+        var additionalResultPreviews: [InjectionChunk] {
+            let selectedID = selectedResultChunk?.id
+            return Array(
+                InjectionPresentation.previewChunks(for: events, limit: 3)
+                    .filter { $0.id != selectedID }
+                    .prefix(2)
+            )
+        }
+        var remainingCollapsedResultCount: Int {
+            let selectedCount = selectedResultChunk == nil ? 0 : 1
+            return max(resultCount - selectedCount - additionalResultPreviews.count, 0)
+        }
+        var sourceLabel: String {
+            events.first?.primaryKind.label ?? "Source unavailable"
+        }
+        var projectLabel: String {
+            claudeProjectPath.isEmpty ? "Project unavailable" : claudeProjectPath
+        }
+        var resultCount: Int {
+            events.reduce(into: Set<String>()) { result, event in
+                result.formUnion(event.uniqueChunkIDs)
+            }.count
+        }
+        var timestampLabel: String {
+            InjectionPresentation.burstRangeText(start: startDate, end: endDate)
+        }
+        private var selectedResultChunk: InjectionChunk? {
+            InjectionPresentation.previewChunks(for: events, limit: 1).first
+        }
         var claudeProjectPath: String {
             events.lazy.map(\.claudeProjectPath).first { !$0.isEmpty } ?? ""
         }
@@ -92,6 +242,7 @@ struct InjectionPresentation {
 
     struct SessionSummary: Equatable, Identifiable {
         let sessionID: String
+        let displayLabel: String
         let queryCount: Int
         let chunkCount: Int
         let tokenCount: Int
@@ -388,6 +539,7 @@ struct InjectionPresentation {
         return grouped.map { sessionID, values in
             SessionSummary(
                 sessionID: sessionID,
+                displayLabel: InjectionChunk.elide(values.first?.event.query ?? "Retrieval session", limit: 42),
                 queryCount: values.count,
                 chunkCount: values.reduce(0) { $0 + $1.event.chunkCount },
                 tokenCount: values.reduce(0) { $0 + $1.event.tokenCount },
