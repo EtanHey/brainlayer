@@ -345,7 +345,7 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.recentActivityBuckets, [0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 8])
     }
 
-    func testDashboardFlowSummarySurfacesAllCommittedChunksAsOwnLane() {
+    func testDashboardFlowSummarySurfacesSourceTimeChunkRowsAsOwnLane() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let stats = DashboardStats(
             chunkCount: 9,
@@ -368,12 +368,12 @@ final class DashboardTests: XCTestCase {
             .derive(daemon: nil, stats: stats, now: now)
             .lane(for: .allCommits)
 
-        XCTAssertEqual(allCommitsLane.name, "All commits")
+        XCTAssertEqual(allCommitsLane.name, "Chunk rows")
         XCTAssertEqual(allCommitsLane.values, [0, 0, 0, 9])
         XCTAssertEqual(allCommitsLane.status, .live)
-        XCTAssertEqual(allCommitsLane.statusText, "All commits live now")
+        XCTAssertEqual(allCommitsLane.statusText, "Chunk rows landing now")
         XCTAssertEqual(allCommitsLane.volumeText, "9 in 1h")
-        XCTAssertEqual(allCommitsLane.sparklineLabel, "All committed chunks over Last 1h")
+        XCTAssertEqual(allCommitsLane.sparklineLabel, "Chunk rows by source time over Last 1h")
     }
 
     func testDashboardFlowLabelsWriteSeriesBySourcePath() {
@@ -393,8 +393,8 @@ final class DashboardTests: XCTestCase {
 
         let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: Date(timeIntervalSince1970: 1_764_236_400))
 
-        XCTAssertEqual(summary.ingress.primarySeriesLabel, "Agent MCP stores")
-        XCTAssertEqual(summary.ingress.secondarySeriesLabel, "JSONL watcher")
+        XCTAssertEqual(summary.ingress.primarySeriesLabel, "Agent-origin chunks")
+        XCTAssertEqual(summary.ingress.secondarySeriesLabel, "Watcher-ingested chunks")
         XCTAssertNil(summary.ingress.tertiarySeriesLabel)
         XCTAssertTrue(summary.ingress.tertiaryValues.isEmpty)
     }
@@ -1009,7 +1009,7 @@ final class DashboardTests: XCTestCase {
             "pending stores: 0; durable queue: 0; repository fallback: 1; deduplicated total: 1; oldest 2m."
         )
         XCTAssertEqual(agentStores.status, .idle)
-        XCTAssertEqual(agentStores.statusText, "No agent MCP stores")
+        XCTAssertEqual(agentStores.statusText, "No agent-origin chunks")
     }
 
     func testDashboardStatsIncludesDurableStoreQueueDepth() throws {
@@ -2326,8 +2326,10 @@ final class DashboardTests: XCTestCase {
             "The collector must publish the unresolved fetch error separately from last-good data."
         )
         XCTAssertTrue(
-            viewSource.contains("lastFetchError") || viewSource.contains("currentFetchError"),
-            "The dashboard must make the current fetch failure visible with last-success age."
+            viewSource.contains("collector.snapshotFreshnessState")
+                && viewSource.contains("case .error(let message")
+                && viewSource.contains("Current error:"),
+            "The dashboard must render the typed current fetch failure with last-success age."
         )
     }
 

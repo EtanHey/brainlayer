@@ -199,7 +199,7 @@ final class BrainBarUXLogicTests: XCTestCase {
         XCTAssertEqual(summary.ingress.status, .live)
         XCTAssertEqual(watcherLane.status, .idle)
         XCTAssertEqual(watcherLane.statusText, "RUNNING · NO RECENT FLOW")
-        XCTAssertEqual(watcherLane.lastEventText, "No watcher writes in Last 30m")
+        XCTAssertEqual(watcherLane.lastEventText, "No watcher-ingested chunks in Last 30m")
     }
 
     func testAgentStoresLaneDoesNotBorrowLiveStatusFromJsonlWatcher() {
@@ -226,8 +226,8 @@ final class BrainBarUXLogicTests: XCTestCase {
 
         XCTAssertEqual(summary.ingress.status, .live)
         XCTAssertEqual(agentLane.status, .idle)
-        XCTAssertEqual(agentLane.statusText, "No agent MCP stores")
-        XCTAssertEqual(agentLane.lastEventText, "No agent MCP stores in Last 30m")
+        XCTAssertEqual(agentLane.statusText, "No agent-origin chunks")
+        XCTAssertEqual(agentLane.lastEventText, "No agent-origin chunks in Last 30m")
     }
 
     func testWatcherOnlyBurstShowsAllCommitsWhileAgentLaneStaysIdle() {
@@ -267,7 +267,7 @@ final class BrainBarUXLogicTests: XCTestCase {
         XCTAssertEqual(allCommitsLane.values, [0, 0, 0, 460])
         XCTAssertEqual(allCommitsLane.volumeText, "460 in 1h")
         XCTAssertEqual(agentLane.status, .idle)
-        XCTAssertEqual(agentLane.statusText, "No agent MCP stores")
+        XCTAssertEqual(agentLane.statusText, "No agent-origin chunks")
         XCTAssertEqual(watcherLane.status, .live)
     }
 
@@ -309,7 +309,7 @@ final class BrainBarUXLogicTests: XCTestCase {
         XCTAssertEqual(summary.lane(for: .allCommits).status, .live)
         XCTAssertEqual(summary.lane(for: .jsonlWatcher).status, .live)
         XCTAssertEqual(agentLane.status, .idle)
-        XCTAssertEqual(agentLane.statusText, "No agent MCP stores")
+        XCTAssertEqual(agentLane.statusText, "No agent-origin chunks")
         XCTAssertEqual(summary.queue.storeReplayDebtDepth, 3)
         XCTAssertEqual(summary.queue.storeDepthText, "3 replay debt")
     }
@@ -336,15 +336,17 @@ final class BrainBarUXLogicTests: XCTestCase {
             pendingStoreFlushRatePerMinute: 0
         )
 
-        let agentLane = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now).lane(for: .agentStores)
+        let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
+        let agentLane = summary.lane(for: .agentStores)
 
         XCTAssertEqual(agentLane.status, .live)
-        XCTAssertEqual(agentLane.statusText, "Agent MCP stores live now")
-        XCTAssertEqual(agentLane.volumeText, "2 in 1h, 5 flush queued")
-        XCTAssertEqual(agentLane.lastEventText, "2 agent MCP stores in latest bucket; 5 flush queued")
+        XCTAssertEqual(agentLane.statusText, "Agent-origin chunks landing now")
+        XCTAssertEqual(agentLane.volumeText, "2 in 1h")
+        XCTAssertEqual(agentLane.lastEventText, "2 agent-origin chunks in latest source-time bucket")
+        XCTAssertEqual(summary.queue.storeDepthText, "5 queued")
     }
 
-    func testAgentStoresLaneShowsPendingReplayDebtWhenCommittedGraphIsZero() {
+    func testPendingStoresStayOutOfAgentOriginChartWhenCommittedGraphIsZero() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let stats = DashboardStats(
             chunkCount: 120,
@@ -366,12 +368,14 @@ final class BrainBarUXLogicTests: XCTestCase {
             pendingStoreFlushRatePerMinute: 0
         )
 
-        let agentLane = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now).lane(for: .agentStores)
+        let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
+        let agentLane = summary.lane(for: .agentStores)
 
-        XCTAssertEqual(agentLane.status, .queued)
-        XCTAssertEqual(agentLane.statusText, "5 agent MCP stores flush queued")
-        XCTAssertEqual(agentLane.volumeText, "0 in 1h, 5 flush queued")
-        XCTAssertEqual(agentLane.lastEventText, "5 agent MCP stores flush queued")
+        XCTAssertEqual(agentLane.status, .idle)
+        XCTAssertEqual(agentLane.statusText, "No agent-origin chunks")
+        XCTAssertEqual(agentLane.volumeText, "0 in 1h")
+        XCTAssertEqual(agentLane.lastEventText, "No agent-origin chunks in Last 1h")
+        XCTAssertEqual(summary.queue.storeDepthText, "5 queued")
     }
 
     func testAgentStoresLaneShowsQueuedReplayDebtBeforeLiveWrites() {
@@ -396,12 +400,14 @@ final class BrainBarUXLogicTests: XCTestCase {
             pendingStoreFlushRatePerMinute: 0
         )
 
-        let agentLane = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now).lane(for: .agentStores)
+        let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
+        let agentLane = summary.lane(for: .agentStores)
 
         XCTAssertEqual(agentLane.status, .live)
-        XCTAssertEqual(agentLane.statusText, "Agent MCP stores live now")
-        XCTAssertEqual(agentLane.volumeText, "2 in 1h, 5 flush queued")
-        XCTAssertEqual(agentLane.lastEventText, "2 agent MCP stores in latest bucket; 5 flush queued")
+        XCTAssertEqual(agentLane.statusText, "Agent-origin chunks landing now")
+        XCTAssertEqual(agentLane.volumeText, "2 in 1h")
+        XCTAssertEqual(agentLane.lastEventText, "2 agent-origin chunks in latest source-time bucket")
+        XCTAssertEqual(summary.queue.storeDepthText, "5 queued")
     }
 
     func testJsonlWatcherLaneDoesNotTreatHistoricalActivityMarkerAsLiveFlowTruth() {
@@ -702,8 +708,8 @@ final class BrainBarUXLogicTests: XCTestCase {
 
         let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
 
-        XCTAssertEqual(summary.enrichment.sparklineLabel, "Enrichment completions over Last 1h")
-        XCTAssertEqual(summary.enrichment.latestBucketName, "latest enrichment bucket")
+        XCTAssertEqual(summary.enrichment.sparklineLabel, "Successful enrichment completions over Last 1h")
+        XCTAssertEqual(summary.enrichment.latestBucketName, "latest successful-enrichment bucket")
         XCTAssertEqual(summary.enrichment.statusText, "Backlog drain burst: 2055 enriched in latest 15m")
         XCTAssertEqual(summary.enrichment.volumeText, "2055 in 1h")
     }
