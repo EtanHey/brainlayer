@@ -50,7 +50,10 @@ let package = Package(
                 "BrainBarLifecycle",
                 .product(name: "GRDB", package: "GRDB.swift"),
             ],
-            path: "Tests/BrainBarTests"
+            path: "Tests/BrainBarTests",
+            exclude: [
+                "RENDER_VERIFICATION.md",
+            ]
         ),
         .testTarget(
             name: "BrainBarDaemonTests",
