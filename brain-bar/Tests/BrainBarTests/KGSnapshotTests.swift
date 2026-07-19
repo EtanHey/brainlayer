@@ -84,12 +84,23 @@ final class KGSnapshotTests: XCTestCase {
             )
         }
 
+        try assertDeterministicRender(
+            named: "graph-dismissed-sidebar.png",
+            in: destination
+        ) {
+            let dismissed = makeViewModel(mode: .tieredAltitude)
+            dismissed.selectedNodeId = nil
+            dismissed.selectedEntity = nil
+            return snapshotView(viewModel: dismissed)
+        }
+
         let expectedNames = [
             "graph-tiered-atlas.png",
             "graph-importance-atlas.png",
             "graph-find-entity.png",
             "graph-selected-details.png",
             "graph-reduced-motion.png",
+            "graph-dismissed-sidebar.png",
         ]
         for name in expectedNames {
             let data = try Data(contentsOf: destination.appendingPathComponent(name))

@@ -141,6 +141,91 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
     }
 
     @MainActor
+    func testDashboardWatcherTruthStatesRenderDeterministically() throws {
+        try XCTSkipIf(
+            shouldSkipDisplayDependentRenderInCI,
+            "Dashboard PNG render verification is display-dependent; set BRAINBAR_RENDER_IN_CI=1 to run in CI."
+        )
+
+        let states: [(BrainBarDashboardFixture.OperatorState, String)] = [
+            (.watcherOffline, "dashboard-watcher-offline"),
+            (.watcherUnknown, "dashboard-watcher-unknown"),
+            (.watcherRunningNoRecentFlow, "dashboard-watcher-running-no-recent-flow"),
+            (.watcherStalledWithPendingWork, "dashboard-watcher-stalled-pending-work"),
+        ]
+
+        for (state, name) in states {
+            let collector = BrainBarDashboardFixture.makeCollector(state)
+            let view = BrainBarDashboardPreview.make(collector: collector)
+            let (png, bitmap) = try renderPNG(view, size: NSSize(width: 960, height: 1_820))
+            let url = try writePNG(png, name: name)
+
+            XCTAssertGreaterThan(png.count, 5_000, "\(name) PNG looks empty")
+            XCTAssertGreaterThan(distinctSampledColorCount(in: bitmap), 16, "\(name) render is too flat")
+            print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
+        }
+    }
+
+    @MainActor
+    func testDashboardChartWindowsAndTooltipSummaryRenderDeterministically() throws {
+        try XCTSkipIf(
+            shouldSkipDisplayDependentRenderInCI,
+            "Dashboard PNG render verification is display-dependent; set BRAINBAR_RENDER_IN_CI=1 to run in CI."
+        )
+
+        let windows: [(PipelineTimeframe, String)] = [
+            (.threeHour, "dashboard-chart-window-3h"),
+            (.day, "dashboard-chart-window-24h"),
+        ]
+        for (timeframe, name) in windows {
+            let view = BrainBarPipelinePanelPreview.make(
+                stats: BrainBarDashboardFixture.stats,
+                containerSize: CGSize(width: 1_120, height: 1_420),
+                fetchedAt: BrainBarDashboardFixture.fetchedAt,
+                selectedTimeframe: timeframe
+            )
+            let (png, bitmap) = try renderPNG(view, size: NSSize(width: 1_120, height: 1_420))
+            let url = try writePNG(png, name: name)
+
+            XCTAssertGreaterThan(png.count, 5_000, "\(name) PNG looks empty")
+            XCTAssertGreaterThan(distinctSampledColorCount(in: bitmap), 16, "\(name) render is too flat")
+            print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
+        }
+
+        let disclosure = "Window: Last 1h · Count: hovered value below · Unit: unique chunk IDs first seen in this window · Clock: ingest time"
+        let accessibilitySummary = "WATCHER INGESTED CHUNKS. Window: Last 1h. Count: 14. Unit: unique chunk IDs first seen in this window. Clock: ingest time."
+        let presentation = SparklineChartPresentation(
+            label: "WATCHER INGESTED CHUNKS",
+            values: [1, 0, 2, 1, 0, 3, 1, 2, 0, 1, 2, 1],
+            activityWindowMinutes: 60,
+            latestBucketName: "latest ingest bucket",
+            fetchedAt: BrainBarDashboardFixture.fetchedAt,
+            metricDisclosure: disclosure,
+            accessibilitySummary: accessibilitySummary
+        )
+        XCTAssertTrue(presentation.accessibilityValue.contains(accessibilitySummary))
+        let tooltipView = SparklineChart(
+            presentation: presentation,
+            accentColor: BrainBarDesignTokens.Colors.seriesWatcher,
+            previewHoveredBucket: 7,
+            previewHoverX: 430
+        )
+        .frame(width: 840, height: 320)
+        .padding(20)
+        .background(Color.brainBarBackgroundBase)
+        .environment(\.colorScheme, .dark)
+
+        let (tooltipPNG, tooltipBitmap) = try renderPNG(
+            tooltipView,
+            size: NSSize(width: 880, height: 360)
+        )
+        let tooltipURL = try writePNG(tooltipPNG, name: "dashboard-chart-tooltip-summary")
+        XCTAssertGreaterThan(tooltipPNG.count, 5_000, "dashboard tooltip PNG looks empty")
+        XCTAssertGreaterThan(distinctSampledColorCount(in: tooltipBitmap), 16, "dashboard tooltip render is too flat")
+        print("[brainbar-render] wrote \(tooltipURL.path) (\(tooltipPNG.count) bytes)")
+    }
+
+    @MainActor
     func testOperatorStateFixturesStayIsolatedFromProductionDatabaseAndProcessServices() throws {
         let collector = BrainBarDashboardFixture.makeCollector()
         let fields = Dictionary(uniqueKeysWithValues: Mirror(reflecting: collector).children.compactMap { child in

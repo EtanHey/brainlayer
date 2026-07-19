@@ -38,6 +38,17 @@ final class BrainBarSettingsSnapshotTests: XCTestCase {
         validationViewModel.backendDraft = "   "
         validationViewModel.commitBackendDraft()
         try render(viewModel: validationViewModel, named: "validation-error")
+
+        let probeErrorViewModel = try makeViewModel(
+            root: tempRoot,
+            name: "probe-error",
+            config: .defaultConfig
+        )
+        XCTAssertEqual(
+            probeErrorViewModel.config.launchdJobs[.watch]?.loadState,
+            .probeError("launchctl exited 1")
+        )
+        try render(viewModel: probeErrorViewModel, named: "launchctl-probe-error")
     }
 
     @MainActor

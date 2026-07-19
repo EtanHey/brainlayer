@@ -29,6 +29,10 @@ enum BrainBarDashboardFixture {
         case stale
         case error
         case partialReplayDebt
+        case watcherOffline
+        case watcherUnknown
+        case watcherRunningNoRecentFlow
+        case watcherStalledWithPendingWork
     }
 
     /// Fixed "data fetched at" instant. Renders only via `absoluteTimeString`.
@@ -75,11 +79,51 @@ enum BrainBarDashboardFixture {
         repositoryFallback: readableReplayDebt.repositoryFallback
     )
 
+    private static let emptyReplayDebt = BrainDatabase.ReplayDebtBreakdown(
+        pendingStores: .init(
+            source: .pendingStores,
+            snapshot: .init(depth: 0, oldestQueuedAt: nil, identityKeys: []),
+            readability: .readable
+        ),
+        durableQueue: .init(
+            source: .durableQueue,
+            snapshot: .init(depth: 0, oldestQueuedAt: nil, identityKeys: []),
+            readability: .readable
+        ),
+        repositoryFallback: .init(
+            source: .repositoryFallback,
+            snapshot: .init(depth: 0, oldestQueuedAt: nil, identityKeys: []),
+            readability: .readable
+        )
+    )
+
     static let stats = makeStats(replayDebtBreakdown: readableReplayDebt)
     static let partialReplayDebtStats = makeStats(replayDebtBreakdown: partialReplayDebt)
+    static let watcherOfflineStats = makeStats(
+        replayDebtBreakdown: readableReplayDebt,
+        watcherProcessProbeResult: .absent,
+        watcherRecentDistinctChunkCount: 0
+    )
+    static let watcherUnknownStats = makeStats(
+        replayDebtBreakdown: readableReplayDebt,
+        watcherProcessProbeResult: .failure("fixture launchctl probe failed"),
+        watcherRecentDistinctChunkCount: 0
+    )
+    static let watcherRunningNoRecentFlowStats = makeStats(
+        replayDebtBreakdown: emptyReplayDebt,
+        watcherProcessProbeResult: .running(pid: 4242),
+        watcherRecentDistinctChunkCount: 0
+    )
+    static let watcherStalledWithPendingWorkStats = makeStats(
+        replayDebtBreakdown: readableReplayDebt,
+        watcherProcessProbeResult: .running(pid: 4242),
+        watcherRecentDistinctChunkCount: 0
+    )
 
     private static func makeStats(
-        replayDebtBreakdown: BrainDatabase.ReplayDebtBreakdown
+        replayDebtBreakdown: BrainDatabase.ReplayDebtBreakdown,
+        watcherProcessProbeResult: WatcherProcessProbeResult = .running(pid: 4242),
+        watcherRecentDistinctChunkCount: Int = 14
     ) -> DashboardStats {
         DashboardStats(
             chunkCount: 297_412,
@@ -118,8 +162,8 @@ enum BrainBarDashboardFixture {
                 updatedAt: fetchedAt
             ),
             replayDebtBreakdown: replayDebtBreakdown,
-            watcherProcessProbeResult: .running(pid: 4242),
-            watcherRecentDistinctChunkCount: 14,
+            watcherProcessProbeResult: watcherProcessProbeResult,
+            watcherRecentDistinctChunkCount: watcherRecentDistinctChunkCount,
             watcherFlowReadability: .readable
         )
     }
@@ -149,7 +193,21 @@ enum BrainBarDashboardFixture {
     /// A `StatsCollector` pre-loaded with the fixture state and no live wiring
     /// (no DB, no observers, no timers — `start()` is never called).
     static func makeCollector(_ operatorState: OperatorState = .live) -> StatsCollector {
-        let fixtureStats = operatorState == .partialReplayDebt ? partialReplayDebtStats : stats
+        let fixtureStats: DashboardStats
+        switch operatorState {
+        case .partialReplayDebt:
+            fixtureStats = partialReplayDebtStats
+        case .watcherOffline:
+            fixtureStats = watcherOfflineStats
+        case .watcherUnknown:
+            fixtureStats = watcherUnknownStats
+        case .watcherRunningNoRecentFlow:
+            fixtureStats = watcherRunningNoRecentFlowStats
+        case .watcherStalledWithPendingWork:
+            fixtureStats = watcherStalledWithPendingWorkStats
+        case .loading, .live, .stale, .error:
+            fixtureStats = stats
+        }
         let freshness: SnapshotFreshnessState
         let lastDataFetchedAt: Date?
         let lastFetchError: String?
@@ -158,7 +216,11 @@ enum BrainBarDashboardFixture {
             freshness = .loading
             lastDataFetchedAt = nil
             lastFetchError = nil
-        case .live:
+        case .live,
+             .watcherOffline,
+             .watcherUnknown,
+             .watcherRunningNoRecentFlow,
+             .watcherStalledWithPendingWork:
             freshness = .live(ageSeconds: 0)
             lastDataFetchedAt = fetchedAt
             lastFetchError = nil
