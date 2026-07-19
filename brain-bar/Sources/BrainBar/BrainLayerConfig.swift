@@ -233,8 +233,16 @@ enum BrainLayerConfigValidationResult: Equatable, Sendable {
 }
 
 enum BrainLayerConfigValidator {
-    static func validate(_ config: BrainLayerConfig) -> BrainLayerConfigValidationResult {
-        if config.enrichmentProvider.unavailableReason != nil {
+    static func validate(
+        _ config: BrainLayerConfig,
+        previousConfig: BrainLayerConfig? = nil
+    ) -> BrainLayerConfigValidationResult {
+        let activatesUnavailableProvider = previousConfig == nil ||
+            previousConfig?.enrichmentProvider != config.enrichmentProvider ||
+            (previousConfig?.enrichmentEnabled == false && config.enrichmentEnabled)
+        if config.enrichmentEnabled,
+           config.enrichmentProvider.unavailableReason != nil,
+           activatesUnavailableProvider {
             return .failed(
                 "\(config.enrichmentProvider.title) cannot be activated because its runtime integration is unavailable."
             )
@@ -501,7 +509,14 @@ struct BrainLayerEnvDocument {
     }
 
     private static func parseGoogleKey(_ raw: String) -> BrainLayerGoogleAPIKey {
-        let value = strippedValue(raw)
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        let value: String
+        if trimmed.count >= 2, trimmed.first == "'", trimmed.last == "'" {
+            value = String(trimmed.dropFirst().dropLast())
+                .replacingOccurrences(of: "'\"'\"'", with: "'")
+        } else {
+            value = strippedValue(raw)
+        }
         guard !value.isEmpty else { return .missing }
         if value.contains("op read") {
             return .onePasswordReference(extractOpReference(from: value) ?? "op://Private/Google AI/Gemini API key")
@@ -559,6 +574,8 @@ struct BrainLayerEnvDocument {
 struct BrainLayerConfigStore {
     let configURL: URL
     var fileManager: FileManager = .default
+    private let loadDocumentOverride: (() throws -> BrainLayerEnvDocument)?
+    private let saveOverride: ((BrainLayerConfig) throws -> Void)?
 
     static func defaultConfigURL(homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
         homeDirectory
@@ -567,11 +584,22 @@ struct BrainLayerConfigStore {
             .appendingPathComponent("brainlayer.env", isDirectory: false)
     }
 
-    init(configURL: URL = BrainLayerConfigStore.defaultConfigURL()) {
+    init(
+        configURL: URL = BrainLayerConfigStore.defaultConfigURL(),
+        fileManager: FileManager = .default,
+        loadDocumentOverride: (() throws -> BrainLayerEnvDocument)? = nil,
+        saveOverride: ((BrainLayerConfig) throws -> Void)? = nil
+    ) {
         self.configURL = configURL
+        self.fileManager = fileManager
+        self.loadDocumentOverride = loadDocumentOverride
+        self.saveOverride = saveOverride
     }
 
     func loadDocument() throws -> BrainLayerEnvDocument {
+        if let loadDocumentOverride {
+            return try loadDocumentOverride()
+        }
         guard fileManager.fileExists(atPath: configURL.path) else {
             return BrainLayerEnvDocument(config: .defaultConfig)
         }
@@ -580,6 +608,10 @@ struct BrainLayerConfigStore {
     }
 
     func save(_ config: BrainLayerConfig) throws {
+        if let saveOverride {
+            try saveOverride(config)
+            return
+        }
         var document = try loadDocument()
         document.update { $0 = config }
         try fileManager.createDirectory(at: configURL.deletingLastPathComponent(), withIntermediateDirectories: true)

@@ -65,6 +65,38 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testExistingUnavailableProviderDoesNotTrapSafeDisableOrUnrelatedEdits() throws {
+        var config = BrainLayerConfig.defaultConfig
+        config.enrichmentProvider = .openai
+        config.enrichmentBackend = "openai"
+        let fixture = try makeFixture(config: config)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        fixture.viewModel.setSystemEnabled(false)
+        fixture.viewModel.setEnrichmentEnabled(false)
+
+        let persisted = try fixture.store.loadDocument().config
+        XCTAssertFalse(persisted.systemEnabled)
+        XCTAssertFalse(persisted.enrichmentEnabled)
+        XCTAssertEqual(persisted.enrichmentProvider, .openai)
+        XCTAssertEqual(fixture.viewModel.lastSaveReceipt?.validation, .passed)
+    }
+
+    @MainActor
+    func testSelectingGeminiRepairsWhitespaceOnlyBackend() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        fixture.viewModel.config.enrichmentProvider = .openai
+        fixture.viewModel.config.enrichmentBackend = "   "
+
+        fixture.viewModel.setEnrichmentProvider(.gemini)
+
+        XCTAssertEqual(fixture.viewModel.config.enrichmentProvider, .gemini)
+        XCTAssertEqual(fixture.viewModel.config.enrichmentBackend, "gemini")
+        XCTAssertEqual(try fixture.store.loadDocument().config.enrichmentBackend, "gemini")
+    }
+
+    @MainActor
     func testSaveKeepsConfiguredAndActiveValuesSeparateUntilRuntimeObservesChange() throws {
         let initial = BrainLayerConfig.defaultConfig
         let fixture = try makeFixture(
@@ -138,6 +170,45 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(
             fixture.viewModel.lastSaveReceipt?.activeRuntimeState,
             .unknown("Configuration file changed, but reload validation failed.")
+        )
+    }
+
+    @MainActor
+    func testReloadErrorAfterSuccessfulWriteReportsFileUpdatedTruthfully() throws {
+        let configURL = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("brainbar-settings-reload-error-\(UUID().uuidString).env")
+        var persisted = BrainLayerConfig.defaultConfig
+        var loadCount = 0
+        let now = fixedNow
+        let store = BrainLayerConfigStore(
+            configURL: configURL,
+            loadDocumentOverride: {
+                loadCount += 1
+                if loadCount > 1 {
+                    throw CocoaError(.fileReadUnknown)
+                }
+                return BrainLayerEnvDocument(config: persisted)
+            },
+            saveOverride: { persisted = $0 }
+        )
+        let viewModel = BrainBarSettingsViewModel(
+            store: store,
+            launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
+            refreshStatusOnLoad: false,
+            now: { now }
+        )
+
+        viewModel.setSystemEnabled(false)
+
+        XCTAssertFalse(persisted.systemEnabled)
+        XCTAssertEqual(viewModel.lastSaveReceipt?.fileUpdated, true)
+        XCTAssertEqual(
+            viewModel.lastSaveReceipt?.validation,
+            .failed("Saved configuration could not be reloaded.")
+        )
+        XCTAssertEqual(
+            viewModel.lastSaveReceipt?.activeRuntimeState,
+            .unknown("Configuration file changed, but reload failed.")
         )
     }
 

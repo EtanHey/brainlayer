@@ -214,7 +214,7 @@ struct InjectionPresentation {
             InjectionChunk.elide(events.first?.query ?? topicOrSource, limit: 96)
         }
         var selectedResultSummary: String {
-            selectedResultChunk?.displayText ?? summaryTitle
+            selectedResultChunk?.displayText ?? "Result unavailable"
         }
         var resultProvenance: [ResultProvenance] {
             var seen = Set<String>()
@@ -621,9 +621,10 @@ struct InjectionPresentation {
     private static func makeSessions(from events: [ParsedEvent]) -> [SessionSummary] {
         let grouped = Dictionary(grouping: events, by: \.event.sessionID)
         return grouped.map { sessionID, values in
-            SessionSummary(
+            let query = values.first?.event.query.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return SessionSummary(
                 sessionID: sessionID,
-                displayLabel: InjectionChunk.elide(values.first?.event.query ?? "Retrieval session", limit: 42),
+                displayLabel: InjectionChunk.elide(query.isEmpty ? "Retrieval session" : query, limit: 42),
                 queryCount: values.count,
                 chunkCount: values.reduce(0) { $0 + $1.event.chunkCount },
                 tokenCount: values.reduce(0) { $0 + $1.event.tokenCount },

@@ -114,7 +114,14 @@ final class DashboardTests: XCTestCase {
     }
 
     func testDashboardEnrichedSuccessfullyExcludesFailedSkippedAndPendingRows() throws {
-        for id in ["enrich-success", "enrich-failed", "enrich-skipped", "enrich-pending"] {
+        for id in [
+            "enrich-success",
+            "enrich-failed",
+            "enrich-skipped",
+            "enrich-duplicate",
+            "enrich-too-short",
+            "enrich-pending",
+        ] {
             try db.insertChunk(
                 id: id,
                 content: "Enrichment truth fixture \(id)",
@@ -127,17 +134,52 @@ final class DashboardTests: XCTestCase {
         db.exec("UPDATE chunks SET enriched_at = datetime('now'), enrich_status = 'success' WHERE id = 'enrich-success'")
         db.exec("UPDATE chunks SET enrich_status = 'failed' WHERE id = 'enrich-failed'")
         db.exec("UPDATE chunks SET enrich_status = 'skipped' WHERE id = 'enrich-skipped'")
+        db.exec("UPDATE chunks SET enrich_status = 'duplicate' WHERE id = 'enrich-duplicate'")
+        db.exec("UPDATE chunks SET enrich_status = 'too_short' WHERE id = 'enrich-too-short'")
 
         let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
 
-        XCTAssertEqual(stats.chunkCount, 4)
+        XCTAssertEqual(stats.chunkCount, 6)
         XCTAssertEqual(
             stats.enrichedChunkCount,
             1,
             "The ENRICHED SUCCESSFULLY numerator counts only enrich_status='success'."
         )
         XCTAssertEqual(stats.pendingEnrichmentCount, 1)
-        XCTAssertEqual(stats.enrichmentPercent, 25, accuracy: 0.001)
+        XCTAssertEqual(stats.skippedEnrichmentCount, 3)
+        XCTAssertEqual(stats.enrichmentPercent, 100.0 / 6.0, accuracy: 0.001)
+    }
+
+    func testWatcherLaneDoesNotCallAnEmptyLatestBucketLive() {
+        let stats = DashboardStats(
+            chunkCount: 2,
+            enrichedChunkCount: 0,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 0,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 0,
+            recentActivityBuckets: [0, 0, 0],
+            recentAgentWriteBuckets: [0, 0, 0],
+            recentWatcherWriteBuckets: [2, 0, 0],
+            recentEnrichmentBuckets: [0, 0, 0],
+            activityWindowMinutes: 15,
+            watcherProcessProbeResult: .running(pid: 42),
+            watcherRecentDistinctChunkCount: 2,
+            watcherFlowReadability: .readable
+        )
+
+        let lane = DashboardFlowSummary.derive(daemon: nil, stats: stats).lane(for: .jsonlWatcher)
+
+        XCTAssertEqual(lane.status, .live)
+        XCTAssertEqual(lane.lastEventText, "2 watcher-ingested chunks in Last 15m")
+    }
+
+    @MainActor
+    func testNoRecentWatcherFlowFixtureDoesNotRenderWatcherIngestActivity() {
+        let stats = BrainBarDashboardFixture.watcherRunningNoRecentFlowStats
+
+        XCTAssertEqual(stats.watcherRecentDistinctChunkCount, 0)
+        XCTAssertEqual(stats.recentWatcherWriteBuckets, Array(repeating: 0, count: stats.bucketCount))
     }
 
     func testDashboardStatsReportsPerSignalCoverageAndBacklogs() throws {
@@ -1066,6 +1108,30 @@ final class DashboardTests: XCTestCase {
 
         XCTAssertEqual(stats.pendingStoreQueueDepth, 2)
         XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+    }
+
+    func testDashboardStatsMarksNonRegularJSONLQueueEntryAsPartialConservativeDebt() throws {
+        let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pending-stores-dashboard-empty-\(UUID().uuidString).jsonl")
+        let durableQueue = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("brainlayer-durable-nonregular-\(UUID().uuidString)", isDirectory: true)
+        let suspiciousEntry = durableQueue.appendingPathComponent("unreadable.jsonl", isDirectory: true)
+        let restoreQueuePath = setDashboardPendingStoreQueuePath(queuePath)
+        let restoreDurableQueue = setDashboardDurableStoreQueuePath(durableQueue)
+        defer {
+            restoreQueuePath()
+            restoreDurableQueue()
+            try? FileManager.default.removeItem(at: queuePath)
+            try? FileManager.default.removeItem(at: durableQueue)
+        }
+        try FileManager.default.createDirectory(at: suspiciousEntry, withIntermediateDirectories: true)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+        let durable = stats.replayDebtBreakdown.durableQueue
+
+        XCTAssertEqual(durable.snapshot.depth, 1)
+        XCTAssertFalse(durable.readability.isReadable)
+        XCTAssertTrue(stats.replayDebtBreakdown.isPartial)
     }
 
     func testDashboardStatsCountsDurableStoreQueueLinesAndSkipsNonStoreEvents() throws {

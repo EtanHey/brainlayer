@@ -134,6 +134,9 @@ enum BrainBarDashboardFixture {
         watcherRecentDistinctChunkCount: Int = 14
     ) -> DashboardStats {
         let windowScale = max(activityWindowMinutes / 60, 1)
+        let watcherBuckets = watcherRecentDistinctChunkCount == 0
+            ? Array(repeating: 0, count: 12)
+            : [1, 0, 2, 1, 0, 3, 1, 2, 0, 1, 2, 1].map { $0 * windowScale }
         return DashboardStats(
             chunkCount: 297_412,
             enrichedChunkCount: 188_204,
@@ -145,7 +148,7 @@ enum BrainBarDashboardFixture {
             databaseSizeBytes: 8_120_000_000,
             recentActivityBuckets: [3, 5, 2, 8, 6, 4, 9, 7, 5, 6, 8, 4].map { $0 * windowScale },
             recentAgentWriteBuckets: [3, 5, 2, 8, 6, 4, 9, 7, 5, 6, 8, 4].map { $0 * windowScale },
-            recentWatcherWriteBuckets: [1, 0, 2, 1, 0, 3, 1, 2, 0, 1, 2, 1].map { $0 * windowScale },
+            recentWatcherWriteBuckets: watcherBuckets,
             recentEnrichmentBuckets: [4, 6, 3, 7, 5, 8, 6, 9, 7, 5, 8, 6].map { $0 * windowScale },
             recentWriteFiveMinuteCount: 18,
             recentEnrichmentFiveMinuteCount: 22,

@@ -2186,7 +2186,9 @@ final class BrainDatabase: @unchecked Sendable {
             chunkCount: try scalarInt("SELECT COUNT(*) FROM chunks"),
             enrichedChunkCount: try scalarInt("SELECT COUNT(*) FROM chunks WHERE LOWER(TRIM(enrich_status)) = 'success'"),
             failedEnrichmentCount: try scalarInt("SELECT COUNT(*) FROM chunks WHERE LOWER(TRIM(enrich_status)) = 'failed'"),
-            skippedEnrichmentCount: try scalarInt("SELECT COUNT(*) FROM chunks WHERE LOWER(TRIM(enrich_status)) = 'skipped'"),
+            skippedEnrichmentCount: try scalarInt(
+                "SELECT COUNT(*) FROM chunks WHERE enrich_status IS NOT NULL AND LOWER(TRIM(enrich_status)) NOT IN ('success', 'failed')"
+            ),
             pendingEnrichmentCount: try scalarInt("SELECT COUNT(*) FROM chunks WHERE enrich_status IS NULL AND enriched_at IS NULL")
         )
     }
@@ -3801,13 +3803,32 @@ final class BrainDatabase: @unchecked Sendable {
         var oldestQueuedAt: Date?
         var identityKeys = Set<String>()
         var isReadable = true
-        for file in files where file.pathExtension == "jsonl" && urlIsRegularFile(file) {
+        for file in files where file.pathExtension == "jsonl" {
+            let resourceValues: URLResourceValues
+            do {
+                resourceValues = try file.resourceValues(
+                    forKeys: [.contentModificationDateKey, .isRegularFileKey]
+                )
+            } catch {
+                isReadable = false
+                depth += 1
+                identityKeys.insert(normalizedPathIdentityKey(file))
+                continue
+            }
+            guard resourceValues.isRegularFile == true else {
+                isReadable = false
+                depth += 1
+                identityKeys.insert(normalizedPathIdentityKey(file))
+                if let modified = resourceValues.contentModificationDate {
+                    oldestQueuedAt = oldestQueuedAt.map { min($0, modified) } ?? modified
+                }
+                continue
+            }
             guard let data = try? Data(contentsOf: file) else {
                 isReadable = false
                 depth += 1
                 identityKeys.insert(normalizedPathIdentityKey(file))
-                if let values = try? file.resourceValues(forKeys: [.contentModificationDateKey]),
-                   let modified = values.contentModificationDate {
+                if let modified = resourceValues.contentModificationDate {
                     oldestQueuedAt = oldestQueuedAt.map { min($0, modified) } ?? modified
                 }
                 continue
@@ -3826,8 +3847,7 @@ final class BrainDatabase: @unchecked Sendable {
             }
             guard storeLineCount > 0 else { continue }
             depth += storeLineCount
-            if let values = try? file.resourceValues(forKeys: [.contentModificationDateKey]),
-               let modified = values.contentModificationDate {
+            if let modified = resourceValues.contentModificationDate {
                 oldestQueuedAt = oldestQueuedAt.map { min($0, modified) } ?? modified
             }
         }

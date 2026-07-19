@@ -69,7 +69,8 @@ final class BrainBarSettingsViewModel: ObservableObject {
         }
         updateConfig { nextConfig in
             nextConfig.enrichmentProvider = provider
-            if provider == .gemini, nextConfig.enrichmentBackend.isEmpty {
+            if provider == .gemini,
+               nextConfig.enrichmentBackend.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 nextConfig.enrichmentBackend = "gemini"
             }
         }
@@ -137,7 +138,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         let previousConfig = config
         var nextConfig = config
         apply(&nextConfig)
-        let validation = BrainLayerConfigValidator.validate(nextConfig)
+        let validation = BrainLayerConfigValidator.validate(nextConfig, previousConfig: previousConfig)
         guard validation == .passed else {
             if case let .failed(message) = validation {
                 recordValidationFailure(message)
@@ -146,8 +147,10 @@ final class BrainBarSettingsViewModel: ObservableObject {
         }
 
         let restartRequirements = Self.restartRequirements(from: previousConfig, to: nextConfig)
+        var fileUpdated = false
         do {
             try store.save(nextConfig)
+            fileUpdated = true
             let persistedConfig = try store.loadDocument().config
             guard persistedConfig.persistedValuesEqual(to: nextConfig) else {
                 recordPostWriteValidationFailure(
@@ -181,10 +184,14 @@ final class BrainBarSettingsViewModel: ObservableObject {
             lastSaveReceipt = BrainLayerSettingsSaveReceipt(
                 configURL: store.configURL,
                 savedAt: now(),
-                fileUpdated: false,
-                validation: .passed,
-                servicesRequiringRestart: [],
-                activeRuntimeState: .unknown("Configuration file was not updated.")
+                fileUpdated: fileUpdated,
+                validation: fileUpdated ? .failed("Saved configuration could not be reloaded.") : .passed,
+                servicesRequiringRestart: fileUpdated ? restartRequirements : [],
+                activeRuntimeState: .unknown(
+                    fileUpdated
+                        ? "Configuration file changed, but reload failed."
+                        : "Configuration file was not updated."
+                )
             )
             return false
         }

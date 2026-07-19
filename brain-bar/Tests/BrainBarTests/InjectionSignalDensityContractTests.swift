@@ -51,6 +51,35 @@ final class InjectionSignalDensityContractTests: XCTestCase {
         XCTAssertFalse(burst.timestampLabel.isEmpty)
     }
 
+    func testMissingSelectedChunkNeverBorrowsAnotherResultsSummary() throws {
+        let now = isoDate("2026-07-19T10:00:00Z")
+        let available = InjectionChunk(
+            id: "available-chunk",
+            content: "Content belonging to a different result",
+            summary: "Different result summary",
+            source: "mcp",
+            sourceFile: "",
+            tags: [],
+            contentType: "memory"
+        )
+        let event = InjectionEvent(
+            id: 43,
+            sessionID: "session-missing-selected",
+            timestamp: "2026-07-19T09:58:00Z",
+            query: "show exact attribution",
+            chunkIDs: ["missing-selected", available.id],
+            tokenCount: 10,
+            chunks: [available]
+        )
+
+        let burst = try XCTUnwrap(
+            InjectionPresentation.snapshot(events: [event], filterText: "", now: now).bursts.first
+        )
+
+        XCTAssertEqual(burst.selectedResultProvenance?.chunkID, "missing-selected")
+        XCTAssertEqual(burst.selectedResultSummary, "Result unavailable")
+    }
+
     func testBurstProvenanceStaysPairedWithEachResult() throws {
         let now = isoDate("2026-07-19T10:00:00Z")
         let selected = InjectionChunk(
@@ -243,6 +272,22 @@ final class InjectionSignalDensityContractTests: XCTestCase {
             InjectionFeedView.burstGroupingDisclosure,
             "Retrieval bursts group the same session and trigger topic while consecutive events remain under 60 minutes."
         )
+    }
+
+    func testEmptyQueryUsesTruthfulSessionRailFallback() throws {
+        let now = isoDate("2026-07-19T10:00:00Z")
+        let event = InjectionEvent(
+            id: 8,
+            sessionID: "empty-query-session",
+            timestamp: "2026-07-19T09:59:00Z",
+            query: "   ",
+            chunkIDs: [],
+            tokenCount: 0
+        )
+
+        let snapshot = InjectionPresentation.snapshot(events: [event], filterText: "", now: now)
+
+        XCTAssertEqual(try XCTUnwrap(snapshot.sessions.first).displayLabel, "Retrieval session")
     }
 
     func testInjectionViewDeclaresLiteralGroupingAccessibilityStateAndFixtureContracts() throws {

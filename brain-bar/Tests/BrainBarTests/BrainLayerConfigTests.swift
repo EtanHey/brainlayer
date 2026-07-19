@@ -98,6 +98,17 @@ final class BrainLayerConfigTests: XCTestCase {
         XCTAssertEqual(document.config.googleAPIKey.displayText, "1Password reference")
     }
 
+    func testPlainGoogleKeyWithApostropheRoundTripsThroughManagedShellRendering() throws {
+        let expected = BrainLayerGoogleAPIKey.plain("fixture'key")
+        var document = BrainLayerEnvDocument(config: .defaultConfig)
+        document.update { $0.googleAPIKey = expected }
+
+        let reloaded = try BrainLayerEnvDocument(text: document.rendered()).config
+
+        XCTAssertEqual(reloaded.googleAPIKey, expected)
+        XCTAssertTrue(reloaded.persistedValuesEqual(to: document.config))
+    }
+
     func testUpdatingConfigPreservesCommentsAndUnmanagedKeys() throws {
         var document = try BrainLayerEnvDocument(
             text: """
@@ -192,6 +203,34 @@ final class BrainLayerConfigTests: XCTestCase {
         XCTAssertEqual(
             BrainLayerConfigValidator.validate(missingBackend),
             .failed("Enrichment backend is required.")
+        )
+    }
+
+    func testValidatorAllowsEditingAnExistingUnavailableProviderButRejectsActivatingOne() {
+        var existingUnsupported = BrainLayerConfig.defaultConfig
+        existingUnsupported.enrichmentProvider = .openai
+        existingUnsupported.enrichmentBackend = "openai"
+
+        var unrelatedEdit = existingUnsupported
+        unrelatedEdit.systemEnabled = false
+        XCTAssertEqual(
+            BrainLayerConfigValidator.validate(unrelatedEdit, previousConfig: existingUnsupported),
+            .passed
+        )
+
+        var disabled = existingUnsupported
+        disabled.enrichmentEnabled = false
+        XCTAssertEqual(
+            BrainLayerConfigValidator.validate(disabled, previousConfig: existingUnsupported),
+            .passed
+        )
+
+        var activation = BrainLayerConfig.defaultConfig
+        activation.enrichmentProvider = .openai
+        activation.enrichmentBackend = "openai"
+        XCTAssertEqual(
+            BrainLayerConfigValidator.validate(activation, previousConfig: .defaultConfig),
+            .failed("OpenAI cannot be activated because its runtime integration is unavailable.")
         )
     }
 }

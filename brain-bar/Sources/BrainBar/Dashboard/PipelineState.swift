@@ -889,7 +889,6 @@ extension DashboardFlowSummary {
                     activityWindowMinutes: ingress.activityWindowMinutes
                 ),
                 lastEventText: jsonlWatcherLastEventText(
-                    status: watcherStatus,
                     totalEvents: watcherTotal,
                     latestBucketCount: watcherValues.last ?? 0,
                     windowLabel: ingress.windowLabel
@@ -970,7 +969,6 @@ extension DashboardFlowSummary {
     }
 
     private func jsonlWatcherLastEventText(
-        status: DashboardFlowLaneStatus,
         totalEvents: Int,
         latestBucketCount: Int,
         windowLabel: String
@@ -978,7 +976,7 @@ extension DashboardFlowSummary {
         if totalEvents == 0 {
             return "No watcher-ingested chunks in \(windowLabel)"
         }
-        if latestBucketCount > 0 || status == .live {
+        if latestBucketCount > 0 {
             return "\(latestBucketCount) watcher-ingested chunks in latest ingest-time bucket"
         }
         return "\(totalEvents) watcher-ingested chunks in \(windowLabel)"
