@@ -106,7 +106,7 @@ enum BrainBarDashboardFixture {
     )
     static let watcherUnknownStats = makeStats(
         replayDebtBreakdown: readableReplayDebt,
-        watcherProcessProbeResult: .failure("fixture launchctl probe failed"),
+        watcherProcessProbeResult: .failure("fixture watcher process probe failed"),
         watcherRecentDistinctChunkCount: 0
     )
     static let watcherRunningNoRecentFlowStats = makeStats(
