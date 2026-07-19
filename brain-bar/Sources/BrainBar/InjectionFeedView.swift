@@ -22,33 +22,18 @@ final class InjectionFeedPresentationModel: ObservableObject {
 
         boundStore = store
         cancellables.removeAll()
-        let currentState = InjectionFeedPresentationState(
+        state = InjectionFeedPresentationState(
             events: store.events,
             degradationState: store.degradationState,
-            loadState: .loaded
+            loadState: store.loadState
         )
-        if !store.events.isEmpty || store.degradationState.isDegraded {
-            state = currentState
-        } else {
-            if state != .empty {
-                state = .empty
-            }
-            DispatchQueue.main.async { [weak self, weak store] in
-                guard let self, let store, self.boundStore === store else { return }
-                self.state = InjectionFeedPresentationState(
-                    events: store.events,
-                    degradationState: store.degradationState,
-                    loadState: .loaded
-                )
-            }
-        }
 
-        Publishers.CombineLatest(store.$events, store.$degradationState)
-            .map { events, degradationState in
+        Publishers.CombineLatest3(store.$events, store.$degradationState, store.$loadState)
+            .map { events, degradationState, loadState in
                 InjectionFeedPresentationState(
                     events: events,
                     degradationState: degradationState,
-                    loadState: .loaded
+                    loadState: loadState
                 )
             }
             .dropFirst()
@@ -90,6 +75,16 @@ struct InjectionFeedView: View {
         _filterText = .constant(fixture.filterText)
         _expandedBurstIDs = State(initialValue: fixture.expandedBurstIDs)
         _actionReceipt = State(initialValue: fixture.actionReceipt)
+    }
+
+    init(disconnectedAt now: Date) {
+        self.init(
+            fixture: InjectionFeedFixture(
+                events: [],
+                now: now,
+                connectionState: .disconnected
+            )
+        )
     }
 
     private let accentPalette: [Color] = [
@@ -168,13 +163,6 @@ struct InjectionFeedView: View {
                 ConversationLoadingOverlay(onClose: { loadingConversationChunkID = nil })
             }
         }
-        .overlay(alignment: .topTrailing) {
-            if presentationState.degradationState.isDegraded {
-                DegradationBadge(reason: presentationState.degradationState.reason)
-                    .padding(.top, 20)
-                    .padding(.trailing, 20)
-            }
-        }
         .overlay(alignment: .bottomTrailing) {
             if let actionReceipt {
                 actionReceiptBadge(actionReceipt)
@@ -230,8 +218,8 @@ struct InjectionFeedView: View {
     }
 
     private var filterChips: some View {
-        let activeFilter = InjectionTypeFilter(rawValue: typeFilterRaw) ?? .all
-        return Picker("Retrieval type", selection: $typeFilterRaw) {
+        let activeFilter = effectiveTypeFilter
+        return Picker("Retrieval type", selection: typeFilterBinding) {
             ForEach(InjectionTypeFilter.allCases, id: \.rawValue) { filter in
                 Text(filter.label).tag(filter.rawValue)
             }
@@ -401,7 +389,7 @@ struct InjectionFeedView: View {
             if isExpanded {
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(burst.events) { event in
-                        eventRow(event)
+                        eventRow(event, selectedResultChunkID: burst.selectedResultProvenance?.chunkID)
                     }
                 }
                 .id(Self.expandedBurstDetailsID(burstID: burst.id))
@@ -466,7 +454,7 @@ struct InjectionFeedView: View {
         .background(.regularMaterial)
     }
 
-    private func eventRow(_ event: InjectionEvent) -> some View {
+    private func eventRow(_ event: InjectionEvent, selectedResultChunkID: String?) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
                 Text(InjectionPresentation.shortTime(event.timestamp))
@@ -506,6 +494,10 @@ struct InjectionFeedView: View {
                         }
                         Text("Session \(event.sessionID)")
                         Text("Event ID \(event.id)")
+                        if !event.claudeConversationID.isEmpty {
+                            Text("Conversation \(event.claudeConversationID)")
+                        }
+                        Text("Mode \(event.mode)")
                         Text("\(event.uniqueChunkIDs.count) results")
                         Text("\(event.tokenCount) tok")
                     }
@@ -519,7 +511,7 @@ struct InjectionFeedView: View {
                     // Previously the chunk list hid behind a low-weight "Show hits"
                     // link, so an expanded "3-chunk" burst showed only one.
                     if !event.uniqueChunkIDs.isEmpty {
-                        chunkList(for: event)
+                        chunkList(for: event, selectedResultChunkID: selectedResultChunkID)
                     }
                 }
 
@@ -594,27 +586,46 @@ struct InjectionFeedView: View {
         )
     }
 
-    private func chunkList(for event: InjectionEvent) -> some View {
+    private func chunkList(for event: InjectionEvent, selectedResultChunkID: String?) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(event.uniqueChunkIDs.enumerated()), id: \.offset) { _, chunkID in
+                let resultChunk = chunk(for: chunkID, event: event)
+                let provenance = InjectionPresentation.ResultProvenance(
+                    chunkID: chunkID,
+                    eventID: event.id,
+                    sessionID: event.sessionID,
+                    timestamp: event.timestamp,
+                    chunk: resultChunk
+                )
                 Button {
                     openConversation(
                         chunkID: chunkID,
-                        title: chunk(for: chunkID, event: event)?.kind.modalTitle ?? event.modalTitle
+                        title: resultChunk?.kind.modalTitle ?? event.modalTitle
                     )
                 } label: {
-                    HStack(spacing: 8) {
+                    HStack(alignment: .top, spacing: 8) {
                         Circle()
-                            .fill(color(for: chunk(for: chunkID, event: event)?.kind ?? .other))
+                            .fill(color(for: resultChunk?.kind ?? .other))
                             .frame(width: 8, height: 8)
-                        VStack(alignment: .leading, spacing: 2) {
+                            .padding(.top, 4)
+                        VStack(alignment: .leading, spacing: 5) {
                             Text(chunkListTitle(chunkID: chunkID, event: event))
                                 .font(.system(size: 11, weight: .medium))
-                                .lineLimit(1)
-                            Text("ID \(chunkID)")
-                                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
+                                .lineLimit(2)
+                            WrappingPillLayout(spacing: 6, lineSpacing: 5) {
+                                ForEach(
+                                    provenance.expandedMetadataLabels(
+                                        isSelected: chunkID == selectedResultChunkID
+                                    ),
+                                    id: \.self
+                                ) { label in
+                                    Text(label)
+                                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(2)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         Spacer()
                         Text("Open thread")
@@ -866,16 +877,12 @@ struct InjectionFeedView: View {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         let copied = pasteboard.setString(command, forType: .string)
+        actionReceipt = .copyResult(copied: copied)
         guard copied else {
-            actionReceipt = InjectionActionReceipt(
-                kind: .failure,
-                message: "Couldn’t copy the resume command"
-            )
             return
         }
 
         let update = { copiedContinuationBurstID = burst.id }
-        actionReceipt = InjectionActionReceipt(kind: .success, message: "Resume command copied")
         if reduceMotion {
             update()
         } else {
@@ -926,6 +933,11 @@ struct InjectionFeedView: View {
         fixture?.typeFilter ?? InjectionTypeFilter(rawValue: typeFilterRaw) ?? .all
     }
 
+    private var typeFilterBinding: Binding<String> {
+        guard let fixture else { return $typeFilterRaw }
+        return .constant(fixture.typeFilter.rawValue)
+    }
+
     private func makePresentation(now: Date = Date()) -> InjectionPresentation.Snapshot {
         let effectiveNow = fixture?.now ?? now
         return InjectionPresentation.snapshot(
@@ -958,10 +970,7 @@ struct InjectionFeedView: View {
     private func openConversation(chunkID: String, title: String) {
         guard loadingConversationChunkID == nil else { return }
         guard let store else {
-            actionReceipt = InjectionActionReceipt(
-                kind: .failure,
-                message: "Thread unavailable in this disconnected snapshot"
-            )
+            actionReceipt = .disconnectedThread
             return
         }
         loadingConversationChunkID = chunkID
@@ -971,15 +980,12 @@ struct InjectionFeedView: View {
                 guard loadingConversationChunkID == chunkID else { return }
                 conversationSelection.open(conversation, title: title)
                 loadingConversationChunkID = nil
-                actionReceipt = InjectionActionReceipt(kind: .success, message: "Thread opened")
+                actionReceipt = .threadOpenResult(errorDescription: nil)
             } catch {
                 if loadingConversationChunkID == chunkID {
                     loadingConversationChunkID = nil
                 }
-                actionReceipt = InjectionActionReceipt(
-                    kind: .failure,
-                    message: "Couldn’t open thread · \(error.localizedDescription)"
-                )
+                actionReceipt = .threadOpenResult(errorDescription: error.localizedDescription)
             }
         }
     }

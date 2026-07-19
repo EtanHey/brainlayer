@@ -117,7 +117,7 @@ struct BrainBarWindowRootView: View {
         if let store = runtime.injectionStore {
             BrainBarInjectionTab(store: store, isActive: selectedTab == .injections && windowObserver.isWindowVisible)
         } else {
-            BrainBarLoadingView(title: "Injections", subtitle: BrainBarPlaceholderCopy.injectionFeedNotWired)
+            InjectionFeedView(disconnectedAt: Date())
         }
     }
 

@@ -79,6 +79,27 @@ struct InjectionActionReceipt: Equatable {
 
     let kind: Kind
     let message: String
+
+    static func copyResult(copied: Bool) -> InjectionActionReceipt {
+        copied
+            ? InjectionActionReceipt(kind: .success, message: "Resume command copied")
+            : InjectionActionReceipt(kind: .failure, message: "Couldn’t copy the resume command")
+    }
+
+    static func threadOpenResult(errorDescription: String?) -> InjectionActionReceipt {
+        guard let errorDescription else {
+            return InjectionActionReceipt(kind: .success, message: "Thread opened")
+        }
+        return InjectionActionReceipt(
+            kind: .failure,
+            message: "Couldn’t open thread · \(errorDescription)"
+        )
+    }
+
+    static let disconnectedThread = InjectionActionReceipt(
+        kind: .failure,
+        message: "Thread unavailable in this disconnected snapshot"
+    )
 }
 
 struct InjectionFeedFixture {
@@ -134,6 +155,45 @@ struct InjectionPresentation {
         let burstCount: Int
     }
 
+    struct ResultProvenance: Equatable, Identifiable {
+        let chunkID: String
+        let eventID: Int64
+        let sessionID: String
+        let timestamp: String
+        let chunk: InjectionChunk?
+
+        var id: String { chunkID }
+        var source: String {
+            chunk?.source.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+        var sourceFile: String {
+            chunk?.sourceFile.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+        var projectPath: String {
+            chunk?.claudeProjectPath.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+        var contentType: String {
+            chunk?.contentType.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+        var tags: [String] {
+            chunk?.tags ?? []
+        }
+
+        func expandedMetadataLabels(isSelected: Bool) -> [String] {
+            var labels: [String] = []
+            if isSelected {
+                labels.append("Selected result")
+            }
+            labels.append("ID \(chunkID)")
+            labels.append("Source \(source.isEmpty ? "unavailable" : source)")
+            labels.append("Source file \(sourceFile.isEmpty ? "unavailable" : sourceFile)")
+            labels.append("Project \(projectPath.isEmpty ? "unavailable" : projectPath)")
+            labels.append("Type \(contentType.isEmpty ? "unavailable" : contentType)")
+            labels.append("Tags \(tags.isEmpty ? "unavailable" : tags.joined(separator: ", "))")
+            return labels
+        }
+    }
+
     struct Burst: Equatable, Identifiable {
         let sessionID: String
         let claudeConversationID: String
@@ -156,11 +216,32 @@ struct InjectionPresentation {
         var selectedResultSummary: String {
             selectedResultChunk?.displayText ?? summaryTitle
         }
+        var resultProvenance: [ResultProvenance] {
+            var seen = Set<String>()
+            var results: [ResultProvenance] = []
+            for event in events {
+                for chunkID in event.uniqueChunkIDs where seen.insert(chunkID).inserted {
+                    results.append(
+                        ResultProvenance(
+                            chunkID: chunkID,
+                            eventID: event.id,
+                            sessionID: event.sessionID,
+                            timestamp: event.timestamp,
+                            chunk: event.chunks.first { $0.id == chunkID }
+                        )
+                    )
+                }
+            }
+            return results
+        }
+        var selectedResultProvenance: ResultProvenance? {
+            resultProvenance.first
+        }
         var additionalResultPreviews: [InjectionChunk] {
-            let selectedID = selectedResultChunk?.id
             return Array(
-                InjectionPresentation.previewChunks(for: events, limit: 3)
-                    .filter { $0.id != selectedID }
+                resultProvenance
+                    .dropFirst()
+                    .compactMap(\.chunk)
                     .prefix(2)
             )
         }
@@ -169,24 +250,27 @@ struct InjectionPresentation {
             return max(resultCount - selectedCount - additionalResultPreviews.count, 0)
         }
         var sourceLabel: String {
-            events.first?.primaryKind.label ?? "Source unavailable"
+            guard let selectedResultChunk else { return "Source unavailable" }
+            let source = selectedResultChunk.source.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !source.isEmpty else { return selectedResultChunk.kind.label }
+            return "\(selectedResultChunk.kind.label) · \(source)"
         }
         var projectLabel: String {
-            claudeProjectPath.isEmpty ? "Project unavailable" : claudeProjectPath
+            guard let selectedResultChunk else { return "Project unavailable" }
+            let projectPath = selectedResultChunk.claudeProjectPath
+            return projectPath.isEmpty ? "Project unavailable" : projectPath
         }
         var resultCount: Int {
-            events.reduce(into: Set<String>()) { result, event in
-                result.formUnion(event.uniqueChunkIDs)
-            }.count
+            resultProvenance.count
         }
         var timestampLabel: String {
             InjectionPresentation.burstRangeText(start: startDate, end: endDate)
         }
         private var selectedResultChunk: InjectionChunk? {
-            InjectionPresentation.previewChunks(for: events, limit: 1).first
+            selectedResultProvenance?.chunk
         }
         var claudeProjectPath: String {
-            events.lazy.map(\.claudeProjectPath).first { !$0.isEmpty } ?? ""
+            selectedResultProvenance?.projectPath ?? ""
         }
 
         var summaryTitle: String {

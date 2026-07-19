@@ -43,12 +43,86 @@ final class InjectionSignalDensityContractTests: XCTestCase {
 
         XCTAssertEqual(burst.queryTitle, event.query)
         XCTAssertEqual(burst.selectedResultSummary, "Routing decision memory")
-        XCTAssertEqual(burst.sourceLabel, "Realtime Capture")
+        XCTAssertEqual(burst.sourceLabel, "Realtime Capture · claude_code")
         XCTAssertEqual(burst.projectLabel, "/Users/example/project")
         XCTAssertEqual(burst.resultCount, 2)
         XCTAssertEqual(burst.additionalResultPreviews.map(\.id), ["chunk-secondary"])
         XCTAssertEqual(burst.remainingCollapsedResultCount, 0)
         XCTAssertFalse(burst.timestampLabel.isEmpty)
+    }
+
+    func testBurstProvenanceStaysPairedWithEachResult() throws {
+        let now = isoDate("2026-07-19T10:00:00Z")
+        let selected = InjectionChunk(
+            id: "selected-chunk",
+            content: "Selected result",
+            summary: "Selected result summary",
+            source: "claude_code",
+            sourceFile: "",
+            tags: ["selected", "truth"],
+            contentType: "memory"
+        )
+        let later = InjectionChunk(
+            id: "later-chunk",
+            content: "Later result",
+            summary: "Later result summary",
+            source: "mcp",
+            sourceFile: "/Users/other/project/.claude/projects/-Users-other-project/session.jsonl",
+            tags: ["later"],
+            contentType: "assistant_text"
+        )
+        let events = [
+            InjectionEvent(
+                id: 2,
+                sessionID: "same-session",
+                timestamp: "2026-07-19T09:59:00Z",
+                query: "same trigger",
+                chunkIDs: [selected.id],
+                tokenCount: 10,
+                chunks: [selected]
+            ),
+            InjectionEvent(
+                id: 1,
+                sessionID: "same-session",
+                timestamp: "2026-07-19T09:58:00Z",
+                query: "same trigger",
+                chunkIDs: [later.id],
+                tokenCount: 9,
+                chunks: [later]
+            ),
+        ]
+
+        let burst = try XCTUnwrap(
+            InjectionPresentation.snapshot(events: events, filterText: "", now: now).bursts.first
+        )
+        let selectedProvenance = try XCTUnwrap(burst.selectedResultProvenance)
+
+        XCTAssertEqual(burst.projectLabel, "Project unavailable")
+        XCTAssertEqual(selectedProvenance.chunkID, selected.id)
+        XCTAssertEqual(selectedProvenance.source, "claude_code")
+        XCTAssertEqual(selectedProvenance.sourceFile, "")
+        XCTAssertEqual(selectedProvenance.projectPath, "")
+        XCTAssertEqual(selectedProvenance.contentType, "memory")
+        XCTAssertEqual(selectedProvenance.tags, ["selected", "truth"])
+        XCTAssertEqual(
+            selectedProvenance.expandedMetadataLabels(isSelected: true),
+            [
+                "Selected result",
+                "ID selected-chunk",
+                "Source claude_code",
+                "Source file unavailable",
+                "Project unavailable",
+                "Type memory",
+                "Tags selected, truth",
+            ]
+        )
+        XCTAssertEqual(
+            burst.resultProvenance.map { "\($0.chunkID)|\($0.source)|\($0.projectPath)" },
+            [
+                "selected-chunk|claude_code|",
+                "later-chunk|mcp|/Users/other/project",
+            ]
+        )
     }
 
     func testPresentationModelStartsInLoadingStateInsteadOfEmptyState() {
@@ -110,6 +184,32 @@ final class InjectionSignalDensityContractTests: XCTestCase {
                 filterActive: false
             ),
             .degraded(reason: "read failed", retainsContent: false)
+        )
+    }
+
+    func testActionReceiptsExposeSuccessFailureAndDisconnectedOutcomes() {
+        XCTAssertEqual(
+            InjectionActionReceipt.copyResult(copied: true),
+            InjectionActionReceipt(kind: .success, message: "Resume command copied")
+        )
+        XCTAssertEqual(
+            InjectionActionReceipt.copyResult(copied: false),
+            InjectionActionReceipt(kind: .failure, message: "Couldn’t copy the resume command")
+        )
+        XCTAssertEqual(
+            InjectionActionReceipt.threadOpenResult(errorDescription: nil),
+            InjectionActionReceipt(kind: .success, message: "Thread opened")
+        )
+        XCTAssertEqual(
+            InjectionActionReceipt.threadOpenResult(errorDescription: "database locked"),
+            InjectionActionReceipt(kind: .failure, message: "Couldn’t open thread · database locked")
+        )
+        XCTAssertEqual(
+            InjectionActionReceipt.disconnectedThread,
+            InjectionActionReceipt(
+                kind: .failure,
+                message: "Thread unavailable in this disconnected snapshot"
+            )
         )
     }
 
@@ -176,6 +276,17 @@ final class InjectionSignalDensityContractTests: XCTestCase {
         XCTAssertFalse(source.contains("docs.local/wave3-qa"))
     }
 
+    func testWindowRootRoutesUnavailableInjectionStoreToDisconnectedFeed() throws {
+        let source = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
+
+        XCTAssertTrue(source.contains("InjectionFeedView(disconnectedAt: Date())"))
+        XCTAssertFalse(
+            source.contains(
+                "BrainBarLoadingView(title: \"Injections\", subtitle: BrainBarPlaceholderCopy.injectionFeedNotWired)"
+            )
+        )
+    }
+
     @MainActor
     func testRendersOverviewExpandedEmptyAndDegradedFixtureStates() throws {
         guard let renderDirectory = ProcessInfo.processInfo.environment["BRAINBAR_RENDER_DIR"],
@@ -204,6 +315,14 @@ final class InjectionSignalDensityContractTests: XCTestCase {
             (
                 "p3-injections-empty.png",
                 InjectionFeedFixture(events: [], now: now)
+            ),
+            (
+                "p3-injections-disconnected.png",
+                InjectionFeedFixture(
+                    events: [],
+                    now: now,
+                    connectionState: .disconnected
+                )
             ),
             (
                 "p3-injections-degraded.png",
