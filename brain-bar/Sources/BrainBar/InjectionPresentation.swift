@@ -217,19 +217,26 @@ struct InjectionPresentation {
             selectedResultChunk?.displayText ?? "Result unavailable"
         }
         var resultProvenance: [ResultProvenance] {
-            var seen = Set<String>()
+            var resultIndexByChunkID: [String: Int] = [:]
             var results: [ResultProvenance] = []
             for event in events {
-                for chunkID in event.uniqueChunkIDs where seen.insert(chunkID).inserted {
-                    results.append(
-                        ResultProvenance(
-                            chunkID: chunkID,
-                            eventID: event.id,
-                            sessionID: event.sessionID,
-                            timestamp: event.timestamp,
-                            chunk: event.chunks.first { $0.id == chunkID }
-                        )
+                for chunkID in event.uniqueChunkIDs {
+                    let chunk = event.chunks.first { $0.id == chunkID }
+                    let provenance = ResultProvenance(
+                        chunkID: chunkID,
+                        eventID: event.id,
+                        sessionID: event.sessionID,
+                        timestamp: event.timestamp,
+                        chunk: chunk
                     )
+                    if let existingIndex = resultIndexByChunkID[chunkID] {
+                        if results[existingIndex].chunk == nil, chunk != nil {
+                            results[existingIndex] = provenance
+                        }
+                        continue
+                    }
+                    resultIndexByChunkID[chunkID] = results.count
+                    results.append(provenance)
                 }
             }
             return results

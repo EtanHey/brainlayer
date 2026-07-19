@@ -80,6 +80,50 @@ final class InjectionSignalDensityContractTests: XCTestCase {
         XCTAssertEqual(burst.selectedResultSummary, "Result unavailable")
     }
 
+    func testRepeatedResultUpgradesMissingProvenanceWhenLaterEventSuppliesChunk() throws {
+        let now = isoDate("2026-07-19T10:00:00Z")
+        let recovered = InjectionChunk(
+            id: "repeated-chunk",
+            content: "Recovered content from a later event in the burst",
+            summary: "Recovered result summary",
+            source: "claude_code",
+            sourceFile: "/Users/example/project/.claude/projects/-Users-example-project/session.jsonl",
+            tags: ["recovered"],
+            contentType: "memory"
+        )
+        let events = [
+            InjectionEvent(
+                id: 52,
+                sessionID: "session-repeated-result",
+                timestamp: "2026-07-19T09:59:00Z",
+                query: "show repeated result truth",
+                chunkIDs: [recovered.id],
+                tokenCount: 10,
+                chunks: []
+            ),
+            InjectionEvent(
+                id: 51,
+                sessionID: "session-repeated-result",
+                timestamp: "2026-07-19T09:58:30Z",
+                query: "show repeated result truth",
+                chunkIDs: [recovered.id],
+                tokenCount: 9,
+                chunks: [recovered]
+            ),
+        ]
+
+        let burst = try XCTUnwrap(
+            InjectionPresentation.snapshot(events: events, filterText: "", now: now).bursts.first
+        )
+        let provenance = try XCTUnwrap(burst.selectedResultProvenance)
+
+        XCTAssertEqual(burst.resultCount, 1)
+        XCTAssertEqual(provenance.eventID, 51)
+        XCTAssertEqual(provenance.chunk, recovered)
+        XCTAssertEqual(burst.selectedResultSummary, "Recovered result summary")
+        XCTAssertEqual(burst.projectLabel, "/Users/example/project")
+    }
+
     func testBurstProvenanceStaysPairedWithEachResult() throws {
         let now = isoDate("2026-07-19T10:00:00Z")
         let selected = InjectionChunk(
