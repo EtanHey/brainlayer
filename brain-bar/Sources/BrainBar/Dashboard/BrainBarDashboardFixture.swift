@@ -120,12 +120,21 @@ enum BrainBarDashboardFixture {
         watcherRecentDistinctChunkCount: 0
     )
 
+    static func makeStats(activityWindowMinutes: Int) -> DashboardStats {
+        makeStats(
+            replayDebtBreakdown: readableReplayDebt,
+            activityWindowMinutes: activityWindowMinutes
+        )
+    }
+
     private static func makeStats(
         replayDebtBreakdown: BrainDatabase.ReplayDebtBreakdown,
+        activityWindowMinutes: Int = 60,
         watcherProcessProbeResult: WatcherProcessProbeResult = .running(pid: 4242),
         watcherRecentDistinctChunkCount: Int = 14
     ) -> DashboardStats {
-        DashboardStats(
+        let windowScale = max(activityWindowMinutes / 60, 1)
+        return DashboardStats(
             chunkCount: 297_412,
             enrichedChunkCount: 188_204,
             failedEnrichmentCount: 1_204,
@@ -134,13 +143,13 @@ enum BrainBarDashboardFixture {
             enrichmentPercent: 63.3,
             enrichmentRatePerMinute: 11.4,
             databaseSizeBytes: 8_120_000_000,
-            recentActivityBuckets: [3, 5, 2, 8, 6, 4, 9, 7, 5, 6, 8, 4],
-            recentAgentWriteBuckets: [3, 5, 2, 8, 6, 4, 9, 7, 5, 6, 8, 4],
-            recentWatcherWriteBuckets: [1, 0, 2, 1, 0, 3, 1, 2, 0, 1, 2, 1],
-            recentEnrichmentBuckets: [4, 6, 3, 7, 5, 8, 6, 9, 7, 5, 8, 6],
+            recentActivityBuckets: [3, 5, 2, 8, 6, 4, 9, 7, 5, 6, 8, 4].map { $0 * windowScale },
+            recentAgentWriteBuckets: [3, 5, 2, 8, 6, 4, 9, 7, 5, 6, 8, 4].map { $0 * windowScale },
+            recentWatcherWriteBuckets: [1, 0, 2, 1, 0, 3, 1, 2, 0, 1, 2, 1].map { $0 * windowScale },
+            recentEnrichmentBuckets: [4, 6, 3, 7, 5, 8, 6, 9, 7, 5, 8, 6].map { $0 * windowScale },
             recentWriteFiveMinuteCount: 18,
             recentEnrichmentFiveMinuteCount: 22,
-            activityWindowMinutes: 60,
+            activityWindowMinutes: activityWindowMinutes,
             bucketCount: 12,
             liveWindowMinutes: 1,
             lastWriteAt: nil,

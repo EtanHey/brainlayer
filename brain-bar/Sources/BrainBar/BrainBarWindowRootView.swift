@@ -2120,6 +2120,7 @@ enum BrainBarPipelinePanelPreview {
         fetchedAt: Date = Date(),
         watcherText: String = "12 files",
         signalCoverageExpanded: Bool = true,
+        replayDebtExpanded: Bool = false,
         selectedTimeframe: PipelineTimeframe = .live
     ) -> AnyView {
         AnyView(
@@ -2129,6 +2130,7 @@ enum BrainBarPipelinePanelPreview {
                 fetchedAt: fetchedAt,
                 watcherText: watcherText,
                 signalCoverageExpanded: signalCoverageExpanded,
+                replayDebtExpanded: replayDebtExpanded,
                 selectedTimeframe: selectedTimeframe
             )
         )
@@ -2145,6 +2147,7 @@ private struct BrainBarPipelinePanelPreviewView: View {
     let containerSize: CGSize
     let fetchedAt: Date
     let watcherText: String
+    let replayDebtExpanded: Bool
     @State private var signalCoverageExpanded: Bool
     @State private var vectorSignalDetailExpanded = false
     @State private var selectedTimeframe: PipelineTimeframe
@@ -2155,12 +2158,14 @@ private struct BrainBarPipelinePanelPreviewView: View {
         fetchedAt: Date,
         watcherText: String,
         signalCoverageExpanded: Bool,
+        replayDebtExpanded: Bool,
         selectedTimeframe: PipelineTimeframe
     ) {
         self.stats = stats
         self.containerSize = containerSize
         self.fetchedAt = fetchedAt
         self.watcherText = watcherText
+        self.replayDebtExpanded = replayDebtExpanded
         _signalCoverageExpanded = State(initialValue: signalCoverageExpanded)
         _selectedTimeframe = State(initialValue: selectedTimeframe)
     }
@@ -2226,7 +2231,8 @@ private struct BrainBarPipelinePanelPreviewView: View {
                     censusText: DashboardMetricFormatter.absoluteTimeString(fetchedAt),
                     coverageText: "\(Int(stats.enrichmentPercent.rounded()))% enriched",
                     watcherText: watcherText,
-                    compact: layout.compactCards
+                    compact: layout.compactCards,
+                    replayDebtExpanded: replayDebtExpanded
                 )
             }
             .padding(layout.cardPadding)
@@ -2261,7 +2267,25 @@ private struct BrainBarQueueRail: View {
     let coverageText: String
     let watcherText: String
     let compact: Bool
-    @State private var replayDebtExpanded = false
+    @State private var replayDebtExpanded: Bool
+
+    init(
+        summary: DashboardQueueSummary,
+        replayDebtBreakdown: BrainDatabase.ReplayDebtBreakdown,
+        censusText: String,
+        coverageText: String,
+        watcherText: String,
+        compact: Bool,
+        replayDebtExpanded: Bool = false
+    ) {
+        self.summary = summary
+        self.replayDebtBreakdown = replayDebtBreakdown
+        self.censusText = censusText
+        self.coverageText = coverageText
+        self.watcherText = watcherText
+        self.compact = compact
+        _replayDebtExpanded = State(initialValue: replayDebtExpanded)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 6 : 8) {

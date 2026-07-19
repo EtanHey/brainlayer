@@ -178,8 +178,29 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             (.day, "dashboard-chart-window-24h"),
         ]
         for (timeframe, name) in windows {
+            let windowedStats = BrainBarDashboardFixture.makeStats(
+                activityWindowMinutes: timeframe.windowMinutes
+            )
+            let windowedSummary = DashboardFlowSummary.derive(
+                daemon: nil,
+                stats: windowedStats,
+                now: BrainBarDashboardFixture.fetchedAt
+            )
+            XCTAssertEqual(
+                windowedSummary.allCommits.windowLabel,
+                DashboardMetricFormatter.windowLabel(minutes: timeframe.windowMinutes)
+            )
+            XCTAssertTrue(
+                windowedSummary.allCommits.volumeText.hasSuffix("in \(timeframe.windowMinutes == 180 ? "3h" : "24h")"),
+                "Chart footer count must follow the selected window instead of retaining a 1h anchor."
+            )
+            XCTAssertNotEqual(
+                windowedSummary.allCommits.rateText,
+                "0.0/min",
+                "A non-empty wider-window fixture must not render a false zero headline rate."
+            )
             let view = BrainBarPipelinePanelPreview.make(
-                stats: BrainBarDashboardFixture.stats,
+                stats: windowedStats,
                 containerSize: CGSize(width: 1_120, height: 1_420),
                 fetchedAt: BrainBarDashboardFixture.fetchedAt,
                 selectedTimeframe: timeframe
@@ -223,6 +244,32 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
         XCTAssertGreaterThan(tooltipPNG.count, 5_000, "dashboard tooltip PNG looks empty")
         XCTAssertGreaterThan(distinctSampledColorCount(in: tooltipBitmap), 16, "dashboard tooltip render is too flat")
         print("[brainbar-render] wrote \(tooltipURL.path) (\(tooltipPNG.count) bytes)")
+    }
+
+    @MainActor
+    func testDashboardReplayDebtDisclosureRendersExpanded() throws {
+        try XCTSkipIf(
+            shouldSkipDisplayDependentRenderInCI,
+            "Dashboard PNG render verification is display-dependent; set BRAINBAR_RENDER_IN_CI=1 to run in CI."
+        )
+
+        let view = BrainBarPipelinePanelPreview.make(
+            stats: BrainBarDashboardFixture.partialReplayDebtStats,
+            containerSize: CGSize(width: 1_120, height: 1_420),
+            fetchedAt: BrainBarDashboardFixture.fetchedAt,
+            signalCoverageExpanded: false,
+            replayDebtExpanded: true
+        )
+        let (png, bitmap) = try renderPNG(view, size: NSSize(width: 1_120, height: 1_700))
+        let url = try writePNG(png, name: "dashboard-replay-debt-expanded")
+
+        XCTAssertGreaterThan(png.count, 5_000, "expanded replay-debt PNG looks empty")
+        XCTAssertGreaterThan(
+            distinctSampledColorCount(in: bitmap),
+            16,
+            "expanded replay-debt render is too flat"
+        )
+        print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
     }
 
     @MainActor
