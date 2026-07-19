@@ -118,6 +118,29 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
     }
 
     @MainActor
+    func testDashboardOperatorStatesRenderDeterministically() throws {
+        try XCTSkipIf(
+            shouldSkipDisplayDependentRenderInCI,
+            "Dashboard PNG render verification is display-dependent; set BRAINBAR_RENDER_IN_CI=1 to run in CI."
+        )
+
+        for state in BrainBarDashboardFixture.OperatorState.allCases {
+            let collector = BrainBarDashboardFixture.makeCollector(state)
+            let view = BrainBarDashboardPreview.make(collector: collector)
+            let size = state == .loading
+                ? NSSize(width: 960, height: 700)
+                : NSSize(width: 960, height: 1_820)
+            let (png, bitmap) = try renderPNG(view, size: size)
+            let name = "dashboard-state-\(String(describing: state))"
+            let url = try writePNG(png, name: name)
+
+            XCTAssertGreaterThan(png.count, 5_000, "\(name) PNG looks empty")
+            XCTAssertGreaterThan(distinctSampledColorCount(in: bitmap), 16, "\(name) render is too flat")
+            print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
+        }
+    }
+
+    @MainActor
     func testOperatorStateFixturesStayIsolatedFromProductionDatabaseAndProcessServices() throws {
         let collector = BrainBarDashboardFixture.makeCollector()
         let fields = Dictionary(uniqueKeysWithValues: Mirror(reflecting: collector).children.compactMap { child in
@@ -147,11 +170,16 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
         XCTAssertTrue(fixtureSource.contains("case live"), "Snapshot fixtures must cover LIVE.")
         XCTAssertTrue(fixtureSource.contains("case stale"), "Snapshot fixtures must cover STALE.")
         XCTAssertTrue(fixtureSource.contains("case error"), "Snapshot fixtures must cover ERROR with last-good data.")
+        XCTAssertTrue(
+            fixtureSource.contains("case partialReplayDebt"),
+            "Snapshot fixtures must cover known replay components plus an unreadable input."
+        )
 
         let loading = BrainBarDashboardFixture.makeCollector(.loading)
         let live = BrainBarDashboardFixture.makeCollector(.live)
         let stale = BrainBarDashboardFixture.makeCollector(.stale)
         let error = BrainBarDashboardFixture.makeCollector(.error)
+        let partialReplayDebt = BrainBarDashboardFixture.makeCollector(.partialReplayDebt)
         XCTAssertEqual(loading.snapshotFreshnessState, .loading)
         XCTAssertEqual(live.snapshotFreshnessState, .live(ageSeconds: 0))
         XCTAssertEqual(stale.snapshotFreshnessState, .stale(ageSeconds: 61))
@@ -161,6 +189,11 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
         )
         XCTAssertNotNil(error.lastDataFetchedAt)
         XCTAssertEqual(error.lastFetchError, "Fixture fetch failed")
+        XCTAssertTrue(partialReplayDebt.stats.replayDebtBreakdown.isPartial)
+        XCTAssertGreaterThan(partialReplayDebt.stats.replayDebtBreakdown.pendingStores.snapshot.depth, 0)
+        XCTAssertGreaterThan(partialReplayDebt.stats.replayDebtBreakdown.durableQueue.snapshot.depth, 0)
+        XCTAssertGreaterThan(partialReplayDebt.stats.replayDebtBreakdown.repositoryFallback.snapshot.depth, 0)
+        XCTAssertFalse(partialReplayDebt.stats.replayDebtBreakdown.durableQueue.readability.isReadable)
     }
 
     // MARK: - Render helpers
