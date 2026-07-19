@@ -2,6 +2,56 @@ import XCTest
 @testable import BrainBar
 
 final class BrainLayerConfigTests: XCTestCase {
+    func testProviderAvailabilityOnlyExposesRuntimeWiredChoices() {
+        XCTAssertEqual(BrainLayerEnrichmentProvider.selectableCases, [.gemini])
+        XCTAssertNil(BrainLayerEnrichmentProvider.gemini.unavailableReason)
+        XCTAssertEqual(
+            BrainLayerEnrichmentProvider.openai.unavailableReason,
+            "Runtime integration is not available in this build."
+        )
+        XCTAssertEqual(
+            BrainLayerEnrichmentProvider.anthropic.unavailableReason,
+            "Runtime integration is not available in this build."
+        )
+    }
+
+    func testLaunchctlProbeDistinguishesMissingJobFromProbeFailure() {
+        let missing = BrainLayerLaunchdStatusProvider(
+            commandRunner: { _ in
+                BrainLayerLaunchdCommandResult(
+                    terminationStatus: 113,
+                    output: "Could not find service com.brainlayer.watch"
+                )
+            },
+            uidProvider: { 501 }
+        )
+        XCTAssertEqual(missing.sample()[.watch], .unloaded)
+
+        let failed = BrainLayerLaunchdStatusProvider(
+            commandRunner: { _ in
+                BrainLayerLaunchdCommandResult(
+                    terminationStatus: 1,
+                    output: "operation timed out"
+                )
+            },
+            uidProvider: { 501 }
+        )
+        XCTAssertEqual(failed.sample()[.watch], .probeError("launchctl exited 1"))
+    }
+
+    func testSecretDescriptionsStayRedacted() {
+        let secret = "super-secret-fixture-value"
+        let value = BrainLayerGoogleAPIKey.plain(secret)
+        var config = BrainLayerConfig.defaultConfig
+        config.googleAPIKey = value
+
+        XCTAssertFalse(String(describing: value).contains(secret))
+        XCTAssertFalse(String(reflecting: value).contains(secret))
+        XCTAssertFalse(String(describing: config).contains(secret))
+        XCTAssertFalse(String(reflecting: config).contains(secret))
+        XCTAssertEqual(String(describing: value), "Stored in config file")
+    }
+
     func testDefaultConfigURLUsesUnifiedBrainLayerEnvPath() {
         let home = URL(fileURLWithPath: "/Users/example", isDirectory: true)
 
@@ -127,5 +177,21 @@ final class BrainLayerConfigTests: XCTestCase {
         XCTAssertTrue(content.contains("BRAINLAYER_ENRICH_BACKEND=gemini"))
         XCTAssertTrue(content.contains("BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED=1"))
         XCTAssertTrue(content.contains("BRAINLAYER_LAUNCHD_DRAIN_ENABLED=1"))
+    }
+
+    func testValidatorRejectsUnavailableProviderAndEmptyBackend() {
+        var unsupported = BrainLayerConfig.defaultConfig
+        unsupported.enrichmentProvider = .openai
+        XCTAssertEqual(
+            BrainLayerConfigValidator.validate(unsupported),
+            .failed("OpenAI cannot be activated because its runtime integration is unavailable.")
+        )
+
+        var missingBackend = BrainLayerConfig.defaultConfig
+        missingBackend.enrichmentBackend = "   "
+        XCTAssertEqual(
+            BrainLayerConfigValidator.validate(missingBackend),
+            .failed("Enrichment backend is required.")
+        )
     }
 }

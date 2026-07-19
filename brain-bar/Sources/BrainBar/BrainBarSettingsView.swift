@@ -9,18 +9,28 @@ final class BrainBarSettingsViewModel: ObservableObject {
     @Published var backendDraft: String
     @Published var errorMessage: String?
     @Published var isRefreshingLaunchdStatus = false
+    @Published private(set) var activeRuntimeObservation: BrainLayerActiveRuntimeObservation
+    @Published private(set) var lastSaveReceipt: BrainLayerSettingsSaveReceipt?
 
     private let store: BrainLayerConfigStore
     private let launchdStatusProvider: any BrainLayerLaunchdStatusSampling
+    private let runtimeStatusProvider: any BrainLayerActiveRuntimeSampling
+    private let now: @Sendable () -> Date
+    private var previousConfigForLastSaveReceipt: BrainLayerConfig?
 
     init(
         store: BrainLayerConfigStore = BrainLayerConfigStore(),
         launchdStatusProvider: any BrainLayerLaunchdStatusSampling = BrainLayerLaunchdStatusProvider(),
+        runtimeStatusProvider: any BrainLayerActiveRuntimeSampling = UnknownBrainLayerActiveRuntimeProvider(),
         initialLaunchdStates: [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState] = [:],
-        refreshStatusOnLoad: Bool = true
+        refreshStatusOnLoad: Bool = true,
+        now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.store = store
         self.launchdStatusProvider = launchdStatusProvider
+        self.runtimeStatusProvider = runtimeStatusProvider
+        self.now = now
+        activeRuntimeObservation = runtimeStatusProvider.sample()
         do {
             let document = try store.loadDocument()
             config = document.config
@@ -51,6 +61,12 @@ final class BrainBarSettingsViewModel: ObservableObject {
     }
 
     func setEnrichmentProvider(_ provider: BrainLayerEnrichmentProvider) {
+        guard provider.isWiredToday else {
+            recordValidationFailure(
+                "\(provider.title) cannot be activated because its runtime integration is unavailable."
+            )
+            return
+        }
         updateConfig { nextConfig in
             nextConfig.enrichmentProvider = provider
             if provider == .gemini, nextConfig.enrichmentBackend.isEmpty {
@@ -61,7 +77,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
 
     func commitBackendDraft() {
         let backend = backendDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !backend.isEmpty, backend != config.enrichmentBackend else {
+        guard backend != config.enrichmentBackend else {
             backendDraft = config.enrichmentBackend
             return
         }
@@ -104,6 +120,8 @@ final class BrainBarSettingsViewModel: ObservableObject {
                 provider.sample()
             }.value
             applyLaunchdStates(states)
+            activeRuntimeObservation = runtimeStatusProvider.sample()
+            refreshLastSaveReceiptActiveState()
             isRefreshingLaunchdStatus = false
         }
     }
@@ -116,17 +134,176 @@ final class BrainBarSettingsViewModel: ObservableObject {
 
     @discardableResult
     private func updateConfig(_ apply: (inout BrainLayerConfig) -> Void) -> Bool {
+        let previousConfig = config
         var nextConfig = config
         apply(&nextConfig)
+        let validation = BrainLayerConfigValidator.validate(nextConfig)
+        guard validation == .passed else {
+            if case let .failed(message) = validation {
+                recordValidationFailure(message)
+            }
+            return false
+        }
+
+        let restartRequirements = Self.restartRequirements(from: previousConfig, to: nextConfig)
         do {
             try store.save(nextConfig)
+            let persistedConfig = try store.loadDocument().config
+            guard persistedConfig.persistedValuesEqual(to: nextConfig) else {
+                recordPostWriteValidationFailure(
+                    "Saved configuration did not validate on reload.",
+                    previousConfig: previousConfig,
+                    persistedConfig: persistedConfig
+                )
+                return false
+            }
+            activeRuntimeObservation = runtimeStatusProvider.sample()
             config = nextConfig
             backendDraft = nextConfig.enrichmentBackend
             errorMessage = nil
+            previousConfigForLastSaveReceipt = previousConfig
+            lastSaveReceipt = BrainLayerSettingsSaveReceipt(
+                configURL: store.configURL,
+                savedAt: now(),
+                fileUpdated: true,
+                validation: .passed,
+                servicesRequiringRestart: restartRequirements,
+                activeRuntimeState: activeRuntimeState(
+                    from: previousConfig,
+                    configured: nextConfig,
+                    requirements: restartRequirements
+                )
+            )
             return true
         } catch {
             errorMessage = error.localizedDescription
+            previousConfigForLastSaveReceipt = nil
+            lastSaveReceipt = BrainLayerSettingsSaveReceipt(
+                configURL: store.configURL,
+                savedAt: now(),
+                fileUpdated: false,
+                validation: .passed,
+                servicesRequiringRestart: [],
+                activeRuntimeState: .unknown("Configuration file was not updated.")
+            )
             return false
+        }
+    }
+
+    private func recordValidationFailure(_ message: String) {
+        errorMessage = nil
+        previousConfigForLastSaveReceipt = nil
+        lastSaveReceipt = BrainLayerSettingsSaveReceipt(
+            configURL: store.configURL,
+            savedAt: now(),
+            fileUpdated: false,
+            validation: .failed(message),
+            servicesRequiringRestart: [],
+            activeRuntimeState: .unknown("Configuration was not written.")
+        )
+    }
+
+    private func recordPostWriteValidationFailure(
+        _ message: String,
+        previousConfig: BrainLayerConfig,
+        persistedConfig: BrainLayerConfig
+    ) {
+        config = persistedConfig
+        backendDraft = persistedConfig.enrichmentBackend
+        onePasswordReference = persistedConfig.googleAPIKey.opReference
+        errorMessage = nil
+        activeRuntimeObservation = runtimeStatusProvider.sample()
+        previousConfigForLastSaveReceipt = nil
+        lastSaveReceipt = BrainLayerSettingsSaveReceipt(
+            configURL: store.configURL,
+            savedAt: now(),
+            fileUpdated: true,
+            validation: .failed(message),
+            servicesRequiringRestart: Self.restartRequirements(from: previousConfig, to: persistedConfig),
+            activeRuntimeState: .unknown("Configuration file changed, but reload validation failed.")
+        )
+    }
+
+    private func refreshLastSaveReceiptActiveState() {
+        guard let receipt = lastSaveReceipt,
+              receipt.fileUpdated,
+              receipt.validation == .passed,
+              let previousConfig = previousConfigForLastSaveReceipt else {
+            return
+        }
+        lastSaveReceipt = BrainLayerSettingsSaveReceipt(
+            configURL: receipt.configURL,
+            savedAt: receipt.savedAt,
+            fileUpdated: receipt.fileUpdated,
+            validation: receipt.validation,
+            servicesRequiringRestart: receipt.servicesRequiringRestart,
+            activeRuntimeState: activeRuntimeState(
+                from: previousConfig,
+                configured: config,
+                requirements: receipt.servicesRequiringRestart
+            )
+        )
+    }
+
+    private static func restartRequirements(
+        from previous: BrainLayerConfig,
+        to configured: BrainLayerConfig
+    ) -> [BrainLayerSettingsService] {
+        var requirements: [BrainLayerSettingsService] = []
+        if previous.googleAPIKey != configured.googleAPIKey ||
+            previous.enrichmentEnabled != configured.enrichmentEnabled ||
+            previous.enrichmentMode != configured.enrichmentMode ||
+            previous.enrichmentProvider != configured.enrichmentProvider ||
+            previous.enrichmentBackend != configured.enrichmentBackend ||
+            previous.tuningValues != configured.tuningValues {
+            requirements.append(.enrichment)
+        }
+        if previous.systemEnabled != configured.systemEnabled {
+            requirements.append(.systemJobs)
+        }
+        for job in BrainLayerLaunchdJob.allCases
+        where previous.launchdJobs[job]?.enabled != configured.launchdJobs[job]?.enabled {
+            requirements.append(.launchdJob(job))
+        }
+        return requirements
+    }
+
+    private func activeRuntimeState(
+        from previous: BrainLayerConfig,
+        configured: BrainLayerConfig,
+        requirements: [BrainLayerSettingsService]
+    ) -> BrainLayerActiveRuntimeReceiptState {
+        if previous.googleAPIKey != configured.googleAPIKey || previous.tuningValues != configured.tuningValues {
+            return .unknown("Secret and tuning reload state is not observable.")
+        }
+
+        for requirement in requirements {
+            guard case let .launchdJob(job) = requirement else { continue }
+            let setting = configured.launchdJobs[job] ?? BrainLayerLaunchdJobSetting(
+                enabled: true,
+                loadState: .unknown
+            )
+            switch setting.loadState {
+            case .unknown:
+                return .unknown("\(job.title) active state is unknown.")
+            case let .probeError(reason):
+                return .unknown("\(job.title) probe failed: \(reason)")
+            case .running where setting.enabled, .loaded where setting.enabled:
+                continue
+            case .unloaded where !setting.enabled:
+                continue
+            default:
+                return .notObserved
+            }
+        }
+
+        let hasRuntimeConfigRequirement = requirements.contains(.enrichment) || requirements.contains(.systemJobs)
+        guard hasRuntimeConfigRequirement else { return .observed }
+        switch activeRuntimeObservation {
+        case let .observed(values):
+            return values.matches(configured) ? .observed : .notObserved
+        case let .unknown(reason):
+            return .unknown(reason)
         }
     }
 
@@ -164,6 +341,11 @@ struct BrainBarSettingsView: View {
                 }
                 BrainBarSettingsPanel(title: "Enrichment") {
                     enrichmentControls
+                }
+                if let receipt = viewModel.lastSaveReceipt {
+                    BrainBarSettingsPanel(title: "Last save receipt") {
+                        saveReceipt(receipt)
+                    }
                 }
                 BrainBarSettingsPanel(title: "Gemini API Key") {
                     secretControls
@@ -245,9 +427,23 @@ struct BrainBarSettingsView: View {
                 )
             ) {
                 ForEach(BrainLayerEnrichmentProvider.allCases) { provider in
-                    Text(provider.title)
+                    Text(provider.isWiredToday ? provider.title : "\(provider.title) — Unavailable")
                         .tag(provider)
+                        .disabled(!provider.isWiredToday)
                 }
+            }
+
+            if let reason = viewModel.config.enrichmentProvider.unavailableReason {
+                Label(
+                    "Configured provider unavailable: \(reason)",
+                    systemImage: "exclamationmark.triangle"
+                )
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color(nsColor: BrainBarStateTheme.error.theme.color))
+            } else {
+                Text("OpenAI and Anthropic are unavailable because this build has no runtime integration for them.")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.brainBarTextMuted)
             }
 
             HStack {
@@ -271,6 +467,42 @@ struct BrainBarSettingsView: View {
                         viewModel.backendDraft.trimmingCharacters(in: .whitespacesAndNewlines) == viewModel.config.enrichmentBackend
                 )
             }
+
+            Divider()
+                .overlay(Color.brainBarBorderSoft)
+
+            settingsTruthRow(
+                label: "Configured",
+                value: BrainLayerActiveRuntimeValues(config: viewModel.config).summary
+            )
+            settingsTruthRow(label: "Active", value: viewModel.activeRuntimeObservation.summary)
+        }
+    }
+
+    private func saveReceipt(_ receipt: BrainLayerSettingsSaveReceipt) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            settingsTruthRow(label: "File", value: receipt.fileUpdated ? "Updated" : "Not updated")
+            settingsTruthRow(label: "Validation", value: receipt.validation.title)
+            settingsTruthRow(
+                label: "Restart",
+                value: receipt.servicesRequiringRestart.isEmpty
+                    ? "Not required"
+                    : receipt.servicesRequiringRestart.map(\.title).joined(separator: ", ")
+            )
+            settingsTruthRow(label: "Active runtime", value: receipt.activeRuntimeState.title)
+        }
+    }
+
+    private func settingsTruthRow(label: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(label)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.brainBarTextMuted)
+                .frame(width: 110, alignment: .leading)
+            Text(value)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.brainBarTextSecondary)
+                .textSelection(.enabled)
         }
     }
 
@@ -346,6 +578,7 @@ private struct BrainBarSettingsPanel<Content: View>: View {
                 content
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
         .background(Color.brainBarGlassPrimary)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -378,6 +611,9 @@ private struct BrainBarJobToggle: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Color.brainBarTextMuted)
             }
+            Text("Configured: \(setting.enabled ? "Enabled" : "Disabled")")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(Color.brainBarTextMuted)
         }
         .padding(12)
         .background(Color.brainBarGlassSecondary)
@@ -394,6 +630,7 @@ private struct BrainBarJobToggle: View {
         case .loaded: BrainBarStateTheme.loading.theme.swiftUIColor
         case .unloaded: BrainBarStateTheme.idle.theme.swiftUIColor
         case .unknown: BrainBarStateTheme.degraded.theme.swiftUIColor
+        case .probeError: BrainBarStateTheme.degraded.theme.swiftUIColor
         }
     }
 }
