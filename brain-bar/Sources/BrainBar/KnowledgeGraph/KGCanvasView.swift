@@ -345,26 +345,24 @@ struct KGCanvasView: View {
                 altitudeSlider
             }
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(snapshot.regions) { region in
-                        HStack(spacing: 6) {
-                            Circle()
-                                .fill(region.nodes.first?.color ?? .secondary)
-                                .frame(width: 8, height: 8)
-                            Text(region.title)
-                                .font(.system(size: 11, weight: .semibold))
-                            Text("\(region.nodes.count)")
-                                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(
-                            Capsule()
-                                .fill(Color.brainBarTextPrimary.opacity(0.07))
-                        )
+            WrappingPillLayout(spacing: 8, lineSpacing: 8) {
+                ForEach(snapshot.regions) { region in
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(region.nodes.first?.color ?? .secondary)
+                            .frame(width: 8, height: 8)
+                        Text(region.title)
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("\(region.nodes.count)")
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.secondary)
                     }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        Capsule()
+                            .fill(Color.brainBarTextPrimary.opacity(0.07))
+                    )
                 }
             }
         }

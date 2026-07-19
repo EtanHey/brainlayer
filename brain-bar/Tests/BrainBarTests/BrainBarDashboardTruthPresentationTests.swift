@@ -48,17 +48,24 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
 
     func testDashboardMakesFreshnessPrimaryAndKeepsLastGoodDataVisible() throws {
         let source = try sourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
-        let dashboardRange = try XCTUnwrap(source.range(of: "private struct BrainBarDashboardView"))
-        let dashboardSource = String(source[dashboardRange.lowerBound...])
+        let dashboardSource = try sourceSlice(
+            from: "private struct BrainBarDashboardView",
+            throughBefore: "private struct BrainBarSnapshotFreshnessBanner",
+            in: source
+        )
+        let freshnessBannerSource = try sourceSlice(
+            from: "private struct BrainBarSnapshotFreshnessBanner",
+            throughBefore: "private struct BrainBarPipelineSeriesCard",
+            in: source
+        )
         let freshnessIndex = try XCTUnwrap(dashboardSource.range(of: "freshnessBanner")?.lowerBound)
         let overviewIndex = try XCTUnwrap(dashboardSource.range(of: "overviewCard(layout: layout)")?.lowerBound)
 
         XCTAssertLessThan(freshnessIndex, overviewIndex, "Freshness must precede last-good dashboard content.")
-        XCTAssertTrue(source.contains("private struct BrainBarSnapshotFreshnessBanner"))
-        XCTAssertTrue(source.contains("Last good"))
-        XCTAssertTrue(source.contains("Data age"))
-        XCTAssertTrue(source.contains("brainbar.dashboard.freshness"))
-        XCTAssertTrue(source.contains("lastGoodContentOpacity"))
+        XCTAssertTrue(dashboardSource.contains("lastGoodContentOpacity"))
+        XCTAssertTrue(freshnessBannerSource.contains("Last good"))
+        XCTAssertTrue(freshnessBannerSource.contains("Data age"))
+        XCTAssertTrue(freshnessBannerSource.contains("brainbar.dashboard.freshness"))
     }
 
     func testDashboardUsesCompactDensityAtSupportedBreakpoints() {
@@ -95,6 +102,7 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
             "brainbar.dashboard.chart.watcher-ingested-chunks",
             "brainbar.dashboard.chart.enriched-successfully",
             "brainbar.dashboard.timeframe",
+            "brainbar.dashboard.timeframe.error",
             "brainbar.dashboard.signal-coverage-disclosure",
             "brainbar.dashboard.runtime-disclosure",
             "brainbar.shell.tabs",
@@ -136,13 +144,22 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
     func testWideHeroLabelsAndChartStatusColorsRemainSemanticallyLegible() throws {
         let dashboard = try sourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
         let pipeline = try sourceFile("Sources/BrainBar/Dashboard/PipelineState.swift")
-        let overviewRange = try XCTUnwrap(dashboard.range(of: "private struct BrainBarOverviewStat"))
-        let overviewSource = String(dashboard[overviewRange.lowerBound...])
+        let overviewSource = try sourceSlice(
+            from: "private struct BrainBarOverviewStat",
+            throughBefore: "private struct BrainBarAgentPresencePill",
+            in: dashboard
+        )
 
         XCTAssertTrue(overviewSource.contains(".lineLimit(2)"), "Wide hero labels must wrap instead of truncating metric truth.")
         XCTAssertTrue(dashboard.contains("lane.status.stateTheme"), "Chart status pills must use semantic state color, not series color.")
         XCTAssertTrue(pipeline.contains("extension DashboardFlowLaneStatus"))
         XCTAssertTrue(pipeline.contains("case .live:\n            return .active"))
+    }
+
+    private func sourceSlice(from start: String, throughBefore end: String, in source: String) throws -> String {
+        let startRange = try XCTUnwrap(source.range(of: start))
+        let endRange = try XCTUnwrap(source.range(of: end, range: startRange.upperBound..<source.endIndex))
+        return String(source[startRange.lowerBound..<endRange.lowerBound])
     }
 
     private func sourceFile(_ relativePath: String) throws -> String {

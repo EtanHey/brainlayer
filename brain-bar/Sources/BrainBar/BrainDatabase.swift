@@ -3926,6 +3926,26 @@ final class BrainDatabase: @unchecked Sendable {
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: directory.path) else { return true }
         guard urlIsDirectory(directory) else { return false }
+        var isReadable = true
+        func inspect(_ file: URL) {
+            switch pendingFallbackReplayRecord(
+                at: file,
+                originRepoPath: originRepoPath,
+                countParsedWithoutIntent: countParsedWithoutIntent,
+                countUnparseableAsDebt: countUnparseableAsDebt
+            ) {
+            case .ignored:
+                break
+            case .pending(let queuedAt, let identityKey):
+                record(queuedAt, identityKey)
+            case .unreadable(let queuedAt, let identityKey):
+                isReadable = false
+                if countUnparseableAsDebt {
+                    record(queuedAt, identityKey)
+                }
+            }
+        }
+
         if recursive {
             guard let enumerator = fileManager.enumerator(
                 at: directory,
@@ -3935,16 +3955,9 @@ final class BrainDatabase: @unchecked Sendable {
                 return false
             }
             for case let file as URL in enumerator where file.pathExtension == "md" {
-                if let pending = pendingFallbackReplayRecord(
-                    at: file,
-                    originRepoPath: originRepoPath,
-                    countParsedWithoutIntent: countParsedWithoutIntent,
-                    countUnparseableAsDebt: countUnparseableAsDebt
-                ) {
-                    record(pending.queuedAt, pending.identityKey)
-                }
+                inspect(file)
             }
-            return true
+            return isReadable
         }
 
         guard let files = try? fileManager.contentsOfDirectory(
@@ -3955,16 +3968,15 @@ final class BrainDatabase: @unchecked Sendable {
             return false
         }
         for file in files where file.pathExtension == "md" {
-            if let pending = pendingFallbackReplayRecord(
-                at: file,
-                originRepoPath: originRepoPath,
-                countParsedWithoutIntent: countParsedWithoutIntent,
-                countUnparseableAsDebt: countUnparseableAsDebt
-            ) {
-                record(pending.queuedAt, pending.identityKey)
-            }
+            inspect(file)
         }
-        return true
+        return isReadable
+    }
+
+    private enum FallbackReplayRecordResult {
+        case ignored
+        case pending(queuedAt: Date?, identityKey: String?)
+        case unreadable(queuedAt: Date?, identityKey: String?)
     }
 
     private static func pendingFallbackReplayRecord(
@@ -3972,15 +3984,21 @@ final class BrainDatabase: @unchecked Sendable {
         originRepoPath: URL,
         countParsedWithoutIntent: Bool,
         countUnparseableAsDebt: Bool
-    ) -> (queuedAt: Date?, identityKey: String?)? {
+    ) -> FallbackReplayRecordResult {
         guard let data = try? Data(contentsOf: file),
               let text = String(data: data, encoding: .utf8) else {
-            return nil
+            return .unreadable(
+                queuedAt: inferLegacyFallbackTimestamp(from: file),
+                identityKey: normalizedPathIdentityKey(file)
+            )
         }
         guard let parsed = fallbackReplayComponents(from: text) else {
-            guard countUnparseableAsDebt else { return nil }
-            guard countParsedWithoutIntent || textLooksLikeFrontmatterAttempt(text) else { return nil }
-            return (inferLegacyFallbackTimestamp(from: file), normalizedPathIdentityKey(file))
+            guard countUnparseableAsDebt else { return .ignored }
+            guard countParsedWithoutIntent || textLooksLikeFrontmatterAttempt(text) else { return .ignored }
+            return .pending(
+                queuedAt: inferLegacyFallbackTimestamp(from: file),
+                identityKey: normalizedPathIdentityKey(file)
+            )
         }
         let frontmatter = parsed.frontmatter
         let hasIntentFlag = isTruthyFrontmatterValue(frontmatter["intended_brain_store"])
@@ -3992,11 +4010,11 @@ final class BrainDatabase: @unchecked Sendable {
                 frontmatter: frontmatter,
                 body: parsed.body
               ) else {
-            return nil
+            return .ignored
         }
-        return (
-            parsePendingStoreQueuedAt(frontmatter["timestamp"] ?? ""),
-            fallbackReplayIdentityKey(
+        return .pending(
+            queuedAt: parsePendingStoreQueuedAt(frontmatter["timestamp"] ?? ""),
+            identityKey: fallbackReplayIdentityKey(
                 frontmatter: frontmatter,
                 file: file,
                 originRepoPath: originRepoPath,

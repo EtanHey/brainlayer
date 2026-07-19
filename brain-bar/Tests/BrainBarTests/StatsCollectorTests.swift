@@ -12,6 +12,17 @@ import SQLite3
 
 @MainActor
 final class StatsCollectorTests: XCTestCase {
+    private struct WindowFetchFailure: Error {}
+
+    private struct BlockingWatcherProbe: WatcherProcessProbing {
+        let delay: TimeInterval
+
+        func sample() -> WatcherProcessProbeResult {
+            Thread.sleep(forTimeInterval: delay)
+            return .running(pid: 4242)
+        }
+    }
+
     private var tempDBPath: String!
 
     override func setUp() {
@@ -93,7 +104,7 @@ final class StatsCollectorTests: XCTestCase {
     }
 
     func testSelectTimeframeWiderPublishesRealHistoricalBuckets() async throws {
-        // Inside 30m (live) plus older rows only a wider window can see.
+        // Inside 1h (live) plus older rows only a wider window can see.
         try insertWrite(id: "agent-live", source: "mcp", minutesAgo: 5)
         try insertWrite(id: "agent-old-1", source: "mcp", minutesAgo: 90)
         try insertWrite(id: "agent-old-2", source: "manual", minutesAgo: 300)
@@ -118,5 +129,116 @@ final class StatsCollectorTests: XCTestCase {
         XCTAssertEqual(buckets.agentTotal, 3, "24h agent window sees live + 2 older agent writes")
         XCTAssertEqual(buckets.watcherTotal, 1, "24h watcher window sees the older watcher write")
         XCTAssertFalse(collector.isWindowedBucketsLoading)
+    }
+
+    func testWindowFetchFailurePreservesLastGoodBucketsAndPublishesTruthfulError() async throws {
+        let threeHourBuckets = BrainDatabase.PipelineWindowBuckets(
+            activityWindowMinutes: 180,
+            bucketCount: 1,
+            allWriteBuckets: [3],
+            agentWriteBuckets: [2],
+            watcherWriteBuckets: [1],
+            enrichmentBuckets: [1],
+            watcherFlowReadability: .readable
+        )
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            windowedBucketsProvider: { windowMinutes, _ in
+                guard windowMinutes == 180 else { throw WindowFetchFailure() }
+                return threeHourBuckets
+            },
+            databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
+        )
+        defer { collector.stop() }
+
+        collector.selectTimeframe(windowMinutes: 180, isLive: false)
+        let successDeadline = Date().addingTimeInterval(2)
+        while collector.isWindowedBucketsLoading && Date() < successDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(collector.windowedBuckets, threeHourBuckets)
+        XCTAssertNil(collector.windowedBucketsError)
+
+        collector.selectTimeframe(windowMinutes: 1_440, isLive: false)
+        let failureDeadline = Date().addingTimeInterval(2)
+        while collector.isWindowedBucketsLoading && Date() < failureDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        XCTAssertEqual(collector.windowedBuckets, threeHourBuckets, "A failed wider fetch must retain last-good evidence.")
+        XCTAssertEqual(collector.windowedBucketsWindowMinutes, 180)
+        XCTAssertEqual(collector.windowedBucketsError, "Could not load Last 24h; showing Last 1h.")
+        XCTAssertEqual(
+            PipelineTimeframe.truthfulDisplay(selected: .day, loadedWindowMinutes: collector.windowedBucketsWindowMinutes),
+            .live,
+            "Live buckets must never be relabeled as the failed 24h selection."
+        )
+    }
+
+    func testReturningToLiveDiscardsLateWindowFetch() async throws {
+        let delayedBuckets = BrainDatabase.PipelineWindowBuckets(
+            activityWindowMinutes: 1_440,
+            bucketCount: 1,
+            allWriteBuckets: [1],
+            agentWriteBuckets: [1],
+            watcherWriteBuckets: [0],
+            enrichmentBuckets: [0],
+            watcherFlowReadability: .readable
+        )
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            windowedBucketsProvider: { _, _ in
+                Thread.sleep(forTimeInterval: 0.1)
+                return delayedBuckets
+            },
+            databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
+        )
+        defer { collector.stop() }
+
+        collector.selectTimeframe(windowMinutes: 1_440, isLive: false)
+        collector.selectTimeframe(windowMinutes: 60, isLive: true)
+        try await Task.sleep(for: .milliseconds(200))
+
+        XCTAssertNil(collector.windowedBuckets)
+        XCTAssertNil(collector.windowedBucketsWindowMinutes)
+        XCTAssertNil(collector.windowedBucketsError)
+        XCTAssertFalse(collector.isWindowedBucketsLoading)
+    }
+
+    func testWatcherProbeDoesNotBlockMainActorRefresh() async throws {
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            watcherProcessProbe: BlockingWatcherProbe(delay: 0.6),
+            databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
+        )
+        defer { collector.stop() }
+
+        let startedAt = Date()
+        collector.refresh(force: true)
+        let elapsed = Date().timeIntervalSince(startedAt)
+
+        XCTAssertLessThan(elapsed, 0.3, "Watcher sampling must leave the main actor before it can block dashboard refresh.")
+        XCTAssertTrue(collector.isRefreshing)
+
+        let deadline = Date().addingTimeInterval(3)
+        while collector.isRefreshing && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(collector.stats.watcherProcessProbeResult, .running(pid: 4242))
+    }
+
+    func testLaunchctlCommandRunnerTimesOutHungProbe() {
+        let startedAt = Date()
+        let result = LaunchctlWatcherProcessProbe.run(
+            ["/bin/sleep", "1"],
+            timeout: 0.05
+        )
+
+        XCTAssertEqual(result.terminationStatus, 124)
+        XCTAssertTrue(result.output.localizedCaseInsensitiveContains("timed out"))
+        XCTAssertLessThan(Date().timeIntervalSince(startedAt), 0.5)
     }
 }

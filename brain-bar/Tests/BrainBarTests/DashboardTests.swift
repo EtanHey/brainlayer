@@ -1012,6 +1012,27 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(agentStores.statusText, "No agent-origin chunks")
     }
 
+    func testDashboardStatsCountsUnreadableFallbackAsPartialConservativeDebt() throws {
+        let fallbackPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("brain-store-fallback", isDirectory: true)
+            .appendingPathComponent("unreadable.md")
+        try FileManager.default.createDirectory(
+            at: fallbackPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data([0xFF, 0xFE, 0xFD]).write(to: fallbackPath)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+        let fallback = stats.replayDebtBreakdown.repositoryFallback
+
+        XCTAssertEqual(fallback.snapshot.depth, 1, "Unreadable fallback files are possible debt, never zero evidence.")
+        XCTAssertFalse(fallback.readability.isReadable)
+        XCTAssertTrue(stats.replayDebtBreakdown.isPartial)
+        XCTAssertTrue(stats.replayDebtBreakdown.detailText.contains("repository fallback"))
+    }
+
     func testDashboardStatsIncludesDurableStoreQueueDepth() throws {
         let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("pending-stores-dashboard-empty-\(UUID().uuidString).jsonl")

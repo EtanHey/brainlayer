@@ -399,8 +399,7 @@ struct DashboardFlowSummary: Sendable, Equatable {
         let storeOldestAgeSeconds = stats.pendingStoreOldestQueuedAt.map { max(0, Int(now.timeIntervalSince($0).rounded())) }
         let storeHealth = storeQueueHealth(depth: stats.pendingStoreQueueDepth, oldestAgeSeconds: storeOldestAgeSeconds)
         let watcherProcess = stats.watcherProcessProbeResult
-            ?? daemon.map { WatcherProcessProbeResult.running(pid: $0.pid) }
-            ?? .absent
+            ?? .failure("watcher process evidence unavailable")
         let watcherFlowState = WatcherFlowState.derive(
             process: watcherProcess,
             recentDistinctChunkCount: stats.watcherRecentDistinctChunkCount,

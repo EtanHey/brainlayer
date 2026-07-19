@@ -1,8 +1,9 @@
 import Combine
 import CoreFoundation
+import Darwin
 import Foundation
 
-protocol WatcherProcessProbing {
+protocol WatcherProcessProbing: Sendable {
     func sample() -> WatcherProcessProbeResult
 }
 
@@ -18,16 +19,16 @@ struct LaunchctlWatcherProcessProbe: WatcherProcessProbing {
         let output: String
     }
 
-    typealias CommandRunner = ([String]) -> CommandResult
+    typealias CommandRunner = @Sendable ([String]) -> CommandResult
 
     private let label: String
     private let commandRunner: CommandRunner
-    private let uidProvider: () -> uid_t
+    private let uidProvider: @Sendable () -> uid_t
 
     init(
         label: String = "com.brainlayer.watch",
-        commandRunner: @escaping CommandRunner = LaunchctlWatcherProcessProbe.run,
-        uidProvider: @escaping () -> uid_t = getuid
+        commandRunner: @escaping CommandRunner = { LaunchctlWatcherProcessProbe.run($0) },
+        uidProvider: @escaping @Sendable () -> uid_t = getuid
     ) {
         self.label = label
         self.commandRunner = commandRunner
@@ -65,7 +66,7 @@ struct LaunchctlWatcherProcessProbe: WatcherProcessProbing {
         return nil
     }
 
-    private static func run(_ command: [String]) -> CommandResult {
+    static func run(_ command: [String], timeout: TimeInterval = 1.0) -> CommandResult {
         guard let executable = command.first else {
             return CommandResult(terminationStatus: 1, output: "missing launchctl executable")
         }
@@ -82,8 +83,30 @@ struct LaunchctlWatcherProcessProbe: WatcherProcessProbing {
             return CommandResult(terminationStatus: 1, output: String(describing: error))
         }
 
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let deadline = Date().addingTimeInterval(max(0.01, timeout))
+        while process.isRunning, Date() < deadline, !Task.isCancelled {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+
+        if process.isRunning {
+            process.terminate()
+            let terminationDeadline = Date().addingTimeInterval(0.1)
+            while process.isRunning, Date() < terminationDeadline {
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+            if process.isRunning {
+                Darwin.kill(process.processIdentifier, SIGKILL)
+            }
+            process.waitUntilExit()
+            _ = pipe.fileHandleForReading.readDataToEndOfFile()
+            return CommandResult(
+                terminationStatus: 124,
+                output: Task.isCancelled ? "launchctl probe cancelled" : "launchctl timed out"
+            )
+        }
+
         process.waitUntilExit()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
         return CommandResult(
             terminationStatus: process.terminationStatus,
             output: String(data: data, encoding: .utf8) ?? ""
@@ -107,6 +130,11 @@ private func statsCollectorDarwinNotificationCallback(
 
 @MainActor
 final class StatsCollector: ObservableObject {
+    typealias WindowedBucketsProvider = @Sendable (
+        _ windowMinutes: Int,
+        _ bucketCount: Int
+    ) throws -> BrainDatabase.PipelineWindowBuckets
+
     static let defaultActivityWindowMinutes = 60
     static let defaultBucketCount = 12
     static let snapshotFreshnessThreshold: TimeInterval = 60
@@ -124,11 +152,12 @@ final class StatsCollector: ObservableObject {
     @Published private(set) var heartbeat: DashboardHeartbeat
     /// REAL windowed buckets for the shared Live/3h/24h selector. `nil` means
     /// "no wider window selected yet" — the views fall back to the live `stats`
-    /// buckets (the resting 30m view). When the selector picks 3h/24h, the view
+    /// buckets (the resting 1h view). When the selector picks 3h/24h, the view
     /// requests a windowed fetch; this publishes the actual DB data for that
     /// window so the charts re-render with genuine history, not a relabel.
     @Published private(set) var windowedBuckets: BrainDatabase.PipelineWindowBuckets?
     @Published private(set) var windowedBucketsWindowMinutes: Int?
+    @Published private(set) var windowedBucketsError: String?
     @Published private(set) var isWindowedBucketsLoading = false
     private var windowedBucketsTask: Task<Void, Never>?
     private var windowedBucketsGeneration = 0
@@ -137,6 +166,7 @@ final class StatsCollector: ObservableObject {
     private let databaseOpenConfiguration: BrainDatabase.OpenConfiguration
     private let daemonMonitor: DaemonHealthMonitor
     private let watcherProcessProbe: any WatcherProcessProbing
+    private let windowedBucketsProvider: WindowedBucketsProvider
     private let agentActivityMonitor: AgentActivityMonitor
     private let agentActivitySampleInterval: TimeInterval
     private let statsRefreshCoalesceInterval: TimeInterval
@@ -153,6 +183,8 @@ final class StatsCollector: ObservableObject {
     private var pendingStatsRefreshBypassesCoalescing = false
     private var dashboardRefreshTask: Task<Void, Never>?
     private var dashboardRefreshGeneration = 0
+    private var watcherProcessRefreshTask: Task<Void, Never>?
+    private var watcherProcessRefreshGeneration = 0
     private var isRunning = false
     private var isStopped = false
     private var lastAgentActivitySampleAt: Date?
@@ -175,12 +207,22 @@ final class StatsCollector: ObservableObject {
         freshnessTickerInterval: TimeInterval = 1,
         nowProvider: @escaping () -> Date = Date.init,
         brainBusEvents: BrainBusEventSource? = nil,
+        windowedBucketsProvider: WindowedBucketsProvider? = nil,
         databaseOpenConfiguration: BrainDatabase.OpenConfiguration = BrainDatabase.OpenConfiguration()
     ) {
         self.dbPath = dbPath
         self.databaseOpenConfiguration = databaseOpenConfiguration
         self.daemonMonitor = daemonMonitor
         self.watcherProcessProbe = watcherProcessProbe
+        self.windowedBucketsProvider = windowedBucketsProvider ?? { windowMinutes, bucketCount in
+            let backgroundDatabase = BrainDatabase(path: dbPath, openConfiguration: databaseOpenConfiguration)
+            defer { backgroundDatabase.close() }
+            backgroundDatabase.reopenIfNeeded()
+            return try backgroundDatabase.pipelineWindowBuckets(
+                activityWindowMinutes: windowMinutes,
+                bucketCount: bucketCount
+            )
+        }
         self.agentActivityMonitor = agentActivityMonitor
         self.agentActivitySampleInterval = agentActivitySampleInterval
         self.statsRefreshCoalesceInterval = statsRefreshCoalesceInterval
@@ -245,8 +287,12 @@ final class StatsCollector: ObservableObject {
         freshnessTicker = nil
         dashboardRefreshTask?.cancel()
         dashboardRefreshTask = nil
+        watcherProcessRefreshTask?.cancel()
+        watcherProcessRefreshTask = nil
+        watcherProcessRefreshGeneration += 1
         windowedBucketsTask?.cancel()
         windowedBucketsTask = nil
+        windowedBucketsGeneration += 1
         isWindowedBucketsLoading = false
         pendingStatsRefreshTask?.cancel()
         pendingStatsRefreshTask = nil
@@ -279,7 +325,7 @@ final class StatsCollector: ObservableObject {
 
     /// Fetch REAL windowed buckets for the shared Live/3h/24h selector.
     ///
-    /// The `.live` (30m) lens reads straight off the resting `stats` buckets, so
+    /// The `.live` (1h) lens reads straight off the resting `stats` buckets, so
     /// it clears any wider-window fetch and returns immediately. The 3h/24h
     /// lenses trigger a genuine off-main DB re-fetch over the requested window
     /// (180 / 1440 minutes) and publish `windowedBuckets` so the charts re-render
@@ -288,30 +334,25 @@ final class StatsCollector: ObservableObject {
     func selectTimeframe(windowMinutes: Int, isLive: Bool) {
         windowedBucketsTask?.cancel()
         windowedBucketsTask = nil
+        windowedBucketsGeneration += 1
+        let generation = windowedBucketsGeneration
 
         if isLive {
             windowedBuckets = nil
             windowedBucketsWindowMinutes = nil
+            windowedBucketsError = nil
             isWindowedBucketsLoading = false
             return
         }
 
-        windowedBucketsGeneration += 1
-        let generation = windowedBucketsGeneration
-        let dbPath = self.dbPath
-        let openConfiguration = self.databaseOpenConfiguration
         let bucketCount = Self.defaultBucketCount
+        let provider = windowedBucketsProvider
+        windowedBucketsError = nil
         isWindowedBucketsLoading = true
 
         windowedBucketsTask = Task.detached(priority: .userInitiated) { [weak self] in
             let result: Result<BrainDatabase.PipelineWindowBuckets, Error> = Result {
-                let backgroundDatabase = BrainDatabase(path: dbPath, openConfiguration: openConfiguration)
-                defer { backgroundDatabase.close() }
-                backgroundDatabase.reopenIfNeeded()
-                return try backgroundDatabase.pipelineWindowBuckets(
-                    activityWindowMinutes: windowMinutes,
-                    bucketCount: bucketCount
-                )
+                try provider(windowMinutes, bucketCount)
             }
 
             await self?.finishWindowedBucketsFetch(
@@ -328,22 +369,21 @@ final class StatsCollector: ObservableObject {
         bypassCoalescing: Bool = false
     ) {
         let nextDaemon = daemonMonitor.sample()
-        let nextWatcherProcess = watcherProcessProbe.sample()
         let snapshotTime = nowProvider()
         refreshAgentActivity(force: force, now: snapshotTime)
 
         if !force, !bypassCoalescing, let coalescedDelay = coalescedStatsRefreshDelay(now: snapshotTime) {
             daemon = nextDaemon
-            stats = stats.withWatcherProcessProbeResult(nextWatcherProcess)
             state = PipelineState.derive(daemon: nextDaemon, stats: stats)
+            requestWatcherProcessRefresh()
             schedulePendingStatsRefresh(after: coalescedDelay)
             return
         }
 
         if dashboardRefreshTask != nil, trigger != .manual {
             daemon = nextDaemon
-            stats = stats.withWatcherProcessProbeResult(nextWatcherProcess)
             state = PipelineState.derive(daemon: nextDaemon, stats: stats)
+            requestWatcherProcessRefresh()
             if !force {
                 schedulePendingStatsRefresh(after: statsRefreshCoalesceInterval)
             }
@@ -363,6 +403,7 @@ final class StatsCollector: ObservableObject {
         let activityWindowMinutes = Self.defaultActivityWindowMinutes
         let bucketCount = Self.defaultBucketCount
         let startStats = stats
+        let watcherProcessProbe = self.watcherProcessProbe
         let startUnix = snapshotTime.timeIntervalSince1970
         isRefreshing = true
         updateSnapshotFreshness()
@@ -370,7 +411,6 @@ final class StatsCollector: ObservableObject {
             isManualRefreshInProgress = true
         }
         daemon = nextDaemon
-        stats = stats.withWatcherProcessProbeResult(nextWatcherProcess)
         state = PipelineState.derive(daemon: nextDaemon, stats: stats)
         logDashboardRefresh(
             timestamp: snapshotTime,
@@ -383,6 +423,7 @@ final class StatsCollector: ObservableObject {
         )
 
         dashboardRefreshTask = Task.detached(priority: .utility) { [weak self] in
+            let nextWatcherProcess = watcherProcessProbe.sample()
             let result: Result<DashboardStats, Error> = Result {
                 let backgroundDatabase = BrainDatabase(path: dbPath, openConfiguration: openConfiguration)
                 defer { backgroundDatabase.close() }
@@ -418,10 +459,28 @@ final class StatsCollector: ObservableObject {
         case .success(let buckets):
             windowedBuckets = buckets
             windowedBucketsWindowMinutes = windowMinutes
+            windowedBucketsError = nil
         case .failure:
-            windowedBuckets = nil
-            windowedBucketsWindowMinutes = nil
+            windowedBucketsError = "Could not load \(DashboardMetricFormatter.windowLabel(minutes: windowMinutes)); showing Last 1h."
         }
+    }
+
+    private func requestWatcherProcessRefresh() {
+        watcherProcessRefreshTask?.cancel()
+        watcherProcessRefreshGeneration += 1
+        let generation = watcherProcessRefreshGeneration
+        let probe = watcherProcessProbe
+        watcherProcessRefreshTask = Task.detached(priority: .utility) { [weak self] in
+            let result = probe.sample()
+            await self?.finishWatcherProcessRefresh(result, generation: generation)
+        }
+    }
+
+    private func finishWatcherProcessRefresh(_ result: WatcherProcessProbeResult, generation: Int) {
+        guard !isStopped, generation == watcherProcessRefreshGeneration else { return }
+        watcherProcessRefreshTask = nil
+        stats = stats.withWatcherProcessProbeResult(result)
+        state = PipelineState.derive(daemon: daemon, stats: stats)
     }
 
     private func finishRequestedRefreshIfCurrent(
@@ -645,9 +704,9 @@ final class StatsCollector: ObservableObject {
         switch event.type {
         case .healthTick:
             daemon = daemonMonitor.sample()
-            stats = stats.withWatcherProcessProbeResult(watcherProcessProbe.sample())
             refreshAgentActivity(force: false, now: Date())
             state = PipelineState.derive(daemon: daemon, stats: stats)
+            requestWatcherProcessRefresh()
         case .queueDepth, .enrichStatus, .lastChunkID, .dbBusy:
             scheduleLiveStatsRefresh()
         }

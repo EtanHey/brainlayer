@@ -5,6 +5,28 @@ import XCTest
 
 @MainActor
 final class KGSnapshotTests: XCTestCase {
+    private var packageRoot: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
+    func testAtlasToolbarWrapsEveryRegionLegendChipWithoutHiddenOverflow() throws {
+        let source = try String(
+            contentsOf: packageRoot.appendingPathComponent("Sources/BrainBar/KnowledgeGraph/KGCanvasView.swift"),
+            encoding: .utf8
+        )
+        let toolbarStart = try XCTUnwrap(source.range(of: "private func atlasToolbar"))
+        let toolbarEnd = try XCTUnwrap(
+            source.range(of: "private func atlasOverview", range: toolbarStart.upperBound..<source.endIndex)
+        )
+        let toolbar = String(source[toolbarStart.lowerBound..<toolbarEnd.lowerBound])
+
+        XCTAssertTrue(toolbar.contains("WrappingPillLayout"))
+        XCTAssertFalse(toolbar.contains("ScrollView(.horizontal, showsIndicators: false)"))
+    }
+
     func testRendersDeterministicAtlasStatesToIsolatedDirectory() throws {
         guard let renderDirectory = ProcessInfo.processInfo.environment["BRAINBAR_RENDER_DIR"] else {
             throw XCTSkip("Set BRAINBAR_RENDER_DIR to render graph QA artifacts")

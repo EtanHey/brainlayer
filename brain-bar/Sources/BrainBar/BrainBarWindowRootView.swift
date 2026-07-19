@@ -356,7 +356,7 @@ private struct BrainBarDashboardView: View {
     @State private var selectedTimeframe: PipelineTimeframe = .live
     @State private var vectorDetailHeight: CGFloat = 0
 
-    /// The stats the graphs render. For the live (30m) lens this is the resting
+    /// The stats the graphs render. For the live (1h) lens this is the resting
     /// `collector.stats`; for a wider lens, if the collector has published REAL
     /// windowed buckets for that window, they are swapped in so the charts show
     /// genuine history (not a relabel).
@@ -368,6 +368,13 @@ private struct BrainBarDashboardView: View {
             return collector.stats
         }
         return collector.stats.withWindowedPipelineBuckets(buckets)
+    }
+
+    private var displayedTimeframe: PipelineTimeframe {
+        PipelineTimeframe.truthfulDisplay(
+            selected: selectedTimeframe,
+            loadedWindowMinutes: collector.windowedBucketsWindowMinutes
+        )
     }
 
     private var flowSummary: DashboardFlowSummary {
@@ -492,7 +499,7 @@ private struct BrainBarDashboardView: View {
         }
         // Shared timeframe selector → REAL windowed re-fetch. Selecting 3h/24h
         // triggers an off-main DB fetch over that window; the published buckets
-        // flow into every graph at once. `.live` clears the fetch (resting 30m).
+        // flow into every graph at once. `.live` clears the fetch (resting 1h).
         .onChange(of: selectedTimeframe) { _, newTimeframe in
             collector.selectTimeframe(
                 windowMinutes: newTimeframe.windowMinutes,
@@ -682,13 +689,14 @@ private struct BrainBarDashboardView: View {
         }
     }
 
-    /// The ONE shared Live(30m)/3h/24h control. It is the SOLE timeframe control
+    /// The ONE shared Live(1h)/3h/24h control. It is the SOLE timeframe control
     /// on the dashboard — every pipeline graph reads `selectedTimeframe`, so the
     /// cards no longer expand to reveal a per-card picker.
     private var sharedTimeframeSelector: some View {
         BrainBarSharedTimeframeSelector(
             selection: $selectedTimeframe,
-            isLoading: collector.isWindowedBucketsLoading
+            isLoading: collector.isWindowedBucketsLoading,
+            loadError: collector.windowedBucketsError
         )
     }
 
@@ -727,7 +735,7 @@ private struct BrainBarDashboardView: View {
             compact: layout.compactCards,
             chartHeight: restingHeight,
             fetchedAt: fetchedAt,
-            timeframe: selectedTimeframe
+            timeframe: displayedTimeframe
         )
     }
 
@@ -743,7 +751,7 @@ private struct BrainBarDashboardView: View {
             compact: layout.compactCards,
             chartHeight: restingHeight,
             fetchedAt: fetchedAt,
-            timeframe: selectedTimeframe
+            timeframe: displayedTimeframe
         )
     }
 
@@ -759,7 +767,7 @@ private struct BrainBarDashboardView: View {
             compact: layout.compactCards,
             chartHeight: restingHeight,
             fetchedAt: fetchedAt,
-            timeframe: selectedTimeframe
+            timeframe: displayedTimeframe
         )
     }
 
@@ -792,7 +800,7 @@ private struct BrainBarDashboardView: View {
                 compact: layout.compactCards,
                 chartHeight: restingHeight,
                 fetchedAt: fetchedAt,
-                timeframe: selectedTimeframe
+                timeframe: displayedTimeframe
             )
 
             queueRail(layout: layout)
@@ -1717,8 +1725,8 @@ private struct BrainBarFlowLaneCard: View {
     }
 }
 
-/// The ONE shared window for every pipeline graph: Live(30m) / 3h / 24h.
-/// `.live` is the resting 30m window the graphs always have; `.threeHour` and
+/// The ONE shared window for every pipeline graph: Live(1h) / 3h / 24h.
+/// `.live` is the resting 1h window the graphs always have; `.threeHour` and
 /// `.day` trigger a REAL windowed re-fetch from `BrainDatabase` (180 / 1440
 /// minutes) so the charts show genuine historical data, not a relabel. Selecting
 /// a window switches ALL graphs at once — there is no per-card timeframe control.
@@ -1738,7 +1746,7 @@ enum PipelineTimeframe: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Sublabel for the live chip so "Live" still surfaces the 30m window.
+    /// Sublabel for the live chip so "Live" still surfaces the 1h window.
     var subLabel: String? {
         switch self {
         case .live: return "1h"
@@ -1755,6 +1763,17 @@ enum PipelineTimeframe: String, CaseIterable, Identifiable {
         case .day: return 1_440
         }
     }
+
+    static func truthfulDisplay(
+        selected: PipelineTimeframe,
+        loadedWindowMinutes: Int?
+    ) -> PipelineTimeframe {
+        guard selected != .live,
+              loadedWindowMinutes == selected.windowMinutes else {
+            return .live
+        }
+        return selected
+    }
 }
 
 enum BrainBarPipelinePulseGate {
@@ -1769,55 +1788,65 @@ enum BrainBarPipelinePulseGate {
 }
 
 /// The single shared Live/3h/24h selector that drives every pipeline graph.
-/// Replaces the removed per-card 30m/3h/24h picker. A small spinner appears
+/// Replaces the removed per-card 1h/3h/24h picker. A small spinner appears
 /// while a wider window is being fetched from the DB.
 struct BrainBarSharedTimeframeSelector: View {
     @Binding var selection: PipelineTimeframe
     var isLoading: Bool = false
+    var loadError: String?
 
     var body: some View {
-        HStack(spacing: 6) {
-            if isLoading {
-                ProgressView()
-                    .controlSize(.small)
-                    .scaleEffect(0.7)
-                    .frame(width: 14, height: 14)
-            }
-            ForEach(PipelineTimeframe.allCases) { frame in
-                Button {
-                    selection = frame
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(frame.label)
-                            .font(.system(size: 11, weight: .semibold))
-                        if let sub = frame.subLabel {
-                            Text(sub)
-                                .font(.system(size: 9, weight: .medium))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .monospacedDigit()
-                    .padding(.horizontal, 11)
-                    .padding(.vertical, 5)
-                    .foregroundStyle(
-                        selection == frame
-                            ? Color.brainBarAccent
-                            : Color.brainBarTextSecondary.opacity(0.85)
-                    )
-                    .background(
-                        Capsule().fill(selection == frame ? Color.brainBarAccent.opacity(0.16) : .clear)
-                    )
-                    .overlay(
-                        Capsule().stroke(
-                            selection == frame ? Color.brainBarAccent.opacity(0.32) : Color.brainBarBorderSoft,
-                            lineWidth: 1
-                        )
-                    )
+        VStack(alignment: .trailing, spacing: 4) {
+            HStack(spacing: 6) {
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.7)
+                        .frame(width: 14, height: 14)
                 }
-                .buttonStyle(.plain)
-                .help("Show \(frame.label) window")
-                .accessibilityIdentifier("brainbar.dashboard.timeframe.\(frame.rawValue)")
-                .focusable()
+                ForEach(PipelineTimeframe.allCases) { frame in
+                    Button {
+                        selection = frame
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(frame.label)
+                                .font(.system(size: 11, weight: .semibold))
+                            if let sub = frame.subLabel {
+                                Text(sub)
+                                    .font(.system(size: 9, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .monospacedDigit()
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 5)
+                        .foregroundStyle(
+                            selection == frame
+                                ? Color.brainBarAccent
+                                : Color.brainBarTextSecondary.opacity(0.85)
+                        )
+                        .background(
+                            Capsule().fill(selection == frame ? Color.brainBarAccent.opacity(0.16) : .clear)
+                        )
+                        .overlay(
+                            Capsule().stroke(
+                                selection == frame ? Color.brainBarAccent.opacity(0.32) : Color.brainBarBorderSoft,
+                                lineWidth: 1
+                            )
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .help("Show \(frame.label) window")
+                    .accessibilityIdentifier("brainbar.dashboard.timeframe.\(frame.rawValue)")
+                    .focusable()
+                }
+            }
+            if let loadError {
+                Text(loadError)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(BrainBarStateTheme.degraded.theme.swiftUIColor)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("brainbar.dashboard.timeframe.error")
             }
         }
         .accessibilityIdentifier("brainbar.dashboard.timeframe")
@@ -1873,7 +1902,7 @@ private struct BrainBarPipelineSeriesCard: View {
         return "scale · peak \(presentation.axisMax)"
     }
 
-    /// The window currently selected by the shared control, e.g. "Last 30m" /
+    /// The window currently selected by the shared control, e.g. "Last 1h" /
     /// "Last 3h" / "Last 24h" — kept in the caption so the chart always names the
     /// window it is plotting.
     private var timeframeWindowText: String {

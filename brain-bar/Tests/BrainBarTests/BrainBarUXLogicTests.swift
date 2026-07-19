@@ -202,6 +202,39 @@ final class BrainBarUXLogicTests: XCTestCase {
         XCTAssertEqual(watcherLane.lastEventText, "No watcher-ingested chunks in Last 30m")
     }
 
+    func testWatcherStateDoesNotBorrowDaemonPIDWhenProbeEvidenceIsMissing() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let stats = DashboardStats(
+            chunkCount: 1,
+            enrichedChunkCount: 1,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 100,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 4_096,
+            recentActivityBuckets: [1],
+            recentWatcherWriteBuckets: [1],
+            recentEnrichmentBuckets: [1],
+            activityWindowMinutes: 60,
+            bucketCount: 1,
+            watcherProcessProbeResult: nil,
+            watcherRecentDistinctChunkCount: 1,
+            watcherFlowReadability: .readable
+        )
+        let daemon = DaemonHealthSnapshot(
+            pid: 4242,
+            isResponsive: true,
+            rssBytes: 1_024,
+            uptime: 60,
+            openConnections: 1,
+            lastSeenAt: now
+        )
+
+        let summary = DashboardFlowSummary.derive(daemon: daemon, stats: stats, now: now)
+
+        XCTAssertEqual(summary.watcherFlowState, .unknown)
+        XCTAssertEqual(summary.lane(for: .jsonlWatcher).statusText, "UNKNOWN")
+    }
+
     func testAgentStoresLaneDoesNotBorrowLiveStatusFromJsonlWatcher() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let stats = DashboardStats(
