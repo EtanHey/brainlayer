@@ -5,7 +5,8 @@ enum KGCanvasMetrics {
     static let canvasPadding: CGFloat = 18
 
     static func sidebarVisible(windowWidth: CGFloat, selectedEntityVisible: Bool) -> Bool {
-        windowWidth >= 980 || selectedEntityVisible
+        _ = windowWidth
+        return selectedEntityVisible
     }
 
     static func drawableSize(windowSize: CGSize, sidebarVisible: Bool) -> CGSize {
@@ -19,6 +20,7 @@ enum KGCanvasMetrics {
 struct KGCanvasView: View {
     @ObservedObject var viewModel: KGViewModel
     let isActive: Bool
+    private let reduceMotionOverride: Bool?
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -31,7 +33,28 @@ struct KGCanvasView: View {
     @State private var altitudeLevel: Double = Double(KGAltitudeTier.signal.rawValue)
     @State private var hasLoadedGraph = false
     @State private var simulationController = KGSimulationController()
+    @State private var isFindPresented: Bool
+    @State private var findQuery: String
+    @State private var highlightedFindResultID: String?
     @GestureState private var toolbarInteractionActive = false
+
+    init(
+        viewModel: KGViewModel,
+        isActive: Bool,
+        initialFindPresented: Bool = false,
+        initialFindQuery: String = "",
+        reduceMotionOverride: Bool? = nil
+    ) {
+        self.viewModel = viewModel
+        self.isActive = isActive
+        self.reduceMotionOverride = reduceMotionOverride
+        _isFindPresented = State(initialValue: initialFindPresented)
+        _findQuery = State(initialValue: initialFindQuery)
+    }
+
+    private var shouldReduceMotion: Bool {
+        reduceMotionOverride ?? reduceMotion
+    }
 
     private var atlas: KGAtlasPresentation.Snapshot {
         KGAtlasPresentation.snapshot(
@@ -44,18 +67,26 @@ struct KGCanvasView: View {
         )
     }
 
+    private var findResults: [KGAtlasPresentation.FindResult] {
+        KGAtlasPresentation.findResults(
+            nodes: atlas.visibleNodes,
+            edges: atlas.visibleEdges,
+            query: findQuery
+        )
+    }
+
     var body: some View {
         GeometryReader { geo in
             let sidebarVisible = KGCanvasMetrics.sidebarVisible(
                 windowWidth: geo.size.width,
-                selectedEntityVisible: viewModel.selectedEntity != nil
+                selectedEntityVisible: viewModel.selectedNodeId != nil
             )
 
             HStack(spacing: 0) {
                 ZStack(alignment: .topLeading) {
                     atlasBackground
                     graphCanvas(snapshot: atlas)
-                    atlasToolbar(snapshot: atlas)
+                    atlasControls(snapshot: atlas)
                     atlasOverview(snapshot: atlas)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -103,7 +134,7 @@ struct KGCanvasView: View {
 
                 let loaded = await viewModel.loadGraphRepeatedly(onSuccessfulLoad: {
                     hasLoadedGraph = true
-                    if reduceMotion {
+                    if shouldReduceMotion {
                         _ = viewModel.tick(reduceMotionEnabled: true)
                     } else if !viewModel.isLayoutPinned {
                         startSimulation()
@@ -114,7 +145,7 @@ struct KGCanvasView: View {
                 }
             }
             .onChange(of: reduceMotion) { _, enabled in
-                if enabled {
+                if reduceMotionOverride ?? enabled {
                     _ = viewModel.tick(reduceMotionEnabled: true)
                     stopSimulation()
                 } else {
@@ -148,13 +179,17 @@ struct KGCanvasView: View {
             var environment = EnvironmentValues()
             environment.colorScheme = colorScheme
             let nodeIndex = Dictionary(uniqueKeysWithValues: snapshot.visibleNodes.map { ($0.id, $0) })
-            let labelledNodeIDs = labelledNodeIDs(for: snapshot.visibleNodes)
+            let labelledNodeIDs = KGAtlasPresentation.priorityLabelNodeIDs(
+                nodes: snapshot.visibleNodes,
+                selectedNodeID: viewModel.selectedNodeId,
+                scale: scale
+            )
 
             for edge in snapshot.visibleEdges {
                 guard let source = nodeIndex[edge.sourceId], let target = nodeIndex[edge.targetId] else { continue }
                 let highlighted = viewModel.selectedNodeId == edge.sourceId || viewModel.selectedNodeId == edge.targetId
                 KGEdgeRenderer.draw(
-                    edge: edge,
+                    edge: KGAtlasPresentation.lineOnlyEdge(edge),
                     sourcePos: source.position,
                     targetPos: target.position,
                     isHighlighted: highlighted,
@@ -190,6 +225,17 @@ struct KGCanvasView: View {
         .gesture(dragGesture)
         .gesture(magnifyGesture)
         .padding(KGCanvasMetrics.canvasPadding)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Knowledge atlas canvas")
+        .accessibilityValue(KGAtlasPresentation.canvasAccessibilityValue(
+            visibleEntityCount: snapshot.visibleNodes.count,
+            visibleRelationshipCount: snapshot.visibleEdges.count
+        ))
+        .accessibilityHint(KGAtlasPresentation.canvasAccessibilityHint)
+        .accessibilityIdentifier("knowledge-graph-canvas")
+        .accessibilityAction(named: Text("Find entity")) {
+            presentFindEntity()
+        }
     }
 
     private var atlasBackground: some View {
@@ -219,6 +265,25 @@ struct KGCanvasView: View {
         }
     }
 
+    private func atlasControls(snapshot: KGAtlasPresentation.Snapshot) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            atlasToolbar(snapshot: snapshot)
+
+            if isFindPresented {
+                KGFindEntityPanel(
+                    query: $findQuery,
+                    results: findResults,
+                    highlightedResultID: highlightedFindResultID,
+                    onHighlight: { highlightedFindResultID = $0 },
+                    onSelect: selectFindResult,
+                    onDismiss: dismissFindEntity
+                )
+                .frame(width: 420)
+            }
+        }
+        .padding(20)
+    }
+
     private func atlasToolbar(snapshot: KGAtlasPresentation.Snapshot) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .center) {
@@ -235,19 +300,42 @@ struct KGCanvasView: View {
                 labelChip(statusChipText(snapshot: snapshot))
             }
 
-            Picker("Graph mode", selection: Binding(
-                get: { viewModel.layoutMode },
-                set: { viewModel.setLayoutMode($0) }
-            )) {
-                ForEach(KGAtlasMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
+            HStack(spacing: 10) {
+                Picker("Graph mode", selection: Binding(
+                    get: { viewModel.layoutMode },
+                    set: { viewModel.setLayoutMode($0) }
+                )) {
+                    ForEach(KGAtlasMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
                 }
+                .pickerStyle(.segmented)
+                .accessibilityHint(modeEffectDescription(snapshot: snapshot))
+
+                Button {
+                    if isFindPresented {
+                        dismissFindEntity()
+                    } else {
+                        presentFindEntity()
+                    }
+                } label: {
+                    Label("Find entity", systemImage: "magnifyingglass")
+                        .labelStyle(.titleAndIcon)
+                }
+                .buttonStyle(.bordered)
+                .keyboardShortcut("f", modifiers: .command)
+                .accessibilityIdentifier("knowledge-graph-find-entity")
             }
-            .pickerStyle(.segmented)
+
+            Text(modeEffectDescription(snapshot: snapshot))
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("knowledge-graph-mode-effect")
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("Altitude")
+                    Text(viewModel.layoutMode == .importance ? "Minimum importance" : "Altitude")
                         .font(.system(size: 11, weight: .semibold))
                     Spacer()
                     Text(altitudeReadout(snapshot: snapshot))
@@ -286,7 +374,6 @@ struct KGCanvasView: View {
         .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .onTapGesture {}
         .simultaneousGesture(toolbarInteractionGesture)
-        .padding(20)
     }
 
     private func atlasOverview(snapshot: KGAtlasPresentation.Snapshot) -> some View {
@@ -429,8 +516,12 @@ struct KGCanvasView: View {
         switch viewModel.layoutMode {
         case .importance:
             Slider(value: $minimumImportance, in: 0...10, step: 1)
+                .accessibilityLabel("Minimum entity importance")
+                .accessibilityValue("\(Int(minimumImportance)) out of 10")
         case .tieredAltitude:
             Slider(value: $altitudeLevel, in: 0...Double(KGAltitudeTier.allCases.count - 1), step: 1)
+                .accessibilityLabel("Visible altitude tiers")
+                .accessibilityValue(atlas.activeAltitudeTier.title)
         }
     }
 
@@ -452,43 +543,174 @@ struct KGCanvasView: View {
         }
     }
 
-    private func labelledNodeIDs(for nodes: [KGNode]) -> Set<String> {
-        if scale >= 1.15 {
-            return Set(nodes.map(\.id))
-        }
+    private func modeEffectDescription(snapshot: KGAtlasPresentation.Snapshot) -> String {
+        KGAtlasPresentation.modeEffectDescription(
+            mode: viewModel.layoutMode,
+            minimumImportance: minimumImportance,
+            altitudeTier: snapshot.activeAltitudeTier
+        )
+    }
 
-        var labelled = Set<String>()
-        if let selectedNodeId = viewModel.selectedNodeId {
-            labelled.insert(selectedNodeId)
-        }
+    private func presentFindEntity() {
+        isFindPresented = true
+        highlightedFindResultID = findResults.first?.id
+    }
 
-        for node in nodes where node.name.localizedCaseInsensitiveCompare("Etan Heyman") == .orderedSame {
-            labelled.insert(node.id)
-        }
+    private func dismissFindEntity() {
+        isFindPresented = false
+        highlightedFindResultID = nil
+    }
 
-        let maxLabels = scale < 0.7 ? 18 : 36
-        for node in nodes
-            .sorted(by: { lhs, rhs in
-                if lhs.importance == rhs.importance {
-                    return lhs.linkedChunkCount > rhs.linkedChunkCount
-                }
-                return lhs.importance > rhs.importance
-            })
-            .prefix(maxLabels) {
-            labelled.insert(node.id)
-        }
-        return labelled
+    private func selectFindResult(_ id: String) {
+        guard atlas.visibleNodes.contains(where: { $0.id == id }) else { return }
+        stopSimulation()
+        viewModel.selectNode(id: id)
+        dismissFindEntity()
     }
 
     private func startSimulation() {
-        guard isActive, !reduceMotion, !viewModel.isLayoutPinned, hasLoadedGraph, viewModel.nodes.count > 1 else { return }
+        guard isActive, !shouldReduceMotion, !viewModel.isLayoutPinned, hasLoadedGraph, viewModel.nodes.count > 1 else { return }
         simulationController.setActive(true)
         simulationController.start {
-            viewModel.tick(reduceMotionEnabled: reduceMotion)
+            viewModel.tick(reduceMotionEnabled: shouldReduceMotion)
         }
     }
 
     private func stopSimulation() {
         simulationController.setActive(false)
+    }
+}
+
+struct KGFindEntityPanel: View {
+    @Binding var query: String
+    let results: [KGAtlasPresentation.FindResult]
+    let highlightedResultID: String?
+    let onHighlight: (String?) -> Void
+    let onSelect: (String) -> Void
+    let onDismiss: () -> Void
+    @FocusState private var queryFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+
+                TextField("Find entity", text: $query)
+                    .textFieldStyle(.plain)
+                    .focused($queryFocused)
+                    .accessibilityLabel("Find entity")
+                    .accessibilityHint("Searches the entities currently visible in the atlas")
+                    .accessibilityIdentifier("knowledge-graph-find-field")
+
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close Find entity")
+            }
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.brainBarTextPrimary.opacity(0.06))
+            )
+
+            if results.isEmpty {
+                Text("No visible entities match “\(query)”.")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 12)
+                    .accessibilityIdentifier("knowledge-graph-find-empty")
+            } else {
+                ScrollView(.vertical, showsIndicators: true) {
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        ForEach(results) { result in
+                            Button {
+                                onSelect(result.id)
+                            } label: {
+                                HStack(alignment: .center, spacing: 10) {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(result.name)
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .lineLimit(1)
+                                        Text("\(result.entityTypeTitle) · \(result.relationshipSummary)")
+                                            .font(.system(size: 10, weight: .medium))
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                    Spacer(minLength: 8)
+                                    Image(systemName: "arrow.right.circle.fill")
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .fill(result.id == highlightedResultID
+                                            ? Color.brainBarAccent.opacity(0.16)
+                                            : Color.brainBarTextPrimary.opacity(0.035))
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(result.accessibilityLabel)
+                            .accessibilityHint("Selects this entity and opens its details")
+                            .accessibilityIdentifier("knowledge-graph-find-result-\(result.id)")
+                            .onHover { hovering in
+                                if hovering {
+                                    onHighlight(result.id)
+                                }
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 250)
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.brainBarGlassPrimary.opacity(0.96))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(Color.brainBarTextPrimary.opacity(0.1), lineWidth: 1)
+                )
+        )
+        .shadow(color: .black.opacity(0.12), radius: 16, y: 8)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Find entity results")
+        .accessibilityIdentifier("knowledge-graph-find-results")
+        .onAppear {
+            queryFocused = true
+            if highlightedResultID == nil {
+                onHighlight(results.first?.id)
+            }
+        }
+        .onChange(of: results.map(\.id)) { _, ids in
+            if !ids.contains(highlightedResultID ?? "") {
+                onHighlight(ids.first)
+            }
+        }
+        .onMoveCommand { direction in
+            let move: KGAtlasPresentation.FindMove?
+            switch direction {
+            case .up: move = .up
+            case .down: move = .down
+            default: move = nil
+            }
+            guard let move else { return }
+            onHighlight(KGAtlasPresentation.nextFindResultID(
+                currentID: highlightedResultID,
+                move: move,
+                results: results
+            ))
+        }
+        .onSubmit {
+            if let id = highlightedResultID ?? results.first?.id {
+                onSelect(id)
+            }
+        }
+        .onExitCommand(perform: onDismiss)
     }
 }

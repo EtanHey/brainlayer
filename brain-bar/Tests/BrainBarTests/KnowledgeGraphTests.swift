@@ -52,6 +52,10 @@ final class KGSidebarViewTests: XCTestCase {
 
     @MainActor
     func testRendersFilesAccordionQAImage() throws {
+        guard let renderDirectory = ProcessInfo.processInfo.environment["BRAINBAR_RENDER_DIR"] else {
+            throw XCTSkip("Set BRAINBAR_RENDER_DIR to render graph QA artifacts")
+        }
+
         let entity = EntityCard(
             id: "person-etan",
             name: "Etan Heyman",
@@ -98,21 +102,25 @@ final class KGSidebarViewTests: XCTestCase {
         )
         .frame(width: KGCanvasMetrics.sidebarWidth, height: 720)
 
-        let renderer = ImageRenderer(content: view)
-        renderer.scale = 2
-        guard let image = renderer.nsImage,
-              let tiff = image.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiff),
-              let png = bitmap.representation(using: .png, properties: [:]) else {
+        let host = NSHostingView(rootView: view.environment(\.colorScheme, .dark))
+        host.frame = NSRect(x: 0, y: 0, width: KGCanvasMetrics.sidebarWidth, height: 720)
+        host.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+        host.layoutSubtreeIfNeeded()
+
+        guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
+            XCTFail("Expected KG sidebar renderer to produce a bitmap")
+            return
+        }
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+
+        guard let png = bitmap.representation(using: .png, properties: [:]) else {
             XCTFail("Expected KG sidebar renderer to produce a PNG")
             return
         }
 
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("docs.local/wave3-qa/bug7-atlas-files-accordion.png")
+        let url = URL(fileURLWithPath: renderDirectory, isDirectory: true)
+            .appendingPathComponent("graph-files-accordion.png")
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -1271,10 +1279,36 @@ final class KGViewModelTests: XCTestCase {
         vm.nodes.removeAll()
         vm.selectNode(id: "a")
 
+        XCTAssertNil(vm.selectedNodeId)
         XCTAssertNil(vm.selectedEntity)
         XCTAssertTrue(vm.isLayoutPinned)
         XCTAssertFalse(vm.isLoadingSelectedEntityChunks)
         XCTAssertTrue(vm.selectedEntityChunks.isEmpty)
+    }
+
+    func testFailedEntityLookupClearsSelectionSoSidebarCanCollapse() async throws {
+        try db.insertEntity(id: "a", type: "person", name: "Alice")
+        try db.insertEntity(id: "b", type: "project", name: "BrainLayer")
+        try db.insertRelation(sourceId: "a", targetId: "b", relationType: "builds")
+        let vm = KGViewModel(database: db)
+        await vm.loadGraph()
+        XCTAssertTrue(vm.nodes.contains { $0.id == "a" })
+
+        guard let handle = db.dbHandle else {
+            XCTFail("Expected database handle")
+            return
+        }
+        XCTAssertEqual(
+            sqlite3_exec(handle, "DELETE FROM kg_entities WHERE id = 'a'", nil, nil, nil),
+            SQLITE_OK
+        )
+
+        vm.selectNode(id: "a")
+
+        XCTAssertNil(vm.selectedNodeId)
+        XCTAssertNil(vm.selectedEntity)
+        XCTAssertFalse(vm.isLoadingSelectedEntityChunks)
+        XCTAssertFalse(vm.isLoadingSelectedEntityFiles)
     }
 
     func testSelectNodeNilDeselects() async throws {
