@@ -43,13 +43,13 @@ final class DesignTokensTests: XCTestCase {
         XCTAssertEqual(PipelineIndicatorStatus.unavailable.stateTheme, .error)
     }
 
-    func testDashboardLayoutUsesAiryGlassSpacingAndHeroScale() {
+    func testDashboardLayoutUsesCompactOperatorDensity() {
         let layout = BrainBarDashboardLayout(containerSize: CGSize(width: 1100, height: 760))
 
-        XCTAssertGreaterThanOrEqual(layout.outerPadding, 36)
-        XCTAssertGreaterThanOrEqual(layout.sectionSpacing, 28)
-        XCTAssertGreaterThanOrEqual(layout.gridSpacing, 20)
-        XCTAssertEqual(layout.metricValueFontSize, BrainBarDesignTokens.TypeScale.hero, accuracy: 0.001)
+        XCTAssertLessThanOrEqual(layout.outerPadding, 24)
+        XCTAssertLessThanOrEqual(layout.sectionSpacing, 20)
+        XCTAssertLessThanOrEqual(layout.gridSpacing, 16)
+        XCTAssertLessThanOrEqual(layout.metricValueFontSize, 40)
         XCTAssertEqual(layout.panelCornerRadius, BrainBarDesignTokens.Radius.xl, accuracy: 0.001)
     }
 
