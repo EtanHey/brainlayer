@@ -2133,6 +2133,8 @@ enum BrainBarPipelinePanelPreview {
                 replayDebtExpanded: replayDebtExpanded,
                 selectedTimeframe: selectedTimeframe
             )
+            .environment(\.colorScheme, .dark)
+            .transaction { $0.disablesAnimations = true }
         )
     }
 }

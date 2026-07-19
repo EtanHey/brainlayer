@@ -247,6 +247,40 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
     }
 
     @MainActor
+    func testPipelinePreviewIgnoresAmbientSystemAppearance() throws {
+        try XCTSkipIf(
+            shouldSkipDisplayDependentRenderInCI,
+            "Dashboard PNG render verification is display-dependent; set BRAINBAR_RENDER_IN_CI=1 to run in CI."
+        )
+
+        let stats = BrainBarDashboardFixture.makeStats(activityWindowMinutes: 180)
+        let size = NSSize(width: 1_120, height: 1_420)
+        let darkParent = BrainBarPipelinePanelPreview.make(
+            stats: stats,
+            containerSize: size,
+            fetchedAt: BrainBarDashboardFixture.fetchedAt,
+            selectedTimeframe: .threeHour
+        )
+        .environment(\.colorScheme, .dark)
+        let lightParent = BrainBarPipelinePanelPreview.make(
+            stats: stats,
+            containerSize: size,
+            fetchedAt: BrainBarDashboardFixture.fetchedAt,
+            selectedTimeframe: .threeHour
+        )
+        .environment(\.colorScheme, .light)
+
+        let (darkPNG, _) = try renderPNG(darkParent, size: size)
+        let (lightPNG, _) = try renderPNG(lightParent, size: size)
+
+        XCTAssertEqual(
+            lightPNG,
+            darkPNG,
+            "The deterministic proof seam must pin dark appearance instead of inheriting the host Mac setting."
+        )
+    }
+
+    @MainActor
     func testDashboardReplayDebtDisclosureRendersExpanded() throws {
         try XCTSkipIf(
             shouldSkipDisplayDependentRenderInCI,
