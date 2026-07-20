@@ -113,6 +113,75 @@ final class DashboardTests: XCTestCase {
         XCTAssertGreaterThan(stats.databaseSizeBytes, 0)
     }
 
+    func testDashboardEnrichedSuccessfullyExcludesFailedSkippedAndPendingRows() throws {
+        for id in [
+            "enrich-success",
+            "enrich-failed",
+            "enrich-skipped",
+            "enrich-duplicate",
+            "enrich-too-short",
+            "enrich-pending",
+        ] {
+            try db.insertChunk(
+                id: id,
+                content: "Enrichment truth fixture \(id)",
+                sessionId: "dashboard",
+                project: "brainlayer",
+                contentType: "assistant_text",
+                importance: 5
+            )
+        }
+        db.exec("UPDATE chunks SET enriched_at = datetime('now'), enrich_status = 'success' WHERE id = 'enrich-success'")
+        db.exec("UPDATE chunks SET enrich_status = 'failed' WHERE id = 'enrich-failed'")
+        db.exec("UPDATE chunks SET enrich_status = 'skipped' WHERE id = 'enrich-skipped'")
+        db.exec("UPDATE chunks SET enrich_status = 'duplicate' WHERE id = 'enrich-duplicate'")
+        db.exec("UPDATE chunks SET enrich_status = 'too_short' WHERE id = 'enrich-too-short'")
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
+
+        XCTAssertEqual(stats.chunkCount, 6)
+        XCTAssertEqual(
+            stats.enrichedChunkCount,
+            1,
+            "The ENRICHED SUCCESSFULLY numerator counts only enrich_status='success'."
+        )
+        XCTAssertEqual(stats.pendingEnrichmentCount, 1)
+        XCTAssertEqual(stats.skippedEnrichmentCount, 3)
+        XCTAssertEqual(stats.enrichmentPercent, 100.0 / 6.0, accuracy: 0.001)
+    }
+
+    func testWatcherLaneDoesNotCallAnEmptyLatestBucketLive() {
+        let stats = DashboardStats(
+            chunkCount: 2,
+            enrichedChunkCount: 0,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 0,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 0,
+            recentActivityBuckets: [0, 0, 0],
+            recentAgentWriteBuckets: [0, 0, 0],
+            recentWatcherWriteBuckets: [2, 0, 0],
+            recentEnrichmentBuckets: [0, 0, 0],
+            activityWindowMinutes: 15,
+            watcherProcessProbeResult: .running(pid: 42),
+            watcherRecentDistinctChunkCount: 2,
+            watcherFlowReadability: .readable
+        )
+
+        let lane = DashboardFlowSummary.derive(daemon: nil, stats: stats).lane(for: .jsonlWatcher)
+
+        XCTAssertEqual(lane.status, .live)
+        XCTAssertEqual(lane.lastEventText, "2 watcher-ingested chunks in Last 15m")
+    }
+
+    @MainActor
+    func testNoRecentWatcherFlowFixtureDoesNotRenderWatcherIngestActivity() {
+        let stats = BrainBarDashboardFixture.watcherRunningNoRecentFlowStats
+
+        XCTAssertEqual(stats.watcherRecentDistinctChunkCount, 0)
+        XCTAssertEqual(stats.recentWatcherWriteBuckets, Array(repeating: 0, count: stats.bucketCount))
+    }
+
     func testDashboardStatsReportsPerSignalCoverageAndBacklogs() throws {
         for id in ["signal-1", "signal-2", "signal-3", "signal-archived"] {
             try db.insertChunk(
@@ -262,7 +331,6 @@ final class DashboardTests: XCTestCase {
                 WHERE id = '\(fixture.id)'
             """)
         }
-
         let stats = try db.dashboardStats(activityWindowMinutes: 60, bucketCount: 12)
 
         XCTAssertEqual(stats.recentEnrichmentBuckets, [0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1])
@@ -298,6 +366,19 @@ final class DashboardTests: XCTestCase {
                 WHERE id = '\(fixture.id)'
             """)
         }
+        db.exec("""
+            CREATE TABLE watcher_liveness_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chunk_id TEXT NOT NULL,
+                ingested_at INTEGER NOT NULL
+            )
+        """)
+        for fixture in fixtures where fixture.source == "realtime_watcher" || fixture.source == "realtime" {
+            db.exec("""
+                INSERT INTO watcher_liveness_events (chunk_id, ingested_at)
+                VALUES ('\(fixture.id)', CAST(strftime('%s', 'now', '\(Int(fixture.offset)) seconds') AS INTEGER))
+            """)
+        }
 
         let stats = try db.dashboardStats(activityWindowMinutes: 60, bucketCount: 12)
 
@@ -306,7 +387,7 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.recentActivityBuckets, [0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 8])
     }
 
-    func testDashboardFlowSummarySurfacesAllCommittedChunksAsOwnLane() {
+    func testDashboardFlowSummarySurfacesSourceTimeChunkRowsAsOwnLane() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let stats = DashboardStats(
             chunkCount: 9,
@@ -329,12 +410,12 @@ final class DashboardTests: XCTestCase {
             .derive(daemon: nil, stats: stats, now: now)
             .lane(for: .allCommits)
 
-        XCTAssertEqual(allCommitsLane.name, "All commits")
+        XCTAssertEqual(allCommitsLane.name, "Chunk rows")
         XCTAssertEqual(allCommitsLane.values, [0, 0, 0, 9])
         XCTAssertEqual(allCommitsLane.status, .live)
-        XCTAssertEqual(allCommitsLane.statusText, "All commits live now")
+        XCTAssertEqual(allCommitsLane.statusText, "Chunk rows landing now")
         XCTAssertEqual(allCommitsLane.volumeText, "9 in 1h")
-        XCTAssertEqual(allCommitsLane.sparklineLabel, "All committed chunks over Last 1h")
+        XCTAssertEqual(allCommitsLane.sparklineLabel, "Chunk rows by source time over Last 1h")
     }
 
     func testDashboardFlowLabelsWriteSeriesBySourcePath() {
@@ -354,8 +435,8 @@ final class DashboardTests: XCTestCase {
 
         let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: Date(timeIntervalSince1970: 1_764_236_400))
 
-        XCTAssertEqual(summary.ingress.primarySeriesLabel, "Agent MCP stores")
-        XCTAssertEqual(summary.ingress.secondarySeriesLabel, "JSONL watcher")
+        XCTAssertEqual(summary.ingress.primarySeriesLabel, "Agent-origin chunks")
+        XCTAssertEqual(summary.ingress.secondarySeriesLabel, "Watcher-ingested chunks")
         XCTAssertNil(summary.ingress.tertiarySeriesLabel)
         XCTAssertTrue(summary.ingress.tertiaryValues.isEmpty)
     }
@@ -406,7 +487,7 @@ final class DashboardTests: XCTestCase {
         let source = try brainBarSourceFile("Sources/BrainBar/BrainDatabase.swift")
         let methodRange = try XCTUnwrap(source.range(of: "func dashboardStats("))
         let methodSource = source[methodRange.lowerBound...]
-        let queueSnapshotRange = try XCTUnwrap(methodSource.range(of: "let pendingStoreFlushQueue = pendingStoreQueueSnapshot()"))
+        let queueSnapshotRange = try XCTUnwrap(methodSource.range(of: "let replayDebtBreakdown = replayDebtBreakdown()"))
         let transactionRange = try XCTUnwrap(methodSource.range(of: "try withReadTransaction"))
 
         XCTAssertLessThan(
@@ -449,8 +530,37 @@ final class DashboardTests: XCTestCase {
         XCTAssertTrue(source.contains("private struct BrainBarDashboardContent: View"))
         XCTAssertTrue(source.contains("@ObservedObject var collector: StatsCollector"))
         XCTAssertTrue(source.contains("BrainBarDashboardContent("))
-        XCTAssertTrue(source.contains("collector.lastDataFetchedAt == nil"))
+        XCTAssertTrue(source.contains("collector.snapshotFreshnessState.isLoading"))
         XCTAssertTrue(source.contains("Connecting to daemon and loading dashboard data"))
+    }
+
+    func testSnapshotFreshnessHasInjectedClockStrictSixtySecondBoundaryAndIndependentTicker() throws {
+        let collectorSource = try brainBarSourceFile("Sources/BrainBar/Dashboard/StatsCollector.swift")
+        let stateSource = try brainBarSourceFile("Sources/BrainBar/Dashboard/PipelineState.swift")
+        let combined = collectorSource + "\n" + stateSource
+
+        XCTAssertTrue(
+            combined.contains("SnapshotFreshnessState"),
+            "Freshness must be a typed state rather than an implicit lastDataFetchedAt nil check."
+        )
+        XCTAssertTrue(
+            combined.contains("snapshotFreshnessThreshold: TimeInterval = 60")
+                || combined.contains("snapshotFreshnessThreshold = 60"),
+            "The named snapshot freshness threshold must be exactly 60 seconds."
+        )
+        XCTAssertTrue(
+            combined.contains("nowProvider") || combined.contains("clock:"),
+            "An injected clock is required to prove the exact 60s versus >60s boundary."
+        )
+        XCTAssertTrue(
+            combined.contains("freshnessTicker") || combined.contains("freshnessTimer"),
+            "Freshness presentation must advance without waiting for a fetch callback."
+        )
+        XCTAssertTrue(
+            combined.contains("> snapshotFreshnessThreshold")
+                || combined.contains("> Self.snapshotFreshnessThreshold"),
+            "Exactly 60 seconds remains LIVE; only age >60 seconds becomes STALE."
+        )
     }
 
     func testDashboardRendersPerSignalCoverageSection() throws {
@@ -745,7 +855,7 @@ final class DashboardTests: XCTestCase {
         )
     }
 
-    func testDashboardStatsCountsTerminalEnrichmentStatusesAsCovered() throws {
+    func testDashboardStatsCountsOnlySuccessfulEnrichmentAndExposesOtherTerminalStates() throws {
         try db.insertChunk(
             id: "dash-success",
             content: "Successfully enriched chunk",
@@ -773,27 +883,29 @@ final class DashboardTests: XCTestCase {
         db.exec("""
             UPDATE chunks
             SET enriched_at = datetime('now', '-5 minutes'),
-                enrich_status = 'success'
+                enrich_status = ' Success '
             WHERE id = 'dash-success'
         """)
         db.exec("""
             UPDATE chunks
             SET enriched_at = 'skipped:duplicate',
-                enrich_status = 'duplicate'
+                enrich_status = 'skipped'
             WHERE id = 'dash-duplicate'
         """)
         db.exec("""
             UPDATE chunks
             SET enriched_at = NULL,
-                enrich_status = 'noise'
+                enrich_status = 'failed'
             WHERE id = 'dash-noise'
         """)
 
         let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
 
-        XCTAssertEqual(stats.enrichedChunkCount, 3)
+        XCTAssertEqual(stats.enrichedChunkCount, 1)
+        XCTAssertEqual(stats.failedEnrichmentCount, 1)
+        XCTAssertEqual(stats.skippedEnrichmentCount, 1)
         XCTAssertEqual(stats.pendingEnrichmentCount, 0)
-        XCTAssertEqual(stats.enrichmentPercent, 100.0, accuracy: 0.001)
+        XCTAssertEqual(stats.enrichmentPercent, 100.0 / 3.0, accuracy: 0.001)
         XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 1)
         let lastEnrichedAt = try XCTUnwrap(stats.lastEnrichedAt)
         XCTAssertLessThan(abs(lastEnrichedAt.timeIntervalSinceNow + 300), 10)
@@ -935,9 +1047,60 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.pendingStoreOldestQueuedAt, Date(timeIntervalSince1970: 1_200))
         XCTAssertEqual(summary.queue.storeReplayDebtDepth, 1)
         XCTAssertEqual(summary.queue.storeDepthText, "1 replay debt")
-        XCTAssertEqual(summary.queue.detail, "1 replay debt, oldest 2m.")
+        XCTAssertEqual(
+            summary.queue.detail,
+            "pending stores: 0; durable queue: 0; repository fallback: 1; deduplicated total: 1; oldest 2m."
+        )
         XCTAssertEqual(agentStores.status, .idle)
-        XCTAssertEqual(agentStores.statusText, "No agent MCP stores")
+        XCTAssertEqual(agentStores.statusText, "No agent-origin chunks")
+    }
+
+    func testDashboardStatsCountsUnreadableFallbackAsPartialConservativeDebt() throws {
+        let fallbackPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("brain-store-fallback", isDirectory: true)
+            .appendingPathComponent("unreadable.md")
+        try FileManager.default.createDirectory(
+            at: fallbackPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data([0xFF, 0xFE, 0xFD]).write(to: fallbackPath)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+        let fallback = stats.replayDebtBreakdown.repositoryFallback
+
+        XCTAssertEqual(fallback.snapshot.depth, 1, "Unreadable fallback files are possible debt, never zero evidence.")
+        XCTAssertFalse(fallback.readability.isReadable)
+        XCTAssertTrue(stats.replayDebtBreakdown.isPartial)
+        XCTAssertTrue(stats.replayDebtBreakdown.detailText.contains("repository fallback"))
+    }
+
+    func testDashboardStatsMarksFallbackPartialWhenRecursiveSubdirectoryCannotBeRead() throws {
+        let blockedDirectory = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("brain-store-fallback", isDirectory: true)
+            .appendingPathComponent("blocked", isDirectory: true)
+        try FileManager.default.createDirectory(at: blockedDirectory, withIntermediateDirectories: true)
+        try "pending debt hidden below unreadable directory\n".write(
+            to: blockedDirectory.appendingPathComponent("pending.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: blockedDirectory.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: blockedDirectory.path)
+        }
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+        let fallback = stats.replayDebtBreakdown.repositoryFallback
+
+        XCTAssertFalse(
+            fallback.readability.isReadable,
+            "A skipped recursive subtree makes repository fallback evidence partial, never trustworthy empty evidence."
+        )
+        XCTAssertTrue(stats.replayDebtBreakdown.isPartial)
     }
 
     func testDashboardStatsIncludesDurableStoreQueueDepth() throws {
@@ -973,6 +1136,30 @@ final class DashboardTests: XCTestCase {
 
         XCTAssertEqual(stats.pendingStoreQueueDepth, 2)
         XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 0)
+    }
+
+    func testDashboardStatsMarksNonRegularJSONLQueueEntryAsPartialConservativeDebt() throws {
+        let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pending-stores-dashboard-empty-\(UUID().uuidString).jsonl")
+        let durableQueue = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("brainlayer-durable-nonregular-\(UUID().uuidString)", isDirectory: true)
+        let suspiciousEntry = durableQueue.appendingPathComponent("unreadable.jsonl", isDirectory: true)
+        let restoreQueuePath = setDashboardPendingStoreQueuePath(queuePath)
+        let restoreDurableQueue = setDashboardDurableStoreQueuePath(durableQueue)
+        defer {
+            restoreQueuePath()
+            restoreDurableQueue()
+            try? FileManager.default.removeItem(at: queuePath)
+            try? FileManager.default.removeItem(at: durableQueue)
+        }
+        try FileManager.default.createDirectory(at: suspiciousEntry, withIntermediateDirectories: true)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+        let durable = stats.replayDebtBreakdown.durableQueue
+
+        XCTAssertEqual(durable.snapshot.depth, 1)
+        XCTAssertFalse(durable.readability.isReadable)
+        XCTAssertTrue(stats.replayDebtBreakdown.isPartial)
     }
 
     func testDashboardStatsCountsDurableStoreQueueLinesAndSkipsNonStoreEvents() throws {
@@ -1056,6 +1243,65 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.pendingStoreQueueDepth, 1)
         XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 1)
         XCTAssertEqual(stats.pendingStoreOldestQueuedAt, Date(timeIntervalSince1970: 1_800))
+
+        let detail = DashboardFlowSummary.derive(daemon: nil, stats: stats).queue.detail.lowercased()
+        XCTAssertTrue(detail.contains("pending stores: 1"), "Replay debt must retain its pending-store component.")
+        XCTAssertTrue(detail.contains("durable queue: 1"), "Replay debt must retain its durable-queue component.")
+        XCTAssertTrue(detail.contains("repository fallback: 1"), "Replay debt must retain its repository-fallback component.")
+        XCTAssertTrue(
+            detail.contains("deduplicated total: 1"),
+            "The three source components share one identity and must aggregate to one debt item."
+        )
+    }
+
+    func testDashboardReplayDebtRetainsKnownComponentsAndMarksAggregatePartialWhenInputUnreadable() throws {
+        let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pending-stores-dashboard-partial-\(UUID().uuidString).jsonl")
+        let unreadableQueueInput = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("brainlayer-durable-unreadable-\(UUID().uuidString)")
+        let fallbackPath = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("decisions", isDirectory: true)
+            .appendingPathComponent("known-fallback.md")
+        let restoreQueuePath = setDashboardPendingStoreQueuePath(queuePath)
+        let restoreDurableQueue = setDashboardDurableStoreQueuePath(unreadableQueueInput)
+        defer {
+            restoreQueuePath()
+            restoreDurableQueue()
+            try? FileManager.default.removeItem(at: queuePath)
+            try? FileManager.default.removeItem(at: unreadableQueueInput)
+        }
+
+        try """
+        {"content":"known pending","tags":["queue"],"importance":5,"source":"mcp","queued_at":"1970-01-01T00:30:00Z","chunk_id":"pending-known"}
+        """.write(to: queuePath, atomically: true, encoding: .utf8)
+        try "not a readable queue directory\n".write(
+            to: unreadableQueueInput,
+            atomically: true,
+            encoding: .utf8
+        )
+        try FileManager.default.createDirectory(
+            at: fallbackPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        ---
+        intended_brain_store: true
+        queued_chunk_id: fallback-known
+        chunk_id:
+        timestamp: 1970-01-01T00:31:00Z
+        ---
+        known fallback body
+        """.write(to: fallbackPath, atomically: true, encoding: .utf8)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+        let detail = DashboardFlowSummary.derive(daemon: nil, stats: stats).queue.detail.lowercased()
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 2, "Readable components remain visible when another source is unreadable.")
+        XCTAssertEqual(stats.pendingStoreFlushQueueDepth, 1)
+        XCTAssertTrue(detail.contains("partial"), "The aggregate must disclose that one replay-debt input was unreadable.")
+        XCTAssertTrue(detail.contains("durable"), "The unreadable durable component must be named, not silently treated as empty.")
     }
 
     func testDashboardStatsDeduplicatesUnmarkedFallbackAgainstDurableFallbackChunkID() throws {
@@ -2148,6 +2394,58 @@ final class DashboardTests: XCTestCase {
         try await waitForCollector(collector) { $0.stats.chunkCount == 1 }
 
         XCTAssertEqual(collector.stats.chunkCount, 1)
+    }
+
+    @MainActor
+    func testStatsCollectorFetchErrorRetainsLastGoodSnapshotAndPublishesVisibleFailure() async throws {
+        try db.insertChunk(
+            id: "last-good-survives-error",
+            content: "The last successful dashboard snapshot must survive a later read failure",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
+        )
+        defer { collector.stop() }
+
+        collector.refresh(force: true)
+        try await waitForCollector(collector) { !$0.isRefreshing && $0.lastDataFetchedAt != nil }
+        let lastGoodStats = collector.stats
+        let lastSuccessAt = try XCTUnwrap(collector.lastDataFetchedAt)
+        XCTAssertEqual(lastGoodStats.chunkCount, 1)
+
+        db.close()
+        try FileManager.default.removeItem(atPath: tempDBPath)
+        try? FileManager.default.removeItem(atPath: tempDBPath + "-wal")
+        try? FileManager.default.removeItem(atPath: tempDBPath + "-shm")
+
+        collector.refresh(force: true)
+        try await waitForCollector(collector) { !$0.isRefreshing }
+
+        XCTAssertEqual(
+            collector.stats,
+            lastGoodStats,
+            "A failed refresh retains and dims the last good snapshot instead of fabricating zero values."
+        )
+        XCTAssertEqual(collector.lastDataFetchedAt, lastSuccessAt)
+
+        let collectorSource = try brainBarSourceFile("Sources/BrainBar/Dashboard/StatsCollector.swift")
+        let viewSource = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
+        XCTAssertTrue(
+            collectorSource.contains("lastFetchError") || collectorSource.contains("currentFetchError"),
+            "The collector must publish the unresolved fetch error separately from last-good data."
+        )
+        XCTAssertTrue(
+            viewSource.contains("collector.snapshotFreshnessState")
+                && viewSource.contains("case .error(let message")
+                && viewSource.contains("Current error:"),
+            "The dashboard must render the typed current fetch failure with last-success age."
+        )
     }
 
     @MainActor

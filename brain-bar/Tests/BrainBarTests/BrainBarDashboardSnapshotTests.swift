@@ -117,6 +117,253 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
         print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
     }
 
+    @MainActor
+    func testDashboardOperatorStatesRenderDeterministically() throws {
+        try XCTSkipIf(
+            shouldSkipDisplayDependentRenderInCI,
+            "Dashboard PNG render verification is display-dependent; set BRAINBAR_RENDER_IN_CI=1 to run in CI."
+        )
+
+        for state in BrainBarDashboardFixture.OperatorState.allCases {
+            let collector = BrainBarDashboardFixture.makeCollector(state)
+            let view = BrainBarDashboardPreview.make(collector: collector)
+            let size = state == .loading
+                ? NSSize(width: 960, height: 700)
+                : NSSize(width: 960, height: 1_820)
+            let (png, bitmap) = try renderPNG(view, size: size)
+            let name = "dashboard-state-\(String(describing: state))"
+            let url = try writePNG(png, name: name)
+
+            XCTAssertGreaterThan(png.count, 5_000, "\(name) PNG looks empty")
+            XCTAssertGreaterThan(distinctSampledColorCount(in: bitmap), 16, "\(name) render is too flat")
+            print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
+        }
+    }
+
+    @MainActor
+    func testDashboardWatcherTruthStatesRenderDeterministically() throws {
+        try XCTSkipIf(
+            shouldSkipDisplayDependentRenderInCI,
+            "Dashboard PNG render verification is display-dependent; set BRAINBAR_RENDER_IN_CI=1 to run in CI."
+        )
+
+        let states: [(BrainBarDashboardFixture.OperatorState, String)] = [
+            (.watcherOffline, "dashboard-watcher-offline"),
+            (.watcherUnknown, "dashboard-watcher-unknown"),
+            (.watcherRunningNoRecentFlow, "dashboard-watcher-running-no-recent-flow"),
+            (.watcherStalledWithPendingWork, "dashboard-watcher-stalled-pending-work"),
+        ]
+
+        for (state, name) in states {
+            let collector = BrainBarDashboardFixture.makeCollector(state)
+            let view = BrainBarDashboardPreview.make(collector: collector)
+            let (png, bitmap) = try renderPNG(view, size: NSSize(width: 960, height: 1_820))
+            let url = try writePNG(png, name: name)
+
+            XCTAssertGreaterThan(png.count, 5_000, "\(name) PNG looks empty")
+            XCTAssertGreaterThan(distinctSampledColorCount(in: bitmap), 16, "\(name) render is too flat")
+            print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
+        }
+    }
+
+    @MainActor
+    func testDashboardChartWindowsAndTooltipSummaryRenderDeterministically() throws {
+        try XCTSkipIf(
+            shouldSkipDisplayDependentRenderInCI,
+            "Dashboard PNG render verification is display-dependent; set BRAINBAR_RENDER_IN_CI=1 to run in CI."
+        )
+
+        let windows: [(PipelineTimeframe, String)] = [
+            (.threeHour, "dashboard-chart-window-3h"),
+            (.day, "dashboard-chart-window-24h"),
+        ]
+        for (timeframe, name) in windows {
+            let windowedStats = BrainBarDashboardFixture.makeStats(
+                activityWindowMinutes: timeframe.windowMinutes
+            )
+            let windowedSummary = DashboardFlowSummary.derive(
+                daemon: nil,
+                stats: windowedStats,
+                now: BrainBarDashboardFixture.fetchedAt
+            )
+            XCTAssertEqual(
+                windowedSummary.allCommits.windowLabel,
+                DashboardMetricFormatter.windowLabel(minutes: timeframe.windowMinutes)
+            )
+            XCTAssertTrue(
+                windowedSummary.allCommits.volumeText.hasSuffix("in \(timeframe.windowMinutes == 180 ? "3h" : "24h")"),
+                "Chart footer count must follow the selected window instead of retaining a 1h anchor."
+            )
+            XCTAssertNotEqual(
+                windowedSummary.allCommits.rateText,
+                "0.0/min",
+                "A non-empty wider-window fixture must not render a false zero headline rate."
+            )
+            let view = BrainBarPipelinePanelPreview.make(
+                stats: windowedStats,
+                containerSize: CGSize(width: 1_120, height: 1_420),
+                fetchedAt: BrainBarDashboardFixture.fetchedAt,
+                selectedTimeframe: timeframe
+            )
+            let (png, bitmap) = try renderPNG(view, size: NSSize(width: 1_120, height: 1_420))
+            let url = try writePNG(png, name: name)
+
+            XCTAssertGreaterThan(png.count, 5_000, "\(name) PNG looks empty")
+            XCTAssertGreaterThan(distinctSampledColorCount(in: bitmap), 16, "\(name) render is too flat")
+            print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
+        }
+
+        let disclosure = "Window: Last 1h · Count: hovered value below · Unit: unique chunk IDs first seen in this window · Clock: ingest time"
+        let accessibilitySummary = "WATCHER INGESTED CHUNKS. Window: Last 1h. Count: 14. Unit: unique chunk IDs first seen in this window. Clock: ingest time."
+        let presentation = SparklineChartPresentation(
+            label: "WATCHER INGESTED CHUNKS",
+            values: [1, 0, 2, 1, 0, 3, 1, 2, 0, 1, 2, 1],
+            activityWindowMinutes: 60,
+            latestBucketName: "latest ingest bucket",
+            fetchedAt: BrainBarDashboardFixture.fetchedAt,
+            metricDisclosure: disclosure,
+            accessibilitySummary: accessibilitySummary
+        )
+        XCTAssertTrue(presentation.accessibilityValue.contains(accessibilitySummary))
+        let tooltipView = SparklineChart(
+            presentation: presentation,
+            accentColor: BrainBarDesignTokens.Colors.seriesWatcher,
+            previewHoveredBucket: 7,
+            previewHoverX: 430
+        )
+        .frame(width: 840, height: 320)
+        .padding(20)
+        .background(Color.brainBarBackgroundBase)
+        .environment(\.colorScheme, .dark)
+
+        let (tooltipPNG, tooltipBitmap) = try renderPNG(
+            tooltipView,
+            size: NSSize(width: 880, height: 360)
+        )
+        let tooltipURL = try writePNG(tooltipPNG, name: "dashboard-chart-tooltip-summary")
+        XCTAssertGreaterThan(tooltipPNG.count, 5_000, "dashboard tooltip PNG looks empty")
+        XCTAssertGreaterThan(distinctSampledColorCount(in: tooltipBitmap), 16, "dashboard tooltip render is too flat")
+        print("[brainbar-render] wrote \(tooltipURL.path) (\(tooltipPNG.count) bytes)")
+    }
+
+    @MainActor
+    func testPipelinePreviewIgnoresAmbientSystemAppearance() throws {
+        try XCTSkipIf(
+            shouldSkipDisplayDependentRenderInCI,
+            "Dashboard PNG render verification is display-dependent; set BRAINBAR_RENDER_IN_CI=1 to run in CI."
+        )
+
+        let stats = BrainBarDashboardFixture.makeStats(activityWindowMinutes: 180)
+        let size = NSSize(width: 1_120, height: 1_420)
+        let darkParent = BrainBarPipelinePanelPreview.make(
+            stats: stats,
+            containerSize: size,
+            fetchedAt: BrainBarDashboardFixture.fetchedAt,
+            selectedTimeframe: .threeHour
+        )
+        .environment(\.colorScheme, .dark)
+        let lightParent = BrainBarPipelinePanelPreview.make(
+            stats: stats,
+            containerSize: size,
+            fetchedAt: BrainBarDashboardFixture.fetchedAt,
+            selectedTimeframe: .threeHour
+        )
+        .environment(\.colorScheme, .light)
+
+        let (darkPNG, darkBitmap) = try renderPNG(darkParent, size: size)
+        let (lightPNG, _) = try renderPNG(lightParent, size: size)
+
+        XCTAssertGreaterThan(darkPNG.count, 5_000, "pipeline determinism PNG looks empty")
+        XCTAssertGreaterThan(distinctSampledColorCount(in: darkBitmap), 16, "pipeline determinism render is too flat")
+        XCTAssertEqual(
+            lightPNG,
+            darkPNG,
+            "The deterministic proof seam must pin dark appearance instead of inheriting the host Mac setting."
+        )
+    }
+
+    @MainActor
+    func testDashboardReplayDebtDisclosureRendersExpanded() throws {
+        try XCTSkipIf(
+            shouldSkipDisplayDependentRenderInCI,
+            "Dashboard PNG render verification is display-dependent; set BRAINBAR_RENDER_IN_CI=1 to run in CI."
+        )
+
+        let view = BrainBarPipelinePanelPreview.make(
+            stats: BrainBarDashboardFixture.partialReplayDebtStats,
+            containerSize: CGSize(width: 1_120, height: 1_420),
+            fetchedAt: BrainBarDashboardFixture.fetchedAt,
+            signalCoverageExpanded: false,
+            replayDebtExpanded: true
+        )
+        let (png, bitmap) = try renderPNG(view, size: NSSize(width: 1_120, height: 1_700))
+        let url = try writePNG(png, name: "dashboard-replay-debt-expanded")
+
+        XCTAssertGreaterThan(png.count, 5_000, "expanded replay-debt PNG looks empty")
+        XCTAssertGreaterThan(
+            distinctSampledColorCount(in: bitmap),
+            16,
+            "expanded replay-debt render is too flat"
+        )
+        print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
+    }
+
+    @MainActor
+    func testOperatorStateFixturesStayIsolatedFromProductionDatabaseAndProcessServices() throws {
+        let collector = BrainBarDashboardFixture.makeCollector()
+        let fields = Dictionary(uniqueKeysWithValues: Mirror(reflecting: collector).children.compactMap { child in
+            child.label.map { ($0, child.value) }
+        })
+
+        XCTAssertEqual(fields["dbPath"] as? String, "/nonexistent/brainbar-fixture.db")
+        XCTAssertEqual(fields["isRunning"] as? Bool, false)
+
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let fixtureSource = try String(
+            contentsOf: packageRoot.appendingPathComponent("Sources/BrainBar/Dashboard/BrainBarDashboardFixture.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(fixtureSource.contains("StatsCollector.fixture("))
+        XCTAssertFalse(fixtureSource.contains(".start()"), "Deterministic fixtures must not start collectors or timers.")
+        XCTAssertFalse(fixtureSource.contains("launchctl"), "Fixture variants must not probe or mutate process services.")
+        XCTAssertFalse(
+            fixtureSource.contains(".local/share/brainlayer/brainlayer.db"),
+            "Fixture variants must never resolve the canonical production database."
+        )
+        XCTAssertTrue(fixtureSource.contains("case loading"), "Snapshot fixtures must cover LOADING.")
+        XCTAssertTrue(fixtureSource.contains("case live"), "Snapshot fixtures must cover LIVE.")
+        XCTAssertTrue(fixtureSource.contains("case stale"), "Snapshot fixtures must cover STALE.")
+        XCTAssertTrue(fixtureSource.contains("case error"), "Snapshot fixtures must cover ERROR with last-good data.")
+        XCTAssertTrue(
+            fixtureSource.contains("case partialReplayDebt"),
+            "Snapshot fixtures must cover known replay components plus an unreadable input."
+        )
+
+        let loading = BrainBarDashboardFixture.makeCollector(.loading)
+        let live = BrainBarDashboardFixture.makeCollector(.live)
+        let stale = BrainBarDashboardFixture.makeCollector(.stale)
+        let error = BrainBarDashboardFixture.makeCollector(.error)
+        let partialReplayDebt = BrainBarDashboardFixture.makeCollector(.partialReplayDebt)
+        XCTAssertEqual(loading.snapshotFreshnessState, .loading)
+        XCTAssertEqual(live.snapshotFreshnessState, .live(ageSeconds: 0))
+        XCTAssertEqual(stale.snapshotFreshnessState, .stale(ageSeconds: 61))
+        XCTAssertEqual(
+            error.snapshotFreshnessState,
+            .error(message: "Fixture fetch failed", lastSuccessAgeSeconds: 15)
+        )
+        XCTAssertNotNil(error.lastDataFetchedAt)
+        XCTAssertEqual(error.lastFetchError, "Fixture fetch failed")
+        XCTAssertTrue(partialReplayDebt.stats.replayDebtBreakdown.isPartial)
+        XCTAssertGreaterThan(partialReplayDebt.stats.replayDebtBreakdown.pendingStores.snapshot.depth, 0)
+        XCTAssertGreaterThan(partialReplayDebt.stats.replayDebtBreakdown.durableQueue.snapshot.depth, 0)
+        XCTAssertGreaterThan(partialReplayDebt.stats.replayDebtBreakdown.repositoryFallback.snapshot.depth, 0)
+        XCTAssertFalse(partialReplayDebt.stats.replayDebtBreakdown.durableQueue.readability.isReadable)
+    }
+
     // MARK: - Render helpers
 
     @MainActor
@@ -164,7 +411,8 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
     private func distinctSampledColorCount(in bitmap: NSBitmapImageRep) -> Int {
         guard let data = bitmap.bitmapData else { return 0 }
         let bytesPerPixel = max(bitmap.bitsPerPixel / 8, 1)
-        let sampleStride = max(bitmap.bytesPerRow / 32, bytesPerPixel)
+        let baseStride = max(bitmap.bytesPerRow / 32, bytesPerPixel)
+        let sampleStride = baseStride - (baseStride % bytesPerPixel)
         var colors = Set<String>()
         for y in stride(from: 0, to: bitmap.pixelsHigh, by: 24) {
             let rowStart = y * bitmap.bytesPerRow

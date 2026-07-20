@@ -1,5 +1,155 @@
 import Foundation
 
+enum InjectionFeedLoadState: Equatable {
+    case loading
+    case loaded
+    case failed
+}
+
+enum InjectionFeedConnectionState: Equatable {
+    case connected
+    case disconnected
+}
+
+enum InjectionFeedSurfaceState: Equatable {
+    case loading
+    case disconnected
+    case empty
+    case noMatches
+    case degraded(reason: String, retainsContent: Bool)
+    case content
+
+    var showsContent: Bool {
+        switch self {
+        case .content, .degraded(_, true):
+            return true
+        case .loading, .disconnected, .empty, .noMatches, .degraded(_, false):
+            return false
+        }
+    }
+
+    static func resolve(
+        snapshot: InjectionPresentation.Snapshot,
+        presentationState: InjectionFeedPresentationState,
+        connectionState: InjectionFeedConnectionState,
+        filterActive: Bool
+    ) -> InjectionFeedSurfaceState {
+        guard connectionState == .connected else { return .disconnected }
+        guard presentationState.loadState != .loading else { return .loading }
+
+        if presentationState.loadState == .failed || presentationState.degradationState.isDegraded {
+            return .degraded(
+                reason: presentationState.degradationState.reason ?? "Injection feed read failed.",
+                retainsContent: !snapshot.bursts.isEmpty
+            )
+        }
+        if snapshot.bursts.isEmpty {
+            return filterActive ? .noMatches : .empty
+        }
+        return .content
+    }
+}
+
+struct InjectionFeedPresentationState: Equatable {
+    let events: [InjectionEvent]
+    let degradationState: DegradationState
+    let loadState: InjectionFeedLoadState
+
+    static let empty = InjectionFeedPresentationState(
+        events: [],
+        degradationState: .healthy,
+        loadState: .loading
+    )
+
+    init(
+        events: [InjectionEvent],
+        degradationState: DegradationState,
+        loadState: InjectionFeedLoadState = .loaded
+    ) {
+        self.events = events
+        self.degradationState = degradationState
+        self.loadState = loadState
+    }
+}
+
+struct InjectionActionReceipt: Equatable {
+    enum Kind: Equatable {
+        case success
+        case failure
+    }
+
+    let kind: Kind
+    let message: String
+
+    static func copyResult(copied: Bool) -> InjectionActionReceipt {
+        copied
+            ? InjectionActionReceipt(kind: .success, message: "Resume command copied")
+            : InjectionActionReceipt(kind: .failure, message: "Couldn’t copy the resume command")
+    }
+
+    static func threadOpenResult(errorDescription: String?) -> InjectionActionReceipt {
+        guard let errorDescription else {
+            return InjectionActionReceipt(kind: .success, message: "Thread opened")
+        }
+        return InjectionActionReceipt(
+            kind: .failure,
+            message: "Couldn’t open thread · \(errorDescription)"
+        )
+    }
+
+    static let disconnectedThread = InjectionActionReceipt(
+        kind: .failure,
+        message: "Thread unavailable in this disconnected snapshot"
+    )
+}
+
+struct InjectionActionReceiptGeneration: Equatable {
+    private(set) var value = 0
+
+    mutating func next() -> Int {
+        value += 1
+        return value
+    }
+
+    func isCurrent(_ candidate: Int) -> Bool {
+        candidate == value
+    }
+}
+
+struct InjectionFeedFixture {
+    let presentationState: InjectionFeedPresentationState
+    let connectionState: InjectionFeedConnectionState
+    let now: Date
+    let filterText: String
+    let typeFilter: InjectionTypeFilter
+    let expandedBurstIDs: Set<String>
+    let actionReceipt: InjectionActionReceipt?
+
+    init(
+        events: [InjectionEvent],
+        now: Date,
+        degradationState: DegradationState = .healthy,
+        loadState: InjectionFeedLoadState = .loaded,
+        connectionState: InjectionFeedConnectionState = .connected,
+        filterText: String = "",
+        typeFilter: InjectionTypeFilter = .all,
+        expandedBurstIDs: Set<String> = [],
+        actionReceipt: InjectionActionReceipt? = nil
+    ) {
+        self.presentationState = InjectionFeedPresentationState(
+            events: events,
+            degradationState: degradationState,
+            loadState: loadState
+        )
+        self.connectionState = connectionState
+        self.now = now
+        self.filterText = filterText
+        self.typeFilter = typeFilter
+        self.expandedBurstIDs = expandedBurstIDs
+        self.actionReceipt = actionReceipt
+    }
+}
+
 struct InjectionPresentation {
     struct Snapshot: Equatable {
         let filteredEvents: [InjectionEvent]
@@ -19,6 +169,45 @@ struct InjectionPresentation {
         let burstCount: Int
     }
 
+    struct ResultProvenance: Equatable, Identifiable {
+        let chunkID: String
+        let eventID: Int64
+        let sessionID: String
+        let timestamp: String
+        let chunk: InjectionChunk?
+
+        var id: String { chunkID }
+        var source: String {
+            chunk?.source.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+        var sourceFile: String {
+            chunk?.sourceFile.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+        var projectPath: String {
+            chunk?.claudeProjectPath.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+        var contentType: String {
+            chunk?.contentType.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+        var tags: [String] {
+            chunk?.tags ?? []
+        }
+
+        func expandedMetadataLabels(isSelected: Bool) -> [String] {
+            var labels: [String] = []
+            if isSelected {
+                labels.append("Selected result")
+            }
+            labels.append("ID \(chunkID)")
+            labels.append("Source \(source.isEmpty ? "unavailable" : source)")
+            labels.append("Source file \(sourceFile.isEmpty ? "unavailable" : sourceFile)")
+            labels.append("Project \(projectPath.isEmpty ? "unavailable" : projectPath)")
+            labels.append("Type \(contentType.isEmpty ? "unavailable" : contentType)")
+            labels.append("Tags \(tags.isEmpty ? "unavailable" : tags.joined(separator: ", "))")
+            return labels
+        }
+    }
+
     struct Burst: Equatable, Identifiable {
         let sessionID: String
         let claudeConversationID: String
@@ -26,6 +215,24 @@ struct InjectionPresentation {
         let startDate: Date
         let endDate: Date
         let events: [InjectionEvent]
+        let resultProvenance: [ResultProvenance]
+
+        init(
+            sessionID: String,
+            claudeConversationID: String,
+            topicOrSource: String,
+            startDate: Date,
+            endDate: Date,
+            events: [InjectionEvent]
+        ) {
+            self.sessionID = sessionID
+            self.claudeConversationID = claudeConversationID
+            self.topicOrSource = topicOrSource
+            self.startDate = startDate
+            self.endDate = endDate
+            self.events = events
+            self.resultProvenance = Self.mergeResultProvenance(from: events)
+        }
 
         var id: String {
             "\(groupKey)|\(events.last?.id ?? 0)"
@@ -35,8 +242,74 @@ struct InjectionPresentation {
         var queryCount: Int { events.count }
         var chunkCount: Int { events.reduce(0) { $0 + $1.chunkCount } }
         var tokenCount: Int { events.reduce(0) { $0 + $1.tokenCount } }
+        var queryTitle: String {
+            InjectionChunk.elide(events.first?.query ?? topicOrSource, limit: 96)
+        }
+        var selectedResultSummary: String {
+            selectedResultChunk?.displayText ?? "Result unavailable"
+        }
+        private static func mergeResultProvenance(from events: [InjectionEvent]) -> [ResultProvenance] {
+            var resultIndexByChunkID: [String: Int] = [:]
+            var results: [ResultProvenance] = []
+            for event in events {
+                for chunkID in event.uniqueChunkIDs {
+                    let chunk = event.chunks.first { $0.id == chunkID }
+                    let provenance = ResultProvenance(
+                        chunkID: chunkID,
+                        eventID: event.id,
+                        sessionID: event.sessionID,
+                        timestamp: event.timestamp,
+                        chunk: chunk
+                    )
+                    if let existingIndex = resultIndexByChunkID[chunkID] {
+                        if results[existingIndex].chunk == nil, chunk != nil {
+                            results[existingIndex] = provenance
+                        }
+                        continue
+                    }
+                    resultIndexByChunkID[chunkID] = results.count
+                    results.append(provenance)
+                }
+            }
+            return results
+        }
+        var selectedResultProvenance: ResultProvenance? {
+            resultProvenance.first
+        }
+        var additionalResultPreviews: [InjectionChunk] {
+            return Array(
+                resultProvenance
+                    .dropFirst()
+                    .compactMap(\.chunk)
+                    .prefix(2)
+            )
+        }
+        var remainingCollapsedResultCount: Int {
+            let selectedCount = resultProvenance.isEmpty ? 0 : 1
+            return max(resultCount - selectedCount - additionalResultPreviews.count, 0)
+        }
+        var sourceLabel: String {
+            guard let selectedResultChunk else { return "Source unavailable" }
+            let source = selectedResultChunk.source.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !source.isEmpty else { return selectedResultChunk.kind.label }
+            return "\(selectedResultChunk.kind.label) · \(source)"
+        }
+        var projectLabel: String {
+            guard let selectedResultChunk else { return "Project unavailable" }
+            let projectPath = selectedResultChunk.claudeProjectPath
+            return projectPath.isEmpty ? "Project unavailable" : projectPath
+        }
+        var resultCount: Int {
+            resultProvenance.count
+        }
+        var timestampLabel: String {
+            InjectionPresentation.burstRangeText(start: startDate, end: endDate)
+        }
+        private var selectedResultChunk: InjectionChunk? {
+            selectedResultProvenance?.chunk
+        }
         var claudeProjectPath: String {
-            events.lazy.map(\.claudeProjectPath).first { !$0.isEmpty } ?? ""
+            selectedResultProvenance?.projectPath ?? ""
         }
 
         var summaryTitle: String {
@@ -92,6 +365,7 @@ struct InjectionPresentation {
 
     struct SessionSummary: Equatable, Identifiable {
         let sessionID: String
+        let displayLabel: String
         let queryCount: Int
         let chunkCount: Int
         let tokenCount: Int
@@ -386,8 +660,10 @@ struct InjectionPresentation {
     private static func makeSessions(from events: [ParsedEvent]) -> [SessionSummary] {
         let grouped = Dictionary(grouping: events, by: \.event.sessionID)
         return grouped.map { sessionID, values in
-            SessionSummary(
+            let query = values.first?.event.query.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return SessionSummary(
                 sessionID: sessionID,
+                displayLabel: InjectionChunk.elide(query.isEmpty ? "Retrieval session" : query, limit: 42),
                 queryCount: values.count,
                 chunkCount: values.reduce(0) { $0 + $1.event.chunkCount },
                 tokenCount: values.reduce(0) { $0 + $1.event.tokenCount },

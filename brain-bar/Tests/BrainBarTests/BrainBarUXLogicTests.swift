@@ -189,7 +189,8 @@ final class BrainBarUXLogicTests: XCTestCase {
                 activeEntriesPerMinute: 0,
                 realtimeInsertsPerMinute: 0,
                 updatedAt: now
-            )
+            ),
+            watcherProcessProbeResult: .running(pid: 4242)
         )
 
         let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
@@ -197,8 +198,41 @@ final class BrainBarUXLogicTests: XCTestCase {
 
         XCTAssertEqual(summary.ingress.status, .live)
         XCTAssertEqual(watcherLane.status, .idle)
-        XCTAssertEqual(watcherLane.statusText, "No JSONL watcher writes")
-        XCTAssertEqual(watcherLane.lastEventText, "No watcher writes in Last 30m")
+        XCTAssertEqual(watcherLane.statusText, "RUNNING · NO RECENT FLOW")
+        XCTAssertEqual(watcherLane.lastEventText, "No watcher-ingested chunks in Last 30m")
+    }
+
+    func testWatcherStateDoesNotBorrowDaemonPIDWhenProbeEvidenceIsMissing() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let stats = DashboardStats(
+            chunkCount: 1,
+            enrichedChunkCount: 1,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 100,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 4_096,
+            recentActivityBuckets: [1],
+            recentWatcherWriteBuckets: [1],
+            recentEnrichmentBuckets: [1],
+            activityWindowMinutes: 60,
+            bucketCount: 1,
+            watcherProcessProbeResult: nil,
+            watcherRecentDistinctChunkCount: 1,
+            watcherFlowReadability: .readable
+        )
+        let daemon = DaemonHealthSnapshot(
+            pid: 4242,
+            isResponsive: true,
+            rssBytes: 1_024,
+            uptime: 60,
+            openConnections: 1,
+            lastSeenAt: now
+        )
+
+        let summary = DashboardFlowSummary.derive(daemon: daemon, stats: stats, now: now)
+
+        XCTAssertEqual(summary.watcherFlowState, .unknown)
+        XCTAssertEqual(summary.lane(for: .jsonlWatcher).statusText, "UNKNOWN")
     }
 
     func testAgentStoresLaneDoesNotBorrowLiveStatusFromJsonlWatcher() {
@@ -225,8 +259,8 @@ final class BrainBarUXLogicTests: XCTestCase {
 
         XCTAssertEqual(summary.ingress.status, .live)
         XCTAssertEqual(agentLane.status, .idle)
-        XCTAssertEqual(agentLane.statusText, "No agent MCP stores")
-        XCTAssertEqual(agentLane.lastEventText, "No agent MCP stores in Last 30m")
+        XCTAssertEqual(agentLane.statusText, "No agent-origin chunks")
+        XCTAssertEqual(agentLane.lastEventText, "No agent-origin chunks in Last 30m")
     }
 
     func testWatcherOnlyBurstShowsAllCommitsWhileAgentLaneStaysIdle() {
@@ -253,7 +287,8 @@ final class BrainBarUXLogicTests: XCTestCase {
                 activeEntriesPerMinute: 0,
                 realtimeInsertsPerMinute: 454,
                 updatedAt: now
-            )
+            ),
+            watcherProcessProbeResult: .running(pid: 4242)
         )
 
         let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
@@ -265,7 +300,7 @@ final class BrainBarUXLogicTests: XCTestCase {
         XCTAssertEqual(allCommitsLane.values, [0, 0, 0, 460])
         XCTAssertEqual(allCommitsLane.volumeText, "460 in 1h")
         XCTAssertEqual(agentLane.status, .idle)
-        XCTAssertEqual(agentLane.statusText, "No agent MCP stores")
+        XCTAssertEqual(agentLane.statusText, "No agent-origin chunks")
         XCTAssertEqual(watcherLane.status, .live)
     }
 
@@ -297,7 +332,8 @@ final class BrainBarUXLogicTests: XCTestCase {
                 activeEntriesPerMinute: 0,
                 realtimeInsertsPerMinute: 12,
                 updatedAt: now
-            )
+            ),
+            watcherProcessProbeResult: .running(pid: 4242)
         )
 
         let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
@@ -306,7 +342,7 @@ final class BrainBarUXLogicTests: XCTestCase {
         XCTAssertEqual(summary.lane(for: .allCommits).status, .live)
         XCTAssertEqual(summary.lane(for: .jsonlWatcher).status, .live)
         XCTAssertEqual(agentLane.status, .idle)
-        XCTAssertEqual(agentLane.statusText, "No agent MCP stores")
+        XCTAssertEqual(agentLane.statusText, "No agent-origin chunks")
         XCTAssertEqual(summary.queue.storeReplayDebtDepth, 3)
         XCTAssertEqual(summary.queue.storeDepthText, "3 replay debt")
     }
@@ -333,15 +369,17 @@ final class BrainBarUXLogicTests: XCTestCase {
             pendingStoreFlushRatePerMinute: 0
         )
 
-        let agentLane = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now).lane(for: .agentStores)
+        let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
+        let agentLane = summary.lane(for: .agentStores)
 
         XCTAssertEqual(agentLane.status, .live)
-        XCTAssertEqual(agentLane.statusText, "Agent MCP stores live now")
-        XCTAssertEqual(agentLane.volumeText, "2 in 1h, 5 flush queued")
-        XCTAssertEqual(agentLane.lastEventText, "2 agent MCP stores in latest bucket; 5 flush queued")
+        XCTAssertEqual(agentLane.statusText, "Agent-origin chunks landing now")
+        XCTAssertEqual(agentLane.volumeText, "2 in 1h")
+        XCTAssertEqual(agentLane.lastEventText, "2 agent-origin chunks in latest source-time bucket")
+        XCTAssertEqual(summary.queue.storeDepthText, "5 queued")
     }
 
-    func testAgentStoresLaneShowsPendingReplayDebtWhenCommittedGraphIsZero() {
+    func testPendingStoresStayOutOfAgentOriginChartWhenCommittedGraphIsZero() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let stats = DashboardStats(
             chunkCount: 120,
@@ -363,12 +401,14 @@ final class BrainBarUXLogicTests: XCTestCase {
             pendingStoreFlushRatePerMinute: 0
         )
 
-        let agentLane = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now).lane(for: .agentStores)
+        let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
+        let agentLane = summary.lane(for: .agentStores)
 
-        XCTAssertEqual(agentLane.status, .queued)
-        XCTAssertEqual(agentLane.statusText, "5 agent MCP stores flush queued")
-        XCTAssertEqual(agentLane.volumeText, "0 in 1h, 5 flush queued")
-        XCTAssertEqual(agentLane.lastEventText, "5 agent MCP stores flush queued")
+        XCTAssertEqual(agentLane.status, .idle)
+        XCTAssertEqual(agentLane.statusText, "No agent-origin chunks")
+        XCTAssertEqual(agentLane.volumeText, "0 in 1h")
+        XCTAssertEqual(agentLane.lastEventText, "No agent-origin chunks in Last 1h")
+        XCTAssertEqual(summary.queue.storeDepthText, "5 queued")
     }
 
     func testAgentStoresLaneShowsQueuedReplayDebtBeforeLiveWrites() {
@@ -393,15 +433,17 @@ final class BrainBarUXLogicTests: XCTestCase {
             pendingStoreFlushRatePerMinute: 0
         )
 
-        let agentLane = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now).lane(for: .agentStores)
+        let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
+        let agentLane = summary.lane(for: .agentStores)
 
         XCTAssertEqual(agentLane.status, .live)
-        XCTAssertEqual(agentLane.statusText, "Agent MCP stores live now")
-        XCTAssertEqual(agentLane.volumeText, "2 in 1h, 5 flush queued")
-        XCTAssertEqual(agentLane.lastEventText, "2 agent MCP stores in latest bucket; 5 flush queued")
+        XCTAssertEqual(agentLane.statusText, "Agent-origin chunks landing now")
+        XCTAssertEqual(agentLane.volumeText, "2 in 1h")
+        XCTAssertEqual(agentLane.lastEventText, "2 agent-origin chunks in latest source-time bucket")
+        XCTAssertEqual(summary.queue.storeDepthText, "5 queued")
     }
 
-    func testJsonlWatcherLaneMarksFlatGraphBrokenWhenHealthSeesActiveJsonl() {
+    func testJsonlWatcherLaneDoesNotTreatHistoricalActivityMarkerAsLiveFlowTruth() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let stats = DashboardStats(
             chunkCount: 120,
@@ -423,17 +465,18 @@ final class BrainBarUXLogicTests: XCTestCase {
                 activeEntriesPerMinute: 8.5,
                 realtimeInsertsPerMinute: 0,
                 updatedAt: now
-            )
+            ),
+            watcherProcessProbeResult: .running(pid: 4242)
         )
 
         let watcherLane = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
             .lane(for: .jsonlWatcher)
 
-        XCTAssertEqual(watcherLane.status, .unavailable)
-        XCTAssertEqual(watcherLane.statusText, "Watcher stale: JSONL activity is not landing")
+        XCTAssertEqual(watcherLane.status, .idle)
+        XCTAssertEqual(watcherLane.statusText, "RUNNING · NO RECENT FLOW")
     }
 
-    func testJsonlWatcherLaneMarksStaleWatcherHealthUnavailable() {
+    func testJsonlWatcherLaneIgnoresStaleHistoricalMarkerWhenLiveEvidenceIsKnown() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let stats = DashboardStats(
             chunkCount: 120,
@@ -455,17 +498,18 @@ final class BrainBarUXLogicTests: XCTestCase {
                 activeEntriesPerMinute: 0,
                 realtimeInsertsPerMinute: 0,
                 updatedAt: now.addingTimeInterval(-601)
-            )
+            ),
+            watcherProcessProbeResult: .running(pid: 4242)
         )
 
         let watcherLane = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
             .lane(for: .jsonlWatcher)
 
-        XCTAssertEqual(watcherLane.status, .unavailable)
-        XCTAssertEqual(watcherLane.statusText, "Watcher health stale")
+        XCTAssertEqual(watcherLane.status, .idle)
+        XCTAssertEqual(watcherLane.statusText, "RUNNING · NO RECENT FLOW")
     }
 
-    func testJsonlWatcherLaneMarksMissingWatcherHealthUnavailable() {
+    func testJsonlWatcherLaneReportsOfflineFromAbsentProcessWithoutHistoricalMarker() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let stats = DashboardStats(
             chunkCount: 120,
@@ -479,17 +523,140 @@ final class BrainBarUXLogicTests: XCTestCase {
             recentWatcherWriteBuckets: [0, 0, 0, 0],
             recentEnrichmentBuckets: [0, 0, 0, 0],
             activityWindowMinutes: 30,
-            bucketCount: 4
+            bucketCount: 4,
+            watcherProcessProbeResult: .absent
         )
 
         let watcherLane = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
             .lane(for: .jsonlWatcher)
 
         XCTAssertEqual(watcherLane.status, .unavailable)
-        XCTAssertEqual(watcherLane.statusText, "Watcher health unavailable")
+        XCTAssertEqual(watcherLane.statusText, "OFFLINE")
     }
 
-    func testJsonlWatcherLaneMarksTimestamplessWatcherHealthUnavailable() {
+    func testWatcherFlowStateMatrixUsesProcessRecentDistinctFlowAndPendingEvidence() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let running = WatcherProcessProbeResult.running(pid: 4242)
+        let historicalMarker = DashboardStats.WatcherHealth(
+            alerting: false,
+            filesTracked: 12,
+            maxOffsetLagBytes: 0,
+            activeEntriesPerMinute: 0,
+            realtimeInsertsPerMinute: 0,
+            updatedAt: now
+        )
+        let alertingHistoricalMarker = DashboardStats.WatcherHealth(
+            alerting: true,
+            filesTracked: 12,
+            maxOffsetLagBytes: 10_000,
+            activeEntriesPerMinute: 0,
+            realtimeInsertsPerMinute: 0,
+            updatedAt: now.addingTimeInterval(-3_600)
+        )
+
+        func watcherStatusText(
+            process: WatcherProcessProbeResult,
+            recentDistinctChunks: [Int],
+            pendingDepth: Int,
+            historicalHealth: DashboardStats.WatcherHealth?,
+            recentFlowReadable: Bool = true
+        ) -> String {
+            let stats = DashboardStats(
+                chunkCount: 120,
+                enrichedChunkCount: 120,
+                pendingEnrichmentCount: 0,
+                enrichmentPercent: 100,
+                enrichmentRatePerMinute: 0,
+                databaseSizeBytes: 4_096,
+                recentActivityBuckets: recentDistinctChunks,
+                recentAgentWriteBuckets: Array(repeating: 0, count: recentDistinctChunks.count),
+                recentWatcherWriteBuckets: recentDistinctChunks,
+                recentEnrichmentBuckets: Array(repeating: 0, count: recentDistinctChunks.count),
+                activityWindowMinutes: 1,
+                bucketCount: recentDistinctChunks.count,
+                liveWindowMinutes: 1,
+                pendingStoreQueueDepth: pendingDepth,
+                pendingStoreFlushQueueDepth: pendingDepth,
+                watcherHealth: historicalHealth,
+                watcherProcessProbeResult: process,
+                watcherRecentDistinctChunkCount: recentDistinctChunks.reduce(0, +),
+                watcherFlowReadability: recentFlowReadable ? .readable : .unreadable("fixture")
+            )
+            return DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
+                .lane(for: .jsonlWatcher)
+                .statusText
+        }
+
+        XCTAssertEqual(
+            watcherStatusText(
+                process: running,
+                recentDistinctChunks: [0, 0, 0, 1],
+                pendingDepth: 0,
+                historicalHealth: historicalMarker
+            ),
+            "FLOWING"
+        )
+        XCTAssertEqual(
+            watcherStatusText(
+                process: running,
+                recentDistinctChunks: [0, 0, 0, 0],
+                pendingDepth: 2,
+                historicalHealth: historicalMarker
+            ),
+            "STALLED"
+        )
+        XCTAssertEqual(
+            watcherStatusText(
+                process: running,
+                recentDistinctChunks: [0, 0, 0, 0],
+                pendingDepth: 0,
+                historicalHealth: historicalMarker
+            ),
+            "RUNNING · NO RECENT FLOW"
+        )
+        XCTAssertEqual(
+            watcherStatusText(
+                process: .absent,
+                recentDistinctChunks: [0, 0, 0, 0],
+                pendingDepth: 0,
+                historicalHealth: historicalMarker
+            ),
+            "OFFLINE"
+        )
+        XCTAssertEqual(
+            watcherStatusText(
+                process: running,
+                recentDistinctChunks: [0, 0, 0, 1],
+                pendingDepth: 0,
+                historicalHealth: alertingHistoricalMarker
+            ),
+            "FLOWING",
+            "watcher-health.json is historical diagnostic context and cannot override current process+flow truth."
+        )
+        XCTAssertEqual(
+            watcherStatusText(
+                process: running,
+                recentDistinctChunks: [0, 0, 0, 0],
+                pendingDepth: 0,
+                historicalHealth: historicalMarker,
+                recentFlowReadable: false
+            ),
+            "RUNNING · FLOW UNVERIFIED"
+        )
+        XCTAssertEqual(
+            watcherStatusText(
+                process: .failure("launchctl timed out"),
+                recentDistinctChunks: [0, 0, 0, 0],
+                pendingDepth: 0,
+                historicalHealth: nil,
+                recentFlowReadable: false
+            ),
+            "UNKNOWN",
+            "Ambiguous process-probe failure plus unavailable flow evidence must fail closed, not claim OFFLINE."
+        )
+    }
+
+    func testJsonlWatcherLaneIgnoresTimestamplessHistoricalMarkerWhenLiveEvidenceIsKnown() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let stats = DashboardStats(
             chunkCount: 120,
@@ -510,14 +677,15 @@ final class BrainBarUXLogicTests: XCTestCase {
                 maxOffsetLagBytes: 0,
                 activeEntriesPerMinute: 0,
                 realtimeInsertsPerMinute: 0
-            )
+            ),
+            watcherProcessProbeResult: .running(pid: 4242)
         )
 
         let watcherLane = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
             .lane(for: .jsonlWatcher)
 
-        XCTAssertEqual(watcherLane.status, .unavailable)
-        XCTAssertEqual(watcherLane.statusText, "Watcher health stale")
+        XCTAssertEqual(watcherLane.status, .idle)
+        XCTAssertEqual(watcherLane.statusText, "RUNNING · NO RECENT FLOW")
     }
 
     func testDashboardFlowSummaryKeepsRecentEnrichmentDistinctFromLiveNow() {
@@ -573,8 +741,8 @@ final class BrainBarUXLogicTests: XCTestCase {
 
         let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
 
-        XCTAssertEqual(summary.enrichment.sparklineLabel, "Enrichment completions over Last 1h")
-        XCTAssertEqual(summary.enrichment.latestBucketName, "latest enrichment bucket")
+        XCTAssertEqual(summary.enrichment.sparklineLabel, "Successful enrichment completions over Last 1h")
+        XCTAssertEqual(summary.enrichment.latestBucketName, "latest successful-enrichment bucket")
         XCTAssertEqual(summary.enrichment.statusText, "Backlog drain burst: 2055 enriched in latest 15m")
         XCTAssertEqual(summary.enrichment.volumeText, "2055 in 1h")
     }

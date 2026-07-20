@@ -95,6 +95,37 @@ final class BrainDatabaseWindowedBucketsTests: XCTestCase {
         )
     }
 
+    func testWindowedStatsAdoptWatcherReadabilityFromTheSameWindow() {
+        let restingStats = BrainDatabase.DashboardStats(
+            chunkCount: 0,
+            enrichedChunkCount: 0,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 0,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 0,
+            recentActivityBuckets: [0],
+            recentEnrichmentBuckets: [0],
+            watcherFlowReadability: .readable
+        )
+        let windowedBuckets = BrainDatabase.PipelineWindowBuckets(
+            activityWindowMinutes: 180,
+            bucketCount: 1,
+            allWriteBuckets: [0],
+            agentWriteBuckets: [0],
+            watcherWriteBuckets: [0],
+            enrichmentBuckets: [0],
+            watcherFlowReadability: .unreadable("windowed watcher evidence unavailable")
+        )
+
+        let windowedStats = restingStats.withWindowedPipelineBuckets(windowedBuckets)
+
+        XCTAssertEqual(
+            windowedStats.watcherFlowReadability,
+            windowedBuckets.watcherFlowReadability,
+            "Windowed watcher buckets and their readability must come from the same evidence fetch."
+        )
+    }
+
     func testWiderWindowReturnsMoreHistoricalDataThanLiveWindow() throws {
         // Force the schema to exist (constructor opens + ensures schema, but make
         // it explicit so an empty-table call cannot be misread).
@@ -107,6 +138,7 @@ final class BrainDatabaseWindowedBucketsTests: XCTestCase {
         try insertWrite(id: "agent-live-1", source: "mcp", createdAt: minutesAgo(5))
         try insertWrite(id: "agent-live-2", source: "brain_store", createdAt: minutesAgo(20))
         try insertWrite(id: "watcher-live-1", source: "realtime_watcher", createdAt: minutesAgo(8))
+        try insertWatcherLiveness(chunkID: "watcher-live-1", ingestedAt: minutesAgo(8))
         try insertWrite(
             id: "enrich-live-1",
             source: "mcp",
@@ -120,6 +152,8 @@ final class BrainDatabaseWindowedBucketsTests: XCTestCase {
         try insertWrite(id: "agent-old-3", source: "digest", createdAt: minutesAgo(600)) // 10h ago
         try insertWrite(id: "watcher-old-1", source: "realtime_watcher", createdAt: minutesAgo(70))
         try insertWrite(id: "watcher-old-2", source: "realtime", createdAt: minutesAgo(300)) // 5h ago
+        try insertWatcherLiveness(chunkID: "watcher-old-1", ingestedAt: minutesAgo(70))
+        try insertWatcherLiveness(chunkID: "watcher-old-2", ingestedAt: minutesAgo(300))
         try insertWrite(
             id: "enrich-old-1",
             source: "mcp",
@@ -199,6 +233,7 @@ final class BrainDatabaseWindowedBucketsTests: XCTestCase {
         let now = Date()
         try insertWrite(id: "agent-mcp", source: "mcp", createdAt: now.addingTimeInterval(-4 * 60))
         try insertWrite(id: "watcher-realtime", source: "realtime_watcher", createdAt: now.addingTimeInterval(-3 * 60))
+        try insertWatcherLiveness(chunkID: "watcher-realtime", ingestedAt: now.addingTimeInterval(-3 * 60))
         try insertWrite(id: "backup-jsonl", source: "jsonl_backup", createdAt: now.addingTimeInterval(-2 * 60))
         try insertWrite(id: "codex-cli", source: "codex_cli", createdAt: now.addingTimeInterval(-1 * 60))
 
@@ -265,6 +300,76 @@ final class BrainDatabaseWindowedBucketsTests: XCTestCase {
             buckets.watcherWriteBuckets,
             [0, 0, 0, 0, 0, 1],
             "JSONL watcher graph must show durable ingestion recency, not the older transcript event time."
+        )
+    }
+
+    func testWatcherWindowCountsDistinctChunkOnceAtFirstInWindowIngestWhileSourceSeriesUseCreatedAt() throws {
+        XCTAssertTrue(try db.tableExists("chunks"))
+
+        let now = Date()
+        try insertWrite(
+            id: "old-source-new-ingest",
+            source: "realtime_watcher",
+            createdAt: now.addingTimeInterval(-2 * 60 * 60)
+        )
+        try insertWatcherLiveness(
+            chunkID: "old-source-new-ingest",
+            ingestedAt: now.addingTimeInterval(-45 * 60)
+        )
+        try insertWatcherLiveness(
+            chunkID: "old-source-new-ingest",
+            ingestedAt: now.addingTimeInterval(-19 * 60)
+        )
+        try insertWatcherLiveness(
+            chunkID: "old-source-new-ingest",
+            ingestedAt: now.addingTimeInterval(-4 * 60)
+        )
+        try insertWrite(
+            id: "agent-source-row",
+            source: "mcp",
+            createdAt: now.addingTimeInterval(-10 * 60)
+        )
+        try insertWrite(
+            id: "other-source-row",
+            source: "jsonl_backup",
+            createdAt: now.addingTimeInterval(-5 * 60)
+        )
+
+        let buckets = try db.pipelineWindowBuckets(activityWindowMinutes: 30, bucketCount: 6, now: now)
+
+        XCTAssertEqual(
+            buckets.allWriteTotal,
+            2,
+            "All chunks use chunks.created_at and count chunk rows; the old source row stays outside the source-time window."
+        )
+        XCTAssertEqual(
+            buckets.agentTotal,
+            1,
+            "Agent-origin chunks use chunks.created_at and chunk-row cardinality."
+        )
+        XCTAssertEqual(
+            buckets.watcherWriteBuckets,
+            [0, 0, 1, 0, 0, 0],
+            "Watcher ingestion counts a chunk_id once per selected window and buckets its first qualifying in-window ingested_at."
+        )
+    }
+
+    func testWatcherWindowDoesNotFallBackToChunkSourceTimeWhenLivenessTableIsUnavailable() throws {
+        XCTAssertFalse(try db.tableExists("watcher_liveness_events"))
+
+        let now = Date()
+        try insertWrite(
+            id: "source-time-is-not-watcher-proof",
+            source: "realtime_watcher",
+            createdAt: now.addingTimeInterval(-60)
+        )
+
+        let buckets = try db.pipelineWindowBuckets(activityWindowMinutes: 30, bucketCount: 6, now: now)
+
+        XCTAssertEqual(
+            buckets.watcherWriteBuckets,
+            [0, 0, 0, 0, 0, 0],
+            "Missing watcher-ingest evidence must fail closed; chunks.created_at cannot silently impersonate ingest time."
         )
     }
 

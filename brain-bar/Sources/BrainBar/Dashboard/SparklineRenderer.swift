@@ -33,6 +33,8 @@ struct SparklineChartPresentation: Equatable, Sendable {
     let activityWindowMinutes: Int
     let latestBucketName: String
     let fetchedAt: Date
+    let metricDisclosure: String?
+    let accessibilitySummary: String?
 
     init(
         label: String,
@@ -44,7 +46,9 @@ struct SparklineChartPresentation: Equatable, Sendable {
         tertiarySeriesLabel: String? = nil,
         activityWindowMinutes: Int = 30,
         latestBucketName: String = "latest bucket count",
-        fetchedAt: Date = Date()
+        fetchedAt: Date = Date(),
+        metricDisclosure: String? = nil,
+        accessibilitySummary: String? = nil
     ) {
         self.label = label
         self.values = values
@@ -56,6 +60,8 @@ struct SparklineChartPresentation: Equatable, Sendable {
         self.activityWindowMinutes = activityWindowMinutes
         self.latestBucketName = latestBucketName
         self.fetchedAt = fetchedAt
+        self.metricDisclosure = metricDisclosure
+        self.accessibilitySummary = accessibilitySummary
     }
 
     var points: [SparklineChartPoint] {
@@ -138,6 +144,9 @@ struct SparklineChartPresentation: Equatable, Sendable {
 
     var accessibilityValue: String {
         var components = ["\(latestBucketName) \(values.last ?? 0)", trendDescription]
+        if let accessibilitySummary {
+            components.insert(accessibilitySummary, at: 0)
+        }
         if let primarySeriesLabel {
             components.append("\(primarySeriesLabel) latest bucket \(values.last ?? 0)")
         }
@@ -638,7 +647,8 @@ struct SparklineChart: View {
                     let anchorPoint = hoverAnchorPoint(forBucket: clampedBucket, in: plotFrame)
                     let tooltipSize = SparklineTooltipPlacement.tooltipSize(
                         in: geometry.size,
-                        seriesCount: tooltipRows(forBucket: clampedBucket).count
+                        seriesCount: tooltipRows(forBucket: clampedBucket).count,
+                        showsMetricDisclosure: presentation.metricDisclosure != nil
                     )
                     sparklineTooltip(forBucket: clampedBucket, size: tooltipSize)
                         .position(
@@ -838,6 +848,14 @@ struct SparklineChart: View {
             }
             .lineLimit(1)
             .fixedSize(horizontal: false, vertical: true)
+
+            if let metricDisclosure = presentation.metricDisclosure {
+                Text(metricDisclosure)
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(Color.brainBarTextSecondary.opacity(0.82))
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if !rows.isEmpty {
                 Rectangle()
@@ -1083,14 +1101,20 @@ enum SparklineTooltipPlacement {
     // Structured-card metrics = the PINNED card height (matches sparklineTooltip's paddings/spacing).
     private static let verticalPadding: CGFloat = 9
     private static let headerHeight: CGFloat = 24
+    private static let metricDisclosureHeight: CGFloat = 42
     private static let dividerBlock: CGFloat = 14
     private static let rowHeight: CGFloat = 16
 
-    static func tooltipSize(in containerSize: CGSize, seriesCount: Int = 1) -> CGSize {
+    static func tooltipSize(
+        in containerSize: CGSize,
+        seriesCount: Int = 1,
+        showsMetricDisclosure: Bool = false
+    ) -> CGSize {
         let availableWidth = max(containerSize.width - margin * 2, minimumWidth)
         let rows = max(seriesCount, 0)
         let rowsBlock = rows > 0 ? dividerBlock + CGFloat(rows) * rowHeight : 0
-        let height = verticalPadding * 2 + headerHeight + rowsBlock
+        let disclosureBlock = showsMetricDisclosure ? metricDisclosureHeight : 0
+        let height = verticalPadding * 2 + headerHeight + disclosureBlock + rowsBlock
         let availableHeight = max(containerSize.height - margin * 2, height)
         return CGSize(width: min(preferredWidth, availableWidth),
                       height: min(height, availableHeight))

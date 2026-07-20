@@ -46,6 +46,7 @@ private struct BrainBarCommandBarReady: View {
         )
         .animation(.easeInOut(duration: 0.14), value: viewModel.mode)
         .animation(.easeInOut(duration: 0.18), value: viewModel.feedback)
+        .accessibilityIdentifier("brainbar.command")
     }
 
     private var borderColor: Color {
@@ -82,6 +83,7 @@ private struct BrainBarCommandBarPlaceholder: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(Color.brainBarWhite.opacity(0.06), lineWidth: 1)
         )
+        .accessibilityIdentifier("brainbar.command.loading")
     }
 }
 
@@ -92,10 +94,18 @@ private struct ModePillPair: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            ModePill(title: "Capture", isActive: viewModel.mode == .capture) {
+            ModePill(
+                title: "Capture",
+                accessibilityIdentifier: "brainbar.command.mode.capture",
+                isActive: viewModel.mode == .capture
+            ) {
                 viewModel.setMode(.capture)
             }
-            ModePill(title: "Search", isActive: viewModel.mode == .search) {
+            ModePill(
+                title: "Search",
+                accessibilityIdentifier: "brainbar.command.mode.search",
+                isActive: viewModel.mode == .search
+            ) {
                 viewModel.setMode(.search)
             }
         }
@@ -111,6 +121,7 @@ private struct ModePillPair: View {
 
 private struct ModePill: View {
     let title: String
+    let accessibilityIdentifier: String
     let isActive: Bool
     let action: () -> Void
 
@@ -127,7 +138,8 @@ private struct ModePill: View {
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .focusable(false)
+        .accessibilityIdentifier(accessibilityIdentifier)
+        .focusable()
     }
 }
 
@@ -226,6 +238,7 @@ private struct CommandBarInput: NSViewRepresentable {
         field.onCommandReturn = { [viewModel] in
             viewModel.handleInputReturn(modifiers: [.command])
         }
+        field.setAccessibilityIdentifier("brainbar.command.input")
         return field
     }
 
@@ -285,8 +298,8 @@ private struct CommandBarTrailingHint: View {
 
     private var keyboardHint: String {
         switch viewModel.mode {
-        case .capture: return "⏎ Store · ⌘⏎ Store · ⇥ Search"
-        case .search: return "⏎ Copy · ⌘⏎ Capture · ⇥ Capture"
+        case .capture: return "⏎ Store · ⇥ Search"
+        case .search: return "⏎ Copy · ⌘⏎ Capture"
         }
     }
 }
@@ -363,6 +376,7 @@ private struct BrainBarCommandBarResultsOverlayReady: View {
                 .strokeBorder(Color.brainBarWhite.opacity(0.08), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.28), radius: 18, y: 8)
+        .accessibilityIdentifier("brainbar.command.results")
     }
 
     @ViewBuilder
@@ -477,6 +491,8 @@ private struct BrainBarCommandBarResultRow: View {
             Text(row.metadata)
         }
         .animation(.easeInOut(duration: 0.14), value: isCopied)
+        .accessibilityIdentifier("brainbar.command.result.\(row.id)")
+        .focusable()
     }
 
     private var rowBackground: Color {

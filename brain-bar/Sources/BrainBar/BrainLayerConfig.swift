@@ -1,6 +1,6 @@
 import Foundation
 
-enum BrainLayerEnrichmentMode: String, CaseIterable, Identifiable {
+enum BrainLayerEnrichmentMode: String, CaseIterable, Identifiable, Sendable {
     case remote
     case local
 
@@ -14,7 +14,7 @@ enum BrainLayerEnrichmentMode: String, CaseIterable, Identifiable {
     }
 }
 
-enum BrainLayerEnrichmentProvider: String, CaseIterable, Identifiable {
+enum BrainLayerEnrichmentProvider: String, CaseIterable, Identifiable, Sendable {
     case gemini
     case openai
     case anthropic
@@ -32,9 +32,17 @@ enum BrainLayerEnrichmentProvider: String, CaseIterable, Identifiable {
     var isWiredToday: Bool {
         self == .gemini
     }
+
+    static var selectableCases: [BrainLayerEnrichmentProvider] {
+        allCases.filter(\.isWiredToday)
+    }
+
+    var unavailableReason: String? {
+        isWiredToday ? nil : "Runtime integration is not available in this build."
+    }
 }
 
-enum BrainLayerGoogleAPIKey: Equatable {
+enum BrainLayerGoogleAPIKey: Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible {
     enum Kind: Equatable {
         case missing
         case plainPresent
@@ -68,6 +76,10 @@ enum BrainLayerGoogleAPIKey: Equatable {
         return "op://Private/Google AI/Gemini API key"
     }
 
+    var description: String { displayText }
+
+    var debugDescription: String { displayText }
+
     fileprivate var renderedValue: String {
         switch self {
         case .missing:
@@ -84,11 +96,12 @@ enum BrainLayerGoogleAPIKey: Equatable {
     }
 }
 
-enum BrainLayerLaunchdLoadState: Equatable {
+enum BrainLayerLaunchdLoadState: Equatable, Sendable {
     case running
     case loaded
     case unloaded
     case unknown
+    case probeError(String)
 
     var title: String {
         switch self {
@@ -96,11 +109,12 @@ enum BrainLayerLaunchdLoadState: Equatable {
         case .loaded: "Loaded"
         case .unloaded: "Unloaded"
         case .unknown: "Unknown"
+        case let .probeError(reason): "Unknown — probe error: \(reason)"
         }
     }
 }
 
-enum BrainLayerLaunchdJob: String, CaseIterable, Identifiable {
+enum BrainLayerLaunchdJob: String, CaseIterable, Identifiable, Sendable {
     case enrichment
     case hotlane
     case decay
@@ -163,12 +177,12 @@ enum BrainLayerLaunchdJob: String, CaseIterable, Identifiable {
     }
 }
 
-struct BrainLayerLaunchdJobSetting: Equatable {
+struct BrainLayerLaunchdJobSetting: Equatable, Sendable {
     var enabled: Bool
     var loadState: BrainLayerLaunchdLoadState
 }
 
-struct BrainLayerConfig: Equatable {
+struct BrainLayerConfig: Equatable, Sendable {
     var googleAPIKey: BrainLayerGoogleAPIKey
     var systemEnabled: Bool
     var enrichmentEnabled: Bool
@@ -192,6 +206,150 @@ struct BrainLayerConfig: Equatable {
             }
         )
     )
+
+    func persistedValuesEqual(to other: BrainLayerConfig) -> Bool {
+        googleAPIKey == other.googleAPIKey &&
+            systemEnabled == other.systemEnabled &&
+            enrichmentEnabled == other.enrichmentEnabled &&
+            enrichmentMode == other.enrichmentMode &&
+            enrichmentProvider == other.enrichmentProvider &&
+            enrichmentBackend == other.enrichmentBackend &&
+            tuningValues == other.tuningValues &&
+            Dictionary(uniqueKeysWithValues: launchdJobs.map { ($0.key, $0.value.enabled) }) ==
+            Dictionary(uniqueKeysWithValues: other.launchdJobs.map { ($0.key, $0.value.enabled) })
+    }
+}
+
+enum BrainLayerConfigValidationResult: Equatable, Sendable {
+    case passed
+    case failed(String)
+
+    var title: String {
+        switch self {
+        case .passed: "Passed"
+        case let .failed(message): "Failed — \(message)"
+        }
+    }
+}
+
+enum BrainLayerConfigValidator {
+    static func validate(
+        _ config: BrainLayerConfig,
+        previousConfig: BrainLayerConfig? = nil
+    ) -> BrainLayerConfigValidationResult {
+        let activatesUnavailableProvider = previousConfig == nil ||
+            previousConfig?.enrichmentProvider != config.enrichmentProvider ||
+            (previousConfig?.enrichmentEnabled == false && config.enrichmentEnabled)
+        if config.enrichmentEnabled,
+           config.enrichmentProvider.unavailableReason != nil,
+           activatesUnavailableProvider {
+            return .failed(
+                "\(config.enrichmentProvider.title) cannot be activated because its runtime integration is unavailable."
+            )
+        }
+        if config.enrichmentBackend.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return .failed("Enrichment backend is required.")
+        }
+        return .passed
+    }
+}
+
+struct BrainLayerActiveRuntimeValues: Equatable, Sendable {
+    let systemEnabled: Bool
+    let enrichmentEnabled: Bool
+    let enrichmentMode: BrainLayerEnrichmentMode
+    let enrichmentProvider: BrainLayerEnrichmentProvider
+    let enrichmentBackend: String
+
+    init(config: BrainLayerConfig) {
+        systemEnabled = config.systemEnabled
+        enrichmentEnabled = config.enrichmentEnabled
+        enrichmentMode = config.enrichmentMode
+        enrichmentProvider = config.enrichmentProvider
+        enrichmentBackend = config.enrichmentBackend
+    }
+
+    func matches(_ config: BrainLayerConfig) -> Bool {
+        self == BrainLayerActiveRuntimeValues(config: config)
+    }
+
+    var summary: String {
+        "\(enrichmentEnabled ? "Enrichment on" : "Enrichment off") · " +
+            "\(enrichmentMode.title) · \(enrichmentProvider.title) · \(enrichmentBackend)"
+    }
+}
+
+enum BrainLayerActiveRuntimeObservation: Equatable, Sendable {
+    case observed(BrainLayerActiveRuntimeValues)
+    case unknown(String)
+
+    var summary: String {
+        switch self {
+        case let .observed(values): values.summary
+        case let .unknown(reason): "Unknown — \(reason)"
+        }
+    }
+}
+
+protocol BrainLayerActiveRuntimeSampling: Sendable {
+    func sample() -> BrainLayerActiveRuntimeObservation
+}
+
+struct UnknownBrainLayerActiveRuntimeProvider: BrainLayerActiveRuntimeSampling {
+    func sample() -> BrainLayerActiveRuntimeObservation {
+        .unknown("Active runtime configuration is not observable.")
+    }
+}
+
+struct StaticBrainLayerActiveRuntimeProvider: BrainLayerActiveRuntimeSampling {
+    let observation: BrainLayerActiveRuntimeObservation
+
+    func sample() -> BrainLayerActiveRuntimeObservation { observation }
+}
+
+enum BrainLayerSettingsService: Equatable, Hashable, Sendable {
+    case enrichment
+    case systemJobs
+    case launchdJob(BrainLayerLaunchdJob)
+
+    var title: String {
+        switch self {
+        case .enrichment: "Enrichment service"
+        case .systemJobs: "BrainLayer jobs"
+        case let .launchdJob(job): job.launchdLabel
+        }
+    }
+}
+
+enum BrainLayerActiveRuntimeReceiptState: Equatable, Sendable {
+    case observed
+    case notObserved
+    case unknown(String)
+
+    var title: String {
+        switch self {
+        case .observed: "Observed active"
+        case .notObserved: "Not active yet"
+        case let .unknown(reason): "Unknown — \(reason)"
+        }
+    }
+}
+
+struct BrainLayerSettingsSaveReceipt: Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible {
+    let configURL: URL
+    let savedAt: Date
+    let fileUpdated: Bool
+    let validation: BrainLayerConfigValidationResult
+    let servicesRequiringRestart: [BrainLayerSettingsService]
+    let activeRuntimeState: BrainLayerActiveRuntimeReceiptState
+
+    var description: String {
+        let services = servicesRequiringRestart.map(\.title).joined(separator: ", ")
+        return "fileUpdated=\(fileUpdated) validation=\(validation.title) " +
+            "restart=\(services.isEmpty ? "none" : services) active=\(activeRuntimeState.title)"
+    }
+
+    var debugDescription: String { description }
 }
 
 struct BrainLayerEnvDocument {
@@ -351,7 +509,14 @@ struct BrainLayerEnvDocument {
     }
 
     private static func parseGoogleKey(_ raw: String) -> BrainLayerGoogleAPIKey {
-        let value = strippedValue(raw)
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        let value: String
+        if trimmed.count >= 2, trimmed.first == "'", trimmed.last == "'" {
+            value = String(trimmed.dropFirst().dropLast())
+                .replacingOccurrences(of: "'\"'\"'", with: "'")
+        } else {
+            value = strippedValue(raw)
+        }
         guard !value.isEmpty else { return .missing }
         if value.contains("op read") {
             return .onePasswordReference(extractOpReference(from: value) ?? "op://Private/Google AI/Gemini API key")
@@ -409,6 +574,8 @@ struct BrainLayerEnvDocument {
 struct BrainLayerConfigStore {
     let configURL: URL
     var fileManager: FileManager = .default
+    private let loadDocumentOverride: (() throws -> BrainLayerEnvDocument)?
+    private let saveOverride: ((BrainLayerConfig) throws -> Void)?
 
     static func defaultConfigURL(homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
         homeDirectory
@@ -417,11 +584,22 @@ struct BrainLayerConfigStore {
             .appendingPathComponent("brainlayer.env", isDirectory: false)
     }
 
-    init(configURL: URL = BrainLayerConfigStore.defaultConfigURL()) {
+    init(
+        configURL: URL = BrainLayerConfigStore.defaultConfigURL(),
+        fileManager: FileManager = .default,
+        loadDocumentOverride: (() throws -> BrainLayerEnvDocument)? = nil,
+        saveOverride: ((BrainLayerConfig) throws -> Void)? = nil
+    ) {
         self.configURL = configURL
+        self.fileManager = fileManager
+        self.loadDocumentOverride = loadDocumentOverride
+        self.saveOverride = saveOverride
     }
 
     func loadDocument() throws -> BrainLayerEnvDocument {
+        if let loadDocumentOverride {
+            return try loadDocumentOverride()
+        }
         guard fileManager.fileExists(atPath: configURL.path) else {
             return BrainLayerEnvDocument(config: .defaultConfig)
         }
@@ -430,6 +608,10 @@ struct BrainLayerConfigStore {
     }
 
     func save(_ config: BrainLayerConfig) throws {
+        if let saveOverride {
+            try saveOverride(config)
+            return
+        }
         var document = try loadDocument()
         document.update { $0 = config }
         try fileManager.createDirectory(at: configURL.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -438,11 +620,29 @@ struct BrainLayerConfigStore {
     }
 }
 
+struct BrainLayerLaunchdCommandResult: Sendable, Equatable {
+    let terminationStatus: Int32
+    let output: String
+}
+
 protocol BrainLayerLaunchdStatusSampling: Sendable {
     func sample() -> [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState]
 }
 
 struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
+    typealias CommandRunner = @Sendable ([String]) -> BrainLayerLaunchdCommandResult
+
+    private let commandRunner: CommandRunner
+    private let uidProvider: @Sendable () -> uid_t
+
+    init(
+        commandRunner: @escaping CommandRunner = BrainLayerLaunchdStatusProvider.run,
+        uidProvider: @escaping @Sendable () -> uid_t = getuid
+    ) {
+        self.commandRunner = commandRunner
+        self.uidProvider = uidProvider
+    }
+
     func sample() -> [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState] {
         Dictionary(
             uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map { job in
@@ -452,21 +652,39 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
     }
 
     private func state(for label: String) -> BrainLayerLaunchdLoadState {
+        let target = "gui/\(uidProvider())/\(label)"
+        let result = commandRunner(["/bin/launchctl", "print", target])
+        if result.terminationStatus == 0 {
+            return result.output.contains("pid =") ? .running : .loaded
+        }
+
+        if result.terminationStatus == 113 ||
+            result.output.localizedCaseInsensitiveContains("could not find service") {
+            return .unloaded
+        }
+        return .probeError("launchctl exited \(result.terminationStatus)")
+    }
+
+    private static func run(_ command: [String]) -> BrainLayerLaunchdCommandResult {
+        guard let executable = command.first else {
+            return BrainLayerLaunchdCommandResult(terminationStatus: 1, output: "")
+        }
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        process.arguments = ["print", "gui/\(getuid())/\(label)"]
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = Array(command.dropFirst())
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe
         do {
             try process.run()
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else { return .unloaded }
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(data: data, encoding: .utf8) ?? ""
-            return output.contains("pid =") ? .running : .loaded
+            process.waitUntilExit()
+            return BrainLayerLaunchdCommandResult(
+                terminationStatus: process.terminationStatus,
+                output: String(data: data, encoding: .utf8) ?? ""
+            )
         } catch {
-            return .unknown
+            return BrainLayerLaunchdCommandResult(terminationStatus: 1, output: "")
         }
     }
 }

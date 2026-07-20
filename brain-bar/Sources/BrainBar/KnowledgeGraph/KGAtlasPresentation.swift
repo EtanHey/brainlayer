@@ -1,6 +1,30 @@
 import Foundation
 
 struct KGAtlasPresentation {
+    enum FindMove {
+        case up
+        case down
+    }
+
+    struct FindResult: Equatable, Identifiable {
+        let id: String
+        let name: String
+        let entityTypeTitle: String
+        let degree: Int
+
+        var relationshipSummary: String {
+            switch degree {
+            case 0: "No visible relationships"
+            case 1: "1 visible relationship"
+            default: "\(degree) visible relationships"
+            }
+        }
+
+        var accessibilityLabel: String {
+            "\(name), \(entityTypeTitle), \(relationshipSummary)"
+        }
+    }
+
     struct Region: Equatable, Identifiable {
         let entityType: String
         let title: String
@@ -77,6 +101,140 @@ struct KGAtlasPresentation {
         }
     }
 
+    static func findResults(
+        nodes: [KGNode],
+        edges: [KGEdge],
+        query: String
+    ) -> [FindResult] {
+        var degrees: [String: Int] = [:]
+        for edge in edges {
+            degrees[edge.sourceId, default: 0] += 1
+            degrees[edge.targetId, default: 0] += 1
+        }
+
+        let terms = query
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: \.isWhitespace)
+            .map { $0.localizedLowercase }
+
+        return nodes.compactMap { node in
+            let result = FindResult(
+                id: node.id,
+                name: node.name,
+                entityTypeTitle: singularTitle(for: node.entityType),
+                degree: degrees[node.id, default: 0]
+            )
+            let searchableText = "\(node.name) \(node.entityType) \(result.entityTypeTitle)"
+                .localizedLowercase
+            guard terms.allSatisfy(searchableText.contains) else { return nil }
+            return result
+        }
+        .sorted { lhs, rhs in
+            let nameOrder = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+            if nameOrder != .orderedSame {
+                return nameOrder == .orderedAscending
+            }
+            if lhs.entityTypeTitle != rhs.entityTypeTitle {
+                return lhs.entityTypeTitle < rhs.entityTypeTitle
+            }
+            return lhs.id < rhs.id
+        }
+    }
+
+    static func nextFindResultID(
+        currentID: String?,
+        move: FindMove,
+        results: [FindResult]
+    ) -> String? {
+        guard !results.isEmpty else { return nil }
+        guard let currentIndex = results.firstIndex(where: { $0.id == currentID }) else {
+            return move == .down ? results.first?.id : results.last?.id
+        }
+
+        switch move {
+        case .up:
+            return results[max(currentIndex - 1, results.startIndex)].id
+        case .down:
+            return results[min(currentIndex + 1, results.index(before: results.endIndex))].id
+        }
+    }
+
+    static func priorityLabelNodeIDs(
+        nodes: [KGNode],
+        selectedNodeID: String?,
+        scale: CGFloat
+    ) -> Set<String> {
+        let maxLabels = scale < 0.7 ? 18 : (scale < 1.15 ? 36 : 72)
+        let orderedNodes = nodes.sorted { lhs, rhs in
+            let lhsSelected = lhs.id == selectedNodeID
+            let rhsSelected = rhs.id == selectedNodeID
+            if lhsSelected != rhsSelected { return lhsSelected }
+
+            let lhsOwner = pinnedEntityNames.contains(lhs.name.localizedLowercase)
+            let rhsOwner = pinnedEntityNames.contains(rhs.name.localizedLowercase)
+            if lhsOwner != rhsOwner { return lhsOwner }
+
+            if lhs.importance != rhs.importance { return lhs.importance > rhs.importance }
+            if lhs.linkedChunkCount != rhs.linkedChunkCount {
+                return lhs.linkedChunkCount > rhs.linkedChunkCount
+            }
+            let nameOrder = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+            if nameOrder != .orderedSame { return nameOrder == .orderedAscending }
+            return lhs.id < rhs.id
+        }
+
+        var acceptedRects: [CGRect] = []
+        var acceptedIDs = Set<String>()
+        for node in orderedNodes {
+            if acceptedIDs.count >= maxLabels, node.id != selectedNodeID { break }
+            let rect = approximateLabelRect(for: node, scale: scale)
+            guard node.id == selectedNodeID || !acceptedRects.contains(where: { $0.intersects(rect) }) else {
+                continue
+            }
+            acceptedRects.append(rect)
+            acceptedIDs.insert(node.id)
+        }
+        return acceptedIDs
+    }
+
+    /// The canvas retains relationship topology while the inspector owns the
+    /// full, readable edge list. Inline relation text becomes illegible on
+    /// dense graphs and competes with priority node labels.
+    static func lineOnlyEdge(_ edge: KGEdge) -> KGEdge {
+        KGEdge(
+            sourceId: edge.sourceId,
+            targetId: edge.targetId,
+            relationType: ""
+        )
+    }
+
+    static func modeEffectDescription(
+        mode: KGAtlasMode,
+        minimumImportance: Double,
+        altitudeTier: KGAltitudeTier
+    ) -> String {
+        switch mode {
+        case .importance:
+            return "Shows entities with importance \(Int(minimumImportance))/10 or higher. Selected and pinned entities remain visible."
+        case .tieredAltitude:
+            return "Shows Summit through \(altitudeTier.title). Lower altitude reveals more entities."
+        }
+    }
+
+    static func canvasAccessibilityValue(
+        visibleEntityCount: Int,
+        visibleRelationshipCount: Int
+    ) -> String {
+        let entities = visibleEntityCount == 1 ? "1 visible entity" : "\(visibleEntityCount) visible entities"
+        let relationships = visibleRelationshipCount == 1
+            ? "1 visible relationship"
+            : "\(visibleRelationshipCount) visible relationships"
+        return "\(entities) and \(relationships)"
+    }
+
+    static let canvasAccessibilityHint =
+        "Use Find entity to browse and select every visible entity without spatial pointing."
+
     private static let orderedEntityTypes = [
         "person",
         "project",
@@ -91,6 +249,34 @@ struct KGAtlasPresentation {
 
     private static let maxLinksPerNodeKey = "brainBar.maxLinksPerNode"
     private static let defaultMaxLinksPerNode = 50
+
+    private static func singularTitle(for entityType: String) -> String {
+        switch entityType {
+        case "person": "Person"
+        case "project": "Project"
+        case "tool": "Tool"
+        case "technology": "Technology"
+        case "agent": "Agent"
+        case "company": "Company"
+        case "topic": "Topic"
+        case "decision": "Decision"
+        default: entityType.isEmpty ? "Entity" : entityType.capitalized
+        }
+    }
+
+    private static func approximateLabelRect(for node: KGNode, scale: CGFloat) -> CGRect {
+        let fontSize = max(9, node.radius * 0.55)
+        let width = max(28, CGFloat(node.name.count) * fontSize * 0.58)
+        let inverseScale = 1 / max(scale, 0.35)
+        let horizontalClearance = 8 * inverseScale
+        let verticalClearance = 5 * inverseScale
+        return CGRect(
+            x: node.position.x - width / 2 - horizontalClearance,
+            y: node.position.y + node.radius + 12 - verticalClearance,
+            width: width + horizontalClearance * 2,
+            height: fontSize + verticalClearance * 2
+        )
+    }
 
     private static func maxLinksPerNode(from userDefaults: UserDefaults) -> Int {
         let configuredValue = userDefaults.integer(forKey: maxLinksPerNodeKey)

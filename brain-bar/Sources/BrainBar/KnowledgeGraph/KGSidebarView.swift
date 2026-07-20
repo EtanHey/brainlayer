@@ -18,6 +18,7 @@ struct KGSidebarView: View {
     let onLoadMoreChunks: () -> Void
     let onLoadMoreFiles: () -> Void
     let onClose: () -> Void
+    @State private var isRelationsExpanded = Self.relationsSectionDefaultExpanded
     @State private var isFilesExpanded = Self.filesSectionDefaultExpanded
 
     var body: some View {
@@ -107,12 +108,7 @@ struct KGSidebarView: View {
 
                 Spacer(minLength: 12)
 
-                Button(action: onClose) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
+                dismissButton
             }
         }
         .padding(16)
@@ -146,62 +142,73 @@ struct KGSidebarView: View {
 
     @ViewBuilder
     private func relationsSection(_ relations: [EntityCard.Relation]) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Relations")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.secondary)
+        DisclosureGroup(isExpanded: $isRelationsExpanded) {
+            VStack(alignment: .leading, spacing: 12) {
+                if relations.isEmpty {
+                    Text("No explicit graph relations yet. Linked chunks are evidence associations and may still appear below.")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(Array(relations.enumerated()), id: \.offset) { _, relation in
+                        let presentation = KGRelationPresentation(relation: relation)
+                        Button {
+                            onSelectRelation(relation)
+                        } label: {
+                            HStack(alignment: .top, spacing: 10) {
+                                Text(relation.direction == "incoming" ? "←" : "→")
+                                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                                    .foregroundStyle(presentation.isDimmed ? .tertiary : .secondary)
+                                    .frame(width: 14)
 
-            if relations.isEmpty {
-                Text("No graph relations yet.")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(Array(relations.enumerated()), id: \.offset) { _, relation in
-                    let presentation = KGRelationPresentation(relation: relation)
-                    Button {
-                        onSelectRelation(relation)
-                    } label: {
-                        HStack(alignment: .top, spacing: 10) {
-                            Text(relation.direction == "incoming" ? "←" : "→")
-                                .font(.system(size: 13, weight: .bold, design: .rounded))
-                                .foregroundStyle(presentation.isDimmed ? .tertiary : .secondary)
-                                .frame(width: 14)
-
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                    Text(relation.targetName)
-                                        .font(.system(size: 13, weight: .semibold))
-                                    if let expiration = presentation.inlinePill {
-                                        ExpirationPill(date: expiration.date, label: expiration.label)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                        Text(relation.targetName)
+                                            .font(.system(size: 13, weight: .semibold))
+                                        if let expiration = presentation.inlinePill {
+                                            ExpirationPill(date: expiration.date, label: expiration.label)
+                                        }
+                                    }
+                                    Text(relation.relationType.replacingOccurrences(of: "_", with: " "))
+                                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                        .foregroundStyle(presentation.isDimmed ? .tertiary : .secondary)
+                                    if let expiredText = presentation.expiredFooterText {
+                                        Text(expiredText)
+                                            .font(.system(size: 10, weight: .medium))
+                                            .foregroundStyle(.tertiary)
                                     }
                                 }
-                                Text(relation.relationType.replacingOccurrences(of: "_", with: " "))
-                                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                    .foregroundStyle(presentation.isDimmed ? .tertiary : .secondary)
-                                if let expiredText = presentation.expiredFooterText {
-                                    Text(expiredText)
-                                        .font(.system(size: 10, weight: .medium))
-                                        .foregroundStyle(.tertiary)
-                                }
-                            }
 
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundStyle(.tertiary)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundStyle(.tertiary)
+                            }
                         }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Open related entity \(relation.targetName)")
+                        .accessibilityHint("Selects this entity and updates the detail panel")
+                        .foregroundStyle(presentation.isDimmed ? .tertiary : .primary)
+                        .padding(12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(Color.brainBarTextPrimary.opacity(0.045))
+                        )
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Open related entity \(relation.targetName)")
-                    .foregroundStyle(presentation.isDimmed ? .tertiary : .primary)
-                    .padding(12)
-                    .background(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(Color.brainBarTextPrimary.opacity(0.045))
-                    )
                 }
             }
+            .padding(.top, 10)
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("Relations")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Text("\(relations.count)")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
         }
+        .accessibilityIdentifier("knowledge-graph-relations-disclosure")
         .padding(16)
         .background(sectionBackground)
     }
@@ -371,15 +378,32 @@ struct KGSidebarView: View {
 
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Knowledge atlas")
-                .font(.system(size: 22, weight: .bold, design: .rounded))
-            Text("Select a node to inspect its relations, metadata, and linked memory chunks.")
+            HStack(alignment: .top) {
+                Text("Entity details unavailable")
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                Spacer(minLength: 12)
+                dismissButton
+            }
+            Text("Close this panel and select the entity again to retry.")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.secondary)
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(sectionBackground)
+    }
+
+    private var dismissButton: some View {
+        Button(action: onClose) {
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut(.cancelAction)
+        .accessibilityLabel(Self.closeAccessibilityLabel)
+        .accessibilityHint("Returns focus to the knowledge atlas")
+        .accessibilityIdentifier("knowledge-graph-close-details")
     }
 
     private var sectionBackground: some View {
@@ -484,6 +508,10 @@ struct KGSidebarView: View {
     }
 
     nonisolated static let filesSectionDefaultExpanded = false
+
+    nonisolated static let relationsSectionDefaultExpanded = false
+
+    nonisolated static let closeAccessibilityLabel = "Close entity details"
 
     nonisolated static let noLinkedChunksMessage = "No linked chunks are stored yet."
 

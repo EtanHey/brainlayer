@@ -5,40 +5,80 @@ import XCTest
 
 final class BrainBarSettingsSnapshotTests: XCTestCase {
     @MainActor
-    func testSettingsViewRendersConfigBackedPanelScreenshot() throws {
+    func testSettingsViewRendersProviderJobsAndSaveTruthScenarios() throws {
         let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("brainbar-settings-\(UUID().uuidString)", isDirectory: true)
-        let configURL = tempRoot
-            .appendingPathComponent(".config", isDirectory: true)
-            .appendingPathComponent("brainlayer", isDirectory: true)
-            .appendingPathComponent("brainlayer.env", isDirectory: false)
-        var config = BrainLayerConfig.defaultConfig
-        config.googleAPIKey = .onePasswordReference("op://Private/Google AI/Gemini API key")
-        config.enrichmentEnabled = true
-        config.enrichmentMode = .remote
-        config.enrichmentProvider = .gemini
-        config.enrichmentBackend = "gemini"
-        config.launchdJobs[.drain]?.enabled = true
-        config.launchdJobs[.hotlane]?.enabled = false
-
-        let store = BrainLayerConfigStore(configURL: configURL)
-        try store.save(config)
         defer { try? FileManager.default.removeItem(at: tempRoot) }
 
-        let viewModel = BrainBarSettingsViewModel(
+        var providerConfig = BrainLayerConfig.defaultConfig
+        providerConfig.googleAPIKey = .onePasswordReference("op://Private/Google AI/Gemini API key")
+        providerConfig.enrichmentProvider = .openai
+        providerConfig.launchdJobs[.hotlane]?.enabled = false
+        let providerViewModel = try makeViewModel(
+            root: tempRoot,
+            name: "provider",
+            config: providerConfig
+        )
+        try render(viewModel: providerViewModel, named: "provider-and-jobs")
+
+        let savedViewModel = try makeViewModel(
+            root: tempRoot,
+            name: "saved",
+            config: .defaultConfig
+        )
+        savedViewModel.backendDraft = "mlx"
+        savedViewModel.commitBackendDraft()
+        try render(viewModel: savedViewModel, named: "saved-restart-needed")
+
+        let validationViewModel = try makeViewModel(
+            root: tempRoot,
+            name: "validation",
+            config: .defaultConfig
+        )
+        validationViewModel.backendDraft = "   "
+        validationViewModel.commitBackendDraft()
+        try render(viewModel: validationViewModel, named: "validation-error")
+
+        let probeErrorViewModel = try makeViewModel(
+            root: tempRoot,
+            name: "probe-error",
+            config: .defaultConfig
+        )
+        XCTAssertEqual(
+            probeErrorViewModel.config.launchdJobs[.watch]?.loadState,
+            .probeError("launchctl exited 1")
+        )
+        try render(viewModel: probeErrorViewModel, named: "launchctl-probe-error")
+    }
+
+    @MainActor
+    private func makeViewModel(
+        root: URL,
+        name: String,
+        config: BrainLayerConfig
+    ) throws -> BrainBarSettingsViewModel {
+        let configURL = root.appendingPathComponent("\(name)-brainlayer.env")
+        let store = BrainLayerConfigStore(configURL: configURL)
+        try store.save(config)
+        let states: [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState] = [
+            .enrichment: .loaded,
+            .hotlane: .unloaded,
+            .drain: .running,
+            .watch: .probeError("launchctl exited 1"),
+        ]
+        return BrainBarSettingsViewModel(
             store: store,
-            launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [
-                .enrichment: .loaded,
-                .hotlane: .unloaded,
-                .drain: .running,
-            ]),
-            initialLaunchdStates: [
-                .enrichment: .loaded,
-                .hotlane: .unloaded,
-                .drain: .running,
-            ],
+            launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: states),
+            runtimeStatusProvider: StaticBrainLayerActiveRuntimeProvider(
+                observation: .unknown("Active runtime configuration is not observable.")
+            ),
+            initialLaunchdStates: states,
             refreshStatusOnLoad: false
         )
+    }
+
+    @MainActor
+    private func render(viewModel: BrainBarSettingsViewModel, named name: String) throws {
         let view = NSHostingView(rootView: BrainBarSettingsView(viewModel: viewModel))
         view.frame = NSRect(x: 0, y: 0, width: 700, height: 1_080)
         view.layoutSubtreeIfNeeded()
@@ -54,29 +94,32 @@ final class BrainBarSettingsSnapshotTests: XCTestCase {
             return
         }
 
-        let url = screenshotURL()
+        let url = screenshotURL(named: name)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try png.write(to: url)
         XCTAssertGreaterThan(png.count, 1_000)
         XCTAssertGreaterThan(distinctSampledColorCount(in: bitmap), 8)
     }
 
-    private func screenshotURL() -> URL {
-        if let override = ProcessInfo.processInfo.environment["BRAINBAR_SETTINGS_SCREENSHOT_PATH"],
+    private func screenshotURL(named name: String) -> URL {
+        if let override = ProcessInfo.processInfo.environment["BRAINBAR_SETTINGS_RENDER_DIR"],
            !override.isEmpty {
-            return URL(fileURLWithPath: override)
+            return URL(fileURLWithPath: override, isDirectory: true)
+                .appendingPathComponent("settings-\(name).png")
         }
-        return URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("docs.local/brainbar-settings-ui-phase2/brainbar-settings.png")
+        return URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent(
+                "brainbar-p5-settings-renders-\(ProcessInfo.processInfo.processIdentifier)",
+                isDirectory: true
+            )
+            .appendingPathComponent("settings-\(name).png")
     }
 
     private func distinctSampledColorCount(in bitmap: NSBitmapImageRep) -> Int {
         guard let data = bitmap.bitmapData else { return 0 }
         let bytesPerPixel = max(bitmap.bitsPerPixel / 8, 1)
-        let sampleStride = max(bitmap.bytesPerRow / 32, bytesPerPixel)
+        let baseStride = max(bitmap.bytesPerRow / 32, bytesPerPixel)
+        let sampleStride = baseStride - (baseStride % bytesPerPixel)
         var colors = Set<String>()
         for y in stride(from: 0, to: bitmap.pixelsHigh, by: 24) {
             let rowStart = y * bitmap.bytesPerRow
