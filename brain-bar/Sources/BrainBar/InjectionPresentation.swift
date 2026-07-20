@@ -3,6 +3,7 @@ import Foundation
 enum InjectionFeedLoadState: Equatable {
     case loading
     case loaded
+    case failed
 }
 
 enum InjectionFeedConnectionState: Equatable {
@@ -34,9 +35,9 @@ enum InjectionFeedSurfaceState: Equatable {
         filterActive: Bool
     ) -> InjectionFeedSurfaceState {
         guard connectionState == .connected else { return .disconnected }
-        guard presentationState.loadState == .loaded else { return .loading }
+        guard presentationState.loadState != .loading else { return .loading }
 
-        if presentationState.degradationState.isDegraded {
+        if presentationState.loadState == .failed || presentationState.degradationState.isDegraded {
             return .degraded(
                 reason: presentationState.degradationState.reason ?? "Injection feed read failed.",
                 retainsContent: !snapshot.bursts.isEmpty
@@ -100,6 +101,19 @@ struct InjectionActionReceipt: Equatable {
         kind: .failure,
         message: "Thread unavailable in this disconnected snapshot"
     )
+}
+
+struct InjectionActionReceiptGeneration: Equatable {
+    private(set) var value = 0
+
+    mutating func next() -> Int {
+        value += 1
+        return value
+    }
+
+    func isCurrent(_ candidate: Int) -> Bool {
+        candidate == value
+    }
 }
 
 struct InjectionFeedFixture {
@@ -201,6 +215,24 @@ struct InjectionPresentation {
         let startDate: Date
         let endDate: Date
         let events: [InjectionEvent]
+        let resultProvenance: [ResultProvenance]
+
+        init(
+            sessionID: String,
+            claudeConversationID: String,
+            topicOrSource: String,
+            startDate: Date,
+            endDate: Date,
+            events: [InjectionEvent]
+        ) {
+            self.sessionID = sessionID
+            self.claudeConversationID = claudeConversationID
+            self.topicOrSource = topicOrSource
+            self.startDate = startDate
+            self.endDate = endDate
+            self.events = events
+            self.resultProvenance = Self.mergeResultProvenance(from: events)
+        }
 
         var id: String {
             "\(groupKey)|\(events.last?.id ?? 0)"
@@ -216,7 +248,7 @@ struct InjectionPresentation {
         var selectedResultSummary: String {
             selectedResultChunk?.displayText ?? "Result unavailable"
         }
-        var resultProvenance: [ResultProvenance] {
+        private static func mergeResultProvenance(from events: [InjectionEvent]) -> [ResultProvenance] {
             var resultIndexByChunkID: [String: Int] = [:]
             var results: [ResultProvenance] = []
             for event in events {
@@ -253,7 +285,7 @@ struct InjectionPresentation {
             )
         }
         var remainingCollapsedResultCount: Int {
-            let selectedCount = selectedResultChunk == nil ? 0 : 1
+            let selectedCount = resultProvenance.isEmpty ? 0 : 1
             return max(resultCount - selectedCount - additionalResultPreviews.count, 0)
         }
         var sourceLabel: String {

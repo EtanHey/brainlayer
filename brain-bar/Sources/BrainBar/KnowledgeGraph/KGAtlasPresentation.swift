@@ -186,7 +186,7 @@ struct KGAtlasPresentation {
         var acceptedRects: [CGRect] = []
         var acceptedIDs = Set<String>()
         for node in orderedNodes {
-            if acceptedIDs.count >= maxLabels, node.id != selectedNodeID { continue }
+            if acceptedIDs.count >= maxLabels, node.id != selectedNodeID { break }
             let rect = approximateLabelRect(for: node, scale: scale)
             guard node.id == selectedNodeID || !acceptedRects.contains(where: { $0.intersects(rect) }) else {
                 continue

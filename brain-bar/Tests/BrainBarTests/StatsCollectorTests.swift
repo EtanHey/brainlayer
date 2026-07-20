@@ -54,6 +54,32 @@ private final class SucceedOnceWindowBucketsProvider: @unchecked Sendable {
     }
 }
 
+private final class CompletingWindowBucketsProvider: @unchecked Sendable {
+    private let lock = NSLock()
+    private let response: BrainDatabase.PipelineWindowBuckets
+    private var completed = false
+
+    deinit {}
+
+    init(response: BrainDatabase.PipelineWindowBuckets) {
+        self.response = response
+    }
+
+    var hasCompleted: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return completed
+    }
+
+    func fetch(windowMinutes: Int, bucketCount: Int) -> BrainDatabase.PipelineWindowBuckets {
+        Thread.sleep(forTimeInterval: 0.1)
+        lock.lock()
+        completed = true
+        lock.unlock()
+        return response
+    }
+}
+
 private final class SequencedBlockingWatcherProbe: WatcherProcessProbing, @unchecked Sendable {
     private let lock = NSLock()
     private let blockedSampleStarted = DispatchSemaphore(value: 0)
@@ -119,6 +145,53 @@ private final class OlderFullRefreshProbe: WatcherProcessProbing, @unchecked Sen
 
     func releaseFirstSample() {
         releaseFirstSampleSemaphore.signal()
+    }
+}
+
+private final class PendingNewerStandaloneProbe: WatcherProcessProbing, @unchecked Sendable {
+    private let lock = NSLock()
+    private let olderFullStarted = DispatchSemaphore(value: 0)
+    private let releaseOlderFullSemaphore = DispatchSemaphore(value: 0)
+    private let newerStandaloneStarted = DispatchSemaphore(value: 0)
+    private let releaseNewerStandaloneSemaphore = DispatchSemaphore(value: 0)
+    private var calls = 0
+
+    deinit {}
+
+    func sample() -> WatcherProcessProbeResult {
+        lock.lock()
+        let call = calls
+        calls += 1
+        lock.unlock()
+
+        switch call {
+        case 0:
+            return .running(pid: 1000)
+        case 1:
+            olderFullStarted.signal()
+            releaseOlderFullSemaphore.wait()
+            return .running(pid: 1111)
+        default:
+            newerStandaloneStarted.signal()
+            releaseNewerStandaloneSemaphore.wait()
+            return .running(pid: 2222)
+        }
+    }
+
+    func waitForOlderFull(timeout: DispatchTime) -> Bool {
+        olderFullStarted.wait(timeout: timeout) == .success
+    }
+
+    func waitForNewerStandalone(timeout: DispatchTime) -> Bool {
+        newerStandaloneStarted.wait(timeout: timeout) == .success
+    }
+
+    func releaseOlderFull() {
+        releaseOlderFullSemaphore.signal()
+    }
+
+    func releaseNewerStandalone() {
+        releaseNewerStandaloneSemaphore.signal()
     }
 }
 
@@ -280,7 +353,7 @@ final class StatsCollectorTests: XCTestCase {
 
         collector.refresh(force: true)
         let refreshDeadline = Date().addingTimeInterval(3)
-        while (collector.isRefreshing || provider.callCount < 2) && Date() < refreshDeadline {
+        while (collector.isRefreshing || collector.windowedBuckets != refreshedBuckets) && Date() < refreshDeadline {
             try await Task.sleep(for: .milliseconds(10))
         }
 
@@ -385,21 +458,23 @@ final class StatsCollectorTests: XCTestCase {
             enrichmentBuckets: [0],
             watcherFlowReadability: .readable
         )
+        let provider = CompletingWindowBucketsProvider(response: delayedBuckets)
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
-            windowedBucketsProvider: { _, _ in
-                Thread.sleep(forTimeInterval: 0.1)
-                return delayedBuckets
-            },
+            windowedBucketsProvider: provider.fetch,
             databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
         )
         defer { collector.stop() }
 
         collector.selectTimeframe(windowMinutes: 1_440, isLive: false)
         collector.selectTimeframe(windowMinutes: 60, isLive: true)
-        try await Task.sleep(for: .milliseconds(200))
+        let completionDeadline = Date().addingTimeInterval(2)
+        while !provider.hasCompleted && Date() < completionDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
 
+        XCTAssertTrue(provider.hasCompleted, "The discarded late fetch must complete before its final state is asserted.")
         XCTAssertNil(collector.windowedBuckets)
         XCTAssertNil(collector.windowedBucketsWindowMinutes)
         XCTAssertNil(collector.windowedBucketsError)
@@ -511,6 +586,92 @@ final class StatsCollectorTests: XCTestCase {
         )
     }
 
+    func testFailedOlderFullRefreshDoesNotOverwriteNewerStandaloneWatcherProbe() async throws {
+        let probe = OlderFullRefreshProbe()
+        let collector = StatsCollector(
+            dbPath: tempDBPath + ".missing",
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            watcherProcessProbe: probe,
+            databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
+        )
+        defer {
+            probe.releaseFirstSample()
+            collector.stop()
+        }
+
+        collector.refresh(force: true)
+        XCTAssertTrue(probe.waitForFirstSample(timeout: .now() + 2))
+
+        collector.refresh(force: false)
+        let standaloneDeadline = Date().addingTimeInterval(3)
+        while collector.stats.watcherProcessProbeResult != .running(pid: 2222), Date() < standaloneDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(collector.stats.watcherProcessProbeResult, .running(pid: 2222))
+
+        probe.releaseFirstSample()
+        let failureDeadline = Date().addingTimeInterval(10)
+        while (collector.isRefreshing || collector.lastFetchError == nil), Date() < failureDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        XCTAssertFalse(collector.isRefreshing)
+        XCTAssertNotNil(collector.lastFetchError)
+        XCTAssertEqual(
+            collector.stats.watcherProcessProbeResult,
+            .running(pid: 2222),
+            "A failed older full refresh must preserve watcher truth from the newer standalone probe."
+        )
+    }
+
+    func testOlderFullRefreshPreservesPublishedTruthWhileNewerStandaloneIsPending() async throws {
+        let probe = PendingNewerStandaloneProbe()
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            watcherProcessProbe: probe,
+            databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
+        )
+        defer {
+            probe.releaseOlderFull()
+            probe.releaseNewerStandalone()
+            collector.stop()
+        }
+
+        collector.refresh(force: true)
+        let initialDeadline = Date().addingTimeInterval(10)
+        while (collector.isRefreshing || collector.stats.watcherProcessProbeResult != .running(pid: 1000)),
+              Date() < initialDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertFalse(collector.isRefreshing)
+        XCTAssertEqual(collector.stats.watcherProcessProbeResult, .running(pid: 1000))
+
+        collector.refresh(force: true)
+        XCTAssertTrue(probe.waitForOlderFull(timeout: .now() + 2))
+        collector.refresh(force: false)
+        XCTAssertTrue(probe.waitForNewerStandalone(timeout: .now() + 2))
+
+        probe.releaseOlderFull()
+        let fullDeadline = Date().addingTimeInterval(10)
+        while collector.isRefreshing, Date() < fullDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertFalse(collector.isRefreshing)
+        XCTAssertEqual(
+            collector.stats.watcherProcessProbeResult,
+            .running(pid: 1000),
+            "The older full refresh must preserve the latest published truth while a newer standalone owner is pending."
+        )
+
+        probe.releaseNewerStandalone()
+        let standaloneDeadline = Date().addingTimeInterval(3)
+        while collector.stats.watcherProcessProbeResult != .running(pid: 2222), Date() < standaloneDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(collector.stats.watcherProcessProbeResult, .running(pid: 2222))
+    }
+
     func testLaunchctlCommandRunnerTimesOutHungProbe() {
         let startedAt = Date()
         let result = LaunchctlWatcherProcessProbe.run(
@@ -521,5 +682,31 @@ final class StatsCollectorTests: XCTestCase {
         XCTAssertEqual(result.terminationStatus, 124)
         XCTAssertTrue(result.output.localizedCaseInsensitiveContains("timed out"))
         XCTAssertLessThan(Date().timeIntervalSince(startedAt), 0.5)
+    }
+
+    func testLaunchctlCommandRunnerCancelsHungProbe() async throws {
+        let task = Task.detached {
+            LaunchctlWatcherProcessProbe.run(["/bin/sleep", "1"], timeout: 2)
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        task.cancel()
+
+        let result = await task.value
+        XCTAssertEqual(result.terminationStatus, 124)
+        XCTAssertTrue(result.output.localizedCaseInsensitiveContains("cancelled"))
+    }
+
+    func testLaunchctlCommandRunnerDrainsLargeOutputBeforeChildExit() {
+        let result = LaunchctlWatcherProcessProbe.run(
+            ["/bin/sh", "-c", "/usr/bin/yes x | /usr/bin/head -c 200000"],
+            timeout: 2
+        )
+
+        XCTAssertEqual(result.terminationStatus, 0)
+        XCTAssertGreaterThan(
+            result.output.utf8.count,
+            64 * 1_024,
+            "The launchctl runner must drain output concurrently so a full pipe cannot wedge a healthy child."
+        )
     }
 }

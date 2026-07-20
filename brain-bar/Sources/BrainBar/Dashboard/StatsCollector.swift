@@ -13,6 +13,27 @@ struct StaticWatcherProcessProbe: WatcherProcessProbing {
     func sample() -> WatcherProcessProbeResult { result }
 }
 
+private final class LaunchctlOutputBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    deinit {}
+
+    func replace(with data: Data) {
+        lock.lock()
+        self.data = data
+        lock.unlock()
+    }
+
+    func text(appending statusMessage: String? = nil) -> String {
+        lock.lock()
+        let captured = String(data: data, encoding: .utf8) ?? ""
+        lock.unlock()
+        guard let statusMessage, !statusMessage.isEmpty else { return captured }
+        return captured.isEmpty ? statusMessage : "\(captured)\n\(statusMessage)"
+    }
+}
+
 struct LaunchctlWatcherProcessProbe: WatcherProcessProbing {
     struct CommandResult: Sendable, Equatable {
         let terminationStatus: Int32
@@ -82,6 +103,15 @@ struct LaunchctlWatcherProcessProbe: WatcherProcessProbing {
         } catch {
             return CommandResult(terminationStatus: 1, output: String(describing: error))
         }
+        try? pipe.fileHandleForWriting.close()
+
+        let outputBuffer = LaunchctlOutputBuffer()
+        let outputDrain = DispatchGroup()
+        outputDrain.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            outputBuffer.replace(with: pipe.fileHandleForReading.readDataToEndOfFile())
+            outputDrain.leave()
+        }
 
         let deadline = Date().addingTimeInterval(max(0.01, timeout))
         while process.isRunning, Date() < deadline, !Task.isCancelled {
@@ -98,18 +128,20 @@ struct LaunchctlWatcherProcessProbe: WatcherProcessProbing {
                 Darwin.kill(process.processIdentifier, SIGKILL)
             }
             process.waitUntilExit()
-            _ = pipe.fileHandleForReading.readDataToEndOfFile()
+            outputDrain.wait()
             return CommandResult(
                 terminationStatus: 124,
-                output: Task.isCancelled ? "launchctl probe cancelled" : "launchctl timed out"
+                output: outputBuffer.text(
+                    appending: Task.isCancelled ? "launchctl probe cancelled" : "launchctl timed out"
+                )
             )
         }
 
         process.waitUntilExit()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        outputDrain.wait()
         return CommandResult(
             terminationStatus: process.terminationStatus,
-            output: String(data: data, encoding: .utf8) ?? ""
+            output: outputBuffer.text()
         )
     }
 }

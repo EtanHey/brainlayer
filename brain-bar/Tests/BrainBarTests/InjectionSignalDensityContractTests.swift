@@ -4,6 +4,8 @@ import XCTest
 @testable import BrainBar
 
 final class InjectionSignalDensityContractTests: XCTestCase {
+    deinit {}
+
     func testCollapsedBurstPresentsTriggerBeforeSelectedResultAndKeepsProvenance() throws {
         let now = isoDate("2026-07-19T10:00:00Z")
         let sourceFile = "/Users/example/project/.claude/projects/-Users-example-project/session.jsonl"
@@ -78,6 +80,11 @@ final class InjectionSignalDensityContractTests: XCTestCase {
 
         XCTAssertEqual(burst.selectedResultProvenance?.chunkID, "missing-selected")
         XCTAssertEqual(burst.selectedResultSummary, "Result unavailable")
+        XCTAssertEqual(
+            burst.remainingCollapsedResultCount,
+            0,
+            "The unresolved selected provenance is still rendered and must consume the selected slot."
+        )
     }
 
     func testRepeatedResultUpgradesMissingProvenanceWhenLaterEventSuppliesChunk() throws {
@@ -283,6 +290,35 @@ final class InjectionSignalDensityContractTests: XCTestCase {
                 kind: .failure,
                 message: "Thread unavailable in this disconnected snapshot"
             )
+        )
+    }
+
+    func testActionReceiptGenerationPreventsOlderExpiryFromClearingNewerReceipt() {
+        var generation = InjectionActionReceiptGeneration()
+        let first = generation.next()
+        let second = generation.next()
+
+        XCTAssertFalse(generation.isCurrent(first))
+        XCTAssertTrue(generation.isCurrent(second))
+    }
+
+    func testFailedInitialLoadResolvesToExplicitDegradedSurface() {
+        let now = isoDate("2026-07-19T10:00:00Z")
+        let emptySnapshot = InjectionPresentation.snapshot(events: [], filterText: "", now: now)
+        let failed = InjectionFeedPresentationState(
+            events: [],
+            degradationState: .degraded(reason: "database locked"),
+            loadState: .failed
+        )
+
+        XCTAssertEqual(
+            InjectionFeedSurfaceState.resolve(
+                snapshot: emptySnapshot,
+                presentationState: failed,
+                connectionState: .connected,
+                filterActive: false
+            ),
+            .degraded(reason: "database locked", retainsContent: false)
         )
     }
 
@@ -534,7 +570,8 @@ final class InjectionSignalDensityContractTests: XCTestCase {
     private func distinctSampledColorCount(in bitmap: NSBitmapImageRep) -> Int {
         guard let data = bitmap.bitmapData else { return 0 }
         let bytesPerPixel = max(bitmap.bitsPerPixel / 8, 1)
-        let sampleStride = max(bitmap.bytesPerRow / 32, bytesPerPixel)
+        let baseStride = max(bitmap.bytesPerRow / 32, bytesPerPixel)
+        let sampleStride = baseStride - (baseStride % bytesPerPixel)
         var colors = Set<String>()
         for y in stride(from: 0, to: bitmap.pixelsHigh, by: 24) {
             let rowStart = y * bitmap.bytesPerRow

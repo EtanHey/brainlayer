@@ -60,6 +60,7 @@ struct InjectionFeedView: View {
     @State private var conversationSelection = InjectionConversationSelection()
     @State private var loadingConversationChunkID: String?
     @State private var actionReceipt: InjectionActionReceipt? = nil
+    @State private var actionReceiptGeneration = InjectionActionReceiptGeneration()
     @State private var groupingDisclosureExpanded = false
     @AppStorage("brainbar.injectionFeed.typeFilter") private var typeFilterRaw = InjectionTypeFilter.all.rawValue
 
@@ -877,7 +878,7 @@ struct InjectionFeedView: View {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         let copied = pasteboard.setString(command, forType: .string)
-        actionReceipt = .copyResult(copied: copied)
+        publishActionReceipt(.copyResult(copied: copied))
         guard copied else {
             return
         }
@@ -893,9 +894,6 @@ struct InjectionFeedView: View {
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(2))
             guard copiedContinuationBurstID == burstID else { return }
-            if actionReceipt?.message == "Resume command copied" {
-                actionReceipt = nil
-            }
             if reduceMotion {
                 copiedContinuationBurstID = nil
             } else {
@@ -970,7 +968,7 @@ struct InjectionFeedView: View {
     private func openConversation(chunkID: String, title: String) {
         guard loadingConversationChunkID == nil else { return }
         guard let store else {
-            actionReceipt = .disconnectedThread
+            publishActionReceipt(.disconnectedThread)
             return
         }
         loadingConversationChunkID = chunkID
@@ -980,13 +978,22 @@ struct InjectionFeedView: View {
                 guard loadingConversationChunkID == chunkID else { return }
                 conversationSelection.open(conversation, title: title)
                 loadingConversationChunkID = nil
-                actionReceipt = .threadOpenResult(errorDescription: nil)
+                publishActionReceipt(.threadOpenResult(errorDescription: nil))
             } catch {
-                if loadingConversationChunkID == chunkID {
-                    loadingConversationChunkID = nil
-                }
-                actionReceipt = .threadOpenResult(errorDescription: error.localizedDescription)
+                guard loadingConversationChunkID == chunkID else { return }
+                loadingConversationChunkID = nil
+                publishActionReceipt(.threadOpenResult(errorDescription: error.localizedDescription))
             }
+        }
+    }
+
+    private func publishActionReceipt(_ receipt: InjectionActionReceipt) {
+        let generation = actionReceiptGeneration.next()
+        actionReceipt = receipt
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard actionReceiptGeneration.isCurrent(generation), actionReceipt == receipt else { return }
+            actionReceipt = nil
         }
     }
 }

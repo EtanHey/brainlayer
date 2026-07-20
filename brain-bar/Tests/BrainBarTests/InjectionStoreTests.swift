@@ -127,12 +127,14 @@ final class InjectionStoreTests: XCTestCase {
 
         store.refreshForTesting(force: true)
         XCTAssertTrue(store.degradationState.isDegraded)
+        XCTAssertEqual(store.loadState, .failed, "A failed refresh must never masquerade as loaded.")
 
         store.refreshForTesting(force: false)
         XCTAssertTrue(
             store.degradationState.isDegraded,
             "An unchanged dataVersion poll skipped the event query; that is not positive recovery evidence."
         )
+        XCTAssertEqual(store.loadState, .loaded, "A successful probe may remain degraded while publishing a completed read state.")
 
         store.refreshForTesting(force: false)
         XCTAssertEqual(store.degradationState, .healthy)
@@ -291,7 +293,10 @@ final class InjectionStoreTests: XCTestCase {
         )
 
         store.refreshForTesting(force: true)
-        try await Task.sleep(for: .milliseconds(20))
+        let deadline = Date().addingTimeInterval(2)
+        while model.state.loadState != .loaded, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
 
         XCTAssertEqual(store.loadState, .loaded)
         XCTAssertEqual(model.state.loadState, .loaded)

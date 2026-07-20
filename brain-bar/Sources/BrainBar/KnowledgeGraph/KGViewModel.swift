@@ -272,7 +272,7 @@ final class KGViewModel: ObservableObject {
             return
         }
 
-        guard let database, let node = nodeById(id) else {
+        guard let node = nodeById(id) else {
             // Missing nodes should clear selection without restarting the simulation.
             freezeLayout()
             selectedNodeId = nil
@@ -282,6 +282,13 @@ final class KGViewModel: ObservableObject {
             return
         }
         pinLayout()
+
+        guard let database else {
+            selectedEntity = nil
+            selectedConversation = nil
+            resetSelectedEntitySidebarState(isLoading: false, loadFailed: true)
+            return
+        }
 
         do {
             guard let lookupPayload = try database.lookupEntity(query: node.name) else {
@@ -300,6 +307,9 @@ final class KGViewModel: ObservableObject {
             // Preserve the explicit sidebar failure state for transient database
             // errors. The empty-state close control keeps this path dismissible.
             selectedEntity = nil
+            selectedConversation = nil
+            resetSelectedEntitySidebarState(isLoading: false, loadFailed: true)
+            return
         }
         selectedConversation = nil
         resetSelectedEntitySidebarState(isLoading: true, loadFailed: false)

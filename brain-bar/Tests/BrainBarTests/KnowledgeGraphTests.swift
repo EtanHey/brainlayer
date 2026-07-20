@@ -1611,6 +1611,11 @@ final class KGViewModelTests: XCTestCase {
         db.close()
 
         vm.selectNode(id: "e1")
+        XCTAssertEqual(vm.selectedNodeId, "e1", "A detail lookup failure must preserve the operator's selection.")
+        XCTAssertFalse(vm.isLoadingSelectedEntityChunks)
+        XCTAssertFalse(vm.isLoadingSelectedEntityFiles)
+        XCTAssertTrue(vm.selectedEntityChunkSidebarLoadFailed)
+        XCTAssertTrue(vm.selectedEntityFileSidebarLoadFailed)
         await waitForSelectedEntityChunkLoadingToFinish(vm)
 
         XCTAssertTrue(vm.selectedEntityChunkSidebarLoadFailed)
@@ -1619,6 +1624,35 @@ final class KGViewModelTests: XCTestCase {
         XCTAssertEqual(vm.selectedEntityFileTotal, 0)
         XCTAssertTrue(vm.selectedEntityChunks.isEmpty)
         XCTAssertTrue(vm.selectedEntityFiles.isEmpty)
+    }
+
+    func testGraphReaderOnlySelectionPreservesNodeAndSurfacesUnavailableSidebar() async throws {
+        let reader = RecordingKnowledgeGraphReader(
+            entities: [
+                BrainDatabase.KGEntityRow(
+                    id: "reader-only",
+                    name: "Reader only",
+                    entityType: "project",
+                    description: nil,
+                    importance: 8,
+                    linkedChunkCount: 0
+                ),
+            ],
+            relations: []
+        )
+        let vm = KGViewModel(graphReader: reader)
+        let loaded = await vm.loadGraph()
+        XCTAssertTrue(loaded)
+
+        vm.selectNode(id: "reader-only")
+
+        XCTAssertEqual(vm.selectedNodeId, "reader-only")
+        XCTAssertTrue(vm.isLayoutPinned)
+        XCTAssertNil(vm.selectedEntity)
+        XCTAssertFalse(vm.isLoadingSelectedEntityChunks)
+        XCTAssertFalse(vm.isLoadingSelectedEntityFiles)
+        XCTAssertTrue(vm.selectedEntityChunkSidebarLoadFailed)
+        XCTAssertTrue(vm.selectedEntityFileSidebarLoadFailed)
     }
 
     func testFetchEntitySidebarSnapshotHonorsCancellationBeforeDatabaseWork() async throws {

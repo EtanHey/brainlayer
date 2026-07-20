@@ -252,7 +252,6 @@ final class InjectionStore: ObservableObject {
     }
 
     private func refresh(force: Bool) {
-        defer { loadState = .loaded }
         do {
             let currentDataVersion = try reader.dataVersion()
             let shouldProbeEvents: Bool
@@ -279,11 +278,13 @@ final class InjectionStore: ObservableObject {
                 recoveryPhase = .probing(reason: reason)
                 degradationState = .degraded(reason: reason)
             }
+            loadState = .loaded
         } catch {
             NSLog("[BrainBar] InjectionStore refresh failed: %@", String(describing: error))
             let reason = String(describing: error)
             recoveryPhase = .degraded(reason: reason)
             degradationState = .degraded(reason: reason)
+            loadState = .failed
         }
     }
 
