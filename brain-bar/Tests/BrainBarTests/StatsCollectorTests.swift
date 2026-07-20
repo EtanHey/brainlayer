@@ -10,6 +10,89 @@ import XCTest
 import SQLite3
 @testable import BrainBar
 
+private final class SequencedWindowBucketsProvider: @unchecked Sendable {
+    private let lock = NSLock()
+    private let responses: [BrainDatabase.PipelineWindowBuckets]
+    private var nextResponseIndex = 0
+
+    init(responses: [BrainDatabase.PipelineWindowBuckets]) {
+        self.responses = responses
+    }
+
+    var callCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return nextResponseIndex
+    }
+
+    func fetch(windowMinutes: Int, bucketCount: Int) throws -> BrainDatabase.PipelineWindowBuckets {
+        lock.lock()
+        defer { lock.unlock() }
+        let index = min(nextResponseIndex, responses.count - 1)
+        nextResponseIndex += 1
+        return responses[index]
+    }
+}
+
+private struct WindowBucketsProviderFailure: Error {}
+
+private final class SucceedOnceWindowBucketsProvider: @unchecked Sendable {
+    private let lock = NSLock()
+    private let response: BrainDatabase.PipelineWindowBuckets
+    private var calls = 0
+
+    init(response: BrainDatabase.PipelineWindowBuckets) {
+        self.response = response
+    }
+
+    func fetch(windowMinutes: Int, bucketCount: Int) throws -> BrainDatabase.PipelineWindowBuckets {
+        lock.lock()
+        defer { lock.unlock() }
+        calls += 1
+        guard calls == 1 else { throw WindowBucketsProviderFailure() }
+        return response
+    }
+}
+
+private final class SequencedBlockingWatcherProbe: WatcherProcessProbing, @unchecked Sendable {
+    private let lock = NSLock()
+    private let blockedSampleStarted = DispatchSemaphore(value: 0)
+    private let releaseBlockedSampleSemaphore = DispatchSemaphore(value: 0)
+    private var calls = 0
+
+    var callCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return calls
+    }
+
+    func sample() -> WatcherProcessProbeResult {
+        lock.lock()
+        let call = calls
+        calls += 1
+        lock.unlock()
+
+        switch call {
+        case 0:
+            return .running(pid: 1001)
+        case 1:
+            blockedSampleStarted.signal()
+            releaseBlockedSampleSemaphore.wait()
+            return .failure("stale standalone probe")
+        default:
+            return .running(pid: 4242)
+        }
+    }
+
+    func waitForBlockedSample(timeout: DispatchTime) -> Bool {
+        blockedSampleStarted.wait(timeout: timeout) == .success
+    }
+
+    func releaseBlockedSample() {
+        releaseBlockedSampleSemaphore.signal()
+    }
+}
+
 @MainActor
 final class StatsCollectorTests: XCTestCase {
     private struct WindowFetchFailure: Error {}
@@ -131,6 +214,52 @@ final class StatsCollectorTests: XCTestCase {
         XCTAssertFalse(collector.isWindowedBucketsLoading)
     }
 
+    func testSuccessfulDashboardRefreshRefetchesSelectedWiderWindow() async throws {
+        let initialBuckets = BrainDatabase.PipelineWindowBuckets(
+            activityWindowMinutes: 180,
+            bucketCount: 1,
+            allWriteBuckets: [1],
+            agentWriteBuckets: [1],
+            watcherWriteBuckets: [0],
+            enrichmentBuckets: [0],
+            watcherFlowReadability: .readable
+        )
+        let refreshedBuckets = BrainDatabase.PipelineWindowBuckets(
+            activityWindowMinutes: 180,
+            bucketCount: 1,
+            allWriteBuckets: [2],
+            agentWriteBuckets: [2],
+            watcherWriteBuckets: [0],
+            enrichmentBuckets: [0],
+            watcherFlowReadability: .readable
+        )
+        let provider = SequencedWindowBucketsProvider(responses: [initialBuckets, refreshedBuckets])
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            windowedBucketsProvider: provider.fetch,
+            databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
+        )
+        defer { collector.stop() }
+
+        collector.selectTimeframe(windowMinutes: 180, isLive: false)
+        let initialDeadline = Date().addingTimeInterval(2)
+        while collector.windowedBuckets != initialBuckets && Date() < initialDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(collector.windowedBuckets, initialBuckets)
+
+        collector.refresh(force: true)
+        let refreshDeadline = Date().addingTimeInterval(3)
+        while (collector.isRefreshing || provider.callCount < 2) && Date() < refreshDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        XCTAssertEqual(provider.callCount, 2, "A successful dashboard refresh must refetch the selected 3h window.")
+        XCTAssertEqual(collector.windowedBuckets, refreshedBuckets)
+        XCTAssertEqual(collector.windowedBucketsWindowMinutes, 180)
+    }
+
     func testWindowFetchFailurePreservesLastGoodBucketsAndPublishesTruthfulError() async throws {
         let threeHourBuckets = BrainDatabase.PipelineWindowBuckets(
             activityWindowMinutes: 180,
@@ -173,6 +302,47 @@ final class StatsCollectorTests: XCTestCase {
             PipelineTimeframe.truthfulDisplay(selected: .day, loadedWindowMinutes: collector.windowedBucketsWindowMinutes),
             .live,
             "Live buckets must never be relabeled as the failed 24h selection."
+        )
+    }
+
+    func testWindowRefreshFailureDescribesRetainedMatchingLastGoodBuckets() async throws {
+        let threeHourBuckets = BrainDatabase.PipelineWindowBuckets(
+            activityWindowMinutes: 180,
+            bucketCount: 1,
+            allWriteBuckets: [3],
+            agentWriteBuckets: [2],
+            watcherWriteBuckets: [1],
+            enrichmentBuckets: [1],
+            watcherFlowReadability: .readable
+        )
+        let provider = SucceedOnceWindowBucketsProvider(response: threeHourBuckets)
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            windowedBucketsProvider: provider.fetch,
+            databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
+        )
+        defer { collector.stop() }
+
+        collector.selectTimeframe(windowMinutes: 180, isLive: false)
+        let successDeadline = Date().addingTimeInterval(2)
+        while collector.isWindowedBucketsLoading && Date() < successDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(collector.windowedBuckets, threeHourBuckets)
+
+        collector.selectTimeframe(windowMinutes: 180, isLive: false)
+        let failureDeadline = Date().addingTimeInterval(2)
+        while collector.isWindowedBucketsLoading && Date() < failureDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        XCTAssertEqual(collector.windowedBuckets, threeHourBuckets, "Section 4 requires retaining last-good values on fetch error.")
+        XCTAssertEqual(collector.windowedBucketsWindowMinutes, 180)
+        XCTAssertEqual(collector.windowedBucketsError, "Could not refresh Last 3h; showing previous Last 3h.")
+        XCTAssertEqual(
+            PipelineTimeframe.truthfulDisplay(selected: .threeHour, loadedWindowMinutes: collector.windowedBucketsWindowMinutes),
+            .threeHour
         )
     }
 
@@ -228,6 +398,49 @@ final class StatsCollectorTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(10))
         }
         XCTAssertEqual(collector.stats.watcherProcessProbeResult, .running(pid: 4242))
+    }
+
+    func testFullRefreshInvalidatesOlderStandaloneWatcherProbe() async throws {
+        let probe = SequencedBlockingWatcherProbe()
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            watcherProcessProbe: probe,
+            statsRefreshCoalesceInterval: 5,
+            databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
+        )
+        defer {
+            probe.releaseBlockedSample()
+            collector.stop()
+        }
+
+        collector.refresh(force: false)
+        let initialDeadline = Date().addingTimeInterval(3)
+        while collector.isRefreshing && Date() < initialDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(collector.stats.watcherProcessProbeResult, .running(pid: 1001))
+
+        collector.refresh(force: false)
+        XCTAssertTrue(
+            probe.waitForBlockedSample(timeout: .now() + 2),
+            "The coalesced refresh must start the standalone probe used to reproduce the race."
+        )
+
+        collector.refresh(force: true)
+        let fullRefreshDeadline = Date().addingTimeInterval(3)
+        while (collector.isRefreshing || probe.callCount < 3) && Date() < fullRefreshDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(collector.stats.watcherProcessProbeResult, .running(pid: 4242))
+
+        probe.releaseBlockedSample()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(
+            collector.stats.watcherProcessProbeResult,
+            .running(pid: 4242),
+            "An older standalone probe must not overwrite the full refresh's newer watcher truth."
+        )
     }
 
     func testLaunchctlCommandRunnerTimesOutHungProbe() {

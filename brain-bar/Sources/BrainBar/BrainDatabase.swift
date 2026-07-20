@@ -3970,7 +3970,11 @@ final class BrainDatabase: @unchecked Sendable {
             guard let enumerator = fileManager.enumerator(
                 at: directory,
                 includingPropertiesForKeys: [.isRegularFileKey],
-                options: [.skipsHiddenFiles]
+                options: [.skipsHiddenFiles],
+                errorHandler: { _, _ in
+                    isReadable = false
+                    return true
+                }
             ) else {
                 return false
             }

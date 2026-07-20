@@ -1075,6 +1075,33 @@ final class DashboardTests: XCTestCase {
         XCTAssertTrue(stats.replayDebtBreakdown.detailText.contains("repository fallback"))
     }
 
+    func testDashboardStatsMarksFallbackPartialWhenRecursiveSubdirectoryCannotBeRead() throws {
+        let blockedDirectory = fallbackReplayRoot
+            .appendingPathComponent("brainlayer", isDirectory: true)
+            .appendingPathComponent("docs.local", isDirectory: true)
+            .appendingPathComponent("brain-store-fallback", isDirectory: true)
+            .appendingPathComponent("blocked", isDirectory: true)
+        try FileManager.default.createDirectory(at: blockedDirectory, withIntermediateDirectories: true)
+        try "pending debt hidden below unreadable directory\n".write(
+            to: blockedDirectory.appendingPathComponent("pending.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: blockedDirectory.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: blockedDirectory.path)
+        }
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+        let fallback = stats.replayDebtBreakdown.repositoryFallback
+
+        XCTAssertFalse(
+            fallback.readability.isReadable,
+            "A skipped recursive subtree makes repository fallback evidence partial, never trustworthy empty evidence."
+        )
+        XCTAssertTrue(stats.replayDebtBreakdown.isPartial)
+    }
+
     func testDashboardStatsIncludesDurableStoreQueueDepth() throws {
         let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("pending-stores-dashboard-empty-\(UUID().uuidString).jsonl")

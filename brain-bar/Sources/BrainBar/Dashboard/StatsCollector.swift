@@ -161,6 +161,7 @@ final class StatsCollector: ObservableObject {
     @Published private(set) var isWindowedBucketsLoading = false
     private var windowedBucketsTask: Task<Void, Never>?
     private var windowedBucketsGeneration = 0
+    private var selectedWindowMinutes: Int?
 
     private let dbPath: String
     private let databaseOpenConfiguration: BrainDatabase.OpenConfiguration
@@ -338,6 +339,7 @@ final class StatsCollector: ObservableObject {
         let generation = windowedBucketsGeneration
 
         if isLive {
+            selectedWindowMinutes = nil
             windowedBuckets = nil
             windowedBucketsWindowMinutes = nil
             windowedBucketsError = nil
@@ -347,6 +349,7 @@ final class StatsCollector: ObservableObject {
 
         let bucketCount = Self.defaultBucketCount
         let provider = windowedBucketsProvider
+        selectedWindowMinutes = windowMinutes
         windowedBucketsError = nil
         isWindowedBucketsLoading = true
 
@@ -397,6 +400,9 @@ final class StatsCollector: ObservableObject {
         hasPendingStatsRefresh = false
         dashboardRefreshTask?.cancel()
         dashboardRefreshGeneration += 1
+        watcherProcessRefreshTask?.cancel()
+        watcherProcessRefreshTask = nil
+        watcherProcessRefreshGeneration += 1
         let generation = dashboardRefreshGeneration
         let dbPath = self.dbPath
         let openConfiguration = self.databaseOpenConfiguration
@@ -461,7 +467,12 @@ final class StatsCollector: ObservableObject {
             windowedBucketsWindowMinutes = windowMinutes
             windowedBucketsError = nil
         case .failure:
-            windowedBucketsError = "Could not load \(DashboardMetricFormatter.windowLabel(minutes: windowMinutes)); showing Last 1h."
+            let windowLabel = DashboardMetricFormatter.windowLabel(minutes: windowMinutes)
+            if windowedBuckets != nil, windowedBucketsWindowMinutes == windowMinutes {
+                windowedBucketsError = "Could not refresh \(windowLabel); showing previous \(windowLabel)."
+            } else {
+                windowedBucketsError = "Could not load \(windowLabel); showing Last 1h."
+            }
         }
     }
 
@@ -529,6 +540,9 @@ final class StatsCollector: ObservableObject {
             state = PipelineState.derive(daemon: finishDaemon, stats: stats)
             lastDataFetchedAt = nowProvider()
             lastFetchError = nil
+            if let selectedWindowMinutes {
+                selectTimeframe(windowMinutes: selectedWindowMinutes, isLive: false)
+            }
             if !force {
                 lastNonForcedStatsRefreshAt = snapshotTime
             }
