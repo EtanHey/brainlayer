@@ -134,7 +134,12 @@ final class InjectionStoreTests: XCTestCase {
             store.degradationState.isDegraded,
             "An unchanged dataVersion poll skipped the event query; that is not positive recovery evidence."
         )
-        XCTAssertEqual(store.loadState, .loaded, "A successful probe may remain degraded while publishing a completed read state.")
+        XCTAssertEqual(reader.listCallCount, 2, "The transition to probing must not claim an event read occurred.")
+        XCTAssertEqual(
+            store.loadState,
+            .failed,
+            "A clean dataVersion probe cannot publish loaded until listInjectionEvents succeeds."
+        )
 
         store.refreshForTesting(force: false)
         XCTAssertEqual(store.degradationState, .healthy)

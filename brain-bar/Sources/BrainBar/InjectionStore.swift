@@ -270,6 +270,7 @@ final class InjectionStore: ObservableObject {
                 lastDataVersion = currentDataVersion
                 recoveryPhase = .healthy
                 degradationState = .healthy
+                loadState = .loaded
             } else if let reason = recoveryPhase.reason {
                 // A clean data_version read is not enough to prove the
                 // injections read path recovered. Keep the public badge
@@ -277,8 +278,10 @@ final class InjectionStore: ObservableObject {
                 // even if SQLite's data version is still unchanged.
                 recoveryPhase = .probing(reason: reason)
                 degradationState = .degraded(reason: reason)
+                loadState = .failed
+            } else {
+                loadState = .loaded
             }
-            loadState = .loaded
         } catch {
             NSLog("[BrainBar] InjectionStore refresh failed: %@", String(describing: error))
             let reason = String(describing: error)
