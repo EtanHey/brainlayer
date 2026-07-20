@@ -979,6 +979,31 @@ class JSONLWatcher:
             normalized.append(entry)
         return normalized
 
+    def _checkpoint_discarded_progress(
+        self,
+        filepath: str,
+        read_start_offset: int,
+        read_end_offset: int,
+        normalized_lines: list[dict],
+    ) -> None:
+        """Confirm intentionally discarded bytes without crossing indexable work."""
+        required_confirmed_offset = max(
+            (
+                line["_line_end_offset"]
+                for line in normalized_lines
+                if isinstance(line.get("_line_end_offset"), int)
+            ),
+            default=read_start_offset,
+        )
+        if read_end_offset <= required_confirmed_offset:
+            return
+        if self.indexer.has_buffered_source(filepath):
+            return
+        confirmed_offset, _confirmed_inode = self.registry.get(filepath)
+        if confirmed_offset < required_confirmed_offset:
+            return
+        self._advance_confirmed_offsets({filepath: read_end_offset})
+
     def _max_offset_lag_bytes(self, files: list[str]) -> int:
         max_lag = 0
         for filepath in files:
@@ -1291,15 +1316,18 @@ class JSONLWatcher:
                             tailer.rewound = False
 
                     if drain_buffer:
+                        read_start_offset = tailer.offset
                         new_lines = tailer.read_buffered_lines(max_lines=self.max_lines_per_file)
                     else:
                         if self._skip_oversized_file(filepath):
                             continue
                         tailer = self._ensure_tailer(filepath)
+                        read_start_offset = tailer.offset
                         new_lines = tailer.read_new_lines(max_lines=self.max_lines_per_file)
 
                     # Handle rewind detection (checkpoint restore)
                     if tailer.rewound:
+                        read_start_offset = 0
                         self._handle_rewind(
                             filepath,
                             tailer.rewind_old_offset,
@@ -1308,11 +1336,17 @@ class JSONLWatcher:
                         )
                         tailer.rewound = False  # Reset flag
 
-                    if new_lines:
-                        normalized_lines = self._normalize_lines(filepath, new_lines)
+                    normalized_lines = self._normalize_lines(filepath, new_lines) if new_lines else []
+                    if normalized_lines:
                         self.indexer.add(normalized_lines)
                         self._health_entries_seen += len(normalized_lines)
                         total_new += len(normalized_lines)
+                    self._checkpoint_discarded_progress(
+                        filepath,
+                        read_start_offset,
+                        tailer.offset,
+                        normalized_lines,
+                    )
                 except Exception:
                     logger.exception("Poll file error: %s", filepath)
 

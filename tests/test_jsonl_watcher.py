@@ -1243,6 +1243,60 @@ class TestJSONLWatcher:
         assert watcher.registry.get(str(rollout)) == (tailer.offset, rollout.stat().st_ino)
         assert tailer.offset < oversized_size
 
+    def test_poll_checkpoints_dropped_only_records_before_oversized_append(self, tmp_path, monkeypatch):
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        rollout = sessions / "rollout.jsonl"
+        rollout.write_text(json.dumps({"type": "response_item", "payload": {"type": "function_call"}}) + "\n")
+        dropped_offset = rollout.stat().st_size
+        monkeypatch.setenv("BRAINLAYER_WATCH_MAX_FILE_BYTES", "128")
+        flushed = []
+
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda items: flushed.extend(items),
+            batch_size=1,
+        )
+
+        assert watcher.poll_once() == 0
+        assert flushed == []
+        assert watcher.registry.get(str(rollout)) == (dropped_offset, rollout.stat().st_ino)
+
+        with rollout.open("a") as file_handle:
+            file_handle.write(json.dumps({"role": "user", "content": "x" * 256}) + "\n")
+        assert watcher.poll_once() == 0
+        oversized_checkpoint = rollout.stat().st_size
+        assert watcher.registry.get(str(rollout))[0] == oversized_checkpoint
+
+        with rollout.open("a") as file_handle:
+            file_handle.write(json.dumps({"role": "user", "content": "small append"}) + "\n")
+        assert watcher.poll_once() == 1
+        assert flushed[0]["message"]["content"][0]["text"] == "small append"
+
+    def test_poll_does_not_checkpoint_dropped_tail_past_unconfirmed_record(self, tmp_path):
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        rollout = sessions / "rollout.jsonl"
+        rollout.write_text(
+            json.dumps({"role": "user", "content": "indexable record"})
+            + "\n"
+            + json.dumps({"type": "response_item", "payload": {"type": "function_call"}})
+            + "\n"
+        )
+
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda _items: None,
+            batch_size=10,
+            flush_interval_ms=360000,
+        )
+
+        assert watcher.poll_once() == 1
+        assert watcher.indexer.has_buffered_source(str(rollout))
+        assert watcher.registry.get(str(rollout)) == (0, 0)
+
     def test_poll_skips_oversized_pending_file_with_warning_and_continues(
         self,
         tmp_path,
