@@ -1358,6 +1358,40 @@ class TestJSONLWatcher:
         assert watcher.registry.get(str(rollout)) == (0, 0)
         assert len(watcher.indexer._buffer) == 1
 
+    def test_poll_does_not_checkpoint_past_partially_confirmed_watermark(self, tmp_path, monkeypatch):
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        rollout = sessions / "rollout.jsonl"
+        rollout.write_text(
+            json.dumps({"role": "user", "content": "first"})
+            + "\n"
+            + json.dumps({"role": "user", "content": "second"})
+            + "\n"
+        )
+        monkeypatch.setenv("BRAINLAYER_WATCH_MAX_FILE_BYTES", "128")
+
+        def confirm_first_only(items):
+            return {str(rollout): items[0]["_line_end_offset"]}
+
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=confirm_first_only,
+            batch_size=2,
+            flush_interval_ms=360000,
+        )
+
+        assert watcher.poll_once() == 2
+        confirmed_offset, confirmed_inode = watcher.registry.get(str(rollout))
+        assert confirmed_offset < watcher._tailers[str(rollout)].offset
+        assert watcher.indexer._buffer == []
+
+        with rollout.open("a") as file_handle:
+            file_handle.write(json.dumps({"role": "user", "content": "x" * 256}) + "\n")
+
+        assert watcher.poll_once() == 0
+        assert watcher.registry.get(str(rollout)) == (confirmed_offset, confirmed_inode)
+
     def test_poll_forgets_oversized_files_that_disappear_or_become_denylisted(self, tmp_path, monkeypatch):
         sessions = tmp_path / "codex" / "sessions"
         sessions.mkdir(parents=True)

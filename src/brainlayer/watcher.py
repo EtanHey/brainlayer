@@ -1181,19 +1181,21 @@ class JSONLWatcher:
 
         tailer = self._tailers.get(filepath)
         registry_offset, registry_inode = self.registry.get(filepath)
-        offset = tailer.offset if tailer else registry_offset
-        rewind_old_offset = offset
-        file_rewound = file_stat.st_size < offset
-        if (registry_inode != 0 and registry_inode != file_stat.st_ino) or file_rewound:
-            offset = 0
+        tailer_offset = tailer.offset if tailer else registry_offset
+        rewind_old_offset = tailer_offset
+        file_rewound = file_stat.st_size < tailer_offset
+        inode_changed = registry_inode != 0 and registry_inode != file_stat.st_ino
+        offset = 0 if inode_changed or file_rewound else registry_offset
         pending_bytes = max(file_stat.st_size - offset, 0)
         if pending_bytes <= self.max_file_bytes:
             self._oversized_files.discard(filepath)
             return False
 
-        if self.indexer.has_buffered_source(filepath):
-            self.indexer.flush()
+        if tailer is not None and not inode_changed and not file_rewound and tailer_offset > registry_offset:
             if self.indexer.has_buffered_source(filepath):
+                self.indexer.flush()
+            confirmed_offset, confirmed_inode = self.registry.get(filepath)
+            if confirmed_inode != file_stat.st_ino or confirmed_offset < tailer_offset:
                 if filepath not in self._oversized_files:
                     logger.error(
                         "Oversized JSONL checkpoint deferred for unconfirmed entries: %s",
@@ -1201,6 +1203,11 @@ class JSONLWatcher:
                     )
                 self._oversized_files.add(filepath)
                 return True
+            offset = confirmed_offset
+            pending_bytes = max(file_stat.st_size - offset, 0)
+            if pending_bytes <= self.max_file_bytes:
+                self._oversized_files.discard(filepath)
+                return False
 
         self._tailers.pop(filepath, None)
         if file_rewound:
