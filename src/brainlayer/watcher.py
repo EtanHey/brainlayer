@@ -24,6 +24,7 @@ import stat
 import tempfile
 import threading
 import time
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,6 +44,32 @@ from .alarm import BrainLayerAlarm, raise_alarm
 from .ingest_denylist import is_denylisted
 
 logger = logging.getLogger(__name__)
+
+_WATCH_MAX_FILE_BYTES_ENV = "BRAINLAYER_WATCH_MAX_FILE_BYTES"
+_DEFAULT_WATCH_MAX_FILE_BYTES = 100 * 1024 * 1024
+
+
+def _watch_max_file_bytes() -> int:
+    raw_value = os.environ.get(_WATCH_MAX_FILE_BYTES_ENV, str(_DEFAULT_WATCH_MAX_FILE_BYTES))
+    try:
+        parsed_value = int(raw_value)
+    except ValueError:
+        logger.warning(
+            "Invalid %s=%r; using default %d",
+            _WATCH_MAX_FILE_BYTES_ENV,
+            raw_value,
+            _DEFAULT_WATCH_MAX_FILE_BYTES,
+        )
+        return _DEFAULT_WATCH_MAX_FILE_BYTES
+    if parsed_value < 0:
+        logger.warning(
+            "Invalid %s=%r; using default %d",
+            _WATCH_MAX_FILE_BYTES_ENV,
+            raw_value,
+            _DEFAULT_WATCH_MAX_FILE_BYTES,
+        )
+        return _DEFAULT_WATCH_MAX_FILE_BYTES
+    return parsed_value
 
 
 @dataclass(frozen=True)
@@ -499,7 +526,7 @@ class OffsetRegistry:
         return False
 
     @staticmethod
-    def _has_live_parent_evidence(candidate: Path, live_files: list[Path]) -> bool:
+    def _has_live_parent_evidence(candidate: Path, live_parent_dirs: AbstractSet[Path]) -> bool:
         """Require a live transcript in the tracked file's containing directory."""
         parent = candidate.parent
         try:
@@ -507,7 +534,7 @@ class OffsetRegistry:
                 return False
         except OSError:
             return False
-        return any(live_file == parent or live_file.is_relative_to(parent) for live_file in live_files)
+        return parent in live_parent_dirs
 
     @property
     def last_prune_complete(self) -> bool:
@@ -530,14 +557,13 @@ class OffsetRegistry:
                     live_files.append(candidate)
             except OSError:
                 continue
+        live_parent_dirs = {parent for live_file in live_files for parent in live_file.parents}
 
         root_availability: dict[Path, bool] = {}
         for root in active_roots:
             candidate_root = Path(os.path.abspath(os.path.expanduser(str(root))))
             try:
-                root_availability[candidate_root] = candidate_root.is_dir() and any(
-                    live_file == candidate_root or live_file.is_relative_to(candidate_root) for live_file in live_files
-                )
+                root_availability[candidate_root] = candidate_root.is_dir() and candidate_root in live_parent_dirs
             except OSError:
                 root_availability[candidate_root] = False
 
@@ -555,7 +581,7 @@ class OffsetRegistry:
             if any(self._has_unavailable_symlink_ancestor(candidate, root) for root in most_specific_roots):
                 self._last_prune_complete = False
                 continue
-            if not self._has_live_parent_evidence(candidate, live_files):
+            if not self._has_live_parent_evidence(candidate, live_parent_dirs):
                 self._last_prune_complete = False
                 continue
             try:
@@ -632,6 +658,14 @@ class JSONLTailer:
 
         if new_data:
             self._buffer += new_data
+        return self.read_buffered_lines(max_lines=max_lines)
+
+    def has_complete_buffered_line(self) -> bool:
+        """Return whether an already-read complete record is waiting to be emitted."""
+        return b"\n" in self._buffer
+
+    def read_buffered_lines(self, max_lines: int | None = None) -> list[dict]:
+        """Parse complete buffered records without reading more bytes from disk."""
         lines = []
 
         while b"\n" in self._buffer:
@@ -717,6 +751,11 @@ class BatchIndexer:
         with self._lock:
             if self._buffer:
                 self._do_flush()
+
+    def has_buffered_source(self, filepath: str) -> bool:
+        """Return whether unconfirmed buffered entries came from filepath."""
+        with self._lock:
+            return any(item.get("_source_file") == filepath for item in self._buffer)
 
     def _do_flush(self):
         """Internal flush — must be called with _lock held."""
@@ -853,8 +892,10 @@ class JSONLWatcher:
         self.poll_interval_s = poll_interval_s
         self.registry_flush_interval_s = registry_flush_interval_s
         self.max_lines_per_file = max(1, max_lines_per_file)
+        self.max_file_bytes = _watch_max_file_bytes()
         self._tailers: dict[str, JSONLTailer] = {}
         self._file_providers: dict[str, str] = {}
+        self._oversized_files: set[str] = set()
         self._stop = threading.Event()
         self._last_registry_flush = time.monotonic()
         self.health_path = Path(health_path).expanduser() if health_path else None
@@ -937,6 +978,27 @@ class JSONLWatcher:
                 entry["_line_end_offset"] = line["_line_end_offset"]
             normalized.append(entry)
         return normalized
+
+    def _checkpoint_discarded_progress(
+        self,
+        filepath: str,
+        read_start_offset: int,
+        read_end_offset: int,
+        normalized_lines: list[dict],
+    ) -> None:
+        """Confirm intentionally discarded bytes without crossing indexable work."""
+        required_confirmed_offset = max(
+            (line["_line_end_offset"] for line in normalized_lines if isinstance(line.get("_line_end_offset"), int)),
+            default=read_start_offset,
+        )
+        if read_end_offset <= required_confirmed_offset:
+            return
+        if self.indexer.has_buffered_source(filepath):
+            return
+        confirmed_offset, _confirmed_inode = self.registry.get(filepath)
+        if confirmed_offset < required_confirmed_offset:
+            return
+        self._advance_confirmed_offsets({filepath: read_end_offset})
 
     def _max_offset_lag_bytes(self, files: list[str]) -> int:
         max_lag = 0
@@ -1098,6 +1160,110 @@ class JSONLWatcher:
         self._tailers[filepath] = tailer
         return tailer
 
+    def _handle_rewind(
+        self,
+        filepath: str,
+        old_offset: int,
+        new_offset: int,
+        inode: int,
+    ) -> None:
+        """Persist a rewind and notify archival consumers."""
+        session_id = Path(filepath).stem
+        self.registry.mark_rewind(filepath, inode)
+        logger.warning(
+            "Checkpoint restore: %s (offset %d → %d)",
+            session_id,
+            old_offset,
+            new_offset,
+        )
+        try:
+            from .telemetry import emit
+
+            emit(
+                "brainlayer-watcher",
+                {
+                    "_type": "rewind_detected",
+                    "session_id": session_id,
+                    "file_path": filepath,
+                    "old_offset": old_offset,
+                    "new_offset": new_offset,
+                },
+            )
+        except Exception:
+            pass
+
+        if self.on_rewind:
+            try:
+                self.on_rewind(filepath, session_id, old_offset, new_offset)
+            except Exception as e:
+                logger.error("Rewind callback failed: %s", e)
+
+    def _skip_oversized_file(self, filepath: str) -> bool:
+        if self.max_file_bytes <= 0:
+            self._oversized_files.discard(filepath)
+            return False
+
+        try:
+            file_stat = os.stat(filepath)
+        except OSError:
+            return False
+
+        tailer = self._tailers.get(filepath)
+        registry_offset, registry_inode = self.registry.get(filepath)
+        tailer_offset = tailer.offset if tailer else registry_offset
+        rewind_old_offset = tailer_offset
+        file_rewound = file_stat.st_size < tailer_offset
+        inode_changed = registry_inode != 0 and registry_inode != file_stat.st_ino
+        offset = 0 if inode_changed or file_rewound else registry_offset
+        pending_bytes = max(file_stat.st_size - offset, 0)
+        if pending_bytes <= self.max_file_bytes:
+            self._oversized_files.discard(filepath)
+            return False
+
+        if tailer is not None and not inode_changed and not file_rewound and tailer_offset > registry_offset:
+            if self.indexer.has_buffered_source(filepath):
+                self.indexer.flush()
+            confirmed_offset, confirmed_inode = self.registry.get(filepath)
+            if confirmed_inode != file_stat.st_ino or confirmed_offset < tailer_offset:
+                if filepath not in self._oversized_files:
+                    logger.error(
+                        "Oversized JSONL checkpoint deferred for unconfirmed entries: %s",
+                        filepath,
+                    )
+                self._oversized_files.add(filepath)
+                return True
+            offset = confirmed_offset
+            pending_bytes = max(file_stat.st_size - offset, 0)
+            if pending_bytes <= self.max_file_bytes:
+                self._oversized_files.discard(filepath)
+                return False
+
+        self._tailers.pop(filepath, None)
+        if file_rewound:
+            self._handle_rewind(
+                filepath,
+                rewind_old_offset,
+                file_stat.st_size,
+                file_stat.st_ino,
+            )
+        self.registry.set(filepath, file_stat.st_size, file_stat.st_ino)
+        if not self.registry.flush():
+            logger.error(
+                "Oversized JSONL checkpoint could not be persisted immediately: %s",
+                filepath,
+            )
+        if filepath not in self._oversized_files:
+            logger.warning(
+                "Oversized JSONL checkpointed and skipped: %s pending_bytes=%d max_file_bytes=%d offset=%d size=%d",
+                filepath,
+                pending_bytes,
+                self.max_file_bytes,
+                offset,
+                file_stat.st_size,
+            )
+        self._oversized_files.add(filepath)
+        return True
+
     def poll_once(self) -> int:
         """Run one poll cycle. Returns number of new lines found."""
         total_new = 0
@@ -1106,6 +1272,7 @@ class JSONLWatcher:
 
         try:
             files = self._discover_jsonl_files()
+            self._oversized_files.intersection_update(filepath for filepath in files if not is_denylisted(filepath))
             if not self._offset_prune_complete:
                 pruned = self.registry.prune_missing_files(
                     [root.resolved_path for root in self.watch_roots],
@@ -1128,54 +1295,54 @@ class JSONLWatcher:
                     self.registry.remove(filepath)
                     continue
                 try:
-                    tailer = self._ensure_tailer(filepath)
-                    new_lines = tailer.read_new_lines(max_lines=self.max_lines_per_file)
+                    tailer = self._tailers.get(filepath)
+                    drain_buffer = False
+                    if tailer is not None and tailer.has_complete_buffered_line():
+                        _registry_offset, registry_inode = self.registry.get(filepath)
+                        inode_changed = registry_inode != 0 and registry_inode != tailer.get_inode()
+                        if not inode_changed and not tailer.check_rewind():
+                            drain_buffer = True
+                        elif tailer.rewound:
+                            self._handle_rewind(
+                                filepath,
+                                tailer.rewind_old_offset,
+                                tailer.rewind_new_offset,
+                                tailer.get_inode(),
+                            )
+                            tailer.rewound = False
+
+                    if drain_buffer:
+                        read_start_offset = tailer.offset
+                        new_lines = tailer.read_buffered_lines(max_lines=self.max_lines_per_file)
+                    else:
+                        if self._skip_oversized_file(filepath):
+                            continue
+                        tailer = self._ensure_tailer(filepath)
+                        read_start_offset = tailer.offset
+                        new_lines = tailer.read_new_lines(max_lines=self.max_lines_per_file)
 
                     # Handle rewind detection (checkpoint restore)
                     if tailer.rewound:
-                        session_id = Path(filepath).stem
-                        self.registry.mark_rewind(filepath, tailer.get_inode())
-                        logger.warning(
-                            "Checkpoint restore: %s (offset %d → %d)",
-                            session_id,
+                        read_start_offset = 0
+                        self._handle_rewind(
+                            filepath,
                             tailer.rewind_old_offset,
                             tailer.rewind_new_offset,
+                            tailer.get_inode(),
                         )
-                        try:
-                            from .telemetry import emit
-
-                            emit(
-                                "brainlayer-watcher",
-                                {
-                                    "_type": "rewind_detected",
-                                    "session_id": session_id,
-                                    "file_path": filepath,
-                                    "old_offset": tailer.rewind_old_offset,
-                                    "new_offset": tailer.rewind_new_offset,
-                                },
-                            )
-                        except Exception:
-                            pass
-
-                        # Call rewind callback if set
-                        if self.on_rewind:
-                            try:
-                                self.on_rewind(
-                                    filepath,
-                                    session_id,
-                                    tailer.rewind_old_offset,
-                                    tailer.rewind_new_offset,
-                                )
-                            except Exception as e:
-                                logger.error("Rewind callback failed: %s", e)
-
                         tailer.rewound = False  # Reset flag
 
-                    if new_lines:
-                        normalized_lines = self._normalize_lines(filepath, new_lines)
+                    normalized_lines = self._normalize_lines(filepath, new_lines) if new_lines else []
+                    if normalized_lines:
                         self.indexer.add(normalized_lines)
                         self._health_entries_seen += len(normalized_lines)
                         total_new += len(normalized_lines)
+                    self._checkpoint_discarded_progress(
+                        filepath,
+                        read_start_offset,
+                        tailer.offset,
+                        normalized_lines,
+                    )
                 except Exception:
                     logger.exception("Poll file error: %s", filepath)
 
