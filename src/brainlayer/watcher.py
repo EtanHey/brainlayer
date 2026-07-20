@@ -1173,6 +1173,7 @@ class JSONLWatcher:
 
         try:
             files = self._discover_jsonl_files()
+            self._oversized_files.intersection_update(filepath for filepath in files if not is_denylisted(filepath))
             if not self._offset_prune_complete:
                 pruned = self.registry.prune_missing_files(
                     [root.resolved_path for root in self.watch_roots],

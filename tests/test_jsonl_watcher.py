@@ -1298,6 +1298,33 @@ class TestJSONLWatcher:
             rollout.stat().st_ino,
         )
 
+    def test_poll_forgets_oversized_files_that_disappear_or_become_denylisted(self, tmp_path, monkeypatch):
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        disappeared = sessions / "disappeared.jsonl"
+        denylisted = sessions / "denylisted.jsonl"
+        for rollout in (disappeared, denylisted):
+            rollout.write_text(json.dumps({"role": "user", "content": "x" * 256}) + "\n")
+        monkeypatch.setenv("BRAINLAYER_WATCH_MAX_FILE_BYTES", "128")
+
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda _items: None,
+        )
+
+        assert watcher.poll_once() == 0
+        assert watcher._oversized_files == {str(disappeared), str(denylisted)}
+
+        disappeared.unlink()
+        monkeypatch.setattr(
+            "brainlayer.watcher.is_denylisted",
+            lambda filepath: filepath == str(denylisted),
+        )
+
+        assert watcher.poll_once() == 0
+        assert watcher._oversized_files == set()
+
     def test_negative_watch_max_file_bytes_falls_back_to_default(self, tmp_path, monkeypatch, caplog):
         monkeypatch.setenv("BRAINLAYER_WATCH_MAX_FILE_BYTES", "-1")
 
