@@ -1131,6 +1131,44 @@ class JSONLWatcher:
         self._tailers[filepath] = tailer
         return tailer
 
+    def _handle_rewind(
+        self,
+        filepath: str,
+        old_offset: int,
+        new_offset: int,
+        inode: int,
+    ) -> None:
+        """Persist a rewind and notify archival consumers."""
+        session_id = Path(filepath).stem
+        self.registry.mark_rewind(filepath, inode)
+        logger.warning(
+            "Checkpoint restore: %s (offset %d → %d)",
+            session_id,
+            old_offset,
+            new_offset,
+        )
+        try:
+            from .telemetry import emit
+
+            emit(
+                "brainlayer-watcher",
+                {
+                    "_type": "rewind_detected",
+                    "session_id": session_id,
+                    "file_path": filepath,
+                    "old_offset": old_offset,
+                    "new_offset": new_offset,
+                },
+            )
+        except Exception:
+            pass
+
+        if self.on_rewind:
+            try:
+                self.on_rewind(filepath, session_id, old_offset, new_offset)
+            except Exception as e:
+                logger.error("Rewind callback failed: %s", e)
+
     def _skip_oversized_file(self, filepath: str) -> bool:
         if self.max_file_bytes <= 0:
             self._oversized_files.discard(filepath)
@@ -1144,6 +1182,7 @@ class JSONLWatcher:
         tailer = self._tailers.get(filepath)
         registry_offset, registry_inode = self.registry.get(filepath)
         offset = tailer.offset if tailer else registry_offset
+        rewind_old_offset = offset
         file_rewound = file_stat.st_size < offset
         if (registry_inode != 0 and registry_inode != file_stat.st_ino) or file_rewound:
             offset = 0
@@ -1165,7 +1204,12 @@ class JSONLWatcher:
 
         self._tailers.pop(filepath, None)
         if file_rewound:
-            self.registry.mark_rewind(filepath, file_stat.st_ino)
+            self._handle_rewind(
+                filepath,
+                rewind_old_offset,
+                file_stat.st_size,
+                file_stat.st_ino,
+            )
         self.registry.set(filepath, file_stat.st_size, file_stat.st_ino)
         if not self.registry.flush():
             logger.error(
@@ -1222,42 +1266,12 @@ class JSONLWatcher:
 
                     # Handle rewind detection (checkpoint restore)
                     if tailer.rewound:
-                        session_id = Path(filepath).stem
-                        self.registry.mark_rewind(filepath, tailer.get_inode())
-                        logger.warning(
-                            "Checkpoint restore: %s (offset %d → %d)",
-                            session_id,
+                        self._handle_rewind(
+                            filepath,
                             tailer.rewind_old_offset,
                             tailer.rewind_new_offset,
+                            tailer.get_inode(),
                         )
-                        try:
-                            from .telemetry import emit
-
-                            emit(
-                                "brainlayer-watcher",
-                                {
-                                    "_type": "rewind_detected",
-                                    "session_id": session_id,
-                                    "file_path": filepath,
-                                    "old_offset": tailer.rewind_old_offset,
-                                    "new_offset": tailer.rewind_new_offset,
-                                },
-                            )
-                        except Exception:
-                            pass
-
-                        # Call rewind callback if set
-                        if self.on_rewind:
-                            try:
-                                self.on_rewind(
-                                    filepath,
-                                    session_id,
-                                    tailer.rewind_old_offset,
-                                    tailer.rewind_new_offset,
-                                )
-                            except Exception as e:
-                                logger.error("Rewind callback failed: %s", e)
-
                         tailer.rewound = False  # Reset flag
 
                     if new_lines:

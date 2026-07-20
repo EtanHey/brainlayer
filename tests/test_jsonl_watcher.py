@@ -1307,11 +1307,13 @@ class TestJSONLWatcher:
         original_inode = rollout.stat().st_ino
         monkeypatch.setenv("BRAINLAYER_WATCH_MAX_FILE_BYTES", "128")
         flushed = []
+        rewinds = []
 
         watcher = JSONLWatcher(
             watch_roots=[WatchRoot("codex", sessions)],
             registry_path=tmp_path / "offsets.json",
             on_flush=lambda items: flushed.extend(items),
+            on_rewind=lambda *args: rewinds.append(args),
             batch_size=1,
         )
         watcher.registry.set(str(rollout), original_size, original_inode)
@@ -1327,6 +1329,7 @@ class TestJSONLWatcher:
             rollout.stat().st_size,
             rollout.stat().st_ino,
         )
+        assert rewinds == [(str(rollout), "rollout", original_size, rollout.stat().st_size)]
 
     def test_poll_does_not_checkpoint_past_retained_unconfirmed_entries(self, tmp_path, monkeypatch):
         sessions = tmp_path / "codex" / "sessions"
