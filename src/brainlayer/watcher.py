@@ -988,11 +988,7 @@ class JSONLWatcher:
     ) -> None:
         """Confirm intentionally discarded bytes without crossing indexable work."""
         required_confirmed_offset = max(
-            (
-                line["_line_end_offset"]
-                for line in normalized_lines
-                if isinstance(line.get("_line_end_offset"), int)
-            ),
+            (line["_line_end_offset"] for line in normalized_lines if isinstance(line.get("_line_end_offset"), int)),
             default=read_start_offset,
         )
         if read_end_offset <= required_confirmed_offset:
