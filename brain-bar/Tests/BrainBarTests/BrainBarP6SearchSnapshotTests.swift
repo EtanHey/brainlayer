@@ -149,7 +149,7 @@ final class BrainBarP6SearchSnapshotTests: XCTestCase {
         let baseStride = max(bitmap.bytesPerRow / 32, bytesPerPixel)
         let sampleStride = baseStride - (baseStride % bytesPerPixel)
         var colors = Set<String>()
-        for y in stride(from: 0, to: bitmap.pixelsHigh, by: 24) {
+        for y in stride(from: 0, to: bitmap.pixelsHigh, by: 12) {
             let rowStart = y * bitmap.bytesPerRow
             for x in stride(from: 0, to: bitmap.bytesPerRow, by: sampleStride) {
                 let offset = rowStart + x
