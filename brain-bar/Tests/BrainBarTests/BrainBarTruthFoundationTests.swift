@@ -2,6 +2,8 @@ import XCTest
 @testable import BrainBar
 
 final class BrainBarTruthFoundationTests: XCTestCase {
+    deinit {}
+
     func testMetricContractsNameClockAndCardinality() {
         XCTAssertEqual(
             DashboardMetricContract.chunkRows,

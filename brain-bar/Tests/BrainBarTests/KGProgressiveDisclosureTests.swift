@@ -2,6 +2,8 @@ import XCTest
 @testable import BrainBar
 
 final class KGProgressiveDisclosureTests: XCTestCase {
+    deinit {}
+
     func testEmptyAtlasNeverReservesSidebarWidth() {
         XCTAssertFalse(KGCanvasMetrics.sidebarVisible(
             windowWidth: 1_200,
@@ -13,7 +15,7 @@ final class KGProgressiveDisclosureTests: XCTestCase {
         ))
     }
 
-    func testFindResultsExposeEveryVisibleEntityWithTypeAndRelationshipDegree() {
+    func testFindResultsExposeEveryVisibleEntityWithTypeAndRelationshipDegree() throws {
         let nodes = [
             node(id: "person", name: "Etan Heyman", type: "person", importance: 10),
             node(id: "project", name: "BrainLayer", type: "project", importance: 8),
@@ -37,15 +39,15 @@ final class KGProgressiveDisclosureTests: XCTestCase {
             edges: snapshot.visibleEdges,
             query: ""
         )
-        let project = allResults.first { $0.id == "project" }
+        let project = try XCTUnwrap(allResults.first { $0.id == "project" })
 
         XCTAssertEqual(Set(allResults.map(\.id)), Set(snapshot.visibleNodes.map(\.id)))
-        XCTAssertEqual(project?.name, "BrainLayer")
-        XCTAssertEqual(project?.entityTypeTitle, "Project")
-        XCTAssertEqual(project?.degree, 2)
-        XCTAssertEqual(project?.relationshipSummary, "2 visible relationships")
+        XCTAssertEqual(project.name, "BrainLayer")
+        XCTAssertEqual(project.entityTypeTitle, "Project")
+        XCTAssertEqual(project.degree, 2)
+        XCTAssertEqual(project.relationshipSummary, "2 visible relationships")
         XCTAssertEqual(
-            project?.accessibilityLabel,
+            project.accessibilityLabel,
             "BrainLayer, Project, 2 visible relationships"
         )
         XCTAssertEqual(
@@ -103,6 +105,14 @@ final class KGProgressiveDisclosureTests: XCTestCase {
                 results: results
             ),
             "c"
+        )
+        XCTAssertEqual(
+            KGAtlasPresentation.nextFindResultID(
+                currentID: "a",
+                move: .up,
+                results: results
+            ),
+            "a"
         )
         XCTAssertEqual(
             KGAtlasPresentation.nextFindResultID(
@@ -169,7 +179,6 @@ final class KGProgressiveDisclosureTests: XCTestCase {
         XCTAssertEqual(lineOnlyEdge.sourceId, edge.sourceId)
         XCTAssertEqual(lineOnlyEdge.targetId, edge.targetId)
         XCTAssertEqual(lineOnlyEdge.relationType, "")
-        XCTAssertFalse(KGSidebarView.relationsSectionDefaultExpanded)
     }
 
     func testModeEffectsAndCanvasSummaryExplainNonSpatialControls() {

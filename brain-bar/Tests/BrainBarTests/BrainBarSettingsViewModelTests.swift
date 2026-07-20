@@ -242,7 +242,12 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
 
         provider.replaceStates(with: [.drain: .unloaded])
         fixture.viewModel.refreshLaunchdStatus()
+        let deadline = Date().addingTimeInterval(2)
         while fixture.viewModel.isRefreshingLaunchdStatus {
+            if Date() > deadline {
+                XCTFail("Timed out waiting for launchd refresh to complete")
+                break
+            }
             await Task.yield()
         }
 

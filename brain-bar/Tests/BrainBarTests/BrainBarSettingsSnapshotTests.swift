@@ -118,7 +118,8 @@ final class BrainBarSettingsSnapshotTests: XCTestCase {
     private func distinctSampledColorCount(in bitmap: NSBitmapImageRep) -> Int {
         guard let data = bitmap.bitmapData else { return 0 }
         let bytesPerPixel = max(bitmap.bitsPerPixel / 8, 1)
-        let sampleStride = max(bitmap.bytesPerRow / 32, bytesPerPixel)
+        let baseStride = max(bitmap.bytesPerRow / 32, bytesPerPixel)
+        let sampleStride = baseStride - (baseStride % bytesPerPixel)
         var colors = Set<String>()
         for y in stride(from: 0, to: bitmap.pixelsHigh, by: 24) {
             let rowStart = y * bitmap.bytesPerRow

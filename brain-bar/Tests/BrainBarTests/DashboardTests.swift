@@ -544,7 +544,8 @@ final class DashboardTests: XCTestCase {
             "Freshness must be a typed state rather than an implicit lastDataFetchedAt nil check."
         )
         XCTAssertTrue(
-            combined.contains("snapshotFreshnessThreshold") && combined.contains("60"),
+            combined.contains("snapshotFreshnessThreshold: TimeInterval = 60")
+                || combined.contains("snapshotFreshnessThreshold = 60"),
             "The named snapshot freshness threshold must be exactly 60 seconds."
         )
         XCTAssertTrue(

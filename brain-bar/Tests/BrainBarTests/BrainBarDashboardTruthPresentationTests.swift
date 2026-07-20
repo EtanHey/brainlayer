@@ -3,6 +3,8 @@ import XCTest
 @testable import BrainBar
 
 final class BrainBarDashboardTruthPresentationTests: XCTestCase {
+    deinit {}
+
     func testDashboardShipLabelsMatchTheApprovedMetricAndWatcherTruth() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let stats = DashboardStats(
@@ -85,8 +87,11 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         let sparkline = try sourceFile("Sources/BrainBar/Dashboard/SparklineRenderer.swift")
         let commandBar = try sourceFile("Sources/BrainBar/BrainBarCommandBar.swift")
 
-        for forbidden in ["All commits", "ALL COMMITS", "Agent MCP stores", "JSONL watcher"] {
-            XCTAssertFalse(dashboard.contains(forbidden), "Dashboard source still presents forbidden label: \(forbidden)")
+        for forbidden in ["All commits", "Agent MCP stores", "JSONL watcher"] {
+            XCTAssertFalse(
+                dashboard.localizedCaseInsensitiveContains(forbidden),
+                "Dashboard source still presents forbidden label: \(forbidden)"
+            )
         }
         for subtitle in [
             "Source time · chunk rows",

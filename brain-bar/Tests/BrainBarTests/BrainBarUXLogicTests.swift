@@ -638,7 +638,7 @@ final class BrainBarUXLogicTests: XCTestCase {
                 process: running,
                 recentDistinctChunks: [0, 0, 0, 0],
                 pendingDepth: 0,
-                historicalHealth: nil,
+                historicalHealth: historicalMarker,
                 recentFlowReadable: false
             ),
             "RUNNING · FLOW UNVERIFIED"

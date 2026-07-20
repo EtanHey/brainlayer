@@ -314,11 +314,15 @@ final class BrainDatabaseWindowedBucketsTests: XCTestCase {
         )
         try insertWatcherLiveness(
             chunkID: "old-source-new-ingest",
-            ingestedAt: now.addingTimeInterval(-20 * 60)
+            ingestedAt: now.addingTimeInterval(-45 * 60)
         )
         try insertWatcherLiveness(
             chunkID: "old-source-new-ingest",
-            ingestedAt: now.addingTimeInterval(-5 * 60)
+            ingestedAt: now.addingTimeInterval(-19 * 60)
+        )
+        try insertWatcherLiveness(
+            chunkID: "old-source-new-ingest",
+            ingestedAt: now.addingTimeInterval(-4 * 60)
         )
         try insertWrite(
             id: "agent-source-row",

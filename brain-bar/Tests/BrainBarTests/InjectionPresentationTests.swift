@@ -545,8 +545,11 @@ final class InjectionPresentationTests: XCTestCase {
 
     @MainActor
     private func renderInjectionPNG<V: View>(_ view: V, name: String) throws {
-        guard let renderDirectory = ProcessInfo.processInfo.environment["BRAINBAR_RENDER_DIR"],
-              !renderDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard let configuredDirectory = ProcessInfo.processInfo.environment["BRAINBAR_RENDER_DIR"] else {
+            throw XCTSkip("Set BRAINBAR_RENDER_DIR to render isolated Injection QA snapshots")
+        }
+        let renderDirectory = configuredDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !renderDirectory.isEmpty else {
             throw XCTSkip("Set BRAINBAR_RENDER_DIR to render isolated Injection QA snapshots")
         }
         let renderer = ImageRenderer(content: view)
