@@ -24,6 +24,7 @@ import stat
 import tempfile
 import threading
 import time
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,6 +44,32 @@ from .alarm import BrainLayerAlarm, raise_alarm
 from .ingest_denylist import is_denylisted
 
 logger = logging.getLogger(__name__)
+
+_WATCH_MAX_FILE_BYTES_ENV = "BRAINLAYER_WATCH_MAX_FILE_BYTES"
+_DEFAULT_WATCH_MAX_FILE_BYTES = 100 * 1024 * 1024
+
+
+def _watch_max_file_bytes() -> int:
+    raw_value = os.environ.get(_WATCH_MAX_FILE_BYTES_ENV, str(_DEFAULT_WATCH_MAX_FILE_BYTES))
+    try:
+        parsed_value = int(raw_value)
+    except ValueError:
+        logger.warning(
+            "Invalid %s=%r; using default %d",
+            _WATCH_MAX_FILE_BYTES_ENV,
+            raw_value,
+            _DEFAULT_WATCH_MAX_FILE_BYTES,
+        )
+        return _DEFAULT_WATCH_MAX_FILE_BYTES
+    if parsed_value < 0:
+        logger.warning(
+            "Invalid %s=%r; using default %d",
+            _WATCH_MAX_FILE_BYTES_ENV,
+            raw_value,
+            _DEFAULT_WATCH_MAX_FILE_BYTES,
+        )
+        return _DEFAULT_WATCH_MAX_FILE_BYTES
+    return parsed_value
 
 
 @dataclass(frozen=True)
@@ -499,7 +526,7 @@ class OffsetRegistry:
         return False
 
     @staticmethod
-    def _has_live_parent_evidence(candidate: Path, live_files: list[Path]) -> bool:
+    def _has_live_parent_evidence(candidate: Path, live_parent_dirs: AbstractSet[Path]) -> bool:
         """Require a live transcript in the tracked file's containing directory."""
         parent = candidate.parent
         try:
@@ -507,7 +534,7 @@ class OffsetRegistry:
                 return False
         except OSError:
             return False
-        return any(live_file == parent or live_file.is_relative_to(parent) for live_file in live_files)
+        return parent in live_parent_dirs
 
     @property
     def last_prune_complete(self) -> bool:
@@ -530,14 +557,13 @@ class OffsetRegistry:
                     live_files.append(candidate)
             except OSError:
                 continue
+        live_parent_dirs = {parent for live_file in live_files for parent in live_file.parents}
 
         root_availability: dict[Path, bool] = {}
         for root in active_roots:
             candidate_root = Path(os.path.abspath(os.path.expanduser(str(root))))
             try:
-                root_availability[candidate_root] = candidate_root.is_dir() and any(
-                    live_file == candidate_root or live_file.is_relative_to(candidate_root) for live_file in live_files
-                )
+                root_availability[candidate_root] = candidate_root.is_dir() and candidate_root in live_parent_dirs
             except OSError:
                 root_availability[candidate_root] = False
 
@@ -555,7 +581,7 @@ class OffsetRegistry:
             if any(self._has_unavailable_symlink_ancestor(candidate, root) for root in most_specific_roots):
                 self._last_prune_complete = False
                 continue
-            if not self._has_live_parent_evidence(candidate, live_files):
+            if not self._has_live_parent_evidence(candidate, live_parent_dirs):
                 self._last_prune_complete = False
                 continue
             try:
@@ -853,8 +879,10 @@ class JSONLWatcher:
         self.poll_interval_s = poll_interval_s
         self.registry_flush_interval_s = registry_flush_interval_s
         self.max_lines_per_file = max(1, max_lines_per_file)
+        self.max_file_bytes = _watch_max_file_bytes()
         self._tailers: dict[str, JSONLTailer] = {}
         self._file_providers: dict[str, str] = {}
+        self._oversized_files: set[str] = set()
         self._stop = threading.Event()
         self._last_registry_flush = time.monotonic()
         self.health_path = Path(health_path).expanduser() if health_path else None
@@ -1098,6 +1126,43 @@ class JSONLWatcher:
         self._tailers[filepath] = tailer
         return tailer
 
+    def _skip_oversized_file(self, filepath: str) -> bool:
+        if self.max_file_bytes <= 0:
+            self._oversized_files.discard(filepath)
+            return False
+
+        try:
+            file_stat = os.stat(filepath)
+        except OSError:
+            return False
+
+        tailer = self._tailers.get(filepath)
+        offset = tailer.offset if tailer else self.registry.get(filepath)[0]
+        pending_bytes = max(file_stat.st_size - offset, 0)
+        if pending_bytes <= self.max_file_bytes:
+            self._oversized_files.discard(filepath)
+            return False
+
+        self._tailers.pop(filepath, None)
+        self.registry.set(filepath, file_stat.st_size, file_stat.st_ino)
+        if not self.registry.flush():
+            logger.error(
+                "Oversized JSONL checkpoint could not be persisted immediately: %s",
+                filepath,
+            )
+        if filepath not in self._oversized_files:
+            logger.warning(
+                "Oversized JSONL checkpointed and skipped: %s "
+                "pending_bytes=%d max_file_bytes=%d offset=%d size=%d",
+                filepath,
+                pending_bytes,
+                self.max_file_bytes,
+                offset,
+                file_stat.st_size,
+            )
+        self._oversized_files.add(filepath)
+        return True
+
     def poll_once(self) -> int:
         """Run one poll cycle. Returns number of new lines found."""
         total_new = 0
@@ -1128,6 +1193,8 @@ class JSONLWatcher:
                     self.registry.remove(filepath)
                     continue
                 try:
+                    if self._skip_oversized_file(filepath):
+                        continue
                     tailer = self._ensure_tailer(filepath)
                     new_lines = tailer.read_new_lines(max_lines=self.max_lines_per_file)
 

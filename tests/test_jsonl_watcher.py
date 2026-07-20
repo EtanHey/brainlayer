@@ -136,6 +136,31 @@ class TestOffsetRegistry:
         assert reloaded.get(str(existing)) == (100, 1)
         assert reloaded.get(str(deleted)) == (0, 0)
 
+    def test_prune_live_parent_evidence_uses_linear_ancestry_checks(self, monkeypatch, tmp_path):
+        tracked_count = 80
+        registry = OffsetRegistry(tmp_path / "offsets.json")
+        live_files = []
+        for index in range(tracked_count):
+            session_dir = tmp_path / f"session-{index}"
+            session_dir.mkdir()
+            live_file = session_dir / "live.jsonl"
+            live_file.write_text('{"id":"live"}\n')
+            live_files.append(live_file)
+            registry.set(str(session_dir / "deleted.jsonl"), 100, index + 1)
+
+        real_is_relative_to = Path.is_relative_to
+        ancestry_checks = 0
+
+        def counting_is_relative_to(path, other):
+            nonlocal ancestry_checks
+            ancestry_checks += 1
+            return real_is_relative_to(path, other)
+
+        monkeypatch.setattr(Path, "is_relative_to", counting_is_relative_to)
+
+        assert registry.prune_missing_files([tmp_path], live_files) == tracked_count
+        assert ancestry_checks <= tracked_count * 6
+
     def test_prune_flush_preserves_newer_offsets_from_concurrent_registry(self, tmp_path):
         registry_path = tmp_path / "offsets.json"
         existing = tmp_path / "existing.jsonl"
@@ -1174,6 +1199,144 @@ class TestJSONLWatcher:
         flushed.clear()
         assert watcher.poll_once() == 1
         assert [item["_provider"] for item in flushed] == ["codex"]
+
+    def test_poll_skips_oversized_pending_file_with_warning_and_continues(
+        self,
+        tmp_path,
+        monkeypatch,
+        caplog,
+    ):
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        oversized = sessions / "oversized.jsonl"
+        healthy = sessions / "healthy.jsonl"
+        oversized.write_text(json.dumps({"role": "user", "content": "x" * 256}) + "\n")
+        healthy.write_text(json.dumps({"role": "user", "content": "healthy"}) + "\n")
+        os.utime(oversized, (2000, 2000))
+        os.utime(healthy, (1000, 1000))
+        monkeypatch.setenv("BRAINLAYER_WATCH_MAX_FILE_BYTES", "128")
+
+        flushed = []
+
+        def confirm_all(items):
+            flushed.extend(items)
+            return {item["_source_file"]: item["_line_end_offset"] for item in items}
+
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=confirm_all,
+            batch_size=1,
+        )
+
+        assert watcher.poll_once() == 1
+        assert [item["_source_file"] for item in flushed] == [str(healthy)]
+        assert watcher.registry.get(str(oversized)) == (
+            oversized.stat().st_size,
+            oversized.stat().st_ino,
+        )
+        assert any(
+            str(oversized) in record.getMessage()
+            and "pending_bytes=" in record.getMessage()
+            and "max_file_bytes=128" in record.getMessage()
+            for record in caplog.records
+        )
+
+    def test_poll_persists_oversized_checkpoint_immediately(self, tmp_path, monkeypatch):
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        oversized = sessions / "oversized.jsonl"
+        oversized.write_text(json.dumps({"role": "user", "content": "x" * 256}) + "\n")
+        registry_path = tmp_path / "offsets.json"
+        monkeypatch.setenv("BRAINLAYER_WATCH_MAX_FILE_BYTES", "128")
+
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=registry_path,
+            on_flush=lambda _items: None,
+            registry_flush_interval_s=3600,
+        )
+
+        assert watcher.poll_once() == 0
+        assert OffsetRegistry(registry_path).get(str(oversized)) == (
+            oversized.stat().st_size,
+            oversized.stat().st_ino,
+        )
+
+    def test_negative_watch_max_file_bytes_falls_back_to_default(self, tmp_path, monkeypatch, caplog):
+        monkeypatch.setenv("BRAINLAYER_WATCH_MAX_FILE_BYTES", "-1")
+
+        watcher = JSONLWatcher(
+            watch_roots=[],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda _items: None,
+        )
+
+        assert watcher.max_file_bytes == 100 * 1024 * 1024
+        assert any(
+            "BRAINLAYER_WATCH_MAX_FILE_BYTES='-1'" in record.getMessage()
+            for record in caplog.records
+        )
+
+    def test_invalid_watch_max_file_bytes_falls_back_to_default(self, tmp_path, monkeypatch, caplog):
+        monkeypatch.setenv("BRAINLAYER_WATCH_MAX_FILE_BYTES", "invalid")
+
+        watcher = JSONLWatcher(
+            watch_roots=[],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda _items: None,
+        )
+
+        assert watcher.max_file_bytes == 100 * 1024 * 1024
+        assert any(
+            "BRAINLAYER_WATCH_MAX_FILE_BYTES='invalid'" in record.getMessage()
+            for record in caplog.records
+        )
+
+    def test_poll_ingests_small_append_after_oversized_checkpoint(self, tmp_path, monkeypatch):
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        rollout = sessions / "rollout.jsonl"
+        rollout.write_text(json.dumps({"role": "user", "content": "x" * 256}) + "\n")
+        monkeypatch.setenv("BRAINLAYER_WATCH_MAX_FILE_BYTES", "128")
+        flushed = []
+
+        def confirm_all(items):
+            flushed.extend(items)
+            return {item["_source_file"]: item["_line_end_offset"] for item in items}
+
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=confirm_all,
+            batch_size=1,
+        )
+
+        assert watcher.poll_once() == 0
+        with rollout.open("a") as file_handle:
+            file_handle.write(json.dumps({"role": "user", "content": "small append"}) + "\n")
+
+        assert watcher.poll_once() == 1
+        assert [item["message"]["content"][0]["text"] for item in flushed] == ["small append"]
+
+    def test_zero_watch_max_file_bytes_disables_checkpointing(self, tmp_path, monkeypatch):
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        rollout = sessions / "rollout.jsonl"
+        rollout.write_text(json.dumps({"role": "user", "content": "x" * 256}) + "\n")
+        monkeypatch.setenv("BRAINLAYER_WATCH_MAX_FILE_BYTES", "0")
+
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda items: {
+                item["_source_file"]: item["_line_end_offset"] for item in items
+            },
+            batch_size=1,
+        )
+
+        assert watcher.poll_once() == 1
+        assert watcher.registry.get(str(rollout))[0] == rollout.stat().st_size
 
     def test_codex_root_normalizes_role_content_entries(self, tmp_path):
         sessions = tmp_path / "codex" / "sessions"
