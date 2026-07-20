@@ -744,6 +744,11 @@ class BatchIndexer:
             if self._buffer:
                 self._do_flush()
 
+    def has_buffered_source(self, filepath: str) -> bool:
+        """Return whether unconfirmed buffered entries came from filepath."""
+        with self._lock:
+            return any(item.get("_source_file") == filepath for item in self._buffer)
+
     def _do_flush(self):
         """Internal flush — must be called with _lock held."""
         batch = self._buffer
@@ -1139,14 +1144,28 @@ class JSONLWatcher:
         tailer = self._tailers.get(filepath)
         registry_offset, registry_inode = self.registry.get(filepath)
         offset = tailer.offset if tailer else registry_offset
-        if registry_inode != 0 and registry_inode != file_stat.st_ino:
+        file_rewound = file_stat.st_size < offset
+        if (registry_inode != 0 and registry_inode != file_stat.st_ino) or file_rewound:
             offset = 0
         pending_bytes = max(file_stat.st_size - offset, 0)
         if pending_bytes <= self.max_file_bytes:
             self._oversized_files.discard(filepath)
             return False
 
+        if self.indexer.has_buffered_source(filepath):
+            self.indexer.flush()
+            if self.indexer.has_buffered_source(filepath):
+                if filepath not in self._oversized_files:
+                    logger.error(
+                        "Oversized JSONL checkpoint deferred for unconfirmed entries: %s",
+                        filepath,
+                    )
+                self._oversized_files.add(filepath)
+                return True
+
         self._tailers.pop(filepath, None)
+        if file_rewound:
+            self.registry.mark_rewind(filepath, file_stat.st_ino)
         self.registry.set(filepath, file_stat.st_size, file_stat.st_ino)
         if not self.registry.flush():
             logger.error(

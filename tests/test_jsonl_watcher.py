@@ -1298,6 +1298,63 @@ class TestJSONLWatcher:
             rollout.stat().st_ino,
         )
 
+    def test_poll_caps_oversized_same_inode_rewind_from_start(self, tmp_path, monkeypatch):
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        rollout = sessions / "rollout.jsonl"
+        rollout.write_text(json.dumps({"role": "user", "content": "x" * 512}) + "\n")
+        original_size = rollout.stat().st_size
+        original_inode = rollout.stat().st_ino
+        monkeypatch.setenv("BRAINLAYER_WATCH_MAX_FILE_BYTES", "128")
+        flushed = []
+
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda items: flushed.extend(items),
+            batch_size=1,
+        )
+        watcher.registry.set(str(rollout), original_size, original_inode)
+        watcher._tailers[str(rollout)] = JSONLTailer(str(rollout), offset=original_size)
+
+        with rollout.open("w") as file_handle:
+            file_handle.write(json.dumps({"role": "user", "content": "y" * 256}) + "\n")
+        assert rollout.stat().st_ino == original_inode
+
+        assert watcher.poll_once() == 0
+        assert flushed == []
+        assert watcher.registry.get(str(rollout)) == (
+            rollout.stat().st_size,
+            rollout.stat().st_ino,
+        )
+
+    def test_poll_does_not_checkpoint_past_retained_unconfirmed_entries(self, tmp_path, monkeypatch):
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        rollout = sessions / "rollout.jsonl"
+        rollout.write_text(json.dumps({"role": "user", "content": "pending"}) + "\n")
+        monkeypatch.setenv("BRAINLAYER_WATCH_MAX_FILE_BYTES", "128")
+
+        def fail_flush(_items):
+            raise RuntimeError("write unavailable")
+
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=fail_flush,
+            batch_size=10,
+            flush_interval_ms=360000,
+        )
+
+        assert watcher.poll_once() == 1
+        assert watcher.registry.get(str(rollout)) == (0, 0)
+        with rollout.open("a") as file_handle:
+            file_handle.write(json.dumps({"role": "user", "content": "x" * 256}) + "\n")
+
+        assert watcher.poll_once() == 0
+        assert watcher.registry.get(str(rollout)) == (0, 0)
+        assert len(watcher.indexer._buffer) == 1
+
     def test_poll_forgets_oversized_files_that_disappear_or_become_denylisted(self, tmp_path, monkeypatch):
         sessions = tmp_path / "codex" / "sessions"
         sessions.mkdir(parents=True)
