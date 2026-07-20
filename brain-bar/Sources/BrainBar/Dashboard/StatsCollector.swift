@@ -403,6 +403,7 @@ final class StatsCollector: ObservableObject {
         watcherProcessRefreshTask?.cancel()
         watcherProcessRefreshTask = nil
         watcherProcessRefreshGeneration += 1
+        let watcherProcessGeneration = watcherProcessRefreshGeneration
         let generation = dashboardRefreshGeneration
         let dbPath = self.dbPath
         let openConfiguration = self.databaseOpenConfiguration
@@ -448,7 +449,8 @@ final class StatsCollector: ObservableObject {
                 startUnix: startUnix,
                 force: force,
                 trigger: trigger,
-                generation: generation
+                generation: generation,
+                watcherProcessGeneration: watcherProcessGeneration
             )
         }
     }
@@ -502,7 +504,8 @@ final class StatsCollector: ObservableObject {
         startUnix: TimeInterval,
         force: Bool,
         trigger: DashboardRefreshTrigger,
-        generation: Int
+        generation: Int,
+        watcherProcessGeneration: Int
     ) {
         guard !isStopped, generation == dashboardRefreshGeneration else { return }
         finishRequestedRefresh(
@@ -512,7 +515,8 @@ final class StatsCollector: ObservableObject {
             snapshotTime: snapshotTime,
             startUnix: startUnix,
             force: force,
-            trigger: trigger
+            trigger: trigger,
+            watcherProcessGeneration: watcherProcessGeneration
         )
     }
 
@@ -527,15 +531,18 @@ final class StatsCollector: ObservableObject {
         snapshotTime: Date,
         startUnix: TimeInterval,
         force: Bool,
-        trigger: DashboardRefreshTrigger
+        trigger: DashboardRefreshTrigger,
+        watcherProcessGeneration: Int
     ) {
         let finishDaemon = daemonMonitor.sample() ?? nextDaemon
         switch result {
         case .success(let nextStats):
             let queueFlushRate = recordPendingStoreQueueDepth(nextStats.pendingStoreFlushQueueDepth, now: snapshotTime)
-            stats = nextStats
-                .withPendingStoreFlushRate(queueFlushRate)
-                .withWatcherProcessProbeResult(watcherProcess)
+            stats = applyingWatcherProcessResultIfCurrent(
+                to: nextStats.withPendingStoreFlushRate(queueFlushRate),
+                candidate: watcherProcess,
+                generation: watcherProcessGeneration
+            )
             daemon = finishDaemon
             state = PipelineState.derive(daemon: finishDaemon, stats: stats)
             lastDataFetchedAt = nowProvider()
@@ -548,7 +555,11 @@ final class StatsCollector: ObservableObject {
             }
         case .failure(let error):
             daemon = finishDaemon
-            stats = stats.withWatcherProcessProbeResult(watcherProcess)
+            stats = applyingWatcherProcessResultIfCurrent(
+                to: stats,
+                candidate: watcherProcess,
+                generation: watcherProcessGeneration
+            )
             lastFetchError = String(describing: error)
             state = PipelineState.derive(daemon: finishDaemon, stats: stats)
         }
@@ -569,6 +580,21 @@ final class StatsCollector: ObservableObject {
             enrich5m: stats.recentEnrichmentFiveMinuteCount,
             trigger: trigger
         )
+    }
+
+    private func applyingWatcherProcessResultIfCurrent(
+        to nextStats: DashboardStats,
+        candidate: WatcherProcessProbeResult,
+        generation: Int
+    ) -> DashboardStats {
+        guard generation == watcherProcessRefreshGeneration else {
+            // A later standalone watcher request superseded the sample embedded
+            // in this full refresh. Preserve the newest published process truth
+            // while that later request completes instead of regressing it.
+            guard let newestPublished = stats.watcherProcessProbeResult else { return nextStats }
+            return nextStats.withWatcherProcessProbeResult(newestPublished)
+        }
+        return nextStats.withWatcherProcessProbeResult(candidate)
     }
 
     private func recordPendingStoreQueueDepth(_ depth: Int, now: Date) -> Double {

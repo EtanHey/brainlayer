@@ -93,6 +93,35 @@ private final class SequencedBlockingWatcherProbe: WatcherProcessProbing, @unche
     }
 }
 
+private final class OlderFullRefreshProbe: WatcherProcessProbing, @unchecked Sendable {
+    private let lock = NSLock()
+    private let firstSampleStarted = DispatchSemaphore(value: 0)
+    private let releaseFirstSampleSemaphore = DispatchSemaphore(value: 0)
+    private var calls = 0
+
+    func sample() -> WatcherProcessProbeResult {
+        lock.lock()
+        let call = calls
+        calls += 1
+        lock.unlock()
+
+        if call == 0 {
+            firstSampleStarted.signal()
+            releaseFirstSampleSemaphore.wait()
+            return .running(pid: 1111)
+        }
+        return .running(pid: 2222)
+    }
+
+    func waitForFirstSample(timeout: DispatchTime) -> Bool {
+        firstSampleStarted.wait(timeout: timeout) == .success
+    }
+
+    func releaseFirstSample() {
+        releaseFirstSampleSemaphore.signal()
+    }
+}
+
 @MainActor
 final class StatsCollectorTests: XCTestCase {
     private struct WindowFetchFailure: Error {}
@@ -440,6 +469,45 @@ final class StatsCollectorTests: XCTestCase {
             collector.stats.watcherProcessProbeResult,
             .running(pid: 4242),
             "An older standalone probe must not overwrite the full refresh's newer watcher truth."
+        )
+    }
+
+    func testFullRefreshDoesNotOverwriteNewerStandaloneWatcherProbe() async throws {
+        let probe = OlderFullRefreshProbe()
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            watcherProcessProbe: probe,
+            databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
+        )
+        defer {
+            probe.releaseFirstSample()
+            collector.stop()
+        }
+
+        collector.refresh(force: true)
+        XCTAssertTrue(
+            probe.waitForFirstSample(timeout: .now() + 2),
+            "The full refresh must hold its older process sample in flight."
+        )
+
+        collector.refresh(force: false)
+        let standaloneDeadline = Date().addingTimeInterval(2)
+        while collector.stats.watcherProcessProbeResult != .running(pid: 2222) && Date() < standaloneDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(collector.stats.watcherProcessProbeResult, .running(pid: 2222))
+
+        probe.releaseFirstSample()
+        let fullRefreshDeadline = Date().addingTimeInterval(3)
+        while collector.isRefreshing && Date() < fullRefreshDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        XCTAssertEqual(
+            collector.stats.watcherProcessProbeResult,
+            .running(pid: 2222),
+            "The older process sample embedded in a full refresh must not overwrite a newer standalone probe."
         )
     }
 
