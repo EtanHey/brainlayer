@@ -1200,6 +1200,49 @@ class TestJSONLWatcher:
         assert watcher.poll_once() == 1
         assert [item["_provider"] for item in flushed] == ["codex"]
 
+    def test_poll_drains_buffered_lines_before_checkpointing_oversized_append(self, tmp_path, monkeypatch):
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        rollout = sessions / "rollout.jsonl"
+        encoded_lines = [
+            (json.dumps({"role": "user", "content": f"buffered line {idx} with enough content"}) + "\n").encode()
+            for idx in range(3)
+        ]
+        rollout.write_bytes(b"".join(encoded_lines))
+        monkeypatch.setenv("BRAINLAYER_WATCH_MAX_FILE_BYTES", "256")
+        flushed = []
+
+        def confirm_all(items):
+            flushed.extend(items)
+            return {item["_source_file"]: item["_line_end_offset"] for item in items}
+
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=confirm_all,
+            batch_size=1,
+            max_lines_per_file=1,
+        )
+
+        assert watcher.poll_once() == 1
+        tailer = watcher._tailers[str(rollout)]
+        assert tailer.offset == len(encoded_lines[0])
+        assert tailer._buffer == b"".join(encoded_lines[1:])
+
+        with rollout.open("ab") as file_handle:
+            file_handle.write(json.dumps({"role": "user", "content": "x" * 512}).encode() + b"\n")
+        oversized_size = rollout.stat().st_size
+
+        assert watcher.poll_once() == 1
+        assert [item["message"]["content"][0]["text"] for item in flushed] == [
+            "buffered line 0 with enough content",
+            "buffered line 1 with enough content",
+        ]
+        assert tailer.offset == len(encoded_lines[0]) + len(encoded_lines[1])
+        assert tailer._buffer == encoded_lines[2]
+        assert watcher.registry.get(str(rollout)) == (tailer.offset, rollout.stat().st_ino)
+        assert tailer.offset < oversized_size
+
     def test_poll_skips_oversized_pending_file_with_warning_and_continues(
         self,
         tmp_path,

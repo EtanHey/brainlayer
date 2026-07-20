@@ -658,6 +658,14 @@ class JSONLTailer:
 
         if new_data:
             self._buffer += new_data
+        return self.read_buffered_lines(max_lines=max_lines)
+
+    def has_complete_buffered_line(self) -> bool:
+        """Return whether an already-read complete record is waiting to be emitted."""
+        return b"\n" in self._buffer
+
+    def read_buffered_lines(self, max_lines: int | None = None) -> list[dict]:
+        """Parse complete buffered records without reading more bytes from disk."""
         lines = []
 
         while b"\n" in self._buffer:
@@ -1266,10 +1274,29 @@ class JSONLWatcher:
                     self.registry.remove(filepath)
                     continue
                 try:
-                    if self._skip_oversized_file(filepath):
-                        continue
-                    tailer = self._ensure_tailer(filepath)
-                    new_lines = tailer.read_new_lines(max_lines=self.max_lines_per_file)
+                    tailer = self._tailers.get(filepath)
+                    drain_buffer = False
+                    if tailer is not None and tailer.has_complete_buffered_line():
+                        _registry_offset, registry_inode = self.registry.get(filepath)
+                        inode_changed = registry_inode != 0 and registry_inode != tailer.get_inode()
+                        if not inode_changed and not tailer.check_rewind():
+                            drain_buffer = True
+                        elif tailer.rewound:
+                            self._handle_rewind(
+                                filepath,
+                                tailer.rewind_old_offset,
+                                tailer.rewind_new_offset,
+                                tailer.get_inode(),
+                            )
+                            tailer.rewound = False
+
+                    if drain_buffer:
+                        new_lines = tailer.read_buffered_lines(max_lines=self.max_lines_per_file)
+                    else:
+                        if self._skip_oversized_file(filepath):
+                            continue
+                        tailer = self._ensure_tailer(filepath)
+                        new_lines = tailer.read_new_lines(max_lines=self.max_lines_per_file)
 
                     # Handle rewind detection (checkpoint restore)
                     if tailer.rewound:
