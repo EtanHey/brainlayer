@@ -1137,7 +1137,10 @@ class JSONLWatcher:
             return False
 
         tailer = self._tailers.get(filepath)
-        offset = tailer.offset if tailer else self.registry.get(filepath)[0]
+        registry_offset, registry_inode = self.registry.get(filepath)
+        offset = tailer.offset if tailer else registry_offset
+        if registry_inode != 0 and registry_inode != file_stat.st_ino:
+            offset = 0
         pending_bytes = max(file_stat.st_size - offset, 0)
         if pending_bytes <= self.max_file_bytes:
             self._oversized_files.discard(filepath)
@@ -1152,8 +1155,7 @@ class JSONLWatcher:
             )
         if filepath not in self._oversized_files:
             logger.warning(
-                "Oversized JSONL checkpointed and skipped: %s "
-                "pending_bytes=%d max_file_bytes=%d offset=%d size=%d",
+                "Oversized JSONL checkpointed and skipped: %s pending_bytes=%d max_file_bytes=%d offset=%d size=%d",
                 filepath,
                 pending_bytes,
                 self.max_file_bytes,

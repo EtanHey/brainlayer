@@ -1263,6 +1263,41 @@ class TestJSONLWatcher:
             oversized.stat().st_ino,
         )
 
+    def test_poll_caps_oversized_replacement_from_start(self, tmp_path, monkeypatch):
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        rollout = sessions / "rollout.jsonl"
+        rollout.write_text(json.dumps({"role": "user", "content": "x" * 512}) + "\n")
+        original_size = rollout.stat().st_size
+        original_inode = rollout.stat().st_ino
+        monkeypatch.setenv("BRAINLAYER_WATCH_MAX_FILE_BYTES", "128")
+        flushed = []
+
+        def confirm_all(items):
+            flushed.extend(items)
+            return {item["_source_file"]: item["_line_end_offset"] for item in items}
+
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=confirm_all,
+            batch_size=1,
+        )
+        watcher.registry.set(str(rollout), original_size, original_inode)
+        watcher._tailers[str(rollout)] = JSONLTailer(str(rollout), offset=original_size)
+
+        replacement = sessions / "replacement.tmp"
+        replacement.write_text(json.dumps({"role": "user", "content": "y" * 256}) + "\n")
+        os.replace(replacement, rollout)
+        assert rollout.stat().st_ino != original_inode
+
+        assert watcher.poll_once() == 0
+        assert flushed == []
+        assert watcher.registry.get(str(rollout)) == (
+            rollout.stat().st_size,
+            rollout.stat().st_ino,
+        )
+
     def test_negative_watch_max_file_bytes_falls_back_to_default(self, tmp_path, monkeypatch, caplog):
         monkeypatch.setenv("BRAINLAYER_WATCH_MAX_FILE_BYTES", "-1")
 
@@ -1273,10 +1308,7 @@ class TestJSONLWatcher:
         )
 
         assert watcher.max_file_bytes == 100 * 1024 * 1024
-        assert any(
-            "BRAINLAYER_WATCH_MAX_FILE_BYTES='-1'" in record.getMessage()
-            for record in caplog.records
-        )
+        assert any("BRAINLAYER_WATCH_MAX_FILE_BYTES='-1'" in record.getMessage() for record in caplog.records)
 
     def test_invalid_watch_max_file_bytes_falls_back_to_default(self, tmp_path, monkeypatch, caplog):
         monkeypatch.setenv("BRAINLAYER_WATCH_MAX_FILE_BYTES", "invalid")
@@ -1288,10 +1320,7 @@ class TestJSONLWatcher:
         )
 
         assert watcher.max_file_bytes == 100 * 1024 * 1024
-        assert any(
-            "BRAINLAYER_WATCH_MAX_FILE_BYTES='invalid'" in record.getMessage()
-            for record in caplog.records
-        )
+        assert any("BRAINLAYER_WATCH_MAX_FILE_BYTES='invalid'" in record.getMessage() for record in caplog.records)
 
     def test_poll_ingests_small_append_after_oversized_checkpoint(self, tmp_path, monkeypatch):
         sessions = tmp_path / "codex" / "sessions"
@@ -1329,9 +1358,7 @@ class TestJSONLWatcher:
         watcher = JSONLWatcher(
             watch_roots=[WatchRoot("codex", sessions)],
             registry_path=tmp_path / "offsets.json",
-            on_flush=lambda items: {
-                item["_source_file"]: item["_line_end_offset"] for item in items
-            },
+            on_flush=lambda items: {item["_source_file"]: item["_line_end_offset"] for item in items},
             batch_size=1,
         )
 
