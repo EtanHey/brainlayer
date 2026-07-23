@@ -215,9 +215,9 @@ export function PipelineDemo() {
       status: string | null,
     ) {
       if (chunks !== null && dsChunksRef.current)
-        dsChunksRef.current.textContent = chunks.toLocaleString();
+        dsChunksRef.current.textContent = chunks.toLocaleString("en-US");
       if (entities !== null && dsEntitiesRef.current)
-        dsEntitiesRef.current.textContent = entities.toLocaleString();
+        dsEntitiesRef.current.textContent = entities.toLocaleString("en-US");
       if (latency !== null && dsLatencyRef.current)
         dsLatencyRef.current.textContent = latency;
       if (status !== null && dsStatusRef.current)
@@ -643,13 +643,15 @@ export function PipelineDemo() {
             <span>
               <span className="mr-1">chunks</span>
               <span ref={dsChunksRef} className="font-medium text-teal">
-                {PUBLIC_SITE_STATS.knowledgeChunks.toLocaleString()}
+                {PUBLIC_SITE_STATS.knowledgeChunks.toLocaleString("en-US")}
               </span>
             </span>
             <span>
               <span className="mr-1">entities</span>
               <span ref={dsEntitiesRef} className="font-medium text-teal">
-                {PUBLIC_SITE_STATS.knowledgeGraphEntities.toLocaleString()}
+                {PUBLIC_SITE_STATS.knowledgeGraphEntities.toLocaleString(
+                  "en-US",
+                )}
               </span>
             </span>
             <span>
