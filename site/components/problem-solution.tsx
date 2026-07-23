@@ -1,6 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
+import { PUBLIC_SITE_STATS } from "@/lib/public-stats";
 
 export function ProblemSolution() {
   return (
@@ -36,7 +37,7 @@ export function ProblemSolution() {
               <code className="text-accent text-xs">brain_search</code> combines
               bge-large embeddings with FTS5 keyword matching via Reciprocal
               Rank Fusion. One query searches across every conversation you have
-              ever had. Sub-50ms on 300K+ chunks.
+              ever had across {PUBLIC_SITE_STATS.knowledgeChunksLabel} chunks.
             </p>
           </motion.div>
 
@@ -96,8 +97,8 @@ export function ProblemSolution() {
               BrainBar
             </h2>
             <p className="flex-1 text-[15px] leading-relaxed font-light text-text-secondary">
-              Optional 209KB native Swift menu bar app. Quick capture, live
-              dashboard, knowledge graph viewer &mdash; all over a Unix socket.
+              Optional native Swift menu bar app. Quick capture, live dashboard,
+              knowledge graph viewer &mdash; all over a Unix socket.
             </p>
             <p className="mt-3 text-[12px] font-light text-text-dim">
               Requires the BrainLayer MCP server.

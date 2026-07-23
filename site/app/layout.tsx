@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Newsreader, Outfit, JetBrains_Mono } from "next/font/google";
+import { PUBLIC_SITE_STATS } from "@/lib/public-stats";
 import "./globals.css";
 
 const newsreader = Newsreader({
@@ -23,8 +24,7 @@ const jetbrainsMono = JetBrains_Mono({
 
 export const metadata: Metadata = {
   title: "BrainLayer - Persistent Memory for MCP Agents",
-  description:
-    "Local-first memory for MCP agents and BrainBar. Twelve working tools, formatted Unicode output, and keyboard-first quick capture.",
+  description: `Local-first memory for MCP agents and BrainBar. ${PUBLIC_SITE_STATS.mcpTools} working tools, formatted Unicode output, and keyboard-first quick capture.`,
   metadataBase: new URL("https://brainlayer.etanheyman.com"),
   alternates: { canonical: "/" },
   icons: {
@@ -33,8 +33,7 @@ export const metadata: Metadata = {
   },
   openGraph: {
     title: "BrainLayer - Persistent Memory for MCP Agents",
-    description:
-      "Local-first memory for MCP agents and BrainBar with twelve working tools and formatted search output.",
+    description: `Local-first memory for MCP agents and BrainBar with ${PUBLIC_SITE_STATS.mcpTools} working tools and formatted search output.`,
     url: "https://brainlayer.etanheyman.com",
     siteName: "BrainLayer",
     type: "website",
@@ -50,8 +49,7 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary_large_image",
     title: "BrainLayer - Persistent Memory for MCP Agents",
-    description:
-      "Local-first memory for MCP agents and BrainBar. Twelve working MCP tools, formatted output, and keyboard-first capture.",
+    description: `Local-first memory for MCP agents and BrainBar. ${PUBLIC_SITE_STATS.mcpTools} working MCP tools, formatted output, and keyboard-first capture.`,
   },
   robots: {
     index: true,

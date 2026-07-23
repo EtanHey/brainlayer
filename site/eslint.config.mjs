@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Static MkDocs output retained for legacy links; it is vendored, minified code.
+    "assets/**",
   ]),
 ]);
 

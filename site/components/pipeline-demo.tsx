@@ -2,6 +2,7 @@
 
 import { useRef, useEffect, useCallback } from "react";
 import { motion, useInView } from "framer-motion";
+import { PUBLIC_SITE_STATS } from "@/lib/public-stats";
 
 /* ── Graph data ─────────────────────────────────────────────── */
 
@@ -204,8 +205,8 @@ export function PipelineDemo() {
       }
     }
 
-    let baseChunks = 284291;
-    let baseEntities = 12847;
+    let baseChunks = PUBLIC_SITE_STATS.knowledgeChunks;
+    let baseEntities = PUBLIC_SITE_STATS.knowledgeGraphEntities;
 
     function updateStats(
       chunks: number | null,
@@ -574,7 +575,8 @@ export function PipelineDemo() {
         </h2>
         <p className="mx-auto mb-14 max-w-[720px] text-center text-[15px] leading-relaxed font-light text-text-secondary">
           Store decisions, search across sessions, recall context, digest
-          documents. One pipeline, twelve tools, zero configuration.
+          documents. One pipeline, {PUBLIC_SITE_STATS.mcpTools} tools, zero
+          configuration.
         </p>
 
         <motion.div
@@ -641,13 +643,13 @@ export function PipelineDemo() {
             <span>
               <span className="mr-1">chunks</span>
               <span ref={dsChunksRef} className="font-medium text-teal">
-                284,291
+                {PUBLIC_SITE_STATS.knowledgeChunks.toLocaleString()}
               </span>
             </span>
             <span>
               <span className="mr-1">entities</span>
               <span ref={dsEntitiesRef} className="font-medium text-teal">
-                12,847
+                {PUBLIC_SITE_STATS.knowledgeGraphEntities.toLocaleString()}
               </span>
             </span>
             <span>

@@ -1,6 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
+import { PUBLIC_SITE_STATS } from "@/lib/public-stats";
 
 const coreTools = [
   {
@@ -14,6 +15,10 @@ const coreTools = [
   {
     name: "brain_recall",
     desc: "Unified recall entrypoint for search, entity, and session-aware lookup",
+  },
+  {
+    name: "brain_resume",
+    desc: "Recover recent PreCompact checkpoints for explicit session restoration",
   },
 ];
 
@@ -81,7 +86,7 @@ export function Tools() {
           MCP tools
         </div>
         <h2 className="mb-14 text-center font-display text-[clamp(26px,3.5vw,36px)] font-semibold leading-tight tracking-tight text-balance">
-          Twelve working tools. One memory layer.
+          {PUBLIC_SITE_STATS.mcpTools} working tools. One memory layer.
         </h2>
 
         <div className="mx-auto mb-12 max-w-[640px]">
