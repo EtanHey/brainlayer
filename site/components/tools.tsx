@@ -2,75 +2,18 @@
 
 import { motion } from "framer-motion";
 import { PUBLIC_SITE_STATS } from "@/lib/public-stats";
-
-const coreTools = [
-  {
-    name: "brain_search",
-    desc: "Hybrid semantic + keyword + KG search with compact formatted output",
-  },
-  {
-    name: "brain_store",
-    desc: "Persist decisions, learnings, corrections, and capture notes",
-  },
-  {
-    name: "brain_recall",
-    desc: "Unified recall entrypoint for search, entity, and session-aware lookup",
-  },
-  {
-    name: "brain_resume",
-    desc: "Recover recent PreCompact checkpoints for explicit session restoration",
-  },
-];
-
-const advancedTools = [
-  { name: "brain_entity", desc: "Knowledge graph entity lookup" },
-  {
-    name: "brain_expand",
-    desc: "Drill into one search hit with surrounding context",
-  },
-  {
-    name: "brain_digest",
-    desc: "Deep-ingest large content and extract entities, actions, and relations",
-  },
-  {
-    name: "brain_update",
-    desc: "Update chunk importance and tags by chunk ID",
-  },
-  {
-    name: "brain_tags",
-    desc: "List unique tags with counts, filter by prefix",
-  },
-  {
-    name: "brain_get_person",
-    desc: "Look up a person entity with all known relations",
-  },
-];
-
-const lifecycleTools = [
-  {
-    name: "brain_supersede",
-    desc: "Replace a chunk with a newer version, preserving history",
-  },
-  {
-    name: "brain_archive",
-    desc: "Soft-delete a chunk with timestamp for audit trail",
-  },
-  {
-    name: "brain_enrich",
-    desc: "Trigger deep enrichment on a stored chunk via Groq or Gemini",
-  },
-];
+import { BRAINBAR_MCP_TOOL_GROUPS } from "@/lib/public-tools";
 
 function ToolItem({ name, desc }: { name: string; desc: string }) {
   return (
     <motion.div
-      className="flex items-baseline gap-5 rounded-lg px-4 py-3 transition-colors hover:bg-bg-elevated"
+      className="flex flex-col items-start gap-1.5 rounded-lg px-4 py-3 transition-colors hover:bg-bg-elevated sm:flex-row sm:items-baseline sm:gap-5"
       initial={{ opacity: 1, y: 8 }}
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true }}
       transition={{ duration: 0.4 }}
     >
-      <span className="min-w-[150px] shrink-0 font-mono text-[13px] font-medium text-accent">
+      <span className="shrink-0 font-mono text-[13px] font-medium text-accent sm:min-w-[150px]">
         {name}
       </span>
       <span className="text-sm font-light text-text-secondary">{desc}</span>
@@ -86,39 +29,31 @@ export function Tools() {
           MCP tools
         </div>
         <h2 className="mb-14 text-center font-display text-[clamp(26px,3.5vw,36px)] font-semibold leading-tight tracking-tight text-balance">
-          {PUBLIC_SITE_STATS.mcpTools} working tools. One memory layer.
+          {PUBLIC_SITE_STATS.brainBarMcpTools}-tool live surface. One memory
+          layer.
         </h2>
 
-        <div className="mx-auto mb-12 max-w-[640px]">
-          <div className="mb-4 pl-1 text-xs font-medium uppercase tracking-[0.1em] text-text-dim">
-            Core - what you use daily
+        {BRAINBAR_MCP_TOOL_GROUPS.map((group, index) => (
+          <div key={group.label}>
+            {index > 0 && (
+              <div className="mx-auto h-px max-w-[640px] bg-border" />
+            )}
+            <div className="mx-auto mb-2 mt-6 max-w-[640px]">
+              <div className="mb-4 pl-1 text-xs font-medium uppercase tracking-[0.1em] text-text-dim">
+                {group.label}
+              </div>
+              {group.tools.map((tool) => (
+                <ToolItem key={tool.name} {...tool} />
+              ))}
+            </div>
           </div>
-          {coreTools.map((tool) => (
-            <ToolItem key={tool.name} {...tool} />
-          ))}
-        </div>
+        ))}
 
-        <div className="mx-auto h-px max-w-[640px] bg-border" />
-
-        <div className="mx-auto mt-2 max-w-[640px]">
-          <div className="mb-4 mt-6 pl-1 text-xs font-medium uppercase tracking-[0.1em] text-text-dim">
-            Advanced
-          </div>
-          {advancedTools.map((tool) => (
-            <ToolItem key={tool.name} {...tool} />
-          ))}
-        </div>
-
-        <div className="mx-auto h-px max-w-[640px] bg-border" />
-
-        <div className="mx-auto mt-2 max-w-[640px]">
-          <div className="mb-4 mt-6 pl-1 text-xs font-medium uppercase tracking-[0.1em] text-text-dim">
-            Lifecycle
-          </div>
-          {lifecycleTools.map((tool) => (
-            <ToolItem key={tool.name} {...tool} />
-          ))}
-        </div>
+        <p className="mx-auto mt-8 max-w-[640px] text-[12px] font-light leading-relaxed text-text-dim">
+          The secondary Python transport exposes{" "}
+          {PUBLIC_SITE_STATS.pythonMcpTools} tools, including the Python-only{" "}
+          <code className="text-accent">brain_resume</code>.
+        </p>
       </div>
     </section>
   );

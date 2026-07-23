@@ -31,8 +31,9 @@ export function Cta() {
           viewport={{ once: true }}
           transition={{ duration: 0.6, delay: 0.1 }}
         >
-          {PUBLIC_SITE_STATS.mcpTools} working tools, one local database, and a
-          BrainBar capture flow that does not lose the thread.
+          {PUBLIC_SITE_STATS.brainBarMcpTools} tools on the live BrainBar
+          surface, one local database, and a capture flow that does not lose the
+          thread.
         </motion.p>
         <motion.div
           initial={{ opacity: 1, y: 12 }}
