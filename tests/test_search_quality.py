@@ -10,6 +10,7 @@ All tests use tmp_path fixtures (isolated, no production DB).
 """
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -326,13 +327,14 @@ class TestPostRRFReranking:
 
     def test_recent_chunk_ranks_higher(self, store, mock_embed):
         """A recent chunk should rank above an old chunk at similar distance."""
+        now = datetime.now(timezone.utc)
         emb = mock_embed("authentication flow")
         _insert_chunk(
             store,
             "old-chunk",
             content="authentication flow implementation details",
             importance=5.0,
-            created_at="2025-06-01T00:00:00",  # 9 months ago
+            created_at=(now - timedelta(days=270)).isoformat(),
             embedding=emb,
         )
         emb_new = [v + 0.001 for v in emb]
@@ -341,7 +343,7 @@ class TestPostRRFReranking:
             "new-chunk",
             content="authentication flow implementation and testing",
             importance=5.0,
-            created_at="2026-03-02T00:00:00",  # yesterday
+            created_at=(now - timedelta(days=1)).isoformat(),
             embedding=emb_new,
         )
         results = store.hybrid_search(

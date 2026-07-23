@@ -1,6 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
+import { PUBLIC_SITE_STATS } from "@/lib/public-stats";
 
 const without = [
   "Repeats the same mistakes every session",
@@ -12,7 +13,7 @@ const without = [
 
 const withBL = [
   "Remembers every decision, learning, and correction",
-  "Searches 294K+ knowledge chunks in under 50ms",
+  `Searches ${PUBLIC_SITE_STATS.knowledgeChunksLabel} knowledge chunks with hybrid retrieval`,
   "Knowledge graph connects entities across sessions",
   "Cross-session memory persists through restarts",
   "Recalls your preferences, patterns, and past work",

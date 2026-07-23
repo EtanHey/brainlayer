@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "postbuild": "node scripts/check-rendered-entities.mjs",
+    "check:rendered-entities": "node scripts/check-rendered-entities.mjs",
     "start": "next start",
     "lint": "eslint"
   },
