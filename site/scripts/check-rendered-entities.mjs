@@ -21,6 +21,13 @@ if (!existsSync(renderedAppDir)) {
 }
 
 const renderedPageFiles = htmlFilesUnder(renderedAppDir);
+if (renderedPageFiles.length === 0) {
+  console.error(
+    "Rendered-output guard found no HTML files under .next/server/app.",
+  );
+  process.exit(1);
+}
+
 const findings = renderedPageFiles.flatMap((path) => {
   const html = readFileSync(path, "utf8");
   return [...html.matchAll(doubleEscapedEntity)].map((match) => ({
