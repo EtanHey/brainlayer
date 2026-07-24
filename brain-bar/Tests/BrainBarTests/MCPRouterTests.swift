@@ -169,6 +169,19 @@ final class MCPRouterTests: XCTestCase {
         }
     }
 
+    func testCoreProfileExplainsGateAndBothRemedies() throws {
+        let router = MCPRouter(profile: "core")
+        let response = router.handle(toolCall(id: 19, name: "brain_digest", arguments: [:]))
+        let error = try XCTUnwrap(response["error"] as? [String: Any])
+
+        XCTAssertEqual(error["code"] as? Int, -32601)
+        XCTAssertEqual(
+            error["message"] as? String,
+            "Tool 'brain_digest' is gated by the core MCP profile. "
+                + "Call expand_palette, or set BRAINLAYER_MCP_PROFILE=full on the MCP server."
+        )
+    }
+
     func testEnvironmentProfileControlsDefaultRouter() throws {
         let environmentKey = "BRAINLAYER_MCP_PROFILE"
         let originalProfile = ProcessInfo.processInfo.environment[environmentKey]
@@ -1083,6 +1096,7 @@ No results found.
 
         XCTAssertNotNil(error, "Unknown tool should return JSON-RPC error")
         XCTAssertEqual(error?["code"] as? Int, -32601, "Should be method-not-found error")
+        XCTAssertEqual(error?["message"] as? String, "Unknown tool: nonexistent_tool")
     }
 
     func testBrainDigestRejectsOversizedContentAtSchemaLayer() throws {

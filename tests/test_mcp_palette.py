@@ -36,6 +36,29 @@ def test_environment_profile_is_resolved_once(monkeypatch):
     assert len(palette.expose(_full_tool_definitions())) == 13
 
 
+def test_python_core_profile_explains_gate_and_both_remedies(monkeypatch):
+    palette = ToolPalette("core")
+    monkeypatch.setattr(mcp_module, "_tool_palette", palette)
+
+    result = asyncio.run(call_tool("brain_digest", {}))
+
+    assert result.is_error is True
+    assert result.content[0].text == (
+        "Tool 'brain_digest' is gated by the core MCP profile. "
+        "Call expand_palette, or set BRAINLAYER_MCP_PROFILE=full on the MCP server."
+    )
+
+
+def test_python_unknown_tool_remains_unknown(monkeypatch):
+    palette = ToolPalette("core")
+    monkeypatch.setattr(mcp_module, "_tool_palette", palette)
+
+    result = asyncio.run(call_tool("nonexistent_tool", {}))
+
+    assert result.is_error is True
+    assert result.content[0].text == "Unknown tool: nonexistent_tool"
+
+
 def test_python_palette_expands_once_and_dispatches_deferred_tools(monkeypatch):
     palette = ToolPalette("core")
     monkeypatch.setattr(mcp_module, "_tool_palette", palette)
@@ -44,7 +67,7 @@ def test_python_palette_expands_once_and_dispatches_deferred_tools(monkeypatch):
 
     before = asyncio.run(call_tool("brain_tags", {}))
     assert before.is_error is True
-    assert "not exposed" in before.content[0].text
+    assert "gated by the core MCP profile" in before.content[0].text
 
     first = asyncio.run(call_tool("expand_palette", {}))
     assert first.is_error is False

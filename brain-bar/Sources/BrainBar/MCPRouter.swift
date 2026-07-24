@@ -400,9 +400,14 @@ final class MCPRouter: @unchecked Sendable {
             return toolCallResult(id: id, output: expandPalette(session: session))
         }
 
-        // Check tool exists
-        guard isToolExposed(toolName, session: session) else {
+        guard Self.toolDefinitions.contains(where: { ($0["name"] as? String) == toolName }) else {
             return jsonRPCError(id: id, code: -32601, message: "Unknown tool: \(toolName)")
+        }
+
+        guard isToolExposed(toolName, session: session) else {
+            let message = "Tool '\(toolName)' is gated by the core MCP profile. "
+                + "Call expand_palette, or set BRAINLAYER_MCP_PROFILE=full on the MCP server."
+            return jsonRPCError(id: id, code: -32601, message: message)
         }
 
         // Dispatch to handler
