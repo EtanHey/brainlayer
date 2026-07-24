@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -69,7 +70,11 @@ def _write_fake_ps(fake_bin: Path) -> None:
         "\n".join(
             [
                 "#!/usr/bin/env bash",
-                'printf "%s\\n" "$FAKE_PS_COMMAND"',
+                'if [[ "$*" == *"ucomm="* ]]; then',
+                '  printf "%s\\n" "${FAKE_PS_NAME:-python3}"',
+                "else",
+                '  printf "%s\\n" "$FAKE_PS_COMMAND"',
+                "fi",
                 "",
             ]
         ),
@@ -111,6 +116,20 @@ def test_launchd_templates_are_declared_as_package_data() -> None:
     for path in plist_paths:
         plist = plistlib.loads(path.read_bytes())
         assert plist["Label"].startswith("com.brainlayer.")
+
+
+def test_launchd_unload_default_covers_hotlane_exit_timeout() -> None:
+    install_script = (REPO_ROOT / "scripts" / "launchd" / "install.sh").read_text(encoding="utf-8")
+    hotlane_plist = plistlib.loads(
+        (REPO_ROOT / "scripts" / "launchd" / "com.brainlayer.hotlane-brainbar.plist").read_bytes()
+    )
+    attempts_match = re.search(r"BRAINLAYER_HOTLANE_UNLOAD_ATTEMPTS:-([0-9]+)", install_script)
+    interval_match = re.search(r"BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL:-([0-9.]+)", install_script)
+
+    assert attempts_match is not None
+    assert interval_match is not None
+    poll_window_seconds = (int(attempts_match.group(1)) - 1) * float(interval_match.group(1))
+    assert poll_window_seconds >= hotlane_plist["ExitTimeOut"]
 
 
 def test_setup_invokes_launchd_install_script_with_env_file(tmp_path: Path, monkeypatch) -> None:
@@ -721,6 +740,59 @@ def test_packaged_launchd_installer_installs_hotlane_daemon(tmp_path: Path) -> N
     assert commands.count(f"print {domain}/com.brainlayer.hotlane-brainbar") >= 3
 
 
+def test_hotlane_installer_accepts_resolved_python_interpreter(tmp_path: Path) -> None:
+    launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
+    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    shutil.copy2(
+        REPO_ROOT / "scripts" / "hotlane_brainbar_daemon.py",
+        launchd_dir / "hotlane_brainbar_daemon.py",
+    )
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(_fake_launchctl_lines()),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+    _write_fake_ps(fake_bin)
+
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = home / ".config" / "brainlayer" / "brainlayer.env"
+    env_file.parent.mkdir(parents=True)
+    _write_full_launchd_env(env_file)
+    installed_script = home / ".local" / "lib" / "brainlayer" / "hotlane_brainbar_daemon.py"
+    python_shim = home / ".pyenv" / "shims" / "python3"
+
+    result = subprocess.run(
+        [str(launchd_dir / "install.sh"), "hotlane"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": str(python_shim),
+            "BRAINLAYER_PYTHON": str(python_shim),
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS": "1",
+            "BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL": "0",
+            "BRAINLAYER_LAUNCHD_VERIFY_INTERVAL": "0",
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+            "FAKE_PS_COMMAND": f"{sys.executable} {installed_script} --interval 1.0",
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Verified running: com.brainlayer.hotlane-brainbar (pid 4242)" in result.stdout
+
+
 def test_hotlane_installer_rejects_unload_timeout_before_bootstrap(tmp_path: Path) -> None:
     launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
     shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
@@ -959,6 +1031,7 @@ def test_hotlane_installer_rejects_stable_disabled_env_runner_pid(tmp_path: Path
             "BRAINLAYER_LAUNCHD_VERIFY_ATTEMPTS": "2",
             "BRAINLAYER_LAUNCHD_VERIFY_INTERVAL": "0",
             "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+            "FAKE_PS_NAME": "bash",
             "FAKE_PS_COMMAND": (
                 f"/bin/bash {home}/.local/lib/brainlayer/brainlayer-env-run.sh {sys.executable} {installed_script}"
             ),

@@ -157,6 +157,9 @@ load_plist() {
     local unload_output=""
     local current_pid=""
 
+    if [ "$name" = "hotlane-brainbar" ] && [ -z "${BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS+x}" ]; then
+        unload_attempts="${BRAINLAYER_HOTLANE_UNLOAD_ATTEMPTS:-301}"
+    fi
     if [ "$name" = "hotlane-brainbar" ]; then
         if initial_output="$(launchctl print "$domain" 2>/dev/null)"; then
             initial_pid="$(
@@ -260,7 +263,7 @@ verify_hotlane_runtime() {
     local output=""
     local pid=""
     local process_command=""
-    local expected_command="$BRAINLAYER_PYTHON $HOTLANE_BRAINBAR_DST"
+    local process_name=""
     local process_matches=0
     local previous_pid=""
     local stable_samples=0
@@ -272,12 +275,22 @@ verify_hotlane_runtime() {
                 | awk -F'= ' '/^[[:space:]]*pid = [0-9]+$/ { print $2; exit }'
         )"
         process_command=""
+        process_name=""
         process_matches=0
         if [ -n "$pid" ]; then
             process_command="$(ps -ww -p "$pid" -o command= 2>/dev/null || true)"
-            case "$process_command" in
-                "$expected_command"|"$expected_command "*)
-                    process_matches=1
+            process_name="$(
+                ps -ww -p "$pid" -o ucomm= 2>/dev/null \
+                    | awk '{$1=$1; print}' \
+                    || true
+            )"
+            case "$process_name" in
+                python*|Python*)
+                    case "$process_command" in
+                        *" $HOTLANE_BRAINBAR_DST"|*" $HOTLANE_BRAINBAR_DST "*)
+                            process_matches=1
+                            ;;
+                    esac
                     ;;
             esac
         fi
@@ -309,7 +322,7 @@ verify_hotlane_runtime() {
     echo "ERROR: hotlane runtime verification failed after $attempts attempts" >&2
     printf '%s\n' "$output" >&2
     if [ -n "$pid" ] && [ "$process_matches" -ne 1 ]; then
-        echo "ERROR: pid $pid command does not match packaged hotlane daemon: $process_command" >&2
+        echo "ERROR: pid $pid process does not match packaged hotlane daemon: name=$process_name command=$process_command" >&2
     fi
     launchctl bootout "$domain" >/dev/null 2>&1 || true
     return 1
