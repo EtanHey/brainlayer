@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Prove the built-wheel and installer regression
+## Task 1: Prove the built-wheel and installer regression
 
 **Files:**
 - Modify: `tests/test_installable_build.py`
@@ -70,7 +70,7 @@ uv run pytest \
 
 Expected: failures because the daemon is not declared in package metadata, is not copied by the installer, and is absent from the wheel.
 
-### Task 2: Package and install the stable hotlane daemon
+## Task 2: Package and install the stable hotlane daemon
 
 **Files:**
 - Modify: `pyproject.toml`
@@ -144,7 +144,7 @@ with:
 
 Run the Task 1 command. Expected: all selected tests pass.
 
-### Task 3: Prepare BrainLayer v1.5.2
+## Task 3: Prepare BrainLayer v1.5.2
 
 **Files:**
 - Modify: `pyproject.toml`
@@ -168,7 +168,7 @@ uv run pytest tests/test_release_version_sync.py tests/test_version_consistency.
 
 Expected: all tests pass with all release metadata synchronized.
 
-### Task 4: Verify source, wheel, installer, and live branch build
+## Task 4: Verify source, wheel, installer, and live branch build
 
 **Files:**
 - Verify only
@@ -210,7 +210,7 @@ Record exact pass/skip/xfail/failure counts. Do not claim green if failures rema
 
 From a fresh real client session, verify BrainLayer MCP tools are available and return real results against the branch-installed worker before merge.
 
-### Task 5: Complete the PR and review loop
+## Task 5: Complete the PR and review loop
 
 **Files:**
 - Commit all files above
@@ -252,7 +252,7 @@ Request `@codex review`, `@cursor @bugbot review`, and CodeRabbit. Complete at l
 
 Use a merge commit. Verify the remote merge commit contains the latest pushed tree.
 
-### Task 6: Publish and verify the supported distribution
+## Task 6: Publish and verify the supported distribution
 
 **Files:**
 - Modify in `homebrew-LAYERS`: `Formula/brainlayer.rb`

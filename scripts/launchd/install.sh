@@ -162,6 +162,10 @@ load_plist() {
             sleep "$unload_interval"
         fi
     done
+    if [ "$confirmed_unloaded" -ne 1 ]; then
+        echo "ERROR: $label did not unload before replacement; refusing to enable or bootstrap" >&2
+        return 1
+    fi
     if ! enable_error="$(launchctl enable "gui/$UID/$label" 2>&1)"; then
         if printf "%s" "$enable_error" | grep -qi "could not find service"; then
             echo "WARN: launchctl enable could not find $label before bootstrap; retrying after bootstrap" >&2
