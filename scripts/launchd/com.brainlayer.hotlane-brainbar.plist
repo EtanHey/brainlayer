@@ -8,7 +8,7 @@
 	<array>
 		<string>__BRAINLAYER_ENV_RUN__</string>
 		<string>__BRAINLAYER_PYTHON__</string>
-		<string>__BRAINLAYER_DIR__/scripts/hotlane_brainbar_daemon.py</string>
+		<string>__HOTLANE_BRAINBAR_DAEMON__</string>
 		<string>--interval</string>
 		<string>1.0</string>
 		<string>--recent-limit</string>

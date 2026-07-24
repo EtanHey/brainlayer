@@ -66,6 +66,7 @@ BRAINLAYER_ENV_FILE="${BRAINLAYER_ENV_FILE:-$HOME/.config/brainlayer/brainlayer.
 BRAINLAYER_ENV_RUN="$BRAINLAYER_LIB_DIR/brainlayer-env-run.sh"
 TIER0_WATCHDOG_DST="$BRAINLAYER_LIB_DIR/tier0-watchdog.sh"
 THROUGHPUT_WATCHDOG_DST="$BRAINLAYER_LIB_DIR/throughput-watchdog.py"
+HOTLANE_BRAINBAR_DST="$BRAINLAYER_LIB_DIR/hotlane_brainbar_daemon.py"
 
 if [ -z "$PYTHON_BIN" ]; then
     echo "ERROR: python3 not found in PATH"
@@ -142,9 +143,25 @@ load_plist() {
     local name="$1"
     local dst="$LAUNCH_DIR/com.brainlayer.${name}.plist"
     local label="com.brainlayer.${name}"
+    local domain="gui/$UID/$label"
     local enable_error=""
     local retry_enable_after_bootstrap=0
-    launchctl bootout "gui/$UID/$label" 2>/dev/null || true
+    local unload_attempts="${BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS:-20}"
+    local unload_interval="${BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL:-0.1}"
+    local unload_attempt=1
+    local confirmed_unloaded=0
+
+    launchctl bootout "$domain" 2>/dev/null || true
+    while [ "$unload_attempt" -le "$unload_attempts" ]; do
+        if ! launchctl print "$domain" >/dev/null 2>&1; then
+            confirmed_unloaded=1
+            break
+        fi
+        unload_attempt=$((unload_attempt + 1))
+        if [ "$unload_attempt" -le "$unload_attempts" ]; then
+            sleep "$unload_interval"
+        fi
+    done
     if ! enable_error="$(launchctl enable "gui/$UID/$label" 2>&1)"; then
         if printf "%s" "$enable_error" | grep -qi "could not find service"; then
             echo "WARN: launchctl enable could not find $label before bootstrap; retrying after bootstrap" >&2
@@ -156,8 +173,14 @@ load_plist() {
         fi
     fi
     if ! launchctl bootstrap "gui/$UID" "$dst"; then
-        echo "ERROR: launchctl bootstrap failed for $label" >&2
-        return 1
+        if [ "$name" = "hotlane-brainbar" ] \
+            && [ "$confirmed_unloaded" -eq 1 ] \
+            && launchctl print "$domain" >/dev/null 2>&1; then
+            echo "WARN: launchctl bootstrap raced with another supervisor for $label; service is loaded" >&2
+        else
+            echo "ERROR: launchctl bootstrap failed for $label" >&2
+            return 1
+        fi
     fi
     if [ "$retry_enable_after_bootstrap" -ne 0 ]; then
         if ! launchctl enable "gui/$UID/$label"; then
@@ -165,7 +188,7 @@ load_plist() {
             return 1
         fi
     fi
-    if ! launchctl print "gui/$UID/$label" >/dev/null; then
+    if ! launchctl print "$domain" >/dev/null; then
         echo "ERROR: launchctl print failed for $label after bootstrap" >&2
         return 1
     fi
@@ -179,6 +202,68 @@ unload_plist() {
     echo "  Unloaded: com.brainlayer.${name}"
 }
 
+install_hotlane_brainbar_daemon() {
+    local script_src="$SCRIPT_DIR/hotlane_brainbar_daemon.py"
+
+    if [ ! -f "$script_src" ]; then
+        script_src="$SCRIPT_DIR/../hotlane_brainbar_daemon.py"
+    fi
+    if [ ! -f "$script_src" ]; then
+        echo "ERROR: hotlane_brainbar_daemon.py not found beside or above $SCRIPT_DIR" >&2
+        return 1
+    fi
+
+    install -m 0755 "$script_src" "$HOTLANE_BRAINBAR_DST" || return 1
+    echo "Installed: $HOTLANE_BRAINBAR_DST"
+}
+
+verify_hotlane_runtime() {
+    local label="com.brainlayer.hotlane-brainbar"
+    local domain="gui/$UID/$label"
+    local attempts="${BRAINLAYER_LAUNCHD_VERIFY_ATTEMPTS:-10}"
+    local interval="${BRAINLAYER_LAUNCHD_VERIFY_INTERVAL:-1}"
+    local attempt=1
+    local output=""
+    local pid=""
+    local previous_pid=""
+    local stable_samples=0
+
+    while [ "$attempt" -le "$attempts" ]; do
+        output="$(launchctl print "$domain" 2>&1 || true)"
+        pid="$(
+            printf '%s\n' "$output" \
+                | awk -F'= ' '/^[[:space:]]*pid = [0-9]+$/ { print $2; exit }'
+        )"
+
+        if printf '%s\n' "$output" | grep -Eq '^[[:space:]]*state = running$' \
+            && [ -n "$pid" ]; then
+            if [ "$pid" = "$previous_pid" ]; then
+                stable_samples=$((stable_samples + 1))
+            else
+                previous_pid="$pid"
+                stable_samples=1
+            fi
+            if [ "$stable_samples" -ge 2 ]; then
+                echo "  Verified running: $label (pid $pid)"
+                return 0
+            fi
+        else
+            previous_pid=""
+            stable_samples=0
+        fi
+
+        attempt=$((attempt + 1))
+        if [ "$attempt" -le "$attempts" ]; then
+            sleep "$interval"
+        fi
+    done
+
+    echo "ERROR: hotlane runtime verification failed after $attempts attempts" >&2
+    printf '%s\n' "$output" >&2
+    launchctl bootout "$domain" >/dev/null 2>&1 || true
+    return 1
+}
+
 install_plist() {
     local name="$1"
     local src="$SCRIPT_DIR/com.brainlayer.${name}.plist"
@@ -187,6 +272,10 @@ install_plist() {
     if [ ! -f "$src" ]; then
         echo "ERROR: $src not found"
         return 1
+    fi
+
+    if [ "$name" = "hotlane-brainbar" ]; then
+        install_hotlane_brainbar_daemon || return 1
     fi
 
     install_env_runner || return 1
@@ -207,12 +296,16 @@ install_plist() {
         -e "s|__REPO_ROOT__|$BRAINLAYER_DIR|g" \
         -e "s|__BRAINLAYER_ENV_FILE__|$BRAINLAYER_ENV_FILE|g" \
         -e "s|__BRAINLAYER_ENV_RUN__|$BRAINLAYER_ENV_RUN|g" \
+        -e "s|__HOTLANE_BRAINBAR_DAEMON__|$HOTLANE_BRAINBAR_DST|g" \
         "$src" > "$dst" || return 1
 
     echo "Installed: $dst"
     echo "  Logs: $LOG_DIR/ and $BRAINLAYER_LOG_DIR/"
 
     if ! load_plist "$name"; then
+        return 1
+    fi
+    if [ "$name" = "hotlane-brainbar" ] && ! verify_hotlane_runtime; then
         return 1
     fi
 }
@@ -508,6 +601,7 @@ case "${1:-all}" in
         rm -f "$BRAINLAYER_LIB_DIR/jsonl-backup.sh"
         rm -f "$TIER0_WATCHDOG_DST"
         rm -f "$THROUGHPUT_WATCHDOG_DST"
+        rm -f "$HOTLANE_BRAINBAR_DST"
         ;;
     *)
         echo "Usage: $0 [index|watch|enrich|enrichment|decay|drain|hotlane|repair-fts|load [name]|unload [name]|checkpoint|backup|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|tier0-watchdog|throughput-watchdog|p0-counter|all|remove]"
