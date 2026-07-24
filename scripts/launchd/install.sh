@@ -229,6 +229,9 @@ verify_hotlane_runtime() {
     local attempt=1
     local output=""
     local pid=""
+    local process_command=""
+    local expected_command="$BRAINLAYER_PYTHON $HOTLANE_BRAINBAR_DST"
+    local process_matches=0
     local previous_pid=""
     local stable_samples=0
 
@@ -238,9 +241,20 @@ verify_hotlane_runtime() {
             printf '%s\n' "$output" \
                 | awk -F'= ' '/^[[:space:]]*pid = [0-9]+$/ { print $2; exit }'
         )"
+        process_command=""
+        process_matches=0
+        if [ -n "$pid" ]; then
+            process_command="$(ps -ww -p "$pid" -o command= 2>/dev/null || true)"
+            case "$process_command" in
+                "$expected_command"|"$expected_command "*)
+                    process_matches=1
+                    ;;
+            esac
+        fi
 
         if printf '%s\n' "$output" | grep -Eq '^[[:space:]]*state = running$' \
-            && [ -n "$pid" ]; then
+            && [ -n "$pid" ] \
+            && [ "$process_matches" -eq 1 ]; then
             if [ "$pid" = "$previous_pid" ]; then
                 stable_samples=$((stable_samples + 1))
             else
@@ -264,6 +278,9 @@ verify_hotlane_runtime() {
 
     echo "ERROR: hotlane runtime verification failed after $attempts attempts" >&2
     printf '%s\n' "$output" >&2
+    if [ -n "$pid" ] && [ "$process_matches" -ne 1 ]; then
+        echo "ERROR: pid $pid command does not match packaged hotlane daemon: $process_command" >&2
+    fi
     launchctl bootout "$domain" >/dev/null 2>&1 || true
     return 1
 }

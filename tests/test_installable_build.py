@@ -63,6 +63,21 @@ def _fake_launchctl_lines(
     ]
 
 
+def _write_fake_ps(fake_bin: Path) -> None:
+    fake_ps = fake_bin / "ps"
+    fake_ps.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'printf "%s\\n" "$FAKE_PS_COMMAND"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_ps.chmod(0o755)
+
+
 def test_brainlayer_cli_entrypoint_imports_typer_app(monkeypatch) -> None:
     monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
 
@@ -658,12 +673,14 @@ def test_packaged_launchd_installer_installs_hotlane_daemon(tmp_path: Path) -> N
         encoding="utf-8",
     )
     fake_launchctl.chmod(0o755)
+    _write_fake_ps(fake_bin)
 
     home = tmp_path / "home"
     home.mkdir()
     env_file = home / ".config" / "brainlayer" / "brainlayer.env"
     env_file.parent.mkdir(parents=True)
     _write_full_launchd_env(env_file)
+    installed_script = home / ".local" / "lib" / "brainlayer" / "hotlane_brainbar_daemon.py"
 
     result = subprocess.run(
         [str(launchd_dir / "install.sh"), "hotlane"],
@@ -679,6 +696,7 @@ def test_packaged_launchd_installer_installs_hotlane_daemon(tmp_path: Path) -> N
             "BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL": "0",
             "BRAINLAYER_LAUNCHD_VERIFY_INTERVAL": "0",
             "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+            "FAKE_PS_COMMAND": f"{sys.executable} {installed_script} --interval 1.0",
         },
         capture_output=True,
         text=True,
@@ -687,7 +705,6 @@ def test_packaged_launchd_installer_installs_hotlane_daemon(tmp_path: Path) -> N
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    installed_script = home / ".local" / "lib" / "brainlayer" / "hotlane_brainbar_daemon.py"
     assert installed_script.read_bytes() == source_script.read_bytes()
     assert os.access(installed_script, os.X_OK)
 
@@ -815,6 +832,61 @@ def test_hotlane_installer_rejects_launchd_job_that_is_not_running(tmp_path: Pat
     assert "hotlane runtime verification failed" in result.stderr
 
 
+def test_hotlane_installer_rejects_stable_disabled_env_runner_pid(tmp_path: Path) -> None:
+    launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
+    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    shutil.copy2(
+        REPO_ROOT / "scripts" / "hotlane_brainbar_daemon.py",
+        launchd_dir / "hotlane_brainbar_daemon.py",
+    )
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(_fake_launchctl_lines()),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+    _write_fake_ps(fake_bin)
+
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = home / ".config" / "brainlayer" / "brainlayer.env"
+    env_file.parent.mkdir(parents=True)
+    _write_full_launchd_env(env_file)
+    installed_script = home / ".local" / "lib" / "brainlayer" / "hotlane_brainbar_daemon.py"
+
+    result = subprocess.run(
+        [str(launchd_dir / "install.sh"), "hotlane"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": sys.executable,
+            "BRAINLAYER_PYTHON": sys.executable,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS": "1",
+            "BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL": "0",
+            "BRAINLAYER_LAUNCHD_VERIFY_ATTEMPTS": "2",
+            "BRAINLAYER_LAUNCHD_VERIFY_INTERVAL": "0",
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+            "FAKE_PS_COMMAND": (
+                f"/bin/bash {home}/.local/lib/brainlayer/brainlayer-env-run.sh {sys.executable} {installed_script}"
+            ),
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "does not match packaged hotlane daemon" in result.stderr
+
+
 def test_hotlane_installer_accepts_supervisor_bootstrap_race_after_confirmed_unload(tmp_path: Path) -> None:
     launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
     shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
@@ -860,12 +932,14 @@ def test_hotlane_installer_accepts_supervisor_bootstrap_race_after_confirmed_unl
         encoding="utf-8",
     )
     fake_launchctl.chmod(0o755)
+    _write_fake_ps(fake_bin)
 
     home = tmp_path / "home"
     home.mkdir()
     env_file = home / ".config" / "brainlayer" / "brainlayer.env"
     env_file.parent.mkdir(parents=True)
     _write_full_launchd_env(env_file)
+    installed_script = home / ".local" / "lib" / "brainlayer" / "hotlane_brainbar_daemon.py"
 
     result = subprocess.run(
         [str(launchd_dir / "install.sh"), "hotlane"],
@@ -881,6 +955,7 @@ def test_hotlane_installer_accepts_supervisor_bootstrap_race_after_confirmed_unl
             "BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL": "0",
             "BRAINLAYER_LAUNCHD_VERIFY_INTERVAL": "0",
             "FAKE_LAUNCHCTL_STATE": str(launchctl_state),
+            "FAKE_PS_COMMAND": f"{sys.executable} {installed_script} --interval 1.0",
         },
         capture_output=True,
         text=True,
