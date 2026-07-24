@@ -171,6 +171,27 @@ def test_install_launchd_times_out_with_clear_error(tmp_path: Path) -> None:
         raise AssertionError("install_launchd did not time out")
 
 
+def test_install_launchd_default_defers_to_bounded_installer_shutdown_waits(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.setup as setup_helpers
+    from brainlayer.setup import install_launchd
+
+    launchd_dir = tmp_path / "launchd"
+    launchd_dir.mkdir()
+    install_script = launchd_dir / "install.sh"
+    install_script.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    install_script.chmod(0o755)
+    calls: list[tuple[list[str], float | None]] = []
+
+    def record_run(command, *, env, check, timeout):  # noqa: ANN001, ARG001
+        calls.append((command, timeout))
+
+    monkeypatch.setattr(setup_helpers.subprocess, "run", record_run)
+
+    install_launchd("all", launchd_dir=launchd_dir)
+
+    assert calls == [([str(install_script), "all"], None)]
+
+
 def test_setup_command_writes_op_backed_env_without_plaintext_and_can_skip_launchd(tmp_path: Path) -> None:
     from brainlayer.cli import app
 
