@@ -146,7 +146,7 @@ load_plist() {
     local domain="gui/$UID/$label"
     local enable_error=""
     local retry_enable_after_bootstrap=0
-    local unload_attempts="${BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS:-20}"
+    local unload_attempts="${BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS:-}"
     local unload_interval="${BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL:-0.1}"
     local unload_attempt=1
     local bootout_succeeded=0
@@ -158,14 +158,58 @@ load_plist() {
     local initial_pid=""
     local unload_output=""
     local current_pid=""
+    local plist_exit_timeout=""
 
     case "$name" in
         hotlane-brainbar|watch|drain|health-check|enrichment)
             supervisor_managed=1
             ;;
     esac
-    if [ "$name" = "hotlane-brainbar" ] && [ -z "${BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS+x}" ]; then
-        unload_attempts="${BRAINLAYER_HOTLANE_UNLOAD_ATTEMPTS:-301}"
+    if [ "$name" = "hotlane-brainbar" ] && [ -z "$unload_attempts" ]; then
+        unload_attempts="${BRAINLAYER_HOTLANE_UNLOAD_ATTEMPTS:-}"
+    fi
+    if [ -z "$unload_attempts" ]; then
+        plist_exit_timeout="$(
+            "$PYTHON_BIN" -c '
+import plistlib
+import sys
+
+with open(sys.argv[1], "rb") as plist_file:
+    value = plistlib.load(plist_file).get("ExitTimeOut")
+if isinstance(value, (int, float)) and value >= 0:
+    print(value)
+' "$dst" 2>/dev/null || true
+        )"
+        if [ -n "$plist_exit_timeout" ]; then
+            if ! unload_attempts="$(
+                awk -v timeout="$plist_exit_timeout" -v interval="$unload_interval" '
+                    BEGIN {
+                        if (interval <= 0 || timeout < 0) {
+                            exit 1
+                        }
+                        quotient = timeout / interval
+                        attempts = int(quotient)
+                        if (attempts < quotient) {
+                            attempts += 1
+                        }
+                        print attempts + 1
+                    }
+                '
+            )"; then
+                unload_attempts=""
+            fi
+        fi
+    fi
+    unload_attempts="${unload_attempts:-20}"
+    case "$unload_attempts" in
+        *[!0-9]*)
+            echo "ERROR: unload attempts must be a positive integer for $label; got '$unload_attempts'" >&2
+            return 1
+            ;;
+    esac
+    if [ "$unload_attempts" -lt 1 ]; then
+        echo "ERROR: unload attempts must be a positive integer for $label; got '$unload_attempts'" >&2
+        return 1
     fi
     if [ "$supervisor_managed" -eq 1 ]; then
         if initial_output="$(launchctl print "$domain" 2>/dev/null)"; then
