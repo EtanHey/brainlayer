@@ -150,10 +150,26 @@ load_plist() {
     local unload_interval="${BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL:-0.1}"
     local unload_attempt=1
     local confirmed_unloaded=0
+    local supervisor_reloaded=0
+    local initially_unloaded=0
+    local initial_output=""
+    local initial_pid=""
+    local unload_output=""
+    local current_pid=""
 
+    if [ "$name" = "hotlane-brainbar" ]; then
+        if initial_output="$(launchctl print "$domain" 2>/dev/null)"; then
+            initial_pid="$(
+                printf '%s\n' "$initial_output" \
+                    | awk -F'= ' '/^[[:space:]]*pid = [0-9]+$/ { print $2; exit }'
+            )"
+        else
+            initially_unloaded=1
+        fi
+    fi
     launchctl bootout "$domain" 2>/dev/null || true
     while [ "$unload_attempt" -le "$unload_attempts" ]; do
-        if ! launchctl print "$domain" >/dev/null 2>&1; then
+        if ! unload_output="$(launchctl print "$domain" 2>/dev/null)"; then
             confirmed_unloaded=1
             break
         fi
@@ -162,6 +178,18 @@ load_plist() {
             sleep "$unload_interval"
         fi
     done
+    if [ "$confirmed_unloaded" -ne 1 ] && [ "$name" = "hotlane-brainbar" ]; then
+        current_pid="$(
+            printf '%s\n' "$unload_output" \
+                | awk -F'= ' '/^[[:space:]]*pid = [0-9]+$/ { print $2; exit }'
+        )"
+        if [ "$initially_unloaded" -eq 1 ] \
+            || { [ -n "$initial_pid" ] && [ -n "$current_pid" ] && [ "$current_pid" != "$initial_pid" ]; }; then
+            confirmed_unloaded=1
+            supervisor_reloaded=1
+            echo "WARN: $label was reloaded before the unload poll; continuing with runtime verification" >&2
+        fi
+    fi
     if [ "$confirmed_unloaded" -ne 1 ]; then
         echo "ERROR: $label did not unload before replacement; refusing to enable or bootstrap" >&2
         return 1
@@ -176,14 +204,16 @@ load_plist() {
             return 1
         fi
     fi
-    if ! launchctl bootstrap "gui/$UID" "$dst"; then
-        if [ "$name" = "hotlane-brainbar" ] \
-            && [ "$confirmed_unloaded" -eq 1 ] \
-            && launchctl print "$domain" >/dev/null 2>&1; then
-            echo "WARN: launchctl bootstrap raced with another supervisor for $label; service is loaded" >&2
-        else
-            echo "ERROR: launchctl bootstrap failed for $label" >&2
-            return 1
+    if [ "$supervisor_reloaded" -ne 1 ]; then
+        if ! launchctl bootstrap "gui/$UID" "$dst"; then
+            if [ "$name" = "hotlane-brainbar" ] \
+                && [ "$confirmed_unloaded" -eq 1 ] \
+                && launchctl print "$domain" >/dev/null 2>&1; then
+                echo "WARN: launchctl bootstrap raced with another supervisor for $label; service is loaded" >&2
+            else
+                echo "ERROR: launchctl bootstrap failed for $label" >&2
+                return 1
+            fi
         fi
     fi
     if [ "$retry_enable_after_bootstrap" -ne 0 ]; then
