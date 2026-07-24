@@ -149,7 +149,9 @@ load_plist() {
     local unload_attempts="${BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS:-20}"
     local unload_interval="${BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL:-0.1}"
     local unload_attempt=1
+    local bootout_succeeded=0
     local confirmed_unloaded=0
+    local supervisor_managed=0
     local supervisor_reloaded=0
     local initially_unloaded=0
     local initial_output=""
@@ -157,10 +159,15 @@ load_plist() {
     local unload_output=""
     local current_pid=""
 
+    case "$name" in
+        hotlane-brainbar|watch|drain|health-check|enrichment)
+            supervisor_managed=1
+            ;;
+    esac
     if [ "$name" = "hotlane-brainbar" ] && [ -z "${BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS+x}" ]; then
         unload_attempts="${BRAINLAYER_HOTLANE_UNLOAD_ATTEMPTS:-301}"
     fi
-    if [ "$name" = "hotlane-brainbar" ]; then
+    if [ "$supervisor_managed" -eq 1 ]; then
         if initial_output="$(launchctl print "$domain" 2>/dev/null)"; then
             initial_pid="$(
                 printf '%s\n' "$initial_output" \
@@ -170,7 +177,9 @@ load_plist() {
             initially_unloaded=1
         fi
     fi
-    launchctl bootout "$domain" 2>/dev/null || true
+    if launchctl bootout "$domain" 2>/dev/null; then
+        bootout_succeeded=1
+    fi
     while [ "$unload_attempt" -le "$unload_attempts" ]; do
         if ! unload_output="$(launchctl print "$domain" 2>/dev/null)"; then
             confirmed_unloaded=1
@@ -181,13 +190,20 @@ load_plist() {
             sleep "$unload_interval"
         fi
     done
-    if [ "$confirmed_unloaded" -ne 1 ] && [ "$name" = "hotlane-brainbar" ]; then
+    if [ "$confirmed_unloaded" -ne 1 ] && [ "$supervisor_managed" -eq 1 ]; then
         current_pid="$(
             printf '%s\n' "$unload_output" \
                 | awk -F'= ' '/^[[:space:]]*pid = [0-9]+$/ { print $2; exit }'
         )"
+        # A supervisor win is safe only if the label was initially absent or
+        # our successful bootout is followed by a fresh loaded PID.
         if [ "$initially_unloaded" -eq 1 ] \
-            || { [ -n "$initial_pid" ] && [ -n "$current_pid" ] && [ "$current_pid" != "$initial_pid" ]; }; then
+            || {
+                [ "$bootout_succeeded" -eq 1 ] \
+                    && [ -n "$initial_pid" ] \
+                    && [ -n "$current_pid" ] \
+                    && [ "$current_pid" != "$initial_pid" ]
+            }; then
             confirmed_unloaded=1
             supervisor_reloaded=1
             echo "WARN: $label was reloaded before the unload poll; continuing with runtime verification" >&2
@@ -268,6 +284,8 @@ verify_hotlane_runtime() {
     local previous_pid=""
     local stable_samples=0
 
+    # Success requires two running samples with the same PID, Python process,
+    # and packaged daemon argument; this rejects disabled env-runner sleepers.
     while [ "$attempt" -le "$attempts" ]; do
         output="$(launchctl print "$domain" 2>&1 || true)"
         pid="$(
