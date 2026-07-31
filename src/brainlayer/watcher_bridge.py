@@ -223,23 +223,62 @@ def _normalize_project_name(raw: str) -> str:
     return name
 
 
-def _extract_project_from_source(source_file: str) -> str | None:
-    """Extract the project root from a watcher source path.
+def _extract_workspace_project(entry: dict[str, Any] | None) -> str | None:
+    """Return a project name from explicit session workspace metadata only."""
+    if not isinstance(entry, dict):
+        return None
 
-    For Claude Code transcripts the canonical project directory is the segment
-    immediately under `.../projects/`, even when the JSONL lives under nested
-    session folders like `subagents/` or `tool-results/`.
+    candidates = [entry]
+    for key in ("payload", "metadata"):
+        value = entry.get(key)
+        if isinstance(value, dict):
+            candidates.append(value)
+    for candidate in candidates:
+        for key in ("cwd", "workspace", "workdir"):
+            value = candidate.get(key)
+            if not isinstance(value, str) or not value.strip():
+                continue
+            name = _normalize_project_name(Path(value).name)
+            if not name.isdigit():
+                return name
+    return None
+
+
+def _extract_project_from_source(source_file: str, entry: dict[str, Any] | None = None) -> str | None:
+    """Extract a project only from workspace metadata or Claude's project path.
+
+    Codex, Cursor, and Gemini paths are date-partitioned and therefore cannot
+    safely provide a project name. Claude Code encodes the workspace explicitly
+    in its `projects/<workspace>` path, which remains a trusted fallback.
     """
     p = Path(source_file)
     parts = p.parts
     if "projects" in parts:
         project_index = parts.index("projects") + 1
         if project_index < len(parts):
-            return _normalize_project_name(parts[project_index])
+            project = _normalize_project_name(parts[project_index])
+            if not project.isdigit():
+                return project
+    return _extract_workspace_project(entry)
 
-    parent_name = p.parent.name
-    if parent_name:
-        return _normalize_project_name(parent_name)
+
+def _extract_project_from_session_file(source_file: str) -> str | None:
+    """Derive a project from the source file's durable session metadata."""
+    project = _extract_project_from_source(source_file)
+    if project is not None:
+        return project
+    try:
+        with Path(source_file).open(encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                project = _extract_project_from_source(source_file, entry)
+                if project is not None:
+                    return project
+    except OSError:
+        return None
     return None
 
 
@@ -264,6 +303,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
         arbitrated = os.environ.get("BRAINLAYER_ARBITRATED") == "1"
     store = None if arbitrated else VectorStore(db_path or get_db_path())
     liveness_schema_ready = False
+    source_projects: dict[str, str | None] = {}
 
     def ensure_direct_liveness_schema() -> None:
         if liveness_schema_ready or store is None:
@@ -338,7 +378,9 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
         for entry in entries:
             source_file = entry.get("_source_file", "unknown")
             source_files_seen.add(source_file)
-            project = _extract_project_from_source(source_file)
+            if source_file not in source_projects:
+                source_projects[source_file] = _extract_project_from_session_file(source_file)
+            project = source_projects[source_file]
             claude_conversation_id = _extract_claude_conversation_id(source_file)
 
             # Layer 1: Pre-classify filter

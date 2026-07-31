@@ -151,6 +151,35 @@ class TestProjectExtraction:
         path = "/Users/etanheyman/.claude/projects/-Users-etanheyman-Gits-brainlayer-grill/abc123.jsonl"
         assert _extract_project_from_source(path) == "brainlayer-grill"
 
+    def test_claude_projects_path_wins_over_session_cwd(self):
+        path = "/Users/etanheyman/.claude/projects/-Users-etanheyman-Gits-brainlayer-grill/abc123.jsonl"
+        entry = {"cwd": "/Users/etanheyman/Gits/grill"}
+
+        assert _extract_project_from_source(path, entry) == "brainlayer-grill"
+
+    def test_extracts_codex_date_partitioned_path_from_session_cwd(self):
+        path = "/Users/etanheyman/.codex/sessions/2026/07/30/rollout-abc.jsonl"
+        entry = {"payload": {"cwd": "/Users/etanheyman/Gits/brainlayer"}}
+
+        assert _extract_project_from_source(path, entry) == "brainlayer"
+
+    def test_extracts_cursor_path_from_session_cwd(self):
+        path = "/Users/etanheyman/.cursor/sessions/2026/07/30/agent.jsonl"
+        entry = {"cwd": "/Users/etanheyman/Gits/cursor-project"}
+
+        assert _extract_project_from_source(path, entry) == "cursor-project"
+
+    def test_extracts_gemini_path_from_session_cwd(self):
+        path = "/Users/etanheyman/.gemini/sessions/2026/07/30/session.jsonl"
+        entry = {"payload": {"workspace": "/Users/etanheyman/Gits/gemini-project"}}
+
+        assert _extract_project_from_source(path, entry) == "gemini-project"
+
+    def test_returns_none_for_path_without_workspace_signal(self):
+        path = "/Users/etanheyman/.codex/sessions/2026/07/30/rollout-abc.jsonl"
+
+        assert _extract_project_from_source(path) is None
+
     def test_extract_claude_conversation_id_from_top_level_jsonl(self):
         path = (
             "/Users/etanheyman/.claude/projects/-Users-etanheyman-Gits-brainlayer/"
@@ -170,6 +199,32 @@ class TestProjectExtraction:
 
 
 class TestFlushCallback:
+    def test_codex_session_metadata_derives_project_for_normalized_entries(self, tmp_path, monkeypatch):
+        db_path = tmp_path / "test.db"
+        queue_dir = tmp_path / "queue"
+        VectorStore(db_path).close()
+        monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+        source_file = tmp_path / ".codex" / "sessions" / "2026" / "07" / "31" / "rollout.jsonl"
+        source_file.parent.mkdir(parents=True)
+        source_file.write_text(
+            json.dumps(
+                {
+                    "type": "session_meta",
+                    "timestamp": "2026-07-31T12:26:57.941Z",
+                    "payload": {"cwd": "/Users/etanheyman/Gits/t3code"},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        entry = _make_jsonl_entry(text=_LONG_TEXT, entry_type="assistant")
+        entry["_source_file"] = str(source_file)
+
+        create_flush_callback(db_path, arbitrated=True)([entry])
+
+        queued = json.loads(next(queue_dir.glob("watcher-*.jsonl")).read_text(encoding="utf-8"))
+        assert queued["project"] == "t3code"
+
     def test_flush_scrubs_secrets_before_hash_and_persistence(self, tmp_path, monkeypatch):
         db_path = tmp_path / "test.db"
         queue_dir = tmp_path / "queue"
