@@ -445,6 +445,34 @@ final class SocketIntegrationTests: XCTestCase {
         XCTAssertEqual(payload?["agent_id"] as? String, "agent-1")
     }
 
+    func testMCPBrainAckRejectsAgentWithoutBrainBarSubscription() throws {
+        _ = try sendMCPRequest([
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": ["protocolVersion": "2024-11-05", "capabilities": [:] as [String: Any],
+                       "clientInfo": ["name": "ack-owner-check", "version": "1.0"]]
+        ])
+
+        let response = try sendMCPRequest([
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_ack",
+                "arguments": [
+                    "agent_id": "cmuxlayer-owned-agent",
+                    "seq": 42
+                ] as [String: Any]
+            ]
+        ])
+
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        let content = try XCTUnwrap(result["content"] as? [[String: Any]])
+        let text = try XCTUnwrap(content.first?["text"] as? String)
+        XCTAssertEqual(result["isError"] as? Bool, true)
+        XCTAssertTrue(text.contains("No BrainBar subscription"))
+        XCTAssertNil(try db.subscription(agentID: "cmuxlayer-owned-agent"))
+    }
+
     func testMatchingStorePushesChannelNotificationAndRequiresAckToClearUnread() throws {
         let subscriberFD = try connectClient()
         defer { close(subscriberFD) }

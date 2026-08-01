@@ -6504,9 +6504,8 @@ final class BrainDatabase: @unchecked Sendable {
         // Store the digest as a chunk
         let digestSummary = "Digest: \(entities.count) entities, \(urls.count) URLs, \(codeIds.count) code refs"
         let titledContent: String = {
-            let body = String(content.prefix(500)) + (content.count > 500 ? "..." : "")
-            if let title, !title.isEmpty { return "\(title)\n\n\(body)" }
-            return body
+            if let title, !title.isEmpty { return "\(title)\n\n\(content)" }
+            return content
         }()
 
         do {

@@ -863,6 +863,9 @@ final class BrainBarServer: @unchecked Sendable {
         }
 
         do {
+            guard try database.subscription(agentID: agentID) != nil else {
+                return toolErrorResponse(id: id, message: "No BrainBar subscription for agent: \(agentID)")
+            }
             try database.acknowledge(agentID: agentID, seq: seq)
             return jsonRPCTextResult(id: id, text: #"{"status":"acked"}"#)
         } catch {
