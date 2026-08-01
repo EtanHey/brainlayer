@@ -239,7 +239,7 @@ def _extract_workspace_project(entry: dict[str, Any] | None) -> str | None:
             if not isinstance(value, str) or not value.strip():
                 continue
             name = _normalize_project_name(Path(value).name)
-            if not name.isdigit():
+            if name and not name.isdigit():
                 return name
     return None
 
@@ -303,7 +303,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
         arbitrated = os.environ.get("BRAINLAYER_ARBITRATED") == "1"
     store = None if arbitrated else VectorStore(db_path or get_db_path())
     liveness_schema_ready = False
-    source_projects: dict[str, str | None] = {}
+    source_projects: dict[str, str] = {}
 
     def ensure_direct_liveness_schema() -> None:
         if liveness_schema_ready or store is None:
@@ -378,9 +378,11 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
         for entry in entries:
             source_file = entry.get("_source_file", "unknown")
             source_files_seen.add(source_file)
-            if source_file not in source_projects:
-                source_projects[source_file] = _extract_project_from_session_file(source_file)
-            project = source_projects[source_file]
+            project = source_projects.get(source_file)
+            if project is None:
+                project = _extract_project_from_session_file(source_file)
+                if project is not None:
+                    source_projects[source_file] = project
             claude_conversation_id = _extract_claude_conversation_id(source_file)
 
             # Layer 1: Pre-classify filter

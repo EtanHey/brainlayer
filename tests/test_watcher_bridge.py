@@ -175,6 +175,12 @@ class TestProjectExtraction:
 
         assert _extract_project_from_source(path, entry) == "gemini-project"
 
+    def test_returns_none_for_root_workspace(self):
+        path = "/Users/etanheyman/.codex/sessions/2026/07/30/rollout-abc.jsonl"
+        entry = {"payload": {"cwd": "/"}}
+
+        assert _extract_project_from_source(path, entry) is None
+
     def test_returns_none_for_path_without_workspace_signal(self):
         path = "/Users/etanheyman/.codex/sessions/2026/07/30/rollout-abc.jsonl"
 
@@ -224,6 +230,38 @@ class TestFlushCallback:
 
         queued = json.loads(next(queue_dir.glob("watcher-*.jsonl")).read_text(encoding="utf-8"))
         assert queued["project"] == "t3code"
+
+    def test_retries_source_file_after_metadata_is_appended(self, tmp_path, monkeypatch):
+        db_path = tmp_path / "test.db"
+        queue_dir = tmp_path / "queue"
+        VectorStore(db_path).close()
+        monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+        source_file = tmp_path / ".codex" / "sessions" / "2026" / "07" / "31" / "rollout.jsonl"
+        source_file.parent.mkdir(parents=True)
+        source_file.write_text("", encoding="utf-8")
+        flush = create_flush_callback(db_path, arbitrated=True)
+
+        first = _make_jsonl_entry(text=_LONG_TEXT, entry_type="assistant")
+        first["_source_file"] = str(source_file)
+        flush([first])
+
+        with source_file.open("a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(
+                    {
+                        "type": "session_meta",
+                        "timestamp": "2026-07-31T12:26:57.941Z",
+                        "payload": {"cwd": "/Users/etanheyman/Gits/t3code"},
+                    }
+                )
+                + "\n"
+            )
+        second = _make_jsonl_entry(text=_LONG_TEXT + " after metadata", entry_type="assistant")
+        second["_source_file"] = str(source_file)
+        flush([second])
+
+        queued = [json.loads(path.read_text(encoding="utf-8")) for path in queue_dir.glob("watcher-*.jsonl")]
+        assert {item["project"] for item in queued} == {None, "t3code"}
 
     def test_flush_scrubs_secrets_before_hash_and_persistence(self, tmp_path, monkeypatch):
         db_path = tmp_path / "test.db"

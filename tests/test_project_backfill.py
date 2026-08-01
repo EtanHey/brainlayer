@@ -1,16 +1,19 @@
 import json
+import os
 import sqlite3
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
+from brainlayer.vector_store import WriterInUseError
 from scripts.d2_project_backfill import backfill_numeric_projects
 
 
 def _create_chunks_db(path, recoverable_source, missing_source, untouched_source):
     conn = sqlite3.connect(path)
-    conn.execute(
-        "CREATE TABLE chunks (id TEXT PRIMARY KEY, source_file TEXT NOT NULL, project TEXT)"
-    )
+    conn.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, source_file TEXT NOT NULL, project TEXT)")
     conn.execute(
         "INSERT INTO chunks VALUES ('recoverable', ?, '30')",
         (str(recoverable_source),),
@@ -65,6 +68,7 @@ def test_backfill_exports_rollback_derives_projects_and_is_idempotent(tmp_path):
 
     second = backfill_numeric_projects(
         db_path,
+        rollback_path=tmp_path / "second-rollback.tsv",
         batch_size=5_000,
     )
 
@@ -73,6 +77,90 @@ def test_backfill_exports_rollback_derives_projects_and_is_idempotent(tmp_path):
     conn.close()
     assert second.rows_updated == 0
     assert rows_after_second == rows_after_first
+
+
+def test_backfill_requires_rollback_artifact_before_mutating_rows(tmp_path):
+    db_path = tmp_path / "brainlayer.db"
+    source = tmp_path / "sessions" / "recoverable.jsonl"
+    missing_source = tmp_path / "sessions" / "missing.jsonl"
+    untouched_source = tmp_path / "sessions" / "untouched.jsonl"
+    _create_chunks_db(db_path, source, missing_source, untouched_source)
+
+    with pytest.raises(ValueError, match="rollback_path is required"):
+        backfill_numeric_projects(db_path)
+
+    conn = sqlite3.connect(db_path)
+    assert dict(conn.execute("SELECT id, project FROM chunks"))["recoverable"] == "30"
+    conn.close()
+
+
+def test_backfill_does_not_mutate_when_rollback_artifact_cannot_be_created(tmp_path):
+    db_path = tmp_path / "brainlayer.db"
+    source = tmp_path / "sessions" / "recoverable.jsonl"
+    missing_source = tmp_path / "sessions" / "missing.jsonl"
+    untouched_source = tmp_path / "sessions" / "untouched.jsonl"
+    _create_chunks_db(db_path, source, missing_source, untouched_source)
+    rollback_path = tmp_path / "rollback.tsv"
+    rollback_path.write_text("existing artifact\n", encoding="utf-8")
+
+    with pytest.raises(FileExistsError, match="rollback artifact already exists"):
+        backfill_numeric_projects(db_path, rollback_path=rollback_path)
+
+    conn = sqlite3.connect(db_path)
+    assert dict(conn.execute("SELECT id, project FROM chunks"))["recoverable"] == "30"
+    conn.close()
+
+
+def test_backfill_refuses_while_standard_writer_lock_is_held(tmp_path, monkeypatch):
+    db_path = tmp_path / "brainlayer.db"
+    source = tmp_path / "sessions" / "recoverable.jsonl"
+    missing_source = tmp_path / "sessions" / "missing.jsonl"
+    untouched_source = tmp_path / "sessions" / "untouched.jsonl"
+    _create_chunks_db(db_path, source, missing_source, untouched_source)
+    pidfile_dir = tmp_path / "pidfiles"
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(pidfile_dir))
+    repo_root = Path(__file__).resolve().parents[1]
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            """
+import sys
+from pathlib import Path
+from brainlayer.vector_store import VectorStore
+
+store = VectorStore.__new__(VectorStore)
+store.db_path = Path(sys.argv[1])
+store._writer_pidfile_acquired = False
+store._acquire_writer_pidfile()
+print("ready", flush=True)
+sys.stdin.readline()
+store._release_writer_pidfile()
+""",
+            str(db_path),
+        ],
+        env={
+            **os.environ,
+            "PYTHONPATH": f"{repo_root / 'src'}:{os.environ.get('PYTHONPATH', '')}",
+        },
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "ready"
+        with pytest.raises(WriterInUseError, match="another writer is using"):
+            backfill_numeric_projects(db_path, rollback_path=tmp_path / "rollback.tsv")
+    finally:
+        assert holder.stdin is not None
+        holder.stdin.write("release\n")
+        holder.stdin.close()
+        holder.wait(timeout=5)
+
+    conn = sqlite3.connect(db_path)
+    assert dict(conn.execute("SELECT id, project FROM chunks"))["recoverable"] == "30"
+    conn.close()
 
 
 @pytest.mark.parametrize("batch_size", (4_999, 10_001))
