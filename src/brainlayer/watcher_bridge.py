@@ -291,6 +291,15 @@ def _source_file_fingerprint(source_file: str) -> tuple[int, int] | None:
     return stat.st_size, stat.st_mtime_ns
 
 
+def _source_file_identity(source_file: str) -> tuple[int, int, int] | None:
+    """Return enough state to detect replacement or rewind without invalidating on append."""
+    try:
+        stat = Path(source_file).stat()
+    except OSError:
+        return None
+    return stat.st_dev, stat.st_ino, stat.st_size
+
+
 def _content_class_for_visibility(base_content_class: str, visibility: str) -> str:
     if visibility == "default":
         return base_content_class
@@ -313,6 +322,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
     store = None if arbitrated else VectorStore(db_path or get_db_path())
     liveness_schema_ready = False
     source_projects: dict[str, str] = {}
+    resolved_source_identities: dict[str, tuple[int, int, int]] = {}
     unresolved_source_versions: dict[str, tuple[int, int] | None] = {}
 
     def ensure_direct_liveness_schema() -> None:
@@ -389,6 +399,15 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
             source_file = entry.get("_source_file", "unknown")
             source_files_seen.add(source_file)
             project = source_projects.get(source_file)
+            source_identity = _source_file_identity(source_file)
+            cached_identity = resolved_source_identities.get(source_file)
+            if project is not None and source_identity is not None and cached_identity is not None:
+                if source_identity[:2] != cached_identity[:2] or source_identity[2] < cached_identity[2]:
+                    source_projects.pop(source_file, None)
+                    resolved_source_identities.pop(source_file, None)
+                    project = None
+                else:
+                    resolved_source_identities[source_file] = source_identity
             if project is None:
                 source_version = _source_file_fingerprint(source_file)
                 if (
@@ -398,6 +417,8 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                     project = _extract_project_from_session_file(source_file)
                     if project is not None:
                         source_projects[source_file] = project
+                        if source_identity is not None:
+                            resolved_source_identities[source_file] = source_identity
                         unresolved_source_versions.pop(source_file, None)
                     else:
                         unresolved_source_versions[source_file] = source_version
