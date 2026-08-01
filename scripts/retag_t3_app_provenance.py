@@ -108,6 +108,8 @@ def rollback_t3_app_chunks(
     *,
     db_path: str | Path,
     rollback_artifact: str | Path,
+    only_null_prior_values: bool = False,
+    pre_restore_artifact: str | Path | None = None,
     batch_size: int = 5_000,
 ) -> dict[str, int]:
     """Restore provenance values recorded by a prior T3 re-tag artifact."""
@@ -117,9 +119,37 @@ def rollback_t3_app_chunks(
     artifact_path = Path(rollback_artifact).expanduser()
     rows = [json.loads(line) for line in artifact_path.read_text(encoding="utf-8").splitlines() if line]
     candidates = [(row["id"], row["provenance_class"]) for row in rows]
+    if only_null_prior_values:
+        candidates = [
+            (chunk_id, provenance_class) for chunk_id, provenance_class in candidates if provenance_class is None
+        ]
+    if pre_restore_artifact is not None:
+        pre_restore_path = Path(pre_restore_artifact).expanduser()
+        if pre_restore_path.exists():
+            raise ValueError(f"pre-restore artifact already exists: {pre_restore_path}")
+    else:
+        pre_restore_path = None
     connection = sqlite3.connect(Path(db_path).expanduser(), timeout=1.0)
     try:
         connection.execute("PRAGMA busy_timeout = 30000")
+        if pre_restore_path is not None:
+            current_values = (
+                {
+                    chunk_id: provenance_class
+                    for chunk_id, provenance_class in connection.execute(
+                        "SELECT id, provenance_class FROM chunks WHERE id IN ({})".format(
+                            ", ".join("?" for _ in candidates)
+                        ),
+                        [chunk_id for chunk_id, _ in candidates],
+                    )
+                }
+                if candidates
+                else {}
+            )
+            pre_restore_path.parent.mkdir(parents=True, exist_ok=True)
+            with pre_restore_path.open("x", encoding="utf-8") as artifact:
+                for chunk_id, _ in candidates:
+                    artifact.write(json.dumps({"id": chunk_id, "provenance_class": current_values[chunk_id]}) + "\n")
         for batch_start in range(0, len(candidates), batch_size):
             batch = candidates[batch_start : batch_start + batch_size]
             connection.executemany(
@@ -141,6 +171,8 @@ def main() -> None:
     parser.add_argument("--state-db", type=Path, default=Path.home() / ".t3/userdata/state.sqlite")
     parser.add_argument("--apply", action="store_true", help="Perform writes; default is read-only dry run")
     parser.add_argument("--rollback", action="store_true", help="Restore values from --rollback-artifact")
+    parser.add_argument("--only-null-prior-values", action="store_true")
+    parser.add_argument("--pre-restore-artifact", type=Path)
     parser.add_argument("--rollback-artifact", type=Path, help="JSONL (id, provenance_class) captured before writes")
     parser.add_argument("--batch-size", type=int, default=5_000)
     args = parser.parse_args()
@@ -148,7 +180,11 @@ def main() -> None:
         if args.rollback_artifact is None:
             parser.error("--rollback-artifact is required with --rollback")
         report: dict[str, Any] = rollback_t3_app_chunks(
-            db_path=args.db_path, rollback_artifact=args.rollback_artifact, batch_size=args.batch_size
+            db_path=args.db_path,
+            rollback_artifact=args.rollback_artifact,
+            only_null_prior_values=args.only_null_prior_values,
+            pre_restore_artifact=args.pre_restore_artifact,
+            batch_size=args.batch_size,
         )
     else:
         report = retag_t3_app_chunks(

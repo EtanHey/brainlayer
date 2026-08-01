@@ -66,7 +66,6 @@ def test_retag_only_explicitly_t3_linked_sessions_and_write_rollback_artifact(tm
             "app-recon": "recon-agent",
             "plain": "codex-session",
         }
-
     assert rollback_t3_app_chunks(db_path=brain_db, rollback_artifact=rollback_artifact, batch_size=1) == {
         "restored_chunks": 1
     }
@@ -77,4 +76,44 @@ def test_retag_only_explicitly_t3_linked_sessions_and_write_rollback_artifact(tm
             "app-none": None,
             "app-recon": "recon-agent",
             "plain": "codex-session",
+        }
+
+
+def test_rollback_can_restore_only_null_prior_values_and_snapshot_current_rows(tmp_path: Path) -> None:
+    brain_db = tmp_path / "brainlayer.db"
+    rollback_artifact = tmp_path / "rollback.jsonl"
+    pre_restore_artifact = tmp_path / "pre-restore.jsonl"
+    with sqlite3.connect(brain_db) as conn:
+        conn.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, source_file TEXT, provenance_class TEXT)")
+        conn.executemany(
+            "INSERT INTO chunks VALUES (?, ?, ?)",
+            [
+                ("prior-null", "/home/etan/.codex/sessions/a.jsonl", "t3-app-session"),
+                ("prior-codex", "/home/etan/.codex/sessions/b.jsonl", "t3-app-session"),
+            ],
+        )
+    rollback_artifact.write_text(
+        "\n".join(
+            [
+                json.dumps({"id": "prior-null", "provenance_class": None}),
+                json.dumps({"id": "prior-codex", "provenance_class": "codex-session"}),
+            ]
+        )
+        + "\n"
+    )
+
+    assert rollback_t3_app_chunks(
+        db_path=brain_db,
+        rollback_artifact=rollback_artifact,
+        only_null_prior_values=True,
+        pre_restore_artifact=pre_restore_artifact,
+        batch_size=1,
+    ) == {"restored_chunks": 1}
+    assert [json.loads(line) for line in pre_restore_artifact.read_text().splitlines()] == [
+        {"id": "prior-null", "provenance_class": "t3-app-session"}
+    ]
+    with sqlite3.connect(brain_db) as conn:
+        assert dict(conn.execute("SELECT id, provenance_class FROM chunks")) == {
+            "prior-null": None,
+            "prior-codex": "t3-app-session",
         }
