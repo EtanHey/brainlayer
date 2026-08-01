@@ -148,7 +148,7 @@ class TestBrainRecallSearchMode:
     def test_search_mode_requires_query(self):
         """mode=search without query returns error."""
         result = asyncio.run(_brain_recall(mode="search", query=None))
-        assert result.isError is True
+        assert result.is_error is True
         assert "query is required" in result.content[0].text
 
 
@@ -194,7 +194,7 @@ class TestBrainRecallEntityMode:
     def test_entity_mode_requires_query(self):
         """mode=entity without query returns error."""
         result = asyncio.run(_brain_recall(mode="entity", query=None))
-        assert result.isError is True
+        assert result.is_error is True
         assert "query is required" in result.content[0].text
 
 
@@ -324,7 +324,7 @@ class TestDeprecationStubs:
         from brainlayer.mcp import call_tool
 
         result = asyncio.run(call_tool("brain_update", {"action": "update", "chunk_id": "abc123"}))
-        assert result.isError is True
+        assert result.is_error is True
         assert "deprecated" in result.content[0].text.lower()
         assert "brain_store" in result.content[0].text or "brain_supersede" in result.content[0].text
 
@@ -333,7 +333,7 @@ class TestDeprecationStubs:
         from brainlayer.mcp import call_tool
 
         result = asyncio.run(call_tool("brain_expand", {"chunk_id": "abc123", "context": 3}))
-        assert result.isError is True
+        assert result.is_error is True
         assert "deprecated" in result.content[0].text.lower()
         assert "brain_recall" in result.content[0].text
 
@@ -342,7 +342,7 @@ class TestDeprecationStubs:
         from brainlayer.mcp import call_tool
 
         result = asyncio.run(call_tool("brain_tags", {"action": "list"}))
-        assert result.isError is True
+        assert result.is_error is True
         assert "deprecated" in result.content[0].text.lower()
         assert "brain_recall" in result.content[0].text or "brain_store" in result.content[0].text
 
@@ -450,7 +450,7 @@ class TestToolsListBackwardCompat:
 
         tools = asyncio.run(list_tools())
         recall_tool = next(t for t in tools if t.name == "brain_recall")
-        mode_enum = recall_tool.inputSchema["properties"]["mode"]["enum"]
+        mode_enum = recall_tool.input_schema["properties"]["mode"]["enum"]
 
         assert "search" in mode_enum
         assert "entity" in mode_enum
@@ -465,7 +465,7 @@ class TestToolsListBackwardCompat:
 
         tools = asyncio.run(list_tools())
         recall_tool = next(t for t in tools if t.name == "brain_recall")
-        assert "query" in recall_tool.inputSchema["properties"]
+        assert "query" in recall_tool.input_schema["properties"]
 
     def test_brain_recall_search_schema_has_order_param(self):
         """brain_recall search mode exposes origin ordering like brain_search."""
@@ -473,7 +473,7 @@ class TestToolsListBackwardCompat:
 
         tools = asyncio.run(list_tools())
         recall_tool = next(t for t in tools if t.name == "brain_recall")
-        order = recall_tool.inputSchema["properties"]["order"]
+        order = recall_tool.input_schema["properties"]["order"]
 
         assert order["type"] == "string"
         assert order["enum"] == ["relevance", "origin"]
@@ -489,17 +489,17 @@ class TestEdgeCases:
     def test_unknown_mode_returns_error(self):
         """Explicit unknown mode returns error."""
         result = asyncio.run(_brain_recall(mode="nonexistent"))
-        assert result.isError is True
+        assert result.is_error is True
         assert "Unknown recall mode" in result.content[0].text
 
     def test_operations_mode_requires_session_id(self):
         """mode=operations without session_id returns error."""
         result = asyncio.run(_brain_recall(mode="operations"))
-        assert result.isError is True
+        assert result.is_error is True
         assert "session_id required" in result.content[0].text
 
     def test_summary_mode_requires_session_id(self):
         """mode=summary without session_id returns error."""
         result = asyncio.run(_brain_recall(mode="summary"))
-        assert result.isError is True
+        assert result.is_error is True
         assert "session_id required" in result.content[0].text

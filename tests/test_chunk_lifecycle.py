@@ -264,7 +264,7 @@ class TestBrainSupersedeHandler:
 
         new = _store_chunk(self.store, mock_embed, "New thing")
         result = await _brain_supersede("nonexistent", new["id"])
-        assert result.isError is True
+        assert result.is_error is True
 
     @pytest.mark.asyncio
     async def test_supersede_nonexistent_new(self, mock_embed):
@@ -272,7 +272,7 @@ class TestBrainSupersedeHandler:
 
         old = _store_chunk(self.store, mock_embed, "Old thing")
         result = await _brain_supersede(old["id"], "nonexistent")
-        assert result.isError is True
+        assert result.is_error is True
 
 
 # ── MCP Handler: brain_archive Tests ─────────────────────────────────────────
@@ -311,7 +311,7 @@ class TestBrainArchiveHandler:
         from brainlayer.mcp.store_handler import _brain_archive
 
         resp = await _brain_archive("nonexistent-id")
-        assert resp.isError is True
+        assert resp.is_error is True
 
 
 # ── brain_store with supersedes Tests ────────────────────────────────────────

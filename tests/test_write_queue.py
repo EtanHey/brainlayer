@@ -1478,7 +1478,7 @@ class TestStoreRetryOnLock:
         with patch("brainlayer.queue_io.get_queue_dir", return_value=tmp_path):
             result = await _store(content="  ", memory_type="note", project="test")
 
-        assert result.isError is True
+        assert result.is_error is True
         assert "content must be non-empty" in result.content[0].text
         assert not list(tmp_path.glob("mcp-*.jsonl"))
 
@@ -2471,7 +2471,7 @@ class TestBrainUpdateRetryOnLock:
         from mcp.types import CallToolResult
 
         assert isinstance(result, CallToolResult)
-        assert result.isError is True
+        assert result.is_error is True
 
 
 class TestBrainSearchRetryOnLock:

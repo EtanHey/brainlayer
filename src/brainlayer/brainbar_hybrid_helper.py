@@ -192,7 +192,7 @@ class HybridSearchHelper:
             content, structured = result
             return self._content_text(content), structured if isinstance(structured, dict) else None, False
         if hasattr(result, "content"):
-            return self._content_text(result.content), None, bool(getattr(result, "isError", False))
+            return self._content_text(result.content), None, bool(getattr(result, "is_error", False))
         return self._content_text(result), None, False
 
     @staticmethod
