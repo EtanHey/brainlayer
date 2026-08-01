@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import brainlayer.watcher_bridge as watcher_bridge
 from brainlayer.agent_provenance import classify_provenance
 from brainlayer.alarm import BrainLayerAlarm
 from brainlayer.watcher_bridge import create_flush_callback
@@ -109,6 +110,46 @@ def test_new_t3_app_codex_ingestion_gets_distinct_provenance(tmp_path: Path, mon
     assert result.inserted == 1
     with sqlite3.connect(tmp_path / "brainlayer.db") as conn:
         assert conn.execute("SELECT provenance_class FROM chunks").fetchone()[0] == "t3-app-session"
+
+
+def test_watcher_loads_t3_session_ids_once_per_flush(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    session_id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+    state_db = _state_db(
+        tmp_path,
+        [("5ca576df-592c-406f-a8f1-7db9c56d36c9", "codex", json.dumps({"threadId": session_id}))],
+    )
+    calls: list[Path] = []
+
+    def load_once(path: Path) -> set[str]:
+        calls.append(path)
+        return {session_id}
+
+    monkeypatch.setenv("BRAINLAYER_T3_STATE_DB", str(state_db))
+    monkeypatch.setattr(watcher_bridge, "t3_app_codex_session_ids", load_once)
+    source_file = _codex_source(tmp_path, session_id)
+    flush = create_flush_callback(db_path=tmp_path / "brainlayer.db", arbitrated=False)
+
+    result = flush(
+        [
+            {
+                "type": "user",
+                "message": {"content": [{"type": "text", "text": "First T3 watcher message."}]},
+                "timestamp": "2026-08-01T12:00:00Z",
+                "_source_file": str(source_file),
+                "_line_end_offset": 100,
+            },
+            {
+                "type": "user",
+                "message": {"content": [{"type": "text", "text": "Second T3 watcher message."}]},
+                "timestamp": "2026-08-01T12:00:01Z",
+                "_source_file": str(source_file),
+                "_line_end_offset": 200,
+            },
+        ]
+    )
+
+    assert result.inserted == 2
+    assert calls == [state_db]
 
 
 def test_canonical_systems_codex_session_uses_runtime_cursor_linkage(tmp_path: Path) -> None:

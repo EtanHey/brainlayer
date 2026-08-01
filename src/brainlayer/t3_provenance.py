@@ -26,6 +26,7 @@ def is_t3_app_initiated_codex_session(
     source_file: str | Path,
     *,
     state_db: str | Path | None = None,
+    linked_session_ids: set[str] | None = None,
 ) -> bool:
     """Return whether a Codex transcript is explicitly linked by T3 runtime state.
 
@@ -38,10 +39,12 @@ def is_t3_app_initiated_codex_session(
     if session_id is None:
         return False
 
+    if linked_session_ids is not None:
+        return session_id in linked_session_ids
+
     path = Path(state_db or os.environ.get("BRAINLAYER_T3_STATE_DB", DEFAULT_T3_STATE_DB)).expanduser()
     if not path.exists():
         return False
-
     return session_id in t3_app_codex_session_ids(path)
 
 

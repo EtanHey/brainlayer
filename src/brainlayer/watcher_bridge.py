@@ -34,6 +34,7 @@ from .pipeline.classify import classify_content
 from .pipeline.correction_detection import build_correction_tags
 from .pipeline.secret_scrub import scrub_secrets
 from .queue_io import enqueue_watcher_chunk
+from .t3_provenance import DEFAULT_T3_STATE_DB, t3_app_codex_session_ids
 from .vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -288,6 +289,8 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
         import time as _time
 
         flush_start = _time.monotonic()
+        t3_state_db = Path(os.environ.get("BRAINLAYER_T3_STATE_DB", DEFAULT_T3_STATE_DB)).expanduser()
+        linked_t3_session_ids = t3_app_codex_session_ids(t3_state_db) if t3_state_db.exists() else set()
         cursor = None if store is None else store.conn.cursor()
         inserted = 0
         skipped = 0
@@ -419,6 +422,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                     source_file,
                     base_content_class,
                     content=clean_content,
+                    t3_linked_session_ids=linked_t3_session_ids,
                 )
                 visibility = effective_visibility(provenance_decision, base_content_class)
                 content_class = _content_class_for_visibility(base_content_class, visibility)
