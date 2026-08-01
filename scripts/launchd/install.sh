@@ -67,6 +67,7 @@ BRAINLAYER_ENV_FILE="${BRAINLAYER_ENV_FILE:-$HOME/.config/brainlayer/brainlayer.
 BRAINLAYER_ENV_RUN="$BRAINLAYER_LIB_DIR/brainlayer-env-run.sh"
 TIER0_WATCHDOG_DST="$BRAINLAYER_LIB_DIR/tier0-watchdog.sh"
 THROUGHPUT_WATCHDOG_DST="$BRAINLAYER_LIB_DIR/throughput-watchdog.py"
+HOTLANE_BRAINBAR_DST="$BRAINLAYER_LIB_DIR/hotlane_brainbar_daemon.py"
 
 if [ -z "$PYTHON_BIN" ]; then
     echo "ERROR: python3 not found in PATH"
@@ -143,9 +144,120 @@ load_plist() {
     local name="$1"
     local dst="$LAUNCH_DIR/com.brainlayer.${name}.plist"
     local label="com.brainlayer.${name}"
+    local domain="gui/$UID/$label"
     local enable_error=""
     local retry_enable_after_bootstrap=0
-    launchctl bootout "gui/$UID/$label" 2>/dev/null || true
+    local unload_attempts="${BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS:-}"
+    local unload_interval="${BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL:-0.1}"
+    local unload_attempt=1
+    local bootout_succeeded=0
+    local confirmed_unloaded=0
+    local supervisor_managed=0
+    local supervisor_reloaded=0
+    local initially_unloaded=0
+    local initial_output=""
+    local initial_pid=""
+    local unload_output=""
+    local current_pid=""
+    local plist_exit_timeout=""
+
+    case "$name" in
+        hotlane-brainbar|watch|drain|health-check|enrichment)
+            supervisor_managed=1
+            ;;
+    esac
+    if [ "$name" = "hotlane-brainbar" ] && [ -z "$unload_attempts" ]; then
+        unload_attempts="${BRAINLAYER_HOTLANE_UNLOAD_ATTEMPTS:-}"
+    fi
+    if [ -z "$unload_attempts" ]; then
+        plist_exit_timeout="$(
+            "$PYTHON_BIN" -c '
+import plistlib
+import sys
+
+with open(sys.argv[1], "rb") as plist_file:
+    value = plistlib.load(plist_file).get("ExitTimeOut")
+if isinstance(value, (int, float)) and value >= 0:
+    print(value)
+' "$dst" 2>/dev/null || true
+        )"
+        if [ -n "$plist_exit_timeout" ]; then
+            if ! unload_attempts="$(
+                awk -v timeout="$plist_exit_timeout" -v interval="$unload_interval" '
+                    BEGIN {
+                        if (interval <= 0 || timeout < 0) {
+                            exit 1
+                        }
+                        quotient = timeout / interval
+                        attempts = int(quotient)
+                        if (attempts < quotient) {
+                            attempts += 1
+                        }
+                        print attempts + 1
+                    }
+                '
+            )"; then
+                unload_attempts=""
+            fi
+        fi
+    fi
+    unload_attempts="${unload_attempts:-20}"
+    case "$unload_attempts" in
+        *[!0-9]*)
+            echo "ERROR: unload attempts must be a positive integer for $label; got '$unload_attempts'" >&2
+            return 1
+            ;;
+    esac
+    if [ "$unload_attempts" -lt 1 ]; then
+        echo "ERROR: unload attempts must be a positive integer for $label; got '$unload_attempts'" >&2
+        return 1
+    fi
+    if [ "$supervisor_managed" -eq 1 ]; then
+        if initial_output="$(launchctl print "$domain" 2>/dev/null)"; then
+            initial_pid="$(
+                printf '%s\n' "$initial_output" \
+                    | awk -F'= ' '/^[[:space:]]*pid = [0-9]+$/ { print $2; exit }'
+            )"
+        else
+            initially_unloaded=1
+        fi
+    fi
+    if launchctl bootout "$domain" 2>/dev/null; then
+        bootout_succeeded=1
+    fi
+    while [ "$unload_attempt" -le "$unload_attempts" ]; do
+        if ! unload_output="$(launchctl print "$domain" 2>/dev/null)"; then
+            confirmed_unloaded=1
+            break
+        fi
+        unload_attempt=$((unload_attempt + 1))
+        if [ "$unload_attempt" -le "$unload_attempts" ]; then
+            sleep "$unload_interval"
+        fi
+    done
+    if [ "$confirmed_unloaded" -ne 1 ] && [ "$supervisor_managed" -eq 1 ]; then
+        current_pid="$(
+            printf '%s\n' "$unload_output" \
+                | awk -F'= ' '/^[[:space:]]*pid = [0-9]+$/ { print $2; exit }'
+        )"
+        # A supervisor win is safe only if the label was initially absent or
+        # our successful bootout is followed by a fresh loaded PID.
+        if [ "$initially_unloaded" -eq 1 ] \
+            || {
+                [ "$bootout_succeeded" -eq 1 ] \
+                    && [ -n "$initial_pid" ] \
+                    && [ -n "$current_pid" ] \
+                    && [ "$current_pid" != "$initial_pid" ]
+            }; then
+            confirmed_unloaded=1
+            supervisor_reloaded=1
+            echo "WARN: $label was reloaded before the unload poll; continuing with runtime verification" >&2
+        fi
+    fi
+    if [ "$confirmed_unloaded" -ne 1 ]; then
+        echo "ERROR: $label did not unload before replacement; refusing to enable or bootstrap" >&2
+        return 1
+    fi
     if ! enable_error="$(launchctl enable "gui/$UID/$label" 2>&1)"; then
         if printf "%s" "$enable_error" | grep -qi "could not find service"; then
             echo "WARN: launchctl enable could not find $label before bootstrap; retrying after bootstrap" >&2
@@ -156,9 +268,17 @@ load_plist() {
             return 1
         fi
     fi
-    if ! launchctl bootstrap "gui/$UID" "$dst"; then
-        echo "ERROR: launchctl bootstrap failed for $label" >&2
-        return 1
+    if [ "$supervisor_reloaded" -ne 1 ]; then
+        if ! launchctl bootstrap "gui/$UID" "$dst"; then
+            if [ "$name" = "hotlane-brainbar" ] \
+                && [ "$confirmed_unloaded" -eq 1 ] \
+                && launchctl print "$domain" >/dev/null 2>&1; then
+                echo "WARN: launchctl bootstrap raced with another supervisor for $label; service is loaded" >&2
+            else
+                echo "ERROR: launchctl bootstrap failed for $label" >&2
+                return 1
+            fi
+        fi
     fi
     if [ "$retry_enable_after_bootstrap" -ne 0 ]; then
         if ! launchctl enable "gui/$UID/$label"; then
@@ -166,7 +286,7 @@ load_plist() {
             return 1
         fi
     fi
-    if ! launchctl print "gui/$UID/$label" >/dev/null; then
+    if ! launchctl print "$domain" >/dev/null; then
         echo "ERROR: launchctl print failed for $label after bootstrap" >&2
         return 1
     fi
@@ -180,6 +300,97 @@ unload_plist() {
     echo "  Unloaded: com.brainlayer.${name}"
 }
 
+install_hotlane_brainbar_daemon() {
+    local script_src="$SCRIPT_DIR/hotlane_brainbar_daemon.py"
+
+    if [ ! -f "$script_src" ]; then
+        script_src="$SCRIPT_DIR/../hotlane_brainbar_daemon.py"
+    fi
+    if [ ! -f "$script_src" ]; then
+        echo "ERROR: hotlane_brainbar_daemon.py not found beside or above $SCRIPT_DIR" >&2
+        return 1
+    fi
+
+    install -m 0755 "$script_src" "$HOTLANE_BRAINBAR_DST" || return 1
+    echo "Installed: $HOTLANE_BRAINBAR_DST"
+}
+
+verify_hotlane_runtime() {
+    local label="com.brainlayer.hotlane-brainbar"
+    local domain="gui/$UID/$label"
+    local attempts="${BRAINLAYER_LAUNCHD_VERIFY_ATTEMPTS:-10}"
+    local interval="${BRAINLAYER_LAUNCHD_VERIFY_INTERVAL:-1}"
+    local attempt=1
+    local output=""
+    local pid=""
+    local process_command=""
+    local process_name=""
+    local process_matches=0
+    local previous_pid=""
+    local stable_samples=0
+
+    # Success requires two running samples with the same PID, Python process,
+    # and packaged daemon argument; this rejects disabled env-runner sleepers.
+    while [ "$attempt" -le "$attempts" ]; do
+        output="$(launchctl print "$domain" 2>&1 || true)"
+        pid="$(
+            printf '%s\n' "$output" \
+                | awk -F'= ' '/^[[:space:]]*pid = [0-9]+$/ { print $2; exit }'
+        )"
+        process_command=""
+        process_name=""
+        process_matches=0
+        if [ -n "$pid" ]; then
+            process_command="$(ps -ww -p "$pid" -o command= 2>/dev/null || true)"
+            process_name="$(
+                ps -ww -p "$pid" -o ucomm= 2>/dev/null \
+                    | awk '{$1=$1; print}' \
+                    || true
+            )"
+            case "$process_name" in
+                python*|Python*)
+                    case "$process_command" in
+                        *" $HOTLANE_BRAINBAR_DST"|*" $HOTLANE_BRAINBAR_DST "*)
+                            process_matches=1
+                            ;;
+                    esac
+                    ;;
+            esac
+        fi
+
+        if printf '%s\n' "$output" | grep -Eq '^[[:space:]]*state = running$' \
+            && [ -n "$pid" ] \
+            && [ "$process_matches" -eq 1 ]; then
+            if [ "$pid" = "$previous_pid" ]; then
+                stable_samples=$((stable_samples + 1))
+            else
+                previous_pid="$pid"
+                stable_samples=1
+            fi
+            if [ "$stable_samples" -ge 2 ]; then
+                echo "  Verified running: $label (pid $pid)"
+                return 0
+            fi
+        else
+            previous_pid=""
+            stable_samples=0
+        fi
+
+        attempt=$((attempt + 1))
+        if [ "$attempt" -le "$attempts" ]; then
+            sleep "$interval"
+        fi
+    done
+
+    echo "ERROR: hotlane runtime verification failed after $attempts attempts" >&2
+    printf '%s\n' "$output" >&2
+    if [ -n "$pid" ] && [ "$process_matches" -ne 1 ]; then
+        echo "ERROR: pid $pid process does not match packaged hotlane daemon: name=$process_name command=$process_command" >&2
+    fi
+    launchctl bootout "$domain" >/dev/null 2>&1 || true
+    return 1
+}
+
 install_plist() {
     local name="$1"
     local src="$SCRIPT_DIR/com.brainlayer.${name}.plist"
@@ -188,6 +399,10 @@ install_plist() {
     if [ ! -f "$src" ]; then
         echo "ERROR: $src not found"
         return 1
+    fi
+
+    if [ "$name" = "hotlane-brainbar" ]; then
+        install_hotlane_brainbar_daemon || return 1
     fi
 
     install_env_runner || return 1
@@ -208,12 +423,16 @@ install_plist() {
         -e "s|__REPO_ROOT__|$BRAINLAYER_DIR|g" \
         -e "s|__BRAINLAYER_ENV_FILE__|$BRAINLAYER_ENV_FILE|g" \
         -e "s|__BRAINLAYER_ENV_RUN__|$BRAINLAYER_ENV_RUN|g" \
+        -e "s|__HOTLANE_BRAINBAR_DAEMON__|$HOTLANE_BRAINBAR_DST|g" \
         "$src" > "$dst" || return 1
 
     echo "Installed: $dst"
     echo "  Logs: $LOG_DIR/ and $BRAINLAYER_LOG_DIR/"
 
     if ! load_plist "$name"; then
+        return 1
+    fi
+    if [ "$name" = "hotlane-brainbar" ] && ! verify_hotlane_runtime; then
         return 1
     fi
 }
@@ -513,6 +732,7 @@ case "${1:-all}" in
         rm -f "$BRAINLAYER_LIB_DIR/jsonl-backup.sh"
         rm -f "$TIER0_WATCHDOG_DST"
         rm -f "$THROUGHPUT_WATCHDOG_DST"
+        rm -f "$HOTLANE_BRAINBAR_DST"
         ;;
     *)
         echo "Usage: $0 [index|t3-ingest|watch|enrich|enrichment|decay|drain|hotlane|repair-fts|load [name]|unload [name]|checkpoint|backup|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|tier0-watchdog|throughput-watchdog|p0-counter|all|remove]"

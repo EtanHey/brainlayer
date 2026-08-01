@@ -87,9 +87,9 @@ def install_launchd(
     env_file: Path | None = None,
     launchd_dir: Path | None = None,
     extra_env: dict[str, str] | None = None,
-    timeout_seconds: float = 120,
+    timeout_seconds: float | None = None,
 ) -> None:
-    """Run the packaged launchd installer for a single target or all agents."""
+    """Run the packaged launchd installer, which owns bounded shutdown waits."""
     template_dir = launchd_dir or get_launchd_dir()
     install_script = template_dir / "install.sh"
     if not install_script.exists():
@@ -109,4 +109,6 @@ def install_launchd(
     try:
         subprocess.run([str(install_script), target], env=run_env, check=True, timeout=timeout_seconds)
     except subprocess.TimeoutExpired as exc:
+        if timeout_seconds is None:
+            raise TimeoutError("launchd installer timed out") from exc
         raise TimeoutError(f"launchd installer timed out after {timeout_seconds:g}s") from exc
