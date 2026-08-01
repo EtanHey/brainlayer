@@ -579,15 +579,50 @@ class TestJSONLTailer:
         assert len(lines) == 1
         assert lines[0]["partial"] == "value"
 
-    def test_corrupt_line_skipped(self, tmp_path):
+    def test_corrupt_line_stops_before_unparsed_bytes(self, tmp_path):
         f = tmp_path / "test.jsonl"
         f.write_text('{"good":"line"}\nnot json at all\n{"also":"good"}\n')
 
         tailer = JSONLTailer(str(f))
         lines = tailer.read_new_lines()
+        first_line_end = len(b'{"good":"line"}\n')
+
+        assert lines == [{"good": "line", "_line_end_offset": first_line_end}]
+        assert tailer.offset == first_line_end
+        assert tailer._buffer.startswith(b"not json at all\n")
+        assert tailer.last_error is not None
+
+    def test_read_new_lines_limits_bytes_per_call(self, tmp_path):
+        f = tmp_path / "test.jsonl"
+        f.write_text(json.dumps({"role": "user", "content": "x" * 256}) + "\n")
+        tailer = JSONLTailer(str(f))
+
+        assert tailer.read_new_lines(max_bytes=64) == []
+        assert tailer.offset == 0
+        assert len(tailer._buffer) == 64
+
+    def test_read_new_lines_stops_reading_once_line_limit_is_buffered(self, tmp_path):
+        f = tmp_path / "test.jsonl"
+        record = json.dumps({"role": "user", "content": "x" * 2048}) + "\n"
+        f.write_text(record * 200)
+        tailer = JSONLTailer(str(f))
+
+        lines = tailer.read_new_lines(max_lines=2, max_bytes=1024 * 1024)
+
         assert len(lines) == 2
-        assert lines[0]["good"] == "line"
-        assert lines[1]["also"] == "good"
+        assert len(tailer._buffer) < 64 * 1024
+
+    def test_read_new_lines_bounds_an_oversized_incomplete_record(self, tmp_path):
+        f = tmp_path / "test.jsonl"
+        f.write_bytes(b'{"role":"user","content":"' + b"x" * 20_000)
+        tailer = JSONLTailer(str(f), max_record_bytes=4096)
+
+        for _ in range(10):
+            assert tailer.read_new_lines(max_bytes=1024) == []
+
+        assert len(tailer._buffer) <= 4097
+        assert type(tailer.last_error).__name__ == "OversizedJSONLRecordError"
+        assert tailer.offset == 0
 
     def test_resume_from_offset(self, tmp_path):
         f = tmp_path / "test.jsonl"
@@ -689,12 +724,12 @@ class TestBatchIndexer:
         indexer.add([{"c": 3}, {"d": 4}])
         assert indexer.total_flushed == 4
 
-    def test_flush_callback_watermark_is_forwarded_to_offset_callback(self):
+    def test_flush_callback_watermark_is_forwarded_to_batch_callback(self):
         confirmed = []
         indexer = BatchIndexer(
             on_flush=lambda items: {"/tmp/source.jsonl": items[-1]["_line_end_offset"]},
             batch_size=2,
-            on_confirm_offsets=confirmed.append,
+            on_confirm_batch=lambda watermarks, _batch: confirmed.append(watermarks),
         )
 
         indexer.add(
@@ -1243,36 +1278,34 @@ class TestJSONLWatcher:
         assert watcher.registry.get(str(rollout)) == (tailer.offset, rollout.stat().st_ino)
         assert tailer.offset < oversized_size
 
-    def test_poll_checkpoints_dropped_only_records_before_oversized_append(self, tmp_path, monkeypatch):
+    def test_poll_fully_indexes_file_larger_than_read_window(self, tmp_path, monkeypatch):
         sessions = tmp_path / "codex" / "sessions"
         sessions.mkdir(parents=True)
         rollout = sessions / "rollout.jsonl"
-        rollout.write_text(json.dumps({"type": "response_item", "payload": {"type": "function_call"}}) + "\n")
-        dropped_offset = rollout.stat().st_size
+        expected = [f"entry {index} " + "x" * 80 for index in range(4)]
+        rollout.write_text("".join(json.dumps({"role": "user", "content": content}) + "\n" for content in expected))
+        assert rollout.stat().st_size > 128
         monkeypatch.setenv("BRAINLAYER_WATCH_MAX_FILE_BYTES", "128")
         flushed = []
+
+        def confirm_all(items):
+            flushed.extend(items)
+            return {item["_source_file"]: item["_line_end_offset"] for item in items}
 
         watcher = JSONLWatcher(
             watch_roots=[WatchRoot("codex", sessions)],
             registry_path=tmp_path / "offsets.json",
-            on_flush=lambda items: flushed.extend(items),
+            on_flush=confirm_all,
             batch_size=1,
         )
 
-        assert watcher.poll_once() == 0
-        assert flushed == []
-        assert watcher.registry.get(str(rollout)) == (dropped_offset, rollout.stat().st_ino)
+        for _ in range(12):
+            watcher.poll_once()
+            if watcher.registry.get(str(rollout))[0] == rollout.stat().st_size:
+                break
 
-        with rollout.open("a") as file_handle:
-            file_handle.write(json.dumps({"role": "user", "content": "x" * 256}) + "\n")
-        assert watcher.poll_once() == 0
-        oversized_checkpoint = rollout.stat().st_size
-        assert watcher.registry.get(str(rollout))[0] == oversized_checkpoint
-
-        with rollout.open("a") as file_handle:
-            file_handle.write(json.dumps({"role": "user", "content": "small append"}) + "\n")
-        assert watcher.poll_once() == 1
-        assert flushed[0]["message"]["content"][0]["text"] == "small append"
+        assert [item["message"]["content"][0]["text"] for item in flushed] == expected
+        assert watcher.registry.get(str(rollout)) == (rollout.stat().st_size, rollout.stat().st_ino)
 
     def test_poll_does_not_checkpoint_dropped_tail_past_unconfirmed_record(self, tmp_path):
         sessions = tmp_path / "codex" / "sessions"
@@ -1297,11 +1330,10 @@ class TestJSONLWatcher:
         assert watcher.indexer.has_buffered_source(str(rollout))
         assert watcher.registry.get(str(rollout)) == (0, 0)
 
-    def test_poll_skips_oversized_pending_file_with_warning_and_continues(
+    def test_poll_bounds_large_file_without_starving_healthy_file(
         self,
         tmp_path,
         monkeypatch,
-        caplog,
     ):
         sessions = tmp_path / "codex" / "sessions"
         sessions.mkdir(parents=True)
@@ -1328,18 +1360,11 @@ class TestJSONLWatcher:
 
         assert watcher.poll_once() == 1
         assert [item["_source_file"] for item in flushed] == [str(healthy)]
-        assert watcher.registry.get(str(oversized)) == (
-            oversized.stat().st_size,
-            oversized.stat().st_ino,
-        )
-        assert any(
-            str(oversized) in record.getMessage()
-            and "pending_bytes=" in record.getMessage()
-            and "max_file_bytes=128" in record.getMessage()
-            for record in caplog.records
-        )
+        assert watcher.registry.get(str(oversized)) == (0, 0)
+        assert watcher._tailers[str(oversized)].offset == 0
+        assert len(watcher._tailers[str(oversized)]._buffer) == 128
 
-    def test_poll_persists_oversized_checkpoint_immediately(self, tmp_path, monkeypatch):
+    def test_poll_never_checkpoints_past_unparsed_window(self, tmp_path, monkeypatch):
         sessions = tmp_path / "codex" / "sessions"
         sessions.mkdir(parents=True)
         oversized = sessions / "oversized.jsonl"
@@ -1355,12 +1380,11 @@ class TestJSONLWatcher:
         )
 
         assert watcher.poll_once() == 0
-        assert OffsetRegistry(registry_path).get(str(oversized)) == (
-            oversized.stat().st_size,
-            oversized.stat().st_ino,
-        )
+        assert watcher._tailers[str(oversized)].offset == 0
+        assert len(watcher._tailers[str(oversized)]._buffer) == 128
+        assert OffsetRegistry(registry_path).get(str(oversized)) == (0, 0)
 
-    def test_poll_caps_oversized_replacement_from_start(self, tmp_path, monkeypatch):
+    def test_poll_indexes_large_inode_replacement_from_start(self, tmp_path, monkeypatch):
         sessions = tmp_path / "codex" / "sessions"
         sessions.mkdir(parents=True)
         rollout = sessions / "rollout.jsonl"
@@ -1388,14 +1412,154 @@ class TestJSONLWatcher:
         os.replace(replacement, rollout)
         assert rollout.stat().st_ino != original_inode
 
-        assert watcher.poll_once() == 0
-        assert flushed == []
+        for _ in range(8):
+            watcher.poll_once()
+            if flushed:
+                break
+
+        assert [item["message"]["content"][0]["text"] for item in flushed] == ["y" * 256]
         assert watcher.registry.get(str(rollout)) == (
             rollout.stat().st_size,
             rollout.stat().st_ino,
         )
 
-    def test_poll_caps_oversized_same_inode_rewind_from_start(self, tmp_path, monkeypatch):
+    def test_poll_discards_unconfirmed_buffer_when_inode_is_replaced(self, tmp_path, monkeypatch):
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        rollout = sessions / "rollout.jsonl"
+        rollout.write_bytes(b'{"role":"user","content":"' + b"x" * 256)
+        monkeypatch.setenv("BRAINLAYER_WATCH_MAX_FILE_BYTES", "128")
+        flushed = []
+
+        def confirm_all(items):
+            flushed.extend(items)
+            return {item["_source_file"]: item["_line_end_offset"] for item in items}
+
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=confirm_all,
+            batch_size=1,
+        )
+        watcher.poll_once()
+        original_inode = rollout.stat().st_ino
+        assert watcher.registry.get(str(rollout)) == (0, 0)
+        assert watcher._tailers[str(rollout)]._buffer
+
+        replacement = sessions / "replacement.jsonl"
+        replacement.write_text(json.dumps({"role": "user", "content": "replacement"}) + "\n")
+        os.replace(replacement, rollout)
+        assert rollout.stat().st_ino != original_inode
+
+        watcher.poll_once()
+
+        assert [item["message"]["content"][0]["text"] for item in flushed] == ["replacement"]
+        assert watcher.registry.get(str(rollout)) == (rollout.stat().st_size, rollout.stat().st_ino)
+
+    def test_old_inode_flush_watermark_cannot_advance_replacement_offset(self, tmp_path, monkeypatch):
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        rollout = sessions / "rollout.jsonl"
+        old_records = [f"old-{index}-" + "x" * 64 for index in range(20)]
+        rollout.write_text("".join(json.dumps({"role": "user", "content": content}) + "\n" for content in old_records))
+        state = {"fail": True}
+
+        def flush(items):
+            if state["fail"]:
+                raise RuntimeError("retain old-inode batch")
+            watermarks = {}
+            for item in items:
+                source = item["_source_file"]
+                watermarks[source] = max(watermarks.get(source, 0), item["_line_end_offset"])
+            return watermarks
+
+        def capture_alarm(code, message, context):
+            raise BrainLayerAlarm(code, message, context)
+
+        monkeypatch.setattr("brainlayer.watcher.raise_alarm", capture_alarm)
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=flush,
+            batch_size=20,
+        )
+        watcher.poll_once()
+        assert watcher.registry.get(str(rollout)) == (0, 0)
+        assert len(watcher.indexer._buffer) == 20
+
+        replacement = sessions / "replacement.jsonl"
+        replacement.write_text(
+            "".join(json.dumps({"role": "user", "content": f"new-{index}"}) + "\n" for index in range(3))
+        )
+        os.replace(replacement, rollout)
+        replacement_size = rollout.stat().st_size
+        replacement_inode = rollout.stat().st_ino
+        watcher.poll_once()
+
+        state["fail"] = False
+        watcher.indexer.flush()
+
+        assert watcher.registry.get(str(rollout)) == (replacement_size, replacement_inode)
+
+        with rollout.open("a") as file_handle:
+            file_handle.write(json.dumps({"role": "user", "content": "new-append"}) + "\n")
+        watcher.poll_once()
+        watcher.indexer.flush()
+        assert watcher.registry.get(str(rollout)) == (rollout.stat().st_size, replacement_inode)
+
+    def test_replacement_between_read_and_confirmation_restarts_at_zero(self, tmp_path, monkeypatch):
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        rollout = sessions / "rollout.jsonl"
+        valid_line = (json.dumps({"role": "user", "content": "old valid record"}) + "\n").encode()
+        malformed_line = b'{"role":"user","content":}\n'
+        rollout.write_bytes(valid_line + malformed_line)
+        old_inode = rollout.stat().st_ino
+        registry_path = tmp_path / "offsets.json"
+        replacement_text = "replacement must be read from its first byte"
+        replacement = sessions / "replacement.tmp"
+        replacement.write_text(json.dumps({"role": "user", "content": replacement_text}) + "\n")
+        replacement_inode = replacement.stat().st_ino
+        flushed = []
+
+        def replace_during_flush(items):
+            flushed.extend(items)
+            os.replace(replacement, rollout)
+            return {item["_source_file"]: item["_line_end_offset"] for item in items}
+
+        monkeypatch.setenv("BRAINLAYER_WATCHER_QUARANTINE_DIR", str(tmp_path / "quarantine"))
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=registry_path,
+            on_flush=replace_during_flush,
+            batch_size=1,
+            registry_flush_interval_s=3600,
+        )
+
+        assert watcher.poll_once() == 1
+        assert rollout.stat().st_ino == replacement_inode
+        assert watcher.registry.get(str(rollout)) == (len(valid_line + malformed_line), old_inode)
+        assert watcher.registry.flush() is True
+
+        replacement_items = []
+
+        def confirm_replacement(items):
+            replacement_items.extend(items)
+            return {item["_source_file"]: item["_line_end_offset"] for item in items}
+
+        fresh_watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=registry_path,
+            on_flush=confirm_replacement,
+            batch_size=1,
+            registry_flush_interval_s=3600,
+        )
+
+        assert fresh_watcher._ensure_tailer(str(rollout)).offset == 0
+        assert fresh_watcher.poll_once() == 1
+        assert [item["message"]["content"][0]["text"] for item in replacement_items] == [replacement_text]
+
+    def test_poll_indexes_large_same_inode_rewind_from_start(self, tmp_path, monkeypatch):
         sessions = tmp_path / "codex" / "sessions"
         sessions.mkdir(parents=True)
         rollout = sessions / "rollout.jsonl"
@@ -1406,10 +1570,14 @@ class TestJSONLWatcher:
         flushed = []
         rewinds = []
 
+        def confirm_all(items):
+            flushed.extend(items)
+            return {item["_source_file"]: item["_line_end_offset"] for item in items}
+
         watcher = JSONLWatcher(
             watch_roots=[WatchRoot("codex", sessions)],
             registry_path=tmp_path / "offsets.json",
-            on_flush=lambda items: flushed.extend(items),
+            on_flush=confirm_all,
             on_rewind=lambda *args: rewinds.append(args),
             batch_size=1,
         )
@@ -1420,8 +1588,12 @@ class TestJSONLWatcher:
             file_handle.write(json.dumps({"role": "user", "content": "y" * 256}) + "\n")
         assert rollout.stat().st_ino == original_inode
 
-        assert watcher.poll_once() == 0
-        assert flushed == []
+        for _ in range(8):
+            watcher.poll_once()
+            if flushed:
+                break
+
+        assert [item["message"]["content"][0]["text"] for item in flushed] == ["y" * 256]
         assert watcher.registry.get(str(rollout)) == (
             rollout.stat().st_size,
             rollout.stat().st_ino,
@@ -1489,34 +1661,248 @@ class TestJSONLWatcher:
         assert watcher.poll_once() == 0
         assert watcher.registry.get(str(rollout)) == (confirmed_offset, confirmed_inode)
 
-    def test_poll_forgets_oversized_files_that_disappear_or_become_denylisted(self, tmp_path, monkeypatch):
+    def test_file_processing_failure_raises_alarm_and_surfaces_in_health(self, tmp_path, monkeypatch):
         sessions = tmp_path / "codex" / "sessions"
         sessions.mkdir(parents=True)
-        disappeared = sessions / "disappeared.jsonl"
-        denylisted = sessions / "denylisted.jsonl"
-        for rollout in (disappeared, denylisted):
-            rollout.write_text(json.dumps({"role": "user", "content": "x" * 256}) + "\n")
-        monkeypatch.setenv("BRAINLAYER_WATCH_MAX_FILE_BYTES", "128")
+        rollout = sessions / "rollout.jsonl"
+        rollout.write_text(json.dumps({"role": "user", "content": "must not be checkpointed"}) + "\n")
+        health_path = tmp_path / "watcher-health.json"
+        alarms = []
 
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda _items: None,
+            health_path=health_path,
+        )
+
+        def forced_failure(_filepath):
+            raise OSError("forced read failure")
+
+        def capture_alarm(code, message, context):
+            alarms.append((code, message, context))
+            raise BrainLayerAlarm(code, message, context)
+
+        monkeypatch.setattr(watcher, "_ensure_tailer", forced_failure)
+        monkeypatch.setattr("brainlayer.watcher.raise_alarm", capture_alarm)
+        assert watcher.poll_once() == 0
+        payload = json.loads(health_path.read_text())
+
+        assert watcher.registry.get(str(rollout)) == (0, 0)
+        assert alarms[0][0] == "watcher_file_ingestion_failed"
+        assert alarms[0][2]["file_path"] == str(rollout)
+        assert payload["alerting"] is True
+        assert "file_ingestion_failure" in payload["alert_reasons"]
+        assert payload["file_ingestion_failure_count"] == 1
+        assert payload["file_ingestion_failures"][0]["file_path"] == str(rollout)
+
+    def test_normalization_failure_retries_without_crossing_failed_record(self, tmp_path, monkeypatch):
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        rollout = sessions / "rollout.jsonl"
+        expected = ["first", "second"]
+        rollout.write_text("".join(json.dumps({"role": "user", "content": content}) + "\n" for content in expected))
+        flushed = []
+
+        def confirm_all(items):
+            flushed.extend(items)
+            return {item["_source_file"]: item["_line_end_offset"] for item in items}
+
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=confirm_all,
+            batch_size=1,
+            max_lines_per_file=1,
+        )
+        original_normalize = watcher._normalize_lines
+        attempts = 0
+
+        def fail_once(filepath, lines):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise RuntimeError("forced normalization failure")
+            return original_normalize(filepath, lines)
+
+        def capture_alarm(code, message, context):
+            raise BrainLayerAlarm(code, message, context)
+
+        monkeypatch.setattr(watcher, "_normalize_lines", fail_once)
+        monkeypatch.setattr("brainlayer.watcher.raise_alarm", capture_alarm)
+
+        assert watcher.poll_once() == 0
+        assert watcher.registry.get(str(rollout)) == (0, 0)
+
+        watcher.poll_once()
+        watcher.poll_once()
+
+        assert [item["message"]["content"][0]["text"] for item in flushed] == expected
+        assert watcher.registry.get(str(rollout))[0] == rollout.stat().st_size
+
+    def test_malformed_record_is_quarantined_and_later_records_continue(self, tmp_path, monkeypatch):
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        rollout = sessions / "rollout.jsonl"
+        first = json.dumps({"role": "user", "content": "first"}) + "\n"
+        malformed = b"not json at all\n"
+        last = json.dumps({"role": "user", "content": "last"}) + "\n"
+        rollout.write_bytes(first.encode() + malformed + last.encode())
+        health_path = tmp_path / "watcher-health.json"
+        quarantine_dir = tmp_path / "quarantine"
+        monkeypatch.setenv("BRAINLAYER_WATCHER_QUARANTINE_DIR", str(quarantine_dir))
+        alarms = []
+        flushed = []
+
+        def confirm_all(items):
+            flushed.extend(items)
+            return {item["_source_file"]: item["_line_end_offset"] for item in items}
+
+        def capture_alarm(code, message, context):
+            alarms.append((code, message, context))
+            raise BrainLayerAlarm(code, message, context)
+
+        monkeypatch.setattr("brainlayer.watcher.raise_alarm", capture_alarm)
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=confirm_all,
+            batch_size=1,
+            health_path=health_path,
+        )
+
+        for _ in range(3):
+            watcher.poll_once()
+
+        payload = json.loads(health_path.read_text())
+        quarantined = list(quarantine_dir.glob("watcher-parse-*.jsonl.bad"))
+        assert [item["message"]["content"][0]["text"] for item in flushed] == ["first", "last"]
+        assert watcher.registry.get(str(rollout))[0] == rollout.stat().st_size
+        assert len(quarantined) == 1
+        assert quarantined[0].read_bytes() == malformed
+        assert len(alarms) == 1
+        assert alarms[0][0] == "watcher_file_ingestion_failed"
+        assert alarms[0][2]["disposition"] == "quarantined"
+        assert payload["quarantined_record_count_total"] == 1
+        assert payload["quarantined_records"][0]["file_path"] == str(rollout)
+        assert "quarantined_record" in payload["alert_reasons"]
+
+    def test_quarantined_offset_waits_for_prior_indexable_record_confirmation(self, tmp_path, monkeypatch):
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        rollout = sessions / "rollout.jsonl"
+        first = json.dumps({"role": "user", "content": "first"}) + "\n"
+        malformed = b"not json at all\n"
+        rollout.write_bytes(first.encode() + malformed)
+        monkeypatch.setenv("BRAINLAYER_WATCHER_QUARANTINE_DIR", str(tmp_path / "quarantine"))
+
+        def confirm_all(items):
+            return {item["_source_file"]: item["_line_end_offset"] for item in items}
+
+        def capture_alarm(code, message, context):
+            raise BrainLayerAlarm(code, message, context)
+
+        monkeypatch.setattr("brainlayer.watcher.raise_alarm", capture_alarm)
+
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=confirm_all,
+            batch_size=10,
+            flush_interval_ms=360_000,
+        )
+
+        watcher.poll_once()
+        assert watcher.registry.get(str(rollout)) == (0, 0)
+
+        watcher.indexer.flush()
+
+        assert watcher.registry.get(str(rollout))[0] == rollout.stat().st_size
+
+    def test_quarantine_write_failure_keeps_record_and_offset_unmodified(self, tmp_path, monkeypatch):
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        rollout = sessions / "rollout.jsonl"
+        rollout.write_bytes(b"not json at all\n")
+        invalid_quarantine_dir = tmp_path / "not-a-directory"
+        invalid_quarantine_dir.write_text("occupied")
+        monkeypatch.setenv("BRAINLAYER_WATCHER_QUARANTINE_DIR", str(invalid_quarantine_dir))
+        alarms = []
+
+        def capture_alarm(code, message, context):
+            alarms.append((code, message, context))
+            raise BrainLayerAlarm(code, message, context)
+
+        monkeypatch.setattr("brainlayer.watcher.raise_alarm", capture_alarm)
         watcher = JSONLWatcher(
             watch_roots=[WatchRoot("codex", sessions)],
             registry_path=tmp_path / "offsets.json",
             on_flush=lambda _items: None,
         )
 
-        assert watcher.poll_once() == 0
-        assert watcher._oversized_files == {str(disappeared), str(denylisted)}
+        watcher.poll_once()
 
-        disappeared.unlink()
-        monkeypatch.setattr(
-            "brainlayer.watcher.is_denylisted",
-            lambda filepath: filepath == str(denylisted),
+        tailer = watcher._tailers[str(rollout)]
+        assert tailer.offset == 0
+        assert tailer._buffer == b"not json at all\n"
+        assert watcher.registry.get(str(rollout)) == (0, 0)
+        assert len(alarms) == 1
+        assert alarms[0][2]["error_type"] == "FileExistsError"
+
+    def test_growing_blocked_record_emits_one_alarm(self, tmp_path, monkeypatch):
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        rollout = sessions / "rollout.jsonl"
+        rollout.write_bytes(b'{"role":"user","content":"' + b"x" * 64)
+        monkeypatch.setenv("BRAINLAYER_WATCH_MAX_FILE_BYTES", "16")
+        monkeypatch.setenv("BRAINLAYER_WATCH_MAX_RECORD_BYTES", "32")
+        alarms = []
+
+        def capture_alarm(code, message, context):
+            alarms.append((code, message, context))
+            raise BrainLayerAlarm(code, message, context)
+
+        monkeypatch.setattr("brainlayer.watcher.raise_alarm", capture_alarm)
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda _items: None,
         )
 
-        assert watcher.poll_once() == 0
-        assert watcher._oversized_files == set()
+        for _ in range(4):
+            with rollout.open("ab") as file_handle:
+                file_handle.write(b"x")
+            watcher.poll_once()
 
-    def test_negative_watch_max_file_bytes_falls_back_to_default(self, tmp_path, monkeypatch, caplog):
+        assert len(alarms) == 1
+        assert watcher.registry.get(str(rollout)) == (0, 0)
+        assert len(watcher._tailers[str(rollout)]._buffer) <= 33
+
+    def test_health_caps_failure_details_and_reports_overflow(self, tmp_path):
+        health_path = tmp_path / "watcher-health.json"
+        watcher = JSONLWatcher(
+            watch_roots=[],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda _items: None,
+            health_path=health_path,
+        )
+        watcher._file_ingestion_failures = {
+            f"/tmp/failure-{index}.jsonl": {
+                "file_path": f"/tmp/failure-{index}.jsonl",
+                "error": "forced",
+                "_fingerprint": ("OSError", "forced"),
+            }
+            for index in range(150)
+        }
+
+        watcher._write_health_snapshot([])
+
+        payload = json.loads(health_path.read_text())
+        assert payload["file_ingestion_failure_count"] == 150
+        assert len(payload["file_ingestion_failures"]) == 100
+        assert payload["file_ingestion_failures_overflow_count"] == 50
+
+    def test_negative_watch_read_window_falls_back_to_default(self, tmp_path, monkeypatch, caplog):
         monkeypatch.setenv("BRAINLAYER_WATCH_MAX_FILE_BYTES", "-1")
 
         watcher = JSONLWatcher(
@@ -1525,10 +1911,10 @@ class TestJSONLWatcher:
             on_flush=lambda _items: None,
         )
 
-        assert watcher.max_file_bytes == 100 * 1024 * 1024
+        assert watcher.max_read_bytes_per_file == 100 * 1024 * 1024
         assert any("BRAINLAYER_WATCH_MAX_FILE_BYTES='-1'" in record.getMessage() for record in caplog.records)
 
-    def test_invalid_watch_max_file_bytes_falls_back_to_default(self, tmp_path, monkeypatch, caplog):
+    def test_invalid_watch_read_window_falls_back_to_default(self, tmp_path, monkeypatch, caplog):
         monkeypatch.setenv("BRAINLAYER_WATCH_MAX_FILE_BYTES", "invalid")
 
         watcher = JSONLWatcher(
@@ -1537,10 +1923,10 @@ class TestJSONLWatcher:
             on_flush=lambda _items: None,
         )
 
-        assert watcher.max_file_bytes == 100 * 1024 * 1024
+        assert watcher.max_read_bytes_per_file == 100 * 1024 * 1024
         assert any("BRAINLAYER_WATCH_MAX_FILE_BYTES='invalid'" in record.getMessage() for record in caplog.records)
 
-    def test_poll_ingests_small_append_after_oversized_checkpoint(self, tmp_path, monkeypatch):
+    def test_poll_ingests_append_after_large_file_is_fully_consumed(self, tmp_path, monkeypatch):
         sessions = tmp_path / "codex" / "sessions"
         sessions.mkdir(parents=True)
         rollout = sessions / "rollout.jsonl"
@@ -1559,29 +1945,30 @@ class TestJSONLWatcher:
             batch_size=1,
         )
 
-        assert watcher.poll_once() == 0
+        for _ in range(8):
+            watcher.poll_once()
+            if watcher.registry.get(str(rollout))[0] == rollout.stat().st_size:
+                break
         with rollout.open("a") as file_handle:
             file_handle.write(json.dumps({"role": "user", "content": "small append"}) + "\n")
 
-        assert watcher.poll_once() == 1
-        assert [item["message"]["content"][0]["text"] for item in flushed] == ["small append"]
+        for _ in range(4):
+            watcher.poll_once()
+            if len(flushed) == 2:
+                break
+        assert [item["message"]["content"][0]["text"] for item in flushed] == ["x" * 256, "small append"]
 
-    def test_zero_watch_max_file_bytes_disables_checkpointing(self, tmp_path, monkeypatch):
-        sessions = tmp_path / "codex" / "sessions"
-        sessions.mkdir(parents=True)
-        rollout = sessions / "rollout.jsonl"
-        rollout.write_text(json.dumps({"role": "user", "content": "x" * 256}) + "\n")
+    def test_zero_watch_read_window_falls_back_to_default(self, tmp_path, monkeypatch, caplog):
         monkeypatch.setenv("BRAINLAYER_WATCH_MAX_FILE_BYTES", "0")
 
         watcher = JSONLWatcher(
-            watch_roots=[WatchRoot("codex", sessions)],
+            watch_roots=[],
             registry_path=tmp_path / "offsets.json",
-            on_flush=lambda items: {item["_source_file"]: item["_line_end_offset"] for item in items},
-            batch_size=1,
+            on_flush=lambda _items: None,
         )
 
-        assert watcher.poll_once() == 1
-        assert watcher.registry.get(str(rollout))[0] == rollout.stat().st_size
+        assert watcher.max_read_bytes_per_file == 100 * 1024 * 1024
+        assert any("BRAINLAYER_WATCH_MAX_FILE_BYTES='0'" in record.getMessage() for record in caplog.records)
 
     def test_codex_root_normalizes_role_content_entries(self, tmp_path):
         sessions = tmp_path / "codex" / "sessions"

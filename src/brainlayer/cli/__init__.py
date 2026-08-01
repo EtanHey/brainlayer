@@ -3494,9 +3494,9 @@ def watch_backfill(
     while cycles < max_cycles:
         cycles += 1
         count = watcher.poll_once()
-        if count == 0:
-            break
         processed += count
+        if count == 0 and not watcher.last_poll_made_progress:
+            break
     watcher.indexer.flush()
     watcher.registry.flush()
     rprint(f"processed_entries={processed} cycles={cycles} registry={registry_path}")
