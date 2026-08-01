@@ -282,6 +282,15 @@ def _extract_project_from_session_file(source_file: str) -> str | None:
     return None
 
 
+def _source_file_fingerprint(source_file: str) -> tuple[int, int] | None:
+    """Return a version token for retrying an unresolved session file."""
+    try:
+        stat = Path(source_file).stat()
+    except OSError:
+        return None
+    return stat.st_size, stat.st_mtime_ns
+
+
 def _content_class_for_visibility(base_content_class: str, visibility: str) -> str:
     if visibility == "default":
         return base_content_class
@@ -304,6 +313,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
     store = None if arbitrated else VectorStore(db_path or get_db_path())
     liveness_schema_ready = False
     source_projects: dict[str, str] = {}
+    unresolved_source_versions: dict[str, tuple[int, int] | None] = {}
 
     def ensure_direct_liveness_schema() -> None:
         if liveness_schema_ready or store is None:
@@ -380,9 +390,17 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
             source_files_seen.add(source_file)
             project = source_projects.get(source_file)
             if project is None:
-                project = _extract_project_from_session_file(source_file)
-                if project is not None:
-                    source_projects[source_file] = project
+                source_version = _source_file_fingerprint(source_file)
+                if (
+                    source_file not in unresolved_source_versions
+                    or unresolved_source_versions[source_file] != source_version
+                ):
+                    project = _extract_project_from_session_file(source_file)
+                    if project is not None:
+                        source_projects[source_file] = project
+                        unresolved_source_versions.pop(source_file, None)
+                    else:
+                        unresolved_source_versions[source_file] = source_version
             claude_conversation_id = _extract_claude_conversation_id(source_file)
 
             # Layer 1: Pre-classify filter

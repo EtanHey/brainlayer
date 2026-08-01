@@ -232,6 +232,8 @@ class TestFlushCallback:
         assert queued["project"] == "t3code"
 
     def test_retries_source_file_after_metadata_is_appended(self, tmp_path, monkeypatch):
+        import brainlayer.watcher_bridge as bridge
+
         db_path = tmp_path / "test.db"
         queue_dir = tmp_path / "queue"
         VectorStore(db_path).close()
@@ -240,10 +242,24 @@ class TestFlushCallback:
         source_file.parent.mkdir(parents=True)
         source_file.write_text("", encoding="utf-8")
         flush = create_flush_callback(db_path, arbitrated=True)
+        original_extract = bridge._extract_project_from_session_file
+        extraction_calls = 0
+
+        def count_extractions(path):
+            nonlocal extraction_calls
+            extraction_calls += 1
+            return original_extract(path)
+
+        monkeypatch.setattr(bridge, "_extract_project_from_session_file", count_extractions)
 
         first = _make_jsonl_entry(text=_LONG_TEXT, entry_type="assistant")
         first["_source_file"] = str(source_file)
         flush([first])
+
+        unchanged = _make_jsonl_entry(text=_LONG_TEXT + " before metadata", entry_type="assistant")
+        unchanged["_source_file"] = str(source_file)
+        flush([unchanged])
+        assert extraction_calls == 1
 
         with source_file.open("a", encoding="utf-8") as handle:
             handle.write(
@@ -259,6 +275,7 @@ class TestFlushCallback:
         second = _make_jsonl_entry(text=_LONG_TEXT + " after metadata", entry_type="assistant")
         second["_source_file"] = str(source_file)
         flush([second])
+        assert extraction_calls == 2
 
         queued = [json.loads(path.read_text(encoding="utf-8")) for path in queue_dir.glob("watcher-*.jsonl")]
         assert {item["project"] for item in queued} == {None, "t3code"}

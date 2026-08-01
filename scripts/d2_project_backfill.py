@@ -69,7 +69,9 @@ def backfill_numeric_projects(
         source_projects: dict[str, str | None] = {}
         try:
             rows_left_untouched = int(
-                conn.execute(f"SELECT COUNT(*) FROM chunks WHERE NOT {NUMERIC_PROJECT_PREDICATE}").fetchone()[0]
+                conn.execute(
+                    f"SELECT COUNT(*) FROM chunks WHERE COALESCE({NUMERIC_PROJECT_PREDICATE}, 0) = 0"
+                ).fetchone()[0]
             )
             _export_rollback(conn, Path(rollback_path))
 
@@ -102,15 +104,16 @@ def backfill_numeric_projects(
                 try:
                     for rowid, chunk_id, _source_file in rows:
                         project = projects_by_rowid[rowid]
-                        conn.execute(
+                        update = conn.execute(
                             f"UPDATE chunks SET project = ? WHERE id = ? AND {NUMERIC_PROJECT_PREDICATE}",
                             (project, chunk_id),
                         )
-                        rows_updated += 1
-                        if project is None:
-                            rows_set_null += 1
-                        else:
-                            rows_rederived += 1
+                        if update.rowcount == 1:
+                            rows_updated += 1
+                            if project is None:
+                                rows_set_null += 1
+                            else:
+                                rows_rederived += 1
                     conn.commit()
                 except Exception:
                     conn.rollback()

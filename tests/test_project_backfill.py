@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import scripts.d2_project_backfill as project_backfill
 from brainlayer.vector_store import WriterInUseError
 from scripts.d2_project_backfill import backfill_numeric_projects
 
@@ -24,6 +25,10 @@ def _create_chunks_db(path, recoverable_source, missing_source, untouched_source
     )
     conn.execute(
         "INSERT INTO chunks VALUES ('untouched', ?, 'already-real')",
+        (str(untouched_source),),
+    )
+    conn.execute(
+        "INSERT INTO chunks VALUES ('already-null', ?, NULL)",
         (str(untouched_source),),
     )
     conn.commit()
@@ -53,13 +58,14 @@ def test_backfill_exports_rollback_derives_projects_and_is_idempotent(tmp_path):
     rows_after_first = dict(conn.execute("SELECT id, project FROM chunks"))
     conn.close()
     assert rows_after_first == {
+        "already-null": None,
         "recoverable": "brainlayer",
         "underivable": None,
         "untouched": "already-real",
     }
     assert first.rows_rederived == 1
     assert first.rows_set_null == 1
-    assert first.rows_left_untouched == 1
+    assert first.rows_left_untouched == 2
     assert rollback_path.read_text(encoding="utf-8").splitlines() == [
         "id\tproject",
         "recoverable\t30",
@@ -145,22 +151,60 @@ store._release_writer_pidfile()
         },
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
     )
     try:
         assert holder.stdout is not None
-        assert holder.stdout.readline().strip() == "ready"
+        readiness = holder.stdout.readline().strip()
+        if readiness != "ready":
+            assert holder.stderr is not None
+            stderr = holder.stderr.read() if holder.poll() is not None else "holder did not exit"
+            pytest.fail(f"writer lock holder did not become ready: {stderr}")
         with pytest.raises(WriterInUseError, match="another writer is using"):
             backfill_numeric_projects(db_path, rollback_path=tmp_path / "rollback.tsv")
     finally:
-        assert holder.stdin is not None
-        holder.stdin.write("release\n")
-        holder.stdin.close()
-        holder.wait(timeout=5)
+        if holder.poll() is None and holder.stdin is not None:
+            try:
+                holder.stdin.write("release\n")
+                holder.stdin.close()
+                holder.wait(timeout=5)
+            except (OSError, subprocess.TimeoutExpired):
+                holder.terminate()
+                holder.wait(timeout=5)
 
     conn = sqlite3.connect(db_path)
     assert dict(conn.execute("SELECT id, project FROM chunks"))["recoverable"] == "30"
     conn.close()
+
+
+def test_backfill_counts_only_rows_changed_by_numeric_guard(tmp_path, monkeypatch):
+    db_path = tmp_path / "brainlayer.db"
+    source = tmp_path / "sessions" / "recoverable.jsonl"
+    missing_source = tmp_path / "sessions" / "missing.jsonl"
+    untouched_source = tmp_path / "sessions" / "untouched.jsonl"
+    _create_chunks_db(db_path, source, missing_source, untouched_source)
+    source.parent.mkdir()
+    source.write_text(
+        json.dumps({"type": "session_meta", "payload": {"cwd": "/Users/test/Gits/brainlayer"}}) + "\n",
+        encoding="utf-8",
+    )
+    original_extract = project_backfill._extract_project_from_session_file
+
+    def change_project_before_write(source_file):
+        if source_file == str(source):
+            conn = sqlite3.connect(db_path)
+            conn.execute("UPDATE chunks SET project = 'already-real' WHERE id = 'recoverable'")
+            conn.commit()
+            conn.close()
+        return original_extract(source_file)
+
+    monkeypatch.setattr(project_backfill, "_extract_project_from_session_file", change_project_before_write)
+    result = backfill_numeric_projects(db_path, rollback_path=tmp_path / "rollback.tsv")
+
+    assert result.rows_updated == 1
+    assert result.rows_rederived == 0
+    assert result.rows_set_null == 1
 
 
 @pytest.mark.parametrize("batch_size", (4_999, 10_001))
