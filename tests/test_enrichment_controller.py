@@ -1587,7 +1587,7 @@ async def test_brain_enrich_handler_returns_error_for_unknown_mode(monkeypatch):
     from brainlayer.mcp.enrich_handler import _brain_enrich
 
     result = await _brain_enrich(mode="unknown")
-    assert result.isError is True
+    assert result.is_error is True
     assert "Unknown mode" in result.content[0].text
 
 
@@ -1603,7 +1603,7 @@ async def test_brain_enrich_handler_stats_mode(monkeypatch):
     monkeypatch.setattr("brainlayer.mcp.enrich_handler._get_vector_store", lambda: store)
 
     result = await _brain_enrich(stats=True)
-    assert result.isError is not True
+    assert result.is_error is not True
     text = result.content[0].text
     # _enrich_stats returns formatted text with box-drawing chars, not JSON
     assert "Total:" in text

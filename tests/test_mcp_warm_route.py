@@ -269,7 +269,7 @@ async def test_brain_search_helper_path_preserves_helper_mcp_error(monkeypatch):
 
     result = await _brain_search(query="invalid helper response")
 
-    assert result.isError is True
+    assert result.is_error is True
     assert result.content[0].text == "Invalid detail='verbose'"
 
 

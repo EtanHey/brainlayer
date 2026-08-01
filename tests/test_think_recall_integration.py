@@ -275,4 +275,4 @@ class TestMCPToolCount:
         read_tools = [t for t in tools if t.name in ("brain_search", "brain_recall")]
         for tool in read_tools:
             assert tool.annotations is not None
-            assert tool.annotations.readOnlyHint is True
+            assert tool.annotations.read_only_hint is True

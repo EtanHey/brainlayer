@@ -3,7 +3,8 @@
 import asyncio
 from typing import Any
 
-from mcp import types
+from mcp.client import Client
+from mcp.types import TextContent
 
 import brainlayer.mcp as mcp_module
 from brainlayer.mcp import _full_tool_definitions, server
@@ -48,7 +49,7 @@ def _iter_string_arrays(schema: dict[str, Any], path: str = ""):
 
 def test_all_string_input_fields_have_max_length_and_string_arrays_have_max_items():
     for tool in _get_tools():
-        schema = tool.inputSchema
+        schema = tool.input_schema
         for field_path, string_schema in _iter_string_fields(schema):
             assert "maxLength" in string_schema, f"{tool.name}.{field_path} is missing maxLength"
 
@@ -58,17 +59,37 @@ def test_all_string_input_fields_have_max_length_and_string_arrays_have_max_item
 
 
 async def _call_brain_digest(arguments: dict[str, Any]):
-    handler = server.request_handlers[types.CallToolRequest]
-    request = types.CallToolRequest(params=types.CallToolRequestParams(name="brain_digest", arguments=arguments))
-    return await handler(request)
+    async with Client(server, mode="legacy") as client:
+        return await client.call_tool("brain_digest", arguments)
 
 
 def test_brain_digest_schema_rejects_oversized_content(monkeypatch):
     monkeypatch.setattr(mcp_module, "_tool_palette", ToolPalette("full"))
-    result = asyncio.run(_call_brain_digest({"content": "x" * 200_001})).root
+    result = asyncio.run(_call_brain_digest({"content": "x" * 200_001}))
 
-    assert result.isError is True
+    assert result.is_error is True
     assert result.content, "Expected error content to be non-empty"
     text = result.content[0].text
     assert "Input validation error:" in text
     assert "is too long" in text
+
+
+def test_mcp_v2_adapter_preserves_combined_tool_results(monkeypatch):
+    async def fake_store_new(**_kwargs):
+        return (
+            [TextContent(type="text", text="stored")],
+            {"chunk_id": "chunk-1", "related": []},
+        )
+
+    monkeypatch.setattr(mcp_module, "_tool_palette", ToolPalette("full"))
+    monkeypatch.setattr(mcp_module, "_store_new", fake_store_new)
+
+    async def call_store():
+        async with Client(server, mode="legacy") as client:
+            return await client.call_tool("brain_store", {"content": "remember this"})
+
+    result = asyncio.run(call_store())
+
+    assert result.is_error is False
+    assert result.content[0].text == "stored"
+    assert result.structured_content == {"chunk_id": "chunk-1", "related": []}

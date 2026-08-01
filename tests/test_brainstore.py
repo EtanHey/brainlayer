@@ -584,7 +584,7 @@ class TestStoreMCPIntegration:
         tools = asyncio.run(list_tools())
         store_tool = next(t for t in tools if t.name == "brain_store")
         # Write tool should NOT be read-only
-        assert store_tool.annotations.readOnlyHint is False
+        assert store_tool.annotations.read_only_hint is False
 
     def test_store_tool_input_schema(self):
         """brain_store has correct required fields — only content required, type is optional."""
@@ -594,7 +594,7 @@ class TestStoreMCPIntegration:
 
         tools = asyncio.run(list_tools())
         store_tool = next(t for t in tools if t.name == "brain_store")
-        schema = store_tool.inputSchema
+        schema = store_tool.input_schema
         assert "content" in schema["properties"]
         assert "type" in schema["properties"]
         assert "content" in schema["required"]

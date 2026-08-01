@@ -7,14 +7,20 @@ import os
 from copy import deepcopy
 from typing import Any
 
+import jsonschema
+
 logger = logging.getLogger(__name__)
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import (
+    CallToolRequestParams,
     CallToolResult,
+    CompleteRequestParams,
     CompleteResult,
     Completion,
+    ListToolsResult,
+    PaginatedRequestParams,
     TextContent,
     Tool,
     ToolAnnotations,
@@ -92,11 +98,63 @@ async def _with_timeout(coro, timeout: float | None = None):
                     ),
                 )
             ],
-            isError=True,
+            is_error=True,
         )
 
 
-# Create MCP server
+async def _handle_list_tools_request(_ctx: Any, _params: PaginatedRequestParams | None) -> ListToolsResult:
+    """Adapt BrainLayer's tool palette to the MCP v2 low-level handler contract."""
+    return ListToolsResult(tools=await list_tools())
+
+
+async def _handle_completion_request(_ctx: Any, params: CompleteRequestParams) -> CompleteResult:
+    """Adapt typed MCP v2 completion params to the existing completion logic."""
+    return await handle_completion(params.ref, params.argument)
+
+
+def _normalize_call_tool_result(result: Any) -> CallToolResult:
+    """Preserve the result forms accepted by the MCP v1 call-tool decorator."""
+    if isinstance(result, CallToolResult):
+        return result
+    if isinstance(result, tuple) and len(result) == 2:
+        content, structured_content = result
+    elif isinstance(result, dict):
+        content = [TextContent(type="text", text=json.dumps(result, indent=2))]
+        structured_content = result
+    elif hasattr(result, "__iter__"):
+        content = result
+        structured_content = None
+    else:
+        raise TypeError(f"Unexpected return type from tool: {type(result).__name__}")
+    return CallToolResult(content=list(content), structured_content=structured_content, is_error=False)
+
+
+async def _handle_call_tool_request(_ctx: Any, params: CallToolRequestParams) -> CallToolResult:
+    """Validate and route a typed MCP v2 tool call while preserving v1 behavior."""
+    arguments = params.arguments or {}
+    try:
+        tool = next((candidate for candidate in await list_tools() if candidate.name == params.name), None)
+        if tool is not None:
+            try:
+                jsonschema.validate(instance=arguments, schema=tool.input_schema)
+            except jsonschema.ValidationError as exc:
+                return _error_result(f"Input validation error: {exc.message}")
+
+        result = _normalize_call_tool_result(await call_tool(params.name, arguments))
+
+        if tool is not None and tool.output_schema is not None:
+            if result.structured_content is None:
+                return _error_result("Output validation error: output_schema defined but no structured output returned")
+            try:
+                jsonschema.validate(instance=result.structured_content, schema=tool.output_schema)
+            except jsonschema.ValidationError as exc:
+                return _error_result(f"Output validation error: {exc.message}")
+        return result
+    except Exception as exc:
+        return _error_result(str(exc))
+
+
+# Create MCP server using the MCP v2 low-level handler API.
 server = Server(
     "brainlayer",
     instructions=(
@@ -115,46 +173,48 @@ server = Server(
         "brain_update/brain_expand/brain_tags are deprecated — see their descriptions for alternatives.\n"
         'Project scoping: auto-inferred from cwd. Override with project="all".'
     ),
+    on_list_tools=_handle_list_tools_request,
+    on_call_tool=_handle_call_tool_request,
+    on_completion=_handle_completion_request,
 )
 
 # Tool annotations
 _MAX_FULL_CONTENT_RESULT_CHARS = 250_000
+_MAX_RESULT_META = {"anthropic/maxResultSizeChars": _MAX_FULL_CONTENT_RESULT_CHARS}
 
 _READ_ONLY = ToolAnnotations(
-    readOnlyHint=True,
-    destructiveHint=False,
-    idempotentHint=True,
-    openWorldHint=False,
-    **{"anthropic/maxResultSizeChars": _MAX_FULL_CONTENT_RESULT_CHARS},
+    read_only_hint=True,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=False,
 )
 
 _RECALL_READ_ONLY = ToolAnnotations(
-    readOnlyHint=True,
-    destructiveHint=False,
-    idempotentHint=True,
-    openWorldHint=False,
-    **{"anthropic/maxResultSizeChars": _MAX_FULL_CONTENT_RESULT_CHARS},
+    read_only_hint=True,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=False,
 )
 
 _WRITE = ToolAnnotations(
-    readOnlyHint=False,
-    destructiveHint=False,
-    idempotentHint=False,
-    openWorldHint=False,
+    read_only_hint=False,
+    destructive_hint=False,
+    idempotent_hint=False,
+    open_world_hint=False,
 )
 
 _WRITE_IDEMPOTENT = ToolAnnotations(
-    readOnlyHint=False,
-    destructiveHint=False,
-    idempotentHint=True,
-    openWorldHint=False,
+    read_only_hint=False,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=False,
 )
 
 _DESTRUCTIVE = ToolAnnotations(
-    readOnlyHint=False,
-    destructiveHint=True,
-    idempotentHint=False,
-    openWorldHint=False,
+    read_only_hint=False,
+    destructive_hint=True,
+    idempotent_hint=False,
+    open_world_hint=False,
 )
 
 _DEFAULT_STRING_MAX_LENGTH = 256
@@ -406,7 +466,8 @@ def _full_tool_definitions() -> list[Tool]:
             title="Search Knowledge Base",
             description="""Search BrainLayer's persistent memory for past decisions, project history, debugging notes, preferences, and other stored knowledge. Use when: the user asks what was decided before, how something was implemented, what happened to a file, or what you are working on. Don't use when: you need current session context or stats (use brain_recall), a named entity graph lookup (use brain_entity), or to save new information (use brain_store). query should be a natural-language lookup phrase; file_path switches to file-history routing, chunk_id expands a known result, and project narrows scope. num_results defaults to 5 and detail defaults to 'compact'; add date, tag, intent, or source filters only when they materially narrow the search. Returns ranked matches with scores, metadata, and compact snippets or full content; after finding a promising chunk, call brain_search with chunk_id or use brain_recall for session-level context.""",
             annotations=_READ_ONLY,
-            inputSchema=_bounded_input_schema(
+            meta=_MAX_RESULT_META,
+            input_schema=_bounded_input_schema(
                 {
                     "type": "object",
                     "properties": {
@@ -588,7 +649,8 @@ def _full_tool_definitions() -> list[Tool]:
             title="Resume From PreCompact Checkpoint",
             description="""Return recent PreCompact checkpoint chunks for session recovery. Use when: an agent asks what it was working on after compaction or needs explicit session-restore state. Don't use for normal topical search; brain_search excludes checkpoints by default to avoid checkpoint pollution. session_id narrows to one session when known, and lookback_days defaults to 7.""",
             annotations=_READ_ONLY,
-            inputSchema=_bounded_input_schema(
+            meta=_MAX_RESULT_META,
+            input_schema=_bounded_input_schema(
                 {
                     "type": "object",
                     "properties": {
@@ -613,7 +675,7 @@ def _full_tool_definitions() -> list[Tool]:
             title="Store Memory",
             description="""Save decisions, learnings, corrections, issues, and other durable memories so future sessions can retrieve the reasoning with brain_search. Use when: you made a decision, learned something important, hit a bug worth tracking, or received a correction that should persist. Don't use when: you are retrieving existing knowledge (use brain_search), deeply extracting entities from large text with richer indexing (use brain_digest), or archiving/superseding old chunks without writing new content (use brain_archive or brain_supersede). content should explain what happened and why; type auto-detects if omitted, and project, tags, and importance improve retrieval. For decisions, add confidence_score, outcome, reversibility, and files_changed; for issues, add status, severity, file_path, function_name, and line_number. Returns a new chunk_id plus related similar memories, and supersedes can replace an older chunk in the same write.""",
             annotations=_WRITE,
-            inputSchema=_bounded_input_schema(
+            input_schema=_bounded_input_schema(
                 {
                     "type": "object",
                     "properties": {
@@ -710,14 +772,15 @@ def _full_tool_definitions() -> list[Tool]:
                     "required": ["content"],
                 }
             ),
-            outputSchema=_STORE_OUTPUT_SCHEMA,
+            output_schema=_STORE_OUTPUT_SCHEMA,
         ),
         Tool(
             name="brain_get_person",
             title="Get Person Context",
             description="""Get a person's profile, graph relations, and linked memories in one call. Use when: preparing for a meeting, recalling someone's preferences or constraints, or gathering person-specific context before taking action. Don't use when: you need fuzzy topic search across all memories (use brain_search), generic entity lookup without scoped memories (use brain_entity), or you are storing new information about the person (use brain_store). name should be the best-known person name; context reranks memories for the current task, and num_memories defaults to 10. Returns profile fields, related entities, and relevant memory chunks; after identifying the right person, use brain_search for broader topic recall if needed.""",
             annotations=_READ_ONLY,
-            inputSchema=_bounded_input_schema(
+            meta=_MAX_RESULT_META,
+            input_schema=_bounded_input_schema(
                 {
                     "type": "object",
                     "properties": {
@@ -746,7 +809,8 @@ def _full_tool_definitions() -> list[Tool]:
             title="Recall / Search / Entity Lookup",
             description="""Get working context, recent sessions, plan/session links, per-session operations, summaries, stats, or routed search from one entry point. Use when: you need 'what am I working on', recent session history, plan linkage, operation groups for a session, or knowledge-base health stats. Don't use when: you already know you want topical memory search (use brain_search), a direct entity graph lookup (use brain_entity), or to store or digest new content (use brain_store or brain_digest). mode can be explicit or auto-detected from query; session_id is required for operations and summary, plan_name targets plan mode, and hours, days, and limit control context windows. In search mode, file_path, chunk_id, content filters, num_results, and detail='compact'|'full' behave like brain_search. Returns structured context, search results, or stats depending on mode; use brain_search after broad routing when you need tighter topical retrieval.""",
             annotations=_RECALL_READ_ONLY,
-            inputSchema=_bounded_input_schema(
+            meta=_MAX_RESULT_META,
+            input_schema=_bounded_input_schema(
                 {
                     "type": "object",
                     "properties": {
@@ -929,7 +993,7 @@ def _full_tool_definitions() -> list[Tool]:
             title="Digest Content",
             description="""Digest large text content into searchable memory plus extracted entities and relations in the knowledge graph. Use when: processing research notes, audits, transcripts, or other large text that should be deeply indexed instead of stored as a quick note. Don't use when: a short decision or learning can be saved directly with brain_store, you only need to retrieve knowledge with brain_search, or you want a specific entity lookup with brain_entity. mode='digest' writes a new enriched chunk, mode='connect' compares content to existing knowledge and returns a proposed connection or supersede plan without storing, and mode='enrich' backfills existing chunks using limit. content should be the raw text; title, project, and participants improve extraction quality. Returns extracted entity and relation counts or a proposal, and you can inspect the indexed result later with brain_search or brain_entity.""",
             annotations=_WRITE,
-            inputSchema=_bounded_input_schema(
+            input_schema=_bounded_input_schema(
                 {
                     "type": "object",
                     "properties": {
@@ -972,7 +1036,8 @@ def _full_tool_definitions() -> list[Tool]:
             title="Entity Lookup",
             description="""Look up a known entity and traverse its relationships in the knowledge graph. Use when: the user names a specific person, project, company, library, tool, or technology and you need structured connections rather than fuzzy search. Don't use when: you need broad topical recall across memories (use brain_search), person-specific profile plus memories in one call (use brain_get_person), or to save new facts (use brain_store or brain_digest). query should be the likely entity name; action defaults to 'lookup', while action='list' browses an entity_type with limit and offset pagination. Returns entity records plus connected relations, and after finding the right entity you can use brain_search to pull narrative memory around it.""",
             annotations=_READ_ONLY,
-            inputSchema=_bounded_input_schema(
+            meta=_MAX_RESULT_META,
+            input_schema=_bounded_input_schema(
                 {
                     "type": "object",
                     "properties": {
@@ -1042,7 +1107,8 @@ def _full_tool_definitions() -> list[Tool]:
             title="Expand Chunk Context",
             description="Deprecated. Use brain_search with detail='full' to get full chunk content, or brain_recall with conversation_id to get session context.",
             annotations=_READ_ONLY,
-            inputSchema=_bounded_input_schema(
+            meta=_MAX_RESULT_META,
+            input_schema=_bounded_input_schema(
                 {
                     "type": "object",
                     "properties": {
@@ -1067,7 +1133,7 @@ def _full_tool_definitions() -> list[Tool]:
             title="Update or Archive Memory",
             description="Deprecated. Use brain_store with supersedes param to replace a memory, or brain_archive/brain_supersede for lifecycle management.",
             annotations=_WRITE_IDEMPOTENT,
-            inputSchema=_bounded_input_schema(
+            input_schema=_bounded_input_schema(
                 {
                     "type": "object",
                     "properties": {
@@ -1110,7 +1176,8 @@ def _full_tool_definitions() -> list[Tool]:
             title="Tag Discovery",
             description="Deprecated. Use brain_recall(mode='search', tag='prefix') to find tagged memories, or brain_store(tags=[...]) to tag when storing.",
             annotations=_READ_ONLY,
-            inputSchema=_bounded_input_schema(
+            meta=_MAX_RESULT_META,
+            input_schema=_bounded_input_schema(
                 {
                     "type": "object",
                     "properties": {
@@ -1148,7 +1215,7 @@ def _full_tool_definitions() -> list[Tool]:
             title="Supersede Memory",
             description="""Mark an old chunk as replaced by a newer one and remove the old chunk from default search while keeping history. Use when: a technical fact, decision, or learning has been updated and search should prefer the replacement. Don't use when: you are writing the new memory itself (use brain_store with supersedes if you are creating it now) or you only need to hide a stale chunk without a replacement (use brain_archive). old_chunk_id and new_chunk_id are required; safety_check defaults to 'auto' for technical content, while personal data requires safety_check='confirm' and confirm=True. Returns the action taken, and you can verify the surviving record with brain_search.""",
             annotations=_DESTRUCTIVE,
-            inputSchema=_bounded_input_schema(
+            input_schema=_bounded_input_schema(
                 {
                     "type": "object",
                     "properties": {
@@ -1181,7 +1248,7 @@ def _full_tool_definitions() -> list[Tool]:
             title="Archive Memory",
             description="""Archive a chunk with a soft-delete timestamp so it disappears from default search but remains recoverable. Use when: a memory is stale, irrelevant, or duplicative and should stop surfacing without being permanently deleted. Don't use when: a newer chunk should explicitly replace it (use brain_supersede) or you are writing fresh information (use brain_store). chunk_id is required and reason is optional audit metadata. Returns the archived chunk_id, and you can use brain_search or direct chunk lookup later if you need the history.""",
             annotations=_DESTRUCTIVE,
-            inputSchema=_bounded_input_schema(
+            input_schema=_bounded_input_schema(
                 {
                     "type": "object",
                     "properties": {
@@ -1203,7 +1270,7 @@ def _full_tool_definitions() -> list[Tool]:
             title="Enrich Chunks",
             description="""Run enrichment on existing chunks to backfill entities, summaries, and related metadata without rewriting the original memory text. Use when: you want realtime enrichment for recent writes, cheaper batch processing for backlog, local offline enrichment, or progress stats for the enrichment system. Don't use when: you are ingesting brand-new long-form content (use brain_digest), saving a quick note (use brain_store), or retrieving knowledge (use brain_search). mode defaults to 'realtime'; batch uses phase='submit'|'poll'|'import'|'run', stats=True returns progress only, and limit, since_hours, or chunk_ids narrow scope. Returns enrichment progress or per-run results, and you can inspect enriched chunks afterward with brain_search or brain_entity.""",
             annotations=_WRITE,
-            inputSchema=_bounded_input_schema(
+            input_schema=_bounded_input_schema(
                 {
                     "type": "object",
                     "properties": {
@@ -1256,7 +1323,6 @@ _tool_palette = ToolPalette()
 _FULL_TOOL_NAMES = tuple(tool.name for tool in _full_tool_definitions())
 
 
-@server.list_tools()
 async def list_tools() -> list[Tool]:
     """List tools exposed by this server session's palette."""
     return _tool_palette.expose(_full_tool_definitions())
@@ -1265,7 +1331,6 @@ async def list_tools() -> list[Tool]:
 # --- Completions ---
 
 
-@server.completion()
 async def handle_completion(ref, argument) -> CompleteResult:
     """Provide completions for tool arguments."""
     if not hasattr(ref, "name"):
@@ -1286,7 +1351,7 @@ async def handle_completion(ref, argument) -> CompleteResult:
                     normalized.append(norm)
             if arg_value:
                 normalized = [p for p in normalized if p.lower().startswith(arg_value.lower())]
-            return CompleteResult(completion=Completion(values=sorted(normalized)[:20], hasMore=len(normalized) > 20))
+            return CompleteResult(completion=Completion(values=sorted(normalized)[:20], has_more=len(normalized) > 20))
         except Exception:
             return CompleteResult(completion=Completion(values=[]))
 
@@ -1326,7 +1391,6 @@ async def handle_completion(ref, argument) -> CompleteResult:
 # --- Tool routing ---
 
 
-@server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]):
     """Handle tool calls — 3 primary tools + backward-compat aliases."""
 
@@ -1336,7 +1400,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
         receipt = _tool_palette.expand(_FULL_TOOL_NAMES)
         return CallToolResult(
             content=[TextContent(type="text", text=json.dumps(receipt, sort_keys=True))],
-            structuredContent=receipt,
+            structured_content=receipt,
         )
 
     if name in _FULL_TOOL_NAMES and not _tool_palette.is_exposed(name):
@@ -1501,7 +1565,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                     ),
                 )
             ],
-            isError=True,
+            is_error=True,
         )
 
     elif name == "brain_entity":
@@ -1521,7 +1585,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
         if not query:
             return CallToolResult(
                 content=[TextContent(type="text", text="query is required for lookup action.")],
-                isError=True,
+                is_error=True,
             )
         return await _with_timeout(
             _brain_recall(
@@ -1545,7 +1609,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                     ),
                 )
             ],
-            isError=True,
+            is_error=True,
         )
 
     elif name == "brain_tags":
@@ -1561,7 +1625,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                     ),
                 )
             ],
-            isError=True,
+            is_error=True,
         )
 
     elif name == "brain_enrich":
