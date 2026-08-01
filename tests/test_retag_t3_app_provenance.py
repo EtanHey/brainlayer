@@ -2,7 +2,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from scripts.retag_t3_app_provenance import retag_t3_app_chunks
+from scripts.retag_t3_app_provenance import retag_t3_app_chunks, rollback_t3_app_chunks
 
 
 def _create_t3_state_db(path: Path, session_id: str) -> None:
@@ -52,14 +52,23 @@ def test_retag_only_explicitly_t3_linked_sessions_and_write_rollback_artifact(tm
         batch_size=1,
     )
 
-    assert report == {"linked_sessions": 1, "candidate_chunks": 2, "retagged_chunks": 2}
+    assert report == {"linked_sessions": 1, "candidate_chunks": 1, "retagged_chunks": 1}
     assert [json.loads(line) for line in rollback_artifact.read_text().splitlines()] == [
         {"id": "app-1", "provenance_class": "codex-session"},
-        {"id": "app-2", "provenance_class": "RAW-ETAN-DIRECT"},
     ]
     with sqlite3.connect(brain_db) as conn:
         assert dict(conn.execute("SELECT id, provenance_class FROM chunks")) == {
             "app-1": "t3-app-session",
-            "app-2": "t3-app-session",
+            "app-2": "RAW-ETAN-DIRECT",
+            "plain": "codex-session",
+        }
+
+    assert rollback_t3_app_chunks(db_path=brain_db, rollback_artifact=rollback_artifact, batch_size=1) == {
+        "restored_chunks": 1
+    }
+    with sqlite3.connect(brain_db) as conn:
+        assert dict(conn.execute("SELECT id, provenance_class FROM chunks")) == {
+            "app-1": "codex-session",
+            "app-2": "RAW-ETAN-DIRECT",
             "plain": "codex-session",
         }

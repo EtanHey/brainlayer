@@ -27,7 +27,7 @@ def _candidates(connection: sqlite3.Connection, linked_session_ids: set[str]) ->
     return [
         (chunk_id, provenance_class)
         for chunk_id, source_file, provenance_class in rows
-        if codex_session_id_from_source(source_file) in linked_session_ids and provenance_class != T3_APP_SESSION
+        if codex_session_id_from_source(source_file) in linked_session_ids and provenance_class == "codex-session"
     ]
 
 
@@ -90,21 +90,60 @@ def retag_t3_app_chunks(
         connection.close()
 
 
+def rollback_t3_app_chunks(
+    *,
+    db_path: str | Path,
+    rollback_artifact: str | Path,
+    batch_size: int = 5_000,
+) -> dict[str, int]:
+    """Restore provenance values recorded by a prior T3 re-tag artifact."""
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+
+    artifact_path = Path(rollback_artifact).expanduser()
+    rows = [json.loads(line) for line in artifact_path.read_text(encoding="utf-8").splitlines() if line]
+    candidates = [(row["id"], row["provenance_class"]) for row in rows]
+    connection = sqlite3.connect(Path(db_path).expanduser(), timeout=1.0)
+    try:
+        connection.execute("PRAGMA busy_timeout = 30000")
+        for batch_start in range(0, len(candidates), batch_size):
+            batch = candidates[batch_start : batch_start + batch_size]
+            connection.executemany(
+                "UPDATE chunks SET provenance_class = ? WHERE id = ?",
+                [(provenance_class, chunk_id) for chunk_id, provenance_class in batch],
+            )
+            connection.commit()
+            if ((batch_start // batch_size) + 1) % 3 == 0:
+                connection.execute("PRAGMA wal_checkpoint(FULL)")
+        connection.execute("PRAGMA wal_checkpoint(FULL)")
+        return {"restored_chunks": len(candidates)}
+    finally:
+        connection.close()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db-path", type=Path, default=Path.home() / ".local/share/brainlayer/brainlayer.db")
     parser.add_argument("--state-db", type=Path, default=Path.home() / ".t3/userdata/state.sqlite")
     parser.add_argument("--apply", action="store_true", help="Perform writes; default is read-only dry run")
+    parser.add_argument("--rollback", action="store_true", help="Restore values from --rollback-artifact")
     parser.add_argument("--rollback-artifact", type=Path, help="JSONL (id, provenance_class) captured before writes")
     parser.add_argument("--batch-size", type=int, default=5_000)
     args = parser.parse_args()
-    report: dict[str, Any] = retag_t3_app_chunks(
-        db_path=args.db_path,
-        state_db=args.state_db,
-        apply=args.apply,
-        rollback_artifact=args.rollback_artifact,
-        batch_size=args.batch_size,
-    )
+    if args.rollback:
+        if args.rollback_artifact is None:
+            parser.error("--rollback-artifact is required with --rollback")
+        report: dict[str, Any] = rollback_t3_app_chunks(
+            db_path=args.db_path, rollback_artifact=args.rollback_artifact, batch_size=args.batch_size
+        )
+    else:
+        report = retag_t3_app_chunks(
+            db_path=args.db_path,
+            state_db=args.state_db,
+            apply=args.apply,
+            rollback_artifact=args.rollback_artifact,
+            batch_size=args.batch_size,
+        )
     print(json.dumps(report, sort_keys=True))
 
 
