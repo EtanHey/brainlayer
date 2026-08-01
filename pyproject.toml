@@ -1,6 +1,6 @@
 [project]
 name = "brainlayer"
-version = "1.5.1"
+version = "1.5.2"
 description = "Persistent memory MCP server for AI agents — 13 tools, semantic search, knowledge graph, on-device SQLite"
 license = {text = "Apache-2.0"}
 readme = "README.md"
@@ -16,7 +16,8 @@ dependencies = [
     "sentence-transformers>=2.2.0",
 
     # MCP server
-    "mcp>=1.0.0",
+    "mcp>=2.0.0,<3.0.0",
+    "jsonschema>=4.20.0",  # MCP v2 low-level handlers require explicit schema validation
 
     # CLI
     "typer>=0.9.0",
@@ -131,12 +132,14 @@ exclude = [
 
 [tool.hatch.build.targets.wheel.force-include]
 "scripts/launchd" = "brainlayer/launchd"
+"scripts/hotlane_brainbar_daemon.py" = "brainlayer/launchd/hotlane_brainbar_daemon.py"
 "scripts/tier0-watchdog.sh" = "brainlayer/launchd/tier0-watchdog.sh"
 
 [tool.hatch.build.targets.sdist]
 only-include = [
     "src/brainlayer",
     "scripts/launchd",
+    "scripts/hotlane_brainbar_daemon.py",
     "scripts/tier0-watchdog.sh",
     "README.md",
     "LICENSE",

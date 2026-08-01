@@ -268,7 +268,7 @@ async def test_run_fan_out_propagates_degraded_scopes_without_dropping_good_resu
         if kwargs.get("date_from"):
             return CallToolResult(
                 content=[TextContent(type="text", text="Search error: database busy")],
-                isError=True,
+                is_error=True,
             )
         return _structured("good-hit")
 
@@ -296,7 +296,7 @@ async def test_run_fan_out_propagates_degraded_scopes_without_dropping_good_resu
 async def test_brain_search_schema_exposes_opt_in_fan_out():
     search_tool = next(tool for tool in await list_tools() if tool.name == "brain_search")
 
-    fan_out = search_tool.inputSchema["properties"]["fan_out"]
+    fan_out = search_tool.input_schema["properties"]["fan_out"]
     assert fan_out == {
         "type": "boolean",
         "default": False,

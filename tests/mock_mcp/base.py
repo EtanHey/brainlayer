@@ -14,10 +14,9 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Callable
 
-from mcp.client.session import ClientSession
+from mcp.client import Client
 from mcp.server import Server
-from mcp.shared.memory import create_connected_server_and_client_session
-from mcp.types import TextContent, Tool
+from mcp.types import CallToolRequestParams, CallToolResult, ListToolsResult, PaginatedRequestParams, TextContent, Tool
 
 
 @dataclass
@@ -33,8 +32,8 @@ class ToolCall:
 class MockMcpServer:
     """Base class for mock MCP servers with call logging.
 
-    Uses the low-level Server API with @server.list_tools() and
-    @server.call_tool() handlers. Subclasses register tools via
+    Uses the low-level Server API with ``on_list_tools`` and
+    ``on_call_tool`` handlers. Subclasses register tools via
     _register_tools() which populates _tools and _handlers dicts.
 
     Usage:
@@ -46,39 +45,32 @@ class MockMcpServer:
     """
 
     def __init__(self, name: str = "mock-server"):
-        self._server = Server(name)
         self._call_log: list[ToolCall] = []
         self._tools: dict[str, Tool] = {}
         self._handlers: dict[str, Callable] = {}
         self._register_tools()
-        self._setup_server_handlers()
+        self._server = Server(name, on_list_tools=self._list_tools, on_call_tool=self._call_tool)
 
-    def _setup_server_handlers(self) -> None:
-        """Wire up the MCP list_tools and call_tool handlers."""
-        mock_ref = self
+    async def _list_tools(self, _ctx: Any, _params: PaginatedRequestParams | None) -> ListToolsResult:
+        return ListToolsResult(tools=list(self._tools.values()))
 
-        @self._server.list_tools()
-        async def list_tools() -> list[Tool]:
-            return list(mock_ref._tools.values())
+    async def _call_tool(self, _ctx: Any, params: CallToolRequestParams) -> CallToolResult:
+        args = params.arguments or {}
+        handler = self._handlers.get(params.name)
+        if handler:
+            result = handler(args)
+            if inspect.isawaitable(result):
+                result = await result
+        else:
+            result = json.dumps({"mock": True, "tool": params.name})
 
-        @self._server.call_tool()
-        async def call_tool(name: str, arguments: dict[str, Any] | None = None) -> list[TextContent]:
-            args = arguments or {}
-            handler = mock_ref._handlers.get(name)
-            if handler:
-                result = handler(args)
-                if inspect.isawaitable(result):
-                    result = await result
-            else:
-                result = json.dumps({"mock": True, "tool": name})
+        if not isinstance(result, str):
+            result = json.dumps(result)
 
-            if not isinstance(result, str):
-                result = json.dumps(result)
+        call = ToolCall(tool_name=params.name, arguments=args, result=result)
+        self._call_log.append(call)
 
-            call = ToolCall(tool_name=name, arguments=args, result=result)
-            mock_ref._call_log.append(call)
-
-            return [TextContent(type="text", text=result)]
+        return CallToolResult(content=[TextContent(type="text", text=result)])
 
     @property
     def call_log(self) -> list[ToolCall]:
@@ -105,7 +97,7 @@ class MockMcpServer:
         self._tools[name] = Tool(
             name=name,
             description=description or f"Mock {name}",
-            inputSchema=schema,
+            input_schema=schema,
         )
         if handler:
             self._handlers[name] = handler
@@ -150,7 +142,7 @@ class MockMcpServer:
     # --- Connection ---
 
     @asynccontextmanager
-    async def connect(self) -> AsyncGenerator[ClientSession, None]:
+    async def connect(self) -> AsyncGenerator[Client, None]:
         """Create an in-memory client session connected to this mock server."""
-        async with create_connected_server_and_client_session(self._server) as session:
-            yield session
+        async with Client(self._server, mode="legacy") as client:
+            yield client

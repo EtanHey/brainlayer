@@ -88,37 +88,37 @@ class TestToolAnnotationsPresent:
                 continue
             ann = tool.annotations
             assert ann is not None, f"{tool.name}: annotations is None"
-            assert ann.readOnlyHint is not None, f"{tool.name}: readOnlyHint is None"
-            assert ann.destructiveHint is not None, f"{tool.name}: destructiveHint is None"
-            assert ann.idempotentHint is not None, f"{tool.name}: idempotentHint is None"
+            assert ann.read_only_hint is not None, f"{tool.name}: readOnlyHint is None"
+            assert ann.destructive_hint is not None, f"{tool.name}: destructiveHint is None"
+            assert ann.idempotent_hint is not None, f"{tool.name}: idempotentHint is None"
 
     @pytest.mark.parametrize("tool_name", sorted(READ_ONLY_TOOLS))
     def test_read_only_tools(self, tool_name):
-        """Read-only tools must have readOnlyHint=True."""
+        """Read-only tools must have read_only_hint=True."""
         tools = self._get_tools()
         tool = next(t for t in tools if t.name == tool_name)
-        assert tool.annotations.readOnlyHint is True, f"{tool_name} should be readOnly"
+        assert tool.annotations.read_only_hint is True, f"{tool_name} should be readOnly"
 
     @pytest.mark.parametrize("tool_name", sorted(WRITE_TOOLS))
     def test_write_tools(self, tool_name):
-        """Write tools must have readOnlyHint=False."""
+        """Write tools must have read_only_hint=False."""
         tools = self._get_tools()
         tool = next(t for t in tools if t.name == tool_name)
-        assert tool.annotations.readOnlyHint is False, f"{tool_name} should not be readOnly"
+        assert tool.annotations.read_only_hint is False, f"{tool_name} should not be readOnly"
 
     @pytest.mark.parametrize("tool_name", sorted(DESTRUCTIVE_TOOLS))
     def test_destructive_tools(self, tool_name):
-        """Destructive tools must have destructiveHint=True."""
+        """Destructive tools must have destructive_hint=True."""
         tools = self._get_tools()
         tool = next(t for t in tools if t.name == tool_name)
-        assert tool.annotations.destructiveHint is True, f"{tool_name} should be destructive"
+        assert tool.annotations.destructive_hint is True, f"{tool_name} should be destructive"
 
     @pytest.mark.parametrize("tool_name", sorted(IDEMPOTENT_TOOLS))
     def test_idempotent_tools(self, tool_name):
-        """Idempotent tools must have idempotentHint=True."""
+        """Idempotent tools must have idempotent_hint=True."""
         tools = self._get_tools()
         tool = next(t for t in tools if t.name == tool_name)
-        assert tool.annotations.idempotentHint is True, f"{tool_name} should be idempotent"
+        assert tool.annotations.idempotent_hint is True, f"{tool_name} should be idempotent"
 
 
 # ── B7: agent_id scoping on brain_store ────────────────────────────
@@ -133,7 +133,7 @@ class TestAgentIdScoping:
 
         tools = asyncio.run(list_tools())
         store_tool = next(t for t in tools if t.name == "brain_store")
-        props = store_tool.inputSchema["properties"]
+        props = store_tool.input_schema["properties"]
         assert "agent_id" in props, "brain_store must have agent_id parameter"
         assert props["agent_id"]["type"] == "string"
 
@@ -143,5 +143,5 @@ class TestAgentIdScoping:
 
         tools = asyncio.run(list_tools())
         store_tool = next(t for t in tools if t.name == "brain_store")
-        required = store_tool.inputSchema.get("required", [])
+        required = store_tool.input_schema.get("required", [])
         assert "agent_id" not in required

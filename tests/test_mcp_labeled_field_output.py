@@ -269,6 +269,5 @@ def test_brain_recall_tool_declares_anthropic_max_result_size():
 
     tools = asyncio.run(list_tools())
     recall = next(tool for tool in tools if tool.name == "brain_recall")
-    annotation_dump = recall.annotations.model_dump(by_alias=True)
 
-    assert annotation_dump["anthropic/maxResultSizeChars"] > 200_000
+    assert recall.meta["anthropic/maxResultSizeChars"] > 200_000

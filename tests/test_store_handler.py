@@ -176,7 +176,7 @@ async def test_store_validates_before_busy_deferral(tmp_path):
             project="test",
         )
 
-    assert result.isError is True
+    assert result.is_error is True
     assert "Validation error" in result.content[0].text
     assert not list(queue_dir.glob("mcp-*.jsonl"))
 

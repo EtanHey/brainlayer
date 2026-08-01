@@ -302,7 +302,7 @@ class TestDecisionTrackingFields:
 
         tools = asyncio.run(list_tools())
         store_tool = next(t for t in tools if t.name == "brain_store")
-        props = store_tool.inputSchema["properties"]
+        props = store_tool.input_schema["properties"]
 
         assert "confidence_score" in props
         assert "outcome" in props
@@ -328,5 +328,5 @@ class TestStoreNewAutoImportance:
 
         tools = asyncio.run(list_tools())
         store_tool = next(t for t in tools if t.name == "brain_store")
-        desc = store_tool.inputSchema["properties"]["importance"]["description"]
+        desc = store_tool.input_schema["properties"]["importance"]["description"]
         assert "auto" in desc.lower() or "Auto" in desc

@@ -529,7 +529,7 @@ class TestInputSchemaPresence:
 
         tools = asyncio.run(list_tools())
         brain_search = next(t for t in tools if t.name == "brain_search")
-        return brain_search.inputSchema["properties"]
+        return brain_search.input_schema["properties"]
 
     def test_new_params_in_schema(self):
         """brain_search tool schema includes all 4 new filter params."""
@@ -807,7 +807,7 @@ class TestBrainResumeSchema:
 
         tools = _full_tool_definitions()
         brain_resume = next(tool for tool in tools if tool.name == "brain_resume")
-        props = brain_resume.inputSchema["properties"]
+        props = brain_resume.input_schema["properties"]
 
         assert props["session_id"]["type"] == "string"
         assert props["lookback_days"]["type"] == "integer"

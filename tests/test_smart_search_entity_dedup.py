@@ -169,10 +169,10 @@ class TestBrainExpand:
 
         tools = asyncio.run(list_tools())
         expand_tool = next(t for t in tools if t.name == "brain_expand")
-        props = expand_tool.inputSchema.get("properties", {})
+        props = expand_tool.input_schema.get("properties", {})
         assert "chunk_id" in props
         assert "context" in props
-        assert "chunk_id" in expand_tool.inputSchema.get("required", [])
+        assert "chunk_id" in expand_tool.input_schema.get("required", [])
 
     def test_brain_expand_returns_target_chunk(self, tmp_path):
         """brain_expand returns at least the target chunk content."""
@@ -228,7 +228,7 @@ class TestBrainExpand:
         # It returns isError: true with a deprecation message.
         result = asyncio.run(call_tool("brain_expand", {"chunk_id": stored["id"]}))
 
-        assert result.isError is True
+        assert result.is_error is True
         assert "deprecated" in result.content[0].text.lower()
 
         # Equivalent via brain_search chunk_id expansion still works:
@@ -380,7 +380,7 @@ class TestMCPSchemaChanges:
 
         tools = asyncio.run(list_tools())
         search_tool = next(t for t in tools if t.name == "brain_search")
-        props = search_tool.inputSchema.get("properties", {})
+        props = search_tool.input_schema.get("properties", {})
         assert "detail" in props
         assert props["detail"]["default"] == "compact"
 
@@ -390,7 +390,7 @@ class TestMCPSchemaChanges:
 
         tools = asyncio.run(list_tools())
         search_tool = next(t for t in tools if t.name == "brain_search")
-        detail_schema = search_tool.inputSchema["properties"]["detail"]
+        detail_schema = search_tool.input_schema["properties"]["detail"]
         assert set(detail_schema.get("enum", [])) == {"compact", "full"}
 
     def test_server_instructions_mention_brain_expand(self):
