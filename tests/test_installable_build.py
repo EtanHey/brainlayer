@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tomllib
+import zipfile
 from pathlib import Path
 from typing import get_type_hints
 
@@ -38,6 +39,47 @@ def _write_full_launchd_env(env_file: Path) -> None:
         encoding="utf-8",
     )
     env_file.chmod(0o600)
+
+
+def _fake_launchctl_lines(
+    *behavior: str,
+    post_bootstrap_output: tuple[str, ...] = ("state = running", "pid = 4242"),
+) -> list[str]:
+    output_commands = [f'    printf "%s\\\\n" "{line}"' for line in post_bootstrap_output]
+    return [
+        "#!/usr/bin/env bash",
+        'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+        *behavior,
+        'if [ "$1" = "print" ]; then',
+        '  label="${2##*/}"',
+        '  if grep -Fq "${label}.plist" "$FAKE_LAUNCHCTL_LOG"; then',
+        *output_commands,
+        "    exit 0",
+        "  fi",
+        "  exit 1",
+        "fi",
+        "exit 0",
+        "",
+    ]
+
+
+def _write_fake_ps(fake_bin: Path) -> None:
+    fake_ps = fake_bin / "ps"
+    fake_ps.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'if [[ "$*" == *"ucomm="* ]]; then',
+                '  printf "%s\\n" "${FAKE_PS_NAME:-python3}"',
+                "else",
+                '  printf "%s\\n" "$FAKE_PS_COMMAND"',
+                "fi",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_ps.chmod(0o755)
 
 
 def test_brainlayer_cli_entrypoint_imports_typer_app(monkeypatch) -> None:
@@ -127,6 +169,27 @@ def test_install_launchd_times_out_with_clear_error(tmp_path: Path) -> None:
         assert "launchd installer timed out after 0.01s" in str(exc)
     else:
         raise AssertionError("install_launchd did not time out")
+
+
+def test_install_launchd_default_defers_to_bounded_installer_shutdown_waits(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.setup as setup_helpers
+    from brainlayer.setup import install_launchd
+
+    launchd_dir = tmp_path / "launchd"
+    launchd_dir.mkdir()
+    install_script = launchd_dir / "install.sh"
+    install_script.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    install_script.chmod(0o755)
+    calls: list[tuple[list[str], float | None]] = []
+
+    def record_run(command, *, env, check, timeout):  # noqa: ANN001, ARG001
+        calls.append((command, timeout))
+
+    monkeypatch.setattr(setup_helpers.subprocess, "run", record_run)
+
+    install_launchd("all", launchd_dir=launchd_dir)
+
+    assert calls == [([str(install_script), "all"], None)]
 
 
 def test_setup_command_writes_op_backed_env_without_plaintext_and_can_skip_launchd(tmp_path: Path) -> None:
@@ -372,12 +435,7 @@ def test_launchd_installer_preflights_all_before_loading_without_google_key(tmp_
     launchctl_log = tmp_path / "launchctl.log"
     fake_launchctl = fake_bin / "launchctl"
     fake_launchctl.write_text(
-        "\n".join(
-            [
-                "#!/usr/bin/env bash",
-                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
-            ]
-        ),
+        "\n".join(_fake_launchctl_lines()),
         encoding="utf-8",
     )
     fake_launchctl.chmod(0o755)
@@ -416,12 +474,7 @@ def test_launchd_installer_renders_brainlayer_python_override(tmp_path: Path) ->
     launchctl_log = tmp_path / "launchctl.log"
     fake_launchctl = fake_bin / "launchctl"
     fake_launchctl.write_text(
-        "\n".join(
-            [
-                "#!/usr/bin/env bash",
-                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
-            ]
-        ),
+        "\n".join(_fake_launchctl_lines()),
         encoding="utf-8",
     )
     fake_launchctl.chmod(0o755)
@@ -463,12 +516,7 @@ def test_packaged_launchd_installer_renders_p0_counter_console_shim(tmp_path: Pa
     launchctl_log = tmp_path / "launchctl.log"
     fake_launchctl = fake_bin / "launchctl"
     fake_launchctl.write_text(
-        "\n".join(
-            [
-                "#!/usr/bin/env bash",
-                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
-            ]
-        ),
+        "\n".join(_fake_launchctl_lines()),
         encoding="utf-8",
     )
     fake_launchctl.chmod(0o755)
@@ -524,14 +572,7 @@ def test_packaged_launchd_installer_installs_tier0_watchdog_without_env_runner(t
     launchctl_log = tmp_path / "launchctl.log"
     fake_launchctl = fake_bin / "launchctl"
     fake_launchctl.write_text(
-        "\n".join(
-            [
-                "#!/usr/bin/env bash",
-                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
-                "exit 0",
-                "",
-            ]
-        ),
+        "\n".join(_fake_launchctl_lines()),
         encoding="utf-8",
     )
     fake_launchctl.chmod(0o755)
@@ -546,6 +587,8 @@ def test_packaged_launchd_installer_installs_tier0_watchdog_without_env_runner(t
             "HOME": str(home),
             "BRAINLAYER_BIN": sys.executable,
             "PYTHON_BIN": sys.executable,
+            "BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS": "1",
+            "BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL": "0",
             "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
         },
         capture_output=True,
@@ -577,8 +620,8 @@ def test_packaged_launchd_installer_installs_tier0_watchdog_without_env_runner(t
     bootstrap_command = f"bootstrap {domain} {rendered}"
     print_command = f"print {domain}/com.brainlayer.tier0-watchdog"
     assert commands.count(bootstrap_command) == 1
-    assert commands.count(print_command) == 1
-    assert commands.index(bootstrap_command) < commands.index(print_command)
+    assert commands.count(print_command) == 2
+    assert commands[-1] == print_command
 
 
 def test_packaged_launchd_installer_installs_throughput_watchdog(tmp_path: Path) -> None:
@@ -591,14 +634,7 @@ def test_packaged_launchd_installer_installs_throughput_watchdog(tmp_path: Path)
     launchctl_log = tmp_path / "launchctl.log"
     fake_launchctl = fake_bin / "launchctl"
     fake_launchctl.write_text(
-        "\n".join(
-            [
-                "#!/usr/bin/env bash",
-                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
-                "exit 0",
-                "",
-            ]
-        ),
+        "\n".join(_fake_launchctl_lines()),
         encoding="utf-8",
     )
     fake_launchctl.chmod(0o755)
@@ -647,7 +683,130 @@ def test_packaged_launchd_installer_installs_throughput_watchdog(tmp_path: Path)
     assert f"print {domain}/com.brainlayer.throughput-watchdog" in commands
 
 
-def test_launchd_installer_renders_launchd_dir_for_maintenance_resume(tmp_path: Path) -> None:
+def test_packaged_launchd_installer_installs_hotlane_daemon(tmp_path: Path) -> None:
+    launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
+    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    source_script = REPO_ROOT / "scripts" / "hotlane_brainbar_daemon.py"
+    shutil.copy2(source_script, launchd_dir / "hotlane_brainbar_daemon.py")
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(_fake_launchctl_lines()),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+    _write_fake_ps(fake_bin)
+
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = home / ".config" / "brainlayer" / "brainlayer.env"
+    env_file.parent.mkdir(parents=True)
+    _write_full_launchd_env(env_file)
+    installed_script = home / ".local" / "lib" / "brainlayer" / "hotlane_brainbar_daemon.py"
+
+    result = subprocess.run(
+        [str(launchd_dir / "install.sh"), "hotlane"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": sys.executable,
+            "BRAINLAYER_PYTHON": sys.executable,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS": "1",
+            "BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL": "0",
+            "BRAINLAYER_LAUNCHD_VERIFY_INTERVAL": "0",
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+            "FAKE_PS_COMMAND": f"{sys.executable} {installed_script} --interval 1.0",
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert installed_script.read_bytes() == source_script.read_bytes()
+    assert os.access(installed_script, os.X_OK)
+
+    rendered = home / "Library" / "LaunchAgents" / "com.brainlayer.hotlane-brainbar.plist"
+    plist = plistlib.loads(rendered.read_bytes())
+    assert plist["ProgramArguments"][2] == str(installed_script)
+    backlog_index = plist["ProgramArguments"].index("--backlog-batch")
+    assert plist["ProgramArguments"][backlog_index + 1] == "4"
+    assert "__HOTLANE_BRAINBAR_DAEMON__" not in rendered.read_text(encoding="utf-8")
+
+    domain = f"gui/{os.getuid()}"
+    commands = launchctl_log.read_text(encoding="utf-8").splitlines()
+    assert f"bootstrap {domain} {rendered}" in commands
+    assert commands.count(f"print {domain}/com.brainlayer.hotlane-brainbar") >= 3
+
+
+def test_hotlane_installer_accepts_resolved_python_interpreter(tmp_path: Path) -> None:
+    launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
+    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    shutil.copy2(
+        REPO_ROOT / "scripts" / "hotlane_brainbar_daemon.py",
+        launchd_dir / "hotlane_brainbar_daemon.py",
+    )
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(_fake_launchctl_lines()),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+    _write_fake_ps(fake_bin)
+
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = home / ".config" / "brainlayer" / "brainlayer.env"
+    env_file.parent.mkdir(parents=True)
+    _write_full_launchd_env(env_file)
+    installed_script = home / ".local" / "lib" / "brainlayer" / "hotlane_brainbar_daemon.py"
+    python_shim = home / ".pyenv" / "shims" / "python3"
+
+    result = subprocess.run(
+        [str(launchd_dir / "install.sh"), "hotlane"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": str(python_shim),
+            "BRAINLAYER_PYTHON": str(python_shim),
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS": "1",
+            "BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL": "0",
+            "BRAINLAYER_LAUNCHD_VERIFY_INTERVAL": "0",
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+            "FAKE_PS_COMMAND": f"{sys.executable} {installed_script} --interval 1.0",
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Verified running: com.brainlayer.hotlane-brainbar (pid 4242)" in result.stdout
+
+
+def test_hotlane_installer_rejects_unload_timeout_before_bootstrap(tmp_path: Path) -> None:
+    launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
+    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    shutil.copy2(
+        REPO_ROOT / "scripts" / "hotlane_brainbar_daemon.py",
+        launchd_dir / "hotlane_brainbar_daemon.py",
+    )
+
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     launchctl_log = tmp_path / "launchctl.log"
@@ -657,8 +816,620 @@ def test_launchd_installer_renders_launchd_dir_for_maintenance_resume(tmp_path: 
             [
                 "#!/usr/bin/env bash",
                 'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+                'if [ "$1" = "print" ]; then',
+                '  printf "%s\\n" "state = running" "pid = 4242"',
+                "fi",
+                "exit 0",
+                "",
             ]
         ),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = home / ".config" / "brainlayer" / "brainlayer.env"
+    env_file.parent.mkdir(parents=True)
+    _write_full_launchd_env(env_file)
+
+    result = subprocess.run(
+        [str(launchd_dir / "install.sh"), "hotlane"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": sys.executable,
+            "BRAINLAYER_PYTHON": sys.executable,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS": "1",
+            "BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL": "0",
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "did not unload before replacement" in result.stderr
+    commands = launchctl_log.read_text(encoding="utf-8").splitlines()
+    assert not any(command.startswith("enable ") for command in commands)
+    assert not any(command.startswith("bootstrap ") for command in commands)
+
+
+def test_launchd_installer_derives_unload_window_from_plist_exit_timeout(tmp_path: Path) -> None:
+    launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
+    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    launchctl_count = tmp_path / "launchctl.count"
+    launchctl_count.write_text("0\n", encoding="utf-8")
+    bootstrapped = tmp_path / "bootstrapped"
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+                'case "$1" in',
+                "  bootout)",
+                "    exit 0",
+                "    ;;",
+                "  bootstrap)",
+                '    touch "$FAKE_BOOTSTRAPPED"',
+                "    exit 0",
+                "    ;;",
+                "  print)",
+                '    if [ -f "$FAKE_BOOTSTRAPPED" ]; then',
+                '      printf "%s\\n" "state = running" "pid = 4242"',
+                "      exit 0",
+                "    fi",
+                '    count="$(cat "$FAKE_LAUNCHCTL_COUNT")"',
+                "    count=$((count + 1))",
+                '    printf "%s\\n" "$count" > "$FAKE_LAUNCHCTL_COUNT"',
+                '    if [ "$count" -le 25 ]; then',
+                '      printf "%s\\n" "state = running" "pid = 5151"',
+                "      exit 0",
+                "    fi",
+                "    exit 1",
+                "    ;;",
+                "  *)",
+                "    exit 0",
+                "    ;;",
+                "esac",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+    fake_sleep = fake_bin / "sleep"
+    fake_sleep.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_sleep.chmod(0o755)
+
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = home / ".config" / "brainlayer" / "brainlayer.env"
+    env_file.parent.mkdir(parents=True)
+    _write_full_launchd_env(env_file)
+
+    result = subprocess.run(
+        [str(launchd_dir / "install.sh"), "maintenance-weekly"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": sys.executable,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+            "FAKE_LAUNCHCTL_COUNT": str(launchctl_count),
+            "FAKE_BOOTSTRAPPED": str(bootstrapped),
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert int(launchctl_count.read_text(encoding="utf-8")) == 26
+    assert bootstrapped.exists()
+
+
+def test_launchd_installer_rejects_invalid_unload_attempt_overrides(tmp_path: Path) -> None:
+    cases = [
+        ("watch", "BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS", "0"),
+        ("watch", "BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS", "-1"),
+        ("watch", "BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS", "invalid"),
+        ("hotlane", "BRAINLAYER_HOTLANE_UNLOAD_ATTEMPTS", "0"),
+    ]
+
+    for index, (service, env_name, value) in enumerate(cases):
+        case_dir = tmp_path / str(index)
+        launchd_dir = case_dir / "site-packages" / "brainlayer" / "launchd"
+        shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+        if service == "hotlane":
+            shutil.copy2(
+                REPO_ROOT / "scripts" / "hotlane_brainbar_daemon.py",
+                launchd_dir / "hotlane_brainbar_daemon.py",
+            )
+
+        fake_bin = case_dir / "bin"
+        fake_bin.mkdir()
+        launchctl_log = case_dir / "launchctl.log"
+        fake_launchctl = fake_bin / "launchctl"
+        fake_launchctl.write_text("\n".join(_fake_launchctl_lines()), encoding="utf-8")
+        fake_launchctl.chmod(0o755)
+
+        home = case_dir / "home"
+        home.mkdir()
+        env_file = home / ".config" / "brainlayer" / "brainlayer.env"
+        env_file.parent.mkdir(parents=True)
+        _write_full_launchd_env(env_file)
+
+        result = subprocess.run(
+            [str(launchd_dir / "install.sh"), service],
+            env={
+                **os.environ,
+                "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                "HOME": str(home),
+                "BRAINLAYER_BIN": sys.executable,
+                "PYTHON_BIN": sys.executable,
+                "BRAINLAYER_PYTHON": sys.executable,
+                "BRAINLAYER_ENV_FILE": str(env_file),
+                env_name: value,
+                "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+            },
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+        assert result.returncode != 0
+        assert "unload attempts must be a positive integer" in result.stderr
+        assert not launchctl_log.exists()
+
+
+def test_hotlane_installer_accepts_supervisor_reload_before_unload_poll(tmp_path: Path) -> None:
+    launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
+    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    shutil.copy2(
+        REPO_ROOT / "scripts" / "hotlane_brainbar_daemon.py",
+        launchd_dir / "hotlane_brainbar_daemon.py",
+    )
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    launchctl_state = tmp_path / "launchctl.state"
+    launchctl_state.write_text("initial\n", encoding="utf-8")
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+                'state="$(cat "$FAKE_LAUNCHCTL_STATE")"',
+                'case "$1" in',
+                "  bootout)",
+                "    # Simulate a supervisor reload before the first unload poll.",
+                '    printf "%s\\n" "reloaded" > "$FAKE_LAUNCHCTL_STATE"',
+                "    exit 0",
+                "    ;;",
+                "  bootstrap)",
+                "    exit 5",
+                "    ;;",
+                "  print)",
+                '    if [ "$state" = "initial" ]; then',
+                '      printf "%s\\n" "state = running" "pid = 5151"',
+                "    else",
+                '      printf "%s\\n" "state = running" "pid = 5152"',
+                "    fi",
+                "    exit 0",
+                "    ;;",
+                "  *)",
+                "    exit 0",
+                "    ;;",
+                "esac",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+    _write_fake_ps(fake_bin)
+
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = home / ".config" / "brainlayer" / "brainlayer.env"
+    env_file.parent.mkdir(parents=True)
+    _write_full_launchd_env(env_file)
+    installed_script = home / ".local" / "lib" / "brainlayer" / "hotlane_brainbar_daemon.py"
+
+    result = subprocess.run(
+        [str(launchd_dir / "install.sh"), "hotlane"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": sys.executable,
+            "BRAINLAYER_PYTHON": sys.executable,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS": "1",
+            "BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL": "0",
+            "BRAINLAYER_LAUNCHD_VERIFY_INTERVAL": "0",
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+            "FAKE_LAUNCHCTL_STATE": str(launchctl_state),
+            "FAKE_PS_COMMAND": f"{sys.executable} {installed_script} --interval 1.0",
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "reloaded before the unload poll" in result.stderr
+    assert "Verified running: com.brainlayer.hotlane-brainbar (pid 5152)" in result.stdout
+    commands = launchctl_log.read_text(encoding="utf-8").splitlines()
+    assert not any(command.startswith("bootstrap ") for command in commands)
+
+
+def test_launchd_installer_accepts_supervisor_reload_for_healed_service(tmp_path: Path) -> None:
+    launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
+    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    launchctl_state = tmp_path / "launchctl.state"
+    launchctl_state.write_text("initial\n", encoding="utf-8")
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+                'state="$(cat "$FAKE_LAUNCHCTL_STATE")"',
+                'case "$1" in',
+                "  bootout)",
+                '    printf "%s\\n" "reloaded" > "$FAKE_LAUNCHCTL_STATE"',
+                "    exit 0",
+                "    ;;",
+                "  bootstrap)",
+                "    exit 5",
+                "    ;;",
+                "  print)",
+                '    if [ "$state" = "initial" ]; then',
+                '      printf "%s\\n" "state = running" "pid = 5151"',
+                "    else",
+                '      printf "%s\\n" "state = running" "pid = 5152"',
+                "    fi",
+                "    exit 0",
+                "    ;;",
+                "  *)",
+                "    exit 0",
+                "    ;;",
+                "esac",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = home / ".config" / "brainlayer" / "brainlayer.env"
+    env_file.parent.mkdir(parents=True)
+    _write_full_launchd_env(env_file)
+
+    result = subprocess.run(
+        [str(launchd_dir / "install.sh"), "watch"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": sys.executable,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS": "1",
+            "BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL": "0",
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+            "FAKE_LAUNCHCTL_STATE": str(launchctl_state),
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "reloaded before the unload poll" in result.stderr
+    commands = launchctl_log.read_text(encoding="utf-8").splitlines()
+    assert not any(command.startswith("bootstrap ") for command in commands)
+
+
+def test_hotlane_installer_rejects_pid_change_after_failed_bootout(tmp_path: Path) -> None:
+    launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
+    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    shutil.copy2(
+        REPO_ROOT / "scripts" / "hotlane_brainbar_daemon.py",
+        launchd_dir / "hotlane_brainbar_daemon.py",
+    )
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    launchctl_state = tmp_path / "launchctl.state"
+    launchctl_state.write_text("initial\n", encoding="utf-8")
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+                'state="$(cat "$FAKE_LAUNCHCTL_STATE")"',
+                'case "$1" in',
+                "  bootout)",
+                '    printf "%s\\n" "restarted" > "$FAKE_LAUNCHCTL_STATE"',
+                "    exit 5",
+                "    ;;",
+                "  print)",
+                '    if [ "$state" = "initial" ]; then',
+                '      printf "%s\\n" "state = running" "pid = 5151"',
+                "    else",
+                '      printf "%s\\n" "state = running" "pid = 5152"',
+                "    fi",
+                "    exit 0",
+                "    ;;",
+                "  *)",
+                "    exit 0",
+                "    ;;",
+                "esac",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = home / ".config" / "brainlayer" / "brainlayer.env"
+    env_file.parent.mkdir(parents=True)
+    _write_full_launchd_env(env_file)
+
+    result = subprocess.run(
+        [str(launchd_dir / "install.sh"), "hotlane"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": sys.executable,
+            "BRAINLAYER_PYTHON": sys.executable,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS": "1",
+            "BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL": "0",
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+            "FAKE_LAUNCHCTL_STATE": str(launchctl_state),
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "did not unload before replacement" in result.stderr
+    commands = launchctl_log.read_text(encoding="utf-8").splitlines()
+    assert not any(command.startswith("enable ") for command in commands)
+    assert not any(command.startswith("bootstrap ") for command in commands)
+
+
+def test_hotlane_installer_rejects_launchd_job_that_is_not_running(tmp_path: Path) -> None:
+    launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
+    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    shutil.copy2(
+        REPO_ROOT / "scripts" / "hotlane_brainbar_daemon.py",
+        launchd_dir / "hotlane_brainbar_daemon.py",
+    )
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(_fake_launchctl_lines(post_bootstrap_output=("state = waiting", "last exit code = 2"))),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = home / ".config" / "brainlayer" / "brainlayer.env"
+    env_file.parent.mkdir(parents=True)
+    _write_full_launchd_env(env_file)
+
+    result = subprocess.run(
+        [str(launchd_dir / "install.sh"), "hotlane"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": sys.executable,
+            "BRAINLAYER_PYTHON": sys.executable,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS": "1",
+            "BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL": "0",
+            "BRAINLAYER_LAUNCHD_VERIFY_ATTEMPTS": "2",
+            "BRAINLAYER_LAUNCHD_VERIFY_INTERVAL": "0",
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "hotlane runtime verification failed" in result.stderr
+
+
+def test_hotlane_installer_rejects_stable_disabled_env_runner_pid(tmp_path: Path) -> None:
+    launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
+    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    shutil.copy2(
+        REPO_ROOT / "scripts" / "hotlane_brainbar_daemon.py",
+        launchd_dir / "hotlane_brainbar_daemon.py",
+    )
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(_fake_launchctl_lines()),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+    _write_fake_ps(fake_bin)
+
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = home / ".config" / "brainlayer" / "brainlayer.env"
+    env_file.parent.mkdir(parents=True)
+    _write_full_launchd_env(env_file)
+    installed_script = home / ".local" / "lib" / "brainlayer" / "hotlane_brainbar_daemon.py"
+
+    result = subprocess.run(
+        [str(launchd_dir / "install.sh"), "hotlane"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": sys.executable,
+            "BRAINLAYER_PYTHON": sys.executable,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS": "1",
+            "BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL": "0",
+            "BRAINLAYER_LAUNCHD_VERIFY_ATTEMPTS": "2",
+            "BRAINLAYER_LAUNCHD_VERIFY_INTERVAL": "0",
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+            "FAKE_PS_NAME": "bash",
+            "FAKE_PS_COMMAND": (
+                f"/bin/bash {home}/.local/lib/brainlayer/brainlayer-env-run.sh {sys.executable} {installed_script}"
+            ),
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "does not match packaged hotlane daemon" in result.stderr
+
+
+def test_hotlane_installer_accepts_supervisor_bootstrap_race_after_confirmed_unload(tmp_path: Path) -> None:
+    launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
+    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    shutil.copy2(
+        REPO_ROOT / "scripts" / "hotlane_brainbar_daemon.py",
+        launchd_dir / "hotlane_brainbar_daemon.py",
+    )
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_state = tmp_path / "launchctl.state"
+    launchctl_state.write_text("loaded\n", encoding="utf-8")
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'state="$(cat "$FAKE_LAUNCHCTL_STATE")"',
+                'case "$1" in',
+                "  bootout)",
+                '    printf "%s\\n" "unloaded" > "$FAKE_LAUNCHCTL_STATE"',
+                "    exit 0",
+                "    ;;",
+                "  bootstrap)",
+                "    # Simulate the fleet watchdog winning the race with this bootstrap.",
+                '    printf "%s\\n" "loaded" > "$FAKE_LAUNCHCTL_STATE"',
+                "    exit 5",
+                "    ;;",
+                "  print)",
+                '    if [ "$state" = "loaded" ]; then',
+                '      printf "%s\\n" "state = running" "pid = 5152"',
+                "      exit 0",
+                "    fi",
+                "    exit 1",
+                "    ;;",
+                "  *)",
+                "    exit 0",
+                "    ;;",
+                "esac",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+    _write_fake_ps(fake_bin)
+
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = home / ".config" / "brainlayer" / "brainlayer.env"
+    env_file.parent.mkdir(parents=True)
+    _write_full_launchd_env(env_file)
+    installed_script = home / ".local" / "lib" / "brainlayer" / "hotlane_brainbar_daemon.py"
+
+    result = subprocess.run(
+        [str(launchd_dir / "install.sh"), "hotlane"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": sys.executable,
+            "BRAINLAYER_PYTHON": sys.executable,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS": "1",
+            "BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL": "0",
+            "BRAINLAYER_LAUNCHD_VERIFY_INTERVAL": "0",
+            "FAKE_LAUNCHCTL_STATE": str(launchctl_state),
+            "FAKE_PS_COMMAND": f"{sys.executable} {installed_script} --interval 1.0",
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "bootstrap raced with another supervisor" in result.stderr
+    assert "Verified running: com.brainlayer.hotlane-brainbar (pid 5152)" in result.stdout
+
+
+def test_launchd_installer_renders_launchd_dir_for_maintenance_resume(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(_fake_launchctl_lines()),
         encoding="utf-8",
     )
     fake_launchctl.chmod(0o755)
@@ -706,12 +1477,7 @@ def test_launchd_installer_renders_homebrew_opt_symlink_instead_of_cellar_versio
     launchctl_log = tmp_path / "launchctl.log"
     fake_launchctl = fake_bin / "launchctl"
     fake_launchctl.write_text(
-        "\n".join(
-            [
-                "#!/usr/bin/env bash",
-                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
-            ]
-        ),
+        "\n".join(_fake_launchctl_lines()),
         encoding="utf-8",
     )
     fake_launchctl.chmod(0o755)
@@ -761,14 +1527,12 @@ def test_launchd_installer_attempts_remaining_services_after_bootstrap_error(tmp
     fake_launchctl = fake_bin / "launchctl"
     fake_launchctl.write_text(
         "\n".join(
-            [
-                "#!/usr/bin/env bash",
-                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+            _fake_launchctl_lines(
                 'if [ "$1" = "bootstrap" ] && [[ "$3" == *"maintenance-nightly.plist" ]]; then',
                 '  printf "%s\\n" "bootstrap failed" >&2',
                 "  exit 5",
                 "fi",
-            ]
+            )
         ),
         encoding="utf-8",
     )
@@ -969,9 +1733,7 @@ def test_launchd_enable_missing_service_is_retried_after_bootstrap(tmp_path: Pat
     fake_launchctl = fake_bin / "launchctl"
     fake_launchctl.write_text(
         "\n".join(
-            [
-                "#!/usr/bin/env bash",
-                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+            _fake_launchctl_lines(
                 'if [ "$1" = "enable" ] && [ ! -f "$FAKE_BOOTSTRAPPED" ]; then',
                 '  printf "%s\\n" "Could not find service" >&2',
                 "  exit 113",
@@ -979,7 +1741,7 @@ def test_launchd_enable_missing_service_is_retried_after_bootstrap(tmp_path: Pat
                 'if [ "$1" = "bootstrap" ]; then',
                 '  touch "$FAKE_BOOTSTRAPPED"',
                 "fi",
-            ]
+            )
         ),
         encoding="utf-8",
     )
@@ -999,6 +1761,8 @@ def test_launchd_enable_missing_service_is_retried_after_bootstrap(tmp_path: Pat
             "BRAINLAYER_BIN": sys.executable,
             "PYTHON_BIN": sys.executable,
             "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS": "1",
+            "BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL": "0",
             "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
             "FAKE_BOOTSTRAPPED": str(bootstrap_state),
         },
@@ -1009,7 +1773,14 @@ def test_launchd_enable_missing_service_is_retried_after_bootstrap(tmp_path: Pat
 
     commands = launchctl_log.read_text(encoding="utf-8").splitlines()
     assert result.returncode == 0, result.stdout + result.stderr
-    assert [command.split()[0] for command in commands] == ["bootout", "enable", "bootstrap", "enable", "print"]
+    assert [command.split()[0] for command in commands] == [
+        "bootout",
+        "print",
+        "enable",
+        "bootstrap",
+        "enable",
+        "print",
+    ]
 
 
 def test_launchd_all_does_not_load_backup_jobs_when_wrapper_render_fails(tmp_path: Path) -> None:
@@ -1056,6 +1827,8 @@ def test_launchd_all_does_not_load_backup_jobs_when_wrapper_render_fails(tmp_pat
             "BRAINLAYER_BIN": sys.executable,
             "PYTHON_BIN": sys.executable,
             "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS": "1",
+            "BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL": "0",
             "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
         },
         capture_output=True,
@@ -1077,14 +1850,12 @@ def test_launchd_all_preserves_legacy_enrich_when_replacement_batch_fails(tmp_pa
     fake_launchctl = fake_bin / "launchctl"
     fake_launchctl.write_text(
         "\n".join(
-            [
-                "#!/usr/bin/env bash",
-                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+            _fake_launchctl_lines(
                 'if [ "$1" = "bootstrap" ] && [[ "$3" == *"com.brainlayer.enrichment.plist" ]]; then',
                 '  printf "%s\\n" "replacement bootstrap failed" >&2',
                 "  exit 5",
                 "fi",
-            ]
+            )
         ),
         encoding="utf-8",
     )
@@ -1103,6 +1874,8 @@ def test_launchd_all_preserves_legacy_enrich_when_replacement_batch_fails(tmp_pa
             "BRAINLAYER_BIN": sys.executable,
             "PYTHON_BIN": sys.executable,
             "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS": "1",
+            "BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL": "0",
             "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
         },
         capture_output=True,
@@ -1125,14 +1898,12 @@ def test_launchd_all_removes_legacy_enrich_when_replacement_loads_despite_siblin
     fake_launchctl = fake_bin / "launchctl"
     fake_launchctl.write_text(
         "\n".join(
-            [
-                "#!/usr/bin/env bash",
-                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+            _fake_launchctl_lines(
                 'if [ "$1" = "bootstrap" ] && [[ "$3" == *"com.brainlayer.repair-fts.plist" ]]; then',
                 '  printf "%s\\n" "repair bootstrap failed" >&2',
                 "  exit 5",
                 "fi",
-            ]
+            )
         ),
         encoding="utf-8",
     )
@@ -1151,6 +1922,8 @@ def test_launchd_all_removes_legacy_enrich_when_replacement_loads_despite_siblin
             "BRAINLAYER_BIN": sys.executable,
             "PYTHON_BIN": sys.executable,
             "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS": "1",
+            "BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL": "0",
             "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
         },
         capture_output=True,
@@ -1217,3 +1990,20 @@ def test_wheel_contains_cli_and_launchd_templates(tmp_path: Path) -> None:
     assert "brainlayer/launchd/tier0-watchdog.sh" in listing
     assert "brainlayer/launchd/com.brainlayer.throughput-watchdog.plist" in listing
     assert "brainlayer/launchd/throughput-watchdog.py" in listing
+    assert "brainlayer/launchd/hotlane_brainbar_daemon.py" in listing
+
+    extracted = tmp_path / "installed-wheel"
+    with zipfile.ZipFile(wheel) as archive:
+        archive.extractall(extracted)
+    packaged_hotlane = extracted / "brainlayer" / "launchd" / "hotlane_brainbar_daemon.py"
+    help_result = subprocess.run(
+        [sys.executable, str(packaged_hotlane), "--help"],
+        cwd=extracted,
+        env={**os.environ, "PYTHONPATH": str(extracted)},
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert help_result.returncode == 0, help_result.stdout + help_result.stderr
+    assert "--backlog-batch" in help_result.stdout
