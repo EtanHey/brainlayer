@@ -27,10 +27,6 @@ from pathlib import Path
 # Add src to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from dotenv import load_dotenv
-
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-
 from brainlayer.paths import get_db_path
 from brainlayer.pipeline.batch_extraction import DEFAULT_SEED_ENTITIES
 from brainlayer.pipeline.entity_extraction import (
