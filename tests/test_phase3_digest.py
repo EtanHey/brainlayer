@@ -302,7 +302,7 @@ def test_brain_digest_schema_has_required_fields():
 
     tools = _full_tool_definitions()
     digest = next(t for t in tools if t.name == "brain_digest")
-    props = digest.inputSchema.get("properties", {})
+    props = digest.input_schema.get("properties", {})
     assert "content" in props
     assert "title" in props
     assert "participants" in props
@@ -346,7 +346,7 @@ def test_brain_entity_schema():
 
     tools = _full_tool_definitions()
     entity_tool = next(t for t in tools if t.name == "brain_entity")
-    props = entity_tool.inputSchema.get("properties", {})
+    props = entity_tool.input_schema.get("properties", {})
     assert "query" in props
 
 

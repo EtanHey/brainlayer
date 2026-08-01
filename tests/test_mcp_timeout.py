@@ -13,5 +13,5 @@ async def test_with_timeout_reads_timeout_budget_at_call_time(monkeypatch):
 
     result = await asyncio.wait_for(mcp._with_timeout(asyncio.sleep(10)), timeout=0.1)
 
-    assert result.isError is True
+    assert result.is_error is True
     assert "BrainLayer timeout (0.001s)" in result.content[0].text

@@ -75,7 +75,7 @@ class TestEntityTypeEnum:
     def test_entity_type_enum_matches_hierarchy(self):
         """Every type in hierarchy seed must exist in the MCP enum."""
         tool = _get_brain_entity_tool()
-        schema = tool.inputSchema
+        schema = tool.input_schema
         enum_values = set(schema["properties"]["entity_type"]["enum"])
         missing = _HIERARCHY_SEED_TYPES - enum_values
         assert not missing, f"Hierarchy types missing from MCP enum: {missing}"
@@ -83,7 +83,7 @@ class TestEntityTypeEnum:
     def test_entity_type_enum_includes_extra_db_types(self):
         """Extra DB types (technology, library, company, location) must be in enum."""
         tool = _get_brain_entity_tool()
-        schema = tool.inputSchema
+        schema = tool.input_schema
         enum_values = set(schema["properties"]["entity_type"]["enum"])
         missing = _EXTRA_DB_TYPES - enum_values
         assert not missing, f"Extra DB types missing from MCP enum: {missing}"
@@ -94,14 +94,14 @@ class TestEntitySchemaParams:
 
     def test_brain_entity_schema_has_action_param(self):
         tool = _get_brain_entity_tool()
-        props = tool.inputSchema["properties"]
+        props = tool.input_schema["properties"]
         assert "action" in props, "action param missing from brain_entity schema"
         assert props["action"]["enum"] == ["lookup", "list"]
         assert props["action"]["default"] == "lookup"
 
     def test_brain_entity_schema_has_limit_offset(self):
         tool = _get_brain_entity_tool()
-        props = tool.inputSchema["properties"]
+        props = tool.input_schema["properties"]
         assert "limit" in props, "limit param missing from brain_entity schema"
         assert props["limit"]["type"] == "integer"
         assert props["limit"]["default"] == 20
@@ -116,7 +116,7 @@ class TestEntitySchemaParams:
     def test_brain_entity_query_not_required(self):
         """query should not be required (list action doesn't need it)."""
         tool = _get_brain_entity_tool()
-        required = tool.inputSchema.get("required", [])
+        required = tool.input_schema.get("required", [])
         assert "query" not in required, "query should not be required (list action doesn't use it)"
 
 

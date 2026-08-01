@@ -42,12 +42,12 @@ def test_python_palette_expands_once_and_dispatches_deferred_tools(monkeypatch):
     assert tuple(tool.name for tool in asyncio.run(list_tools())) == CORE_WITH_CONTROL
 
     before = asyncio.run(call_tool("brain_tags", {}))
-    assert before.isError is True
+    assert before.is_error is True
     assert "not exposed" in before.content[0].text
 
     first = asyncio.run(call_tool("expand_palette", {}))
-    assert first.isError is False
-    assert first.structuredContent == {
+    assert first.is_error is False
+    assert first.structured_content == {
         "expanded": True,
         "already_expanded": False,
         "registered_tools": [tool.name for tool in _full_tool_definitions() if tool.name not in CORE_TOOL_NAMES],
@@ -58,7 +58,7 @@ def test_python_palette_expands_once_and_dispatches_deferred_tools(monkeypatch):
     assert "deprecated" in after.content[0].text
 
     second = asyncio.run(call_tool("expand_palette", {}))
-    assert second.structuredContent == {
+    assert second.structured_content == {
         "expanded": False,
         "already_expanded": True,
         "registered_tools": [],
