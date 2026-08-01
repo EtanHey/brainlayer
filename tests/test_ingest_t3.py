@@ -3,6 +3,7 @@
 import json
 import sqlite3
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from typer.testing import CliRunner
@@ -11,6 +12,16 @@ from brainlayer.alarm import BrainLayerAlarm
 from brainlayer.embeddings import EmbeddedChunk
 from brainlayer.pipeline.chunk import Chunk
 from brainlayer.pipeline.classify import ContentType, ContentValue
+
+
+def _is_uuid(value: str | None) -> bool:
+    if value is None:
+        return False
+    try:
+        UUID(value)
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return True
 
 
 def _create_t3_fixture(path: Path, *, drift: bool = False) -> Path:
@@ -50,6 +61,10 @@ def _create_t3_fixture(path: Path, *, drift: bool = False) -> Path:
                 resume_cursor_json TEXT,
                 runtime_payload_json TEXT
             );
+            CREATE TABLE projection_projects (
+                project_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL
+            );
             """
         )
         if drift:
@@ -61,6 +76,10 @@ def _create_t3_fixture(path: Path, *, drift: bool = False) -> Path:
                 ("thread-1", "brainlayer", "Mirrored thread", "2026-07-01T00:00:00Z", "2026-07-01T00:02:00Z"),
                 ("thread-2", "golems", "Unmirrored thread", "2026-07-02T00:00:00Z", "2026-07-02T00:01:00Z"),
             ],
+        )
+        conn.executemany(
+            "INSERT INTO projection_projects VALUES (?, ?)",
+            [("brainlayer", "BrainLayer"), ("golems", "Golems")],
         )
         if not drift:
             conn.executemany(
@@ -117,9 +136,24 @@ def test_t3_reader_maps_messages_and_thread_provider_linkage(tmp_path):
     assert [thread.thread_id for thread in threads] == ["thread-1", "thread-2"]
     assert [message.message_id for message in threads[0].messages] == ["message-1", "message-2"]
     assert threads[0].provider_session_id == "provider-session-1"
+    assert threads[0].project_name == "BrainLayer"
     assert threads[0].mirrored is True
     assert threads[1].provider_session_id is None
+    assert threads[1].project_name == "Golems"
     assert threads[1].mirrored is False
+
+
+def test_t3_project_mapping_missing_row_falls_back_to_none(tmp_path):
+    from brainlayer.ingest.t3 import T3Reader
+
+    state_db = _create_t3_fixture(tmp_path / "state.sqlite")
+    with sqlite3.connect(state_db) as conn:
+        conn.execute("DELETE FROM projection_projects WHERE project_id = ?", ("golems",))
+
+    threads = T3Reader(state_db, health_path=tmp_path / "t3-health.json").read_threads()
+
+    assert threads[0].project_name == "BrainLayer"
+    assert threads[1].project_name is None
 
 
 def test_t3_reader_does_not_require_unused_session_projection(tmp_path):
@@ -209,7 +243,8 @@ def test_t3_ingestion_keeps_short_messages_and_sets_first_class_provenance(tmp_p
     assert len(indexed) == 3
     assert {chunk.metadata["provenance_class"] for chunk in indexed} == {"t3-thread"}
     assert {chunk.metadata["source"] for chunk in indexed} == {"t3"}
-    assert {chunk.metadata["project"] for chunk in indexed} == {"brainlayer", "golems"}
+    assert {chunk.metadata["project"] for chunk in indexed} == {"BrainLayer", "Golems"}
+    assert all(not _is_uuid(chunk.metadata["project"]) for chunk in indexed)
     assert indexed[0].metadata["t3_provider_name"] == "codex"
     assert indexed[0].metadata["t3_provider_session_id"] == "provider-session-1"
     assert indexed[0].metadata["t3_mirrored"] is True

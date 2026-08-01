@@ -28,6 +28,7 @@ DEFAULT_T3_HEALTH_PATH = Path("~/.local/share/brainlayer/t3-health.json").expand
 _REQUIRED_COLUMNS: dict[str, frozenset[str]] = {
     "projection_threads": frozenset({"thread_id", "project_id", "title", "created_at"}),
     "projection_thread_messages": frozenset({"message_id", "thread_id", "role", "text", "created_at"}),
+    "projection_projects": frozenset({"project_id", "title"}),
     "provider_session_runtime": frozenset({"thread_id", "provider_name", "resume_cursor_json"}),
 }
 
@@ -47,6 +48,7 @@ class T3Thread:
     project_id: str
     title: str
     created_at: str
+    project_name: str | None = None
     messages: tuple[T3Message, ...] = ()
     provider_name: str | None = None
     provider_session_id: str | None = None
@@ -183,9 +185,10 @@ class T3Reader:
     def _read_snapshot(conn: sqlite3.Connection) -> list[T3Thread]:
         thread_rows = conn.execute(
             """
-            SELECT thread_id, project_id, title, created_at
-              FROM projection_threads
-             ORDER BY created_at, thread_id
+            SELECT t.thread_id, t.project_id, p.title, t.title, t.created_at
+              FROM projection_threads AS t
+              LEFT JOIN projection_projects AS p ON p.project_id = t.project_id
+             ORDER BY t.created_at, t.thread_id
             """
         ).fetchall()
         message_rows = conn.execute(
@@ -216,7 +219,7 @@ class T3Reader:
 
         runtimes = {row[0]: row[1:] for row in runtime_rows}
         threads = []
-        for thread_id, project_id, title, created_at in thread_rows:
+        for thread_id, project_id, project_name, title, created_at in thread_rows:
             runtime = runtimes.get(thread_id)
             runtime_provider = runtime[0] if runtime else None
             runtime_session_id = _provider_session_id(runtime[1]) if runtime else None
@@ -226,6 +229,7 @@ class T3Reader:
                     project_id=project_id,
                     title=title,
                     created_at=created_at,
+                    project_name=project_name,
                     messages=tuple(messages_by_thread.get(thread_id, ())),
                     provider_name=runtime_provider,
                     provider_session_id=runtime_session_id,
@@ -304,7 +308,7 @@ def _message_chunks(thread: T3Thread, message: T3Message) -> list:
         "created_at": message.created_at,
         "allow_duplicate": True,
         "message_id": message.message_id,
-        "project": thread.project_id,
+        "project": thread.project_name,
         "provenance_class": T3_PROVENANCE_CLASS,
         "sender": message.role,
         "session_id": thread.thread_id,
