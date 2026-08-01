@@ -50,6 +50,8 @@ def test_health_check_cli_forwards_mode_a_config_fields(monkeypatch, tmp_path):
             str(tmp_path / "offsets.json"),
             "--watcher-health-path",
             str(tmp_path / "watcher-health.json"),
+            "--t3-health-path",
+            str(tmp_path / "t3-health.json"),
             "--json",
         ],
     )
@@ -68,6 +70,7 @@ def test_health_check_cli_forwards_mode_a_config_fields(monkeypatch, tmp_path):
     assert config.queue_dir == tmp_path / "queue"
     assert config.offsets_path == tmp_path / "offsets.json"
     assert config.watcher_health_path == tmp_path / "watcher-health.json"
+    assert config.t3_health_path == tmp_path / "t3-health.json"
 
 
 def test_pause_and_resume_record_labels_and_call_launchctl(monkeypatch, tmp_path):
