@@ -309,3 +309,23 @@ def test_groq_rebuild_entity_payload_preserves_source_subtype():
     assert entity.entity_type == "source"
     assert entity.entity_subtype == "channel"
     assert entity.start == 6
+
+
+def test_kg_rebuild_module_import_does_not_require_python_dotenv(monkeypatch):
+    import builtins
+    import importlib
+    import sys
+
+    real_import = builtins.__import__
+
+    def import_without_dotenv(name, *args, **kwargs):
+        if name == "dotenv" or name.startswith("dotenv."):
+            raise ModuleNotFoundError("No module named 'dotenv'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_dotenv)
+    sys.modules.pop("scripts.kg_rebuild", None)
+
+    module = importlib.import_module("scripts.kg_rebuild")
+
+    assert callable(module.extracted_entity_from_groq_payload)
