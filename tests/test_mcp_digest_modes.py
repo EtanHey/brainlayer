@@ -74,7 +74,7 @@ async def test_brain_digest_missing_content_with_mode_digest_errors():
 
     result = await _brain_digest(content=None, mode="digest")
 
-    assert result.isError is True
+    assert result.is_error is True
     assert "content is required" in result.content[0].text.lower()
 
 
@@ -83,7 +83,7 @@ def test_brain_digest_input_schema_includes_mode_and_limit():
 
     tools = _full_tool_definitions()
     digest = next(t for t in tools if t.name == "brain_digest")
-    props = digest.inputSchema["properties"]
+    props = digest.input_schema["properties"]
 
     assert "mode" in props
     assert props["mode"]["enum"] == ["digest", "enrich", "connect"]

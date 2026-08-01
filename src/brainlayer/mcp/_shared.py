@@ -324,7 +324,7 @@ def _normalize_project_name(project: str | None) -> str | None:
 
 def _error_result(message: str):
     """Create an error CallToolResult."""
-    return CallToolResult(content=[TextContent(type="text", text=message)], isError=True)
+    return CallToolResult(content=[TextContent(type="text", text=message)], is_error=True)
 
 
 def _memory_to_dict(item: dict) -> dict:

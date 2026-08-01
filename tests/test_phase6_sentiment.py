@@ -192,7 +192,7 @@ def test_brain_search_schema_has_sentiment():
 
     tools = asyncio.run(list_tools())
     brain_search = next(t for t in tools if t.name == "brain_search")
-    props = brain_search.inputSchema.get("properties", {})
+    props = brain_search.input_schema.get("properties", {})
     assert "sentiment" in props
     assert props["sentiment"]["type"] == "string"
 

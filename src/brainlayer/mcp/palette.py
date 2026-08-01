@@ -47,7 +47,7 @@ class ToolPalette:
             Tool(
                 name=EXPAND_TOOL_NAME,
                 description="Expose all tools.",
-                inputSchema={"type": "object"},
+                input_schema={"type": "object"},
             )
         )
         return core_tools

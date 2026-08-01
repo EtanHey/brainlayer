@@ -114,7 +114,7 @@ async def smoke_context(name: str, *, cwd: Path, timeout: float, live_store: boo
 
 
 def _raise_if_tool_error(result, tool_name: str) -> None:
-    if getattr(result, "isError", False):
+    if getattr(result, "is_error", False):
         raise RuntimeError(f"{tool_name} returned isError=true: {_compact_tool_text(result)}")
     text = _compact_tool_text(result).lower()
     if "transport closed" in text or "connection closed" in text:

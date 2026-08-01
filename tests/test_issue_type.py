@@ -163,27 +163,27 @@ class TestIssueMCPSchema:
     def test_issue_in_type_enum(self):
         tools = asyncio.run(_get_tools())
         store_tool = next(t for t in tools if t.name == "brain_store")
-        type_enum = store_tool.inputSchema["properties"]["type"]["enum"]
+        type_enum = store_tool.input_schema["properties"]["type"]["enum"]
         assert "issue" in type_enum
 
     def test_status_field_exists(self):
         tools = asyncio.run(_get_tools())
         store_tool = next(t for t in tools if t.name == "brain_store")
-        props = store_tool.inputSchema["properties"]
+        props = store_tool.input_schema["properties"]
         assert "status" in props
         assert props["status"]["enum"] == ["open", "in_progress", "done", "archived"]
 
     def test_severity_field_exists(self):
         tools = asyncio.run(_get_tools())
         store_tool = next(t for t in tools if t.name == "brain_store")
-        props = store_tool.inputSchema["properties"]
+        props = store_tool.input_schema["properties"]
         assert "severity" in props
         assert props["severity"]["enum"] == ["critical", "high", "medium", "low"]
 
     def test_code_ref_fields_exist(self):
         tools = asyncio.run(_get_tools())
         store_tool = next(t for t in tools if t.name == "brain_store")
-        props = store_tool.inputSchema["properties"]
+        props = store_tool.input_schema["properties"]
         assert "file_path" in props
         assert "function_name" in props
         assert "line_number" in props

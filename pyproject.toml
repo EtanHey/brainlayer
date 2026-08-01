@@ -16,7 +16,8 @@ dependencies = [
     "sentence-transformers>=2.2.0",
 
     # MCP server
-    "mcp>=1.0.0,<2.0.0",
+    "mcp>=2.0.0,<3.0.0",
+    "jsonschema>=4.20.0",  # MCP v2 low-level handlers require explicit schema validation
 
     # CLI
     "typer>=0.9.0",

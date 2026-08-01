@@ -943,7 +943,7 @@ def test_brain_resume_error_path_preserves_mcp_error_result(monkeypatch):
 
     result = asyncio.run(_brain_resume())
 
-    assert result.isError is True
+    assert result.is_error is True
     assert result.content[0].text == "Resume error: boom"
 
 
@@ -983,5 +983,5 @@ def test_brain_resume_store_creation_error_preserves_mcp_error_result(monkeypatc
 
     result = asyncio.run(_brain_resume())
 
-    assert result.isError is True
+    assert result.is_error is True
     assert result.content[0].text == "Resume error: boom"
