@@ -11,7 +11,6 @@ from .t3 import (
     T3SchemaError,
     T3Thread,
     ingest_t3,
-    read_t3_threads,
 )
 
 __all__ = [
@@ -25,5 +24,4 @@ __all__ = [
     "T3SchemaError",
     "T3Thread",
     "ingest_t3",
-    "read_t3_threads",
 ]

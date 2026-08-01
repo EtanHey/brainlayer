@@ -20,6 +20,7 @@
 #   ./scripts/launchd/install.sh throughput-watchdog # Install watcher throughput watchdog only
 #   ./scripts/launchd/install.sh hotlane      # Install BrainBar hotlane embed/enrich daemon only
 #   ./scripts/launchd/install.sh p0-counter   # Install daily P0 longitudinal counter only
+#   ./scripts/launchd/install.sh t3-ingest    # Install T3 thread ingestion only
 #   ./scripts/launchd/install.sh remove       # Unload and remove all
 set -euo pipefail
 
@@ -442,13 +443,16 @@ case "${1:-all}" in
     p0-counter)
         install_plist p0-counter
         ;;
+    t3-ingest)
+        install_plist t3-ingest
+        ;;
     all)
         install_env_runner
         verify_config_file
         verify_gemini_env_file
         failures=0
         enrichment_ok=0
-        if ! install_many index drain watch hotlane-brainbar; then
+        if ! install_many index t3-ingest drain watch hotlane-brainbar; then
             failures=1
         fi
         if install_plist enrichment; then
@@ -488,6 +492,7 @@ case "${1:-all}" in
         ;;
     remove)
         remove_plist index
+        remove_plist t3-ingest 2>/dev/null || true
         remove_plist enrich 2>/dev/null || true
         remove_plist enrichment 2>/dev/null || true
         remove_plist watch 2>/dev/null || true
@@ -510,7 +515,7 @@ case "${1:-all}" in
         rm -f "$THROUGHPUT_WATCHDOG_DST"
         ;;
     *)
-        echo "Usage: $0 [index|watch|enrich|enrichment|decay|drain|hotlane|repair-fts|load [name]|unload [name]|checkpoint|backup|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|tier0-watchdog|throughput-watchdog|p0-counter|all|remove]"
+        echo "Usage: $0 [index|t3-ingest|watch|enrich|enrichment|decay|drain|hotlane|repair-fts|load [name]|unload [name]|checkpoint|backup|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|tier0-watchdog|throughput-watchdog|p0-counter|all|remove]"
         exit 1
         ;;
 esac

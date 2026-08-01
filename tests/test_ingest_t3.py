@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
 from brainlayer.alarm import BrainLayerAlarm
 from brainlayer.embeddings import EmbeddedChunk
@@ -121,6 +122,19 @@ def test_t3_reader_maps_messages_and_thread_provider_linkage(tmp_path):
     assert threads[1].mirrored is False
 
 
+def test_t3_reader_does_not_require_unused_session_projection(tmp_path):
+    from brainlayer.ingest.t3 import T3Reader
+
+    state_db = _create_t3_fixture(tmp_path / "state.sqlite")
+    with sqlite3.connect(state_db) as conn:
+        conn.execute("DROP TABLE projection_thread_sessions")
+
+    threads = T3Reader(state_db, health_path=tmp_path / "t3-health.json").read_threads()
+
+    assert len(threads) == 2
+    assert threads[0].provider_session_id == "provider-session-1"
+
+
 def test_t3_reader_opens_source_with_readonly_wal_safe_uri(tmp_path, monkeypatch):
     from brainlayer.ingest.t3 import T3Reader
 
@@ -196,6 +210,9 @@ def test_t3_ingestion_keeps_short_messages_and_sets_first_class_provenance(tmp_p
     assert {chunk.metadata["provenance_class"] for chunk in indexed} == {"t3-thread"}
     assert {chunk.metadata["source"] for chunk in indexed} == {"t3"}
     assert {chunk.metadata["project"] for chunk in indexed} == {"brainlayer", "golems"}
+    assert indexed[0].metadata["t3_provider_name"] == "codex"
+    assert indexed[0].metadata["t3_provider_session_id"] == "provider-session-1"
+    assert indexed[0].metadata["t3_mirrored"] is True
     assert {chunk.metadata["conversation_id"] for chunk in indexed} == {"thread-1", "thread-2"}
     assert {chunk.metadata["chunk_id"] for chunk in indexed} == {
         "t3:thread-1:message-1:0",
@@ -235,3 +252,60 @@ def test_indexer_preserves_stable_identity_timestamp_and_provenance(monkeypatch)
     assert captured["chunks"][0]["id"] == "t3:thread-1:message-1:0"
     assert captured["chunks"][0]["created_at"] == "2026-07-01T00:00:01Z"
     assert captured["chunks"][0]["provenance_class"] == "t3-thread"
+
+
+def test_ingest_t3_cli_is_a_real_production_entrypoint(tmp_path, monkeypatch):
+    from brainlayer.cli import app
+    from brainlayer.ingest.t3 import T3IngestionResult
+
+    captured = {}
+
+    def fake_ingest(state_db_path, *, db_path, health_path, dry_run):
+        captured.update(
+            state_db_path=state_db_path,
+            db_path=db_path,
+            health_path=health_path,
+            dry_run=dry_run,
+        )
+        return T3IngestionResult(
+            threads_seen=45,
+            threads_ingested=45,
+            messages_seen=2349,
+            messages_ingested=2349,
+            chunks_planned=2506,
+            chunks_indexed=2506,
+            duplicates_accepted=34,
+        )
+
+    monkeypatch.setattr("brainlayer.ingest.t3.ingest_t3", fake_ingest)
+    state_db = tmp_path / "state.sqlite"
+    db_path = tmp_path / "brainlayer.db"
+    health_path = tmp_path / "t3-health.json"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "ingest-t3",
+            "--state-db",
+            str(state_db),
+            "--db",
+            str(db_path),
+            "--health-path",
+            str(health_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "state_db_path": state_db,
+        "db_path": db_path,
+        "health_path": health_path,
+        "dry_run": False,
+    }
+    assert "chunks_indexed=2506" in result.output
+
+
+def test_read_t3_threads_export_is_removed():
+    import brainlayer.ingest as ingest
+
+    assert not hasattr(ingest, "read_t3_threads")

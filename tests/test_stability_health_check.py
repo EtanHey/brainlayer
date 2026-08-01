@@ -131,6 +131,39 @@ def _ok_canary(_socket_path: Path, _query: str, _timeout_seconds: float) -> dict
     }
 
 
+def test_health_check_consumes_alerting_t3_health_snapshot(tmp_path):
+    health_path = tmp_path / "t3-health.json"
+    payload = {
+        "alerting": True,
+        "alert_reasons": ["schema_drift"],
+        "failures": [{"code": "t3_schema_drift", "error": "missing text"}],
+    }
+    health_path.write_text(json.dumps(payload), encoding="utf-8")
+    db_path = tmp_path / "brainlayer.db"
+    _make_db(db_path, total=1, vector_rows=1)
+
+    result = health_check.run_health_check(
+        health_check.HealthCheckConfig(
+            db_path=db_path,
+            state_path=tmp_path / "state.json",
+            t3_health_path=health_path,
+            watcher_health_path=tmp_path / "watcher-health.json",
+            drain_health_path=tmp_path / "drain-health.json",
+            source_jsonl_globs=[],
+            queue_dir=tmp_path / "queue",
+            pending_stores_path=tmp_path / "pending-stores.jsonl",
+        ),
+        ps_output_fn=lambda: "",
+        socket_request_fn=_ok_canary,
+        command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    assert result.t3_health == payload
+    issue = next(issue for issue in result.issues if issue.code == "t3_ingest_unhealthy")
+    assert issue.severity == "critical"
+    assert "schema_drift" in issue.message
+
+
 def test_backlog_batch_zero_alarms_but_waits_until_repeated_failure_to_kickstart_hotlane(tmp_path, capsys):
     db_path = tmp_path / "brainlayer.db"
     state_path = tmp_path / "health-state.json"

@@ -1,121 +1,139 @@
-# D4-T3 ingestion report
+# D4-T3 ingestion iterate report
 
-Status: implementation complete on `feat/d4-t3-thread-ingest`; no push or PR.
+Status: iteration implemented on `feat/d4-t3-thread-ingest`; production entrypoint
+executed; no push or PR.
 
-## Decision and estimate
+## Review blockers resolved
 
-Implemented the already-settled Option C: ingest all 45 T3 threads as a first-class
-source with `source = "t3"` and `provenance_class = "t3-thread"`. The estimate was
-90–120 minutes because this is a new live SQLite reader and ingestion path rather
-than another watched JSONL root.
+- `brainlayer ingest-t3` is now a first-class CLI entrypoint. The dedicated
+  `scripts/launchd/com.brainlayer.t3-ingest.plist` runs it at load and daily at
+  03:45; `scripts/launchd/install.sh all` installs it.
+- Provider runtime linkage now reaches every emitted chunk as
+  `t3_provider_name`, `t3_provider_session_id`, and `t3_mirrored` metadata.
+- The fatal schema contract is limited to columns actually consumed:
+  `projection_threads(thread_id, project_id, title, created_at)`,
+  `projection_thread_messages(message_id, thread_id, role, text, created_at)`,
+  and `provider_session_runtime(thread_id, provider_name, resume_cursor_json)`.
+  `projection_thread_sessions` and all `updated_at` columns are no longer
+  required.
+- The dead `read_t3_threads` export was removed.
+- `health-check` accepts `--t3-health-path`, includes the JSON snapshot in its
+  result, and raises a critical `t3_ingest_unhealthy` issue when `alerting` is
+  true.
+- SQLite/DB sources no longer pass a 704 MB binary file through the JSONL
+  timestamp sniffer; T3 chunk metadata supplies its timestamps.
 
-The parent branch confirms that the existing watcher roots are Claude, Codex,
-Cursor, and Gemini only (`src/brainlayer/watcher.py:86-98 @ cc1d21f6`). T3 is
-therefore not covered by the watcher’s normal ingestion path.
+Relevant implementation locations are `src/brainlayer/cli/__init__.py:3681-3715`,
+`scripts/launchd/com.brainlayer.t3-ingest.plist`,
+`src/brainlayer/ingest/t3.py:28-32,156-235,295-317`, and
+`src/brainlayer/health_check.py:779-795,961-964` (iteration changes; final
+branch commit is recorded below). The original reader’s read-only and alarm
+primitives remain at `src/brainlayer/ingest/t3.py:156-180`.
 
-## Re-verified source facts
+## Re-verified live source facts
 
-The live source was opened with SQLite URI `mode=ro&immutable=0`,
-`PRAGMA query_only=ON`, and a 1-second busy timeout. No production BrainLayer DB
-write was performed.
+The source is opened with SQLite URI `mode=ro&immutable=0`, autocommit,
+`PRAGMA query_only=ON`, and a 1-second busy timeout. The production source
+remained read-only during the live ingest.
 
 | Fact | Observed |
 |---|---:|
 | `~/.t3/userdata/state.sqlite` size | 704,430,080 bytes |
 | `projection_threads` | 45 |
 | `projection_thread_messages` | 2,349 |
-| `projection_thread_sessions` | 44 |
+| `projection_thread_sessions` | 44 (not required by the reader) |
 | `projection_thread_activities` | 38,381 |
 | `provider_session_runtime` | 34 |
-| message roles | 2,083 assistant; 266 user |
 
-## Schema map
+## Schema map and provider linkage
 
 | Table/column | Meaning and relationship |
 |---|---|
-| `projection_threads.thread_id` | Thread primary key; the reader’s thread identity. |
-| `projection_threads.project_id`, `title`, `created_at`, `updated_at` | Thread metadata retained on every emitted chunk. |
-| `projection_thread_messages.message_id` | Message primary key. |
-| `projection_thread_messages.thread_id` | Message-to-thread link: joins to `projection_threads.thread_id`. |
-| `projection_thread_messages.role`, `text`, `created_at`, `updated_at` | Message payload and ordering fields consumed by the reader. |
-| `projection_thread_sessions.thread_id` | Session-projection-to-thread link. `provider_session_id` and `provider_thread_id` are present but all 44 live values are NULL. |
-| `provider_session_runtime.thread_id` | Runtime-mirror-to-thread link. Presence of a row marks a thread as mirrored; 34 rows matched 34 threads. |
-| `provider_session_runtime.resume_cursor_json.threadId` | Provider session identifier used when present; 33 of 34 runtime rows contain it. The live provider counts are Codex 29, Claude 4, Cursor 1. |
+| `projection_threads.thread_id` | Thread identity and primary join key. |
+| `projection_threads.project_id`, `title`, `created_at` | Thread metadata retained on emitted chunks. |
+| `projection_thread_messages.message_id` | Message identity. |
+| `projection_thread_messages.thread_id` | Message-to-thread link to `projection_threads.thread_id`. |
+| `projection_thread_messages.role`, `text`, `created_at` | Message payload and ordering fields consumed. |
+| `provider_session_runtime.thread_id` | Runtime-mirror-to-thread link; a matching row marks the thread mirrored. |
+| `provider_session_runtime.provider_name` | Provider name persisted to chunk metadata. |
+| `provider_session_runtime.resume_cursor_json.threadId` | Provider session ID persisted to `t3_provider_session_id` when present. |
 
-The schema was validated at open time for every column consumed by the reader.
-Missing or renamed tables/columns raise a `t3_schema_drift` alarm and write a
-health failure before raising. The alarm route is the existing fatal primitive
-(`src/brainlayer/alarm.py:105-115 @ cc1d21f6`); the new adapter also writes an
-atomic JSON health snapshot at `~/.local/share/brainlayer/t3-health.json` by
-default.
+The reader validates this consumed contract before snapshot queries. Missing
+tables/columns raise the existing `t3_schema_drift` alarm and write an alerting
+health snapshot before raising. The 34 runtime rows are accepted as duplicate
+content by design; no mirror exclusion or source-specific dedup heuristic was
+added.
 
 ## The 11 unmirrored threads
 
-“Unmirrored” means no matching row in `provider_session_runtime`; it does not
-mean the other threads are safe to exclude. The following list is the complete
-read-only query result, ordered by creation time.
+“Unmirrored” means no matching `provider_session_runtime` row. It is not an
+exclusion rule.
 
-| Thread ID | Created | Updated | Messages |
-|---|---|---|---:|
-| `a7b35b2a-50f2-4e8c-83a5-747e7a29757c` | 2026-03-06T17:45:31.449Z | 2026-03-06T21:59:37.337Z | 1 |
-| `2b5cad3c-eefb-4766-949b-01ffcdfcfbf5` | 2026-03-07T18:21:10.185Z | 2026-03-07T18:23:15.704Z | 1 |
-| `e9cf5dd4-a039-4dec-bfe8-d717dd2e9c23` | 2026-03-07T18:23:16.780Z | 2026-03-07T18:23:39.985Z | 1 |
-| `44dd2387-fbf5-4b92-b778-b1f5487a15f0` | 2026-03-07T18:25:01.591Z | 2026-03-07T18:27:58.686Z | 1 |
-| `263650ba-2190-43f7-a32a-2a87975a7d5e` | 2026-03-07T18:28:00.738Z | 2026-03-07T18:29:24.243Z | 1 |
-| `7eb8d353-7eb2-4420-b7ad-e31926128aef` | 2026-03-07T18:28:53.755Z | 2026-07-29T23:55:56.741Z | 0 |
-| `de99ab14-0595-42da-b3f1-cf863e8d5835` | 2026-03-07T18:29:26.869Z | 2026-03-07T19:08:47.583Z | 1 |
-| `da804581-3b59-49e3-bef1-96e9f851a1f1` | 2026-03-07T19:08:49.225Z | 2026-03-07T19:13:05.827Z | 1 |
-| `1babbcbf-0e37-40a4-bb14-14b1b336d542` | 2026-03-07T19:13:08.735Z | 2026-03-07T19:17:01.910Z | 1 |
-| `d762ec6e-cb56-41a2-aea6-46dd547f2e75` | 2026-03-07T19:16:05.780Z | 2026-03-07T19:16:41.025Z | 1 |
-| `95eee65c-59b3-49c7-9f3f-5051ead264ca` | 2026-03-07T19:17:18.220Z | 2026-03-11T14:04:50.782Z | 1 |
+| Thread ID | Created | Messages |
+|---|---|---:|
+| `a7b35b2a-50f2-4e8c-83a5-747e7a29757c` | 2026-03-06T17:45:31.449Z | 1 |
+| `2b5cad3c-eefb-4766-949b-01ffcdfcfbf5` | 2026-03-07T18:21:10.185Z | 1 |
+| `e9cf5dd4-a039-4dec-bfe8-d717dd2e9c23` | 2026-03-07T18:23:16.780Z | 1 |
+| `44dd2387-fbf5-4b92-b778-b1f5487a15f0` | 2026-03-07T18:25:01.591Z | 1 |
+| `263650ba-2190-43f7-a32a-2a87975a7d5e` | 2026-03-07T18:28:00.738Z | 1 |
+| `7eb8d353-7eb2-4420-b7ad-e31926128aef` | 2026-03-07T18:28:53.755Z | 0 |
+| `de99ab14-0595-42da-b3f1-cf863e8d5835` | 2026-03-07T18:29:26.869Z | 1 |
+| `da804581-3b59-49e3-bef1-96e9f851a1f1` | 2026-03-07T19:08:49.225Z | 1 |
+| `1babbcbf-0e37-40a4-bb14-14b1b336d542` | 2026-03-07T19:13:08.735Z | 1 |
+| `d762ec6e-cb56-41a2-aea6-46dd547f2e75` | 2026-03-07T19:16:05.780Z | 1 |
+| `95eee65c-59b3-49c7-9f3f-5051ead264ca` | 2026-03-07T19:17:18.220Z | 1 |
 
-## Ingestion behavior and counts
+## Real production invocation
 
-The reader is `src/brainlayer/ingest/t3.py`. It emits stable IDs of the form
-`t3:<thread_id>:<message_id>:<chunk_index>`, preserves source timestamps and
-project IDs, and records thread/message URI metadata. Short non-empty messages
-are retained through a direct single-chunk fallback; there is no Codex-style
-minimum-length drop policy.
+The installed console entrypoint was run with the checked-out source:
 
-The live dry-run result was:
+```text
+PYTHONPATH=src brainlayer ingest-t3 \
+  --state-db /Users/etanheyman/.t3/userdata/state.sqlite \
+  --db /Users/etanheyman/.local/share/brainlayer/brainlayer.db \
+  --health-path /Users/etanheyman/.local/share/brainlayer/t3-health.json
+```
 
 | Metric | Count |
 |---|---:|
-| Threads seen | 45 |
-| Threads ingested | 45 |
-| Messages seen | 2,349 |
-| Messages ingested | 2,349 |
+| Threads seen / ingested | 45 / 45 |
+| Messages seen / ingested | 2,349 / 2,349 |
 | Chunks planned | 2,506 |
-| Chunks indexed | 0 (dry-run) |
-| Mirrored threads deliberately accepted as duplicates | 34 |
-| Messages skipped | 0 |
+| Chunks indexed | 2,505 |
+| Mirrored threads accepted as duplicates | 34 |
+| T3 messages skipped by role/empty-text policy | 0 |
+| Chunks filtered by shared system-prompt guard | 1 |
 
-The 34 mirrored threads are an accepted duplication cost, not a defect to
-optimize. The vector-store path honors an explicit per-chunk duplicate opt-out
-and does not add a source-specific dedup heuristic. Re-running the same stable
-T3 IDs remains upsert-idempotent while distinct T3 messages with equal content
-remain distinct rows.
+The one filtered chunk is message
+`c65c95ed-2d60-4f6d-92a6-8a2ff6ad0b40` in thread
+`f2a72bc0-1abc-450d-ae50-ab6b3e9812dd`; its user text begins with agent
+instruction scaffolding and matched the existing global guard. This is why the
+indexed count is one below the planned count; it was not a T3 reader failure.
+
+Read-only post-run verification of the canonical BrainLayer DB found:
+
+- `2,505` rows with `provenance_class = 't3-thread'` and `source = 't3'`;
+- `44` nonempty T3 conversations;
+- `2,495` mirrored rows and `2,487` rows carrying a non-null provider session ID;
+- `t3-health.json` with `alerting=false`, `threads_seen=45`,
+  `messages_seen=2349`, `chunks_planned=2506`, and `chunks_indexed=2505`.
 
 ## Verification
 
 Passed:
 
-- `pytest -q tests/test_ingest_t3.py tests/test_vector_store_upsert_transactions.py tests/test_ingest_codex.py tests/test_watcher_provenance_ingest.py tests/test_phase2_plugin_queue.py::test_append_queue_event_is_safe_under_concurrent_process_writers`
-  → **57 passed**, 101 warnings.
-- Focused Ruff checks on all changed Python files.
-- Live T3 read-only dry-run with the counts above.
+- Focused and cross-cutting suite: **81 passed**.
+- Isolated baseline phase-2 queue file: **11 passed**.
+- Live production invocation and read-only destination/source verification.
 
-The full `pytest -x -vv` run collected 3,770 tests and stopped at
-`tests/test_phase2_plugin_queue.py::test_append_queue_event_is_safe_under_concurrent_process_writers`
-at 68%. Pytest then exhausted file descriptors during temporary-directory
-cleanup (`OSError: [Errno 24] Too many open files`). The failing process test
-passes in isolation, and no file in that phase-2 queue surface was changed by
-this task. This remains an environment/baseline verification caveat rather
-than a claimed full-suite pass.
+The full `pytest -q` run reached the repository’s existing phase-2 queue
+failure at 68%, then cascaded into file-descriptor errors (`OSError: [Errno
+24] Too many open files`) during temporary-directory cleanup. The isolated
+phase-2 file passes, and no phase-2 queue file changed in this iteration.
 
-## Commit and review handoff
+## Commit
 
-The deliverable is one branch commit containing the adapter, indexing/upsert
-plumbing, behavioral tests, and this report. No push or PR was performed.
+One iteration commit will contain the implementation, launchd wiring, health
+consumer, behavioral tests, and this report. No push or PR was performed.
 
 TASK_DONE

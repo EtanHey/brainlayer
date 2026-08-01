@@ -58,22 +58,25 @@ def index_chunks_to_sqlite(
     if not embedded_chunks:
         return 0
 
-    # Try to get timestamp from source file (first JSONL message)
+    # Try to get timestamp from a text source (first JSONL message). SQLite
+    # adapters already put timestamps in chunk metadata; opening a live DB as
+    # JSONL would wastefully read binary data and can block on a large file.
     created_at = None
-    try:
-        import json as _json
+    if Path(source_file).suffix.lower() not in {".sqlite", ".db"}:
+        try:
+            import json as _json
 
-        with open(source_file) as _f:
-            for _line in _f:
-                _line = _line.strip()
-                if not _line:
-                    continue
-                _data = _json.loads(_line)
-                if "timestamp" in _data:
-                    created_at = _data["timestamp"]
-                    break
-    except Exception as e:
-        logger.debug("Could not extract timestamp from %s: %s", source_file, e)
+            with open(source_file) as _f:
+                for _line in _f:
+                    _line = _line.strip()
+                    if not _line:
+                        continue
+                    _data = _json.loads(_line)
+                    if "timestamp" in _data:
+                        created_at = _data["timestamp"]
+                        break
+        except Exception as e:
+            logger.debug("Could not extract timestamp from %s: %s", source_file, e)
     if not created_at:
         from datetime import datetime, timezone
 

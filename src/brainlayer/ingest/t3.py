@@ -26,11 +26,8 @@ DEFAULT_T3_STATE_DB = Path("~/.t3/userdata/state.sqlite").expanduser()
 DEFAULT_T3_HEALTH_PATH = Path("~/.local/share/brainlayer/t3-health.json").expanduser()
 
 _REQUIRED_COLUMNS: dict[str, frozenset[str]] = {
-    "projection_threads": frozenset({"thread_id", "project_id", "title", "created_at", "updated_at"}),
-    "projection_thread_messages": frozenset({"message_id", "thread_id", "role", "text", "created_at", "updated_at"}),
-    "projection_thread_sessions": frozenset(
-        {"thread_id", "provider_name", "provider_session_id", "provider_thread_id"}
-    ),
+    "projection_threads": frozenset({"thread_id", "project_id", "title", "created_at"}),
+    "projection_thread_messages": frozenset({"message_id", "thread_id", "role", "text", "created_at"}),
     "provider_session_runtime": frozenset({"thread_id", "provider_name", "resume_cursor_json"}),
 }
 
@@ -42,7 +39,6 @@ class T3Message:
     role: str
     text: str
     created_at: str
-    updated_at: str
 
 
 @dataclass(frozen=True)
@@ -51,11 +47,9 @@ class T3Thread:
     project_id: str
     title: str
     created_at: str
-    updated_at: str
     messages: tuple[T3Message, ...] = ()
     provider_name: str | None = None
     provider_session_id: str | None = None
-    provider_thread_id: str | None = None
     mirrored: bool = False
 
 
@@ -189,22 +183,16 @@ class T3Reader:
     def _read_snapshot(conn: sqlite3.Connection) -> list[T3Thread]:
         thread_rows = conn.execute(
             """
-            SELECT thread_id, project_id, title, created_at, updated_at
+            SELECT thread_id, project_id, title, created_at
               FROM projection_threads
              ORDER BY created_at, thread_id
             """
         ).fetchall()
         message_rows = conn.execute(
             """
-            SELECT message_id, thread_id, role, text, created_at, updated_at
+            SELECT message_id, thread_id, role, text, created_at
               FROM projection_thread_messages
              ORDER BY thread_id, created_at, message_id
-            """
-        ).fetchall()
-        session_rows = conn.execute(
-            """
-            SELECT thread_id, provider_name, provider_session_id, provider_thread_id
-              FROM projection_thread_sessions
             """
         ).fetchall()
         runtime_rows = conn.execute(
@@ -215,23 +203,20 @@ class T3Reader:
         ).fetchall()
 
         messages_by_thread: dict[str, list[T3Message]] = {}
-        for message_id, thread_id, role, text, created_at, updated_at in message_rows:
+        for message_id, thread_id, role, text, created_at in message_rows:
             messages_by_thread.setdefault(thread_id, []).append(
                 T3Message(
                     message_id=message_id,
                     thread_id=thread_id,
                     role=role,
-                    text=text,
+                    text=text or "",
                     created_at=created_at,
-                    updated_at=updated_at,
                 )
             )
 
-        sessions = {row[0]: row[1:] for row in session_rows}
         runtimes = {row[0]: row[1:] for row in runtime_rows}
         threads = []
-        for thread_id, project_id, title, created_at, updated_at in thread_rows:
-            session_provider, session_id, provider_thread_id = sessions.get(thread_id, (None, None, None))
+        for thread_id, project_id, title, created_at in thread_rows:
             runtime = runtimes.get(thread_id)
             runtime_provider = runtime[0] if runtime else None
             runtime_session_id = _provider_session_id(runtime[1]) if runtime else None
@@ -241,11 +226,9 @@ class T3Reader:
                     project_id=project_id,
                     title=title,
                     created_at=created_at,
-                    updated_at=updated_at,
                     messages=tuple(messages_by_thread.get(thread_id, ())),
-                    provider_name=session_provider or runtime_provider,
-                    provider_session_id=session_id or runtime_session_id,
-                    provider_thread_id=provider_thread_id,
+                    provider_name=runtime_provider,
+                    provider_session_id=runtime_session_id,
                     mirrored=runtime is not None,
                 )
             )
@@ -329,6 +312,9 @@ def _message_chunks(thread: T3Thread, message: T3Message) -> list:
         "source_uri": f"t3://thread/{thread.thread_id}/message/{message.message_id}",
         "t3_thread_id": thread.thread_id,
         "t3_title": thread.title,
+        "t3_mirrored": thread.mirrored,
+        "t3_provider_name": thread.provider_name,
+        "t3_provider_session_id": thread.provider_session_id,
     }
     classified = ClassifiedContent(
         content=message.text,
@@ -412,12 +398,3 @@ def ingest_t3(
         )
         reader._write_health(alerting=False, alert_reasons=[])
     return result
-
-
-def read_t3_threads(
-    state_db_path: Path | str = DEFAULT_T3_STATE_DB,
-    *,
-    health_path: Path | str | None = DEFAULT_T3_HEALTH_PATH,
-):
-    """Convenience wrapper for callers that only need the read-only snapshot."""
-    return T3Reader(state_db_path, health_path=health_path).read_threads()
