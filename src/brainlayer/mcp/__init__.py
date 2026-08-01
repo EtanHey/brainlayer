@@ -142,7 +142,7 @@ async def _handle_call_tool_request(_ctx: Any, params: CallToolRequestParams) ->
 
         result = _normalize_call_tool_result(await call_tool(params.name, arguments))
 
-        if tool is not None and tool.output_schema is not None:
+        if tool is not None and tool.output_schema is not None and not result.is_error:
             if result.structured_content is None:
                 return _error_result("Output validation error: output_schema defined but no structured output returned")
             try:

@@ -93,3 +93,20 @@ def test_mcp_v2_adapter_preserves_combined_tool_results(monkeypatch):
     assert result.is_error is False
     assert result.content[0].text == "stored"
     assert result.structured_content == {"chunk_id": "chunk-1", "related": []}
+
+
+def test_mcp_v2_adapter_preserves_brain_store_error_message(monkeypatch):
+    async def failing_store_new(**_kwargs):
+        return mcp_module._error_result("Store failed: database is locked")
+
+    monkeypatch.setattr(mcp_module, "_tool_palette", ToolPalette("full"))
+    monkeypatch.setattr(mcp_module, "_store_new", failing_store_new)
+
+    async def call_store():
+        async with Client(server, mode="legacy") as client:
+            return await client.call_tool("brain_store", {"content": "remember this"})
+
+    result = asyncio.run(call_store())
+
+    assert result.is_error is True
+    assert result.content[0].text == "Store failed: database is locked"
