@@ -828,13 +828,11 @@ class BatchIndexer:
         on_flush: Callable[[list[dict]], dict[str, int] | None],
         batch_size: int = 10,
         flush_interval_ms: int = 100,
-        on_confirm_offsets: Callable[[dict[str, int]], None] | None = None,
         on_confirm_batch: Callable[[dict[str, int], list[dict]], None] | None = None,
     ):
         self.on_flush = on_flush
         self.batch_size = batch_size
         self.flush_interval_ms = flush_interval_ms
-        self.on_confirm_offsets = on_confirm_offsets
         self.on_confirm_batch = on_confirm_batch
         self._buffer: list[dict] = []
         self._lock = threading.Lock()
@@ -883,8 +881,6 @@ class BatchIndexer:
             watermarks = self._confirmed_watermarks(batch, result)
             if watermarks and self.on_confirm_batch:
                 self.on_confirm_batch(watermarks, batch)
-            elif watermarks and self.on_confirm_offsets:
-                self.on_confirm_offsets(watermarks)
             self._buffer = []  # Clear only after successful flush
             self._flush_failures = 0
             self.total_flushed += count
@@ -947,8 +943,6 @@ class BatchIndexer:
 
         if confirmed and self.on_confirm_batch:
             self.on_confirm_batch(confirmed, confirmed_items)
-        elif confirmed and self.on_confirm_offsets:
-            self.on_confirm_offsets(confirmed)
         self.total_outputs += outputs
         self.total_flushed += len(batch) - len(retained)
         self._buffer = retained
@@ -1016,7 +1010,6 @@ class JSONLWatcher:
         self.max_lines_per_file = max(1, max_lines_per_file)
         self.max_read_bytes_per_file = _watch_read_window_bytes()
         self.max_record_bytes = _watch_max_record_bytes()
-        self.max_file_bytes = self.max_read_bytes_per_file  # Backward-compatible attribute.
         self._tailers: dict[str, JSONLTailer] = {}
         self._file_providers: dict[str, str] = {}
         self._file_ingestion_failures: dict[str, dict[str, Any]] = {}

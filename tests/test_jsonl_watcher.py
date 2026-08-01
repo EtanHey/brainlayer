@@ -724,12 +724,12 @@ class TestBatchIndexer:
         indexer.add([{"c": 3}, {"d": 4}])
         assert indexer.total_flushed == 4
 
-    def test_flush_callback_watermark_is_forwarded_to_offset_callback(self):
+    def test_flush_callback_watermark_is_forwarded_to_batch_callback(self):
         confirmed = []
         indexer = BatchIndexer(
             on_flush=lambda items: {"/tmp/source.jsonl": items[-1]["_line_end_offset"]},
             batch_size=2,
-            on_confirm_offsets=confirmed.append,
+            on_confirm_batch=lambda watermarks, _batch: confirmed.append(watermarks),
         )
 
         indexer.add(
