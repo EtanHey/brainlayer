@@ -30,6 +30,8 @@ def _create_brain_db(path: Path, app_session_id: str, plain_session_id: str) -> 
             [
                 ("app-1", f"/home/etan/.codex/sessions/rollout-{app_session_id}.jsonl", "codex-session"),
                 ("app-2", f"/home/etan/.codex/sessions/rollout-{app_session_id}.jsonl", "RAW-ETAN-DIRECT"),
+                ("app-none", f"/home/etan/.codex/sessions/rollout-{app_session_id}.jsonl", None),
+                ("app-recon", f"/home/etan/.codex/sessions/rollout-{app_session_id}.jsonl", "recon-agent"),
                 ("plain", f"/home/etan/.codex/sessions/rollout-{plain_session_id}.jsonl", "codex-session"),
             ],
         )
@@ -60,6 +62,8 @@ def test_retag_only_explicitly_t3_linked_sessions_and_write_rollback_artifact(tm
         assert dict(conn.execute("SELECT id, provenance_class FROM chunks")) == {
             "app-1": "t3-app-session",
             "app-2": "RAW-ETAN-DIRECT",
+            "app-none": None,
+            "app-recon": "recon-agent",
             "plain": "codex-session",
         }
 
@@ -70,5 +74,7 @@ def test_retag_only_explicitly_t3_linked_sessions_and_write_rollback_artifact(tm
         assert dict(conn.execute("SELECT id, provenance_class FROM chunks")) == {
             "app-1": "codex-session",
             "app-2": "RAW-ETAN-DIRECT",
+            "app-none": None,
+            "app-recon": "recon-agent",
             "plain": "codex-session",
         }

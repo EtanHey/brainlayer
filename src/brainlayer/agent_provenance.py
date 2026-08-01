@@ -147,8 +147,6 @@ def classify_provenance(
 
     is_t3_app_session = _under_provider_sessions(path, ".codex") and (
         is_t3_app_initiated_codex_session(source_file, state_db=t3_state_db)
-        if t3_state_db is not None
-        else is_t3_app_initiated_codex_session(source_file)
     )
     if is_t3_app_session:
         return ProvenanceDecision(T3_APP_SESSION, "KEEP", "T3 runtime cursor links Codex session")

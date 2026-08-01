@@ -12,10 +12,11 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from brainlayer.provenance import PROVENANCE_RANK
 from brainlayer.t3_provenance import T3_APP_SESSION, codex_session_id_from_source, t3_app_codex_session_ids
 
 
-def _candidates(connection: sqlite3.Connection, linked_session_ids: set[str]) -> list[tuple[str, str]]:
+def _candidates(connection: sqlite3.Connection, linked_session_ids: set[str]) -> list[tuple[str, str | None]]:
     rows = connection.execute(
         """
         SELECT id, source_file, provenance_class
@@ -27,14 +28,27 @@ def _candidates(connection: sqlite3.Connection, linked_session_ids: set[str]) ->
     return [
         (chunk_id, provenance_class)
         for chunk_id, source_file, provenance_class in rows
-        if codex_session_id_from_source(source_file) in linked_session_ids and provenance_class == "codex-session"
+        if codex_session_id_from_source(source_file) in linked_session_ids
+        and provenance_class == "codex-session"
+        and provenance_class not in PROVENANCE_RANK
     ]
 
 
-def _write_rollback_artifact(path: Path, candidates: list[tuple[str, str]]) -> None:
+def _write_rollback_artifact(path: Path, candidates: list[tuple[str, str | None]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    existing = (
+        {
+            row["id"]: row["provenance_class"]
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line
+            for row in [json.loads(line)]
+        }
+        if path.exists()
+        else {}
+    )
+    existing.update(dict(candidates))
     with path.open("w", encoding="utf-8") as artifact:
-        for chunk_id, provenance_class in candidates:
+        for chunk_id, provenance_class in sorted(existing.items()):
             artifact.write(json.dumps({"id": chunk_id, "provenance_class": provenance_class}) + "\n")
 
 
