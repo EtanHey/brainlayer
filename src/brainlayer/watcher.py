@@ -365,13 +365,23 @@ class OffsetRegistry:
         """Return the current rewind generation for a file."""
         return self._entry_generation(self._data.get(filepath))
 
-    def set(self, filepath: str, offset: int, inode: int):
-        """Update offset for a file."""
-        generation = self._entry_generation(self._data.get(filepath))
+    def set(self, filepath: str, offset: int, inode: int, *, generation: int | None = None):
+        """Update offset for a file, optionally preserving its validated generation."""
+        current_generation = self._entry_generation(self._data.get(filepath))
+        preserve_generation = generation is not None
+        if generation is None:
+            generation = current_generation
+        elif not isinstance(generation, int) or isinstance(generation, bool) or generation < 0:
+            raise ValueError("generation must be a non-negative integer")
+        elif generation < current_generation:
+            return
         tombstone = self._removed.get(filepath)
         valid_inode = isinstance(inode, int) and not isinstance(inode, bool) and inode > 0
         if tombstone is not None and valid_inode:
-            generation = max(generation, int(tombstone["generation"]) + 1, time.time_ns())
+            if preserve_generation and generation <= int(tombstone["generation"]):
+                return
+            if not preserve_generation:
+                generation = max(generation, int(tombstone["generation"]) + 1, time.time_ns())
         self._data[filepath] = {
             "offset": offset,
             "inode": inode,
@@ -1015,7 +1025,7 @@ class JSONLWatcher:
         self._file_ingestion_failures: dict[str, dict[str, Any]] = {}
         self._quarantined_record_count_total = 0
         self._quarantined_records: list[dict[str, Any]] = []
-        self._pending_quarantined_offsets: dict[str, list[tuple[int, int]]] = {}
+        self._pending_quarantined_offsets: dict[str, list[tuple[int, int, int, int]]] = {}
         self._stop = threading.Event()
         self._last_registry_flush = time.monotonic()
         self.health_path = Path(health_path).expanduser() if health_path else None
@@ -1026,20 +1036,19 @@ class JSONLWatcher:
         self._health_entries_seen = 0
         self._health_output_at_start = 0
         self.poll_count = 0
+        self.last_poll_made_progress = False
         self._offset_prune_complete = False
 
-    def _advance_confirmed_offsets(self, watermarks: dict[str, int]) -> None:
-        for filepath, offset in watermarks.items():
-            tailer = self._tailers.get(filepath)
-            inode = tailer.get_inode() if tailer else self.registry.get(filepath)[1]
+    def _advance_confirmed_offsets(self, confirmations: dict[str, tuple[int, int, int]]) -> None:
+        for filepath, (offset, source_inode, source_generation) in confirmations.items():
             current_offset, _current_inode = self.registry.get(filepath)
             if offset >= current_offset:
-                self.registry.set(filepath, offset, inode)
-                self._advance_quarantined_offsets(filepath)
+                self.registry.set(filepath, offset, source_inode, generation=source_generation)
+                self._advance_quarantined_offsets(filepath, source_inode, source_generation)
 
     def _advance_confirmed_batch(self, watermarks: dict[str, int], batch: list[dict]) -> None:
         """Confirm only offsets produced by the file generation currently being tailed."""
-        current_watermarks: dict[str, int] = {}
+        current_confirmations: dict[str, tuple[int, int, int]] = {}
         for filepath, reported_offset in watermarks.items():
             tailer = self._tailers.get(filepath)
             if tailer is None:
@@ -1056,24 +1065,28 @@ class JSONLWatcher:
                 and item["_line_end_offset"] <= reported_offset
             ]
             if eligible_offsets:
-                current_watermarks[filepath] = max(eligible_offsets)
-        self._advance_confirmed_offsets(current_watermarks)
+                current_confirmations[filepath] = (max(eligible_offsets), current_inode, current_generation)
+        self._advance_confirmed_offsets(current_confirmations)
 
-    def _advance_quarantined_offsets(self, filepath: str) -> None:
+    def _advance_quarantined_offsets(self, filepath: str, source_inode: int, source_generation: int) -> None:
         """Advance over consecutive durably quarantined records after prior bytes confirm."""
         pending = self._pending_quarantined_offsets.get(filepath)
         if not pending:
             return
         current_offset, current_inode = self.registry.get(filepath)
-        remaining: list[tuple[int, int]] = []
-        for start_offset, end_offset in sorted(pending):
+        current_generation = self.registry.generation(filepath)
+        if current_generation != source_generation or current_inode not in (0, source_inode):
+            return
+        remaining: list[tuple[int, int, int, int]] = []
+        for start_offset, end_offset, pending_inode, pending_generation in sorted(pending):
+            if (pending_inode, pending_generation) != (source_inode, source_generation):
+                remaining.append((start_offset, end_offset, pending_inode, pending_generation))
+                continue
             if current_offset < start_offset:
-                remaining.append((start_offset, end_offset))
+                remaining.append((start_offset, end_offset, pending_inode, pending_generation))
                 continue
             if end_offset > current_offset:
-                tailer = self._tailers.get(filepath)
-                inode = tailer.get_inode() if tailer else current_inode
-                self.registry.set(filepath, end_offset, inode)
+                self.registry.set(filepath, end_offset, pending_inode, generation=pending_generation)
                 current_offset = end_offset
         if remaining:
             self._pending_quarantined_offsets[filepath] = remaining
@@ -1149,6 +1162,8 @@ class JSONLWatcher:
         read_start_offset: int,
         read_end_offset: int,
         normalized_lines: list[dict],
+        source_inode: int,
+        source_generation: int,
     ) -> None:
         """Confirm intentionally discarded bytes without crossing indexable work."""
         required_confirmed_offset = max(
@@ -1162,7 +1177,15 @@ class JSONLWatcher:
         confirmed_offset, _confirmed_inode = self.registry.get(filepath)
         if confirmed_offset < required_confirmed_offset:
             return
-        self._advance_confirmed_offsets({filepath: read_end_offset})
+        self._advance_confirmed_offsets(
+            {
+                filepath: (
+                    read_end_offset,
+                    source_inode,
+                    source_generation,
+                )
+            }
+        )
 
     def _record_file_ingestion_failure(
         self,
@@ -1213,7 +1236,13 @@ class JSONLWatcher:
     def _clear_file_ingestion_failure(self, filepath: str) -> None:
         self._file_ingestion_failures.pop(filepath, None)
 
-    def _quarantine_failed_record(self, filepath: str, tailer: JSONLTailer) -> bool:
+    def _quarantine_failed_record(
+        self,
+        filepath: str,
+        tailer: JSONLTailer,
+        source_inode: int,
+        source_generation: int,
+    ) -> bool:
         """Durably preserve one malformed record, alarm, and advance over only those bytes."""
         if tailer.failed_record is None or not isinstance(
             tailer.last_error,
@@ -1287,8 +1316,10 @@ class JSONLWatcher:
         discarded = tailer.discard_failed_record()
         if discarded is None:
             raise RuntimeError("quarantined record no longer matches the tailer buffer")
-        self._pending_quarantined_offsets.setdefault(filepath, []).append((start_offset, end_offset))
-        self._advance_quarantined_offsets(filepath)
+        self._pending_quarantined_offsets.setdefault(filepath, []).append(
+            (start_offset, end_offset, source_inode, source_generation)
+        )
+        self._advance_quarantined_offsets(filepath, source_inode, source_generation)
         return True
 
     def _max_offset_lag_bytes(self, files: list[str]) -> int:
@@ -1526,6 +1557,7 @@ class JSONLWatcher:
         total_new = 0
         files: list[str] = []
         self.poll_count += 1
+        self.last_poll_made_progress = False
 
         try:
             files = self._discover_jsonl_files()
@@ -1565,6 +1597,8 @@ class JSONLWatcher:
                     continue
                 tailer: JSONLTailer | None = None
                 tailer_snapshot: tuple[int, bytes] | None = None
+                source_inode = 0
+                source_generation = 0
                 read_accepted = False
                 try:
                     tailer = self._tailers.get(filepath)
@@ -1590,11 +1624,15 @@ class JSONLWatcher:
                     if drain_buffer:
                         read_start_offset = tailer.offset
                         tailer_snapshot = (tailer.offset, tailer._buffer)
+                        source_inode = tailer.observed_inode
+                        source_generation = self.registry.generation(filepath)
                         new_lines = tailer.read_buffered_lines(max_lines=self.max_lines_per_file)
                     else:
                         tailer = self._ensure_tailer(filepath)
                         read_start_offset = tailer.offset
                         tailer_snapshot = (tailer.offset, tailer._buffer)
+                        source_inode = tailer.observed_inode
+                        source_generation = self.registry.generation(filepath)
                         new_lines = tailer.read_new_lines(
                             max_lines=self.max_lines_per_file,
                             max_bytes=self.max_read_bytes_per_file,
@@ -1610,12 +1648,13 @@ class JSONLWatcher:
                             tailer.get_inode(),
                         )
                         tailer.rewound = False  # Reset flag
+                        source_inode = tailer.observed_inode
+                        source_generation = self.registry.generation(filepath)
 
                     normalized_lines = self._normalize_lines(filepath, new_lines) if new_lines else []
                     if normalized_lines:
-                        source_generation = self.registry.generation(filepath)
                         for line in normalized_lines:
-                            line["_source_inode"] = tailer.observed_inode
+                            line["_source_inode"] = source_inode
                             line["_source_generation"] = source_generation
                         self.indexer.add(normalized_lines)
                         read_accepted = True
@@ -1626,12 +1665,23 @@ class JSONLWatcher:
                         read_start_offset,
                         tailer.offset,
                         normalized_lines,
+                        source_inode,
+                        source_generation,
                     )
                     if tailer.last_error is not None:
-                        if not self._quarantine_failed_record(filepath, tailer):
+                        if not self._quarantine_failed_record(
+                            filepath,
+                            tailer,
+                            source_inode,
+                            source_generation,
+                        ):
                             self._record_file_ingestion_failure(filepath, tailer.last_error)
                     else:
                         self._clear_file_ingestion_failure(filepath)
+                    if tailer_snapshot is not None and (
+                        tailer.offset != tailer_snapshot[0] or tailer._buffer != tailer_snapshot[1]
+                    ):
+                        self.last_poll_made_progress = True
                     read_accepted = True
                 except Exception as error:
                     if tailer is not None and tailer_snapshot is not None and not read_accepted:

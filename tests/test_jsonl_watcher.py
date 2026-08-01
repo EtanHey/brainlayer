@@ -1507,6 +1507,58 @@ class TestJSONLWatcher:
         watcher.indexer.flush()
         assert watcher.registry.get(str(rollout)) == (rollout.stat().st_size, replacement_inode)
 
+    def test_replacement_between_read_and_confirmation_restarts_at_zero(self, tmp_path, monkeypatch):
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        rollout = sessions / "rollout.jsonl"
+        valid_line = (json.dumps({"role": "user", "content": "old valid record"}) + "\n").encode()
+        malformed_line = b'{"role":"user","content":}\n'
+        rollout.write_bytes(valid_line + malformed_line)
+        old_inode = rollout.stat().st_ino
+        registry_path = tmp_path / "offsets.json"
+        replacement_text = "replacement must be read from its first byte"
+        replacement = sessions / "replacement.tmp"
+        replacement.write_text(json.dumps({"role": "user", "content": replacement_text}) + "\n")
+        replacement_inode = replacement.stat().st_ino
+        flushed = []
+
+        def replace_during_flush(items):
+            flushed.extend(items)
+            os.replace(replacement, rollout)
+            return {item["_source_file"]: item["_line_end_offset"] for item in items}
+
+        monkeypatch.setenv("BRAINLAYER_WATCHER_QUARANTINE_DIR", str(tmp_path / "quarantine"))
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=registry_path,
+            on_flush=replace_during_flush,
+            batch_size=1,
+            registry_flush_interval_s=3600,
+        )
+
+        assert watcher.poll_once() == 1
+        assert rollout.stat().st_ino == replacement_inode
+        assert watcher.registry.get(str(rollout)) == (len(valid_line + malformed_line), old_inode)
+        assert watcher.registry.flush() is True
+
+        replacement_items = []
+
+        def confirm_replacement(items):
+            replacement_items.extend(items)
+            return {item["_source_file"]: item["_line_end_offset"] for item in items}
+
+        fresh_watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=registry_path,
+            on_flush=confirm_replacement,
+            batch_size=1,
+            registry_flush_interval_s=3600,
+        )
+
+        assert fresh_watcher._ensure_tailer(str(rollout)).offset == 0
+        assert fresh_watcher.poll_once() == 1
+        assert [item["message"]["content"][0]["text"] for item in replacement_items] == [replacement_text]
+
     def test_poll_indexes_large_same_inode_rewind_from_start(self, tmp_path, monkeypatch):
         sessions = tmp_path / "codex" / "sessions"
         sessions.mkdir(parents=True)
