@@ -23,11 +23,16 @@ def test_pyproject_declares_pure_engine_package_boundary() -> None:
     assert "src/brainlayer/cli" not in wheel_config.get("exclude", [])
     assert "src/brainlayer/cli_new.py" not in wheel_config.get("exclude", [])
     assert wheel_config["force-include"]["scripts/launchd"] == "brainlayer/launchd"
+    assert (
+        wheel_config["force-include"]["scripts/hotlane_brainbar_daemon.py"]
+        == "brainlayer/launchd/hotlane_brainbar_daemon.py"
+    )
     assert wheel_config["force-include"]["scripts/tier0-watchdog.sh"] == "brainlayer/launchd/tier0-watchdog.sh"
     assert "src/brainlayer/dashboard" in wheel_config["exclude"]
     assert sdist_config["only-include"] == [
         "src/brainlayer",
         "scripts/launchd",
+        "scripts/hotlane_brainbar_daemon.py",
         "scripts/tier0-watchdog.sh",
         "README.md",
         "LICENSE",
