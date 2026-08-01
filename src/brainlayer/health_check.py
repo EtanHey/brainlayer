@@ -135,9 +135,7 @@ class HealthCheckConfig:
     drain_health_path: Path = field(
         default_factory=lambda: Path("~/.local/share/brainlayer/drain-health.json").expanduser()
     )
-    t3_health_path: Path = field(
-        default_factory=lambda: Path("~/.local/share/brainlayer/t3-health.json").expanduser()
-    )
+    t3_health_path: Path = field(default_factory=lambda: Path("~/.local/share/brainlayer/t3-health.json").expanduser())
     queue_dir: Path = field(default_factory=lambda: Path("~/.brainlayer/queue").expanduser())
     pending_stores_path: Path = field(
         default_factory=lambda: Path("~/.local/share/brainlayer/pending-stores.jsonl").expanduser()
