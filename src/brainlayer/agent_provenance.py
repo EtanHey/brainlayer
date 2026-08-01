@@ -145,6 +145,14 @@ def classify_provenance(
     del content_class
     path = _abspath(source_file)
 
+    is_t3_app_session = _under_provider_sessions(path, ".codex") and (
+        is_t3_app_initiated_codex_session(source_file, state_db=t3_state_db)
+        if t3_state_db is not None
+        else is_t3_app_initiated_codex_session(source_file)
+    )
+    if is_t3_app_session:
+        return ProvenanceDecision(T3_APP_SESSION, "KEEP", "T3 runtime cursor links Codex session")
+
     if has_recon_agent_signature(content) or _has_recon_path_signature(path):
         return ProvenanceDecision("recon-agent", "OUT", "recon Agent-tool signature wins precedence")
 
@@ -152,13 +160,6 @@ def classify_provenance(
         return ProvenanceDecision("workflow-agent", "ISOLATE", "workflow wf_* path segment")
 
     if _under_provider_sessions(path, ".codex"):
-        is_t3_app_session = (
-            is_t3_app_initiated_codex_session(source_file, state_db=t3_state_db)
-            if t3_state_db is not None
-            else is_t3_app_initiated_codex_session(source_file)
-        )
-        if is_t3_app_session:
-            return ProvenanceDecision(T3_APP_SESSION, "KEEP", "T3 runtime cursor links Codex session")
         return ProvenanceDecision("codex-session", "KEEP", "Codex session root stays searchable")
 
     if _under_cursor_agent_transcripts(path):

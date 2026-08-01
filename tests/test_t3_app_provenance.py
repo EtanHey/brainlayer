@@ -66,6 +66,22 @@ def test_t3_app_initiated_codex_session_is_tagged_distinctly(tmp_path: Path) -> 
     assert (decision.provenance_tag, decision.search_policy) == ("t3-app-session", "KEEP")
 
 
+def test_t3_app_linkage_outranks_recon_content_signature(tmp_path: Path) -> None:
+    session_id = "019fb03f-0650-7f53-850b-921246951edc"
+    state_db = _state_db(
+        tmp_path,
+        [("5ca576df-592c-406f-a8f1-7db9c56d36c9", "codex", json.dumps({"threadId": session_id}))],
+    )
+
+    decision = classify_provenance(
+        str(_codex_source(tmp_path, session_id)),
+        content="Task for brain-worker: mine the transcript.",
+        t3_state_db=state_db,
+    )
+
+    assert decision.provenance_tag == "t3-app-session"
+
+
 def test_new_t3_app_codex_ingestion_gets_distinct_provenance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     session_id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
     state_db = _state_db(
