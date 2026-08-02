@@ -319,9 +319,13 @@ class TestBrainArchiveHandler:
 
 class TestStoreWithSupersedes:
     @pytest.fixture(autouse=True)
-    def _patch(self, store, mock_embed, monkeypatch):
+    def _patch(self, store, mock_embed, monkeypatch, tmp_path):
         self.store = store
         self.mock_embed = mock_embed
+        queue_dir = tmp_path / "queue"
+        queue_dir.mkdir()
+        monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+        monkeypatch.setenv("BRAINLAYER_DB", str(store.db_path))
         monkeypatch.setattr(
             "brainlayer.mcp.store_handler._get_vector_store",
             lambda: store,

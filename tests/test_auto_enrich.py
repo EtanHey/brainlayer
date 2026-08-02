@@ -302,6 +302,14 @@ class TestEnrichSingle:
 class TestStoreAutoEnrich:
     """Test that brain_store's background thread triggers auto-enrichment."""
 
+    @pytest.fixture(autouse=True)
+    def _isolate_store_paths(self, tmp_path, monkeypatch):
+        """Keep shared queue pressure and legacy flushes out of these store tests."""
+        queue_dir = tmp_path / "queue"
+        queue_dir.mkdir()
+        monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+        monkeypatch.setenv("BRAINLAYER_DB", str(tmp_path / "test.db"))
+
     @pytest.mark.asyncio
     async def test_store_triggers_enrich_single(self, tmp_path, monkeypatch):
         """_store's background thread calls enrich_single after embedding."""
