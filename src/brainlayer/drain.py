@@ -31,6 +31,7 @@ from .dedupe import (
 )
 from .ingest_guard import recursive_mcp_output_reason
 from .paths import get_db_path
+from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_sentinel_state
 from .provenance_integration import enqueue_provenance_resolution_for_entities
 from .writer_telemetry import start_writer_span
 
@@ -1244,6 +1245,16 @@ def _rewrite_events_file(path: Path, events: list[dict[str, Any]]) -> None:
     tmp_path.replace(path)
 
 
+def _preserve_remaining_events(path: Path, events: list[dict[str, Any]]) -> None:
+    if events and all(_event_payload(event).get("kind") == "enrichment_update" for event in events):
+        if not _is_enrichment_queue_file(path):
+            enrichment_path = path.with_name(f"enrichment-paused-{uuid.uuid4().hex}-{path.name}")
+            _rewrite_events_file(enrichment_path, events)
+            path.unlink()
+            return
+    _rewrite_events_file(path, events)
+
+
 def _select_burn_batch(
     files: list[Path], max_events_per_transaction: int
 ) -> tuple[list[tuple[Path, list[dict[str, Any]]]], int]:
@@ -1364,6 +1375,7 @@ def burn_drain_once(
     max_events_per_transaction: int = _DEFAULT_BURN_MAX_EVENTS_PER_TRANSACTION,
     log_path: Path | None = None,
     embed_fn: Callable[[str], list[float]] | None = None,
+    pause_sentinel_path: Path | None = None,
 ) -> BurnDrainResult:
     """Drain a large queue backlog with one writer and one commit per large batch.
 
@@ -1374,8 +1386,10 @@ def burn_drain_once(
     db_path = db_path or _default_db_path()
     queue_dir = queue_dir or _default_queue_dir()
     log_path = log_path or _default_log_path()
+    pause_sentinel_path = pause_sentinel_path or DEFAULT_PAUSE_SENTINEL_PATH
     queue_dir.mkdir(parents=True, exist_ok=True)
     max_events_per_transaction = max(1, max_events_per_transaction)
+    _pause_payload, pause_active, _pause_stale = pause_sentinel_state(pause_sentinel_path)
 
     result = BurnDrainResult()
     lock_fd = _acquire_queue_lock(queue_dir)
@@ -1393,7 +1407,24 @@ def burn_drain_once(
         if not batch:
             return result
 
+        paused_events_by_path: dict[Path, list[dict[str, Any]]] = {}
+        if pause_active:
+            apply_batch: list[tuple[Path, list[dict[str, Any]]]] = []
+            for path, events in batch:
+                paused_events = [event for event in events if _event_payload(event).get("kind") == "enrichment_update"]
+                apply_events = [event for event in events if _event_payload(event).get("kind") != "enrichment_update"]
+                if paused_events:
+                    paused_events_by_path[path] = paused_events
+                apply_batch.append((path, apply_events))
+            batch = apply_batch
+
         all_events = [event for _, events in batch for event in events]
+        if not all_events:
+            for path, _events in batch:
+                paused_events = paused_events_by_path.get(path)
+                if paused_events and not _is_enrichment_queue_file(path):
+                    _preserve_remaining_events(path, paused_events)
+            return result
         queue_telemetry = _queue_telemetry([path for path, _events in batch], all_events)
         batch_includes_store = _events_include_store(all_events)
         if batch_includes_store and not _ensure_drain_db_schema_preserving_queue(
@@ -1488,6 +1519,13 @@ def burn_drain_once(
 
         fallback_markers_to_apply: list[FallbackReplayMarker] = []
         for path, _events in batch:
+            paused_events = paused_events_by_path.get(path)
+            if paused_events:
+                try:
+                    _preserve_remaining_events(path, paused_events)
+                except OSError as exc:
+                    _log(log_path, f"burn drain committed but could not preserve paused enrichment in {path}: {exc}")
+                continue
             try:
                 path.unlink()
                 result.files_deleted += 1
@@ -1518,11 +1556,14 @@ def drain_once(
     batch_size: int = 250,
     log_path: Path | None = None,
     embed_fn: Callable[[str], list[float]] | None = None,
+    pause_sentinel_path: Path | None = None,
 ) -> int:
     db_path = db_path or _default_db_path()
     queue_dir = queue_dir or _default_queue_dir()
     log_path = log_path or _default_log_path()
+    pause_sentinel_path = pause_sentinel_path or DEFAULT_PAUSE_SENTINEL_PATH
     queue_dir.mkdir(parents=True, exist_ok=True)
+    _pause_payload, pause_active, _pause_stale = pause_sentinel_state(pause_sentinel_path)
 
     lock_fd = _acquire_queue_lock(queue_dir)
     try:
@@ -1542,8 +1583,19 @@ def drain_once(
             if not events:
                 _unlink_processed_file(path, log_path)
                 continue
-            events_to_apply = events[: _max_events_per_transaction()]
-            remaining_events = events[len(events_to_apply) :]
+            events_to_apply: list[dict[str, Any]] = []
+            remaining_events: list[dict[str, Any]] = []
+            for event in events:
+                if pause_active and _event_payload(event).get("kind") == "enrichment_update":
+                    remaining_events.append(event)
+                elif len(events_to_apply) < _max_events_per_transaction():
+                    events_to_apply.append(event)
+                else:
+                    remaining_events.append(event)
+            if not events_to_apply:
+                if not _is_enrichment_queue_file(path):
+                    _preserve_remaining_events(path, remaining_events)
+                continue
             queue_telemetry = _queue_telemetry([path], events_to_apply)
             events_include_store = _events_include_store(events_to_apply)
             if events_include_store and not _ensure_drain_db_schema_preserving_queue(
@@ -1611,7 +1663,7 @@ def drain_once(
                         _log(log_path, f"WARN: queued chunk_id {chunk_id} collided with existing row, dropped")
                     queue_cleanup_succeeded = True
                     if remaining_events:
-                        _rewrite_events_file(path, remaining_events)
+                        _preserve_remaining_events(path, remaining_events)
                     else:
                         queue_cleanup_succeeded = _unlink_processed_file(path, log_path)
                     if queue_cleanup_succeeded:

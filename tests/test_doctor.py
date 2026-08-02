@@ -189,6 +189,33 @@ def test_launchd_install_and_verify_accepts_loaded_label_after_bootstrap_already
     )
 
 
+def test_launchd_install_and_verify_preserves_deliberately_disabled_label(tmp_path):
+    from brainlayer.launchd_primitive import LaunchdLabelDisabledError, install_and_verify_launchagent
+
+    plist_path = tmp_path / "com.example.disabled.plist"
+    plist_path.write_text("<plist />", encoding="utf-8")
+    commands: list[list[str]] = []
+
+    def command_runner(args: list[str]) -> SimpleNamespace:
+        commands.append(args)
+        if args[:2] == ["launchctl", "print-disabled"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout='disabled services = {\n\t"com.example.disabled" => true\n}\n',
+                stderr="",
+            )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with pytest.raises(LaunchdLabelDisabledError, match="explicitly disabled"):
+        install_and_verify_launchagent(
+            "com.example.disabled",
+            plist_path,
+            command_runner=command_runner,
+        )
+    assert not [command for command in commands if command[:2] == ["launchctl", "enable"]]
+    assert not [command for command in commands if command[:2] == ["launchctl", "bootstrap"]]
+
+
 def test_launchd_label_loaded_does_not_use_unscoped_list_fallback():
     from brainlayer.launchd_primitive import is_launchd_label_loaded
 

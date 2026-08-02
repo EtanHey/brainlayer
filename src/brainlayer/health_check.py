@@ -24,12 +24,14 @@ from .drain_liveness import (
     check_drain_liveness,
 )
 from .launchd_primitive import (
+    LaunchdLabelDisabledError,
     LaunchdVerificationError,
     install_and_verify_launchagent,
     is_launchd_label_loaded,
     launchd_target,
 )
 from .paths import get_db_path
+from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
 from .watcher import default_watch_roots
 
 DEFAULT_SOCKET_PATH = Path("/tmp/brainbar.sock")
@@ -144,9 +146,7 @@ class HealthCheckConfig:
     source_jsonl_globs: list[str] = field(
         default_factory=lambda: [str(root.resolved_path / "**" / "*.jsonl") for root in default_watch_roots()]
     )
-    pause_sentinel_path: Path = field(
-        default_factory=lambda: Path("~/.local/share/brainlayer/pause.sentinel").expanduser()
-    )
+    pause_sentinel_path: Path = field(default_factory=lambda: DEFAULT_PAUSE_SENTINEL_PATH)
     max_offsets_age_seconds: int = 900
     queue_auto_heal_count: int = 25
     queue_page_count: int = 200
@@ -285,6 +285,8 @@ def _bootstrap_if_absent(label: str, plist_path: Path, command_runner: CommandRu
     try:
         install_and_verify_launchagent(label, plist_path, command_runner=command_runner)
         return f"bootstrap:{label}"
+    except LaunchdLabelDisabledError:
+        return f"disabled:{label}"
     except LaunchdVerificationError:
         return f"bootstrap_failed:{label}"
 
@@ -793,25 +795,8 @@ def _t3_health_issue(payload: dict[str, Any]) -> HealthIssue | None:
     )
 
 
-def _parse_iso_datetime(value: Any) -> datetime | None:
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
-
-
 def _pause_sentinel_state(config: HealthCheckConfig, now: datetime) -> tuple[dict[str, Any], bool, bool]:
-    payload = _load_json(config.pause_sentinel_path)
-    if not payload:
-        return {}, False, False
-    expires_at = _parse_iso_datetime(payload.get("expires_at"))
-    stale = expires_at is not None and now > expires_at
-    return payload, not stale, stale
+    return pause_sentinel_state(config.pause_sentinel_path, now)
 
 
 def _source_recent(
@@ -956,6 +941,8 @@ def run_health_check(
             return None
         return finish_slow(stage, f"health-check exceeded {config.max_duration_seconds:.0f}s during {stage}")
 
+    pause_payload, pause_active, pause_stale = _pause_sentinel_state(config, now)
+
     t3_health = _load_json(config.t3_health_path)
     result.t3_health = t3_health or None
     if t3_issue := _t3_health_issue(t3_health):
@@ -1078,7 +1065,7 @@ def run_health_check(
             config.health_check_label,
             config.enrichment_label,
         ):
-            if label:
+            if label and not (pause_active and pause_applies_to_label(pause_payload, label)):
                 action = _bootstrap_if_absent(label, _plist_for_label(config, label), command_runner)
                 if action.startswith(("bootstrap:", "bootstrap_failed:", "launchctl-unavailable:")):
                     result.actions.append(action)
@@ -1101,7 +1088,6 @@ def run_health_check(
     if slow_result := deadline_reached("launchd_status"):
         return slow_result
 
-    pause_payload, pause_active, pause_stale = _pause_sentinel_state(config, now)
     if pause_stale:
         add_issue(
             "pause_sentinel_stale", "critical", "pause sentinel is expired; launchd resume may have been forgotten"
@@ -1258,6 +1244,13 @@ def run_health_check(
                     holder_label,
                     _plist_for_label(config, holder_label),
                 )
+
+    if pause_active:
+        heal_issue_labels = {
+            issue_code: label_and_path
+            for issue_code, label_and_path in heal_issue_labels.items()
+            if not pause_applies_to_label(pause_payload, label_and_path[0])
+        }
 
     heal_failures, heal_tripped = _apply_heals(
         result=result,

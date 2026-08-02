@@ -174,14 +174,7 @@ def sandbox_stop_command(
 
 
 def _default_pause_labels() -> list[str]:
-    return [
-        "com.brainlayer.watch",
-        "com.brainlayer.drain",
-        "com.brainlayer.t3-ingest",
-        "com.brainlayer.hotlane-brainbar",
-        "com.brainlayer.enrichment",
-        "com.brainlayer.health-check",
-    ]
+    return ["com.brainlayer.enrichment"]
 
 
 @app.command("pause")

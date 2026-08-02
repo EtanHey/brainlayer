@@ -1070,9 +1070,7 @@ def test_health_check_bootstraps_absent_default_launchd_labels_instead_of_kickst
 
     issue_codes = [issue.code for issue in result.issues]
     assert {"watch_unloaded", "drain_unloaded", "health_check_unloaded"} <= set(issue_codes)
-    assert ["launchctl", "enable", f"gui/{__import__('os').getuid()}/com.brainlayer.watch"] in commands
-    assert ["launchctl", "enable", f"gui/{__import__('os').getuid()}/com.brainlayer.drain"] in commands
-    assert ["launchctl", "enable", f"gui/{__import__('os').getuid()}/com.brainlayer.health-check"] in commands
+    assert not [command for command in commands if command[:2] == ["launchctl", "enable"]]
     assert [
         "launchctl",
         "bootstrap",
@@ -1139,6 +1137,51 @@ def test_health_check_bootstraps_absent_enrichment_and_clears_tripped_after_succ
     assert "bootstrap:com.brainlayer.enrichment" in result.actions
     saved = json.loads(state_path.read_text(encoding="utf-8"))
     assert "com.brainlayer.enrichment:enrichment_unloaded" not in saved["heal_tripped"]
+
+
+def test_health_check_does_not_bootstrap_label_recorded_in_active_pause_sentinel(tmp_path):
+    db_path = tmp_path / "brainlayer.db"
+    state_path = tmp_path / "health-state.json"
+    pause_path = tmp_path / "pause.sentinel"
+    _make_db(db_path, total=1, vector_rows=1)
+    pause_path.write_text(
+        json.dumps(
+            {
+                "labels": ["com.brainlayer.enrichment"],
+                "created_at": "2026-08-02T09:00:00+00:00",
+                "expires_at": "2026-08-02T11:00:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    commands: list[list[str]] = []
+
+    def command_runner(args: list[str]):
+        commands.append(args)
+        if args[:2] == ["launchctl", "print"] and "com.brainlayer.enrichment" in args[2]:
+            return SimpleNamespace(returncode=113, stdout="", stderr="Could not find service")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    result = run_health_check(
+        HealthCheckConfig(
+            db_path=db_path,
+            state_path=state_path,
+            pause_sentinel_path=pause_path,
+            queue_dir=tmp_path / "queue",
+            source_jsonl_globs=[],
+            heal=True,
+            heal_min_consecutive_failures=1,
+        ),
+        ps_output_fn=lambda: "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 4\n",
+        socket_request_fn=_ok_canary,
+        command_runner=command_runner,
+        now_fn=lambda: datetime(2026, 8, 2, 10, 0, tzinfo=UTC),
+    )
+
+    enrichment_commands = [command for command in commands if "com.brainlayer.enrichment" in " ".join(command)]
+    assert "enrichment_unloaded" in [issue.code for issue in result.issues]
+    assert not [command for command in enrichment_commands if command[:2] == ["launchctl", "bootstrap"]]
+    assert not [command for command in enrichment_commands if command[:2] == ["launchctl", "enable"]]
 
 
 def test_run_health_check_references_mode_d_detector_helpers():

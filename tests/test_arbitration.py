@@ -240,6 +240,204 @@ def test_drain_prioritizes_writes_before_enrichment(tmp_path, monkeypatch):
         assert conn.execute("SELECT id FROM chunks WHERE id = 'watcher-priority'").fetchone() == ("watcher-priority",)
 
 
+def test_drain_keeps_paused_enrichment_queued_while_applying_watcher_in_same_file(tmp_path, monkeypatch):
+    import brainlayer.drain as drain
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    _create_minimal_db(db_path)
+    pause_path = tmp_path / "pause.sentinel"
+    pause_path.write_text(
+        json.dumps(
+            {
+                "labels": ["com.brainlayer.enrichment"],
+                "created_at": "2026-08-02T09:00:00+00:00",
+                "expires_at": "2099-08-02T11:00:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    queue_path = queue_dir / "mixed-events.jsonl"
+    enrichment_event = {
+        "kind": "enrichment_update",
+        "chunk_id": "must-stay-paused",
+        "enrichment": {"summary": "must not apply"},
+    }
+    watcher_event = {
+        "kind": "watcher_chunk",
+        "chunk_id": "watcher-still-ingests",
+        "content": "Ingestion must continue while queued enrichment is paused.",
+        "created_at": "2026-08-02T09:30:00Z",
+    }
+    queue_path.write_text(
+        json.dumps(enrichment_event) + "\n" + json.dumps(watcher_event) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        drain,
+        "_apply_enrichment",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("paused enrichment reached apply")),
+    )
+
+    drained = drain.drain_once(
+        db_path=db_path,
+        queue_dir=queue_dir,
+        batch_size=1,
+        log_path=tmp_path / "drain.log",
+        pause_sentinel_path=pause_path,
+    )
+
+    assert drained == 1
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT id FROM chunks WHERE id = 'watcher-still-ingests'").fetchone() == (
+            "watcher-still-ingests",
+        )
+    queued_files = list(queue_dir.glob("*.jsonl"))
+    assert len(queued_files) == 1
+    assert [json.loads(line) for line in queued_files[0].read_text(encoding="utf-8").splitlines()] == [enrichment_event]
+
+
+def test_burn_drain_keeps_paused_enrichment_queued_while_applying_watcher(tmp_path, monkeypatch):
+    import brainlayer.drain as drain
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    _create_minimal_db(db_path)
+    pause_path = tmp_path / "pause.sentinel"
+    pause_path.write_text(json.dumps({"labels": ["com.brainlayer.enrichment"]}), encoding="utf-8")
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    enrichment_event = {
+        "kind": "enrichment_update",
+        "chunk_id": "burn-must-stay-paused",
+        "enrichment": {"summary": "must not apply"},
+    }
+    watcher_event = {
+        "kind": "watcher_chunk",
+        "chunk_id": "burn-watcher-still-ingests",
+        "content": "Burn drain must preserve the same pause interlock.",
+        "created_at": "2026-08-02T09:30:00Z",
+    }
+    (queue_dir / "mixed-burn.jsonl").write_text(
+        json.dumps(enrichment_event) + "\n" + json.dumps(watcher_event) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        drain,
+        "_apply_enrichment",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("paused enrichment reached burn apply")),
+    )
+
+    result = drain.burn_drain_once(
+        db_path=db_path,
+        queue_dir=queue_dir,
+        log_path=tmp_path / "drain.log",
+        pause_sentinel_path=pause_path,
+    )
+
+    assert result.applied_events == 1
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT id FROM chunks WHERE id = 'burn-watcher-still-ingests'").fetchone()
+    queued = [json.loads(line) for path in queue_dir.glob("*.jsonl") for line in path.read_text().splitlines()]
+    assert queued == [enrichment_event]
+
+
+def test_paused_misnamed_enrichment_file_does_not_starve_later_ingestion(tmp_path, monkeypatch):
+    from brainlayer.drain import drain_once
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    _create_minimal_db(db_path)
+    pause_path = tmp_path / "pause.sentinel"
+    pause_path.write_text(json.dumps({"labels": ["com.brainlayer.enrichment"]}), encoding="utf-8")
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    (queue_dir / "aaa-misnamed.jsonl").write_text(
+        json.dumps(
+            {
+                "kind": "enrichment_update",
+                "chunk_id": "misnamed-paused-enrichment",
+                "enrichment": {"summary": "must wait"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (queue_dir / "watcher-later.jsonl").write_text(
+        json.dumps(
+            {
+                "kind": "watcher_chunk",
+                "chunk_id": "watcher-after-misnamed-enrichment",
+                "content": "A paused file must not monopolize the high-priority queue.",
+                "created_at": "2026-08-02T09:30:00Z",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert (
+        drain_once(
+            db_path=db_path,
+            queue_dir=queue_dir,
+            batch_size=1,
+            log_path=tmp_path / "drain.log",
+            pause_sentinel_path=pause_path,
+        )
+        == 0
+    )
+    assert not (queue_dir / "aaa-misnamed.jsonl").exists()
+
+    assert (
+        drain_once(
+            db_path=db_path,
+            queue_dir=queue_dir,
+            batch_size=1,
+            log_path=tmp_path / "drain.log",
+            pause_sentinel_path=pause_path,
+        )
+        == 1
+    )
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT id FROM chunks WHERE id = 'watcher-after-misnamed-enrichment'").fetchone()
+
+
+def test_paused_enrichment_file_is_left_untouched_between_drain_ticks(tmp_path):
+    from brainlayer.drain import drain_once
+
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    pause_path = tmp_path / "pause.sentinel"
+    pause_path.write_text(json.dumps({"labels": ["com.brainlayer.enrichment"]}), encoding="utf-8")
+    queue_path = queue_dir / "enrichment-paused.jsonl"
+    queue_path.write_text(
+        json.dumps(
+            {
+                "kind": "enrichment_update",
+                "chunk_id": "paused-without-churn",
+                "enrichment": {"summary": "wait"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    original_mtime_ns = queue_path.stat().st_mtime_ns
+
+    assert (
+        drain_once(
+            db_path=tmp_path / "unused.db",
+            queue_dir=queue_dir,
+            log_path=tmp_path / "drain.log",
+            pause_sentinel_path=pause_path,
+        )
+        == 0
+    )
+
+    assert queue_path.stat().st_mtime_ns == original_mtime_ns
+
+
 def test_drain_yields_enrichment_when_interactive_store_is_queued(tmp_path, monkeypatch):
     """Interactive stores are higher priority than enrichment metadata writes."""
     from brainlayer.drain import drain_once
