@@ -6,6 +6,15 @@ from pathlib import Path
 
 import pytest
 
+# Deterministic CLI output for assertions: several tests compare CLI messages as plain
+# strings, and ANSI color escapes mid-sentence broke 3 test_installable_build assertions
+# in color-enabled environments (2026-08-02; NO_COLOR=1 -> 3 passed, verified). Pin the
+# test env here — the single place every pytest path (pre-push gate, CI, dev shell)
+# flows through — so pass/fail cannot depend on the caller's terminal.
+os.environ["NO_COLOR"] = "1"
+os.environ.pop("FORCE_COLOR", None)
+os.environ.setdefault("TERM", "dumb")
+
 ENGINE_TEST_MARK = "engine"
 ENGINE_TEST_EXCLUDED_FILES = {
     "tests/test_agent_profiles.py",
