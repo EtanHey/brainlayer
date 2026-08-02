@@ -31,7 +31,7 @@ from .dedupe import (
 )
 from .ingest_guard import recursive_mcp_output_reason
 from .paths import get_db_path
-from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_sentinel_state
+from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
 from .provenance_integration import enqueue_provenance_resolution_for_entities
 from .writer_telemetry import start_writer_span
 
@@ -47,6 +47,7 @@ _DEFAULT_MAX_EVENTS_PER_TRANSACTION = 5
 _DEFAULT_BURN_MAX_EVENTS_PER_TRANSACTION = 100
 _DEFAULT_POST_COMMIT_YIELD_MS = 10.0
 _DEFAULT_MAX_ENRICHMENT_FILES_PER_CYCLE = 16
+_ENRICHMENT_LABEL = "com.brainlayer.enrichment"
 # The post-commit WAL checkpoint is best-effort and must stay non-blocking. A
 # truncating checkpoint can wedge the live writer behind long-lived readers on a
 # multi-GB WAL; the scheduled wal-checkpoint job owns truncation.
@@ -1389,7 +1390,8 @@ def burn_drain_once(
     pause_sentinel_path = pause_sentinel_path or DEFAULT_PAUSE_SENTINEL_PATH
     queue_dir.mkdir(parents=True, exist_ok=True)
     max_events_per_transaction = max(1, max_events_per_transaction)
-    _pause_payload, pause_active, _pause_stale = pause_sentinel_state(pause_sentinel_path)
+    pause_payload, pause_active, _pause_stale = pause_sentinel_state(pause_sentinel_path)
+    pause_enrichment = pause_active and pause_applies_to_label(pause_payload, _ENRICHMENT_LABEL)
 
     result = BurnDrainResult()
     lock_fd = _acquire_queue_lock(queue_dir)
@@ -1408,7 +1410,7 @@ def burn_drain_once(
             return result
 
         paused_events_by_path: dict[Path, list[dict[str, Any]]] = {}
-        if pause_active:
+        if pause_enrichment:
             apply_batch: list[tuple[Path, list[dict[str, Any]]]] = []
             for path, events in batch:
                 paused_events = [event for event in events if _event_payload(event).get("kind") == "enrichment_update"]
@@ -1563,7 +1565,8 @@ def drain_once(
     log_path = log_path or _default_log_path()
     pause_sentinel_path = pause_sentinel_path or DEFAULT_PAUSE_SENTINEL_PATH
     queue_dir.mkdir(parents=True, exist_ok=True)
-    _pause_payload, pause_active, _pause_stale = pause_sentinel_state(pause_sentinel_path)
+    pause_payload, pause_active, _pause_stale = pause_sentinel_state(pause_sentinel_path)
+    pause_enrichment = pause_active and pause_applies_to_label(pause_payload, _ENRICHMENT_LABEL)
 
     lock_fd = _acquire_queue_lock(queue_dir)
     try:
@@ -1586,7 +1589,7 @@ def drain_once(
             events_to_apply: list[dict[str, Any]] = []
             remaining_events: list[dict[str, Any]] = []
             for event in events:
-                if pause_active and _event_payload(event).get("kind") == "enrichment_update":
+                if pause_enrichment and _event_payload(event).get("kind") == "enrichment_update":
                     remaining_events.append(event)
                 elif len(events_to_apply) < _max_events_per_transaction():
                     events_to_apply.append(event)
@@ -1663,7 +1666,14 @@ def drain_once(
                         _log(log_path, f"WARN: queued chunk_id {chunk_id} collided with existing row, dropped")
                     queue_cleanup_succeeded = True
                     if remaining_events:
-                        _preserve_remaining_events(path, remaining_events)
+                        try:
+                            _preserve_remaining_events(path, remaining_events)
+                        except OSError as exc:
+                            queue_cleanup_succeeded = False
+                            _log(
+                                log_path,
+                                f"drain committed but could not preserve remaining events in {path}: {exc}",
+                            )
                     else:
                         queue_cleanup_succeeded = _unlink_processed_file(path, log_path)
                     if queue_cleanup_succeeded:

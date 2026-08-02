@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 import apsw
+import pytest
 import sqlite_vec
 
 
@@ -344,6 +345,109 @@ def test_burn_drain_keeps_paused_enrichment_queued_while_applying_watcher(tmp_pa
     assert queued == [enrichment_event]
 
 
+@pytest.mark.parametrize("burn", [False, True])
+def test_non_enrichment_pause_does_not_gate_enrichment_drain(tmp_path, monkeypatch, burn):
+    import brainlayer.drain as drain
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    _create_minimal_db(db_path)
+    pause_path = tmp_path / "pause.sentinel"
+    pause_path.write_text(json.dumps({"labels": ["com.brainlayer.watch"]}), encoding="utf-8")
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    (queue_dir / "enrichment-scoped-pause.jsonl").write_text(
+        json.dumps(
+            {
+                "kind": "enrichment_update",
+                "chunk_id": "enrichment-must-continue",
+                "enrichment": {"summary": "apply me"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    applied: list[str] = []
+    monkeypatch.setattr(
+        drain,
+        "_apply_enrichment",
+        lambda _conn, event: applied.append(event["chunk_id"]),
+    )
+
+    if burn:
+        result = drain.burn_drain_once(
+            db_path=db_path,
+            queue_dir=queue_dir,
+            log_path=tmp_path / "drain.log",
+            pause_sentinel_path=pause_path,
+        )
+        assert result.applied_events == 1
+    else:
+        assert (
+            drain.drain_once(
+                db_path=db_path,
+                queue_dir=queue_dir,
+                log_path=tmp_path / "drain.log",
+                pause_sentinel_path=pause_path,
+            )
+            == 1
+        )
+
+    assert applied == ["enrichment-must-continue"]
+
+
+def test_drain_preserve_failure_after_commit_is_best_effort(tmp_path, monkeypatch):
+    import brainlayer.drain as drain
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    _create_minimal_db(db_path)
+    pause_path = tmp_path / "pause.sentinel"
+    pause_path.write_text(json.dumps({"labels": ["com.brainlayer.enrichment"]}), encoding="utf-8")
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    (queue_dir / "mixed-events.jsonl").write_text(
+        json.dumps(
+            {
+                "kind": "enrichment_update",
+                "chunk_id": "preserve-me",
+                "enrichment": {"summary": "wait"},
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "kind": "watcher_chunk",
+                "chunk_id": "commit-me",
+                "content": "The committed event must survive cleanup failure.",
+                "created_at": "2026-08-02T09:30:00Z",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        drain,
+        "_preserve_remaining_events",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk unavailable")),
+    )
+    log_path = tmp_path / "drain.log"
+
+    assert (
+        drain.drain_once(
+            db_path=db_path,
+            queue_dir=queue_dir,
+            log_path=log_path,
+            pause_sentinel_path=pause_path,
+        )
+        == 1
+    )
+
+    assert "drain committed but could not preserve remaining events" in log_path.read_text(encoding="utf-8")
+
+
 def test_paused_misnamed_enrichment_file_does_not_starve_later_ingestion(tmp_path, monkeypatch):
     from brainlayer.drain import drain_once
 
@@ -404,13 +508,17 @@ def test_paused_misnamed_enrichment_file_does_not_starve_later_ingestion(tmp_pat
         assert conn.execute("SELECT id FROM chunks WHERE id = 'watcher-after-misnamed-enrichment'").fetchone()
 
 
-def test_paused_enrichment_file_is_left_untouched_between_drain_ticks(tmp_path):
-    from brainlayer.drain import drain_once
+def test_paused_enrichment_file_is_left_untouched_between_drain_ticks(tmp_path, monkeypatch):
+    import brainlayer.drain as drain
 
+    db_path = tmp_path / "brainlayer.db"
     queue_dir = tmp_path / "queue"
     queue_dir.mkdir()
+    _create_minimal_db(db_path)
     pause_path = tmp_path / "pause.sentinel"
     pause_path.write_text(json.dumps({"labels": ["com.brainlayer.enrichment"]}), encoding="utf-8")
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
     queue_path = queue_dir / "enrichment-paused.jsonl"
     queue_path.write_text(
         json.dumps(
@@ -424,10 +532,16 @@ def test_paused_enrichment_file_is_left_untouched_between_drain_ticks(tmp_path):
         encoding="utf-8",
     )
     original_mtime_ns = queue_path.stat().st_mtime_ns
+    applied: list[str] = []
+    monkeypatch.setattr(
+        drain,
+        "_apply_enrichment",
+        lambda _conn, event: applied.append(event["chunk_id"]),
+    )
 
     assert (
-        drain_once(
-            db_path=tmp_path / "unused.db",
+        drain.drain_once(
+            db_path=db_path,
             queue_dir=queue_dir,
             log_path=tmp_path / "drain.log",
             pause_sentinel_path=pause_path,
@@ -435,6 +549,7 @@ def test_paused_enrichment_file_is_left_untouched_between_drain_ticks(tmp_path):
         == 0
     )
 
+    assert applied == []
     assert queue_path.stat().st_mtime_ns == original_mtime_ns
 
 

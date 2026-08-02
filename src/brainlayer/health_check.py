@@ -1067,7 +1067,7 @@ def run_health_check(
         ):
             if label and not (pause_active and pause_applies_to_label(pause_payload, label)):
                 action = _bootstrap_if_absent(label, _plist_for_label(config, label), command_runner)
-                if action.startswith(("bootstrap:", "bootstrap_failed:", "launchctl-unavailable:")):
+                if action.startswith(("bootstrap:", "bootstrap_failed:", "launchctl-unavailable:", "disabled:")):
                     result.actions.append(action)
 
     drain_loaded: bool | None = None

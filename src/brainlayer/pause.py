@@ -30,7 +30,7 @@ def pause_sentinel_state(
 def pause_applies_to_label(payload: dict[str, Any], label: str) -> bool:
     labels = payload.get("labels")
     if not isinstance(labels, list):
-        return True
+        return False
     return label in {str(item) for item in labels}
 
 

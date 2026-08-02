@@ -8,6 +8,16 @@ from typer.testing import CliRunner
 
 from brainlayer.cli import app
 from brainlayer.health_check import HealthCheckResult
+from brainlayer.pause import pause_applies_to_label
+
+
+def test_malformed_pause_labels_do_not_apply_globally(monkeypatch, tmp_path):
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
+
+    assert not pause_applies_to_label(
+        {"labels": "com.brainlayer.enrichment"},
+        "com.brainlayer.watch",
+    )
 
 
 def test_health_check_cli_forwards_mode_a_config_fields(monkeypatch, tmp_path):
