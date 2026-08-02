@@ -1425,7 +1425,10 @@ def burn_drain_once(
             for path, _events in batch:
                 paused_events = paused_events_by_path.get(path)
                 if paused_events and not _is_enrichment_queue_file(path):
-                    _preserve_remaining_events(path, paused_events)
+                    try:
+                        _preserve_remaining_events(path, paused_events)
+                    except OSError as exc:
+                        _log(log_path, f"burn drain could not preserve paused enrichment in {path}: {exc}")
             return result
         queue_telemetry = _queue_telemetry([path for path, _events in batch], all_events)
         batch_includes_store = _events_include_store(all_events)
@@ -1597,7 +1600,10 @@ def drain_once(
                     remaining_events.append(event)
             if not events_to_apply:
                 if not _is_enrichment_queue_file(path):
-                    _preserve_remaining_events(path, remaining_events)
+                    try:
+                        _preserve_remaining_events(path, remaining_events)
+                    except OSError as exc:
+                        _log(log_path, f"drain could not preserve paused enrichment in {path}: {exc}")
                 continue
             queue_telemetry = _queue_telemetry([path], events_to_apply)
             events_include_store = _events_include_store(events_to_apply)

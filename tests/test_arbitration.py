@@ -448,6 +448,80 @@ def test_drain_preserve_failure_after_commit_is_best_effort(tmp_path, monkeypatc
     assert "drain committed but could not preserve remaining events" in log_path.read_text(encoding="utf-8")
 
 
+def test_drain_preserve_failure_before_apply_is_best_effort(tmp_path, monkeypatch):
+    import brainlayer.drain as drain
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    _create_minimal_db(db_path)
+    pause_path = tmp_path / "pause.sentinel"
+    pause_path.write_text(json.dumps({"labels": ["com.brainlayer.enrichment"]}), encoding="utf-8")
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    queue_path = queue_dir / "misnamed-paused.jsonl"
+    enrichment_event = {
+        "kind": "enrichment_update",
+        "chunk_id": "preserve-before-drain-apply",
+        "enrichment": {"summary": "wait"},
+    }
+    queue_path.write_text(json.dumps(enrichment_event) + "\n", encoding="utf-8")
+    monkeypatch.setattr(
+        drain,
+        "_preserve_remaining_events",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk unavailable")),
+    )
+    log_path = tmp_path / "drain.log"
+
+    assert (
+        drain.drain_once(
+            db_path=db_path,
+            queue_dir=queue_dir,
+            log_path=log_path,
+            pause_sentinel_path=pause_path,
+        )
+        == 0
+    )
+
+    assert json.loads(queue_path.read_text(encoding="utf-8")) == enrichment_event
+    assert "drain could not preserve paused enrichment" in log_path.read_text(encoding="utf-8")
+
+
+def test_burn_drain_preserve_failure_before_apply_is_best_effort(tmp_path, monkeypatch):
+    import brainlayer.drain as drain
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    _create_minimal_db(db_path)
+    pause_path = tmp_path / "pause.sentinel"
+    pause_path.write_text(json.dumps({"labels": ["com.brainlayer.enrichment"]}), encoding="utf-8")
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    queue_path = queue_dir / "misnamed-paused.jsonl"
+    enrichment_event = {
+        "kind": "enrichment_update",
+        "chunk_id": "preserve-before-burn-apply",
+        "enrichment": {"summary": "wait"},
+    }
+    queue_path.write_text(json.dumps(enrichment_event) + "\n", encoding="utf-8")
+    monkeypatch.setattr(
+        drain,
+        "_preserve_remaining_events",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk unavailable")),
+    )
+    log_path = tmp_path / "drain.log"
+
+    result = drain.burn_drain_once(
+        db_path=db_path,
+        queue_dir=queue_dir,
+        log_path=log_path,
+        pause_sentinel_path=pause_path,
+    )
+
+    assert result.applied_events == 0
+    assert json.loads(queue_path.read_text(encoding="utf-8")) == enrichment_event
+    assert "burn drain could not preserve paused enrichment" in log_path.read_text(encoding="utf-8")
+
+
 def test_paused_misnamed_enrichment_file_does_not_starve_later_ingestion(tmp_path, monkeypatch):
     from brainlayer.drain import drain_once
 
