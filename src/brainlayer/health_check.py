@@ -135,6 +135,7 @@ class HealthCheckConfig:
     drain_health_path: Path = field(
         default_factory=lambda: Path("~/.local/share/brainlayer/drain-health.json").expanduser()
     )
+    t3_health_path: Path = field(default_factory=lambda: Path("~/.local/share/brainlayer/t3-health.json").expanduser())
     queue_dir: Path = field(default_factory=lambda: Path("~/.brainlayer/queue").expanduser())
     pending_stores_path: Path = field(
         default_factory=lambda: Path("~/.local/share/brainlayer/pending-stores.jsonl").expanduser()
@@ -196,6 +197,7 @@ class HealthCheckResult:
     duration_seconds: float = 0.0
     slow_check: bool = False
     slow_check_stage: str | None = None
+    t3_health: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -772,6 +774,25 @@ def _load_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _t3_health_issue(payload: dict[str, Any]) -> HealthIssue | None:
+    """Turn the T3 adapter's durable health snapshot into a check issue."""
+    if not payload.get("alerting"):
+        return None
+    reasons = payload.get("alert_reasons")
+    reason_text = ", ".join(str(reason) for reason in reasons if reason) if isinstance(reasons, list) else "unknown"
+    failures = payload.get("failures")
+    failure_text = ""
+    if isinstance(failures, list) and failures:
+        latest = failures[-1]
+        if isinstance(latest, dict):
+            failure_text = f" ({latest.get('message') or latest.get('code') or 'reader failure'})"
+    return HealthIssue(
+        "t3_ingest_unhealthy",
+        "critical",
+        f"T3 ingestion health alert: {reason_text}{failure_text}",
+    )
+
+
 def _parse_iso_datetime(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value:
         return None
@@ -934,6 +955,11 @@ def run_health_check(
         if monotonic_fn() < deadline_at:
             return None
         return finish_slow(stage, f"health-check exceeded {config.max_duration_seconds:.0f}s during {stage}")
+
+    t3_health = _load_json(config.t3_health_path)
+    result.t3_health = t3_health or None
+    if t3_issue := _t3_health_issue(t3_health):
+        add_issue(t3_issue.code, t3_issue.severity, t3_issue.message)
 
     ps_output = ps_output_fn()
     lock_holder = None

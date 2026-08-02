@@ -123,3 +123,45 @@ def test_watch_backfill_indexes_cursor_agent_transcripts_once(tmp_path, monkeypa
     assert second.exit_code == 0, second.output
     assert "processed_entries=0" in second.output
     assert list(queue_dir.glob("watcher-*.jsonl")) == queue_files
+
+
+def test_watch_backfill_keeps_polling_while_oversized_record_is_buffering(tmp_path, monkeypatch):
+    monkeypatch.delenv("BRAINLAYER_INGEST_DENYLIST", raising=False)
+    transcript = tmp_path / ".codex" / "sessions" / "2026" / "07" / "oversized.jsonl"
+    registry = tmp_path / "offsets.json"
+    queue_dir = tmp_path / "queue"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text(
+        json.dumps(
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "x" * 512}],
+                "timestamp": "2026-07-31T21:00:00Z",
+            }
+        )
+        + "\n"
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "watch-backfill",
+            "--home",
+            str(tmp_path),
+            "--registry",
+            str(registry),
+            "--max-cycles",
+            "10",
+        ],
+        env={
+            "BRAINLAYER_QUEUE_DIR": str(queue_dir),
+            "BRAINLAYER_WATCH_MAX_FILE_BYTES": "128",
+        },
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "processed_entries=1" in result.output
+    assert len(list(queue_dir.glob("watcher-*.jsonl"))) == 1
+    persisted = json.loads(registry.read_text())
+    assert persisted[str(transcript)]["offset"] == transcript.stat().st_size

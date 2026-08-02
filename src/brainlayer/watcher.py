@@ -15,6 +15,7 @@ Swift DispatchSource kqueue in BrainBar for sub-1ms notification latency.
 """
 
 import errno
+import hashlib
 import json
 import logging
 import math
@@ -47,9 +48,15 @@ logger = logging.getLogger(__name__)
 
 _WATCH_MAX_FILE_BYTES_ENV = "BRAINLAYER_WATCH_MAX_FILE_BYTES"
 _DEFAULT_WATCH_MAX_FILE_BYTES = 100 * 1024 * 1024
+_WATCH_MAX_RECORD_BYTES_ENV = "BRAINLAYER_WATCH_MAX_RECORD_BYTES"
+_DEFAULT_WATCH_MAX_RECORD_BYTES = 128 * 1024 * 1024
+_WATCH_READ_CHUNK_BYTES = 64 * 1024
+_MAX_HEALTH_FAILURE_DETAILS = 100
+_MAX_HEALTH_QUARANTINE_DETAILS = 100
 
 
-def _watch_max_file_bytes() -> int:
+def _watch_read_window_bytes() -> int:
+    """Load the per-file, per-poll read window from the legacy environment name."""
     raw_value = os.environ.get(_WATCH_MAX_FILE_BYTES_ENV, str(_DEFAULT_WATCH_MAX_FILE_BYTES))
     try:
         parsed_value = int(raw_value)
@@ -61,7 +68,7 @@ def _watch_max_file_bytes() -> int:
             _DEFAULT_WATCH_MAX_FILE_BYTES,
         )
         return _DEFAULT_WATCH_MAX_FILE_BYTES
-    if parsed_value < 0:
+    if parsed_value <= 0:
         logger.warning(
             "Invalid %s=%r; using default %d",
             _WATCH_MAX_FILE_BYTES_ENV,
@@ -69,6 +76,24 @@ def _watch_max_file_bytes() -> int:
             _DEFAULT_WATCH_MAX_FILE_BYTES,
         )
         return _DEFAULT_WATCH_MAX_FILE_BYTES
+    return parsed_value
+
+
+def _watch_max_record_bytes() -> int:
+    """Load the hard in-memory ceiling for one JSONL record."""
+    raw_value = os.environ.get(_WATCH_MAX_RECORD_BYTES_ENV, str(_DEFAULT_WATCH_MAX_RECORD_BYTES))
+    try:
+        parsed_value = int(raw_value)
+    except ValueError:
+        parsed_value = 0
+    if parsed_value <= 0:
+        logger.warning(
+            "Invalid %s=%r; using default %d",
+            _WATCH_MAX_RECORD_BYTES_ENV,
+            raw_value,
+            _DEFAULT_WATCH_MAX_RECORD_BYTES,
+        )
+        return _DEFAULT_WATCH_MAX_RECORD_BYTES
     return parsed_value
 
 
@@ -336,13 +361,27 @@ class OffsetRegistry:
         entry = self._data.get(filepath, {})
         return entry.get("offset", 0), entry.get("inode", 0)
 
-    def set(self, filepath: str, offset: int, inode: int):
-        """Update offset for a file."""
-        generation = self._entry_generation(self._data.get(filepath))
+    def generation(self, filepath: str) -> int:
+        """Return the current rewind generation for a file."""
+        return self._entry_generation(self._data.get(filepath))
+
+    def set(self, filepath: str, offset: int, inode: int, *, generation: int | None = None):
+        """Update offset for a file, optionally preserving its validated generation."""
+        current_generation = self._entry_generation(self._data.get(filepath))
+        preserve_generation = generation is not None
+        if generation is None:
+            generation = current_generation
+        elif not isinstance(generation, int) or isinstance(generation, bool) or generation < 0:
+            raise ValueError("generation must be a non-negative integer")
+        elif generation < current_generation:
+            return
         tombstone = self._removed.get(filepath)
         valid_inode = isinstance(inode, int) and not isinstance(inode, bool) and inode > 0
         if tombstone is not None and valid_inode:
-            generation = max(generation, int(tombstone["generation"]) + 1, time.time_ns())
+            if preserve_generation and generation <= int(tombstone["generation"]):
+                return
+            if not preserve_generation:
+                generation = max(generation, int(tombstone["generation"]) + 1, time.time_ns())
         self._data[filepath] = {
             "offset": offset,
             "inode": inode,
@@ -602,21 +641,30 @@ class OffsetRegistry:
 # ── JSONL Tailer ─────────────────────────────────────────────────────────────
 
 
+class OversizedJSONLRecordError(ValueError):
+    """A single JSONL record exceeded the configured in-memory safety ceiling."""
+
+
 class JSONLTailer:
     """Tail-follows a single JSONL file from a stored offset.
 
     Handles partial writes: buffers incomplete lines until a newline arrives.
-    Validates JSON before yielding — skips corrupt lines silently.
+    Validates JSON before yielding and stops before corrupt records so callers
+    can surface the failure without checkpointing unparsed bytes.
     Detects file rewinds (checkpoint restore) when file shrinks.
     """
 
-    def __init__(self, filepath: str, offset: int = 0):
+    def __init__(self, filepath: str, offset: int = 0, max_record_bytes: int | None = None):
         self.filepath = filepath
         self.offset = offset
+        self.max_record_bytes = max_record_bytes
         self._buffer = b""
         self.rewound = False  # Set to True when rewind detected
         self.rewind_old_offset = 0
         self.rewind_new_offset = 0
+        self.last_error: OSError | json.JSONDecodeError | UnicodeDecodeError | OversizedJSONLRecordError | None = None
+        self.failed_record: bytes | None = None
+        self.observed_inode = self.get_inode()
 
     def check_rewind(self) -> bool:
         """Check if file has shrunk (checkpoint restore). Returns True if rewound."""
@@ -641,23 +689,62 @@ class JSONLTailer:
             return True
         return False
 
-    def read_new_lines(self, max_lines: int | None = None) -> list[dict]:
-        """Read any new complete lines since last call. Returns parsed JSON dicts."""
+    def read_new_lines(
+        self,
+        max_lines: int | None = None,
+        max_bytes: int | None = None,
+    ) -> list[dict]:
+        """Read a bounded window of new bytes and return complete parsed JSON dicts."""
+        self.last_error = None
+        self.failed_record = None
         # Check for rewind before reading
         self.check_rewind()
+
+        if self.max_record_bytes is not None and self._partial_record_bytes() > self.max_record_bytes:
+            return self.read_buffered_lines(max_lines=max_lines)
 
         try:
             with open(self.filepath, "rb") as f:
                 f.seek(self.offset + len(self._buffer))
-                new_data = f.read()
-        except OSError:
+                remaining_bytes = max_bytes if max_bytes is not None and max_bytes > 0 else None
+                complete_lines = self._buffer.count(b"\n")
+                current_record_bytes = self._partial_record_bytes()
+                combined = bytearray(self._buffer)
+                while remaining_bytes is None or remaining_bytes > 0:
+                    if max_lines is not None and complete_lines >= max_lines:
+                        break
+                    chunk_bytes = _WATCH_READ_CHUNK_BYTES
+                    if remaining_bytes is not None:
+                        chunk_bytes = min(chunk_bytes, remaining_bytes)
+                    if self.max_record_bytes is not None:
+                        record_capacity = self.max_record_bytes - current_record_bytes + 1
+                        if record_capacity <= 0:
+                            break
+                        chunk_bytes = min(chunk_bytes, record_capacity)
+                    new_data = f.read(chunk_bytes)
+                    if not new_data:
+                        break
+                    combined.extend(new_data)
+                    if remaining_bytes is not None:
+                        remaining_bytes -= len(new_data)
+
+                    cursor = 0
+                    while True:
+                        newline_index = new_data.find(b"\n", cursor)
+                        if newline_index < 0:
+                            current_record_bytes += len(new_data) - cursor
+                            break
+                        current_record_bytes += newline_index - cursor
+                        complete_lines += 1
+                        current_record_bytes = 0
+                        cursor = newline_index + 1
+                self._buffer = bytes(combined)
+        except OSError as error:
+            self.last_error = error
             return []
 
-        if not new_data and b"\n" not in self._buffer:
+        if b"\n" not in self._buffer and not self._buffer:
             return []
-
-        if new_data:
-            self._buffer += new_data
         return self.read_buffered_lines(max_lines=max_lines)
 
     def has_complete_buffered_line(self) -> bool:
@@ -667,29 +754,66 @@ class JSONLTailer:
     def read_buffered_lines(self, max_lines: int | None = None) -> list[dict]:
         """Parse complete buffered records without reading more bytes from disk."""
         lines = []
+        self.last_error = None
+        self.failed_record = None
+        consumed_bytes = 0
+        starting_offset = self.offset
 
-        while b"\n" in self._buffer:
+        while True:
             if max_lines is not None and len(lines) >= max_lines:
                 break
-            nl_idx = self._buffer.index(b"\n")
-            line_data = self._buffer[:nl_idx]
-            self._buffer = self._buffer[nl_idx + 1 :]
+            nl_idx = self._buffer.find(b"\n", consumed_bytes)
+            if nl_idx < 0:
+                break
+            line_data = self._buffer[consumed_bytes:nl_idx]
 
             if not line_data.strip():
-                self.offset += nl_idx + 1
+                consumed_bytes = nl_idx + 1
                 continue
+
+            if self.max_record_bytes is not None and len(line_data) > self.max_record_bytes:
+                self.last_error = OversizedJSONLRecordError(f"JSONL record exceeds {self.max_record_bytes} bytes")
+                break
 
             try:
                 parsed = json.loads(line_data)
-                if isinstance(parsed, dict):
-                    parsed["_line_end_offset"] = self.offset + nl_idx + 1
-                    lines.append(parsed)
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                logger.debug("Skipping corrupt JSONL line at offset %d", self.offset)
+            except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                self.last_error = error
+                break
 
-            self.offset += nl_idx + 1
+            line_end_offset = starting_offset + nl_idx + 1
+            consumed_bytes = nl_idx + 1
+            if isinstance(parsed, dict):
+                parsed["_line_end_offset"] = line_end_offset
+                lines.append(parsed)
+
+        if consumed_bytes:
+            self._buffer = self._buffer[consumed_bytes:]
+            self.offset = starting_offset + consumed_bytes
+
+        if self.last_error is not None and b"\n" in self._buffer:
+            failed_end = self._buffer.index(b"\n") + 1
+            self.failed_record = self._buffer[:failed_end]
+        elif self.max_record_bytes is not None and self._partial_record_bytes() > self.max_record_bytes:
+            self.last_error = OversizedJSONLRecordError(f"JSONL record exceeds {self.max_record_bytes} bytes")
 
         return lines
+
+    def discard_failed_record(self) -> tuple[int, int, bytes] | None:
+        """Advance over a failed complete record after the caller durably quarantines it."""
+        if self.failed_record is None or not self._buffer.startswith(self.failed_record):
+            return None
+        start_offset = self.offset
+        record = self.failed_record
+        self._buffer = self._buffer[len(record) :]
+        self.offset += len(record)
+        self.failed_record = None
+        self.last_error = None
+        return start_offset, self.offset, record
+
+    def _partial_record_bytes(self) -> int:
+        last_newline = self._buffer.rfind(b"\n")
+        return len(self._buffer) if last_newline < 0 else len(self._buffer) - last_newline - 1
 
     def get_inode(self) -> int:
         """Return the inode of the file, or 0 if not accessible."""
@@ -714,12 +838,12 @@ class BatchIndexer:
         on_flush: Callable[[list[dict]], dict[str, int] | None],
         batch_size: int = 10,
         flush_interval_ms: int = 100,
-        on_confirm_offsets: Callable[[dict[str, int]], None] | None = None,
+        on_confirm_batch: Callable[[dict[str, int], list[dict]], None] | None = None,
     ):
         self.on_flush = on_flush
         self.batch_size = batch_size
         self.flush_interval_ms = flush_interval_ms
-        self.on_confirm_offsets = on_confirm_offsets
+        self.on_confirm_batch = on_confirm_batch
         self._buffer: list[dict] = []
         self._lock = threading.Lock()
         self._last_flush = time.monotonic()
@@ -765,8 +889,8 @@ class BatchIndexer:
         try:
             result = self.on_flush(batch)
             watermarks = self._confirmed_watermarks(batch, result)
-            if watermarks and self.on_confirm_offsets:
-                self.on_confirm_offsets(watermarks)
+            if watermarks and self.on_confirm_batch:
+                self.on_confirm_batch(watermarks, batch)
             self._buffer = []  # Clear only after successful flush
             self._flush_failures = 0
             self.total_flushed += count
@@ -812,6 +936,7 @@ class BatchIndexer:
             return len(batch)
 
         retained: list[dict] = []
+        confirmed_items: list[dict] = []
         confirmed: dict[str, int] = {}
         outputs = 0
         for item in batch:
@@ -823,10 +948,11 @@ class BatchIndexer:
             item_watermarks = self._confirmed_watermarks([item], result)
             for source_file, offset in item_watermarks.items():
                 confirmed[source_file] = max(confirmed.get(source_file, 0), offset)
+            confirmed_items.append(item)
             outputs += getattr(result, "inserted", 1)
 
-        if confirmed and self.on_confirm_offsets:
-            self.on_confirm_offsets(confirmed)
+        if confirmed and self.on_confirm_batch:
+            self.on_confirm_batch(confirmed, confirmed_items)
         self.total_outputs += outputs
         self.total_flushed += len(batch) - len(retained)
         self._buffer = retained
@@ -887,15 +1013,19 @@ class JSONLWatcher:
             on_flush=on_flush or (lambda _items: None),
             batch_size=batch_size,
             flush_interval_ms=flush_interval_ms,
-            on_confirm_offsets=self._advance_confirmed_offsets,
+            on_confirm_batch=self._advance_confirmed_batch,
         )
         self.poll_interval_s = poll_interval_s
         self.registry_flush_interval_s = registry_flush_interval_s
         self.max_lines_per_file = max(1, max_lines_per_file)
-        self.max_file_bytes = _watch_max_file_bytes()
+        self.max_read_bytes_per_file = _watch_read_window_bytes()
+        self.max_record_bytes = _watch_max_record_bytes()
         self._tailers: dict[str, JSONLTailer] = {}
         self._file_providers: dict[str, str] = {}
-        self._oversized_files: set[str] = set()
+        self._file_ingestion_failures: dict[str, dict[str, Any]] = {}
+        self._quarantined_record_count_total = 0
+        self._quarantined_records: list[dict[str, Any]] = []
+        self._pending_quarantined_offsets: dict[str, list[tuple[int, int, int, int]]] = {}
         self._stop = threading.Event()
         self._last_registry_flush = time.monotonic()
         self.health_path = Path(health_path).expanduser() if health_path else None
@@ -906,15 +1036,62 @@ class JSONLWatcher:
         self._health_entries_seen = 0
         self._health_output_at_start = 0
         self.poll_count = 0
+        self.last_poll_made_progress = False
         self._offset_prune_complete = False
 
-    def _advance_confirmed_offsets(self, watermarks: dict[str, int]) -> None:
-        for filepath, offset in watermarks.items():
-            tailer = self._tailers.get(filepath)
-            inode = tailer.get_inode() if tailer else self.registry.get(filepath)[1]
+    def _advance_confirmed_offsets(self, confirmations: dict[str, tuple[int, int, int]]) -> None:
+        for filepath, (offset, source_inode, source_generation) in confirmations.items():
             current_offset, _current_inode = self.registry.get(filepath)
             if offset >= current_offset:
-                self.registry.set(filepath, offset, inode)
+                self.registry.set(filepath, offset, source_inode, generation=source_generation)
+                self._advance_quarantined_offsets(filepath, source_inode, source_generation)
+
+    def _advance_confirmed_batch(self, watermarks: dict[str, int], batch: list[dict]) -> None:
+        """Confirm only offsets produced by the file generation currently being tailed."""
+        current_confirmations: dict[str, tuple[int, int, int]] = {}
+        for filepath, reported_offset in watermarks.items():
+            tailer = self._tailers.get(filepath)
+            if tailer is None:
+                continue
+            current_inode = tailer.observed_inode
+            current_generation = self.registry.generation(filepath)
+            eligible_offsets = [
+                item["_line_end_offset"]
+                for item in batch
+                if item.get("_source_file") == filepath
+                and item.get("_source_inode") == current_inode
+                and item.get("_source_generation") == current_generation
+                and isinstance(item.get("_line_end_offset"), int)
+                and item["_line_end_offset"] <= reported_offset
+            ]
+            if eligible_offsets:
+                current_confirmations[filepath] = (max(eligible_offsets), current_inode, current_generation)
+        self._advance_confirmed_offsets(current_confirmations)
+
+    def _advance_quarantined_offsets(self, filepath: str, source_inode: int, source_generation: int) -> None:
+        """Advance over consecutive durably quarantined records after prior bytes confirm."""
+        pending = self._pending_quarantined_offsets.get(filepath)
+        if not pending:
+            return
+        current_offset, current_inode = self.registry.get(filepath)
+        current_generation = self.registry.generation(filepath)
+        if current_generation != source_generation or current_inode not in (0, source_inode):
+            return
+        remaining: list[tuple[int, int, int, int]] = []
+        for start_offset, end_offset, pending_inode, pending_generation in sorted(pending):
+            if (pending_inode, pending_generation) != (source_inode, source_generation):
+                remaining.append((start_offset, end_offset, pending_inode, pending_generation))
+                continue
+            if current_offset < start_offset:
+                remaining.append((start_offset, end_offset, pending_inode, pending_generation))
+                continue
+            if end_offset > current_offset:
+                self.registry.set(filepath, end_offset, pending_inode, generation=pending_generation)
+                current_offset = end_offset
+        if remaining:
+            self._pending_quarantined_offsets[filepath] = remaining
+        else:
+            self._pending_quarantined_offsets.pop(filepath, None)
 
     def provider_for_file(self, filepath: str) -> str:
         if is_denylisted(filepath):
@@ -985,6 +1162,8 @@ class JSONLWatcher:
         read_start_offset: int,
         read_end_offset: int,
         normalized_lines: list[dict],
+        source_inode: int,
+        source_generation: int,
     ) -> None:
         """Confirm intentionally discarded bytes without crossing indexable work."""
         required_confirmed_offset = max(
@@ -998,7 +1177,150 @@ class JSONLWatcher:
         confirmed_offset, _confirmed_inode = self.registry.get(filepath)
         if confirmed_offset < required_confirmed_offset:
             return
-        self._advance_confirmed_offsets({filepath: read_end_offset})
+        self._advance_confirmed_offsets(
+            {
+                filepath: (
+                    read_end_offset,
+                    source_inode,
+                    source_generation,
+                )
+            }
+        )
+
+    def _record_file_ingestion_failure(
+        self,
+        filepath: str,
+        error: BaseException,
+        extra_context: dict[str, Any] | None = None,
+    ) -> None:
+        """Raise once per distinct failure and retain it on the health surface."""
+        tailer = self._tailers.get(filepath)
+        confirmed_offset, confirmed_inode = self.registry.get(filepath)
+        try:
+            file_size = os.path.getsize(filepath)
+        except OSError:
+            file_size = None
+        context = {
+            "file_path": filepath,
+            "error_type": type(error).__name__,
+            "error": str(error),
+            "confirmed_offset": confirmed_offset,
+            "confirmed_inode": confirmed_inode,
+            "read_offset": tailer.offset if tailer else confirmed_offset,
+            "file_size_bytes": file_size,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if extra_context:
+            context.update(extra_context)
+        fingerprint = (
+            context["error_type"],
+            context["error"],
+            context["confirmed_offset"],
+            context["read_offset"],
+            context.get("disposition"),
+            context.get("quarantine_path"),
+        )
+        previous = self._file_ingestion_failures.get(filepath)
+        self._file_ingestion_failures[filepath] = {**context, "_fingerprint": fingerprint}
+        if previous and previous.get("_fingerprint") == fingerprint:
+            return
+        try:
+            raise_alarm(
+                "watcher_file_ingestion_failed",
+                "watcher deferred a JSONL file because bytes could not be safely parsed",
+                context,
+            )
+        except BrainLayerAlarm as alarm:
+            logger.error("Watcher file-ingestion alarm emitted without stopping watcher: %s", alarm)
+
+    def _clear_file_ingestion_failure(self, filepath: str) -> None:
+        self._file_ingestion_failures.pop(filepath, None)
+
+    def _quarantine_failed_record(
+        self,
+        filepath: str,
+        tailer: JSONLTailer,
+        source_inode: int,
+        source_generation: int,
+    ) -> bool:
+        """Durably preserve one malformed record, alarm, and advance over only those bytes."""
+        if tailer.failed_record is None or not isinstance(
+            tailer.last_error,
+            (json.JSONDecodeError, UnicodeDecodeError),
+        ):
+            return False
+
+        record = tailer.failed_record
+        start_offset = tailer.offset
+        end_offset = start_offset + len(record)
+        digest = hashlib.sha256(record).hexdigest()
+        quarantine_dir = Path(
+            os.environ.get("BRAINLAYER_WATCHER_QUARANTINE_DIR", "~/.brainlayer/quarantine")
+        ).expanduser()
+        quarantine_path = quarantine_dir / (
+            f"watcher-parse-{Path(filepath).stem}-{start_offset}-{digest[:16]}.jsonl.bad"
+        )
+        temp_path: Path | None = None
+        try:
+            quarantine_dir.mkdir(parents=True, exist_ok=True)
+            if not quarantine_path.exists():
+                with tempfile.NamedTemporaryFile(
+                    mode="wb",
+                    dir=quarantine_dir,
+                    prefix=f".{quarantine_path.name}.",
+                    delete=False,
+                ) as handle:
+                    temp_path = Path(handle.name)
+                    handle.write(record)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                temp_path.replace(quarantine_path)
+                temp_path = None
+                directory_fd = os.open(quarantine_dir, os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+            elif quarantine_path.read_bytes() != record:
+                raise OSError(f"quarantine collision at {quarantine_path}")
+        except OSError as error:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
+            tailer.last_error = error
+            tailer.failed_record = None
+            return False
+
+        parse_error = tailer.last_error
+        event = {
+            "file_path": filepath,
+            "start_offset": start_offset,
+            "end_offset": end_offset,
+            "record_bytes": len(record),
+            "sha256": digest,
+            "quarantine_path": str(quarantine_path),
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self._quarantined_record_count_total += 1
+        self._quarantined_records.append(event)
+        self._quarantined_records = self._quarantined_records[-_MAX_HEALTH_QUARANTINE_DETAILS:]
+        self._record_file_ingestion_failure(
+            filepath,
+            parse_error,
+            {
+                "disposition": "quarantined",
+                "quarantine_path": str(quarantine_path),
+                "quarantined_start_offset": start_offset,
+                "quarantined_end_offset": end_offset,
+            },
+        )
+        discarded = tailer.discard_failed_record()
+        if discarded is None:
+            raise RuntimeError("quarantined record no longer matches the tailer buffer")
+        self._pending_quarantined_offsets.setdefault(filepath, []).append(
+            (start_offset, end_offset, source_inode, source_generation)
+        )
+        self._advance_quarantined_offsets(filepath, source_inode, source_generation)
+        return True
 
     def _max_offset_lag_bytes(self, files: list[str]) -> int:
         max_lag = 0
@@ -1075,6 +1397,24 @@ class JSONLWatcher:
             realtime_inserts_per_minute=watchdog_inserts_per_min,
             max_offset_lag_bytes=max_lag,
         )
+        all_failure_payloads = [
+            {key: value for key, value in failure.items() if key != "_fingerprint"}
+            for _filepath, failure in sorted(self._file_ingestion_failures.items())
+        ]
+        failure_payloads = all_failure_payloads[:_MAX_HEALTH_FAILURE_DETAILS]
+        failure_overflow_count = len(all_failure_payloads) - len(failure_payloads)
+        alert_reasons = list(watchdog.get("alert_reasons", []))
+        if all_failure_payloads and "file_ingestion_failure" not in alert_reasons:
+            alert_reasons.append("file_ingestion_failure")
+        if self._quarantined_record_count_total and "quarantined_record" not in alert_reasons:
+            alert_reasons.append("quarantined_record")
+        watchdog = {
+            **watchdog,
+            "alerting": bool(watchdog.get("alerting"))
+            or bool(all_failure_payloads)
+            or bool(self._quarantined_record_count_total),
+            "alert_reasons": alert_reasons,
+        }
         coverage_degraded = (
             active_entries_per_min > 0
             and watchdog_inserts_per_min / active_entries_per_min < self.coverage_watchdog.coverage_ratio_threshold
@@ -1093,6 +1433,11 @@ class JSONLWatcher:
             "failed_flush_inputs_per_minute": failed_flush_inputs_per_min,
             "watcher_chunks_output_per_minute": outputs_per_min,
             "max_offset_lag_bytes": max_lag,
+            "file_ingestion_failure_count": len(all_failure_payloads),
+            "file_ingestion_failures": failure_payloads,
+            "file_ingestion_failures_overflow_count": failure_overflow_count,
+            "quarantined_record_count_total": self._quarantined_record_count_total,
+            "quarantined_records": list(self._quarantined_records),
             **watchdog,
         }
         try:
@@ -1143,19 +1488,27 @@ class JSONLWatcher:
             # Check inode hasn't changed (file replaced)
             current_inode = tailer.get_inode()
             stored_offset, stored_inode = self.registry.get(filepath)
-            if stored_inode != 0 and current_inode != stored_inode:
+            inode_changed = current_inode != 0 and (
+                (stored_inode != 0 and current_inode != stored_inode)
+                or (tailer.observed_inode != 0 and current_inode != tailer.observed_inode)
+            )
+            if inode_changed:
                 # File was replaced — reset offset
-                tailer = JSONLTailer(filepath, offset=0)
+                self._pending_quarantined_offsets.pop(filepath, None)
+                self.registry.mark_rewind(filepath, current_inode)
+                tailer = JSONLTailer(filepath, offset=0, max_record_bytes=self.max_record_bytes)
                 self._tailers[filepath] = tailer
             return tailer
 
         stored_offset, stored_inode = self.registry.get(filepath)
-        tailer = JSONLTailer(filepath, offset=stored_offset)
+        tailer = JSONLTailer(filepath, offset=stored_offset, max_record_bytes=self.max_record_bytes)
 
         # Verify inode matches
         current_inode = tailer.get_inode()
-        if stored_inode != 0 and current_inode != stored_inode:
-            tailer = JSONLTailer(filepath, offset=0)
+        if stored_inode != 0 and current_inode != 0 and current_inode != stored_inode:
+            self._pending_quarantined_offsets.pop(filepath, None)
+            self.registry.mark_rewind(filepath, current_inode)
+            tailer = JSONLTailer(filepath, offset=0, max_record_bytes=self.max_record_bytes)
 
         self._tailers[filepath] = tailer
         return tailer
@@ -1169,6 +1522,7 @@ class JSONLWatcher:
     ) -> None:
         """Persist a rewind and notify archival consumers."""
         session_id = Path(filepath).stem
+        self._pending_quarantined_offsets.pop(filepath, None)
         self.registry.mark_rewind(filepath, inode)
         logger.warning(
             "Checkpoint restore: %s (offset %d → %d)",
@@ -1198,81 +1552,26 @@ class JSONLWatcher:
             except Exception as e:
                 logger.error("Rewind callback failed: %s", e)
 
-    def _skip_oversized_file(self, filepath: str) -> bool:
-        if self.max_file_bytes <= 0:
-            self._oversized_files.discard(filepath)
-            return False
-
-        try:
-            file_stat = os.stat(filepath)
-        except OSError:
-            return False
-
-        tailer = self._tailers.get(filepath)
-        registry_offset, registry_inode = self.registry.get(filepath)
-        tailer_offset = tailer.offset if tailer else registry_offset
-        rewind_old_offset = tailer_offset
-        file_rewound = file_stat.st_size < tailer_offset
-        inode_changed = registry_inode != 0 and registry_inode != file_stat.st_ino
-        offset = 0 if inode_changed or file_rewound else registry_offset
-        pending_bytes = max(file_stat.st_size - offset, 0)
-        if pending_bytes <= self.max_file_bytes:
-            self._oversized_files.discard(filepath)
-            return False
-
-        if tailer is not None and not inode_changed and not file_rewound and tailer_offset > registry_offset:
-            if self.indexer.has_buffered_source(filepath):
-                self.indexer.flush()
-            confirmed_offset, confirmed_inode = self.registry.get(filepath)
-            if confirmed_inode != file_stat.st_ino or confirmed_offset < tailer_offset:
-                if filepath not in self._oversized_files:
-                    logger.error(
-                        "Oversized JSONL checkpoint deferred for unconfirmed entries: %s",
-                        filepath,
-                    )
-                self._oversized_files.add(filepath)
-                return True
-            offset = confirmed_offset
-            pending_bytes = max(file_stat.st_size - offset, 0)
-            if pending_bytes <= self.max_file_bytes:
-                self._oversized_files.discard(filepath)
-                return False
-
-        self._tailers.pop(filepath, None)
-        if file_rewound:
-            self._handle_rewind(
-                filepath,
-                rewind_old_offset,
-                file_stat.st_size,
-                file_stat.st_ino,
-            )
-        self.registry.set(filepath, file_stat.st_size, file_stat.st_ino)
-        if not self.registry.flush():
-            logger.error(
-                "Oversized JSONL checkpoint could not be persisted immediately: %s",
-                filepath,
-            )
-        if filepath not in self._oversized_files:
-            logger.warning(
-                "Oversized JSONL checkpointed and skipped: %s pending_bytes=%d max_file_bytes=%d offset=%d size=%d",
-                filepath,
-                pending_bytes,
-                self.max_file_bytes,
-                offset,
-                file_stat.st_size,
-            )
-        self._oversized_files.add(filepath)
-        return True
-
     def poll_once(self) -> int:
         """Run one poll cycle. Returns number of new lines found."""
         total_new = 0
         files: list[str] = []
         self.poll_count += 1
+        self.last_poll_made_progress = False
 
         try:
             files = self._discover_jsonl_files()
-            self._oversized_files.intersection_update(filepath for filepath in files if not is_denylisted(filepath))
+            live_files = {filepath for filepath in files if not is_denylisted(filepath)}
+            self._file_ingestion_failures = {
+                filepath: failure
+                for filepath, failure in self._file_ingestion_failures.items()
+                if filepath in live_files
+            }
+            self._pending_quarantined_offsets = {
+                filepath: pending
+                for filepath, pending in self._pending_quarantined_offsets.items()
+                if filepath in live_files
+            }
             if not self._offset_prune_complete:
                 pruned = self.registry.prune_missing_files(
                     [root.resolved_path for root in self.watch_roots],
@@ -1286,20 +1585,31 @@ class JSONLWatcher:
                 if is_denylisted(filepath):
                     self._tailers.pop(filepath, None)
                     self._file_providers.pop(filepath, None)
+                    self._pending_quarantined_offsets.pop(filepath, None)
                     self.registry.remove(filepath)
 
             for filepath in files:
                 if is_denylisted(filepath):
                     self._tailers.pop(filepath, None)
                     self._file_providers.pop(filepath, None)
+                    self._pending_quarantined_offsets.pop(filepath, None)
                     self.registry.remove(filepath)
                     continue
+                tailer: JSONLTailer | None = None
+                tailer_snapshot: tuple[int, bytes] | None = None
+                source_inode = 0
+                source_generation = 0
+                read_accepted = False
                 try:
                     tailer = self._tailers.get(filepath)
                     drain_buffer = False
                     if tailer is not None and tailer.has_complete_buffered_line():
                         _registry_offset, registry_inode = self.registry.get(filepath)
-                        inode_changed = registry_inode != 0 and registry_inode != tailer.get_inode()
+                        current_inode = tailer.get_inode()
+                        inode_changed = current_inode != 0 and (
+                            (registry_inode != 0 and registry_inode != current_inode)
+                            or (tailer.observed_inode != 0 and tailer.observed_inode != current_inode)
+                        )
                         if not inode_changed and not tailer.check_rewind():
                             drain_buffer = True
                         elif tailer.rewound:
@@ -1313,13 +1623,20 @@ class JSONLWatcher:
 
                     if drain_buffer:
                         read_start_offset = tailer.offset
+                        tailer_snapshot = (tailer.offset, tailer._buffer)
+                        source_inode = tailer.observed_inode
+                        source_generation = self.registry.generation(filepath)
                         new_lines = tailer.read_buffered_lines(max_lines=self.max_lines_per_file)
                     else:
-                        if self._skip_oversized_file(filepath):
-                            continue
                         tailer = self._ensure_tailer(filepath)
                         read_start_offset = tailer.offset
-                        new_lines = tailer.read_new_lines(max_lines=self.max_lines_per_file)
+                        tailer_snapshot = (tailer.offset, tailer._buffer)
+                        source_inode = tailer.observed_inode
+                        source_generation = self.registry.generation(filepath)
+                        new_lines = tailer.read_new_lines(
+                            max_lines=self.max_lines_per_file,
+                            max_bytes=self.max_read_bytes_per_file,
+                        )
 
                     # Handle rewind detection (checkpoint restore)
                     if tailer.rewound:
@@ -1331,10 +1648,16 @@ class JSONLWatcher:
                             tailer.get_inode(),
                         )
                         tailer.rewound = False  # Reset flag
+                        source_inode = tailer.observed_inode
+                        source_generation = self.registry.generation(filepath)
 
                     normalized_lines = self._normalize_lines(filepath, new_lines) if new_lines else []
                     if normalized_lines:
+                        for line in normalized_lines:
+                            line["_source_inode"] = source_inode
+                            line["_source_generation"] = source_generation
                         self.indexer.add(normalized_lines)
+                        read_accepted = True
                         self._health_entries_seen += len(normalized_lines)
                         total_new += len(normalized_lines)
                     self._checkpoint_discarded_progress(
@@ -1342,9 +1665,31 @@ class JSONLWatcher:
                         read_start_offset,
                         tailer.offset,
                         normalized_lines,
+                        source_inode,
+                        source_generation,
                     )
-                except Exception:
+                    if tailer.last_error is not None:
+                        if not self._quarantine_failed_record(
+                            filepath,
+                            tailer,
+                            source_inode,
+                            source_generation,
+                        ):
+                            self._record_file_ingestion_failure(filepath, tailer.last_error)
+                    else:
+                        self._clear_file_ingestion_failure(filepath)
+                    if tailer_snapshot is not None and (
+                        tailer.offset != tailer_snapshot[0] or tailer._buffer != tailer_snapshot[1]
+                    ):
+                        self.last_poll_made_progress = True
+                    read_accepted = True
+                except Exception as error:
+                    if tailer is not None and tailer_snapshot is not None and not read_accepted:
+                        tailer.offset, tailer._buffer = tailer_snapshot
+                        tailer.last_error = error
+                        tailer.failed_record = None
                     logger.exception("Poll file error: %s", filepath)
+                    self._record_file_ingestion_failure(filepath, error)
 
             self.indexer.tick()
             if self.on_tick:

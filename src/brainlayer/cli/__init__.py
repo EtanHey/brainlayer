@@ -177,6 +177,7 @@ def _default_pause_labels() -> list[str]:
     return [
         "com.brainlayer.watch",
         "com.brainlayer.drain",
+        "com.brainlayer.t3-ingest",
         "com.brainlayer.hotlane-brainbar",
         "com.brainlayer.enrichment",
         "com.brainlayer.health-check",
@@ -845,6 +846,11 @@ def health_check_command(
         "--drain-health-path",
         help="Drain health JSON path.",
     ),
+    t3_health_path: Path = typer.Option(
+        Path("~/.local/share/brainlayer/t3-health.json"),
+        "--t3-health-path",
+        help="T3 ingestion health JSON path.",
+    ),
     queue_dir: Path = typer.Option(Path("~/.brainlayer/queue"), "--queue-dir", help="Durable queue directory."),
     offsets_path: Path = typer.Option(
         Path("~/.local/share/brainlayer/offsets.json"),
@@ -880,6 +886,7 @@ def health_check_command(
             else HealthCheckConfig().source_jsonl_globs,
             pause_sentinel_path=pause_sentinel_path.expanduser(),
             drain_health_path=drain_health_path.expanduser(),
+            t3_health_path=t3_health_path.expanduser(),
             queue_dir=queue_dir.expanduser(),
             offsets_path=offsets_path.expanduser(),
             watcher_health_path=watcher_health_path.expanduser(),
@@ -3494,9 +3501,9 @@ def watch_backfill(
     while cycles < max_cycles:
         cycles += 1
         count = watcher.poll_once()
-        if count == 0:
-            break
         processed += count
+        if count == 0 and not watcher.last_poll_made_progress:
+            break
     watcher.indexer.flush()
     watcher.registry.flush()
     rprint(f"processed_entries={processed} cycles={cycles} registry={registry_path}")
@@ -3669,6 +3676,43 @@ def index_fast(
     except Exception as e:
         rprint(f"[bold red]Error:[/] {e}")
         raise typer.Exit(1)
+
+
+@app.command("ingest-t3")
+def ingest_t3_command(
+    state_db: Path = typer.Option(
+        Path("~/.t3/userdata/state.sqlite"),
+        "--state-db",
+        help="Read-only T3 state SQLite database.",
+    ),
+    db: Optional[Path] = typer.Option(None, "--db", help="BrainLayer destination database."),
+    health_path: Path = typer.Option(
+        Path("~/.local/share/brainlayer/t3-health.json"),
+        "--health-path",
+        help="T3 ingestion health JSON path.",
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Read and plan chunks without writing BrainLayer."),
+) -> None:
+    """Ingest the live T3 thread projection into BrainLayer."""
+    from ..ingest.t3 import ingest_t3
+    from ..paths import get_db_path
+
+    result = ingest_t3(
+        state_db.expanduser(),
+        db_path=(db.expanduser() if db is not None else get_db_path()),
+        health_path=health_path.expanduser(),
+        dry_run=dry_run,
+    )
+    mode = "dry-run " if dry_run else ""
+    rprint(
+        f"{mode}threads_seen={result.threads_seen} "
+        f"threads_ingested={result.threads_ingested} "
+        f"messages_seen={result.messages_seen} "
+        f"messages_ingested={result.messages_ingested} "
+        f"chunks_planned={result.chunks_planned} "
+        f"chunks_indexed={result.chunks_indexed} "
+        f"duplicates_accepted={result.duplicates_accepted}"
+    )
 
 
 @app.command("ingest-codex")

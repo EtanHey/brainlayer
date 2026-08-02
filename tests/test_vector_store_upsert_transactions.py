@@ -172,6 +172,38 @@ def test_upsert_chunks_preserves_dedupe_and_repeat_upsert_shape(isolated_store, 
     assert vector_rows == [("canonical",), ("distinct",)]
 
 
+def test_t3_upsert_persists_provenance_and_accepts_mirrored_duplicates(isolated_store):
+    duplicate_content = "T3 mirrored content must remain a first-class duplicate"
+    chunks = [
+        {
+            **_chunk("t3-thread-1", duplicate_content),
+            "project": None,
+            "source": "t3",
+            "provenance_class": "t3-thread",
+            "allow_duplicate": True,
+        },
+        {
+            **_chunk("t3-thread-2", duplicate_content),
+            "project": None,
+            "source": "t3",
+            "provenance_class": "t3-thread",
+            "allow_duplicate": True,
+        },
+    ]
+
+    assert isolated_store.upsert_chunks(chunks, [_embedding(1), _embedding(2)]) == 2
+
+    rows = (
+        isolated_store.conn.cursor()
+        .execute("SELECT id, source, provenance_class FROM chunks WHERE id LIKE 't3-thread-%' ORDER BY id")
+        .fetchall()
+    )
+    assert rows == [
+        ("t3-thread-1", "t3", "t3-thread"),
+        ("t3-thread-2", "t3", "t3-thread"),
+    ]
+
+
 def test_busy_sub_batch_retries_without_replaying_committed_sub_batches(isolated_store, monkeypatch):
     monkeypatch.setenv("BRAINLAYER_INDEX_TXN_BATCH", "2")
     insert_attempts: dict[str, int] = {}

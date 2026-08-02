@@ -230,6 +230,16 @@ def test_index_launchagent_runs_nightly_without_keepalive_or_run_at_load():
     assert index["StartCalendarInterval"] == {"Hour": 3, "Minute": 15}
 
 
+def test_t3_ingest_launchagent_invokes_first_class_source():
+    t3 = _load("scripts/launchd/com.brainlayer.t3-ingest.plist")
+
+    assert t3["Label"] == "com.brainlayer.t3-ingest"
+    assert t3["ProgramArguments"][:3] == ["__BRAINLAYER_ENV_RUN__", "__BRAINLAYER_BIN__", "ingest-t3"]
+    assert t3["StartCalendarInterval"] == {"Hour": 3, "Minute": 45}
+    assert t3["RunAtLoad"] is True
+    assert "KeepAlive" not in t3
+
+
 def test_canonical_launchagent_env_has_no_concrete_dev_src_paths():
     plist_paths = [
         *sorted((REPO_ROOT / "scripts/launchd").glob("com.brainlayer.*.plist")),
@@ -525,6 +535,15 @@ def test_launchd_installer_wires_health_check_target():
     assert "health-check)" in install_source
     assert "install_plist health-check" in install_source
     assert "remove_plist health-check" in install_source
+
+
+def test_launchd_installer_wires_t3_ingest_target():
+    install_source = (REPO_ROOT / "scripts/launchd/install.sh").read_text(encoding="utf-8")
+
+    assert "./scripts/launchd/install.sh t3-ingest" in install_source
+    assert "t3-ingest)" in install_source
+    assert "install_plist t3-ingest" in install_source
+    assert "remove_plist t3-ingest" in install_source
 
 
 def test_launchd_installer_wires_throughput_watchdog_target():

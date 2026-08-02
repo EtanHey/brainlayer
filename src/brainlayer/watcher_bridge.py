@@ -224,24 +224,81 @@ def _normalize_project_name(raw: str) -> str:
     return name
 
 
-def _extract_project_from_source(source_file: str) -> str | None:
-    """Extract the project root from a watcher source path.
+def _extract_workspace_project(entry: dict[str, Any] | None) -> str | None:
+    """Return a project name from explicit session workspace metadata only."""
+    if not isinstance(entry, dict):
+        return None
 
-    For Claude Code transcripts the canonical project directory is the segment
-    immediately under `.../projects/`, even when the JSONL lives under nested
-    session folders like `subagents/` or `tool-results/`.
+    candidates = [entry]
+    for key in ("payload", "metadata"):
+        value = entry.get(key)
+        if isinstance(value, dict):
+            candidates.append(value)
+    for candidate in candidates:
+        for key in ("cwd", "workspace", "workdir"):
+            value = candidate.get(key)
+            if not isinstance(value, str) or not value.strip():
+                continue
+            name = _normalize_project_name(Path(value).name)
+            if name and not name.isdigit():
+                return name
+    return None
+
+
+def _extract_project_from_source(source_file: str, entry: dict[str, Any] | None = None) -> str | None:
+    """Extract a project only from workspace metadata or Claude's project path.
+
+    Codex, Cursor, and Gemini paths are date-partitioned and therefore cannot
+    safely provide a project name. Claude Code encodes the workspace explicitly
+    in its `projects/<workspace>` path, which remains a trusted fallback.
     """
     p = Path(source_file)
     parts = p.parts
     if "projects" in parts:
         project_index = parts.index("projects") + 1
         if project_index < len(parts):
-            return _normalize_project_name(parts[project_index])
+            project = _normalize_project_name(parts[project_index])
+            if not project.isdigit():
+                return project
+    return _extract_workspace_project(entry)
 
-    parent_name = p.parent.name
-    if parent_name:
-        return _normalize_project_name(parent_name)
+
+def _extract_project_from_session_file(source_file: str) -> str | None:
+    """Derive a project from the source file's durable session metadata."""
+    project = _extract_project_from_source(source_file)
+    if project is not None:
+        return project
+    try:
+        with Path(source_file).open(encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                project = _extract_project_from_source(source_file, entry)
+                if project is not None:
+                    return project
+    except OSError:
+        return None
     return None
+
+
+def _source_file_fingerprint(source_file: str) -> tuple[int, int] | None:
+    """Return a version token for retrying an unresolved session file."""
+    try:
+        stat = Path(source_file).stat()
+    except OSError:
+        return None
+    return stat.st_size, stat.st_mtime_ns
+
+
+def _source_file_identity(source_file: str) -> tuple[int, int, int] | None:
+    """Return enough state to detect replacement or rewind without invalidating on append."""
+    try:
+        stat = Path(source_file).stat()
+    except OSError:
+        return None
+    return stat.st_dev, stat.st_ino, stat.st_size
 
 
 def _content_class_for_visibility(base_content_class: str, visibility: str) -> str:
@@ -265,6 +322,9 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
         arbitrated = os.environ.get("BRAINLAYER_ARBITRATED") == "1"
     store = None if arbitrated else VectorStore(db_path or get_db_path())
     liveness_schema_ready = False
+    source_projects: dict[str, str] = {}
+    resolved_source_identities: dict[str, tuple[int, int, int]] = {}
+    unresolved_source_versions: dict[str, tuple[int, int] | None] = {}
 
     def ensure_direct_liveness_schema() -> None:
         if liveness_schema_ready or store is None:
@@ -341,7 +401,30 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
         for entry in entries:
             source_file = entry.get("_source_file", "unknown")
             source_files_seen.add(source_file)
-            project = _extract_project_from_source(source_file)
+            project = source_projects.get(source_file)
+            source_identity = _source_file_identity(source_file)
+            cached_identity = resolved_source_identities.get(source_file)
+            if project is not None and source_identity is not None and cached_identity is not None:
+                if source_identity[:2] != cached_identity[:2] or source_identity[2] < cached_identity[2]:
+                    source_projects.pop(source_file, None)
+                    resolved_source_identities.pop(source_file, None)
+                    project = None
+                else:
+                    resolved_source_identities[source_file] = source_identity
+            if project is None:
+                source_version = _source_file_fingerprint(source_file)
+                if (
+                    source_file not in unresolved_source_versions
+                    or unresolved_source_versions[source_file] != source_version
+                ):
+                    project = _extract_project_from_session_file(source_file)
+                    if project is not None:
+                        source_projects[source_file] = project
+                        if source_identity is not None:
+                            resolved_source_identities[source_file] = source_identity
+                        unresolved_source_versions.pop(source_file, None)
+                    else:
+                        unresolved_source_versions[source_file] = source_version
             claude_conversation_id = _extract_claude_conversation_id(source_file)
 
             # Layer 1: Pre-classify filter

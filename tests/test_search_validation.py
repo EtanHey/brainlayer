@@ -48,7 +48,7 @@ class TestDetailParamValidation:
 
         # After fix: _search is NOT called — error returned before routing
         mock_search.assert_not_called()
-        assert result.isError is True
+        assert result.is_error is True
         assert "Invalid detail='verbose'" in result.content[0].text
 
     def test_detail_empty_string_returns_error(self):
@@ -63,7 +63,7 @@ class TestDetailParamValidation:
             result = asyncio.run(_brain_search(query="test", detail="", project="test"))
 
         mock_search.assert_not_called()
-        assert result.isError is True
+        assert result.is_error is True
         assert "Must be one of" in result.content[0].text
 
     def test_detail_none_returns_error(self):
@@ -78,7 +78,7 @@ class TestDetailParamValidation:
             result = asyncio.run(_brain_search(query="test", detail=None, project="test"))
 
         mock_search.assert_not_called()
-        assert result.isError is True
+        assert result.is_error is True
         assert "Invalid detail='None'" in result.content[0].text
 
     def test_detail_compact_is_valid(self):
@@ -131,7 +131,7 @@ class TestDetailParamValidation:
             result = asyncio.run(_brain_search(query="test", num_results=101, project="test"))
 
         mock_search.assert_not_called()
-        assert result.isError is True
+        assert result.is_error is True
         assert "must be between 1 and 100" in result.content[0].text
 
     @pytest.mark.parametrize("num_results", [0, -1])
@@ -147,7 +147,7 @@ class TestDetailParamValidation:
             result = asyncio.run(_brain_search(query="test", num_results=num_results, project="test"))
 
         mock_search.assert_not_called()
-        assert result.isError is True
+        assert result.is_error is True
         assert f"num_results={num_results}" in result.content[0].text
 
 

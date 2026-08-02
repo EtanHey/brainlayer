@@ -1113,6 +1113,35 @@ No results found.
         XCTAssertNotNil(entity, "Digest-extracted entity should resolve via brain_entity lookup")
     }
 
+    func testBrainDigestStoresTheFullInputContent() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-digest-full-content-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+
+        let input = "DIGEST-CUTOFF " + String(repeating: "x", count: 677) + " FULL-TAIL"
+        XCTAssertEqual(input.count, 701)
+
+        let router = MCPRouter(profile: "full")
+        router.setDatabase(db)
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_digest",
+                "arguments": ["content": input]
+            ] as [String: Any]
+        ])
+
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertNil(result["isError"] as? Bool)
+        let matches = try db.search(query: "DIGEST-CUTOFF", limit: 1)
+        let stored = try XCTUnwrap(matches.first?["content"] as? String)
+        XCTAssertEqual(stored.count, input.count, "brain_digest stored \(stored.count) characters from a \(input.count)-character input")
+        XCTAssertEqual(stored, input)
+    }
+
     func testBrainSubscribeToolIsServerHandled() throws {
         let router = MCPRouter(profile: "full")
         let request: [String: Any] = [

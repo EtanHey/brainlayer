@@ -180,7 +180,7 @@ def test_helper_preserves_agent_id_for_brain_search(monkeypatch, tmp_path):
 
 def test_helper_preserves_brain_search_mcp_error(monkeypatch, tmp_path):
     async def fake_brain_search(**_kwargs):
-        return CallToolResult(content=[TextContent(type="text", text="Invalid detail='verbose'")], isError=True)
+        return CallToolResult(content=[TextContent(type="text", text="Invalid detail='verbose'")], is_error=True)
 
     monkeypatch.setattr("brainlayer.mcp.search_handler._brain_search", fake_brain_search)
 

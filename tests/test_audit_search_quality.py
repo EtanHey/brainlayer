@@ -113,7 +113,7 @@ class TestEntityTypeEnumAlignment:
 
         tools = await list_tools()
         recall_tool = next(t for t in tools if t.name == "brain_recall")
-        schema = recall_tool.inputSchema
+        schema = recall_tool.input_schema
         mcp_enum = schema["properties"]["entity_type"]["enum"]
 
         assert sorted(mcp_enum) == sorted(ENTITY_TYPES), (
@@ -126,7 +126,7 @@ class TestEntityTypeEnumAlignment:
 
         tools = _full_tool_definitions()
         entity_tool = next(t for t in tools if t.name == "brain_entity")
-        schema = entity_tool.inputSchema
+        schema = entity_tool.input_schema
         mcp_enum = schema["properties"]["entity_type"]["enum"]
 
         assert sorted(mcp_enum) == sorted(self.BRAIN_ENTITY_TYPES), (
