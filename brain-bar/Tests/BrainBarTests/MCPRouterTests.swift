@@ -2014,6 +2014,57 @@ No results found.
         XCTAssertTrue(queuedText.contains(chunkID))
     }
 
+    func testDeferredBrainStoreRetryReusesQueuedChunkInsteadOfCreatingSecondRow() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        let restoreQueuePath = setPendingStoreQueuePath(queuePath)
+        defer { restoreQueuePath() }
+
+        let dbPath = tempDir.appendingPathComponent("brainbar.db").path
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+        db.failNextStoreWithBusyForTesting = true
+
+        let router = MCPRouter(profile: "full")
+        router.setDatabase(db)
+        let session = router.makePaletteSession()
+        let content = "A client retry after DEFERRED must resolve to the queued chunk"
+        let arguments: [String: Any] = [
+            "content": content,
+            "tags": ["deferred-retry"],
+            "importance": 7,
+        ]
+
+        let deferredResponse = router.handle(
+            toolCall(id: 223, name: "brain_store", arguments: arguments),
+            session: session
+        )
+        let deferred = try XCTUnwrap(deferredResponse["result"] as? [String: Any])
+        XCTAssertEqual(deferred["status"] as? String, "DEFERRED")
+        let queuedChunkID = try XCTUnwrap(deferred["chunk_id"] as? String)
+
+        _ = db.flushPendingStores()
+        XCTAssertEqual(try chunkContents(path: dbPath).filter { $0 == content }.count, 1)
+
+        let retryResponse = router.handle(
+            toolCall(id: 224, name: "brain_store", arguments: arguments),
+            session: session
+        )
+        let retryResult = try XCTUnwrap(retryResponse["result"] as? [String: Any])
+        XCTAssertNil(retryResult["isError"])
+        XCTAssertNotEqual(retryResult["status"] as? String, "DEFERRED")
+        let stored = try XCTUnwrap(retryResult["_brainbarStoredChunk"] as? [String: Any])
+
+        XCTAssertEqual(stored["chunk_id"] as? String, queuedChunkID)
+        XCTAssertEqual(
+            try chunkContents(path: dbPath).filter { $0 == content }.count,
+            1,
+            "retrying a durable DEFERRED receipt must not create a second chunk"
+        )
+    }
+
     func testBrainStoreMCPWriteBudgetQueuesPromptlyUnderSQLiteLock() throws {
         let tempDir = makeTempTestDirectory()
         defer { try? FileManager.default.removeItem(at: tempDir) }

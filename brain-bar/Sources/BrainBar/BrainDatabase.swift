@@ -808,7 +808,8 @@ final class BrainDatabase: @unchecked Sendable {
                     source_uri TEXT,
                     status TEXT DEFAULT 'active',
                     ingested_at INTEGER,
-                    topic_cluster TEXT
+                    topic_cluster TEXT,
+                    content_hash TEXT
                 )
             """)
         }
@@ -1305,11 +1306,12 @@ final class BrainDatabase: @unchecked Sendable {
         guard let db else { throw DBError.notOpen }
         let chunkID = chunkID ?? Self.makeChunkID()
         let createdAt = createdAt ?? Self.timestamp()
+        let contentHash = Self.bodySHA256(content)
         let tagsJSON = (try? encodeJSON(tags)) ?? "[]"
         let metadataJSON = Self.storeMetadataJSON(queueID: queueID)
         let sql = """
-            INSERT INTO chunks (id, content, metadata, source_file, project, tags, importance, source, content_type, char_count, created_at, preview_text, conversation_id, position)
-            VALUES (?, ?, ?, 'brainbar-store', ?, ?, ?, ?, 'user_message', ?, ?, ?, ?, ?)
+            INSERT INTO chunks (id, content, metadata, source_file, project, tags, importance, source, content_type, char_count, created_at, preview_text, conversation_id, position, content_hash)
+            VALUES (?, ?, ?, 'brainbar-store', ?, ?, ?, ?, 'user_message', ?, ?, ?, ?, ?, ?)
         """
         let previousBusyTimeout = busyTimeoutMillis.flatMap { _ in queryPragma(db, name: "busy_timeout") }
         if let busyTimeoutMillis {
@@ -1322,6 +1324,20 @@ final class BrainDatabase: @unchecked Sendable {
         }
 
         return try withImmediateTransaction(retries: retries) {
+            // DEFERRED is a durable success receipt, but a client may still retry it.
+            // Reuse the exact-content row within this server-owned session so replay plus retry
+            // cannot double-store, while distinct legacy queue entries remain distinct.
+            if let conversationID {
+                if let existing = try storedChunk(
+                    contentHash: contentHash,
+                    project: project,
+                    contentType: "user_message",
+                    conversationID: conversationID,
+                    on: db
+                ) {
+                    return existing
+                }
+            }
             let position = try nextPosition(conversationID: conversationID, on: db)
             try runWriteStatement(on: db, sql: sql, retries: retries) { stmt in
                 bindText(chunkID, to: stmt, index: 1)
@@ -1348,6 +1364,7 @@ final class BrainDatabase: @unchecked Sendable {
                 } else {
                     sqlite3_bind_null(stmt, 12)
                 }
+                bindText(contentHash, to: stmt, index: 13)
             }
             if failNextStoreAfterInsertForTesting {
                 failNextStoreAfterInsertForTesting = false
@@ -4611,6 +4628,54 @@ final class BrainDatabase: @unchecked Sendable {
         bindText(conversationID, to: stmt, index: 1)
         guard sqlite3_step(stmt) == SQLITE_ROW else { throw DBError.noResult }
         return sqlite3_column_int64(stmt, 0)
+    }
+
+    private func storedChunk(
+        contentHash: String,
+        project: String?,
+        contentType: String,
+        conversationID: String,
+        on db: OpaquePointer
+    ) throws -> StoredChunk? {
+        var stmt: OpaquePointer?
+        let sql = """
+            SELECT id, rowid
+            FROM chunks
+            WHERE content_hash = ?
+              AND project IS ?
+              AND content_type = ?
+              AND conversation_id = ?
+              AND COALESCE(status, 'active') = 'active'
+              AND COALESCE(archived, 0) = 0
+              AND superseded_by IS NULL
+              AND aggregated_into IS NULL
+              AND archived_at IS NULL
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+        """
+        let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+
+        bindText(contentHash, to: stmt, index: 1)
+        if let project {
+            bindText(project, to: stmt, index: 2)
+        } else {
+            sqlite3_bind_null(stmt, 2)
+        }
+        bindText(contentType, to: stmt, index: 3)
+        bindText(conversationID, to: stmt, index: 4)
+
+        let stepRC = sqlite3_step(stmt)
+        switch stepRC {
+        case SQLITE_ROW:
+            guard let chunkID = columnText(stmt, 0) else { throw DBError.noResult }
+            return StoredChunk(chunkID: chunkID, rowID: sqlite3_column_int64(stmt, 1))
+        case SQLITE_DONE:
+            return nil
+        default:
+            throw DBError.step(stepRC)
+        }
     }
 
     private static func deterministicPendingStoreQueueID(
