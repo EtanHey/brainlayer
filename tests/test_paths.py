@@ -17,14 +17,11 @@ class TestGetDbPath:
         with patch.dict(os.environ, {"BRAINLAYER_DB": str(db_path)}):
             assert get_db_path() == db_path
 
-    def test_canonical_path_fresh_install(self, tmp_path):
+    def test_canonical_path_fresh_install(self, tmp_path, monkeypatch):
         """Canonical path used when no DB exists yet."""
         canonical = tmp_path / "brainlayer" / "brainlayer.db"
-        with (
-            patch.dict(os.environ, {}, clear=True),
-            patch("brainlayer.paths._CANONICAL_DB_PATH", canonical),
-        ):
-            os.environ.pop("BRAINLAYER_DB", None)
+        with patch("brainlayer.paths._CANONICAL_DB_PATH", canonical):
+            monkeypatch.delenv("BRAINLAYER_DB", raising=False)
             result = get_db_path()
             assert result == canonical
             assert canonical.parent.exists()  # Parent dir created

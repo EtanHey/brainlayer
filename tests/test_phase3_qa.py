@@ -33,13 +33,12 @@ class TestDBPathResolution:
         with patch.dict(os.environ, {"BRAINLAYER_DB": custom}):
             assert get_db_path() == Path(custom)
 
-    def test_canonical_path_for_fresh_install(self, tmp_path):
+    def test_canonical_path_for_fresh_install(self, tmp_path, monkeypatch):
         """Canonical path should be used for fresh installs."""
-        with patch.dict(os.environ, {}, clear=True):
-            os.environ.pop("BRAINLAYER_DB", None)
-            with patch("brainlayer.paths._CANONICAL_DB_PATH", tmp_path / "canonical.db"):
-                result = get_db_path()
-                assert result == tmp_path / "canonical.db"
+        monkeypatch.delenv("BRAINLAYER_DB", raising=False)
+        with patch("brainlayer.paths._CANONICAL_DB_PATH", tmp_path / "canonical.db"):
+            result = get_db_path()
+            assert result == tmp_path / "canonical.db"
 
 
 # ============================================================================

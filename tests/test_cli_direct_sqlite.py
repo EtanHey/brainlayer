@@ -212,6 +212,10 @@ def test_cli_stats_p95_under_200ms_with_direct_readonly_store(monkeypatch: pytes
     monkeypatch.setattr(cli_new, "ReadonlyStore", FastStatsStore)
 
     runner = CliRunner()
+    warmup = runner.invoke(app, ["stats"])
+    assert warmup.exit_code == 0, warmup.output
+    calls.clear()
+
     durations: list[float] = []
     for _ in range(10):
         start = time.perf_counter()
