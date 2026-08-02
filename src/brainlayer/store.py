@@ -100,6 +100,7 @@ def store_memory(
     line_number: Optional[int] = None,
     chunk_id: Optional[str] = None,
     created_at: Optional[str] = None,
+    conversation_id: Optional[str] = None,
     fallback_source_path: Optional[str] = None,
     origin_repo_path: Optional[str] = None,
     replayed_by: Optional[str] = None,
@@ -133,6 +134,7 @@ def store_memory(
         line_number: Optional line number reference. Only for type=issue.
         chunk_id: Optional caller-supplied chunk ID for durable queued writes.
         created_at: Optional caller-supplied reservation timestamp for queued writes.
+        conversation_id: Server-owned MCP session identifier for expansion context.
         fallback_source_path: Optional path to a local fallback file being replayed.
         origin_repo_path: Optional git root for the fallback's originating repo.
         replayed_by: Optional replay worker identifier.
@@ -346,6 +348,18 @@ def store_memory(
                         "sys_period_start": now,
                         "sys_period_end": "9999-12-31T23:59:59.999999Z",
                     }
+                    if conversation_id is not None and "conversation_id" in chunk_columns:
+                        position_row = cursor.execute(
+                            """
+                            SELECT COALESCE(MAX(position), -1) + 1
+                            FROM chunks
+                            WHERE conversation_id = ?
+                            """,
+                            (conversation_id,),
+                        ).fetchone()
+                        optional_values["conversation_id"] = conversation_id
+                        if "position" in chunk_columns:
+                            optional_values["position"] = int(position_row[0]) if position_row else 0
                     for column, value in optional_values.items():
                         if column in chunk_columns:
                             insert_columns.append(column)

@@ -95,6 +95,37 @@ class TestStoreMemory:
         rows = list(cursor.execute("SELECT source FROM chunks WHERE id = ?", (result["id"],)))
         assert rows[0][0] == "manual"
 
+    def test_store_assigns_server_session_and_monotonic_position(self, store, mock_embed):
+        """MCP-owned session linkage makes newly stored memories expandable in order."""
+        from brainlayer.store import store_memory
+
+        for content in ["session-linked first", "session-linked second", "session-linked third"]:
+            store_memory(
+                store=store,
+                embed_fn=mock_embed,
+                content=content,
+                memory_type="note",
+                project="brainlayer",
+                conversation_id="mcp-server-session",
+            )
+
+        rows = list(
+            store.conn.cursor().execute(
+                """
+                SELECT content, conversation_id, position
+                FROM chunks
+                WHERE conversation_id = ?
+                ORDER BY position
+                """,
+                ("mcp-server-session",),
+            )
+        )
+        assert rows == [
+            ("session-linked first", "mcp-server-session", 0),
+            ("session-linked second", "mcp-server-session", 1),
+            ("session-linked third", "mcp-server-session", 2),
+        ]
+
     def test_store_sets_content_type(self, store, mock_embed):
         """content_type is set based on memory_type."""
         from brainlayer.store import store_memory

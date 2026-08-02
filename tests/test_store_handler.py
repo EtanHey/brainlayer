@@ -145,6 +145,7 @@ async def test_busy_queue_fallback_returns_loud_deferred_receipt(tmp_path):
             content="deferred receipt must be loud",
             memory_type="note",
             project="test",
+            conversation_id="mcp-server-session",
         )
 
     queued_files = list(queue_dir.glob("mcp-*.jsonl"))
@@ -156,6 +157,7 @@ async def test_busy_queue_fallback_returns_loud_deferred_receipt(tmp_path):
     assert structured["deferred"]["chunk_id"] == queued_event["chunk_id"]
     assert structured["deferred"]["queue_path"] == str(queued_files[0])
     assert structured["deferred"]["action"] == "queued_for_drain"
+    assert queued_event["conversation_id"] == "mcp-server-session"
     assert any("DEFERRED" in item.text for item in texts)
 
 
@@ -1220,6 +1222,7 @@ async def test_busy_queue_fallback_flushes_reservation_timestamp_and_project(tmp
             content="queued flush must keep reservation metadata",
             memory_type="note",
             project="brainlayer",
+            conversation_id="mcp-server-session",
         )
 
     queued_files = list(queue_dir.glob("mcp-*.jsonl"))
@@ -1240,7 +1243,7 @@ async def test_busy_queue_fallback_flushes_reservation_timestamp_and_project(tmp
         row = (
             conn.cursor()
             .execute(
-                "SELECT created_at, project FROM chunks WHERE id = ?",
+                "SELECT created_at, project, conversation_id, position FROM chunks WHERE id = ?",
                 (promised_chunk_id,),
             )
             .fetchone()
@@ -1248,7 +1251,7 @@ async def test_busy_queue_fallback_flushes_reservation_timestamp_and_project(tmp
     finally:
         conn.close()
 
-    assert row == (reservation_created_at, "brainlayer")
+    assert row == (reservation_created_at, "brainlayer", "mcp-server-session", 0)
 
 
 @pytest.mark.asyncio

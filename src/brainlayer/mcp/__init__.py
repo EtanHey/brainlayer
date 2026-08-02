@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import uuid
 from copy import deepcopy
 from typing import Any
 
@@ -177,6 +178,32 @@ server = Server(
     on_call_tool=_handle_call_tool_request,
     on_completion=_handle_completion_request,
 )
+
+_MCP_PROCESS_SESSION_ID = f"mcp-{uuid.uuid4().hex}"
+
+
+def _server_owned_conversation_id(session: Any) -> str:
+    """Return one stable identifier for all requests on an MCP connection."""
+    connection = getattr(session, "_connection", None)
+    state = getattr(connection, "state", None)
+    if not isinstance(state, dict):
+        return _MCP_PROCESS_SESSION_ID
+
+    state_key = "brainlayer_conversation_id"
+    session_id = state.get(state_key)
+    if session_id is None:
+        session_id = f"mcp-{uuid.uuid4().hex}"
+        state[state_key] = session_id
+    return str(session_id)
+
+
+def _calling_session_id() -> str:
+    """Return a server-owned identifier for the active MCP transport session."""
+    try:
+        session = server.request_context.session
+    except (AttributeError, LookupError):
+        return _MCP_PROCESS_SESSION_ID
+    return _server_owned_conversation_id(session)
 
 # Tool annotations
 _MAX_FULL_CONTENT_RESULT_CHARS = 250_000
@@ -1480,6 +1507,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
             line_number=max(1, ln) if ln is not None else None,
             supersedes=arguments.get("supersedes"),
             agent_id=arguments.get("agent_id"),
+            conversation_id=_calling_session_id(),
         )
 
     elif name == "brain_supersede":
@@ -1754,6 +1782,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
             project=arguments.get("project"),
             tags=arguments.get("tags"),
             importance=max(1, min(imp, 10)) if imp is not None else None,
+            conversation_id=_calling_session_id(),
         )
 
     else:

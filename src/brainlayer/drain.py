@@ -736,6 +736,18 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     supersedes = event.get("supersedes") or metadata.get("supersedes")
     tags = event.get("tags")
     explicit_chunk_origin = event.get("chunk_origin") or metadata.get("chunk_origin")
+    conversation_id = event.get("conversation_id") or metadata.get("conversation_id")
+    position = None
+    if conversation_id:
+        position_row = conn.execute(
+            """
+            SELECT COALESCE(MAX(position), -1) + 1
+            FROM chunks
+            WHERE conversation_id = ?
+            """,
+            (conversation_id,),
+        ).fetchone()
+        position = int(position_row[0]) if position_row else 0
     existing = conn.execute("SELECT content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
     if existing:
         if str(existing[0]).strip() == content:
@@ -774,6 +786,8 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
             "tags": json.dumps(tags) if tags else None,
             "importance": float(event["importance"]) if event.get("importance") is not None else None,
             "content_hash": _content_hash(content),
+            "conversation_id": conversation_id,
+            "position": position,
             "chunk_origin": detect_chunk_origin(content, explicit_chunk_origin),
         },
     )

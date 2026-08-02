@@ -175,6 +175,7 @@ async def _store_new(
     line_number: int | None = None,
     supersedes: str | None = None,
     agent_id: str | None = None,
+    conversation_id: str | None = None,
 ):
     """Wrapper for _store with auto-type detection and auto-importance."""
     resolved_type = memory_type or _detect_memory_type(content)
@@ -204,6 +205,7 @@ async def _store_new(
         function_name=function_name,
         line_number=line_number,
         supersedes=supersedes,
+        conversation_id=conversation_id,
     )
 
 
@@ -710,6 +712,7 @@ def _flush_pending_stores(store, embed_fn) -> int:
                     chunk_id=item.get("chunk_id"),
                     created_at=_reservation_created_at(item),
                     chunk_origin=item.get("chunk_origin") or item_metadata.get("chunk_origin"),
+                    conversation_id=item.get("conversation_id"),
                 )
                 if item.get("supersedes"):
                     if not store.supersede_chunk(item["supersedes"], result["id"]):
@@ -818,6 +821,7 @@ async def _store(
     function_name: str | None = None,
     line_number: int | None = None,
     supersedes: str | None = None,
+    conversation_id: str | None = None,
 ):
     """Store a memory into BrainLayer with deferred embedding.
 
@@ -851,6 +855,7 @@ async def _store(
                     "line_number": line_number,
                     "supersedes": supersedes,
                     "created_at": reservation_created_at,
+                    "conversation_id": conversation_id,
                 }
             )
             _clear_hybrid_search_cache_if_loaded()
@@ -888,6 +893,7 @@ async def _store(
             line_number=line_number,
             chunk_id=promised_chunk_id,
             created_at=reservation_created_at,
+            conversation_id=conversation_id,
         )
 
         chunk_id = result["id"]
@@ -980,6 +986,7 @@ async def _store(
                     "line_number": line_number,
                     "supersedes": supersedes,
                     "created_at": reservation_created_at,
+                    "conversation_id": conversation_id,
                 }
             )
             structured = _deferred_store_receipt(promised_chunk_id, queue_path)

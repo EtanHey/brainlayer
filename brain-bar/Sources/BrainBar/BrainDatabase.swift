@@ -614,6 +614,7 @@ final class BrainDatabase: @unchecked Sendable {
         let queuedAt: String?
         let createdAt: String?
         let chunkID: String?
+        let conversationID: String?
 
         enum CodingKeys: String, CodingKey {
             case content
@@ -625,6 +626,7 @@ final class BrainDatabase: @unchecked Sendable {
             case queuedAt = "queued_at"
             case createdAt = "created_at"
             case chunkID = "chunk_id"
+            case conversationID = "conversation_id"
         }
 
         init(
@@ -636,7 +638,8 @@ final class BrainDatabase: @unchecked Sendable {
             queueID: String? = nil,
             queuedAt: String? = nil,
             createdAt: String? = nil,
-            chunkID: String? = nil
+            chunkID: String? = nil,
+            conversationID: String? = nil
         ) {
             self.content = content
             self.tags = tags
@@ -647,6 +650,7 @@ final class BrainDatabase: @unchecked Sendable {
             self.queuedAt = queuedAt
             self.createdAt = createdAt
             self.chunkID = chunkID
+            self.conversationID = conversationID
         }
 
         init(from decoder: Decoder) throws {
@@ -660,6 +664,7 @@ final class BrainDatabase: @unchecked Sendable {
             queuedAt = try container.decodeIfPresent(String.self, forKey: .queuedAt)
             createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
             chunkID = try container.decodeIfPresent(String.self, forKey: .chunkID)
+            conversationID = try container.decodeIfPresent(String.self, forKey: .conversationID)
         }
     }
 
@@ -1292,6 +1297,7 @@ final class BrainDatabase: @unchecked Sendable {
         chunkID: String? = nil,
         queueID: String? = nil,
         createdAt: String? = nil,
+        conversationID: String? = nil,
         refreshStatistics: Bool = true,
         retries: Int = 3,
         busyTimeoutMillis: Int32? = nil
@@ -1302,8 +1308,8 @@ final class BrainDatabase: @unchecked Sendable {
         let tagsJSON = (try? encodeJSON(tags)) ?? "[]"
         let metadataJSON = Self.storeMetadataJSON(queueID: queueID)
         let sql = """
-            INSERT INTO chunks (id, content, metadata, source_file, project, tags, importance, source, content_type, char_count, created_at, preview_text)
-            VALUES (?, ?, ?, 'brainbar-store', ?, ?, ?, ?, 'user_message', ?, ?, ?)
+            INSERT INTO chunks (id, content, metadata, source_file, project, tags, importance, source, content_type, char_count, created_at, preview_text, conversation_id, position)
+            VALUES (?, ?, ?, 'brainbar-store', ?, ?, ?, ?, 'user_message', ?, ?, ?, ?, ?)
         """
         let previousBusyTimeout = busyTimeoutMillis.flatMap { _ in queryPragma(db, name: "busy_timeout") }
         if let busyTimeoutMillis {
@@ -1316,6 +1322,7 @@ final class BrainDatabase: @unchecked Sendable {
         }
 
         return try withImmediateTransaction(retries: retries) {
+            let position = try nextPosition(conversationID: conversationID, on: db)
             try runWriteStatement(on: db, sql: sql, retries: retries) { stmt in
                 bindText(chunkID, to: stmt, index: 1)
                 bindText(content, to: stmt, index: 2)
@@ -1331,6 +1338,16 @@ final class BrainDatabase: @unchecked Sendable {
                 sqlite3_bind_int(stmt, 8, Int32(content.count))
                 bindText(createdAt, to: stmt, index: 9)
                 bindText(Self.previewText(summary: "", content: content), to: stmt, index: 10)
+                if let conversationID {
+                    bindText(conversationID, to: stmt, index: 11)
+                } else {
+                    sqlite3_bind_null(stmt, 11)
+                }
+                if let position {
+                    sqlite3_bind_int64(stmt, 12, position)
+                } else {
+                    sqlite3_bind_null(stmt, 12)
+                }
             }
             if failNextStoreAfterInsertForTesting {
                 failNextStoreAfterInsertForTesting = false
@@ -1352,6 +1369,7 @@ final class BrainDatabase: @unchecked Sendable {
         importance: Int,
         source: String,
         project: String? = nil,
+        conversationID: String? = nil,
         busyTimeoutMillis: Int32 = 30_000,
         retries: Int = 3
     ) throws -> StoreWriteOutcome {
@@ -1370,6 +1388,7 @@ final class BrainDatabase: @unchecked Sendable {
                 project: project,
                 chunkID: chunkID,
                 createdAt: createdAt,
+                conversationID: conversationID,
                 refreshStatistics: true,
                 retries: retries,
                 busyTimeoutMillis: busyTimeoutMillis
@@ -1386,7 +1405,8 @@ final class BrainDatabase: @unchecked Sendable {
                 source: source,
                 project: project,
                 createdAt: createdAt,
-                chunkID: chunkID
+                chunkID: chunkID,
+                conversationID: conversationID
             )
             return .queued(queueID: queued.queueID, queuedAt: queued.queuedAt, chunkID: queued.chunkID)
         }
@@ -1440,7 +1460,8 @@ final class BrainDatabase: @unchecked Sendable {
         source: String,
         project: String? = nil,
         createdAt: String? = nil,
-        chunkID: String? = nil
+        chunkID: String? = nil,
+        conversationID: String? = nil
     ) throws -> (queueID: String, queuedAt: String, chunkID: String) {
         try Self.queuePendingStore(
             dbPath: path,
@@ -1450,7 +1471,8 @@ final class BrainDatabase: @unchecked Sendable {
             source: source,
             project: project,
             createdAt: createdAt,
-            chunkID: chunkID
+            chunkID: chunkID,
+            conversationID: conversationID
         )
     }
 
@@ -1471,7 +1493,8 @@ final class BrainDatabase: @unchecked Sendable {
         source: String,
         project: String? = nil,
         createdAt: String? = nil,
-        chunkID: String? = nil
+        chunkID: String? = nil,
+        conversationID: String? = nil
     ) throws -> (queueID: String, queuedAt: String, chunkID: String) {
         Self.pendingStoreFileLock.lock()
         defer { Self.pendingStoreFileLock.unlock() }
@@ -1494,7 +1517,8 @@ final class BrainDatabase: @unchecked Sendable {
             queueID: queueID,
             queuedAt: queuedAt,
             createdAt: createdAt,
-            chunkID: chunkID
+            chunkID: chunkID,
+            conversationID: conversationID
         )
         var line = try JSONEncoder().encode(item)
         line.append(0x0A)
@@ -1562,6 +1586,7 @@ final class BrainDatabase: @unchecked Sendable {
                             chunkID: chunkID,
                             queueID: queueID,
                             createdAt: item.createdAt ?? item.queuedAt,
+                            conversationID: item.conversationID,
                             refreshStatistics: false,
                             retries: retries,
                             busyTimeoutMillis: busyTimeoutMillis
@@ -4569,9 +4594,23 @@ final class BrainDatabase: @unchecked Sendable {
             queueID: queueID,
             queuedAt: item.queuedAt,
             createdAt: item.createdAt ?? item.queuedAt,
-            chunkID: chunkID
+            chunkID: chunkID,
+            conversationID: item.conversationID
         )
         return try? JSONEncoder().encode(replayItem)
+    }
+
+    private func nextPosition(conversationID: String?, on db: OpaquePointer) throws -> Int64? {
+        guard let conversationID else { return nil }
+        var stmt: OpaquePointer?
+        let sql = "SELECT COALESCE(MAX(position), -1) + 1 FROM chunks WHERE conversation_id = ?"
+        let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+
+        bindText(conversationID, to: stmt, index: 1)
+        guard sqlite3_step(stmt) == SQLITE_ROW else { throw DBError.noResult }
+        return sqlite3_column_int64(stmt, 0)
     }
 
     private static func deterministicPendingStoreQueueID(
