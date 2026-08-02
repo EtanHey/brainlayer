@@ -152,6 +152,36 @@ def test_watcher_loads_t3_session_ids_once_per_flush(tmp_path: Path, monkeypatch
     assert calls == [state_db]
 
 
+def test_partially_installed_t3_does_not_stop_plain_claude_ingestion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_db = tmp_path / "state.sqlite"
+    with sqlite3.connect(state_db) as conn:
+        conn.execute("CREATE TABLE unrelated_bootstrap_state (id INTEGER PRIMARY KEY)")
+
+    monkeypatch.setenv("BRAINLAYER_T3_STATE_DB", str(state_db))
+    source_file = (
+        tmp_path / "home" / ".claude" / "projects" / "-Users-etanheyman-Gits-brainlayer" / "plain-session.jsonl"
+    )
+    flush = create_flush_callback(db_path=tmp_path / "brainlayer.db", arbitrated=False)
+
+    result = flush(
+        [
+            {
+                "type": "user",
+                "message": {"content": [{"type": "text", "text": "Keep ordinary Claude ingestion available."}]},
+                "timestamp": "2026-08-01T12:00:00Z",
+                "_source_file": str(source_file),
+                "_line_end_offset": 100,
+            }
+        ]
+    )
+
+    assert result.inserted == 1
+    with sqlite3.connect(tmp_path / "brainlayer.db") as conn:
+        assert conn.execute("SELECT provenance_class FROM chunks").fetchone()[0] == "direct-session"
+
+
 def test_canonical_systems_codex_session_uses_runtime_cursor_linkage(tmp_path: Path) -> None:
     session_id = "019fb03f-0650-7f53-850b-921246951edc"
     state_db = _state_db(

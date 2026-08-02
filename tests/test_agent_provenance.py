@@ -5,6 +5,7 @@ from pathlib import Path
 
 import apsw
 
+import scripts.provenance_classify_report as provenance_classify_report
 from brainlayer.agent_provenance import (
     classify_provenance,
     effective_visibility,
@@ -256,6 +257,38 @@ def test_report_summarizes_tags_policies_and_effective_visibility_without_real_d
     }
     assert report["policies"] == {"KEEP": 3, "ISOLATE": 1, "OUT": 0}
     assert report["effective_visibility"] == {"cold": 0, "default": 3, "operational": 1}
+
+
+def test_report_loads_t3_session_ids_once(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "brainlayer-test.db"
+    conn = apsw.Connection(str(db_path))
+    cursor = conn.cursor()
+    cursor.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, source_file TEXT, content_class TEXT)")
+    rows = [
+        (
+            f"codex-{index}",
+            str(tmp_path / ".codex" / "sessions" / f"rollout-{index}-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl"),
+            "knowledge",
+        )
+        for index in range(3)
+    ]
+    cursor.executemany("INSERT INTO chunks (id, source_file, content_class) VALUES (?, ?, ?)", rows)
+    conn.close()
+    state_db = tmp_path / "state.sqlite"
+    state_db.touch()
+    monkeypatch.setenv("BRAINLAYER_T3_STATE_DB", str(state_db))
+    calls: list[Path] = []
+
+    def load_once(path: Path) -> set[str]:
+        calls.append(path)
+        return set()
+
+    monkeypatch.setattr(provenance_classify_report, "t3_app_codex_session_ids", load_once, raising=False)
+
+    report = provenance_classify_report.build_report(db_path)
+
+    assert report["total_chunks"] == 3
+    assert calls == [state_db]
 
 
 def test_report_script_bootstraps_src_when_run_directly(tmp_path: Path) -> None:

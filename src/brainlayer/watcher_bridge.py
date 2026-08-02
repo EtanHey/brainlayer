@@ -23,6 +23,7 @@ from typing import Any
 import apsw
 
 from .agent_provenance import classify_provenance, effective_visibility
+from .alarm import BrainLayerAlarm
 from .chunk_origin import detect_chunk_origin
 from .claude_paths import extract_claude_conversation_id as _extract_claude_conversation_id
 from .content_class import classify_content_class
@@ -350,7 +351,10 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
 
         flush_start = _time.monotonic()
         t3_state_db = Path(os.environ.get("BRAINLAYER_T3_STATE_DB", DEFAULT_T3_STATE_DB)).expanduser()
-        linked_t3_session_ids = t3_app_codex_session_ids(t3_state_db) if t3_state_db.exists() else set()
+        try:
+            linked_t3_session_ids = t3_app_codex_session_ids(t3_state_db) if t3_state_db.exists() else set()
+        except BrainLayerAlarm:
+            linked_t3_session_ids = set()
         cursor = None if store is None else store.conn.cursor()
         inserted = 0
         skipped = 0

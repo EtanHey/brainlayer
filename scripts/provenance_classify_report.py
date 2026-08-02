@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections import Counter
 from pathlib import Path
@@ -18,6 +19,7 @@ if str(SRC_DIR) not in sys.path:
 
 from brainlayer.agent_provenance import classify_provenance, effective_visibility
 from brainlayer.paths import DEFAULT_DB_PATH
+from brainlayer.t3_provenance import DEFAULT_T3_STATE_DB, t3_app_codex_session_ids
 
 
 def build_report(db_path: str | Path) -> dict[str, Any]:
@@ -27,6 +29,8 @@ def build_report(db_path: str | Path) -> dict[str, Any]:
     policies: Counter[str] = Counter()
     visibility: Counter[str] = Counter()
     total = 0
+    t3_state_db = Path(os.environ.get("BRAINLAYER_T3_STATE_DB", DEFAULT_T3_STATE_DB)).expanduser()
+    linked_t3_session_ids = t3_app_codex_session_ids(t3_state_db) if t3_state_db.exists() else set()
 
     conn = apsw.Connection(str(db_path), flags=apsw.SQLITE_OPEN_READONLY)
     try:
@@ -34,7 +38,9 @@ def build_report(db_path: str | Path) -> dict[str, Any]:
         for _chunk_id, source_file, content_class in cursor.execute(
             "SELECT id, source_file, content_class FROM chunks"
         ):
-            decision = classify_provenance(str(source_file or ""), content_class)
+            decision = classify_provenance(
+                str(source_file or ""), content_class, t3_linked_session_ids=linked_t3_session_ids
+            )
             tags[decision.provenance_tag] += 1
             policies[decision.search_policy] += 1
             visibility[effective_visibility(decision, content_class)] += 1
