@@ -74,12 +74,20 @@ _PURE_DELETION_DIFF_RE = re.compile(r"^```(?:diff)?\n(?:-[^\n]*\n)+```$", re.MUL
 
 
 class FlushWatermarks(dict[str, int]):
-    """Confirmed per-source offsets returned by watcher flushes."""
+    """Confirmed per-source offsets plus entries that require a later retry."""
 
-    def __init__(self, *args: Any, inserted: int = 0, skipped: int = 0, **kwargs: Any):
+    def __init__(
+        self,
+        *args: Any,
+        inserted: int = 0,
+        skipped: int = 0,
+        deferred_entries: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ):
         super().__init__(*args, **kwargs)
         self.inserted = inserted
         self.skipped = skipped
+        self.deferred_entries = list(deferred_entries or [])
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, int):
@@ -360,6 +368,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
         cursor = None if store is None else store.conn.cursor()
         inserted = 0
         skipped = 0
+        deferred_entries: list[dict[str, Any]] = []
         source_files_seen: set[str] = set()
         confirmed_offsets: dict[str, int] = {}
 
@@ -410,7 +419,8 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
             if not t3_linkage_resolved:
                 source_only_provenance = classify_provenance(source_file, t3_linked_session_ids=set())
                 if source_only_provenance.provenance_tag == "codex-session":
-                    # Do not persist or confirm ambiguous Codex provenance; a later pass can replay this offset.
+                    # Do not persist or confirm ambiguous Codex provenance; retain its payload for a later pass.
+                    deferred_entries.append(entry)
                     continue
             project = source_projects.get(source_file)
             source_identity = _source_file_identity(source_file)
@@ -728,6 +738,11 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
         except Exception:
             pass
 
-        return FlushWatermarks(confirmed_offsets, inserted=inserted, skipped=skipped)
+        return FlushWatermarks(
+            confirmed_offsets,
+            inserted=inserted,
+            skipped=skipped,
+            deferred_entries=deferred_entries,
+        )
 
     return flush_to_db

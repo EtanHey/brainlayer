@@ -888,12 +888,13 @@ class BatchIndexer:
         count = len(batch)
         try:
             result = self.on_flush(batch)
-            watermarks = self._confirmed_watermarks(batch, result)
+            deferred_entries = self._deferred_entries(batch, result)
+            watermarks = self._confirmed_watermarks(batch, result, deferred_entries)
             if watermarks and self.on_confirm_batch:
                 self.on_confirm_batch(watermarks, batch)
-            self._buffer = []  # Clear only after successful flush
+            self._buffer = deferred_entries
             self._flush_failures = 0
-            self.total_flushed += count
+            self.total_flushed += count - len(deferred_entries)
             self.total_outputs += getattr(result, "inserted", count)
         except Exception as e:
             logger.error("Batch flush failed (%d items), retaining in buffer: %s", count, e)
@@ -904,9 +905,33 @@ class BatchIndexer:
         with self._lock:
             return len(self._buffer) if self._flush_failures > 0 else 0
 
-    def _confirmed_watermarks(self, batch: list[dict], result: dict[str, int] | None) -> dict[str, int]:
+    def _deferred_entries(self, batch: list[dict], result: dict[str, int] | None) -> list[dict]:
+        requested = getattr(result, "deferred_entries", None)
+        if not requested:
+            return []
+        batch_ids = {id(item) for item in batch}
+        requested_ids = {id(item) for item in requested}
+        if not requested_ids.issubset(batch_ids):
+            raise ValueError("flush callback deferred an entry outside the current batch")
+        return [item for item in batch if id(item) in requested_ids]
+
+    def _confirmed_watermarks(
+        self,
+        batch: list[dict],
+        result: dict[str, int] | None,
+        deferred_entries: list[dict] | None = None,
+    ) -> dict[str, int]:
         if isinstance(result, dict):
-            return {str(source_file): int(offset) for source_file, offset in result.items()}
+            deferred_sources = {
+                str(item["_source_file"])
+                for item in deferred_entries or []
+                if isinstance(item.get("_source_file"), str)
+            }
+            return {
+                str(source_file): int(offset)
+                for source_file, offset in result.items()
+                if str(source_file) not in deferred_sources
+            }
         return {}
 
     def _flush_retain_limit(self) -> int:
