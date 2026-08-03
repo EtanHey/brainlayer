@@ -8,6 +8,16 @@ from typer.testing import CliRunner
 
 from brainlayer.cli import app
 from brainlayer.health_check import HealthCheckResult
+from brainlayer.pause import pause_applies_to_label
+
+
+def test_malformed_pause_labels_do_not_apply_globally(monkeypatch, tmp_path):
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
+
+    assert not pause_applies_to_label(
+        {"labels": "com.brainlayer.enrichment"},
+        "com.brainlayer.watch",
+    )
 
 
 def test_health_check_cli_forwards_mode_a_config_fields(monkeypatch, tmp_path):
@@ -104,6 +114,20 @@ def test_pause_and_resume_record_labels_and_call_launchctl(monkeypatch, tmp_path
     assert resume_result.exit_code == 0, resume_result.output
     assert not pause_path.exists()
     assert any(command[:2] == ["launchctl", "bootstrap"] for command in commands)
+
+
+def test_pause_defaults_to_enrichment_without_stopping_ingestion_daemons(monkeypatch, tmp_path):
+    commands: list[list[str]] = []
+    monkeypatch.setattr("brainlayer.cli._run_launchctl", lambda args: commands.append(args) or 0)
+
+    result = CliRunner().invoke(
+        app,
+        ["pause", "--pause-sentinel-path", str(tmp_path / "pause.sentinel"), "--ttl-seconds", "60"],
+    )
+
+    assert result.exit_code == 0, result.output
+    booted_out = [command[-1].rsplit("/", 1)[-1] for command in commands if command[:2] == ["launchctl", "bootout"]]
+    assert booted_out == ["com.brainlayer.enrichment"]
 
 
 def test_reconcile_launchd_bootstraps_all_mode_a_labels(monkeypatch, tmp_path):

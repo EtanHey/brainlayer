@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Any, Callable
@@ -92,6 +93,10 @@ class LaunchdLabelNotLoadedError(LaunchdVerificationError):
     """Raised when launchd reports that a required label is not loaded."""
 
 
+class LaunchdLabelDisabledError(LaunchdVerificationError):
+    """Raised when launchd reports that a label was explicitly disabled."""
+
+
 class LaunchdCommandError(LaunchdVerificationError):
     """Raised when an install/bootstrap command fails before verification."""
 
@@ -128,6 +133,24 @@ def is_launchd_label_loaded(
     if print_state is not None:
         return print_state
     return None
+
+
+def is_launchd_label_disabled(
+    label: str,
+    *,
+    command_runner: CommandRunner = _default_command_runner,
+) -> bool | None:
+    """Return whether launchd explicitly marks a label disabled."""
+    if not label:
+        return False
+    domain = f"gui/{os.getuid()}"
+    result = command_runner(["launchctl", "print-disabled", domain])
+    if _command_returncode(result) != 0:
+        return None
+    match = re.search(rf'["\']?{re.escape(label)}["\']?\s*=>\s*(true|false)', _command_stdout(result), re.I)
+    if match is None:
+        return False
+    return match.group(1).lower() == "true"
 
 
 def verify_launchd_label_loaded(
@@ -199,12 +222,14 @@ def install_and_verify_launchagent(
     target = launchd_target(label)
     domain = f"gui/{os.getuid()}"
 
-    _run_required_launchctl(
-        ["launchctl", "enable", target],
-        label=label,
-        plist_path=resolved_plist_path,
-        command_runner=command_runner,
-    )
+    if is_launchd_label_disabled(label, command_runner=command_runner) is True:
+        raise LaunchdLabelDisabledError(
+            f"launchd label {label} is explicitly disabled",
+            label=label,
+            target=target,
+            reason="disabled",
+            plist_path=resolved_plist_path,
+        )
     if bootout_existing:
         command_runner(["launchctl", "bootout", target])
     bootstrap_args = ["launchctl", "bootstrap", domain, str(resolved_plist_path)]
