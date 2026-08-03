@@ -173,11 +173,23 @@ def _default_queue_dir() -> Path:
 
 
 def _default_log_path() -> Path:
-    return Path.home() / ".brainlayer" / "logs" / "drain.log"
+    from .paths import _guard_test_runtime_path
+
+    configured = os.environ.get("BRAINLAYER_DRAIN_LOG_PATH")
+    path = Path(configured).expanduser() if configured else Path.home() / ".brainlayer" / "logs" / "drain.log"
+    return _guard_test_runtime_path(path, source="drain log path")
 
 
 def _default_drain_health_path() -> Path:
-    return Path.home() / ".local" / "share" / "brainlayer" / "drain-health.json"
+    from .paths import _guard_test_runtime_path
+
+    configured = os.environ.get("BRAINLAYER_DRAIN_HEALTH_PATH")
+    path = (
+        Path(configured).expanduser()
+        if configured
+        else Path.home() / ".local" / "share" / "brainlayer" / "drain-health.json"
+    )
+    return _guard_test_runtime_path(path, source="drain health path")
 
 
 def _log(path: Path, message: str) -> None:

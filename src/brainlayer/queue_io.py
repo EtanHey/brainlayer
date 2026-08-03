@@ -17,10 +17,12 @@ def _safe_source_name(source: str) -> str:
 
 
 def get_queue_dir() -> Path:
+    from .paths import _guard_test_runtime_path
+
     env = os.environ.get("BRAINLAYER_QUEUE_DIR")
     if env:
-        return Path(env).expanduser()
-    return Path.home() / ".brainlayer" / "queue"
+        return _guard_test_runtime_path(Path(env).expanduser(), source="BRAINLAYER_QUEUE_DIR")
+    return _guard_test_runtime_path(Path.home() / ".brainlayer" / "queue", source="canonical queue path")
 
 
 def enqueue_jsonl_batch(events: list[dict[str, Any]], *, source: str, queue_dir: Path | None = None) -> Path:

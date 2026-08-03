@@ -14,14 +14,14 @@ from .vector_store import IndexDeadlineExceeded, VectorStore
 
 logger = logging.getLogger(__name__)
 
-from .paths import DEFAULT_DB_PATH
+from .paths import get_db_path
 
 
 def index_chunks_to_sqlite(
     chunks: List[Chunk],
     source_file: str,
     project: Optional[str] = None,
-    db_path: Path = DEFAULT_DB_PATH,
+    db_path: Path | None = None,
     on_progress: Optional[Callable[[int, int], None]] = None,
     deadline_monotonic: float | None = None,
     store: VectorStore | None = None,
@@ -127,11 +127,11 @@ def index_chunks_to_sqlite(
     # callers still get one bounded runtime open for this adapter invocation.
     if store is not None:
         return store.upsert_chunks(chunk_data, embeddings, deadline_monotonic=deadline_monotonic)
-    with open_writer_store(db_path) as opened_store:
+    with open_writer_store(db_path or get_db_path()) as opened_store:
         return opened_store.upsert_chunks(chunk_data, embeddings, deadline_monotonic=deadline_monotonic)
 
 
-def get_stats(db_path: Path = DEFAULT_DB_PATH) -> dict:
+def get_stats(db_path: Path | None = None) -> dict:
     """Get database statistics."""
-    with ReadonlyStore(db_path) as store:
+    with ReadonlyStore(db_path or get_db_path()) as store:
         return store.get_stats()

@@ -1,10 +1,13 @@
 """Shared test fixtures for BrainLayer tests."""
 
 import os
+import sys
 import uuid
 from pathlib import Path
 
 import pytest
+
+_PROTECTED_TEST_HOME = Path.home().resolve()
 
 ENGINE_TEST_MARK = "engine"
 ENGINE_TEST_EXCLUDED_FILES = {
@@ -78,6 +81,51 @@ def isolate_backup_daily_log(monkeypatch, tmp_path):
     """Keep backup_daily tests and subprocesses from appending to the production heartbeat log."""
     monkeypatch.setenv("BRAINLAYER_BACKUP_LOG_PATH", str(tmp_path / "pytest-backup-daily.log"))
     monkeypatch.setenv("BRAINLAYER_BACKUP_LOG_PROVENANCE", "pytest")
+
+
+@pytest.fixture(autouse=True)
+def isolate_brainlayer_runtime_paths(monkeypatch, tmp_path, request):
+    """Keep unit-test runtime resolvers out of production BrainLayer paths."""
+    if request.node.get_closest_marker("integration") or request.node.get_closest_marker("live"):
+        monkeypatch.setenv("BRAINLAYER_TEST_PATH_PROVENANCE", "live")
+        return
+
+    isolated_home = tmp_path.parent / f".{tmp_path.name}-brainlayer-home"
+    isolated_home.mkdir()
+    runtime_root = isolated_home / ".brainlayer"
+    queue_dir = runtime_root / "queue"
+    data_dir = isolated_home / ".local" / "share" / "brainlayer"
+
+    monkeypatch.setenv("HOME", str(isolated_home))
+    monkeypatch.setenv("BRAINLAYER_DB", str(data_dir / "brainlayer.db"))
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+    monkeypatch.setenv("BRAINLAYER_DRAIN_LOG_PATH", str(runtime_root / "logs" / "drain.log"))
+    monkeypatch.setenv("BRAINLAYER_DRAIN_HEALTH_PATH", str(data_dir / "drain-health.json"))
+    monkeypatch.setenv("BRAINLAYER_TEST_PATH_PROVENANCE", "pytest")
+    monkeypatch.setenv("BRAINLAYER_TEST_PROTECTED_HOME", str(_PROTECTED_TEST_HOME))
+
+    # paths.py caches these at import time, potentially before this fixture replaces HOME.
+    from brainlayer import paths as brain_paths
+
+    isolated_db = data_dir / "brainlayer.db"
+    monkeypatch.setattr(brain_paths, "_CANONICAL_DB_PATH", isolated_db)
+    monkeypatch.setattr(brain_paths, "DEFAULT_DB_PATH", isolated_db)
+
+    protected_roots = (
+        (_PROTECTED_TEST_HOME / ".brainlayer", runtime_root),
+        (_PROTECTED_TEST_HOME / ".local" / "share" / "brainlayer", data_dir),
+    )
+    for module in list(sys.modules.values()):
+        if module is None or not getattr(module, "__name__", "").startswith("brainlayer"):
+            continue
+        for attribute, value in list(vars(module).items()):
+            if not isinstance(value, Path):
+                continue
+            resolved = value.expanduser().resolve(strict=False)
+            for protected_root, isolated_root in protected_roots:
+                if resolved == protected_root or protected_root in resolved.parents:
+                    monkeypatch.setattr(module, attribute, isolated_root / resolved.relative_to(protected_root))
+                    break
 
 
 @pytest.fixture(autouse=True)
