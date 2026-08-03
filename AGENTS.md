@@ -106,7 +106,19 @@ brainlayer enrich
 - Concurrency: retry on `SQLITE_BUSY`; each worker uses its own connection
 
 ## P1 Pipeline Contracts
-- BL-10 source denylist is implemented in `src/brainlayer/ingest_denylist.py`. By default, provider sessions and ordinary Claude subagents ingest; only exact `brain-worker` subagents and workflow paths under `wf_*` are excluded. Exclusion never deletes the source JSONL. `BRAINLAYER_INGEST_DENYLIST` remains an explicit deployment override.
+- BL-10 source denylist is implemented in `src/brainlayer/ingest_denylist.py`. By default, provider
+  sessions and ordinary Claude subagents ingest. **Exclusion is scoped to agents whose job is to READ
+  OTHER AGENTS' MEMORY OR JSONLs — `brain-worker` sub-agents, and `session-miner` / `weave` workflow
+  agents. It is NOT all workflows.** Etan, 2026-08-03: *"That's very specific. It's not all workflows.
+  I don't know why y'all keep thinking it's all workflows."* and *"the Weaver's workflow is built of
+  session miners."*
+- **brain-worker and miner sessions are KEPT but NOT INDEXED.** Exclusion never deletes the source
+  JSONL — it means exclusion from the index only. `BRAINLAYER_INGEST_DENYLIST` remains an explicit
+  deployment override.
+- ⚠️ **Known code drift, do not read this file as describing shipped behaviour:**
+  `ingest_denylist.py:14` is `("~/.claude/projects/**/wf_*/**",)`, which excludes **every** workflow
+  path and silently discards legitimate workflow-agent memory. The rule above is the ruling; the code
+  is the defect. Code fix owned by the brainlayer lane.
 - Go-forward secret scrubbing runs in `src/brainlayer/pipeline/secret_scrub.py` from `src/brainlayer/watcher_bridge.py` before chunk persistence. Provider-prefixed and labeled high-entropy secrets are redacted; unlabeled high-entropy tokens are recorded in quarantine metadata.
 - MCP search uses a fixed-size readonly WAL `VectorStore` pool in `src/brainlayer/mcp/_shared.py`. `BRAINLAYER_READ_POOL_SIZE` defaults to 8, or 4 on detected Apple M1; M1 machines can keep the lower override explicitly. Checkout beyond the fixed pool blocks up to `BRAINLAYER_READ_BUSY_TIMEOUT_MS`, and startup rejects `pool_size * BRAINLAYER_READ_CACHE_KB` above about 768MB.
 
@@ -189,3 +201,14 @@ brainlayer enrich
 
 ## Naming
 - BrainLayer (זיכרון) = "memory"
+
+## Rulings that bind every agent here (ratified by voice 2026-08-02)
+
+- **Worktrees: `project` is always the REPO** (canonical); the branch is a separate field.
+  A branch name is never a project.
+- **Rules ride in instruction files** (this file + `CLAUDE.md`), deterministically. BrainLayer
+  injects CONTEXT only — it is **not a source of law**, and no third curated instruction source gets created.
+- **Agent-authored chunks are the normal case** — *"rules cite no source"* is a **non-finding**;
+  never report it.
+- **Pre-merge live-check against a DB copy** is required before any change that touches stored data.
+  *(Etan's addition at ratification, 2026-08-02.)*
