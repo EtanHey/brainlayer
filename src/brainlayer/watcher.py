@@ -964,15 +964,22 @@ class BatchIndexer:
         confirmed_items: list[dict] = []
         confirmed: dict[str, int] = {}
         outputs = 0
+        failed_inputs = 0
         for item in batch:
             try:
                 result = self.on_flush([item])
             except Exception:
                 retained.append(item)
+                failed_inputs += 1
                 continue
-            item_watermarks = self._confirmed_watermarks([item], result)
+            deferred_entries = self._deferred_entries([item], result)
+            item_watermarks = self._confirmed_watermarks([item], result, deferred_entries)
             for source_file, offset in item_watermarks.items():
                 confirmed[source_file] = max(confirmed.get(source_file, 0), offset)
+            retained.extend(deferred_entries)
+            if deferred_entries:
+                outputs += getattr(result, "inserted", 0)
+                continue
             confirmed_items.append(item)
             outputs += getattr(result, "inserted", 1)
 
@@ -981,8 +988,8 @@ class BatchIndexer:
         self.total_outputs += outputs
         self.total_flushed += len(batch) - len(retained)
         self._buffer = retained
-        self._flush_failures = self._flush_failures + 1 if retained else 0
-        return len(retained)
+        self._flush_failures = self._flush_failures + 1 if failed_inputs else 0
+        return failed_inputs
 
 
 # ── JSONL Watcher ────────────────────────────────────────────────────────────
