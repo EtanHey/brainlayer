@@ -351,10 +351,12 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
 
         flush_start = _time.monotonic()
         t3_state_db = Path(os.environ.get("BRAINLAYER_T3_STATE_DB", DEFAULT_T3_STATE_DB)).expanduser()
+        t3_linkage_resolved = True
         try:
             linked_t3_session_ids = t3_app_codex_session_ids(t3_state_db) if t3_state_db.exists() else set()
         except BrainLayerAlarm:
             linked_t3_session_ids = set()
+            t3_linkage_resolved = False
         cursor = None if store is None else store.conn.cursor()
         inserted = 0
         skipped = 0
@@ -405,6 +407,11 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
         for entry in entries:
             source_file = entry.get("_source_file", "unknown")
             source_files_seen.add(source_file)
+            if not t3_linkage_resolved:
+                source_only_provenance = classify_provenance(source_file, t3_linked_session_ids=set())
+                if source_only_provenance.provenance_tag == "codex-session":
+                    # Do not persist or confirm ambiguous Codex provenance; a later pass can replay this offset.
+                    continue
             project = source_projects.get(source_file)
             source_identity = _source_file_identity(source_file)
             cached_identity = resolved_source_identities.get(source_file)

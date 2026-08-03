@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -180,6 +181,88 @@ def test_partially_installed_t3_does_not_stop_plain_claude_ingestion(
     assert result.inserted == 1
     with sqlite3.connect(tmp_path / "brainlayer.db") as conn:
         assert conn.execute("SELECT provenance_class FROM chunks").fetchone()[0] == "direct-session"
+
+
+def test_t3_linkage_alarm_defers_recon_codex_but_confirms_plain_claude(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+    state_db = tmp_path / "state.sqlite"
+    queue_dir = tmp_path / "queue"
+    with closing(sqlite3.connect(state_db)) as conn:
+        conn.execute("CREATE TABLE unrelated_bootstrap_state (id INTEGER PRIMARY KEY)")
+        conn.commit()
+
+    monkeypatch.setenv("BRAINLAYER_T3_STATE_DB", str(state_db))
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+    codex_source = _codex_source(tmp_path, session_id)
+    claude_source = (
+        tmp_path / "home" / ".claude" / "projects" / "-Users-etanheyman-Gits-brainlayer" / "plain-session.jsonl"
+    )
+    codex_entry = {
+        "type": "user",
+        "message": {"content": [{"type": "text", "text": "Task for brain-worker: mine the transcript."}]},
+        "timestamp": "2026-08-01T12:00:01Z",
+        "_source_file": str(codex_source),
+        "_line_end_offset": 555,
+    }
+    flush = create_flush_callback(arbitrated=True)
+
+    def queued_events() -> list[dict[str, object]]:
+        return [
+            json.loads(line)
+            for queue_file in queue_dir.glob("*.jsonl")
+            for line in queue_file.read_text(encoding="utf-8").splitlines()
+        ]
+
+    degraded_result = flush(
+        [
+            {
+                "type": "user",
+                "message": {"content": [{"type": "text", "text": "Keep ordinary Claude ingestion available."}]},
+                "timestamp": "2026-08-01T12:00:00Z",
+                "_source_file": str(claude_source),
+                "_line_end_offset": 100,
+            },
+            codex_entry,
+        ]
+    )
+
+    assert degraded_result.inserted == 1
+    assert dict(degraded_result) == {str(claude_source): 100}
+    assert [(event["source_file"], event["provenance_class"]) for event in queued_events()] == [
+        (str(claude_source), "direct-session")
+    ]
+
+    with closing(sqlite3.connect(state_db)) as conn:
+        conn.execute(
+            """
+            CREATE TABLE provider_session_runtime (
+                thread_id TEXT PRIMARY KEY,
+                provider_name TEXT NOT NULL,
+                resume_cursor_json TEXT NOT NULL,
+                runtime_payload_json TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO provider_session_runtime
+                (thread_id, provider_name, resume_cursor_json, runtime_payload_json)
+            VALUES (?, ?, ?, ?)
+            """,
+            ("t3-thread", "codex", json.dumps({"threadId": session_id}), "{}"),
+        )
+        conn.commit()
+
+    recovered_result = flush([codex_entry])
+
+    assert recovered_result.inserted == 1
+    assert dict(recovered_result) == {str(codex_source): 555}
+    assert {event["source_file"]: event["provenance_class"] for event in queued_events()} == {
+        str(claude_source): "direct-session",
+        str(codex_source): "t3-app-session",
+    }
 
 
 def test_canonical_systems_codex_session_uses_runtime_cursor_linkage(tmp_path: Path) -> None:
