@@ -309,9 +309,7 @@ def test_watcher_retries_deferred_t3_codex_without_advancing_across_gap(
         json.dumps(
             {
                 "type": "user",
-                "message": {
-                    "content": [{"type": "text", "text": "Keep ordinary Claude ingestion available."}]
-                },
+                "message": {"content": [{"type": "text", "text": "Keep ordinary Claude ingestion available."}]},
                 "timestamp": "2026-08-01T12:00:00Z",
             }
         )

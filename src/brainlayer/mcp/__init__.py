@@ -205,6 +205,7 @@ def _calling_session_id() -> str:
         return _MCP_PROCESS_SESSION_ID
     return _server_owned_conversation_id(session)
 
+
 # Tool annotations
 _MAX_FULL_CONTENT_RESULT_CHARS = 250_000
 _MAX_RESULT_META = {"anthropic/maxResultSizeChars": _MAX_FULL_CONTENT_RESULT_CHARS}
