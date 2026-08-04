@@ -584,6 +584,14 @@ final class BrainDatabase: @unchecked Sendable {
     struct StoredChunk: Sendable, Equatable {
         let chunkID: String
         let rowID: Int64
+        let contentIntegrity: StoredContentIntegrity?
+    }
+
+    struct StoredContentIntegrity: Sendable, Equatable {
+        let expectedCharacters: Int
+        let storedCharacters: Int
+        let expectedBytes: Int
+        let storedBytes: Int
     }
 
     struct StoredChunkDetails: Sendable, Equatable {
@@ -1294,7 +1302,8 @@ final class BrainDatabase: @unchecked Sendable {
         createdAt: String? = nil,
         refreshStatistics: Bool = true,
         retries: Int = 3,
-        busyTimeoutMillis: Int32? = nil
+        busyTimeoutMillis: Int32? = nil,
+        verifyContentIntegrity: Bool = false
     ) throws -> StoredChunk {
         guard let db else { throw DBError.notOpen }
         let chunkID = chunkID ?? Self.makeChunkID()
@@ -1339,10 +1348,28 @@ final class BrainDatabase: @unchecked Sendable {
             guard let rowID = try chunkRowID(forChunkID: chunkID) else {
                 throw DBError.noResult
             }
+            let contentIntegrity: StoredContentIntegrity?
+            if verifyContentIntegrity {
+                guard let stored = try storedChunkDetails(chunkID: chunkID, rowID: rowID) else {
+                    throw DBError.contentIntegrityCheckFailed("stored chunk could not be read")
+                }
+                let integrity = StoredContentIntegrity(
+                    expectedCharacters: content.count,
+                    storedCharacters: stored.content.count,
+                    expectedBytes: content.utf8.count,
+                    storedBytes: stored.content.utf8.count
+                )
+                guard stored.content.utf8.elementsEqual(content.utf8) else {
+                    throw DBError.contentIntegrityMismatch(integrity)
+                }
+                contentIntegrity = integrity
+            } else {
+                contentIntegrity = nil
+            }
             if refreshStatistics {
                 refreshSearchStatisticsBestEffort()
             }
-            return StoredChunk(chunkID: chunkID, rowID: rowID)
+            return StoredChunk(chunkID: chunkID, rowID: rowID, contentIntegrity: contentIntegrity)
         }
     }
 
@@ -1427,7 +1454,8 @@ final class BrainDatabase: @unchecked Sendable {
             return Self.isRetryableQueueErrorCode(rc)
         case .exec(let rc, _):
             return Self.isRetryableQueueErrorCode(rc)
-        case .notOpen, .open, .noResult, .invalidPragma:
+        case .notOpen, .open, .noResult, .invalidPragma,
+             .contentIntegrityCheckFailed, .contentIntegrityMismatch:
             return false
         }
     }
@@ -6514,8 +6542,12 @@ final class BrainDatabase: @unchecked Sendable {
                 tags: ["digest"] + entities.prefix(5).map { $0 },
                 importance: 5,
                 source: "digest",
-                project: project
+                project: project,
+                verifyContentIntegrity: true
             )
+            guard let integrity = stored.contentIntegrity else {
+                throw DBError.contentIntegrityCheckFailed("verification receipt was not produced")
+            }
 
             // Persist extracted entities to the knowledge graph so they are
             // immediately resolvable via brain_entity (lookupEntity), and link
@@ -6540,6 +6572,11 @@ final class BrainDatabase: @unchecked Sendable {
                 "chunks_created": 1,
                 "relations_created": 0,
                 "chunk_id": stored.chunkID,
+                "content_integrity": "verified",
+                "expected_characters": integrity.expectedCharacters,
+                "stored_characters": integrity.storedCharacters,
+                "expected_bytes": integrity.expectedBytes,
+                "stored_bytes": integrity.storedBytes,
                 "summary": digestSummary
             ]
         } catch {
@@ -6573,6 +6610,8 @@ final class BrainDatabase: @unchecked Sendable {
         case exec(Int32, String)
         case noResult
         case invalidPragma(String)
+        case contentIntegrityCheckFailed(String)
+        case contentIntegrityMismatch(StoredContentIntegrity)
 
         var errorDescription: String? {
             switch self {
@@ -6583,6 +6622,10 @@ final class BrainDatabase: @unchecked Sendable {
             case .exec(let rc, let message): return "SQLite exec failed: \(rc) (\(message))"
             case .noResult: return "No result"
             case .invalidPragma(let name): return "PRAGMA '\(name)' not in allowlist"
+            case .contentIntegrityCheckFailed(let reason):
+                return "Stored content integrity check failed: \(reason)"
+            case .contentIntegrityMismatch(let integrity):
+                return "Stored content integrity mismatch (characters \(integrity.storedCharacters)/\(integrity.expectedCharacters), bytes \(integrity.storedBytes)/\(integrity.expectedBytes))"
             }
         }
     }
