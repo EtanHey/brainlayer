@@ -1264,7 +1264,49 @@ No results found.
 
         let result = try XCTUnwrap(response["result"] as? [String: Any])
         XCTAssertEqual(result["isError"] as? Bool, true)
+        let contentBlocks = try XCTUnwrap(result["content"] as? [[String: Any]])
+        let errorText = try XCTUnwrap(contentBlocks.first?["text"] as? String)
+        XCTAssertTrue(errorText.contains("Stored content integrity check failed"))
         XCTAssertTrue(try db.search(query: "integrity", limit: 10).isEmpty)
+    }
+
+    func testBrainDigestRejectsEmbeddedNullSuffixInStoredContent() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-digest-null-suffix-rejection-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+        try sqliteExec(
+            path: tempDB,
+            sql: """
+            CREATE TRIGGER append_null_suffix_to_digest
+            AFTER INSERT ON chunks
+            WHEN NEW.source = 'digest'
+            BEGIN
+                UPDATE chunks
+                SET content = NEW.content || char(0) || 'CORRUPT-SUFFIX'
+                WHERE rowid = NEW.rowid;
+            END;
+            """
+        )
+
+        let router = MCPRouter(profile: "full")
+        router.setDatabase(db)
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 12,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_digest",
+                "arguments": ["content": String(repeating: "digest raw byte check ", count: 40)]
+            ] as [String: Any]
+        ])
+
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertEqual(result["isError"] as? Bool, true)
+        XCTAssertTrue(
+            try db.search(query: "digest", limit: 10).isEmpty,
+            "A digest with an appended embedded-NUL suffix must roll back"
+        )
     }
 
     func testBrainSubscribeToolIsServerHandled() throws {
