@@ -751,6 +751,39 @@ class TestBatchIndexer:
         assert indexer.total_flushed == 0
         assert len(indexer._buffer) == 1  # Retained for retry
 
+    def test_failure_isolation_retains_deferred_entry_without_confirming_its_gap(self):
+        deferred = {
+            "id": "deferred",
+            "_source_file": "/tmp/codex.jsonl",
+            "_line_end_offset": 555,
+        }
+        failing = {"id": "failing", "_source_file": "/tmp/other.jsonl", "_line_end_offset": 100}
+        confirmed = []
+
+        class DeferredWatermark(dict):
+            def __init__(self, item):
+                super().__init__({item["_source_file"]: item["_line_end_offset"]})
+                self.deferred_entries = [item]
+                self.inserted = 0
+
+        def isolate_mixed_batch(items):
+            if len(items) > 1 or items[0] is failing:
+                raise RuntimeError("isolate this flush")
+            return DeferredWatermark(items[0])
+
+        indexer = BatchIndexer(
+            on_flush=isolate_mixed_batch,
+            batch_size=2,
+            on_confirm_batch=lambda watermarks, _batch: confirmed.append(watermarks),
+        )
+
+        indexer.add([deferred, failing])
+
+        assert indexer._buffer == [deferred, failing]
+        assert confirmed == []
+        assert indexer.total_failed_inputs == 1
+        assert indexer.total_flushed == 0
+
 
 # ── JSONLWatcher Integration Tests ──────────────────────────────────────────
 

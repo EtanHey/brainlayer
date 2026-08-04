@@ -144,6 +144,12 @@ def isolate_writer_telemetry(monkeypatch, tmp_path):
     monkeypatch.setenv("BRAINLAYER_WRITER_HEARTBEAT_DIR", str(tmp_path / "writer-heartbeats"))
 
 
+@pytest.fixture(autouse=True)
+def isolate_t3_runtime_state(monkeypatch, tmp_path):
+    """Prevent unit provenance tests from reading the developer's live T3 app DB."""
+    monkeypatch.setenv("BRAINLAYER_T3_STATE_DB", str(tmp_path / "missing-t3-state.sqlite"))
+
+
 @pytest.fixture
 def test_user() -> str:
     """Username for path-based tests.

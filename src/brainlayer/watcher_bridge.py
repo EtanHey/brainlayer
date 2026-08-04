@@ -23,6 +23,7 @@ from typing import Any
 import apsw
 
 from .agent_provenance import classify_provenance, effective_visibility
+from .alarm import BrainLayerAlarm
 from .chunk_origin import detect_chunk_origin
 from .claude_paths import extract_claude_conversation_id as _extract_claude_conversation_id
 from .content_class import classify_content_class
@@ -34,6 +35,7 @@ from .pipeline.classify import classify_content
 from .pipeline.correction_detection import build_correction_tags
 from .pipeline.secret_scrub import scrub_secrets
 from .queue_io import enqueue_watcher_chunk
+from .t3_provenance import DEFAULT_T3_STATE_DB, t3_app_codex_session_ids
 from .vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -72,12 +74,20 @@ _PURE_DELETION_DIFF_RE = re.compile(r"^```(?:diff)?\n(?:-[^\n]*\n)+```$", re.MUL
 
 
 class FlushWatermarks(dict[str, int]):
-    """Confirmed per-source offsets returned by watcher flushes."""
+    """Confirmed per-source offsets plus entries that require a later retry."""
 
-    def __init__(self, *args: Any, inserted: int = 0, skipped: int = 0, **kwargs: Any):
+    def __init__(
+        self,
+        *args: Any,
+        inserted: int = 0,
+        skipped: int = 0,
+        deferred_entries: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ):
         super().__init__(*args, **kwargs)
         self.inserted = inserted
         self.skipped = skipped
+        self.deferred_entries = list(deferred_entries or [])
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, int):
@@ -348,9 +358,17 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
         import time as _time
 
         flush_start = _time.monotonic()
+        t3_state_db = Path(os.environ.get("BRAINLAYER_T3_STATE_DB", DEFAULT_T3_STATE_DB)).expanduser()
+        t3_linkage_resolved = True
+        try:
+            linked_t3_session_ids = t3_app_codex_session_ids(t3_state_db) if t3_state_db.exists() else set()
+        except BrainLayerAlarm:
+            linked_t3_session_ids = set()
+            t3_linkage_resolved = False
         cursor = None if store is None else store.conn.cursor()
         inserted = 0
         skipped = 0
+        deferred_entries: list[dict[str, Any]] = []
         source_files_seen: set[str] = set()
         confirmed_offsets: dict[str, int] = {}
 
@@ -398,6 +416,12 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
         for entry in entries:
             source_file = entry.get("_source_file", "unknown")
             source_files_seen.add(source_file)
+            if not t3_linkage_resolved:
+                source_only_provenance = classify_provenance(source_file, t3_linked_session_ids=set())
+                if source_only_provenance.provenance_tag == "codex-session":
+                    # Do not persist or confirm ambiguous Codex provenance; retain its payload for a later pass.
+                    deferred_entries.append(entry)
+                    continue
             project = source_projects.get(source_file)
             source_identity = _source_file_identity(source_file)
             cached_identity = resolved_source_identities.get(source_file)
@@ -502,6 +526,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                     source_file,
                     base_content_class,
                     content=clean_content,
+                    t3_linked_session_ids=linked_t3_session_ids,
                 )
                 visibility = effective_visibility(provenance_decision, base_content_class)
                 content_class = _content_class_for_visibility(base_content_class, visibility)
@@ -713,6 +738,11 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
         except Exception:
             pass
 
-        return FlushWatermarks(confirmed_offsets, inserted=inserted, skipped=skipped)
+        return FlushWatermarks(
+            confirmed_offsets,
+            inserted=inserted,
+            skipped=skipped,
+            deferred_entries=deferred_entries,
+        )
 
     return flush_to_db
