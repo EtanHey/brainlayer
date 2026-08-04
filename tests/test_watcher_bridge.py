@@ -640,7 +640,7 @@ class TestFlushCallback:
 
 
 class TestFullPipeline:
-    def test_watcher_denylist_blocks_only_brain_and_workflow_workers(self, tmp_path, monkeypatch):
+    def test_watcher_denylist_blocks_all_claude_subagents_and_allows_direct_sessions(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.delenv("BRAINLAYER_INGEST_DENYLIST", raising=False)
         db_path = tmp_path / "test.db"
@@ -663,8 +663,6 @@ class TestFullPipeline:
             / "workflows"
             / "wf_123"
             / "agent-workflow.jsonl",
-        }
-        allowed = {
             "claude-subagent": tmp_path
             / ".claude"
             / "projects"
@@ -672,6 +670,8 @@ class TestFullPipeline:
             / "session-123"
             / "subagents"
             / "agent-general.jsonl",
+        }
+        allowed = {
             "codex": tmp_path / ".codex" / "sessions" / "2026" / "07" / "02" / "worker.jsonl",
             "cursor": tmp_path
             / ".cursor"
@@ -685,7 +685,11 @@ class TestFullPipeline:
         }
         for provider, path in denylisted.items():
             path.parent.mkdir(parents=True, exist_ok=True)
-            attribution = "brain-worker" if provider == "brain-worker" else "workflow-subagent"
+            attribution = {
+                "brain-worker": "brain-worker",
+                "workflow-worker": "workflow-subagent",
+                "claude-subagent": "general-purpose",
+            }[provider]
             path.write_text(
                 json.dumps(
                     _make_jsonl_entry(
