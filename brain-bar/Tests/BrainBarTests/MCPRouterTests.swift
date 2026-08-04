@@ -784,6 +784,51 @@ No results found.
         XCTAssertFalse(expandText.contains("\u{2502} Short generated summary"), expandText)
     }
 
+    func testBrainStoreUsesServerSessionForExpandableOrderedContext() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-store-session-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+
+        let router = MCPRouter(profile: "full")
+        router.setDatabase(db)
+        let session = router.makePaletteSession()
+        let contents = [
+            "R1-C session context before",
+            "R1-C session context target",
+            "R1-C session context after",
+        ]
+        var chunkIDs: [String] = []
+
+        for (index, content) in contents.enumerated() {
+            let response = router.handle(
+                toolCall(id: 320 + index, name: "brain_store", arguments: [
+                    "content": content,
+                    "project": "brainlayer",
+                    "conversation_id": "client-forged-session",
+                ]),
+                session: session
+            )
+            let result = try XCTUnwrap(response["result"] as? [String: Any])
+            XCTAssertNil(result["isError"])
+            let stored = try XCTUnwrap(result["_brainbarStoredChunk"] as? [String: Any])
+            chunkIDs.append(try XCTUnwrap(stored["chunk_id"] as? String))
+        }
+
+        let expanded = try db.expandChunk(id: chunkIDs[1], before: 1, after: 1)
+        let before = try XCTUnwrap(expanded["before_context"] as? [[String: Any]])
+        let after = try XCTUnwrap(expanded["after_context"] as? [[String: Any]])
+        XCTAssertEqual(before.map { $0["content"] as? String }, [contents[0]])
+        XCTAssertEqual(after.map { $0["content"] as? String }, [contents[2]])
+
+        let states = try chunkSessionStates(path: tempDB)
+        XCTAssertEqual(states.map(\.content), contents)
+        XCTAssertEqual(Set(states.compactMap(\.conversationID)).count, 1)
+        XCTAssertEqual(states.compactMap(\.position), [0, 1, 2])
+        XCTAssertFalse(states.contains { $0.conversationID == nil || $0.conversationID?.isEmpty == true })
+        XCTAssertFalse(states.contains { $0.conversationID == "client-forged-session" })
+    }
+
     /// Regression: brain_search(unread_only) marks messages delivered (a write).
     /// It must run on the writable connection, not the read-only read handle —
     /// otherwise markDelivered fails with `SQLite step failed: 8` (SQLITE_READONLY).
@@ -2049,6 +2094,57 @@ No results found.
         XCTAssertTrue(queuedText.contains(chunkID))
     }
 
+    func testDeferredBrainStoreRetryReusesQueuedChunkInsteadOfCreatingSecondRow() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        let restoreQueuePath = setPendingStoreQueuePath(queuePath)
+        defer { restoreQueuePath() }
+
+        let dbPath = tempDir.appendingPathComponent("brainbar.db").path
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+        db.failNextStoreWithBusyForTesting = true
+
+        let router = MCPRouter(profile: "full")
+        router.setDatabase(db)
+        let session = router.makePaletteSession()
+        let content = "A client retry after DEFERRED must resolve to the queued chunk"
+        let arguments: [String: Any] = [
+            "content": content,
+            "tags": ["deferred-retry"],
+            "importance": 7,
+        ]
+
+        let deferredResponse = router.handle(
+            toolCall(id: 223, name: "brain_store", arguments: arguments),
+            session: session
+        )
+        let deferred = try XCTUnwrap(deferredResponse["result"] as? [String: Any])
+        XCTAssertEqual(deferred["status"] as? String, "DEFERRED")
+        let queuedChunkID = try XCTUnwrap(deferred["chunk_id"] as? String)
+
+        _ = db.flushPendingStores()
+        XCTAssertEqual(try chunkContents(path: dbPath).filter { $0 == content }.count, 1)
+
+        let retryResponse = router.handle(
+            toolCall(id: 224, name: "brain_store", arguments: arguments),
+            session: session
+        )
+        let retryResult = try XCTUnwrap(retryResponse["result"] as? [String: Any])
+        XCTAssertNil(retryResult["isError"])
+        XCTAssertNotEqual(retryResult["status"] as? String, "DEFERRED")
+        let stored = try XCTUnwrap(retryResult["_brainbarStoredChunk"] as? [String: Any])
+
+        XCTAssertEqual(stored["chunk_id"] as? String, queuedChunkID)
+        XCTAssertEqual(
+            try chunkContents(path: dbPath).filter { $0 == content }.count,
+            1,
+            "retrying a durable DEFERRED receipt must not create a second chunk"
+        )
+    }
+
     func testBrainStoreMCPWriteBudgetQueuesPromptlyUnderSQLiteLock() throws {
         let tempDir = makeTempTestDirectory()
         defer { try? FileManager.default.removeItem(at: tempDir) }
@@ -2781,6 +2877,40 @@ private func chunkContents(path: String) throws -> [String] {
         if let value = sqlite3_column_text(stmt, 0) {
             results.append(String(cString: value))
         }
+    }
+    return results
+}
+
+private struct ChunkSessionState: Equatable {
+    let content: String
+    let conversationID: String?
+    let position: Int64?
+}
+
+private func chunkSessionStates(path: String) throws -> [ChunkSessionState] {
+    var db: OpaquePointer?
+    let rc = sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nil)
+    guard rc == SQLITE_OK, let db else {
+        throw NSError(domain: "MCPRouterTests", code: Int(rc))
+    }
+    defer { sqlite3_close(db) }
+
+    var stmt: OpaquePointer?
+    let sql = "SELECT content, conversation_id, position FROM chunks ORDER BY rowid ASC"
+    let prepareRC = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+    guard prepareRC == SQLITE_OK else {
+        throw NSError(domain: "MCPRouterTests", code: Int(prepareRC))
+    }
+    defer { sqlite3_finalize(stmt) }
+
+    var results: [ChunkSessionState] = []
+    while sqlite3_step(stmt) == SQLITE_ROW {
+        let content = sqlite3_column_text(stmt, 0).map { String(cString: $0) } ?? ""
+        let conversationID = sqlite3_column_text(stmt, 1).map { String(cString: $0) }
+        let position = sqlite3_column_type(stmt, 2) == SQLITE_NULL ? nil : sqlite3_column_int64(stmt, 2)
+        results.append(
+            ChunkSessionState(content: content, conversationID: conversationID, position: position)
+        )
     }
     return results
 }

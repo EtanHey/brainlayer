@@ -58,6 +58,11 @@ final class MCPRouter: @unchecked Sendable {
     final class PaletteSession: @unchecked Sendable {
         private let lock = NSLock()
         private var expanded = false
+        let conversationID: String
+
+        init(conversationID: String = "mcp-\(UUID().uuidString.lowercased())") {
+            self.conversationID = conversationID
+        }
 
         func isExpanded() -> Bool {
             lock.lock()
@@ -403,7 +408,7 @@ final class MCPRouter: @unchecked Sendable {
         // Dispatch to handler
         do {
             try Self.validate(arguments: arguments, for: toolName)
-            let output = try dispatchTool(name: toolName, arguments: arguments)
+            let output = try dispatchTool(name: toolName, arguments: arguments, session: session)
             return toolCallResult(id: id, output: output)
         } catch {
             return [
@@ -435,12 +440,16 @@ final class MCPRouter: @unchecked Sendable {
         ]
     }
 
-    private func dispatchTool(name: String, arguments: [String: Any]) throws -> ToolOutput {
+    private func dispatchTool(
+        name: String,
+        arguments: [String: Any],
+        session: PaletteSession
+    ) throws -> ToolOutput {
         switch name {
         case "brain_search":
             return try handleBrainSearch(arguments)
         case "brain_store":
-            return try handleBrainStore(arguments)
+            return try handleBrainStore(arguments, session: session)
         case "brain_get_person":
             return try handleBrainGetPerson(arguments)
         case "brain_recall":
@@ -691,7 +700,7 @@ final class MCPRouter: @unchecked Sendable {
         return arguments
     }
 
-    private func handleBrainStore(_ args: [String: Any]) throws -> ToolOutput {
+    private func handleBrainStore(_ args: [String: Any], session: PaletteSession) throws -> ToolOutput {
         guard let content = args["content"] as? String else {
             throw ToolError.missingParameter("content")
         }
@@ -705,6 +714,7 @@ final class MCPRouter: @unchecked Sendable {
                 importance: importance,
                 source: "mcp",
                 project: project,
+                conversationID: session.conversationID,
                 reason: "DB_NOT_OPEN"
             )
         }
@@ -716,6 +726,7 @@ final class MCPRouter: @unchecked Sendable {
                 importance: importance,
                 source: "mcp",
                 project: project,
+                conversationID: session.conversationID,
                 busyTimeoutMillis: Self.mcpStoreBusyTimeoutMillis,
                 retries: Self.mcpStoreRetries
             ) {
@@ -761,6 +772,7 @@ final class MCPRouter: @unchecked Sendable {
                 importance: importance,
                 source: "mcp",
                 project: project,
+                conversationID: session.conversationID,
                 reason: "DB_NOT_OPEN"
             )
         }
@@ -863,6 +875,7 @@ final class MCPRouter: @unchecked Sendable {
         importance: Int,
         source: String,
         project: String?,
+        conversationID: String,
         reason: String
     ) throws -> ToolOutput {
         guard let dbPath else {
@@ -874,7 +887,8 @@ final class MCPRouter: @unchecked Sendable {
             tags: tags,
             importance: importance,
             source: source,
-            project: project
+            project: project,
+            conversationID: conversationID
         )
         return queuedBrainStoreOutput(
             queueID: queued.queueID,
