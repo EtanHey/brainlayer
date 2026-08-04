@@ -596,8 +596,16 @@ final class BrainDatabase: @unchecked Sendable {
 
     struct StoredChunkDetails: Sendable, Equatable {
         let content: String
+        let contentUTF8: Data
         let tags: [String]
         let importance: Int
+
+        init(content: String, contentUTF8: Data? = nil, tags: [String], importance: Int) {
+            self.content = content
+            self.contentUTF8 = contentUTF8 ?? Data(content.utf8)
+            self.tags = tags
+            self.importance = importance
+        }
     }
 
     struct FlushedPendingStore: Sendable {
@@ -1346,6 +1354,9 @@ final class BrainDatabase: @unchecked Sendable {
                 throw DBError.exec(SQLITE_IOERR, "simulated post-insert validation failure")
             }
             guard let rowID = try chunkRowID(forChunkID: chunkID) else {
+                if verifyContentIntegrity {
+                    throw DBError.contentIntegrityCheckFailed("stored chunk could not be read")
+                }
                 throw DBError.noResult
             }
             let contentIntegrity: StoredContentIntegrity?
@@ -1353,13 +1364,14 @@ final class BrainDatabase: @unchecked Sendable {
                 guard let stored = try storedChunkDetails(chunkID: chunkID, rowID: rowID) else {
                     throw DBError.contentIntegrityCheckFailed("stored chunk could not be read")
                 }
+                let expectedUTF8 = Data(content.utf8)
                 let integrity = StoredContentIntegrity(
                     expectedCharacters: content.count,
                     storedCharacters: stored.content.count,
-                    expectedBytes: content.utf8.count,
-                    storedBytes: stored.content.utf8.count
+                    expectedBytes: expectedUTF8.count,
+                    storedBytes: stored.contentUTF8.count
                 )
-                guard stored.content.utf8.elementsEqual(content.utf8) else {
+                guard stored.contentUTF8 == expectedUTF8 else {
                     throw DBError.contentIntegrityMismatch(integrity)
                 }
                 contentIntegrity = integrity
@@ -1927,12 +1939,13 @@ final class BrainDatabase: @unchecked Sendable {
         sqlite3_bind_int64(stmt, 2, rowID)
         guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
 
-        let content = columnText(stmt, 0) ?? ""
+        let contentUTF8 = columnData(stmt, 0) ?? Data()
+        let content = String(decoding: contentUTF8, as: UTF8.self)
         let tagsJSON = columnText(stmt, 1) ?? "[]"
         let tagsData = Data(tagsJSON.utf8)
         let tags = (try? JSONDecoder().decode([String].self, from: tagsData)) ?? []
         let importance = Int(sqlite3_column_int(stmt, 2))
-        return StoredChunkDetails(content: content, tags: tags, importance: importance)
+        return StoredChunkDetails(content: content, contentUTF8: contentUTF8, tags: tags, importance: importance)
     }
 
     func unreadCount(agentID: String, tags: [String]? = nil) throws -> Int {
@@ -2880,6 +2893,14 @@ final class BrainDatabase: @unchecked Sendable {
     private func columnText(_ stmt: OpaquePointer?, _ col: Int32) -> String? {
         guard let cStr = sqlite3_column_text(stmt, col) else { return nil }
         return String(cString: cStr)
+    }
+
+    private func columnData(_ stmt: OpaquePointer?, _ col: Int32) -> Data? {
+        guard sqlite3_column_type(stmt, col) != SQLITE_NULL else { return nil }
+        let byteCount = Int(sqlite3_column_bytes(stmt, col))
+        guard byteCount > 0 else { return Data() }
+        guard let bytes = sqlite3_column_blob(stmt, col) else { return nil }
+        return Data(bytes: bytes, count: byteCount)
     }
 
     private func bindText(_ value: String, to stmt: OpaquePointer?, index: Int32) {
