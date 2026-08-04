@@ -709,8 +709,20 @@ def test_alert_framing_pages_once_per_episode_not_per_kickstart(tmp_path: Path) 
     config = _config(module, tmp_path, stall_threshold=3, cooldown_seconds=0)
     alerts: list[int] = []
 
+    process = {"pid": 4321, "running": True}
+
     def command_runner(args: list[str]):
-        stdout = "state = running\npid = 4321\n" if args[:2] == ["launchctl", "print"] else ""
+        stdout = ""
+        if args[:2] == ["launchctl", "print"]:
+            if process["running"]:
+                stdout = f"state = running\npid = {process['pid']}\n"
+            else:
+                stdout = "state = exited\n"
+        elif args[:2] == ["/bin/kill", "-9"] and args[2:3] == [str(process["pid"])]:
+            process["running"] = False
+        elif args[:3] == ["launchctl", "kickstart", "-k"]:
+            process["pid"] += 1
+            process["running"] = True
         return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
 
     clock = {"t": 1_000}
