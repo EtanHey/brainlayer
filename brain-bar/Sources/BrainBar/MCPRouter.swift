@@ -998,7 +998,24 @@ final class MCPRouter: @unchecked Sendable {
         let title = (args["title"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         let db = try writeDB()
         let result = try db.digest(content: content, project: project, title: title)
-        return ToolOutput(text: TextFormatter.formatDigestResult(DigestResult(payload: result)))
+        if let error = result["error"] as? String {
+            throw ToolError.operationFailed(error)
+        }
+        let integrityKeys = [
+            "content_integrity",
+            "expected_characters",
+            "stored_characters",
+            "expected_bytes",
+            "stored_bytes"
+        ]
+        var metadata: [String: Any] = [:]
+        for key in integrityKeys {
+            metadata[key] = result[key]
+        }
+        return ToolOutput(
+            text: TextFormatter.formatDigestResult(DigestResult(payload: result)),
+            metadata: metadata
+        )
     }
 
     private func handleBrainUpdate(_ args: [String: Any]) throws -> ToolOutput {
@@ -1408,6 +1425,7 @@ final class MCPRouter: @unchecked Sendable {
         case notFound(String)
         case notImplemented(String)
         case schemaValidation(String)
+        case operationFailed(String)
 
         var errorDescription: String? {
             switch self {
@@ -1417,6 +1435,7 @@ final class MCPRouter: @unchecked Sendable {
             case .notFound(let message): return message
             case .notImplemented(let tool): return "\(tool) not yet implemented in BrainBar (use Python MCP server)"
             case .schemaValidation(let message): return "Schema validation error: \(message)"
+            case .operationFailed(let message): return message
             }
         }
     }

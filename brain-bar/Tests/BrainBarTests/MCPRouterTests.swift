@@ -1119,8 +1119,9 @@ No results found.
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
 
-        let input = "DIGEST-CUTOFF " + String(repeating: "x", count: 677) + " FULL-TAIL"
+        let input = "DIGEST-CUTOFF " + String(repeating: "é", count: 677) + " FULL-TAIL"
         XCTAssertEqual(input.count, 701)
+        XCTAssertGreaterThan(input.utf8.count, input.count)
 
         let router = MCPRouter(profile: "full")
         router.setDatabase(db)
@@ -1136,10 +1137,89 @@ No results found.
 
         let result = try XCTUnwrap(response["result"] as? [String: Any])
         XCTAssertNil(result["isError"] as? Bool)
+        XCTAssertEqual(result["content_integrity"] as? String, "verified")
+        XCTAssertEqual(result["expected_characters"] as? Int, input.count)
+        XCTAssertEqual(result["stored_characters"] as? Int, input.count)
+        XCTAssertEqual(result["expected_bytes"] as? Int, input.utf8.count)
+        XCTAssertEqual(result["stored_bytes"] as? Int, input.utf8.count)
         let matches = try db.search(query: "DIGEST-CUTOFF", limit: 1)
         let stored = try XCTUnwrap(matches.first?["content"] as? String)
         XCTAssertEqual(stored.count, input.count, "brain_digest stored \(stored.count) characters from a \(input.count)-character input")
         XCTAssertEqual(stored, input)
+    }
+
+    func testBrainDigestRejectsTruncatedStoredContent() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-digest-truncation-rejection-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+        try sqliteExec(
+            path: tempDB,
+            sql: """
+            CREATE TRIGGER truncate_digest_after_insert
+            AFTER INSERT ON chunks
+            WHEN NEW.source = 'digest'
+            BEGIN
+                UPDATE chunks
+                SET content = substr(NEW.content, 1, 500) || '...', char_count = 503
+                WHERE rowid = NEW.rowid;
+            END;
+            """
+        )
+
+        let input = "DIGEST-TRUNCATION " + String(repeating: "é", count: 700) + " FULL-TAIL"
+        let router = MCPRouter(profile: "full")
+        router.setDatabase(db)
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_digest",
+                "arguments": ["content": input]
+            ] as [String: Any]
+        ])
+
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertEqual(result["isError"] as? Bool, true)
+        XCTAssertTrue(
+            try db.search(query: "DIGEST-TRUNCATION", limit: 10).isEmpty,
+            "A digest whose persisted content differs from its input must roll back"
+        )
+    }
+
+    func testBrainDigestFailsClosedWhenStoredContentCannotBeRead() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-digest-unreadable-content-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+        try sqliteExec(
+            path: tempDB,
+            sql: """
+            CREATE TRIGGER remove_digest_after_insert
+            AFTER INSERT ON chunks
+            WHEN NEW.source = 'digest'
+            BEGIN
+                DELETE FROM chunks WHERE rowid = NEW.rowid;
+            END;
+            """
+        )
+
+        let router = MCPRouter(profile: "full")
+        router.setDatabase(db)
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_digest",
+                "arguments": ["content": String(repeating: "digest integrity check ", count: 40)]
+            ] as [String: Any]
+        ])
+
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertEqual(result["isError"] as? Bool, true)
+        XCTAssertTrue(try db.search(query: "integrity", limit: 10).isEmpty)
     }
 
     func testBrainSubscribeToolIsServerHandled() throws {
