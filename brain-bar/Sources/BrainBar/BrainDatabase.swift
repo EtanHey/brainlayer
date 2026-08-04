@@ -4698,7 +4698,7 @@ final class BrainDatabase: @unchecked Sendable {
         switch stepRC {
         case SQLITE_ROW:
             guard let chunkID = columnText(stmt, 0) else { throw DBError.noResult }
-            return StoredChunk(chunkID: chunkID, rowID: sqlite3_column_int64(stmt, 1))
+            return StoredChunk(chunkID: chunkID, rowID: sqlite3_column_int64(stmt, 1), contentIntegrity: nil)
         case SQLITE_DONE:
             return nil
         default:
