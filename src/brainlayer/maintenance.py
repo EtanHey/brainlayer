@@ -8,6 +8,7 @@ import json
 import os
 import sqlite3
 import subprocess
+import sys
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -18,8 +19,11 @@ import apsw
 from .backup_daily import WEEKLY_RETENTION, run_backup
 from .drain import BurnDrainResult, burn_drain_once
 from .paths import get_db_path
+from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
 from .queue_io import get_queue_dir
 from .wal_checkpoint import checkpoint
+
+PAUSE_SENTINEL_PATH = DEFAULT_PAUSE_SENTINEL_PATH
 
 MAINTENANCE_DATASET = "brainlayer-maintenance"
 DEFAULT_SERVICES = ("watch", "enrichment", "index", "drain")
@@ -403,9 +407,28 @@ def _quiesce_services(services: Sequence[str]) -> None:
         _bootout_service(service)
 
 
+def _service_is_deliberately_paused(service: str) -> bool:
+    """True when a pause sentinel names this service's launchd label.
+
+    Maintenance must never resume a service someone deliberately stopped. Before this
+    check, teardown re-installed every entry in DEFAULT_SERVICES unconditionally, so a
+    human STOP was byte-identical to a maintenance pause -- which re-created the
+    enrichment plist four times and cost 5,137 rows on 2026-08-04.
+    """
+    from datetime import UTC, datetime
+
+    payload, active, _stale = pause_sentinel_state(PAUSE_SENTINEL_PATH, datetime.now(UTC))
+    if not active:
+        return False
+    return pause_applies_to_label(payload, f"com.brainlayer.{service}")
+
+
 def _resume_services(repo_root: Path, services: Sequence[str]) -> list[tuple[str, Exception]]:
     failures: list[tuple[str, Exception]] = []
     for service in services:
+        if _service_is_deliberately_paused(service):
+            print(f"skipping resume of {service}: pause sentinel is active", file=sys.stderr)
+            continue
         try:
             _resume_service(repo_root, service)
         except Exception as exc:
