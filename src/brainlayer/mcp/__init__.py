@@ -1432,7 +1432,10 @@ async def call_tool(name: str, arguments: dict[str, Any]):
         )
 
     if name in _FULL_TOOL_NAMES and not _tool_palette.is_exposed(name):
-        return _error_result(f"Tool not exposed in the core profile: {name}. Call {EXPAND_TOOL_NAME} first.")
+        return _error_result(
+            f"Tool '{name}' is gated by the core MCP profile. "
+            f"Call {EXPAND_TOOL_NAME}, or set BRAINLAYER_MCP_PROFILE=full on the MCP server."
+        )
 
     # --- New consolidated tools ---
 
