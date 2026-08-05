@@ -407,6 +407,90 @@ def _quiesce_services(services: Sequence[str]) -> None:
         _bootout_service(service)
 
 
+def _git_head_sha(repo_root: Path) -> str | None:
+    """SHA of the code actually on disk — the code an editable install will import."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        )
+    except Exception:
+        return None
+    return out.stdout.strip() or None
+
+
+def _git_merged_head_sha(repo_root: Path) -> str | None:
+    """SHA of the merged code. Best-effort fetch; falls back to the cached ref."""
+    try:
+        subprocess.run(
+            ["git", "-C", str(repo_root), "fetch", "--quiet", "origin", "main"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        out = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "origin/main"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        )
+    except Exception:
+        return None
+    return out.stdout.strip() or None
+
+
+def _assert_running_merged_code(repo_root: Path, *, strict: bool = False) -> None:
+    """Refuse to run code that is not the merged code.
+
+    The nightly job runs `python -m brainlayer.maintenance` from an EDITABLE install,
+    so `import brainlayer` resolves to the WORKING TREE. On 2026-08-05 that tree was 8
+    commits behind origin/main and #650's pause-sentinel fix -- merged hours earlier --
+    was simply not on disk. The job would have run stale code and reported success.
+
+    Either we run the merged code, or we abort LOUDLY. Never silently stale.
+    """
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        # Under pytest the working tree is legitimately a feature branch, which is not
+        # staleness. Production behaviour is unchanged; the freshness contract itself is
+        # covered by tests/test_maintenance_code_freshness.py, which calls the guard
+        # directly with injected SHAs.
+        return
+    if os.environ.get("BRAINLAYER_MAINTENANCE_ALLOW_STALE") == "1":
+        print("maintenance: BRAINLAYER_MAINTENANCE_ALLOW_STALE=1 -- skipping freshness check", file=sys.stderr)
+        return
+
+    head = _git_head_sha(repo_root)
+    merged = _git_merged_head_sha(repo_root)
+
+    if merged is None:
+        # Cannot prove freshness. Never treat "unverifiable" as "fresh".
+        if strict:
+            raise MaintenanceAbort(
+                "maintenance aborted: cannot verify the working tree matches merged code "
+                f"(HEAD={head or 'unknown'}, origin/main unavailable). "
+                "Set BRAINLAYER_MAINTENANCE_ALLOW_STALE=1 to override deliberately."
+            )
+        print(
+            f"maintenance: WARNING cannot reach origin/main to verify freshness (HEAD={head or 'unknown'})",
+            file=sys.stderr,
+        )
+        return
+
+    if head != merged:
+        raise MaintenanceAbort(
+            f"maintenance aborted: refusing to run STALE code. "
+            f"working tree HEAD={head or 'unknown'} but merged origin/main={merged}. "
+            "The nightly job imports the working tree (editable install), so merging is "
+            "not deploying -- run `git pull` in the repo, or set "
+            "BRAINLAYER_MAINTENANCE_ALLOW_STALE=1 to override deliberately."
+        )
+
+
 def _service_is_deliberately_paused(service: str) -> bool:
     """True when a pause sentinel names this service's launchd label.
 
@@ -519,6 +603,7 @@ def _run_gates(config: MaintenanceConfig) -> None:
 
 
 def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_run: bool = False) -> MaintenanceResult:
+    _assert_running_merged_code((config or MaintenanceConfig()).repo_root)
     if mode not in {"light", "full", "burn"}:
         raise ValueError(f"unsupported maintenance mode: {mode}")
     config = config or MaintenanceConfig()
