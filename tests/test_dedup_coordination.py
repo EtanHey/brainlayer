@@ -9,7 +9,9 @@ Covers:
 
 import json
 import os
+import subprocess
 import sys
+import time
 
 import pytest
 
@@ -45,6 +47,53 @@ def cleanup_coord_file(session_id):
             os.unlink(path)
         except OSError:
             pass
+
+
+def test_concurrent_run_worker(session_id):
+    """Exercise one side of the cross-pytest-run coordination collision."""
+    run_id = os.environ.get("BRAINLAYER_CONCURRENCY_RUN_ID")
+    barrier_dir = os.environ.get("BRAINLAYER_CONCURRENCY_BARRIER_DIR")
+    if not run_id or not barrier_dir:
+        pytest.skip("only used by the concurrent pytest reproduction")
+
+    chunk_id = f"chunk-{run_id}"
+    register_chunks(session_id, [chunk_id], source_hook="SessionStart")
+    with open(os.path.join(barrier_dir, run_id), "w"):
+        pass
+
+    deadline = time.monotonic() + 10
+    while len(os.listdir(barrier_dir)) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert len(os.listdir(barrier_dir)) == 2, "both pytest workers must reach the barrier"
+    assert get_injected_ids(session_id) == {chunk_id}
+
+
+def test_concurrent_pytest_runs_do_not_share_coordination_state(tmp_path):
+    """Two independent pytest processes must not read each other's hook state."""
+    barrier_dir = tmp_path / "barrier"
+    barrier_dir.mkdir()
+    test_path = os.path.abspath(__file__)
+    processes = []
+
+    for run_id in ("run-a", "run-b"):
+        env = os.environ.copy()
+        env["BRAINLAYER_CONCURRENCY_RUN_ID"] = run_id
+        env["BRAINLAYER_CONCURRENCY_BARRIER_DIR"] = str(barrier_dir)
+        processes.append(
+            subprocess.Popen(
+                [sys.executable, "-m", "pytest", "-q", test_path, "-k", "concurrent_run_worker"],
+                cwd=os.path.dirname(os.path.dirname(test_path)),
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+        )
+
+    results = [process.communicate(timeout=30) for process in processes]
+    failures = [output for process, (output, _) in zip(processes, results) if process.returncode != 0]
+    assert not failures, "\n".join(failures)
 
 
 # ── Coordination File Read/Write ─────────────────────────────────────────────
