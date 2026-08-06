@@ -85,13 +85,13 @@ def test_concurrent_pytest_runs_do_not_share_coordination_state(tmp_path):
     barrier_dir.mkdir()
     test_path = os.path.abspath(__file__)
     processes = []
-
-    for run_id in ("run-a", "run-b"):
-        env = os.environ.copy()
-        env["BRAINLAYER_CONCURRENCY_RUN_ID"] = run_id
-        env["BRAINLAYER_CONCURRENCY_BARRIER_DIR"] = str(barrier_dir)
-        processes.append(
-            subprocess.Popen(
+    results = []
+    try:
+        for run_id in ("run-a", "run-b"):
+            env = os.environ.copy()
+            env["BRAINLAYER_CONCURRENCY_RUN_ID"] = run_id
+            env["BRAINLAYER_CONCURRENCY_BARRIER_DIR"] = str(barrier_dir)
+            process = subprocess.Popen(
                 # Select only the worker so child runs cannot recursively spawn children.
                 [sys.executable, "-m", "pytest", "-q", test_path, "-k", "concurrent_run_worker"],
                 cwd=os.path.dirname(os.path.dirname(test_path)),
@@ -100,10 +100,7 @@ def test_concurrent_pytest_runs_do_not_share_coordination_state(tmp_path):
                 stderr=subprocess.STDOUT,
                 text=True,
             )
-        )
-
-    results = []
-    try:
+            processes.append(process)
         results = [process.communicate(timeout=30) for process in processes]
     finally:
         for process in processes:
