@@ -9,7 +9,9 @@ Covers:
 
 import json
 import os
+import subprocess
 import sys
+import time
 
 import pytest
 
@@ -17,6 +19,7 @@ import pytest
 HOOKS_DIR = os.path.join(os.path.dirname(__file__), "..", "hooks")
 sys.path.insert(0, HOOKS_DIR)
 
+import dedup_coordination
 from dedup_coordination import (
     _lock_path,
     coord_path,
@@ -29,6 +32,15 @@ from dedup_coordination import (
 )
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture(scope="module", autouse=True)
+def isolated_coord_dir(tmp_path_factory):
+    """Give each pytest process its own hook coordination directory."""
+    production_coord_dir = dedup_coordination._COORD_DIR
+    dedup_coordination._COORD_DIR = str(tmp_path_factory.mktemp("dedup-coordination"))
+    yield
+    dedup_coordination._COORD_DIR = production_coord_dir
 
 
 @pytest.fixture
@@ -47,10 +59,80 @@ def cleanup_coord_file(session_id):
             pass
 
 
+def test_concurrent_run_worker(session_id):
+    """Exercise one side of the cross-pytest-run coordination collision."""
+    run_id = os.environ.get("BRAINLAYER_CONCURRENCY_RUN_ID")
+    barrier_dir = os.environ.get("BRAINLAYER_CONCURRENCY_BARRIER_DIR")
+    if not run_id or not barrier_dir:
+        pytest.skip("only used by the concurrent pytest reproduction")
+
+    chunk_id = f"chunk-{run_id}"
+    register_chunks(session_id, [chunk_id], source_hook="SessionStart")
+    with open(os.path.join(barrier_dir, run_id), "w"):
+        pass
+
+    deadline = time.monotonic() + 10
+    while len(os.listdir(barrier_dir)) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert len(os.listdir(barrier_dir)) == 2, "both pytest workers must reach the barrier"
+    assert get_injected_ids(session_id) == {chunk_id}
+
+
+def test_concurrent_pytest_runs_do_not_share_coordination_state(tmp_path):
+    """Two independent pytest processes must not read each other's hook state."""
+    barrier_dir = tmp_path / "barrier"
+    barrier_dir.mkdir()
+    test_path = os.path.abspath(__file__)
+    processes = []
+    results = []
+    try:
+        for run_id in ("run-a", "run-b"):
+            env = os.environ.copy()
+            env["BRAINLAYER_CONCURRENCY_RUN_ID"] = run_id
+            env["BRAINLAYER_CONCURRENCY_BARRIER_DIR"] = str(barrier_dir)
+            process = subprocess.Popen(
+                # Select only the worker so child runs cannot recursively spawn children.
+                [sys.executable, "-m", "pytest", "-q", test_path, "-k", "concurrent_run_worker"],
+                cwd=os.path.dirname(os.path.dirname(test_path)),
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            processes.append(process)
+        results = [process.communicate(timeout=30) for process in processes]
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+    failures = [output for process, (output, _) in zip(processes, results) if process.returncode != 0]
+    assert not failures, "\n".join(failures)
+
+
 # ── Coordination File Read/Write ─────────────────────────────────────────────
 
 
 class TestCoordFileIO:
+    def test_production_coord_path_defaults_to_tmp(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import sys; "
+                    f"sys.path.insert(0, {HOOKS_DIR!r}); "
+                    "from dedup_coordination import coord_path; "
+                    "print(coord_path('production-default'))"
+                ),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert os.path.dirname(result.stdout.strip()) == "/tmp"
+
     def test_write_and_read(self, session_id):
         data = {
             "session_id": session_id,
@@ -97,7 +179,7 @@ class TestCoordFileIO:
         data = {"injected_chunks": [], "injected_ids_set": [], "total_tokens_injected": 0}
         write_coord(session_id, data)
 
-        # Check no .tmp files in /tmp matching our pattern
+        # Check no .tmp files in the coordination directory matching our pattern
         coord = coord_path(session_id)
         dir_name = os.path.dirname(coord)
         tmp_files = [f for f in os.listdir(dir_name) if f.endswith(".tmp") and "brainlayer" in f]
