@@ -59,18 +59,23 @@ def _python_tool_count() -> int:
     return len(re.findall(r"\bTool\(", PYTHON_REGISTRATION.read_text(encoding="utf-8")))
 
 
+def _python_literal_tool_name_count() -> int:
+    return len(re.findall(r"\bTool\(name=", PYTHON_REGISTRATION.read_text(encoding="utf-8")))
+
+
 def _swift_tool_names() -> set[str]:
     return set(re.findall(r"\bbrain_[a-z_]+\b", SWIFT_REGISTRATION.read_text(encoding="utf-8")))
 
 
 def test_documented_counts_match_both_registration_surfaces() -> None:
     assert _python_tool_count() == 13
+    assert _python_literal_tool_name_count() == 0
     assert len(_swift_tool_names()) == 17
 
     documented_counts = [
         int(match.group(1) or match.group(2) or match.group(3) or match.group(4))
         for line in _current_readme_lines()
-        if (match := COUNT_LINE.search(line))
+        for match in COUNT_LINE.finditer(line)
     ]
     assert documented_counts, "README must contain at least one in-scope MCP count"
     assert set(documented_counts) <= {13, 17}
