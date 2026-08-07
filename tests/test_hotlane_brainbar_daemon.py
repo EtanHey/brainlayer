@@ -89,8 +89,20 @@ def test_hot_candidate_query_forces_created_at_index_to_avoid_full_mcp_sort():
     store = SimpleNamespace(conn=SimpleNamespace(cursor=FakeCursor))
 
     assert hotlane._candidate_chunk_rows(store, limit=5) == []
-    assert "chunks c INDEXED BY idx_chunks_created_at" in executed[0][0]
+    assert "chunks c INDEXED BY idx_chunks_created" in executed[0][0]
+    assert "idx_chunks_created_at" not in executed[0][0]
     assert executed[0][1] == (5,)
+
+
+def test_hot_candidate_query_uses_index_created_by_python_vectorstore(tmp_path):
+    from brainlayer.vector_store import VectorStore
+
+    hotlane = _load_hotlane_module()
+    store = VectorStore(tmp_path / "brainlayer.db")
+    try:
+        assert hotlane._candidate_chunk_rows(store, limit=5) == []
+    finally:
+        store.close()
 
 
 def test_hotlane_run_threads_model_batch_embedder_to_backlog_cycle():
