@@ -238,11 +238,92 @@ def test_hot_candidate_scanner_does_not_skip_unreturned_page_candidates(tmp_path
             hotlane.EmbedCandidate("head-hot", "pending head"),
             hotlane.EmbedCandidate("page-127", "pending"),
         ]
-        conn.executemany("INSERT INTO chunk_vectors_rowids (id) VALUES (?)", [(item.chunk_id,) for item in first])
+        conn.execute("INSERT INTO chunk_vectors_rowids (id) VALUES ('head-hot')")
+        assert scanner(store, limit=2)[0] == hotlane.EmbedCandidate("page-127", "pending")
+        conn.execute("INSERT INTO chunk_vectors_rowids (id) VALUES ('page-127')")
         assert scanner(store, limit=2) == [
             hotlane.EmbedCandidate("page-126", "pending"),
             hotlane.EmbedCandidate("page-125", "pending"),
         ]
+    finally:
+        conn.close()
+
+
+def test_hot_candidate_scanner_catches_rows_pushed_below_moving_head(tmp_path):
+    hotlane = _load_hotlane_module()
+    conn = sqlite3.connect(tmp_path / "moving-head.db")
+    conn.executescript(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT,
+            source_file TEXT,
+            source TEXT,
+            created_at TEXT,
+            archived_at TEXT,
+            superseded_by TEXT,
+            aggregated_into TEXT,
+            archived INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'active'
+        );
+        CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY);
+        """
+    )
+    initial_rows = [(f"initial-{index}", "embedded", "brainbar-store", "mcp", str(index)) for index in range(128)]
+    conn.executemany(
+        "INSERT INTO chunks (id, content, source_file, source, created_at) VALUES (?, ?, ?, ?, ?)", initial_rows
+    )
+    conn.executemany("INSERT INTO chunk_vectors_rowids (id) VALUES (?)", [(row[0],) for row in initial_rows])
+    scanner = hotlane.HotCandidateScanner()
+    store = SimpleNamespace(conn=conn)
+    try:
+        assert scanner(store, limit=5) == []
+        conn.execute(
+            "INSERT INTO chunks (id, content, source_file, source, created_at) VALUES "
+            "('gap-hot', 'must catch up', 'brainbar-store', 'mcp', 'gap')"
+        )
+        newer_rows = [(f"new-{index}", "embedded", "brainbar-store", "mcp", str(index)) for index in range(128)]
+        conn.executemany(
+            "INSERT INTO chunks (id, content, source_file, source, created_at) VALUES (?, ?, ?, ?, ?)", newer_rows
+        )
+        conn.executemany("INSERT INTO chunk_vectors_rowids (id) VALUES (?)", [(row[0],) for row in newer_rows])
+        assert scanner(store, limit=5) == [hotlane.EmbedCandidate("gap-hot", "must catch up")]
+    finally:
+        conn.close()
+
+
+def test_hot_candidate_scanner_deduplicates_head_and_forward_catchup(tmp_path):
+    hotlane = _load_hotlane_module()
+    conn = sqlite3.connect(tmp_path / "head-forward.db")
+    conn.executescript(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT,
+            source_file TEXT,
+            source TEXT,
+            created_at TEXT,
+            archived_at TEXT,
+            superseded_by TEXT,
+            aggregated_into TEXT,
+            archived INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'active'
+        );
+        CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY);
+        INSERT INTO chunks (id, content, source_file, source, created_at)
+        VALUES ('baseline', 'embedded', 'brainbar-store', 'mcp', 'before');
+        INSERT INTO chunk_vectors_rowids (id) VALUES ('baseline');
+        """
+    )
+    scanner = hotlane.HotCandidateScanner()
+    store = SimpleNamespace(conn=conn)
+    try:
+        assert scanner(store, limit=5) == []
+        conn.execute(
+            "INSERT INTO chunks (id, content, source_file, source, created_at) VALUES "
+            "('new-hot', 'only once', 'brainbar-store', 'mcp', 'after')"
+        )
+        assert scanner(store, limit=5) == [hotlane.EmbedCandidate("new-hot", "only once")]
     finally:
         conn.close()
 

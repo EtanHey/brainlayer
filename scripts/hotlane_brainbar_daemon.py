@@ -102,6 +102,26 @@ HOT_CANDIDATE_ROWID_PAGE_SQL = """
     LIMIT ?
 """
 
+HOT_CANDIDATE_ROWID_FORWARD_SQL = """
+    SELECT
+        c.rowid,
+        c.id,
+        c.content,
+        c.source_file,
+        c.source,
+        c.archived_at,
+        c.superseded_by,
+        c.aggregated_into,
+        COALESCE(c.archived, 0),
+        COALESCE(c.status, 'active'),
+        r.id
+    FROM chunks c
+    LEFT JOIN chunk_vectors_rowids r ON r.id = c.id
+    WHERE c.rowid > ?
+    ORDER BY c.rowid ASC
+    LIMIT ?
+"""
+
 
 class CycleResult(NamedTuple):
     embedded: int = 0
@@ -123,10 +143,14 @@ class EmbeddedVector(NamedTuple):
     embedding: list[float]
 
 
-def _candidates_from_scanned_rows(rows: list[tuple], *, limit: int) -> tuple[list[EmbedCandidate], int | None, bool]:
+def _candidates_from_scanned_rows(
+    rows: list[tuple], *, limit: int, exclude_ids: set[str] | None = None
+) -> tuple[list[EmbedCandidate], int | None, int | None, bool]:
     if limit <= 0:
-        return [], None, False
+        return [], None, None, False
     candidates: list[EmbedCandidate] = []
+    exclude_ids = exclude_ids or set()
+    first_candidate_rowid: int | None = None
     last_inspected_rowid: int | None = None
     for index, row in enumerate(rows):
         (
@@ -153,11 +177,14 @@ def _candidates_from_scanned_rows(rows: list[tuple], *, limit: int) -> tuple[lis
             and aggregated_into is None
             and not archived
             and status == "active"
+            and str(chunk_id) not in exclude_ids
         ):
+            if first_candidate_rowid is None:
+                first_candidate_rowid = int(rowid)
             candidates.append(EmbedCandidate(str(chunk_id), str(content)))
             if len(candidates) >= limit:
-                return candidates, last_inspected_rowid, index == len(rows) - 1
-    return candidates, last_inspected_rowid, True
+                return candidates, first_candidate_rowid, last_inspected_rowid, index == len(rows) - 1
+    return candidates, first_candidate_rowid, last_inspected_rowid, True
 
 
 class HotCandidateScanner:
@@ -165,37 +192,54 @@ class HotCandidateScanner:
 
     def __init__(self) -> None:
         self._before_rowid: int | None = None
+        self._newest_seen_rowid: int | None = None
 
     def __call__(self, store: VectorStore, *, limit: int) -> list[EmbedCandidate]:
         cursor = store.conn.cursor()
         head_rows = list(cursor.execute(HOT_CANDIDATE_ROWID_SCAN_SQL, (HOT_CANDIDATE_HEAD_LIMIT,)))
-        candidates, _, _ = _candidates_from_scanned_rows(head_rows, limit=limit)
-        if len(head_rows) < HOT_CANDIDATE_HEAD_LIMIT:
-            self._before_rowid = None
+        candidates, _, _, _ = _candidates_from_scanned_rows(head_rows, limit=limit)
+        if not head_rows:
             return candidates
+        if self._newest_seen_rowid is None:
+            self._newest_seen_rowid = int(head_rows[0][0])
+        if self._before_rowid is None and len(head_rows) == HOT_CANDIDATE_HEAD_LIMIT:
+            self._before_rowid = int(head_rows[-1][0])
         if len(candidates) >= limit:
             return candidates
 
-        if self._before_rowid is None:
-            self._before_rowid = int(head_rows[-1][0])
         page_limit = HOT_CANDIDATE_SCAN_LIMIT - HOT_CANDIDATE_HEAD_LIMIT
-        page_rows = list(
+        forward_rows = list(
             cursor.execute(
-                HOT_CANDIDATE_ROWID_PAGE_SQL,
-                (self._before_rowid, page_limit),
+                HOT_CANDIDATE_ROWID_FORWARD_SQL,
+                (self._newest_seen_rowid, page_limit),
             )
         )
+        if forward_rows:
+            forward_candidates, first_candidate_rowid, last_inspected_rowid, _ = _candidates_from_scanned_rows(
+                forward_rows,
+                limit=limit - len(candidates),
+                exclude_ids={candidate.chunk_id for candidate in candidates},
+            )
+            candidates.extend(forward_candidates)
+            self._newest_seen_rowid = (
+                first_candidate_rowid - 1 if first_candidate_rowid is not None else last_inspected_rowid
+            )
+        if len(candidates) >= limit or self._before_rowid is None:
+            return candidates[:limit]
+
+        page_rows = list(cursor.execute(HOT_CANDIDATE_ROWID_PAGE_SQL, (self._before_rowid, page_limit)))
         if page_rows:
-            page_candidates, last_inspected_rowid, fully_scanned = _candidates_from_scanned_rows(
+            page_candidates, first_candidate_rowid, last_inspected_rowid, fully_scanned = _candidates_from_scanned_rows(
                 page_rows,
                 limit=limit - len(candidates),
+                exclude_ids={candidate.chunk_id for candidate in candidates},
             )
             candidates.extend(page_candidates)
-            self._before_rowid = last_inspected_rowid
-        else:
-            fully_scanned = True
-        if fully_scanned and len(page_rows) < page_limit:
-            self._before_rowid = None
+            self._before_rowid = (
+                first_candidate_rowid + 1 if first_candidate_rowid is not None else last_inspected_rowid
+            )
+            if first_candidate_rowid is None and fully_scanned and len(page_rows) < page_limit:
+                self._before_rowid = None
         return candidates[:limit]
 
 
