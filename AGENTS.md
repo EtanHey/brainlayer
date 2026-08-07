@@ -1,4 +1,48 @@
-# BrainLayer Agent Notes
+# BrainLayer — a letter from Etan
+
+> Ratified row-by-row by voice, 2026-08-07. Record: `docs.local/GRILL-RATIFIED-2026-08-06.md`.
+
+BrainLayer is the fleet's memory — both sides of it. My prompts, intent, and corrections on one
+side; what you all tried, what worked, what eroded and why on the other — the fleet's accumulated
+experience, so agents learn from each other's experience instead of re-deriving what the fleet
+already paid to learn. More than storage: it should give agents the
+understanding of WHY to go one way and not the other.
+
+**Everything traces to its origin.** From any memory you can walk back to the conversation it came
+from. Prefer pointers to the source of truth over hoarding copies.
+
+**Every indexed source carries its class.** CLI coding agents (Claude Code, Codex, antigravity),
+desktop apps (Claude Desktop, Gemini, ChatGPT), and subagents — normal subagents versus
+brain-workers. The class is labeled at ingest and decides default-search visibility and importance.
+Desktop apps: indexed, hidden from default search, opt-in only — and the opt-in switch stays
+unadvertised so benchmark lanes can't trip it. Normal subagents: indexed, labeled, expandable as a
+subagent thread. Brain-workers: always saved, never in default searches, never demoting other
+results — `[OPEN]` whether they index at all, and they should ship with BrainLayer itself. All
+transcripts get saved, so every memory can trace back. A new source enters only by deliberate
+wiring; nothing is auto-detected.
+
+**Store discipline.** Verify, then store. Do the thing, then store it — never store-before-work as
+ritual. When something you stored turns out wrong, UPDATE it, don't store again beside it. If it's
+my intent you corrected, come back and ask me if you got it right — and make sure your question
+actually reached me: a question buried under recon output was never asked. Standing rules carry
+their date and expiry — a stale truth must not masquerade as current. `[NOT A FEATURE YET — this is where I'm driving this]`
+Eventually BrainLayer should be able to sleep like a human brain does: during the night or
+hibernation periods it runs local or large-context models to figure out what the current truths
+still are, and learns. That's what a brain does when it sleeps.
+
+**Never silently degrade. Never auto-delete personal data.** Transcripts move to the archive only
+after they're embedded, and only if the usage readers still see everything. Test data changes
+against a copy of the real database before merging. Merged is not deployed — verify the thing that
+executes. Never ship my database inside a package.
+
+This letter is for agents building BrainLayer. The rules for agents USING it live in the tool
+descriptions — keep those true.
+
+— Etan
+
+---
+
+# BrainLayer Agent Notes (operational)
 
 BrainLayer is the memory layer for the entire ecosystem. If it breaks, every golem degrades into a vanilla LLM with no durable recall.
 
@@ -42,19 +86,7 @@ BrainLayer is the memory layer for the entire ecosystem. If it breaks, every gol
 - DB locking during enrichment.
 - WAL can grow to 4.7GB.
 
-<!-- IDENTITY: brainlayer, owner=EtanHey, purpose=the fleet's organizational memory — Etan's prompts+intent AND the agents' work-history (what worked where, what eroded why), indexed/searchable/enriched -->
-# BrainLayer (זיכרון) - Fleet Organizational Memory
-
-> The fleet's memory: Etan's prompts + intent AND the agents' work-history — what was tried, what worked where, what eroded and why — searchable across every session.
-
-## Purpose (WHY)
-- BrainLayer is the FLEET's organizational memory — not one person's private notebook.
-- It captures BOTH sides of the work: Etan's prompts + intent, AND the agents' work-history — what was tried, what worked where, what eroded and why.
-- So any agent inherits the fleet's accumulated experience: search prior decisions, skip re-solving already-fixed bugs, and see WHY a past choice was made before repeating a mistake.
-- Fast search, context retrieval, and exports for downstream tools.
-
----
-
+<!-- IDENTITY: brainlayer, owner=EtanHey, purpose=the fleet's memory — see the letter at the top of this file -->
 ## BrainBar Native Tools
 
 Current native Swift BrainBar tools (PR #135, 2026-03-30):
@@ -190,9 +222,7 @@ brainlayer enrich
 ## Bulk DB Operations (SAFETY)
 1. **Stop enrichment workers first** — never run bulk ops while enrichment is writing (causes WAL bloat + potential freeze)
 2. **Checkpoint WAL** before and after: `PRAGMA wal_checkpoint(FULL)`
-3. **Drop FTS triggers** before bulk deletes — `chunks_fts_delete` trigger is a massive perf killer. Recreate after.
-4. **Batch deletes** in 5-10K chunks, checkpoint every 3 batches
-5. Never delete from `chunks` while FTS trigger is active on large datasets
+3. **Batch deletes** in 5-10K chunks, checkpoint every 3 batches
 
 ## Memory Tools
 - Always `brain_search` before answering questions about project history, architecture, or past decisions
