@@ -42,6 +42,7 @@ DEFAULT_HOTLANE_WRITE_BUSY_TIMEOUT_MS = 1000
 MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 VECTOR_WRITE_YIELD_SECONDS = 0.005
 HOT_CANDIDATE_SCAN_LIMIT = 256
+HOT_CANDIDATE_HEAD_LIMIT = HOT_CANDIDATE_SCAN_LIMIT // 2
 _sleep = time.sleep
 
 HOT_CANDIDATE_SCAN_SQL = """
@@ -59,6 +60,45 @@ HOT_CANDIDATE_SCAN_SQL = """
     FROM chunks c
     LEFT JOIN chunk_vectors_rowids r ON r.id = c.id
     ORDER BY c.created_at DESC
+    LIMIT ?
+"""
+
+HOT_CANDIDATE_ROWID_SCAN_SQL = """
+    SELECT
+        c.rowid,
+        c.id,
+        c.content,
+        c.source_file,
+        c.source,
+        c.archived_at,
+        c.superseded_by,
+        c.aggregated_into,
+        COALESCE(c.archived, 0),
+        COALESCE(c.status, 'active'),
+        r.id
+    FROM chunks c
+    LEFT JOIN chunk_vectors_rowids r ON r.id = c.id
+    ORDER BY c.rowid DESC
+    LIMIT ?
+"""
+
+HOT_CANDIDATE_ROWID_PAGE_SQL = """
+    SELECT
+        c.rowid,
+        c.id,
+        c.content,
+        c.source_file,
+        c.source,
+        c.archived_at,
+        c.superseded_by,
+        c.aggregated_into,
+        COALESCE(c.archived, 0),
+        COALESCE(c.status, 'active'),
+        r.id
+    FROM chunks c
+    LEFT JOIN chunk_vectors_rowids r ON r.id = c.id
+    WHERE c.rowid < ?
+    ORDER BY c.rowid DESC
     LIMIT ?
 """
 
@@ -81,6 +121,72 @@ class EmbeddedVector(NamedTuple):
     chunk_id: str
     content: str
     embedding: list[float]
+
+
+def _candidates_from_scanned_rows(rows: list[tuple], *, limit: int) -> list[EmbedCandidate]:
+    if limit <= 0:
+        return []
+    candidates: list[EmbedCandidate] = []
+    for row in rows:
+        (
+            _rowid,
+            chunk_id,
+            content,
+            source_file,
+            source,
+            archived_at,
+            superseded_by,
+            aggregated_into,
+            archived,
+            status,
+            vector_id,
+        ) = row
+        if (
+            vector_id is None
+            and source_file == "brainbar-store"
+            and source == "mcp"
+            and content
+            and archived_at is None
+            and superseded_by is None
+            and aggregated_into is None
+            and not archived
+            and status == "active"
+        ):
+            candidates.append(EmbedCandidate(str(chunk_id), str(content)))
+            if len(candidates) >= limit:
+                break
+    return candidates
+
+
+class HotCandidateScanner:
+    """Scan the recent head every cycle while paging through older rows."""
+
+    def __init__(self) -> None:
+        self._before_rowid: int | None = None
+
+    def __call__(self, store: VectorStore, *, limit: int) -> list[EmbedCandidate]:
+        cursor = store.conn.cursor()
+        head_rows = list(cursor.execute(HOT_CANDIDATE_ROWID_SCAN_SQL, (HOT_CANDIDATE_HEAD_LIMIT,)))
+        candidates = _candidates_from_scanned_rows(head_rows, limit=limit)
+        if len(head_rows) < HOT_CANDIDATE_HEAD_LIMIT:
+            self._before_rowid = None
+            return candidates
+
+        if self._before_rowid is None:
+            self._before_rowid = int(head_rows[-1][0])
+        page_limit = HOT_CANDIDATE_SCAN_LIMIT - HOT_CANDIDATE_HEAD_LIMIT
+        page_rows = list(
+            cursor.execute(
+                HOT_CANDIDATE_ROWID_PAGE_SQL,
+                (self._before_rowid, page_limit),
+            )
+        )
+        if page_rows:
+            self._before_rowid = int(page_rows[-1][0])
+            candidates.extend(_candidates_from_scanned_rows(page_rows, limit=max(limit - len(candidates), 0)))
+        if len(page_rows) < page_limit:
+            self._before_rowid = None
+        return candidates[:limit]
 
 
 def _stop(_signum: int, _frame: object) -> None:
@@ -541,6 +647,7 @@ def run(
     last_enrich = 0.0
     enrich_disabled = False
     queue_backpressure_active = False
+    hot_candidate_scanner = HotCandidateScanner()
     cycles = 0
     backlog_batch = min(max(backlog_batch, 0), MAX_BACKLOG_BATCH)
     LOGGER.info("hotlane adapter started db=%s", db_path)
@@ -582,6 +689,7 @@ def run(
                     embed_batch_fn=embed_batch_fn,
                     enrich_limit=cycle_enrich_limit,
                     enrich_since_hours=enrich_since_hours,
+                    candidate_rows_fn=hot_candidate_scanner,
                 )
             else:
                 store = vector_store_cls(db_path)
