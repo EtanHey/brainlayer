@@ -551,7 +551,7 @@ def test_hotlane_run_continues_embedding_during_enrichment_only_queue_backlog(tm
     queue_dir = tmp_path / "queue"
     queue_dir.mkdir()
     (queue_dir / "enrichment-first.jsonl").write_text("{}\n")
-    (queue_dir / "enrichment-second.jsonl").write_text("{}\n")
+    (queue_dir / "queue-enrichment-legacy.jsonl").write_text("{}\n")
 
     class FakeStore:
         def __init__(self, path):

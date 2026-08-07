@@ -419,9 +419,13 @@ def _queue_depth(queue_dir: Path) -> int:
         return 0
 
 
+def _is_enrichment_queue_file(path: Path) -> bool:
+    return path.name.startswith("enrichment-") or path.name.startswith("queue-enrichment")
+
+
 def _high_priority_queue_depth(queue_dir: Path) -> int:
     try:
-        return sum(1 for path in queue_dir.glob("*.jsonl") if not path.name.startswith("enrichment-"))
+        return sum(1 for path in queue_dir.glob("*.jsonl") if not _is_enrichment_queue_file(path))
     except OSError:
         return 0
 
