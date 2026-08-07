@@ -419,9 +419,13 @@ def _queue_depth(queue_dir: Path) -> int:
         return 0
 
 
+def _is_enrichment_queue_file(path: Path) -> bool:
+    return path.name.startswith("enrichment-") or path.name.startswith("queue-enrichment")
+
+
 def _high_priority_queue_depth(queue_dir: Path) -> int:
     try:
-        return sum(1 for path in queue_dir.glob("*.jsonl") if not path.name.startswith("enrichment-"))
+        return sum(1 for path in queue_dir.glob("*.jsonl") if not _is_enrichment_queue_file(path))
     except OSError:
         return 0
 
@@ -505,6 +509,7 @@ def run(
     last_backlog = time_fn() - backlog_interval
     last_enrich = 0.0
     enrich_disabled = False
+    queue_backpressure_active = False
     cycles = 0
     backlog_batch = min(max(backlog_batch, 0), MAX_BACKLOG_BATCH)
     LOGGER.info("hotlane adapter started db=%s", db_path)
@@ -515,23 +520,23 @@ def run(
             now = time_fn()
             queue_has_backlog = queue_depth_fn(queue_dir) > 0
             queue_has_high_priority_backlog = queue_has_backlog and high_priority_queue_depth_fn(queue_dir) > 0
-            if queue_has_backlog:
-                if queue_has_high_priority_backlog:
+            if queue_has_high_priority_backlog:
+                if not queue_backpressure_active:
                     LOGGER.info("durable high-priority queue has backlog; yielding all hotlane writer work")
-                else:
-                    LOGGER.info("durable queue has backlog; yielding all hotlane writer work")
+                queue_backpressure_active = True
                 cycles += 1
                 sleep_fn(interval)
                 continue
-            else:
-                cycle_backlog_batch = (
-                    backlog_batch if backlog_batch > 0 and now - last_backlog >= backlog_interval else 0
-                )
-                cycle_enrich_limit = (
-                    enrich_limit
-                    if not enrich_disabled and enrich_limit > 0 and now - last_enrich >= enrich_interval
-                    else 0
-                )
+            queue_backpressure_active = False
+            cycle_backlog_batch = backlog_batch if backlog_batch > 0 and now - last_backlog >= backlog_interval else 0
+            cycle_enrich_limit = (
+                enrich_limit
+                if not queue_has_backlog
+                and not enrich_disabled
+                and enrich_limit > 0
+                and now - last_enrich >= enrich_interval
+                else 0
+            )
             if cycle_backlog_batch > 0:
                 last_backlog = now
             if cycle_enrich_limit > 0:
