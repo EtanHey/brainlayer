@@ -123,13 +123,14 @@ class EmbeddedVector(NamedTuple):
     embedding: list[float]
 
 
-def _candidates_from_scanned_rows(rows: list[tuple], *, limit: int) -> list[EmbedCandidate]:
+def _candidates_from_scanned_rows(rows: list[tuple], *, limit: int) -> tuple[list[EmbedCandidate], int | None, bool]:
     if limit <= 0:
-        return []
+        return [], None, False
     candidates: list[EmbedCandidate] = []
-    for row in rows:
+    last_inspected_rowid: int | None = None
+    for index, row in enumerate(rows):
         (
-            _rowid,
+            rowid,
             chunk_id,
             content,
             source_file,
@@ -141,6 +142,7 @@ def _candidates_from_scanned_rows(rows: list[tuple], *, limit: int) -> list[Embe
             status,
             vector_id,
         ) = row
+        last_inspected_rowid = int(rowid)
         if (
             vector_id is None
             and source_file == "brainbar-store"
@@ -154,8 +156,8 @@ def _candidates_from_scanned_rows(rows: list[tuple], *, limit: int) -> list[Embe
         ):
             candidates.append(EmbedCandidate(str(chunk_id), str(content)))
             if len(candidates) >= limit:
-                break
-    return candidates
+                return candidates, last_inspected_rowid, index == len(rows) - 1
+    return candidates, last_inspected_rowid, True
 
 
 class HotCandidateScanner:
@@ -167,9 +169,11 @@ class HotCandidateScanner:
     def __call__(self, store: VectorStore, *, limit: int) -> list[EmbedCandidate]:
         cursor = store.conn.cursor()
         head_rows = list(cursor.execute(HOT_CANDIDATE_ROWID_SCAN_SQL, (HOT_CANDIDATE_HEAD_LIMIT,)))
-        candidates = _candidates_from_scanned_rows(head_rows, limit=limit)
+        candidates, _, _ = _candidates_from_scanned_rows(head_rows, limit=limit)
         if len(head_rows) < HOT_CANDIDATE_HEAD_LIMIT:
             self._before_rowid = None
+            return candidates
+        if len(candidates) >= limit:
             return candidates
 
         if self._before_rowid is None:
@@ -182,9 +186,15 @@ class HotCandidateScanner:
             )
         )
         if page_rows:
-            self._before_rowid = int(page_rows[-1][0])
-            candidates.extend(_candidates_from_scanned_rows(page_rows, limit=max(limit - len(candidates), 0)))
-        if len(page_rows) < page_limit:
+            page_candidates, last_inspected_rowid, fully_scanned = _candidates_from_scanned_rows(
+                page_rows,
+                limit=limit - len(candidates),
+            )
+            candidates.extend(page_candidates)
+            self._before_rowid = last_inspected_rowid
+        else:
+            fully_scanned = True
+        if fully_scanned and len(page_rows) < page_limit:
             self._before_rowid = None
         return candidates[:limit]
 

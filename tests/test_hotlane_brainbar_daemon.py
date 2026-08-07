@@ -202,6 +202,51 @@ def test_hot_candidate_scanner_pages_past_recent_embedded_window(tmp_path):
         conn.close()
 
 
+def test_hot_candidate_scanner_does_not_skip_unreturned_page_candidates(tmp_path):
+    hotlane = _load_hotlane_module()
+    conn = sqlite3.connect(tmp_path / "page-capacity.db")
+    conn.executescript(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT,
+            source_file TEXT,
+            source TEXT,
+            created_at TEXT,
+            archived_at TEXT,
+            superseded_by TEXT,
+            aggregated_into TEXT,
+            archived INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'active'
+        );
+        CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY);
+        """
+    )
+    page_rows = [(f"page-{index}", "pending", "brainbar-store", "mcp", str(index)) for index in range(128)]
+    head_rows = [(f"head-{index}", "embedded", "brainbar-store", "mcp", str(index)) for index in range(127)]
+    head_rows.append(("head-hot", "pending head", "brainbar-store", "mcp", "latest"))
+    conn.executemany(
+        "INSERT INTO chunks (id, content, source_file, source, created_at) VALUES (?, ?, ?, ?, ?)",
+        page_rows + head_rows,
+    )
+    conn.executemany("INSERT INTO chunk_vectors_rowids (id) VALUES (?)", [(row[0],) for row in head_rows[:-1]])
+    scanner = hotlane.HotCandidateScanner()
+    store = SimpleNamespace(conn=conn)
+    try:
+        first = scanner(store, limit=2)
+        assert first == [
+            hotlane.EmbedCandidate("head-hot", "pending head"),
+            hotlane.EmbedCandidate("page-127", "pending"),
+        ]
+        conn.executemany("INSERT INTO chunk_vectors_rowids (id) VALUES (?)", [(item.chunk_id,) for item in first])
+        assert scanner(store, limit=2) == [
+            hotlane.EmbedCandidate("page-126", "pending"),
+            hotlane.EmbedCandidate("page-125", "pending"),
+        ]
+    finally:
+        conn.close()
+
+
 def test_hotlane_run_threads_model_batch_embedder_to_backlog_cycle():
     hotlane = _load_hotlane_module()
     received_batch_fns = []
