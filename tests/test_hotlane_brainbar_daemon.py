@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -542,11 +543,15 @@ def test_hotlane_run_opens_and_closes_writer_store_each_cycle(tmp_path):
     assert [event[0] for event in events] == ["open", "close", "open", "close"]
 
 
-def test_hotlane_run_yields_all_writer_work_during_enrichment_queue_backlog(tmp_path):
+def test_hotlane_run_continues_embedding_during_enrichment_only_queue_backlog(tmp_path):
     hotlane = _load_hotlane_module()
     opened = []
     cycle_calls = []
     sleeps = []
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    (queue_dir / "enrichment-first.jsonl").write_text("{}\n")
+    (queue_dir / "enrichment-second.jsonl").write_text("{}\n")
 
     class FakeStore:
         def __init__(self, path):
@@ -570,13 +575,65 @@ def test_hotlane_run_yields_all_writer_work_during_enrichment_queue_backlog(tmp_
         time_fn=iter([0.0, 100.0]).__next__,
         sleep_fn=sleeps.append,
         max_cycles=1,
-        queue_depth_fn=lambda _queue_dir: 3,
-        high_priority_queue_depth_fn=lambda _queue_dir: 0,
+        queue_dir=queue_dir,
     )
 
-    assert opened == []
-    assert cycle_calls == []
+    assert opened == [tmp_path / "brainlayer.db"]
+    assert len(cycle_calls) == 1
+    assert cycle_calls[0]["backlog_batch"] == hotlane.DEFAULT_BACKLOG_BATCH
+    assert cycle_calls[0]["enrich_limit"] == 0
     assert sleeps == [0.25]
+
+
+def test_hotlane_run_logs_high_priority_backpressure_once_per_blocked_state(tmp_path, caplog):
+    hotlane = _load_hotlane_module()
+    caplog.set_level(logging.INFO, logger=hotlane.LOGGER.name)
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    high_priority_event = queue_dir / "store-pending.jsonl"
+    high_priority_event.write_text("{}\n")
+    (queue_dir / "enrichment-pending.jsonl").write_text("{}\n")
+    cycle_calls = []
+    sleep_count = 0
+
+    class FakeStore:
+        def close(self):
+            pass
+
+    def update_queue_after_cycle(_seconds):
+        nonlocal sleep_count
+        sleep_count += 1
+        if sleep_count == 2:
+            high_priority_event.unlink()
+        elif sleep_count == 3:
+            high_priority_event.write_text("{}\n")
+
+    hotlane.run(
+        db_path=tmp_path / "brainlayer.db",
+        interval=0.25,
+        recent_limit=5,
+        backlog_interval=10.0,
+        backlog_batch=hotlane.DEFAULT_BACKLOG_BATCH,
+        enrich_interval=10.0,
+        enrich_limit=hotlane.DEFAULT_HOTLANE_ENRICH_LIMIT,
+        enrich_since_hours=8760,
+        vector_store_cls=lambda _path: FakeStore(),
+        model_factory=lambda: SimpleNamespace(embed_query=lambda _text: [0.0]),
+        cycle_fn=lambda **kwargs: cycle_calls.append(kwargs) or hotlane.CycleResult(),
+        time_fn=iter([0.0, 100.0, 101.0, 102.0, 103.0, 104.0]).__next__,
+        sleep_fn=update_queue_after_cycle,
+        max_cycles=5,
+        queue_dir=queue_dir,
+    )
+
+    yield_logs = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "durable high-priority queue has backlog; yielding all hotlane writer work"
+    ]
+    assert len(yield_logs) == 2
+    assert len(cycle_calls) == 1
+    assert cycle_calls[0]["enrich_limit"] == 0
 
 
 def test_hotlane_run_yields_all_writer_work_during_high_priority_queue_backlog(tmp_path):
