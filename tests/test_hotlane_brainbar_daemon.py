@@ -77,6 +77,22 @@ def test_hotlane_default_backlog_batch_drains_pending_embeddings():
     assert hotlane.DEFAULT_BACKLOG_BATCH == 4
 
 
+def test_hot_candidate_query_forces_created_at_index_to_avoid_full_mcp_sort():
+    hotlane = _load_hotlane_module()
+    executed = []
+
+    class FakeCursor:
+        def execute(self, sql, bindings):
+            executed.append((sql, bindings))
+            return []
+
+    store = SimpleNamespace(conn=SimpleNamespace(cursor=FakeCursor))
+
+    assert hotlane._candidate_chunk_rows(store, limit=5) == []
+    assert "chunks c INDEXED BY idx_chunks_created_at" in executed[0][0]
+    assert executed[0][1] == (5,)
+
+
 def test_hotlane_run_threads_model_batch_embedder_to_backlog_cycle():
     hotlane = _load_hotlane_module()
     received_batch_fns = []

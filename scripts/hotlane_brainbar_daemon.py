@@ -73,7 +73,7 @@ def _candidate_chunk_ids(store: VectorStore, *, limit: int) -> list[str]:
     rows = store.conn.cursor().execute(
         """
         SELECT c.id
-        FROM chunks c
+        FROM chunks c INDEXED BY idx_chunks_created_at
         LEFT JOIN chunk_vectors_rowids r ON r.id = c.id
         WHERE r.id IS NULL
           AND c.source_file = 'brainbar-store'
@@ -97,7 +97,7 @@ def _candidate_chunk_rows(store: VectorStore, *, limit: int) -> list[EmbedCandid
     rows = store.conn.cursor().execute(
         """
         SELECT c.id, c.content
-        FROM chunks c
+        FROM chunks c INDEXED BY idx_chunks_created_at
         LEFT JOIN chunk_vectors_rowids r ON r.id = c.id
         WHERE r.id IS NULL
           AND c.source_file = 'brainbar-store'
