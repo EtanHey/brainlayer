@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import sqlite3
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -77,7 +78,7 @@ def test_hotlane_default_backlog_batch_drains_pending_embeddings():
     assert hotlane.DEFAULT_BACKLOG_BATCH == 4
 
 
-def test_hot_candidate_query_forces_created_at_index_to_avoid_full_mcp_sort():
+def test_hot_candidate_query_scans_a_bounded_recent_window_without_forcing_schema_index():
     hotlane = _load_hotlane_module()
     executed = []
 
@@ -89,9 +90,9 @@ def test_hot_candidate_query_forces_created_at_index_to_avoid_full_mcp_sort():
     store = SimpleNamespace(conn=SimpleNamespace(cursor=FakeCursor))
 
     assert hotlane._candidate_chunk_rows(store, limit=5) == []
-    assert "chunks c INDEXED BY idx_chunks_created" in executed[0][0]
-    assert "idx_chunks_created_at" not in executed[0][0]
-    assert executed[0][1] == (5,)
+    assert "INDEXED BY" not in executed[0][0]
+    assert "ORDER BY c.created_at DESC" in executed[0][0]
+    assert executed[0][1] == (hotlane.HOT_CANDIDATE_SCAN_LIMIT,)
 
 
 def test_hot_candidate_query_uses_index_created_by_python_vectorstore(tmp_path):
@@ -100,9 +101,65 @@ def test_hot_candidate_query_uses_index_created_by_python_vectorstore(tmp_path):
     hotlane = _load_hotlane_module()
     store = VectorStore(tmp_path / "brainlayer.db")
     try:
+        cursor = store.conn.cursor()
+        cursor.executemany(
+            """
+            INSERT INTO chunks (id, content, metadata, source_file, source, created_at)
+            VALUES (?, ?, '{}', 'provider-session', 'claude', ?)
+            """,
+            [(f"other-{index}", "already handled", f"2026-08-07T00:{index:03d}:00Z") for index in range(300)],
+        )
+        cursor.execute(
+            """
+            INSERT INTO chunks (id, content, metadata, source_file, source, created_at)
+            VALUES ('recent-brainbar', 'already embedded', '{}', 'brainbar-store', 'mcp', '9999-12-31T23:59:59Z')
+            """
+        )
+        store._upsert_chunk_vector(cursor, "recent-brainbar", [0.0] * 1024)
+
+        plan = [
+            str(row[3])
+            for row in cursor.execute(
+                "EXPLAIN QUERY PLAN " + hotlane.HOT_CANDIDATE_SCAN_SQL,
+                (hotlane.HOT_CANDIDATE_SCAN_LIMIT,),
+            )
+        ]
+        assert any("USING INDEX idx_chunks_created" in detail for detail in plan)
+        assert not any("USE TEMP B-TREE" in detail for detail in plan)
         assert hotlane._candidate_chunk_rows(store, limit=5) == []
     finally:
         store.close()
+
+
+def test_hot_candidate_query_uses_native_created_at_index_without_python_index(tmp_path):
+    hotlane = _load_hotlane_module()
+    conn = sqlite3.connect(tmp_path / "native.db")
+    conn.executescript(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT,
+            source_file TEXT,
+            source TEXT,
+            created_at TEXT,
+            archived_at TEXT,
+            superseded_by TEXT,
+            aggregated_into TEXT,
+            archived INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'active'
+        );
+        CREATE INDEX idx_chunks_created_at ON chunks(created_at);
+        CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY);
+        INSERT INTO chunks (id, content, source_file, source, created_at)
+        VALUES ('native-hot', 'pending native chunk', 'brainbar-store', 'mcp', '2026-08-08T00:00:00Z');
+        """
+    )
+    try:
+        assert hotlane._candidate_chunk_rows(SimpleNamespace(conn=conn), limit=5) == [
+            hotlane.EmbedCandidate("native-hot", "pending native chunk")
+        ]
+    finally:
+        conn.close()
 
 
 def test_hotlane_run_threads_model_batch_embedder_to_backlog_cycle():
@@ -776,8 +833,8 @@ def test_hotlane_split_cycle_writes_vectors_without_opening_vectorstore_writer(t
 
         def execute(self, sql, params=()):
             if self.readonly:
-                if "c.source_file = 'brainbar-store'" in sql:
-                    return [("hot-1", "hot content")]
+                if sql == hotlane.HOT_CANDIDATE_SCAN_SQL:
+                    return [("hot-1", "hot content", "brainbar-store", "mcp", None, None, None, 0, "active", None)]
                 return [("pending-1", "pending content")]
             events.append(("sql", sql.strip().splitlines()[0]))
             if sql.strip().startswith("SELECT 1"):
@@ -841,8 +898,11 @@ def test_hotlane_split_cycle_falls_through_recent_candidates_after_embed_failure
 
         def execute(self, sql, params=()):
             if self.readonly:
-                if "c.source_file = 'brainbar-store'" in sql:
-                    return [("hot-bad", "bad content"), ("hot-good", "good content")]
+                if sql == hotlane.HOT_CANDIDATE_SCAN_SQL:
+                    return [
+                        ("hot-bad", "bad content", "brainbar-store", "mcp", None, None, None, 0, "active", None),
+                        ("hot-good", "good content", "brainbar-store", "mcp", None, None, None, 0, "active", None),
+                    ]
                 return []
             events.append(("sql", sql.strip().splitlines()[0]))
             if sql.strip().startswith("SELECT 1"):

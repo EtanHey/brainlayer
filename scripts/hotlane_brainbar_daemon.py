@@ -41,7 +41,26 @@ MAX_BACKLOG_BATCH = 16
 DEFAULT_HOTLANE_WRITE_BUSY_TIMEOUT_MS = 1000
 MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 VECTOR_WRITE_YIELD_SECONDS = 0.005
+HOT_CANDIDATE_SCAN_LIMIT = 256
 _sleep = time.sleep
+
+HOT_CANDIDATE_SCAN_SQL = """
+    SELECT
+        c.id,
+        c.content,
+        c.source_file,
+        c.source,
+        c.archived_at,
+        c.superseded_by,
+        c.aggregated_into,
+        COALESCE(c.archived, 0),
+        COALESCE(c.status, 'active'),
+        r.id
+    FROM chunks c
+    LEFT JOIN chunk_vectors_rowids r ON r.id = c.id
+    ORDER BY c.created_at DESC
+    LIMIT ?
+"""
 
 
 class CycleResult(NamedTuple):
@@ -95,26 +114,38 @@ def _candidate_chunk_ids(store: VectorStore, *, limit: int) -> list[str]:
 
 def _candidate_chunk_rows(store: VectorStore, *, limit: int) -> list[EmbedCandidate]:
     rows = store.conn.cursor().execute(
-        """
-        SELECT c.id, c.content
-        FROM chunks c INDEXED BY idx_chunks_created
-        LEFT JOIN chunk_vectors_rowids r ON r.id = c.id
-        WHERE r.id IS NULL
-          AND c.source_file = 'brainbar-store'
-          AND c.source = 'mcp'
-          AND c.content IS NOT NULL
-          AND c.content != ''
-          AND c.archived_at IS NULL
-          AND c.superseded_by IS NULL
-          AND c.aggregated_into IS NULL
-          AND COALESCE(c.archived, 0) = 0
-          AND COALESCE(c.status, 'active') = 'active'
-        ORDER BY c.created_at DESC
-        LIMIT ?
-        """,
-        (limit,),
+        HOT_CANDIDATE_SCAN_SQL,
+        (HOT_CANDIDATE_SCAN_LIMIT,),
     )
-    return [EmbedCandidate(str(row[0]), str(row[1])) for row in rows]
+    candidates: list[EmbedCandidate] = []
+    for row in rows:
+        (
+            chunk_id,
+            content,
+            source_file,
+            source,
+            archived_at,
+            superseded_by,
+            aggregated_into,
+            archived,
+            status,
+            vector_id,
+        ) = row
+        if (
+            vector_id is None
+            and source_file == "brainbar-store"
+            and source == "mcp"
+            and content
+            and archived_at is None
+            and superseded_by is None
+            and aggregated_into is None
+            and not archived
+            and status == "active"
+        ):
+            candidates.append(EmbedCandidate(str(chunk_id), str(content)))
+            if len(candidates) >= limit:
+                break
+    return candidates
 
 
 def _pending_chunk_rows(store: VectorStore, *, limit: int) -> list[EmbedCandidate]:
