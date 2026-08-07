@@ -335,6 +335,16 @@ class TestStoreAutoEnrich:
         mock_model.embed_query = lambda text: [0.1] * 1024
         monkeypatch.setattr(store_handler, "_get_embedding_model", lambda: mock_model)
 
+        started_threads = []
+        real_thread = threading.Thread
+
+        def tracking_thread(*args, **kwargs):
+            thread = real_thread(*args, **kwargs)
+            started_threads.append(thread)
+            return thread
+
+        monkeypatch.setattr(store_handler, "threading", SimpleNamespace(Thread=tracking_thread))
+
         result = await store_handler._store_new(
             content="Test auto-enrichment integration",
             memory_type="learning",
@@ -344,10 +354,9 @@ class TestStoreAutoEnrich:
         content_items, structured = result
         chunk_id = structured["chunk_id"]
 
-        # Wait for background thread to complete
-        for t in threading.enumerate():
-            if t.daemon and t.name != "MainThread":
-                t.join(timeout=5.0)
+        assert len(started_threads) == 1
+        started_threads[0].join(timeout=5.0)
+        assert not started_threads[0].is_alive()
 
         assert len(enriched_ids) == 1
         assert enriched_ids[0] == chunk_id
@@ -375,6 +384,16 @@ class TestStoreAutoEnrich:
         mock_model.embed_query = lambda text: [0.1] * 1024
         monkeypatch.setattr(store_handler, "_get_embedding_model", lambda: mock_model)
 
+        started_threads = []
+        real_thread = threading.Thread
+
+        def tracking_thread(*args, **kwargs):
+            thread = real_thread(*args, **kwargs)
+            started_threads.append(thread)
+            return thread
+
+        monkeypatch.setattr(store_handler, "threading", SimpleNamespace(Thread=tracking_thread))
+
         result = await store_handler._store_new(
             content="Store should succeed regardless of enrichment",
             memory_type="note",
@@ -384,9 +403,9 @@ class TestStoreAutoEnrich:
         assert structured["chunk_id"] != "queued"
         assert content_items[0].text == f"✔ Stored → {structured['chunk_id']}"
 
-        for t in threading.enumerate():
-            if t.daemon and t.name != "MainThread":
-                t.join(timeout=5.0)
+        assert len(started_threads) == 1
+        started_threads[0].join(timeout=5.0)
+        assert not started_threads[0].is_alive()
 
         test_store.close()
 
