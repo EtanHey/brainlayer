@@ -167,7 +167,7 @@ def _candidates_from_scanned_rows(
             vector_id,
         ) = row
         last_inspected_rowid = int(rowid)
-        if (
+        eligible = (
             vector_id is None
             and source_file == "brainbar-store"
             and source == "mcp"
@@ -177,10 +177,12 @@ def _candidates_from_scanned_rows(
             and aggregated_into is None
             and not archived
             and status == "active"
-            and str(chunk_id) not in exclude_ids
-        ):
+        )
+        if eligible:
             if first_candidate_rowid is None:
                 first_candidate_rowid = int(rowid)
+            if str(chunk_id) in exclude_ids:
+                continue
             candidates.append(EmbedCandidate(str(chunk_id), str(content)))
             if len(candidates) >= limit:
                 return candidates, first_candidate_rowid, last_inspected_rowid, index == len(rows) - 1

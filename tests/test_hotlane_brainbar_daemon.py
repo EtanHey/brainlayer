@@ -310,11 +310,13 @@ def test_hot_candidate_scanner_deduplicates_head_and_forward_catchup(tmp_path):
             status TEXT DEFAULT 'active'
         );
         CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY);
-        INSERT INTO chunks (id, content, source_file, source, created_at)
-        VALUES ('baseline', 'embedded', 'brainbar-store', 'mcp', 'before');
-        INSERT INTO chunk_vectors_rowids (id) VALUES ('baseline');
         """
     )
+    baseline_rows = [(f"baseline-{index}", "embedded", "brainbar-store", "mcp", str(index)) for index in range(1000)]
+    conn.executemany(
+        "INSERT INTO chunks (id, content, source_file, source, created_at) VALUES (?, ?, ?, ?, ?)", baseline_rows
+    )
+    conn.executemany("INSERT INTO chunk_vectors_rowids (id) VALUES (?)", [(row[0],) for row in baseline_rows])
     scanner = hotlane.HotCandidateScanner()
     store = SimpleNamespace(conn=conn)
     try:
@@ -323,6 +325,12 @@ def test_hot_candidate_scanner_deduplicates_head_and_forward_catchup(tmp_path):
             "INSERT INTO chunks (id, content, source_file, source, created_at) VALUES "
             "('new-hot', 'only once', 'brainbar-store', 'mcp', 'after')"
         )
+        assert scanner(store, limit=5) == [hotlane.EmbedCandidate("new-hot", "only once")]
+        newer_rows = [(f"later-{index}", "embedded", "brainbar-store", "mcp", str(index)) for index in range(128)]
+        conn.executemany(
+            "INSERT INTO chunks (id, content, source_file, source, created_at) VALUES (?, ?, ?, ?, ?)", newer_rows
+        )
+        conn.executemany("INSERT INTO chunk_vectors_rowids (id) VALUES (?)", [(row[0],) for row in newer_rows])
         assert scanner(store, limit=5) == [hotlane.EmbedCandidate("new-hot", "only once")]
     finally:
         conn.close()
