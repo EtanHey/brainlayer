@@ -524,8 +524,6 @@ async def test_store_busy_budget_refreshes_after_timeout_lock_wait(monkeypatch):
     """Time spent waiting for the timeout lock must count against the store budget."""
     from brainlayer.mcp import store_handler
 
-    real_sleep = time.sleep
-
     class FakeCursor:
         def __init__(self, conn):
             self.conn = conn
@@ -556,14 +554,13 @@ async def test_store_busy_budget_refreshes_after_timeout_lock_wait(monkeypatch):
     def locked_store_memory(**kwargs):
         nonlocal attempts
         attempts += 1
-        real_sleep(store.conn.timeout_ms / 1000)
         raise apsw.BusyError("database is locked")
 
-    monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "200")
+    monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "400")
     monkeypatch.setattr(store_handler, "_RETRY_MAX_ATTEMPTS", 1)
 
     store_handler._STORE_BUSY_TIMEOUT_LOCK.acquire()
-    timer = threading.Timer(0.15, store_handler._STORE_BUSY_TIMEOUT_LOCK.release)
+    timer = threading.Timer(0.05, store_handler._STORE_BUSY_TIMEOUT_LOCK.release)
     timer.start()
     try:
         result = await store_handler._store_memory_with_retries(locked_store_memory, store=store)
@@ -578,7 +575,7 @@ async def test_store_busy_budget_refreshes_after_timeout_lock_wait(monkeypatch):
     clamped_timeouts = [timeout_ms for timeout_ms in store.conn.timeout_history if timeout_ms != 5000]
     assert attempts == 1
     assert clamped_timeouts
-    assert max(clamped_timeouts) < 150
+    assert max(clamped_timeouts) < 375
     assert store.conn.timeout_ms == 5000
 
 
@@ -832,11 +829,16 @@ async def test_store_busy_budget_bounds_singleton_init_lock_wait(tmp_path, monke
 
     pending_path = tmp_path / "pending-stores.jsonl"
     db_path = tmp_path / "singleton-lock.db"
+    init_timeouts = []
 
     class FakeVectorStore:
         def __init__(self, path):
             self.db_path = path
             self.conn = MagicMock()
+
+    def capturing_get_vector_store(*, timeout=None):
+        init_timeouts.append(timeout)
+        return _shared._get_vector_store(timeout=timeout)
 
     monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "80")
     monkeypatch.setattr(_shared, "_vector_store", None)
@@ -847,6 +849,7 @@ async def test_store_busy_budget_bounds_singleton_init_lock_wait(tmp_path, monke
         patch("brainlayer.mcp.store_handler._normalize_project_name", return_value="test"),
         patch("brainlayer.queue_io.enqueue_store", side_effect=RuntimeError("force legacy pending queue")),
         patch("brainlayer.mcp.store_handler._get_pending_store_path", return_value=pending_path),
+        patch("brainlayer.mcp.store_handler._get_vector_store", side_effect=capturing_get_vector_store),
         patch("brainlayer.store.store_memory", side_effect=apsw.BusyError("database is locked")),
     ):
         _shared._store_lock.acquire()
@@ -865,6 +868,8 @@ async def test_store_busy_budget_bounds_singleton_init_lock_wait(tmp_path, monke
 
     assert structured["status"] == "DEFERRED"
     assert structured["deferred"]["action"] == "queued_for_replay"
+    assert init_timeouts
+    assert all(timeout is not None and 0 < timeout <= 0.08 for timeout in init_timeouts)
     assert _shared._vector_store is None
 
 
@@ -937,12 +942,14 @@ async def test_store_busy_budget_bounds_supersede_update(tmp_path, monkeypatch):
     class FakeConn:
         def __init__(self):
             self.timeout_ms = 250
+            self.timeout_history = []
 
         def cursor(self):
             return FakeCursor(self)
 
         def setbusytimeout(self, timeout_ms):
             self.timeout_ms = timeout_ms
+            self.timeout_history.append(timeout_ms)
 
     store = MagicMock()
     store.conn = FakeConn()
@@ -972,7 +979,10 @@ async def test_store_busy_budget_bounds_supersede_update(tmp_path, monkeypatch):
             supersedes="manual-old",
         )
 
-    assert store.supersede_chunk.call_count == 1
+    clamped_timeouts = [timeout_ms for timeout_ms in store.conn.timeout_history if timeout_ms != 250]
+    assert clamped_timeouts
+    assert max(clamped_timeouts) <= 80
+    assert store.conn.timeout_ms == 250
     assert structured["status"] == "DEFERRED"
     assert structured["deferred"]["action"] == "queued_for_replay"
     assert json.loads(pending_path.read_text())["supersedes"] == "manual-old"
