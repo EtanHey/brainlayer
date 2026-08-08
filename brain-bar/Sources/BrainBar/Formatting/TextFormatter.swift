@@ -49,7 +49,9 @@ enum TextFormatter {
         lines.append("")
         lines.append("### KG Facts")
         for fact in facts.prefix(20) {
-            lines.append("- \(fact.relationType): \(fact.relatedEntity)")
+            var line = "- \(fact.relationType): \(fact.relatedEntity)"
+            line += relationTemporalSuffix(validUntil: fact.validUntil, expiredAt: fact.expiredAt)
+            lines.append(line)
         }
 
         return lines.joined(separator: "\n")
@@ -221,10 +223,22 @@ enum TextFormatter {
 
     private static func relationLine(_ relation: EntityCard.Relation) -> String {
         var line = "- \(relation.relationType): \(relation.targetName)"
-        if let expired = formattedDate(relation.expiredAt) {
-            line += " (expired \(expired))"
-        }
+        line += relationTemporalSuffix(validUntil: relation.validUntil, expiredAt: relation.expiredAt)
         return line
+    }
+
+    private static func relationTemporalSuffix(
+        validUntil: Date?,
+        expiredAt: Date?,
+        now: Date = Date()
+    ) -> String {
+        if let expired = formattedDate(expiredAt) {
+            return " (expired \(expired))"
+        }
+        if let validUntil, let date = formattedDate(validUntil) {
+            return validUntil < now ? " (expired \(date))" : " (until \(date))"
+        }
+        return ""
     }
 
     private static func appendEntitySections(_ entity: EntityCard, to lines: inout [String]) {
