@@ -10,6 +10,9 @@ import BrainBarLifecycle
 import Foundation
 
 final class BrainBarServer: @unchecked Sendable {
+    static let requestQueueLabel = "com.brainlayer.brainbar.server"
+    static let daemonHeartbeatQueueLabel = "com.brainlayer.brainbar.daemon-heartbeat"
+
     struct DatabaseRecoveryPolicy: Sendable, Equatable {
         let busyTimeoutMillis: Int32
         let initialRetryDelayMillis: UInt64
@@ -100,7 +103,11 @@ final class BrainBarServer: @unchecked Sendable {
     private let databaseRecoveryPolicy: DatabaseRecoveryPolicy
     private let instanceLockPath: String
     private static let queueKey = DispatchSpecificKey<UUID>()
-    private let queue = DispatchQueue(label: "com.brainlayer.brainbar.server", qos: .userInitiated)
+    private let queue = DispatchQueue(label: BrainBarServer.requestQueueLabel, qos: .userInitiated)
+    private let daemonHeartbeatQueue = DispatchQueue(
+        label: BrainBarServer.daemonHeartbeatQueueLabel,
+        qos: .utility
+    )
     private let queueID = UUID()
     private var listenFD: Int32 = -1
     private var listenSource: DispatchSourceRead?
@@ -776,12 +783,19 @@ final class BrainBarServer: @unchecked Sendable {
         NSLog("[BrainBar] Server stopped")
     }
 
-    private func startDaemonHeartbeatOnQueue() {
+    func enqueueOnRequestQueue(_ work: @escaping @Sendable () -> Void) {
+        queue.async(execute: work)
+    }
+
+    func startDaemonHeartbeatOnQueue(
+        path: String = BrainBarLifecycleWatchdog.daemonHeartbeatPath,
+        interval: TimeInterval = 5
+    ) {
         daemonHeartbeatTimer?.cancel()
         let timer = BrainBarLifecycleWatchdog.makeHeartbeatTimer(
-            path: BrainBarLifecycleWatchdog.daemonHeartbeatPath,
-            interval: 5,
-            queue: queue
+            path: path,
+            interval: interval,
+            queue: daemonHeartbeatQueue
         )
         daemonHeartbeatTimer = timer
     }

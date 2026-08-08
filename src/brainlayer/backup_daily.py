@@ -21,6 +21,7 @@ import subprocess
 import tempfile
 import time
 import traceback
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,7 @@ DEFAULT_STAGING_DIR = Path.home() / ".local" / "share" / "brainlayer" / "backups
 DEFAULT_LOG_PATH = Path.home() / ".local" / "share" / "brainlayer" / "logs" / "backup-daily.log"
 DEFAULT_BRAINBAR_SOCKET_PATH = "/tmp/brainbar.sock"
 BACKUP_TIMEOUT_ENV = "BRAINLAYER_BACKUP_TIMEOUT_SECONDS"
+BACKUP_CLIENT_TIMEOUT_ENV = "BRAINLAYER_BACKUP_CLIENT_TIMEOUT_SECONDS"
 BACKUP_FULL_VERIFY_ENV = "BRAINLAYER_BACKUP_FULL_VERIFY"
 BACKUP_LOG_PATH_ENV = "BRAINLAYER_BACKUP_LOG_PATH"
 BACKUP_LOG_PROVENANCE_ENV = "BRAINLAYER_BACKUP_LOG_PROVENANCE"
@@ -46,6 +48,7 @@ DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 DEFAULT_DAILY_KEEP = 7
 DEFAULT_WEEKLY_KEEP = 4
 DEFAULT_LOCAL_UNCOMPRESSED_KEEP = 2
+DEFAULT_BACKUP_CLIENT_TIMEOUT_SECONDS = 0
 
 
 @dataclass(frozen=True)
@@ -111,6 +114,19 @@ def _configured_backup_timeout_seconds() -> int | None:
     return seconds if seconds > 0 else None
 
 
+def _configured_backup_client_timeout_seconds() -> int | None:
+    raw = os.environ.get(BACKUP_CLIENT_TIMEOUT_ENV)
+    if raw is None or raw.strip() == "":
+        return DEFAULT_BACKUP_CLIENT_TIMEOUT_SECONDS or None
+    try:
+        seconds = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{BACKUP_CLIENT_TIMEOUT_ENV} must be an integer number of seconds") from exc
+    if seconds < 0:
+        raise ValueError(f"{BACKUP_CLIENT_TIMEOUT_ENV} must be zero or a positive number of seconds")
+    return seconds or None
+
+
 def _raise_backup_timeout(signum, frame) -> None:  # noqa: ARG001
     raise BackupTimeoutError("backup exceeded configured wall-clock timeout")
 
@@ -131,6 +147,26 @@ def _count_chunks(db_path: Path) -> int:
     finally:
         conn.close()
     return int(row[0]) if row else 0
+
+
+def _validate_backup_target(db_path: Path, *, pragma_name: str = "quick_check") -> int:
+    db_path = Path(db_path).expanduser().resolve()
+    conn = sqlite3.connect(f"{db_path.as_uri()}?mode=ro&immutable=1", uri=True)
+    try:
+        integrity = conn.execute(f"PRAGMA {pragma_name}").fetchone()
+        if not integrity or integrity[0] != "ok":
+            raise RuntimeError(f"Backup {pragma_name} failed: {integrity!r}")
+        page_count_row = conn.execute("PRAGMA page_count").fetchone()
+        page_count = int(page_count_row[0]) if page_count_row else 0
+        if page_count < 1:
+            raise RuntimeError("Backup target has zero SQLite pages")
+        chunks_row = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()
+        chunks = int(chunks_row[0]) if chunks_row else 0
+        if chunks < 1:
+            raise RuntimeError("Backup target has zero chunks rows")
+        return chunks
+    finally:
+        conn.close()
 
 
 def _parse_uncompressed_snapshot_date(name: str) -> dt.date | None:
@@ -195,16 +231,8 @@ def create_sqlite_backup_artifact(
 
     with tempfile.TemporaryDirectory(prefix="brainlayer-backup-", dir=output_dir) as tmp:
         raw_snapshot = Path(tmp) / f"{date_stamp}.db"
-        request_brainbar_vacuum_into(raw_snapshot, socket_path=socket_path)
-        target = sqlite3.connect(f"file:{raw_snapshot}?mode=ro", uri=True)
-        try:
-            integrity = target.execute("PRAGMA integrity_check").fetchone()
-            if not integrity or integrity[0] != "ok":
-                raise RuntimeError(f"Backup integrity check failed: {integrity!r}")
-            row = target.execute("SELECT COUNT(*) FROM chunks").fetchone()
-            sentinel_chunks = int(row[0]) if row else 0
-        finally:
-            target.close()
+        request_brainbar_vacuum_into(raw_snapshot, socket_path=socket_path, attempt_dir=output_dir)
+        sentinel_chunks = _validate_backup_target(raw_snapshot, pragma_name="integrity_check")
 
         temp_gz = Path(tmp) / final_gz.name
         with raw_snapshot.open("rb") as src, gzip.open(temp_gz, "wb", compresslevel=6) as dst:
@@ -249,27 +277,46 @@ def _brainbar_socket_path(socket_path: Path | str | None = None) -> Path:
 def request_brainbar_vacuum_into(
     target_path: Path,
     socket_path: Path | str | None = None,
-    timeout_seconds: int = 300,
+    timeout_seconds: int | None = None,
     max_attempts: int = 3,
     retry_backoff_seconds: int = 60,
+    attempt_dir: Path | None = None,
 ) -> None:
     target_path = Path(target_path).expanduser()
     if max_attempts < 1:
         raise ValueError("max_attempts must be at least 1")
-    request = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": {
-            "name": "brain_backup_vacuum_into",
-            "arguments": {"target_path": str(target_path)},
-        },
-    }
+    if target_path.exists():
+        raise FileExistsError(f"Backup target already exists: {target_path}")
     resolved_socket_path = _brainbar_socket_path(socket_path)
+    resolved_timeout_seconds: int | None = (
+        _configured_backup_client_timeout_seconds() if timeout_seconds is None else timeout_seconds
+    )
+    if resolved_timeout_seconds is not None and resolved_timeout_seconds < 1:
+        raise ValueError("timeout_seconds must be at least 1 or None")
+    resolved_attempt_dir = Path(attempt_dir).expanduser() if attempt_dir is not None else target_path.parent
+    resolved_attempt_dir.mkdir(parents=True, exist_ok=True)
+    prior_attempt_paths = list(resolved_attempt_dir.glob(".*.db.attempt-*"))
     last_error: Exception | None = None
+    unconfirmed_attempt_paths: list[Path] = []
     for attempt in range(1, max_attempts + 1):
+        attempt_path = resolved_attempt_dir / f".{target_path.name}.attempt-{attempt}-{uuid.uuid4().hex}"
+        request = {
+            "jsonrpc": "2.0",
+            "id": attempt,
+            "method": "tools/call",
+            "params": {
+                "name": "brain_backup_vacuum_into",
+                "arguments": {"target_path": str(attempt_path)},
+            },
+        }
+        terminal_response_received = False
         try:
-            response = _send_brainbar_json_request(resolved_socket_path, request, timeout_seconds=timeout_seconds)
+            response = _send_brainbar_json_request(
+                resolved_socket_path,
+                request,
+                timeout_seconds=resolved_timeout_seconds,
+            )
+            terminal_response_received = True
             if response.get("error"):
                 raise RuntimeError(f"BrainBar backup request failed: {response['error']}")
             result = response.get("result") or {}
@@ -277,30 +324,35 @@ def request_brainbar_vacuum_into(
                 content = result.get("content") or []
                 text = content[0].get("text") if content and isinstance(content[0], dict) else result
                 raise RuntimeError(f"BrainBar backup request failed: {text}")
-            if not target_path.exists():
-                raise RuntimeError(f"BrainBar backup did not create snapshot: {target_path}")
+            if not attempt_path.exists():
+                raise RuntimeError(f"BrainBar backup did not create snapshot: {attempt_path}")
+            try:
+                _validate_backup_target(attempt_path)
+            except Exception:
+                # A tool response is terminal, so this attempt is no longer being written.
+                attempt_path.unlink(missing_ok=True)
+                raise
+            os.replace(attempt_path, target_path)
+            for prior_path in [*prior_attempt_paths, *unconfirmed_attempt_paths]:
+                prior_path.unlink(missing_ok=True)
             return
         except BackupTimeoutError:
             raise
         except Exception as exc:
             last_error = exc
             existing_target_note = ""
-            if target_path.exists():
-                try:
-                    pragma = _sqlite_pragma_check(target_path, "quick_check")
-                except Exception as check_exc:
-                    target_path.unlink(missing_ok=True)
-                    existing_target_note = f"; removing invalid existing target after quick_check error: {check_exc}"
-                else:
-                    if pragma == "ok":
-                        print(
-                            f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {exc}; "
-                            "target exists and passed quick_check",
-                            flush=True,
-                        )
-                        return
-                    target_path.unlink(missing_ok=True)
-                    existing_target_note = f"; removing invalid existing target after quick_check={pragma!r}"
+            if terminal_response_received:
+                # BrainBar's request queue is serial. A terminal response proves this
+                # attempt and every earlier request are no longer writing.
+                for completed_path in [*prior_attempt_paths, *unconfirmed_attempt_paths, attempt_path]:
+                    completed_path.unlink(missing_ok=True)
+                prior_attempt_paths.clear()
+                unconfirmed_attempt_paths.clear()
+            elif attempt_path.exists():
+                # A lost response does not prove VACUUM INTO is finished. Never inspect,
+                # unlink, or promote a path that BrainBar may still be writing.
+                unconfirmed_attempt_paths.append(attempt_path)
+                existing_target_note = f"; preserving isolated attempt target: {attempt_path}"
             if attempt >= max_attempts:
                 print(
                     f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {exc}{existing_target_note}",
@@ -317,7 +369,11 @@ def request_brainbar_vacuum_into(
         raise last_error
 
 
-def _send_brainbar_json_request(socket_path: Path, request: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
+def _send_brainbar_json_request(
+    socket_path: Path,
+    request: dict[str, Any],
+    timeout_seconds: int | None,
+) -> dict[str, Any]:
     payload = json.dumps(request, separators=(",", ":")).encode("utf-8") + b"\n"
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(timeout_seconds)
