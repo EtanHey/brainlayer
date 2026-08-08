@@ -263,7 +263,8 @@ class HotCandidateScanner:
         else:
             retry_limit = min(len(self._retries), max(1, limit // 2))
         candidates = self._take_retries(limit=retry_limit)
-        scan_limit = min(limit - len(candidates), MAX_HOT_CANDIDATE_RETRIES - len(self._retries))
+        retention_slots = MAX_HOT_CANDIDATE_RETRIES - len(self._retries)
+        scan_limit = min(limit - len(candidates), retention_slots)
         if scan_limit <= 0:
             return candidates
         retry_ids = set(self._retries)
@@ -274,6 +275,7 @@ class HotCandidateScanner:
             exclude_ids=retry_ids,
         )
         candidates.extend(head_candidates)
+        retention_slots -= len(head_candidates)
         if not head_rows:
             self._retain(candidates)
             return candidates
@@ -281,7 +283,7 @@ class HotCandidateScanner:
             self._newest_seen_rowid = last_inspected_rowid
         if self._before_rowid is None and last_inspected_rowid is not None:
             self._before_rowid = last_inspected_rowid
-        if len(candidates) >= limit:
+        if len(candidates) >= limit or retention_slots <= 0:
             self._retain(candidates)
             return candidates
 
@@ -295,12 +297,13 @@ class HotCandidateScanner:
         if forward_rows:
             forward_candidates, _, last_inspected_rowid, _ = _candidates_from_scanned_rows(
                 forward_rows,
-                limit=limit - len(candidates),
+                limit=min(limit - len(candidates), retention_slots),
                 exclude_ids=retry_ids | {candidate.chunk_id for candidate in candidates},
             )
             candidates.extend(forward_candidates)
+            retention_slots -= len(forward_candidates)
             self._newest_seen_rowid = last_inspected_rowid
-        if len(candidates) >= limit or self._before_rowid is None:
+        if len(candidates) >= limit or retention_slots <= 0 or self._before_rowid is None:
             self._retain(candidates)
             return candidates[:limit]
 
@@ -308,7 +311,7 @@ class HotCandidateScanner:
         if page_rows:
             page_candidates, _, last_inspected_rowid, fully_scanned = _candidates_from_scanned_rows(
                 page_rows,
-                limit=limit - len(candidates),
+                limit=min(limit - len(candidates), retention_slots),
                 exclude_ids=retry_ids | {candidate.chunk_id for candidate in candidates},
             )
             candidates.extend(page_candidates)

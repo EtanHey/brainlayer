@@ -392,6 +392,51 @@ def test_hot_candidate_scanner_retries_startup_head_candidate_after_displacement
         conn.close()
 
 
+def test_hot_candidate_scanner_does_not_advance_past_retry_capacity(tmp_path):
+    hotlane = _load_hotlane_module()
+    conn = sqlite3.connect(tmp_path / "retry-capacity.db")
+    conn.executescript(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT,
+            source_file TEXT,
+            source TEXT,
+            created_at TEXT,
+            archived_at TEXT,
+            superseded_by TEXT,
+            aggregated_into TEXT,
+            archived INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'active'
+        );
+        CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY);
+        """
+    )
+    retry_rows = [
+        (f"retry-{index}", "retry", "brainbar-store", "mcp", str(index))
+        for index in range(hotlane.MAX_HOT_CANDIDATE_RETRIES - 2)
+    ]
+    new_rows = [(f"new-{index}", "new", "brainbar-store", "mcp", str(index)) for index in range(3)]
+    conn.executemany(
+        "INSERT INTO chunks (id, content, source_file, source, created_at) VALUES (?, ?, ?, ?, ?)",
+        retry_rows + new_rows,
+    )
+    scanner = hotlane.HotCandidateScanner()
+    for row in retry_rows:
+        scanner._retries[row[0]] = hotlane.EmbedCandidate(row[0], row[1])
+    store = SimpleNamespace(conn=conn)
+    try:
+        first = scanner(store, limit=5)
+        assert len(first) == 4
+        assert [candidate.chunk_id for candidate in first[-2:]] == ["new-2", "new-1"]
+        conn.executemany(
+            "INSERT INTO chunk_vectors_rowids (id) VALUES (?)", [(candidate.chunk_id,) for candidate in first]
+        )
+        assert hotlane.EmbedCandidate("new-0", "new") in scanner(store, limit=5)
+    finally:
+        conn.close()
+
+
 def test_hotlane_run_threads_model_batch_embedder_to_backlog_cycle():
     hotlane = _load_hotlane_module()
     received_batch_fns = []
