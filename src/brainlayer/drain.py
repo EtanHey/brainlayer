@@ -1175,33 +1175,6 @@ def _embedding_enabled() -> bool:
     return os.environ.get("BRAINLAYER_DRAIN_EMBED", "1").lower() not in {"0", "false", "no"}
 
 
-def _embed_store_chunks(
-    conn: apsw.Connection,
-    chunk_ids: list[str],
-    embed_fn: Callable[[str], list[float]] | None,
-) -> None:
-    if not chunk_ids or "chunk_vectors" not in _table_names(conn):
-        return
-    resolved_embed_fn = embed_fn or _default_embed_fn()
-    unique_chunk_ids = list(dict.fromkeys(chunk_ids))
-    for chunk_id in unique_chunk_ids:
-        try:
-            row = conn.execute("SELECT content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
-            if not row:
-                continue
-            embedding_bytes = serialize_f32(resolved_embed_fn(row[0]))
-            conn.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
-            conn.execute("INSERT INTO chunk_vectors (chunk_id, embedding) VALUES (?, ?)", (chunk_id, embedding_bytes))
-            if "chunk_vectors_binary" in _table_names(conn):
-                conn.execute("DELETE FROM chunk_vectors_binary WHERE chunk_id = ?", (chunk_id,))
-                conn.execute(
-                    "INSERT INTO chunk_vectors_binary (chunk_id, embedding) VALUES (?, vec_quantize_binary(?))",
-                    (chunk_id, embedding_bytes),
-                )
-        except Exception as exc:
-            logger.warning("Failed to embed drained chunk %s: %s", chunk_id, exc)
-
-
 def _precompute_event_embeddings(
     events: list[dict[str, Any]],
     embed_fn: Callable[[str], list[float]] | None,
@@ -1518,6 +1491,7 @@ def burn_drain_once(
         ):
             result.failed_files = len(batch)
             return result
+        precomputed_embeddings = _precompute_event_embeddings(all_events, embed_fn)
         for schema_attempt in range(2):
             conn = _open_connection(db_path)
             telemetry_span = start_writer_span(
@@ -1537,7 +1511,6 @@ def burn_drain_once(
                 ensure_dedupe_schema(conn)
                 conn.execute("BEGIN IMMEDIATE")
                 prefetched_state = _prefetch_enrichment_state(conn, all_events)
-                store_chunk_ids: list[str] = []
                 fallback_markers_by_path: dict[Path, list[FallbackReplayMarker]] = {}
                 attempt_applied_events = 0
                 attempt_skipped_verified_stale = 0
@@ -1557,12 +1530,13 @@ def burn_drain_once(
                         applied = _apply_event(conn, event)
                         attempt_applied_events += 1
                         if applied.chunk_id:
-                            store_chunk_ids.append(applied.chunk_id)
+                            content = str(_event_payload(event).get("content") or "").strip()
+                            embedding_bytes = precomputed_embeddings.get(content)
+                            if embedding_bytes:
+                                _insert_precomputed_embedding(conn, applied.chunk_id, embedding_bytes)
                         path_fallback_markers.extend(applied.fallback_markers)
                     if path_fallback_markers:
                         fallback_markers_by_path[path] = path_fallback_markers
-                if _embedding_enabled():
-                    _embed_store_chunks(conn, store_chunk_ids, embed_fn)
                 conn.execute("COMMIT")
                 telemetry_span.finish("commit", rows_touched=attempt_applied_events)
                 result.applied_events += attempt_applied_events

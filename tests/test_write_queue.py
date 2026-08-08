@@ -1793,6 +1793,50 @@ def test_burn_drain_skips_verified_stale_enrichment_and_applies_real_update(tmp_
     assert rows == {"already-done": "old summary", "needs-update": "real summary"}
 
 
+def test_burn_drain_precomputes_embeddings_before_begin_immediate(tmp_path, monkeypatch):
+    from brainlayer import drain
+    from brainlayer.vector_store import VectorStore
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "burn.log"
+    VectorStore(db_path).close()
+    enqueue_store(
+        content="burn embedding must not hold the SQLite write transaction",
+        memory_type="note",
+        project="brainlayer",
+        queue_dir=queue_dir,
+    )
+    events: list[str] = []
+    real_open = drain._open_connection
+
+    class RecordingConnection:
+        def __init__(self, connection):
+            self._connection = connection
+
+        def execute(self, sql, *args, **kwargs):
+            if sql.strip().upper() == "BEGIN IMMEDIATE":
+                events.append("begin")
+            return self._connection.execute(sql, *args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._connection, name)
+
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "1")
+    monkeypatch.setattr(drain, "_open_connection", lambda path: RecordingConnection(real_open(path)))
+
+    result = drain.burn_drain_once(
+        db_path=db_path,
+        queue_dir=queue_dir,
+        batch_size=10,
+        log_path=log_path,
+        embed_fn=lambda _content: events.append("embed") or [0.0] * 1024,
+    )
+
+    assert result.applied_events == 1
+    assert events.index("embed") < events.index("begin")
+
+
 def test_burn_drain_adds_provenance_columns_on_fresh_schema_before_queued_update(tmp_path):
     from brainlayer.drain import burn_drain_once
 
@@ -2410,12 +2454,13 @@ def test_burn_drain_rolls_back_provenance_enqueue_with_batch(tmp_path, monkeypat
         queue_dir=queue_dir,
     )
 
-    monkeypatch.setattr(drain, "_embedding_enabled", lambda: True)
+    real_apply_event = drain._apply_event
 
-    def fail_after_events(*_args, **_kwargs):
+    def fail_after_events(conn, event):
+        real_apply_event(conn, event)
         raise RuntimeError("synthetic post-event batch failure")
 
-    monkeypatch.setattr(drain, "_embed_store_chunks", fail_after_events)
+    monkeypatch.setattr(drain, "_apply_event", fail_after_events)
 
     result = drain.burn_drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10, log_path=log_path)
 
