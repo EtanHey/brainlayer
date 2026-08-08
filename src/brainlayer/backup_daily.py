@@ -282,7 +282,9 @@ def _brainbar_writer_started_at(socket_path: Path | str | None = None) -> float:
         },
     }
     response = _send_brainbar_json_request(_brainbar_socket_path(socket_path), request, timeout_seconds=5)
-    started_at = ((response.get("result") or {}).get("serverInfo") or {}).get("backupWriterStartedAtUnix")
+    result = response.get("result")
+    server_info = result.get("serverInfo") if isinstance(result, dict) else None
+    started_at = server_info.get("backupWriterStartedAtUnix") if isinstance(server_info, dict) else None
     if not isinstance(started_at, (int, float)) or started_at <= 0:
         raise RuntimeError("BrainBar initialize response missing backupWriterStartedAtUnix")
     return float(started_at)

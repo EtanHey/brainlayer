@@ -679,6 +679,19 @@ def test_brainbar_writer_started_at_reads_initialize_server_info(monkeypatch):
     assert seen["request"]["method"] == "initialize"
 
 
+def test_brainbar_writer_started_at_rejects_unexpected_initialize_shape(monkeypatch):
+    from brainlayer import backup_daily
+
+    monkeypatch.setattr(
+        backup_daily,
+        "_send_brainbar_json_request",
+        lambda *args, **kwargs: {"result": "error"},
+    )
+
+    with pytest.raises(RuntimeError, match="missing backupWriterStartedAtUnix"):
+        backup_daily._brainbar_writer_started_at("/tmp/brainbar.sock")
+
+
 def test_recent_attempt_growth_is_reserved_in_disk_preflight(tmp_path, monkeypatch):
     from brainlayer import backup_daily
 
