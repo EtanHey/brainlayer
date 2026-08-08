@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import json
 import os
 import plistlib
 import shutil
 import subprocess
 import sys
+import time
 import tomllib
 import zipfile
 from pathlib import Path
 from typing import get_type_hints
 
+import pytest
 from typer.testing import CliRunner
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -192,6 +195,234 @@ def test_install_launchd_default_defers_to_bounded_installer_shutdown_waits(tmp_
     assert calls == [([str(install_script), "all"], None)]
 
 
+def test_setup_migrates_legacy_raw_socat_mcp_config_idempotently(tmp_path: Path) -> None:
+    from brainlayer.setup import migrate_legacy_mcp_configs
+
+    config_path = tmp_path / ".claude.json"
+    original = {
+        "theme": "dark",
+        "mcpServers": {
+            "brainlayer": {
+                "command": "socat",
+                "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"],
+                "disabled": True,
+                "env": {"BRAINLAYER_MCP_SOCKET": "/tmp/brainbar.sock"},
+                "timeout": 30,
+            },
+            "unrelated": {"command": "other-mcp", "args": ["--keep"]},
+        },
+    }
+    config_path.write_text(json.dumps(original) + "\n", encoding="utf-8")
+
+    changed = migrate_legacy_mcp_configs(
+        [config_path],
+        bridge_command="/opt/homebrew/bin/brainlayer-mcp-stdio-bridge",
+    )
+    second_changed = migrate_legacy_mcp_configs(
+        [config_path],
+        bridge_command="/opt/homebrew/bin/brainlayer-mcp-stdio-bridge",
+    )
+
+    migrated = json.loads(config_path.read_text(encoding="utf-8"))
+    assert changed == [config_path]
+    assert second_changed == []
+    assert migrated["theme"] == "dark"
+    assert migrated["mcpServers"]["unrelated"] == original["mcpServers"]["unrelated"]
+    assert migrated["mcpServers"]["brainlayer"] == {
+        "command": "/opt/homebrew/bin/brainlayer-mcp-stdio-bridge",
+        "disabled": True,
+        "env": {"BRAINLAYER_MCP_SOCKET": "/tmp/brainbar.sock"},
+        "timeout": 30,
+    }
+
+
+def test_setup_mcp_migration_refuses_unresolved_bridge_without_touching_config(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.setup as setup_helpers
+
+    config_path = tmp_path / ".claude.json"
+    original = {
+        "mcpServers": {
+            "brainlayer": {
+                "command": "socat",
+                "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"],
+            }
+        }
+    }
+    original_text = json.dumps(original) + "\n"
+    config_path.write_text(original_text, encoding="utf-8")
+    monkeypatch.setattr(setup_helpers, "get_current_mcp_bridge_bin", lambda: None)
+
+    with pytest.raises(FileNotFoundError, match="brainlayer-mcp-stdio-bridge was not found"):
+        setup_helpers.migrate_legacy_mcp_configs([config_path])
+
+    assert config_path.read_text(encoding="utf-8") == original_text
+
+
+def test_setup_mcp_migration_preserves_original_and_cleans_temp_on_replace_failure(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.setup as setup_helpers
+
+    config_path = tmp_path / ".claude.json"
+    original = {
+        "mcpServers": {
+            "brainlayer": {
+                "command": "socat",
+                "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"],
+            }
+        }
+    }
+    original_text = json.dumps(original) + "\n"
+    config_path.write_text(original_text, encoding="utf-8")
+
+    def fail_replace(_source: Path, _destination: Path) -> None:
+        raise PermissionError("replace denied")
+
+    monkeypatch.setattr(setup_helpers.os, "replace", fail_replace)
+
+    with pytest.raises(PermissionError, match="replace denied"):
+        setup_helpers.migrate_legacy_mcp_configs([config_path], bridge_command="brainlayer-mcp-stdio-bridge")
+
+    assert config_path.read_text(encoding="utf-8") == original_text
+    assert not (tmp_path / f".{config_path.name}.{os.getpid()}.tmp").exists()
+
+
+def test_setup_mcp_migration_preserves_symlink_and_updates_target(tmp_path: Path) -> None:
+    from brainlayer.setup import migrate_legacy_mcp_configs
+
+    target = tmp_path / "dotfiles" / "claude.json"
+    target.parent.mkdir()
+    target.write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "brainlayer": {
+                        "command": "socat",
+                        "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"],
+                    }
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    config_path = tmp_path / ".claude.json"
+    config_path.symlink_to(target)
+
+    changed = migrate_legacy_mcp_configs(
+        [config_path],
+        bridge_command="/opt/homebrew/bin/brainlayer-mcp-stdio-bridge",
+    )
+
+    assert changed == [config_path]
+    assert config_path.is_symlink()
+    assert json.loads(target.read_text(encoding="utf-8"))["mcpServers"]["brainlayer"] == {
+        "command": "/opt/homebrew/bin/brainlayer-mcp-stdio-bridge"
+    }
+
+
+def test_verify_mcp_transport_requires_initialize_and_tools_list(tmp_path: Path) -> None:
+    from brainlayer.setup import verify_mcp_transport
+
+    bridge = tmp_path / "fake-bridge"
+    bridge.write_text(
+        """#!/usr/bin/env python3
+import json
+import sys
+for line in sys.stdin:
+    request = json.loads(line)
+    if request.get("id") == 1:
+        print(json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18"}}), flush=True)
+    elif request.get("id") == 2:
+        print(json.dumps({"jsonrpc": "2.0", "id": 2, "result": {"tools": [{"name": "brain_search"}]}}), flush=True)
+""",
+        encoding="utf-8",
+    )
+    bridge.chmod(0o755)
+
+    assert verify_mcp_transport(bridge_command=str(bridge), timeout_seconds=2) == 1
+
+
+def test_verify_mcp_transport_waits_for_initialize_response_before_next_message(tmp_path: Path) -> None:
+    from brainlayer.setup import verify_mcp_transport
+
+    bridge = tmp_path / "strict-bridge"
+    bridge.write_text(
+        """#!/usr/bin/env python3
+import json
+import select
+import sys
+
+initialize = json.loads(sys.stdin.readline())
+if initialize.get("id") != 1 or select.select([sys.stdin], [], [], 0)[0]:
+    raise SystemExit(12)
+print(json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18"}}), flush=True)
+initialized = json.loads(sys.stdin.readline())
+if initialized.get("method") != "notifications/initialized":
+    raise SystemExit(13)
+tools = json.loads(sys.stdin.readline())
+if tools.get("id") != 2:
+    raise SystemExit(14)
+print(json.dumps({"jsonrpc": "2.0", "id": 2, "result": {"tools": [{"name": "brain_search"}]}}), flush=True)
+""",
+        encoding="utf-8",
+    )
+    bridge.chmod(0o755)
+
+    assert verify_mcp_transport(bridge_command=str(bridge), timeout_seconds=2) == 1
+
+
+def test_mcp_bridge_resolution_uses_installed_brainlayer_sibling_when_path_is_empty(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from brainlayer.setup import get_current_mcp_bridge_bin
+
+    bin_dir = tmp_path / "Cellar" / "brainlayer" / "1.5.3" / "libexec" / "bin"
+    bin_dir.mkdir(parents=True)
+    brainlayer_bin = bin_dir / "brainlayer"
+    bridge_bin = bin_dir / "brainlayer-mcp-stdio-bridge"
+    brainlayer_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+    bridge_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+    brainlayer_bin.chmod(0o755)
+    bridge_bin.chmod(0o755)
+    monkeypatch.setattr(sys, "argv", [str(brainlayer_bin), "setup"])
+    monkeypatch.setenv("PATH", "")
+
+    assert get_current_mcp_bridge_bin() == str(bridge_bin)
+
+
+def test_verify_mcp_transport_fails_loudly_when_bridge_has_no_tools(tmp_path: Path) -> None:
+    from brainlayer.setup import verify_mcp_transport
+
+    bridge = tmp_path / "dead-bridge"
+    bridge.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    bridge.chmod(0o755)
+
+    with pytest.raises(RuntimeError, match="initialize response"):
+        verify_mcp_transport(bridge_command=str(bridge), timeout_seconds=2)
+
+
+def test_verify_mcp_transport_times_out_on_partial_stdout_line(tmp_path: Path) -> None:
+    from brainlayer.setup import verify_mcp_transport
+
+    bridge = tmp_path / "partial-line-bridge"
+    bridge.write_text(
+        """#!/usr/bin/env python3
+import sys
+import time
+sys.stdin.readline()
+sys.stdout.write('{"jsonrpc":"2.0","id":1')
+sys.stdout.flush()
+time.sleep(10)
+""",
+        encoding="utf-8",
+    )
+    bridge.chmod(0o755)
+
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="timed out"):
+        verify_mcp_transport(bridge_command=str(bridge), timeout_seconds=0.1)
+    assert time.monotonic() - started < 1
+
+
 def test_setup_command_writes_op_backed_env_without_plaintext_and_can_skip_launchd(tmp_path: Path) -> None:
     from brainlayer.cli import app
 
@@ -248,6 +479,41 @@ def test_setup_command_does_not_install_launchd_by_default(tmp_path: Path, monke
 
     assert result.exit_code == 0, result.stdout
     assert env_file.exists()
+
+
+def test_setup_command_can_migrate_and_verify_mcp_transport(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.setup as setup_helpers
+    from brainlayer.cli import app
+
+    migrated_path = tmp_path / ".claude.json"
+    calls: list[str] = []
+    monkeypatch.setattr(
+        setup_helpers,
+        "migrate_legacy_mcp_configs",
+        lambda: calls.append("migrate") or [migrated_path],
+    )
+    monkeypatch.setattr(
+        setup_helpers,
+        "verify_mcp_transport",
+        lambda: calls.append("verify") or 17,
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "setup",
+            "--env-file",
+            str(tmp_path / "brainlayer.env"),
+            "--migrate-mcp",
+            "--verify-mcp",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert calls == ["migrate", "verify"]
+    assert "Migrated MCP config:" in result.stdout
+    assert ".claude.json" in result.stdout
+    assert "MCP transport verified: 17 tools" in result.stdout
 
 
 def test_setup_command_env_file_annotation_accepts_none() -> None:
@@ -1994,7 +2260,12 @@ def test_wheel_contains_cli_and_launchd_templates(tmp_path: Path) -> None:
 
     extracted = tmp_path / "installed-wheel"
     with zipfile.ZipFile(wheel) as archive:
+        entry_points_path = next(name for name in archive.namelist() if name.endswith(".dist-info/entry_points.txt"))
+        entry_points = archive.read(entry_points_path).decode("utf-8")
         archive.extractall(extracted)
+    assert "brainlayer = brainlayer.cli:app" in entry_points
+    assert "brainlayer-mcp = brainlayer.mcp:serve" in entry_points
+    assert "brainlayer-mcp-stdio-bridge = brainlayer.mcp_stdio_bridge:main" in entry_points
     packaged_hotlane = extracted / "brainlayer" / "launchd" / "hotlane_brainbar_daemon.py"
     help_result = subprocess.run(
         [sys.executable, str(packaged_hotlane), "--help"],

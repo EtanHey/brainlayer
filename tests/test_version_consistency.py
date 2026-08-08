@@ -120,6 +120,29 @@ def test_version_check_passes_when_release_metadata_matches(tmp_path: Path) -> N
     assert f"PASS: BrainLayer/BrainBar {package_version} release metadata is consistent" in result.stdout
 
 
+def test_version_check_accepts_four_part_interim_with_three_part_bundle_short_version(tmp_path: Path) -> None:
+    fixture_root, tap_root, package_version = _copy_version_fixture(tmp_path)
+    interim_version = f"{package_version}.1"
+    for relative_path in ("pyproject.toml", "src/brainlayer/__init__.py", "server.json"):
+        path = fixture_root / relative_path
+        path.write_text(path.read_text(encoding="utf-8").replace(package_version, interim_version), encoding="utf-8")
+    plist = fixture_root / "brain-bar" / "bundle" / "Info.plist"
+    plist.write_text(
+        plist.read_text(encoding="utf-8").replace(
+            f"<key>BrainLayerReleaseVersion</key>\n    <string>{package_version}</string>",
+            f"<key>BrainLayerReleaseVersion</key>\n    <string>{interim_version}</string>",
+        ),
+        encoding="utf-8",
+    )
+    cask = tap_root / "Casks" / "brainbar.rb"
+    cask.write_text(cask.read_text(encoding="utf-8").replace(package_version, interim_version), encoding="utf-8")
+
+    result = _run(fixture_root, tap_root, git_tag=f"v{interim_version}")
+
+    assert result.returncode == 0, result.stderr
+    assert f"PASS: BrainLayer/BrainBar {interim_version} release metadata is consistent" in result.stdout
+
+
 def test_version_check_fails_loudly_when_cask_version_drifts(tmp_path: Path) -> None:
     fixture_root, tap_root, package_version = _copy_version_fixture(tmp_path)
     cask = tap_root / "Casks" / "brainbar.rb"

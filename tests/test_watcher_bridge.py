@@ -640,7 +640,8 @@ class TestFlushCallback:
 
 
 class TestFullPipeline:
-    def test_watcher_denylist_blocks_all_claude_subagents_and_allows_direct_sessions(self, tmp_path, monkeypatch):
+    def test_watcher_denylist_blocks_brain_workers_and_allows_ordinary_subagents(self, tmp_path, monkeypatch):
+        """Exercise #666 while naming workflow-path exclusion below as known drift, not policy."""
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.delenv("BRAINLAYER_INGEST_DENYLIST", raising=False)
         db_path = tmp_path / "test.db"
@@ -654,7 +655,7 @@ class TestFullPipeline:
             / "session-123"
             / "subagents"
             / "agent-brain.jsonl",
-            "workflow-worker": tmp_path
+            "known-drift-workflow-worker": tmp_path
             / ".claude"
             / "projects"
             / "proj"
@@ -663,13 +664,6 @@ class TestFullPipeline:
             / "workflows"
             / "wf_123"
             / "agent-workflow.jsonl",
-            "claude-subagent": tmp_path
-            / ".claude"
-            / "projects"
-            / "proj"
-            / "session-123"
-            / "subagents"
-            / "agent-general.jsonl",
         }
         allowed = {
             "codex": tmp_path / ".codex" / "sessions" / "2026" / "07" / "02" / "worker.jsonl",
@@ -682,13 +676,19 @@ class TestFullPipeline:
             / "agent-session.jsonl",
             "gemini": tmp_path / ".gemini" / "sessions" / "worker.jsonl",
             "claude-direct": tmp_path / ".claude" / "projects" / "proj" / "direct-session.jsonl",
+            "claude-subagent": tmp_path
+            / ".claude"
+            / "projects"
+            / "proj"
+            / "session-123"
+            / "subagents"
+            / "agent-general.jsonl",
         }
         for provider, path in denylisted.items():
             path.parent.mkdir(parents=True, exist_ok=True)
             attribution = {
                 "brain-worker": "brain-worker",
-                "workflow-worker": "workflow-subagent",
-                "claude-subagent": "general-purpose",
+                "known-drift-workflow-worker": "workflow-subagent",
             }[provider]
             path.write_text(
                 json.dumps(

@@ -106,12 +106,18 @@ def _assert_version_stamp(job: dict) -> None:
     assert any("CFBundleShortVersionString" in _step_run(step) for step in version_steps), (
         "Info.plist release version must come from the pushed tag"
     )
+    assert any("BrainLayerReleaseVersion" in _step_run(step) for step in version_steps), (
+        "Info.plist must preserve the full BrainLayer release identity"
+    )
+    assert any(
+        "git rev-list --count HEAD" in _step_run(step) for step in job.get("steps", []) if isinstance(step, dict)
+    ), "Info.plist CFBundleVersion must use an Apple-compatible monotonically increasing build number"
     metadata_steps = [
         step
         for step in job.get("steps", [])
         if isinstance(step, dict) and "BRAINBAR_RELEASE_VERSION" in _step_run(step)
     ]
-    assert any(r"^[0-9]+\.[0-9]+\.[0-9]+$" in _step_run(step) for step in metadata_steps), (
+    assert any(r"^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$" in _step_run(step) for step in metadata_steps), (
         "BrainBar release workflow must reject tags that cannot be stamped into macOS bundle versions"
     )
 

@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import os
+import select
 import shutil
 import subprocess
 import sys
+import time
 from importlib import resources
 from pathlib import Path
 
 from .cli.wizard import DEFAULT_BRAINLAYER_CONFIG, write_gemini_env_file
 
 DEFAULT_GOOGLE_API_KEY_OP_REF = "op://Private/Google AI/Gemini API key"
+DEFAULT_MCP_PROTOCOL_VERSION = "2025-06-18"
 
 
 def get_default_env_file() -> Path:
@@ -44,6 +48,166 @@ def get_current_brainlayer_bin() -> str | None:
     if found:
         return found
     return None
+
+
+def get_current_mcp_bridge_bin() -> str | None:
+    """Return the bridge installed beside the active BrainLayer CLI, then fall back to PATH."""
+    brainlayer_bin = get_current_brainlayer_bin()
+    if brainlayer_bin:
+        sibling = Path(brainlayer_bin).with_name("brainlayer-mcp-stdio-bridge")
+        if sibling.is_file() and os.access(sibling, os.X_OK):
+            return str(sibling)
+    return shutil.which("brainlayer-mcp-stdio-bridge")
+
+
+def get_default_mcp_config_paths() -> tuple[Path, ...]:
+    home = Path.home()
+    return (
+        home / ".claude.json",
+        home / ".cursor" / "mcp.json",
+        home / ".gemini" / "settings.json",
+    )
+
+
+def _is_legacy_brainbar_socat(server: object) -> bool:
+    if not isinstance(server, dict):
+        return False
+    command = server.get("command")
+    args = server.get("args")
+    if not isinstance(command, str) or Path(command).name != "socat" or not isinstance(args, list):
+        return False
+    string_args = [arg for arg in args if isinstance(arg, str)]
+    return "STDIO" in string_args and "UNIX-CONNECT:/tmp/brainbar.sock" in string_args
+
+
+def migrate_legacy_mcp_configs(
+    config_paths: list[Path] | tuple[Path, ...] | None = None,
+    *,
+    bridge_command: str | None = None,
+) -> list[Path]:
+    """Replace known raw-socat BrainBar transports without touching unrelated MCP entries."""
+    resolved_bridge = bridge_command
+    changed: list[Path] = []
+    paths = config_paths if config_paths is not None else get_default_mcp_config_paths()
+    for config_path in paths:
+        path = config_path.expanduser()
+        if not path.is_file():
+            continue
+        target_path = path.resolve()
+        try:
+            payload = json.loads(target_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"could not read MCP config {path}: {exc}") from exc
+        if not isinstance(payload, dict):
+            continue
+        servers = payload.get("mcpServers")
+        if not isinstance(servers, dict):
+            continue
+
+        migrated = False
+        for name, server in list(servers.items()):
+            if not _is_legacy_brainbar_socat(server):
+                continue
+            if resolved_bridge is None:
+                resolved_bridge = get_current_mcp_bridge_bin()
+            if not resolved_bridge:
+                raise FileNotFoundError("brainlayer-mcp-stdio-bridge was not found on PATH")
+            migrated_server = dict(server)
+            migrated_server["command"] = resolved_bridge
+            migrated_server.pop("args", None)
+            servers[name] = migrated_server
+            migrated = True
+        if not migrated:
+            continue
+
+        mode = target_path.stat().st_mode & 0o777
+        temporary = target_path.with_name(f".{target_path.name}.{os.getpid()}.tmp")
+        try:
+            temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            temporary.chmod(mode)
+            os.replace(temporary, target_path)
+        finally:
+            temporary.unlink(missing_ok=True)
+        changed.append(path)
+    return changed
+
+
+def verify_mcp_transport(*, bridge_command: str | None = None, timeout_seconds: float = 10.0) -> int:
+    """Require a real initialize + tools/list exchange through the installed stdio bridge."""
+    resolved_bridge = bridge_command or get_current_mcp_bridge_bin()
+    if not resolved_bridge:
+        raise FileNotFoundError("brainlayer-mcp-stdio-bridge was not found on PATH")
+    initialize_request = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": DEFAULT_MCP_PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": {"name": "brainlayer-setup", "version": "1"},
+        },
+    }
+    initialized_notification = {"jsonrpc": "2.0", "method": "notifications/initialized"}
+    tools_request = {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
+    deadline = time.monotonic() + timeout_seconds
+
+    def send(process: subprocess.Popen[bytes], payload: dict[str, object]) -> None:
+        assert process.stdin is not None
+        process.stdin.write((json.dumps(payload, separators=(",", ":")) + "\n").encode())
+        process.stdin.flush()
+
+    def receive(process: subprocess.Popen[bytes], response_id: int) -> dict[str, object] | None:
+        assert process.stdout is not None
+        buffered = bytearray()
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not select.select([process.stdout], [], [], remaining)[0]:
+                raise RuntimeError(f"MCP transport verification timed out after {timeout_seconds:g}s")
+            chunk = os.read(process.stdout.fileno(), 4096)
+            if not chunk:
+                return None
+            buffered.extend(chunk)
+            while b"\n" in buffered:
+                line, _, remainder = buffered.partition(b"\n")
+                buffered = bytearray(remainder)
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(payload, dict) and payload.get("id") == response_id:
+                    return payload
+
+    try:
+        process = subprocess.Popen(
+            [resolved_bridge],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+        )
+    except OSError as exc:
+        raise RuntimeError(f"could not start MCP bridge: {exc}") from exc
+
+    try:
+        send(process, initialize_request)
+        initialize = receive(process, 1)
+        if not initialize or not isinstance(initialize.get("result"), dict):
+            raise RuntimeError("MCP initialize response missing or invalid")
+        send(process, initialized_notification)
+        send(process, tools_request)
+        tools_response = receive(process, 2)
+        tools_result = tools_response.get("result") if tools_response else None
+        tools = tools_result.get("tools") if isinstance(tools_result, dict) else None
+        if not isinstance(tools, list) or not tools:
+            raise RuntimeError("MCP tools/list response missing tools")
+        return len(tools)
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
 
 
 def ensure_brainlayer_env(

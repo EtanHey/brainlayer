@@ -5320,25 +5320,32 @@ final class BrainDatabase: @unchecked Sendable {
         let relationType: String
         let entityType: String
         let direction: String  // "outgoing" or "incoming"
+        let validUntil: Date?
+        let expiredAt: Date?
     }
 
     /// Pure SQL KG fact lookup — no embeddings needed.
     /// Returns typed relations for an entity, excluding co_occurs_with.
     func lookupEntityFacts(entityName: String, limit: Int = 20) throws -> [KGFact] {
         guard let db else { throw DBError.notOpen }
+        let expirationSelects = try kgRelationExpirationSelects(alias: "r")
 
         let sql = """
-            SELECT e2.name, r.relation_type, e2.entity_type, 'outgoing' AS direction
-            FROM kg_relations_typed r
+            SELECT e2.name, r.relation_type, e2.entity_type, 'outgoing' AS direction,
+                   \(expirationSelects.validUntil), \(expirationSelects.expiredAt)
+            FROM kg_relations r
             JOIN kg_entities e1 ON r.source_id = e1.id
             JOIN kg_entities e2 ON r.target_id = e2.id
             WHERE LOWER(e1.name) = LOWER(?1)
+              AND r.relation_type != 'co_occurs_with'
             UNION ALL
-            SELECT e1.name, r.relation_type, e1.entity_type, 'incoming'
-            FROM kg_relations_typed r
+            SELECT e1.name, r.relation_type, e1.entity_type, 'incoming',
+                   \(expirationSelects.validUntil), \(expirationSelects.expiredAt)
+            FROM kg_relations r
             JOIN kg_entities e1 ON r.source_id = e1.id
             JOIN kg_entities e2 ON r.target_id = e2.id
             WHERE LOWER(e2.name) = LOWER(?1)
+              AND r.relation_type != 'co_occurs_with'
             ORDER BY 2
             LIMIT ?2
         """
@@ -5357,7 +5364,9 @@ final class BrainDatabase: @unchecked Sendable {
                 relatedEntity: columnText(stmt, 0) ?? "",
                 relationType: columnText(stmt, 1) ?? "",
                 entityType: columnText(stmt, 2) ?? "",
-                direction: columnText(stmt, 3) ?? "outgoing"
+                direction: columnText(stmt, 3) ?? "outgoing",
+                validUntil: KGTemporalDate.parse(columnText(stmt, 4)),
+                expiredAt: KGTemporalDate.parse(columnText(stmt, 5))
             ))
         }
         return facts

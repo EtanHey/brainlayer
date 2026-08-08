@@ -2582,6 +2582,19 @@ class TestBrainUpdateRetryOnLock:
         assert isinstance(result, CallToolResult)
         assert result.is_error is True
 
+    @pytest.mark.asyncio
+    async def test_update_zero_retry_budget_returns_structured_error(self, monkeypatch):
+        """A patched zero-attempt budget must not fall through with None."""
+        from brainlayer.mcp import store_handler
+
+        monkeypatch.setattr(store_handler, "_RETRY_MAX_ATTEMPTS", 0)
+
+        result = await store_handler._brain_update(action="archive", chunk_id="test-chunk-123")
+
+        assert result is not None
+        assert result.is_error is True
+        assert "failed after 0 retries" in result.content[0].text
+
 
 class TestBrainSearchRetryOnLock:
     """brain_search (reads) should retry on BusyError in WAL mode."""

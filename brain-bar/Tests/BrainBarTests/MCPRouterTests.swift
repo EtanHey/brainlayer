@@ -702,6 +702,95 @@ No results found.
         XCTAssertTrue(text.contains("fallback result from BrainBar database search"), text)
     }
 
+    func testBrainSearchFallbackMarksExpiredKGFactsInEntityHeader() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-fallback-expired-kg-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+        try db.insertEntity(id: "person-etan", type: "person", name: "Etan")
+        try db.insertEntity(id: "company-domica", type: "company", name: "Domica")
+        try db.insertRelation(sourceId: "person-etan", targetId: "company-domica", relationType: "cto_of")
+        try db.insertChunk(
+            id: "fallback-expired-kg-result",
+            content: "Etan Domica fallback result from BrainBar database search",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+        XCTAssertEqual(
+            sqlite3_exec(
+                db.dbHandle,
+                """
+                UPDATE kg_relations
+                SET expired_at = '2026-05-24T00:00:00Z',
+                    valid_until = '2026-05-24T00:00:00Z'
+                WHERE source_id = 'person-etan' AND target_id = 'company-domica'
+                """,
+                nil,
+                nil,
+                nil
+            ),
+            SQLITE_OK
+        )
+
+        let helper = RecordingHybridSearchClient()
+        let router = MCPRouter(profile: "full", hybridSearchClient: helper)
+        router.setDatabase(db)
+
+        let text = try toolText(router.handle(toolCall(id: 173, name: "brain_search", arguments: [
+            "query": "Etan Domica",
+            "num_results": 3
+        ])))
+
+        XCTAssertTrue(text.contains("## Entity: Etan"), text)
+        XCTAssertTrue(text.contains("- cto_of: Domica (expired 2026-05-24)"), text)
+    }
+
+    func testBrainSearchFallbackMarksLapsedValidUntilWithoutExpiredStamp() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-fallback-lapsed-kg-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+        try db.insertEntity(id: "person-etan", type: "person", name: "Etan")
+        try db.insertEntity(id: "company-domica", type: "company", name: "Domica")
+        try db.insertRelation(sourceId: "person-etan", targetId: "company-domica", relationType: "cto_of")
+        try db.insertChunk(
+            id: "fallback-lapsed-kg-result",
+            content: "Etan Domica fallback result from BrainBar database search",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+        XCTAssertEqual(
+            sqlite3_exec(
+                db.dbHandle,
+                """
+                UPDATE kg_relations
+                SET valid_until = '2025-05-24T00:00:00Z',
+                    expired_at = NULL
+                WHERE source_id = 'person-etan' AND target_id = 'company-domica'
+                """,
+                nil,
+                nil,
+                nil
+            ),
+            SQLITE_OK
+        )
+
+        let helper = RecordingHybridSearchClient()
+        let router = MCPRouter(profile: "full", hybridSearchClient: helper)
+        router.setDatabase(db)
+
+        let text = try toolText(router.handle(toolCall(id: 174, name: "brain_search", arguments: [
+            "query": "Etan Domica",
+            "num_results": 3
+        ])))
+
+        XCTAssertTrue(text.contains("- cto_of: Domica (expired 2025-05-24)"), text)
+    }
+
     func testReadToolsUseReadonlyReadDatabaseWhenWriteHandleIsUnavailable() throws {
         let tempDB = NSTemporaryDirectory() + "brainbar-read-db-routing-\(UUID().uuidString).db"
         defer { try? FileManager.default.removeItem(atPath: tempDB) }

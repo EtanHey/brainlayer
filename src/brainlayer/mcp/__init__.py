@@ -171,7 +171,7 @@ server = Server(
         "know this is a topical memory search (brain_search).\n"
         "- brain_entity(name): look up known entities and their relationships from the knowledge graph.\n"
         "- brain_digest(content): extract entities and structured knowledge from large content.\n"
-        "brain_update/brain_expand/brain_tags are deprecated — see their descriptions for alternatives.\n"
+        "brain_expand/brain_tags are deprecated — see their descriptions for alternatives.\n"
         'Project scoping: auto-inferred from cwd. Override with project="all".'
     ),
     on_list_tools=_handle_list_tools_request,
@@ -1159,7 +1159,7 @@ def _full_tool_definitions() -> list[Tool]:
         Tool(
             name="brain_update",
             title="Update or Archive Memory",
-            description="Deprecated. Use brain_store with supersedes param to replace a memory, or brain_archive/brain_supersede for lifecycle management.",
+            description="Update a memory's content, tags, or importance; archive a memory; or merge duplicate memories into one keeper.",
             annotations=_WRITE_IDEMPOTENT,
             input_schema=_bounded_input_schema(
                 {
@@ -1629,19 +1629,13 @@ async def call_tool(name: str, arguments: dict[str, Any]):
         )
 
     elif name == "brain_update":
-        # DEPRECATED: stub returns isError
-        return CallToolResult(
-            content=[
-                TextContent(
-                    type="text",
-                    text=(
-                        "brain_update is deprecated and non-functional. "
-                        "Use brain_store(supersedes='old_chunk_id') to replace a memory, "
-                        "or brain_supersede/brain_archive for lifecycle management."
-                    ),
-                )
-            ],
-            is_error=True,
+        return await _brain_update(
+            action=arguments["action"],
+            chunk_id=arguments["chunk_id"],
+            content=arguments.get("content"),
+            tags=arguments.get("tags"),
+            importance=arguments.get("importance"),
+            merge_chunk_ids=arguments.get("merge_chunk_ids"),
         )
 
     elif name == "brain_tags":

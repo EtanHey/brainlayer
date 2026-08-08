@@ -39,7 +39,7 @@ def test_default_policy_allows_normal_provider_sessions(monkeypatch, tmp_path):
     assert not is_denylisted(backup_home / ".claude" / "projects" / "proj" / "direct-session.jsonl")
 
 
-def test_default_policy_excludes_ordinary_claude_subagents(monkeypatch, tmp_path):
+def test_default_policy_allows_ordinary_claude_subagents(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv(BRAINLAYER_INGEST_DENYLIST_ENV, raising=False)
     projects = tmp_path / ".claude" / "projects" / "-Users-test-Gits-brainlayer" / "session-uuid"
@@ -47,8 +47,8 @@ def test_default_policy_excludes_ordinary_claude_subagents(monkeypatch, tmp_path
     explore = _write_subagent(projects / "subagents" / "agent-explore.jsonl", "Explore")
     general = _write_subagent(projects / "subagents" / "agent-general.jsonl", "general-purpose")
 
-    assert is_denylisted(explore)
-    assert is_denylisted(general)
+    assert not is_denylisted(explore)
+    assert not is_denylisted(general)
 
 
 def test_default_policy_excludes_exact_brain_worker_but_keeps_raw_jsonl(monkeypatch, tmp_path):
@@ -69,7 +69,8 @@ def test_default_policy_excludes_exact_brain_worker_but_keeps_raw_jsonl(monkeypa
     assert worker.exists()
 
 
-def test_default_policy_excludes_workflow_workers_by_path_and_keeps_raw_jsonl(monkeypatch, tmp_path):
+def test_known_drift_blanket_workflow_path_exclusion_keeps_raw_jsonl(monkeypatch, tmp_path):
+    """Document the shipped wf_* over-exclusion without presenting it as the BL-10 ruling."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv(BRAINLAYER_INGEST_DENYLIST_ENV, raising=False)
     workflow = _write_subagent(

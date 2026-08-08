@@ -292,6 +292,8 @@ async def _brain_update(
             logger.error("brain_update failed: %s", e)
             return _error_result(f"brain_update error: {e}")
 
+    return _error_result(f"brain_update failed after {_RETRY_MAX_ATTEMPTS} retries: {last_err}")
+
 
 _PERSONAL_TYPES = frozenset({"journal", "note", "bookmark"})
 _PERSONAL_KEYWORDS = ("health", "family", "relationship", "finance", "personal", "therapy", "medical")
