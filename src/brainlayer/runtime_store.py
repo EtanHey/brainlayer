@@ -16,6 +16,7 @@ import sqlite_vec
 from .vector_store import (
     _CONNECTION_HOOK_STATE,
     VectorStore,
+    _configure_writer_pragmas,
     _write_busy_timeout_ms,
 )
 from .writer_telemetry import start_writer_span
@@ -431,6 +432,7 @@ class WriterRuntimeStore(VectorStore):
         try:
             self.conn.setbusytimeout(_write_busy_timeout_ms())
             _load_vector_extension(self.conn)
+            _configure_writer_pragmas(self.conn)
         except BaseException:
             self.conn.close()
             raise

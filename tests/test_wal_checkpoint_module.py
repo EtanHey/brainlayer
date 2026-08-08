@@ -31,6 +31,24 @@ def test_checkpoint_rejects_invalid_mode(tmp_path):
         wal_checkpoint.checkpoint(str(tmp_path / "brainlayer.db"), mode="DROP TABLE chunks")
 
 
+def test_checkpoint_guard_acquisition_times_out_while_another_holder_is_wedged(tmp_path):
+    import brainlayer.wal_checkpoint as wal_checkpoint
+
+    db_path = tmp_path / "brainlayer.db"
+    with wal_checkpoint.checkpoint_guard(db_path, blocking=False) as acquired:
+        assert acquired is True
+        with pytest.raises(TimeoutError, match="checkpoint guard acquisition timed out"):
+            wal_checkpoint.checkpoint(str(db_path), guard_timeout_seconds=0)
+
+
+def test_checkpoint_guard_timeout_env_rejects_unbounded_values(monkeypatch):
+    import brainlayer.wal_checkpoint as wal_checkpoint
+
+    monkeypatch.setenv("BRAINLAYER_CHECKPOINT_GUARD_TIMEOUT_SECONDS", "inf")
+
+    assert wal_checkpoint._guard_timeout_seconds() == 10.0
+
+
 def test_retrying_truncate_backs_off_until_checkpoint_is_not_busy(tmp_path, monkeypatch):
     import brainlayer.wal_checkpoint as wal_checkpoint
 

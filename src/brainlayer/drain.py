@@ -33,6 +33,7 @@ from .ingest_guard import recursive_mcp_output_reason
 from .paths import get_db_path
 from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
 from .provenance_integration import enqueue_provenance_resolution_for_entities
+from .vector_store import _configure_writer_pragmas
 from .wal_checkpoint import checkpoint_guard
 from .wal_checkpoint import get_wal_size as _wal_size_bytes
 from .writer_telemetry import start_writer_span
@@ -277,6 +278,7 @@ def _open_connection(db_path: Path) -> apsw.Connection:
     conn.enableloadextension(True)
     conn.loadextension(sqlite_vec.loadable_path())
     conn.enableloadextension(False)
+    _configure_writer_pragmas(conn)
     return conn
 
 

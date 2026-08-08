@@ -19,6 +19,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
 
+from brainlayer.wal_checkpoint import checkpoint_guard
+
 DEFAULT_WATCH_LABEL = "com.brainlayer.watch"
 DEFAULT_NOTIFY_ENDPOINT = "http://localhost:3847/notify"
 # Alert-framing (orc law, stalker postmortem): after a wedge episode is paged once,
@@ -45,6 +47,9 @@ class Config:
     recent_window_seconds: int = 600
     max_source_files: int = 100_000
     max_scan_seconds: float = 20.0
+    progress_slo_seconds: int = 180
+    checkpoint_deferral_alert_threshold: int = 3
+    drain_health_path: Path | None = None
     dry_run: bool = False
     log_path: Path = Path("~/.local/share/brainlayer/logs/throughput-watchdog.log").expanduser()
     notify_endpoint: str = DEFAULT_NOTIFY_ENDPOINT
@@ -66,6 +71,13 @@ class WatcherProgress:
     liveness_rowid: int
 
 
+@dataclass(frozen=True)
+class OperationalProgress:
+    offset_bytes: int | None
+    drain_cycles: int | None
+    drained_total: int | None
+
+
 @dataclass
 class WatchdogResult:
     checked_at_epoch: int
@@ -81,12 +93,21 @@ class WatchdogResult:
     scan_errors: int
     stalled_ticks: int
     action: str
+    checkpoint_deferred_ticks: int = 0
+    offset_bytes: int | None = None
+    offset_bytes_delta: int | None = None
+    drain_cycles: int | None = None
+    drain_cycles_delta: int | None = None
+    drained_total: int | None = None
+    drained_total_delta: int | None = None
+    no_progress_seconds: int = 0
     error: str = ""
     alert_error: str = ""
 
 
 CommandRunner = Callable[[list[str]], object]
 ProgressReader = Callable[[Path], WatcherProgress]
+OperationalProgressReader = Callable[[Config], OperationalProgress]
 SourceProbe = Callable[[Config, int], SourceEvidence]
 AlertFn = Callable[[Config, WatchdogResult], None]
 
@@ -175,6 +196,32 @@ def read_watcher_progress(db_path: Path) -> WatcherProgress:
 def read_watcher_highwater(db_path: Path) -> int:
     """Compatibility helper for callers that only need committed watcher chunks."""
     return read_watcher_progress(db_path).chunk_rowid
+
+
+def _optional_nonnegative_int(value: object) -> int | None:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        return None
+    return value
+
+
+def read_operational_progress(config: Config) -> OperationalProgress:
+    offset_bytes: int | None = None
+    registry_path = config.registry_path.expanduser()
+    if registry_path.is_file():
+        registry = _read_json_object(registry_path)
+        offset_bytes = sum(
+            offset
+            for entry in registry.values()
+            if isinstance(entry, dict) and (offset := _optional_nonnegative_int(entry.get("offset"))) is not None
+        )
+
+    drain_path = config.drain_health_path or config.db_path.expanduser().parent / "drain-health.json"
+    drain_health = _read_json_object(drain_path)
+    return OperationalProgress(
+        offset_bytes=offset_bytes,
+        drain_cycles=_optional_nonnegative_int(drain_health.get("drain_cycles")),
+        drained_total=_optional_nonnegative_int(drain_health.get("drained_total")),
+    )
 
 
 def _registry_offset(entry: object, *, current_inode: int) -> int | None:
@@ -458,10 +505,16 @@ def _best_effort_alert(config: Config, result: WatchdogResult) -> None:
     config.log_path.expanduser().parent.mkdir(parents=True, exist_ok=True)
     with config.log_path.expanduser().open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(asdict(result), sort_keys=True) + "\n")
-    body = (
-        "Watcher has registry-tracked JSONL bytes pending but realtime_watcher chunks are flat; "
-        "automatic recovery is starting."
-    )
+    if result.action == "checkpoint_deferral_alert":
+        body = (
+            "Watcher recovery is blocked because the WAL checkpoint guard remains held across "
+            f"{result.checkpoint_deferred_ticks} attempts; operator intervention is required."
+        )
+    else:
+        body = (
+            "Watcher has registry-tracked JSONL bytes pending but realtime_watcher chunks are flat; "
+            "automatic recovery is starting."
+        )
     try:
         subprocess.run(
             [
@@ -493,6 +546,7 @@ def run_once(
     *,
     now_epoch: int | None = None,
     progress_reader: ProgressReader = read_watcher_progress,
+    operational_progress_reader: OperationalProgressReader = read_operational_progress,
     source_probe: SourceProbe = collect_source_evidence,
     command_runner: CommandRunner = _default_command_runner,
     alert_fn: AlertFn = _best_effort_alert,
@@ -502,23 +556,63 @@ def run_once(
     current_progress = progress_reader(config.db_path)
     current_highwater = current_progress.chunk_rowid
     current_liveness_highwater = current_progress.liveness_rowid
+    operational_progress = operational_progress_reader(config)
     evidence = source_probe(config, checked_at)
     previous_highwater = state.get("watcher_highwater_rowid")
     previous_liveness_highwater = state.get("watcher_liveness_highwater_rowid")
+    previous_offset_bytes = state.get("offset_bytes")
+    previous_drain_cycles = state.get("drain_cycles")
+    previous_drained_total = state.get("drained_total")
     previous_stalled = state.get("stalled_ticks", 0)
     if not isinstance(previous_stalled, int) or previous_stalled < 0:
         previous_stalled = 0
+    previous_checkpoint_deferred = state.get("checkpoint_deferred_ticks", 0)
+    if not isinstance(previous_checkpoint_deferred, int) or previous_checkpoint_deferred < 0:
+        previous_checkpoint_deferred = 0
+    checkpoint_deferral_alerted = bool(state.get("checkpoint_deferral_alerted"))
     delta = current_highwater - previous_highwater if isinstance(previous_highwater, int) else None
     liveness_delta = (
         current_liveness_highwater - previous_liveness_highwater
         if isinstance(previous_liveness_highwater, int)
         else None
     )
+    offset_delta = (
+        operational_progress.offset_bytes - previous_offset_bytes
+        if operational_progress.offset_bytes is not None and isinstance(previous_offset_bytes, int)
+        else None
+    )
+    drain_cycles_delta = (
+        operational_progress.drain_cycles - previous_drain_cycles
+        if operational_progress.drain_cycles is not None and isinstance(previous_drain_cycles, int)
+        else None
+    )
+    drained_total_delta = (
+        operational_progress.drained_total - previous_drained_total
+        if operational_progress.drained_total is not None and isinstance(previous_drained_total, int)
+        else None
+    )
+    new_operational_baseline = any(
+        current is not None and not isinstance(previous, int)
+        for current, previous in (
+            (operational_progress.offset_bytes, previous_offset_bytes),
+            (operational_progress.drain_cycles, previous_drain_cycles),
+            (operational_progress.drained_total, previous_drained_total),
+        )
+    )
+    operational_deltas = (offset_delta, drain_cycles_delta, drained_total_delta)
+    operational_counter_reset = any(delta is not None and delta < 0 for delta in operational_deltas)
 
-    if delta is None or liveness_delta is None or delta < 0 or liveness_delta < 0:
+    if (
+        delta is None
+        or liveness_delta is None
+        or delta < 0
+        or liveness_delta < 0
+        or new_operational_baseline
+        or operational_counter_reset
+    ):
         action = "baseline"
         stalled_ticks = 0
-    elif delta > 0 or liveness_delta > 0:
+    elif delta > 0 or liveness_delta > 0 or any(value is not None and value > 0 for value in operational_deltas):
         action = "progress"
         stalled_ticks = 0
     elif evidence.pending_files == 0:
@@ -527,6 +621,10 @@ def run_once(
     else:
         action = "stalled"
         stalled_ticks = previous_stalled + 1
+
+    if action in {"baseline", "progress", "idle"}:
+        previous_checkpoint_deferred = 0
+        checkpoint_deferral_alerted = False
 
     result = WatchdogResult(
         checked_at_epoch=checked_at,
@@ -542,7 +640,21 @@ def run_once(
         scan_errors=evidence.scan_errors,
         stalled_ticks=stalled_ticks,
         action=action,
+        checkpoint_deferred_ticks=previous_checkpoint_deferred,
+        offset_bytes=operational_progress.offset_bytes,
+        offset_bytes_delta=offset_delta,
+        drain_cycles=operational_progress.drain_cycles,
+        drain_cycles_delta=drain_cycles_delta,
+        drained_total=operational_progress.drained_total,
+        drained_total_delta=drained_total_delta,
     )
+
+    previous_last_progress = state.get("last_progress_epoch")
+    if action in {"baseline", "progress", "idle"} or not isinstance(previous_last_progress, int):
+        last_progress_epoch = checked_at
+    else:
+        last_progress_epoch = min(previous_last_progress, checked_at)
+    result.no_progress_seconds = max(0, checked_at - last_progress_epoch)
 
     last_restart_epoch = state.get("last_restart_epoch")
     cooldown_active = (
@@ -550,55 +662,79 @@ def run_once(
         and checked_at >= last_restart_epoch
         and checked_at - last_restart_epoch < config.cooldown_seconds
     )
-    if stalled_ticks >= config.stall_threshold:
+    if stalled_ticks >= config.stall_threshold and result.no_progress_seconds >= config.progress_slo_seconds:
         if cooldown_active:
             result.action = "cooldown"
         elif config.dry_run:
             result.action = "would_kickstart"
         else:
-            # Alert-framing: page on the FIRST wedge of an episode only — never
-            # per-kick of a chronic sawtooth. The latch clears after a sustained
-            # healthy run (episode reset below). Recovery still runs every tick.
-            # The latch is set ONLY when the page actually sent — a transient
-            # notify failure on the first wedge must NOT silence the whole
-            # episode (page-once must never become page-zero); the next tick
-            # retries the alert instead.
-            episode_alerted = bool(state.get("episode_alerted"))
-            if not episode_alerted:
-                try:
-                    alert_fn(config, result)
-                    episode_alerted = True
-                except Exception as exc:
-                    result.alert_error = str(exc)
-                    print(f"throughput-watchdog alert failed: {exc}", file=sys.stderr)
-            attempt_state = dict(state)
-            attempt_state.update(
-                {
-                    "checked_at_epoch": checked_at,
-                    "watcher_highwater_rowid": current_highwater,
-                    "watcher_liveness_highwater_rowid": current_liveness_highwater,
-                    "pending_files": evidence.pending_files,
-                    "pending_bytes": evidence.pending_bytes,
-                    "recent_files": evidence.recent_files,
-                    "untracked_recent_files": evidence.untracked_recent_files,
-                    "newest_source_mtime": evidence.newest_mtime,
-                    "scan_errors": evidence.scan_errors,
-                    "stalled_ticks": stalled_ticks,
-                    "last_action": "recovery_attempt",
-                    "last_restart_epoch": checked_at,
-                    "restart_attempt_count": int(state.get("restart_attempt_count", 0)) + 1,
-                    "episode_alerted": episode_alerted,
-                }
-            )
-            _atomic_write_json(config.state_path, attempt_state)
-            state = attempt_state
             try:
-                result.action = _restart_watch(config, command_runner)
-            except RuntimeError as exc:
-                result.action = "recovery_failed"
+                with checkpoint_guard(config.db_path, blocking=False) as checkpoint_available:
+                    if not checkpoint_available:
+                        result.checkpoint_deferred_ticks += 1
+                        if result.checkpoint_deferred_ticks >= config.checkpoint_deferral_alert_threshold:
+                            result.action = "checkpoint_deferral_alert"
+                            if not checkpoint_deferral_alerted:
+                                try:
+                                    alert_fn(config, result)
+                                    checkpoint_deferral_alerted = True
+                                except Exception as exc:
+                                    result.alert_error = str(exc)
+                                    print(
+                                        f"throughput-watchdog checkpoint deferral alert failed: {exc}",
+                                        file=sys.stderr,
+                                    )
+                        else:
+                            result.action = "checkpoint_deferred"
+                    else:
+                        result.checkpoint_deferred_ticks = 0
+                        checkpoint_deferral_alerted = False
+                        # Alert-framing: page on the FIRST wedge of an episode only — never
+                        # per-kick of a chronic sawtooth. The latch clears after a sustained
+                        # healthy run (episode reset below). Recovery still runs every tick.
+                        # The latch is set ONLY when the page actually sent — a transient
+                        # notify failure on the first wedge must NOT silence the whole
+                        # episode (page-once must never become page-zero); the next tick
+                        # retries the alert instead.
+                        episode_alerted = bool(state.get("episode_alerted"))
+                        if not episode_alerted:
+                            try:
+                                alert_fn(config, result)
+                                episode_alerted = True
+                            except Exception as exc:
+                                result.alert_error = str(exc)
+                                print(f"throughput-watchdog alert failed: {exc}", file=sys.stderr)
+                        attempt_state = dict(state)
+                        attempt_state.update(
+                            {
+                                "checked_at_epoch": checked_at,
+                                "watcher_highwater_rowid": current_highwater,
+                                "watcher_liveness_highwater_rowid": current_liveness_highwater,
+                                "pending_files": evidence.pending_files,
+                                "pending_bytes": evidence.pending_bytes,
+                                "recent_files": evidence.recent_files,
+                                "untracked_recent_files": evidence.untracked_recent_files,
+                                "newest_source_mtime": evidence.newest_mtime,
+                                "scan_errors": evidence.scan_errors,
+                                "stalled_ticks": stalled_ticks,
+                                "last_action": "recovery_attempt",
+                                "last_restart_epoch": checked_at,
+                                "restart_attempt_count": int(state.get("restart_attempt_count", 0)) + 1,
+                                "episode_alerted": episode_alerted,
+                            }
+                        )
+                        _atomic_write_json(config.state_path, attempt_state)
+                        state = attempt_state
+                        try:
+                            result.action = _restart_watch(config, command_runner)
+                        except RuntimeError as exc:
+                            result.action = "recovery_failed"
+                            result.error = str(exc)
+                        else:
+                            result.stalled_ticks = 0
+            except OSError as exc:
+                result.action = "checkpoint_guard_error"
                 result.error = str(exc)
-            else:
-                result.stalled_ticks = 0
 
     next_state = dict(state)
     next_state.update(
@@ -614,6 +750,13 @@ def run_once(
             "scan_errors": evidence.scan_errors,
             "stalled_ticks": result.stalled_ticks,
             "last_action": result.action,
+            "checkpoint_deferred_ticks": result.checkpoint_deferred_ticks,
+            "checkpoint_deferral_alerted": checkpoint_deferral_alerted,
+            "offset_bytes": operational_progress.offset_bytes,
+            "drain_cycles": operational_progress.drain_cycles,
+            "drained_total": operational_progress.drained_total,
+            "last_progress_epoch": last_progress_epoch,
+            "no_progress_seconds": result.no_progress_seconds,
         }
     )
     if result.action.startswith(("kickstart:", "respawn:")):
@@ -636,7 +779,11 @@ def run_once(
     # the current values, so neither comparison is strictly-greater on that tick.
     prev_chunk = int(state.get("watcher_highwater_rowid", 0) or 0)
     prev_liveness = int(state.get("watcher_liveness_highwater_rowid", 0) or 0)
-    progressed = current_highwater > prev_chunk or current_liveness_highwater > prev_liveness
+    progressed = (
+        current_highwater > prev_chunk
+        or current_liveness_highwater > prev_liveness
+        or any(value is not None and value > 0 for value in operational_deltas)
+    )
     if result.stalled_ticks == 0 and progressed:
         healthy_ticks = int(state.get("healthy_ticks", 0)) + 1
         next_state["healthy_ticks"] = healthy_ticks
@@ -660,6 +807,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--watch-label", default=DEFAULT_WATCH_LABEL)
     parser.add_argument("--watch-plist", type=Path, default=home / "Library/LaunchAgents/com.brainlayer.watch.plist")
     parser.add_argument("--stall-threshold", type=_positive_int, default=3)
+    parser.add_argument("--progress-slo-seconds", type=_positive_int, default=180)
+    parser.add_argument("--checkpoint-deferral-alert-threshold", type=_positive_int, default=3)
     parser.add_argument("--cooldown-seconds", type=_positive_int, default=600)
     parser.add_argument("--recent-window-seconds", type=_positive_int, default=600)
     parser.add_argument("--max-source-files", type=_positive_int, default=100_000)
@@ -683,6 +832,8 @@ def _config_from_args(args: argparse.Namespace) -> Config:
         watch_label=args.watch_label,
         watch_plist_path=args.watch_plist,
         stall_threshold=args.stall_threshold,
+        progress_slo_seconds=args.progress_slo_seconds,
+        checkpoint_deferral_alert_threshold=args.checkpoint_deferral_alert_threshold,
         cooldown_seconds=args.cooldown_seconds,
         recent_window_seconds=args.recent_window_seconds,
         max_source_files=args.max_source_files,
@@ -717,7 +868,7 @@ def main(argv: list[str] | None = None) -> int:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     print(json.dumps(asdict(result), sort_keys=True) if args.json else f"{result.action}: {result}")
-    return 1 if result.action == "recovery_failed" else 0
+    return 1 if result.action in {"recovery_failed", "checkpoint_guard_error", "checkpoint_deferral_alert"} else 0
 
 
 if __name__ == "__main__":

@@ -707,6 +707,21 @@ def test_drain_open_retries_busy_error_before_connection_exists(tmp_path, monkey
             self.busy_timeout_ms = None
             self.extension_enabled: list[bool] = []
             self.loaded_extensions: list[str] = []
+            self.executed: list[str] = []
+
+        class Cursor:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def execute(self, statement: str):
+                self.connection.executed.append(statement)
+                return self
+
+            def fetchone(self):
+                return ("wal",)
+
+        def cursor(self):
+            return self.Cursor(self)
 
         def setbusytimeout(self, timeout_ms: int) -> None:
             self.busy_timeout_ms = timeout_ms
@@ -738,6 +753,7 @@ def test_drain_open_retries_busy_error_before_connection_exists(tmp_path, monkey
     assert conn.busy_timeout_ms >= 30000
     assert conn.loaded_extensions == ["sqlite_vec"]
     assert conn.extension_enabled == [True, False]
+    assert conn.executed == ["PRAGMA journal_mode", "PRAGMA synchronous = NORMAL"]
 
 
 def test_drain_busy_timeout_invalid_env_falls_back_to_30s(tmp_path, monkeypatch):

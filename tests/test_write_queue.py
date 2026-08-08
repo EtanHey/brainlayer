@@ -58,6 +58,19 @@ class TestQueueStore:
         finally:
             apsw.connection_hooks[:] = original_hooks
 
+    def test_drain_writer_defaults_to_synchronous_normal(self, tmp_path, monkeypatch):
+        from brainlayer.vector_store import VectorStore
+
+        monkeypatch.delenv("BRAINLAYER_WRITE_SYNCHRONOUS", raising=False)
+        db_path = tmp_path / "drain-sync.db"
+        VectorStore(db_path).close()
+
+        conn = _open_connection(db_path)
+        try:
+            assert conn.cursor().execute("PRAGMA synchronous").fetchone()[0] == 1
+        finally:
+            conn.close()
+
     def test_queue_store_writes_jsonl(self, tmp_path):
         """_queue_store writes to the unified arbitration queue."""
         with patch("brainlayer.queue_io.get_queue_dir", return_value=tmp_path):
