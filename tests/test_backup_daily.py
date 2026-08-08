@@ -21,29 +21,41 @@ def _start_fake_brainbar_vacuum_server(socket_path: Path, source_db: Path):
             socket_path.unlink()
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
             server.bind(str(socket_path))
-            server.listen(1)
+            server.listen(2)
             ready.set()
-            conn, _ = server.accept()
-            with conn:
-                data = b""
-                while not data.endswith(b"\n"):
-                    data += conn.recv(65_536)
-                request = json.loads(data.decode("utf-8"))
-                received.put(request)
-                args = request["params"]["arguments"]
-                target_path = Path(args["target_path"])
-                with sqlite3.connect(source_db) as db:
-                    db.execute("VACUUM INTO ?", (str(target_path),))
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": request["id"],
-                    "result": {
-                        "content": [
-                            {"type": "text", "text": json.dumps({"status": "ok", "target_path": str(target_path)})}
-                        ]
-                    },
-                }
-                conn.sendall(json.dumps(response).encode("utf-8") + b"\n")
+            for _ in range(2):
+                conn, _ = server.accept()
+                with conn:
+                    data = b""
+                    while not data.endswith(b"\n"):
+                        data += conn.recv(65_536)
+                    request = json.loads(data.decode("utf-8"))
+                    if request["method"] == "initialize":
+                        response = {
+                            "jsonrpc": "2.0",
+                            "id": request["id"],
+                            "result": {"serverInfo": {"backupWriterStartedAtUnix": time.time()}},
+                        }
+                    else:
+                        received.put(request)
+                        args = request["params"]["arguments"]
+                        target_path = Path(args["target_path"])
+                        with sqlite3.connect(source_db) as db:
+                            db.execute("VACUUM INTO ?", (str(target_path),))
+                        target_path.with_name(f"{target_path.name}.complete").write_text("complete\n")
+                        response = {
+                            "jsonrpc": "2.0",
+                            "id": request["id"],
+                            "result": {
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": json.dumps({"status": "ok", "target_path": str(target_path)}),
+                                    }
+                                ]
+                            },
+                        }
+                    conn.sendall(json.dumps(response).encode("utf-8") + b"\n")
 
     thread = threading.Thread(target=run, daemon=True)
     thread.start()
@@ -76,6 +88,7 @@ def test_create_snapshot_gzip_is_restorable(tmp_path):
 
     assert snapshot == out_dir / "2026-05-13.db.gz"
     assert snapshot.exists()
+    assert not list(out_dir.glob(".*.db.attempt-*.complete"))
 
     restored = tmp_path / "restored.db"
     with gzip.open(snapshot, "rb") as src, restored.open("wb") as dst:
@@ -310,6 +323,17 @@ def test_brainbar_vacuum_request_defaults_to_outer_wall_clock_timeout(tmp_path, 
     assert seen_timeouts == [None]
 
 
+def test_backup_wall_clock_timeout_has_safe_default_and_rejects_disable(monkeypatch):
+    from brainlayer import backup_daily
+
+    monkeypatch.delenv("BRAINLAYER_BACKUP_TIMEOUT_SECONDS", raising=False)
+    assert backup_daily._configured_backup_timeout_seconds() == 7200
+
+    monkeypatch.setenv("BRAINLAYER_BACKUP_TIMEOUT_SECONDS", "0")
+    with pytest.raises(ValueError, match="must be at least 1 second"):
+        backup_daily._configured_backup_timeout_seconds()
+
+
 def test_brainbar_vacuum_request_fails_loud_after_retry_budget(tmp_path, monkeypatch, capsys):
     from brainlayer import backup_daily
 
@@ -476,6 +500,8 @@ def test_create_snapshot_preserves_failed_attempts_outside_temporary_directory(t
     attempt_targets = []
 
     def closed_after_write(socket_path, request, timeout_seconds):  # noqa: ARG001
+        if request["method"] == "initialize":
+            return {"result": {"serverInfo": {"backupWriterStartedAtUnix": time.time()}}}
         attempt_target = Path(request["params"]["arguments"]["target_path"])
         attempt_targets.append(attempt_target)
         _create_source_db(attempt_target, chunk_count=2)
@@ -492,7 +518,202 @@ def test_create_snapshot_preserves_failed_attempts_outside_temporary_directory(t
     assert all(path.exists() for path in attempt_targets)
 
 
-def test_terminal_response_cleans_prior_run_attempts(tmp_path, monkeypatch):
+def test_stale_attempt_sweep_deletes_only_completed_regular_files_older_than_one_run_interval(tmp_path):
+    from brainlayer import backup_daily
+
+    now = 200_000.0
+    stale_completed = tmp_path / ".2026-05-12.db.attempt-1-stale-completed"
+    stale_prior_writer = tmp_path / ".2026-05-12.db.attempt-1-stale-prior-writer"
+    stale_current_writer = tmp_path / ".2026-05-12.db.attempt-1-stale-current-writer"
+    current_writer = tmp_path / ".2026-05-13.db.attempt-1-current-writer"
+    recent = tmp_path / ".2026-05-13.db.attempt-1-recent"
+    target = tmp_path / "outside.db"
+    symlink = tmp_path / ".2026-05-11.db.attempt-1-link"
+    stale_completed.write_bytes(b"stale completed")
+    stale_prior_writer.write_bytes(b"stale prior writer")
+    stale_current_writer.write_bytes(b"stale current writer")
+    current_writer.write_bytes(b"current writer")
+    recent.write_bytes(b"recent")
+    target.write_bytes(b"outside")
+    symlink.symlink_to(target)
+    stale_marker = backup_daily._backup_attempt_completion_marker(stale_completed)
+    recent_marker = backup_daily._backup_attempt_completion_marker(recent)
+    stale_marker.write_text("complete")
+    recent_marker.write_text("complete")
+    os.utime(stale_completed, (now - 90_000, now - 90_000))
+    os.utime(stale_prior_writer, (now - 110_000, now - 110_000))
+    os.utime(stale_current_writer, (now - 87_000, now - 87_000))
+    os.utime(current_writer, (now - 60, now - 60))
+    os.utime(stale_marker, (now - 90_000, now - 90_000))
+    os.utime(recent, (now - 60, now - 60))
+    os.utime(recent_marker, (now - 60, now - 60))
+
+    deleted, surviving = backup_daily._sweep_stale_backup_attempts(
+        tmp_path,
+        max_age_seconds=86_400,
+        now=now,
+        writer_started_at=now - 100_000,
+    )
+
+    assert deleted == [stale_completed.name, stale_prior_writer.name]
+    assert {path.name for path in surviving} == {
+        stale_current_writer.name,
+        current_writer.name,
+        recent.name,
+        symlink.name,
+    }
+    assert not stale_completed.exists()
+    assert not stale_marker.exists()
+    assert not stale_prior_writer.exists()
+    assert stale_current_writer.exists()
+    assert current_writer.exists()
+    assert recent.exists()
+    assert recent_marker.exists()
+    assert symlink.is_symlink()
+    assert target.read_bytes() == b"outside"
+
+
+def test_stale_attempt_sweep_keeps_recent_attempt_from_prior_writer(tmp_path):
+    from brainlayer import backup_daily
+
+    now = 200_000.0
+    recent_prior_writer = tmp_path / ".2026-05-13.db.attempt-1-recent-prior-writer"
+    recent_prior_writer.write_bytes(b"recent prior writer")
+    os.utime(recent_prior_writer, (now - 3_000, now - 3_000))
+
+    deleted, surviving = backup_daily._sweep_stale_backup_attempts(
+        tmp_path,
+        max_age_seconds=86_400,
+        now=now,
+        writer_started_at=now - 1_000,
+    )
+
+    assert deleted == []
+    assert surviving == [recent_prior_writer]
+    assert recent_prior_writer.exists()
+
+
+def test_create_snapshot_reports_degraded_reclamation_and_preserves_old_unmarked_attempt(tmp_path, monkeypatch, capsys):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    output_dir = tmp_path / "out"
+    _create_source_db(source, chunk_count=2)
+    output_dir.mkdir()
+    old_unmarked = output_dir / ".2026-05-12.db.attempt-1-old-unmarked"
+    old_unmarked.write_bytes(b"old unmarked")
+    old_mtime = time.time() - backup_daily.DEFAULT_BACKUP_ATTEMPT_MAX_AGE_SECONDS - 60
+    os.utime(old_unmarked, (old_mtime, old_mtime))
+
+    def fake_vacuum_into(target_path, **kwargs):  # noqa: ARG001
+        with sqlite3.connect(source) as db:
+            db.execute("VACUUM INTO ?", (str(target_path),))
+
+    monkeypatch.setattr(
+        backup_daily,
+        "_brainbar_writer_started_at",
+        lambda socket_path=None: (_ for _ in ()).throw(RuntimeError("missing writer timestamp")),
+    )
+    monkeypatch.setattr(backup_daily, "request_brainbar_vacuum_into", fake_vacuum_into)
+
+    artifact = backup_daily.create_sqlite_backup_artifact(source, output_dir, date_stamp="2026-05-14")
+
+    assert artifact.attempt_reclamation == "degraded"
+    assert artifact.writer_probe_error == "RuntimeError: missing writer timestamp"
+    assert old_unmarked.name in artifact.surviving_attempts
+    assert old_unmarked.exists()
+    assert "attempt reclamation degraded: RuntimeError: missing writer timestamp" in capsys.readouterr().out
+
+
+def test_create_snapshot_does_not_swallow_global_timeout_during_writer_probe(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    _create_source_db(source, chunk_count=2)
+    monkeypatch.setattr(
+        backup_daily,
+        "_brainbar_writer_started_at",
+        lambda socket_path=None: (_ for _ in ()).throw(backup_daily.BackupTimeoutError("deadline")),
+    )
+
+    with pytest.raises(backup_daily.BackupTimeoutError, match="deadline"):
+        backup_daily.create_sqlite_backup_artifact(source, tmp_path / "out")
+
+
+def test_database_logical_size_includes_committed_wal_pages(tmp_path):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    conn = sqlite3.connect(source)
+    try:
+        assert conn.execute("PRAGMA journal_mode=WAL").fetchone()[0].upper() == "WAL"
+        conn.execute("PRAGMA wal_autocheckpoint=0")
+        conn.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, content TEXT)")
+        conn.commit()
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        main_file_size = source.stat().st_size
+        conn.executemany(
+            "INSERT INTO chunks VALUES (?, ?)",
+            [(f"c{idx}", "x" * 4096) for idx in range(256)],
+        )
+        conn.commit()
+
+        assert backup_daily._database_logical_size_bytes(source) > main_file_size
+    finally:
+        conn.close()
+
+
+def test_brainbar_writer_started_at_reads_initialize_server_info(monkeypatch):
+    from brainlayer import backup_daily
+
+    seen: dict[str, object] = {}
+
+    def initialize_response(socket_path, request, timeout_seconds):
+        seen.update(socket_path=socket_path, request=request, timeout_seconds=timeout_seconds)
+        return {"result": {"serverInfo": {"backupWriterStartedAtUnix": 1234.5}}}
+
+    monkeypatch.setattr(backup_daily, "_send_brainbar_json_request", initialize_response)
+
+    assert backup_daily._brainbar_writer_started_at("/tmp/brainbar.sock") == 1234.5
+    assert seen["socket_path"] == Path("/tmp/brainbar.sock")
+    assert seen["request"]["method"] == "initialize"
+
+
+def test_brainbar_writer_started_at_rejects_unexpected_initialize_shape(monkeypatch):
+    from brainlayer import backup_daily
+
+    monkeypatch.setattr(
+        backup_daily,
+        "_send_brainbar_json_request",
+        lambda *args, **kwargs: {"result": "error"},
+    )
+
+    with pytest.raises(RuntimeError, match="missing backupWriterStartedAtUnix"):
+        backup_daily._brainbar_writer_started_at("/tmp/brainbar.sock")
+
+
+def test_recent_attempt_growth_is_reserved_in_disk_preflight(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    output_dir = tmp_path / "out"
+    _create_source_db(source, chunk_count=2)
+    output_dir.mkdir()
+    recent = output_dir / ".2026-05-13.db.attempt-1-recent"
+    recent.write_bytes(b"x")
+    db_size = source.stat().st_size
+    base_required = (db_size * 3) + (512 * 1024 * 1024)
+
+    class Disk:
+        free = base_required
+
+    monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: Disk())
+
+    with pytest.raises(RuntimeError, match="1 recent attempts reserve"):
+        backup_daily.create_sqlite_backup_artifact(source, output_dir, date_stamp="2026-05-14")
+
+
+def test_terminal_response_does_not_clean_unowned_prior_run_attempts(tmp_path, monkeypatch):
     from brainlayer import backup_daily
 
     target = tmp_path / "snapshot.db"
@@ -509,7 +730,7 @@ def test_terminal_response_cleans_prior_run_attempts(tmp_path, monkeypatch):
     backup_daily.request_brainbar_vacuum_into(target, socket_path="/tmp/brainbar.sock")
 
     assert target.exists()
-    assert not prior_attempt.exists()
+    assert prior_attempt.exists()
 
 
 def test_create_snapshot_rejects_low_disk_space(tmp_path, monkeypatch):
@@ -651,6 +872,8 @@ def test_run_backup_appends_result_to_file_log(tmp_path, monkeypatch):
         uncompressed_path = None
         sentinel_chunks = 1
         local_retention_deleted: list[str] = []
+        attempt_reclamation = "degraded"
+        writer_probe_error = "RuntimeError: missing writer timestamp"
 
     monkeypatch.setattr(backup_daily, "create_sqlite_backup_artifact", lambda *args, **kwargs: FakeArtifact())
     monkeypatch.setattr(backup_daily, "get_drive_credentials", lambda *args, **kwargs: object())
@@ -692,6 +915,8 @@ def test_run_backup_appends_result_to_file_log(tmp_path, monkeypatch):
     assert logged["snapshot"] == str(snapshot)
     assert logged["drive_file"]["id"] == "drive-file-id"
     assert logged["verified"] is True
+    assert logged["attempt_reclamation"] == "degraded"
+    assert logged["writer_probe_error"] == "RuntimeError: missing writer timestamp"
     assert logged == result
 
 
@@ -735,6 +960,39 @@ def test_run_backup_appends_file_log_when_upload_fails(tmp_path, monkeypatch):
     assert logged["verified"] is False
     assert logged["error_type"] == "RuntimeError"
     assert logged["error"] == "drive unavailable"
+
+
+def test_run_backup_logs_degraded_writer_probe_when_artifact_creation_fails(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    log_path = tmp_path / "backup-daily.log"
+    _create_source_db(source, chunk_count=2)
+    monkeypatch.setattr(
+        backup_daily,
+        "_brainbar_writer_started_at",
+        lambda socket_path=None: (_ for _ in ()).throw(RuntimeError("daemon unavailable")),
+    )
+    monkeypatch.setattr(
+        backup_daily,
+        "request_brainbar_vacuum_into",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("vacuum unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="vacuum unavailable"):
+        backup_daily.run_backup(
+            db_path=source,
+            staging_dir=tmp_path / "out",
+            date_stamp="2026-05-30",
+            upload=False,
+            log_path=log_path,
+        )
+
+    logged = json.loads(log_path.read_text(encoding="utf-8"))
+    assert logged["attempt_reclamation"] == "degraded"
+    assert logged["writer_probe_error"] == "RuntimeError: daemon unavailable"
+    assert logged["error_type"] == "RuntimeError"
+    assert logged["error"] == "vacuum unavailable"
 
 
 def test_run_backup_uses_env_log_path_without_explicit_log_path(tmp_path, monkeypatch):
@@ -853,6 +1111,7 @@ def test_launchd_installer_knows_backup_target():
     assert "<integer>300</integer>" in plist
     assert "BRAINLAYER_BACKUP_CLIENT_TIMEOUT_SECONDS:=0" in wrapper
     assert "BRAINLAYER_BACKUP_TIMEOUT_SECONDS:=7200" in wrapper
+    assert "BRAINLAYER_BACKUP_ATTEMPT_MAX_AGE_SECONDS:=86400" in wrapper
     assert "BRAINLAYER_BACKUP_LOG_PROVENANCE:=real" in wrapper
 
 

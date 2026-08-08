@@ -285,7 +285,9 @@ final class SocketIntegrationTests: XCTestCase {
 
     func testBrainBackupVacuumIntoOverSocketCreatesRestorableSnapshot() throws {
         let targetPath = NSTemporaryDirectory() + "brainbar-backup-\(UUID().uuidString).db"
+        let completionMarkerPath = targetPath + ".complete"
         defer { try? FileManager.default.removeItem(atPath: targetPath) }
+        defer { try? FileManager.default.removeItem(atPath: completionMarkerPath) }
 
         _ = try sendMCPRequest([
             "jsonrpc": "2.0", "id": 20, "method": "initialize",
@@ -319,6 +321,7 @@ final class SocketIntegrationTests: XCTestCase {
         let result = response["result"] as? [String: Any]
         XCTAssertEqual(result?["isError"] as? Bool, nil)
         XCTAssertTrue(FileManager.default.fileExists(atPath: targetPath))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: completionMarkerPath))
 
         var restored: OpaquePointer?
         XCTAssertEqual(sqlite3_open_v2(targetPath, &restored, SQLITE_OPEN_READONLY, nil), SQLITE_OK)
@@ -328,6 +331,35 @@ final class SocketIntegrationTests: XCTestCase {
             try queryString("SELECT content FROM chunks WHERE content = 'vacuum over socket'", on: restored),
             "vacuum over socket"
         )
+    }
+
+    func testBrainBackupVacuumIntoRefusesExistingCompletionMarkerWithoutOverwritingIt() throws {
+        let targetPath = NSTemporaryDirectory() + "brainbar-backup-\(UUID().uuidString).db"
+        let completionMarkerPath = targetPath + ".complete"
+        let originalMarker = Data("unrelated data".utf8)
+        try originalMarker.write(to: URL(fileURLWithPath: completionMarkerPath))
+        defer { try? FileManager.default.removeItem(atPath: targetPath) }
+        defer { try? FileManager.default.removeItem(atPath: completionMarkerPath) }
+
+        _ = try sendMCPRequest([
+            "jsonrpc": "2.0", "id": 30, "method": "initialize",
+            "params": ["protocolVersion": "2024-11-05", "capabilities": [:] as [String: Any],
+                       "clientInfo": ["name": "backup-marker-test", "version": "1.0"]]
+        ])
+        let response = try sendMCPRequest([
+            "jsonrpc": "2.0",
+            "id": 31,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_backup_vacuum_into",
+                "arguments": ["target_path": targetPath]
+            ]
+        ])
+
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertEqual(result["isError"] as? Bool, true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: targetPath))
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: completionMarkerPath)), originalMarker)
     }
 
     func testMCPBrainSearchOverSocketUsesInjectedHybridHelper() throws {
