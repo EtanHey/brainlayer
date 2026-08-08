@@ -49,6 +49,7 @@ DEFAULT_DAILY_KEEP = 7
 DEFAULT_WEEKLY_KEEP = 4
 DEFAULT_LOCAL_UNCOMPRESSED_KEEP = 2
 DEFAULT_BACKUP_CLIENT_TIMEOUT_SECONDS = 0
+DEFAULT_BACKUP_TIMEOUT_SECONDS = 7200
 
 
 @dataclass(frozen=True)
@@ -103,15 +104,17 @@ class BackupTimeoutError(TimeoutError):
     pass
 
 
-def _configured_backup_timeout_seconds() -> int | None:
+def _configured_backup_timeout_seconds() -> int:
     raw = os.environ.get(BACKUP_TIMEOUT_ENV)
     if raw is None or raw.strip() == "":
-        return None
+        return DEFAULT_BACKUP_TIMEOUT_SECONDS
     try:
         seconds = int(raw)
     except ValueError as exc:
         raise ValueError(f"{BACKUP_TIMEOUT_ENV} must be an integer number of seconds") from exc
-    return seconds if seconds > 0 else None
+    if seconds < 1:
+        raise ValueError(f"{BACKUP_TIMEOUT_ENV} must be at least 1 second")
+    return seconds
 
 
 def _configured_backup_client_timeout_seconds() -> int | None:
