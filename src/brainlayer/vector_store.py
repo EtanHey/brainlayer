@@ -282,6 +282,23 @@ def _wal_size_limit_bytes() -> int:
     return max(_int_env("BRAINLAYER_WAL_SIZE_LIMIT_BYTES", 256_000_000), 0)
 
 
+def _write_synchronous_mode() -> str:
+    """Return the requested safe writer durability mode; NORMAL is the WAL default."""
+    mode = os.environ.get("BRAINLAYER_WRITE_SYNCHRONOUS", "NORMAL").strip().upper()
+    return mode if mode in {"NORMAL", "FULL"} else "NORMAL"
+
+
+def _configure_writer_pragmas(conn: apsw.Connection) -> str:
+    """Use NORMAL only for WAL; retain FULL if a database is not in WAL mode."""
+    cursor = conn.cursor()
+    journal_row = cursor.execute("PRAGMA journal_mode").fetchone()
+    journal_mode = str(journal_row[0] if journal_row else "").lower()
+    requested = _write_synchronous_mode()
+    effective = requested if journal_mode == "wal" else "FULL"
+    cursor.execute(f"PRAGMA synchronous = {effective}")
+    return effective
+
+
 class WriterInUseError(RuntimeError):
     """Raised when a live process already owns the writer pidfile."""
 
@@ -762,6 +779,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
 
         # WAL mode is persistent on the DB file — set it every time
         cursor.execute("PRAGMA journal_mode = WAL")
+        _configure_writer_pragmas(self.conn)
         cursor.execute(f"PRAGMA wal_autocheckpoint = {_wal_autocheckpoint_pages()}")
         # Bound the WAL file so it truncates back after each checkpoint instead of
         # staying at its high-water mark (default -1 = unlimited). See

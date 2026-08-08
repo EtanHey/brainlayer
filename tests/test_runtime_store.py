@@ -120,6 +120,15 @@ def test_runtime_store_opens_existing_schema_without_legacy_init(tmp_path, monke
         assert len(store.schema_fingerprint) == 64
 
 
+def test_runtime_writer_defaults_to_synchronous_normal(tmp_path, monkeypatch):
+    db_path = tmp_path / "runtime-sync.db"
+    monkeypatch.delenv("BRAINLAYER_WRITE_SYNCHRONOUS", raising=False)
+    _bootstrap(db_path)
+
+    with WriterRuntimeStore(db_path) as store:
+        assert store.conn.cursor().execute("PRAGMA synchronous").fetchone()[0] == 1
+
+
 def test_runtime_store_closes_connection_when_extension_setup_fails(tmp_path, monkeypatch):
     db_path = tmp_path / "extension-failure.db"
     _bootstrap(db_path)

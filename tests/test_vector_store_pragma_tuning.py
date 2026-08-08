@@ -44,6 +44,25 @@ def test_writer_init_sets_wal_autocheckpoint(tmp_path, monkeypatch):
         store.close()
 
 
+def test_writer_connections_default_to_synchronous_normal_in_wal_mode(tmp_path, monkeypatch):
+    monkeypatch.delenv("BRAINLAYER_WRITE_SYNCHRONOUS", raising=False)
+    store = VectorStore(tmp_path / "pragma-writer-sync.db")
+    try:
+        assert _pragma_value(store.conn, "synchronous") == 1
+    finally:
+        store.close()
+
+
+def test_writer_synchronous_mode_accepts_full_override_and_rejects_invalid(monkeypatch):
+    from brainlayer import vector_store
+
+    monkeypatch.setenv("BRAINLAYER_WRITE_SYNCHRONOUS", "FULL")
+    assert vector_store._write_synchronous_mode() == "FULL"
+
+    monkeypatch.setenv("BRAINLAYER_WRITE_SYNCHRONOUS", "unsafe-garbage")
+    assert vector_store._write_synchronous_mode() == "NORMAL"
+
+
 def test_readonly_primary_connection_uses_bounded_reader_pragmas(tmp_path, monkeypatch):
     monkeypatch.delenv("BRAINLAYER_READ_BUSY_TIMEOUT_MS", raising=False)
     store = VectorStore(tmp_path / "pragma-readonly-primary.db")
