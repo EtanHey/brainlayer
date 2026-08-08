@@ -4,6 +4,7 @@ import os
 import queue
 import socket
 import sqlite3
+import sys
 import threading
 import time
 import uuid
@@ -327,7 +328,7 @@ def test_backup_wall_clock_timeout_has_safe_default_and_rejects_disable(monkeypa
     from brainlayer import backup_daily
 
     monkeypatch.delenv("BRAINLAYER_BACKUP_TIMEOUT_SECONDS", raising=False)
-    assert backup_daily._configured_backup_timeout_seconds() == 7200
+    assert backup_daily._configured_backup_timeout_seconds() == 21600
 
     monkeypatch.setenv("BRAINLAYER_BACKUP_TIMEOUT_SECONDS", "0")
     with pytest.raises(ValueError, match="must be at least 1 second"):
@@ -1110,7 +1111,7 @@ def test_launchd_installer_knows_backup_target():
     assert "<key>ExitTimeOut</key>" in plist
     assert "<integer>300</integer>" in plist
     assert "BRAINLAYER_BACKUP_CLIENT_TIMEOUT_SECONDS:=0" in wrapper
-    assert "BRAINLAYER_BACKUP_TIMEOUT_SECONDS:=7200" in wrapper
+    assert "BRAINLAYER_BACKUP_TIMEOUT_SECONDS:=21600" in wrapper
     assert "BRAINLAYER_BACKUP_ATTEMPT_MAX_AGE_SECONDS:=86400" in wrapper
     assert "BRAINLAYER_BACKUP_LOG_PROVENANCE:=real" in wrapper
 
@@ -1122,7 +1123,38 @@ def test_main_enforces_configured_backup_timeout(monkeypatch, capsys):
         time.sleep(5)
 
     monkeypatch.setenv("BRAINLAYER_BACKUP_TIMEOUT_SECONDS", "1")
+    monkeypatch.setenv(backup_daily.BACKUP_SUPERVISED_CHILD_ENV, "1")
     monkeypatch.setattr(backup_daily, "run_backup", slow_backup)
 
     assert backup_daily.main() == 124
     assert "brainlayer backup timed out after 1s" in capsys.readouterr().out
+
+
+def test_backup_supervisor_enforces_timeout_outside_python_signal_delivery(tmp_path, monkeypatch, capsys):
+    from brainlayer import backup_daily
+
+    log_path = tmp_path / "backup.log"
+    sleeper = tmp_path / "sleeper.py"
+    sleeper.write_text(
+        "import signal\n"
+        "import time\n"
+        "signal.signal(signal.SIGALRM, lambda signum, frame: None)\n"
+        "while True:\n"
+        "    time.sleep(60)\n"
+    )
+    monkeypatch.setenv("BRAINLAYER_BACKUP_LOG_PATH", str(log_path))
+    monkeypatch.setenv("BRAINLAYER_BACKUP_LOG_PROVENANCE", "pytest")
+
+    started = time.monotonic()
+    exit_code = backup_daily._supervise_backup_process(1, command=[sys.executable, str(sleeper)])
+    elapsed = time.monotonic() - started
+
+    assert exit_code == 124
+    assert elapsed < 5
+    receipt = json.loads(log_path.read_text().strip())
+    assert receipt["backup_log_provenance"] == "pytest"
+    assert receipt["verified"] is False
+    assert receipt["uploaded"] is False
+    assert receipt["error_type"] == "BackupTimeoutError"
+    assert receipt["timeout_seconds"] == 1
+    assert "timed out after 1s" in capsys.readouterr().out
