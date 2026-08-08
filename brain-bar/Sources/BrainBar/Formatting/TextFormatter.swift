@@ -42,7 +42,7 @@ enum TextFormatter {
         return lines.joined(separator: "\n")
     }
 
-    static func formatKGFacts(entity: String, facts: [BrainDatabase.KGFact]) -> String {
+    static func formatKGFacts(entity: String, facts: [BrainDatabase.KGFact], now: Date = Date()) -> String {
         guard !facts.isEmpty else { return "" }
         var lines: [String] = []
         lines.append("## Entity: \(entity)")
@@ -50,14 +50,14 @@ enum TextFormatter {
         lines.append("### KG Facts")
         for fact in facts.prefix(20) {
             var line = "- \(fact.relationType): \(fact.relatedEntity)"
-            line += relationTemporalSuffix(validUntil: fact.validUntil, expiredAt: fact.expiredAt)
+            line += relationTemporalSuffix(validUntil: fact.validUntil, expiredAt: fact.expiredAt, now: now)
             lines.append(line)
         }
 
         return lines.joined(separator: "\n")
     }
 
-    static func formatEntityCard(_ entity: EntityCard) -> String {
+    static func formatEntityCard(_ entity: EntityCard, now: Date = Date()) -> String {
         var lines = ["## Entity: \(entity.name)"]
 
         if !entity.description.isEmpty {
@@ -65,11 +65,11 @@ enum TextFormatter {
             lines.append(truncate(entity.description, maxLen: 200))
         }
 
-        appendEntitySections(entity, to: &lines)
+        appendEntitySections(entity, to: &lines, now: now)
         return lines.joined(separator: "\n")
     }
 
-    static func formatEntitySimple(_ entity: EntityCard) -> String {
+    static func formatEntitySimple(_ entity: EntityCard, now: Date = Date()) -> String {
         var lines = ["## Entity: \(entity.name)"]
 
         if !entity.description.isEmpty {
@@ -77,7 +77,7 @@ enum TextFormatter {
             lines.append(truncate(entity.description, maxLen: 200))
         }
 
-        appendEntitySections(entity, to: &lines)
+        appendEntitySections(entity, to: &lines, now: now)
         return lines.joined(separator: "\n")
     }
 
@@ -221,9 +221,9 @@ enum TextFormatter {
         return formatter.string(from: date)
     }
 
-    private static func relationLine(_ relation: EntityCard.Relation) -> String {
+    private static func relationLine(_ relation: EntityCard.Relation, now: Date) -> String {
         var line = "- \(relation.relationType): \(relation.targetName)"
-        line += relationTemporalSuffix(validUntil: relation.validUntil, expiredAt: relation.expiredAt)
+        line += relationTemporalSuffix(validUntil: relation.validUntil, expiredAt: relation.expiredAt, now: now)
         return line
     }
 
@@ -241,7 +241,7 @@ enum TextFormatter {
         return ""
     }
 
-    private static func appendEntitySections(_ entity: EntityCard, to lines: inout [String]) {
+    private static func appendEntitySections(_ entity: EntityCard, to lines: inout [String], now: Date) {
         appendKeyValueSection("Profile", values: entity.profile, to: &lines)
         appendKeyValueSection("Constraints", values: entity.hardConstraints, to: &lines)
         appendKeyValueSection("Preferences", values: entity.preferences, to: &lines)
@@ -253,7 +253,7 @@ enum TextFormatter {
             lines.append("- None")
         } else {
             for relation in entity.relations.prefix(20) {
-                lines.append(relationLine(relation))
+                lines.append(relationLine(relation, now: now))
             }
         }
 

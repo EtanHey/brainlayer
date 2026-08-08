@@ -176,6 +176,7 @@ final class TextFormatterParityTests: XCTestCase {
 
     func testEntityCardDoesNotMarkFutureValidUntilExpired() {
         let validUntil = ISO8601DateFormatter().date(from: "2026-12-31T00:00:00Z")
+        let now = ISO8601DateFormatter().date(from: "2026-08-08T00:00:00Z")!
         let entity = EntityCard(
             id: "tech-001",
             name: "JWT middleware",
@@ -189,7 +190,7 @@ final class TextFormatterParityTests: XCTestCase {
             ]
         )
 
-        let output = TextFormatter.formatEntityCard(entity)
+        let output = TextFormatter.formatEntityCard(entity, now: now)
 
         XCTAssertTrue(output.contains("- depends_on: auth-service"))
         XCTAssertFalse(output.contains("expired 2026-12-31"))
