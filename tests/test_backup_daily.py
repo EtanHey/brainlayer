@@ -492,6 +492,26 @@ def test_create_snapshot_preserves_failed_attempts_outside_temporary_directory(t
     assert all(path.exists() for path in attempt_targets)
 
 
+def test_terminal_response_cleans_prior_run_attempts(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    target = tmp_path / "snapshot.db"
+    prior_attempt = tmp_path / ".2026-05-13.db.attempt-3-prior"
+    _create_source_db(prior_attempt, chunk_count=2)
+
+    def successful_response(socket_path, request, timeout_seconds):  # noqa: ARG001
+        attempt_target = Path(request["params"]["arguments"]["target_path"])
+        _create_source_db(attempt_target, chunk_count=2)
+        return {"result": {"content": [{"type": "text", "text": '{"status":"ok"}'}]}}
+
+    monkeypatch.setattr(backup_daily, "_send_brainbar_json_request", successful_response)
+
+    backup_daily.request_brainbar_vacuum_into(target, socket_path="/tmp/brainbar.sock")
+
+    assert target.exists()
+    assert not prior_attempt.exists()
+
+
 def test_create_snapshot_rejects_low_disk_space(tmp_path, monkeypatch):
     from brainlayer import backup_daily
 

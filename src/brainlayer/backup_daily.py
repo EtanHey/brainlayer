@@ -295,6 +295,7 @@ def request_brainbar_vacuum_into(
         raise ValueError("timeout_seconds must be at least 1 or None")
     resolved_attempt_dir = Path(attempt_dir).expanduser() if attempt_dir is not None else target_path.parent
     resolved_attempt_dir.mkdir(parents=True, exist_ok=True)
+    prior_attempt_paths = list(resolved_attempt_dir.glob(".*.db.attempt-*"))
     last_error: Exception | None = None
     unconfirmed_attempt_paths: list[Path] = []
     for attempt in range(1, max_attempts + 1):
@@ -332,7 +333,7 @@ def request_brainbar_vacuum_into(
                 attempt_path.unlink(missing_ok=True)
                 raise
             os.replace(attempt_path, target_path)
-            for prior_path in unconfirmed_attempt_paths:
+            for prior_path in [*prior_attempt_paths, *unconfirmed_attempt_paths]:
                 prior_path.unlink(missing_ok=True)
             return
         except BackupTimeoutError:
@@ -343,8 +344,9 @@ def request_brainbar_vacuum_into(
             if terminal_response_received:
                 # BrainBar's request queue is serial. A terminal response proves this
                 # attempt and every earlier request are no longer writing.
-                for completed_path in [*unconfirmed_attempt_paths, attempt_path]:
+                for completed_path in [*prior_attempt_paths, *unconfirmed_attempt_paths, attempt_path]:
                     completed_path.unlink(missing_ok=True)
+                prior_attempt_paths.clear()
                 unconfirmed_attempt_paths.clear()
             elif attempt_path.exists():
                 # A lost response does not prove VACUUM INTO is finished. Never inspect,
