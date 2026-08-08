@@ -33,6 +33,8 @@ from .ingest_guard import recursive_mcp_output_reason
 from .paths import get_db_path
 from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
 from .provenance_integration import enqueue_provenance_resolution_for_entities
+from .wal_checkpoint import checkpoint_guard
+from .wal_checkpoint import get_wal_size as _wal_size_bytes
 from .writer_telemetry import start_writer_span
 
 logger = logging.getLogger(__name__)
@@ -52,6 +54,9 @@ _ENRICHMENT_LABEL = "com.brainlayer.enrichment"
 # truncating checkpoint can wedge the live writer behind long-lived readers on a
 # multi-GB WAL; the scheduled wal-checkpoint job owns truncation.
 _DEFAULT_CHECKPOINT_BUSY_TIMEOUT_MS = 1000
+_DEFAULT_WAL_RESTART_HIGH_WATER_BYTES = 192_000_000
+_DEFAULT_WAL_RESTART_MIN_INTERVAL_SECONDS = 60.0
+_LAST_RESTART_ATTEMPT: dict[Path, float] = {}
 
 
 def _drain_busy_timeout_ms() -> int:
@@ -90,6 +95,54 @@ def _checkpoint_busy_timeout_ms() -> int:
     if timeout_ms < 0 or timeout_ms > _MAX_APSW_BUSY_TIMEOUT_MS:
         return _DEFAULT_CHECKPOINT_BUSY_TIMEOUT_MS
     return timeout_ms
+
+
+def _wal_restart_high_water_bytes() -> int:
+    return _positive_int_env(
+        "BRAINLAYER_WAL_RESTART_HIGH_WATER_BYTES",
+        _DEFAULT_WAL_RESTART_HIGH_WATER_BYTES,
+    )
+
+
+def _wal_restart_min_interval_seconds() -> float:
+    return _nonnegative_float_env(
+        "BRAINLAYER_WAL_RESTART_MIN_INTERVAL_SECONDS",
+        _DEFAULT_WAL_RESTART_MIN_INTERVAL_SECONDS,
+    )
+
+
+def _post_commit_checkpoint(conn: apsw.Connection, db_path: Path, log_path: Path | None = None) -> int:
+    """Backfill every commit and make bounded, rate-limited WAL reset attempts."""
+    checkpoints = 0
+    timeout_changed = False
+    try:
+        with checkpoint_guard(db_path, blocking=False) as acquired:
+            if not acquired:
+                return 0
+            conn.setbusytimeout(_checkpoint_busy_timeout_ms())
+            timeout_changed = True
+            conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            checkpoints += 1
+            resolved_path = db_path.resolve()
+            now = time.monotonic()
+            last_attempt = _LAST_RESTART_ATTEMPT.get(resolved_path)
+            restart_due = last_attempt is None or now - last_attempt >= _wal_restart_min_interval_seconds()
+            if _wal_size_bytes(str(db_path)) >= _wal_restart_high_water_bytes() and restart_due:
+                _LAST_RESTART_ATTEMPT[resolved_path] = now
+                conn.execute("PRAGMA wal_checkpoint(RESTART)")
+                checkpoints += 1
+    except Exception as exc:
+        if log_path is not None:
+            _log(log_path, f"drain checkpoint skipped: {exc}")
+        else:
+            logger.debug("Drain checkpoint skipped: %s", exc)
+    finally:
+        if timeout_changed:
+            try:
+                conn.setbusytimeout(_drain_busy_timeout_ms())
+            except Exception:
+                logger.debug("Failed to restore drain busy timeout after checkpoint", exc_info=True)
+    return checkpoints
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -1122,33 +1175,6 @@ def _embedding_enabled() -> bool:
     return os.environ.get("BRAINLAYER_DRAIN_EMBED", "1").lower() not in {"0", "false", "no"}
 
 
-def _embed_store_chunks(
-    conn: apsw.Connection,
-    chunk_ids: list[str],
-    embed_fn: Callable[[str], list[float]] | None,
-) -> None:
-    if not chunk_ids or "chunk_vectors" not in _table_names(conn):
-        return
-    resolved_embed_fn = embed_fn or _default_embed_fn()
-    unique_chunk_ids = list(dict.fromkeys(chunk_ids))
-    for chunk_id in unique_chunk_ids:
-        try:
-            row = conn.execute("SELECT content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
-            if not row:
-                continue
-            embedding_bytes = serialize_f32(resolved_embed_fn(row[0]))
-            conn.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
-            conn.execute("INSERT INTO chunk_vectors (chunk_id, embedding) VALUES (?, ?)", (chunk_id, embedding_bytes))
-            if "chunk_vectors_binary" in _table_names(conn):
-                conn.execute("DELETE FROM chunk_vectors_binary WHERE chunk_id = ?", (chunk_id,))
-                conn.execute(
-                    "INSERT INTO chunk_vectors_binary (chunk_id, embedding) VALUES (?, vec_quantize_binary(?))",
-                    (chunk_id, embedding_bytes),
-                )
-        except Exception as exc:
-            logger.warning("Failed to embed drained chunk %s: %s", chunk_id, exc)
-
-
 def _precompute_event_embeddings(
     events: list[dict[str, Any]],
     embed_fn: Callable[[str], list[float]] | None,
@@ -1465,6 +1491,7 @@ def burn_drain_once(
         ):
             result.failed_files = len(batch)
             return result
+        precomputed_embeddings = _precompute_event_embeddings(all_events, embed_fn)
         for schema_attempt in range(2):
             conn = _open_connection(db_path)
             telemetry_span = start_writer_span(
@@ -1484,7 +1511,6 @@ def burn_drain_once(
                 ensure_dedupe_schema(conn)
                 conn.execute("BEGIN IMMEDIATE")
                 prefetched_state = _prefetch_enrichment_state(conn, all_events)
-                store_chunk_ids: list[str] = []
                 fallback_markers_by_path: dict[Path, list[FallbackReplayMarker]] = {}
                 attempt_applied_events = 0
                 attempt_skipped_verified_stale = 0
@@ -1504,24 +1530,18 @@ def burn_drain_once(
                         applied = _apply_event(conn, event)
                         attempt_applied_events += 1
                         if applied.chunk_id:
-                            store_chunk_ids.append(applied.chunk_id)
+                            content = str(_event_payload(event).get("content") or "").strip()
+                            embedding_bytes = precomputed_embeddings.get(content)
+                            if embedding_bytes:
+                                _insert_precomputed_embedding(conn, applied.chunk_id, embedding_bytes)
                         path_fallback_markers.extend(applied.fallback_markers)
                     if path_fallback_markers:
                         fallback_markers_by_path[path] = path_fallback_markers
-                if _embedding_enabled():
-                    _embed_store_chunks(conn, store_chunk_ids, embed_fn)
                 conn.execute("COMMIT")
                 telemetry_span.finish("commit", rows_touched=attempt_applied_events)
                 result.applied_events += attempt_applied_events
                 result.skipped_verified_stale += attempt_skipped_verified_stale
-                conn.setbusytimeout(_checkpoint_busy_timeout_ms())
-                try:
-                    conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
-                    result.checkpoints += 1
-                except apsw.Error as exc:
-                    _log(log_path, f"burn drain checkpoint skipped: {exc}")
-                finally:
-                    conn.setbusytimeout(_drain_busy_timeout_ms())
+                result.checkpoints += _post_commit_checkpoint(conn, db_path, log_path)
                 break
             except Exception as exc:
                 try:
@@ -1685,13 +1705,7 @@ def drain_once(
                     # WAL, which stalls queue drain before it can publish health.
                     # journal_size_limit and the scheduled wal-checkpoint job reclaim
                     # disk later. The except keeps a busy checkpoint non-fatal.
-                    conn.setbusytimeout(_checkpoint_busy_timeout_ms())
-                    try:
-                        conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
-                    except apsw.Error:
-                        pass
-                    finally:
-                        conn.setbusytimeout(_drain_busy_timeout_ms())
+                    _post_commit_checkpoint(conn, db_path, log_path)
                     drained += attempt_drained
                     collisions_dropped += len(collision_ids)
                     for chunk_id in collision_ids:

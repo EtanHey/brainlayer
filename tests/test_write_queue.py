@@ -533,6 +533,57 @@ class TestQueueStore:
         assert drained == 1
         assert checkpoint_sql == ["PRAGMA wal_checkpoint(PASSIVE)"]
 
+    def test_large_wal_escalates_to_rate_limited_restart_checkpoint(self, tmp_path, monkeypatch):
+        """A large WAL gets a bounded reset attempt without RESTART on every commit."""
+        from brainlayer import drain
+
+        checkpoint_sql: list[str] = []
+
+        class FakeResult:
+            def fetchone(self):
+                return (0, 100, 100)
+
+        class FakeConnection:
+            def execute(self, sql, *_args):
+                if "wal_checkpoint" in sql:
+                    checkpoint_sql.append(sql)
+                return FakeResult()
+
+            def setbusytimeout(self, _timeout_ms):
+                return None
+
+        monkeypatch.setenv("BRAINLAYER_WAL_RESTART_HIGH_WATER_BYTES", "1")
+        monkeypatch.setenv("BRAINLAYER_WAL_RESTART_MIN_INTERVAL_SECONDS", "60")
+        monkeypatch.setattr(drain, "_wal_size_bytes", lambda _path: 100)
+        monkeypatch.setattr(drain.time, "monotonic", lambda: 1_000.0)
+        drain._LAST_RESTART_ATTEMPT.clear()
+
+        first = drain._post_commit_checkpoint(FakeConnection(), tmp_path / "brainlayer.db")
+        second = drain._post_commit_checkpoint(FakeConnection(), tmp_path / "brainlayer.db")
+
+        assert first == 2
+        assert second == 1
+        assert checkpoint_sql == [
+            "PRAGMA wal_checkpoint(PASSIVE)",
+            "PRAGMA wal_checkpoint(RESTART)",
+            "PRAGMA wal_checkpoint(PASSIVE)",
+        ]
+
+    def test_post_commit_checkpoint_guard_failure_is_nonfatal(self, tmp_path, monkeypatch):
+        """Checkpoint bookkeeping cannot turn a committed queue item into a replay."""
+        from brainlayer import drain
+
+        class BrokenGuard:
+            def __enter__(self):
+                raise OSError("checkpoint lock unavailable")
+
+            def __exit__(self, *_args):
+                return False
+
+        monkeypatch.setattr(drain, "checkpoint_guard", lambda *_args, **_kwargs: BrokenGuard())
+
+        assert drain._post_commit_checkpoint(MagicMock(), tmp_path / "brainlayer.db") == 0
+
     def test_drain_prepares_all_schema_before_acquiring_immediate_write_lock(self, tmp_path, monkeypatch):
         """Schema/FTS inspection must not hold the exclusive writer transaction."""
         from brainlayer import drain
@@ -1742,6 +1793,50 @@ def test_burn_drain_skips_verified_stale_enrichment_and_applies_real_update(tmp_
     assert rows == {"already-done": "old summary", "needs-update": "real summary"}
 
 
+def test_burn_drain_precomputes_embeddings_before_begin_immediate(tmp_path, monkeypatch):
+    from brainlayer import drain
+    from brainlayer.vector_store import VectorStore
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "burn.log"
+    VectorStore(db_path).close()
+    enqueue_store(
+        content="burn embedding must not hold the SQLite write transaction",
+        memory_type="note",
+        project="brainlayer",
+        queue_dir=queue_dir,
+    )
+    events: list[str] = []
+    real_open = drain._open_connection
+
+    class RecordingConnection:
+        def __init__(self, connection):
+            self._connection = connection
+
+        def execute(self, sql, *args, **kwargs):
+            if sql.strip().upper() == "BEGIN IMMEDIATE":
+                events.append("begin")
+            return self._connection.execute(sql, *args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._connection, name)
+
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "1")
+    monkeypatch.setattr(drain, "_open_connection", lambda path: RecordingConnection(real_open(path)))
+
+    result = drain.burn_drain_once(
+        db_path=db_path,
+        queue_dir=queue_dir,
+        batch_size=10,
+        log_path=log_path,
+        embed_fn=lambda _content: events.append("embed") or [0.0] * 1024,
+    )
+
+    assert result.applied_events == 1
+    assert events.index("embed") < events.index("begin")
+
+
 def test_burn_drain_adds_provenance_columns_on_fresh_schema_before_queued_update(tmp_path):
     from brainlayer.drain import burn_drain_once
 
@@ -2359,12 +2454,13 @@ def test_burn_drain_rolls_back_provenance_enqueue_with_batch(tmp_path, monkeypat
         queue_dir=queue_dir,
     )
 
-    monkeypatch.setattr(drain, "_embedding_enabled", lambda: True)
+    real_apply_event = drain._apply_event
 
-    def fail_after_events(*_args, **_kwargs):
+    def fail_after_events(conn, event):
+        real_apply_event(conn, event)
         raise RuntimeError("synthetic post-event batch failure")
 
-    monkeypatch.setattr(drain, "_embed_store_chunks", fail_after_events)
+    monkeypatch.setattr(drain, "_apply_event", fail_after_events)
 
     result = drain.burn_drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10, log_path=log_path)
 

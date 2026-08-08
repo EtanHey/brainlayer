@@ -147,6 +147,11 @@ brainlayer enrich
 - **brain-worker and miner sessions are KEPT but NOT INDEXED.** Exclusion never deletes the source
   JSONL — it means exclusion from the index only. `BRAINLAYER_INGEST_DENYLIST` remains an explicit
   deployment override.
+- **brain-worker ≠ brainlayer worker (Etan, ratified by voice 2026-08-08):** a *brain-worker* is
+  the ingest-excluded SUBAGENT type (Claude Agent-tool type today; other harnesses hopefully later)
+  — its transcript stays out of the index BY CLASS, which is its entire point. A *brainlayer
+  worker* is a cmux pane of a brainlayerGolem and ingests normally. Never substitute a visible pane
+  when ingest-exclusion is the goal; to "paste" to a subagent, paste to the lead, who relays.
 - ⚠️ **Known code drift, do not read this file as describing shipped behaviour:**
   `ingest_denylist.py:14` is `("~/.claude/projects/**/wf_*/**",)`, which excludes **every** workflow
   path and silently discards legitimate workflow-agent memory. The rule above is the ruling; the code
