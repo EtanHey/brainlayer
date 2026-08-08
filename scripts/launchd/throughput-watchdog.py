@@ -48,6 +48,7 @@ class Config:
     max_source_files: int = 100_000
     max_scan_seconds: float = 20.0
     progress_slo_seconds: int = 180
+    checkpoint_deferral_alert_threshold: int = 3
     drain_health_path: Path | None = None
     dry_run: bool = False
     log_path: Path = Path("~/.local/share/brainlayer/logs/throughput-watchdog.log").expanduser()
@@ -92,6 +93,7 @@ class WatchdogResult:
     scan_errors: int
     stalled_ticks: int
     action: str
+    checkpoint_deferred_ticks: int = 0
     offset_bytes: int | None = None
     offset_bytes_delta: int | None = None
     drain_cycles: int | None = None
@@ -503,10 +505,16 @@ def _best_effort_alert(config: Config, result: WatchdogResult) -> None:
     config.log_path.expanduser().parent.mkdir(parents=True, exist_ok=True)
     with config.log_path.expanduser().open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(asdict(result), sort_keys=True) + "\n")
-    body = (
-        "Watcher has registry-tracked JSONL bytes pending but realtime_watcher chunks are flat; "
-        "automatic recovery is starting."
-    )
+    if result.action == "checkpoint_deferral_alert":
+        body = (
+            "Watcher recovery is blocked because the WAL checkpoint guard remains held across "
+            f"{result.checkpoint_deferred_ticks} attempts; operator intervention is required."
+        )
+    else:
+        body = (
+            "Watcher has registry-tracked JSONL bytes pending but realtime_watcher chunks are flat; "
+            "automatic recovery is starting."
+        )
     try:
         subprocess.run(
             [
@@ -558,6 +566,10 @@ def run_once(
     previous_stalled = state.get("stalled_ticks", 0)
     if not isinstance(previous_stalled, int) or previous_stalled < 0:
         previous_stalled = 0
+    previous_checkpoint_deferred = state.get("checkpoint_deferred_ticks", 0)
+    if not isinstance(previous_checkpoint_deferred, int) or previous_checkpoint_deferred < 0:
+        previous_checkpoint_deferred = 0
+    checkpoint_deferral_alerted = bool(state.get("checkpoint_deferral_alerted"))
     delta = current_highwater - previous_highwater if isinstance(previous_highwater, int) else None
     liveness_delta = (
         current_liveness_highwater - previous_liveness_highwater
@@ -610,6 +622,10 @@ def run_once(
         action = "stalled"
         stalled_ticks = previous_stalled + 1
 
+    if action in {"baseline", "progress", "idle"}:
+        previous_checkpoint_deferred = 0
+        checkpoint_deferral_alerted = False
+
     result = WatchdogResult(
         checked_at_epoch=checked_at,
         watcher_highwater_rowid=current_highwater,
@@ -624,6 +640,7 @@ def run_once(
         scan_errors=evidence.scan_errors,
         stalled_ticks=stalled_ticks,
         action=action,
+        checkpoint_deferred_ticks=previous_checkpoint_deferred,
         offset_bytes=operational_progress.offset_bytes,
         offset_bytes_delta=offset_delta,
         drain_cycles=operational_progress.drain_cycles,
@@ -654,8 +671,24 @@ def run_once(
             try:
                 with checkpoint_guard(config.db_path, blocking=False) as checkpoint_available:
                     if not checkpoint_available:
-                        result.action = "checkpoint_deferred"
+                        result.checkpoint_deferred_ticks += 1
+                        if result.checkpoint_deferred_ticks >= config.checkpoint_deferral_alert_threshold:
+                            result.action = "checkpoint_deferral_alert"
+                            if not checkpoint_deferral_alerted:
+                                try:
+                                    alert_fn(config, result)
+                                    checkpoint_deferral_alerted = True
+                                except Exception as exc:
+                                    result.alert_error = str(exc)
+                                    print(
+                                        f"throughput-watchdog checkpoint deferral alert failed: {exc}",
+                                        file=sys.stderr,
+                                    )
+                        else:
+                            result.action = "checkpoint_deferred"
                     else:
+                        result.checkpoint_deferred_ticks = 0
+                        checkpoint_deferral_alerted = False
                         # Alert-framing: page on the FIRST wedge of an episode only — never
                         # per-kick of a chronic sawtooth. The latch clears after a sustained
                         # healthy run (episode reset below). Recovery still runs every tick.
@@ -717,6 +750,8 @@ def run_once(
             "scan_errors": evidence.scan_errors,
             "stalled_ticks": result.stalled_ticks,
             "last_action": result.action,
+            "checkpoint_deferred_ticks": result.checkpoint_deferred_ticks,
+            "checkpoint_deferral_alerted": checkpoint_deferral_alerted,
             "offset_bytes": operational_progress.offset_bytes,
             "drain_cycles": operational_progress.drain_cycles,
             "drained_total": operational_progress.drained_total,
@@ -773,6 +808,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--watch-plist", type=Path, default=home / "Library/LaunchAgents/com.brainlayer.watch.plist")
     parser.add_argument("--stall-threshold", type=_positive_int, default=3)
     parser.add_argument("--progress-slo-seconds", type=_positive_int, default=180)
+    parser.add_argument("--checkpoint-deferral-alert-threshold", type=_positive_int, default=3)
     parser.add_argument("--cooldown-seconds", type=_positive_int, default=600)
     parser.add_argument("--recent-window-seconds", type=_positive_int, default=600)
     parser.add_argument("--max-source-files", type=_positive_int, default=100_000)
@@ -797,6 +833,7 @@ def _config_from_args(args: argparse.Namespace) -> Config:
         watch_plist_path=args.watch_plist,
         stall_threshold=args.stall_threshold,
         progress_slo_seconds=args.progress_slo_seconds,
+        checkpoint_deferral_alert_threshold=args.checkpoint_deferral_alert_threshold,
         cooldown_seconds=args.cooldown_seconds,
         recent_window_seconds=args.recent_window_seconds,
         max_source_files=args.max_source_files,
@@ -831,7 +868,7 @@ def main(argv: list[str] | None = None) -> int:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     print(json.dumps(asdict(result), sort_keys=True) if args.json else f"{result.action}: {result}")
-    return 1 if result.action in {"recovery_failed", "checkpoint_guard_error"} else 0
+    return 1 if result.action in {"recovery_failed", "checkpoint_guard_error", "checkpoint_deferral_alert"} else 0
 
 
 if __name__ == "__main__":

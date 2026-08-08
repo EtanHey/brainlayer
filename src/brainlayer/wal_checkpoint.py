@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
+import math
 import os
 import sqlite3
 import time
@@ -14,6 +15,12 @@ from pathlib import Path
 from .paths import get_db_path
 
 _VALID_CHECKPOINT_MODES = {"PASSIVE", "FULL", "RESTART", "TRUNCATE"}
+_DEFAULT_GUARD_TIMEOUT_SECONDS = 10.0
+_GUARD_POLL_SECONDS = 0.1
+
+
+class CheckpointGuardTimeout(TimeoutError):
+    """Raised when a live checkpoint owner outlasts the acquisition deadline."""
 
 
 def checkpoint_lock_path(db_path: str | Path) -> Path:
@@ -23,19 +30,55 @@ def checkpoint_lock_path(db_path: str | Path) -> Path:
     return Path("/tmp") / f"brainlayer-wal-checkpoint-{digest}.lock"
 
 
+def _bounded_guard_timeout(value: object) -> float:
+    if value is None:
+        return _DEFAULT_GUARD_TIMEOUT_SECONDS
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return _DEFAULT_GUARD_TIMEOUT_SECONDS
+    if not math.isfinite(parsed):
+        return _DEFAULT_GUARD_TIMEOUT_SECONDS
+    return max(0.0, parsed)
+
+
+def _guard_timeout_seconds() -> float:
+    return _bounded_guard_timeout(os.environ.get("BRAINLAYER_CHECKPOINT_GUARD_TIMEOUT_SECONDS"))
+
+
 @contextmanager
-def checkpoint_guard(db_path: str | Path, *, blocking: bool = True) -> Iterator[bool]:
-    """Serialize checkpoints and let recovery defer while one is active."""
+def checkpoint_guard(
+    db_path: str | Path,
+    *,
+    blocking: bool = True,
+    timeout_seconds: float | None = None,
+) -> Iterator[bool]:
+    """Serialize checkpoints with bounded wait; let recovery defer immediately."""
     lock_path = checkpoint_lock_path(db_path)
     lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
     acquired = False
     try:
-        operation = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)
-        try:
-            fcntl.flock(lock_fd, operation)
-            acquired = True
-        except BlockingIOError:
-            pass
+        if blocking:
+            timeout = _guard_timeout_seconds() if timeout_seconds is None else _bounded_guard_timeout(timeout_seconds)
+            deadline = time.monotonic() + timeout
+            while True:
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True
+                    break
+                except BlockingIOError:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise CheckpointGuardTimeout(
+                            f"checkpoint guard acquisition timed out after {timeout:.1f}s for {db_path}"
+                        )
+                    time.sleep(min(_GUARD_POLL_SECONDS, remaining))
+        else:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+            except BlockingIOError:
+                pass
         yield acquired
     finally:
         if acquired:
@@ -67,14 +110,19 @@ def format_size(size_bytes: int) -> str:
     return f"{value:.1f}TB"
 
 
-def checkpoint(db_path: str, mode: str = "TRUNCATE") -> tuple[int, int, int]:
+def checkpoint(
+    db_path: str,
+    mode: str = "TRUNCATE",
+    *,
+    guard_timeout_seconds: float | None = None,
+) -> tuple[int, int, int]:
     """Run WAL checkpoint and return (busy, log_pages, checkpointed_pages)."""
     mode = mode.upper()
     if mode not in _VALID_CHECKPOINT_MODES:
         raise ValueError(f"Invalid checkpoint mode: {mode}")
 
-    with checkpoint_guard(db_path) as acquired:
-        if not acquired:  # pragma: no cover - blocking acquisition always resolves
+    with checkpoint_guard(db_path, timeout_seconds=guard_timeout_seconds) as acquired:
+        if not acquired:  # pragma: no cover - bounded acquisition resolves or raises
             raise RuntimeError("checkpoint guard was not acquired")
         conn = sqlite3.connect(db_path, timeout=10)
         try:

@@ -1,5 +1,6 @@
 """Tests for brainlayer enrichment and maintenance CLI routing."""
 
+import json
 import os
 import signal
 from types import SimpleNamespace
@@ -336,3 +337,17 @@ def test_cli_wal_checkpoint_routes_to_helper(monkeypatch):
     assert result.exit_code == 0
     assert called == {"mode": "TRUNCATE"}
     assert "Checkpoint (TRUNCATE): 10/10 pages" in result.stdout
+
+
+def test_cli_wal_checkpoint_reports_guard_timeout_as_json_error(monkeypatch):
+    from brainlayer.wal_checkpoint import CheckpointGuardTimeout
+
+    def fake_run(_mode):
+        raise CheckpointGuardTimeout("checkpoint guard acquisition timed out after 10.0s")
+
+    monkeypatch.setattr("brainlayer.wal_checkpoint.run_wal_checkpoint", fake_run)
+
+    result = runner.invoke(app, ["wal-checkpoint", "--json"])
+
+    assert result.exit_code == 1
+    assert json.loads(result.stdout) == {"error": "checkpoint guard acquisition timed out after 10.0s"}

@@ -32,6 +32,7 @@ def _config(
     stall_threshold: int = 3,
     cooldown_seconds: int = 600,
     progress_slo_seconds: int | None = None,
+    checkpoint_deferral_alert_threshold: int = 3,
 ):
     return module.Config(
         db_path=tmp_path / "brainlayer.db",
@@ -43,6 +44,7 @@ def _config(
         stall_threshold=stall_threshold,
         cooldown_seconds=cooldown_seconds,
         progress_slo_seconds=progress_slo_seconds or stall_threshold * 60,
+        checkpoint_deferral_alert_threshold=checkpoint_deferral_alert_threshold,
     )
 
 
@@ -863,9 +865,97 @@ def test_recovery_defers_without_signaling_while_checkpoint_guard_is_held(tmp_pa
 
     assert result.action == "checkpoint_deferred"
     assert result.stalled_ticks == 1
+    assert result.checkpoint_deferred_ticks == 1
     assert commands == []
     state = json.loads(config.state_path.read_text(encoding="utf-8"))
     assert "last_restart_epoch" not in state
+
+
+def test_sustained_checkpoint_deferral_pages_once_and_remains_nonzero(tmp_path: Path) -> None:
+    from brainlayer.wal_checkpoint import checkpoint_guard
+
+    module = _load_module()
+    config = _config(
+        module,
+        tmp_path,
+        stall_threshold=1,
+        checkpoint_deferral_alert_threshold=3,
+    )
+    evidence = module.SourceEvidence(1, 20, 1, 999.0)
+    frozen = module.OperationalProgress(offset_bytes=100, drain_cycles=10, drained_total=4)
+    commands: list[list[str]] = []
+    alerts: list[tuple[str, int]] = []
+
+    module.run_once(
+        config,
+        now_epoch=1_000,
+        progress_reader=lambda _path: _progress(module, 40, 10),
+        operational_progress_reader=lambda _config: frozen,
+        source_probe=lambda _config, _now: evidence,
+    )
+    with checkpoint_guard(config.db_path, blocking=False) as acquired:
+        assert acquired is True
+        results = [
+            module.run_once(
+                config,
+                now_epoch=checked_at,
+                progress_reader=lambda _path: _progress(module, 40, 10),
+                operational_progress_reader=lambda _config: frozen,
+                source_probe=lambda _config, _now: evidence,
+                command_runner=lambda args: commands.append(args),
+                alert_fn=lambda _config, result: alerts.append((result.action, result.checkpoint_deferred_ticks)),
+            )
+            for checked_at in (1_060, 1_120, 1_180, 1_240)
+        ]
+
+    assert [result.action for result in results] == [
+        "checkpoint_deferred",
+        "checkpoint_deferred",
+        "checkpoint_deferral_alert",
+        "checkpoint_deferral_alert",
+    ]
+    assert [result.checkpoint_deferred_ticks for result in results] == [1, 2, 3, 4]
+    assert alerts == [("checkpoint_deferral_alert", 3)]
+    assert commands == []
+    state = json.loads(config.state_path.read_text(encoding="utf-8"))
+    assert state["checkpoint_deferred_ticks"] == 4
+    assert state["checkpoint_deferral_alerted"] is True
+
+
+def test_checkpoint_deferral_alert_exits_nonzero(tmp_path: Path, monkeypatch, capsys) -> None:
+    module = _load_module()
+    alert_result = module.WatchdogResult(
+        checked_at_epoch=1_180,
+        watcher_highwater_rowid=40,
+        watcher_highwater_delta=0,
+        watcher_liveness_highwater_rowid=10,
+        watcher_liveness_highwater_delta=0,
+        pending_files=1,
+        pending_bytes=20,
+        recent_files=1,
+        untracked_recent_files=0,
+        newest_source_mtime=999.0,
+        scan_errors=0,
+        stalled_ticks=3,
+        action="checkpoint_deferral_alert",
+        checkpoint_deferred_ticks=3,
+    )
+    monkeypatch.setattr(module, "run_once", lambda _config, now_epoch=None: alert_result)
+
+    exit_code = module.main(
+        [
+            "--db",
+            str(tmp_path / "brainlayer.db"),
+            "--state",
+            str(tmp_path / "watchdog-state.json"),
+            "--source-root",
+            str(tmp_path / "sessions"),
+            "--json",
+        ]
+    )
+
+    assert exit_code == 1
+    assert json.loads(capsys.readouterr().out)["action"] == "checkpoint_deferral_alert"
 
 
 def test_recovery_requires_kickstarted_job_to_reach_running_state(tmp_path: Path) -> None:
