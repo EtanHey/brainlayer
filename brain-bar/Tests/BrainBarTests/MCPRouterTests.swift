@@ -109,7 +109,7 @@ final class MCPRouterTests: XCTestCase {
     // MARK: - Initialize
 
     func testInitializeReturnsProtocolVersion() throws {
-        let router = MCPRouter(profile: "full")
+        let router = MCPRouter(profile: "full", backupWriterStartedAtUnix: 1_234.5)
         let request: [String: Any] = [
             "jsonrpc": "2.0",
             "id": 1,
@@ -127,7 +127,7 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertNotNil(result)
         XCTAssertEqual(result?["protocolVersion"] as? String, "2024-11-05")
         let serverInfo = try XCTUnwrap(result?["serverInfo"] as? [String: Any])
-        XCTAssertGreaterThan(serverInfo["backupWriterStartedAtUnix"] as? Double ?? 0, 0)
+        XCTAssertEqual(serverInfo["backupWriterStartedAtUnix"] as? Double, 1_234.5)
         XCTAssertEqual(response["id"] as? Int, 1)
 
         // Must declare tool capabilities

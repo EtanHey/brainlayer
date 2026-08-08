@@ -524,12 +524,14 @@ def test_stale_attempt_sweep_deletes_only_completed_regular_files_older_than_one
     now = 200_000.0
     stale_completed = tmp_path / ".2026-05-12.db.attempt-1-stale-completed"
     stale_prior_writer = tmp_path / ".2026-05-12.db.attempt-1-stale-prior-writer"
+    stale_current_writer = tmp_path / ".2026-05-12.db.attempt-1-stale-current-writer"
     current_writer = tmp_path / ".2026-05-13.db.attempt-1-current-writer"
     recent = tmp_path / ".2026-05-13.db.attempt-1-recent"
     target = tmp_path / "outside.db"
     symlink = tmp_path / ".2026-05-11.db.attempt-1-link"
     stale_completed.write_bytes(b"stale completed")
     stale_prior_writer.write_bytes(b"stale prior writer")
+    stale_current_writer.write_bytes(b"stale current writer")
     current_writer.write_bytes(b"current writer")
     recent.write_bytes(b"recent")
     target.write_bytes(b"outside")
@@ -539,7 +541,8 @@ def test_stale_attempt_sweep_deletes_only_completed_regular_files_older_than_one
     stale_marker.write_text("complete")
     recent_marker.write_text("complete")
     os.utime(stale_completed, (now - 90_000, now - 90_000))
-    os.utime(stale_prior_writer, (now - 90_000, now - 90_000))
+    os.utime(stale_prior_writer, (now - 110_000, now - 110_000))
+    os.utime(stale_current_writer, (now - 87_000, now - 87_000))
     os.utime(current_writer, (now - 60, now - 60))
     os.utime(stale_marker, (now - 90_000, now - 90_000))
     os.utime(recent, (now - 60, now - 60))
@@ -549,19 +552,60 @@ def test_stale_attempt_sweep_deletes_only_completed_regular_files_older_than_one
         tmp_path,
         max_age_seconds=86_400,
         now=now,
-        writer_started_at=now - 3_600,
+        writer_started_at=now - 100_000,
     )
 
     assert deleted == [stale_completed.name, stale_prior_writer.name]
-    assert {path.name for path in surviving} == {current_writer.name, recent.name, symlink.name}
+    assert {path.name for path in surviving} == {
+        stale_current_writer.name,
+        current_writer.name,
+        recent.name,
+        symlink.name,
+    }
     assert not stale_completed.exists()
     assert not stale_marker.exists()
     assert not stale_prior_writer.exists()
+    assert stale_current_writer.exists()
     assert current_writer.exists()
     assert recent.exists()
     assert recent_marker.exists()
     assert symlink.is_symlink()
     assert target.read_bytes() == b"outside"
+
+
+def test_stale_attempt_sweep_keeps_recent_attempt_from_prior_writer(tmp_path):
+    from brainlayer import backup_daily
+
+    now = 200_000.0
+    recent_prior_writer = tmp_path / ".2026-05-13.db.attempt-1-recent-prior-writer"
+    recent_prior_writer.write_bytes(b"recent prior writer")
+    os.utime(recent_prior_writer, (now - 3_000, now - 3_000))
+
+    deleted, surviving = backup_daily._sweep_stale_backup_attempts(
+        tmp_path,
+        max_age_seconds=86_400,
+        now=now,
+        writer_started_at=now - 1_000,
+    )
+
+    assert deleted == []
+    assert surviving == [recent_prior_writer]
+    assert recent_prior_writer.exists()
+
+
+def test_create_snapshot_does_not_swallow_global_timeout_during_writer_probe(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    _create_source_db(source, chunk_count=2)
+    monkeypatch.setattr(
+        backup_daily,
+        "_brainbar_writer_started_at",
+        lambda socket_path=None: (_ for _ in ()).throw(backup_daily.BackupTimeoutError("deadline")),
+    )
+
+    with pytest.raises(backup_daily.BackupTimeoutError, match="deadline"):
+        backup_daily.create_sqlite_backup_artifact(source, tmp_path / "out")
 
 
 def test_database_logical_size_includes_committed_wal_pages(tmp_path):

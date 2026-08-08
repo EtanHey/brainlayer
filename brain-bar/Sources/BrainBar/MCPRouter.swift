@@ -16,7 +16,7 @@ final class MCPRouter: @unchecked Sendable {
     }
 
     private static let profileEnvironmentKey = "BRAINLAYER_MCP_PROFILE"
-    private static let backupWriterStartedAtUnix = Date().timeIntervalSince1970
+    private let backupWriterStartedAtUnix: TimeInterval
     private static let coreToolNames: Set<String> = [
         "brain_search",
         "brain_store",
@@ -177,12 +177,14 @@ final class MCPRouter: @unchecked Sendable {
         profile: String? = nil,
         hybridSearchClient: HybridSearchClientProtocol? = nil,
         hybridSearchBudget: TimeInterval = 0.8,
-        dbPath: String? = nil
+        dbPath: String? = nil,
+        backupWriterStartedAtUnix: TimeInterval = Date().timeIntervalSince1970
     ) {
         self.toolProfile = Self.resolveToolProfile(profile)
         self.hybridSearchClient = hybridSearchClient
         self.hybridSearchBudget = max(0.001, hybridSearchBudget)
         self.dbPath = dbPath
+        self.backupWriterStartedAtUnix = backupWriterStartedAtUnix
     }
 
     private static func resolveToolProfile(_ explicitProfile: String?) -> ToolProfile {
@@ -363,7 +365,7 @@ final class MCPRouter: @unchecked Sendable {
                 "serverInfo": [
                     "name": "brainbar",
                     "version": "1.0.0",
-                    "backupWriterStartedAtUnix": Self.backupWriterStartedAtUnix,
+                    "backupWriterStartedAtUnix": backupWriterStartedAtUnix,
                 ]
             ] as [String: Any]
         ]

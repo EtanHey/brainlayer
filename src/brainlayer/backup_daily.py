@@ -324,6 +324,8 @@ def create_sqlite_backup_artifact(
     output_dir.mkdir(parents=True, exist_ok=True)
     try:
         writer_started_at = _brainbar_writer_started_at(socket_path)
+    except BackupTimeoutError:
+        raise
     except (OSError, RuntimeError, ValueError):
         writer_started_at = None
     stale_attempts_deleted, surviving_attempt_paths = _sweep_stale_backup_attempts(
