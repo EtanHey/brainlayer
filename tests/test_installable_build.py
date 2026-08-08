@@ -204,6 +204,9 @@ def test_setup_migrates_legacy_raw_socat_mcp_config_idempotently(tmp_path: Path)
             "brainlayer": {
                 "command": "socat",
                 "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"],
+                "disabled": True,
+                "env": {"BRAINLAYER_MCP_SOCKET": "/tmp/brainbar.sock"},
+                "timeout": 30,
             },
             "unrelated": {"command": "other-mcp", "args": ["--keep"]},
         },
@@ -224,7 +227,34 @@ def test_setup_migrates_legacy_raw_socat_mcp_config_idempotently(tmp_path: Path)
     assert second_changed == []
     assert migrated["theme"] == "dark"
     assert migrated["mcpServers"]["unrelated"] == original["mcpServers"]["unrelated"]
-    assert migrated["mcpServers"]["brainlayer"] == {"command": "/opt/homebrew/bin/brainlayer-mcp-stdio-bridge"}
+    assert migrated["mcpServers"]["brainlayer"] == {
+        "command": "/opt/homebrew/bin/brainlayer-mcp-stdio-bridge",
+        "disabled": True,
+        "env": {"BRAINLAYER_MCP_SOCKET": "/tmp/brainbar.sock"},
+        "timeout": 30,
+    }
+
+
+def test_setup_mcp_migration_refuses_unresolved_bridge_without_touching_config(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.setup as setup_helpers
+
+    config_path = tmp_path / ".claude.json"
+    original = {
+        "mcpServers": {
+            "brainlayer": {
+                "command": "socat",
+                "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"],
+            }
+        }
+    }
+    original_text = json.dumps(original) + "\n"
+    config_path.write_text(original_text, encoding="utf-8")
+    monkeypatch.setattr(setup_helpers, "get_current_mcp_bridge_bin", lambda: None)
+
+    with pytest.raises(FileNotFoundError, match="brainlayer-mcp-stdio-bridge was not found"):
+        setup_helpers.migrate_legacy_mcp_configs([config_path])
+
+    assert config_path.read_text(encoding="utf-8") == original_text
 
 
 def test_setup_mcp_migration_preserves_original_and_cleans_temp_on_replace_failure(tmp_path: Path, monkeypatch) -> None:

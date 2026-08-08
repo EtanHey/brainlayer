@@ -84,7 +84,7 @@ def migrate_legacy_mcp_configs(
     bridge_command: str | None = None,
 ) -> list[Path]:
     """Replace known raw-socat BrainBar transports without touching unrelated MCP entries."""
-    resolved_bridge = bridge_command or get_current_mcp_bridge_bin() or "brainlayer-mcp-stdio-bridge"
+    resolved_bridge = bridge_command
     changed: list[Path] = []
     paths = config_paths if config_paths is not None else get_default_mcp_config_paths()
     for config_path in paths:
@@ -105,7 +105,14 @@ def migrate_legacy_mcp_configs(
         for name, server in list(servers.items()):
             if not _is_legacy_brainbar_socat(server):
                 continue
-            servers[name] = {"command": resolved_bridge}
+            if resolved_bridge is None:
+                resolved_bridge = get_current_mcp_bridge_bin()
+            if not resolved_bridge:
+                raise FileNotFoundError("brainlayer-mcp-stdio-bridge was not found on PATH")
+            migrated_server = dict(server)
+            migrated_server["command"] = resolved_bridge
+            migrated_server.pop("args", None)
+            servers[name] = migrated_server
             migrated = True
         if not migrated:
             continue
