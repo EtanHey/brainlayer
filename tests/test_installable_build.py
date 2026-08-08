@@ -284,6 +284,40 @@ def test_setup_mcp_migration_preserves_original_and_cleans_temp_on_replace_failu
     assert not (tmp_path / f".{config_path.name}.{os.getpid()}.tmp").exists()
 
 
+def test_setup_mcp_migration_preserves_symlink_and_updates_target(tmp_path: Path) -> None:
+    from brainlayer.setup import migrate_legacy_mcp_configs
+
+    target = tmp_path / "dotfiles" / "claude.json"
+    target.parent.mkdir()
+    target.write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "brainlayer": {
+                        "command": "socat",
+                        "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"],
+                    }
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    config_path = tmp_path / ".claude.json"
+    config_path.symlink_to(target)
+
+    changed = migrate_legacy_mcp_configs(
+        [config_path],
+        bridge_command="/opt/homebrew/bin/brainlayer-mcp-stdio-bridge",
+    )
+
+    assert changed == [config_path]
+    assert config_path.is_symlink()
+    assert json.loads(target.read_text(encoding="utf-8"))["mcpServers"]["brainlayer"] == {
+        "command": "/opt/homebrew/bin/brainlayer-mcp-stdio-bridge"
+    }
+
+
 def test_verify_mcp_transport_requires_initialize_and_tools_list(tmp_path: Path) -> None:
     from brainlayer.setup import verify_mcp_transport
 
@@ -298,6 +332,35 @@ for line in sys.stdin:
         print(json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18"}}), flush=True)
     elif request.get("id") == 2:
         print(json.dumps({"jsonrpc": "2.0", "id": 2, "result": {"tools": [{"name": "brain_search"}]}}), flush=True)
+""",
+        encoding="utf-8",
+    )
+    bridge.chmod(0o755)
+
+    assert verify_mcp_transport(bridge_command=str(bridge), timeout_seconds=2) == 1
+
+
+def test_verify_mcp_transport_waits_for_initialize_response_before_next_message(tmp_path: Path) -> None:
+    from brainlayer.setup import verify_mcp_transport
+
+    bridge = tmp_path / "strict-bridge"
+    bridge.write_text(
+        """#!/usr/bin/env python3
+import json
+import select
+import sys
+
+initialize = json.loads(sys.stdin.readline())
+if initialize.get("id") != 1 or select.select([sys.stdin], [], [], 0)[0]:
+    raise SystemExit(12)
+print(json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18"}}), flush=True)
+initialized = json.loads(sys.stdin.readline())
+if initialized.get("method") != "notifications/initialized":
+    raise SystemExit(13)
+tools = json.loads(sys.stdin.readline())
+if tools.get("id") != 2:
+    raise SystemExit(14)
+print(json.dumps({"jsonrpc": "2.0", "id": 2, "result": {"tools": [{"name": "brain_search"}]}}), flush=True)
 """,
         encoding="utf-8",
     )

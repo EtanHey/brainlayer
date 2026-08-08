@@ -189,7 +189,18 @@ def detect_deploy_drift(label: str, provenance_dir: Path) -> DeployDriftFinding 
 
     launch_version = payload.get("artifact_version")
     deployed_version = _artifact_version()
-    if not isinstance(launch_version, str) or launch_version == deployed_version:
+    if not isinstance(launch_version, str) and repo_root is not None and isinstance(launch_commit, str):
+        return DeployDriftFinding(
+            label=label,
+            repo_root=str(repo_root) if repo_root is not None else None,
+            provenance_path=str(provenance_path),
+            drift_status="release_identity_missing",
+            identity_kind="release_version",
+            deployed_version=deployed_version,
+        )
+    if not isinstance(launch_version, str):
+        return None
+    if launch_version == deployed_version:
         return None
     return DeployDriftFinding(
         label=label,

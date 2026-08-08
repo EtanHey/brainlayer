@@ -666,7 +666,7 @@ def test_run_doctor_stays_silent_when_loaded_daemon_launch_commit_matches_head(t
     assert not [issue for issue in result.issues if issue.code == "deploy_drift"]
 
 
-def test_deploy_drift_ignores_unrelated_parent_git_repo_for_packaged_install(tmp_path):
+def test_deploy_drift_treats_legacy_packaged_identity_as_unverifiable(tmp_path):
     from brainlayer.deploy_drift import detect_deploy_drift
 
     homebrew_root = tmp_path / "homebrew"
@@ -681,7 +681,11 @@ def test_deploy_drift_ignores_unrelated_parent_git_repo_for_packaged_install(tmp
         launch_commit=old_homebrew_commit,
     )
 
-    assert detect_deploy_drift("com.brainlayer.drain", provenance_dir) is None
+    finding = detect_deploy_drift("com.brainlayer.drain", provenance_dir)
+
+    assert finding is not None
+    assert finding.identity_kind == "release_version"
+    assert finding.drift_status == "release_identity_missing"
 
 
 def test_deploy_drift_uses_release_version_for_packaged_install(tmp_path):
@@ -710,6 +714,26 @@ def test_deploy_drift_uses_release_version_for_packaged_install(tmp_path):
     assert finding.to_context()["identity_kind"] == "release_version"
     assert finding.to_context()["launch_version"] == "1.5.1"
     assert finding.to_context()["deployed_version"] == __version__
+
+
+def test_deploy_drift_reports_packaged_provenance_without_release_identity(tmp_path):
+    from brainlayer.deploy_drift import detect_deploy_drift
+
+    package_root = tmp_path / "Cellar" / "brainlayer" / "1.5.2" / "libexec" / "site-packages"
+    package_root.mkdir(parents=True)
+    provenance_dir = tmp_path / "daemon-provenance"
+    _write_daemon_provenance(
+        provenance_dir,
+        label="com.brainlayer.drain",
+        repo_root=package_root,
+        launch_commit="legacy-writer-commit",
+    )
+
+    finding = detect_deploy_drift("com.brainlayer.drain", provenance_dir)
+
+    assert finding is not None
+    assert finding.identity_kind == "release_version"
+    assert finding.drift_status == "release_identity_missing"
 
 
 def test_real_provenance_writer_uses_release_identity_inside_unrelated_homebrew_checkout(tmp_path):
@@ -918,7 +942,10 @@ def test_deploy_drift_check_contains_per_label_exceptions(tmp_path, monkeypatch)
     result = doctor.DoctorResult(checked_at=NOW.isoformat(), ok=True, exit_code=0)
     monkeypatch.setattr(doctor, "is_launchd_label_loaded", lambda _label, command_runner: True)
 
+    checked: list[str] = []
+
     def fail_one_label(label: str, _provenance_dir: Path):
+        checked.append(label)
         if label == "com.brainlayer.drain":
             raise RuntimeError("corrupt deploy provenance")
         return None
@@ -936,6 +963,26 @@ def test_deploy_drift_check_contains_per_label_exceptions(tmp_path, monkeypatch)
     assert issue.severity == "fatal"
     assert issue.details["label"] == "com.brainlayer.drain"
     assert "corrupt deploy provenance" in issue.details["exception"]
+    assert checked == ["com.brainlayer.drain", "com.brainlayer.watch"]
+    assert len(result.issues) == 1
+
+
+def test_deploy_drift_alarm_context_redacts_home_paths() -> None:
+    from brainlayer.doctor import _redact_home_paths
+
+    home = Path.home()
+    context = {
+        "repo_root": str(home / "Gits" / "brainlayer"),
+        "provenance_path": str(home / ".local" / "share" / "brainlayer" / "daemon-provenance.json"),
+        "label": "com.brainlayer.drain",
+    }
+
+    assert _redact_home_paths(context) == {
+        "repo_root": "~/Gits/brainlayer",
+        "provenance_path": "~/.local/share/brainlayer/daemon-provenance.json",
+        "label": "com.brainlayer.drain",
+    }
+    assert context["repo_root"] == str(home / "Gits" / "brainlayer")
 
 
 def test_brainbar_changed_for_deploy_detects_brainbar_changes_since_launch(tmp_path):

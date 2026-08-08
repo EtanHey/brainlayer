@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import shutil
 import subprocess
 import sys
+import time
 from importlib import resources
 from pathlib import Path
 
@@ -91,8 +93,9 @@ def migrate_legacy_mcp_configs(
         path = config_path.expanduser()
         if not path.is_file():
             continue
+        target_path = path.resolve()
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = json.loads(target_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError(f"could not read MCP config {path}: {exc}") from exc
         if not isinstance(payload, dict):
@@ -117,12 +120,12 @@ def migrate_legacy_mcp_configs(
         if not migrated:
             continue
 
-        mode = path.stat().st_mode & 0o777
-        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        mode = target_path.stat().st_mode & 0o777
+        temporary = target_path.with_name(f".{target_path.name}.{os.getpid()}.tmp")
         try:
             temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             temporary.chmod(mode)
-            os.replace(temporary, path)
+            os.replace(temporary, target_path)
         finally:
             temporary.unlink(missing_ok=True)
         changed.append(path)
@@ -134,52 +137,73 @@ def verify_mcp_transport(*, bridge_command: str | None = None, timeout_seconds: 
     resolved_bridge = bridge_command or get_current_mcp_bridge_bin()
     if not resolved_bridge:
         raise FileNotFoundError("brainlayer-mcp-stdio-bridge was not found on PATH")
-    requests = (
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": DEFAULT_MCP_PROTOCOL_VERSION,
-                "capabilities": {},
-                "clientInfo": {"name": "brainlayer-setup", "version": "1"},
-            },
+    initialize_request = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": DEFAULT_MCP_PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": {"name": "brainlayer-setup", "version": "1"},
         },
-        {"jsonrpc": "2.0", "method": "notifications/initialized"},
-        {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
-    )
-    input_text = "".join(json.dumps(request, separators=(",", ":")) + "\n" for request in requests)
-    try:
-        completed = subprocess.run(
-            [resolved_bridge],
-            input=input_text,
-            text=True,
-            capture_output=True,
-            timeout=timeout_seconds,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(f"MCP transport verification timed out after {timeout_seconds:g}s") from exc
+    }
+    initialized_notification = {"jsonrpc": "2.0", "method": "notifications/initialized"}
+    tools_request = {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
+    deadline = time.monotonic() + timeout_seconds
 
-    responses: dict[object, dict[str, object]] = {}
-    for line in completed.stdout.splitlines():
+    def send(process: subprocess.Popen[str], payload: dict[str, object]) -> None:
+        assert process.stdin is not None
+        process.stdin.write(json.dumps(payload, separators=(",", ":")) + "\n")
+        process.stdin.flush()
+
+    def receive(process: subprocess.Popen[str], response_id: int) -> dict[str, object] | None:
+        assert process.stdout is not None
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not select.select([process.stdout], [], [], remaining)[0]:
+                raise RuntimeError(f"MCP transport verification timed out after {timeout_seconds:g}s")
+            line = process.stdout.readline()
+            if not line:
+                return None
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict) and payload.get("id") == response_id:
+                return payload
+
+    try:
+        process = subprocess.Popen(
+            [resolved_bridge],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+    except OSError as exc:
+        raise RuntimeError(f"could not start MCP bridge: {exc}") from exc
+
+    try:
+        send(process, initialize_request)
+        initialize = receive(process, 1)
+        if not initialize or not isinstance(initialize.get("result"), dict):
+            raise RuntimeError("MCP initialize response missing or invalid")
+        send(process, initialized_notification)
+        send(process, tools_request)
+        tools_response = receive(process, 2)
+        tools_result = tools_response.get("result") if tools_response else None
+        tools = tools_result.get("tools") if isinstance(tools_result, dict) else None
+        if not isinstance(tools, list) or not tools:
+            raise RuntimeError("MCP tools/list response missing tools")
+        return len(tools)
+    finally:
+        process.terminate()
         try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(payload, dict) and payload.get("id") in (1, 2):
-            responses[payload["id"]] = payload
-    initialize = responses.get(1)
-    if not initialize or not isinstance(initialize.get("result"), dict):
-        detail = completed.stderr.strip() or f"bridge exited {completed.returncode}"
-        raise RuntimeError(f"MCP initialize response missing or invalid: {detail}")
-    tools_response = responses.get(2)
-    tools_result = tools_response.get("result") if tools_response else None
-    tools = tools_result.get("tools") if isinstance(tools_result, dict) else None
-    if not isinstance(tools, list) or not tools:
-        detail = completed.stderr.strip() or f"bridge exited {completed.returncode}"
-        raise RuntimeError(f"MCP tools/list response missing tools: {detail}")
-    return len(tools)
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
 
 
 def ensure_brainlayer_env(

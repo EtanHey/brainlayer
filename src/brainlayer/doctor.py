@@ -311,6 +311,16 @@ def _counter_increased(before: Any, after: Any) -> bool:
     return isinstance(before, int) and isinstance(after, int) and after > before
 
 
+def _redact_home_paths(context: dict[str, Any]) -> dict[str, Any]:
+    redacted = dict(context)
+    home = str(Path.home())
+    for key in ("repo_root", "provenance_path"):
+        value = redacted.get(key)
+        if isinstance(value, str) and (value == home or value.startswith(f"{home}/")):
+            redacted[key] = f"~{value[len(home):]}"
+    return redacted
+
+
 def _check_deploy_drift(
     result: DoctorResult,
     *,
@@ -338,7 +348,7 @@ def _check_deploy_drift(
             continue
         message = f"daemon {label} running stale code, redeploy needed"
         context = finding.to_context()
-        emit_alarm(build_alarm("deploy_drift", message, context))
+        emit_alarm(build_alarm("deploy_drift", message, _redact_home_paths(context)))
         result.issues.append(
             DoctorIssue(
                 "deploy_drift",
