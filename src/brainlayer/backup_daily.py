@@ -227,6 +227,7 @@ def _sweep_stale_backup_attempts(
     *,
     max_age_seconds: int | None = None,
     now: float | None = None,
+    writer_started_at: float | None = None,
 ) -> tuple[list[str], list[Path]]:
     """Remove old, daemon-confirmed attempts while preserving unproven or recent entries."""
     output_dir = Path(output_dir)
@@ -242,11 +243,16 @@ def _sweep_stale_backup_attempts(
             if path.is_symlink() or not path.is_file():
                 surviving.append(path)
                 continue
+            path_mtime = path.stat().st_mtime
             completion_marker = _backup_attempt_completion_marker(path)
             if completion_marker.is_symlink() or not completion_marker.is_file():
-                surviving.append(path)
+                if path_mtime <= cutoff and writer_started_at is not None and path_mtime < writer_started_at:
+                    path.unlink()
+                    deleted.append(path.name)
+                else:
+                    surviving.append(path)
                 continue
-            if max(path.stat().st_mtime, completion_marker.stat().st_mtime) <= cutoff:
+            if max(path_mtime, completion_marker.stat().st_mtime) <= cutoff:
                 path.unlink()
                 completion_marker.unlink(missing_ok=True)
                 deleted.append(path.name)
@@ -261,14 +267,42 @@ def _backup_attempt_completion_marker(attempt_path: Path) -> Path:
     return attempt_path.with_name(f"{attempt_path.name}.complete")
 
 
+def _brainbar_writer_started_at(socket_path: Path | str | None = None) -> float:
+    request = {
+        "jsonrpc": "2.0",
+        "id": "backup-writer-status",
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "brainlayer-backup", "version": "1.0"},
+        },
+    }
+    response = _send_brainbar_json_request(_brainbar_socket_path(socket_path), request, timeout_seconds=5)
+    started_at = ((response.get("result") or {}).get("serverInfo") or {}).get("backupWriterStartedAtUnix")
+    if not isinstance(started_at, (int, float)) or started_at <= 0:
+        raise RuntimeError("BrainBar initialize response missing backupWriterStartedAtUnix")
+    return float(started_at)
+
+
 def _database_logical_size_bytes(db_path: Path) -> int:
     db_path = Path(db_path).expanduser().resolve()
-    with sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True) as conn:
+    main_file_size = db_path.stat().st_size
+    conn: sqlite3.Connection | None = None
+    try:
+        conn = sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True)
         page_count_row = conn.execute("PRAGMA page_count").fetchone()
         page_size_row = conn.execute("PRAGMA page_size").fetchone()
+    except sqlite3.Error:
+        wal_path = Path(f"{db_path}-wal")
+        wal_size = wal_path.stat().st_size if wal_path.exists() else 0
+        return main_file_size + wal_size
+    finally:
+        if conn is not None:
+            conn.close()
     page_count = int(page_count_row[0]) if page_count_row else 0
     page_size = int(page_size_row[0]) if page_size_row else 0
-    return max(db_path.stat().st_size, page_count * page_size)
+    return max(main_file_size, page_count * page_size)
 
 
 def create_sqlite_backup_artifact(
@@ -288,7 +322,14 @@ def create_sqlite_backup_artifact(
         raise FileNotFoundError(f"BrainLayer database not found: {db_path}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    stale_attempts_deleted, surviving_attempt_paths = _sweep_stale_backup_attempts(output_dir)
+    try:
+        writer_started_at = _brainbar_writer_started_at(socket_path)
+    except (OSError, RuntimeError, ValueError):
+        writer_started_at = None
+    stale_attempts_deleted, surviving_attempt_paths = _sweep_stale_backup_attempts(
+        output_dir,
+        writer_started_at=writer_started_at,
+    )
     db_size = _database_logical_size_bytes(db_path)
     surviving_attempt_bytes = 0
     surviving_attempt_growth_reserve_bytes = 0

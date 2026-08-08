@@ -1040,8 +1040,30 @@ final class BrainDatabase: @unchecked Sendable {
         guard stepRC == SQLITE_DONE else { throw DBError.step(stepRC) }
 
         let attributes = try FileManager.default.attributesOfItem(atPath: targetURL.path)
+        try syncBackupTarget(targetURL)
         try Data("complete\n".utf8).write(to: completionMarkerURL, options: .atomic)
         return (attributes[.size] as? NSNumber)?.int64Value ?? 0
+    }
+
+    private func syncBackupTarget(_ targetURL: URL) throws {
+        let fileDescriptor = open(targetURL.path, O_RDONLY | O_CLOEXEC)
+        guard fileDescriptor >= 0 else {
+            throw DBError.exec(SQLITE_IOERR, "unable to open backup target for fsync: \(targetURL.path)")
+        }
+        defer { Darwin.close(fileDescriptor) }
+        guard fsync(fileDescriptor) == 0 else {
+            throw DBError.exec(SQLITE_IOERR, "unable to fsync backup target: \(targetURL.path)")
+        }
+
+        let directoryURL = targetURL.deletingLastPathComponent()
+        let directoryDescriptor = open(directoryURL.path, O_RDONLY | O_CLOEXEC)
+        guard directoryDescriptor >= 0 else {
+            throw DBError.exec(SQLITE_IOERR, "unable to open backup directory for fsync: \(directoryURL.path)")
+        }
+        defer { Darwin.close(directoryDescriptor) }
+        guard fsync(directoryDescriptor) == 0 else {
+            throw DBError.exec(SQLITE_IOERR, "unable to fsync backup directory: \(directoryURL.path)")
+        }
     }
 
     private static let allowedPragmas: Set<String> = [

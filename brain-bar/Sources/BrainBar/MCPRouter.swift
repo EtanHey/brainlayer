@@ -16,6 +16,7 @@ final class MCPRouter: @unchecked Sendable {
     }
 
     private static let profileEnvironmentKey = "BRAINLAYER_MCP_PROFILE"
+    private static let backupWriterStartedAtUnix = Date().timeIntervalSince1970
     private static let coreToolNames: Set<String> = [
         "brain_search",
         "brain_store",
@@ -361,7 +362,8 @@ final class MCPRouter: @unchecked Sendable {
                 ],
                 "serverInfo": [
                     "name": "brainbar",
-                    "version": "1.0.0"
+                    "version": "1.0.0",
+                    "backupWriterStartedAtUnix": Self.backupWriterStartedAtUnix,
                 ]
             ] as [String: Any]
         ]

@@ -21,30 +21,41 @@ def _start_fake_brainbar_vacuum_server(socket_path: Path, source_db: Path):
             socket_path.unlink()
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
             server.bind(str(socket_path))
-            server.listen(1)
+            server.listen(2)
             ready.set()
-            conn, _ = server.accept()
-            with conn:
-                data = b""
-                while not data.endswith(b"\n"):
-                    data += conn.recv(65_536)
-                request = json.loads(data.decode("utf-8"))
-                received.put(request)
-                args = request["params"]["arguments"]
-                target_path = Path(args["target_path"])
-                with sqlite3.connect(source_db) as db:
-                    db.execute("VACUUM INTO ?", (str(target_path),))
-                target_path.with_name(f"{target_path.name}.complete").write_text("complete\n")
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": request["id"],
-                    "result": {
-                        "content": [
-                            {"type": "text", "text": json.dumps({"status": "ok", "target_path": str(target_path)})}
-                        ]
-                    },
-                }
-                conn.sendall(json.dumps(response).encode("utf-8") + b"\n")
+            for _ in range(2):
+                conn, _ = server.accept()
+                with conn:
+                    data = b""
+                    while not data.endswith(b"\n"):
+                        data += conn.recv(65_536)
+                    request = json.loads(data.decode("utf-8"))
+                    if request["method"] == "initialize":
+                        response = {
+                            "jsonrpc": "2.0",
+                            "id": request["id"],
+                            "result": {"serverInfo": {"backupWriterStartedAtUnix": time.time()}},
+                        }
+                    else:
+                        received.put(request)
+                        args = request["params"]["arguments"]
+                        target_path = Path(args["target_path"])
+                        with sqlite3.connect(source_db) as db:
+                            db.execute("VACUUM INTO ?", (str(target_path),))
+                        target_path.with_name(f"{target_path.name}.complete").write_text("complete\n")
+                        response = {
+                            "jsonrpc": "2.0",
+                            "id": request["id"],
+                            "result": {
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": json.dumps({"status": "ok", "target_path": str(target_path)}),
+                                    }
+                                ]
+                            },
+                        }
+                    conn.sendall(json.dumps(response).encode("utf-8") + b"\n")
 
     thread = threading.Thread(target=run, daemon=True)
     thread.start()
@@ -489,6 +500,8 @@ def test_create_snapshot_preserves_failed_attempts_outside_temporary_directory(t
     attempt_targets = []
 
     def closed_after_write(socket_path, request, timeout_seconds):  # noqa: ARG001
+        if request["method"] == "initialize":
+            return {"result": {"serverInfo": {"backupWriterStartedAtUnix": time.time()}}}
         attempt_target = Path(request["params"]["arguments"]["target_path"])
         attempt_targets.append(attempt_target)
         _create_source_db(attempt_target, chunk_count=2)
@@ -510,12 +523,14 @@ def test_stale_attempt_sweep_deletes_only_completed_regular_files_older_than_one
 
     now = 200_000.0
     stale_completed = tmp_path / ".2026-05-12.db.attempt-1-stale-completed"
-    stale_incomplete = tmp_path / ".2026-05-12.db.attempt-1-stale-incomplete"
+    stale_prior_writer = tmp_path / ".2026-05-12.db.attempt-1-stale-prior-writer"
+    current_writer = tmp_path / ".2026-05-13.db.attempt-1-current-writer"
     recent = tmp_path / ".2026-05-13.db.attempt-1-recent"
     target = tmp_path / "outside.db"
     symlink = tmp_path / ".2026-05-11.db.attempt-1-link"
     stale_completed.write_bytes(b"stale completed")
-    stale_incomplete.write_bytes(b"stale incomplete")
+    stale_prior_writer.write_bytes(b"stale prior writer")
+    current_writer.write_bytes(b"current writer")
     recent.write_bytes(b"recent")
     target.write_bytes(b"outside")
     symlink.symlink_to(target)
@@ -524,7 +539,8 @@ def test_stale_attempt_sweep_deletes_only_completed_regular_files_older_than_one
     stale_marker.write_text("complete")
     recent_marker.write_text("complete")
     os.utime(stale_completed, (now - 90_000, now - 90_000))
-    os.utime(stale_incomplete, (now - 90_000, now - 90_000))
+    os.utime(stale_prior_writer, (now - 90_000, now - 90_000))
+    os.utime(current_writer, (now - 60, now - 60))
     os.utime(stale_marker, (now - 90_000, now - 90_000))
     os.utime(recent, (now - 60, now - 60))
     os.utime(recent_marker, (now - 60, now - 60))
@@ -533,13 +549,15 @@ def test_stale_attempt_sweep_deletes_only_completed_regular_files_older_than_one
         tmp_path,
         max_age_seconds=86_400,
         now=now,
+        writer_started_at=now - 3_600,
     )
 
-    assert deleted == [stale_completed.name]
-    assert {path.name for path in surviving} == {stale_incomplete.name, recent.name, symlink.name}
+    assert deleted == [stale_completed.name, stale_prior_writer.name]
+    assert {path.name for path in surviving} == {current_writer.name, recent.name, symlink.name}
     assert not stale_completed.exists()
     assert not stale_marker.exists()
-    assert stale_incomplete.exists()
+    assert not stale_prior_writer.exists()
+    assert current_writer.exists()
     assert recent.exists()
     assert recent_marker.exists()
     assert symlink.is_symlink()
@@ -567,6 +585,22 @@ def test_database_logical_size_includes_committed_wal_pages(tmp_path):
         assert backup_daily._database_logical_size_bytes(source) > main_file_size
     finally:
         conn.close()
+
+
+def test_brainbar_writer_started_at_reads_initialize_server_info(monkeypatch):
+    from brainlayer import backup_daily
+
+    seen: dict[str, object] = {}
+
+    def initialize_response(socket_path, request, timeout_seconds):
+        seen.update(socket_path=socket_path, request=request, timeout_seconds=timeout_seconds)
+        return {"result": {"serverInfo": {"backupWriterStartedAtUnix": 1234.5}}}
+
+    monkeypatch.setattr(backup_daily, "_send_brainbar_json_request", initialize_response)
+
+    assert backup_daily._brainbar_writer_started_at("/tmp/brainbar.sock") == 1234.5
+    assert seen["socket_path"] == Path("/tmp/brainbar.sock")
+    assert seen["request"]["method"] == "initialize"
 
 
 def test_recent_attempt_growth_is_reserved_in_disk_preflight(tmp_path, monkeypatch):

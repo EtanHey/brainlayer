@@ -126,6 +126,8 @@ final class MCPRouterTests: XCTestCase {
 
         XCTAssertNotNil(result)
         XCTAssertEqual(result?["protocolVersion"] as? String, "2024-11-05")
+        let serverInfo = try XCTUnwrap(result?["serverInfo"] as? [String: Any])
+        XCTAssertGreaterThan(serverInfo["backupWriterStartedAtUnix"] as? Double ?? 0, 0)
         XCTAssertEqual(response["id"] as? Int, 1)
 
         // Must declare tool capabilities
