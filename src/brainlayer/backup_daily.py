@@ -48,7 +48,7 @@ DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 DEFAULT_DAILY_KEEP = 7
 DEFAULT_WEEKLY_KEEP = 4
 DEFAULT_LOCAL_UNCOMPRESSED_KEEP = 2
-DEFAULT_BACKUP_CLIENT_TIMEOUT_SECONDS = 300
+DEFAULT_BACKUP_CLIENT_TIMEOUT_SECONDS = 0
 
 
 @dataclass(frozen=True)
@@ -114,17 +114,17 @@ def _configured_backup_timeout_seconds() -> int | None:
     return seconds if seconds > 0 else None
 
 
-def _configured_backup_client_timeout_seconds() -> int:
+def _configured_backup_client_timeout_seconds() -> int | None:
     raw = os.environ.get(BACKUP_CLIENT_TIMEOUT_ENV)
     if raw is None or raw.strip() == "":
-        return DEFAULT_BACKUP_CLIENT_TIMEOUT_SECONDS
+        return DEFAULT_BACKUP_CLIENT_TIMEOUT_SECONDS or None
     try:
         seconds = int(raw)
     except ValueError as exc:
         raise ValueError(f"{BACKUP_CLIENT_TIMEOUT_ENV} must be an integer number of seconds") from exc
-    if seconds < 1:
-        raise ValueError(f"{BACKUP_CLIENT_TIMEOUT_ENV} must be at least 1 second")
-    return seconds
+    if seconds < 0:
+        raise ValueError(f"{BACKUP_CLIENT_TIMEOUT_ENV} must be zero or a positive number of seconds")
+    return seconds or None
 
 
 def _raise_backup_timeout(signum, frame) -> None:  # noqa: ARG001
@@ -234,7 +234,7 @@ def create_sqlite_backup_artifact(
 
     with tempfile.TemporaryDirectory(prefix="brainlayer-backup-", dir=output_dir) as tmp:
         raw_snapshot = Path(tmp) / f"{date_stamp}.db"
-        request_brainbar_vacuum_into(raw_snapshot, socket_path=socket_path)
+        request_brainbar_vacuum_into(raw_snapshot, socket_path=socket_path, attempt_dir=output_dir)
         sentinel_chunks = _validate_backup_target(raw_snapshot, pragma_name="integrity_check")
         if sentinel_chunks < source_chunks_before:
             raise RuntimeError(
@@ -288,6 +288,7 @@ def request_brainbar_vacuum_into(
     timeout_seconds: int | None = None,
     max_attempts: int = 3,
     retry_backoff_seconds: int = 60,
+    attempt_dir: Path | None = None,
 ) -> None:
     target_path = Path(target_path).expanduser()
     if max_attempts < 1:
@@ -295,14 +296,16 @@ def request_brainbar_vacuum_into(
     if target_path.exists():
         raise FileExistsError(f"Backup target already exists: {target_path}")
     resolved_socket_path = _brainbar_socket_path(socket_path)
-    resolved_timeout_seconds = (
+    resolved_timeout_seconds: int | None = (
         _configured_backup_client_timeout_seconds() if timeout_seconds is None else timeout_seconds
     )
-    if resolved_timeout_seconds < 1:
-        raise ValueError("timeout_seconds must be at least 1")
+    if resolved_timeout_seconds is not None and resolved_timeout_seconds < 1:
+        raise ValueError("timeout_seconds must be at least 1 or None")
+    resolved_attempt_dir = Path(attempt_dir).expanduser() if attempt_dir is not None else target_path.parent
+    resolved_attempt_dir.mkdir(parents=True, exist_ok=True)
     last_error: Exception | None = None
     for attempt in range(1, max_attempts + 1):
-        attempt_path = target_path.with_name(f".{target_path.name}.attempt-{attempt}-{uuid.uuid4().hex}")
+        attempt_path = resolved_attempt_dir / f".{target_path.name}.attempt-{attempt}-{uuid.uuid4().hex}"
         request = {
             "jsonrpc": "2.0",
             "id": attempt,
@@ -360,7 +363,11 @@ def request_brainbar_vacuum_into(
         raise last_error
 
 
-def _send_brainbar_json_request(socket_path: Path, request: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
+def _send_brainbar_json_request(
+    socket_path: Path,
+    request: dict[str, Any],
+    timeout_seconds: int | None,
+) -> dict[str, Any]:
     payload = json.dumps(request, separators=(",", ":")).encode("utf-8") + b"\n"
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(timeout_seconds)

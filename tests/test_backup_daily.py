@@ -310,6 +310,25 @@ def test_brainbar_vacuum_request_uses_configured_client_timeout(tmp_path, monkey
     assert seen_timeouts == [420]
 
 
+def test_brainbar_vacuum_request_defaults_to_outer_wall_clock_timeout(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    target = tmp_path / "snapshot.db"
+    seen_timeouts = []
+
+    def capture_timeout(socket_path, request, timeout_seconds):  # noqa: ARG001
+        seen_timeouts.append(timeout_seconds)
+        _create_source_db(Path(request["params"]["arguments"]["target_path"]), chunk_count=2)
+        return {"result": {"content": [{"type": "text", "text": '{"status":"ok"}'}]}}
+
+    monkeypatch.delenv("BRAINLAYER_BACKUP_CLIENT_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setattr(backup_daily, "_send_brainbar_json_request", capture_timeout)
+
+    backup_daily.request_brainbar_vacuum_into(target, socket_path="/tmp/brainbar.sock")
+
+    assert seen_timeouts == [None]
+
+
 def test_brainbar_vacuum_request_fails_loud_after_retry_budget(tmp_path, monkeypatch, capsys):
     from brainlayer import backup_daily
 
@@ -465,6 +484,31 @@ def test_brainbar_vacuum_request_preserves_lost_response_attempt_before_retry(tm
     output = capsys.readouterr().out
     assert "preserving isolated attempt target" in output
     assert "retrying in 60s" in output
+
+
+def test_create_snapshot_preserves_failed_attempts_outside_temporary_directory(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    output_dir = tmp_path / "out"
+    _create_source_db(source, chunk_count=2)
+    attempt_targets = []
+
+    def closed_after_write(socket_path, request, timeout_seconds):  # noqa: ARG001
+        attempt_target = Path(request["params"]["arguments"]["target_path"])
+        attempt_targets.append(attempt_target)
+        _create_source_db(attempt_target, chunk_count=2)
+        raise RuntimeError("BrainBar socket closed without response: /tmp/brainbar.sock")
+
+    monkeypatch.setattr(backup_daily, "_send_brainbar_json_request", closed_after_write)
+    monkeypatch.setattr(backup_daily, "_sleep", lambda seconds: None)
+
+    with pytest.raises(RuntimeError, match="socket closed without response"):
+        backup_daily.create_sqlite_backup_artifact(source, output_dir, date_stamp="2026-05-14")
+
+    assert len(attempt_targets) == 3
+    assert all(path.parent == output_dir for path in attempt_targets)
+    assert all(path.exists() for path in attempt_targets)
 
 
 def test_create_snapshot_rejects_low_disk_space(tmp_path, monkeypatch):
@@ -806,7 +850,7 @@ def test_launchd_installer_knows_backup_target():
     assert "<key>KeepAlive</key>" not in plist
     assert "<key>ExitTimeOut</key>" in plist
     assert "<integer>300</integer>" in plist
-    assert "BRAINLAYER_BACKUP_CLIENT_TIMEOUT_SECONDS:=300" in wrapper
+    assert "BRAINLAYER_BACKUP_CLIENT_TIMEOUT_SECONDS:=0" in wrapper
     assert "BRAINLAYER_BACKUP_TIMEOUT_SECONDS:=7200" in wrapper
     assert "BRAINLAYER_BACKUP_LOG_PROVENANCE:=real" in wrapper
 
