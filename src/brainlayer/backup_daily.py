@@ -22,6 +22,7 @@ import tempfile
 import time
 import traceback
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,7 @@ DEFAULT_LOG_PATH = Path.home() / ".local" / "share" / "brainlayer" / "logs" / "b
 DEFAULT_BRAINBAR_SOCKET_PATH = "/tmp/brainbar.sock"
 BACKUP_TIMEOUT_ENV = "BRAINLAYER_BACKUP_TIMEOUT_SECONDS"
 BACKUP_CLIENT_TIMEOUT_ENV = "BRAINLAYER_BACKUP_CLIENT_TIMEOUT_SECONDS"
+BACKUP_ATTEMPT_MAX_AGE_ENV = "BRAINLAYER_BACKUP_ATTEMPT_MAX_AGE_SECONDS"
 BACKUP_FULL_VERIFY_ENV = "BRAINLAYER_BACKUP_FULL_VERIFY"
 BACKUP_LOG_PATH_ENV = "BRAINLAYER_BACKUP_LOG_PATH"
 BACKUP_LOG_PROVENANCE_ENV = "BRAINLAYER_BACKUP_LOG_PROVENANCE"
@@ -49,6 +51,8 @@ DEFAULT_DAILY_KEEP = 7
 DEFAULT_WEEKLY_KEEP = 4
 DEFAULT_LOCAL_UNCOMPRESSED_KEEP = 2
 DEFAULT_BACKUP_CLIENT_TIMEOUT_SECONDS = 0
+DEFAULT_BACKUP_TIMEOUT_SECONDS = 7200
+DEFAULT_BACKUP_ATTEMPT_MAX_AGE_SECONDS = 24 * 60 * 60
 
 
 @dataclass(frozen=True)
@@ -72,6 +76,12 @@ class SQLiteBackupArtifact:
     uncompressed_path: Path | None
     sentinel_chunks: int
     local_retention_deleted: list[str]
+    stale_attempts_deleted: list[str]
+    surviving_attempts: list[str]
+    surviving_attempt_bytes: int
+    surviving_attempt_growth_reserve_bytes: int
+    attempt_reclamation: str
+    writer_probe_error: str | None
 
 
 def _today() -> str:
@@ -103,15 +113,17 @@ class BackupTimeoutError(TimeoutError):
     pass
 
 
-def _configured_backup_timeout_seconds() -> int | None:
+def _configured_backup_timeout_seconds() -> int:
     raw = os.environ.get(BACKUP_TIMEOUT_ENV)
     if raw is None or raw.strip() == "":
-        return None
+        return DEFAULT_BACKUP_TIMEOUT_SECONDS
     try:
         seconds = int(raw)
     except ValueError as exc:
         raise ValueError(f"{BACKUP_TIMEOUT_ENV} must be an integer number of seconds") from exc
-    return seconds if seconds > 0 else None
+    if seconds < 1:
+        raise ValueError(f"{BACKUP_TIMEOUT_ENV} must be at least 1 second")
+    return seconds
 
 
 def _configured_backup_client_timeout_seconds() -> int | None:
@@ -125,6 +137,19 @@ def _configured_backup_client_timeout_seconds() -> int | None:
     if seconds < 0:
         raise ValueError(f"{BACKUP_CLIENT_TIMEOUT_ENV} must be zero or a positive number of seconds")
     return seconds or None
+
+
+def _configured_backup_attempt_max_age_seconds() -> int:
+    raw = os.environ.get(BACKUP_ATTEMPT_MAX_AGE_ENV)
+    if raw is None or raw.strip() == "":
+        return DEFAULT_BACKUP_ATTEMPT_MAX_AGE_SECONDS
+    try:
+        seconds = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{BACKUP_ATTEMPT_MAX_AGE_ENV} must be an integer number of seconds") from exc
+    if seconds < 1:
+        raise ValueError(f"{BACKUP_ATTEMPT_MAX_AGE_ENV} must be at least 1 second")
+    return seconds
 
 
 def _raise_backup_timeout(signum, frame) -> None:  # noqa: ARG001
@@ -200,6 +225,91 @@ def prune_local_uncompressed_snapshots(
     return deleted
 
 
+def _sweep_stale_backup_attempts(
+    output_dir: Path,
+    *,
+    max_age_seconds: int | None = None,
+    now: float | None = None,
+    writer_started_at: float | None = None,
+) -> tuple[list[str], list[Path]]:
+    """Remove old, daemon-confirmed attempts while preserving unproven or recent entries."""
+    output_dir = Path(output_dir)
+    cutoff = (time.time() if now is None else now) - (
+        _configured_backup_attempt_max_age_seconds() if max_age_seconds is None else max_age_seconds
+    )
+    deleted: list[str] = []
+    surviving: list[Path] = []
+    for path in sorted(output_dir.glob(".*.db.attempt-*")):
+        try:
+            if path.name.endswith(".complete"):
+                continue
+            if path.is_symlink() or not path.is_file():
+                surviving.append(path)
+                continue
+            path_mtime = path.stat().st_mtime
+            completion_marker = _backup_attempt_completion_marker(path)
+            if completion_marker.is_symlink() or not completion_marker.is_file():
+                if path_mtime <= cutoff and writer_started_at is not None and path_mtime < writer_started_at:
+                    path.unlink()
+                    deleted.append(path.name)
+                else:
+                    surviving.append(path)
+                continue
+            if max(path_mtime, completion_marker.stat().st_mtime) <= cutoff:
+                path.unlink()
+                completion_marker.unlink(missing_ok=True)
+                deleted.append(path.name)
+            else:
+                surviving.append(path)
+        except FileNotFoundError:
+            continue
+    return deleted, surviving
+
+
+def _backup_attempt_completion_marker(attempt_path: Path) -> Path:
+    return attempt_path.with_name(f"{attempt_path.name}.complete")
+
+
+def _brainbar_writer_started_at(socket_path: Path | str | None = None) -> float:
+    request = {
+        "jsonrpc": "2.0",
+        "id": "backup-writer-status",
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "brainlayer-backup", "version": "1.0"},
+        },
+    }
+    response = _send_brainbar_json_request(_brainbar_socket_path(socket_path), request, timeout_seconds=5)
+    result = response.get("result")
+    server_info = result.get("serverInfo") if isinstance(result, dict) else None
+    started_at = server_info.get("backupWriterStartedAtUnix") if isinstance(server_info, dict) else None
+    if not isinstance(started_at, (int, float)) or started_at <= 0:
+        raise RuntimeError("BrainBar initialize response missing backupWriterStartedAtUnix")
+    return float(started_at)
+
+
+def _database_logical_size_bytes(db_path: Path) -> int:
+    db_path = Path(db_path).expanduser().resolve()
+    main_file_size = db_path.stat().st_size
+    conn: sqlite3.Connection | None = None
+    try:
+        conn = sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True)
+        page_count_row = conn.execute("PRAGMA page_count").fetchone()
+        page_size_row = conn.execute("PRAGMA page_size").fetchone()
+    except sqlite3.Error:
+        wal_path = Path(f"{db_path}-wal")
+        wal_size = wal_path.stat().st_size if wal_path.exists() else 0
+        return main_file_size + wal_size
+    finally:
+        if conn is not None:
+            conn.close()
+    page_count = int(page_count_row[0]) if page_count_row else 0
+    page_size = int(page_size_row[0]) if page_size_row else 0
+    return max(main_file_size, page_count * page_size)
+
+
 def create_sqlite_backup_artifact(
     db_path: Path,
     output_dir: Path,
@@ -207,6 +317,7 @@ def create_sqlite_backup_artifact(
     socket_path: Path | str | None = None,
     keep_uncompressed: bool = True,
     local_uncompressed_keep: int = DEFAULT_LOCAL_UNCOMPRESSED_KEEP,
+    reclamation_status_callback: Callable[[str, str | None], None] | None = None,
 ) -> SQLiteBackupArtifact:
     """Create a restorable `.db.gz` snapshot through BrainBar's single-writer socket."""
     db_path = Path(db_path).expanduser()
@@ -217,12 +328,40 @@ def create_sqlite_backup_artifact(
         raise FileNotFoundError(f"BrainLayer database not found: {db_path}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    required_bytes = (db_path.stat().st_size * 3) + (512 * 1024 * 1024)
+    writer_probe_error: str | None = None
+    try:
+        writer_started_at = _brainbar_writer_started_at(socket_path)
+    except BackupTimeoutError:
+        raise
+    except (OSError, RuntimeError, ValueError) as exc:
+        writer_started_at = None
+        writer_probe_error = f"{type(exc).__name__}: {exc}"
+        print(f"BrainBar attempt reclamation degraded: {writer_probe_error}", flush=True)
+    attempt_reclamation = "armed" if writer_started_at is not None else "degraded"
+    if reclamation_status_callback is not None:
+        reclamation_status_callback(attempt_reclamation, writer_probe_error)
+    stale_attempts_deleted, surviving_attempt_paths = _sweep_stale_backup_attempts(
+        output_dir,
+        writer_started_at=writer_started_at,
+    )
+    db_size = _database_logical_size_bytes(db_path)
+    surviving_attempt_bytes = 0
+    surviving_attempt_growth_reserve_bytes = 0
+    for attempt_path in surviving_attempt_paths:
+        try:
+            attempt_size = attempt_path.stat().st_size
+        except (FileNotFoundError, OSError):
+            continue
+        surviving_attempt_bytes += attempt_size
+        surviving_attempt_growth_reserve_bytes += max(0, db_size - attempt_size)
+    required_bytes = (db_size * 3) + (512 * 1024 * 1024) + surviving_attempt_growth_reserve_bytes
     free_bytes = shutil.disk_usage(output_dir).free
     if free_bytes < required_bytes:
         raise RuntimeError(
             f"Insufficient free space for backup in {output_dir}: "
-            f"{free_bytes} bytes free, {required_bytes} bytes required"
+            f"{free_bytes} bytes free, {required_bytes} bytes required; "
+            f"{len(surviving_attempt_paths)} recent attempts reserve "
+            f"{surviving_attempt_growth_reserve_bytes} growth bytes"
         )
     final_gz = output_dir / f"{date_stamp}.db.gz"
     final_raw = output_dir / f"{date_stamp}.db"
@@ -255,6 +394,12 @@ def create_sqlite_backup_artifact(
         uncompressed_path=uncompressed_path,
         sentinel_chunks=sentinel_chunks,
         local_retention_deleted=deleted,
+        stale_attempts_deleted=stale_attempts_deleted,
+        surviving_attempts=[path.name for path in surviving_attempt_paths],
+        surviving_attempt_bytes=surviving_attempt_bytes,
+        surviving_attempt_growth_reserve_bytes=surviving_attempt_growth_reserve_bytes,
+        attempt_reclamation=attempt_reclamation,
+        writer_probe_error=writer_probe_error,
     )
 
 
@@ -295,7 +440,6 @@ def request_brainbar_vacuum_into(
         raise ValueError("timeout_seconds must be at least 1 or None")
     resolved_attempt_dir = Path(attempt_dir).expanduser() if attempt_dir is not None else target_path.parent
     resolved_attempt_dir.mkdir(parents=True, exist_ok=True)
-    prior_attempt_paths = list(resolved_attempt_dir.glob(".*.db.attempt-*"))
     last_error: Exception | None = None
     unconfirmed_attempt_paths: list[Path] = []
     for attempt in range(1, max_attempts + 1):
@@ -331,10 +475,13 @@ def request_brainbar_vacuum_into(
             except Exception:
                 # A tool response is terminal, so this attempt is no longer being written.
                 attempt_path.unlink(missing_ok=True)
+                _backup_attempt_completion_marker(attempt_path).unlink(missing_ok=True)
                 raise
             os.replace(attempt_path, target_path)
-            for prior_path in [*prior_attempt_paths, *unconfirmed_attempt_paths]:
+            _backup_attempt_completion_marker(attempt_path).unlink(missing_ok=True)
+            for prior_path in unconfirmed_attempt_paths:
                 prior_path.unlink(missing_ok=True)
+                _backup_attempt_completion_marker(prior_path).unlink(missing_ok=True)
             return
         except BackupTimeoutError:
             raise
@@ -344,9 +491,9 @@ def request_brainbar_vacuum_into(
             if terminal_response_received:
                 # BrainBar's request queue is serial. A terminal response proves this
                 # attempt and every earlier request are no longer writing.
-                for completed_path in [*prior_attempt_paths, *unconfirmed_attempt_paths, attempt_path]:
+                for completed_path in [*unconfirmed_attempt_paths, attempt_path]:
                     completed_path.unlink(missing_ok=True)
-                prior_attempt_paths.clear()
+                    _backup_attempt_completion_marker(completed_path).unlink(missing_ok=True)
                 unconfirmed_attempt_paths.clear()
             elif attempt_path.exists():
                 # A lost response does not prove VACUUM INTO is finished. Never inspect,
@@ -755,22 +902,51 @@ def run_backup(
 ) -> dict[str, Any]:
     resolved_date_stamp = date_stamp or _today()
     resolved_log_path = _backup_log_path(log_path)
-    artifact = create_sqlite_backup_artifact(db_path or get_db_path(), staging_dir, date_stamp=resolved_date_stamp)
-    snapshot = artifact.gzip_path
-    snapshot_size = snapshot.stat().st_size
+    resolved_db_path = db_path or get_db_path()
     result: dict[str, Any] = {
-        "db": str(db_path or get_db_path()),
-        "snapshot": str(snapshot),
-        "local_uncompressed_snapshot": str(artifact.uncompressed_path) if artifact.uncompressed_path else None,
-        "local_retention_deleted": artifact.local_retention_deleted,
-        "sentinel_snapshot_chunks": artifact.sentinel_chunks,
-        "bytes": snapshot_size,
+        "db": str(resolved_db_path),
         "uploaded": False,
         "local_removed": False,
         "verified": False,
         "backup_log_provenance": _backup_log_provenance(),
+        "attempt_reclamation": "unknown",
+        "writer_probe_error": None,
     }
+
+    def record_reclamation_status(status: str, error: str | None) -> None:
+        result["attempt_reclamation"] = status
+        result["writer_probe_error"] = error
+
     try:
+        artifact = create_sqlite_backup_artifact(
+            resolved_db_path,
+            staging_dir,
+            date_stamp=resolved_date_stamp,
+            reclamation_status_callback=record_reclamation_status,
+        )
+        snapshot = artifact.gzip_path
+        snapshot_size = snapshot.stat().st_size
+        result.update(
+            {
+                "snapshot": str(snapshot),
+                "local_uncompressed_snapshot": (
+                    str(artifact.uncompressed_path) if artifact.uncompressed_path else None
+                ),
+                "local_retention_deleted": artifact.local_retention_deleted,
+                "stale_attempts_deleted": getattr(artifact, "stale_attempts_deleted", []),
+                "surviving_attempts": getattr(artifact, "surviving_attempts", []),
+                "surviving_attempt_bytes": getattr(artifact, "surviving_attempt_bytes", 0),
+                "surviving_attempt_growth_reserve_bytes": getattr(
+                    artifact,
+                    "surviving_attempt_growth_reserve_bytes",
+                    0,
+                ),
+                "attempt_reclamation": getattr(artifact, "attempt_reclamation", "unknown"),
+                "writer_probe_error": getattr(artifact, "writer_probe_error", None),
+                "sentinel_snapshot_chunks": artifact.sentinel_chunks,
+                "bytes": snapshot_size,
+            }
+        )
         if upload:
             credentials = get_drive_credentials()
             service = build_drive_service()
