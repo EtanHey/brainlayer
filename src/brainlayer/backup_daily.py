@@ -21,6 +21,7 @@ import subprocess
 import tempfile
 import time
 import traceback
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -283,15 +284,8 @@ def request_brainbar_vacuum_into(
     target_path = Path(target_path).expanduser()
     if max_attempts < 1:
         raise ValueError("max_attempts must be at least 1")
-    request = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": {
-            "name": "brain_backup_vacuum_into",
-            "arguments": {"target_path": str(target_path)},
-        },
-    }
+    if target_path.exists():
+        raise FileExistsError(f"Backup target already exists: {target_path}")
     resolved_socket_path = _brainbar_socket_path(socket_path)
     resolved_timeout_seconds = (
         _configured_backup_client_timeout_seconds() if timeout_seconds is None else timeout_seconds
@@ -300,6 +294,16 @@ def request_brainbar_vacuum_into(
         raise ValueError("timeout_seconds must be at least 1")
     last_error: Exception | None = None
     for attempt in range(1, max_attempts + 1):
+        attempt_path = target_path.with_name(f".{target_path.name}.attempt-{attempt}-{uuid.uuid4().hex}")
+        request = {
+            "jsonrpc": "2.0",
+            "id": attempt,
+            "method": "tools/call",
+            "params": {
+                "name": "brain_backup_vacuum_into",
+                "arguments": {"target_path": str(attempt_path)},
+            },
+        }
         try:
             response = _send_brainbar_json_request(
                 resolved_socket_path,
@@ -313,28 +317,25 @@ def request_brainbar_vacuum_into(
                 content = result.get("content") or []
                 text = content[0].get("text") if content and isinstance(content[0], dict) else result
                 raise RuntimeError(f"BrainBar backup request failed: {text}")
-            if not target_path.exists():
-                raise RuntimeError(f"BrainBar backup did not create snapshot: {target_path}")
-            _validate_backup_target(target_path)
+            if not attempt_path.exists():
+                raise RuntimeError(f"BrainBar backup did not create snapshot: {attempt_path}")
+            try:
+                _validate_backup_target(attempt_path)
+            except Exception:
+                # A tool response is terminal, so this attempt is no longer being written.
+                attempt_path.unlink(missing_ok=True)
+                raise
+            os.replace(attempt_path, target_path)
             return
         except BackupTimeoutError:
             raise
         except Exception as exc:
             last_error = exc
             existing_target_note = ""
-            if target_path.exists():
-                try:
-                    _validate_backup_target(target_path)
-                except Exception as check_exc:
-                    target_path.unlink(missing_ok=True)
-                    existing_target_note = f"; removing invalid existing target after backup validation: {check_exc}"
-                else:
-                    print(
-                        f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {exc}; "
-                        "target exists and passed backup validation",
-                        flush=True,
-                    )
-                    return
+            if attempt_path.exists():
+                # A lost response does not prove VACUUM INTO is finished. Never inspect,
+                # unlink, or promote a path that BrainBar may still be writing.
+                existing_target_note = f"; preserving isolated attempt target: {attempt_path}"
             if attempt >= max_attempts:
                 print(
                     f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {exc}{existing_target_note}",

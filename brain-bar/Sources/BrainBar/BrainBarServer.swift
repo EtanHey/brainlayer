@@ -783,11 +783,18 @@ final class BrainBarServer: @unchecked Sendable {
         NSLog("[BrainBar] Server stopped")
     }
 
-    private func startDaemonHeartbeatOnQueue() {
+    func enqueueOnRequestQueue(_ work: @escaping @Sendable () -> Void) {
+        queue.async(execute: work)
+    }
+
+    func startDaemonHeartbeatOnQueue(
+        path: String = BrainBarLifecycleWatchdog.daemonHeartbeatPath,
+        interval: TimeInterval = 5
+    ) {
         daemonHeartbeatTimer?.cancel()
         let timer = BrainBarLifecycleWatchdog.makeHeartbeatTimer(
-            path: BrainBarLifecycleWatchdog.daemonHeartbeatPath,
-            interval: 5,
+            path: path,
+            interval: interval,
             queue: daemonHeartbeatQueue
         )
         daemonHeartbeatTimer = timer

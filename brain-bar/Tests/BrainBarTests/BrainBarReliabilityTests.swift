@@ -11,12 +11,37 @@ final class BrainBarReliabilityTests: XCTestCase {
     private var servers: [BrainBarServer] = []
     private var tempDirectories: [URL] = []
 
-    func testDaemonHeartbeatQueueIsIndependentFromBlockingRequestQueue() {
-        XCTAssertNotEqual(
-            BrainBarServer.requestQueueLabel,
-            BrainBarServer.daemonHeartbeatQueueLabel,
-            "VACUUM INTO can block the request queue longer than the watchdog stale timeout"
+    func testDaemonHeartbeatQueueIsIndependentFromBlockingRequestQueue() throws {
+        let directory = makeReliabilityTempDirectory()
+        let heartbeatPath = directory.appendingPathComponent("daemon.heartbeat").path
+        let requestQueueBlocked = expectation(description: "request queue blocked")
+        let releaseRequestQueue = DispatchSemaphore(value: 0)
+        let server = BrainBarServer(
+            socketPath: directory.appendingPathComponent("brainbar.sock").path,
+            dbPath: directory.appendingPathComponent("brainbar.db").path,
+            enableHybridSearchHelper: false
         )
+        servers.append(server)
+
+        server.enqueueOnRequestQueue {
+            requestQueueBlocked.fulfill()
+            releaseRequestQueue.wait()
+        }
+        wait(for: [requestQueueBlocked], timeout: 1)
+        server.startDaemonHeartbeatOnQueue(path: heartbeatPath, interval: 0.01)
+
+        let heartbeatWritten = expectation(description: "heartbeat written while request queue remains blocked")
+        DispatchQueue.global().async {
+            for _ in 0..<100 {
+                if FileManager.default.fileExists(atPath: heartbeatPath) {
+                    heartbeatWritten.fulfill()
+                    return
+                }
+                usleep(10_000)
+            }
+        }
+        wait(for: [heartbeatWritten], timeout: 1)
+        releaseRequestQueue.signal()
     }
 
     override func tearDown() {
