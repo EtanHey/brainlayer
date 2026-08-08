@@ -38,6 +38,7 @@ DEFAULT_STAGING_DIR = Path.home() / ".local" / "share" / "brainlayer" / "backups
 DEFAULT_LOG_PATH = Path.home() / ".local" / "share" / "brainlayer" / "logs" / "backup-daily.log"
 DEFAULT_BRAINBAR_SOCKET_PATH = "/tmp/brainbar.sock"
 BACKUP_TIMEOUT_ENV = "BRAINLAYER_BACKUP_TIMEOUT_SECONDS"
+BACKUP_CLIENT_TIMEOUT_ENV = "BRAINLAYER_BACKUP_CLIENT_TIMEOUT_SECONDS"
 BACKUP_FULL_VERIFY_ENV = "BRAINLAYER_BACKUP_FULL_VERIFY"
 BACKUP_LOG_PATH_ENV = "BRAINLAYER_BACKUP_LOG_PATH"
 BACKUP_LOG_PROVENANCE_ENV = "BRAINLAYER_BACKUP_LOG_PROVENANCE"
@@ -46,6 +47,7 @@ DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 DEFAULT_DAILY_KEEP = 7
 DEFAULT_WEEKLY_KEEP = 4
 DEFAULT_LOCAL_UNCOMPRESSED_KEEP = 2
+DEFAULT_BACKUP_CLIENT_TIMEOUT_SECONDS = 300
 
 
 @dataclass(frozen=True)
@@ -111,6 +113,19 @@ def _configured_backup_timeout_seconds() -> int | None:
     return seconds if seconds > 0 else None
 
 
+def _configured_backup_client_timeout_seconds() -> int:
+    raw = os.environ.get(BACKUP_CLIENT_TIMEOUT_ENV)
+    if raw is None or raw.strip() == "":
+        return DEFAULT_BACKUP_CLIENT_TIMEOUT_SECONDS
+    try:
+        seconds = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{BACKUP_CLIENT_TIMEOUT_ENV} must be an integer number of seconds") from exc
+    if seconds < 1:
+        raise ValueError(f"{BACKUP_CLIENT_TIMEOUT_ENV} must be at least 1 second")
+    return seconds
+
+
 def _raise_backup_timeout(signum, frame) -> None:  # noqa: ARG001
     raise BackupTimeoutError("backup exceeded configured wall-clock timeout")
 
@@ -131,6 +146,26 @@ def _count_chunks(db_path: Path) -> int:
     finally:
         conn.close()
     return int(row[0]) if row else 0
+
+
+def _validate_backup_target(db_path: Path, *, pragma_name: str = "quick_check") -> int:
+    db_path = Path(db_path).expanduser().resolve()
+    conn = sqlite3.connect(f"{db_path.as_uri()}?mode=ro&immutable=1", uri=True)
+    try:
+        integrity = conn.execute(f"PRAGMA {pragma_name}").fetchone()
+        if not integrity or integrity[0] != "ok":
+            raise RuntimeError(f"Backup {pragma_name} failed: {integrity!r}")
+        page_count_row = conn.execute("PRAGMA page_count").fetchone()
+        page_count = int(page_count_row[0]) if page_count_row else 0
+        if page_count < 1:
+            raise RuntimeError("Backup target has zero SQLite pages")
+        chunks_row = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()
+        chunks = int(chunks_row[0]) if chunks_row else 0
+        if chunks < 1:
+            raise RuntimeError("Backup target has zero chunks rows")
+        return chunks
+    finally:
+        conn.close()
 
 
 def _parse_uncompressed_snapshot_date(name: str) -> dt.date | None:
@@ -196,15 +231,7 @@ def create_sqlite_backup_artifact(
     with tempfile.TemporaryDirectory(prefix="brainlayer-backup-", dir=output_dir) as tmp:
         raw_snapshot = Path(tmp) / f"{date_stamp}.db"
         request_brainbar_vacuum_into(raw_snapshot, socket_path=socket_path)
-        target = sqlite3.connect(f"file:{raw_snapshot}?mode=ro", uri=True)
-        try:
-            integrity = target.execute("PRAGMA integrity_check").fetchone()
-            if not integrity or integrity[0] != "ok":
-                raise RuntimeError(f"Backup integrity check failed: {integrity!r}")
-            row = target.execute("SELECT COUNT(*) FROM chunks").fetchone()
-            sentinel_chunks = int(row[0]) if row else 0
-        finally:
-            target.close()
+        sentinel_chunks = _validate_backup_target(raw_snapshot, pragma_name="integrity_check")
 
         temp_gz = Path(tmp) / final_gz.name
         with raw_snapshot.open("rb") as src, gzip.open(temp_gz, "wb", compresslevel=6) as dst:
@@ -249,7 +276,7 @@ def _brainbar_socket_path(socket_path: Path | str | None = None) -> Path:
 def request_brainbar_vacuum_into(
     target_path: Path,
     socket_path: Path | str | None = None,
-    timeout_seconds: int = 300,
+    timeout_seconds: int | None = None,
     max_attempts: int = 3,
     retry_backoff_seconds: int = 60,
 ) -> None:
@@ -266,10 +293,19 @@ def request_brainbar_vacuum_into(
         },
     }
     resolved_socket_path = _brainbar_socket_path(socket_path)
+    resolved_timeout_seconds = (
+        _configured_backup_client_timeout_seconds() if timeout_seconds is None else timeout_seconds
+    )
+    if resolved_timeout_seconds < 1:
+        raise ValueError("timeout_seconds must be at least 1")
     last_error: Exception | None = None
     for attempt in range(1, max_attempts + 1):
         try:
-            response = _send_brainbar_json_request(resolved_socket_path, request, timeout_seconds=timeout_seconds)
+            response = _send_brainbar_json_request(
+                resolved_socket_path,
+                request,
+                timeout_seconds=resolved_timeout_seconds,
+            )
             if response.get("error"):
                 raise RuntimeError(f"BrainBar backup request failed: {response['error']}")
             result = response.get("result") or {}
@@ -279,6 +315,7 @@ def request_brainbar_vacuum_into(
                 raise RuntimeError(f"BrainBar backup request failed: {text}")
             if not target_path.exists():
                 raise RuntimeError(f"BrainBar backup did not create snapshot: {target_path}")
+            _validate_backup_target(target_path)
             return
         except BackupTimeoutError:
             raise
@@ -287,20 +324,17 @@ def request_brainbar_vacuum_into(
             existing_target_note = ""
             if target_path.exists():
                 try:
-                    pragma = _sqlite_pragma_check(target_path, "quick_check")
+                    _validate_backup_target(target_path)
                 except Exception as check_exc:
                     target_path.unlink(missing_ok=True)
-                    existing_target_note = f"; removing invalid existing target after quick_check error: {check_exc}"
+                    existing_target_note = f"; removing invalid existing target after backup validation: {check_exc}"
                 else:
-                    if pragma == "ok":
-                        print(
-                            f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {exc}; "
-                            "target exists and passed quick_check",
-                            flush=True,
-                        )
-                        return
-                    target_path.unlink(missing_ok=True)
-                    existing_target_note = f"; removing invalid existing target after quick_check={pragma!r}"
+                    print(
+                        f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {exc}; "
+                        "target exists and passed backup validation",
+                        flush=True,
+                    )
+                    return
             if attempt >= max_attempts:
                 print(
                     f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {exc}{existing_target_note}",

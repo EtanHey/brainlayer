@@ -11,6 +11,14 @@ final class BrainBarReliabilityTests: XCTestCase {
     private var servers: [BrainBarServer] = []
     private var tempDirectories: [URL] = []
 
+    func testDaemonHeartbeatQueueIsIndependentFromBlockingRequestQueue() {
+        XCTAssertNotEqual(
+            BrainBarServer.requestQueueLabel,
+            BrainBarServer.daemonHeartbeatQueueLabel,
+            "VACUUM INTO can block the request queue longer than the watchdog stale timeout"
+        )
+    }
+
     override func tearDown() {
         for server in servers {
             server.stop()

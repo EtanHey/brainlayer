@@ -252,7 +252,7 @@ def test_brainbar_vacuum_request_retries_closed_socket_with_backoff(tmp_path, mo
         calls.append((socket_path, request["params"]["name"], timeout_seconds))
         if len(calls) < 3:
             raise RuntimeError("BrainBar socket closed without response: /tmp/brainbar.sock")
-        target.write_bytes(b"ok")
+        _create_source_db(target, chunk_count=2)
         return {"result": {"content": [{"type": "text", "text": '{"status":"ok"}'}]}}
 
     monkeypatch.setattr(backup_daily, "_send_brainbar_json_request", flaky_send)
@@ -266,6 +266,25 @@ def test_brainbar_vacuum_request_retries_closed_socket_with_backoff(tmp_path, mo
     assert "BrainBar vacuum snapshot attempt 1/3 failed" in output
     assert "BrainBar vacuum snapshot attempt 2/3 failed" in output
     assert "retrying in 60s" in output
+
+
+def test_brainbar_vacuum_request_uses_configured_client_timeout(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    target = tmp_path / "snapshot.db"
+    seen_timeouts = []
+
+    def capture_timeout(socket_path, request, timeout_seconds):  # noqa: ARG001
+        seen_timeouts.append(timeout_seconds)
+        _create_source_db(target, chunk_count=2)
+        return {"result": {"content": [{"type": "text", "text": '{"status":"ok"}'}]}}
+
+    monkeypatch.setenv("BRAINLAYER_BACKUP_CLIENT_TIMEOUT_SECONDS", "420")
+    monkeypatch.setattr(backup_daily, "_send_brainbar_json_request", capture_timeout)
+
+    backup_daily.request_brainbar_vacuum_into(target, socket_path="/tmp/brainbar.sock")
+
+    assert seen_timeouts == [420]
 
 
 def test_brainbar_vacuum_request_fails_loud_after_retry_budget(tmp_path, monkeypatch, capsys):
@@ -335,7 +354,56 @@ def test_brainbar_vacuum_request_accepts_valid_target_after_lost_response(tmp_pa
 
     assert calls == ["brain_backup_vacuum_into"]
     assert sleeps == []
-    assert "target exists and passed quick_check" in capsys.readouterr().out
+    assert "target exists and passed backup validation" in capsys.readouterr().out
+
+
+def test_brainbar_vacuum_request_rejects_zero_page_target_after_success_response(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    target = tmp_path / "snapshot.db"
+    calls = []
+
+    def decoy_then_valid(socket_path, request, timeout_seconds):  # noqa: ARG001
+        calls.append(request["params"]["name"])
+        if len(calls) == 1:
+            target.touch()
+        else:
+            assert not target.exists()
+            _create_source_db(target, chunk_count=2)
+        return {"result": {"content": [{"type": "text", "text": '{"status":"ok"}'}]}}
+
+    monkeypatch.setattr(backup_daily, "_send_brainbar_json_request", decoy_then_valid)
+    monkeypatch.setattr(backup_daily, "_sleep", lambda seconds: None)
+
+    backup_daily.request_brainbar_vacuum_into(target, socket_path="/tmp/brainbar.sock")
+
+    assert calls == ["brain_backup_vacuum_into", "brain_backup_vacuum_into"]
+    assert backup_daily._count_chunks(target) == 2
+
+
+def test_brainbar_vacuum_request_rejects_empty_chunks_target_after_lost_response(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    target = tmp_path / "snapshot.db"
+    calls = []
+
+    def empty_then_valid(socket_path, request, timeout_seconds):  # noqa: ARG001
+        calls.append(request["params"]["name"])
+        if len(calls) == 1:
+            with sqlite3.connect(target) as db:
+                db.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, content TEXT)")
+            raise RuntimeError("BrainBar socket closed without response: /tmp/brainbar.sock")
+        assert not target.exists()
+        _create_source_db(target, chunk_count=2)
+        return {"result": {"content": [{"type": "text", "text": '{"status":"ok"}'}]}}
+
+    monkeypatch.setattr(backup_daily, "_send_brainbar_json_request", empty_then_valid)
+    monkeypatch.setattr(backup_daily, "_sleep", lambda seconds: None)
+
+    backup_daily.request_brainbar_vacuum_into(target, socket_path="/tmp/brainbar.sock")
+
+    assert calls == ["brain_backup_vacuum_into", "brain_backup_vacuum_into"]
+    assert backup_daily._count_chunks(target) == 2
 
 
 def test_brainbar_vacuum_request_removes_invalid_target_before_retry(tmp_path, monkeypatch, capsys):
@@ -705,7 +773,8 @@ def test_launchd_installer_knows_backup_target():
     assert "<key>KeepAlive</key>" not in plist
     assert "<key>ExitTimeOut</key>" in plist
     assert "<integer>300</integer>" in plist
-    assert "BRAINLAYER_BACKUP_TIMEOUT_SECONDS:=300" in wrapper
+    assert "BRAINLAYER_BACKUP_CLIENT_TIMEOUT_SECONDS:=300" in wrapper
+    assert "BRAINLAYER_BACKUP_TIMEOUT_SECONDS:=7200" in wrapper
     assert "BRAINLAYER_BACKUP_LOG_PROVENANCE:=real" in wrapper
 
 
