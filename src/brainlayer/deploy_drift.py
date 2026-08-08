@@ -53,12 +53,15 @@ class DeployProvenanceError(RuntimeError):
 class DeployDriftFinding:
     label: str
     repo_root: str
-    launch_commit: str
-    deployed_commit: str
     provenance_path: str
     drift_status: str
+    identity_kind: str
+    launch_commit: str | None = None
+    deployed_commit: str | None = None
+    launch_version: str | None = None
+    deployed_version: str | None = None
 
-    def to_context(self) -> dict[str, str]:
+    def to_context(self) -> dict[str, str | None]:
         return asdict(self)
 
 
@@ -102,6 +105,17 @@ def git_root_for_path(path: Path) -> Path | None:
     return Path(root) if root else None
 
 
+def _is_exact_git_checkout(path: Path) -> bool:
+    git_root = git_root_for_path(path)
+    return git_root is not None and git_root.resolve() == path.expanduser().resolve()
+
+
+def _artifact_version() -> str:
+    from . import __version__
+
+    return __version__
+
+
 def commit_is_ancestor(repo_root: Path, ancestor: str, descendant: str) -> bool:
     try:
         result = subprocess.run(
@@ -143,24 +157,40 @@ def detect_deploy_drift(label: str, provenance_dir: Path) -> DeployDriftFinding 
         return None
 
     repo_root_value = payload.get("repo_root")
-    launch_commit = payload.get("launch_commit")
-    if not isinstance(repo_root_value, str) or not isinstance(launch_commit, str):
+    if not isinstance(repo_root_value, str):
         return None
     repo_root = Path(repo_root_value).expanduser()
-    deployed_commit = git_head(repo_root)
-    if not deployed_commit or deployed_commit == launch_commit:
+    launch_commit = payload.get("launch_commit")
+    if _is_exact_git_checkout(repo_root) and isinstance(launch_commit, str):
+        deployed_commit = git_head(repo_root)
+        if not deployed_commit or deployed_commit == launch_commit:
+            return None
+        changed_files = changed_files_between(repo_root, launch_commit, deployed_commit)
+        if not deploy_drift_changes_require_redeploy(changed_files):
+            return None
+        drift_status = "older" if commit_is_ancestor(repo_root, launch_commit, deployed_commit) else "diverged"
+        return DeployDriftFinding(
+            label=label,
+            repo_root=str(repo_root),
+            launch_commit=launch_commit,
+            deployed_commit=deployed_commit,
+            provenance_path=str(provenance_path),
+            drift_status=drift_status,
+            identity_kind="git_commit",
+        )
+
+    launch_version = payload.get("artifact_version")
+    deployed_version = _artifact_version()
+    if not isinstance(launch_version, str) or launch_version == deployed_version:
         return None
-    changed_files = changed_files_between(repo_root, launch_commit, deployed_commit)
-    if not deploy_drift_changes_require_redeploy(changed_files):
-        return None
-    drift_status = "older" if commit_is_ancestor(repo_root, launch_commit, deployed_commit) else "diverged"
     return DeployDriftFinding(
         label=label,
         repo_root=str(repo_root),
-        launch_commit=launch_commit,
-        deployed_commit=deployed_commit,
         provenance_path=str(provenance_path),
-        drift_status=drift_status,
+        drift_status="version_mismatch",
+        identity_kind="release_version",
+        launch_version=launch_version,
+        deployed_version=deployed_version,
     )
 
 
@@ -180,12 +210,15 @@ def write_daemon_launch_provenance(
     now_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> Path:
     resolved_repo = repo_root or _repo_root_from_env_or_cwd()
-    launch_commit = git_head(resolved_repo) if resolved_repo is not None else None
+    launch_commit = (
+        git_head(resolved_repo) if resolved_repo is not None and _is_exact_git_checkout(resolved_repo) else None
+    )
     path = provenance_path_for_label(provenance_dir or default_deploy_provenance_dir(), label)
     payload: dict[str, object] = {
         "label": label,
         "launched_at": now_fn().isoformat(),
         "pid": os.getpid(),
+        "artifact_version": _artifact_version(),
     }
     if resolved_repo is not None:
         payload["repo_root"] = str(resolved_repo)

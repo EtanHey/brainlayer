@@ -503,6 +503,16 @@ def init(
 @app.command()
 def setup(
     launchd: bool = typer.Option(False, "--launchd/--no-launchd", help="Install launchd agents after writing config."),
+    migrate_mcp: bool = typer.Option(
+        False,
+        "--migrate-mcp/--no-migrate-mcp",
+        help="Migrate known raw-socat BrainBar MCP entries to the reconnecting stdio bridge.",
+    ),
+    verify_mcp: bool = typer.Option(
+        False,
+        "--verify-mcp/--no-verify-mcp",
+        help="Require initialize and tools/list to succeed through the installed stdio bridge.",
+    ),
     env_file: Path | None = typer.Option(
         None,
         "--env-file",
@@ -524,7 +534,7 @@ def setup(
     """Create brainlayer.env and optionally bootstrap launchd agents."""
     import subprocess
 
-    from ..setup import ensure_brainlayer_env, install_launchd
+    from ..setup import ensure_brainlayer_env, install_launchd, migrate_legacy_mcp_configs, verify_mcp_transport
 
     try:
         resolved_env_file = ensure_brainlayer_env(
@@ -534,17 +544,24 @@ def setup(
         )
         if launchd:
             install_launchd(target, env_file=resolved_env_file)
+        migrated_configs = migrate_legacy_mcp_configs() if migrate_mcp else []
+        tool_count = verify_mcp_transport() if verify_mcp else None
     except (
         FileNotFoundError,
         FileExistsError,
         PermissionError,
         TimeoutError,
+        RuntimeError,
         ValueError,
         subprocess.CalledProcessError,
     ) as exc:
         rprint(f"[red]BrainLayer setup failed:[/] {exc}")
         raise typer.Exit(1) from exc
     rprint(f"[green]BrainLayer env file:[/] {resolved_env_file}")
+    for migrated_config in migrated_configs:
+        rprint(f"[green]Migrated MCP config:[/] {migrated_config}")
+    if tool_count is not None:
+        rprint(f"[green]MCP transport verified:[/] {tool_count} tools")
 
 
 @app.command()

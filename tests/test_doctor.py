@@ -654,8 +654,53 @@ def test_run_doctor_stays_silent_when_loaded_daemon_launch_commit_matches_head(t
     assert not [issue for issue in result.issues if issue.code == "deploy_drift"]
 
 
-def test_run_doctor_raises_alarm_when_loaded_daemon_launch_commit_is_older_than_head(tmp_path):
-    from brainlayer.alarm import BrainLayerAlarm
+def test_deploy_drift_ignores_unrelated_parent_git_repo_for_packaged_install(tmp_path):
+    from brainlayer.deploy_drift import detect_deploy_drift
+
+    homebrew_root = tmp_path / "homebrew"
+    old_homebrew_commit, _new_homebrew_commit = _git_repo_with_two_commits(homebrew_root)
+    package_root = homebrew_root / "Cellar" / "brainlayer" / "1.5.2" / "libexec" / "site-packages"
+    package_root.mkdir(parents=True)
+    provenance_dir = tmp_path / "daemon-provenance"
+    _write_daemon_provenance(
+        provenance_dir,
+        label="com.brainlayer.drain",
+        repo_root=package_root,
+        launch_commit=old_homebrew_commit,
+    )
+
+    assert detect_deploy_drift("com.brainlayer.drain", provenance_dir) is None
+
+
+def test_deploy_drift_uses_release_version_for_packaged_install(tmp_path):
+    from brainlayer import __version__
+    from brainlayer.deploy_drift import detect_deploy_drift
+
+    homebrew_root = tmp_path / "homebrew"
+    old_homebrew_commit, _new_homebrew_commit = _git_repo_with_two_commits(homebrew_root)
+    package_root = homebrew_root / "Cellar" / "brainlayer" / "1.5.1" / "libexec" / "site-packages"
+    package_root.mkdir(parents=True)
+    provenance_dir = tmp_path / "daemon-provenance"
+    _write_daemon_provenance(
+        provenance_dir,
+        label="com.brainlayer.drain",
+        repo_root=package_root,
+        launch_commit=old_homebrew_commit,
+    )
+    provenance_path = provenance_dir / "com.brainlayer.drain.json"
+    payload = json.loads(provenance_path.read_text(encoding="utf-8"))
+    payload["artifact_version"] = "1.5.1"
+    provenance_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    finding = detect_deploy_drift("com.brainlayer.drain", provenance_dir)
+
+    assert finding is not None
+    assert finding.to_context()["identity_kind"] == "release_version"
+    assert finding.to_context()["launch_version"] == "1.5.1"
+    assert finding.to_context()["deployed_version"] == __version__
+
+
+def test_run_doctor_reports_issue_and_continues_when_loaded_daemon_launch_commit_is_older_than_head(tmp_path):
     from brainlayer.doctor import run_doctor
 
     db_path = tmp_path / "deploy-drift-stale.db"
@@ -673,19 +718,21 @@ def test_run_doctor_raises_alarm_when_loaded_daemon_launch_commit_is_older_than_
     config.deploy_provenance_dir = provenance_dir
     config.deploy_drift_labels = ("com.brainlayer.drain",)
 
-    with pytest.raises(BrainLayerAlarm) as alarm:
-        run_doctor(
-            config,
-            ps_output_fn=_hotlane_ps,
-            command_runner=_loaded_launchctl,
-            now_fn=lambda: NOW,
-        )
+    result = run_doctor(
+        config,
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
 
-    assert alarm.value.code == "deploy_drift"
-    assert alarm.value.message == "daemon com.brainlayer.drain running stale code, redeploy needed"
-    assert alarm.value.context["label"] == "com.brainlayer.drain"
-    assert alarm.value.context["launch_commit"] == old_commit
-    assert alarm.value.context["deployed_commit"] == head_commit
+    issue = next(issue for issue in result.issues if issue.code == "deploy_drift")
+    assert issue.severity == "fatal"
+    assert issue.message == "daemon com.brainlayer.drain running stale code, redeploy needed"
+    assert issue.details["label"] == "com.brainlayer.drain"
+    assert issue.details["launch_commit"] == old_commit
+    assert issue.details["deployed_commit"] == head_commit
+    assert result.hotlane_running is True
+    assert result.exit_code == 1
 
 
 def test_run_doctor_ignores_deploy_drift_when_only_offline_reembed_utility_changed(tmp_path):
@@ -735,7 +782,6 @@ def test_run_doctor_ignores_deploy_drift_when_only_offline_reembed_utility_chang
 
 
 def test_deploy_drift_git_shellouts_ignore_inherited_git_env(tmp_path, monkeypatch):
-    from brainlayer.alarm import BrainLayerAlarm
     from brainlayer.doctor import run_doctor
 
     parent_repo = tmp_path / "parent-repo"
@@ -757,20 +803,19 @@ def test_deploy_drift_git_shellouts_ignore_inherited_git_env(tmp_path, monkeypat
     monkeypatch.setenv("GIT_DIR", str(parent_repo / ".git"))
     monkeypatch.setenv("GIT_WORK_TREE", str(parent_repo))
 
-    with pytest.raises(BrainLayerAlarm) as alarm:
-        run_doctor(
-            config,
-            ps_output_fn=_hotlane_ps,
-            command_runner=_loaded_launchctl,
-            now_fn=lambda: NOW,
-        )
+    result = run_doctor(
+        config,
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
 
-    assert alarm.value.context["launch_commit"] == old_commit
-    assert alarm.value.context["deployed_commit"] == head_commit
+    issue = next(issue for issue in result.issues if issue.code == "deploy_drift")
+    assert issue.details["launch_commit"] == old_commit
+    assert issue.details["deployed_commit"] == head_commit
 
 
-def test_run_doctor_raises_alarm_when_loaded_daemon_launch_commit_diverged_from_head(tmp_path):
-    from brainlayer.alarm import BrainLayerAlarm
+def test_run_doctor_reports_diverged_deploy_drift_without_aborting(tmp_path):
     from brainlayer.doctor import run_doctor
 
     db_path = tmp_path / "deploy-drift-diverged.db"
@@ -788,18 +833,43 @@ def test_run_doctor_raises_alarm_when_loaded_daemon_launch_commit_diverged_from_
     config.deploy_provenance_dir = provenance_dir
     config.deploy_drift_labels = ("com.brainlayer.drain",)
 
-    with pytest.raises(BrainLayerAlarm) as alarm:
-        run_doctor(
-            config,
-            ps_output_fn=_hotlane_ps,
-            command_runner=_loaded_launchctl,
-            now_fn=lambda: NOW,
-        )
+    result = run_doctor(
+        config,
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
 
-    assert alarm.value.code == "deploy_drift"
-    assert alarm.value.context["drift_status"] == "diverged"
-    assert alarm.value.context["launch_commit"] == launch_commit
-    assert alarm.value.context["deployed_commit"] == deployed_commit
+    issue = next(issue for issue in result.issues if issue.code == "deploy_drift")
+    assert issue.details["drift_status"] == "diverged"
+    assert issue.details["launch_commit"] == launch_commit
+    assert issue.details["deployed_commit"] == deployed_commit
+
+
+def test_deploy_drift_check_contains_per_label_exceptions(tmp_path, monkeypatch):
+    from brainlayer import doctor
+
+    result = doctor.DoctorResult(checked_at=NOW.isoformat(), ok=True, exit_code=0)
+    monkeypatch.setattr(doctor, "is_launchd_label_loaded", lambda _label, command_runner: True)
+
+    def fail_one_label(label: str, _provenance_dir: Path):
+        if label == "com.brainlayer.drain":
+            raise RuntimeError("corrupt deploy provenance")
+        return None
+
+    monkeypatch.setattr(doctor, "detect_deploy_drift", fail_one_label)
+
+    doctor._check_deploy_drift(
+        result,
+        labels=("com.brainlayer.drain", "com.brainlayer.watch"),
+        provenance_dir=tmp_path,
+        command_runner=_loaded_launchctl,
+    )
+
+    issue = next(issue for issue in result.issues if issue.code == "deploy_drift_check_failed")
+    assert issue.severity == "fatal"
+    assert issue.details["label"] == "com.brainlayer.drain"
+    assert "corrupt deploy provenance" in issue.details["exception"]
 
 
 def test_brainbar_changed_for_deploy_detects_brainbar_changes_since_launch(tmp_path):
