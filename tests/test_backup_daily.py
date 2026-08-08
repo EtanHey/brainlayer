@@ -553,7 +553,7 @@ def test_recent_attempt_growth_is_reserved_in_disk_preflight(tmp_path, monkeypat
         backup_daily.create_sqlite_backup_artifact(source, output_dir, date_stamp="2026-05-14")
 
 
-def test_terminal_response_cleans_prior_run_attempts(tmp_path, monkeypatch):
+def test_terminal_response_does_not_clean_unowned_prior_run_attempts(tmp_path, monkeypatch):
     from brainlayer import backup_daily
 
     target = tmp_path / "snapshot.db"
@@ -570,7 +570,7 @@ def test_terminal_response_cleans_prior_run_attempts(tmp_path, monkeypatch):
     backup_daily.request_brainbar_vacuum_into(target, socket_path="/tmp/brainbar.sock")
 
     assert target.exists()
-    assert not prior_attempt.exists()
+    assert prior_attempt.exists()
 
 
 def test_create_snapshot_rejects_low_disk_space(tmp_path, monkeypatch):
