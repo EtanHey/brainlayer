@@ -926,7 +926,7 @@ async def test_store_busy_budget_bounds_supersede_update(tmp_path, monkeypatch):
     from brainlayer.mcp.store_handler import _store
 
     pending_path = tmp_path / "pending-stores.jsonl"
-    real_sleep = time.sleep
+    supersede_timeouts = []
 
     class FakeCursor:
         def __init__(self, conn):
@@ -958,7 +958,7 @@ async def test_store_busy_budget_bounds_supersede_update(tmp_path, monkeypatch):
         return {"id": kwargs["chunk_id"], "related": []}
 
     def locked_supersede(_old_chunk_id, _new_chunk_id):
-        real_sleep(store.conn.timeout_ms / 1000)
+        supersede_timeouts.append(store.conn.timeout_ms)
         raise apsw.BusyError("database is locked")
 
     store.supersede_chunk.side_effect = locked_supersede
@@ -982,6 +982,8 @@ async def test_store_busy_budget_bounds_supersede_update(tmp_path, monkeypatch):
     clamped_timeouts = [timeout_ms for timeout_ms in store.conn.timeout_history if timeout_ms != 250]
     assert clamped_timeouts
     assert max(clamped_timeouts) <= 80
+    assert supersede_timeouts
+    assert max(supersede_timeouts) <= 80
     assert store.conn.timeout_ms == 250
     assert structured["status"] == "DEFERRED"
     assert structured["deferred"]["action"] == "queued_for_replay"
