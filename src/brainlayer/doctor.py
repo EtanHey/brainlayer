@@ -317,7 +317,7 @@ def _redact_home_paths(context: dict[str, Any]) -> dict[str, Any]:
     for key in ("repo_root", "provenance_path"):
         value = redacted.get(key)
         if isinstance(value, str) and (value == home or value.startswith(f"{home}/")):
-            redacted[key] = f"~{value[len(home):]}"
+            redacted[key] = f"~{value[len(home) :]}"
     return redacted
 
 
