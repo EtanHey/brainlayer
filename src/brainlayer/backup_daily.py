@@ -226,6 +226,9 @@ def create_sqlite_backup_artifact(
         )
     final_gz = output_dir / f"{date_stamp}.db.gz"
     final_raw = output_dir / f"{date_stamp}.db"
+    source_chunks_before = _count_chunks(db_path)
+    if source_chunks_before < 1:
+        raise RuntimeError("Source database has zero chunks rows")
     sentinel_chunks = 0
     uncompressed_path: Path | None = None
 
@@ -233,6 +236,11 @@ def create_sqlite_backup_artifact(
         raw_snapshot = Path(tmp) / f"{date_stamp}.db"
         request_brainbar_vacuum_into(raw_snapshot, socket_path=socket_path)
         sentinel_chunks = _validate_backup_target(raw_snapshot, pragma_name="integrity_check")
+        if sentinel_chunks < source_chunks_before:
+            raise RuntimeError(
+                "Backup target has fewer chunks rows than the pre-vacuum source: "
+                f"{sentinel_chunks} < {source_chunks_before}"
+            )
 
         temp_gz = Path(tmp) / final_gz.name
         with raw_snapshot.open("rb") as src, gzip.open(temp_gz, "wb", compresslevel=6) as dst:
