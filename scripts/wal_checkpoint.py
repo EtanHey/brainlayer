@@ -34,6 +34,11 @@ def main():
     parser.add_argument("--json", action="store_true", help="JSON output")
     parser.add_argument("--quiet", action="store_true", help="Silent unless error")
     parser.add_argument(
+        "--retry-busy",
+        action="store_true",
+        help="Retry busy TRUNCATE checkpoints with exponential backoff",
+    )
+    parser.add_argument(
         "--mode",
         default="TRUNCATE",
         choices=["PASSIVE", "FULL", "RESTART", "TRUNCATE"],
@@ -42,7 +47,7 @@ def main():
     args = parser.parse_args()
 
     try:
-        result = run_wal_checkpoint(args.mode)
+        result = run_wal_checkpoint(args.mode, retry_busy=args.retry_busy)
     except FileNotFoundError:
         if args.json:
             print(json.dumps({"error": "no database found"}))

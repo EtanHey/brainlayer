@@ -2663,6 +2663,7 @@ def decay(
 @app.command("wal-checkpoint")
 def wal_checkpoint(
     mode: str = typer.Option("TRUNCATE", "--mode", help="Checkpoint mode"),
+    retry_busy: bool = typer.Option(False, "--retry-busy", help="Retry busy TRUNCATE checkpoints with backoff"),
     json_output: bool = typer.Option(False, "--json", help="Emit JSON output"),
     quiet: bool = typer.Option(False, "--quiet", help="Silent unless error"),
 ) -> None:
@@ -2674,7 +2675,9 @@ def wal_checkpoint(
         raise typer.BadParameter(f"Invalid checkpoint mode: {mode}")
 
     try:
-        result = run_wal_checkpoint(normalized_mode)
+        result = (
+            run_wal_checkpoint(normalized_mode, retry_busy=True) if retry_busy else run_wal_checkpoint(normalized_mode)
+        )
     except FileNotFoundError as e:
         if json_output:
             console.print_json(data={"error": str(e)})

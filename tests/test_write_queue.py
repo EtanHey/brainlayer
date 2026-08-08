@@ -533,6 +533,57 @@ class TestQueueStore:
         assert drained == 1
         assert checkpoint_sql == ["PRAGMA wal_checkpoint(PASSIVE)"]
 
+    def test_large_wal_escalates_to_rate_limited_restart_checkpoint(self, tmp_path, monkeypatch):
+        """A large WAL gets a bounded reset attempt without RESTART on every commit."""
+        from brainlayer import drain
+
+        checkpoint_sql: list[str] = []
+
+        class FakeResult:
+            def fetchone(self):
+                return (0, 100, 100)
+
+        class FakeConnection:
+            def execute(self, sql, *_args):
+                if "wal_checkpoint" in sql:
+                    checkpoint_sql.append(sql)
+                return FakeResult()
+
+            def setbusytimeout(self, _timeout_ms):
+                return None
+
+        monkeypatch.setenv("BRAINLAYER_WAL_RESTART_HIGH_WATER_BYTES", "1")
+        monkeypatch.setenv("BRAINLAYER_WAL_RESTART_MIN_INTERVAL_SECONDS", "60")
+        monkeypatch.setattr(drain, "_wal_size_bytes", lambda _path: 100)
+        monkeypatch.setattr(drain.time, "monotonic", lambda: 1_000.0)
+        drain._LAST_RESTART_ATTEMPT.clear()
+
+        first = drain._post_commit_checkpoint(FakeConnection(), tmp_path / "brainlayer.db")
+        second = drain._post_commit_checkpoint(FakeConnection(), tmp_path / "brainlayer.db")
+
+        assert first == 2
+        assert second == 1
+        assert checkpoint_sql == [
+            "PRAGMA wal_checkpoint(PASSIVE)",
+            "PRAGMA wal_checkpoint(RESTART)",
+            "PRAGMA wal_checkpoint(PASSIVE)",
+        ]
+
+    def test_post_commit_checkpoint_guard_failure_is_nonfatal(self, tmp_path, monkeypatch):
+        """Checkpoint bookkeeping cannot turn a committed queue item into a replay."""
+        from brainlayer import drain
+
+        class BrokenGuard:
+            def __enter__(self):
+                raise OSError("checkpoint lock unavailable")
+
+            def __exit__(self, *_args):
+                return False
+
+        monkeypatch.setattr(drain, "checkpoint_guard", lambda *_args, **_kwargs: BrokenGuard())
+
+        assert drain._post_commit_checkpoint(MagicMock(), tmp_path / "brainlayer.db") == 0
+
     def test_drain_prepares_all_schema_before_acquiring_immediate_write_lock(self, tmp_path, monkeypatch):
         """Schema/FTS inspection must not hold the exclusive writer transaction."""
         from brainlayer import drain
