@@ -16,7 +16,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
-from .alarm import BrainLayerAlarm, emit_alarm
+from .alarm import BrainLayerAlarm, build_alarm, emit_alarm
 from .deploy_drift import DEFAULT_DEPLOY_DRIFT_LABELS, default_deploy_provenance_dir, detect_deploy_drift
 from .drain_liveness import (
     DEFAULT_DRAIN_LIVENESS_STALE_SECONDS,
@@ -336,12 +336,15 @@ def _check_deploy_drift(
             continue
         if finding is None:
             continue
+        message = f"daemon {label} running stale code, redeploy needed"
+        context = finding.to_context()
+        emit_alarm(build_alarm("deploy_drift", message, context))
         result.issues.append(
             DoctorIssue(
                 "deploy_drift",
                 "fatal",
-                f"daemon {label} running stale code, redeploy needed",
-                finding.to_context(),
+                message,
+                context,
             )
         )
 

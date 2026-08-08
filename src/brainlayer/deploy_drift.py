@@ -6,6 +6,7 @@ import json
 import os
 import plistlib
 import subprocess
+import tomllib
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -52,7 +53,7 @@ class DeployProvenanceError(RuntimeError):
 @dataclass(frozen=True)
 class DeployDriftFinding:
     label: str
-    repo_root: str
+    repo_root: str | None
     provenance_path: str
     drift_status: str
     identity_kind: str
@@ -105,9 +106,18 @@ def git_root_for_path(path: Path) -> Path | None:
     return Path(root) if root else None
 
 
-def _is_exact_git_checkout(path: Path) -> bool:
+def _is_brainlayer_git_checkout(path: Path) -> bool:
     git_root = git_root_for_path(path)
-    return git_root is not None and git_root.resolve() == path.expanduser().resolve()
+    resolved = path.expanduser().resolve()
+    if git_root is None or git_root.resolve() != resolved:
+        return False
+    package_marker = resolved / "src" / "brainlayer" / "__init__.py"
+    try:
+        metadata = tomllib.loads((resolved / "pyproject.toml").read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return False
+    project = metadata.get("project")
+    return package_marker.is_file() and isinstance(project, dict) and project.get("name") == "brainlayer"
 
 
 def _artifact_version() -> str:
@@ -157,11 +167,9 @@ def detect_deploy_drift(label: str, provenance_dir: Path) -> DeployDriftFinding 
         return None
 
     repo_root_value = payload.get("repo_root")
-    if not isinstance(repo_root_value, str):
-        return None
-    repo_root = Path(repo_root_value).expanduser()
+    repo_root = Path(repo_root_value).expanduser() if isinstance(repo_root_value, str) else None
     launch_commit = payload.get("launch_commit")
-    if _is_exact_git_checkout(repo_root) and isinstance(launch_commit, str):
+    if repo_root is not None and _is_brainlayer_git_checkout(repo_root) and isinstance(launch_commit, str):
         deployed_commit = git_head(repo_root)
         if not deployed_commit or deployed_commit == launch_commit:
             return None
@@ -185,7 +193,7 @@ def detect_deploy_drift(label: str, provenance_dir: Path) -> DeployDriftFinding 
         return None
     return DeployDriftFinding(
         label=label,
-        repo_root=str(repo_root),
+        repo_root=str(repo_root) if repo_root is not None else None,
         provenance_path=str(provenance_path),
         drift_status="version_mismatch",
         identity_kind="release_version",
@@ -207,11 +215,14 @@ def write_daemon_launch_provenance(
     label: str,
     repo_root: Path | None = None,
     provenance_dir: Path | None = None,
+    auto_detect_repo_root: bool = True,
     now_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> Path:
-    resolved_repo = repo_root or _repo_root_from_env_or_cwd()
+    resolved_repo = repo_root
+    if resolved_repo is None and auto_detect_repo_root:
+        resolved_repo = _repo_root_from_env_or_cwd()
     launch_commit = (
-        git_head(resolved_repo) if resolved_repo is not None and _is_exact_git_checkout(resolved_repo) else None
+        git_head(resolved_repo) if resolved_repo is not None and _is_brainlayer_git_checkout(resolved_repo) else None
     )
     path = provenance_path_for_label(provenance_dir or default_deploy_provenance_dir(), label)
     payload: dict[str, object] = {
@@ -270,16 +281,11 @@ def repo_root_from_launchd_plist(plist_path: Path) -> Path | None:
 
 def record_deploy_provenance_for_label(*, label: str, plist_path: Path, provenance_dir: Path) -> Path:
     repo_root = repo_root_from_launchd_plist(plist_path)
-    if repo_root is None:
-        raise DeployProvenanceError(
-            label,
-            plist_path,
-            f"could not resolve repo root from launchd plist for {label}: {plist_path.expanduser()}",
-        )
     return write_daemon_launch_provenance(
         label=label,
         repo_root=repo_root,
         provenance_dir=provenance_dir,
+        auto_detect_repo_root=False,
     )
 
 
