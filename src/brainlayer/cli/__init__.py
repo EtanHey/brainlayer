@@ -31,6 +31,7 @@ from rich.progress import (
 )
 from rich.table import Table
 
+from .. import __version__
 from ..config import DEFAULT_REALTIME_ENRICH_SINCE_HOURS
 from ..paths import get_db_path
 
@@ -47,6 +48,22 @@ provenance_app = typer.Typer(help="Resolve provenance conflicts and pending conf
 app.add_typer(provenance_app, name="provenance")
 sandbox_app = typer.Typer(help="Manage isolated sandbox BrainLayer databases")
 app.add_typer(sandbox_app, name="sandbox")
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        typer.echo(f"brainlayer {__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def _root_callback(
+    version: Annotated[
+        bool,
+        typer.Option("--version", "-V", callback=_version_callback, is_eager=True, help="Show the version and exit."),
+    ] = False,
+) -> None:
+    """Configure global BrainLayer CLI options."""
 
 
 def _index_max_runtime_s() -> float:
