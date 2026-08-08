@@ -503,6 +503,56 @@ def test_create_snapshot_preserves_failed_attempts_outside_temporary_directory(t
     assert all(path.exists() for path in attempt_targets)
 
 
+def test_stale_attempt_sweep_deletes_only_regular_files_older_than_one_run_interval(tmp_path):
+    from brainlayer import backup_daily
+
+    now = 200_000.0
+    stale = tmp_path / ".2026-05-12.db.attempt-1-stale"
+    recent = tmp_path / ".2026-05-13.db.attempt-1-recent"
+    target = tmp_path / "outside.db"
+    symlink = tmp_path / ".2026-05-11.db.attempt-1-link"
+    stale.write_bytes(b"stale")
+    recent.write_bytes(b"recent")
+    target.write_bytes(b"outside")
+    symlink.symlink_to(target)
+    os.utime(stale, (now - 90_000, now - 90_000))
+    os.utime(recent, (now - 60, now - 60))
+
+    deleted, surviving = backup_daily._sweep_stale_backup_attempts(
+        tmp_path,
+        max_age_seconds=86_400,
+        now=now,
+    )
+
+    assert deleted == [stale.name]
+    assert {path.name for path in surviving} == {recent.name, symlink.name}
+    assert not stale.exists()
+    assert recent.exists()
+    assert symlink.is_symlink()
+    assert target.read_bytes() == b"outside"
+
+
+def test_recent_attempt_growth_is_reserved_in_disk_preflight(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    output_dir = tmp_path / "out"
+    _create_source_db(source, chunk_count=2)
+    output_dir.mkdir()
+    recent = output_dir / ".2026-05-13.db.attempt-1-recent"
+    recent.write_bytes(b"x")
+    db_size = source.stat().st_size
+    base_required = (db_size * 3) + (512 * 1024 * 1024)
+
+    class Disk:
+        free = base_required
+
+    monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: Disk())
+
+    with pytest.raises(RuntimeError, match="1 recent attempts reserve"):
+        backup_daily.create_sqlite_backup_artifact(source, output_dir, date_stamp="2026-05-14")
+
+
 def test_terminal_response_cleans_prior_run_attempts(tmp_path, monkeypatch):
     from brainlayer import backup_daily
 
@@ -864,6 +914,7 @@ def test_launchd_installer_knows_backup_target():
     assert "<integer>300</integer>" in plist
     assert "BRAINLAYER_BACKUP_CLIENT_TIMEOUT_SECONDS:=0" in wrapper
     assert "BRAINLAYER_BACKUP_TIMEOUT_SECONDS:=7200" in wrapper
+    assert "BRAINLAYER_BACKUP_ATTEMPT_MAX_AGE_SECONDS:=86400" in wrapper
     assert "BRAINLAYER_BACKUP_LOG_PROVENANCE:=real" in wrapper
 
 
