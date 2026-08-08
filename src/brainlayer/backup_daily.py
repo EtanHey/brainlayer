@@ -18,6 +18,7 @@ import signal
 import socket
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import time
 import traceback
@@ -45,13 +46,14 @@ BACKUP_ATTEMPT_MAX_AGE_ENV = "BRAINLAYER_BACKUP_ATTEMPT_MAX_AGE_SECONDS"
 BACKUP_FULL_VERIFY_ENV = "BRAINLAYER_BACKUP_FULL_VERIFY"
 BACKUP_LOG_PATH_ENV = "BRAINLAYER_BACKUP_LOG_PATH"
 BACKUP_LOG_PROVENANCE_ENV = "BRAINLAYER_BACKUP_LOG_PROVENANCE"
+BACKUP_SUPERVISED_CHILD_ENV = "BRAINLAYER_BACKUP_SUPERVISED_CHILD"
 DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 DEFAULT_DAILY_KEEP = 7
 DEFAULT_WEEKLY_KEEP = 4
 DEFAULT_LOCAL_UNCOMPRESSED_KEEP = 2
 DEFAULT_BACKUP_CLIENT_TIMEOUT_SECONDS = 0
-DEFAULT_BACKUP_TIMEOUT_SECONDS = 7200
+DEFAULT_BACKUP_TIMEOUT_SECONDS = 6 * 60 * 60
 DEFAULT_BACKUP_ATTEMPT_MAX_AGE_SECONDS = 24 * 60 * 60
 
 
@@ -989,13 +991,11 @@ def run_backup(
     return result
 
 
-def main() -> int:
-    timeout_seconds = _configured_backup_timeout_seconds()
+def _run_backup_process(timeout_seconds: int) -> int:
     previous_alarm_handler = None
-    if timeout_seconds is not None:
-        previous_alarm_handler = signal.getsignal(signal.SIGALRM)
-        signal.signal(signal.SIGALRM, _raise_backup_timeout)
-        signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
+    previous_alarm_handler = signal.getsignal(signal.SIGALRM)
+    signal.signal(signal.SIGALRM, _raise_backup_timeout)
+    signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
     try:
         result = run_backup(
             staging_dir=Path(os.environ.get("BRAINLAYER_BACKUP_STAGING_DIR", str(DEFAULT_STAGING_DIR))),
@@ -1013,11 +1013,70 @@ def main() -> int:
         print(f"brainlayer backup failed: {exc}\n{traceback.format_exc()}", flush=True)
         return 1
     finally:
-        if timeout_seconds is not None:
-            signal.setitimer(signal.ITIMER_REAL, 0)
-            signal.signal(signal.SIGALRM, previous_alarm_handler)
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_alarm_handler)
     print(json.dumps(result, sort_keys=True), flush=True)
     return 0 if result.get("verified", True) else 1
+
+
+def _supervise_backup_process(timeout_seconds: int, *, command: list[str] | None = None) -> int:
+    child_env = os.environ.copy()
+    child_env[BACKUP_SUPERVISED_CHILD_ENV] = "1"
+    child = subprocess.Popen(
+        command or [sys.executable, "-m", "brainlayer.backup_daily"],
+        env=child_env,
+        start_new_session=True,
+    )
+    previous_signal_handlers: dict[int, Any] = {}
+
+    def forward_shutdown_signal(signum, frame) -> None:  # noqa: ARG001
+        if child.poll() is None:
+            os.killpg(child.pid, signum)
+        raise SystemExit(128 + signum)
+
+    for shutdown_signal in (signal.SIGTERM, signal.SIGINT):
+        previous_signal_handlers[shutdown_signal] = signal.getsignal(shutdown_signal)
+        signal.signal(shutdown_signal, forward_shutdown_signal)
+    try:
+        try:
+            return child.wait(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            if child.poll() is None:
+                os.killpg(child.pid, signal.SIGTERM)
+                try:
+                    child.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    os.killpg(child.pid, signal.SIGKILL)
+                    child.wait()
+            message = f"backup exceeded configured wall-clock timeout ({timeout_seconds}s)"
+            _append_json_log(
+                _backup_log_path(None),
+                {
+                    "db": str(get_db_path()),
+                    "uploaded": False,
+                    "local_removed": False,
+                    "verified": False,
+                    "backup_log_provenance": _backup_log_provenance(),
+                    "attempt_reclamation": "unknown",
+                    "writer_probe_error": None,
+                    "error_type": "BackupTimeoutError",
+                    "error": message,
+                    "timeout_seconds": timeout_seconds,
+                    "timeout_enforced_by": "parent_process_supervisor",
+                },
+            )
+            print(f"brainlayer backup timed out after {timeout_seconds}s", flush=True)
+            return 124
+    finally:
+        for shutdown_signal, previous_handler in previous_signal_handlers.items():
+            signal.signal(shutdown_signal, previous_handler)
+
+
+def main() -> int:
+    timeout_seconds = _configured_backup_timeout_seconds()
+    if _env_flag_enabled(BACKUP_SUPERVISED_CHILD_ENV):
+        return _run_backup_process(timeout_seconds)
+    return _supervise_backup_process(timeout_seconds)
 
 
 if __name__ == "__main__":
