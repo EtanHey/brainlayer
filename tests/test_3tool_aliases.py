@@ -6,7 +6,7 @@ Covers:
 - brain_recall mode=entity routing
 - brain_search → brain_recall(mode=search) delegation
 - brain_entity → brain_recall(mode=entity) delegation
-- brain_update / brain_expand / brain_tags deprecation (isError: true)
+- brain_update routing and brain_expand / brain_tags deprecation
 - Backward compatibility: all old modes still work
 - Edge cases: empty query, None query, mixed signals
 """
@@ -313,20 +313,50 @@ class TestBackwardCompatRecallModes:
         mock_ctx.assert_called_once()
 
 
-# ── Deprecation stubs (isError: true) ─────────────────────────────────────────
+# ── Update routing and deprecation stubs ──────────────────────────────────────
 
 
-class TestDeprecationStubs:
-    """brain_update, brain_expand, brain_tags return isError: true."""
+class TestUpdateRoutingAndDeprecationStubs:
+    """brain_update is live while brain_expand and brain_tags remain deprecated."""
 
-    def test_brain_update_returns_deprecation_error(self):
-        """brain_update returns isError with deprecation message."""
+    def test_brain_update_routes_to_store_handler(self):
+        """brain_update delegates to the working store handler."""
         from brainlayer.mcp import call_tool
 
-        result = asyncio.run(call_tool("brain_update", {"action": "update", "chunk_id": "abc123"}))
-        assert result.is_error is True
-        assert "deprecated" in result.content[0].text.lower()
-        assert "brain_store" in result.content[0].text or "brain_supersede" in result.content[0].text
+        with patch("brainlayer.mcp._brain_update", new_callable=AsyncMock, return_value=[MagicMock()]) as update:
+            result = asyncio.run(
+                call_tool(
+                    "brain_update",
+                    {
+                        "action": "update",
+                        "chunk_id": "abc123",
+                        "content": "Corrected content",
+                        "tags": ["corrected"],
+                        "importance": 9,
+                        "merge_chunk_ids": ["duplicate-1"],
+                    },
+                )
+            )
+
+        assert len(result) == 1
+        update.assert_awaited_once_with(
+            action="update",
+            chunk_id="abc123",
+            content="Corrected content",
+            tags=["corrected"],
+            importance=9,
+            merge_chunk_ids=["duplicate-1"],
+        )
+
+    def test_brain_update_tool_contract_is_live(self):
+        """The advertised brain_update contract must not claim the live tool is deprecated."""
+        from brainlayer.mcp import list_tools
+
+        tools = asyncio.run(list_tools())
+        update_tool = next(tool for tool in tools if tool.name == "brain_update")
+
+        assert "deprecated" not in update_tool.description.lower()
+        assert "update" in update_tool.description.lower()
 
     def test_brain_expand_returns_deprecation_error(self):
         """brain_expand returns isError with deprecation message."""

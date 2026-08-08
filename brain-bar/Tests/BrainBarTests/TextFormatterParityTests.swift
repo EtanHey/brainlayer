@@ -176,6 +176,7 @@ final class TextFormatterParityTests: XCTestCase {
 
     func testEntityCardDoesNotMarkFutureValidUntilExpired() {
         let validUntil = ISO8601DateFormatter().date(from: "2026-12-31T00:00:00Z")
+        let now = ISO8601DateFormatter().date(from: "2026-08-08T00:00:00Z")!
         let entity = EntityCard(
             id: "tech-001",
             name: "JWT middleware",
@@ -189,10 +190,31 @@ final class TextFormatterParityTests: XCTestCase {
             ]
         )
 
-        let output = TextFormatter.formatEntityCard(entity)
+        let output = TextFormatter.formatEntityCard(entity, now: now)
 
         XCTAssertTrue(output.contains("- depends_on: auth-service"))
         XCTAssertFalse(output.contains("expired 2026-12-31"))
+        XCTAssertTrue(output.contains("- depends_on: auth-service (until 2026-12-31)"))
+    }
+
+    func testEntityCardMarksLapsedValidUntilExpiredWithoutExpiredStamp() {
+        let validUntil = ISO8601DateFormatter().date(from: "2025-05-24T00:00:00Z")
+        let entity = EntityCard(
+            id: "person-001",
+            name: "Etan",
+            entityType: "person",
+            relations: [
+                EntityCard.Relation(
+                    relationType: "cto_of",
+                    targetName: "Domica",
+                    validUntil: validUntil
+                )
+            ]
+        )
+
+        let output = TextFormatter.formatEntityCard(entity)
+
+        XCTAssertTrue(output.contains("- cto_of: Domica (expired 2025-05-24)"), output)
     }
 
     func testRecallContextUsesLabeledChunkMarkdown() {
