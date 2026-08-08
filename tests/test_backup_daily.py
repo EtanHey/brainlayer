@@ -310,6 +310,17 @@ def test_brainbar_vacuum_request_defaults_to_outer_wall_clock_timeout(tmp_path, 
     assert seen_timeouts == [None]
 
 
+def test_backup_wall_clock_timeout_has_safe_default_and_rejects_disable(monkeypatch):
+    from brainlayer import backup_daily
+
+    monkeypatch.delenv("BRAINLAYER_BACKUP_TIMEOUT_SECONDS", raising=False)
+    assert backup_daily._configured_backup_timeout_seconds() == 7200
+
+    monkeypatch.setenv("BRAINLAYER_BACKUP_TIMEOUT_SECONDS", "0")
+    with pytest.raises(ValueError, match="must be at least 1 second"):
+        backup_daily._configured_backup_timeout_seconds()
+
+
 def test_brainbar_vacuum_request_fails_loud_after_retry_budget(tmp_path, monkeypatch, capsys):
     from brainlayer import backup_daily
 
