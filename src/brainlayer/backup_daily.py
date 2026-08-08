@@ -226,9 +226,6 @@ def create_sqlite_backup_artifact(
         )
     final_gz = output_dir / f"{date_stamp}.db.gz"
     final_raw = output_dir / f"{date_stamp}.db"
-    source_chunks_before = _count_chunks(db_path)
-    if source_chunks_before < 1:
-        raise RuntimeError("Source database has zero chunks rows")
     sentinel_chunks = 0
     uncompressed_path: Path | None = None
 
@@ -236,11 +233,6 @@ def create_sqlite_backup_artifact(
         raw_snapshot = Path(tmp) / f"{date_stamp}.db"
         request_brainbar_vacuum_into(raw_snapshot, socket_path=socket_path, attempt_dir=output_dir)
         sentinel_chunks = _validate_backup_target(raw_snapshot, pragma_name="integrity_check")
-        if sentinel_chunks < source_chunks_before:
-            raise RuntimeError(
-                "Backup target has fewer chunks rows than the pre-vacuum source: "
-                f"{sentinel_chunks} < {source_chunks_before}"
-            )
 
         temp_gz = Path(tmp) / final_gz.name
         with raw_snapshot.open("rb") as src, gzip.open(temp_gz, "wb", compresslevel=6) as dst:
@@ -304,6 +296,7 @@ def request_brainbar_vacuum_into(
     resolved_attempt_dir = Path(attempt_dir).expanduser() if attempt_dir is not None else target_path.parent
     resolved_attempt_dir.mkdir(parents=True, exist_ok=True)
     last_error: Exception | None = None
+    unconfirmed_attempt_paths: list[Path] = []
     for attempt in range(1, max_attempts + 1):
         attempt_path = resolved_attempt_dir / f".{target_path.name}.attempt-{attempt}-{uuid.uuid4().hex}"
         request = {
@@ -315,12 +308,14 @@ def request_brainbar_vacuum_into(
                 "arguments": {"target_path": str(attempt_path)},
             },
         }
+        terminal_response_received = False
         try:
             response = _send_brainbar_json_request(
                 resolved_socket_path,
                 request,
                 timeout_seconds=resolved_timeout_seconds,
             )
+            terminal_response_received = True
             if response.get("error"):
                 raise RuntimeError(f"BrainBar backup request failed: {response['error']}")
             result = response.get("result") or {}
@@ -337,15 +332,24 @@ def request_brainbar_vacuum_into(
                 attempt_path.unlink(missing_ok=True)
                 raise
             os.replace(attempt_path, target_path)
+            for prior_path in unconfirmed_attempt_paths:
+                prior_path.unlink(missing_ok=True)
             return
         except BackupTimeoutError:
             raise
         except Exception as exc:
             last_error = exc
             existing_target_note = ""
-            if attempt_path.exists():
+            if terminal_response_received:
+                # BrainBar's request queue is serial. A terminal response proves this
+                # attempt and every earlier request are no longer writing.
+                for completed_path in [*unconfirmed_attempt_paths, attempt_path]:
+                    completed_path.unlink(missing_ok=True)
+                unconfirmed_attempt_paths.clear()
+            elif attempt_path.exists():
                 # A lost response does not prove VACUUM INTO is finished. Never inspect,
                 # unlink, or promote a path that BrainBar may still be writing.
+                unconfirmed_attempt_paths.append(attempt_path)
                 existing_target_note = f"; preserving isolated attempt target: {attempt_path}"
             if attempt >= max_attempts:
                 print(

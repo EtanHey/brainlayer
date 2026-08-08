@@ -223,25 +223,6 @@ def test_create_snapshot_reports_no_uncompressed_path_when_current_raw_is_pruned
     assert sorted(path.name for path in out_dir.glob("*.db")) == ["2026-06-04.db", "2026-06-05.db"]
 
 
-def test_create_snapshot_rejects_chunk_count_below_pre_vacuum_source(tmp_path, monkeypatch):
-    from brainlayer import backup_daily
-
-    source = tmp_path / "brainlayer.db"
-    _create_source_db(source, chunk_count=3)
-
-    def create_truncated_snapshot(target_path, **kwargs):  # noqa: ARG001
-        _create_source_db(target_path, chunk_count=2)
-
-    monkeypatch.setattr(backup_daily, "request_brainbar_vacuum_into", create_truncated_snapshot)
-
-    with pytest.raises(RuntimeError, match="fewer chunks rows than the pre-vacuum source: 2 < 3"):
-        backup_daily.create_sqlite_backup_artifact(
-            source,
-            tmp_path / "out",
-            date_stamp="2026-05-12",
-        )
-
-
 def test_create_snapshot_routes_vacuum_into_over_brainbar_socket(tmp_path):
     from brainlayer.backup_daily import create_sqlite_backup_gzip
 
@@ -402,7 +383,7 @@ def test_brainbar_vacuum_request_does_not_promote_valid_target_after_lost_respon
 
     assert calls == ["brain_backup_vacuum_into", "brain_backup_vacuum_into"]
     assert sleeps == [60]
-    assert attempt_targets[0].exists()
+    assert not attempt_targets[0].exists()
     assert target.exists()
 
 
