@@ -151,26 +151,31 @@ def verify_mcp_transport(*, bridge_command: str | None = None, timeout_seconds: 
     tools_request = {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
     deadline = time.monotonic() + timeout_seconds
 
-    def send(process: subprocess.Popen[str], payload: dict[str, object]) -> None:
+    def send(process: subprocess.Popen[bytes], payload: dict[str, object]) -> None:
         assert process.stdin is not None
-        process.stdin.write(json.dumps(payload, separators=(",", ":")) + "\n")
+        process.stdin.write((json.dumps(payload, separators=(",", ":")) + "\n").encode())
         process.stdin.flush()
 
-    def receive(process: subprocess.Popen[str], response_id: int) -> dict[str, object] | None:
+    def receive(process: subprocess.Popen[bytes], response_id: int) -> dict[str, object] | None:
         assert process.stdout is not None
+        buffered = bytearray()
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0 or not select.select([process.stdout], [], [], remaining)[0]:
                 raise RuntimeError(f"MCP transport verification timed out after {timeout_seconds:g}s")
-            line = process.stdout.readline()
-            if not line:
+            chunk = os.read(process.stdout.fileno(), 4096)
+            if not chunk:
                 return None
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(payload, dict) and payload.get("id") == response_id:
-                return payload
+            buffered.extend(chunk)
+            while b"\n" in buffered:
+                line, _, remainder = buffered.partition(b"\n")
+                buffered = bytearray(remainder)
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(payload, dict) and payload.get("id") == response_id:
+                    return payload
 
     try:
         process = subprocess.Popen(
@@ -178,8 +183,7 @@ def verify_mcp_transport(*, bridge_command: str | None = None, timeout_seconds: 
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
+            bufsize=0,
         )
     except OSError as exc:
         raise RuntimeError(f"could not start MCP bridge: {exc}") from exc

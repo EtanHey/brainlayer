@@ -6,6 +6,7 @@ import plistlib
 import shutil
 import subprocess
 import sys
+import time
 import tomllib
 import zipfile
 from pathlib import Path
@@ -397,6 +398,29 @@ def test_verify_mcp_transport_fails_loudly_when_bridge_has_no_tools(tmp_path: Pa
 
     with pytest.raises(RuntimeError, match="initialize response"):
         verify_mcp_transport(bridge_command=str(bridge), timeout_seconds=2)
+
+
+def test_verify_mcp_transport_times_out_on_partial_stdout_line(tmp_path: Path) -> None:
+    from brainlayer.setup import verify_mcp_transport
+
+    bridge = tmp_path / "partial-line-bridge"
+    bridge.write_text(
+        """#!/usr/bin/env python3
+import sys
+import time
+sys.stdin.readline()
+sys.stdout.write('{"jsonrpc":"2.0","id":1')
+sys.stdout.flush()
+time.sleep(10)
+""",
+        encoding="utf-8",
+    )
+    bridge.chmod(0o755)
+
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="timed out"):
+        verify_mcp_transport(bridge_command=str(bridge), timeout_seconds=0.1)
+    assert time.monotonic() - started < 1
 
 
 def test_setup_command_writes_op_backed_env_without_plaintext_and_can_skip_launchd(tmp_path: Path) -> None:

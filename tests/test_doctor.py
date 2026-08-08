@@ -1054,6 +1054,25 @@ def test_record_deploy_provenance_without_repo_root_preserves_release_identity(t
     assert finding.repo_root is None
 
 
+@pytest.mark.parametrize("plist_contents", [None, b"not a plist"])
+def test_record_deploy_provenance_rejects_unreadable_plist(tmp_path, plist_contents):
+    from brainlayer.deploy_drift import DeployProvenanceError, record_deploy_provenance_for_label
+
+    plist_path = tmp_path / "com.example.invalid.plist"
+    if plist_contents is not None:
+        plist_path.write_bytes(plist_contents)
+    provenance_dir = tmp_path / "daemon-provenance"
+
+    with pytest.raises(DeployProvenanceError, match="could not read launchd plist"):
+        record_deploy_provenance_for_label(
+            label="com.example.invalid",
+            plist_path=plist_path,
+            provenance_dir=provenance_dir,
+        )
+
+    assert not (provenance_dir / "com.example.invalid.json").exists()
+
+
 def test_run_doctor_exits_nonzero_for_recent_unvectored_chunk(tmp_path):
     from brainlayer.doctor import run_doctor
 

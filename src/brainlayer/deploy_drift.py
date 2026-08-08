@@ -291,6 +291,13 @@ def repo_root_from_launchd_plist(plist_path: Path) -> Path | None:
 
 
 def record_deploy_provenance_for_label(*, label: str, plist_path: Path, provenance_dir: Path) -> Path:
+    try:
+        with plist_path.expanduser().open("rb") as handle:
+            payload = plistlib.load(handle)
+    except (FileNotFoundError, OSError, plistlib.InvalidFileException) as exc:
+        raise DeployProvenanceError(label, plist_path, f"could not read launchd plist {plist_path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise DeployProvenanceError(label, plist_path, f"could not read launchd plist {plist_path}: root is not a dict")
     repo_root = repo_root_from_launchd_plist(plist_path)
     return write_daemon_launch_provenance(
         label=label,
