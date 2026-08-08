@@ -438,7 +438,34 @@ def test_build_app_rejects_invalid_release_version(tmp_path: Path) -> None:
     )
 
     assert result.returncode != 0
-    assert "release version must match X.Y.Z" in result.stderr
+    assert "release version must match X.Y.Z or interim X.Y.Z.N" in result.stderr
+
+
+def test_build_app_accepts_truthful_four_part_interim_release_version(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-dev-worktree")
+    home = tmp_path / "home"
+    home.mkdir()
+    _prepare_bundle_inputs(repo)
+    tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=tmp_path / "canonical",
+        home=home,
+        dry_run=False,
+        extra_args=["--force-worktree-build"],
+        extra_env={
+            **_fake_build_env(tmp_path, tool_dir, bin_dir),
+            "BRAINBAR_RELEASE_VERSION": "1.5.2.1",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "ReleaseVersion=1.5.2.1" in result.stdout
+    assert "BundleShortVersion=1.5.2" in result.stdout
+    assert "BundleBuildVersion=" in result.stdout
+    assert "BrainLayerReleaseVersion=1.5.2.1" in result.stdout
 
 
 @pytest.mark.parametrize("tag_name", ["ci-smoke", "1.2.3"])

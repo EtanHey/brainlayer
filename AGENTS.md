@@ -80,7 +80,8 @@ BrainLayer is the memory layer for the entire ecosystem. If it breaks, every gol
 
 ## PR Workflow
 - Request `@codex review`.
-- Request `@cursor` and `@bugbot` review.
+- Request a lead-routed Claude pair review through the active collab lane.
+- Do not route mandatory reviews to Bugbot or Greptile.
 
 ## Known Issues
 - DB locking during enrichment.

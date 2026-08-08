@@ -16,7 +16,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
-from .alarm import BrainLayerAlarm, emit_alarm, raise_alarm
+from .alarm import BrainLayerAlarm, build_alarm, emit_alarm
 from .deploy_drift import DEFAULT_DEPLOY_DRIFT_LABELS, default_deploy_provenance_dir, detect_deploy_drift
 from .drain_liveness import (
     DEFAULT_DRAIN_LIVENESS_STALE_SECONDS,
@@ -311,23 +311,51 @@ def _counter_increased(before: Any, after: Any) -> bool:
     return isinstance(before, int) and isinstance(after, int) and after > before
 
 
+def _redact_home_paths(context: dict[str, Any]) -> dict[str, Any]:
+    redacted = dict(context)
+    home = str(Path.home())
+    for key in ("repo_root", "provenance_path"):
+        value = redacted.get(key)
+        if isinstance(value, str) and (value == home or value.startswith(f"{home}/")):
+            redacted[key] = f"~{value[len(home) :]}"
+    return redacted
+
+
 def _check_deploy_drift(
+    result: DoctorResult,
     *,
     labels: tuple[str, ...],
     provenance_dir: Path,
     command_runner: CommandRunner,
 ) -> None:
     for label in labels:
-        loaded = is_launchd_label_loaded(label, command_runner=command_runner)
-        if loaded is not True:
+        try:
+            loaded = is_launchd_label_loaded(label, command_runner=command_runner)
+            if loaded is not True:
+                continue
+            finding = detect_deploy_drift(label, provenance_dir)
+        except Exception as exc:
+            result.issues.append(
+                DoctorIssue(
+                    "deploy_drift_check_failed",
+                    "fatal",
+                    f"could not check deploy drift for {label}: {exc}",
+                    {"label": label, "exception": repr(exc)},
+                )
+            )
             continue
-        finding = detect_deploy_drift(label, provenance_dir)
         if finding is None:
             continue
-        raise_alarm(
-            "deploy_drift",
-            f"daemon {label} running stale code, redeploy needed",
-            finding.to_context(),
+        message = f"daemon {label} running stale code, redeploy needed"
+        context = finding.to_context()
+        emit_alarm(build_alarm("deploy_drift", message, _redact_home_paths(context)))
+        result.issues.append(
+            DoctorIssue(
+                "deploy_drift",
+                "fatal",
+                message,
+                context,
+            )
         )
 
 
@@ -495,6 +523,7 @@ def run_doctor(
 
     if config.deploy_drift_enabled:
         _check_deploy_drift(
+            result,
             labels=config.deploy_drift_labels,
             provenance_dir=config.deploy_provenance_dir,
             command_runner=command_runner,

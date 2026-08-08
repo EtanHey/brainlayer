@@ -168,14 +168,29 @@ init_version="$(read_init_version "$INIT_PY")"
 server_version="$(read_server_value "$SERVER_JSON" "version")"
 server_package_version="$(read_server_value "$SERVER_JSON" "packages[0].version")"
 plist_short_version="$(read_plist_string "$INFO_PLIST" "CFBundleShortVersionString")"
+plist_bundle_version="$(read_plist_string "$INFO_PLIST" "CFBundleVersion")"
+plist_release_version="$(read_plist_string "$INFO_PLIST" "BrainLayerReleaseVersion")"
 cask_version="$(extract_cask_version "$CASK_PATH")"
 git_tag="$(latest_git_tag)"
 expected_git_tag="v$canonical_version"
 
+if [[ "$canonical_version" =~ ^([0-9]+\.[0-9]+\.[0-9]+)(\.[0-9]+)?$ ]]; then
+    expected_plist_short_version="${BASH_REMATCH[1]}"
+else
+    err "pyproject.toml version '$canonical_version' must match X.Y.Z or interim X.Y.Z.N"
+    FAILED=1
+    expected_plist_short_version="$canonical_version"
+fi
+
 require_equal "src/brainlayer/__init__.py __version__" "$init_version" "$canonical_version"
 require_equal "server.json version" "$server_version" "$canonical_version"
 require_equal "server.json packages[0].version" "$server_package_version" "$canonical_version"
-require_equal "Info.plist CFBundleShortVersionString" "$plist_short_version" "$canonical_version"
+require_equal "Info.plist CFBundleShortVersionString" "$plist_short_version" "$expected_plist_short_version"
+require_equal "Info.plist BrainLayerReleaseVersion" "$plist_release_version" "$canonical_version"
+if [[ ! "$plist_bundle_version" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+    err "Info.plist CFBundleVersion '$plist_bundle_version' must contain one to three numeric components"
+    FAILED=1
+fi
 require_equal "Casks/brainbar.rb version" "$cask_version" "$canonical_version"
 if [[ -z "$git_tag" ]]; then
     err "latest git tag could not be determined under $PACKAGE_ROOT"

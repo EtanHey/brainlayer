@@ -50,14 +50,23 @@ jobs:
         run: |
           set -euo pipefail
           release_version="${GITHUB_REF_NAME#v}"
-          if [[ ! "$release_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error title=Invalid BrainBar release tag::Expected tag format vX.Y.Z so Info.plist can be stamped with valid macOS bundle versions; got '$GITHUB_REF_NAME'"
+          if [[ ! "$release_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "::error title=Invalid BrainBar release tag::Expected tag format vX.Y.Z or interim vX.Y.Z.N; got '$GITHUB_REF_NAME'"
             exit 1
           fi
+          bundle_short_version="$release_version"
+          if [[ "$release_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            bundle_short_version="${release_version%.*}"
+          fi
           build_time_utc="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          bundle_build_version="$(git rev-list --count HEAD)"
           echo "BRAINBAR_RELEASE_VERSION=$release_version" >> "$GITHUB_ENV"
+          echo "BRAINBAR_BUNDLE_SHORT_VERSION=$bundle_short_version" >> "$GITHUB_ENV"
+          echo "BRAINBAR_BUNDLE_BUILD_VERSION=$bundle_build_version" >> "$GITHUB_ENV"
           echo "BRAINBAR_BUILD_TIME_UTC=$build_time_utc" >> "$GITHUB_ENV"
           echo "BrainBar release version: $release_version"
+          echo "BrainBar bundle short version: $bundle_short_version"
+          echo "BrainBar bundle build version: $bundle_build_version"
           echo "BrainBar build time UTC: $build_time_utc"
 
       - name: Cache SwiftPM
@@ -99,8 +108,9 @@ jobs:
             fi
           }
 
-          set_plist_string CFBundleShortVersionString "$BRAINBAR_RELEASE_VERSION"
-          set_plist_string CFBundleVersion "$BRAINBAR_RELEASE_VERSION"
+          set_plist_string CFBundleShortVersionString "$BRAINBAR_BUNDLE_SHORT_VERSION"
+          set_plist_string CFBundleVersion "$BRAINBAR_BUNDLE_BUILD_VERSION"
+          set_plist_string BrainLayerReleaseVersion "$BRAINBAR_RELEASE_VERSION"
           set_plist_string GitCommit "$GITHUB_SHA"
           set_plist_string GitDescribe "$GITHUB_REF_NAME"
           set_plist_string BuildTimeUTC "$BRAINBAR_BUILD_TIME_UTC"

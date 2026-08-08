@@ -443,13 +443,26 @@ build_time_utc() {
     date -u +"%Y-%m-%dT%H:%M:%SZ"
 }
 
+git_build_number() {
+    git -C "$PACKAGE_DIR" rev-list --count HEAD
+}
+
 validate_release_version() {
     local version="$1"
-    if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
         return 0
     fi
-    echo "[build-app] ERROR: release version must match X.Y.Z for macOS bundle metadata (got '$version')" >&2
+    echo "[build-app] ERROR: release version must match X.Y.Z or interim X.Y.Z.N (got '$version')" >&2
     return 1
+}
+
+bundle_short_version() {
+    local version="$1"
+    if [[ "$version" =~ ^([0-9]+\.[0-9]+\.[0-9]+)\.[0-9]+$ ]]; then
+        printf '%s\n' "${BASH_REMATCH[1]}"
+        return
+    fi
+    printf '%s\n' "$version"
 }
 
 release_version() {
@@ -463,7 +476,7 @@ release_version() {
 
     local exact_tag
     exact_tag="$(git -C "$PACKAGE_DIR" describe --tags --exact-match 2>/dev/null || true)"
-    if [[ "$exact_tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+    if [[ "$exact_tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?)$ ]]; then
         printf '%s\n' "${BASH_REMATCH[1]}"
         return 0
     fi
@@ -541,9 +554,11 @@ stamp_info_plist() {
     local describe_ref="$3"
     local build_utc="$4"
     local release_version="$5"
+    local build_number="$6"
 
-    plist_set_string "$plist_path" "CFBundleShortVersionString" "$release_version"
-    plist_set_string "$plist_path" "CFBundleVersion" "$release_version"
+    plist_set_string "$plist_path" "CFBundleShortVersionString" "$(bundle_short_version "$release_version")"
+    plist_set_string "$plist_path" "CFBundleVersion" "$build_number"
+    plist_set_string "$plist_path" "BrainLayerReleaseVersion" "$release_version"
     plist_set_string "$plist_path" "GitCommit" "$commit_sha"
     plist_set_string "$plist_path" "GitDescribe" "$describe_ref"
     plist_set_string "$plist_path" "BuildTimeUTC" "$build_utc"
@@ -735,12 +750,16 @@ cp "$DAEMON_PLIST_SRC" "$APP_DIR/Contents/Resources/LaunchAgents/$DAEMON_PLIST_F
 COMMIT_SHA="$(git_commit)"
 DESCRIBE_REF="$(git_describe)"
 BUILD_UTC="$(build_time_utc)"
+BUILD_NUMBER="$(git_build_number)"
 if ! RELEASE_VERSION="$(release_version)"; then
     exit 1
 fi
-stamp_info_plist "$APP_DIR/Contents/Info.plist" "$COMMIT_SHA" "$DESCRIBE_REF" "$BUILD_UTC" "$RELEASE_VERSION"
+stamp_info_plist "$APP_DIR/Contents/Info.plist" "$COMMIT_SHA" "$DESCRIBE_REF" "$BUILD_UTC" "$RELEASE_VERSION" "$BUILD_NUMBER"
 echo "[build-app] Stamped Info.plist:"
 echo "  ReleaseVersion=$RELEASE_VERSION"
+echo "  BundleShortVersion=$(bundle_short_version "$RELEASE_VERSION")"
+echo "  BundleBuildVersion=$BUILD_NUMBER"
+echo "  BrainLayerReleaseVersion=$RELEASE_VERSION"
 echo "  GitCommit=$COMMIT_SHA"
 echo "  GitDescribe=$DESCRIBE_REF"
 echo "  BuildTimeUTC=$BUILD_UTC"
