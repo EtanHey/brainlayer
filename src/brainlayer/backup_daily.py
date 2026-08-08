@@ -22,6 +22,7 @@ import tempfile
 import time
 import traceback
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -314,6 +315,7 @@ def create_sqlite_backup_artifact(
     socket_path: Path | str | None = None,
     keep_uncompressed: bool = True,
     local_uncompressed_keep: int = DEFAULT_LOCAL_UNCOMPRESSED_KEEP,
+    reclamation_status_callback: Callable[[str, str | None], None] | None = None,
 ) -> SQLiteBackupArtifact:
     """Create a restorable `.db.gz` snapshot through BrainBar's single-writer socket."""
     db_path = Path(db_path).expanduser()
@@ -333,6 +335,9 @@ def create_sqlite_backup_artifact(
         writer_started_at = None
         writer_probe_error = f"{type(exc).__name__}: {exc}"
         print(f"BrainBar attempt reclamation degraded: {writer_probe_error}", flush=True)
+    attempt_reclamation = "armed" if writer_started_at is not None else "degraded"
+    if reclamation_status_callback is not None:
+        reclamation_status_callback(attempt_reclamation, writer_probe_error)
     stale_attempts_deleted, surviving_attempt_paths = _sweep_stale_backup_attempts(
         output_dir,
         writer_started_at=writer_started_at,
@@ -391,7 +396,7 @@ def create_sqlite_backup_artifact(
         surviving_attempts=[path.name for path in surviving_attempt_paths],
         surviving_attempt_bytes=surviving_attempt_bytes,
         surviving_attempt_growth_reserve_bytes=surviving_attempt_growth_reserve_bytes,
-        attempt_reclamation="armed" if writer_started_at is not None else "degraded",
+        attempt_reclamation=attempt_reclamation,
         writer_probe_error=writer_probe_error,
     )
 
@@ -895,32 +900,51 @@ def run_backup(
 ) -> dict[str, Any]:
     resolved_date_stamp = date_stamp or _today()
     resolved_log_path = _backup_log_path(log_path)
-    artifact = create_sqlite_backup_artifact(db_path or get_db_path(), staging_dir, date_stamp=resolved_date_stamp)
-    snapshot = artifact.gzip_path
-    snapshot_size = snapshot.stat().st_size
+    resolved_db_path = db_path or get_db_path()
     result: dict[str, Any] = {
-        "db": str(db_path or get_db_path()),
-        "snapshot": str(snapshot),
-        "local_uncompressed_snapshot": str(artifact.uncompressed_path) if artifact.uncompressed_path else None,
-        "local_retention_deleted": artifact.local_retention_deleted,
-        "stale_attempts_deleted": getattr(artifact, "stale_attempts_deleted", []),
-        "surviving_attempts": getattr(artifact, "surviving_attempts", []),
-        "surviving_attempt_bytes": getattr(artifact, "surviving_attempt_bytes", 0),
-        "surviving_attempt_growth_reserve_bytes": getattr(
-            artifact,
-            "surviving_attempt_growth_reserve_bytes",
-            0,
-        ),
-        "attempt_reclamation": getattr(artifact, "attempt_reclamation", "unknown"),
-        "writer_probe_error": getattr(artifact, "writer_probe_error", None),
-        "sentinel_snapshot_chunks": artifact.sentinel_chunks,
-        "bytes": snapshot_size,
+        "db": str(resolved_db_path),
         "uploaded": False,
         "local_removed": False,
         "verified": False,
         "backup_log_provenance": _backup_log_provenance(),
+        "attempt_reclamation": "unknown",
+        "writer_probe_error": None,
     }
+
+    def record_reclamation_status(status: str, error: str | None) -> None:
+        result["attempt_reclamation"] = status
+        result["writer_probe_error"] = error
+
     try:
+        artifact = create_sqlite_backup_artifact(
+            resolved_db_path,
+            staging_dir,
+            date_stamp=resolved_date_stamp,
+            reclamation_status_callback=record_reclamation_status,
+        )
+        snapshot = artifact.gzip_path
+        snapshot_size = snapshot.stat().st_size
+        result.update(
+            {
+                "snapshot": str(snapshot),
+                "local_uncompressed_snapshot": (
+                    str(artifact.uncompressed_path) if artifact.uncompressed_path else None
+                ),
+                "local_retention_deleted": artifact.local_retention_deleted,
+                "stale_attempts_deleted": getattr(artifact, "stale_attempts_deleted", []),
+                "surviving_attempts": getattr(artifact, "surviving_attempts", []),
+                "surviving_attempt_bytes": getattr(artifact, "surviving_attempt_bytes", 0),
+                "surviving_attempt_growth_reserve_bytes": getattr(
+                    artifact,
+                    "surviving_attempt_growth_reserve_bytes",
+                    0,
+                ),
+                "attempt_reclamation": getattr(artifact, "attempt_reclamation", "unknown"),
+                "writer_probe_error": getattr(artifact, "writer_probe_error", None),
+                "sentinel_snapshot_chunks": artifact.sentinel_chunks,
+                "bytes": snapshot_size,
+            }
+        )
         if upload:
             credentials = get_drive_credentials()
             service = build_drive_service()

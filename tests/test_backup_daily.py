@@ -949,6 +949,39 @@ def test_run_backup_appends_file_log_when_upload_fails(tmp_path, monkeypatch):
     assert logged["error"] == "drive unavailable"
 
 
+def test_run_backup_logs_degraded_writer_probe_when_artifact_creation_fails(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    log_path = tmp_path / "backup-daily.log"
+    _create_source_db(source, chunk_count=2)
+    monkeypatch.setattr(
+        backup_daily,
+        "_brainbar_writer_started_at",
+        lambda socket_path=None: (_ for _ in ()).throw(RuntimeError("daemon unavailable")),
+    )
+    monkeypatch.setattr(
+        backup_daily,
+        "request_brainbar_vacuum_into",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("vacuum unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="vacuum unavailable"):
+        backup_daily.run_backup(
+            db_path=source,
+            staging_dir=tmp_path / "out",
+            date_stamp="2026-05-30",
+            upload=False,
+            log_path=log_path,
+        )
+
+    logged = json.loads(log_path.read_text(encoding="utf-8"))
+    assert logged["attempt_reclamation"] == "degraded"
+    assert logged["writer_probe_error"] == "RuntimeError: daemon unavailable"
+    assert logged["error_type"] == "RuntimeError"
+    assert logged["error"] == "vacuum unavailable"
+
+
 def test_run_backup_uses_env_log_path_without_explicit_log_path(tmp_path, monkeypatch):
     from brainlayer import backup_daily
 
