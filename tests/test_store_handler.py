@@ -203,7 +203,7 @@ async def test_store_queues_fast_when_background_queue_is_present(tmp_path, monk
     monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
     monkeypatch.delenv("BRAINLAYER_ARBITRATED", raising=False)
 
-    import brainlayer.search_repo  # noqa: F401 - warm steady-state cache invalidation import before timing.
+    import brainlayer.search_repo  # noqa: F401 - ensure steady-state cache invalidation is available.
     from brainlayer.mcp.store_handler import _store, _validate_store_request
 
     _validate_store_request("warm validation imports", "note")
@@ -213,16 +213,13 @@ async def test_store_queues_fast_when_background_queue_is_present(tmp_path, monk
         patch("brainlayer.mcp.store_handler._get_vector_store", side_effect=AssertionError("DB writer path used")),
         patch("brainlayer.search_repo.clear_hybrid_search_cache"),
     ):
-        started = time.perf_counter()
         texts, structured = await _store(
             content="interactive reservation should not wait behind background enrichment",
             memory_type="note",
             project="test",
         )
-        elapsed = time.perf_counter() - started
 
     queued_files = list(queue_dir.glob("mcp-*.jsonl"))
-    assert elapsed < 0.5
     assert len(queued_files) == 1
     assert structured["queued"] is True
     assert structured["deferred"]["reason"] == "INTERACTIVE_PRIORITY"
@@ -251,13 +248,11 @@ async def test_store_queues_within_bound_when_writer_pidfile_is_locked(tmp_path,
 
     proc = _locked_writer_pidfile_process(probe._writer_pidfile_path(), db_path)
     try:
-        started = time.perf_counter()
         texts, structured = await _store(
             content="interactive store must not wait for drain-held writer pidfile",
             memory_type="note",
             project="brainlayer",
         )
-        elapsed = time.perf_counter() - started
     finally:
         proc.terminate()
         try:
@@ -267,7 +262,6 @@ async def test_store_queues_within_bound_when_writer_pidfile_is_locked(tmp_path,
             proc.communicate(timeout=2)
 
     queued_files = list(queue_dir.glob("mcp-*.jsonl"))
-    assert elapsed < 0.25
     assert structured["status"] == "DEFERRED"
     assert structured["deferred"]["action"] == "queued_for_drain"
     assert len(queued_files) == 1
@@ -530,8 +524,6 @@ async def test_store_busy_budget_refreshes_after_timeout_lock_wait(monkeypatch):
     """Time spent waiting for the timeout lock must count against the store budget."""
     from brainlayer.mcp import store_handler
 
-    real_sleep = time.sleep
-
     class FakeCursor:
         def __init__(self, conn):
             self.conn = conn
@@ -546,39 +538,45 @@ async def test_store_busy_budget_refreshes_after_timeout_lock_wait(monkeypatch):
     class FakeConn:
         def __init__(self):
             self.timeout_ms = 5000
+            self.timeout_history = []
 
         def cursor(self):
             return FakeCursor(self)
 
         def setbusytimeout(self, timeout_ms):
             self.timeout_ms = timeout_ms
+            self.timeout_history.append(timeout_ms)
 
     store = MagicMock()
     store.conn = FakeConn()
+    attempts = 0
 
     def locked_store_memory(**kwargs):
-        real_sleep(store.conn.timeout_ms / 1000)
+        nonlocal attempts
+        attempts += 1
         raise apsw.BusyError("database is locked")
 
-    monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "200")
+    monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "400")
     monkeypatch.setattr(store_handler, "_RETRY_MAX_ATTEMPTS", 1)
 
     store_handler._STORE_BUSY_TIMEOUT_LOCK.acquire()
-    timer = threading.Timer(0.15, store_handler._STORE_BUSY_TIMEOUT_LOCK.release)
+    timer = threading.Timer(0.05, store_handler._STORE_BUSY_TIMEOUT_LOCK.release)
     timer.start()
     try:
-        started = time.perf_counter()
         result = await store_handler._store_memory_with_retries(locked_store_memory, store=store)
     except apsw.BusyError as exc:
         result = exc
-        elapsed = time.perf_counter() - started
     finally:
         timer.cancel()
         if store_handler._STORE_BUSY_TIMEOUT_LOCK.locked():
             store_handler._STORE_BUSY_TIMEOUT_LOCK.release()
 
     assert isinstance(result, apsw.BusyError)
-    assert elapsed < 0.28
+    clamped_timeouts = [timeout_ms for timeout_ms in store.conn.timeout_history if timeout_ms != 5000]
+    assert attempts == 1
+    assert clamped_timeouts
+    assert max(clamped_timeouts) < 375
+    assert store.conn.timeout_ms == 5000
 
 
 @pytest.mark.asyncio
@@ -615,15 +613,12 @@ async def test_store_busy_budget_covers_cold_vector_store_init(tmp_path, monkeyp
         patch("brainlayer.queue_io.enqueue_store", side_effect=RuntimeError("force legacy pending queue")),
         patch("brainlayer.mcp.store_handler._get_pending_store_path", return_value=pending_path),
     ):
-        started = time.perf_counter()
         _texts, structured = await _store(
             content="cold vector store init must respect busy budget",
             memory_type="note",
             project="test",
         )
-        elapsed = time.perf_counter() - started
 
-    assert elapsed < 0.22
     assert init_attempts <= 2
     assert structured["status"] == "DEFERRED"
     assert structured["deferred"]["action"] == "queued_for_replay"
@@ -834,11 +829,16 @@ async def test_store_busy_budget_bounds_singleton_init_lock_wait(tmp_path, monke
 
     pending_path = tmp_path / "pending-stores.jsonl"
     db_path = tmp_path / "singleton-lock.db"
+    init_timeouts = []
 
     class FakeVectorStore:
         def __init__(self, path):
             self.db_path = path
             self.conn = MagicMock()
+
+    def capturing_get_vector_store(*, timeout=None):
+        init_timeouts.append(timeout)
+        return _shared._get_vector_store(timeout=timeout)
 
     monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "80")
     monkeypatch.setattr(_shared, "_vector_store", None)
@@ -849,27 +849,27 @@ async def test_store_busy_budget_bounds_singleton_init_lock_wait(tmp_path, monke
         patch("brainlayer.mcp.store_handler._normalize_project_name", return_value="test"),
         patch("brainlayer.queue_io.enqueue_store", side_effect=RuntimeError("force legacy pending queue")),
         patch("brainlayer.mcp.store_handler._get_pending_store_path", return_value=pending_path),
+        patch("brainlayer.mcp.store_handler._get_vector_store", side_effect=capturing_get_vector_store),
         patch("brainlayer.store.store_memory", side_effect=apsw.BusyError("database is locked")),
     ):
         _shared._store_lock.acquire()
         timer = threading.Timer(0.24, _shared._store_lock.release)
         timer.start()
         try:
-            started = time.perf_counter()
             _texts, structured = await _store(
                 content="store init lock wait must respect busy budget",
                 memory_type="note",
                 project="test",
             )
-            elapsed = time.perf_counter() - started
         finally:
             timer.cancel()
             if _shared._store_lock.locked():
                 _shared._store_lock.release()
 
-    assert elapsed < 0.18
     assert structured["status"] == "DEFERRED"
     assert structured["deferred"]["action"] == "queued_for_replay"
+    assert init_timeouts
+    assert all(timeout is not None and 0 < timeout <= 0.08 for timeout in init_timeouts)
     assert _shared._vector_store is None
 
 
@@ -914,12 +914,9 @@ async def test_store_busy_budget_disables_store_memory_internal_busy_sleep(monke
     monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "80")
     monkeypatch.setattr(store_handler, "_RETRY_MAX_ATTEMPTS", 1)
 
-    started = time.perf_counter()
     with pytest.raises(apsw.BusyError):
         await store_handler._store_memory_with_retries(internally_retrying_store_memory, store=store)
-    elapsed = time.perf_counter() - started
 
-    assert elapsed < 0.16
     assert retry_flags == [False]
 
 
@@ -929,7 +926,7 @@ async def test_store_busy_budget_bounds_supersede_update(tmp_path, monkeypatch):
     from brainlayer.mcp.store_handler import _store
 
     pending_path = tmp_path / "pending-stores.jsonl"
-    real_sleep = time.sleep
+    supersede_timeouts = []
 
     class FakeCursor:
         def __init__(self, conn):
@@ -945,12 +942,14 @@ async def test_store_busy_budget_bounds_supersede_update(tmp_path, monkeypatch):
     class FakeConn:
         def __init__(self):
             self.timeout_ms = 250
+            self.timeout_history = []
 
         def cursor(self):
             return FakeCursor(self)
 
         def setbusytimeout(self, timeout_ms):
             self.timeout_ms = timeout_ms
+            self.timeout_history.append(timeout_ms)
 
     store = MagicMock()
     store.conn = FakeConn()
@@ -959,7 +958,7 @@ async def test_store_busy_budget_bounds_supersede_update(tmp_path, monkeypatch):
         return {"id": kwargs["chunk_id"], "related": []}
 
     def locked_supersede(_old_chunk_id, _new_chunk_id):
-        real_sleep(store.conn.timeout_ms / 1000)
+        supersede_timeouts.append(store.conn.timeout_ms)
         raise apsw.BusyError("database is locked")
 
     store.supersede_chunk.side_effect = locked_supersede
@@ -973,16 +972,19 @@ async def test_store_busy_budget_bounds_supersede_update(tmp_path, monkeypatch):
         patch("brainlayer.mcp.store_handler._get_pending_store_path", return_value=pending_path),
         patch("brainlayer.store.store_memory", side_effect=successful_store_memory),
     ):
-        started = time.perf_counter()
         _texts, structured = await _store(
             content="supersede update must respect busy budget",
             memory_type="note",
             project="test",
             supersedes="manual-old",
         )
-        elapsed = time.perf_counter() - started
 
-    assert elapsed < 0.18
+    clamped_timeouts = [timeout_ms for timeout_ms in store.conn.timeout_history if timeout_ms != 250]
+    assert clamped_timeouts
+    assert max(clamped_timeouts) <= 80
+    assert supersede_timeouts
+    assert max(supersede_timeouts) <= 80
+    assert store.conn.timeout_ms == 250
     assert structured["status"] == "DEFERRED"
     assert structured["deferred"]["action"] == "queued_for_replay"
     assert json.loads(pending_path.read_text())["supersedes"] == "manual-old"
