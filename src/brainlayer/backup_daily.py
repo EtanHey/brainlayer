@@ -79,6 +79,8 @@ class SQLiteBackupArtifact:
     surviving_attempts: list[str]
     surviving_attempt_bytes: int
     surviving_attempt_growth_reserve_bytes: int
+    attempt_reclamation: str
+    writer_probe_error: str | None
 
 
 def _today() -> str:
@@ -322,12 +324,15 @@ def create_sqlite_backup_artifact(
         raise FileNotFoundError(f"BrainLayer database not found: {db_path}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    writer_probe_error: str | None = None
     try:
         writer_started_at = _brainbar_writer_started_at(socket_path)
     except BackupTimeoutError:
         raise
-    except (OSError, RuntimeError, ValueError):
+    except (OSError, RuntimeError, ValueError) as exc:
         writer_started_at = None
+        writer_probe_error = f"{type(exc).__name__}: {exc}"
+        print(f"BrainBar attempt reclamation degraded: {writer_probe_error}", flush=True)
     stale_attempts_deleted, surviving_attempt_paths = _sweep_stale_backup_attempts(
         output_dir,
         writer_started_at=writer_started_at,
@@ -386,6 +391,8 @@ def create_sqlite_backup_artifact(
         surviving_attempts=[path.name for path in surviving_attempt_paths],
         surviving_attempt_bytes=surviving_attempt_bytes,
         surviving_attempt_growth_reserve_bytes=surviving_attempt_growth_reserve_bytes,
+        attempt_reclamation="armed" if writer_started_at is not None else "degraded",
+        writer_probe_error=writer_probe_error,
     )
 
 
@@ -904,6 +911,8 @@ def run_backup(
             "surviving_attempt_growth_reserve_bytes",
             0,
         ),
+        "attempt_reclamation": getattr(artifact, "attempt_reclamation", "unknown"),
+        "writer_probe_error": getattr(artifact, "writer_probe_error", None),
         "sentinel_snapshot_chunks": artifact.sentinel_chunks,
         "bytes": snapshot_size,
         "uploaded": False,

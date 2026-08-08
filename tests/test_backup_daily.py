@@ -593,6 +593,38 @@ def test_stale_attempt_sweep_keeps_recent_attempt_from_prior_writer(tmp_path):
     assert recent_prior_writer.exists()
 
 
+def test_create_snapshot_reports_degraded_reclamation_and_preserves_old_unmarked_attempt(tmp_path, monkeypatch, capsys):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    output_dir = tmp_path / "out"
+    _create_source_db(source, chunk_count=2)
+    output_dir.mkdir()
+    old_unmarked = output_dir / ".2026-05-12.db.attempt-1-old-unmarked"
+    old_unmarked.write_bytes(b"old unmarked")
+    old_mtime = time.time() - backup_daily.DEFAULT_BACKUP_ATTEMPT_MAX_AGE_SECONDS - 60
+    os.utime(old_unmarked, (old_mtime, old_mtime))
+
+    def fake_vacuum_into(target_path, **kwargs):  # noqa: ARG001
+        with sqlite3.connect(source) as db:
+            db.execute("VACUUM INTO ?", (str(target_path),))
+
+    monkeypatch.setattr(
+        backup_daily,
+        "_brainbar_writer_started_at",
+        lambda socket_path=None: (_ for _ in ()).throw(RuntimeError("missing writer timestamp")),
+    )
+    monkeypatch.setattr(backup_daily, "request_brainbar_vacuum_into", fake_vacuum_into)
+
+    artifact = backup_daily.create_sqlite_backup_artifact(source, output_dir, date_stamp="2026-05-14")
+
+    assert artifact.attempt_reclamation == "degraded"
+    assert artifact.writer_probe_error == "RuntimeError: missing writer timestamp"
+    assert old_unmarked.name in artifact.surviving_attempts
+    assert old_unmarked.exists()
+    assert "attempt reclamation degraded: RuntimeError: missing writer timestamp" in capsys.readouterr().out
+
+
 def test_create_snapshot_does_not_swallow_global_timeout_during_writer_probe(tmp_path, monkeypatch):
     from brainlayer import backup_daily
 
@@ -827,6 +859,8 @@ def test_run_backup_appends_result_to_file_log(tmp_path, monkeypatch):
         uncompressed_path = None
         sentinel_chunks = 1
         local_retention_deleted: list[str] = []
+        attempt_reclamation = "degraded"
+        writer_probe_error = "RuntimeError: missing writer timestamp"
 
     monkeypatch.setattr(backup_daily, "create_sqlite_backup_artifact", lambda *args, **kwargs: FakeArtifact())
     monkeypatch.setattr(backup_daily, "get_drive_credentials", lambda *args, **kwargs: object())
@@ -868,6 +902,8 @@ def test_run_backup_appends_result_to_file_log(tmp_path, monkeypatch):
     assert logged["snapshot"] == str(snapshot)
     assert logged["drive_file"]["id"] == "drive-file-id"
     assert logged["verified"] is True
+    assert logged["attempt_reclamation"] == "degraded"
+    assert logged["writer_probe_error"] == "RuntimeError: missing writer timestamp"
     assert logged == result
 
 
