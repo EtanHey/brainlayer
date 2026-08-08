@@ -25,7 +25,14 @@ def _load_module():
     return module
 
 
-def _config(module, tmp_path: Path, *, stall_threshold: int = 3, cooldown_seconds: int = 600):
+def _config(
+    module,
+    tmp_path: Path,
+    *,
+    stall_threshold: int = 3,
+    cooldown_seconds: int = 600,
+    progress_slo_seconds: int | None = None,
+):
     return module.Config(
         db_path=tmp_path / "brainlayer.db",
         registry_path=tmp_path / "offsets.json",
@@ -35,6 +42,7 @@ def _config(module, tmp_path: Path, *, stall_threshold: int = 3, cooldown_second
         watch_plist_path=tmp_path / "com.example.brainlayer.watch.plist",
         stall_threshold=stall_threshold,
         cooldown_seconds=cooldown_seconds,
+        progress_slo_seconds=progress_slo_seconds or stall_threshold * 60,
     )
 
 
@@ -578,6 +586,288 @@ def test_liveness_progress_prevents_false_restart_for_dedupe_only_ingest(tmp_pat
     assert commands == []
 
 
+def test_offset_progress_prevents_restart_when_db_highwaters_are_flat(tmp_path: Path) -> None:
+    module = _load_module()
+    config = _config(module, tmp_path, stall_threshold=1)
+    evidence = module.SourceEvidence(1, 20, 1, 999.0)
+    operational = iter(
+        [
+            module.OperationalProgress(offset_bytes=100, drain_cycles=10, drained_total=4),
+            module.OperationalProgress(offset_bytes=120, drain_cycles=11, drained_total=4),
+        ]
+    )
+    commands: list[list[str]] = []
+
+    module.run_once(
+        config,
+        now_epoch=1_000,
+        progress_reader=lambda _path: _progress(module, 40, 10),
+        operational_progress_reader=lambda _config: next(operational),
+        source_probe=lambda _config, _now: evidence,
+    )
+    result = module.run_once(
+        config,
+        now_epoch=1_060,
+        progress_reader=lambda _path: _progress(module, 40, 10),
+        operational_progress_reader=lambda _config: next(operational),
+        source_probe=lambda _config, _now: evidence,
+        command_runner=lambda args: commands.append(args),
+    )
+
+    assert result.action == "progress"
+    assert result.offset_bytes_delta == 20
+    assert commands == []
+
+
+def test_operational_progress_reader_sums_offsets_and_reads_drain_counters(tmp_path: Path) -> None:
+    module = _load_module()
+    drain_health_path = tmp_path / "custom-drain-health.json"
+    config = replace(_config(module, tmp_path), drain_health_path=drain_health_path)
+    config.registry_path.write_text(
+        json.dumps(
+            {
+                "/tmp/a.jsonl": {"offset": 40},
+                "/tmp/b.jsonl": {"offset": 60},
+                "/tmp/invalid.jsonl": {"offset": -1},
+                "_tombstones": {"/tmp/old.jsonl": 123},
+            }
+        ),
+        encoding="utf-8",
+    )
+    drain_health_path.write_text(json.dumps({"drain_cycles": 12, "drained_total": 7}), encoding="utf-8")
+
+    progress = module.read_operational_progress(config)
+
+    assert progress == module.OperationalProgress(offset_bytes=100, drain_cycles=12, drained_total=7)
+
+
+def test_drain_progress_prevents_restart_when_offsets_and_db_are_flat(tmp_path: Path) -> None:
+    module = _load_module()
+    config = _config(module, tmp_path, stall_threshold=1)
+    evidence = module.SourceEvidence(1, 20, 1, 999.0)
+    operational = iter(
+        [
+            module.OperationalProgress(offset_bytes=100, drain_cycles=10, drained_total=4),
+            module.OperationalProgress(offset_bytes=100, drain_cycles=11, drained_total=5),
+        ]
+    )
+
+    module.run_once(
+        config,
+        now_epoch=1_000,
+        progress_reader=lambda _path: _progress(module, 40, 10),
+        operational_progress_reader=lambda _config: next(operational),
+        source_probe=lambda _config, _now: evidence,
+    )
+    result = module.run_once(
+        config,
+        now_epoch=1_060,
+        progress_reader=lambda _path: _progress(module, 40, 10),
+        operational_progress_reader=lambda _config: next(operational),
+        source_probe=lambda _config, _now: evidence,
+    )
+
+    assert result.action == "progress"
+    assert result.drained_total_delta == 1
+
+
+def test_drain_cycle_progress_prevents_restart_when_no_items_are_drained(tmp_path: Path) -> None:
+    module = _load_module()
+    config = _config(module, tmp_path, stall_threshold=1)
+    evidence = module.SourceEvidence(1, 20, 1, 999.0)
+    operational = iter(
+        [
+            module.OperationalProgress(offset_bytes=100, drain_cycles=10, drained_total=4),
+            module.OperationalProgress(offset_bytes=100, drain_cycles=11, drained_total=4),
+        ]
+    )
+
+    module.run_once(
+        config,
+        now_epoch=1_000,
+        progress_reader=lambda _path: _progress(module, 40, 10),
+        operational_progress_reader=lambda _config: next(operational),
+        source_probe=lambda _config, _now: evidence,
+    )
+    result = module.run_once(
+        config,
+        now_epoch=1_060,
+        progress_reader=lambda _path: _progress(module, 40, 10),
+        operational_progress_reader=lambda _config: next(operational),
+        source_probe=lambda _config, _now: evidence,
+    )
+
+    assert result.action == "progress"
+    assert result.drain_cycles_delta == 1
+
+
+def test_drain_counter_reset_rebaselines_instead_of_triggering_recovery(tmp_path: Path) -> None:
+    module = _load_module()
+    config = _config(module, tmp_path, stall_threshold=1)
+    evidence = module.SourceEvidence(1, 20, 1, 999.0)
+    operational = iter(
+        [
+            module.OperationalProgress(offset_bytes=100, drain_cycles=10, drained_total=4),
+            module.OperationalProgress(offset_bytes=100, drain_cycles=0, drained_total=0),
+        ]
+    )
+
+    module.run_once(
+        config,
+        now_epoch=1_000,
+        progress_reader=lambda _path: _progress(module, 40, 10),
+        operational_progress_reader=lambda _config: next(operational),
+        source_probe=lambda _config, _now: evidence,
+    )
+    result = module.run_once(
+        config,
+        now_epoch=1_060,
+        progress_reader=lambda _path: _progress(module, 40, 10),
+        operational_progress_reader=lambda _config: next(operational),
+        source_probe=lambda _config, _now: evidence,
+    )
+
+    assert result.action == "baseline"
+    assert result.stalled_ticks == 0
+
+
+def test_offset_counter_reset_rebaselines_instead_of_looking_like_progress(tmp_path: Path) -> None:
+    module = _load_module()
+    config = _config(module, tmp_path, stall_threshold=1)
+    evidence = module.SourceEvidence(1, 20, 1, 999.0)
+    operational = iter(
+        [
+            module.OperationalProgress(offset_bytes=100, drain_cycles=10, drained_total=4),
+            module.OperationalProgress(offset_bytes=20, drain_cycles=10, drained_total=4),
+        ]
+    )
+
+    module.run_once(
+        config,
+        now_epoch=1_000,
+        progress_reader=lambda _path: _progress(module, 40, 10),
+        operational_progress_reader=lambda _config: next(operational),
+        source_probe=lambda _config, _now: evidence,
+    )
+    result = module.run_once(
+        config,
+        now_epoch=1_060,
+        progress_reader=lambda _path: _progress(module, 40, 10),
+        operational_progress_reader=lambda _config: next(operational),
+        source_probe=lambda _config, _now: evidence,
+    )
+
+    assert result.action == "baseline"
+    assert result.stalled_ticks == 0
+
+
+def test_operational_progress_counts_toward_healthy_episode_reset(tmp_path: Path) -> None:
+    module = _load_module()
+    config = _config(module, tmp_path)
+    config.state_path.write_text(
+        json.dumps(
+            {
+                "watcher_highwater_rowid": 40,
+                "watcher_liveness_highwater_rowid": 10,
+                "offset_bytes": 100,
+                "drain_cycles": 10,
+                "drained_total": 4,
+                "last_progress_epoch": 940,
+                "healthy_ticks": 2,
+                "episode_alerted": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = module.run_once(
+        config,
+        now_epoch=1_000,
+        progress_reader=lambda _path: _progress(module, 40, 10),
+        operational_progress_reader=lambda _config: module.OperationalProgress(120, 11, 4),
+        source_probe=lambda _config, _now: module.SourceEvidence(1, 20, 1, 999.0),
+    )
+
+    assert result.action == "progress"
+    state = json.loads(config.state_path.read_text(encoding="utf-8"))
+    assert state["healthy_ticks"] == 3
+    assert state["episode_alerted"] is False
+
+
+def test_recovery_waits_for_elapsed_progress_slo_not_only_tick_count(tmp_path: Path) -> None:
+    module = _load_module()
+    config = _config(module, tmp_path, stall_threshold=1, progress_slo_seconds=300)
+    evidence = module.SourceEvidence(1, 20, 1, 999.0)
+    frozen = module.OperationalProgress(offset_bytes=100, drain_cycles=10, drained_total=4)
+    command_events: list[str] = []
+    runner = _successful_recovery_runner(command_events)
+
+    module.run_once(
+        config,
+        now_epoch=1_000,
+        progress_reader=lambda _path: _progress(module, 40, 10),
+        operational_progress_reader=lambda _config: frozen,
+        source_probe=lambda _config, _now: evidence,
+    )
+    early = module.run_once(
+        config,
+        now_epoch=1_299,
+        progress_reader=lambda _path: _progress(module, 40, 10),
+        operational_progress_reader=lambda _config: frozen,
+        source_probe=lambda _config, _now: evidence,
+        command_runner=runner,
+    )
+    due = module.run_once(
+        config,
+        now_epoch=1_300,
+        progress_reader=lambda _path: _progress(module, 40, 10),
+        operational_progress_reader=lambda _config: frozen,
+        source_probe=lambda _config, _now: evidence,
+        command_runner=runner,
+        alert_fn=lambda _config, _result: None,
+    )
+
+    assert early.action == "stalled"
+    assert early.no_progress_seconds == 299
+    assert due.action == "kickstart:com.example.brainlayer.watch"
+    assert due.no_progress_seconds == 300
+
+
+def test_recovery_defers_without_signaling_while_checkpoint_guard_is_held(tmp_path: Path) -> None:
+    from brainlayer.wal_checkpoint import checkpoint_guard
+
+    module = _load_module()
+    config = _config(module, tmp_path, stall_threshold=1)
+    evidence = module.SourceEvidence(1, 20, 1, 999.0)
+    frozen = module.OperationalProgress(offset_bytes=100, drain_cycles=10, drained_total=4)
+    commands: list[list[str]] = []
+
+    module.run_once(
+        config,
+        now_epoch=1_000,
+        progress_reader=lambda _path: _progress(module, 40, 10),
+        operational_progress_reader=lambda _config: frozen,
+        source_probe=lambda _config, _now: evidence,
+    )
+    with checkpoint_guard(config.db_path, blocking=False) as acquired:
+        assert acquired is True
+        result = module.run_once(
+            config,
+            now_epoch=1_060,
+            progress_reader=lambda _path: _progress(module, 40, 10),
+            operational_progress_reader=lambda _config: frozen,
+            source_probe=lambda _config, _now: evidence,
+            command_runner=lambda args: commands.append(args),
+            alert_fn=lambda _config, _result: None,
+        )
+
+    assert result.action == "checkpoint_deferred"
+    assert result.stalled_ticks == 1
+    assert commands == []
+    state = json.loads(config.state_path.read_text(encoding="utf-8"))
+    assert "last_restart_epoch" not in state
+
+
 def test_recovery_requires_kickstarted_job_to_reach_running_state(tmp_path: Path) -> None:
     module = _load_module()
     config = _config(module, tmp_path, stall_threshold=1)
@@ -770,10 +1060,23 @@ def test_failed_alert_does_not_latch_episode_and_retries(tmp_path: Path) -> None
     module = _load_module()
     config = _config(module, tmp_path, stall_threshold=3, cooldown_seconds=0)
     calls = {"n": 0}
+    process = {"pid": 4321, "running": True}
 
     def command_runner(args):
-        stdout = "state = running\npid = 4321\n" if args[:2] == ["launchctl", "print"] else ""
-        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+        if args[:2] == ["launchctl", "print"]:
+            if process["running"]:
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=f"state = running\npid = {process['pid']}\n",
+                    stderr="",
+                )
+            return SimpleNamespace(returncode=0, stdout="state = exited\n", stderr="")
+        if args[:2] == ["/bin/kill", "-9"]:
+            process["running"] = False
+        elif args[:3] == ["launchctl", "kickstart", "-k"]:
+            process["pid"] += 1
+            process["running"] = True
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     def flaky_alert(_config, _result):
         calls["n"] += 1
