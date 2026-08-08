@@ -336,6 +336,49 @@ def test_hot_candidate_scanner_deduplicates_head_and_forward_catchup(tmp_path):
         conn.close()
 
 
+def test_hot_candidate_scanner_retries_startup_head_candidate_after_displacement(tmp_path):
+    hotlane = _load_hotlane_module()
+    conn = sqlite3.connect(tmp_path / "startup-head.db")
+    conn.executescript(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT,
+            source_file TEXT,
+            source TEXT,
+            created_at TEXT,
+            archived_at TEXT,
+            superseded_by TEXT,
+            aggregated_into TEXT,
+            archived INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'active'
+        );
+        CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY);
+        """
+    )
+    baseline_rows = [(f"base-{index}", "embedded", "brainbar-store", "mcp", str(index)) for index in range(999)]
+    conn.executemany(
+        "INSERT INTO chunks (id, content, source_file, source, created_at) VALUES (?, ?, ?, ?, ?)", baseline_rows
+    )
+    conn.executemany("INSERT INTO chunk_vectors_rowids (id) VALUES (?)", [(row[0],) for row in baseline_rows])
+    conn.execute(
+        "INSERT INTO chunks (id, content, source_file, source, created_at) VALUES "
+        "('startup-hot', 'retry startup', 'brainbar-store', 'mcp', 'latest')"
+    )
+    scanner = hotlane.HotCandidateScanner()
+    store = SimpleNamespace(conn=conn)
+    try:
+        assert scanner(store, limit=5) == [hotlane.EmbedCandidate("startup-hot", "retry startup")]
+        newer_rows = [(f"after-{index}", "embedded", "brainbar-store", "mcp", str(index)) for index in range(128)]
+        conn.executemany(
+            "INSERT INTO chunks (id, content, source_file, source, created_at) VALUES (?, ?, ?, ?, ?)", newer_rows
+        )
+        conn.executemany("INSERT INTO chunk_vectors_rowids (id) VALUES (?)", [(row[0],) for row in newer_rows])
+        assert scanner(store, limit=5) == [hotlane.EmbedCandidate("startup-hot", "retry startup")]
+    finally:
+        conn.close()
+
+
 def test_hotlane_run_threads_model_batch_embedder_to_backlog_cycle():
     hotlane = _load_hotlane_module()
     received_batch_fns = []

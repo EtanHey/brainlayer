@@ -199,13 +199,17 @@ class HotCandidateScanner:
     def __call__(self, store: VectorStore, *, limit: int) -> list[EmbedCandidate]:
         cursor = store.conn.cursor()
         head_rows = list(cursor.execute(HOT_CANDIDATE_ROWID_SCAN_SQL, (HOT_CANDIDATE_HEAD_LIMIT,)))
-        candidates, _, _, _ = _candidates_from_scanned_rows(head_rows, limit=limit)
+        candidates, first_candidate_rowid, last_inspected_rowid, _ = _candidates_from_scanned_rows(
+            head_rows, limit=limit
+        )
         if not head_rows:
             return candidates
         if self._newest_seen_rowid is None:
-            self._newest_seen_rowid = int(head_rows[0][0])
-        if self._before_rowid is None and len(head_rows) == HOT_CANDIDATE_HEAD_LIMIT:
-            self._before_rowid = int(head_rows[-1][0])
+            self._newest_seen_rowid = (
+                first_candidate_rowid - 1 if first_candidate_rowid is not None else int(head_rows[0][0])
+            )
+        if self._before_rowid is None and last_inspected_rowid is not None:
+            self._before_rowid = last_inspected_rowid
         if len(candidates) >= limit:
             return candidates
 
