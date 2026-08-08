@@ -178,7 +178,7 @@ brainlayer enrich
 - Daemon API (core): `/health`, `/stats`, `/search`, `/context/{chunk_id}`, `/session/{session_id}`
 - Brain graph API: `/brain/graph`, `/brain/node/{node_id}`
 - Backlog API: `/backlog/items` (GET/POST/PATCH/DELETE)
-- MCP tools (13): `brain_search`, `brain_store`, `brain_recall`, `brain_resume`, `brain_entity`, `brain_expand`, `brain_update`, `brain_digest`, `brain_get_person`, `brain_enrich`, `brain_tags`, `brain_supersede`, `brain_archive` (legacy `brainlayer_*` aliases still work; note: `brain_update`, `brain_expand`, `brain_tags` are deprecated in the Python MCP path and return errors — use the BrainBar native path for these)
+- MCP tools (13): `brain_search`, `brain_store`, `brain_recall`, `brain_resume`, `brain_entity`, `brain_expand`, `brain_update`, `brain_digest`, `brain_get_person`, `brain_enrich`, `brain_tags`, `brain_supersede`, `brain_archive` (legacy `brainlayer_*` aliases still work; note: `brain_expand` and `brain_tags` are deprecated in the Python MCP path and return errors — use the BrainBar native path for those two)
 - MCP server entrypoint: `brainlayer-mcp`
 
 <!-- COMMANDS: `brainlayer brain-export` → graph JSON for dashboard | `brainlayer export-obsidian` → Markdown vault with backlinks + tags -->
