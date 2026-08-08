@@ -15,6 +15,7 @@ import logging
 import os
 import signal
 import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Callable, NamedTuple
 
@@ -41,7 +42,87 @@ MAX_BACKLOG_BATCH = 16
 DEFAULT_HOTLANE_WRITE_BUSY_TIMEOUT_MS = 1000
 MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 VECTOR_WRITE_YIELD_SECONDS = 0.005
+HOT_CANDIDATE_SCAN_LIMIT = 256
+HOT_CANDIDATE_HEAD_LIMIT = HOT_CANDIDATE_SCAN_LIMIT // 2
+MAX_HOT_CANDIDATE_RETRIES = 256
 _sleep = time.sleep
+
+HOT_CANDIDATE_SCAN_SQL = """
+    SELECT
+        c.id,
+        c.content,
+        c.source_file,
+        c.source,
+        c.archived_at,
+        c.superseded_by,
+        c.aggregated_into,
+        COALESCE(c.archived, 0),
+        COALESCE(c.status, 'active'),
+        r.id
+    FROM chunks c
+    LEFT JOIN chunk_vectors_rowids r ON r.id = c.id
+    ORDER BY c.created_at DESC
+    LIMIT ?
+"""
+
+HOT_CANDIDATE_ROWID_SCAN_SQL = """
+    SELECT
+        c.rowid,
+        c.id,
+        c.content,
+        c.source_file,
+        c.source,
+        c.archived_at,
+        c.superseded_by,
+        c.aggregated_into,
+        COALESCE(c.archived, 0),
+        COALESCE(c.status, 'active'),
+        r.id
+    FROM chunks c
+    LEFT JOIN chunk_vectors_rowids r ON r.id = c.id
+    ORDER BY c.rowid DESC
+    LIMIT ?
+"""
+
+HOT_CANDIDATE_ROWID_PAGE_SQL = """
+    SELECT
+        c.rowid,
+        c.id,
+        c.content,
+        c.source_file,
+        c.source,
+        c.archived_at,
+        c.superseded_by,
+        c.aggregated_into,
+        COALESCE(c.archived, 0),
+        COALESCE(c.status, 'active'),
+        r.id
+    FROM chunks c
+    LEFT JOIN chunk_vectors_rowids r ON r.id = c.id
+    WHERE c.rowid < ?
+    ORDER BY c.rowid DESC
+    LIMIT ?
+"""
+
+HOT_CANDIDATE_ROWID_FORWARD_SQL = """
+    SELECT
+        c.rowid,
+        c.id,
+        c.content,
+        c.source_file,
+        c.source,
+        c.archived_at,
+        c.superseded_by,
+        c.aggregated_into,
+        COALESCE(c.archived, 0),
+        COALESCE(c.status, 'active'),
+        r.id
+    FROM chunks c
+    LEFT JOIN chunk_vectors_rowids r ON r.id = c.id
+    WHERE c.rowid > ?
+    ORDER BY c.rowid ASC
+    LIMIT ?
+"""
 
 
 class CycleResult(NamedTuple):
@@ -62,6 +143,183 @@ class EmbeddedVector(NamedTuple):
     chunk_id: str
     content: str
     embedding: list[float]
+
+
+def _candidates_from_scanned_rows(
+    rows: list[tuple], *, limit: int, exclude_ids: set[str] | None = None
+) -> tuple[list[EmbedCandidate], int | None, int | None, bool]:
+    if limit <= 0:
+        return [], None, None, False
+    candidates: list[EmbedCandidate] = []
+    exclude_ids = exclude_ids or set()
+    first_candidate_rowid: int | None = None
+    last_inspected_rowid: int | None = None
+    for index, row in enumerate(rows):
+        (
+            rowid,
+            chunk_id,
+            content,
+            source_file,
+            source,
+            archived_at,
+            superseded_by,
+            aggregated_into,
+            archived,
+            status,
+            vector_id,
+        ) = row
+        last_inspected_rowid = int(rowid)
+        eligible = (
+            vector_id is None
+            and source_file == "brainbar-store"
+            and source == "mcp"
+            and content
+            and archived_at is None
+            and superseded_by is None
+            and aggregated_into is None
+            and not archived
+            and status == "active"
+        )
+        if eligible:
+            if first_candidate_rowid is None:
+                first_candidate_rowid = int(rowid)
+            if str(chunk_id) in exclude_ids:
+                continue
+            candidates.append(EmbedCandidate(str(chunk_id), str(content)))
+            if len(candidates) >= limit:
+                return candidates, first_candidate_rowid, last_inspected_rowid, index == len(rows) - 1
+    return candidates, first_candidate_rowid, last_inspected_rowid, True
+
+
+class HotCandidateScanner:
+    """Scan bounded rowid lanes while retaining returned candidates for retry."""
+
+    def __init__(self) -> None:
+        self._before_rowid: int | None = None
+        self._newest_seen_rowid: int | None = None
+        self._retries: OrderedDict[str, EmbedCandidate] = OrderedDict()
+        self._retry_turn = True
+        self._retry_buffer_full_logged = False
+
+    def _refresh_retries(self, cursor: apsw.Cursor) -> None:
+        if not self._retries:
+            return
+        placeholders = ",".join("?" for _ in self._retries)
+        rows = cursor.execute(
+            f"""
+            SELECT c.id, c.content
+            FROM chunks c
+            LEFT JOIN chunk_vectors_rowids r ON r.id = c.id
+            WHERE c.id IN ({placeholders})
+              AND r.id IS NULL
+              AND c.source_file = 'brainbar-store'
+              AND c.source = 'mcp'
+              AND c.content IS NOT NULL
+              AND c.content != ''
+              AND c.archived_at IS NULL
+              AND c.superseded_by IS NULL
+              AND c.aggregated_into IS NULL
+              AND COALESCE(c.archived, 0) = 0
+              AND COALESCE(c.status, 'active') = 'active'
+            """,
+            tuple(self._retries),
+        )
+        active = {str(chunk_id): EmbedCandidate(str(chunk_id), str(content)) for chunk_id, content in rows}
+        for chunk_id in list(self._retries):
+            if chunk_id not in active:
+                del self._retries[chunk_id]
+            else:
+                self._retries[chunk_id] = active[chunk_id]
+        if len(self._retries) < MAX_HOT_CANDIDATE_RETRIES:
+            self._retry_buffer_full_logged = False
+
+    def _take_retries(self, *, limit: int) -> list[EmbedCandidate]:
+        selected: list[EmbedCandidate] = []
+        for _ in range(min(limit, len(self._retries))):
+            chunk_id, candidate = self._retries.popitem(last=False)
+            self._retries[chunk_id] = candidate
+            selected.append(candidate)
+        return selected
+
+    def _retain(self, candidates: list[EmbedCandidate]) -> None:
+        for candidate in candidates:
+            if candidate.chunk_id in self._retries:
+                continue
+            if len(self._retries) >= MAX_HOT_CANDIDATE_RETRIES:
+                if not self._retry_buffer_full_logged:
+                    LOGGER.warning("hot candidate retry buffer full; pausing new retry retention")
+                    self._retry_buffer_full_logged = True
+                break
+            self._retries[candidate.chunk_id] = candidate
+
+    def __call__(self, store: VectorStore, *, limit: int) -> list[EmbedCandidate]:
+        cursor = store.conn.cursor()
+        self._refresh_retries(cursor)
+        if limit <= 0:
+            return []
+        if limit == 1 and self._retries:
+            retry_limit = 1 if self._retry_turn else 0
+            self._retry_turn = not self._retry_turn
+        else:
+            retry_limit = min(len(self._retries), max(1, limit // 2))
+        candidates = self._take_retries(limit=retry_limit)
+        retention_slots = MAX_HOT_CANDIDATE_RETRIES - len(self._retries)
+        scan_limit = min(limit - len(candidates), retention_slots)
+        if scan_limit <= 0:
+            return candidates
+        retry_ids = set(self._retries)
+        head_rows = list(cursor.execute(HOT_CANDIDATE_ROWID_SCAN_SQL, (HOT_CANDIDATE_HEAD_LIMIT,)))
+        head_candidates, _, last_inspected_rowid, _ = _candidates_from_scanned_rows(
+            head_rows,
+            limit=scan_limit,
+            exclude_ids=retry_ids,
+        )
+        candidates.extend(head_candidates)
+        retention_slots -= len(head_candidates)
+        if not head_rows:
+            self._retain(candidates)
+            return candidates
+        if self._newest_seen_rowid is None:
+            self._newest_seen_rowid = last_inspected_rowid
+        if self._before_rowid is None and last_inspected_rowid is not None:
+            self._before_rowid = last_inspected_rowid
+        if len(candidates) >= limit or retention_slots <= 0:
+            self._retain(candidates)
+            return candidates
+
+        page_limit = HOT_CANDIDATE_SCAN_LIMIT - HOT_CANDIDATE_HEAD_LIMIT
+        forward_rows = list(
+            cursor.execute(
+                HOT_CANDIDATE_ROWID_FORWARD_SQL,
+                (self._newest_seen_rowid, page_limit),
+            )
+        )
+        if forward_rows:
+            forward_candidates, _, last_inspected_rowid, _ = _candidates_from_scanned_rows(
+                forward_rows,
+                limit=min(limit - len(candidates), retention_slots),
+                exclude_ids=retry_ids | {candidate.chunk_id for candidate in candidates},
+            )
+            candidates.extend(forward_candidates)
+            retention_slots -= len(forward_candidates)
+            self._newest_seen_rowid = last_inspected_rowid
+        if len(candidates) >= limit or retention_slots <= 0 or self._before_rowid is None:
+            self._retain(candidates)
+            return candidates[:limit]
+
+        page_rows = list(cursor.execute(HOT_CANDIDATE_ROWID_PAGE_SQL, (self._before_rowid, page_limit)))
+        if page_rows:
+            page_candidates, _, last_inspected_rowid, fully_scanned = _candidates_from_scanned_rows(
+                page_rows,
+                limit=min(limit - len(candidates), retention_slots),
+                exclude_ids=retry_ids | {candidate.chunk_id for candidate in candidates},
+            )
+            candidates.extend(page_candidates)
+            self._before_rowid = last_inspected_rowid
+            if fully_scanned and len(page_rows) < page_limit:
+                self._before_rowid = None
+        self._retain(candidates)
+        return candidates[:limit]
 
 
 def _stop(_signum: int, _frame: object) -> None:
@@ -95,26 +353,38 @@ def _candidate_chunk_ids(store: VectorStore, *, limit: int) -> list[str]:
 
 def _candidate_chunk_rows(store: VectorStore, *, limit: int) -> list[EmbedCandidate]:
     rows = store.conn.cursor().execute(
-        """
-        SELECT c.id, c.content
-        FROM chunks c
-        LEFT JOIN chunk_vectors_rowids r ON r.id = c.id
-        WHERE r.id IS NULL
-          AND c.source_file = 'brainbar-store'
-          AND c.source = 'mcp'
-          AND c.content IS NOT NULL
-          AND c.content != ''
-          AND c.archived_at IS NULL
-          AND c.superseded_by IS NULL
-          AND c.aggregated_into IS NULL
-          AND COALESCE(c.archived, 0) = 0
-          AND COALESCE(c.status, 'active') = 'active'
-        ORDER BY c.created_at DESC
-        LIMIT ?
-        """,
-        (limit,),
+        HOT_CANDIDATE_SCAN_SQL,
+        (HOT_CANDIDATE_SCAN_LIMIT,),
     )
-    return [EmbedCandidate(str(row[0]), str(row[1])) for row in rows]
+    candidates: list[EmbedCandidate] = []
+    for row in rows:
+        (
+            chunk_id,
+            content,
+            source_file,
+            source,
+            archived_at,
+            superseded_by,
+            aggregated_into,
+            archived,
+            status,
+            vector_id,
+        ) = row
+        if (
+            vector_id is None
+            and source_file == "brainbar-store"
+            and source == "mcp"
+            and content
+            and archived_at is None
+            and superseded_by is None
+            and aggregated_into is None
+            and not archived
+            and status == "active"
+        ):
+            candidates.append(EmbedCandidate(str(chunk_id), str(content)))
+            if len(candidates) >= limit:
+                break
+    return candidates
 
 
 def _pending_chunk_rows(store: VectorStore, *, limit: int) -> list[EmbedCandidate]:
@@ -510,6 +780,7 @@ def run(
     last_enrich = 0.0
     enrich_disabled = False
     queue_backpressure_active = False
+    hot_candidate_scanner = HotCandidateScanner()
     cycles = 0
     backlog_batch = min(max(backlog_batch, 0), MAX_BACKLOG_BATCH)
     LOGGER.info("hotlane adapter started db=%s", db_path)
@@ -551,6 +822,7 @@ def run(
                     embed_batch_fn=embed_batch_fn,
                     enrich_limit=cycle_enrich_limit,
                     enrich_since_hours=enrich_since_hours,
+                    candidate_rows_fn=hot_candidate_scanner,
                 )
             else:
                 store = vector_store_cls(db_path)
