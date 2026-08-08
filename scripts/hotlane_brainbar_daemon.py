@@ -15,6 +15,7 @@ import logging
 import os
 import signal
 import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Callable, NamedTuple
 
@@ -43,6 +44,7 @@ MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 VECTOR_WRITE_YIELD_SECONDS = 0.005
 HOT_CANDIDATE_SCAN_LIMIT = 256
 HOT_CANDIDATE_HEAD_LIMIT = HOT_CANDIDATE_SCAN_LIMIT // 2
+MAX_HOT_CANDIDATE_RETRIES = 256
 _sleep = time.sleep
 
 HOT_CANDIDATE_SCAN_SQL = """
@@ -190,27 +192,97 @@ def _candidates_from_scanned_rows(
 
 
 class HotCandidateScanner:
-    """Scan the recent head every cycle while paging through older rows."""
+    """Scan bounded rowid lanes while retaining returned candidates for retry."""
 
     def __init__(self) -> None:
         self._before_rowid: int | None = None
         self._newest_seen_rowid: int | None = None
+        self._retries: OrderedDict[str, EmbedCandidate] = OrderedDict()
+        self._retry_turn = True
+        self._retry_buffer_full_logged = False
+
+    def _refresh_retries(self, cursor: apsw.Cursor) -> None:
+        if not self._retries:
+            return
+        placeholders = ",".join("?" for _ in self._retries)
+        rows = cursor.execute(
+            f"""
+            SELECT c.id, c.content
+            FROM chunks c
+            LEFT JOIN chunk_vectors_rowids r ON r.id = c.id
+            WHERE c.id IN ({placeholders})
+              AND r.id IS NULL
+              AND c.source_file = 'brainbar-store'
+              AND c.source = 'mcp'
+              AND c.content IS NOT NULL
+              AND c.content != ''
+              AND c.archived_at IS NULL
+              AND c.superseded_by IS NULL
+              AND c.aggregated_into IS NULL
+              AND COALESCE(c.archived, 0) = 0
+              AND COALESCE(c.status, 'active') = 'active'
+            """,
+            tuple(self._retries),
+        )
+        active = {str(chunk_id): EmbedCandidate(str(chunk_id), str(content)) for chunk_id, content in rows}
+        for chunk_id in list(self._retries):
+            if chunk_id not in active:
+                del self._retries[chunk_id]
+            else:
+                self._retries[chunk_id] = active[chunk_id]
+        if len(self._retries) < MAX_HOT_CANDIDATE_RETRIES:
+            self._retry_buffer_full_logged = False
+
+    def _take_retries(self, *, limit: int) -> list[EmbedCandidate]:
+        selected: list[EmbedCandidate] = []
+        for _ in range(min(limit, len(self._retries))):
+            chunk_id, candidate = self._retries.popitem(last=False)
+            self._retries[chunk_id] = candidate
+            selected.append(candidate)
+        return selected
+
+    def _retain(self, candidates: list[EmbedCandidate]) -> None:
+        for candidate in candidates:
+            if candidate.chunk_id in self._retries:
+                continue
+            if len(self._retries) >= MAX_HOT_CANDIDATE_RETRIES:
+                if not self._retry_buffer_full_logged:
+                    LOGGER.warning("hot candidate retry buffer full; pausing new retry retention")
+                    self._retry_buffer_full_logged = True
+                break
+            self._retries[candidate.chunk_id] = candidate
 
     def __call__(self, store: VectorStore, *, limit: int) -> list[EmbedCandidate]:
         cursor = store.conn.cursor()
+        self._refresh_retries(cursor)
+        if limit <= 0:
+            return []
+        if limit == 1 and self._retries:
+            retry_limit = 1 if self._retry_turn else 0
+            self._retry_turn = not self._retry_turn
+        else:
+            retry_limit = min(len(self._retries), max(1, limit // 2))
+        candidates = self._take_retries(limit=retry_limit)
+        scan_limit = min(limit - len(candidates), MAX_HOT_CANDIDATE_RETRIES - len(self._retries))
+        if scan_limit <= 0:
+            return candidates
+        retry_ids = set(self._retries)
         head_rows = list(cursor.execute(HOT_CANDIDATE_ROWID_SCAN_SQL, (HOT_CANDIDATE_HEAD_LIMIT,)))
-        candidates, first_candidate_rowid, last_inspected_rowid, _ = _candidates_from_scanned_rows(
-            head_rows, limit=limit
+        head_candidates, _, last_inspected_rowid, _ = _candidates_from_scanned_rows(
+            head_rows,
+            limit=scan_limit,
+            exclude_ids=retry_ids,
         )
+        candidates.extend(head_candidates)
         if not head_rows:
+            self._retain(candidates)
             return candidates
         if self._newest_seen_rowid is None:
-            self._newest_seen_rowid = (
-                first_candidate_rowid - 1 if first_candidate_rowid is not None else int(head_rows[0][0])
-            )
+            self._newest_seen_rowid = last_inspected_rowid
         if self._before_rowid is None and last_inspected_rowid is not None:
             self._before_rowid = last_inspected_rowid
         if len(candidates) >= limit:
+            self._retain(candidates)
             return candidates
 
         page_limit = HOT_CANDIDATE_SCAN_LIMIT - HOT_CANDIDATE_HEAD_LIMIT
@@ -221,31 +293,29 @@ class HotCandidateScanner:
             )
         )
         if forward_rows:
-            forward_candidates, first_candidate_rowid, last_inspected_rowid, _ = _candidates_from_scanned_rows(
+            forward_candidates, _, last_inspected_rowid, _ = _candidates_from_scanned_rows(
                 forward_rows,
                 limit=limit - len(candidates),
-                exclude_ids={candidate.chunk_id for candidate in candidates},
+                exclude_ids=retry_ids | {candidate.chunk_id for candidate in candidates},
             )
             candidates.extend(forward_candidates)
-            self._newest_seen_rowid = (
-                first_candidate_rowid - 1 if first_candidate_rowid is not None else last_inspected_rowid
-            )
+            self._newest_seen_rowid = last_inspected_rowid
         if len(candidates) >= limit or self._before_rowid is None:
+            self._retain(candidates)
             return candidates[:limit]
 
         page_rows = list(cursor.execute(HOT_CANDIDATE_ROWID_PAGE_SQL, (self._before_rowid, page_limit)))
         if page_rows:
-            page_candidates, first_candidate_rowid, last_inspected_rowid, fully_scanned = _candidates_from_scanned_rows(
+            page_candidates, _, last_inspected_rowid, fully_scanned = _candidates_from_scanned_rows(
                 page_rows,
                 limit=limit - len(candidates),
-                exclude_ids={candidate.chunk_id for candidate in candidates},
+                exclude_ids=retry_ids | {candidate.chunk_id for candidate in candidates},
             )
             candidates.extend(page_candidates)
-            self._before_rowid = (
-                first_candidate_rowid + 1 if first_candidate_rowid is not None else last_inspected_rowid
-            )
-            if first_candidate_rowid is None and fully_scanned and len(page_rows) < page_limit:
+            self._before_rowid = last_inspected_rowid
+            if fully_scanned and len(page_rows) < page_limit:
                 self._before_rowid = None
+        self._retain(candidates)
         return candidates[:limit]
 
 

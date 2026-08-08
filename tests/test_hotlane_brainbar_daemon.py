@@ -332,6 +332,19 @@ def test_hot_candidate_scanner_deduplicates_head_and_forward_catchup(tmp_path):
         )
         conn.executemany("INSERT INTO chunk_vectors_rowids (id) VALUES (?)", [(row[0],) for row in newer_rows])
         assert scanner(store, limit=5) == [hotlane.EmbedCandidate("new-hot", "only once")]
+        conn.execute(
+            "INSERT INTO chunks (id, content, source_file, source, created_at) VALUES "
+            "('later-hot', 'must progress', 'brainbar-store', 'mcp', 'later')"
+        )
+        final_rows = [(f"final-{index}", "embedded", "brainbar-store", "mcp", str(index)) for index in range(128)]
+        conn.executemany(
+            "INSERT INTO chunks (id, content, source_file, source, created_at) VALUES (?, ?, ?, ?, ?)", final_rows
+        )
+        conn.executemany("INSERT INTO chunk_vectors_rowids (id) VALUES (?)", [(row[0],) for row in final_rows])
+        assert scanner(store, limit=5) == [
+            hotlane.EmbedCandidate("new-hot", "only once"),
+            hotlane.EmbedCandidate("later-hot", "must progress"),
+        ]
     finally:
         conn.close()
 
