@@ -285,7 +285,9 @@ final class SocketIntegrationTests: XCTestCase {
 
     func testBrainBackupVacuumIntoOverSocketCreatesRestorableSnapshot() throws {
         let targetPath = NSTemporaryDirectory() + "brainbar-backup-\(UUID().uuidString).db"
+        let completionMarkerPath = targetPath + ".complete"
         defer { try? FileManager.default.removeItem(atPath: targetPath) }
+        defer { try? FileManager.default.removeItem(atPath: completionMarkerPath) }
 
         _ = try sendMCPRequest([
             "jsonrpc": "2.0", "id": 20, "method": "initialize",
@@ -319,6 +321,7 @@ final class SocketIntegrationTests: XCTestCase {
         let result = response["result"] as? [String: Any]
         XCTAssertEqual(result?["isError"] as? Bool, nil)
         XCTAssertTrue(FileManager.default.fileExists(atPath: targetPath))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: completionMarkerPath))
 
         var restored: OpaquePointer?
         XCTAssertEqual(sqlite3_open_v2(targetPath, &restored, SQLITE_OPEN_READONLY, nil), SQLITE_OK)

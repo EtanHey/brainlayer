@@ -1036,6 +1036,8 @@ final class BrainDatabase: @unchecked Sendable {
         guard stepRC == SQLITE_DONE else { throw DBError.step(stepRC) }
 
         let attributes = try FileManager.default.attributesOfItem(atPath: targetURL.path)
+        let completionMarkerURL = URL(fileURLWithPath: targetURL.path + ".complete")
+        try Data("complete\n".utf8).write(to: completionMarkerURL, options: .atomic)
         return (attributes[.size] as? NSNumber)?.int64Value ?? 0
     }
 

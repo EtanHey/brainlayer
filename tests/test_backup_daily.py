@@ -34,6 +34,7 @@ def _start_fake_brainbar_vacuum_server(socket_path: Path, source_db: Path):
                 target_path = Path(args["target_path"])
                 with sqlite3.connect(source_db) as db:
                     db.execute("VACUUM INTO ?", (str(target_path),))
+                target_path.with_name(f"{target_path.name}.complete").write_text("complete\n")
                 response = {
                     "jsonrpc": "2.0",
                     "id": request["id"],
@@ -76,6 +77,7 @@ def test_create_snapshot_gzip_is_restorable(tmp_path):
 
     assert snapshot == out_dir / "2026-05-13.db.gz"
     assert snapshot.exists()
+    assert not list(out_dir.glob(".*.db.attempt-*.complete"))
 
     restored = tmp_path / "restored.db"
     with gzip.open(snapshot, "rb") as src, restored.open("wb") as dst:
@@ -503,20 +505,29 @@ def test_create_snapshot_preserves_failed_attempts_outside_temporary_directory(t
     assert all(path.exists() for path in attempt_targets)
 
 
-def test_stale_attempt_sweep_deletes_only_regular_files_older_than_one_run_interval(tmp_path):
+def test_stale_attempt_sweep_deletes_only_completed_regular_files_older_than_one_run_interval(tmp_path):
     from brainlayer import backup_daily
 
     now = 200_000.0
-    stale = tmp_path / ".2026-05-12.db.attempt-1-stale"
+    stale_completed = tmp_path / ".2026-05-12.db.attempt-1-stale-completed"
+    stale_incomplete = tmp_path / ".2026-05-12.db.attempt-1-stale-incomplete"
     recent = tmp_path / ".2026-05-13.db.attempt-1-recent"
     target = tmp_path / "outside.db"
     symlink = tmp_path / ".2026-05-11.db.attempt-1-link"
-    stale.write_bytes(b"stale")
+    stale_completed.write_bytes(b"stale completed")
+    stale_incomplete.write_bytes(b"stale incomplete")
     recent.write_bytes(b"recent")
     target.write_bytes(b"outside")
     symlink.symlink_to(target)
-    os.utime(stale, (now - 90_000, now - 90_000))
+    stale_marker = backup_daily._backup_attempt_completion_marker(stale_completed)
+    recent_marker = backup_daily._backup_attempt_completion_marker(recent)
+    stale_marker.write_text("complete")
+    recent_marker.write_text("complete")
+    os.utime(stale_completed, (now - 90_000, now - 90_000))
+    os.utime(stale_incomplete, (now - 90_000, now - 90_000))
+    os.utime(stale_marker, (now - 90_000, now - 90_000))
     os.utime(recent, (now - 60, now - 60))
+    os.utime(recent_marker, (now - 60, now - 60))
 
     deleted, surviving = backup_daily._sweep_stale_backup_attempts(
         tmp_path,
@@ -524,12 +535,38 @@ def test_stale_attempt_sweep_deletes_only_regular_files_older_than_one_run_inter
         now=now,
     )
 
-    assert deleted == [stale.name]
-    assert {path.name for path in surviving} == {recent.name, symlink.name}
-    assert not stale.exists()
+    assert deleted == [stale_completed.name]
+    assert {path.name for path in surviving} == {stale_incomplete.name, recent.name, symlink.name}
+    assert not stale_completed.exists()
+    assert not stale_marker.exists()
+    assert stale_incomplete.exists()
     assert recent.exists()
+    assert recent_marker.exists()
     assert symlink.is_symlink()
     assert target.read_bytes() == b"outside"
+
+
+def test_database_logical_size_includes_committed_wal_pages(tmp_path):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    conn = sqlite3.connect(source)
+    try:
+        assert conn.execute("PRAGMA journal_mode=WAL").fetchone()[0].upper() == "WAL"
+        conn.execute("PRAGMA wal_autocheckpoint=0")
+        conn.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, content TEXT)")
+        conn.commit()
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        main_file_size = source.stat().st_size
+        conn.executemany(
+            "INSERT INTO chunks VALUES (?, ?)",
+            [(f"c{idx}", "x" * 4096) for idx in range(256)],
+        )
+        conn.commit()
+
+        assert backup_daily._database_logical_size_bytes(source) > main_file_size
+    finally:
+        conn.close()
 
 
 def test_recent_attempt_growth_is_reserved_in_disk_preflight(tmp_path, monkeypatch):
