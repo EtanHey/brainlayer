@@ -1025,6 +1025,10 @@ final class BrainDatabase: @unchecked Sendable {
         guard !FileManager.default.fileExists(atPath: targetURL.path) else {
             throw DBError.exec(SQLITE_CANTOPEN, "backup target already exists: \(targetURL.path)")
         }
+        let completionMarkerURL = URL(fileURLWithPath: targetURL.path + ".complete")
+        guard !FileManager.default.fileExists(atPath: completionMarkerURL.path) else {
+            throw DBError.exec(SQLITE_CANTOPEN, "backup completion marker already exists: \(completionMarkerURL.path)")
+        }
 
         var stmt: OpaquePointer?
         let prepareRC = sqlite3_prepare_v2(db, "VACUUM INTO ?", -1, &stmt, nil)
@@ -1036,7 +1040,6 @@ final class BrainDatabase: @unchecked Sendable {
         guard stepRC == SQLITE_DONE else { throw DBError.step(stepRC) }
 
         let attributes = try FileManager.default.attributesOfItem(atPath: targetURL.path)
-        let completionMarkerURL = URL(fileURLWithPath: targetURL.path + ".complete")
         try Data("complete\n".utf8).write(to: completionMarkerURL, options: .atomic)
         return (attributes[.size] as? NSNumber)?.int64Value ?? 0
     }
