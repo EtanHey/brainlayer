@@ -487,7 +487,7 @@ def _pending_store_lock_path(path):
 def _queue_store(item: dict):
     """Buffer a store request to JSONL when DB is locked.
 
-    Enforces _QUEUE_MAX_SIZE: if the file exceeds the limit, oldest lines
+    _QUEUE_MAX_SIZE is a soft warning threshold only; acknowledged lines
     are dropped to make room.
     """
     item = dict(item)
@@ -507,20 +507,21 @@ def _queue_store(item: dict):
             f.flush()
             _fsync(f.fileno())
 
-        # Enforce max size — read, trim oldest, atomic rewrite via tempfile
+        # Never trim: every line here was acknowledged with a durably-queued
+        # receipt that forbade the caller keeping a fallback copy, so dropping
+        # the oldest silently deletes an accepted memory. Depth is bounded by
+        # outage length and the replay empties the file once writes recover;
+        # past _QUEUE_MAX_SIZE we only warn.
         try:
             lines = path.read_text().strip().splitlines()
             if len(lines) > _QUEUE_MAX_SIZE:
-                trimmed = lines[-_QUEUE_MAX_SIZE:]
-                _atomic_rewrite_pending_store(path, trimmed)
                 logger.warning(
-                    "Pending store queue trimmed: %d -> %d (dropped %d oldest)",
+                    "Pending store queue depth %d exceeds soft limit %d; retaining all acknowledged entries",
                     len(lines),
                     _QUEUE_MAX_SIZE,
-                    len(lines) - _QUEUE_MAX_SIZE,
                 )
         except Exception:
-            logger.debug("Queue trim failed (non-critical)", exc_info=True)
+            logger.debug("Queue depth check failed (non-critical)", exc_info=True)
     return path
 
 

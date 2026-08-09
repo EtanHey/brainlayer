@@ -25,7 +25,7 @@ final class MCPRouter: @unchecked Sendable {
     ]
     private static let coreToolDescriptions: [String: String] = [
         "brain_search": "Search memory.",
-        "brain_store": "Store memory. A DEFERRED result is success (durably queued, auto-persisted) - never re-store.",
+        "brain_store": "Store memory; DEFERRED = stored.",
         "brain_recall": "Recall context.",
         "brain_expand": "Expand chunk.",
     ]
@@ -297,28 +297,43 @@ final class MCPRouter: @unchecked Sendable {
     /// have no drain scheduled; without this, they persist only if a later store
     /// happens to run. Schedule their drains as soon as a write handle exists.
     private func scheduleDrainForExistingPendingStores(db: BrainDatabase) {
-        guard let snapshot = db.pendingStoreQueueSnapshotIfReadable() else { return }
-        var scheduledAny = false
-        for identity in snapshot.identityKeys where identity.hasPrefix("chunk:") {
-            scheduledAny = true
-            Self.schedulePendingStoreDrain(
-                db: db,
-                chunkID: String(identity.dropFirst("chunk:".count)),
-                delay: Self.pendingStoreDrainInitialDelay
-            )
-        }
-        // Legacy entries written by older builds may lack chunk_id and thus
-        // contribute no identity keys; flush them directly so an upgrade does
-        // not strand acknowledged stores.
-        if !scheduledAny && snapshot.depth > 0 {
-            Self.pendingStoreDrainQueue.asyncAfter(
-                deadline: .now() + Self.pendingStoreDrainInitialDelay
-            ) { [weak db] in
-                guard let db, db.isOpen else { return }
-                _ = db.flushPendingStores(
-                    busyTimeoutMillis: Self.mcpStoreBusyTimeoutMillis,
-                    retries: Self.mcpStoreRetries
+        // The snapshot takes the cross-process queue LOCK_EX; a concurrent MCP
+        // replay can hold it across DB writes, so never block the caller
+        // (setDatabases runs on BrainBarServer.queue during initialization).
+        Self.pendingStoreDrainQueue.async { [weak db] in
+            guard let db else { return }
+            guard let snapshot = db.pendingStoreQueueSnapshotIfReadable() else { return }
+            var scheduledAny = false
+            for identity in snapshot.identityKeys where identity.hasPrefix("chunk:") {
+                scheduledAny = true
+                Self.schedulePendingStoreDrain(
+                    db: db,
+                    chunkID: String(identity.dropFirst("chunk:".count)),
+                    delay: Self.pendingStoreDrainInitialDelay
                 )
+            }
+            if !scheduledAny && snapshot.depth > 0 {
+                Self.scheduleIdentitylessLegacyFlush(db: db, delay: Self.pendingStoreDrainInitialDelay)
+            }
+        }
+    }
+
+    /// Legacy entries written by older builds may lack chunk_id and thus have no
+    /// identity for the normal per-chunk drain; flush with capped-backoff retries
+    /// until the queue empties so a busy DB at startup cannot strand them.
+    private static func scheduleIdentitylessLegacyFlush(db: BrainDatabase, delay: TimeInterval) {
+        pendingStoreDrainQueue.asyncAfter(deadline: .now() + delay) { [weak db] in
+            guard let db, db.isOpen else { return }
+            _ = db.flushPendingStores(
+                busyTimeoutMillis: mcpStoreBusyTimeoutMillis,
+                retries: mcpStoreRetries
+            )
+            guard let after = db.pendingStoreQueueSnapshotIfReadable() else {
+                scheduleIdentitylessLegacyFlush(db: db, delay: min(delay * 2, 60))
+                return
+            }
+            if after.depth > 0 {
+                scheduleIdentitylessLegacyFlush(db: db, delay: min(delay * 2, 60))
             }
         }
     }

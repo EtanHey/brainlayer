@@ -64,3 +64,28 @@ def test_startup_rearms_replay_when_legacy_queue_nonempty(monkeypatch, tmp_path)
     stranded.write_text("")
     assert store_handler.rearm_stranded_pending_stores() is False
     assert calls == [True]
+
+
+def test_queue_store_never_trims_acknowledged_entries(monkeypatch, tmp_path) -> None:
+    """Acknowledged durably-queued stores must never be silently dropped (codex round 5)."""
+    import json as _json
+
+    from brainlayer.mcp import store_handler
+
+    path = tmp_path / "pending-stores.jsonl"
+    monkeypatch.setattr(store_handler, "_get_pending_store_path", lambda: path)
+    monkeypatch.setattr(store_handler, "_schedule_pending_store_replay", lambda: None)
+
+    def _fail_enqueue(**kwargs):
+        raise RuntimeError("unified queue unavailable")
+
+    import brainlayer.queue_io as queue_io
+
+    monkeypatch.setattr(queue_io, "enqueue_store", _fail_enqueue)
+
+    for i in range(store_handler._QUEUE_MAX_SIZE + 5):
+        store_handler._queue_store({"chunk_id": f"c{i}", "content": f"memory {i}"})
+
+    lines = path.read_text().strip().splitlines()
+    assert len(lines) == store_handler._QUEUE_MAX_SIZE + 5
+    assert _json.loads(lines[0])["chunk_id"] == "c0"  # oldest acknowledged entry survives
