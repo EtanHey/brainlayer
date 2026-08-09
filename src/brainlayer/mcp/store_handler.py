@@ -564,6 +564,8 @@ def _clear_hybrid_search_cache_if_loaded() -> None:
 
 def _deferred_store_receipt(chunk_id: str, queue_path, *, reason: str = "DB_BUSY") -> dict:
     action = "queued_for_replay" if str(queue_path).endswith("pending-stores.jsonl") else "queued_for_drain"
+    if action == "queued_for_replay":
+        _schedule_pending_store_replay()
     return {
         "chunk_id": chunk_id,
         "queued": True,
@@ -667,6 +669,47 @@ def _temporary_store_busy_timeout(conn, deadline: float):
         _set_connection_exec_trace(conn, original_exec_trace)
         _set_connection_busy_timeout(conn, original_busy_timeout_ms)
         _STORE_BUSY_TIMEOUT_LOCK.release()
+
+
+_pending_replay_lock = threading.Lock()
+_pending_replay_active = False
+
+
+def _schedule_pending_store_replay() -> None:
+    """The legacy pending-stores.jsonl fallback has no daemon watching it, but a
+    DEFERRED receipt promises automatic persistence — so schedule a bounded
+    background replay instead of waiting for an unrelated later store."""
+    global _pending_replay_active
+    with _pending_replay_lock:
+        if _pending_replay_active:
+            return
+        _pending_replay_active = True
+
+    def _replay() -> None:
+        global _pending_replay_active
+        try:
+            from ..paths import get_db_path
+            from ..runtime_store import open_writer_store
+
+            for delay in (2, 5, 15, 60, 180):
+                time.sleep(delay)
+                path = _get_pending_store_path()
+                if not path.exists() or path.stat().st_size == 0:
+                    return
+                store = None
+                try:
+                    store = open_writer_store(get_db_path())
+                    _flush_pending_stores(store, None)
+                except Exception:
+                    logger.debug("Deferred pending-store replay attempt failed", exc_info=True)
+                finally:
+                    if store is not None:
+                        store.close()
+        finally:
+            with _pending_replay_lock:
+                _pending_replay_active = False
+
+    threading.Thread(target=_replay, daemon=True).start()
 
 
 def _flush_pending_stores(store, embed_fn) -> int:
@@ -976,6 +1019,9 @@ async def _store(
         return _error_result(f"Validation error: {str(e)}")
     except Exception as e:
         if _is_lock_error(e):
+            from ..runtime_store import SchemaFingerprintMismatch
+
+            deferral_reason = "SCHEMA_FINGERPRINT_MISMATCH" if isinstance(e, SchemaFingerprintMismatch) else "DB_BUSY"
             queue_path = _queue_store(
                 {
                     "chunk_id": promised_chunk_id,
@@ -999,8 +1045,8 @@ async def _store(
                     "conversation_id": conversation_id,
                 }
             )
-            structured = _deferred_store_receipt(promised_chunk_id, queue_path)
-            formatted = format_store_result(promised_chunk_id, queued=True)
+            structured = _deferred_store_receipt(promised_chunk_id, queue_path, reason=deferral_reason)
+            formatted = format_store_result(promised_chunk_id, queued=True, queued_reason=deferral_reason)
             return (
                 [TextContent(type="text", text=formatted)],
                 structured,
