@@ -50,8 +50,18 @@ def test_occurrence_identity_includes_semantic_fingerprint_and_scope(
             severity=2,
         )
     )
+    other_fingerprint = ledger.record(
+        OccurrenceEvent(
+            fingerprint="sqlite-busy-write-contention",
+            scope="host:m2/service:brainlayer-watch",
+            session_id="session-a",
+            occurred_at=FIXED_NOW,
+            severity=2,
+        )
+    )
 
     assert first.occurrence_id != other_scope.occurrence_id
+    assert first.occurrence_id != other_fingerprint.occurrence_id
 
 
 def test_occurrence_identity_has_no_delimiter_collision(
