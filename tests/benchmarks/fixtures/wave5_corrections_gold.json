@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "provenance": "Etan-ratified correction history copied from repository instruction and convergence records; source pointers are mandatory.",
+  "etan_digest_requirement": "I should get a summarized version of what's superseding what, and be the human in the loop for some of it",
+  "thresholds": {
+    "min_auto_confidence": 0.98,
+    "min_precision": 1.0,
+    "min_recall": 0.95,
+    "max_false_positives": 0,
+    "min_digest_fidelity": 1.0
+  },
+  "rollback_rules": [
+    "false-positive budget exceeded",
+    "precision below threshold",
+    "recall below threshold",
+    "digest fidelity below threshold"
+  ],
+  "cases": [
+    {
+      "case_id": "workflow-exclusion-scope",
+      "source_pointer": "AGENTS.md:145",
+      "source_excerpt": "It is NOT all workflows.",
+      "historical_claim": "Every workflow session should be excluded from the index.",
+      "corrected_claim": "Exclusion is scoped to brain-worker subagents and session-miner or weave agents; it is not all workflows.",
+      "scope": "brainlayer/ingest-policy",
+      "entity": "workflow session indexing",
+      "attribute": "default visibility",
+      "expected_decision": "supersede",
+      "expected_digest": "workflow session indexing · default visibility: replace 'exclude every workflow' with 'exclude brain-worker, session-miner, and weave agents only' (AGENTS.md:145)"
+    },
+    {
+      "case_id": "project-is-repo",
+      "source_pointer": "AGENTS.md:243",
+      "source_excerpt": "project` is always the REPO",
+      "historical_claim": "A worktree branch name may be stored as project.",
+      "corrected_claim": "Project is always the canonical repository; branch is a separate field.",
+      "scope": "brainlayer/provenance",
+      "entity": "chunk provenance",
+      "attribute": "project identity",
+      "expected_decision": "supersede",
+      "expected_digest": "chunk provenance · project identity: replace 'project may equal branch' with 'project is the repository and branch is separate' (AGENTS.md:243)"
+    },
+    {
+      "case_id": "brain-worker-class",
+      "source_pointer": "AGENTS.md:151",
+      "source_excerpt": "brain-worker ≠ brainlayer worker",
+      "historical_claim": "A visible brainlayer worker pane can stand in for an ingest-excluded brain-worker.",
+      "corrected_claim": "A brain-worker is an ingest-excluded subagent class; a visible brainlayer worker ingests normally.",
+      "scope": "brainlayer/source-class",
+      "entity": "brain-worker",
+      "attribute": "source class",
+      "expected_decision": "supersede",
+      "expected_digest": "brain-worker · source class: replace 'visible BrainLayer pane' with 'ingest-excluded subagent class' (AGENTS.md:151)"
+    },
+    {
+      "case_id": "store-update-not-duplicate",
+      "source_pointer": "AGENTS.md:25",
+      "source_excerpt": "UPDATE it, don't store again beside it",
+      "historical_claim": "When a stored memory is wrong, store the correction beside it.",
+      "corrected_claim": "When a stored memory is wrong, update it instead of storing a duplicate beside it.",
+      "scope": "brainlayer/store-discipline",
+      "entity": "stored correction",
+      "attribute": "replacement behavior",
+      "expected_decision": "supersede",
+      "expected_digest": "stored correction · replacement behavior: replace 'store beside the old memory' with 'update the wrong memory' (AGENTS.md:25)"
+    },
+    {
+      "case_id": "merged-is-not-deployed",
+      "source_pointer": "AGENTS.md:35",
+      "source_excerpt": "Merged is not deployed",
+      "historical_claim": "A merged BrainLayer change is deployed.",
+      "corrected_claim": "Merged is not deployed; verify the artifact that executes.",
+      "scope": "brainlayer/deployment",
+      "entity": "merged change",
+      "attribute": "deployment state",
+      "expected_decision": "supersede",
+      "expected_digest": "merged change · deployment state: replace 'merged means deployed' with 'verify the executing artifact' (AGENTS.md:35)"
+    },
+    {
+      "case_id": "stored-data-check-on-copy",
+      "source_pointer": "AGENTS.md:249",
+      "source_excerpt": "Pre-merge live-check against a DB copy",
+      "historical_claim": "A stored-data change may be tested directly against the production database before merge.",
+      "corrected_claim": "Every pre-merge live check for a stored-data change runs against a database copy.",
+      "scope": "brainlayer/data-safety",
+      "entity": "stored-data change",
+      "attribute": "pre-merge test target",
+      "expected_decision": "supersede",
+      "expected_digest": "stored-data change · pre-merge test target: replace 'test against production' with 'test against a database copy' (AGENTS.md:249)"
+    },
+    {
+      "case_id": "keep-archive-preconditions",
+      "source_pointer": "AGENTS.md:33",
+      "source_excerpt": "Never auto-delete personal data.",
+      "historical_claim": "Never auto-delete personal data.",
+      "corrected_claim": "Transcripts move to archive only after embedding and reader-parity checks.",
+      "scope": "brainlayer/data-lifecycle",
+      "entity": "personal transcript",
+      "attribute": "deletion policy vs archive preconditions",
+      "expected_decision": "keep_both",
+      "expected_digest": null
+    },
+    {
+      "case_id": "keep-law-and-context-roles",
+      "source_pointer": "AGENTS.md:245",
+      "source_excerpt": "Rules ride in instruction files",
+      "historical_claim": "Rules ride in instruction files deterministically.",
+      "corrected_claim": "BrainLayer injects context and is not a source of law.",
+      "scope": "brainlayer/instruction-truth",
+      "entity": "agent instructions",
+      "attribute": "instruction carrier vs memory role",
+      "expected_decision": "keep_both",
+      "expected_digest": null
+    },
+    {
+      "case_id": "keep-agent-authorship-rulings",
+      "source_pointer": "AGENTS.md:247",
+      "source_excerpt": "Agent-authored chunks are the normal case",
+      "historical_claim": "Agent-authored chunks are the normal case.",
+      "corrected_claim": "Rules cite no source is a non-finding and must not be reported.",
+      "scope": "brainlayer/review-policy",
+      "entity": "agent-authored memory",
+      "attribute": "normality vs review disposition",
+      "expected_decision": "keep_both",
+      "expected_digest": null
+    },
+    {
+      "case_id": "keep-worker-read-write-rules",
+      "source_pointer": "AGENTS.md:72",
+      "source_excerpt": "Concurrency Rules",
+      "historical_claim": "Only one BrainLayer write may run at a time.",
+      "corrected_claim": "BrainLayer reads are safe to run concurrently.",
+      "scope": "brainlayer/concurrency",
+      "entity": "database operation",
+      "attribute": "write serialization vs read concurrency",
+      "expected_decision": "keep_both",
+      "expected_digest": null
+    }
+  ]
+}
