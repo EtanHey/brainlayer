@@ -43,6 +43,7 @@ MAX_BACKLOG_BATCH = 16
 DEFAULT_HOTLANE_WRITE_BUSY_TIMEOUT_MS = 1000
 MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 VECTOR_WRITE_YIELD_SECONDS = 0.005
+MAX_PENDING_CANDIDATE_SCAN_PAGES = 16
 HOT_CANDIDATE_SCAN_LIMIT = 256
 HOT_CANDIDATE_HEAD_LIMIT = HOT_CANDIDATE_SCAN_LIMIT // 2
 MAX_HOT_CANDIDATE_RETRIES = 256
@@ -138,6 +139,18 @@ class CycleResult(NamedTuple):
 class EmbedCandidate(NamedTuple):
     chunk_id: str
     content: str
+
+
+class PendingCandidateScanState:
+    def __init__(self) -> None:
+        self.active = False
+        self.after_created_at: str | None = None
+        self.after_rowid = 0
+
+    def reset(self) -> None:
+        self.active = False
+        self.after_created_at = None
+        self.after_rowid = 0
 
 
 class EmbeddedVector(NamedTuple):
@@ -388,26 +401,101 @@ def _candidate_chunk_rows(store: VectorStore, *, limit: int) -> list[EmbedCandid
     return candidates
 
 
-def _pending_chunk_rows(store: VectorStore, *, limit: int) -> list[EmbedCandidate]:
-    rows = store.conn.cursor().execute(
-        """
-        SELECT c.id, c.content
-        FROM chunks c
-        LEFT JOIN chunk_vectors_rowids r ON c.id = r.id
-        WHERE r.id IS NULL
-          AND c.content IS NOT NULL
-          AND c.content != ''
-          AND c.archived_at IS NULL
-          AND c.superseded_by IS NULL
-          AND c.aggregated_into IS NULL
-          AND COALESCE(c.archived, 0) = 0
-          AND COALESCE(c.status, 'active') = 'active'
-        ORDER BY c.created_at ASC
-        LIMIT ?
-        """,
-        (limit,),
-    )
-    return [EmbedCandidate(str(row[0]), str(row[1])) for row in rows]
+def _pending_chunk_rows(
+    store: VectorStore,
+    *,
+    limit: int,
+    scan_state: PendingCandidateScanState | None = None,
+) -> list[EmbedCandidate]:
+    if limit <= 0:
+        return []
+
+    scan_limit = limit
+    candidates: list[EmbedCandidate] = []
+    after_created_at = scan_state.after_created_at if scan_state and scan_state.active else None
+    after_rowid = scan_state.after_rowid if scan_state and scan_state.active else 0
+    first_page = not scan_state or not scan_state.active
+    exhausted = False
+
+    for _page in range(MAX_PENDING_CANDIDATE_SCAN_PAGES):
+        if first_page:
+            page_filter = ""
+            bindings: tuple[object, ...] = (scan_limit,)
+        elif after_created_at is None:
+            page_filter = "AND ((c.created_at IS NULL AND c.rowid > ?) OR c.created_at IS NOT NULL)"
+            bindings = (after_rowid, scan_limit)
+        else:
+            page_filter = """
+              AND (c.created_at, c.rowid) > (?, ?)
+            """
+            bindings = (after_created_at, after_rowid, scan_limit)
+
+        id_rows = list(
+            store.conn.cursor().execute(
+                f"""
+                SELECT c.id, c.created_at, c.rowid
+                FROM chunks c
+                LEFT JOIN chunk_vectors_rowids r ON c.id = r.id
+                WHERE r.id IS NULL
+                  {page_filter}
+                ORDER BY c.created_at ASC
+                LIMIT ?
+                """,
+                bindings,
+            )
+        )
+        if not id_rows:
+            exhausted = True
+            break
+
+        candidate_ids = [str(row[0]) for row in id_rows]
+        placeholders = ", ".join("?" for _chunk_id in candidate_ids)
+        content_rows = store.conn.cursor().execute(
+            f"""
+            SELECT
+                id,
+                content,
+                archived_at,
+                superseded_by,
+                aggregated_into,
+                COALESCE(archived, 0),
+                COALESCE(status, 'active')
+            FROM chunks
+            WHERE id IN ({placeholders})
+            """,
+            tuple(candidate_ids),
+        )
+        content_by_id = {
+            str(row[0]): str(row[1])
+            for row in content_rows
+            if row[1] and row[2] is None and row[3] is None and row[4] is None and not row[5] and row[6] == "active"
+        }
+        candidates.extend(
+            EmbedCandidate(chunk_id, content_by_id[chunk_id]) for chunk_id in candidate_ids if chunk_id in content_by_id
+        )
+
+        after_created_at = id_rows[-1][1]
+        after_rowid = int(id_rows[-1][2])
+        first_page = False
+        if len(candidates) >= limit or len(id_rows) < scan_limit:
+            exhausted = len(id_rows) < scan_limit
+            break
+
+    if scan_state is not None:
+        if exhausted:
+            scan_state.reset()
+        else:
+            scan_state.active = True
+            scan_state.after_created_at = after_created_at
+            scan_state.after_rowid = after_rowid
+    return candidates[:limit]
+
+
+PENDING_CANDIDATE_SCAN_STATE = PendingCandidateScanState()
+
+
+def _pending_chunk_rows_with_resume(store: VectorStore, *, limit: int) -> list[EmbedCandidate]:
+    return _pending_chunk_rows(store, limit=limit, scan_state=PENDING_CANDIDATE_SCAN_STATE)
 
 
 def _embed_candidates(
@@ -640,7 +728,7 @@ def _run_split_cycle(
     embed_batch_fn: Callable[[list[str]], list[list[float]]] | None = None,
     enrich_fn: Callable[..., object] = enrich_realtime,
     candidate_rows_fn: Callable[..., list[EmbedCandidate]] = _candidate_chunk_rows,
-    pending_rows_fn: Callable[..., list[EmbedCandidate]] = _pending_chunk_rows,
+    pending_rows_fn: Callable[..., list[EmbedCandidate]] = _pending_chunk_rows_with_resume,
     write_vectors_fn: Callable[..., int] = _write_embedded_vectors,
 ) -> CycleResult:
     embedded = 0

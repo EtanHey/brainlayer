@@ -78,6 +78,160 @@ def test_hotlane_default_backlog_batch_drains_pending_embeddings():
     assert hotlane.DEFAULT_BACKLOG_BATCH == 4
 
 
+def test_pending_chunk_query_defers_content_reads_until_after_bounded_id_scan():
+    hotlane = _load_hotlane_module()
+    executed = []
+
+    class FakeCursor:
+        def execute(self, sql, bindings):
+            executed.append((sql, bindings))
+            if len(executed) == 1:
+                if "c.content" in sql:
+                    return [("empty", ""), ("valid-1", "one"), ("valid-2", "two")]
+                return [
+                    ("empty", "2026-08-01T00:00:00Z", 1),
+                    ("archived", "2026-08-01T00:00:01Z", 2),
+                    ("valid-1", "2026-08-01T00:00:02Z", 3),
+                    ("valid-2", "2026-08-01T00:00:03Z", 4),
+                    ("valid-3", "2026-08-01T00:00:04Z", 5),
+                ]
+            return [
+                ("valid-3", "three", None, None, None, 0, "active"),
+                ("valid-2", "two", None, None, None, 0, "active"),
+                ("empty", "", None, None, None, 0, "active"),
+                ("archived", "skip me", "2026-08-02T00:00:00Z", None, None, 1, "archived"),
+                ("valid-1", "one", None, None, None, 0, "active"),
+            ]
+
+    store = SimpleNamespace(conn=SimpleNamespace(cursor=lambda: FakeCursor()))
+
+    assert hotlane._pending_chunk_rows(store, limit=2) == [
+        hotlane.EmbedCandidate("valid-1", "one"),
+        hotlane.EmbedCandidate("valid-2", "two"),
+    ]
+    assert "c.content" not in executed[0][0]
+    assert "archived_at" not in executed[0][0]
+    assert "superseded_by" not in executed[0][0]
+    assert "status" not in executed[0][0]
+    assert executed[0][1] == (2,)
+    assert "WHERE id IN" in executed[1][0]
+    assert executed[1][1] == ("empty", "archived", "valid-1", "valid-2", "valid-3")
+
+
+@pytest.mark.parametrize("empty_created_at", [None, "2026-08-01T00:00:00Z"])
+def test_pending_chunk_query_pages_past_a_full_window_of_empty_content(tmp_path, empty_created_at):
+    hotlane = _load_hotlane_module()
+    conn = sqlite3.connect(tmp_path / "empty-window.db")
+    conn.executescript(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT,
+            created_at TEXT,
+            archived_at TEXT,
+            superseded_by TEXT,
+            aggregated_into TEXT,
+            archived INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'active'
+        );
+        CREATE INDEX idx_chunks_created_at ON chunks(created_at);
+        CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY);
+        """
+    )
+    empty_rows = [(f"empty-{index:03d}", "", empty_created_at) for index in range(4)]
+    conn.executemany("INSERT INTO chunks (id, content, created_at) VALUES (?, ?, ?)", empty_rows)
+    conn.execute(
+        "INSERT INTO chunks (id, content, created_at) VALUES "
+        "('valid-after-empty-window', 'must make progress', '2026-08-02T00:00:00Z')"
+    )
+    try:
+        assert hotlane._pending_chunk_rows(SimpleNamespace(conn=conn), limit=1) == [
+            hotlane.EmbedCandidate("valid-after-empty-window", "must make progress")
+        ]
+    finally:
+        conn.close()
+
+
+def test_pending_chunk_query_bounds_pages_when_all_remaining_content_is_empty(tmp_path):
+    hotlane = _load_hotlane_module()
+    conn = sqlite3.connect(tmp_path / "all-empty.db")
+    conn.executescript(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT,
+            created_at TEXT,
+            archived_at TEXT,
+            superseded_by TEXT,
+            aggregated_into TEXT,
+            archived INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'active'
+        );
+        CREATE INDEX idx_chunks_created_at ON chunks(created_at);
+        CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY);
+        """
+    )
+    conn.executemany(
+        "INSERT INTO chunks (id, content, created_at) VALUES (?, '', ?)",
+        [(f"empty-{index:03d}", f"2026-08-01T00:{index:03d}:00Z") for index in range(100)],
+    )
+    statements = []
+    conn.set_trace_callback(statements.append)
+    try:
+        assert hotlane._pending_chunk_rows(SimpleNamespace(conn=conn), limit=1) == []
+        id_page_queries = [statement for statement in statements if "SELECT c.id, c.created_at, c.rowid" in statement]
+        assert len(id_page_queries) <= 16
+    finally:
+        conn.close()
+
+
+def test_pending_chunk_query_resumes_after_page_budget_on_next_cycle(tmp_path):
+    hotlane = _load_hotlane_module()
+    conn = sqlite3.connect(tmp_path / "resume-after-budget.db")
+    conn.executescript(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT,
+            created_at TEXT,
+            archived_at TEXT,
+            superseded_by TEXT,
+            aggregated_into TEXT,
+            archived INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'active'
+        );
+        CREATE INDEX idx_chunks_created_at ON chunks(created_at);
+        CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY);
+        """
+    )
+    conn.executemany(
+        "INSERT INTO chunks (id, content, created_at) VALUES (?, '', ?)",
+        [(f"empty-{index:03d}", f"2026-08-01T00:{index:03d}:00Z") for index in range(16)],
+    )
+    conn.execute(
+        "INSERT INTO chunks (id, content, created_at) VALUES "
+        "('valid-after-budget', 'must resume', '2026-08-02T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO chunks (id, content, created_at) VALUES "
+        "('next-valid-after-budget', 'must keep position', '2026-08-03T00:00:00Z')"
+    )
+    state = hotlane.PendingCandidateScanState()
+    store = SimpleNamespace(conn=conn)
+    try:
+        assert hotlane._pending_chunk_rows(store, limit=1, scan_state=state) == []
+        assert hotlane._pending_chunk_rows(store, limit=1, scan_state=state) == [
+            hotlane.EmbedCandidate("valid-after-budget", "must resume")
+        ]
+        assert state.active is True
+        conn.execute("INSERT INTO chunk_vectors_rowids (id) VALUES ('valid-after-budget')")
+        assert hotlane._pending_chunk_rows(store, limit=1, scan_state=state) == [
+            hotlane.EmbedCandidate("next-valid-after-budget", "must keep position")
+        ]
+    finally:
+        conn.close()
+
+
 def test_hot_candidate_query_scans_a_bounded_recent_window_without_forcing_schema_index():
     hotlane = _load_hotlane_module()
     executed = []
@@ -1271,7 +1425,9 @@ def test_hotlane_split_cycle_writes_vectors_without_opening_vectorstore_writer(t
             if self.readonly:
                 if sql == hotlane.HOT_CANDIDATE_SCAN_SQL:
                     return [("hot-1", "hot content", "brainbar-store", "mcp", None, None, None, 0, "active", None)]
-                return [("pending-1", "pending content")]
+                if "SELECT c.id, c.created_at, c.rowid" in sql:
+                    return [("pending-1", "2026-08-01T00:00:00Z", 1)]
+                return [("pending-1", "pending content", None, None, None, 0, "active")]
             events.append(("sql", sql.strip().splitlines()[0]))
             if sql.strip().startswith("SELECT 1"):
                 return SimpleNamespace(fetchone=lambda: (1,))
