@@ -27,11 +27,13 @@ def test_embedding_model_forwards_explicit_device_without_mps_probe(monkeypatch)
 
 
 def test_get_embedding_model_cache_distinguishes_explicit_device(monkeypatch):
-    monkeypatch.setattr(embeddings, "_embedding_model", None)
+    monkeypatch.setattr(embeddings, "_embedding_models", {})
 
     automatic = embeddings.get_embedding_model()
     cpu = embeddings.get_embedding_model(device="cpu")
     same_cpu = embeddings.get_embedding_model(device="cpu")
+    same_automatic = embeddings.get_embedding_model()
 
     assert automatic is not cpu
     assert cpu is same_cpu
+    assert automatic is same_automatic

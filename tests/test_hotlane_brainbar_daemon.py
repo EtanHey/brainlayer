@@ -855,6 +855,26 @@ def test_hotlane_run_requests_cpu_embedding_device_by_default():
     assert requested_devices == ["cpu"]
 
 
+def test_hotlane_run_preserves_positional_only_model_factory():
+    hotlane = _load_hotlane_module()
+
+    def positional_only_model_factory(device="cpu", /):
+        return SimpleNamespace(embed_query=lambda _text: [0.0])
+
+    hotlane.run(
+        db_path=Path("/tmp/unused.db"),
+        interval=0.25,
+        recent_limit=5,
+        backlog_interval=10.0,
+        backlog_batch=0,
+        enrich_interval=10.0,
+        enrich_limit=0,
+        enrich_since_hours=8760,
+        model_factory=positional_only_model_factory,
+        max_cycles=0,
+    )
+
+
 def test_hotlane_run_disables_enrichment_after_daily_cap():
     hotlane = _load_hotlane_module()
     scheduled_enrich_limits = []

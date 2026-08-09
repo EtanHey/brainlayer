@@ -606,9 +606,11 @@ def _callable_accepts_keyword(func: Callable[..., object], keyword: str) -> bool
         signature = inspect.signature(func)
     except (TypeError, ValueError):
         return True
-    return keyword in signature.parameters or any(
-        parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()
-    )
+    parameter = signature.parameters.get(keyword)
+    return (
+        parameter is not None
+        and parameter.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    ) or any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values())
 
 
 def _type_error_rejects_keyword(exc: TypeError, keyword: str) -> bool:

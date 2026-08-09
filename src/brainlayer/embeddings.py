@@ -137,16 +137,16 @@ class EmbeddingModel:
             raise RuntimeError(f"Failed to embed text batch: {e}") from e
 
 
-# Global model instance
-_embedding_model: Optional[EmbeddingModel] = None
+# Global model instances, keyed by model and requested device.
+_embedding_models: dict[tuple[str, str | None], EmbeddingModel] = {}
 
 
 def get_embedding_model(model_name: str = DEFAULT_MODEL, *, device: str | None = None) -> EmbeddingModel:
     """Get global embedding model instance."""
-    global _embedding_model
-    if _embedding_model is None or _embedding_model.model_name != model_name or _embedding_model.device != device:
-        _embedding_model = EmbeddingModel(model_name, device=device)
-    return _embedding_model
+    key = (model_name, device)
+    if key not in _embedding_models:
+        _embedding_models[key] = EmbeddingModel(model_name, device=device)
+    return _embedding_models[key]
 
 
 def embed_chunks(
