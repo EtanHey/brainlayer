@@ -144,11 +144,20 @@ def test_weave_feed_accumulates_by_event_day_until_weave_is_invoked(
             )
         )
         occurrence_id = occurrence_id or receipt.occurrence_id
+    ledger.record(
+        OccurrenceEvent(
+            fingerprint="sqlite-wal-checkpoint-starvation",
+            scope="host:m2/service:brainlayer-watch",
+            session_id="session-a",
+            occurred_at=FIXED_NOW + timedelta(minutes=5),
+            severity=2,
+        )
+    )
 
     feed = ledger.weave_accumulation(through=date(2026, 8, 10))
 
     assert [bucket.day for bucket in feed] == [date(2026, 8, 9), date(2026, 8, 10)]
-    assert [bucket.event_count for bucket in feed] == [1, 1]
+    assert [bucket.event_count for bucket in feed] == [2, 1]
     assert {bucket.occurrence_id for bucket in feed} == {occurrence_id}
     assert [bucket.session_ids for bucket in feed] == [("session-a",), ("session-b",)]
     assert ledger.weave_accumulation(through=date(2026, 8, 10)) == ()
