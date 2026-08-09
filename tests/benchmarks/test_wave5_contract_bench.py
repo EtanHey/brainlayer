@@ -447,6 +447,31 @@ def test_correction_gold_loader_rejects_unknown_schema(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("min_auto_confidence", float("nan")),
+        ("min_recall", float("inf")),
+        ("min_recall", -0.01),
+        ("min_digest_fidelity", 1.01),
+        ("max_false_positives", -1),
+        ("max_false_positives", 0.5),
+    ],
+)
+def test_correction_gold_loader_rejects_unsafe_thresholds(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    payload = json.loads(CORRECTION_GOLD_PATH.read_text(encoding="utf-8"))
+    payload["thresholds"][field] = value
+    fixture_path = tmp_path / f"invalid-threshold-{field}.json"
+    fixture_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="correction threshold"):
+        load_correction_gold(fixture_path)
+
+
+@pytest.mark.parametrize(
     ("case_index", "field", "value", "message"),
     [
         (0, "expected_decision", "archive", "expected_decision"),

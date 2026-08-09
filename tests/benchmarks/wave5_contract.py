@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -181,6 +182,18 @@ def load_correction_gold(path: Path = CORRECTION_GOLD_PATH) -> CorrectionGold:
     if payload.get("schema_version") != 1:
         raise ValueError("unsupported correction gold schema version")
     thresholds = CorrectionThresholds(**payload["thresholds"])
+    fractional_thresholds = (
+        thresholds.min_auto_confidence,
+        thresholds.min_recall,
+        thresholds.min_digest_fidelity,
+    )
+    if any(
+        type(value) not in {int, float} or not math.isfinite(value) or not 0.0 <= value <= 1.0
+        for value in fractional_thresholds
+    ):
+        raise ValueError("fractional correction thresholds must be finite values between 0 and 1")
+    if type(thresholds.max_false_positives) is not int or thresholds.max_false_positives < 0:
+        raise ValueError("max false-positive correction threshold must be a non-negative integer")
     cases = tuple(CorrectionGoldCase(**case) for case in payload["cases"])
     for case in cases:
         if case.expected_decision not in {"supersede", "keep_both"}:
