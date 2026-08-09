@@ -43,6 +43,8 @@ MAX_BACKLOG_BATCH = 16
 DEFAULT_HOTLANE_WRITE_BUSY_TIMEOUT_MS = 1000
 MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 VECTOR_WRITE_YIELD_SECONDS = 0.005
+PENDING_CANDIDATE_SCAN_FLOOR = 64
+PENDING_CANDIDATE_SCAN_MULTIPLIER = 16
 HOT_CANDIDATE_SCAN_LIMIT = 256
 HOT_CANDIDATE_HEAD_LIMIT = HOT_CANDIDATE_SCAN_LIMIT // 2
 MAX_HOT_CANDIDATE_RETRIES = 256
@@ -389,25 +391,43 @@ def _candidate_chunk_rows(store: VectorStore, *, limit: int) -> list[EmbedCandid
 
 
 def _pending_chunk_rows(store: VectorStore, *, limit: int) -> list[EmbedCandidate]:
-    rows = store.conn.cursor().execute(
-        """
-        SELECT c.id, c.content
-        FROM chunks c
-        LEFT JOIN chunk_vectors_rowids r ON c.id = r.id
-        WHERE r.id IS NULL
-          AND c.content IS NOT NULL
-          AND c.content != ''
-          AND c.archived_at IS NULL
-          AND c.superseded_by IS NULL
-          AND c.aggregated_into IS NULL
-          AND COALESCE(c.archived, 0) = 0
-          AND COALESCE(c.status, 'active') = 'active'
-        ORDER BY c.created_at ASC
-        LIMIT ?
-        """,
-        (limit,),
+    if limit <= 0:
+        return []
+
+    scan_limit = max(PENDING_CANDIDATE_SCAN_FLOOR, limit * PENDING_CANDIDATE_SCAN_MULTIPLIER)
+    id_rows = list(
+        store.conn.cursor().execute(
+            """
+            SELECT c.id
+            FROM chunks c
+            LEFT JOIN chunk_vectors_rowids r ON c.id = r.id
+            WHERE r.id IS NULL
+              AND c.archived_at IS NULL
+              AND c.superseded_by IS NULL
+              AND c.aggregated_into IS NULL
+              AND COALESCE(c.archived, 0) = 0
+              AND COALESCE(c.status, 'active') = 'active'
+            ORDER BY c.created_at ASC
+            LIMIT ?
+            """,
+            (scan_limit,),
+        )
     )
-    return [EmbedCandidate(str(row[0]), str(row[1])) for row in rows]
+    candidate_ids = [str(row[0]) for row in id_rows]
+    if not candidate_ids:
+        return []
+
+    placeholders = ", ".join("?" for _chunk_id in candidate_ids)
+    content_rows = store.conn.cursor().execute(
+        f"SELECT id, content FROM chunks WHERE id IN ({placeholders})",
+        tuple(candidate_ids),
+    )
+    content_by_id = {str(row[0]): row[1] for row in content_rows}
+    return [
+        EmbedCandidate(chunk_id, str(content_by_id[chunk_id]))
+        for chunk_id in candidate_ids
+        if content_by_id.get(chunk_id)
+    ][:limit]
 
 
 def _embed_candidates(

@@ -78,6 +78,31 @@ def test_hotlane_default_backlog_batch_drains_pending_embeddings():
     assert hotlane.DEFAULT_BACKLOG_BATCH == 4
 
 
+def test_pending_chunk_query_defers_content_reads_until_after_bounded_id_scan():
+    hotlane = _load_hotlane_module()
+    executed = []
+
+    class FakeCursor:
+        def execute(self, sql, bindings):
+            executed.append((sql, bindings))
+            if len(executed) == 1:
+                if "c.content" in sql:
+                    return [("empty", ""), ("valid-1", "one"), ("valid-2", "two")]
+                return [("empty",), ("valid-1",), ("valid-2",)]
+            return [("valid-2", "two"), ("empty", ""), ("valid-1", "one")]
+
+    store = SimpleNamespace(conn=SimpleNamespace(cursor=lambda: FakeCursor()))
+
+    assert hotlane._pending_chunk_rows(store, limit=2) == [
+        hotlane.EmbedCandidate("valid-1", "one"),
+        hotlane.EmbedCandidate("valid-2", "two"),
+    ]
+    assert "c.content" not in executed[0][0]
+    assert executed[0][1][0] > 2
+    assert "WHERE id IN" in executed[1][0]
+    assert executed[1][1] == ("empty", "valid-1", "valid-2")
+
+
 def test_hot_candidate_query_scans_a_bounded_recent_window_without_forcing_schema_index():
     hotlane = _load_hotlane_module()
     executed = []
