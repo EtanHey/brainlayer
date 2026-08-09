@@ -141,6 +141,18 @@ class EmbedCandidate(NamedTuple):
     content: str
 
 
+class PendingCandidateScanState:
+    def __init__(self) -> None:
+        self.active = False
+        self.after_created_at: str | None = None
+        self.after_rowid = 0
+
+    def reset(self) -> None:
+        self.active = False
+        self.after_created_at = None
+        self.after_rowid = 0
+
+
 class EmbeddedVector(NamedTuple):
     chunk_id: str
     content: str
@@ -389,15 +401,21 @@ def _candidate_chunk_rows(store: VectorStore, *, limit: int) -> list[EmbedCandid
     return candidates
 
 
-def _pending_chunk_rows(store: VectorStore, *, limit: int) -> list[EmbedCandidate]:
+def _pending_chunk_rows(
+    store: VectorStore,
+    *,
+    limit: int,
+    scan_state: PendingCandidateScanState | None = None,
+) -> list[EmbedCandidate]:
     if limit <= 0:
         return []
 
     scan_limit = limit
     candidates: list[EmbedCandidate] = []
-    after_created_at: str | None = None
-    after_rowid = 0
-    first_page = True
+    after_created_at = scan_state.after_created_at if scan_state and scan_state.active else None
+    after_rowid = scan_state.after_rowid if scan_state and scan_state.active else 0
+    first_page = not scan_state or not scan_state.active
+    exhausted = False
 
     for _page in range(MAX_PENDING_CANDIDATE_SCAN_PAGES):
         if first_page:
@@ -427,6 +445,7 @@ def _pending_chunk_rows(store: VectorStore, *, limit: int) -> list[EmbedCandidat
             )
         )
         if not id_rows:
+            exhausted = True
             break
 
         candidate_ids = [str(row[0]) for row in id_rows]
@@ -459,9 +478,24 @@ def _pending_chunk_rows(store: VectorStore, *, limit: int) -> list[EmbedCandidat
         after_rowid = int(id_rows[-1][2])
         first_page = False
         if len(candidates) >= limit or len(id_rows) < scan_limit:
+            exhausted = len(id_rows) < scan_limit
             break
 
+    if scan_state is not None:
+        if candidates or exhausted:
+            scan_state.reset()
+        else:
+            scan_state.active = True
+            scan_state.after_created_at = after_created_at
+            scan_state.after_rowid = after_rowid
     return candidates[:limit]
+
+
+PENDING_CANDIDATE_SCAN_STATE = PendingCandidateScanState()
+
+
+def _pending_chunk_rows_with_resume(store: VectorStore, *, limit: int) -> list[EmbedCandidate]:
+    return _pending_chunk_rows(store, limit=limit, scan_state=PENDING_CANDIDATE_SCAN_STATE)
 
 
 def _embed_candidates(
@@ -694,7 +728,7 @@ def _run_split_cycle(
     embed_batch_fn: Callable[[list[str]], list[list[float]]] | None = None,
     enrich_fn: Callable[..., object] = enrich_realtime,
     candidate_rows_fn: Callable[..., list[EmbedCandidate]] = _candidate_chunk_rows,
-    pending_rows_fn: Callable[..., list[EmbedCandidate]] = _pending_chunk_rows,
+    pending_rows_fn: Callable[..., list[EmbedCandidate]] = _pending_chunk_rows_with_resume,
     write_vectors_fn: Callable[..., int] = _write_embedded_vectors,
 ) -> CycleResult:
     embedded = 0

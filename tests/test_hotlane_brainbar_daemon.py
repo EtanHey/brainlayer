@@ -185,6 +185,44 @@ def test_pending_chunk_query_bounds_pages_when_all_remaining_content_is_empty(tm
         conn.close()
 
 
+def test_pending_chunk_query_resumes_after_page_budget_on_next_cycle(tmp_path):
+    hotlane = _load_hotlane_module()
+    conn = sqlite3.connect(tmp_path / "resume-after-budget.db")
+    conn.executescript(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT,
+            created_at TEXT,
+            archived_at TEXT,
+            superseded_by TEXT,
+            aggregated_into TEXT,
+            archived INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'active'
+        );
+        CREATE INDEX idx_chunks_created_at ON chunks(created_at);
+        CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY);
+        """
+    )
+    conn.executemany(
+        "INSERT INTO chunks (id, content, created_at) VALUES (?, '', ?)",
+        [(f"empty-{index:03d}", f"2026-08-01T00:{index:03d}:00Z") for index in range(16)],
+    )
+    conn.execute(
+        "INSERT INTO chunks (id, content, created_at) VALUES "
+        "('valid-after-budget', 'must resume', '2026-08-02T00:00:00Z')"
+    )
+    state = hotlane.PendingCandidateScanState()
+    store = SimpleNamespace(conn=conn)
+    try:
+        assert hotlane._pending_chunk_rows(store, limit=1, scan_state=state) == []
+        assert hotlane._pending_chunk_rows(store, limit=1, scan_state=state) == [
+            hotlane.EmbedCandidate("valid-after-budget", "must resume")
+        ]
+    finally:
+        conn.close()
+
+
 def test_hot_candidate_query_scans_a_bounded_recent_window_without_forcing_schema_index():
     hotlane = _load_hotlane_module()
     executed = []
