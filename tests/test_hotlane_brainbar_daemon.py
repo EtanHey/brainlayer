@@ -90,10 +90,18 @@ def test_pending_chunk_query_defers_content_reads_until_after_bounded_id_scan():
                     return [("empty", ""), ("valid-1", "one"), ("valid-2", "two")]
                 return [
                     ("empty", "2026-08-01T00:00:00Z", 1),
-                    ("valid-1", "2026-08-01T00:00:01Z", 2),
-                    ("valid-2", "2026-08-01T00:00:02Z", 3),
+                    ("archived", "2026-08-01T00:00:01Z", 2),
+                    ("valid-1", "2026-08-01T00:00:02Z", 3),
+                    ("valid-2", "2026-08-01T00:00:03Z", 4),
+                    ("valid-3", "2026-08-01T00:00:04Z", 5),
                 ]
-            return [("valid-2", "two"), ("empty", ""), ("valid-1", "one")]
+            return [
+                ("valid-3", "three", None, None, None, 0, "active"),
+                ("valid-2", "two", None, None, None, 0, "active"),
+                ("empty", "", None, None, None, 0, "active"),
+                ("archived", "skip me", "2026-08-02T00:00:00Z", None, None, 1, "archived"),
+                ("valid-1", "one", None, None, None, 0, "active"),
+            ]
 
     store = SimpleNamespace(conn=SimpleNamespace(cursor=lambda: FakeCursor()))
 
@@ -102,9 +110,12 @@ def test_pending_chunk_query_defers_content_reads_until_after_bounded_id_scan():
         hotlane.EmbedCandidate("valid-2", "two"),
     ]
     assert "c.content" not in executed[0][0]
-    assert executed[0][1][0] > 2
+    assert "archived_at" not in executed[0][0]
+    assert "superseded_by" not in executed[0][0]
+    assert "status" not in executed[0][0]
+    assert executed[0][1] == (2,)
     assert "WHERE id IN" in executed[1][0]
-    assert executed[1][1] == ("empty", "valid-1", "valid-2")
+    assert executed[1][1] == ("empty", "archived", "valid-1", "valid-2", "valid-3")
 
 
 @pytest.mark.parametrize("empty_created_at", [None, "2026-08-01T00:00:00Z"])
@@ -127,7 +138,7 @@ def test_pending_chunk_query_pages_past_a_full_window_of_empty_content(tmp_path,
         CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY);
         """
     )
-    empty_rows = [(f"empty-{index:03d}", "", empty_created_at) for index in range(hotlane.PENDING_CANDIDATE_SCAN_FLOOR)]
+    empty_rows = [(f"empty-{index:03d}", "", empty_created_at) for index in range(4)]
     conn.executemany("INSERT INTO chunks (id, content, created_at) VALUES (?, ?, ?)", empty_rows)
     conn.execute(
         "INSERT INTO chunks (id, content, created_at) VALUES "
@@ -1336,7 +1347,7 @@ def test_hotlane_split_cycle_writes_vectors_without_opening_vectorstore_writer(t
                     return [("hot-1", "hot content", "brainbar-store", "mcp", None, None, None, 0, "active", None)]
                 if "SELECT c.id, c.created_at, c.rowid" in sql:
                     return [("pending-1", "2026-08-01T00:00:00Z", 1)]
-                return [("pending-1", "pending content")]
+                return [("pending-1", "pending content", None, None, None, 0, "active")]
             events.append(("sql", sql.strip().splitlines()[0]))
             if sql.strip().startswith("SELECT 1"):
                 return SimpleNamespace(fetchone=lambda: (1,))

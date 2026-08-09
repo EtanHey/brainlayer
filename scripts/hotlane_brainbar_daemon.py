@@ -43,8 +43,6 @@ MAX_BACKLOG_BATCH = 16
 DEFAULT_HOTLANE_WRITE_BUSY_TIMEOUT_MS = 1000
 MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 VECTOR_WRITE_YIELD_SECONDS = 0.005
-PENDING_CANDIDATE_SCAN_FLOOR = 64
-PENDING_CANDIDATE_SCAN_MULTIPLIER = 16
 HOT_CANDIDATE_SCAN_LIMIT = 256
 HOT_CANDIDATE_HEAD_LIMIT = HOT_CANDIDATE_SCAN_LIMIT // 2
 MAX_HOT_CANDIDATE_RETRIES = 256
@@ -394,7 +392,7 @@ def _pending_chunk_rows(store: VectorStore, *, limit: int) -> list[EmbedCandidat
     if limit <= 0:
         return []
 
-    scan_limit = max(PENDING_CANDIDATE_SCAN_FLOOR, limit * PENDING_CANDIDATE_SCAN_MULTIPLIER)
+    scan_limit = limit
     candidates: list[EmbedCandidate] = []
     after_created_at: str | None = None
     after_rowid = 0
@@ -409,10 +407,9 @@ def _pending_chunk_rows(store: VectorStore, *, limit: int) -> list[EmbedCandidat
             bindings = (after_rowid, scan_limit)
         else:
             page_filter = """
-              AND c.created_at IS NOT NULL
-              AND (c.created_at > ? OR (c.created_at = ? AND c.rowid > ?))
+              AND (c.created_at, c.rowid) > (?, ?)
             """
-            bindings = (after_created_at, after_created_at, after_rowid, scan_limit)
+            bindings = (after_created_at, after_rowid, scan_limit)
 
         id_rows = list(
             store.conn.cursor().execute(
@@ -421,13 +418,8 @@ def _pending_chunk_rows(store: VectorStore, *, limit: int) -> list[EmbedCandidat
                 FROM chunks c
                 LEFT JOIN chunk_vectors_rowids r ON c.id = r.id
                 WHERE r.id IS NULL
-                  AND c.archived_at IS NULL
-                  AND c.superseded_by IS NULL
-                  AND c.aggregated_into IS NULL
-                  AND COALESCE(c.archived, 0) = 0
-                  AND COALESCE(c.status, 'active') = 'active'
                   {page_filter}
-                ORDER BY c.created_at ASC, c.rowid ASC
+                ORDER BY c.created_at ASC
                 LIMIT ?
                 """,
                 bindings,
@@ -439,14 +431,27 @@ def _pending_chunk_rows(store: VectorStore, *, limit: int) -> list[EmbedCandidat
         candidate_ids = [str(row[0]) for row in id_rows]
         placeholders = ", ".join("?" for _chunk_id in candidate_ids)
         content_rows = store.conn.cursor().execute(
-            f"SELECT id, content FROM chunks WHERE id IN ({placeholders})",
+            f"""
+            SELECT
+                id,
+                content,
+                archived_at,
+                superseded_by,
+                aggregated_into,
+                COALESCE(archived, 0),
+                COALESCE(status, 'active')
+            FROM chunks
+            WHERE id IN ({placeholders})
+            """,
             tuple(candidate_ids),
         )
-        content_by_id = {str(row[0]): row[1] for row in content_rows}
+        content_by_id = {
+            str(row[0]): str(row[1])
+            for row in content_rows
+            if row[1] and row[2] is None and row[3] is None and row[4] is None and not row[5] and row[6] == "active"
+        }
         candidates.extend(
-            EmbedCandidate(chunk_id, str(content_by_id[chunk_id]))
-            for chunk_id in candidate_ids
-            if content_by_id.get(chunk_id)
+            EmbedCandidate(chunk_id, content_by_id[chunk_id]) for chunk_id in candidate_ids if chunk_id in content_by_id
         )
 
         after_created_at = id_rows[-1][1]
