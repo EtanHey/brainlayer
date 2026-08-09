@@ -1,9 +1,12 @@
+import hashlib
+import json
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from tests.benchmarks.wave5_contract import (
+    CORRECTION_GOLD_PATH,
     ETAN_DIGEST_REQUIREMENT,
     CandidateCorrection,
     OccurrenceEvent,
@@ -38,6 +41,14 @@ def test_occurrence_identity_includes_semantic_fingerprint_and_scope() -> None:
     )
 
     assert first.occurrence_id != other_scope.occurrence_id
+
+
+def test_occurrence_identity_has_no_delimiter_collision() -> None:
+    ledger = OccurrenceLedger()
+    first = ledger.record(OccurrenceEvent("b\0c", "a", "session-a", FIXED_NOW, 1))
+    second = ledger.record(OccurrenceEvent("c", "a\0b", "session-b", FIXED_NOW, 1))
+
+    assert first.occurrence_id != second.occurrence_id
 
 
 def test_cross_session_repeats_dedupe_without_losing_event_provenance() -> None:
@@ -141,11 +152,25 @@ def _oracle_candidates() -> list[CandidateCorrection]:
 def test_correction_gold_is_real_history_with_source_pointers_and_exact_etan_digest() -> None:
     gold = load_correction_gold()
 
-    assert len(gold.cases) >= 10
-    assert sum(case.expected_decision == "supersede" for case in gold.cases) >= 6
+    assert tuple(case.case_id for case in gold.cases) == (
+        "workflow-exclusion-scope",
+        "project-is-repo",
+        "brain-worker-class",
+        "store-update-not-duplicate",
+        "merged-is-not-deployed",
+        "stored-data-check-on-copy",
+        "keep-archive-preconditions",
+        "keep-law-and-context-roles",
+        "keep-agent-authorship-rulings",
+        "keep-worker-read-write-rules",
+    )
+    assert hashlib.sha256(CORRECTION_GOLD_PATH.read_bytes()).hexdigest() == (
+        "e8008fd5705ade7b97d7d9456e489c6d4f9058ae57beb78570466a66c606aa15"
+    )
+    repo_root = Path(__file__).resolve().parents[2]
     for case in gold.cases:
         source_path, line_number = case.source_pointer.rsplit(":", 1)
-        source_lines = Path(source_path).read_text(encoding="utf-8").splitlines()
+        source_lines = (repo_root / source_path).read_text(encoding="utf-8").splitlines()
         assert case.source_excerpt in source_lines[int(line_number) - 1]
     assert gold.etan_digest_requirement == ETAN_DIGEST_REQUIREMENT
     assert ETAN_DIGEST_REQUIREMENT == (
@@ -245,3 +270,13 @@ def test_gold_scorer_rejects_unknown_decisions_and_out_of_range_confidence() -> 
     candidates[0] = CandidateCorrection(first.case_id, first.decision, 1.01, first.digest)
     with pytest.raises(ValueError, match="confidence"):
         score_correction_gold(candidates)
+
+
+def test_correction_gold_loader_rejects_unknown_schema(tmp_path: Path) -> None:
+    payload = json.loads(CORRECTION_GOLD_PATH.read_text(encoding="utf-8"))
+    payload["schema_version"] = 2
+    fixture_path = tmp_path / "future-gold.json"
+    fixture_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unsupported correction gold schema"):
+        load_correction_gold(fixture_path)

@@ -103,7 +103,11 @@ class OccurrenceLedger:
 
     @staticmethod
     def _occurrence_id(event: OccurrenceEvent) -> str:
-        identity = f"{event.scope}\0{event.fingerprint}".encode()
+        identity = json.dumps(
+            [event.scope, event.fingerprint],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode()
         return hashlib.sha256(identity).hexdigest()
 
     def record(self, event: OccurrenceEvent) -> OccurrenceReceipt:
@@ -147,6 +151,8 @@ class OccurrenceLedger:
 
 def load_correction_gold(path: Path = CORRECTION_GOLD_PATH) -> CorrectionGold:
     payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("schema_version") != 1:
+        raise ValueError("unsupported correction gold schema version")
     thresholds = CorrectionThresholds(**payload["thresholds"])
     cases = tuple(CorrectionGoldCase(**case) for case in payload["cases"])
     return CorrectionGold(
