@@ -2132,6 +2132,7 @@ No results found.
 
         let dbPath = tempDir.appendingPathComponent("brainbar.db").path
         let router = MCPRouter(profile: "full", dbPath: dbPath)
+        defer { withExtendedLifetime(router) {} }
 
         let response = router.handle([
             "jsonrpc": "2.0",
@@ -2482,6 +2483,7 @@ No results found.
         db.failNextStoreWithBusyForTesting = true
 
         let router = MCPRouter(profile: "full")
+        defer { withExtendedLifetime(router) {} }
         router.setDatabase(db)
 
         let queuedContent = "Queued current write survives one unreadable pending store queue snapshot"
@@ -2551,6 +2553,7 @@ No results found.
 
         let startupDrainQueue = DispatchQueue(label: "test.pending-store-startup-retry")
         let router = MCPRouter(profile: "full", pendingStoreDrainQueue: startupDrainQueue)
+        defer { withExtendedLifetime(router) {} }
         router.setDatabase(db)
         startupDrainQueue.sync {}
 
@@ -2591,6 +2594,7 @@ No results found.
         let blockedDB = BrainDatabase(path: tempDir.appendingPathComponent("blocked.db").path)
         defer { blockedDB.close() }
         let blockedRouter = MCPRouter(profile: "full", pendingStoreDrainQueue: blockedDrainQueue)
+        defer { withExtendedLifetime(blockedRouter) {} }
         blockedRouter.setDatabase(blockedDB)
 
         let drainingQueuePath = tempDir.appendingPathComponent("draining-pending-stores.jsonl")
@@ -2608,6 +2612,7 @@ No results found.
         )
 
         let drainingRouter = MCPRouter(profile: "full")
+        defer { withExtendedLifetime(drainingRouter) {} }
         drainingRouter.setDatabase(drainingDB)
 
         let deadline = Date().addingTimeInterval(1.5)
