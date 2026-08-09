@@ -198,6 +198,8 @@ def test_occurrence_ledger_rejects_ambiguous_timestamp_or_identity(
         ledger.record(OccurrenceEvent(**{**valid, "scope": " \t"}))
     with pytest.raises(ValueError, match="session_id"):
         ledger.record(OccurrenceEvent(**{**valid, "session_id": ""}))
+    with pytest.raises(ValueError, match="session_id"):
+        ledger.record(OccurrenceEvent(**{**valid, "session_id": " \t"}))
 
 
 def test_occurrence_ledger_accepts_equivalent_explicit_utc_timezone(
