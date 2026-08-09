@@ -1532,7 +1532,7 @@ final class MCPRouter: @unchecked Sendable {
         ],
         [
             "name": "brain_store",
-            "description": "Save a decision, learning, mistake, idea, or todo to durable memory so future sessions can retrieve it with brain_search. Returns the new chunk_id. Add tags, importance (1-10), and project to improve later retrieval. For digesting long raw text use brain_digest instead.",
+            "description": "Save a decision, learning, mistake, idea, or todo to durable memory so future sessions can retrieve it with brain_search. Returns the new chunk_id. Add tags, importance (1-10), and project to improve later retrieval. A STORED (deferred) result is SUCCESS: the memory is durably queued while the DB is busy and the drain persists it automatically \u{2014} never call brain_store again for it and never save a fallback copy. For digesting long raw text use brain_digest instead.",
             "annotations": MCPRouter.writeAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",

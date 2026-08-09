@@ -158,7 +158,10 @@ def format_recalled_context(query: str, chunks: list[dict]) -> str:
 def format_store_result(chunk_id: str, superseded: str | None = None, queued: bool = False) -> str:
     """Format store confirmation as a clean one-liner."""
     if queued:
-        return f"\u2502 DEFERRED: Memory queued (DB busy) \u2192 {chunk_id} \u2500 drain will persist it."
+        return (
+            f"\u2502 \u2714 STORED (deferred): DB busy \u2192 {chunk_id} \u2500 durably queued; "
+            "the drain persists it automatically. Do NOT re-store or save a fallback copy."
+        )
 
     parts = [f"\u2714 Stored \u2192 {chunk_id}"]
     if superseded:

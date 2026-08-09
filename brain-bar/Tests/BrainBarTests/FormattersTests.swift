@@ -106,7 +106,8 @@ final class FormattersTests: XCTestCase {
         XCTAssertTrue(out.contains("DEFERRED"))
         XCTAssertEqual(
             out,
-            "\u{2502} DEFERRED: Memory queued (DB busy) \u{2192} brainbar-queued123 \u{2500} drain will persist it."
+            "\u{2502} \u{2714} STORED (deferred): DB busy \u{2192} brainbar-queued123 \u{2500} durably queued; "
+                + "the drain persists it automatically. Do NOT re-store or save a fallback copy."
         )
         XCTAssertFalse(out.contains("\u{1b}["))
     }
