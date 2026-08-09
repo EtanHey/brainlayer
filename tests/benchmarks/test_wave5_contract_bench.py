@@ -504,6 +504,38 @@ def test_occurrence_ledger_rejects_ambiguous_timestamp_or_identity(
     assert ledger.weave_accumulation(through=FIXED_NOW.date()) == ()
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("fingerprint", None, "fingerprint and scope"),
+        ("fingerprint", 1, "fingerprint and scope"),
+        ("scope", False, "fingerprint and scope"),
+        ("scope", b"host:m2", "fingerprint and scope"),
+        ("session_id", None, "session_id"),
+        ("session_id", 2, "session_id"),
+    ],
+)
+def test_occurrence_ledger_rejects_non_string_identity_without_writing(
+    ledger_factory: LedgerFactory,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    ledger = ledger_factory()
+    values = {
+        "fingerprint": "sqlite-wal-checkpoint-starvation",
+        "scope": "host:m2/service:brainlayer-watch",
+        "session_id": "session-a",
+        "occurred_at": FIXED_NOW,
+        "severity": 2,
+        field: value,
+    }
+
+    with pytest.raises(ValueError, match=message):
+        ledger.record(OccurrenceEvent(**values))  # type: ignore[arg-type]
+    assert ledger.weave_accumulation(through=FIXED_NOW.date()) == ()
+
+
 @pytest.mark.parametrize("severity", [True, "2", 2.0, float("nan"), -1])
 def test_occurrence_ledger_rejects_malformed_severity_without_writing(
     ledger_factory: LedgerFactory,

@@ -172,9 +172,14 @@ class OccurrenceLedger:
         return hashlib.sha256(identity).hexdigest()
 
     def record(self, event: OccurrenceEvent) -> OccurrenceReceipt:
-        if not event.fingerprint.strip() or not event.scope.strip():
+        if (
+            type(event.fingerprint) is not str
+            or type(event.scope) is not str
+            or not event.fingerprint.strip()
+            or not event.scope.strip()
+        ):
             raise ValueError("fingerprint and scope are required")
-        if not event.session_id.strip():
+        if type(event.session_id) is not str or not event.session_id.strip():
             raise ValueError("session_id is required")
         if event.occurred_at.tzinfo is None or event.occurred_at.utcoffset() != timedelta(0):
             raise ValueError("occurred_at must be an explicit UTC timestamp")
