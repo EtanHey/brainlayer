@@ -340,7 +340,7 @@ def test_weave_feed_accumulates_by_event_day_until_weave_is_invoked(
     next_day = feed_by_key[(date(2026, 8, 10), occurrence_id)]
     assert (next_day.event_count, next_day.session_ids) == (1, ("session-b",))
     assert ledger.weave_accumulation(through=date(2026, 8, 10)) == ()
-    ledger.record(
+    late_receipt = ledger.record(
         OccurrenceEvent(
             fingerprint="sqlite-wal-checkpoint-starvation",
             scope="host:m2/service:brainlayer-watch",
@@ -348,6 +348,15 @@ def test_weave_feed_accumulates_by_event_day_until_weave_is_invoked(
             occurred_at=FIXED_NOW + timedelta(minutes=20),
             severity=2,
         )
+    )
+    assert (
+        late_receipt.alert,
+        late_receipt.event_count,
+        late_receipt.session_ids,
+    ) == (
+        None,
+        6,
+        ("session-a", "session-b", "session-c", "session-d", "session-late"),
     )
     assert ledger.weave_accumulation(through=date(2026, 8, 10)) == (
         DailyOccurrence(
