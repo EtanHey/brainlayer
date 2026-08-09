@@ -96,7 +96,11 @@ def test_occurrence_identity_includes_semantic_fingerprint_and_scope(
     assert first.occurrence_id != other_scope.occurrence_id
     assert first.occurrence_id != other_fingerprint.occurrence_id
     assert other_scope.alert == "new"
+    assert other_scope.event_count == 1
+    assert other_scope.session_ids == ("session-a",)
     assert other_fingerprint.alert == "new"
+    assert other_fingerprint.event_count == 1
+    assert other_fingerprint.session_ids == ("session-a",)
 
 
 def test_occurrence_identity_has_no_delimiter_collision(
@@ -107,6 +111,16 @@ def test_occurrence_identity_has_no_delimiter_collision(
     second = ledger.record(OccurrenceEvent("c", "a\0b", "session-b", FIXED_NOW, 1))
 
     assert first.occurrence_id != second.occurrence_id
+    assert (first.alert, first.event_count, first.session_ids) == (
+        "new",
+        1,
+        ("session-a",),
+    )
+    assert (second.alert, second.event_count, second.session_ids) == (
+        "new",
+        1,
+        ("session-b",),
+    )
 
 
 def test_cross_session_repeats_dedupe_without_losing_event_provenance(
@@ -237,6 +251,11 @@ def test_weave_feed_accumulates_by_event_day_until_weave_is_invoked(
             severity=2,
         )
     )
+    assert (
+        other_occurrence.alert,
+        other_occurrence.event_count,
+        other_occurrence.session_ids,
+    ) == ("new", 1, ("session-e",))
 
     feed = ledger.weave_accumulation(through=date(2026, 8, 10))
 
