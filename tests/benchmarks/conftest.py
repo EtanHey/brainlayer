@@ -11,19 +11,6 @@ from tests.benchmarks.wave5_contract import (
 )
 
 
-def pytest_addoption(parser: pytest.Parser) -> None:
-    parser.addoption(
-        "--wave5-ledger-factory",
-        metavar="MODULE:ATTRIBUTE",
-        help="Run the Wave 5 ledger contract against an external factory.",
-    )
-    parser.addoption(
-        "--wave5-candidate-producer",
-        metavar="MODULE:ATTRIBUTE",
-        help="Run the Wave 5 correction benchmark against an external producer.",
-    )
-
-
 def _load_ledger_factory(reference: str) -> LedgerFactory:
     module_name, separator, attribute_name = reference.partition(":")
     if not module_name or not separator or not attribute_name:
