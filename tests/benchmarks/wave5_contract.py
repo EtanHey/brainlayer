@@ -11,6 +11,7 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import Callable, Protocol
 
 ETAN_DIGEST_REQUIREMENT = (
     "I should get a summarized version of what's superseding what, and be the human in the loop for some of it"
@@ -59,7 +60,6 @@ class CorrectionGoldCase:
 @dataclass(frozen=True)
 class CorrectionThresholds:
     min_auto_confidence: float
-    min_precision: float
     min_recall: float
     max_false_positives: int
     min_digest_fidelity: float
@@ -94,12 +94,24 @@ class CorrectionBenchReport:
     rollback_rules: tuple[str, ...]
 
 
+class Ledger(Protocol):
+    """Seam implemented by the reference oracle and future production ledger."""
+
+    def record(self, event: OccurrenceEvent) -> OccurrenceReceipt: ...
+
+    def weave_accumulation(self, *, through: date) -> tuple[DailyOccurrence, ...]: ...
+
+
+LedgerFactory = Callable[[], Ledger]
+
+
 class OccurrenceLedger:
     """In-memory oracle for the immutable occurrence-ledger contract."""
 
     def __init__(self) -> None:
         self.events: list[OccurrenceEvent] = []
         self.receipts: list[OccurrenceReceipt] = []
+        self._weave_delivered: set[int] = set()
 
     @staticmethod
     def _occurrence_id(event: OccurrenceEvent) -> str:
@@ -137,16 +149,22 @@ class OccurrenceLedger:
 
     def weave_accumulation(self, *, through: date) -> tuple[DailyOccurrence, ...]:
         daily_counts: dict[tuple[date, str], int] = {}
-        for event in self.events:
+        delivered_now: list[int] = []
+        for index, event in enumerate(self.events):
+            if index in self._weave_delivered:
+                continue
             event_day = event.occurred_at.date()
             if event_day > through:
                 continue
             key = (event_day, self._occurrence_id(event))
             daily_counts[key] = daily_counts.get(key, 0) + 1
-        return tuple(
+            delivered_now.append(index)
+        feed = tuple(
             DailyOccurrence(day=day, occurrence_id=occurrence_id, event_count=count)
             for (day, occurrence_id), count in sorted(daily_counts.items())
         )
+        self._weave_delivered.update(delivered_now)
+        return feed
 
 
 def load_correction_gold(path: Path = CORRECTION_GOLD_PATH) -> CorrectionGold:
@@ -155,6 +173,28 @@ def load_correction_gold(path: Path = CORRECTION_GOLD_PATH) -> CorrectionGold:
         raise ValueError("unsupported correction gold schema version")
     thresholds = CorrectionThresholds(**payload["thresholds"])
     cases = tuple(CorrectionGoldCase(**case) for case in payload["cases"])
+    for case in cases:
+        if case.expected_decision not in {"supersede", "keep_both"}:
+            raise ValueError(f"invalid expected_decision for {case.case_id}")
+        required_text = (
+            case.case_id,
+            case.source_pointer,
+            case.source_excerpt,
+            case.historical_claim,
+            case.corrected_claim,
+            case.scope,
+            case.entity,
+            case.attribute,
+        )
+        if not all(value.strip() for value in required_text):
+            raise ValueError(f"non-empty case content required for {case.case_id}")
+        if case.expected_decision == "supersede":
+            if case.expected_digest is None:
+                raise ValueError(f"supersede digest required for {case.case_id}")
+            if not all(field in case.expected_digest for field in (case.entity, case.attribute, case.source_pointer)):
+                raise ValueError(f"digest must name entity, attribute, and source for {case.case_id}")
+        elif case.expected_digest is not None:
+            raise ValueError(f"keep_both digest must be null for {case.case_id}")
     return CorrectionGold(
         cases=cases,
         thresholds=thresholds,
@@ -206,8 +246,6 @@ def score_correction_gold(
     thresholds = benchmark.thresholds
     if false_positives > thresholds.max_false_positives:
         blockers.append("false-positive budget")
-    if precision < thresholds.min_precision:
-        blockers.append("precision threshold")
     if recall < thresholds.min_recall:
         blockers.append("recall threshold")
     if digest_fidelity < thresholds.min_digest_fidelity:

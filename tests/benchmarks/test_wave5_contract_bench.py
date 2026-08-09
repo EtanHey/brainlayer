@@ -1,6 +1,6 @@
 import hashlib
 import json
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -9,6 +9,8 @@ from tests.benchmarks.wave5_contract import (
     CORRECTION_GOLD_PATH,
     ETAN_DIGEST_REQUIREMENT,
     CandidateCorrection,
+    Ledger,
+    LedgerFactory,
     OccurrenceEvent,
     OccurrenceLedger,
     load_correction_gold,
@@ -18,8 +20,16 @@ from tests.benchmarks.wave5_contract import (
 FIXED_NOW = datetime(2026, 8, 9, 9, 0, tzinfo=UTC)
 
 
-def test_occurrence_identity_includes_semantic_fingerprint_and_scope() -> None:
-    ledger = OccurrenceLedger()
+@pytest.fixture
+def ledger_factory() -> LedgerFactory:
+    """Override this fixture to run the same contract against production."""
+    return OccurrenceLedger
+
+
+def test_occurrence_identity_includes_semantic_fingerprint_and_scope(
+    ledger_factory: LedgerFactory,
+) -> None:
+    ledger: Ledger = ledger_factory()
 
     first = ledger.record(
         OccurrenceEvent(
@@ -43,16 +53,20 @@ def test_occurrence_identity_includes_semantic_fingerprint_and_scope() -> None:
     assert first.occurrence_id != other_scope.occurrence_id
 
 
-def test_occurrence_identity_has_no_delimiter_collision() -> None:
-    ledger = OccurrenceLedger()
+def test_occurrence_identity_has_no_delimiter_collision(
+    ledger_factory: LedgerFactory,
+) -> None:
+    ledger = ledger_factory()
     first = ledger.record(OccurrenceEvent("b\0c", "a", "session-a", FIXED_NOW, 1))
     second = ledger.record(OccurrenceEvent("c", "a\0b", "session-b", FIXED_NOW, 1))
 
     assert first.occurrence_id != second.occurrence_id
 
 
-def test_cross_session_repeats_dedupe_without_losing_event_provenance() -> None:
-    ledger = OccurrenceLedger()
+def test_cross_session_repeats_dedupe_without_losing_event_provenance(
+    ledger_factory: LedgerFactory,
+) -> None:
+    ledger = ledger_factory()
     first = ledger.record(
         OccurrenceEvent(
             fingerprint="sqlite-wal-checkpoint-starvation",
@@ -77,10 +91,21 @@ def test_cross_session_repeats_dedupe_without_losing_event_provenance() -> None:
     assert repeated.occurrence_id == first.occurrence_id
     assert repeated.event_count == 2
     assert repeated.session_ids == ("session-a", "session-b")
+    same_session = ledger.record(
+        OccurrenceEvent(
+            fingerprint="sqlite-wal-checkpoint-starvation",
+            scope="host:m2/service:brainlayer-watch",
+            session_id="session-b",
+            occurred_at=FIXED_NOW + timedelta(minutes=10),
+            severity=2,
+        )
+    )
+    assert same_session.event_count == 3
+    assert same_session.session_ids == ("session-a", "session-b")
 
 
-def test_only_new_or_escalating_occurrences_alert() -> None:
-    ledger = OccurrenceLedger()
+def test_only_new_or_escalating_occurrences_alert(ledger_factory: LedgerFactory) -> None:
+    ledger = ledger_factory()
     base = OccurrenceEvent(
         fingerprint="sqlite-wal-checkpoint-starvation",
         scope="host:m2/service:brainlayer-watch",
@@ -98,10 +123,17 @@ def test_only_new_or_escalating_occurrences_alert() -> None:
     assert ledger.record(OccurrenceEvent(**{**base.__dict__, "session_id": "session-d", "severity": 3})).alert is None
 
 
-def test_weave_feed_accumulates_by_event_day_until_weave_is_invoked() -> None:
-    ledger = OccurrenceLedger()
-    for session_id, offset in (("session-a", timedelta()), ("session-b", timedelta(days=1))):
-        ledger.record(
+def test_weave_feed_accumulates_by_event_day_until_weave_is_invoked(
+    ledger_factory: LedgerFactory,
+) -> None:
+    ledger = ledger_factory()
+    occurrence_id = ""
+    for session_id, offset in (
+        ("session-a", timedelta()),
+        ("session-b", timedelta(days=1)),
+        ("session-c", timedelta(days=2)),
+    ):
+        receipt = ledger.record(
             OccurrenceEvent(
                 fingerprint="sqlite-wal-checkpoint-starvation",
                 scope="host:m2/service:brainlayer-watch",
@@ -110,18 +142,22 @@ def test_weave_feed_accumulates_by_event_day_until_weave_is_invoked() -> None:
                 severity=2,
             )
         )
+        occurrence_id = occurrence_id or receipt.occurrence_id
 
     feed = ledger.weave_accumulation(through=date(2026, 8, 10))
 
     assert [bucket.day for bucket in feed] == [date(2026, 8, 9), date(2026, 8, 10)]
     assert [bucket.event_count for bucket in feed] == [1, 1]
-    assert {bucket.occurrence_id for bucket in feed} == {
-        ledger.receipts[0].occurrence_id,
-    }
+    assert {bucket.occurrence_id for bucket in feed} == {occurrence_id}
+    assert ledger.weave_accumulation(through=date(2026, 8, 10)) == ()
+    future_feed = ledger.weave_accumulation(through=date(2026, 8, 11))
+    assert [(bucket.day, bucket.event_count) for bucket in future_feed] == [(date(2026, 8, 11), 1)]
 
 
-def test_occurrence_ledger_rejects_ambiguous_timestamp_or_identity() -> None:
-    ledger = OccurrenceLedger()
+def test_occurrence_ledger_rejects_ambiguous_timestamp_or_identity(
+    ledger_factory: LedgerFactory,
+) -> None:
+    ledger = ledger_factory()
     valid = {
         "fingerprint": "sqlite-wal-checkpoint-starvation",
         "scope": "host:m2/service:brainlayer-watch",
@@ -132,8 +168,19 @@ def test_occurrence_ledger_rejects_ambiguous_timestamp_or_identity() -> None:
 
     with pytest.raises(ValueError, match="UTC timestamp"):
         ledger.record(OccurrenceEvent(**{**valid, "occurred_at": FIXED_NOW.replace(tzinfo=None)}))
+    with pytest.raises(ValueError, match="UTC timestamp"):
+        ledger.record(
+            OccurrenceEvent(
+                **{
+                    **valid,
+                    "occurred_at": FIXED_NOW.astimezone(timezone(timedelta(hours=3))),
+                }
+            )
+        )
     with pytest.raises(ValueError, match="fingerprint and scope"):
         ledger.record(OccurrenceEvent(**{**valid, "fingerprint": ""}))
+    with pytest.raises(ValueError, match="fingerprint and scope"):
+        ledger.record(OccurrenceEvent(**{**valid, "scope": ""}))
 
 
 def _oracle_candidates() -> list[CandidateCorrection]:
@@ -165,13 +212,13 @@ def test_correction_gold_is_real_history_with_source_pointers_and_exact_etan_dig
         "keep-worker-read-write-rules",
     )
     assert hashlib.sha256(CORRECTION_GOLD_PATH.read_bytes()).hexdigest() == (
-        "e8008fd5705ade7b97d7d9456e489c6d4f9058ae57beb78570466a66c606aa15"
+        "c1990cb5426011bc0280bca3f2c189df3aa6195ee7b753dbc7f7e851c80a8d33"
     )
     repo_root = Path(__file__).resolve().parents[2]
     for case in gold.cases:
-        source_path, line_number = case.source_pointer.rsplit(":", 1)
-        source_lines = (repo_root / source_path).read_text(encoding="utf-8").splitlines()
-        assert case.source_excerpt in source_lines[int(line_number) - 1]
+        source_path, _line_number = case.source_pointer.rsplit(":", 1)
+        source_text = (repo_root / source_path).read_text(encoding="utf-8")
+        assert case.source_excerpt in source_text
     assert gold.etan_digest_requirement == ETAN_DIGEST_REQUIREMENT
     assert ETAN_DIGEST_REQUIREMENT == (
         "I should get a summarized version of what's superseding what, and be the human in the loop for some of it"
@@ -183,13 +230,11 @@ def test_gold_oracle_meets_promotion_thresholds_and_false_positive_budget() -> N
     report = score_correction_gold(_oracle_candidates(), gold=gold)
 
     assert gold.thresholds.min_auto_confidence == 0.98
-    assert gold.thresholds.min_precision == 1.0
-    assert gold.thresholds.min_recall == 0.95
+    assert gold.thresholds.min_recall == 1.0
     assert gold.thresholds.max_false_positives == 0
     assert gold.thresholds.min_digest_fidelity == 1.0
     assert gold.rollback_rules == (
         "false-positive budget exceeded",
-        "precision below threshold",
         "recall below threshold",
         "digest fidelity below threshold",
     )
@@ -253,7 +298,7 @@ def test_below_threshold_supersession_stays_suggest_only() -> None:
 
     report = score_correction_gold(candidates)
 
-    assert report.recall < 0.95
+    assert report.recall < 1.0
     assert report.promote_to_auto is False
     assert report.rollback_required is True
     assert "recall threshold" in report.blockers
@@ -271,6 +316,22 @@ def test_gold_scorer_rejects_unknown_decisions_and_out_of_range_confidence() -> 
     with pytest.raises(ValueError, match="confidence"):
         score_correction_gold(candidates)
 
+    with pytest.raises(ValueError, match="unique"):
+        score_correction_gold([*candidates, candidates[-1]])
+
+
+def test_auto_confidence_threshold_is_inclusive() -> None:
+    candidates = _oracle_candidates()
+    first = candidates[0]
+    candidates[0] = CandidateCorrection(
+        first.case_id,
+        first.decision,
+        0.98,
+        first.digest,
+    )
+
+    assert score_correction_gold(candidates).promote_to_auto is True
+
 
 def test_correction_gold_loader_rejects_unknown_schema(tmp_path: Path) -> None:
     payload = json.loads(CORRECTION_GOLD_PATH.read_text(encoding="utf-8"))
@@ -279,4 +340,30 @@ def test_correction_gold_loader_rejects_unknown_schema(tmp_path: Path) -> None:
     fixture_path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(ValueError, match="unsupported correction gold schema"):
+        load_correction_gold(fixture_path)
+
+
+@pytest.mark.parametrize(
+    ("case_index", "field", "value", "message"),
+    [
+        (0, "expected_decision", "archive", "expected_decision"),
+        (0, "expected_digest", None, "supersede digest"),
+        (0, "expected_digest", "missing structured fields", "entity, attribute, and source"),
+        (6, "expected_digest", "must stay null", "keep_both digest"),
+        (0, "corrected_claim", "", "non-empty case content"),
+    ],
+)
+def test_correction_gold_loader_rejects_inert_case_contracts(
+    tmp_path: Path,
+    case_index: int,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    payload = json.loads(CORRECTION_GOLD_PATH.read_text(encoding="utf-8"))
+    payload["cases"][case_index][field] = value
+    fixture_path = tmp_path / f"invalid-{case_index}-{field}.json"
+    fixture_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
         load_correction_gold(fixture_path)

@@ -4,14 +4,12 @@
   "etan_digest_requirement": "I should get a summarized version of what's superseding what, and be the human in the loop for some of it",
   "thresholds": {
     "min_auto_confidence": 0.98,
-    "min_precision": 1.0,
-    "min_recall": 0.95,
+    "min_recall": 1.0,
     "max_false_positives": 0,
     "min_digest_fidelity": 1.0
   },
   "rollback_rules": [
     "false-positive budget exceeded",
-    "precision below threshold",
     "recall below threshold",
     "digest fidelity below threshold"
   ],
