@@ -68,6 +68,8 @@ def test_occurrence_identity_includes_semantic_fingerprint_and_scope(
     assert first.occurrence_id == hashlib.sha256(canonical_identity).hexdigest()
     assert first.occurrence_id != other_scope.occurrence_id
     assert first.occurrence_id != other_fingerprint.occurrence_id
+    assert other_scope.alert == "new"
+    assert other_fingerprint.alert == "new"
 
 
 def test_occurrence_identity_has_no_delimiter_collision(
@@ -178,16 +180,33 @@ def test_weave_feed_accumulates_by_event_day_until_weave_is_invoked(
             severity=2,
         )
     )
+    other_occurrence = ledger.record(
+        OccurrenceEvent(
+            fingerprint="sqlite-busy-write-contention",
+            scope="host:m2/service:brainlayer-watch",
+            session_id="session-e",
+            occurred_at=FIXED_NOW + timedelta(minutes=15),
+            severity=2,
+        )
+    )
 
     feed = ledger.weave_accumulation(through=date(2026, 8, 10))
 
-    assert [bucket.day for bucket in feed] == [date(2026, 8, 9), date(2026, 8, 10)]
-    assert [bucket.event_count for bucket in feed] == [3, 1]
-    assert {bucket.occurrence_id for bucket in feed} == {occurrence_id}
-    assert [bucket.session_ids for bucket in feed] == [
+    feed_by_key = {(bucket.day, bucket.occurrence_id): bucket for bucket in feed}
+    assert set(feed_by_key) == {
+        (date(2026, 8, 9), occurrence_id),
+        (date(2026, 8, 9), other_occurrence.occurrence_id),
+        (date(2026, 8, 10), occurrence_id),
+    }
+    primary_day = feed_by_key[(date(2026, 8, 9), occurrence_id)]
+    assert (primary_day.event_count, primary_day.session_ids) == (
+        3,
         ("session-a", "session-d"),
-        ("session-b",),
-    ]
+    )
+    other_day = feed_by_key[(date(2026, 8, 9), other_occurrence.occurrence_id)]
+    assert (other_day.event_count, other_day.session_ids) == (1, ("session-e",))
+    next_day = feed_by_key[(date(2026, 8, 10), occurrence_id)]
+    assert (next_day.event_count, next_day.session_ids) == (1, ("session-b",))
     assert ledger.weave_accumulation(through=date(2026, 8, 10)) == ()
     future_feed = ledger.weave_accumulation(through=date(2026, 8, 11))
     assert [(bucket.day, bucket.event_count) for bucket in future_feed] == [(date(2026, 8, 11), 1)]
