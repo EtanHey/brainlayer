@@ -43,6 +43,7 @@ MAX_BACKLOG_BATCH = 16
 DEFAULT_HOTLANE_WRITE_BUSY_TIMEOUT_MS = 1000
 MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 VECTOR_WRITE_YIELD_SECONDS = 0.005
+MAX_PENDING_CANDIDATE_SCAN_PAGES = 16
 HOT_CANDIDATE_SCAN_LIMIT = 256
 HOT_CANDIDATE_HEAD_LIMIT = HOT_CANDIDATE_SCAN_LIMIT // 2
 MAX_HOT_CANDIDATE_RETRIES = 256
@@ -398,7 +399,7 @@ def _pending_chunk_rows(store: VectorStore, *, limit: int) -> list[EmbedCandidat
     after_rowid = 0
     first_page = True
 
-    while len(candidates) < limit:
+    for _page in range(MAX_PENDING_CANDIDATE_SCAN_PAGES):
         if first_page:
             page_filter = ""
             bindings: tuple[object, ...] = (scan_limit,)
@@ -457,7 +458,7 @@ def _pending_chunk_rows(store: VectorStore, *, limit: int) -> list[EmbedCandidat
         after_created_at = id_rows[-1][1]
         after_rowid = int(id_rows[-1][2])
         first_page = False
-        if len(id_rows) < scan_limit:
+        if len(candidates) >= limit or len(id_rows) < scan_limit:
             break
 
     return candidates[:limit]

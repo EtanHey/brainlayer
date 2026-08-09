@@ -152,6 +152,39 @@ def test_pending_chunk_query_pages_past_a_full_window_of_empty_content(tmp_path,
         conn.close()
 
 
+def test_pending_chunk_query_bounds_pages_when_all_remaining_content_is_empty(tmp_path):
+    hotlane = _load_hotlane_module()
+    conn = sqlite3.connect(tmp_path / "all-empty.db")
+    conn.executescript(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT,
+            created_at TEXT,
+            archived_at TEXT,
+            superseded_by TEXT,
+            aggregated_into TEXT,
+            archived INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'active'
+        );
+        CREATE INDEX idx_chunks_created_at ON chunks(created_at);
+        CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY);
+        """
+    )
+    conn.executemany(
+        "INSERT INTO chunks (id, content, created_at) VALUES (?, '', ?)",
+        [(f"empty-{index:03d}", f"2026-08-01T00:{index:03d}:00Z") for index in range(100)],
+    )
+    statements = []
+    conn.set_trace_callback(statements.append)
+    try:
+        assert hotlane._pending_chunk_rows(SimpleNamespace(conn=conn), limit=1) == []
+        id_page_queries = [statement for statement in statements if "SELECT c.id, c.created_at, c.rowid" in statement]
+        assert len(id_page_queries) <= 16
+    finally:
+        conn.close()
+
+
 def test_hot_candidate_query_scans_a_bounded_recent_window_without_forcing_schema_index():
     hotlane = _load_hotlane_module()
     executed = []
