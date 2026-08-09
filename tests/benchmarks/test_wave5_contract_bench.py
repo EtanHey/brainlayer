@@ -360,12 +360,39 @@ def test_weave_feed_accumulates_by_event_day_until_weave_is_invoked(
         6,
         ("session-a", "session-b", "session-c", "session-d", "session-late"),
     )
+    post_escalation = ledger.record(
+        OccurrenceEvent(
+            fingerprint="sqlite-wal-checkpoint-starvation",
+            scope="host:m2/service:brainlayer-watch",
+            session_id="session-after-escalation",
+            occurred_at=FIXED_NOW + timedelta(minutes=25),
+            severity=3,
+        )
+    )
+    assert (
+        post_escalation.occurrence_id,
+        post_escalation.alert,
+        post_escalation.event_count,
+        post_escalation.session_ids,
+    ) == (
+        occurrence_id,
+        None,
+        7,
+        (
+            "session-a",
+            "session-b",
+            "session-c",
+            "session-d",
+            "session-late",
+            "session-after-escalation",
+        ),
+    )
     assert ledger.weave_accumulation(through=date(2026, 8, 10)) == (
         DailyOccurrence(
             day=date(2026, 8, 9),
             occurrence_id=occurrence_id,
-            event_count=1,
-            session_ids=("session-late",),
+            event_count=2,
+            session_ids=("session-late", "session-after-escalation"),
         ),
     )
     assert ledger.weave_accumulation(through=date(2026, 8, 10)) == ()
