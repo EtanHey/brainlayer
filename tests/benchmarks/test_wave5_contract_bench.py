@@ -134,12 +134,20 @@ def test_only_new_or_escalating_occurrences_alert(ledger_factory: LedgerFactory)
         severity=2,
     )
 
-    assert ledger.record(base).alert == "new"
+    new = ledger.record(base)
+    assert new.alert == "new"
+    assert new.event_count == 1
+    assert new.session_ids == ("session-a",)
     assert ledger.record(OccurrenceEvent(**{**base.__dict__, "session_id": "session-b", "severity": 1})).alert is None
     assert ledger.record(OccurrenceEvent(**{**base.__dict__, "session_id": "session-c", "severity": 2})).alert is None
-    assert (
-        ledger.record(OccurrenceEvent(**{**base.__dict__, "session_id": "session-d", "severity": 3})).alert
-        == "escalated"
+    escalated = ledger.record(OccurrenceEvent(**{**base.__dict__, "session_id": "session-d", "severity": 3}))
+    assert escalated.alert == "escalated"
+    assert escalated.event_count == 4
+    assert escalated.session_ids == (
+        "session-a",
+        "session-b",
+        "session-c",
+        "session-d",
     )
     assert ledger.record(OccurrenceEvent(**{**base.__dict__, "session_id": "session-e", "severity": 3})).alert is None
 
