@@ -675,6 +675,16 @@ _pending_replay_lock = threading.Lock()
 _pending_replay_active = False
 
 
+def rearm_stranded_pending_stores() -> bool:
+    """Re-arm the legacy replay if a prior process died with pending-stores.jsonl
+    non-empty after acknowledging the write. Returns True when a replay was armed."""
+    path = _get_pending_store_path()
+    if path.exists() and path.stat().st_size > 0:
+        _schedule_pending_store_replay()
+        return True
+    return False
+
+
 def _schedule_pending_store_replay() -> None:
     """The legacy pending-stores.jsonl fallback has no daemon watching it, but a
     DEFERRED receipt promises automatic persistence — so schedule a bounded

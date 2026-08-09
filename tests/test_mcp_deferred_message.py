@@ -46,3 +46,21 @@ def test_schema_mismatch_deferral_names_its_reason(tmp_path) -> None:
     msg = format_store_result("brainbar-x", queued=True, queued_reason="SCHEMA_FINGERPRINT_MISMATCH")
     assert "STORED (deferred): SCHEMA_FINGERPRINT_MISMATCH" in msg
     assert "DB busy" not in msg
+
+
+def test_startup_rearms_replay_when_legacy_queue_nonempty(monkeypatch, tmp_path) -> None:
+    """A stranded pending-stores.jsonl must re-arm replay at process start (codex round 4)."""
+    from brainlayer.mcp import store_handler
+
+    stranded = tmp_path / "pending-stores.jsonl"
+    stranded.write_text('{"chunk_id": "c1", "content": "x"}\n')
+    calls = []
+    monkeypatch.setattr(store_handler, "_get_pending_store_path", lambda: stranded)
+    monkeypatch.setattr(store_handler, "_schedule_pending_store_replay", lambda: calls.append(True))
+
+    assert store_handler.rearm_stranded_pending_stores() is True
+    assert calls == [True]
+
+    stranded.write_text("")
+    assert store_handler.rearm_stranded_pending_stores() is False
+    assert calls == [True]

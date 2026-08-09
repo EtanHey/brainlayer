@@ -1800,6 +1800,15 @@ def serve():
 
     install_parent_death_watcher()
 
+    # A prior process may have died after acknowledging a legacy-fallback store
+    # but before its replay ran; re-arm the replay so that receipt stays true.
+    try:
+        from .store_handler import rearm_stranded_pending_stores
+
+        rearm_stranded_pending_stores()
+    except Exception:
+        logger.debug("Startup pending-store replay arming failed", exc_info=True)
+
     # Validate configuration at startup
     config_errors = validate_config()
     fatal = [e for e in config_errors if e["severity"] == "error"]
