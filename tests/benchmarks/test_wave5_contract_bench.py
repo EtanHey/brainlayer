@@ -451,9 +451,11 @@ def test_correction_gold_loader_rejects_unknown_schema(tmp_path: Path) -> None:
     [
         ("min_auto_confidence", float("nan")),
         ("min_recall", float("inf")),
+        ("min_recall", True),
         ("min_recall", -0.01),
         ("min_digest_fidelity", 1.01),
         ("max_false_positives", -1),
+        ("max_false_positives", True),
         ("max_false_positives", 0.5),
     ],
 )
