@@ -41,6 +41,7 @@ class DailyOccurrence:
     day: date
     occurrence_id: str
     event_count: int
+    session_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -124,7 +125,7 @@ class OccurrenceLedger:
         return hashlib.sha256(identity).hexdigest()
 
     def record(self, event: OccurrenceEvent) -> OccurrenceReceipt:
-        if not event.fingerprint or not event.scope:
+        if not event.fingerprint.strip() or not event.scope.strip():
             raise ValueError("fingerprint and scope are required")
         if not event.session_id.strip():
             raise ValueError("session_id is required")
@@ -151,7 +152,7 @@ class OccurrenceLedger:
         return receipt
 
     def weave_accumulation(self, *, through: date) -> tuple[DailyOccurrence, ...]:
-        daily_counts: dict[tuple[date, str], int] = {}
+        daily_events: dict[tuple[date, str], list[OccurrenceEvent]] = {}
         delivered_now: list[int] = []
         for index, event in enumerate(self.events):
             if index in self._weave_delivered:
@@ -160,11 +161,16 @@ class OccurrenceLedger:
             if event_day > through:
                 continue
             key = (event_day, self._occurrence_id(event))
-            daily_counts[key] = daily_counts.get(key, 0) + 1
+            daily_events.setdefault(key, []).append(event)
             delivered_now.append(index)
         feed = tuple(
-            DailyOccurrence(day=day, occurrence_id=occurrence_id, event_count=count)
-            for (day, occurrence_id), count in sorted(daily_counts.items())
+            DailyOccurrence(
+                day=day,
+                occurrence_id=occurrence_id,
+                event_count=len(events),
+                session_ids=tuple(dict.fromkeys(event.session_id for event in events)),
+            )
+            for (day, occurrence_id), events in sorted(daily_events.items())
         )
         self._weave_delivered.update(delivered_now)
         return feed

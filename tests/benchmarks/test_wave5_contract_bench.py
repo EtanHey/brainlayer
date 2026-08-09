@@ -150,6 +150,7 @@ def test_weave_feed_accumulates_by_event_day_until_weave_is_invoked(
     assert [bucket.day for bucket in feed] == [date(2026, 8, 9), date(2026, 8, 10)]
     assert [bucket.event_count for bucket in feed] == [1, 1]
     assert {bucket.occurrence_id for bucket in feed} == {occurrence_id}
+    assert [bucket.session_ids for bucket in feed] == [("session-a",), ("session-b",)]
     assert ledger.weave_accumulation(through=date(2026, 8, 10)) == ()
     future_feed = ledger.weave_accumulation(through=date(2026, 8, 11))
     assert [(bucket.day, bucket.event_count) for bucket in future_feed] == [(date(2026, 8, 11), 1)]
@@ -182,6 +183,10 @@ def test_occurrence_ledger_rejects_ambiguous_timestamp_or_identity(
         ledger.record(OccurrenceEvent(**{**valid, "fingerprint": ""}))
     with pytest.raises(ValueError, match="fingerprint and scope"):
         ledger.record(OccurrenceEvent(**{**valid, "scope": ""}))
+    with pytest.raises(ValueError, match="fingerprint and scope"):
+        ledger.record(OccurrenceEvent(**{**valid, "fingerprint": " \t"}))
+    with pytest.raises(ValueError, match="fingerprint and scope"):
+        ledger.record(OccurrenceEvent(**{**valid, "scope": " \t"}))
     with pytest.raises(ValueError, match="session_id"):
         ledger.record(OccurrenceEvent(**{**valid, "session_id": ""}))
 
