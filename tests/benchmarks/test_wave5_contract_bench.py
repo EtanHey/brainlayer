@@ -149,6 +149,7 @@ def test_weave_feed_accumulates_by_event_day_until_weave_is_invoked(
 ) -> None:
     ledger = ledger_factory()
     occurrence_id = ""
+    cross_day_receipts = []
     for session_id, offset in (
         ("session-a", timedelta()),
         ("session-b", timedelta(days=1)),
@@ -163,7 +164,18 @@ def test_weave_feed_accumulates_by_event_day_until_weave_is_invoked(
                 severity=2,
             )
         )
+        cross_day_receipts.append(receipt)
         occurrence_id = occurrence_id or receipt.occurrence_id
+    assert cross_day_receipts[1].alert is None
+    assert cross_day_receipts[1].event_count == 2
+    assert cross_day_receipts[1].session_ids == ("session-a", "session-b")
+    assert cross_day_receipts[2].alert is None
+    assert cross_day_receipts[2].event_count == 3
+    assert cross_day_receipts[2].session_ids == (
+        "session-a",
+        "session-b",
+        "session-c",
+    )
     ledger.record(
         OccurrenceEvent(
             fingerprint="sqlite-wal-checkpoint-starvation",
@@ -257,6 +269,26 @@ def test_occurrence_ledger_rejects_ambiguous_timestamp_or_identity(
         ledger.record(OccurrenceEvent(**{**valid, "session_id": ""}))
     with pytest.raises(ValueError, match="session_id"):
         ledger.record(OccurrenceEvent(**{**valid, "session_id": " \t"}))
+    assert ledger.weave_accumulation(through=FIXED_NOW.date()) == ()
+
+
+@pytest.mark.parametrize("severity", [True, "2", 2.0, float("nan"), -1])
+def test_occurrence_ledger_rejects_malformed_severity_without_writing(
+    ledger_factory: LedgerFactory,
+    severity: object,
+) -> None:
+    ledger = ledger_factory()
+    event = OccurrenceEvent(
+        fingerprint="sqlite-wal-checkpoint-starvation",
+        scope="host:m2/service:brainlayer-watch",
+        session_id="session-a",
+        occurred_at=FIXED_NOW,
+        severity=severity,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(ValueError, match="severity must be a non-negative integer"):
+        ledger.record(event)
+    assert ledger.weave_accumulation(through=FIXED_NOW.date()) == ()
 
 
 def test_occurrence_ledger_accepts_equivalent_explicit_utc_timezone(

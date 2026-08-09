@@ -132,6 +132,8 @@ class OccurrenceLedger:
             raise ValueError("session_id is required")
         if event.occurred_at.tzinfo is None or event.occurred_at.utcoffset() != timedelta(0):
             raise ValueError("occurred_at must be an explicit UTC timestamp")
+        if type(event.severity) is not int or event.severity < 0:
+            raise ValueError("severity must be a non-negative integer")
         occurrence_id = self._occurrence_id(event)
         prior = [stored for stored in self.events if self._occurrence_id(stored) == occurrence_id]
         if not prior:
