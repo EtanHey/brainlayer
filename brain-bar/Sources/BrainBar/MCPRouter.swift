@@ -25,7 +25,7 @@ final class MCPRouter: @unchecked Sendable {
     ]
     private static let coreToolDescriptions: [String: String] = [
         "brain_search": "Search memory.",
-        "brain_store": "Store memory.",
+        "brain_store": "Store memory. A DEFERRED result is success (durably queued, auto-persisted) - never re-store.",
         "brain_recall": "Recall context.",
         "brain_expand": "Expand chunk.",
     ]
@@ -290,6 +290,21 @@ final class MCPRouter: @unchecked Sendable {
         readDatabase = readDB
         entityCache.load(from: readDB.dbHandle)
         entityCache.startRefreshTimer(db: readDB.dbHandle)
+        scheduleDrainForExistingPendingStores(db: writeDB)
+    }
+
+    /// Stores acknowledged before the database was injected (DB_NOT_OPEN queue path)
+    /// have no drain scheduled; without this, they persist only if a later store
+    /// happens to run. Schedule their drains as soon as a write handle exists.
+    private func scheduleDrainForExistingPendingStores(db: BrainDatabase) {
+        guard let snapshot = db.pendingStoreQueueSnapshotIfReadable() else { return }
+        for identity in snapshot.identityKeys where identity.hasPrefix("chunk:") {
+            Self.schedulePendingStoreDrain(
+                db: db,
+                chunkID: String(identity.dropFirst("chunk:".count)),
+                delay: Self.pendingStoreDrainInitialDelay
+            )
+        }
     }
 
     private func readDB() throws -> BrainDatabase {
@@ -918,7 +933,7 @@ final class MCPRouter: @unchecked Sendable {
     ) -> ToolOutput {
         let action = Self.deferredQueueAction(for: queuePath)
         return ToolOutput(
-            text: Formatters.formatStoreResult(chunkId: chunkID, queued: true, useColor: false),
+            text: Formatters.formatStoreResult(chunkId: chunkID, queued: true, queuedReason: reason, useColor: false),
             metadata: [
                 "queued": true,
                 "status": "DEFERRED",

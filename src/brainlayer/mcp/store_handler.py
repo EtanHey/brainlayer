@@ -862,7 +862,15 @@ async def _store(
             )
             _clear_hybrid_search_cache_if_loaded()
             structured = _deferred_store_receipt(promised_chunk_id, queue_path, reason=queue_reason)
-            return ([TextContent(type="text", text=format_store_result(promised_chunk_id, queued=True))], structured)
+            return (
+                [
+                    TextContent(
+                        type="text",
+                        text=format_store_result(promised_chunk_id, queued=True, queued_reason=queue_reason),
+                    )
+                ],
+                structured,
+            )
 
         from ..store import embed_hot_chunk, embed_pending_chunks, store_memory
         from ..vector_store import temporary_write_busy_timeout_ms

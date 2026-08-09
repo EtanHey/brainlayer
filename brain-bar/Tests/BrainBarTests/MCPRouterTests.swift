@@ -2114,7 +2114,7 @@ No results found.
         )
         XCTAssertEqual(
             text,
-            "\u{2502} \u{2714} STORED (deferred): DB busy \u{2192} \(chunkID) \u{2500} durably queued; "
+            "\u{2502} \u{2714} STORED (deferred): DB_NOT_OPEN \u{2192} \(chunkID) \u{2500} durably queued; "
                 + "the drain persists it automatically. Do NOT re-store or save a fallback copy."
         )
         XCTAssertFalse(text.contains("\u{1b}["))
@@ -2124,6 +2124,49 @@ No results found.
         XCTAssertEqual(queuedPayload["queue_id"] as? String, queueID)
         XCTAssertEqual(queuedPayload["queued_at"] as? String, queuedAt)
         XCTAssertEqual(queuedPayload["chunk_id"] as? String, chunkID)
+    }
+
+    func testPendingStoresDrainAfterDatabaseInjection() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let dbPath = tempDir.appendingPathComponent("brainbar.db").path
+        let router = MCPRouter(profile: "full", dbPath: dbPath)
+
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 90,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_store",
+                "arguments": [
+                    "content": "Queued before injection must drain once the database opens",
+                    "tags": ["drain-on-injection"],
+                    "importance": 6
+                ] as [String: Any]
+            ] as [String: Any]
+        ])
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertEqual(result["queued"] as? Bool, true)
+        let chunkID = try XCTUnwrap(result["chunk_id"] as? String)
+
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+        XCTAssertTrue(db.isOpen)
+        router.setDatabase(db)
+
+        let deadline = Date().addingTimeInterval(5)
+        var drained = false
+        while Date() < deadline {
+            if db.pendingStoreQueueSnapshot().depth == 0 {
+                drained = true
+                break
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        XCTAssertTrue(drained, "pending store queued before injection was never drained")
+        let results = try db.search(query: "Queued before injection must drain", limit: 5)
+        XCTAssertTrue(results.contains { ($0["chunk_id"] as? String) == chunkID })
     }
 
     func testBrainStoreQueuesWhenDatabaseHandleIsNotOpen() throws {
@@ -2171,7 +2214,7 @@ No results found.
         )
         XCTAssertEqual(
             text,
-            "\u{2502} \u{2714} STORED (deferred): DB busy \u{2192} \(chunkID) \u{2500} durably queued; "
+            "\u{2502} \u{2714} STORED (deferred): DB_NOT_OPEN \u{2192} \(chunkID) \u{2500} durably queued; "
                 + "the drain persists it automatically. Do NOT re-store or save a fallback copy."
         )
         XCTAssertFalse(text.contains("\u{1b}["))
