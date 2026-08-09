@@ -125,7 +125,7 @@ BrainLayer includes launchd plist templates for automated operation:
 | `com.brainlayer.drain` | Queue/WatchPaths trigger | Drain queued writes as the single writer |
 | `com.brainlayer.decay` | Weekly | Refresh decay metadata |
 | `com.brainlayer.repair-fts` | Weekly | Repair FTS indexes |
-| `com.brainlayer.wal-checkpoint` | Weekly | Checkpoint the WAL |
+| `com.brainlayer.wal-checkpoint` | Daily 09:30 | Checkpoint the WAL |
 | `com.brainlayer.backup-daily` | Daily | Backup the BrainLayer DB |
 | `com.brainlayer.jsonl-backup` | Daily | Backup Claude JSONL files |
 | `com.brainlayer.maintenance-nightly` | Nightly | Light maintenance |
