@@ -160,6 +160,7 @@ def test_cross_session_repeats_dedupe_without_losing_event_provenance(
             severity=2,
         )
     )
+    assert same_session.alert is None
     assert same_session.event_count == 3
     assert same_session.session_ids == ("session-a", "session-b")
 
