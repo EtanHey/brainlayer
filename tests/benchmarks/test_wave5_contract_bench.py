@@ -42,6 +42,24 @@ def _broken_candidate_producer(
     return [CandidateCorrection(case.case_id, "keep_both", 0.99, None) for case in cases]
 
 
+def _assert_pristine_state_after_rejection(ledger: Ledger, event: OccurrenceEvent) -> None:
+    receipt = ledger.record(event)
+    assert (receipt.alert, receipt.event_count, receipt.session_ids) == (
+        "new",
+        1,
+        (event.session_id,),
+    )
+    assert ledger.weave_accumulation(through=event.occurred_at.date()) == (
+        DailyOccurrence(
+            day=event.occurred_at.date(),
+            occurrence_id=receipt.occurrence_id,
+            event_count=1,
+            session_ids=(event.session_id,),
+        ),
+    )
+    assert ledger.weave_accumulation(through=event.occurred_at.date()) == ()
+
+
 def test_wave5_options_register_for_root_suite_without_collection() -> None:
     result = subprocess.run(
         [
@@ -501,13 +519,7 @@ def test_occurrence_ledger_rejects_ambiguous_timestamp_or_identity(
         ledger.record(OccurrenceEvent(**{**valid, "session_id": ""}))
     with pytest.raises(ValueError, match="session_id"):
         ledger.record(OccurrenceEvent(**{**valid, "session_id": " \t"}))
-    assert ledger.weave_accumulation(through=FIXED_NOW.date()) == ()
-    valid_receipt = ledger.record(OccurrenceEvent(**valid))
-    assert (
-        valid_receipt.alert,
-        valid_receipt.event_count,
-        valid_receipt.session_ids,
-    ) == ("new", 1, ("session-a",))
+    _assert_pristine_state_after_rejection(ledger, OccurrenceEvent(**valid))
 
 
 @pytest.mark.parametrize(
@@ -531,13 +543,7 @@ def test_occurrence_ledger_rejects_non_datetime_timestamp_without_writing(
         ledger.record(
             OccurrenceEvent(**{**valid, "occurred_at": occurred_at})  # type: ignore[arg-type]
         )
-    assert ledger.weave_accumulation(through=FIXED_NOW.date()) == ()
-    valid_receipt = ledger.record(OccurrenceEvent(**valid))
-    assert (
-        valid_receipt.alert,
-        valid_receipt.event_count,
-        valid_receipt.session_ids,
-    ) == ("new", 1, ("session-a",))
+    _assert_pristine_state_after_rejection(ledger, OccurrenceEvent(**valid))
 
 
 @pytest.mark.parametrize("field", ["fingerprint", "scope", "session_id"])
@@ -560,13 +566,7 @@ def test_occurrence_ledger_rejects_non_string_identity_without_writing(
 
     with pytest.raises(ValueError, match=message):
         ledger.record(OccurrenceEvent(**values))  # type: ignore[arg-type]
-    assert ledger.weave_accumulation(through=FIXED_NOW.date()) == ()
-    valid_receipt = ledger.record(OccurrenceEvent(**valid))
-    assert (
-        valid_receipt.alert,
-        valid_receipt.event_count,
-        valid_receipt.session_ids,
-    ) == ("new", 1, ("session-a",))
+    _assert_pristine_state_after_rejection(ledger, OccurrenceEvent(**valid))
 
 
 @pytest.mark.parametrize("severity", [True, "2", 2.0, float("nan"), -1])
@@ -585,21 +585,16 @@ def test_occurrence_ledger_rejects_malformed_severity_without_writing(
 
     with pytest.raises(ValueError, match="severity must be a non-negative integer"):
         ledger.record(event)
-    assert ledger.weave_accumulation(through=FIXED_NOW.date()) == ()
-    valid_receipt = ledger.record(
+    _assert_pristine_state_after_rejection(
+        ledger,
         OccurrenceEvent(
             fingerprint="sqlite-wal-checkpoint-starvation",
             scope="host:m2/service:brainlayer-watch",
             session_id="session-a",
             occurred_at=FIXED_NOW,
             severity=2,
-        )
+        ),
     )
-    assert (
-        valid_receipt.alert,
-        valid_receipt.event_count,
-        valid_receipt.session_ids,
-    ) == ("new", 1, ("session-a",))
 
 
 def test_occurrence_ledger_accepts_equivalent_explicit_utc_timezone(
