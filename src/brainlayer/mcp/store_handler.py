@@ -691,11 +691,15 @@ def _schedule_pending_store_replay() -> None:
             from ..paths import get_db_path
             from ..runtime_store import open_writer_store
 
-            for delay in (2, 5, 15, 60, 180):
+            # Retry until the file empties: a fixed window would re-strand the
+            # queue behind a persistent schema mismatch or long enrichment hold.
+            delay = 2.0
+            while True:
                 time.sleep(delay)
+                delay = min(delay * 2, 180.0)
                 path = _get_pending_store_path()
                 if not path.exists() or path.stat().st_size == 0:
-                    return
+                    break
                 store = None
                 try:
                     store = open_writer_store(get_db_path())
@@ -708,6 +712,11 @@ def _schedule_pending_store_replay() -> None:
         finally:
             with _pending_replay_lock:
                 _pending_replay_active = False
+        # A concurrent fallback may append between our last empty check and the
+        # flag clear above; re-arm rather than strand that write.
+        path = _get_pending_store_path()
+        if path.exists() and path.stat().st_size > 0:
+            _schedule_pending_store_replay()
 
     threading.Thread(target=_replay, daemon=True).start()
 

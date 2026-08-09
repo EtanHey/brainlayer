@@ -298,12 +298,28 @@ final class MCPRouter: @unchecked Sendable {
     /// happens to run. Schedule their drains as soon as a write handle exists.
     private func scheduleDrainForExistingPendingStores(db: BrainDatabase) {
         guard let snapshot = db.pendingStoreQueueSnapshotIfReadable() else { return }
+        var scheduledAny = false
         for identity in snapshot.identityKeys where identity.hasPrefix("chunk:") {
+            scheduledAny = true
             Self.schedulePendingStoreDrain(
                 db: db,
                 chunkID: String(identity.dropFirst("chunk:".count)),
                 delay: Self.pendingStoreDrainInitialDelay
             )
+        }
+        // Legacy entries written by older builds may lack chunk_id and thus
+        // contribute no identity keys; flush them directly so an upgrade does
+        // not strand acknowledged stores.
+        if !scheduledAny && snapshot.depth > 0 {
+            Self.pendingStoreDrainQueue.asyncAfter(
+                deadline: .now() + Self.pendingStoreDrainInitialDelay
+            ) { [weak db] in
+                guard let db, db.isOpen else { return }
+                _ = db.flushPendingStores(
+                    busyTimeoutMillis: Self.mcpStoreBusyTimeoutMillis,
+                    retries: Self.mcpStoreRetries
+                )
+            }
         }
     }
 
