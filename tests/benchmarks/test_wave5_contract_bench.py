@@ -43,7 +43,14 @@ def _broken_candidate_producer(
 
 
 def _assert_pristine_state_after_rejection(ledger: Ledger, event: OccurrenceEvent) -> None:
+    canonical_identity = json.dumps(
+        [event.scope, event.fingerprint],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode()
+    expected_occurrence_id = hashlib.sha256(canonical_identity).hexdigest()
     receipt = ledger.record(event)
+    assert receipt.occurrence_id == expected_occurrence_id
     assert (receipt.alert, receipt.event_count, receipt.session_ids) == (
         "new",
         1,
@@ -52,7 +59,7 @@ def _assert_pristine_state_after_rejection(ledger: Ledger, event: OccurrenceEven
     assert ledger.weave_accumulation(through=event.occurred_at.date()) == (
         DailyOccurrence(
             day=event.occurred_at.date(),
-            occurrence_id=receipt.occurrence_id,
+            occurrence_id=expected_occurrence_id,
             event_count=1,
             session_ids=(event.session_id,),
         ),
@@ -484,8 +491,28 @@ def test_weave_feed_accumulates_by_event_day_until_weave_is_invoked(
     assert ledger.weave_accumulation(through=date(2026, 8, 11)) == ()
 
 
-def test_occurrence_ledger_rejects_ambiguous_timestamp_or_identity(
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("occurred_at", FIXED_NOW.replace(tzinfo=None), "UTC timestamp"),
+        (
+            "occurred_at",
+            FIXED_NOW.astimezone(timezone(timedelta(hours=3))),
+            "UTC timestamp",
+        ),
+        ("fingerprint", "", "fingerprint and scope"),
+        ("scope", "", "fingerprint and scope"),
+        ("fingerprint", " \t", "fingerprint and scope"),
+        ("scope", " \t", "fingerprint and scope"),
+        ("session_id", "", "session_id"),
+        ("session_id", " \t", "session_id"),
+    ],
+)
+def test_occurrence_ledger_rejects_ambiguous_timestamp_or_identity_without_writing(
     ledger_factory: LedgerFactory,
+    field: str,
+    value: object,
+    message: str,
 ) -> None:
     ledger = ledger_factory()
     valid = {
@@ -496,29 +523,8 @@ def test_occurrence_ledger_rejects_ambiguous_timestamp_or_identity(
         "severity": 2,
     }
 
-    with pytest.raises(ValueError, match="UTC timestamp"):
-        ledger.record(OccurrenceEvent(**{**valid, "occurred_at": FIXED_NOW.replace(tzinfo=None)}))
-    with pytest.raises(ValueError, match="UTC timestamp"):
-        ledger.record(
-            OccurrenceEvent(
-                **{
-                    **valid,
-                    "occurred_at": FIXED_NOW.astimezone(timezone(timedelta(hours=3))),
-                }
-            )
-        )
-    with pytest.raises(ValueError, match="fingerprint and scope"):
-        ledger.record(OccurrenceEvent(**{**valid, "fingerprint": ""}))
-    with pytest.raises(ValueError, match="fingerprint and scope"):
-        ledger.record(OccurrenceEvent(**{**valid, "scope": ""}))
-    with pytest.raises(ValueError, match="fingerprint and scope"):
-        ledger.record(OccurrenceEvent(**{**valid, "fingerprint": " \t"}))
-    with pytest.raises(ValueError, match="fingerprint and scope"):
-        ledger.record(OccurrenceEvent(**{**valid, "scope": " \t"}))
-    with pytest.raises(ValueError, match="session_id"):
-        ledger.record(OccurrenceEvent(**{**valid, "session_id": ""}))
-    with pytest.raises(ValueError, match="session_id"):
-        ledger.record(OccurrenceEvent(**{**valid, "session_id": " \t"}))
+    with pytest.raises(ValueError, match=message):
+        ledger.record(OccurrenceEvent(**{**valid, field: value}))  # type: ignore[arg-type]
     _assert_pristine_state_after_rejection(ledger, OccurrenceEvent(**valid))
 
 
