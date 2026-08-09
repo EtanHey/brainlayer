@@ -2526,6 +2526,59 @@ No results found.
         XCTAssertFalse(FileManager.default.fileExists(atPath: queuePath.path))
     }
 
+    func testDeferredBrainStoreDrainIsNotBlockedByAnotherRouterScheduler() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let blockedDrainQueue = DispatchQueue(label: "test.pending-store-drain.blocked")
+        let blockerStarted = expectation(description: "first router drain queue is blocked")
+        let releaseBlocker = DispatchSemaphore(value: 0)
+        blockedDrainQueue.async {
+            blockerStarted.fulfill()
+            releaseBlocker.wait()
+        }
+        wait(for: [blockerStarted], timeout: 1.0)
+        defer { releaseBlocker.signal() }
+
+        let blockedDB = BrainDatabase(path: tempDir.appendingPathComponent("blocked.db").path)
+        defer { blockedDB.close() }
+        let blockedRouter = MCPRouter(profile: "full", pendingStoreDrainQueue: blockedDrainQueue)
+        blockedRouter.setDatabase(blockedDB)
+
+        let drainingQueuePath = tempDir.appendingPathComponent("draining-pending-stores.jsonl")
+        let restoreDrainingQueuePath = setPendingStoreQueuePath(drainingQueuePath)
+        defer { restoreDrainingQueuePath() }
+
+        let drainingDBPath = tempDir.appendingPathComponent("draining.db").path
+        let drainingDB = BrainDatabase(path: drainingDBPath)
+        defer { drainingDB.close() }
+        _ = try drainingDB.queuePendingStore(
+            content: "A router drain must not wait behind another router's scheduler",
+            tags: ["drain-isolation"],
+            importance: 7,
+            source: "mcp"
+        )
+
+        let drainingRouter = MCPRouter(profile: "full")
+        drainingRouter.setDatabase(drainingDB)
+
+        let deadline = Date().addingTimeInterval(1.5)
+        var storedContents: [String] = []
+        while Date() < deadline {
+            storedContents = (try? chunkContents(path: drainingDBPath)) ?? []
+            if storedContents.contains("A router drain must not wait behind another router's scheduler") {
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+
+        XCTAssertTrue(
+            storedContents.contains("A router drain must not wait behind another router's scheduler"),
+            "one router's blocked queue scan must not stall another router's deferred-store drain"
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: drainingQueuePath.path))
+    }
+
     func testBrainStoreFlushesPendingQueueAfterSuccessfulStore() throws {
         let tempDir = makeTempTestDirectory()
         defer { try? FileManager.default.removeItem(at: tempDir) }
