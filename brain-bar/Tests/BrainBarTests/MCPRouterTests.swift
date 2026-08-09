@@ -2114,7 +2114,8 @@ No results found.
         )
         XCTAssertEqual(
             text,
-            "\u{2502} DEFERRED: Memory queued (DB busy) \u{2192} \(chunkID) \u{2500} drain will persist it."
+            "\u{2502} \u{2714} STORED (deferred): DB_NOT_OPEN \u{2192} \(chunkID) \u{2500} durably queued; "
+                + "the drain persists it automatically. Do NOT re-store or save a fallback copy."
         )
         XCTAssertFalse(text.contains("\u{1b}["))
 
@@ -2123,6 +2124,50 @@ No results found.
         XCTAssertEqual(queuedPayload["queue_id"] as? String, queueID)
         XCTAssertEqual(queuedPayload["queued_at"] as? String, queuedAt)
         XCTAssertEqual(queuedPayload["chunk_id"] as? String, chunkID)
+    }
+
+    func testPendingStoresDrainAfterDatabaseInjection() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let dbPath = tempDir.appendingPathComponent("brainbar.db").path
+        let router = MCPRouter(profile: "full", dbPath: dbPath)
+        defer { withExtendedLifetime(router) {} }
+
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 90,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_store",
+                "arguments": [
+                    "content": "Queued before injection must drain once the database opens",
+                    "tags": ["drain-on-injection"],
+                    "importance": 6
+                ] as [String: Any]
+            ] as [String: Any]
+        ])
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertEqual(result["queued"] as? Bool, true)
+        let chunkID = try XCTUnwrap(result["chunk_id"] as? String)
+
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+        XCTAssertTrue(db.isOpen)
+        router.setDatabase(db)
+
+        let deadline = Date().addingTimeInterval(5)
+        var drained = false
+        while Date() < deadline {
+            if db.pendingStoreQueueSnapshot().depth == 0 {
+                drained = true
+                break
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        XCTAssertTrue(drained, "pending store queued before injection was never drained")
+        let results = try db.search(query: "Queued before injection must drain", limit: 5)
+        XCTAssertTrue(results.contains { ($0["chunk_id"] as? String) == chunkID })
     }
 
     func testBrainStoreQueuesWhenDatabaseHandleIsNotOpen() throws {
@@ -2170,7 +2215,8 @@ No results found.
         )
         XCTAssertEqual(
             text,
-            "\u{2502} DEFERRED: Memory queued (DB busy) \u{2192} \(chunkID) \u{2500} drain will persist it."
+            "\u{2502} \u{2714} STORED (deferred): DB_NOT_OPEN \u{2192} \(chunkID) \u{2500} durably queued; "
+                + "the drain persists it automatically. Do NOT re-store or save a fallback copy."
         )
         XCTAssertFalse(text.contains("\u{1b}["))
 
@@ -2229,7 +2275,8 @@ No results found.
         )
         XCTAssertEqual(
             text,
-            "\u{2502} DEFERRED: Memory queued (DB busy) \u{2192} \(chunkID) \u{2500} drain will persist it."
+            "\u{2502} \u{2714} STORED (deferred): DB busy \u{2192} \(chunkID) \u{2500} durably queued; "
+                + "the drain persists it automatically. Do NOT re-store or save a fallback copy."
         )
         XCTAssertFalse(text.contains("\u{1b}["))
         XCTAssertTrue(FileManager.default.fileExists(atPath: queuePath.path))
@@ -2436,6 +2483,7 @@ No results found.
         db.failNextStoreWithBusyForTesting = true
 
         let router = MCPRouter(profile: "full")
+        defer { withExtendedLifetime(router) {} }
         router.setDatabase(db)
 
         let queuedContent = "Queued current write survives one unreadable pending store queue snapshot"
@@ -2478,6 +2526,110 @@ No results found.
             "deferred drain should retry instead of treating an unreadable queue snapshot as an empty queue"
         )
         XCTAssertFalse(FileManager.default.fileExists(atPath: queuePath.path))
+    }
+
+    func testStartupDrainRetriesAfterTransientQueueReadFailure() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        let restoreQueuePath = setPendingStoreQueuePath(queuePath)
+        defer { restoreQueuePath() }
+
+        let dbPath = tempDir.appendingPathComponent("brainbar.db").path
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+        _ = try db.queuePendingStore(
+            content: "Startup drain survives one unreadable pending store queue snapshot",
+            tags: ["startup-retry"],
+            importance: 7,
+            source: "mcp",
+            chunkID: "brainbar-startup-retry"
+        )
+        let queuedText = try String(contentsOf: queuePath, encoding: .utf8)
+
+        try FileManager.default.removeItem(at: queuePath)
+        try FileManager.default.createDirectory(at: queuePath, withIntermediateDirectories: false)
+
+        let startupDrainQueue = DispatchQueue(label: "test.pending-store-startup-retry")
+        let router = MCPRouter(profile: "full", pendingStoreDrainQueue: startupDrainQueue)
+        defer { withExtendedLifetime(router) {} }
+        router.setDatabase(db)
+        startupDrainQueue.sync {}
+
+        try FileManager.default.removeItem(at: queuePath)
+        try queuedText.write(to: queuePath, atomically: true, encoding: .utf8)
+
+        let deadline = Date().addingTimeInterval(2.0)
+        var storedContents: [String] = []
+        while Date() < deadline {
+            storedContents = (try? chunkContents(path: dbPath)) ?? []
+            if storedContents.contains("Startup drain survives one unreadable pending store queue snapshot") {
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+
+        XCTAssertTrue(
+            storedContents.contains("Startup drain survives one unreadable pending store queue snapshot"),
+            "startup drain should retry when its first pending-store queue snapshot is unreadable"
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: queuePath.path))
+    }
+
+    func testDeferredBrainStoreDrainIsNotBlockedByAnotherRouterScheduler() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let blockedDrainQueue = DispatchQueue(label: "test.pending-store-drain.blocked")
+        let blockerStarted = expectation(description: "first router drain queue is blocked")
+        let releaseBlocker = DispatchSemaphore(value: 0)
+        blockedDrainQueue.async {
+            blockerStarted.fulfill()
+            releaseBlocker.wait()
+        }
+        wait(for: [blockerStarted], timeout: 1.0)
+        defer { releaseBlocker.signal() }
+
+        let blockedDB = BrainDatabase(path: tempDir.appendingPathComponent("blocked.db").path)
+        defer { blockedDB.close() }
+        let blockedRouter = MCPRouter(profile: "full", pendingStoreDrainQueue: blockedDrainQueue)
+        defer { withExtendedLifetime(blockedRouter) {} }
+        blockedRouter.setDatabase(blockedDB)
+
+        let drainingQueuePath = tempDir.appendingPathComponent("draining-pending-stores.jsonl")
+        let restoreDrainingQueuePath = setPendingStoreQueuePath(drainingQueuePath)
+        defer { restoreDrainingQueuePath() }
+
+        let drainingDBPath = tempDir.appendingPathComponent("draining.db").path
+        let drainingDB = BrainDatabase(path: drainingDBPath)
+        defer { drainingDB.close() }
+        _ = try drainingDB.queuePendingStore(
+            content: "A router drain must not wait behind another router's scheduler",
+            tags: ["drain-isolation"],
+            importance: 7,
+            source: "mcp"
+        )
+
+        let drainingRouter = MCPRouter(profile: "full")
+        defer { withExtendedLifetime(drainingRouter) {} }
+        drainingRouter.setDatabase(drainingDB)
+
+        let deadline = Date().addingTimeInterval(1.5)
+        var storedContents: [String] = []
+        while Date() < deadline {
+            storedContents = (try? chunkContents(path: drainingDBPath)) ?? []
+            if storedContents.contains("A router drain must not wait behind another router's scheduler") {
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+
+        XCTAssertTrue(
+            storedContents.contains("A router drain must not wait behind another router's scheduler"),
+            "one router's blocked queue scan must not stall another router's deferred-store drain"
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: drainingQueuePath.path))
     }
 
     func testBrainStoreFlushesPendingQueueAfterSuccessfulStore() throws {

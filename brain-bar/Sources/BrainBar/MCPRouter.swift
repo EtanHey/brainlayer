@@ -25,7 +25,7 @@ final class MCPRouter: @unchecked Sendable {
     ]
     private static let coreToolDescriptions: [String: String] = [
         "brain_search": "Search memory.",
-        "brain_store": "Store memory.",
+        "brain_store": "Store memory; DEFERRED = stored.",
         "brain_recall": "Recall context.",
         "brain_expand": "Expand chunk.",
     ]
@@ -48,11 +48,6 @@ final class MCPRouter: @unchecked Sendable {
     // attempt (retries == 0) with a sub-budget busy timeout, then queues on busy.
     private static let mcpStoreBusyTimeoutMillis: Int32 = 25
     private static let mcpStoreRetries = 0
-    private static let pendingStoreDrainQueue = DispatchQueue(
-        label: "com.brainlayer.brainbar.pending-store-drain",
-        qos: .utility
-    )
-    private static let pendingStoreDrainRegistry = PendingStoreDrainRegistry()
     private static let pendingStoreDrainInitialDelay: TimeInterval = 0.25
     private static let pendingStoreDrainMaxDelay: TimeInterval = 30.0
 
@@ -140,12 +135,22 @@ final class MCPRouter: @unchecked Sendable {
         }
     }
 
+    private final class PendingStoreDrainScheduler: @unchecked Sendable {
+        let queue: DispatchQueue
+        let registry = PendingStoreDrainRegistry()
+
+        init(queue: DispatchQueue) {
+            self.queue = queue
+        }
+    }
+
     private var database: BrainDatabase?
     private var readDatabase: BrainDatabase?
     private let hybridSearchClient: HybridSearchClientProtocol?
     private let dbPath: String?
     private let hybridSearchBudget: TimeInterval
     private let toolProfile: ToolProfile
+    private let pendingStoreDrainScheduler: PendingStoreDrainScheduler
     private let defaultPaletteSession = PaletteSession()
     let entityCache = EntityCache()
     private static let defaultStringMaxLength = 256
@@ -178,12 +183,19 @@ final class MCPRouter: @unchecked Sendable {
         hybridSearchClient: HybridSearchClientProtocol? = nil,
         hybridSearchBudget: TimeInterval = 0.8,
         dbPath: String? = nil,
+        pendingStoreDrainQueue: DispatchQueue? = nil,
         backupWriterStartedAtUnix: TimeInterval = Date().timeIntervalSince1970
     ) {
         self.toolProfile = Self.resolveToolProfile(profile)
         self.hybridSearchClient = hybridSearchClient
         self.hybridSearchBudget = max(0.001, hybridSearchBudget)
         self.dbPath = dbPath
+        self.pendingStoreDrainScheduler = PendingStoreDrainScheduler(
+            queue: pendingStoreDrainQueue ?? DispatchQueue(
+                label: "com.brainlayer.brainbar.pending-store-drain",
+                qos: .utility
+            )
+        )
         self.backupWriterStartedAtUnix = backupWriterStartedAtUnix
     }
 
@@ -290,6 +302,88 @@ final class MCPRouter: @unchecked Sendable {
         readDatabase = readDB
         entityCache.load(from: readDB.dbHandle)
         entityCache.startRefreshTimer(db: readDB.dbHandle)
+        scheduleDrainForExistingPendingStores(db: writeDB)
+    }
+
+    /// Stores acknowledged before the database was injected (DB_NOT_OPEN queue path)
+    /// have no drain scheduled; without this, they persist only if a later store
+    /// happens to run. Schedule their drains as soon as a write handle exists.
+    private func scheduleDrainForExistingPendingStores(db: BrainDatabase) {
+        // The snapshot takes the cross-process queue LOCK_EX; a concurrent MCP
+        // replay can hold it across DB writes, so never block the caller
+        // (setDatabases runs on BrainBarServer.queue during initialization).
+        let scheduler = pendingStoreDrainScheduler
+        Self.scheduleExistingPendingStoreScan(scheduler: scheduler, db: db, delay: 0)
+    }
+
+    private static func scheduleExistingPendingStoreScan(
+        scheduler: PendingStoreDrainScheduler,
+        db: BrainDatabase,
+        delay: TimeInterval
+    ) {
+        scheduler.queue.asyncAfter(deadline: .now() + delay) { [weak scheduler, weak db] in
+            guard let scheduler, let db, db.isOpen else { return }
+            guard let snapshot = db.pendingStoreQueueSnapshotIfReadable() else {
+                scheduleExistingPendingStoreScan(
+                    scheduler: scheduler,
+                    db: db,
+                    delay: min(
+                        pendingStoreDrainMaxDelay,
+                        max(pendingStoreDrainInitialDelay, delay * 2)
+                    )
+                )
+                return
+            }
+            var scheduledAny = false
+            for identity in snapshot.identityKeys where identity.hasPrefix("chunk:") {
+                scheduledAny = true
+                Self.schedulePendingStoreDrain(
+                    scheduler: scheduler,
+                    db: db,
+                    chunkID: String(identity.dropFirst("chunk:".count)),
+                    delay: Self.pendingStoreDrainInitialDelay
+                )
+            }
+            if !scheduledAny && snapshot.depth > 0 {
+                Self.scheduleIdentitylessLegacyFlush(
+                    scheduler: scheduler,
+                    db: db,
+                    delay: Self.pendingStoreDrainInitialDelay
+                )
+            }
+        }
+    }
+
+    /// Legacy entries written by older builds may lack chunk_id and thus have no
+    /// identity for the normal per-chunk drain; flush with capped-backoff retries
+    /// until the queue empties so a busy DB at startup cannot strand them.
+    private static func scheduleIdentitylessLegacyFlush(
+        scheduler: PendingStoreDrainScheduler,
+        db: BrainDatabase,
+        delay: TimeInterval
+    ) {
+        scheduler.queue.asyncAfter(deadline: .now() + delay) { [weak scheduler, weak db] in
+            guard let scheduler, let db, db.isOpen else { return }
+            _ = db.flushPendingStores(
+                busyTimeoutMillis: mcpStoreBusyTimeoutMillis,
+                retries: mcpStoreRetries
+            )
+            guard let after = db.pendingStoreQueueSnapshotIfReadable() else {
+                scheduleIdentitylessLegacyFlush(
+                    scheduler: scheduler,
+                    db: db,
+                    delay: min(delay * 2, 60)
+                )
+                return
+            }
+            if after.depth > 0 {
+                scheduleIdentitylessLegacyFlush(
+                    scheduler: scheduler,
+                    db: db,
+                    delay: min(delay * 2, 60)
+                )
+            }
+        }
     }
 
     private func readDB() throws -> BrainDatabase {
@@ -789,35 +883,50 @@ final class MCPRouter: @unchecked Sendable {
 
     private func schedulePendingStoreDrain(db: BrainDatabase, chunkID: String) {
         Self.schedulePendingStoreDrain(
+            scheduler: pendingStoreDrainScheduler,
             db: db,
             chunkID: chunkID,
             delay: Self.pendingStoreDrainInitialDelay
         )
     }
 
-    private static func schedulePendingStoreDrain(db: BrainDatabase, chunkID: String, delay: TimeInterval) {
+    private static func schedulePendingStoreDrain(
+        scheduler: PendingStoreDrainScheduler,
+        db: BrainDatabase,
+        chunkID: String,
+        delay: TimeInterval
+    ) {
         let drainKey = "\(ObjectIdentifier(db).hashValue):\(chunkID)"
-        guard pendingStoreDrainRegistry.insert(drainKey) else { return }
+        guard scheduler.registry.insert(drainKey) else { return }
 
-        pendingStoreDrainQueue.asyncAfter(deadline: .now() + delay) {
-            drainPendingStoreTarget(db: db, chunkID: chunkID, drainKey: drainKey, delay: delay)
+        scheduler.queue.asyncAfter(deadline: .now() + delay) { [weak scheduler, weak db] in
+            guard let scheduler, let db else { return }
+            drainPendingStoreTarget(
+                scheduler: scheduler,
+                db: db,
+                chunkID: chunkID,
+                drainKey: drainKey,
+                delay: delay
+            )
         }
     }
 
     private static func drainPendingStoreTarget(
+        scheduler: PendingStoreDrainScheduler,
         db: BrainDatabase,
         chunkID: String,
         drainKey: String,
         delay: TimeInterval
     ) {
         guard db.isOpen else {
-            finishPendingStoreDrain(drainKey)
+            finishPendingStoreDrain(scheduler: scheduler, drainKey: drainKey)
             return
         }
 
         let targetIdentity = "chunk:\(chunkID)"
         guard let before = db.pendingStoreQueueSnapshotIfReadable() else {
             reschedulePendingStoreDrain(
+                scheduler: scheduler,
                 db: db,
                 chunkID: chunkID,
                 drainKey: drainKey,
@@ -827,7 +936,7 @@ final class MCPRouter: @unchecked Sendable {
             return
         }
         guard before.identityKeys.contains(targetIdentity) else {
-            finishPendingStoreDrain(drainKey)
+            finishPendingStoreDrain(scheduler: scheduler, drainKey: drainKey)
             return
         }
 
@@ -837,6 +946,7 @@ final class MCPRouter: @unchecked Sendable {
         )
         guard let after = db.pendingStoreQueueSnapshotIfReadable() else {
             reschedulePendingStoreDrain(
+                scheduler: scheduler,
                 db: db,
                 chunkID: chunkID,
                 drainKey: drainKey,
@@ -846,11 +956,12 @@ final class MCPRouter: @unchecked Sendable {
             return
         }
         guard after.identityKeys.contains(targetIdentity) else {
-            finishPendingStoreDrain(drainKey)
+            finishPendingStoreDrain(scheduler: scheduler, drainKey: drainKey)
             return
         }
 
         reschedulePendingStoreDrain(
+            scheduler: scheduler,
             db: db,
             chunkID: chunkID,
             drainKey: drainKey,
@@ -860,6 +971,7 @@ final class MCPRouter: @unchecked Sendable {
     }
 
     private static func reschedulePendingStoreDrain(
+        scheduler: PendingStoreDrainScheduler,
         db: BrainDatabase,
         chunkID: String,
         drainKey: String,
@@ -869,13 +981,23 @@ final class MCPRouter: @unchecked Sendable {
         let nextDelay = flushedAny
             ? pendingStoreDrainInitialDelay
             : min(pendingStoreDrainMaxDelay, max(pendingStoreDrainInitialDelay, delay * 2.0))
-        pendingStoreDrainQueue.asyncAfter(deadline: .now() + nextDelay) {
-            drainPendingStoreTarget(db: db, chunkID: chunkID, drainKey: drainKey, delay: nextDelay)
+        scheduler.queue.asyncAfter(deadline: .now() + nextDelay) { [weak scheduler, weak db] in
+            guard let scheduler, let db else { return }
+            drainPendingStoreTarget(
+                scheduler: scheduler,
+                db: db,
+                chunkID: chunkID,
+                drainKey: drainKey,
+                delay: nextDelay
+            )
         }
     }
 
-    private static func finishPendingStoreDrain(_ drainKey: String) {
-        pendingStoreDrainRegistry.remove(drainKey)
+    private static func finishPendingStoreDrain(
+        scheduler: PendingStoreDrainScheduler,
+        drainKey: String
+    ) {
+        scheduler.registry.remove(drainKey)
     }
 
     private func queueBrainStore(
@@ -918,7 +1040,7 @@ final class MCPRouter: @unchecked Sendable {
     ) -> ToolOutput {
         let action = Self.deferredQueueAction(for: queuePath)
         return ToolOutput(
-            text: Formatters.formatStoreResult(chunkId: chunkID, queued: true, useColor: false),
+            text: Formatters.formatStoreResult(chunkId: chunkID, queued: true, queuedReason: reason, useColor: false),
             metadata: [
                 "queued": true,
                 "status": "DEFERRED",
@@ -1532,7 +1654,7 @@ final class MCPRouter: @unchecked Sendable {
         ],
         [
             "name": "brain_store",
-            "description": "Save a decision, learning, mistake, idea, or todo to durable memory so future sessions can retrieve it with brain_search. Returns the new chunk_id. Add tags, importance (1-10), and project to improve later retrieval. For digesting long raw text use brain_digest instead.",
+            "description": "Save a decision, learning, mistake, idea, or todo to durable memory so future sessions can retrieve it with brain_search. Returns the new chunk_id. Add tags, importance (1-10), and project to improve later retrieval. A STORED (deferred) result is SUCCESS: the memory is durably queued while the DB is busy and the drain persists it automatically \u{2014} never call brain_store again for it and never save a fallback copy. For digesting long raw text use brain_digest instead.",
             "annotations": MCPRouter.writeAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",

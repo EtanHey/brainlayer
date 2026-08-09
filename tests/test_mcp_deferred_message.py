@@ -1,0 +1,118 @@
+"""The DEFERRED store receipt must read as SUCCESS so agents stop re-storing (Etan, 2026-08-09)."""
+
+from brainlayer.mcp._format import format_store_result
+
+
+def test_deferred_store_receipt_reads_as_success_and_forbids_restore() -> None:
+    msg = format_store_result("brainbar-abc123", queued=True)
+    assert "STORED (deferred)" in msg
+    assert "DB busy" in msg
+    assert "brainbar-abc123" in msg
+    assert "durably queued" in msg
+    assert "the drain persists it automatically" in msg
+    assert "Do NOT re-store" in msg
+    assert "fallback copy" in msg
+    assert "DEFERRED:" not in msg  # old failure-sounding prefix retired
+
+
+def test_deferred_store_receipt_carries_non_busy_reason() -> None:
+    msg = format_store_result("brainbar-abc123", queued=True, queued_reason="INTERACTIVE_PRIORITY")
+    assert "STORED (deferred): INTERACTIVE_PRIORITY" in msg
+    assert "DB busy" not in msg
+    assert "Do NOT re-store" in msg
+
+
+def test_non_queued_store_receipt_unchanged() -> None:
+    msg = format_store_result("brainbar-abc123")
+    assert msg == "✔ Stored → brainbar-abc123"
+
+
+def test_deferred_receipt_for_legacy_queue_schedules_replay(monkeypatch, tmp_path) -> None:
+    """A queued_for_replay receipt must arm the background replay (codex P1, PR #693)."""
+    from brainlayer.mcp import store_handler
+
+    calls = []
+    monkeypatch.setattr(store_handler, "_schedule_pending_store_replay", lambda: calls.append(True))
+
+    store_handler._deferred_store_receipt("c1", tmp_path / "pending-stores.jsonl")
+    assert calls == [True]
+
+    store_handler._deferred_store_receipt("c2", tmp_path / "mcp-123.jsonl")
+    assert calls == [True]  # drain-daemon path must NOT arm the replay
+
+
+def test_schema_mismatch_deferral_names_its_reason(tmp_path) -> None:
+    """Schema-fingerprint deferrals must not claim DB busy (codex P2, PR #693)."""
+    msg = format_store_result("brainbar-x", queued=True, queued_reason="SCHEMA_FINGERPRINT_MISMATCH")
+    assert "STORED (deferred): SCHEMA_FINGERPRINT_MISMATCH" in msg
+    assert "DB busy" not in msg
+
+
+def test_startup_rearms_replay_when_legacy_queue_nonempty(monkeypatch, tmp_path) -> None:
+    """A stranded pending-stores.jsonl must re-arm replay at process start (codex round 4)."""
+    from brainlayer.mcp import store_handler
+
+    stranded = tmp_path / "pending-stores.jsonl"
+    stranded.write_text('{"chunk_id": "c1", "content": "x"}\n')
+    calls = []
+    monkeypatch.setattr(store_handler, "_get_pending_store_path", lambda: stranded)
+    monkeypatch.setattr(store_handler, "_schedule_pending_store_replay", lambda: calls.append(True))
+
+    assert store_handler.rearm_stranded_pending_stores() is True
+    assert calls == [True]
+
+    stranded.write_text("")
+    assert store_handler.rearm_stranded_pending_stores() is False
+    assert calls == [True]
+
+
+def test_startup_replay_probe_tolerates_concurrent_queue_unlink(monkeypatch, tmp_path) -> None:
+    """A queue removed between existence and size probes must not kill replay recovery."""
+    from contextlib import nullcontext
+
+    from brainlayer.mcp import store_handler
+
+    class UnlinkedPendingStorePath:
+        parent = tmp_path
+        name = "pending-stores.jsonl"
+
+        @staticmethod
+        def exists() -> bool:
+            return True
+
+        @staticmethod
+        def stat():
+            raise FileNotFoundError("concurrent replay removed pending-stores.jsonl")
+
+    calls = []
+    monkeypatch.setattr(store_handler, "_get_pending_store_path", UnlinkedPendingStorePath)
+    monkeypatch.setattr(store_handler, "_pending_store_file_lock", lambda _path: nullcontext())
+    monkeypatch.setattr(store_handler, "_schedule_pending_store_replay", lambda: calls.append(True))
+
+    assert store_handler.rearm_stranded_pending_stores() is False
+    assert calls == []
+
+
+def test_queue_store_never_trims_acknowledged_entries(monkeypatch, tmp_path) -> None:
+    """Acknowledged durably-queued stores must never be silently dropped (codex round 5)."""
+    import json as _json
+
+    from brainlayer.mcp import store_handler
+
+    path = tmp_path / "pending-stores.jsonl"
+    monkeypatch.setattr(store_handler, "_get_pending_store_path", lambda: path)
+    monkeypatch.setattr(store_handler, "_schedule_pending_store_replay", lambda: None)
+
+    def _fail_enqueue(**kwargs):
+        raise RuntimeError("unified queue unavailable")
+
+    import brainlayer.queue_io as queue_io
+
+    monkeypatch.setattr(queue_io, "enqueue_store", _fail_enqueue)
+
+    for i in range(store_handler._QUEUE_MAX_SIZE + 5):
+        store_handler._queue_store({"chunk_id": f"c{i}", "content": f"memory {i}"})
+
+    lines = path.read_text().strip().splitlines()
+    assert len(lines) == store_handler._QUEUE_MAX_SIZE + 5
+    assert _json.loads(lines[0])["chunk_id"] == "c0"  # oldest acknowledged entry survives
