@@ -151,6 +151,78 @@ def _assert_existing_state_after_rejection(ledger: Ledger, event: OccurrenceEven
     )
     assert ledger.weave_accumulation(through=post_drain_followup.occurred_at.date()) == ()
 
+    cross_day_escalation = OccurrenceEvent(
+        **{
+            **post_drain_followup.__dict__,
+            "session_id": "session-after-rejection-cross-day-escalation",
+            "occurred_at": post_drain_followup.occurred_at + timedelta(days=1),
+            "severity": post_drain_followup.severity + 1,
+        }
+    )
+    escalation_receipt = ledger.record(cross_day_escalation)
+    assert (
+        escalation_receipt.occurrence_id,
+        escalation_receipt.alert,
+        escalation_receipt.event_count,
+        escalation_receipt.session_ids,
+    ) == (
+        expected_occurrence_id,
+        "escalated",
+        5,
+        (
+            event.session_id,
+            equal_followup.session_id,
+            escalated_followup.session_id,
+            post_drain_followup.session_id,
+            cross_day_escalation.session_id,
+        ),
+    )
+    assert ledger.weave_accumulation(through=cross_day_escalation.occurred_at.date()) == (
+        DailyOccurrence(
+            day=cross_day_escalation.occurred_at.date(),
+            occurrence_id=expected_occurrence_id,
+            event_count=1,
+            session_ids=(cross_day_escalation.session_id,),
+        ),
+    )
+    assert ledger.weave_accumulation(through=cross_day_escalation.occurred_at.date()) == ()
+
+    cross_day_repeat = OccurrenceEvent(
+        **{
+            **cross_day_escalation.__dict__,
+            "session_id": "session-after-rejection-cross-day-repeat",
+            "occurred_at": cross_day_escalation.occurred_at + timedelta(days=1),
+        }
+    )
+    repeat_receipt = ledger.record(cross_day_repeat)
+    assert (
+        repeat_receipt.occurrence_id,
+        repeat_receipt.alert,
+        repeat_receipt.event_count,
+        repeat_receipt.session_ids,
+    ) == (
+        expected_occurrence_id,
+        None,
+        6,
+        (
+            event.session_id,
+            equal_followup.session_id,
+            escalated_followup.session_id,
+            post_drain_followup.session_id,
+            cross_day_escalation.session_id,
+            cross_day_repeat.session_id,
+        ),
+    )
+    assert ledger.weave_accumulation(through=cross_day_repeat.occurred_at.date()) == (
+        DailyOccurrence(
+            day=cross_day_repeat.occurred_at.date(),
+            occurrence_id=expected_occurrence_id,
+            event_count=1,
+            session_ids=(cross_day_repeat.session_id,),
+        ),
+    )
+    assert ledger.weave_accumulation(through=cross_day_repeat.occurred_at.date()) == ()
+
 
 def test_wave5_options_register_for_root_suite_without_collection() -> None:
     result = subprocess.run(
