@@ -2114,7 +2114,8 @@ No results found.
         )
         XCTAssertEqual(
             text,
-            "\u{2502} DEFERRED: Memory queued (DB busy) \u{2192} \(chunkID) \u{2500} drain will persist it."
+            "\u{2502} \u{2714} STORED (deferred): DB busy \u{2192} \(chunkID) \u{2500} durably queued; "
+                + "the drain persists it automatically. Do NOT re-store or save a fallback copy."
         )
         XCTAssertFalse(text.contains("\u{1b}["))
 
@@ -2170,7 +2171,8 @@ No results found.
         )
         XCTAssertEqual(
             text,
-            "\u{2502} DEFERRED: Memory queued (DB busy) \u{2192} \(chunkID) \u{2500} drain will persist it."
+            "\u{2502} \u{2714} STORED (deferred): DB busy \u{2192} \(chunkID) \u{2500} durably queued; "
+                + "the drain persists it automatically. Do NOT re-store or save a fallback copy."
         )
         XCTAssertFalse(text.contains("\u{1b}["))
 
@@ -2229,7 +2231,8 @@ No results found.
         )
         XCTAssertEqual(
             text,
-            "\u{2502} DEFERRED: Memory queued (DB busy) \u{2192} \(chunkID) \u{2500} drain will persist it."
+            "\u{2502} \u{2714} STORED (deferred): DB busy \u{2192} \(chunkID) \u{2500} durably queued; "
+                + "the drain persists it automatically. Do NOT re-store or save a fallback copy."
         )
         XCTAssertFalse(text.contains("\u{1b}["))
         XCTAssertTrue(FileManager.default.fileExists(atPath: queuePath.path))
