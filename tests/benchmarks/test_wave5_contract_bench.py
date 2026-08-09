@@ -367,6 +367,7 @@ def test_weave_feed_accumulates_by_event_day_until_weave_is_invoked(
             session_ids=("session-c",),
         ),
     )
+    assert ledger.weave_accumulation(through=date(2026, 8, 11)) == ()
 
 
 def test_occurrence_ledger_rejects_ambiguous_timestamp_or_identity(
