@@ -989,8 +989,7 @@ def test_hotlane_run_logs_high_priority_backpressure_once_per_blocked_state(tmp_
     yield_logs = [
         record
         for record in caplog.records
-        if record.getMessage()
-        == "durable high-priority queue has backlog; suppressing hot embedding and enrichment"
+        if record.getMessage() == "durable high-priority queue has backlog; suppressing hot embedding and enrichment"
     ]
     assert len(yield_logs) == 2
     assert len(cycle_calls) == 2

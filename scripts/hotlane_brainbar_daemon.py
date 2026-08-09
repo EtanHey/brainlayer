@@ -792,15 +792,11 @@ def run(
             now = time_fn()
             queue_has_backlog = queue_depth_fn(queue_dir) > 0
             queue_has_high_priority_backlog = queue_has_backlog and high_priority_queue_depth_fn(queue_dir) > 0
-            cycle_backlog_batch = (
-                backlog_batch if backlog_batch > 0 and now - last_backlog >= backlog_interval else 0
-            )
+            cycle_backlog_batch = backlog_batch if backlog_batch > 0 and now - last_backlog >= backlog_interval else 0
             cycle_recent_limit = recent_limit
             if queue_has_high_priority_backlog:
                 if not queue_backpressure_active:
-                    LOGGER.info(
-                        "durable high-priority queue has backlog; suppressing hot embedding and enrichment"
-                    )
+                    LOGGER.info("durable high-priority queue has backlog; suppressing hot embedding and enrichment")
                 queue_backpressure_active = True
                 if cycle_backlog_batch <= 0:
                     cycles += 1
