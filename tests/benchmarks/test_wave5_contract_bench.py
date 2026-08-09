@@ -117,6 +117,39 @@ def _assert_existing_state_after_rejection(ledger: Ledger, event: OccurrenceEven
     )
     assert ledger.weave_accumulation(through=escalated_followup.occurred_at.date()) == ()
 
+    post_drain_followup = OccurrenceEvent(
+        **{
+            **escalated_followup.__dict__,
+            "session_id": "session-after-rejection-drain",
+        }
+    )
+    post_drain_receipt = ledger.record(post_drain_followup)
+    assert (
+        post_drain_receipt.occurrence_id,
+        post_drain_receipt.alert,
+        post_drain_receipt.event_count,
+        post_drain_receipt.session_ids,
+    ) == (
+        expected_occurrence_id,
+        None,
+        4,
+        (
+            event.session_id,
+            equal_followup.session_id,
+            escalated_followup.session_id,
+            post_drain_followup.session_id,
+        ),
+    )
+    assert ledger.weave_accumulation(through=post_drain_followup.occurred_at.date()) == (
+        DailyOccurrence(
+            day=post_drain_followup.occurred_at.date(),
+            occurrence_id=expected_occurrence_id,
+            event_count=1,
+            session_ids=(post_drain_followup.session_id,),
+        ),
+    )
+    assert ledger.weave_accumulation(through=post_drain_followup.occurred_at.date()) == ()
+
 
 def test_wave5_options_register_for_root_suite_without_collection() -> None:
     result = subprocess.run(
