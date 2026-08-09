@@ -235,6 +235,8 @@ def score_correction_gold(
     gold: CorrectionGold | None = None,
     human_approved: bool = False,
 ) -> CorrectionBenchReport:
+    if type(human_approved) is not bool:
+        raise ValueError("human_approved must be a boolean")
     benchmark = gold or load_correction_gold()
     by_id = {candidate.case_id: candidate for candidate in candidates}
     if set(by_id) != {case.case_id for case in benchmark.cases}:

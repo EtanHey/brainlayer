@@ -436,6 +436,15 @@ def test_auto_confidence_threshold_is_inclusive() -> None:
     assert score_correction_gold(candidates, human_approved=True).promote_to_auto is True
 
 
+@pytest.mark.parametrize("approval", ["false", 1, None])
+def test_gold_scorer_rejects_non_boolean_human_approval(approval: object) -> None:
+    with pytest.raises(ValueError, match="human_approved must be a boolean"):
+        score_correction_gold(
+            _oracle_candidates(),
+            human_approved=approval,  # type: ignore[arg-type]
+        )
+
+
 def test_correction_gold_loader_rejects_unknown_schema(tmp_path: Path) -> None:
     payload = json.loads(CORRECTION_GOLD_PATH.read_text(encoding="utf-8"))
     payload["schema_version"] = 2
