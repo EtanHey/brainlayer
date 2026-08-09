@@ -128,6 +128,6 @@ def test_launchagent_runs_retrying_truncate_every_night():
     plist_path = Path(__file__).resolve().parents[1] / "scripts/launchd/com.brainlayer.wal-checkpoint.plist"
     plist = plistlib.loads(plist_path.read_bytes())
 
-    assert plist["StartCalendarInterval"] == {"Hour": 4, "Minute": 0}
+    assert plist["StartCalendarInterval"] == {"Hour": 9, "Minute": 30}
     assert plist["ProgramArguments"][-1] == "--retry-busy"
     assert "KeepAlive" not in plist
