@@ -989,14 +989,20 @@ def test_hotlane_run_logs_high_priority_backpressure_once_per_blocked_state(tmp_
     yield_logs = [
         record
         for record in caplog.records
-        if record.getMessage() == "durable high-priority queue has backlog; yielding all hotlane writer work"
+        if record.getMessage()
+        == "durable high-priority queue has backlog; suppressing hot embedding and enrichment"
     ]
     assert len(yield_logs) == 2
-    assert len(cycle_calls) == 1
+    assert len(cycle_calls) == 2
+    assert cycle_calls[0]["recent_limit"] == 0
+    assert cycle_calls[0]["backlog_batch"] == hotlane.DEFAULT_BACKLOG_BATCH
     assert cycle_calls[0]["enrich_limit"] == 0
+    assert cycle_calls[1]["recent_limit"] == 5
+    assert cycle_calls[1]["backlog_batch"] == 0
+    assert cycle_calls[1]["enrich_limit"] == 0
 
 
-def test_hotlane_run_yields_all_writer_work_during_high_priority_queue_backlog(tmp_path):
+def test_hotlane_run_yields_all_writer_work_when_backlog_embedding_is_disabled(tmp_path):
     hotlane = _load_hotlane_module()
     opened = []
     cycle_calls = []
@@ -1014,7 +1020,7 @@ def test_hotlane_run_yields_all_writer_work_during_high_priority_queue_backlog(t
         interval=0.25,
         recent_limit=5,
         backlog_interval=10.0,
-        backlog_batch=hotlane.DEFAULT_BACKLOG_BATCH,
+        backlog_batch=0,
         enrich_interval=10.0,
         enrich_limit=hotlane.DEFAULT_HOTLANE_ENRICH_LIMIT,
         enrich_since_hours=8760,
@@ -1031,6 +1037,41 @@ def test_hotlane_run_yields_all_writer_work_during_high_priority_queue_backlog(t
     assert opened == []
     assert cycle_calls == []
     assert sleeps == [0.25]
+
+
+def test_hotlane_run_reserves_due_backlog_slice_during_high_priority_queue_backlog(tmp_path):
+    hotlane = _load_hotlane_module()
+    cycle_calls = []
+    sleeps = []
+
+    class FakeStore:
+        def close(self):
+            pass
+
+    hotlane.run(
+        db_path=tmp_path / "brainlayer.db",
+        interval=0.25,
+        recent_limit=5,
+        backlog_interval=10.0,
+        backlog_batch=hotlane.DEFAULT_BACKLOG_BATCH,
+        enrich_interval=10.0,
+        enrich_limit=hotlane.DEFAULT_HOTLANE_ENRICH_LIMIT,
+        enrich_since_hours=8760,
+        vector_store_cls=lambda _path: FakeStore(),
+        model_factory=lambda: SimpleNamespace(embed_query=lambda _text: [0.0]),
+        cycle_fn=lambda **kwargs: cycle_calls.append(kwargs) or hotlane.CycleResult(),
+        time_fn=iter([100.0, 100.0, 101.0]).__next__,
+        sleep_fn=sleeps.append,
+        max_cycles=2,
+        queue_depth_fn=lambda _queue_dir: 3,
+        high_priority_queue_depth_fn=lambda _queue_dir: 1,
+    )
+
+    assert len(cycle_calls) == 1
+    assert cycle_calls[0]["recent_limit"] == 0
+    assert cycle_calls[0]["backlog_batch"] == hotlane.DEFAULT_BACKLOG_BATCH
+    assert cycle_calls[0]["enrich_limit"] == 0
+    assert sleeps == [0.25, 0.25]
 
 
 def test_hotlane_run_skips_default_hot_embedding_during_queue_backlog(tmp_path, monkeypatch):
@@ -1062,7 +1103,10 @@ def test_hotlane_run_skips_default_hot_embedding_during_queue_backlog(tmp_path, 
         high_priority_queue_depth_fn=lambda _queue_dir: 1,
     )
 
-    assert split_calls == []
+    assert len(split_calls) == 1
+    assert split_calls[0]["recent_limit"] == 0
+    assert split_calls[0]["backlog_batch"] == hotlane.DEFAULT_BACKLOG_BATCH
+    assert split_calls[0]["enrich_limit"] == 0
     assert sleeps == [0.25]
 
 

@@ -791,15 +791,27 @@ def run(
             now = time_fn()
             queue_has_backlog = queue_depth_fn(queue_dir) > 0
             queue_has_high_priority_backlog = queue_has_backlog and high_priority_queue_depth_fn(queue_dir) > 0
+            cycle_backlog_batch = (
+                backlog_batch if backlog_batch > 0 and now - last_backlog >= backlog_interval else 0
+            )
+            cycle_recent_limit = recent_limit
             if queue_has_high_priority_backlog:
                 if not queue_backpressure_active:
-                    LOGGER.info("durable high-priority queue has backlog; yielding all hotlane writer work")
+                    LOGGER.info(
+                        "durable high-priority queue has backlog; suppressing hot embedding and enrichment"
+                    )
                 queue_backpressure_active = True
-                cycles += 1
-                sleep_fn(interval)
-                continue
-            queue_backpressure_active = False
-            cycle_backlog_batch = backlog_batch if backlog_batch > 0 and now - last_backlog >= backlog_interval else 0
+                if cycle_backlog_batch <= 0:
+                    cycles += 1
+                    sleep_fn(interval)
+                    continue
+                cycle_recent_limit = 0
+                LOGGER.info(
+                    "durable high-priority queue has backlog; reserving backlog embedding slice batch=%d",
+                    cycle_backlog_batch,
+                )
+            else:
+                queue_backpressure_active = False
             cycle_enrich_limit = (
                 enrich_limit
                 if not queue_has_backlog
@@ -817,7 +829,7 @@ def run(
                     db_path=db_path,
                     vector_store_cls=vector_store_cls,
                     embed_fn=embed_fn,
-                    recent_limit=recent_limit,
+                    recent_limit=cycle_recent_limit,
                     backlog_batch=cycle_backlog_batch,
                     embed_batch_fn=embed_batch_fn,
                     enrich_limit=cycle_enrich_limit,
@@ -830,7 +842,7 @@ def run(
                     result = cycle_fn(
                         store=store,
                         embed_fn=embed_fn,
-                        recent_limit=recent_limit,
+                        recent_limit=cycle_recent_limit,
                         backlog_batch=cycle_backlog_batch,
                         embed_batch_fn=embed_batch_fn,
                         enrich_limit=cycle_enrich_limit,
