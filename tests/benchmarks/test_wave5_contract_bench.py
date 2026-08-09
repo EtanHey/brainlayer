@@ -1,5 +1,7 @@
 import hashlib
 import json
+import subprocess
+import sys
 from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -14,7 +16,6 @@ from tests.benchmarks.wave5_contract import (
     Ledger,
     LedgerFactory,
     OccurrenceEvent,
-    OccurrenceLedger,
     load_correction_gold,
     score_correction_gold,
 )
@@ -22,10 +23,35 @@ from tests.benchmarks.wave5_contract import (
 FIXED_NOW = datetime(2026, 8, 9, 9, 0, tzinfo=UTC)
 
 
-@pytest.fixture
-def ledger_factory() -> LedgerFactory:
-    """Override this fixture to run the same contract against production."""
-    return OccurrenceLedger
+class _ExplodingExternalLedger:
+    def record(self, event: OccurrenceEvent) -> None:
+        raise AssertionError("external ledger factory selected")
+
+    def weave_accumulation(self, *, through: date) -> tuple[DailyOccurrence, ...]:
+        return ()
+
+
+def test_external_ledger_factory_option_reaches_contract() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            str(Path(__file__)),
+            "-q",
+            "-k",
+            "occurrence_identity_includes_semantic_fingerprint_and_scope",
+            "--wave5-ledger-factory",
+            "tests.benchmarks.test_wave5_contract_bench:_ExplodingExternalLedger",
+        ],
+        cwd=Path(__file__).parents[2],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "external ledger factory selected" in result.stdout
 
 
 def test_occurrence_identity_includes_semantic_fingerprint_and_scope(
