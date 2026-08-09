@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Callable, Protocol
 
@@ -90,6 +90,7 @@ class CorrectionBenchReport:
     promote_to_auto: bool
     rollback_required: bool
     blockers: tuple[str, ...]
+    proposed_digests: tuple[str, ...]
     etan_digest_requirement: str
     rollback_rules: tuple[str, ...]
 
@@ -125,7 +126,9 @@ class OccurrenceLedger:
     def record(self, event: OccurrenceEvent) -> OccurrenceReceipt:
         if not event.fingerprint or not event.scope:
             raise ValueError("fingerprint and scope are required")
-        if event.occurred_at.tzinfo is None or event.occurred_at.tzinfo != UTC:
+        if not event.session_id.strip():
+            raise ValueError("session_id is required")
+        if event.occurred_at.tzinfo is None or event.occurred_at.utcoffset() != timedelta(0):
             raise ValueError("occurred_at must be an explicit UTC timestamp")
         occurrence_id = self._occurrence_id(event)
         prior = [stored for stored in self.events if self._occurrence_id(stored) == occurrence_id]
@@ -188,6 +191,10 @@ def load_correction_gold(path: Path = CORRECTION_GOLD_PATH) -> CorrectionGold:
         )
         if not all(value.strip() for value in required_text):
             raise ValueError(f"non-empty case content required for {case.case_id}")
+        source_path, separator, excerpt_digest = case.source_pointer.partition("#excerpt-sha256:")
+        expected_excerpt_digest = hashlib.sha256(case.source_excerpt.encode()).hexdigest()
+        if not source_path or not separator or excerpt_digest != expected_excerpt_digest:
+            raise ValueError(f"stable source excerpt anchor required for {case.case_id}")
         if case.expected_decision == "supersede":
             if case.expected_digest is None:
                 raise ValueError(f"supersede digest required for {case.case_id}")
@@ -207,6 +214,7 @@ def score_correction_gold(
     candidates: list[CandidateCorrection],
     *,
     gold: CorrectionGold | None = None,
+    human_approved: bool = False,
 ) -> CorrectionBenchReport:
     benchmark = gold or load_correction_gold()
     by_id = {candidate.case_id: candidate for candidate in candidates}
@@ -242,24 +250,33 @@ def score_correction_gold(
     recall = true_positives / actual_positive if actual_positive else 0.0
     digest_fidelity = exact_digests / true_positives if true_positives else 0.0
 
-    blockers: list[str] = []
+    metric_blockers: list[str] = []
     thresholds = benchmark.thresholds
     if false_positives > thresholds.max_false_positives:
-        blockers.append("false-positive budget")
+        metric_blockers.append("false-positive budget")
     if recall < thresholds.min_recall:
-        blockers.append("recall threshold")
+        metric_blockers.append("recall threshold")
     if digest_fidelity < thresholds.min_digest_fidelity:
-        blockers.append("digest fidelity")
+        metric_blockers.append("digest fidelity")
 
+    blockers = [*metric_blockers]
+    if not human_approved:
+        blockers.append("human approval")
     promote = not blockers
+    proposed_digests = tuple(
+        by_id[case.case_id].digest
+        for case in benchmark.cases
+        if by_id[case.case_id].decision == "supersede" and by_id[case.case_id].digest is not None
+    )
     return CorrectionBenchReport(
         precision=precision,
         recall=recall,
         false_positives=false_positives,
         digest_fidelity=digest_fidelity,
         promote_to_auto=promote,
-        rollback_required=not promote,
+        rollback_required=bool(metric_blockers),
         blockers=tuple(blockers),
+        proposed_digests=proposed_digests,
         etan_digest_requirement=benchmark.etan_digest_requirement,
         rollback_rules=benchmark.rollback_rules,
     )

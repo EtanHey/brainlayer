@@ -2,6 +2,7 @@ import hashlib
 import json
 from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -181,6 +182,26 @@ def test_occurrence_ledger_rejects_ambiguous_timestamp_or_identity(
         ledger.record(OccurrenceEvent(**{**valid, "fingerprint": ""}))
     with pytest.raises(ValueError, match="fingerprint and scope"):
         ledger.record(OccurrenceEvent(**{**valid, "scope": ""}))
+    with pytest.raises(ValueError, match="session_id"):
+        ledger.record(OccurrenceEvent(**{**valid, "session_id": ""}))
+
+
+def test_occurrence_ledger_accepts_equivalent_explicit_utc_timezone(
+    ledger_factory: LedgerFactory,
+) -> None:
+    ledger = ledger_factory()
+
+    receipt = ledger.record(
+        OccurrenceEvent(
+            fingerprint="sqlite-wal-checkpoint-starvation",
+            scope="host:m2/service:brainlayer-watch",
+            session_id="session-a",
+            occurred_at=FIXED_NOW.astimezone(ZoneInfo("UTC")),
+            severity=2,
+        )
+    )
+
+    assert receipt.alert == "new"
 
 
 def _oracle_candidates() -> list[CandidateCorrection]:
@@ -212,12 +233,13 @@ def test_correction_gold_is_real_history_with_source_pointers_and_exact_etan_dig
         "keep-worker-read-write-rules",
     )
     assert hashlib.sha256(CORRECTION_GOLD_PATH.read_bytes()).hexdigest() == (
-        "c1990cb5426011bc0280bca3f2c189df3aa6195ee7b753dbc7f7e851c80a8d33"
+        "1a8bf7077c0d6c6638e6472bde0f417e6d5f64514c25ac6d7ecd15977adb3806"
     )
     repo_root = Path(__file__).resolve().parents[2]
     for case in gold.cases:
-        source_path, _line_number = case.source_pointer.rsplit(":", 1)
+        source_path, excerpt_digest = case.source_pointer.split("#excerpt-sha256:", 1)
         source_text = (repo_root / source_path).read_text(encoding="utf-8")
+        assert hashlib.sha256(case.source_excerpt.encode()).hexdigest() == excerpt_digest
         assert case.source_excerpt in source_text
     assert gold.etan_digest_requirement == ETAN_DIGEST_REQUIREMENT
     assert ETAN_DIGEST_REQUIREMENT == (
@@ -227,7 +249,9 @@ def test_correction_gold_is_real_history_with_source_pointers_and_exact_etan_dig
 
 def test_gold_oracle_meets_promotion_thresholds_and_false_positive_budget() -> None:
     gold = load_correction_gold()
-    report = score_correction_gold(_oracle_candidates(), gold=gold)
+    candidates = _oracle_candidates()
+    unapproved = score_correction_gold(candidates, gold=gold)
+    report = score_correction_gold(candidates, gold=gold, human_approved=True)
 
     assert gold.thresholds.min_auto_confidence == 0.98
     assert gold.thresholds.min_recall == 1.0
@@ -241,6 +265,12 @@ def test_gold_oracle_meets_promotion_thresholds_and_false_positive_budget() -> N
     assert report.precision == 1.0
     assert report.recall == 1.0
     assert report.false_positives == 0
+    assert unapproved.promote_to_auto is False
+    assert unapproved.rollback_required is False
+    assert "human approval" in unapproved.blockers
+    assert unapproved.proposed_digests == tuple(
+        candidate.digest for candidate in candidates if candidate.digest is not None
+    )
     assert report.promote_to_auto is True
     assert report.rollback_required is False
     assert report.etan_digest_requirement == ETAN_DIGEST_REQUIREMENT
@@ -330,7 +360,7 @@ def test_auto_confidence_threshold_is_inclusive() -> None:
         first.digest,
     )
 
-    assert score_correction_gold(candidates).promote_to_auto is True
+    assert score_correction_gold(candidates, human_approved=True).promote_to_auto is True
 
 
 def test_correction_gold_loader_rejects_unknown_schema(tmp_path: Path) -> None:
@@ -351,6 +381,7 @@ def test_correction_gold_loader_rejects_unknown_schema(tmp_path: Path) -> None:
         (0, "expected_digest", "missing structured fields", "entity, attribute, and source"),
         (6, "expected_digest", "must stay null", "keep_both digest"),
         (0, "corrected_claim", "", "non-empty case content"),
+        (0, "source_pointer", "AGENTS.md:1", "stable source excerpt anchor"),
     ],
 )
 def test_correction_gold_loader_rejects_inert_case_contracts(
