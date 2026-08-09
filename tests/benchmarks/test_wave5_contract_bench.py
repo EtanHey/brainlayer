@@ -463,6 +463,23 @@ def test_gold_scorer_rejects_unknown_decisions_and_out_of_range_confidence() -> 
         score_correction_gold([*candidates, candidates[-1]])
 
 
+@pytest.mark.parametrize("confidence", [True, "0.99", float("nan"), float("inf")])
+def test_gold_scorer_rejects_malformed_candidate_confidence(
+    confidence: object,
+) -> None:
+    candidates = _oracle_candidates()
+    first = candidates[0]
+    candidates[0] = CandidateCorrection(
+        first.case_id,
+        first.decision,
+        confidence,  # type: ignore[arg-type]
+        first.digest,
+    )
+
+    with pytest.raises(ValueError, match="candidate confidence"):
+        score_correction_gold(candidates)
+
+
 def test_auto_confidence_threshold_is_inclusive() -> None:
     candidates = _oracle_candidates()
     first = candidates[0]

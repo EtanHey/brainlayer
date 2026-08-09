@@ -248,8 +248,12 @@ def score_correction_gold(
     for candidate in candidates:
         if candidate.decision not in {"supersede", "keep_both"}:
             raise ValueError(f"invalid candidate decision: {candidate.decision!r}")
-        if not 0.0 <= candidate.confidence <= 1.0:
-            raise ValueError("candidate confidence must be between 0 and 1")
+        if (
+            type(candidate.confidence) not in {int, float}
+            or not math.isfinite(candidate.confidence)
+            or not 0.0 <= candidate.confidence <= 1.0
+        ):
+            raise ValueError("candidate confidence must be a finite number between 0 and 1")
 
     true_positives = false_positives = false_negatives = 0
     exact_digests = 0
