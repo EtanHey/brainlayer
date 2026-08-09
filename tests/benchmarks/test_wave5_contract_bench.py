@@ -13,11 +13,12 @@ from tests.benchmarks.wave5_contract import (
     ETAN_DIGEST_REQUIREMENT,
     CandidateCorrection,
     CandidateProducer,
-    CorrectionGold,
+    CorrectionInputCase,
     DailyOccurrence,
     Ledger,
     LedgerFactory,
     OccurrenceEvent,
+    correction_inputs,
     load_correction_gold,
     oracle_candidate_producer,
     score_correction_gold,
@@ -34,9 +35,11 @@ class _ExplodingExternalLedger:
         return ()
 
 
-def _broken_candidate_producer(gold: CorrectionGold) -> list[CandidateCorrection]:
+def _broken_candidate_producer(
+    cases: tuple[CorrectionInputCase, ...],
+) -> list[CandidateCorrection]:
     print("external candidate producer selected")
-    return [CandidateCorrection(case.case_id, "keep_both", 0.99, None) for case in gold.cases]
+    return [CandidateCorrection(case.case_id, "keep_both", 0.99, None) for case in cases]
 
 
 def test_external_ledger_factory_option_reaches_contract() -> None:
@@ -442,7 +445,8 @@ def test_occurrence_ledger_accepts_equivalent_explicit_utc_timezone(
 
 
 def _oracle_candidates() -> list[CandidateCorrection]:
-    return oracle_candidate_producer(load_correction_gold())
+    gold = load_correction_gold()
+    return oracle_candidate_producer(correction_inputs(gold))
 
 
 def test_correction_gold_is_real_history_with_source_pointers_and_exact_etan_digest() -> None:
@@ -469,6 +473,10 @@ def test_correction_gold_is_real_history_with_source_pointers_and_exact_etan_dig
         source_text = (repo_root / source_path).read_text(encoding="utf-8")
         assert hashlib.sha256(case.source_excerpt.encode()).hexdigest() == excerpt_digest
         assert case.source_excerpt in source_text
+    producer_inputs = correction_inputs(gold)
+    assert tuple(case.case_id for case in producer_inputs) == tuple(case.case_id for case in gold.cases)
+    assert all(not hasattr(case, "expected_decision") for case in producer_inputs)
+    assert all(not hasattr(case, "expected_digest") for case in producer_inputs)
     assert gold.etan_digest_requirement == ETAN_DIGEST_REQUIREMENT
     assert ETAN_DIGEST_REQUIREMENT == (
         "I should get a summarized version of what's superseding what, and be the human in the loop for some of it"
@@ -479,7 +487,7 @@ def test_candidate_producer_meets_promotion_thresholds_and_false_positive_budget
     candidate_producer: CandidateProducer,
 ) -> None:
     gold = load_correction_gold()
-    candidates = candidate_producer(gold)
+    candidates = candidate_producer(correction_inputs(gold))
     unapproved = score_correction_gold(candidates, gold=gold)
     report = score_correction_gold(candidates, gold=gold, human_approved=True)
 
@@ -498,8 +506,11 @@ def test_candidate_producer_meets_promotion_thresholds_and_false_positive_budget
     assert unapproved.promote_to_auto is False
     assert unapproved.rollback_required is False
     assert "human approval" in unapproved.blockers
+    candidates_by_id = {candidate.case_id: candidate for candidate in candidates}
     assert unapproved.proposed_digests == tuple(
-        candidate.digest for candidate in candidates if candidate.digest is not None
+        candidates_by_id[case.case_id].digest
+        for case in gold.cases
+        if candidates_by_id[case.case_id].digest is not None
     )
     assert report.promote_to_auto is True
     assert report.rollback_required is False

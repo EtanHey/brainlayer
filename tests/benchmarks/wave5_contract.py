@@ -60,6 +60,18 @@ class CorrectionGoldCase:
 
 
 @dataclass(frozen=True)
+class CorrectionInputCase:
+    case_id: str
+    source_pointer: str
+    source_excerpt: str
+    historical_claim: str
+    corrected_claim: str
+    scope: str
+    entity: str
+    attribute: str
+
+
+@dataclass(frozen=True)
 class CorrectionThresholds:
     min_auto_confidence: float
     min_recall: float
@@ -106,18 +118,39 @@ class Ledger(Protocol):
 
 
 LedgerFactory = Callable[[], Ledger]
-CandidateProducer = Callable[[CorrectionGold], list[CandidateCorrection]]
+CandidateProducer = Callable[[tuple[CorrectionInputCase, ...]], list[CandidateCorrection]]
 
 
-def oracle_candidate_producer(gold: CorrectionGold) -> list[CandidateCorrection]:
+def correction_inputs(gold: CorrectionGold) -> tuple[CorrectionInputCase, ...]:
+    return tuple(
+        CorrectionInputCase(
+            case_id=case.case_id,
+            source_pointer=case.source_pointer,
+            source_excerpt=case.source_excerpt,
+            historical_claim=case.historical_claim,
+            corrected_claim=case.corrected_claim,
+            scope=case.scope,
+            entity=case.entity,
+            attribute=case.attribute,
+        )
+        for case in gold.cases
+    )
+
+
+def oracle_candidate_producer(
+    cases: tuple[CorrectionInputCase, ...],
+) -> list[CandidateCorrection]:
+    gold_by_id = {case.case_id: case for case in load_correction_gold().cases}
     return [
         CandidateCorrection(
             case_id=case.case_id,
-            decision=case.expected_decision,
+            decision=gold_by_id[case.case_id].expected_decision,
             confidence=0.99,
-            digest=case.expected_digest if case.expected_decision == "supersede" else None,
+            digest=gold_by_id[case.case_id].expected_digest
+            if gold_by_id[case.case_id].expected_decision == "supersede"
+            else None,
         )
-        for case in gold.cases
+        for case in cases
     ]
 
 
