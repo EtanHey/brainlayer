@@ -780,6 +780,7 @@ def run(
     last_enrich = 0.0
     enrich_disabled = False
     queue_backpressure_active = False
+    backlog_slice_logged = False
     hot_candidate_scanner = HotCandidateScanner()
     cycles = 0
     backlog_batch = min(max(backlog_batch, 0), MAX_BACKLOG_BATCH)
@@ -806,12 +807,15 @@ def run(
                     sleep_fn(interval)
                     continue
                 cycle_recent_limit = 0
-                LOGGER.info(
-                    "durable high-priority queue has backlog; reserving backlog embedding slice batch=%d",
-                    cycle_backlog_batch,
-                )
+                if not backlog_slice_logged:
+                    LOGGER.info(
+                        "durable high-priority queue has backlog; reserving backlog embedding slice batch=%d",
+                        cycle_backlog_batch,
+                    )
+                    backlog_slice_logged = True
             else:
                 queue_backpressure_active = False
+                backlog_slice_logged = False
             cycle_enrich_limit = (
                 enrich_limit
                 if not queue_has_backlog
