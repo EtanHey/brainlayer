@@ -212,12 +212,21 @@ def test_pending_chunk_query_resumes_after_page_budget_on_next_cycle(tmp_path):
         "INSERT INTO chunks (id, content, created_at) VALUES "
         "('valid-after-budget', 'must resume', '2026-08-02T00:00:00Z')"
     )
+    conn.execute(
+        "INSERT INTO chunks (id, content, created_at) VALUES "
+        "('next-valid-after-budget', 'must keep position', '2026-08-03T00:00:00Z')"
+    )
     state = hotlane.PendingCandidateScanState()
     store = SimpleNamespace(conn=conn)
     try:
         assert hotlane._pending_chunk_rows(store, limit=1, scan_state=state) == []
         assert hotlane._pending_chunk_rows(store, limit=1, scan_state=state) == [
             hotlane.EmbedCandidate("valid-after-budget", "must resume")
+        ]
+        assert state.active is True
+        conn.execute("INSERT INTO chunk_vectors_rowids (id) VALUES ('valid-after-budget')")
+        assert hotlane._pending_chunk_rows(store, limit=1, scan_state=state) == [
+            hotlane.EmbedCandidate("next-valid-after-budget", "must keep position")
         ]
     finally:
         conn.close()

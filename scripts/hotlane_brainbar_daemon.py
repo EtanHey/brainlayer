@@ -482,7 +482,7 @@ def _pending_chunk_rows(
             break
 
     if scan_state is not None:
-        if candidates or exhausted:
+        if exhausted:
             scan_state.reset()
         else:
             scan_state.active = True
