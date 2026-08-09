@@ -35,6 +35,7 @@ class _ExplodingExternalLedger:
 
 
 def _broken_candidate_producer(gold: CorrectionGold) -> list[CandidateCorrection]:
+    print("external candidate producer selected")
     return [CandidateCorrection(case.case_id, "keep_both", 0.99, None) for case in gold.cases]
 
 
@@ -81,6 +82,7 @@ def test_external_candidate_producer_option_reaches_promotion_benchmark() -> Non
     )
 
     assert result.returncode == 1
+    assert "external candidate producer selected" in result.stdout
 
 
 def test_occurrence_identity_includes_semantic_fingerprint_and_scope(
