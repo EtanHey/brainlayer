@@ -346,15 +346,17 @@ def test_weave_feed_accumulates_by_event_day_until_weave_is_invoked(
             scope="host:m2/service:brainlayer-watch",
             session_id="session-late",
             occurred_at=FIXED_NOW + timedelta(minutes=20),
-            severity=2,
+            severity=3,
         )
     )
     assert (
+        late_receipt.occurrence_id,
         late_receipt.alert,
         late_receipt.event_count,
         late_receipt.session_ids,
     ) == (
-        None,
+        occurrence_id,
+        "escalated",
         6,
         ("session-a", "session-b", "session-c", "session-d", "session-late"),
     )
