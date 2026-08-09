@@ -39,8 +39,9 @@ class EmbeddedChunk:
 class EmbeddingModel:
     """Sentence-transformers embedding model."""
 
-    def __init__(self, model_name: str = DEFAULT_MODEL):
+    def __init__(self, model_name: str = DEFAULT_MODEL, *, device: str | None = None):
         self.model_name = model_name
+        self.device = device
         self._model: Optional[SentenceTransformer] = None
 
     def _load_model(self) -> SentenceTransformer:
@@ -51,11 +52,14 @@ class EmbeddingModel:
         validation — never pays the ~3.7s torch import cost.
         """
         if self._model is None:
-            import torch
             from sentence_transformers import SentenceTransformer
 
-            logger.info(f"Loading embedding model: {self.model_name}")
-            device = "mps" if torch.backends.mps.is_available() else "cpu"
+            device = self.device
+            if device is None:
+                import torch
+
+                device = "mps" if torch.backends.mps.is_available() else "cpu"
+            logger.info("Loading embedding model: %s device=%s", self.model_name, device)
             self._model = SentenceTransformer(self.model_name, device=device)
         return self._model
 
@@ -133,16 +137,16 @@ class EmbeddingModel:
             raise RuntimeError(f"Failed to embed text batch: {e}") from e
 
 
-# Global model instance
-_embedding_model: Optional[EmbeddingModel] = None
+# Global model instances, keyed by model and requested device.
+_embedding_models: dict[tuple[str, str | None], EmbeddingModel] = {}
 
 
-def get_embedding_model(model_name: str = DEFAULT_MODEL) -> EmbeddingModel:
+def get_embedding_model(model_name: str = DEFAULT_MODEL, *, device: str | None = None) -> EmbeddingModel:
     """Get global embedding model instance."""
-    global _embedding_model
-    if _embedding_model is None or _embedding_model.model_name != model_name:
-        _embedding_model = EmbeddingModel(model_name)
-    return _embedding_model
+    key = (model_name, device)
+    if key not in _embedding_models:
+        _embedding_models[key] = EmbeddingModel(model_name, device=device)
+    return _embedding_models[key]
 
 
 def embed_chunks(

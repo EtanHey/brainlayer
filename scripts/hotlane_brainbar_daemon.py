@@ -38,6 +38,7 @@ LOGGER = logging.getLogger("brainlayer.hotlane_brainbar")
 STOP = False
 DEFAULT_HOTLANE_ENRICH_LIMIT = 5
 DEFAULT_BACKLOG_BATCH = 4
+DEFAULT_HOTLANE_EMBED_DEVICE = "cpu"
 MAX_BACKLOG_BATCH = 16
 DEFAULT_HOTLANE_WRITE_BUSY_TIMEOUT_MS = 1000
 MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
@@ -605,9 +606,11 @@ def _callable_accepts_keyword(func: Callable[..., object], keyword: str) -> bool
         signature = inspect.signature(func)
     except (TypeError, ValueError):
         return True
-    return keyword in signature.parameters or any(
-        parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()
-    )
+    parameter = signature.parameters.get(keyword)
+    return (
+        parameter is not None
+        and parameter.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    ) or any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values())
 
 
 def _type_error_rejects_keyword(exc: TypeError, keyword: str) -> bool:
@@ -617,6 +620,12 @@ def _type_error_rejects_keyword(exc: TypeError, keyword: str) -> bool:
         or "got an unexpected keyword" in message
         or "invalid keyword argument" in message
     )
+
+
+def _create_embedding_model(model_factory: Callable[..., object], *, device: str) -> object:
+    if _callable_accepts_keyword(model_factory, "device"):
+        return model_factory(device=device)
+    return model_factory()
 
 
 def _run_split_cycle(
@@ -753,7 +762,8 @@ def run(
     enrich_limit: int,
     enrich_since_hours: int,
     vector_store_cls: Callable[[Path], VectorStore] = VectorStore,
-    model_factory: Callable[[], object] = get_embedding_model,
+    model_factory: Callable[..., object] = get_embedding_model,
+    embedding_device: str = DEFAULT_HOTLANE_EMBED_DEVICE,
     cycle_fn: Callable[..., CycleResult] = run_cycle,
     time_fn: Callable[[], float] = time.monotonic,
     sleep_fn: Callable[[float], None] = time.sleep,
@@ -762,7 +772,7 @@ def run(
     queue_depth_fn: Callable[[Path], int] = _queue_depth,
     high_priority_queue_depth_fn: Callable[[Path], int] = _high_priority_queue_depth,
 ) -> None:
-    model = model_factory()
+    model = _create_embedding_model(model_factory, device=embedding_device)
     embed_batch_fn = getattr(model, "embed_texts", None)
     if embed_batch_fn is not None:
 
