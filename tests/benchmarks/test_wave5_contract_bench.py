@@ -10,6 +10,7 @@ from tests.benchmarks.wave5_contract import (
     CORRECTION_GOLD_PATH,
     ETAN_DIGEST_REQUIREMENT,
     CandidateCorrection,
+    DailyOccurrence,
     Ledger,
     LedgerFactory,
     OccurrenceEvent,
@@ -135,11 +136,12 @@ def test_only_new_or_escalating_occurrences_alert(ledger_factory: LedgerFactory)
 
     assert ledger.record(base).alert == "new"
     assert ledger.record(OccurrenceEvent(**{**base.__dict__, "session_id": "session-b", "severity": 1})).alert is None
+    assert ledger.record(OccurrenceEvent(**{**base.__dict__, "session_id": "session-c", "severity": 2})).alert is None
     assert (
-        ledger.record(OccurrenceEvent(**{**base.__dict__, "session_id": "session-c", "severity": 3})).alert
+        ledger.record(OccurrenceEvent(**{**base.__dict__, "session_id": "session-d", "severity": 3})).alert
         == "escalated"
     )
-    assert ledger.record(OccurrenceEvent(**{**base.__dict__, "session_id": "session-d", "severity": 3})).alert is None
+    assert ledger.record(OccurrenceEvent(**{**base.__dict__, "session_id": "session-e", "severity": 3})).alert is None
 
 
 def test_weave_feed_accumulates_by_event_day_until_weave_is_invoked(
@@ -192,6 +194,7 @@ def test_weave_feed_accumulates_by_event_day_until_weave_is_invoked(
 
     feed = ledger.weave_accumulation(through=date(2026, 8, 10))
 
+    assert len(feed) == 3
     feed_by_key = {(bucket.day, bucket.occurrence_id): bucket for bucket in feed}
     assert set(feed_by_key) == {
         (date(2026, 8, 9), occurrence_id),
@@ -209,7 +212,14 @@ def test_weave_feed_accumulates_by_event_day_until_weave_is_invoked(
     assert (next_day.event_count, next_day.session_ids) == (1, ("session-b",))
     assert ledger.weave_accumulation(through=date(2026, 8, 10)) == ()
     future_feed = ledger.weave_accumulation(through=date(2026, 8, 11))
-    assert [(bucket.day, bucket.event_count) for bucket in future_feed] == [(date(2026, 8, 11), 1)]
+    assert future_feed == (
+        DailyOccurrence(
+            day=date(2026, 8, 11),
+            occurrence_id=occurrence_id,
+            event_count=1,
+            session_ids=("session-c",),
+        ),
+    )
 
 
 def test_occurrence_ledger_rejects_ambiguous_timestamp_or_identity(
