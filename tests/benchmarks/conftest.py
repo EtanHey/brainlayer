@@ -3,7 +3,12 @@ from typing import cast
 
 import pytest
 
-from tests.benchmarks.wave5_contract import LedgerFactory, OccurrenceLedger
+from tests.benchmarks.wave5_contract import (
+    CandidateProducer,
+    LedgerFactory,
+    OccurrenceLedger,
+    oracle_candidate_producer,
+)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -11,6 +16,11 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--wave5-ledger-factory",
         metavar="MODULE:ATTRIBUTE",
         help="Run the Wave 5 ledger contract against an external factory.",
+    )
+    parser.addoption(
+        "--wave5-candidate-producer",
+        metavar="MODULE:ATTRIBUTE",
+        help="Run the Wave 5 correction benchmark against an external producer.",
     )
 
 
@@ -28,3 +38,19 @@ def _load_ledger_factory(reference: str) -> LedgerFactory:
 def ledger_factory(request: pytest.FixtureRequest) -> LedgerFactory:
     reference = request.config.getoption("--wave5-ledger-factory")
     return _load_ledger_factory(reference) if reference else OccurrenceLedger
+
+
+def _load_candidate_producer(reference: str) -> CandidateProducer:
+    module_name, separator, attribute_name = reference.partition(":")
+    if not module_name or not separator or not attribute_name:
+        raise pytest.UsageError("--wave5-candidate-producer must use MODULE:ATTRIBUTE syntax")
+    producer = getattr(import_module(module_name), attribute_name, None)
+    if not callable(producer):
+        raise pytest.UsageError(f"--wave5-candidate-producer target is not callable: {reference}")
+    return cast(CandidateProducer, producer)
+
+
+@pytest.fixture
+def candidate_producer(request: pytest.FixtureRequest) -> CandidateProducer:
+    reference = request.config.getoption("--wave5-candidate-producer")
+    return _load_candidate_producer(reference) if reference else oracle_candidate_producer

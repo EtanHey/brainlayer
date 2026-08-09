@@ -12,11 +12,14 @@ from tests.benchmarks.wave5_contract import (
     CORRECTION_GOLD_PATH,
     ETAN_DIGEST_REQUIREMENT,
     CandidateCorrection,
+    CandidateProducer,
+    CorrectionGold,
     DailyOccurrence,
     Ledger,
     LedgerFactory,
     OccurrenceEvent,
     load_correction_gold,
+    oracle_candidate_producer,
     score_correction_gold,
 )
 
@@ -29,6 +32,10 @@ class _ExplodingExternalLedger:
 
     def weave_accumulation(self, *, through: date) -> tuple[DailyOccurrence, ...]:
         return ()
+
+
+def _broken_candidate_producer(gold: CorrectionGold) -> list[CandidateCorrection]:
+    return [CandidateCorrection(case.case_id, "keep_both", 0.99, None) for case in gold.cases]
 
 
 def test_external_ledger_factory_option_reaches_contract() -> None:
@@ -52,6 +59,28 @@ def test_external_ledger_factory_option_reaches_contract() -> None:
 
     assert result.returncode == 1
     assert "external ledger factory selected" in result.stdout
+
+
+def test_external_candidate_producer_option_reaches_promotion_benchmark() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            str(Path(__file__)),
+            "-q",
+            "-k",
+            "candidate_producer_meets_promotion_thresholds_and_false_positive_budget",
+            "--wave5-candidate-producer",
+            "tests.benchmarks.test_wave5_contract_bench:_broken_candidate_producer",
+        ],
+        cwd=Path(__file__).parents[2],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
 
 
 def test_occurrence_identity_includes_semantic_fingerprint_and_scope(
@@ -163,6 +192,20 @@ def test_cross_session_repeats_dedupe_without_losing_event_provenance(
     assert same_session.alert is None
     assert same_session.event_count == 3
     assert same_session.session_ids == ("session-a", "session-b")
+    same_session_escalated = ledger.record(
+        OccurrenceEvent(
+            fingerprint="sqlite-wal-checkpoint-starvation",
+            scope="host:m2/service:brainlayer-watch",
+            session_id="session-b",
+            occurred_at=FIXED_NOW + timedelta(minutes=15),
+            severity=3,
+        )
+    )
+    assert (
+        same_session_escalated.alert,
+        same_session_escalated.event_count,
+        same_session_escalated.session_ids,
+    ) == ("escalated", 4, ("session-a", "session-b"))
 
 
 def test_only_new_or_escalating_occurrences_alert(ledger_factory: LedgerFactory) -> None:
@@ -397,16 +440,7 @@ def test_occurrence_ledger_accepts_equivalent_explicit_utc_timezone(
 
 
 def _oracle_candidates() -> list[CandidateCorrection]:
-    gold = load_correction_gold()
-    return [
-        CandidateCorrection(
-            case_id=case.case_id,
-            decision=case.expected_decision,
-            confidence=0.99,
-            digest=case.expected_digest if case.expected_decision == "supersede" else None,
-        )
-        for case in gold.cases
-    ]
+    return oracle_candidate_producer(load_correction_gold())
 
 
 def test_correction_gold_is_real_history_with_source_pointers_and_exact_etan_digest() -> None:
@@ -439,9 +473,11 @@ def test_correction_gold_is_real_history_with_source_pointers_and_exact_etan_dig
     )
 
 
-def test_gold_oracle_meets_promotion_thresholds_and_false_positive_budget() -> None:
+def test_candidate_producer_meets_promotion_thresholds_and_false_positive_budget(
+    candidate_producer: CandidateProducer,
+) -> None:
     gold = load_correction_gold()
-    candidates = _oracle_candidates()
+    candidates = candidate_producer(gold)
     unapproved = score_correction_gold(candidates, gold=gold)
     report = score_correction_gold(candidates, gold=gold, human_approved=True)
 

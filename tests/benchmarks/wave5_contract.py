@@ -106,6 +106,19 @@ class Ledger(Protocol):
 
 
 LedgerFactory = Callable[[], Ledger]
+CandidateProducer = Callable[[CorrectionGold], list[CandidateCorrection]]
+
+
+def oracle_candidate_producer(gold: CorrectionGold) -> list[CandidateCorrection]:
+    return [
+        CandidateCorrection(
+            case_id=case.case_id,
+            decision=case.expected_decision,
+            confidence=0.99,
+            digest=case.expected_digest if case.expected_decision == "supersede" else None,
+        )
+        for case in gold.cases
+    ]
 
 
 class OccurrenceLedger:
