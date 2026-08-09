@@ -125,7 +125,7 @@ async def test_schema_fingerprint_mismatch_fails_closed_to_durable_queue(tmp_pat
     assert structured["queued"] is True
     assert structured["status"] == "DEFERRED"
     assert len(list(queue_dir.glob("mcp-*.jsonl"))) == 1
-    assert any("DEFERRED" in item.text for item in texts)
+    assert any("STORED (deferred)" in item.text for item in texts)
 
 
 @pytest.mark.asyncio
@@ -158,7 +158,7 @@ async def test_busy_queue_fallback_returns_loud_deferred_receipt(tmp_path):
     assert structured["deferred"]["queue_path"] == str(queued_files[0])
     assert structured["deferred"]["action"] == "queued_for_drain"
     assert queued_event["conversation_id"] == "mcp-server-session"
-    assert any("DEFERRED" in item.text for item in texts)
+    assert any("STORED (deferred)" in item.text for item in texts)
 
 
 @pytest.mark.asyncio
@@ -265,7 +265,7 @@ async def test_store_queues_within_bound_when_writer_pidfile_is_locked(tmp_path,
     assert structured["status"] == "DEFERRED"
     assert structured["deferred"]["action"] == "queued_for_drain"
     assert len(queued_files) == 1
-    assert any("DEFERRED" in item.text for item in texts)
+    assert any("STORED (deferred)" in item.text for item in texts)
 
 
 @pytest.mark.asyncio
