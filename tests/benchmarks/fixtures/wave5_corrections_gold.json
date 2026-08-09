@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "provenance": "Etan-ratified corrected claims copied from repository instructions; historical claims are normalized counterclaims for scoring, not quoted origins; stable source anchors are mandatory.",
+  "etan_digest_requirement": "I should get a summarized version of what's superseding what, and be the human in the loop for some of it",
+  "thresholds": {
+    "min_auto_confidence": 0.98,
+    "min_recall": 1.0,
+    "max_false_positives": 0,
+    "min_digest_fidelity": 1.0
+  },
+  "rollback_rules": [
+    "false-positive budget exceeded",
+    "recall below threshold",
+    "digest fidelity below threshold"
+  ],
+  "cases": [
+    {
+      "case_id": "workflow-exclusion-scope",
+      "source_pointer": "AGENTS.md#excerpt-sha256:8f8fc97840eeafee254b3d5b30920111f740c2bf1a3fa27c136c8e01b0c2a29b",
+      "source_excerpt": "It is NOT all workflows.",
+      "historical_claim": "Every workflow session should be excluded from the index.",
+      "corrected_claim": "Exclusion is scoped to brain-worker subagents and session-miner or weave agents; it is not all workflows.",
+      "scope": "brainlayer/ingest-policy",
+      "entity": "workflow session indexing",
+      "attribute": "default visibility",
+      "expected_decision": "supersede",
+      "expected_digest": "workflow session indexing · default visibility: replace 'exclude every workflow' with 'exclude brain-worker, session-miner, and weave agents only' (AGENTS.md#excerpt-sha256:8f8fc97840eeafee254b3d5b30920111f740c2bf1a3fa27c136c8e01b0c2a29b)"
+    },
+    {
+      "case_id": "project-is-repo",
+      "source_pointer": "AGENTS.md#excerpt-sha256:4e1481e19d04904d4f94373e1c2d0344eb631ef62066ba0b0ba1f69ef245e2b8",
+      "source_excerpt": "project` is always the REPO",
+      "historical_claim": "A worktree branch name may be stored as project.",
+      "corrected_claim": "Project is always the canonical repository; branch is a separate field.",
+      "scope": "brainlayer/provenance",
+      "entity": "chunk provenance",
+      "attribute": "project identity",
+      "expected_decision": "supersede",
+      "expected_digest": "chunk provenance · project identity: replace 'project may equal branch' with 'project is the repository and branch is separate' (AGENTS.md#excerpt-sha256:4e1481e19d04904d4f94373e1c2d0344eb631ef62066ba0b0ba1f69ef245e2b8)"
+    },
+    {
+      "case_id": "brain-worker-class",
+      "source_pointer": "AGENTS.md#excerpt-sha256:c8977df1a9d232e7e301fe58e298860bcfacd4286fc5b64eace199e4f95ea27f",
+      "source_excerpt": "brain-worker ≠ brainlayer worker",
+      "historical_claim": "A visible brainlayer worker pane can stand in for an ingest-excluded brain-worker.",
+      "corrected_claim": "A brain-worker is an ingest-excluded subagent class; a visible brainlayer worker ingests normally.",
+      "scope": "brainlayer/source-class",
+      "entity": "brain-worker",
+      "attribute": "source class",
+      "expected_decision": "supersede",
+      "expected_digest": "brain-worker · source class: replace 'visible BrainLayer pane' with 'ingest-excluded subagent class' (AGENTS.md#excerpt-sha256:c8977df1a9d232e7e301fe58e298860bcfacd4286fc5b64eace199e4f95ea27f)"
+    },
+    {
+      "case_id": "store-update-not-duplicate",
+      "source_pointer": "AGENTS.md#excerpt-sha256:386b3925990200dba4aad8181024dba799f00ef5ea101ae969914161c431e8a7",
+      "source_excerpt": "UPDATE it, don't store again beside it",
+      "historical_claim": "When a stored memory is wrong, store the correction beside it.",
+      "corrected_claim": "When a stored memory is wrong, update it instead of storing a duplicate beside it.",
+      "scope": "brainlayer/store-discipline",
+      "entity": "stored correction",
+      "attribute": "replacement behavior",
+      "expected_decision": "supersede",
+      "expected_digest": "stored correction · replacement behavior: replace 'store beside the old memory' with 'update the wrong memory' (AGENTS.md#excerpt-sha256:386b3925990200dba4aad8181024dba799f00ef5ea101ae969914161c431e8a7)"
+    },
+    {
+      "case_id": "merged-is-not-deployed",
+      "source_pointer": "AGENTS.md#excerpt-sha256:f04fa6d230d8ac37f73ac76f3963476d8b42cf592e5de7f2a369dbea263e9c2c",
+      "source_excerpt": "Merged is not deployed",
+      "historical_claim": "A merged BrainLayer change is deployed.",
+      "corrected_claim": "Merged is not deployed; verify the artifact that executes.",
+      "scope": "brainlayer/deployment",
+      "entity": "merged change",
+      "attribute": "deployment state",
+      "expected_decision": "supersede",
+      "expected_digest": "merged change · deployment state: replace 'merged means deployed' with 'verify the executing artifact' (AGENTS.md#excerpt-sha256:f04fa6d230d8ac37f73ac76f3963476d8b42cf592e5de7f2a369dbea263e9c2c)"
+    },
+    {
+      "case_id": "stored-data-check-on-copy",
+      "source_pointer": "AGENTS.md#excerpt-sha256:5f9eefc9e7f6c734ce3e29d5d2b33230cd4db03f1b52c094b8c8388d709ef2ca",
+      "source_excerpt": "Pre-merge live-check against a DB copy",
+      "historical_claim": "A stored-data change may be tested directly against the production database before merge.",
+      "corrected_claim": "Every pre-merge live check for a stored-data change runs against a database copy.",
+      "scope": "brainlayer/data-safety",
+      "entity": "stored-data change",
+      "attribute": "pre-merge test target",
+      "expected_decision": "supersede",
+      "expected_digest": "stored-data change · pre-merge test target: replace 'test against production' with 'test against a database copy' (AGENTS.md#excerpt-sha256:5f9eefc9e7f6c734ce3e29d5d2b33230cd4db03f1b52c094b8c8388d709ef2ca)"
+    },
+    {
+      "case_id": "keep-archive-preconditions",
+      "source_pointer": "AGENTS.md#excerpt-sha256:10549bfd4eb5eb816fab39eae507518072bc163866dde93ddc9c7e868eec4d59",
+      "source_excerpt": "Never auto-delete personal data.",
+      "historical_claim": "Never auto-delete personal data.",
+      "corrected_claim": "Transcripts move to archive only after embedding and reader-parity checks.",
+      "scope": "brainlayer/data-lifecycle",
+      "entity": "personal transcript",
+      "attribute": "deletion policy vs archive preconditions",
+      "expected_decision": "keep_both",
+      "expected_digest": null
+    },
+    {
+      "case_id": "keep-law-and-context-roles",
+      "source_pointer": "AGENTS.md#excerpt-sha256:0e60bc29a0285be83155f66f7a30465c7cf79df6bdd572593d7107e77a1ea2cd",
+      "source_excerpt": "Rules ride in instruction files",
+      "historical_claim": "Rules ride in instruction files deterministically.",
+      "corrected_claim": "BrainLayer injects context and is not a source of law.",
+      "scope": "brainlayer/instruction-truth",
+      "entity": "agent instructions",
+      "attribute": "instruction carrier vs memory role",
+      "expected_decision": "keep_both",
+      "expected_digest": null
+    },
+    {
+      "case_id": "keep-agent-authorship-rulings",
+      "source_pointer": "AGENTS.md#excerpt-sha256:cad863a844ec6e67709f05dc8ffac2b4f01a9813bc2e6d3f170e7baccb6b582b",
+      "source_excerpt": "Agent-authored chunks are the normal case",
+      "historical_claim": "Agent-authored chunks are the normal case.",
+      "corrected_claim": "Rules cite no source is a non-finding and must not be reported.",
+      "scope": "brainlayer/review-policy",
+      "entity": "agent-authored memory",
+      "attribute": "normality vs review disposition",
+      "expected_decision": "keep_both",
+      "expected_digest": null
+    },
+    {
+      "case_id": "keep-worker-read-write-rules",
+      "source_pointer": "AGENTS.md#excerpt-sha256:ec23bf58ac509ea9d99fcabfc058d2a542c3c4215bdd8f40e4301dfd5c11cb7b",
+      "source_excerpt": "Concurrency Rules",
+      "historical_claim": "Only one BrainLayer write may run at a time.",
+      "corrected_claim": "BrainLayer reads are safe to run concurrently.",
+      "scope": "brainlayer/concurrency",
+      "entity": "database operation",
+      "attribute": "write serialization vs read concurrency",
+      "expected_decision": "keep_both",
+      "expected_digest": null
+    }
+  ]
+}

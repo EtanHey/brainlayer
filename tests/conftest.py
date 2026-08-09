@@ -45,6 +45,20 @@ ENGINE_TEST_FILES = frozenset(
 )
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """Register externally injectable Wave 5 benchmark implementations."""
+    parser.addoption(
+        "--wave5-ledger-factory",
+        metavar="MODULE:ATTRIBUTE",
+        help="Run the Wave 5 ledger contract against an external factory.",
+    )
+    parser.addoption(
+        "--wave5-candidate-producer",
+        metavar="MODULE:ATTRIBUTE",
+        help="Run the Wave 5 correction benchmark against an external producer.",
+    )
+
+
 def pytest_configure(config):
     """Register custom pytest marks."""
     config.addinivalue_line(
