@@ -51,7 +51,7 @@ def _canonical_occurrence_id(event: OccurrenceEvent) -> str:
     return hashlib.sha256(canonical_identity).hexdigest()
 
 
-def _seed_existing_occurrence(ledger: Ledger, event: OccurrenceEvent) -> None:
+def _seed_existing_occurrence(ledger: Ledger, event: OccurrenceEvent, *, drain: bool) -> None:
     expected_occurrence_id = _canonical_occurrence_id(event)
     receipt = ledger.record(event)
     assert receipt.occurrence_id == expected_occurrence_id
@@ -60,42 +60,62 @@ def _seed_existing_occurrence(ledger: Ledger, event: OccurrenceEvent) -> None:
         1,
         (event.session_id,),
     )
-    assert ledger.weave_accumulation(through=event.occurred_at.date()) == (
-        DailyOccurrence(
-            day=event.occurred_at.date(),
-            occurrence_id=expected_occurrence_id,
-            event_count=1,
-            session_ids=(event.session_id,),
-        ),
-    )
-    assert ledger.weave_accumulation(through=event.occurred_at.date()) == ()
+    if drain:
+        assert ledger.weave_accumulation(through=event.occurred_at.date()) == (
+            DailyOccurrence(
+                day=event.occurred_at.date(),
+                occurrence_id=expected_occurrence_id,
+                event_count=1,
+                session_ids=(event.session_id,),
+            ),
+        )
+        assert ledger.weave_accumulation(through=event.occurred_at.date()) == ()
 
 
-def _assert_existing_state_after_rejection(ledger: Ledger, event: OccurrenceEvent) -> None:
-    followup = OccurrenceEvent(
+def _assert_existing_state_after_rejection(ledger: Ledger, event: OccurrenceEvent, *, seed_was_drained: bool) -> None:
+    equal_followup = OccurrenceEvent(
         **{
             **event.__dict__,
-            "session_id": "session-after-rejection",
+            "session_id": "session-after-rejection-equal",
+        }
+    )
+    expected_occurrence_id = _canonical_occurrence_id(equal_followup)
+    equal_receipt = ledger.record(equal_followup)
+    assert equal_receipt.occurrence_id == expected_occurrence_id
+    assert (equal_receipt.alert, equal_receipt.event_count, equal_receipt.session_ids) == (
+        None,
+        2,
+        (event.session_id, equal_followup.session_id),
+    )
+
+    escalated_followup = OccurrenceEvent(
+        **{
+            **event.__dict__,
+            "session_id": "session-after-rejection-escalated",
             "severity": event.severity + 1,
         }
     )
-    expected_occurrence_id = _canonical_occurrence_id(followup)
-    receipt = ledger.record(followup)
+    receipt = ledger.record(escalated_followup)
     assert receipt.occurrence_id == expected_occurrence_id
     assert (receipt.alert, receipt.event_count, receipt.session_ids) == (
         "escalated",
-        2,
-        (event.session_id, followup.session_id),
+        3,
+        (event.session_id, equal_followup.session_id, escalated_followup.session_id),
     )
-    assert ledger.weave_accumulation(through=followup.occurred_at.date()) == (
+    expected_sessions = (
+        (equal_followup.session_id, escalated_followup.session_id)
+        if seed_was_drained
+        else (event.session_id, equal_followup.session_id, escalated_followup.session_id)
+    )
+    assert ledger.weave_accumulation(through=escalated_followup.occurred_at.date()) == (
         DailyOccurrence(
-            day=followup.occurred_at.date(),
+            day=escalated_followup.occurred_at.date(),
             occurrence_id=expected_occurrence_id,
-            event_count=1,
-            session_ids=(followup.session_id,),
+            event_count=len(expected_sessions),
+            session_ids=expected_sessions,
         ),
     )
-    assert ledger.weave_accumulation(through=followup.occurred_at.date()) == ()
+    assert ledger.weave_accumulation(through=escalated_followup.occurred_at.date()) == ()
 
 
 def test_wave5_options_register_for_root_suite_without_collection() -> None:
@@ -539,11 +559,13 @@ def test_weave_feed_accumulates_by_event_day_until_weave_is_invoked(
         ("session_id", " \t", "session_id"),
     ],
 )
+@pytest.mark.parametrize("drain_seed", [False, True], ids=["pending-seed", "drained-seed"])
 def test_occurrence_ledger_rejects_ambiguous_timestamp_or_identity_without_writing(
     ledger_factory: LedgerFactory,
     field: str,
     value: object,
     message: str,
+    drain_seed: bool,
 ) -> None:
     ledger = ledger_factory()
     valid = {
@@ -553,20 +575,22 @@ def test_occurrence_ledger_rejects_ambiguous_timestamp_or_identity_without_writi
         "occurred_at": FIXED_NOW,
         "severity": 2,
     }
-    _seed_existing_occurrence(ledger, OccurrenceEvent(**valid))
+    _seed_existing_occurrence(ledger, OccurrenceEvent(**valid), drain=drain_seed)
 
     with pytest.raises(ValueError, match=message):
         ledger.record(OccurrenceEvent(**{**valid, field: value}))  # type: ignore[arg-type]
-    _assert_existing_state_after_rejection(ledger, OccurrenceEvent(**valid))
+    _assert_existing_state_after_rejection(ledger, OccurrenceEvent(**valid), seed_was_drained=drain_seed)
 
 
 @pytest.mark.parametrize(
     "occurred_at",
     [None, "2026-08-09T09:00:00Z", 1, False, b"2026-08-09T09:00:00Z"],
 )
+@pytest.mark.parametrize("drain_seed", [False, True], ids=["pending-seed", "drained-seed"])
 def test_occurrence_ledger_rejects_non_datetime_timestamp_without_writing(
     ledger_factory: LedgerFactory,
     occurred_at: object,
+    drain_seed: bool,
 ) -> None:
     ledger = ledger_factory()
     valid = {
@@ -576,21 +600,23 @@ def test_occurrence_ledger_rejects_non_datetime_timestamp_without_writing(
         "occurred_at": FIXED_NOW,
         "severity": 2,
     }
-    _seed_existing_occurrence(ledger, OccurrenceEvent(**valid))
+    _seed_existing_occurrence(ledger, OccurrenceEvent(**valid), drain=drain_seed)
 
     with pytest.raises(ValueError, match="UTC timestamp"):
         ledger.record(
             OccurrenceEvent(**{**valid, "occurred_at": occurred_at})  # type: ignore[arg-type]
         )
-    _assert_existing_state_after_rejection(ledger, OccurrenceEvent(**valid))
+    _assert_existing_state_after_rejection(ledger, OccurrenceEvent(**valid), seed_was_drained=drain_seed)
 
 
 @pytest.mark.parametrize("field", ["fingerprint", "scope", "session_id"])
 @pytest.mark.parametrize("value", [None, 1, False, b"not-a-string"])
+@pytest.mark.parametrize("drain_seed", [False, True], ids=["pending-seed", "drained-seed"])
 def test_occurrence_ledger_rejects_non_string_identity_without_writing(
     ledger_factory: LedgerFactory,
     field: str,
     value: object,
+    drain_seed: bool,
 ) -> None:
     ledger = ledger_factory()
     valid = {
@@ -602,17 +628,19 @@ def test_occurrence_ledger_rejects_non_string_identity_without_writing(
     }
     values = {**valid, field: value}
     message = "session_id" if field == "session_id" else "fingerprint and scope"
-    _seed_existing_occurrence(ledger, OccurrenceEvent(**valid))
+    _seed_existing_occurrence(ledger, OccurrenceEvent(**valid), drain=drain_seed)
 
     with pytest.raises(ValueError, match=message):
         ledger.record(OccurrenceEvent(**values))  # type: ignore[arg-type]
-    _assert_existing_state_after_rejection(ledger, OccurrenceEvent(**valid))
+    _assert_existing_state_after_rejection(ledger, OccurrenceEvent(**valid), seed_was_drained=drain_seed)
 
 
 @pytest.mark.parametrize("severity", [True, "2", 2.0, float("nan"), -1])
+@pytest.mark.parametrize("drain_seed", [False, True], ids=["pending-seed", "drained-seed"])
 def test_occurrence_ledger_rejects_malformed_severity_without_writing(
     ledger_factory: LedgerFactory,
     severity: object,
+    drain_seed: bool,
 ) -> None:
     ledger = ledger_factory()
     valid_event = OccurrenceEvent(
@@ -622,7 +650,7 @@ def test_occurrence_ledger_rejects_malformed_severity_without_writing(
         occurred_at=FIXED_NOW,
         severity=2,
     )
-    _seed_existing_occurrence(ledger, valid_event)
+    _seed_existing_occurrence(ledger, valid_event, drain=drain_seed)
     event = OccurrenceEvent(
         fingerprint="sqlite-wal-checkpoint-starvation",
         scope="host:m2/service:brainlayer-watch",
@@ -633,7 +661,7 @@ def test_occurrence_ledger_rejects_malformed_severity_without_writing(
 
     with pytest.raises(ValueError, match="severity must be a non-negative integer"):
         ledger.record(event)
-    _assert_existing_state_after_rejection(ledger, valid_event)
+    _assert_existing_state_after_rejection(ledger, valid_event, seed_was_drained=drain_seed)
 
 
 def test_occurrence_ledger_accepts_equivalent_explicit_utc_timezone(
