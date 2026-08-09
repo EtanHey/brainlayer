@@ -502,6 +502,42 @@ def test_occurrence_ledger_rejects_ambiguous_timestamp_or_identity(
     with pytest.raises(ValueError, match="session_id"):
         ledger.record(OccurrenceEvent(**{**valid, "session_id": " \t"}))
     assert ledger.weave_accumulation(through=FIXED_NOW.date()) == ()
+    valid_receipt = ledger.record(OccurrenceEvent(**valid))
+    assert (
+        valid_receipt.alert,
+        valid_receipt.event_count,
+        valid_receipt.session_ids,
+    ) == ("new", 1, ("session-a",))
+
+
+@pytest.mark.parametrize(
+    "occurred_at",
+    [None, "2026-08-09T09:00:00Z", 1, False, b"2026-08-09T09:00:00Z"],
+)
+def test_occurrence_ledger_rejects_non_datetime_timestamp_without_writing(
+    ledger_factory: LedgerFactory,
+    occurred_at: object,
+) -> None:
+    ledger = ledger_factory()
+    valid = {
+        "fingerprint": "sqlite-wal-checkpoint-starvation",
+        "scope": "host:m2/service:brainlayer-watch",
+        "session_id": "session-a",
+        "occurred_at": FIXED_NOW,
+        "severity": 2,
+    }
+
+    with pytest.raises(ValueError, match="UTC timestamp"):
+        ledger.record(
+            OccurrenceEvent(**{**valid, "occurred_at": occurred_at})  # type: ignore[arg-type]
+        )
+    assert ledger.weave_accumulation(through=FIXED_NOW.date()) == ()
+    valid_receipt = ledger.record(OccurrenceEvent(**valid))
+    assert (
+        valid_receipt.alert,
+        valid_receipt.event_count,
+        valid_receipt.session_ids,
+    ) == ("new", 1, ("session-a",))
 
 
 @pytest.mark.parametrize("field", ["fingerprint", "scope", "session_id"])
@@ -550,6 +586,20 @@ def test_occurrence_ledger_rejects_malformed_severity_without_writing(
     with pytest.raises(ValueError, match="severity must be a non-negative integer"):
         ledger.record(event)
     assert ledger.weave_accumulation(through=FIXED_NOW.date()) == ()
+    valid_receipt = ledger.record(
+        OccurrenceEvent(
+            fingerprint="sqlite-wal-checkpoint-starvation",
+            scope="host:m2/service:brainlayer-watch",
+            session_id="session-a",
+            occurred_at=FIXED_NOW,
+            severity=2,
+        )
+    )
+    assert (
+        valid_receipt.alert,
+        valid_receipt.event_count,
+        valid_receipt.session_ids,
+    ) == ("new", 1, ("session-a",))
 
 
 def test_occurrence_ledger_accepts_equivalent_explicit_utc_timezone(

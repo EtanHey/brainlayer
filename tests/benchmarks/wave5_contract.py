@@ -181,7 +181,11 @@ class OccurrenceLedger:
             raise ValueError("fingerprint and scope are required")
         if type(event.session_id) is not str or not event.session_id.strip():
             raise ValueError("session_id is required")
-        if event.occurred_at.tzinfo is None or event.occurred_at.utcoffset() != timedelta(0):
+        if (
+            type(event.occurred_at) is not datetime
+            or event.occurred_at.tzinfo is None
+            or event.occurred_at.utcoffset() != timedelta(0)
+        ):
             raise ValueError("occurred_at must be an explicit UTC timestamp")
         if type(event.severity) is not int or event.severity < 0:
             raise ValueError("severity must be a non-negative integer")
