@@ -121,6 +121,7 @@ def _assert_existing_state_after_rejection(ledger: Ledger, event: OccurrenceEven
         **{
             **escalated_followup.__dict__,
             "session_id": "session-after-rejection-drain",
+            "occurred_at": escalated_followup.occurred_at + timedelta(days=1),
         }
     )
     post_drain_receipt = ledger.record(post_drain_followup)
