@@ -42,12 +42,34 @@ def _broken_candidate_producer(
     return [CandidateCorrection(case.case_id, "keep_both", 0.99, None) for case in cases]
 
 
+def test_wave5_options_register_for_root_suite_without_collection() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--help",
+            "--wave5-ledger-factory=tests.benchmarks.wave5_contract:OccurrenceLedger",
+            "--wave5-candidate-producer=tests.benchmarks.wave5_contract:oracle_candidate_producer",
+        ],
+        cwd=Path(__file__).parents[2],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "--wave5-ledger-factory=MODULE:ATTRIBUTE" in result.stdout
+    assert "--wave5-candidate-producer=MODULE:ATTRIBUTE" in result.stdout
+
+
 def test_external_ledger_factory_option_reaches_contract() -> None:
     result = subprocess.run(
         [
             sys.executable,
             "-m",
             "pytest",
+            str(Path(__file__)),
             "-q",
             "-k",
             "occurrence_identity_includes_semantic_fingerprint_and_scope",
@@ -70,6 +92,7 @@ def test_external_candidate_producer_option_reaches_promotion_benchmark() -> Non
             sys.executable,
             "-m",
             "pytest",
+            str(Path(__file__)),
             "-q",
             "-k",
             "candidate_producer_meets_promotion_thresholds_and_false_positive_budget",
