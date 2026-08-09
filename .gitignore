@@ -98,3 +98,5 @@ site/
 
 # render-verification ephemeral logs
 brain-bar/.render-logs/
+.worktrees/
+.cmux/worktrees/
