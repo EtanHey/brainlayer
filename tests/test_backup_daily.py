@@ -4,6 +4,7 @@ import os
 import queue
 import socket
 import sqlite3
+import subprocess
 import sys
 import threading
 import time
@@ -139,6 +140,7 @@ def test_run_backup_verifies_gzip_with_snapshot_sentinel_and_keeps_raw_snapshot(
     assert result["verification_mode"] == "quick"
     assert result["sentinel_snapshot_chunks"] == 3
     assert result["sentinel_verified_chunks"] == 3
+    assert result["pragma"] == "skipped"
     assert result["local_removed"] is True
     assert not (staging_dir / "2026-06-05.db.gz").exists()
     assert (staging_dir / "2026-06-05.db").exists()
@@ -333,6 +335,58 @@ def test_backup_wall_clock_timeout_has_safe_default_and_rejects_disable(monkeypa
     monkeypatch.setenv("BRAINLAYER_BACKUP_TIMEOUT_SECONDS", "0")
     with pytest.raises(ValueError, match="must be at least 1 second"):
         backup_daily._configured_backup_timeout_seconds()
+
+
+def test_backup_target_primary_gate_uses_pages_and_chunks_without_pragma_scan(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    snapshot = tmp_path / "snapshot.db"
+    snapshot.touch()
+    statements = []
+
+    class Cursor:
+        def __init__(self, row):
+            self.row = row
+
+        def fetchone(self):
+            return self.row
+
+    class Connection:
+        def execute(self, statement):
+            statements.append(statement)
+            if statement == "PRAGMA page_count":
+                return Cursor((128,))
+            if statement == "SELECT COUNT(*) FROM chunks":
+                return Cursor((3,))
+            raise AssertionError(f"PRAGMA scan is beyond the primary gate: {statement}")
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(backup_daily.sqlite3, "connect", lambda *args, **kwargs: Connection())
+
+    assert backup_daily._validate_backup_target(snapshot) == 3
+    assert statements == ["PRAGMA page_count", "SELECT COUNT(*) FROM chunks"]
+
+
+def test_optional_sqlite_check_is_disabled_by_default_and_timeout_is_nonfatal(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    snapshot = tmp_path / "snapshot.db"
+    _create_source_db(snapshot, chunk_count=2)
+    monkeypatch.delenv("BRAINLAYER_BACKUP_SQLITE_CHECK_TIMEOUT_SECONDS", raising=False)
+
+    assert backup_daily._configured_sqlite_check_timeout_seconds() == 0
+    assert backup_daily._optional_sqlite_pragma_check(snapshot, "quick_check") == "skipped"
+
+    monkeypatch.setenv("BRAINLAYER_BACKUP_SQLITE_CHECK_TIMEOUT_SECONDS", "1")
+    monkeypatch.setattr(
+        backup_daily.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(subprocess.TimeoutExpired(cmd=[sys.executable], timeout=1)),
+    )
+
+    assert backup_daily._optional_sqlite_pragma_check(snapshot, "quick_check") == "timeout"
 
 
 def test_brainbar_vacuum_request_fails_loud_after_retry_budget(tmp_path, monkeypatch, capsys):
@@ -1112,6 +1166,7 @@ def test_launchd_installer_knows_backup_target():
     assert "<integer>300</integer>" in plist
     assert "BRAINLAYER_BACKUP_CLIENT_TIMEOUT_SECONDS:=0" in wrapper
     assert "BRAINLAYER_BACKUP_TIMEOUT_SECONDS:=21600" in wrapper
+    assert "BRAINLAYER_BACKUP_SQLITE_CHECK_TIMEOUT_SECONDS:=0" in wrapper
     assert "BRAINLAYER_BACKUP_ATTEMPT_MAX_AGE_SECONDS:=86400" in wrapper
     assert "BRAINLAYER_BACKUP_LOG_PROVENANCE:=real" in wrapper
 

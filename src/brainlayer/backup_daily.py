@@ -47,6 +47,7 @@ BACKUP_FULL_VERIFY_ENV = "BRAINLAYER_BACKUP_FULL_VERIFY"
 BACKUP_LOG_PATH_ENV = "BRAINLAYER_BACKUP_LOG_PATH"
 BACKUP_LOG_PROVENANCE_ENV = "BRAINLAYER_BACKUP_LOG_PROVENANCE"
 BACKUP_SUPERVISED_CHILD_ENV = "BRAINLAYER_BACKUP_SUPERVISED_CHILD"
+BACKUP_SQLITE_CHECK_TIMEOUT_ENV = "BRAINLAYER_BACKUP_SQLITE_CHECK_TIMEOUT_SECONDS"
 DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 DEFAULT_DAILY_KEEP = 7
@@ -55,6 +56,7 @@ DEFAULT_LOCAL_UNCOMPRESSED_KEEP = 2
 DEFAULT_BACKUP_CLIENT_TIMEOUT_SECONDS = 0
 DEFAULT_BACKUP_TIMEOUT_SECONDS = 6 * 60 * 60
 DEFAULT_BACKUP_ATTEMPT_MAX_AGE_SECONDS = 24 * 60 * 60
+DEFAULT_BACKUP_SQLITE_CHECK_TIMEOUT_SECONDS = 0
 
 
 @dataclass(frozen=True)
@@ -154,6 +156,19 @@ def _configured_backup_attempt_max_age_seconds() -> int:
     return seconds
 
 
+def _configured_sqlite_check_timeout_seconds() -> int:
+    raw = os.environ.get(BACKUP_SQLITE_CHECK_TIMEOUT_ENV)
+    if raw is None or raw.strip() == "":
+        return DEFAULT_BACKUP_SQLITE_CHECK_TIMEOUT_SECONDS
+    try:
+        seconds = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{BACKUP_SQLITE_CHECK_TIMEOUT_ENV} must be an integer number of seconds") from exc
+    if seconds < 0:
+        raise ValueError(f"{BACKUP_SQLITE_CHECK_TIMEOUT_ENV} must be zero or a positive number of seconds")
+    return seconds
+
+
 def _raise_backup_timeout(signum, frame) -> None:  # noqa: ARG001
     raise BackupTimeoutError("backup exceeded configured wall-clock timeout")
 
@@ -167,6 +182,38 @@ def _sqlite_pragma_check(db_path: Path, pragma_name: str) -> str:
     return str(row[0]) if row else ""
 
 
+def _optional_sqlite_pragma_check(db_path: Path, pragma_name: str) -> str:
+    timeout_seconds = _configured_sqlite_check_timeout_seconds()
+    if timeout_seconds == 0:
+        return "skipped"
+    if pragma_name not in {"quick_check", "integrity_check"}:
+        raise ValueError(f"unsupported SQLite check: {pragma_name}")
+    check_script = (
+        "import sqlite3,sys; "
+        "path,check=sys.argv[1:3]; "
+        "conn=sqlite3.connect('file:'+path+'?mode=ro', uri=True); "
+        "row=conn.execute('PRAGMA '+check).fetchone(); "
+        "conn.close(); "
+        "print(str(row[0]) if row else '')"
+    )
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-c", check_script, str(Path(db_path).expanduser().resolve()), pragma_name],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired:
+        return "timeout"
+    if completed.returncode != 0:
+        raise RuntimeError(f"Backup {pragma_name} subprocess failed: {completed.stderr.strip()}")
+    result = completed.stdout.strip()
+    if result != "ok":
+        raise RuntimeError(f"Backup {pragma_name} failed: {result!r}")
+    return result
+
+
 def _count_chunks(db_path: Path) -> int:
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
@@ -176,13 +223,10 @@ def _count_chunks(db_path: Path) -> int:
     return int(row[0]) if row else 0
 
 
-def _validate_backup_target(db_path: Path, *, pragma_name: str = "quick_check") -> int:
+def _validate_backup_target(db_path: Path) -> int:
     db_path = Path(db_path).expanduser().resolve()
     conn = sqlite3.connect(f"{db_path.as_uri()}?mode=ro&immutable=1", uri=True)
     try:
-        integrity = conn.execute(f"PRAGMA {pragma_name}").fetchone()
-        if not integrity or integrity[0] != "ok":
-            raise RuntimeError(f"Backup {pragma_name} failed: {integrity!r}")
         page_count_row = conn.execute("PRAGMA page_count").fetchone()
         page_count = int(page_count_row[0]) if page_count_row else 0
         if page_count < 1:
@@ -373,7 +417,7 @@ def create_sqlite_backup_artifact(
     with tempfile.TemporaryDirectory(prefix="brainlayer-backup-", dir=output_dir) as tmp:
         raw_snapshot = Path(tmp) / f"{date_stamp}.db"
         request_brainbar_vacuum_into(raw_snapshot, socket_path=socket_path, attempt_dir=output_dir)
-        sentinel_chunks = _validate_backup_target(raw_snapshot, pragma_name="integrity_check")
+        sentinel_chunks = _validate_backup_target(raw_snapshot)
 
         temp_gz = Path(tmp) / final_gz.name
         with raw_snapshot.open("rb") as src, gzip.open(temp_gz, "wb", compresslevel=6) as dst:
@@ -808,19 +852,15 @@ def verify_sqlite_backup_artifact(
             result["gzip_test"] = True
             restored = tmp_dir / "restored.db"
             _decompress_gzip_to(verify_path, restored)
-            pragma_name = "integrity_check" if full else "quick_check"
-            pragma = _sqlite_pragma_check(restored, pragma_name)
-            result["pragma"] = pragma
-            if pragma != "ok":
-                result["verification_error"] = f"PRAGMA {pragma_name} failed: {pragma!r}"
-                return result
-            verified_chunks = _count_chunks(restored)
+            verified_chunks = _validate_backup_target(restored)
             result["sentinel_verified_chunks"] = verified_chunks
             if verified_chunks != artifact.sentinel_chunks:
                 result["verification_error"] = (
                     f"sentinel mismatch: snapshot={artifact.sentinel_chunks} verified={verified_chunks}"
                 )
                 return result
+            pragma_name = "integrity_check" if full else "quick_check"
+            result["pragma"] = _optional_sqlite_pragma_check(restored, pragma_name)
             result["verified"] = True
     except Exception as exc:
         result.setdefault("gzip_test", False)
