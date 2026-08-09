@@ -313,9 +313,27 @@ final class MCPRouter: @unchecked Sendable {
         // replay can hold it across DB writes, so never block the caller
         // (setDatabases runs on BrainBarServer.queue during initialization).
         let scheduler = pendingStoreDrainScheduler
-        scheduler.queue.async { [weak scheduler, weak db] in
-            guard let scheduler, let db else { return }
-            guard let snapshot = db.pendingStoreQueueSnapshotIfReadable() else { return }
+        Self.scheduleExistingPendingStoreScan(scheduler: scheduler, db: db, delay: 0)
+    }
+
+    private static func scheduleExistingPendingStoreScan(
+        scheduler: PendingStoreDrainScheduler,
+        db: BrainDatabase,
+        delay: TimeInterval
+    ) {
+        scheduler.queue.asyncAfter(deadline: .now() + delay) { [weak scheduler, weak db] in
+            guard let scheduler, let db, db.isOpen else { return }
+            guard let snapshot = db.pendingStoreQueueSnapshotIfReadable() else {
+                scheduleExistingPendingStoreScan(
+                    scheduler: scheduler,
+                    db: db,
+                    delay: min(
+                        pendingStoreDrainMaxDelay,
+                        max(pendingStoreDrainInitialDelay, delay * 2)
+                    )
+                )
+                return
+            }
             var scheduledAny = false
             for identity in snapshot.identityKeys where identity.hasPrefix("chunk:") {
                 scheduledAny = true

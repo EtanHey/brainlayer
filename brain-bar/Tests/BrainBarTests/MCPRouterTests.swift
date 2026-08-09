@@ -2526,6 +2526,54 @@ No results found.
         XCTAssertFalse(FileManager.default.fileExists(atPath: queuePath.path))
     }
 
+    func testStartupDrainRetriesAfterTransientQueueReadFailure() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        let restoreQueuePath = setPendingStoreQueuePath(queuePath)
+        defer { restoreQueuePath() }
+
+        let dbPath = tempDir.appendingPathComponent("brainbar.db").path
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+        _ = try db.queuePendingStore(
+            content: "Startup drain survives one unreadable pending store queue snapshot",
+            tags: ["startup-retry"],
+            importance: 7,
+            source: "mcp",
+            chunkID: "brainbar-startup-retry"
+        )
+        let queuedText = try String(contentsOf: queuePath, encoding: .utf8)
+
+        try FileManager.default.removeItem(at: queuePath)
+        try FileManager.default.createDirectory(at: queuePath, withIntermediateDirectories: false)
+
+        let startupDrainQueue = DispatchQueue(label: "test.pending-store-startup-retry")
+        let router = MCPRouter(profile: "full", pendingStoreDrainQueue: startupDrainQueue)
+        router.setDatabase(db)
+        startupDrainQueue.sync {}
+
+        try FileManager.default.removeItem(at: queuePath)
+        try queuedText.write(to: queuePath, atomically: true, encoding: .utf8)
+
+        let deadline = Date().addingTimeInterval(2.0)
+        var storedContents: [String] = []
+        while Date() < deadline {
+            storedContents = (try? chunkContents(path: dbPath)) ?? []
+            if storedContents.contains("Startup drain survives one unreadable pending store queue snapshot") {
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+
+        XCTAssertTrue(
+            storedContents.contains("Startup drain survives one unreadable pending store queue snapshot"),
+            "startup drain should retry when its first pending-store queue snapshot is unreadable"
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: queuePath.path))
+    }
+
     func testDeferredBrainStoreDrainIsNotBlockedByAnotherRouterScheduler() throws {
         let tempDir = makeTempTestDirectory()
         defer { try? FileManager.default.removeItem(at: tempDir) }

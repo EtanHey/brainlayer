@@ -676,11 +676,24 @@ _pending_replay_lock = threading.Lock()
 _pending_replay_active = False
 
 
+def _pending_store_has_data(path) -> bool:
+    """Inspect the legacy replay queue under its writer lock.
+
+    Another process may flush and unlink the file between probes; absence means
+    there is currently nothing to replay, not that the recovery thread failed.
+    """
+    with _pending_store_file_lock(path):
+        try:
+            return path.stat().st_size > 0
+        except FileNotFoundError:
+            return False
+
+
 def rearm_stranded_pending_stores() -> bool:
     """Re-arm the legacy replay if a prior process died with pending-stores.jsonl
     non-empty after acknowledging the write. Returns True when a replay was armed."""
     path = _get_pending_store_path()
-    if path.exists() and path.stat().st_size > 0:
+    if _pending_store_has_data(path):
         _schedule_pending_store_replay()
         return True
     return False
@@ -709,7 +722,7 @@ def _schedule_pending_store_replay() -> None:
                 time.sleep(delay)
                 delay = min(delay * 2, 180.0)
                 path = _get_pending_store_path()
-                if not path.exists() or path.stat().st_size == 0:
+                if not _pending_store_has_data(path):
                     break
                 store = None
                 try:
@@ -726,7 +739,7 @@ def _schedule_pending_store_replay() -> None:
         # A concurrent fallback may append between our last empty check and the
         # flag clear above; re-arm rather than strand that write.
         path = _get_pending_store_path()
-        if path.exists() and path.stat().st_size > 0:
+        if _pending_store_has_data(path):
             _schedule_pending_store_replay()
 
     threading.Thread(target=_replay, daemon=True).start()

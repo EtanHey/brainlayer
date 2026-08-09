@@ -66,6 +66,33 @@ def test_startup_rearms_replay_when_legacy_queue_nonempty(monkeypatch, tmp_path)
     assert calls == [True]
 
 
+def test_startup_replay_probe_tolerates_concurrent_queue_unlink(monkeypatch, tmp_path) -> None:
+    """A queue removed between existence and size probes must not kill replay recovery."""
+    from contextlib import nullcontext
+
+    from brainlayer.mcp import store_handler
+
+    class UnlinkedPendingStorePath:
+        parent = tmp_path
+        name = "pending-stores.jsonl"
+
+        @staticmethod
+        def exists() -> bool:
+            return True
+
+        @staticmethod
+        def stat():
+            raise FileNotFoundError("concurrent replay removed pending-stores.jsonl")
+
+    calls = []
+    monkeypatch.setattr(store_handler, "_get_pending_store_path", UnlinkedPendingStorePath)
+    monkeypatch.setattr(store_handler, "_pending_store_file_lock", lambda _path: nullcontext())
+    monkeypatch.setattr(store_handler, "_schedule_pending_store_replay", lambda: calls.append(True))
+
+    assert store_handler.rearm_stranded_pending_stores() is False
+    assert calls == []
+
+
 def test_queue_store_never_trims_acknowledged_entries(monkeypatch, tmp_path) -> None:
     """Acknowledged durably-queued stores must never be silently dropped (codex round 5)."""
     import json as _json
