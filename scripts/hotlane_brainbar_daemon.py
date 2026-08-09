@@ -395,39 +395,67 @@ def _pending_chunk_rows(store: VectorStore, *, limit: int) -> list[EmbedCandidat
         return []
 
     scan_limit = max(PENDING_CANDIDATE_SCAN_FLOOR, limit * PENDING_CANDIDATE_SCAN_MULTIPLIER)
-    id_rows = list(
-        store.conn.cursor().execute(
-            """
-            SELECT c.id
-            FROM chunks c
-            LEFT JOIN chunk_vectors_rowids r ON c.id = r.id
-            WHERE r.id IS NULL
-              AND c.archived_at IS NULL
-              AND c.superseded_by IS NULL
-              AND c.aggregated_into IS NULL
-              AND COALESCE(c.archived, 0) = 0
-              AND COALESCE(c.status, 'active') = 'active'
-            ORDER BY c.created_at ASC
-            LIMIT ?
-            """,
-            (scan_limit,),
-        )
-    )
-    candidate_ids = [str(row[0]) for row in id_rows]
-    if not candidate_ids:
-        return []
+    candidates: list[EmbedCandidate] = []
+    after_created_at: str | None = None
+    after_rowid = 0
+    first_page = True
 
-    placeholders = ", ".join("?" for _chunk_id in candidate_ids)
-    content_rows = store.conn.cursor().execute(
-        f"SELECT id, content FROM chunks WHERE id IN ({placeholders})",
-        tuple(candidate_ids),
-    )
-    content_by_id = {str(row[0]): row[1] for row in content_rows}
-    return [
-        EmbedCandidate(chunk_id, str(content_by_id[chunk_id]))
-        for chunk_id in candidate_ids
-        if content_by_id.get(chunk_id)
-    ][:limit]
+    while len(candidates) < limit:
+        if first_page:
+            page_filter = ""
+            bindings: tuple[object, ...] = (scan_limit,)
+        elif after_created_at is None:
+            page_filter = "AND ((c.created_at IS NULL AND c.rowid > ?) OR c.created_at IS NOT NULL)"
+            bindings = (after_rowid, scan_limit)
+        else:
+            page_filter = """
+              AND c.created_at IS NOT NULL
+              AND (c.created_at > ? OR (c.created_at = ? AND c.rowid > ?))
+            """
+            bindings = (after_created_at, after_created_at, after_rowid, scan_limit)
+
+        id_rows = list(
+            store.conn.cursor().execute(
+                f"""
+                SELECT c.id, c.created_at, c.rowid
+                FROM chunks c
+                LEFT JOIN chunk_vectors_rowids r ON c.id = r.id
+                WHERE r.id IS NULL
+                  AND c.archived_at IS NULL
+                  AND c.superseded_by IS NULL
+                  AND c.aggregated_into IS NULL
+                  AND COALESCE(c.archived, 0) = 0
+                  AND COALESCE(c.status, 'active') = 'active'
+                  {page_filter}
+                ORDER BY c.created_at ASC, c.rowid ASC
+                LIMIT ?
+                """,
+                bindings,
+            )
+        )
+        if not id_rows:
+            break
+
+        candidate_ids = [str(row[0]) for row in id_rows]
+        placeholders = ", ".join("?" for _chunk_id in candidate_ids)
+        content_rows = store.conn.cursor().execute(
+            f"SELECT id, content FROM chunks WHERE id IN ({placeholders})",
+            tuple(candidate_ids),
+        )
+        content_by_id = {str(row[0]): row[1] for row in content_rows}
+        candidates.extend(
+            EmbedCandidate(chunk_id, str(content_by_id[chunk_id]))
+            for chunk_id in candidate_ids
+            if content_by_id.get(chunk_id)
+        )
+
+        after_created_at = id_rows[-1][1]
+        after_rowid = int(id_rows[-1][2])
+        first_page = False
+        if len(id_rows) < scan_limit:
+            break
+
+    return candidates[:limit]
 
 
 def _embed_candidates(
