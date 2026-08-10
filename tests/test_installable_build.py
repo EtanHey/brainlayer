@@ -319,26 +319,33 @@ def test_setup_mcp_migration_preserves_symlink_and_updates_target(tmp_path: Path
     }
 
 
-def test_verify_mcp_transport_requires_initialize_and_tools_list(tmp_path: Path) -> None:
+def test_verify_mcp_transport_requires_initialize_tools_list_and_tool_call(tmp_path: Path) -> None:
     from brainlayer.setup import verify_mcp_transport
 
     bridge = tmp_path / "fake-bridge"
+    call_marker = tmp_path / "tool-call-seen"
     bridge.write_text(
-        """#!/usr/bin/env python3
+        f"""#!/usr/bin/env python3
 import json
+from pathlib import Path
 import sys
 for line in sys.stdin:
     request = json.loads(line)
     if request.get("id") == 1:
-        print(json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18"}}), flush=True)
+        print(json.dumps({{"jsonrpc": "2.0", "id": 1, "result": {{"protocolVersion": "2025-06-18"}}}}), flush=True)
     elif request.get("id") == 2:
-        print(json.dumps({"jsonrpc": "2.0", "id": 2, "result": {"tools": [{"name": "brain_search"}]}}), flush=True)
+        print(json.dumps({{"jsonrpc": "2.0", "id": 2, "result": {{"tools": [{{"name": "brain_recall"}}]}}}}), flush=True)
+    elif request.get("id") == 3 and request.get("method") == "tools/call":
+        assert request.get("params") == {{"name": "brain_recall", "arguments": {{"mode": "stats"}}}}
+        Path({str(call_marker)!r}).write_text("seen")
+        print(json.dumps({{"jsonrpc": "2.0", "id": 3, "result": {{"content": [{{"type": "text", "text": "expanded"}}]}}}}), flush=True)
 """,
         encoding="utf-8",
     )
     bridge.chmod(0o755)
 
     assert verify_mcp_transport(bridge_command=str(bridge), timeout_seconds=2) == 1
+    assert call_marker.read_text() == "seen"
 
 
 def test_verify_mcp_transport_waits_for_initialize_response_before_next_message(tmp_path: Path) -> None:
@@ -361,7 +368,13 @@ if initialized.get("method") != "notifications/initialized":
 tools = json.loads(sys.stdin.readline())
 if tools.get("id") != 2:
     raise SystemExit(14)
-print(json.dumps({"jsonrpc": "2.0", "id": 2, "result": {"tools": [{"name": "brain_search"}]}}), flush=True)
+print(json.dumps({"jsonrpc": "2.0", "id": 2, "result": {"tools": [{"name": "brain_recall"}]}}), flush=True)
+call = json.loads(sys.stdin.readline())
+if call.get("id") != 3 or call.get("method") != "tools/call":
+    raise SystemExit(15)
+if call.get("params") != {"name": "brain_recall", "arguments": {"mode": "stats"}}:
+    raise SystemExit(16)
+print(json.dumps({"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "expanded"}]}}), flush=True)
 """,
         encoding="utf-8",
     )

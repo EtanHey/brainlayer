@@ -104,6 +104,10 @@ final class BrainBarServer: @unchecked Sendable {
     private let instanceLockPath: String
     private static let queueKey = DispatchSpecificKey<UUID>()
     private let queue = DispatchQueue(label: BrainBarServer.requestQueueLabel, qos: .userInitiated)
+    private let backupToolQueue = DispatchQueue(
+        label: "com.brainlayer.brainbar.backup-tool",
+        qos: .utility
+    )
     private let daemonHeartbeatQueue = DispatchQueue(
         label: BrainBarServer.daemonHeartbeatQueueLabel,
         qos: .utility
@@ -125,6 +129,7 @@ final class BrainBarServer: @unchecked Sendable {
     private var databaseOpenInProgress = false
     private var instanceLock: BrainBarInstanceLock?
     private var daemonHeartbeatTimer: DispatchSourceTimer?
+    private var backupToolCallInProgress = false
     var onDatabaseReady: (@Sendable (BrainDatabase) -> Void)?
     var onStartRejected: (@Sendable (String) -> Void)?
     /// Maximum EAGAIN retries before disconnecting a stalled client.
@@ -164,6 +169,14 @@ final class BrainBarServer: @unchecked Sendable {
         var agentID: String?
         var subscribedTags: Set<String> = []
         var brainBusSubscriptionID: BrainBusEventHub.SubscriptionID?
+    }
+
+    private final class SendableBox<Value>: @unchecked Sendable {
+        let value: Value
+
+        init(_ value: Value) {
+            self.value = value
+        }
     }
 
     init(
@@ -486,6 +499,15 @@ final class BrainBarServer: @unchecked Sendable {
             let method = msg["method"] as? String ?? "<no method>"
             let id = msg["id"]
             debugLog("  MSG fd=\(fd): method=\(method) id=\(String(describing: id))")
+            if parseToolCall(msg)?.name == "brain_backup_vacuum_into" {
+                handleBackupToolCallAsync(
+                    fd: fd,
+                    request: msg,
+                    useContentLength: state.usesContentLengthFraming
+                )
+                debugLog("  DEFERRED response for method=\(method) to backup queue")
+                continue
+            }
             let response = handleMessage(fd: fd, request: msg)
             if !response.isEmpty {
                 sendResponse(fd: fd, response: response, useContentLength: state.usesContentLengthFraming)
@@ -507,6 +529,16 @@ final class BrainBarServer: @unchecked Sendable {
     private func handleMessage(fd: Int32, request: [String: Any]) -> [String: Any] {
         let paletteSession = clients[fd]?.paletteSession
         if let toolCall = parseToolCall(request) {
+            if backupToolCallInProgress, !canHandleDuringBackup(toolCall.name) {
+                return [
+                    "jsonrpc": "2.0",
+                    "id": request["id"] as Any,
+                    "error": [
+                        "code": -32000,
+                        "message": "BrainBar backup snapshot is in progress; retry this tool call shortly.",
+                    ] as [String: Any],
+                ]
+            }
             switch toolCall.name {
             case "brain_subscribe":
                 guard let paletteSession,
@@ -546,6 +578,55 @@ final class BrainBarServer: @unchecked Sendable {
             }
         }
         return router.handle(request, session: paletteSession)
+    }
+
+    private func canHandleDuringBackup(_ toolName: String) -> Bool {
+        if toolName == "expand_palette" { return true }
+        // Production keeps reads on a separate SQLite connection. Do not allow
+        // recall concurrently in injected/single-connection test topologies.
+        return toolName == "brain_recall"
+            && readDatabase != nil
+            && database != nil
+            && readDatabase !== database
+    }
+
+    /// VACUUM INTO can run for minutes on the production database. It must not
+    /// occupy the serial socket queue: initialize, tools/list, and lightweight
+    /// protocol calls are fleet liveness, even while a scheduled backup runs.
+    private func handleBackupToolCallAsync(
+        fd: Int32,
+        request: [String: Any],
+        useContentLength: Bool
+    ) {
+        guard !backupToolCallInProgress else {
+            let response: [String: Any] = [
+                "jsonrpc": "2.0",
+                "id": request["id"] as Any,
+                "error": [
+                    "code": -32000,
+                    "message": "A BrainBar backup snapshot is already in progress.",
+                ] as [String: Any],
+            ]
+            sendResponse(fd: fd, response: response, useContentLength: useContentLength)
+            return
+        }
+        guard let paletteSession = clients[fd]?.paletteSession else { return }
+
+        backupToolCallInProgress = true
+        let requestBox = SendableBox(request)
+        backupToolQueue.async { [weak self] in
+            guard let self else { return }
+            let responseBox = SendableBox(
+                self.router.handle(requestBox.value, session: paletteSession)
+            )
+            self.queue.async { [weak self] in
+                guard let self else { return }
+                self.backupToolCallInProgress = false
+                guard self.clients[fd] != nil else { return }
+                self.sendResponse(fd: fd, response: responseBox.value, useContentLength: useContentLength)
+                self.debugLog("  SENT async response for brain_backup_vacuum_into")
+            }
+        }
     }
 
     @discardableResult
@@ -766,6 +847,9 @@ final class BrainBarServer: @unchecked Sendable {
         clients.removeAll()
         if listenFD >= 0 { listenFD = -1 }
         unlink(socketPath)
+        // The backup runs off the request queue so protocol traffic stays live.
+        // Drain it before closing the shared SQLite connection during shutdown.
+        backupToolQueue.sync {}
         let writeDatabase = database
         if providedDatabase == nil {
             if let readDatabase, let writeDatabase, readDatabase !== writeDatabase {

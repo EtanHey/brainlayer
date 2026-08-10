@@ -7,6 +7,47 @@ import SQLite3
 import XCTest
 @testable import BrainBar
 
+private final class SQLiteProgressGate: @unchecked Sendable {
+    let entered = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var shouldBlock = true
+
+    func step() -> Int32 {
+        lock.lock()
+        let block = shouldBlock
+        shouldBlock = false
+        lock.unlock()
+        if block {
+            entered.signal()
+            release.wait()
+        }
+        return 0
+    }
+}
+
+private final class BrainDatabaseCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var captured: BrainDatabase?
+
+    func set(_ database: BrainDatabase) {
+        lock.lock()
+        captured = database
+        lock.unlock()
+    }
+
+    func get() -> BrainDatabase? {
+        lock.lock()
+        defer { lock.unlock() }
+        return captured
+    }
+}
+
+private func blockSQLiteProgress(_ context: UnsafeMutableRawPointer?) -> Int32 {
+    guard let context else { return 0 }
+    return Unmanaged<SQLiteProgressGate>.fromOpaque(context).takeUnretainedValue().step()
+}
+
 final class SocketIntegrationTests: XCTestCase {
     let testSocketPath = "/tmp/brainbar-test-\(ProcessInfo.processInfo.processIdentifier).sock"
     var server: BrainBarServer!
@@ -350,6 +391,99 @@ final class SocketIntegrationTests: XCTestCase {
             try queryString("SELECT content FROM chunks WHERE content = 'vacuum over socket'", on: restored),
             "vacuum over socket"
         )
+    }
+
+    func testBlockedBackupVacuumDoesNotStarveFreshSocketProtocolFlow() throws {
+        // Use the production topology: a write connection for VACUUM and an
+        // independent read-only connection for normal recall traffic.
+        server.stop()
+        db.close()
+        setenv("BRAINLAYER_MCP_PROFILE", "core", 1)
+        let databaseReady = DispatchSemaphore(value: 0)
+        let databaseCapture = BrainDatabaseCapture()
+        server = BrainBarServer(
+            socketPath: testSocketPath,
+            dbPath: tempDBPath,
+            enableHybridSearchHelper: false
+        )
+        server.onDatabaseReady = { database in
+            databaseCapture.set(database)
+            databaseReady.signal()
+        }
+        server.start()
+        XCTAssertTrue(waitForSocket(at: testSocketPath), "Server should bind \(testSocketPath)")
+        XCTAssertEqual(databaseReady.wait(timeout: .now() + 1), .success)
+        guard let writeDatabase = databaseCapture.get() else {
+            return XCTFail("Server should expose its ready write database")
+        }
+
+        _ = try sendMCPRequest([
+            "jsonrpc": "2.0", "id": 39, "method": "initialize",
+            "params": ["protocolVersion": "2024-11-05", "capabilities": [:] as [String: Any],
+                       "clientInfo": ["name": "backup-liveness-warmup", "version": "1.0"]],
+        ])
+        Thread.sleep(forTimeInterval: 0.05)
+
+        let progressGate = SQLiteProgressGate()
+        defer { progressGate.release.signal() }
+        sqlite3_progress_handler(
+            writeDatabase.dbHandle,
+            1,
+            blockSQLiteProgress,
+            Unmanaged.passUnretained(progressGate).toOpaque()
+        )
+        defer { sqlite3_progress_handler(writeDatabase.dbHandle, 0, nil, nil) }
+
+        let targetPath = NSTemporaryDirectory() + "brainbar-blocked-backup-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: targetPath) }
+        defer { try? FileManager.default.removeItem(atPath: targetPath + ".complete") }
+
+        let backupFD = try connectClient()
+        defer { close(backupFD) }
+        try sendMCPRequest(on: backupFD, request: [
+            "jsonrpc": "2.0",
+            "id": 40,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_backup_vacuum_into",
+                "arguments": ["target_path": targetPath],
+            ],
+        ])
+        XCTAssertEqual(progressGate.entered.wait(timeout: .now() + 1), .success)
+
+        // Deployment health is a held-open, fresh-socket protocol sequence —
+        // initialize + tools/list + a real tool call — not a version/plist probe.
+        let probeFD = try connectClient()
+        defer { close(probeFD) }
+        try sendMCPRequest(on: probeFD, request: [
+            "jsonrpc": "2.0", "id": 41, "method": "initialize",
+            "params": ["protocolVersion": "2024-11-05", "capabilities": [:] as [String: Any],
+                       "clientInfo": ["name": "backup-liveness-probe", "version": "1.0"]],
+        ])
+        let initialize = try? readMCPMessage(fd: probeFD, timeout: 0.5)
+        XCTAssertNotNil(initialize?["result"])
+
+        if initialize != nil {
+            try sendMCPRequest(on: probeFD, request: [
+                "jsonrpc": "2.0", "id": 42, "method": "tools/list", "params": [:] as [String: Any],
+            ])
+            let tools = try readMCPMessage(fd: probeFD, timeout: 0.5)
+            XCTAssertNotNil((tools["result"] as? [String: Any])?["tools"])
+
+            try sendMCPRequest(on: probeFD, request: [
+                "jsonrpc": "2.0", "id": 43, "method": "tools/call",
+                "params": ["name": "brain_recall", "arguments": ["mode": "stats"]],
+            ])
+            let call = try readMCPMessage(fd: probeFD, timeout: 0.5)
+            XCTAssertNil(call["error"])
+            XCTAssertNotNil(call["result"])
+        }
+
+        progressGate.release.signal()
+        _ = try readMCPMessage(fd: backupFD, timeout: 2)
+        if initialize == nil {
+            _ = try? readMCPMessage(fd: probeFD, timeout: 1)
+        }
     }
 
     func testBrainBackupVacuumIntoRefusesExistingCompletionMarkerWithoutOverwritingIt() throws {
