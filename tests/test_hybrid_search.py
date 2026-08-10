@@ -2,6 +2,7 @@
 
 import json
 import math
+import threading
 import uuid
 from datetime import datetime, timezone
 
@@ -118,6 +119,76 @@ def test_hybrid_cache_rejects_result_after_cross_connection_source_class_change(
         n_results=5,
     )
     assert "cache-source-class-row" not in second["ids"][0]
+
+
+def test_hybrid_cache_rejects_result_on_new_reader_with_same_data_version(store):
+    embedding = _embed("cross thread source class cache")
+    _insert_chunk(
+        store,
+        chunk_id="cache-cross-thread-source-class-row",
+        content="CrossThreadSourceClassCacheNeedle",
+        embedding=embedding,
+    )
+
+    results = []
+
+    def search():
+        results.append(
+            store.hybrid_search(
+                query_embedding=embedding,
+                query_text="CrossThreadSourceClassCacheNeedle",
+                n_results=5,
+            )
+        )
+
+    first_reader = threading.Thread(target=search)
+    first_reader.start()
+    first_reader.join()
+    assert "cache-cross-thread-source-class-row" in results[-1]["ids"][0]
+
+    writer = apsw.Connection(str(store.db_path))
+    writer.execute(
+        "UPDATE chunks SET source_class = 'desktop' WHERE id = ?",
+        ("cache-cross-thread-source-class-row",),
+    )
+    writer.close()
+
+    second_reader = threading.Thread(target=search)
+    second_reader.start()
+    second_reader.join()
+    assert "cache-cross-thread-source-class-row" not in results[-1]["ids"][0]
+
+
+def test_source_class_knn_count_cache_is_scoped_to_reader_connection(store):
+    embedding = _embed("cross thread hidden count")
+    _insert_chunk(
+        store,
+        chunk_id="cross-thread-hidden-count-row",
+        content="CrossThreadHiddenCountNeedle",
+        embedding=embedding,
+    )
+
+    effective_k = []
+
+    def calculate_k():
+        effective_k.append(store._source_class_filtered_knn_k(5, False))
+
+    first_reader = threading.Thread(target=calculate_k)
+    first_reader.start()
+    first_reader.join()
+    assert effective_k[-1] == 5
+
+    writer = apsw.Connection(str(store.db_path))
+    writer.execute(
+        "UPDATE chunks SET source_class = 'desktop' WHERE id = ?",
+        ("cross-thread-hidden-count-row",),
+    )
+    writer.close()
+
+    second_reader = threading.Thread(target=calculate_k)
+    second_reader.start()
+    second_reader.join()
+    assert effective_k[-1] == 6
 
 
 class TestBinaryIndexLifecycle:

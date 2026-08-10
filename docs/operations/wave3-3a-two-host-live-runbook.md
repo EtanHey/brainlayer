@@ -10,8 +10,8 @@ This runbook is the source-class segment of the Wave 3 maintenance sitting. Exec
 - Required deployed release before either host migrates: BrainLayer + BrainBar **exactly v1.5.6**. v1.5.5 carries the backup-race fix; v1.5.6 adds the Swift default-search source-class gate.
 - Command: `scripts/migrate_source_class.py` from a checkout containing that commit.
 - Rehearsal source: online SQLite backup from canonical opened `mode=ro` into gitignored `.tmp-wave3-3a/` (contingency route, not the LIVE primary route).
-- Timed contingency replay: 26.16 seconds wall-clock while live drain writes continued; 744,396 rows, 4,251,874 pages, 17,415,675,904 bytes. The pristine rehearsal copy passed `PRAGMA quick_check` before migration.
-- Rehearsal rows: 744,335 before and after.
+- Timed contingency replay: `.tmp-wave3-3a/online-backup-timed.db`, completed 2026-08-10 13:39:47 IDT after 26.16 seconds while live drain writes continued; 744,396 rows, 4,251,874 pages, 17,415,675,904 bytes. This copy proved only the contingency mechanism.
+- Final migration rehearsal source: the earlier APFS clone `.tmp-wave3-3a/canonical-pristine.db`, captured 2026-08-10 12:44:04 IDT with 744,335 rows and a clean `PRAGMA quick_check`. Its migrated copy retained exactly 744,335 rows. The 61-row difference from the later online-backup snapshot is therefore between two independently timestamped live snapshots, not a migration row-count discrepancy.
 - Final-code rehearsal migration: 252.02 seconds wall-clock on commit `3964412f8291a083150a424e38df08ece817783d` (`duration_seconds=251.79996774997562`); exact-SHA idempotent rerun: 0.65 seconds.
 - Rehearsal distribution: NULL 69,581; brain-worker 84; cli-agent 536,851; desktop 2,696; fleet-coordination 105,383; subagent 29,740.
 - Earlier monitored rehearsal migration WAL: 0 bytes before, 29,181,992-byte observed peak, 0 bytes at close after checkpoints; the final-code rerun was not separately peak-sampled.
@@ -70,8 +70,9 @@ fi
 scripts/brainlayer-update-brainbar.sh
 export WAVE3A_INSTALLED_CLI="$(command -v brainlayer)"
 test -x "$WAVE3A_INSTALLED_CLI"
-"$WAVE3A_INSTALLED_CLI" --version | tee "$HOME/.local/share/brainlayer/wave3a-installed-cli-version.txt"
-grep -F "$WAVE3A_REQUIRED_VERSION" "$HOME/.local/share/brainlayer/wave3a-installed-cli-version.txt"
+"$WAVE3A_INSTALLED_CLI" --version | awk '{print $NF}' \
+  | tee "$HOME/.local/share/brainlayer/wave3a-installed-cli-version.txt"
+grep -Fx "$WAVE3A_REQUIRED_VERSION" "$HOME/.local/share/brainlayer/wave3a-installed-cli-version.txt"
 /usr/libexec/PlistBuddy -c 'Print:CFBundleShortVersionString' /Applications/BrainBar.app/Contents/Info.plist \
   | tee "$HOME/.local/share/brainlayer/wave3a-brainbar-version.txt"
 grep -Fx "$WAVE3A_REQUIRED_VERSION" "$HOME/.local/share/brainlayer/wave3a-brainbar-version.txt"
@@ -114,12 +115,21 @@ mkdir -p "$WAVE3A_RUN_DIR"
 test -x "$WAVE3A_PYTHON"
 test -x "$WAVE3A_CLI"
 test "$(git rev-parse "$WAVE3A_SHA")" = "$WAVE3A_SHA"
-git merge-base --is-ancestor "$WAVE3A_SHA" HEAD
+test "$(git rev-parse HEAD)" = "$WAVE3A_SHA"
+test -z "$(git status --porcelain)"
 test -f "$WAVE3A_DB"
 /usr/libexec/PlistBuddy -c 'Print:CFBundleShortVersionString' /Applications/BrainBar.app/Contents/Info.plist | grep -Fx '1.5.6'
 df -k "$(dirname "$WAVE3A_DB")"
 stat -f '%z' "$WAVE3A_DB"
 stat -f '%z' "$WAVE3A_DB-wal" 2>/dev/null || true
+export WAVE3A_ROWS_BEFORE="$("$WAVE3A_PYTHON" - "$WAVE3A_DB" <<'PY'
+import sqlite3, sys
+c = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
+print(c.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
+c.close()
+PY
+)"
+printf '%s\n' "$WAVE3A_ROWS_BEFORE" | tee "$WAVE3A_RUN_DIR/rows-before.txt"
 cat "$HOME/.local/share/brainlayer/pause.sentinel" 2>/dev/null || true
 pgrep -af '[b]rain_digest|[b]rainlayer.*digest' && exit 1 || true
 pgrep -af '[b]rainlayer.backup_daily|[b]ackup-daily.sh' && exit 1 || true
@@ -236,7 +246,7 @@ cat "$WAVE3A_FENCE_READY"
 
 ## 3. Primary LIVE backup route: backup pipeline
 
-This is the required Tuesday route. Deployed v1.5.6 includes v1.5.5's backup-race fix and the v1.5.6 Swift source-class gate.
+This is the required Tuesday route. Deployed v1.5.6 includes v1.5.5's backup-race fix and the v1.5.6 Swift source-class gate. The command enters through Python, but `create_sqlite_backup_artifact()` must send `brain_backup_vacuum_into` over the installed BrainBarDaemon socket; it does not perform SQLite backup locally. A successful terminal tool response plus the validated raw snapshot proves that daemon route executed.
 
 ```bash
 set -o pipefail
@@ -262,13 +272,15 @@ Before migration, require all of the following in the JSON receipt: `backup_log_
 ```bash
 export WAVE3A_BACKUP_RAW="<local_uncompressed_snapshot from receipt>"
 test -f "$WAVE3A_BACKUP_RAW"
-"$WAVE3A_PYTHON" - "$WAVE3A_BACKUP_RAW" <<'PY'
+"$WAVE3A_PYTHON" - "$WAVE3A_BACKUP_RAW" "$WAVE3A_ROWS_BEFORE" <<'PY'
 import sqlite3, sys
-p = sys.argv[1]
+p, expected_rows = sys.argv[1], int(sys.argv[2])
 c = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
-print(c.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
+rows = c.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+print(rows)
 print(c.execute("PRAGMA quick_check").fetchone()[0])
 c.close()
+assert rows == expected_rows
 PY
 ```
 
@@ -289,12 +301,15 @@ src.backup(dst, pages=4096, sleep=0.050)
 dst.close()
 src.close()
 PY
-"$WAVE3A_PYTHON" - "$WAVE3A_BACKUP_RAW" <<'PY'
+"$WAVE3A_PYTHON" - "$WAVE3A_BACKUP_RAW" "$WAVE3A_ROWS_BEFORE" <<'PY'
 import sqlite3, sys
-c = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
-print(c.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
+p, expected_rows = sys.argv[1], int(sys.argv[2])
+c = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
+rows = c.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+print(rows)
 print(c.execute("PRAGMA quick_check").fetchone()[0])
 c.close()
+assert rows == expected_rows
 PY
 ```
 
@@ -337,10 +352,10 @@ If additional approved Wave 3 migrations are scheduled for the same maintenance 
 Run this read-only receipt query:
 
 ```bash
-"$WAVE3A_PYTHON" - "$WAVE3A_DB" "$WAVE3A_SHA" <<'PY'
+"$WAVE3A_PYTHON" - "$WAVE3A_DB" "$WAVE3A_SHA" "$WAVE3A_ROWS_BEFORE" <<'PY'
 import json, sqlite3, sys
 import sqlite_vec
-db, expected_sha = sys.argv[1:3]
+db, expected_sha, expected_rows = sys.argv[1], sys.argv[2], int(sys.argv[3])
 c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
 c.enable_load_extension(True)
 c.load_extension(sqlite_vec.loadable_path())
@@ -368,6 +383,7 @@ receipt = {
 c.close()
 print(json.dumps(receipt, indent=2, sort_keys=True))
 assert receipt["quick_check"] == "ok"
+assert receipt["rows"] == expected_rows
 assert receipt["invalid_classes"] == 0
 assert receipt["brain_worker_fts_rows"] == 0
 assert receipt["brain_worker_float_vector_rows"] == 0

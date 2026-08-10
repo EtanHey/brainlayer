@@ -119,8 +119,11 @@ AUDIT_RECURSION_TAG_PATTERNS = (
     "{tag_expr} GLOB 'r0[0-9]'",
 )
 
-# Module-level LRU cache: {cache_key: (result, timestamp, data_version)}
-_hybrid_cache: "OrderedDict[tuple, tuple[dict, float, int | None]]" = OrderedDict()
+# Module-level LRU cache: {cache_key: (result, timestamp, reader_state)}.
+# reader_state contains an application-owned per-connection token because
+# PRAGMA data_version values from different SQLite connections are not
+# comparable.
+_hybrid_cache: "OrderedDict[tuple, tuple[dict, float, tuple[object, int] | None]]" = OrderedDict()
 
 
 def _env_flag_enabled(name: str) -> bool:
@@ -799,6 +802,30 @@ class SearchMixin:
                 _sleep(0.05 * (2**attempt))
         return None
 
+    def _reader_cache_state(self) -> tuple[object, int] | None:
+        """Return a connection-scoped token plus that connection's data version."""
+        for attempt in range(3):
+            try:
+                cursor = self._read_cursor()
+                row = cursor.execute("PRAGMA data_version").fetchone()
+                if not row:
+                    return None
+                local = getattr(self, "_local", None)
+                if local is not None:
+                    token = getattr(local, "reader_cache_token", None)
+                    if token is None:
+                        token = object()
+                        local.reader_cache_token = token
+                else:
+                    connection = cursor.get_connection()
+                    token = connection if connection is not None else cursor
+                return token, int(row[0])
+            except (apsw.Error, AttributeError, TypeError, IndexError, ValueError) as exc:
+                if not isinstance(exc, apsw.Error) or not _is_sqlite_busy_error(exc) or attempt == 2:
+                    return None
+                _sleep(0.05 * (2**attempt))
+        return None
+
     def _checkpoint_filtered_knn_k(
         self,
         n_results: int,
@@ -867,11 +894,12 @@ class SearchMixin:
     ) -> int:
         if not getattr(self, "_has_source_class", False):
             return n_results
-        cache_key = "opt_in" if include_hidden_source_classes else "default"
+        visibility_key = "opt_in" if include_hidden_source_classes else "default"
         cache = getattr(self, "_source_class_count_cache", {})
-        current_data_version = self._checkpoint_cache_data_version()
+        reader_state = self._reader_cache_state()
+        cache_key = (visibility_key, reader_state[0]) if reader_state is not None else None
         cached = cache.get(cache_key)
-        if cached is not None and (current_data_version is None or cached[0] == current_data_version):
+        if cached is not None and reader_state is not None and cached[0] == reader_state[1]:
             hidden_count = int(cached[1])
         else:
             hidden_values = ("brain-worker",) if include_hidden_source_classes else ("desktop", "brain-worker")
@@ -889,8 +917,9 @@ class SearchMixin:
                     )
                     hidden_count = int(row[0]) if row else 0
                     cache = dict(cache)
-                    cache[cache_key] = (current_data_version, hidden_count)
-                    setattr(self, "_source_class_count_cache", cache)
+                    if cache_key is not None and reader_state is not None:
+                        cache[cache_key] = (reader_state[1], hidden_count)
+                        setattr(self, "_source_class_count_cache", cache)
                     break
                 except (apsw.Error, TypeError, IndexError, ValueError) as exc:
                     if not isinstance(exc, apsw.Error) or not _is_sqlite_busy_error(exc) or attempt == 2:
@@ -1966,12 +1995,12 @@ class SearchMixin:
         )
         now = time.monotonic()
         if cache_key in _hybrid_cache:
-            cached_result, cached_at, cached_data_version = _hybrid_cache[cache_key]
-            current_data_version = self._checkpoint_cache_data_version()
+            cached_result, cached_at, cached_reader_state = _hybrid_cache[cache_key]
+            current_reader_state = self._reader_cache_state()
             if (
                 now - cached_at < _HYBRID_CACHE_TTL
-                and current_data_version is not None
-                and cached_data_version == current_data_version
+                and current_reader_state is not None
+                and cached_reader_state == current_reader_state
             ):
                 _hybrid_cache.move_to_end(cache_key)  # LRU touch
                 cached_clone = _clone_hybrid_result(cached_result)
@@ -2646,7 +2675,7 @@ class SearchMixin:
         _hybrid_cache[cache_key] = (
             _clone_hybrid_result(result),
             time.monotonic(),
-            self._checkpoint_cache_data_version(),
+            self._reader_cache_state(),
         )
         _hybrid_cache.move_to_end(cache_key)
         if len(_hybrid_cache) > _HYBRID_CACHE_MAX:
