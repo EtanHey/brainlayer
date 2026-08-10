@@ -11,7 +11,11 @@ from pathlib import Path
 
 BRAINLAYER_INGEST_DENYLIST_ENV = "BRAINLAYER_INGEST_DENYLIST"
 
-DEFAULT_INGEST_DENYLIST = ("~/.claude/projects/**/wf_*/**",)
+# The class rule is deliberately narrower than the historical wf_* blanket:
+# only memory-reading workers are out of the index. Explicit deployment globs
+# remain available through BRAINLAYER_INGEST_DENYLIST.
+DEFAULT_INGEST_DENYLIST: tuple[str, ...] = ()
+MEMORY_READER_ATTRIBUTIONS = frozenset({"brain-worker", "session-miner", "weave"})
 
 
 @dataclass(frozen=True)
@@ -67,6 +71,30 @@ def _match_parts(path_parts: tuple[str, ...], pattern_parts: tuple[str, ...]) ->
 def _is_claude_subagent(path: Path) -> bool:
     parts = path.parts
     return ".claude" in parts and "projects" in parts and "subagents" in parts
+
+
+def _has_memory_reader_path_signature(path: Path) -> bool:
+    if "subagents" not in path.parts:
+        return False
+    subagents_index = path.parts.index("subagents")
+    markers = {part.casefold().replace("_", "-") for part in path.parts[subagents_index + 1 :]}
+    return bool(markers & MEMORY_READER_ATTRIBUTIONS)
+
+
+def memory_reader_attribution(path: str | Path) -> str | None:
+    """Return an exact memory-reader role from path/JSONL attribution, never task text."""
+    candidate = Path(os.path.abspath(os.path.expanduser(str(path))))
+    if not _is_claude_subagent(candidate):
+        return None
+    if "subagents" in candidate.parts:
+        subagents_index = candidate.parts.index("subagents")
+        for part in candidate.parts[subagents_index + 1 :]:
+            normalized = part.strip().casefold().replace("_", "-")
+            if normalized in MEMORY_READER_ATTRIBUTIONS:
+                return normalized
+    attribution = _claude_subagent_attribution(candidate)
+    normalized = str(attribution or "").strip().casefold().replace("_", "-")
+    return normalized if normalized in MEMORY_READER_ATTRIBUTIONS else None
 
 
 def _claude_subagent_attribution(path: Path) -> str | None:
@@ -162,6 +190,9 @@ def is_denylisted(path: str | Path, *, unknown_subagent_is_denylisted: bool = Tr
             if _match_parts(candidate.parts, expanded_pattern.parts):
                 return True
     if BRAINLAYER_INGEST_DENYLIST_ENV not in os.environ and _is_claude_subagent(candidate):
+        if memory_reader_attribution(candidate) is not None:
+            return True
         attribution = _claude_subagent_attribution(candidate)
-        return (attribution is None and unknown_subagent_is_denylisted) or attribution == "brain-worker"
+        normalized = str(attribution or "").strip().casefold().replace("_", "-")
+        return (attribution is None and unknown_subagent_is_denylisted) or normalized in MEMORY_READER_ATTRIBUTIONS
     return False

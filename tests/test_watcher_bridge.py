@@ -641,7 +641,7 @@ class TestFlushCallback:
 
 class TestFullPipeline:
     def test_watcher_denylist_blocks_brain_workers_and_allows_ordinary_subagents(self, tmp_path, monkeypatch):
-        """Exercise #666 while naming workflow-path exclusion below as known drift, not policy."""
+        """Exercise #666: only memory-reading workers stay out of the index."""
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.delenv("BRAINLAYER_INGEST_DENYLIST", raising=False)
         db_path = tmp_path / "test.db"
@@ -655,15 +655,6 @@ class TestFullPipeline:
             / "session-123"
             / "subagents"
             / "agent-brain.jsonl",
-            "known-drift-workflow-worker": tmp_path
-            / ".claude"
-            / "projects"
-            / "proj"
-            / "session-123"
-            / "subagents"
-            / "workflows"
-            / "wf_123"
-            / "agent-workflow.jsonl",
         }
         allowed = {
             "codex": tmp_path / ".codex" / "sessions" / "2026" / "07" / "02" / "worker.jsonl",
@@ -683,13 +674,19 @@ class TestFullPipeline:
             / "session-123"
             / "subagents"
             / "agent-general.jsonl",
+            "workflow-subagent": tmp_path
+            / ".claude"
+            / "projects"
+            / "proj"
+            / "session-123"
+            / "subagents"
+            / "workflows"
+            / "wf_123"
+            / "agent-workflow.jsonl",
         }
         for provider, path in denylisted.items():
             path.parent.mkdir(parents=True, exist_ok=True)
-            attribution = {
-                "brain-worker": "brain-worker",
-                "known-drift-workflow-worker": "workflow-subagent",
-            }[provider]
+            attribution = "brain-worker"
             path.write_text(
                 json.dumps(
                     _make_jsonl_entry(
@@ -707,7 +704,13 @@ class TestFullPipeline:
 
         for provider, path in allowed.items():
             path.parent.mkdir(parents=True, exist_ok=True)
-            extra = {"attributionAgent": "general-purpose"} if provider == "claude-subagent" else {}
+            extra = (
+                {"attributionAgent": "workflow-subagent"}
+                if provider == "workflow-subagent"
+                else {"attributionAgent": "general-purpose"}
+                if provider == "claude-subagent"
+                else {}
+            )
             sentinel_provider = provider.replace("-", "").upper()
             path.write_text(
                 json.dumps(
@@ -750,6 +753,9 @@ class TestFullPipeline:
                 )
             for provider, path in allowed.items():
                 sentinel_provider = provider.replace("-", "").upper()
+                expected_source_class = (
+                    "subagent" if provider in {"claude-subagent", "workflow-subagent"} else "cli-agent"
+                )
                 assert (
                     conn.execute("SELECT count(*) FROM chunks WHERE source_file = ?", (str(path),)).fetchone()[0] >= 1
                 )
@@ -760,6 +766,13 @@ class TestFullPipeline:
                     ).fetchone()[0]
                     >= 1
                 ), provider
+                assert {
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT source_class FROM chunks WHERE source_file = ?",
+                        (str(path),),
+                    )
+                } == {expected_source_class}
             assert (
                 conn.execute(
                     "SELECT count(*) FROM chunks_fts WHERE chunks_fts MATCH ?",
@@ -798,6 +811,30 @@ class TestFullPipeline:
         rows = conn.execute("SELECT content FROM chunks WHERE source = 'realtime_watcher'").fetchall()
         conn.close()
         assert len(rows) >= 1
+
+    def test_direct_watcher_insert_is_safe_before_source_class_migration(self, tmp_path):
+        db_path = tmp_path / "legacy-without-source-class.db"
+        store = VectorStore(db_path)
+        store.close()
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("DROP INDEX IF EXISTS idx_chunks_source_class")
+            conn.execute("ALTER TABLE chunks DROP COLUMN source_class")
+
+        source_file = tmp_path / "projects" / "test-project" / "session.jsonl"
+        entry = _make_jsonl_entry(
+            text="LegacySchemaNeedle direct watcher writes must remain safe before the supervised migration.",
+            entry_type="assistant",
+        )
+        entry["_source_file"] = str(source_file)
+
+        result = create_flush_callback(db_path, arbitrated=False)([entry])
+
+        assert result.inserted == 1
+        with sqlite3.connect(db_path) as conn:
+            assert "source_class" not in {row[1] for row in conn.execute("PRAGMA table_info(chunks)")}
+            assert conn.execute("SELECT COUNT(*) FROM chunks WHERE content LIKE '%LegacySchemaNeedle%'").fetchone() == (
+                1,
+            )
 
     def test_fts5_searchable_after_insert(self, tmp_path):
         db_path = tmp_path / "test.db"

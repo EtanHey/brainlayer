@@ -180,6 +180,7 @@ def test_t3_upsert_persists_provenance_and_accepts_mirrored_duplicates(isolated_
             "project": None,
             "source": "t3",
             "provenance_class": "t3-thread",
+            "source_class": "desktop",
             "allow_duplicate": True,
         },
         {
@@ -187,6 +188,7 @@ def test_t3_upsert_persists_provenance_and_accepts_mirrored_duplicates(isolated_
             "project": None,
             "source": "t3",
             "provenance_class": "t3-thread",
+            "source_class": "desktop",
             "allow_duplicate": True,
         },
     ]
@@ -195,13 +197,30 @@ def test_t3_upsert_persists_provenance_and_accepts_mirrored_duplicates(isolated_
 
     rows = (
         isolated_store.conn.cursor()
-        .execute("SELECT id, source, provenance_class FROM chunks WHERE id LIKE 't3-thread-%' ORDER BY id")
+        .execute(
+            "SELECT id, source, provenance_class, source_class FROM chunks WHERE id LIKE 't3-thread-%' ORDER BY id"
+        )
         .fetchall()
     )
     assert rows == [
-        ("t3-thread-1", "t3", "t3-thread"),
-        ("t3-thread-2", "t3", "t3-thread"),
+        ("t3-thread-1", "t3", "t3-thread", "desktop"),
+        ("t3-thread-2", "t3", "t3-thread", "desktop"),
     ]
+
+
+def test_repeat_upsert_validates_and_backfills_source_class(isolated_store):
+    first = {**_chunk("replayed"), "source_class": "brain_worker"}
+    replay = {**_chunk("replayed"), "source_class": "desktop"}
+
+    isolated_store.upsert_chunks([first], [_embedding(1)])
+    assert isolated_store.conn.cursor().execute("SELECT source_class FROM chunks WHERE id = 'replayed'").fetchone() == (
+        None,
+    )
+
+    isolated_store.upsert_chunks([replay], [_embedding(1)])
+    assert isolated_store.conn.cursor().execute("SELECT source_class FROM chunks WHERE id = 'replayed'").fetchone() == (
+        "desktop",
+    )
 
 
 def test_busy_sub_batch_retries_without_replaying_committed_sub_batches(isolated_store, monkeypatch):

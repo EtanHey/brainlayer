@@ -8,12 +8,21 @@
 # Environment:
 #   DEADLINE_SECS=8    Response deadline for tools/list + query
 #   QUERY=agent-html   Query passed to brain_search
+#   NUM_RESULTS=1      brain_search result limit
+#   RAW_OUTPUT_PATH=   Optional file receiving the raw JSON-RPC response
 
 set -euo pipefail
 
 SOCK="${1:-/tmp/brainbar.sock}"
 DEADLINE_SECS="${DEADLINE_SECS:-8}"
 QUERY="${QUERY:-agent-html}"
+NUM_RESULTS="${NUM_RESULTS:-1}"
+RAW_OUTPUT_PATH="${RAW_OUTPUT_PATH:-}"
+
+if [[ ! "$NUM_RESULTS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "FAIL: NUM_RESULTS must be a positive integer"
+  exit 2
+fi
 
 for cmd in date grep python3 socat timeout; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
@@ -32,7 +41,7 @@ init='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":
 inited='{"jsonrpc":"2.0","method":"notifications/initialized"}'
 listtools='{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
 json_query="$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$QUERY")"
-callsearch='{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"brain_search","arguments":{"query":'"$json_query"',"num_results":1}}}'
+callsearch='{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"brain_search","arguments":{"query":'"$json_query"',"num_results":'"$NUM_RESULTS"'}}}'
 
 echo "== first-turn BrainLayer smoke =="
 echo "socket: $SOCK   deadline: ${DEADLINE_SECS}s   query: $QUERY"
@@ -49,6 +58,18 @@ elapsed=$((end - start))
 if [[ -z "$out" ]]; then
   echo "FAIL: no output from MCP socket (rc=$rc, ${elapsed}s)"
   exit 2
+fi
+
+if [[ -n "$RAW_OUTPUT_PATH" ]]; then
+  if [[ -e "$RAW_OUTPUT_PATH" ]]; then
+    chmod 600 "$RAW_OUTPUT_PATH"
+  fi
+  (
+    umask 077
+    : > "$RAW_OUTPUT_PATH"
+    chmod 600 "$RAW_OUTPUT_PATH"
+    printf '%s\n' "$out" > "$RAW_OUTPUT_PATH"
+  )
 fi
 
 if [[ "$rc" -eq 124 ]]; then

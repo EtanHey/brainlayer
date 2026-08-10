@@ -49,7 +49,7 @@ def test_direct_session_ingest_stays_default_visible_and_never_operational_or_co
     assert metadata["provenance_effective_visibility"] == "default"
 
 
-def test_cursor_agent_transcript_ingest_is_tagged_and_routed_operational(tmp_path):
+def test_cursor_agent_transcript_ingest_is_tagged_and_default_searchable(tmp_path):
     db_path = tmp_path / "brainlayer.db"
     source_file = (
         tmp_path / "home" / ".cursor" / "projects" / "brainlayer" / "agent-transcripts" / "cursor-gather.jsonl"
@@ -62,13 +62,13 @@ def test_cursor_agent_transcript_ingest_is_tagged_and_routed_operational(tmp_pat
     assert result.inserted == 1
     content_class, provenance_class, metadata, normal_fts_count, operational_fts_count = _single_inserted_row(db_path)
     assert (content_class, provenance_class, normal_fts_count, operational_fts_count) == (
-        "operational",
+        "knowledge",
         "cursor-gather",
-        0,
         1,
+        0,
     )
     assert metadata["provenance_tag"] == "cursor-gather"
-    assert metadata["provenance_effective_visibility"] == "operational"
+    assert metadata["provenance_effective_visibility"] == "default"
 
 
 def test_gemini_session_ingest_is_searchable_by_default(tmp_path):

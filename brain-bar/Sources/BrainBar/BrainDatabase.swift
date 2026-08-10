@@ -1248,11 +1248,7 @@ final class BrainDatabase: @unchecked Sendable {
         let sourceFilter = normalizedSourceFilter(source)
         var conditions = [
             "\(tableName) MATCH ?",
-            "c.superseded_by IS NULL",
-            "c.aggregated_into IS NULL",
-            "c.archived_at IS NULL",
-            "COALESCE(c.archived, 0) = 0",
-            "COALESCE(c.status, 'active') = 'active'"
+            try searchableChunkWhereClause(alias: "c"),
         ]
         if project != nil { conditions.append("(c.project = ? OR c.project IS NULL)") }
         if sourceFilter != nil { conditions.append("c.source = ?") }
@@ -1724,11 +1720,7 @@ final class BrainDatabase: @unchecked Sendable {
         let sourceFilter = normalizedSourceFilter(source)
         var conditions = [
             "chunks_fts MATCH ?",
-            "c.superseded_by IS NULL",
-            "c.aggregated_into IS NULL",
-            "c.archived_at IS NULL",
-            "COALESCE(c.archived, 0) = 0",
-            "COALESCE(c.status, 'active') = 'active'"
+            try searchableChunkWhereClause(alias: "c"),
         ]
         if project != nil { conditions.append("(c.project = ? OR c.project IS NULL)") }
         if sourceFilter != nil { conditions.append("c.source = ?") }
@@ -2372,6 +2364,9 @@ final class BrainDatabase: @unchecked Sendable {
         }
         if columns.contains("status") {
             clauses.append("COALESCE(\(alias).status, 'active') = 'active'")
+        }
+        if columns.contains("source_class") {
+            clauses.append("(\(alias).source_class IS NULL OR \(alias).source_class NOT IN ('desktop', 'brain-worker'))")
         }
         return clauses.isEmpty ? "1 = 1" : clauses.joined(separator: " AND ")
     }
@@ -3134,14 +3129,7 @@ final class BrainDatabase: @unchecked Sendable {
         }
 
         let sourceFilter = normalizedSourceFilter(source)
-        var conditions = [
-            "c.id = ?",
-            "c.superseded_by IS NULL",
-            "c.aggregated_into IS NULL",
-            "c.archived_at IS NULL",
-            "COALESCE(c.archived, 0) = 0",
-            "COALESCE(c.status, 'active') = 'active'"
-        ]
+        var conditions = ["c.id = ?", try searchableChunkWhereClause(alias: "c")]
         if project != nil { conditions.append("(c.project = ? OR c.project IS NULL)") }
         if sourceFilter != nil { conditions.append("c.source = ?") }
         if tag != nil { conditions.append("c.tags LIKE ?") }

@@ -37,14 +37,15 @@ def _insert_chunk(
     chunk_origin: str | None = None,
     created_at: str = "2026-05-16T10:00:00+00:00",
     conversation_id: str = "session-a",
+    source_class: str | None = None,
 ) -> None:
     cursor = store.conn.cursor()
     cursor.execute(
         """INSERT INTO chunks (
             id, content, metadata, source_file, project, content_type,
-            char_count, source, created_at, conversation_id, chunk_origin
-        ) VALUES (?, ?, '{}', 'test.jsonl', 'brainlayer', 'assistant_text', ?, 'claude_code', ?, ?, ?)""",
-        (chunk_id, content, len(content), created_at, conversation_id, chunk_origin),
+            char_count, source, created_at, conversation_id, chunk_origin, source_class
+        ) VALUES (?, ?, '{}', 'test.jsonl', 'brainlayer', 'assistant_text', ?, 'claude_code', ?, ?, ?, ?)""",
+        (chunk_id, content, len(content), created_at, conversation_id, chunk_origin, source_class),
     )
     cursor.execute(
         "INSERT INTO chunk_vectors (chunk_id, embedding) VALUES (?, ?)",
@@ -835,6 +836,58 @@ def test_binary_search_overfetches_when_checkpoint_filter_discards_nearest_neigh
     store.close()
 
     assert results["ids"][0] == ["normal-just-outside-binary-window"]
+
+
+def test_binary_search_overfetches_when_hidden_source_classes_are_nearest(tmp_path):
+    store = VectorStore(tmp_path / "binary-source-class-overfetch.db")
+    query_embedding = [1.0] + ([0.0] * 1023)
+    for index in range(5):
+        _insert_chunk(
+            store,
+            chunk_id=f"desktop-{index}",
+            content=f"hidden desktop memory {index}",
+            embedding=query_embedding,
+            source_class="desktop",
+        )
+    visible_embedding = [0.9, 0.1] + ([0.0] * 1022)
+    _insert_chunk(
+        store,
+        chunk_id="visible-cli",
+        content="visible CLI memory outside the initial KNN window",
+        embedding=visible_embedding,
+        source_class="cli-agent",
+    )
+    store.build_binary_index()
+
+    results = store._binary_search(query_embedding=query_embedding, n_results=1)
+    store.close()
+
+    assert results["ids"][0] == ["visible-cli"]
+
+
+def test_vector_search_overfetches_when_hidden_source_classes_are_nearest(tmp_path):
+    store = VectorStore(tmp_path / "float-source-class-overfetch.db")
+    query_embedding = [1.0] + ([0.0] * 1023)
+    for index in range(5):
+        _insert_chunk(
+            store,
+            chunk_id=f"desktop-float-{index}",
+            content=f"hidden desktop float memory {index}",
+            embedding=query_embedding,
+            source_class="desktop",
+        )
+    _insert_chunk(
+        store,
+        chunk_id="visible-cli-float",
+        content="visible CLI float memory outside the initial KNN window",
+        embedding=[0.9, 0.1] + ([0.0] * 1022),
+        source_class="cli-agent",
+    )
+
+    results = store.search(query_embedding=query_embedding, n_results=1)
+    store.close()
+
+    assert results["ids"][0] == ["visible-cli-float"]
 
 
 def test_brain_resume_returns_recent_checkpoint_partition(tmp_path, monkeypatch):

@@ -394,6 +394,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
             chunk_origin: str | None,
             content_class: str,
             provenance_class: str,
+            source_class: str | None,
         ) -> None:
             enqueue_watcher_chunk(
                 chunk_id=chunk_id,
@@ -411,6 +412,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                 chunk_origin=chunk_origin,
                 content_class=content_class,
                 provenance_class=provenance_class,
+                source_class=source_class,
             )
 
         for entry in entries:
@@ -531,9 +533,14 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                 visibility = effective_visibility(provenance_decision, base_content_class)
                 content_class = _content_class_for_visibility(base_content_class, visibility)
                 provenance_class = provenance_decision.provenance_tag
+                source_class = provenance_decision.source_class
+                if source_class == "brain-worker":
+                    skipped += 1
+                    continue
                 metadata["provenance_tag"] = provenance_decision.provenance_tag
                 metadata["provenance_search_policy"] = provenance_decision.search_policy
                 metadata["provenance_effective_visibility"] = visibility
+                metadata["source_class"] = source_class
 
                 if arbitrated:
                     try:
@@ -553,6 +560,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                             chunk_origin=chunk_origin,
                             content_class=content_class,
                             provenance_class=provenance_class,
+                            source_class=source_class,
                         )
                     except Exception:
                         entry_confirmed = False
@@ -612,6 +620,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                     "tags": tags,
                                     "created_at": created_at,
                                     "last_seen_at": created_at,
+                                    "source_class": source_class,
                                 },
                             ):
                                 record_direct_liveness(chunk_id, ingested_at)
@@ -620,17 +629,20 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                 transaction_started = False
                                 inserted += 1
                                 break
+                            has_source_class = bool(getattr(store, "_has_source_class", False))
+                            source_class_column = ", source_class" if has_source_class else ""
+                            source_class_placeholder = ", ?" if has_source_class else ""
                             cursor.execute(
-                                """INSERT OR IGNORE INTO chunks
+                                f"""INSERT OR IGNORE INTO chunks
                                    (id, content, metadata, source_file, project,
                                     content_type, value_type, char_count, source,
                                     created_at, conversation_id, sender, tags, chunk_origin,
                                     seen_count, last_seen_at, dedupe_hash, simhash,
                                     simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3,
                                     source_end_offset, source_last_queued_at,
-                                    ingested_at, content_class, provenance_class)
+                                    ingested_at, content_class, provenance_class{source_class_column})
                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                                           ?, ?, ?, ?, ?)""",
+                                           ?, ?, ?, ?, ?{source_class_placeholder})""",
                                 (
                                     chunk_id,
                                     clean_content,
@@ -659,6 +671,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                     ingested_at,
                                     content_class,
                                     provenance_class,
+                                    *([source_class] if has_source_class else []),
                                 ),
                             )
                             changed = store.conn.changes() > 0
@@ -693,6 +706,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                         chunk_origin=chunk_origin,
                                         content_class=content_class,
                                         provenance_class=provenance_class,
+                                        source_class=source_class,
                                     )
                                 except Exception:
                                     logger.exception("spill_failed chunk_id=%s source_file=%s", chunk_id, source_file)

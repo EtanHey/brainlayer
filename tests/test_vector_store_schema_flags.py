@@ -10,7 +10,7 @@ def test_writer_init_marks_provenance_columns_available(tmp_path, monkeypatch):
     try:
         columns = {row[1] for row in store.conn.cursor().execute("PRAGMA table_info(chunks)")}
 
-        assert {"provenance_class", "superseded_by"}.issubset(columns)
+        assert {"provenance_class", "source_class", "superseded_by"}.issubset(columns)
         assert _optional_chunk_expr(store, "provenance_class") == "provenance_class"
         assert _optional_chunk_expr(store, "superseded_by") == "superseded_by"
     finally:
@@ -19,6 +19,7 @@ def test_writer_init_marks_provenance_columns_available(tmp_path, monkeypatch):
     readonly_store = VectorStore(tmp_path / "brainlayer.db", readonly=True)
     try:
         assert _optional_chunk_expr(readonly_store, "provenance_class") == "provenance_class"
+        assert readonly_store._has_source_class is True
         assert _optional_chunk_expr(readonly_store, "superseded_by") == "superseded_by"
     finally:
         readonly_store.close()

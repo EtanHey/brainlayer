@@ -119,8 +119,11 @@ AUDIT_RECURSION_TAG_PATTERNS = (
     "{tag_expr} GLOB 'r0[0-9]'",
 )
 
-# Module-level LRU cache: {cache_key: (result, timestamp)}
-_hybrid_cache: "OrderedDict[tuple, tuple[dict, float]]" = OrderedDict()
+# Module-level LRU cache: {cache_key: (result, timestamp, reader_state)}.
+# reader_state contains an application-owned per-connection token because
+# PRAGMA data_version values from different SQLite connections are not
+# comparable.
+_hybrid_cache: "OrderedDict[tuple, tuple[dict, float, tuple[object, int] | None]]" = OrderedDict()
 
 
 def _env_flag_enabled(name: str) -> bool:
@@ -403,6 +406,24 @@ def _content_class_expr(store: Any, alias: str | None = None) -> str:
     if getattr(store, "_has_content_class", True):
         return f"{alias}.content_class" if alias else "content_class"
     return f"'{DEFAULT_CONTENT_CLASS}'"
+
+
+def _source_class_where(
+    store: Any,
+    *,
+    alias: str | None = None,
+    include_hidden_source_classes: bool = False,
+) -> str | None:
+    """Build the unadvertised source-class visibility gate.
+
+    Legacy NULL rows stay visible. The internal opt-in reveals desktop rows,
+    while brain-worker rows remain excluded even if a legacy leak exists.
+    """
+    if not getattr(store, "_has_source_class", False):
+        return None
+    column = f"{alias}.source_class" if alias else "source_class"
+    hidden = "('brain-worker')" if include_hidden_source_classes else "('desktop', 'brain-worker')"
+    return f"({column} IS NULL OR {column} NOT IN {hidden})"
 
 
 def _effective_project_filter(project_filter: Optional[str], consumer_scope: ConsumerScope | None) -> Optional[str]:
@@ -781,6 +802,30 @@ class SearchMixin:
                 _sleep(0.05 * (2**attempt))
         return None
 
+    def _reader_cache_state(self) -> tuple[object, int] | None:
+        """Return a connection-scoped token plus that connection's data version."""
+        for attempt in range(3):
+            try:
+                cursor = self._read_cursor()
+                row = cursor.execute("PRAGMA data_version").fetchone()
+                if not row:
+                    return None
+                local = getattr(self, "_local", None)
+                if local is not None:
+                    token = getattr(local, "reader_cache_token", None)
+                    if token is None:
+                        token = object()
+                        local.reader_cache_token = token
+                else:
+                    connection = cursor.get_connection()
+                    token = connection if connection is not None else cursor
+                return token, int(row[0])
+            except (apsw.Error, AttributeError, TypeError, IndexError, ValueError) as exc:
+                if not isinstance(exc, apsw.Error) or not _is_sqlite_busy_error(exc) or attempt == 2:
+                    return None
+                _sleep(0.05 * (2**attempt))
+        return None
+
     def _checkpoint_filtered_knn_k(
         self,
         n_results: int,
@@ -840,12 +885,61 @@ class SearchMixin:
             return expanded_k
         return min(expanded_k, max(n_results, _FILTERED_KNN_MAX))
 
+    def _source_class_filtered_knn_k(
+        self,
+        n_results: int,
+        include_hidden_source_classes: bool,
+        *,
+        cap_filtered: bool = True,
+    ) -> int:
+        if not getattr(self, "_has_source_class", False):
+            return n_results
+        visibility_key = "opt_in" if include_hidden_source_classes else "default"
+        cache = getattr(self, "_source_class_count_cache", {})
+        reader_state = self._reader_cache_state()
+        cache_key = (visibility_key, reader_state[0]) if reader_state is not None else None
+        cached = cache.get(cache_key)
+        if cached is not None and reader_state is not None and cached[0] == reader_state[1]:
+            hidden_count = int(cached[1])
+        else:
+            hidden_values = ("brain-worker",) if include_hidden_source_classes else ("desktop", "brain-worker")
+            placeholders = ",".join("?" for _ in hidden_values)
+            hidden_count = 0
+            for attempt in range(3):
+                try:
+                    row = (
+                        self._read_cursor()
+                        .execute(
+                            f"SELECT COUNT(*) FROM chunks WHERE source_class IN ({placeholders})",
+                            hidden_values,
+                        )
+                        .fetchone()
+                    )
+                    hidden_count = int(row[0]) if row else 0
+                    cache = dict(cache)
+                    if cache_key is not None and reader_state is not None:
+                        cache[cache_key] = (reader_state[1], hidden_count)
+                        setattr(self, "_source_class_count_cache", cache)
+                    break
+                except (apsw.Error, TypeError, IndexError, ValueError) as exc:
+                    if not isinstance(exc, apsw.Error) or not _is_sqlite_busy_error(exc) or attempt == 2:
+                        hidden_count = 0
+                        break
+                    _sleep(0.05 * (2**attempt))
+        if hidden_count <= 0:
+            return n_results
+        expanded_k = n_results + hidden_count
+        if not cap_filtered:
+            return expanded_k
+        return min(expanded_k, max(n_results, _FILTERED_KNN_MAX))
+
     def _effective_knn_k(
         self,
         n_results: int,
         needs_overfetch: bool,
         include_checkpoints: bool,
         include_audit: bool,
+        include_hidden_source_classes: bool = False,
         *,
         cap_filtered: bool = True,
     ) -> int:
@@ -858,6 +952,11 @@ class SearchMixin:
             cap_filtered=cap_filtered,
         )
         effective_k = self._audit_filtered_knn_k(effective_k, include_audit, cap_filtered=cap_filtered)
+        effective_k = self._source_class_filtered_knn_k(
+            effective_k,
+            include_hidden_source_classes,
+            cap_filtered=cap_filtered,
+        )
         return min(effective_k, _SQLITE_VEC_MAX_K)
 
     def _load_chunk_embeddings(self, chunk_ids: List[str]) -> Dict[str, np.ndarray]:
@@ -1079,6 +1178,7 @@ class SearchMixin:
         include_audit: bool = False,
         include_operational: bool = False,
         content_class_filter: Optional[str] = None,
+        include_hidden_source_classes: bool = False,
         consumer_scope: ConsumerScope | None = None,
     ) -> Dict[str, List]:
         """Search chunks by embedding or text.
@@ -1157,6 +1257,13 @@ class SearchMixin:
             if content_class_clause:
                 where_clauses.append(content_class_clause)
                 filter_params.extend(content_class_params)
+            source_class_clause = _source_class_where(
+                self,
+                alias="c",
+                include_hidden_source_classes=include_hidden_source_classes,
+            )
+            if source_class_clause:
+                where_clauses.append(source_class_clause)
             if not include_audit:
                 where_clauses.append(self._audit_recursion_exclusion_sql("c.id", "c.tags", "c.content"))
             if not include_checkpoints:
@@ -1188,7 +1295,13 @@ class SearchMixin:
                 or source_file_filter_like
                 or correction_category
             )
-            effective_k = self._effective_knn_k(n_results, bool(needs_overfetch), include_checkpoints, include_audit)
+            effective_k = self._effective_knn_k(
+                n_results,
+                bool(needs_overfetch),
+                include_checkpoints,
+                include_audit,
+                include_hidden_source_classes,
+            )
             params = [query_bytes, effective_k] + filter_params
             chunk_origin_expr = "c.chunk_origin" if getattr(self, "_has_chunk_origin", True) else "'unknown'"
             content_class_expr = _content_class_expr(self, "c")
@@ -1215,6 +1328,7 @@ class SearchMixin:
                     bool(needs_overfetch),
                     include_checkpoints,
                     include_audit,
+                    include_hidden_source_classes,
                     cap_filtered=False,
                 )
                 if retry_k > effective_k:
@@ -1278,6 +1392,12 @@ class SearchMixin:
             if content_class_clause:
                 where_clauses.append(content_class_clause)
                 params.extend(content_class_params)
+            source_class_clause = _source_class_where(
+                self,
+                include_hidden_source_classes=include_hidden_source_classes,
+            )
+            if source_class_clause:
+                where_clauses.append(source_class_clause)
             if not include_audit:
                 where_clauses.append(self._audit_recursion_exclusion_sql("id", "tags", "content"))
             if not include_checkpoints:
@@ -1517,6 +1637,7 @@ class SearchMixin:
         include_operational: bool = False,
         content_class_filter: Optional[str] = None,
         brainbar_helper_fast_profile: bool = False,
+        include_hidden_source_classes: bool = False,
         consumer_scope: ConsumerScope | None = None,
     ) -> Dict[str, List]:
         """Run KNN search against binary-quantized vectors."""
@@ -1584,6 +1705,13 @@ class SearchMixin:
         if content_class_clause:
             where_clauses.append(content_class_clause)
             filter_params.extend(content_class_params)
+        source_class_clause = _source_class_where(
+            self,
+            alias="c",
+            include_hidden_source_classes=include_hidden_source_classes,
+        )
+        if source_class_clause:
+            where_clauses.append(source_class_clause)
         if not include_audit:
             where_clauses.append(self._audit_recursion_exclusion_sql("c.id", "c.tags", "c.content"))
         if not include_checkpoints:
@@ -1614,7 +1742,13 @@ class SearchMixin:
         if brainbar_helper_fast_profile:
             effective_k = min(max(n_results, _BRAINBAR_HELPER_FAST_K), _SQLITE_VEC_MAX_K)
         else:
-            effective_k = self._effective_knn_k(n_results, bool(needs_overfetch), include_checkpoints, include_audit)
+            effective_k = self._effective_knn_k(
+                n_results,
+                bool(needs_overfetch),
+                include_checkpoints,
+                include_audit,
+                include_hidden_source_classes,
+            )
         params = [query_bytes, effective_k] + filter_params
         chunk_origin_expr = "c.chunk_origin" if getattr(self, "_has_chunk_origin", True) else "'unknown'"
         content_class_expr = _content_class_expr(self, "c")
@@ -1634,12 +1768,14 @@ class SearchMixin:
                 ORDER BY v.distance
                 """
         results = list(cursor.execute(query, params))
-        if len(results) < n_results and not brainbar_helper_fast_profile:
+        source_class_filter_active = bool(getattr(self, "_has_source_class", False))
+        if len(results) < n_results and (not brainbar_helper_fast_profile or source_class_filter_active):
             retry_k = self._effective_knn_k(
                 n_results,
                 bool(needs_overfetch),
                 include_checkpoints,
                 include_audit,
+                include_hidden_source_classes,
                 cap_filtered=False,
             )
             if retry_k > effective_k:
@@ -1785,6 +1921,7 @@ class SearchMixin:
         include_audit: bool = False,
         include_operational: bool = False,
         content_class_filter: Optional[str] = None,
+        include_hidden_source_classes: bool = False,
         profile_query_id: str | None = None,
         profile_scope: str = "search.repo",
         brainbar_helper_fast_profile: bool = False,
@@ -1854,11 +1991,17 @@ class SearchMixin:
             filter_meta_noise,
             brainbar_helper_fast_profile,
             consumer_scope.cache_key() if consumer_scope is not None else None,
+            include_hidden_source_classes,
         )
         now = time.monotonic()
         if cache_key in _hybrid_cache:
-            cached_result, cached_at = _hybrid_cache[cache_key]
-            if now - cached_at < _HYBRID_CACHE_TTL:
+            cached_result, cached_at, cached_reader_state = _hybrid_cache[cache_key]
+            current_reader_state = self._reader_cache_state()
+            if (
+                now - cached_at < _HYBRID_CACHE_TTL
+                and current_reader_state is not None
+                and cached_reader_state == current_reader_state
+            ):
                 _hybrid_cache.move_to_end(cache_key)  # LRU touch
                 cached_clone = _clone_hybrid_result(cached_result)
                 self._queue_retrieval_strengthening(cached_clone["ids"][0])
@@ -1907,6 +2050,7 @@ class SearchMixin:
                 include_operational=include_operational,
                 content_class_filter=content_class_filter,
                 brainbar_helper_fast_profile=brainbar_helper_fast_profile,
+                include_hidden_source_classes=include_hidden_source_classes,
                 consumer_scope=consumer_scope,
             )
             search_profile.emit(
@@ -1952,6 +2096,7 @@ class SearchMixin:
                 include_audit=include_audit,
                 include_operational=include_operational,
                 content_class_filter=content_class_filter,
+                include_hidden_source_classes=include_hidden_source_classes,
                 consumer_scope=consumer_scope,
             )
             search_profile.emit(
@@ -2036,6 +2181,13 @@ class SearchMixin:
             if content_class_clause:
                 fts_extra.append(f"AND {content_class_clause}")
                 fts_filter_params.extend(content_class_params)
+            source_class_clause = _source_class_where(
+                self,
+                alias="c",
+                include_hidden_source_classes=include_hidden_source_classes,
+            )
+            if source_class_clause:
+                fts_extra.append(f"AND {source_class_clause}")
             if not include_audit:
                 fts_extra.append(f"AND {self._audit_recursion_exclusion_sql('c.id', 'c.tags', 'c.content')}")
             if not include_checkpoints:
@@ -2229,6 +2381,12 @@ class SearchMixin:
             if content_class_clause:
                 recent_extra.append(f"AND {content_class_clause}")
                 recent_params.extend(content_class_params)
+            source_class_clause = _source_class_where(
+                self,
+                include_hidden_source_classes=include_hidden_source_classes,
+            )
+            if source_class_clause:
+                recent_extra.append(f"AND {source_class_clause}")
             if not include_audit:
                 recent_extra.append(f"AND {self._audit_recursion_exclusion_sql('id', 'tags', 'content')}")
             if not include_checkpoints:
@@ -2514,7 +2672,11 @@ class SearchMixin:
         self._queue_retrieval_strengthening(ids)
 
         # ── Cache store ──────────────────────────────────────────────────────
-        _hybrid_cache[cache_key] = (_clone_hybrid_result(result), time.monotonic())
+        _hybrid_cache[cache_key] = (
+            _clone_hybrid_result(result),
+            time.monotonic(),
+            self._reader_cache_state(),
+        )
         _hybrid_cache.move_to_end(cache_key)
         if len(_hybrid_cache) > _HYBRID_CACHE_MAX:
             _hybrid_cache.popitem(last=False)  # evict oldest
