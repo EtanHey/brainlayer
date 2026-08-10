@@ -82,23 +82,33 @@ condition fails, keep services stopped and investigate; do not move the tree.
 
 ### 4. Stage, mark, and restore each canonical tree
 
-For each of the four roots, perform a same-filesystem rename to its exact staging path, recreate the
-canonical root, create `.metadata_never_index`, then move every child (including dotfiles) back.
-Never copy across filesystems and never create the marker after children return.
+For each of the four roots, perform a same-filesystem rename to its exact staging path, create
+`.metadata_never_index` inside the staged tree, then atomically rename the same tree back to its
+canonical path. This preserves the root's mode, ownership, ACLs, extended attributes, and children;
+the marker is already present before the canonical path becomes visible again. Never copy the tree.
 
 Example for the data root; repeat with the exact runtime/log/counter pairs listed above:
 
 ```bash
 mv /Users/etanheyman/.local/share/brainlayer \
   /Users/etanheyman/.local/share/brainlayer.spotlight-migration-staging
-mkdir /Users/etanheyman/.local/share/brainlayer
-touch /Users/etanheyman/.local/share/brainlayer/.metadata_never_index
-find /Users/etanheyman/.local/share/brainlayer.spotlight-migration-staging \
-  -mindepth 1 -maxdepth 1 -exec mv {} /Users/etanheyman/.local/share/brainlayer/ \;
+touch /Users/etanheyman/.local/share/brainlayer.spotlight-migration-staging/.metadata_never_index
+mv /Users/etanheyman/.local/share/brainlayer.spotlight-migration-staging \
+  /Users/etanheyman/.local/share/brainlayer
 ```
 
 Before each `mv`, resolve and print both paths, assert the source is the expected canonical root,
 assert the staging target does not exist, and confirm both parents are on the same filesystem.
+Apply this recovery state machine before continuing any root:
+
+- canonical exists, staging absent: expected; continue;
+- canonical missing, staging exists: restore with an atomic staging-to-canonical rename, verify the
+  tree, and restart this root's preflight from the beginning;
+- both exist: duplicate/conflict; stop without moving or merging either tree;
+- both absent: data is missing; stop and investigate.
+
+This same state machine is the recovery procedure if the shell or machine stops between either
+rename. Never infer completion from the presence of only one path without inspecting it.
 
 ### 5. Re-run setup and verify paths before restart
 
@@ -118,8 +128,8 @@ it points into a marked ancestor before restart.
 Bootstrap the recorded launchd plist set, then verify each expected label is loaded and each daemon
 has a live PID. Do not restore a label that was deliberately disabled before the window.
 
-Keep the now-empty staging directories until every verification below passes. Afterward, verify
-each is empty and remove only those four exact directories.
+Confirm none of the four staging paths remains after its atomic rename back. If one remains, stop
+and investigate before restarting writers.
 
 Run a real request through a fresh installed MCP client session (not an in-process Python test):
 
@@ -143,15 +153,22 @@ First establish that Spotlight is enabled for the containing volume:
 mdutil -s /
 ```
 
-Then create a unique plain-text probe beneath the marked data root. Record these outputs:
+Then create a unique, non-clobbering plain-text probe beneath the marked data root. Record these
+outputs and retain the two printed variable values with the evidence:
 
 ```bash
-mdimport -t -d1 /Users/etanheyman/.local/share/brainlayer/spotlight-exclusion-live-probe.txt
-mdimport -i /Users/etanheyman/.local/share/brainlayer/spotlight-exclusion-live-probe.txt
+spotlight_probe_path="$(mktemp /Users/etanheyman/.local/share/brainlayer/spotlight-exclusion-live-probe.txt.XXXXXX)"
+spotlight_probe_name="$(basename "$spotlight_probe_path")"
+printf 'BrainLayer Spotlight exclusion live probe %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  > "$spotlight_probe_path"
+printf 'probe_path=%s\nprobe_name=%s\n' "$spotlight_probe_path" "$spotlight_probe_name"
+mdimport -t -d1 "$spotlight_probe_path"
+mdimport -i "$spotlight_probe_path"
 mdls -name kMDItemFSName -name kMDItemContentType \
-  /Users/etanheyman/.local/share/brainlayer/spotlight-exclusion-live-probe.txt
+  "$spotlight_probe_path"
 mdfind -onlyin /Users/etanheyman/.local/share/brainlayer \
-  'kMDItemFSName == "spotlight-exclusion-live-probe.txt"cd'
+  "kMDItemFSName == '$spotlight_probe_name'cd"
+rm -- "$spotlight_probe_path"
 ```
 
 Pass criteria: `mdutil` shows the containing volume is indexed; `mdimport -t` identifies the normal
@@ -165,11 +182,12 @@ the whole volume.
 
 ## Rollback
 
-Rollback is allowed only before writers restart. Keep all processes stopped. For each root, move
-every restored child except `.metadata_never_index` back into its still-present staging directory,
-remove only the exact marker, remove the now-empty canonical directory, and rename staging back to
-the canonical name. Verify DB/WAL/SHM and queue counts before bootstrapping only the preflight label
-set. If either tree contains an unexpected duplicate, stop; never overwrite or merge it.
+Rollback is allowed only before writers restart. Keep all processes stopped. For each root, first
+apply the same four-state recovery table above: restore staging to canonical when only staging
+exists, and stop on both-exist or both-absent states. Once canonical exists and staging is absent,
+atomically rename canonical to staging, remove only `.metadata_never_index`, then atomically rename
+the same tree back to canonical. This preserves the original root metadata. Verify DB/WAL/SHM and
+queue counts before bootstrapping only the preflight label set. Never overwrite or merge paths.
 
 ## Completion record
 

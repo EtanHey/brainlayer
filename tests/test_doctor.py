@@ -407,6 +407,33 @@ def test_spotlight_exclusion_issue_accepts_marker_on_data_directory(tmp_path):
     assert doctor._spotlight_exclusion_issue(db_path) is None
 
 
+def test_spotlight_exclusion_issue_reports_path_check_failure(tmp_path, monkeypatch):
+    from brainlayer import doctor
+
+    monkeypatch.setattr(
+        doctor,
+        "is_spotlight_excluded",
+        lambda _path: (_ for _ in ()).throw(RuntimeError("symlink loop")),
+    )
+
+    issue = doctor._spotlight_exclusion_issue(tmp_path / "brainlayer.db")
+
+    assert issue is not None
+    assert issue.code == "spotlight_exclusion_check_failed"
+    assert issue.severity == "warning"
+
+
+@pytest.mark.parametrize(("platform", "expected"), [("darwin", True), ("linux", False)])
+def test_doctor_config_defaults_spotlight_check_by_platform(tmp_path, monkeypatch, platform, expected):
+    from brainlayer import doctor
+
+    monkeypatch.setattr(doctor.sys, "platform", platform)
+
+    config = doctor.DoctorConfig(db_path=tmp_path / "brainlayer.db")
+
+    assert config.spotlight_check_enabled is expected
+
+
 def test_run_doctor_reports_unexcluded_data_directory_as_warning(tmp_path):
     from brainlayer.doctor import run_doctor
 

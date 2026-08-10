@@ -74,8 +74,17 @@ class DoctorIssue:
 
 
 def _spotlight_exclusion_issue(db_path: Path) -> DoctorIssue | None:
-    data_dir = db_path.expanduser().parent.resolve(strict=False)
-    if is_spotlight_excluded(data_dir):
+    try:
+        data_dir = db_path.expanduser().parent.resolve(strict=False)
+        excluded = is_spotlight_excluded(data_dir)
+    except (OSError, RuntimeError) as exc:
+        return DoctorIssue(
+            "spotlight_exclusion_check_failed",
+            "warning",
+            "Could not verify Spotlight exclusion for the BrainLayer data directory",
+            {"db_path": str(db_path), "error": str(exc)},
+        )
+    if excluded:
         return None
     return DoctorIssue(
         "spotlight_indexing_enabled",

@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Path exclusion contract
+## Task 1: Path exclusion contract
 
 **Files:**
 - Modify: `src/brainlayer/paths.py`
@@ -21,7 +21,7 @@
 3. Add `SPOTLIGHT_EXCLUSION_MARKER` and `is_spotlight_excluded(path)`.
 4. Re-run `pytest tests/test_paths.py -q` and confirm green.
 
-### Task 2: Setup layout
+## Task 2: Setup layout
 
 **Files:**
 - Modify: `src/brainlayer/setup.py`
@@ -34,7 +34,7 @@
 3. Implement `ensure_spotlight_excluded_layout()` and call it first from `brainlayer setup`.
 4. Re-run the focused tests and confirm GREEN.
 
-### Task 3: Doctor warning
+## Task 3: Doctor warning
 
 **Files:**
 - Modify: `src/brainlayer/doctor.py`
@@ -45,7 +45,7 @@
 3. Add a Darwin-defaulted config flag and warning-only issue with remediation details.
 4. Re-run the focused tests and confirm GREEN.
 
-### Task 4: Migration runbook and evidence
+## Task 4: Migration runbook and evidence
 
 **Files:**
 - Create: `docs/operations/spotlight-exclusion-migration.md`
@@ -56,7 +56,7 @@
 3. Run the commands only against disposable probe directories; never touch canonical runtime data.
 4. Mark the runbook READY in the source task, reserving the live-migration marker for its window.
 
-### Task 5: Verification and PR loop
+## Task 5: Verification and PR loop
 
 **Files:** all changed files.
 
@@ -66,4 +66,3 @@
 4. Append the PR and exact head to the collab, then route `READY_FOR_REVIEW_SPOTLIGHT` to the lead.
 5. Address review findings, re-run verification, confirm CI and exact head, and merge.
 6. Append merged evidence plus `DONE_SPOTLIGHT_EXCL` to the source task and a one-line DONE pointer to the lead.
-

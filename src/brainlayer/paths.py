@@ -44,19 +44,22 @@ def _guard_test_runtime_path(path: Path, *, source: str) -> Path:
     return path
 
 
-def get_db_path() -> Path:
-    """Resolve the BrainLayer database path.
-
-    Checks BRAINLAYER_DB env var first, then uses the canonical path.
-    """
+def resolve_db_path() -> Path:
+    """Resolve the BrainLayer database path without creating its parent."""
     env = os.environ.get("BRAINLAYER_DB")
     if env:
         return _guard_test_runtime_path(Path(env), source="BRAINLAYER_DB")
 
-    db_path = _guard_test_runtime_path(_CANONICAL_DB_PATH, source="canonical database path")
+    return _guard_test_runtime_path(_CANONICAL_DB_PATH, source="canonical database path")
+
+
+def get_db_path() -> Path:
+    """Resolve the BrainLayer database path and ensure its parent exists."""
+    db_path = resolve_db_path()
+
     db_path.parent.mkdir(parents=True, exist_ok=True)
     return db_path
 
 
-# Convenience: pre-resolved default for import
-DEFAULT_DB_PATH = get_db_path()
+# Convenience: pre-resolved default without import-time filesystem mutation.
+DEFAULT_DB_PATH = resolve_db_path()

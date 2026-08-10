@@ -481,10 +481,13 @@ def init(
     """Interactive setup wizard — detects your environment and configures BrainLayer."""
     import subprocess
 
+    from ..setup import ensure_spotlight_excluded_layout
     from ..setup import install_launchd as install_launchd_agents
     from .wizard import run_wizard
 
     try:
+        if sys.platform == "darwin":
+            ensure_spotlight_excluded_layout()
         config = run_wizard()
         if should_install_launchd:
             install_launchd_agents("all", env_file=config.gemini_env_file)
@@ -493,6 +496,7 @@ def init(
         FileExistsError,
         PermissionError,
         TimeoutError,
+        RuntimeError,
         ValueError,
         subprocess.CalledProcessError,
     ) as exc:
@@ -543,7 +547,8 @@ def setup(
     )
 
     try:
-        ensure_spotlight_excluded_layout()
+        if sys.platform == "darwin":
+            ensure_spotlight_excluded_layout()
         resolved_env_file = ensure_brainlayer_env(
             env_file,
             google_api_key_op_ref=google_api_key_op_ref,

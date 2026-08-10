@@ -295,6 +295,24 @@ def test_setup_preflights_invalid_root_types_before_creating_any_marker(tmp_path
     assert not data_dir.exists()
 
 
+def test_setup_default_data_root_is_not_created_when_later_root_is_invalid(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.setup as setup_helpers
+
+    data_dir = tmp_path / "default-data"
+    runtime_dir = tmp_path / "invalid-runtime"
+    runtime_dir.write_text("not a directory\n", encoding="utf-8")
+    monkeypatch.setattr(setup_helpers, "resolve_db_path", lambda: data_dir / "brainlayer.db")
+
+    with pytest.raises(RuntimeError, match="must be a directory"):
+        setup_helpers.ensure_spotlight_excluded_layout(
+            runtime_dir=runtime_dir,
+            launchd_log_dir=tmp_path / "launchd-logs",
+            counter_dir=tmp_path / "counter",
+        )
+
+    assert not data_dir.exists()
+
+
 def test_setup_migrates_legacy_raw_socat_mcp_config_idempotently(tmp_path: Path) -> None:
     from brainlayer.setup import migrate_legacy_mcp_configs
 
@@ -560,10 +578,11 @@ def test_setup_command_writes_op_backed_env_without_plaintext_and_can_skip_launc
 
 
 def test_setup_command_excludes_runtime_layout_before_writing_env(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.cli as cli
     import brainlayer.setup as setup_helpers
-    from brainlayer.cli import app
 
     calls: list[str] = []
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
     monkeypatch.setattr(setup_helpers, "ensure_spotlight_excluded_layout", lambda: calls.append("layout"))
     monkeypatch.setattr(
         setup_helpers,
@@ -571,10 +590,29 @@ def test_setup_command_excludes_runtime_layout_before_writing_env(tmp_path: Path
         lambda *_args, **_kwargs: calls.append("env") or tmp_path / "brainlayer.env",
     )
 
-    result = CliRunner().invoke(app, ["setup", "--no-launchd"])
+    result = CliRunner().invoke(cli.app, ["setup", "--no-launchd"])
 
     assert result.exit_code == 0, result.stdout
     assert calls == ["layout", "env"]
+
+
+def test_setup_command_skips_spotlight_layout_outside_macos(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.cli as cli
+    import brainlayer.setup as setup_helpers
+
+    calls: list[str] = []
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+    monkeypatch.setattr(setup_helpers, "ensure_spotlight_excluded_layout", lambda: calls.append("layout"))
+    monkeypatch.setattr(
+        setup_helpers,
+        "ensure_brainlayer_env",
+        lambda *_args, **_kwargs: calls.append("env") or tmp_path / "brainlayer.env",
+    )
+
+    result = CliRunner().invoke(cli.app, ["setup", "--no-launchd"])
+
+    assert result.exit_code == 0, result.stdout
+    assert calls == ["env"]
 
 
 def test_launchd_env_runner_makes_homebrew_op_available_before_loading_env() -> None:
@@ -718,6 +756,27 @@ def test_init_command_reports_launchd_failure_without_traceback(monkeypatch) -> 
     assert result.exit_code == 1
     assert "BrainLayer init failed: missing install.sh" in result.stdout
     assert "Traceback" not in result.stdout
+
+
+def test_init_command_excludes_layout_before_wizard_and_launchd(monkeypatch) -> None:
+    import brainlayer.cli as cli
+    import brainlayer.cli.wizard as wizard
+    import brainlayer.setup as setup_helpers
+
+    calls: list[str] = []
+
+    class Config:
+        gemini_env_file = Path("/tmp/brainlayer.env")
+
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    monkeypatch.setattr(setup_helpers, "ensure_spotlight_excluded_layout", lambda: calls.append("layout"))
+    monkeypatch.setattr(wizard, "run_wizard", lambda: calls.append("wizard") or Config())
+    monkeypatch.setattr(setup_helpers, "install_launchd", lambda *_args, **_kwargs: calls.append("launchd"))
+
+    result = CliRunner().invoke(cli.app, ["init", "--install-launchd"])
+
+    assert result.exit_code == 0, result.stdout
+    assert calls == ["layout", "wizard", "launchd"]
 
 
 def test_config_loader_prefers_process_env_then_user_env_and_ignores_repo_root_dotenv(
