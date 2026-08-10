@@ -50,6 +50,11 @@ def resolve_db_path() -> Path:
     if env:
         return _guard_test_runtime_path(Path(env), source="BRAINLAYER_DB")
 
+    return get_canonical_db_path()
+
+
+def get_canonical_db_path() -> Path:
+    """Return the canonical database path without creating its parent."""
     return _guard_test_runtime_path(_CANONICAL_DB_PATH, source="canonical database path")
 
 

@@ -22,6 +22,7 @@ because setup must work unattended.
 | Excluded root | Covered paths |
 | --- | --- |
 | `$HOME/.local/share/brainlayer` | `brainlayer.db`, `brainlayer.db-wal`, `brainlayer.db-shm`; sqlite-vec data and future vector sidecars; `chromadb`, `chromadb.backup`, `style`, `storage`, `experiments`; `enrichment_checkpoints.db`, `reembed_bgem3_checkpoint.json`, `enrichment-scratch`; `prompts`; `offsets.json`, watcher/drain/T3/health state, pause sentinel, pending-store files; `backups`, `jsonl-backups`; `logs` |
+| active `BRAINLAYER_DB` parent, when outside the canonical root | overridden DB, WAL, SHM, and adjacent vector sidecars; setup marks both this parent and the canonical root |
 | `$HOME/.brainlayer` | `queue`; `quarantine` including stale-queue quarantine; `logs` including drain logs; runtime repository state |
 | `$HOME/Library/Logs/brainlayer` | launchd stdout/stderr and BrainBar runtime logs |
 | `$HOME/.brainlayer-p0-counter` | longitudinal counter logs |
@@ -108,7 +109,10 @@ Apply this recovery state machine before continuing any root:
 - canonical missing, staging exists: restore with an atomic staging-to-canonical rename, verify the
   tree, and restart this root's preflight from the beginning;
 - both exist: duplicate/conflict; stop without moving or merging either tree;
-- both absent: data is missing; stop and investigate.
+- both absent: for the canonical/override data root, stop because data is missing. For an optional
+  runtime/log/counter root, first prove from the preflight label and path inventory that it was never
+  created and never held data; record that evidence, create the exact canonical directory with mode
+  `0700`, create and verify `.metadata_never_index`, and do not perform a staging rename for it.
 
 This same state machine is the recovery procedure if the shell or machine stops between either
 rename. Never infer completion from the presence of only one path without inspecting it.

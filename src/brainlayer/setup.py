@@ -13,7 +13,7 @@ from importlib import resources
 from pathlib import Path
 
 from .cli.wizard import DEFAULT_BRAINLAYER_CONFIG, write_gemini_env_file
-from .paths import SPOTLIGHT_EXCLUSION_MARKER, resolve_db_path
+from .paths import SPOTLIGHT_EXCLUSION_MARKER, get_canonical_db_path, resolve_db_path
 
 DEFAULT_GOOGLE_API_KEY_OP_REF = "op://Private/Google AI/Gemini API key"
 DEFAULT_MCP_PROTOCOL_VERSION = "2025-06-18"
@@ -51,10 +51,16 @@ def ensure_spotlight_excluded_layout(
     runtime_dir: Path | None = None,
     launchd_log_dir: Path | None = None,
     counter_dir: Path | None = None,
-) -> tuple[Path, Path, Path, Path]:
+) -> tuple[Path, ...]:
     """Create marker-backed roots for every high-churn BrainLayer runtime path."""
+    if data_dir is not None:
+        data_roots = (data_dir,)
+    else:
+        active_data_root = resolve_db_path().parent
+        canonical_data_root = get_canonical_db_path().parent
+        data_roots = tuple(dict.fromkeys((active_data_root, canonical_data_root)))
     requested_roots = (
-        data_dir or resolve_db_path().parent,
+        *data_roots,
         runtime_dir or Path.home() / ".brainlayer",
         launchd_log_dir or Path.home() / "Library" / "Logs" / "brainlayer",
         counter_dir or Path.home() / ".brainlayer-p0-counter",
@@ -67,11 +73,12 @@ def ensure_spotlight_excluded_layout(
         if root.is_dir() and not marker.is_file() and next(root.iterdir(), None) is not None:
             raise RuntimeError(f"existing runtime tree {root} requires the Spotlight exclusion migration runbook")
 
+    data_root_count = len(data_roots)
     roots = (
-        _ensure_spotlight_excluded_root(resolved_roots[0], _DATA_CHILDREN),
-        _ensure_spotlight_excluded_root(resolved_roots[1], _RUNTIME_CHILDREN),
-        _ensure_spotlight_excluded_root(resolved_roots[2]),
-        _ensure_spotlight_excluded_root(resolved_roots[3]),
+        *(_ensure_spotlight_excluded_root(root, _DATA_CHILDREN) for root in resolved_roots[:data_root_count]),
+        _ensure_spotlight_excluded_root(resolved_roots[data_root_count], _RUNTIME_CHILDREN),
+        _ensure_spotlight_excluded_root(resolved_roots[data_root_count + 1]),
+        _ensure_spotlight_excluded_root(resolved_roots[data_root_count + 2]),
     )
     return roots
 
