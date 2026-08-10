@@ -82,6 +82,28 @@ if [ ! -x "$BRAINLAYER_BIN" ]; then
     exit 1
 fi
 
+case "${1:-all}" in
+    remove|unload)
+        ;;
+    *)
+        if [ "$(uname -s)" = "Darwin" ]; then
+            if [ -d "$BRAINLAYER_DIR/src/brainlayer" ]; then
+                BRAINLAYER_PREFLIGHT_PYTHONPATH="$BRAINLAYER_DIR/src"
+            else
+                BRAINLAYER_PREFLIGHT_PYTHONPATH="$BRAINLAYER_DIR"
+            fi
+            if [ -x "$PYTHON_BIN" ]; then
+                BRAINLAYER_PREFLIGHT_PYTHON="$PYTHON_BIN"
+            else
+                BRAINLAYER_PREFLIGHT_PYTHON="$(command -v python3)"
+            fi
+            PYTHONPATH="$BRAINLAYER_PREFLIGHT_PYTHONPATH${PYTHONPATH:+:$PYTHONPATH}" \
+                "$BRAINLAYER_PREFLIGHT_PYTHON" -c \
+                'from brainlayer.spotlight import ensure_spotlight_excluded_layout; ensure_spotlight_excluded_layout()'
+        fi
+        ;;
+esac
+
 mkdir -p "$LAUNCH_DIR" "$LOG_DIR" "$LOG_DIR/brainlayer" "$BRAINLAYER_LOG_DIR" "$BRAINLAYER_LIB_DIR"
 mkdir -p "$HOME/.brainlayer/logs" "$HOME/.brainlayer/queue"
 

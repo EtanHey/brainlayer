@@ -13,54 +13,11 @@ from importlib import resources
 from pathlib import Path
 
 from .cli.wizard import DEFAULT_BRAINLAYER_CONFIG, write_gemini_env_file
-from .paths import SPOTLIGHT_EXCLUSION_MARKER, get_canonical_db_path, resolve_db_path
+from .paths import get_canonical_db_path, resolve_db_path
+from .spotlight import ensure_spotlight_excluded_layout as _ensure_spotlight_excluded_layout
 
 DEFAULT_GOOGLE_API_KEY_OP_REF = "op://Private/Google AI/Gemini API key"
 DEFAULT_MCP_PROTOCOL_VERSION = "2025-06-18"
-
-_DATA_CHILDREN = (
-    "backups",
-    "chromadb",
-    "chromadb.backup",
-    "enrichment-scratch",
-    "experiments",
-    "jsonl-backups",
-    "logs",
-    "prompts",
-    "style",
-    "storage",
-)
-_RUNTIME_CHILDREN = ("logs", "quarantine", "queue")
-
-
-def _validate_override_data_root(active_root: Path, canonical_root: Path) -> None:
-    active = active_root.expanduser().resolve(strict=False)
-    canonical = canonical_root.expanduser().resolve(strict=False)
-    if active == canonical:
-        return
-    unsafe_location = active == Path.home().resolve() or active == Path(active.anchor) or os.path.ismount(active)
-    if unsafe_location or active in canonical.parents or "brainlayer" not in active.name.casefold():
-        raise RuntimeError(f"BRAINLAYER_DB must be inside a dedicated BrainLayer directory; unsafe parent: {active}")
-
-
-def _validate_disjoint_roots(roots: tuple[Path, ...]) -> None:
-    resolved = tuple(root.expanduser().resolve(strict=False) for root in roots)
-    for index, root in enumerate(resolved):
-        for other in resolved[:index]:
-            if root == other or root in other.parents or other in root.parents:
-                raise RuntimeError(f"Spotlight exclusion roots must not overlap: {other} and {root}")
-
-
-def _ensure_spotlight_excluded_root(root: Path, children: tuple[str, ...] = ()) -> Path:
-    resolved = root.expanduser()
-    resolved.mkdir(parents=True, exist_ok=True)
-    marker = resolved / SPOTLIGHT_EXCLUSION_MARKER
-    if not marker.is_file() and next(resolved.iterdir(), None) is not None:
-        raise RuntimeError(f"existing runtime tree {resolved} requires the Spotlight exclusion migration runbook")
-    marker.touch(exist_ok=True)
-    for child in children:
-        (resolved / child).mkdir(parents=True, exist_ok=True)
-    return resolved
 
 
 def ensure_spotlight_excluded_layout(
@@ -71,36 +28,16 @@ def ensure_spotlight_excluded_layout(
     counter_dir: Path | None = None,
 ) -> tuple[Path, ...]:
     """Create marker-backed roots for every high-churn BrainLayer runtime path."""
-    if data_dir is not None:
-        data_roots = (data_dir,)
-    else:
-        active_data_root = resolve_db_path().parent
-        canonical_data_root = get_canonical_db_path().parent
-        _validate_override_data_root(active_data_root, canonical_data_root)
-        data_roots = tuple(dict.fromkeys((active_data_root, canonical_data_root)))
-    requested_roots = (
-        *data_roots,
-        runtime_dir or Path.home() / ".brainlayer",
-        launchd_log_dir or Path.home() / "Library" / "Logs" / "brainlayer",
-        counter_dir or Path.home() / ".brainlayer-p0-counter",
+    return _ensure_spotlight_excluded_layout(
+        data_dir=data_dir,
+        runtime_dir=runtime_dir,
+        launchd_log_dir=launchd_log_dir,
+        counter_dir=counter_dir,
+        resolve_db_path_fn=resolve_db_path,
+        get_canonical_db_path_fn=get_canonical_db_path,
+        home_fn=Path.home,
+        ismount_fn=os.path.ismount,
     )
-    _validate_disjoint_roots(requested_roots)
-    resolved_roots = tuple(root.expanduser() for root in requested_roots)
-    for root in resolved_roots:
-        if root.is_symlink() or (root.exists() and not root.is_dir()):
-            raise RuntimeError(f"runtime root {root} must be a directory")
-        marker = root / SPOTLIGHT_EXCLUSION_MARKER
-        if root.is_dir() and not marker.is_file() and next(root.iterdir(), None) is not None:
-            raise RuntimeError(f"existing runtime tree {root} requires the Spotlight exclusion migration runbook")
-
-    data_root_count = len(data_roots)
-    roots = (
-        *(_ensure_spotlight_excluded_root(root, _DATA_CHILDREN) for root in resolved_roots[:data_root_count]),
-        _ensure_spotlight_excluded_root(resolved_roots[data_root_count], _RUNTIME_CHILDREN),
-        _ensure_spotlight_excluded_root(resolved_roots[data_root_count + 1]),
-        _ensure_spotlight_excluded_root(resolved_roots[data_root_count + 2]),
-    )
-    return roots
 
 
 def get_default_env_file() -> Path:
