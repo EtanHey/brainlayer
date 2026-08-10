@@ -351,7 +351,6 @@ def test_setup_marks_override_and_canonical_data_roots(tmp_path: Path, monkeypat
 
 
 def test_setup_uses_selected_env_file_db_override(tmp_path: Path, monkeypatch) -> None:
-    import brainlayer.config as config
     import brainlayer.setup as setup_helpers
 
     home = tmp_path / "home"
@@ -359,7 +358,6 @@ def test_setup_uses_selected_env_file_db_override(tmp_path: Path, monkeypatch) -
     canonical_data_dir = tmp_path / "canonical-data"
     env_file = tmp_path / "selected.env"
     env_file.write_text(f"BRAINLAYER_DB={override_data_dir / 'brainlayer.db'}\n", encoding="utf-8")
-    monkeypatch.setattr(config, "_PROCESS_ENV_AT_IMPORT", {})
     monkeypatch.setattr(setup_helpers, "get_canonical_db_path", lambda: canonical_data_dir / "brainlayer.db")
 
     roots = setup_helpers.ensure_spotlight_excluded_layout(
@@ -1149,16 +1147,17 @@ def test_standalone_launchd_installer_preflights_selected_env_db(tmp_path: Path)
     fake_brainlayer.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     fake_brainlayer.chmod(0o755)
     override_data_dir = tmp_path / "brainlayer-selected"
+    transient_process_data_dir = tmp_path / "brainlayer-transient-process"
     env_file = tmp_path / "selected.env"
     env_file.write_text(f"BRAINLAYER_DB={override_data_dir / 'brainlayer.db'}\n", encoding="utf-8")
     run_env = os.environ.copy()
-    run_env.pop("BRAINLAYER_DB", None)
     run_env.update(
         {
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
             "HOME": str(home),
             "BRAINLAYER_BIN": str(fake_brainlayer),
             "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_DB": str(transient_process_data_dir / "brainlayer.db"),
         }
     )
 
@@ -1173,25 +1172,57 @@ def test_standalone_launchd_installer_preflights_selected_env_db(tmp_path: Path)
 
     assert result.returncode != 0
     assert (override_data_dir / ".metadata_never_index").is_file()
+    assert not transient_process_data_dir.exists()
 
 
-def test_configured_env_value_prefers_original_process_then_selected_file(tmp_path: Path, monkeypatch) -> None:
+def test_configured_env_value_matches_selected_file_last_assignment(tmp_path: Path, monkeypatch) -> None:
     import brainlayer.config as config
 
     env_file = tmp_path / "brainlayer.env"
     env_file.write_text("BRAINLAYER_DB=/from/selected/brainlayer.db\n", encoding="utf-8")
-    monkeypatch.setattr(config, "_PROCESS_ENV_AT_IMPORT", {"BRAINLAYER_DB": "/from/process/brainlayer.db"})
-
-    assert config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file) == "/from/process/brainlayer.db"
-
-    monkeypatch.setattr(config, "_PROCESS_ENV_AT_IMPORT", {})
+    monkeypatch.setenv("BRAINLAYER_DB", "/from/process/brainlayer.db")
     assert config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file) == "/from/selected/brainlayer.db"
 
     env_file.write_text(
-        "BRAINLAYER_DB=$(not-allowed)\nBRAINLAYER_DB=/from/later/brainlayer.db\n",
+        "BRAINLAYER_DB=$(not-allowed)\n"
+        "BRAINLAYER_DB=/from/first/brainlayer.db\n"
+        "BRAINLAYER_DB=/from/later/brainlayer.db\n",
         encoding="utf-8",
     )
     assert config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file) == "/from/later/brainlayer.db"
+
+
+@pytest.mark.parametrize("action", ["remove", "unload"])
+def test_launchd_teardown_does_not_create_runtime_roots(tmp_path: Path, action: str) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_launchctl.chmod(0o755)
+    fake_brainlayer = tmp_path / "brainlayer"
+    fake_brainlayer.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_brainlayer.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+
+    result = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), action],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": str(fake_brainlayer),
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not (home / ".local" / "share" / "brainlayer").exists()
+    assert not (home / ".brainlayer").exists()
+    assert not (home / "Library" / "Logs" / "brainlayer").exists()
 
 
 def test_launchd_installer_renders_brainlayer_python_override(tmp_path: Path) -> None:

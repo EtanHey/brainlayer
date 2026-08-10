@@ -10,7 +10,6 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 _OP_READ_PREFIX = "$(op read "
-_PROCESS_ENV_AT_IMPORT = dict(os.environ)
 
 
 def get_user_env_path() -> Path:
@@ -93,24 +92,22 @@ def _resolve_op_read_value(value_text: str) -> str | None:
 
 
 def configured_brainlayer_env_value(name: str, env_path: Path | None = None) -> str | None:
-    """Return one configured value with original process-env precedence."""
-    if name in _PROCESS_ENV_AT_IMPORT:
-        return _PROCESS_ENV_AT_IMPORT[name]
-
+    """Return the final valid assignment from the selected BrainLayer env file."""
     target = env_path or get_user_env_path()
     try:
         lines = target.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeDecodeError):
         return None
 
+    selected: str | None = None
     for line in lines:
         assignment = _split_env_assignment(line)
         if assignment is None or assignment[0] != name:
             continue
         value = _parse_env_value(assignment[1])
         if value is not None:
-            return value
-    return None
+            selected = value
+    return selected
 
 
 def load_brainlayer_env(

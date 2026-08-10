@@ -102,11 +102,10 @@ case "$BRAINLAYER_INSTALL_ACTION" in
                 "$BRAINLAYER_PREFLIGHT_PYTHON" -c \
                 'import os; from pathlib import Path; from brainlayer.config import configured_brainlayer_env_value; from brainlayer.spotlight import ensure_spotlight_excluded_layout; env_file = Path(os.environ["BRAINLAYER_ENV_FILE"]) if os.environ.get("BRAINLAYER_ENV_FILE") else None; configured_db = configured_brainlayer_env_value("BRAINLAYER_DB", env_file); kwargs = {"resolve_db_path_fn": lambda: Path(configured_db).expanduser()} if configured_db else {}; ensure_spotlight_excluded_layout(**kwargs)'
         fi
+        mkdir -p "$LAUNCH_DIR" "$LOG_DIR" "$LOG_DIR/brainlayer" "$BRAINLAYER_LOG_DIR" "$BRAINLAYER_LIB_DIR"
+        mkdir -p "$HOME/.brainlayer/logs" "$HOME/.brainlayer/queue"
         ;;
 esac
-
-mkdir -p "$LAUNCH_DIR" "$LOG_DIR" "$LOG_DIR/brainlayer" "$BRAINLAYER_LOG_DIR" "$BRAINLAYER_LIB_DIR"
-mkdir -p "$HOME/.brainlayer/logs" "$HOME/.brainlayer/queue"
 
 install_env_runner() {
     local src="$SCRIPT_DIR/brainlayer-env-run.sh"
