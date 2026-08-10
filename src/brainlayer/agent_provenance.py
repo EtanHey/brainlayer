@@ -20,6 +20,7 @@ from .t3_provenance import T3_APP_SESSION, is_t3_app_initiated_codex_session
 
 SearchPolicy = Literal["KEEP", "ISOLATE", "OUT"]
 EffectiveVisibility = Literal["default", "operational", "cold"]
+SourceClass = Literal["cli-agent", "desktop", "subagent", "brain-worker", "fleet-coordination"]
 
 RECON_BRAIN_WORKER_RE = re.compile(r"\bbrain[-_ ]?worker\b", re.IGNORECASE)
 RECON_WEAVE_RE = re.compile(r"(?<!\w)/weave\b|\bweave[-_ ]+(?:worker|agent|recon)\b", re.IGNORECASE)
@@ -49,6 +50,7 @@ class ProvenanceDecision:
     provenance_tag: str
     search_policy: SearchPolicy
     reason: str
+    source_class: SourceClass | None
 
 
 def _abspath(source_file: str | Path) -> Path:
@@ -154,33 +156,73 @@ def classify_provenance(
         )
     )
     if is_t3_app_session:
-        return ProvenanceDecision(T3_APP_SESSION, "KEEP", "T3 runtime cursor links Codex session")
+        return ProvenanceDecision(T3_APP_SESSION, "KEEP", "T3 runtime cursor links Codex session", "desktop")
 
     if has_recon_agent_signature(content) or _has_recon_path_signature(path):
-        return ProvenanceDecision("recon-agent", "OUT", "recon Agent-tool signature wins precedence")
+        return ProvenanceDecision("recon-agent", "OUT", "recon Agent-tool signature wins precedence", "brain-worker")
 
     if _has_segment(path, "wf_*"):
-        return ProvenanceDecision("workflow-agent", "ISOLATE", "workflow wf_* path segment")
+        repo = _repo_from_project_segment(_project_segment(path))
+        source_class: SourceClass = "fleet-coordination" if repo in FLEET_REPOS else "subagent"
+        return ProvenanceDecision("workflow-agent", "KEEP", "ordinary workflow subagent", source_class)
 
     if _under_provider_sessions(path, ".codex"):
-        return ProvenanceDecision("codex-session", "KEEP", "Codex session root stays searchable")
+        return ProvenanceDecision("codex-session", "KEEP", "Codex session root stays searchable", "cli-agent")
 
     if _under_cursor_agent_transcripts(path):
-        return ProvenanceDecision("cursor-gather", "ISOLATE", "Cursor agent-transcripts root")
+        return ProvenanceDecision("cursor-gather", "KEEP", "Cursor coding-agent transcript root", "cli-agent")
 
     if _under_provider_sessions(path, ".gemini"):
-        return ProvenanceDecision("gemini-session", "KEEP", "Gemini session root stays searchable")
+        return ProvenanceDecision("gemini-session", "KEEP", "Gemini session root stays searchable", "cli-agent")
 
     if _is_subagent(path):
         repo = _repo_from_project_segment(_project_segment(path))
         if repo in FLEET_REPOS:
-            return ProvenanceDecision("fleet-subagent", "KEEP", f"fleet subagent project token {repo}")
-        return ProvenanceDecision("product-subagent", "KEEP", "non-fleet product subagent")
+            return ProvenanceDecision(
+                "fleet-subagent", "KEEP", f"fleet subagent project token {repo}", "fleet-coordination"
+            )
+        return ProvenanceDecision("product-subagent", "KEEP", "non-fleet product subagent", "subagent")
 
     if _is_direct_claude_session(path):
-        return ProvenanceDecision("direct-session", "KEEP", "direct/control Claude session")
+        return ProvenanceDecision("direct-session", "KEEP", "direct/control Claude session", "cli-agent")
 
-    return ProvenanceDecision("unknown", "KEEP", "no agent provenance rule matched")
+    return ProvenanceDecision("unknown", "KEEP", "no agent provenance rule matched", None)
+
+
+def derive_source_class(
+    source_file: str,
+    *,
+    provenance_class: str | None = None,
+    source: str | None = None,
+    content: str | None = None,
+) -> SourceClass | None:
+    """Return the five-value source class only when provenance is unambiguous."""
+    provenance_map: dict[str, SourceClass] = {
+        T3_APP_SESSION: "desktop",
+        "t3-thread": "desktop",
+        "recon-agent": "brain-worker",
+        "fleet-subagent": "fleet-coordination",
+        "product-subagent": "subagent",
+        "codex-session": "cli-agent",
+        "cursor-gather": "cli-agent",
+        "gemini-session": "cli-agent",
+        "direct-session": "cli-agent",
+    }
+    if provenance_class in provenance_map:
+        return provenance_map[provenance_class]
+    path_class = classify_provenance(
+        source_file,
+        content=content,
+        t3_linked_session_ids=set(),
+    ).source_class
+    if path_class is not None:
+        return path_class
+    normalized_source = str(source or "").strip().casefold().replace("-", "_")
+    if normalized_source in {"t3", "chatgpt", "claude_desktop", "gemini_desktop"}:
+        return "desktop"
+    if normalized_source in {"claude_code", "codex", "gemini_cli", "cursor", "antigravity"}:
+        return "cli-agent"
+    return None
 
 
 def effective_visibility(decision: ProvenanceDecision, content_class: str | None) -> EffectiveVisibility:

@@ -26,7 +26,7 @@ def test_classifies_provider_roots_and_workflow_paths(tmp_path: Path) -> None:
         (
             home / ".cursor" / "projects" / "brainlayer" / "agent-transcripts" / "session.jsonl",
             "cursor-gather",
-            "ISOLATE",
+            "KEEP",
         ),
         (
             home / ".gemini" / "sessions" / "session.jsonl",
@@ -44,7 +44,7 @@ def test_classifies_provider_roots_and_workflow_paths(tmp_path: Path) -> None:
             / "wf_c83ce37d"
             / "agent.jsonl",
             "workflow-agent",
-            "ISOLATE",
+            "KEEP",
         ),
     ]
 
@@ -206,11 +206,11 @@ def test_recon_path_signature_is_scoped_to_agent_transcript_roots(tmp_path: Path
     assert classify_provenance(str(recon_subagent)).provenance_tag == "recon-agent"
 
 
-def test_effective_visibility_preserves_keep_knowledge_and_decision_but_isolates_operational(
+def test_effective_visibility_preserves_searchable_source_classes_and_content_routing(
     tmp_path: Path,
 ) -> None:
     keep = classify_provenance(str(tmp_path / ".codex" / "sessions" / "session.jsonl"))
-    isolate = classify_provenance(
+    cursor = classify_provenance(
         str(tmp_path / ".cursor" / "projects" / "repo" / "agent-transcripts" / "session.jsonl")
     )
     gemini = classify_provenance(str(tmp_path / ".gemini" / "sessions" / "session.jsonl"))
@@ -218,7 +218,7 @@ def test_effective_visibility_preserves_keep_knowledge_and_decision_but_isolates
     assert effective_visibility(keep, "knowledge") == "default"
     assert effective_visibility(keep, "decision") == "default"
     assert effective_visibility(keep, "operational") == "operational"
-    assert effective_visibility(isolate, "knowledge") == "operational"
+    assert effective_visibility(cursor, "knowledge") == "default"
     assert effective_visibility(gemini, "knowledge") == "default"
 
 
@@ -255,8 +255,8 @@ def test_report_summarizes_tags_policies_and_effective_visibility_without_real_d
         "direct-session": 1,
         "gemini-session": 1,
     }
-    assert report["policies"] == {"KEEP": 3, "ISOLATE": 1, "OUT": 0}
-    assert report["effective_visibility"] == {"cold": 0, "default": 3, "operational": 1}
+    assert report["policies"] == {"KEEP": 4, "ISOLATE": 0, "OUT": 0}
+    assert report["effective_visibility"] == {"cold": 0, "default": 4, "operational": 0}
 
 
 def test_report_loads_t3_session_ids_once(tmp_path: Path, monkeypatch) -> None:

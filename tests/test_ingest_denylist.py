@@ -69,8 +69,20 @@ def test_default_policy_excludes_exact_brain_worker_but_keeps_raw_jsonl(monkeypa
     assert worker.exists()
 
 
-def test_known_drift_blanket_workflow_path_exclusion_keeps_raw_jsonl(monkeypatch, tmp_path):
-    """Document the shipped wf_* over-exclusion without presenting it as the BL-10 ruling."""
+def test_default_policy_excludes_all_memory_reader_attributions(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv(BRAINLAYER_INGEST_DENYLIST_ENV, raising=False)
+
+    for attribution in ("brain-worker", "session-miner", "weave"):
+        worker = _write_subagent(
+            tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / f"agent-{attribution}.jsonl",
+            attribution,
+        )
+        assert is_denylisted(worker)
+        assert worker.exists()
+
+
+def test_default_policy_keeps_non_recon_workflow_subagent(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv(BRAINLAYER_INGEST_DENYLIST_ENV, raising=False)
     workflow = _write_subagent(
@@ -86,7 +98,7 @@ def test_known_drift_blanket_workflow_path_exclusion_keeps_raw_jsonl(monkeypatch
         "workflow-subagent",
     )
 
-    assert is_denylisted(workflow)
+    assert not is_denylisted(workflow)
     assert workflow.exists()
 
 

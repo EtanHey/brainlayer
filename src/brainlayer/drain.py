@@ -926,6 +926,8 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
         values["content_class"] = event.get("content_class")
     if event.get("provenance_class"):
         values["provenance_class"] = event.get("provenance_class")
+    if event.get("source_class") and "source_class" in _columns(conn, "chunks"):
+        values["source_class"] = event.get("source_class")
     stored_chunk_id = _insert_or_merge_chunk(
         conn,
         values,

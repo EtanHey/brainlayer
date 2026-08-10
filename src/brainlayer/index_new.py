@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 from typing import Callable, List, Optional
 
+from .agent_provenance import derive_source_class
 from .claude_paths import extract_claude_conversation_id as _extract_claude_conversation_id
 from .embeddings import embed_chunks
 from .pipeline.chunk import Chunk
@@ -116,6 +117,13 @@ def index_chunks_to_sqlite(
                 "sender": metadata.get("sender"),
                 "source": metadata.get("source", "claude_code"),
                 "provenance_class": metadata.get("provenance_class"),
+                "source_class": metadata.get("source_class")
+                or derive_source_class(
+                    source_file,
+                    provenance_class=metadata.get("provenance_class"),
+                    source=metadata.get("source", "claude_code"),
+                    content=chunk.content,
+                ),
                 "source_uri": metadata.get("source_uri"),
                 "allow_duplicate": metadata.get("allow_duplicate", False),
             }

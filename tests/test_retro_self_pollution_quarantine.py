@@ -199,7 +199,7 @@ def _call_record_manifest_for_plan(script: ModuleType, cursor: apsw.Cursor, chun
         script._record_manifest(cursor, chunk_ids, run_id="plan-run", timestamp="2026-07-08T00:00:00Z")
 
 
-def test_dry_run_uses_denylist_and_preserves_direct_sessions(tmp_path: Path, monkeypatch) -> None:
+def test_dry_run_uses_class_denylist_and_preserves_workflows_and_direct_sessions(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("BRAINLAYER_INGEST_DENYLIST", raising=False)
     script = _load_script()
     db_path = tmp_path / "dry-run.db"
@@ -236,10 +236,10 @@ def test_dry_run_uses_denylist_and_preserves_direct_sessions(tmp_path: Path, mon
 
     report = script.run_dry_run(db_path, sample_size=10, random_seed=7)
 
-    assert report["counts"] == {"quarantine_set": 1, "preserved": 3, "total": 4}
-    assert report["provider_breakdown"]["quarantine_set"] == {"claude": 1}
-    assert report["provider_breakdown"]["preserved"] == {"codex": 1, "claude": 1, "other": 1}
-    assert report["audit"]["quarantine_sample_size"] == 1
+    assert report["counts"] == {"quarantine_set": 0, "preserved": 4, "total": 4}
+    assert report["provider_breakdown"]["quarantine_set"] == {}
+    assert report["provider_breakdown"]["preserved"] == {"codex": 1, "claude": 2, "other": 1}
+    assert report["audit"]["quarantine_sample_size"] == 0
     assert report["audit"]["direct_session_source_files_checked"] == 1
     assert report["audit"]["direct_session_false_positive_count"] == 0
     assert report["audit"]["stop_gate_passed"] is True
@@ -1302,15 +1302,7 @@ def test_run_apply_refuses_when_retrievability_proof_fails(tmp_path: Path, monke
     db_path = tmp_path / "apply-proof-gate.db"
     backup_path = tmp_path / "apply-proof-gate-backup.db"
     denied_source = (
-        tmp_path
-        / ".claude"
-        / "projects"
-        / "proj"
-        / "session"
-        / "subagents"
-        / "workflows"
-        / "wf_test"
-        / "agent-worker.jsonl"
+        tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "brain-worker" / "agent-worker.jsonl"
     )
     store = VectorStore(db_path)
     try:
@@ -1454,15 +1446,7 @@ def test_revert_proof_runs_only_on_snapshot_path(tmp_path: Path) -> None:
             store,
             chunk_id="claude-subagent",
             source_file=(
-                tmp_path
-                / ".claude"
-                / "projects"
-                / "proj"
-                / "session"
-                / "subagents"
-                / "workflows"
-                / "wf_test"
-                / "agent-a1.jsonl"
+                tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "brain-worker" / "agent-a1.jsonl"
             ),
             content="snapshot revert proof sentinel",
         )
@@ -1488,15 +1472,7 @@ def test_direct_script_execution_bootstraps_operational_fts_for_legacy_snapshot(
     db_path = tmp_path / "legacy-source.db"
     snapshot_path = tmp_path / "legacy-snapshot.db"
     source_file = (
-        tmp_path
-        / ".claude"
-        / "projects"
-        / "proj"
-        / "session"
-        / "subagents"
-        / "workflows"
-        / "wf_test"
-        / "agent-a1.jsonl"
+        tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "brain-worker" / "agent-a1.jsonl"
     )
     conn = apsw.Connection(str(db_path))
     try:

@@ -405,6 +405,24 @@ def _content_class_expr(store: Any, alias: str | None = None) -> str:
     return f"'{DEFAULT_CONTENT_CLASS}'"
 
 
+def _source_class_where(
+    store: Any,
+    *,
+    alias: str | None = None,
+    include_hidden_source_classes: bool = False,
+) -> str | None:
+    """Build the unadvertised source-class visibility gate.
+
+    Legacy NULL rows stay visible. The internal opt-in reveals desktop rows,
+    while brain-worker rows remain excluded even if a legacy leak exists.
+    """
+    if not getattr(store, "_has_source_class", False):
+        return None
+    column = f"{alias}.source_class" if alias else "source_class"
+    hidden = "('brain-worker')" if include_hidden_source_classes else "('desktop', 'brain-worker')"
+    return f"({column} IS NULL OR {column} NOT IN {hidden})"
+
+
 def _effective_project_filter(project_filter: Optional[str], consumer_scope: ConsumerScope | None) -> Optional[str]:
     if consumer_scope is not None:
         return consumer_scope.project_filter
@@ -1079,6 +1097,7 @@ class SearchMixin:
         include_audit: bool = False,
         include_operational: bool = False,
         content_class_filter: Optional[str] = None,
+        include_hidden_source_classes: bool = False,
         consumer_scope: ConsumerScope | None = None,
     ) -> Dict[str, List]:
         """Search chunks by embedding or text.
@@ -1157,6 +1176,13 @@ class SearchMixin:
             if content_class_clause:
                 where_clauses.append(content_class_clause)
                 filter_params.extend(content_class_params)
+            source_class_clause = _source_class_where(
+                self,
+                alias="c",
+                include_hidden_source_classes=include_hidden_source_classes,
+            )
+            if source_class_clause:
+                where_clauses.append(source_class_clause)
             if not include_audit:
                 where_clauses.append(self._audit_recursion_exclusion_sql("c.id", "c.tags", "c.content"))
             if not include_checkpoints:
@@ -1278,6 +1304,12 @@ class SearchMixin:
             if content_class_clause:
                 where_clauses.append(content_class_clause)
                 params.extend(content_class_params)
+            source_class_clause = _source_class_where(
+                self,
+                include_hidden_source_classes=include_hidden_source_classes,
+            )
+            if source_class_clause:
+                where_clauses.append(source_class_clause)
             if not include_audit:
                 where_clauses.append(self._audit_recursion_exclusion_sql("id", "tags", "content"))
             if not include_checkpoints:
@@ -1517,6 +1549,7 @@ class SearchMixin:
         include_operational: bool = False,
         content_class_filter: Optional[str] = None,
         brainbar_helper_fast_profile: bool = False,
+        include_hidden_source_classes: bool = False,
         consumer_scope: ConsumerScope | None = None,
     ) -> Dict[str, List]:
         """Run KNN search against binary-quantized vectors."""
@@ -1584,6 +1617,13 @@ class SearchMixin:
         if content_class_clause:
             where_clauses.append(content_class_clause)
             filter_params.extend(content_class_params)
+        source_class_clause = _source_class_where(
+            self,
+            alias="c",
+            include_hidden_source_classes=include_hidden_source_classes,
+        )
+        if source_class_clause:
+            where_clauses.append(source_class_clause)
         if not include_audit:
             where_clauses.append(self._audit_recursion_exclusion_sql("c.id", "c.tags", "c.content"))
         if not include_checkpoints:
@@ -1785,6 +1825,7 @@ class SearchMixin:
         include_audit: bool = False,
         include_operational: bool = False,
         content_class_filter: Optional[str] = None,
+        include_hidden_source_classes: bool = False,
         profile_query_id: str | None = None,
         profile_scope: str = "search.repo",
         brainbar_helper_fast_profile: bool = False,
@@ -1854,6 +1895,7 @@ class SearchMixin:
             filter_meta_noise,
             brainbar_helper_fast_profile,
             consumer_scope.cache_key() if consumer_scope is not None else None,
+            include_hidden_source_classes,
         )
         now = time.monotonic()
         if cache_key in _hybrid_cache:
@@ -1907,6 +1949,7 @@ class SearchMixin:
                 include_operational=include_operational,
                 content_class_filter=content_class_filter,
                 brainbar_helper_fast_profile=brainbar_helper_fast_profile,
+                include_hidden_source_classes=include_hidden_source_classes,
                 consumer_scope=consumer_scope,
             )
             search_profile.emit(
@@ -1952,6 +1995,7 @@ class SearchMixin:
                 include_audit=include_audit,
                 include_operational=include_operational,
                 content_class_filter=content_class_filter,
+                include_hidden_source_classes=include_hidden_source_classes,
                 consumer_scope=consumer_scope,
             )
             search_profile.emit(
@@ -2036,6 +2080,13 @@ class SearchMixin:
             if content_class_clause:
                 fts_extra.append(f"AND {content_class_clause}")
                 fts_filter_params.extend(content_class_params)
+            source_class_clause = _source_class_where(
+                self,
+                alias="c",
+                include_hidden_source_classes=include_hidden_source_classes,
+            )
+            if source_class_clause:
+                fts_extra.append(f"AND {source_class_clause}")
             if not include_audit:
                 fts_extra.append(f"AND {self._audit_recursion_exclusion_sql('c.id', 'c.tags', 'c.content')}")
             if not include_checkpoints:
@@ -2229,6 +2280,12 @@ class SearchMixin:
             if content_class_clause:
                 recent_extra.append(f"AND {content_class_clause}")
                 recent_params.extend(content_class_params)
+            source_class_clause = _source_class_where(
+                self,
+                include_hidden_source_classes=include_hidden_source_classes,
+            )
+            if source_class_clause:
+                recent_extra.append(f"AND {source_class_clause}")
             if not include_audit:
                 recent_extra.append(f"AND {self._audit_recursion_exclusion_sql('id', 'tags', 'content')}")
             if not include_checkpoints:

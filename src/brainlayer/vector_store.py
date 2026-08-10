@@ -663,6 +663,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         self._has_chunk_origin = "chunk_origin" in chunk_columns
         self._has_content_class = "content_class" in chunk_columns
         self._has_provenance_class = "provenance_class" in chunk_columns
+        self._has_source_class = "source_class" in chunk_columns
         self._has_superseded_by = "superseded_by" in chunk_columns
         self._has_invalid_at = "invalid_at" in chunk_columns
         self._binary_index_available = "chunk_vectors_binary" in existing_tables
@@ -808,6 +809,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 context_summary TEXT,
                 created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
                 provenance_class TEXT,
+                source_class TEXT,
                 chunk_origin TEXT DEFAULT 'unknown',
                 content_class TEXT DEFAULT 'knowledge',
                 content_hash TEXT,
@@ -913,6 +915,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         self._has_chunk_origin = True
         self._has_content_class = True
         self._has_provenance_class = True
+        self._has_source_class = "source_class" in existing_cols
         self._has_superseded_by = True
         ensure_dedupe_schema(self.conn)
 
@@ -1047,6 +1050,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             ("idx_chunks_topic_cluster", "topic_cluster"),
         ]:
             cursor.execute(f"CREATE INDEX IF NOT EXISTS {idx} ON chunks({col})")
+        if self._has_source_class:
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_source_class ON chunks(source_class)")
         cursor.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_chunks_brick_id ON chunks(brick_id) WHERE brick_id IS NOT NULL"
         )
@@ -2591,11 +2596,19 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                             continue
 
                         has_provenance_class = getattr(self, "_has_provenance_class", False)
+                        has_source_class = getattr(self, "_has_source_class", False)
                         provenance_column = ", provenance_class" if has_provenance_class else ""
                         provenance_value = ", ?" if has_provenance_class else ""
                         provenance_update = (
                             ", provenance_class = COALESCE(excluded.provenance_class, chunks.provenance_class)"
                             if has_provenance_class
+                            else ""
+                        )
+                        source_class_column = ", source_class" if has_source_class else ""
+                        source_class_value = ", ?" if has_source_class else ""
+                        source_class_update = (
+                            ", source_class = COALESCE(excluded.source_class, chunks.source_class)"
+                            if has_source_class
                             else ""
                         )
                         cursor.execute(
@@ -2606,8 +2619,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                              conversation_id, position, sender, chunk_origin, tags, importance,
                              half_life_days, seen_count, last_seen_at, dedupe_hash, simhash,
                              simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3,
-                             brick_id, source_uri, status, ingested_at, topic_cluster{provenance_column})
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?{provenance_value})
+                             brick_id, source_uri, status, ingested_at, topic_cluster{provenance_column}{source_class_column})
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?{provenance_value}{source_class_value})
                             ON CONFLICT(id) DO UPDATE SET
                                 content = excluded.content,
                                 metadata = excluded.metadata,
@@ -2649,7 +2662,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                                     WHEN chunks.chunk_origin IS NULL
                                         THEN COALESCE(excluded.chunk_origin, 'unknown')
                                     ELSE chunks.chunk_origin
-                                END{provenance_update}
+                                END{provenance_update}{source_class_update}
                         """,
                             (
                                 chunk_id,
@@ -2683,6 +2696,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                                 chunk.get("ingested_at") or int(time.time()),
                                 chunk.get("topic_cluster"),
                                 *([chunk.get("provenance_class")] if has_provenance_class else []),
+                                *([chunk.get("source_class")] if has_source_class else []),
                             ),
                         )
                         self._upsert_chunk_vector(cursor, chunk_id, embedding)

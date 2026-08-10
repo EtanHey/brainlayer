@@ -459,6 +459,7 @@ class WriterRuntimeStore(VectorStore):
             self._has_chunk_origin = "chunk_origin" in chunk_columns
             self._has_content_class = "content_class" in chunk_columns
             self._has_provenance_class = "provenance_class" in chunk_columns
+            self._has_source_class = "source_class" in chunk_columns
             self._has_superseded_by = "superseded_by" in chunk_columns
             self._has_invalid_at = "invalid_at" in chunk_columns
             self._binary_index_available = "chunk_vectors_binary" in objects

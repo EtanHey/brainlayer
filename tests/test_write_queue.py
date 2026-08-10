@@ -142,6 +142,7 @@ class TestQueueStore:
             created_at="2026-07-08T12:00:00Z",
             conversation_id="session",
             provenance_class="cursor-gather",
+            source_class="cli-agent",
             content_class="operational",
             queue_dir=tmp_path,
         )
@@ -149,6 +150,7 @@ class TestQueueStore:
         item = json.loads(path.read_text())
 
         assert item["provenance_class"] == "cursor-gather"
+        assert item["source_class"] == "cli-agent"
         assert item["content_class"] == "operational"
 
     def test_enqueue_watcher_chunk_omits_empty_provenance_routing_fields(self, tmp_path):
@@ -260,6 +262,7 @@ class TestQueueStore:
             "created_at": "2026-07-08T12:00:00Z",
             "conversation_id": "session-provenance-routing",
             "provenance_class": "cursor-gather",
+            "source_class": "cli-agent",
             "content_class": "operational",
         }
         queue_dir.mkdir()
@@ -270,7 +273,7 @@ class TestQueueStore:
         with sqlite3.connect(db_path) as conn:
             row = conn.execute(
                 """
-                SELECT content_class, provenance_class,
+                SELECT content_class, provenance_class, source_class,
                        (SELECT COUNT(*) FROM chunks_fts WHERE chunk_id = chunks.id),
                        (SELECT COUNT(*) FROM chunks_fts_operational WHERE chunk_id = chunks.id)
                 FROM chunks WHERE id = ?
@@ -279,7 +282,7 @@ class TestQueueStore:
             ).fetchone()
 
         assert drained == 1
-        assert row == ("operational", "cursor-gather", 0, 1)
+        assert row == ("operational", "cursor-gather", "cli-agent", 0, 1)
 
     def test_drain_classifies_legacy_watcher_event_without_routing_fields(self, tmp_path, monkeypatch):
         """Legacy watcher queue files without explicit routing fields still use classifier fallback."""
