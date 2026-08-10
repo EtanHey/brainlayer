@@ -1,8 +1,10 @@
 import json
 import sqlite3
+import struct
 from pathlib import Path
 
 import pytest
+import sqlite_vec
 
 import brainlayer.source_class_migration as migration
 
@@ -147,6 +149,37 @@ def test_migration_uses_subagent_attribution_and_not_chunk_role_mentions(tmp_pat
             "ordinary": "fleet-coordination",
             "worker": "brain-worker",
         }
+
+
+def test_migration_loads_vec0_and_purges_brain_worker_candidates(tmp_path: Path) -> None:
+    db_path = tmp_path / "vec0-copy.db"
+    _legacy_db(db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DROP TABLE chunk_vectors")
+        conn.execute("DROP TABLE chunk_vectors_binary")
+        conn.enable_load_extension(True)
+        conn.load_extension(sqlite_vec.loadable_path())
+        conn.enable_load_extension(False)
+        conn.execute("CREATE VIRTUAL TABLE chunk_vectors USING vec0(chunk_id TEXT PRIMARY KEY, embedding FLOAT[1024])")
+        conn.execute(
+            "CREATE VIRTUAL TABLE chunk_vectors_binary USING vec0(chunk_id TEXT PRIMARY KEY, embedding BIT[1024])"
+        )
+        float_embedding = struct.pack("<1024f", *([0.0] * 1024))
+        for chunk_id in ("cli", "brain-worker"):
+            conn.execute("INSERT INTO chunk_vectors(chunk_id, embedding) VALUES (?, ?)", (chunk_id, float_embedding))
+            conn.execute(
+                "INSERT INTO chunk_vectors_binary(chunk_id, embedding) VALUES (?, vec_quantize_binary(?))",
+                (chunk_id, float_embedding),
+            )
+
+    receipt = migration.migrate_source_class(db_path, git_sha=GIT_SHA, actor="pytest")
+
+    assert receipt["vector_rows_removed"] == {"chunk_vectors": 1, "chunk_vectors_binary": 1}
+    with sqlite3.connect(db_path) as conn:
+        conn.enable_load_extension(True)
+        conn.load_extension(sqlite_vec.loadable_path())
+        assert conn.execute("SELECT chunk_id FROM chunk_vectors").fetchall() == [("cli",)]
+        assert conn.execute("SELECT chunk_id FROM chunk_vectors_binary").fetchall() == [("cli",)]
 
 
 def test_migration_rerun_rejects_a_different_code_sha(tmp_path: Path) -> None:

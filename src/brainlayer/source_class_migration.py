@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import sqlite_vec
+
 from .agent_provenance import derive_source_class
 from .paths import get_db_path
 
@@ -62,6 +64,19 @@ def _schema_fingerprint(conn: sqlite3.Connection) -> str:
     rows = conn.execute("SELECT type, name, COALESCE(sql, '') FROM sqlite_master ORDER BY type, name").fetchall()
     payload = json.dumps(rows, separators=(",", ":"), ensure_ascii=True).encode()
     return hashlib.sha256(payload).hexdigest()
+
+
+def _load_vec0_if_needed(conn: sqlite3.Connection) -> None:
+    uses_vec0 = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND sql LIKE '%USING vec0%' LIMIT 1"
+    ).fetchone()
+    if uses_vec0 is None:
+        return
+    conn.enable_load_extension(True)
+    try:
+        conn.load_extension(sqlite_vec.loadable_path())
+    finally:
+        conn.enable_load_extension(False)
 
 
 def _ensure_ledgers(conn: sqlite3.Connection) -> None:
@@ -168,6 +183,7 @@ def migrate_source_class(
 
     started = time.monotonic()
     conn = sqlite3.connect(path, timeout=60.0)
+    _load_vec0_if_needed(conn)
     conn.execute("PRAGMA busy_timeout = 60000")
     conn.execute("PRAGMA foreign_keys = ON")
     prior_fingerprint = _schema_fingerprint(conn)
