@@ -806,6 +806,7 @@ class SearchMixin:
         """Return a connection-scoped token plus that connection's data version."""
         for attempt in range(3):
             try:
+                # Resolve the cursor first: _get_read_conn() rotates the token when it creates a replacement connection.
                 cursor = self._read_cursor()
                 row = cursor.execute("PRAGMA data_version").fetchone()
                 if not row:
@@ -1953,7 +1954,7 @@ class SearchMixin:
 
         # ── Cache lookup ─────────────────────────────────────────────────────
         store_key = os.fspath(getattr(self, "db_path", "<unknown-db>"))
-        cache_key = _hybrid_cache_key(
+        base_cache_key = _hybrid_cache_key(
             store_key,
             query_text,
             query_embedding,
@@ -1995,6 +1996,8 @@ class SearchMixin:
         )
         now = time.monotonic()
         reader_state_before_search = self._reader_cache_state()
+        reader_cache_token = reader_state_before_search[0] if reader_state_before_search is not None else None
+        cache_key = base_cache_key + (reader_cache_token,)
         if cache_key in _hybrid_cache:
             cached_result, cached_at, cached_reader_state = _hybrid_cache[cache_key]
             if (
