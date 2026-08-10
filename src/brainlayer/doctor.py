@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -43,7 +44,7 @@ from .launchd_primitive import (
     is_launchd_label_loaded,
     verify_launchd_label_loaded,
 )
-from .paths import get_db_path
+from .paths import SPOTLIGHT_EXCLUSION_MARKER, get_db_path, is_spotlight_excluded
 from .search_repo import clear_hybrid_search_cache
 from .vector_store import VectorStore
 
@@ -72,6 +73,25 @@ class DoctorIssue:
     details: dict[str, Any] = field(default_factory=dict)
 
 
+def _spotlight_exclusion_issue(db_path: Path) -> DoctorIssue | None:
+    data_dir = db_path.expanduser().parent.resolve(strict=False)
+    if is_spotlight_excluded(data_dir):
+        return None
+    return DoctorIssue(
+        "spotlight_indexing_enabled",
+        "warning",
+        "BrainLayer data directory is not excluded from Spotlight indexing",
+        {
+            "data_dir": str(data_dir),
+            "marker": SPOTLIGHT_EXCLUSION_MARKER,
+            "remediation": (
+                "run `brainlayer setup` for a fresh or empty layout; "
+                "for existing data, follow the Spotlight exclusion migration runbook"
+            ),
+        },
+    )
+
+
 @dataclass
 class DoctorConfig:
     db_path: Path = field(default_factory=get_db_path)
@@ -98,6 +118,7 @@ class DoctorConfig:
     version_check_enabled: bool = True
     version_check_required: bool = False
     version_check_path: Path = field(default_factory=default_version_check_path)
+    spotlight_check_enabled: bool = field(default_factory=lambda: sys.platform == "darwin")
 
 
 @dataclass
@@ -435,6 +456,11 @@ def run_doctor(
             version_check_required=config.version_check_required,
             command_runner=command_runner,
         )
+
+    if config.spotlight_check_enabled:
+        spotlight_issue = _spotlight_exclusion_issue(config.db_path)
+        if spotlight_issue is not None:
+            result.issues.append(spotlight_issue)
 
     store: VectorStore | None = None
     try:

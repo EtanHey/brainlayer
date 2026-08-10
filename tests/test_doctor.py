@@ -382,6 +382,52 @@ def test_run_doctor_exits_zero_on_healthy_fixture(tmp_path):
     assert not [issue for issue in result.issues if issue.severity == "fatal"]
 
 
+def test_spotlight_exclusion_issue_warns_for_unmarked_db_directory(tmp_path):
+    from brainlayer import doctor
+
+    db_path = tmp_path / "data" / "brainlayer.db"
+    db_path.parent.mkdir()
+
+    issue = doctor._spotlight_exclusion_issue(db_path)
+
+    assert issue is not None
+    assert issue.code == "spotlight_indexing_enabled"
+    assert issue.severity == "warning"
+    assert issue.details["data_dir"] == str(db_path.parent)
+    assert issue.details["marker"] == ".metadata_never_index"
+
+
+def test_spotlight_exclusion_issue_accepts_marker_on_data_directory(tmp_path):
+    from brainlayer import doctor
+
+    db_path = tmp_path / "data" / "brainlayer.db"
+    db_path.parent.mkdir()
+    (db_path.parent / ".metadata_never_index").touch()
+
+    assert doctor._spotlight_exclusion_issue(db_path) is None
+
+
+def test_run_doctor_reports_unexcluded_data_directory_as_warning(tmp_path):
+    from brainlayer.doctor import run_doctor
+
+    db_path = tmp_path / "unexcluded" / "healthy.db"
+    db_path.parent.mkdir()
+    _build_db(db_path)
+    config = _doctor_config(tmp_path, db_path)
+    config.spotlight_check_enabled = True
+
+    result = run_doctor(
+        config,
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+
+    issue = next(issue for issue in result.issues if issue.code == "spotlight_indexing_enabled")
+    assert issue.severity == "warning"
+    assert result.exit_code == 0
+
+
 def test_run_doctor_reports_unavailable_process_snapshot_without_false_daemon_death(tmp_path):
     from brainlayer.doctor import run_doctor
 

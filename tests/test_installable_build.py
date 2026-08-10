@@ -195,6 +195,106 @@ def test_install_launchd_default_defers_to_bounded_installer_shutdown_waits(tmp_
     assert calls == [([str(install_script), "all"], None)]
 
 
+def test_setup_creates_complete_spotlight_excluded_layout_idempotently(tmp_path: Path) -> None:
+    import brainlayer.setup as setup_helpers
+
+    data_dir = tmp_path / "data"
+    runtime_dir = tmp_path / "runtime"
+    launchd_log_dir = tmp_path / "launchd-logs"
+    counter_dir = tmp_path / "counter"
+
+    first = setup_helpers.ensure_spotlight_excluded_layout(
+        data_dir=data_dir,
+        runtime_dir=runtime_dir,
+        launchd_log_dir=launchd_log_dir,
+        counter_dir=counter_dir,
+    )
+    second = setup_helpers.ensure_spotlight_excluded_layout(
+        data_dir=data_dir,
+        runtime_dir=runtime_dir,
+        launchd_log_dir=launchd_log_dir,
+        counter_dir=counter_dir,
+    )
+
+    roots = (data_dir, runtime_dir, launchd_log_dir, counter_dir)
+    assert first == roots
+    assert second == roots
+    assert all((root / ".metadata_never_index").is_file() for root in roots)
+    assert {path.name for path in data_dir.iterdir() if path.is_dir()} == {
+        "backups",
+        "chromadb",
+        "chromadb.backup",
+        "enrichment-scratch",
+        "experiments",
+        "jsonl-backups",
+        "logs",
+        "prompts",
+        "style",
+        "storage",
+    }
+    assert {path.name for path in runtime_dir.iterdir() if path.is_dir()} == {"logs", "quarantine", "queue"}
+
+
+def test_setup_refuses_to_mark_legacy_nonempty_runtime_tree(tmp_path: Path) -> None:
+    import brainlayer.setup as setup_helpers
+
+    data_dir = tmp_path / "legacy-data"
+    data_dir.mkdir()
+    (data_dir / "brainlayer.db").write_bytes(b"existing production data")
+
+    with pytest.raises(RuntimeError, match="requires the Spotlight exclusion migration runbook"):
+        setup_helpers.ensure_spotlight_excluded_layout(
+            data_dir=data_dir,
+            runtime_dir=tmp_path / "runtime",
+            launchd_log_dir=tmp_path / "launchd-logs",
+            counter_dir=tmp_path / "counter",
+        )
+
+    assert not (data_dir / ".metadata_never_index").exists()
+
+
+def test_setup_preflights_all_roots_before_creating_any_marker(tmp_path: Path) -> None:
+    import brainlayer.setup as setup_helpers
+
+    data_dir = tmp_path / "new-data"
+    runtime_dir = tmp_path / "legacy-runtime"
+    runtime_dir.mkdir()
+    (runtime_dir / "queue-item.jsonl").write_text("pending\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="requires the Spotlight exclusion migration runbook"):
+        setup_helpers.ensure_spotlight_excluded_layout(
+            data_dir=data_dir,
+            runtime_dir=runtime_dir,
+            launchd_log_dir=tmp_path / "launchd-logs",
+            counter_dir=tmp_path / "counter",
+        )
+
+    assert not data_dir.exists()
+    assert not (runtime_dir / ".metadata_never_index").exists()
+
+
+@pytest.mark.parametrize("invalid_kind", ["file", "dangling-symlink"])
+def test_setup_preflights_invalid_root_types_before_creating_any_marker(tmp_path: Path, invalid_kind: str) -> None:
+    import brainlayer.setup as setup_helpers
+
+    data_dir = tmp_path / "new-data"
+    runtime_dir = tmp_path / "invalid-runtime"
+    if invalid_kind == "file":
+        runtime_dir.write_text("not a directory\n", encoding="utf-8")
+    else:
+        runtime_dir.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="must be a directory"):
+        setup_helpers.ensure_spotlight_excluded_layout(
+            data_dir=data_dir,
+            runtime_dir=runtime_dir,
+            launchd_log_dir=tmp_path / "launchd-logs",
+            counter_dir=tmp_path / "counter",
+        )
+
+    assert not data_dir.exists()
+
+
 def test_setup_migrates_legacy_raw_socat_mcp_config_idempotently(tmp_path: Path) -> None:
     from brainlayer.setup import migrate_legacy_mcp_configs
 
@@ -457,6 +557,24 @@ def test_setup_command_writes_op_backed_env_without_plaintext_and_can_skip_launc
     assert "GOOGLE_API_KEY=\"$(op read 'op://Private/Google AI/Gemini API key')\"" in content
     assert "AIza" not in content
     assert oct(env_file.stat().st_mode & 0o777) == "0o600"
+
+
+def test_setup_command_excludes_runtime_layout_before_writing_env(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.setup as setup_helpers
+    from brainlayer.cli import app
+
+    calls: list[str] = []
+    monkeypatch.setattr(setup_helpers, "ensure_spotlight_excluded_layout", lambda: calls.append("layout"))
+    monkeypatch.setattr(
+        setup_helpers,
+        "ensure_brainlayer_env",
+        lambda *_args, **_kwargs: calls.append("env") or tmp_path / "brainlayer.env",
+    )
+
+    result = CliRunner().invoke(app, ["setup", "--no-launchd"])
+
+    assert result.exit_code == 0, result.stdout
+    assert calls == ["layout", "env"]
 
 
 def test_launchd_env_runner_makes_homebrew_op_available_before_loading_env() -> None:

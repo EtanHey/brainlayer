@@ -13,9 +13,67 @@ from importlib import resources
 from pathlib import Path
 
 from .cli.wizard import DEFAULT_BRAINLAYER_CONFIG, write_gemini_env_file
+from .paths import SPOTLIGHT_EXCLUSION_MARKER, get_db_path
 
 DEFAULT_GOOGLE_API_KEY_OP_REF = "op://Private/Google AI/Gemini API key"
 DEFAULT_MCP_PROTOCOL_VERSION = "2025-06-18"
+
+_DATA_CHILDREN = (
+    "backups",
+    "chromadb",
+    "chromadb.backup",
+    "enrichment-scratch",
+    "experiments",
+    "jsonl-backups",
+    "logs",
+    "prompts",
+    "style",
+    "storage",
+)
+_RUNTIME_CHILDREN = ("logs", "quarantine", "queue")
+
+
+def _ensure_spotlight_excluded_root(root: Path, children: tuple[str, ...] = ()) -> Path:
+    resolved = root.expanduser()
+    resolved.mkdir(parents=True, exist_ok=True)
+    marker = resolved / SPOTLIGHT_EXCLUSION_MARKER
+    if not marker.is_file() and next(resolved.iterdir(), None) is not None:
+        raise RuntimeError(f"existing runtime tree {resolved} requires the Spotlight exclusion migration runbook")
+    marker.touch(exist_ok=True)
+    for child in children:
+        (resolved / child).mkdir(parents=True, exist_ok=True)
+    return resolved
+
+
+def ensure_spotlight_excluded_layout(
+    *,
+    data_dir: Path | None = None,
+    runtime_dir: Path | None = None,
+    launchd_log_dir: Path | None = None,
+    counter_dir: Path | None = None,
+) -> tuple[Path, Path, Path, Path]:
+    """Create marker-backed roots for every high-churn BrainLayer runtime path."""
+    requested_roots = (
+        data_dir or get_db_path().parent,
+        runtime_dir or Path.home() / ".brainlayer",
+        launchd_log_dir or Path.home() / "Library" / "Logs" / "brainlayer",
+        counter_dir or Path.home() / ".brainlayer-p0-counter",
+    )
+    resolved_roots = tuple(root.expanduser() for root in requested_roots)
+    for root in resolved_roots:
+        if (root.exists() or root.is_symlink()) and not root.is_dir():
+            raise RuntimeError(f"runtime root {root} must be a directory")
+        marker = root / SPOTLIGHT_EXCLUSION_MARKER
+        if root.is_dir() and not marker.is_file() and next(root.iterdir(), None) is not None:
+            raise RuntimeError(f"existing runtime tree {root} requires the Spotlight exclusion migration runbook")
+
+    roots = (
+        _ensure_spotlight_excluded_root(resolved_roots[0], _DATA_CHILDREN),
+        _ensure_spotlight_excluded_root(resolved_roots[1], _RUNTIME_CHILDREN),
+        _ensure_spotlight_excluded_root(resolved_roots[2]),
+        _ensure_spotlight_excluded_root(resolved_roots[3]),
+    )
+    return roots
 
 
 def get_default_env_file() -> Path:

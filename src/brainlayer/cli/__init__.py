@@ -534,9 +534,16 @@ def setup(
     """Create brainlayer.env and optionally bootstrap launchd agents."""
     import subprocess
 
-    from ..setup import ensure_brainlayer_env, install_launchd, migrate_legacy_mcp_configs, verify_mcp_transport
+    from ..setup import (
+        ensure_brainlayer_env,
+        ensure_spotlight_excluded_layout,
+        install_launchd,
+        migrate_legacy_mcp_configs,
+        verify_mcp_transport,
+    )
 
     try:
+        ensure_spotlight_excluded_layout()
         resolved_env_file = ensure_brainlayer_env(
             env_file,
             google_api_key_op_ref=google_api_key_op_ref,

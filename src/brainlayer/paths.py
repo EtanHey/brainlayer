@@ -9,6 +9,13 @@ import os
 from pathlib import Path
 
 _CANONICAL_DB_PATH = Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db"
+SPOTLIGHT_EXCLUSION_MARKER = ".metadata_never_index"
+
+
+def is_spotlight_excluded(path: Path) -> bool:
+    """Return whether *path* is beneath a marker-backed Spotlight exclusion."""
+    resolved = path.expanduser().resolve(strict=False)
+    return any((directory / SPOTLIGHT_EXCLUSION_MARKER).is_file() for directory in (resolved, *resolved.parents))
 
 
 def _guard_test_runtime_path(path: Path, *, source: str) -> Path:

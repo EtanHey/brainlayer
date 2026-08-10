@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
+import brainlayer.paths as brainlayer_paths
 from brainlayer.paths import get_db_path
 
 
@@ -33,3 +34,26 @@ class TestGetDbPath:
 
         assert DEFAULT_DB_PATH.exists(), f"DB not found at {DEFAULT_DB_PATH}"
         assert DEFAULT_DB_PATH.stat().st_size > 1_000_000, "DB too small — might be empty"
+
+
+def test_spotlight_exclusion_accepts_marker_on_directory(tmp_path):
+    marker_name = ".metadata_never_index"
+    (tmp_path / marker_name).touch()
+
+    assert brainlayer_paths.is_spotlight_excluded(tmp_path)
+
+
+def test_spotlight_exclusion_accepts_marker_on_ancestor(tmp_path):
+    marker_name = ".metadata_never_index"
+    (tmp_path / marker_name).touch()
+    child = tmp_path / "logs" / "nested"
+    child.mkdir(parents=True)
+
+    assert brainlayer_paths.is_spotlight_excluded(child)
+
+
+def test_spotlight_exclusion_rejects_unmarked_path(tmp_path):
+    child = tmp_path / "queue"
+    child.mkdir()
+
+    assert not brainlayer_paths.is_spotlight_excluded(child)
