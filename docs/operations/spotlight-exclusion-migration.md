@@ -44,7 +44,9 @@ configuration and user-facing exports.
    root, overlap another migration root, or contain unrelated data. If it fails any check, stop:
    never mark or rename that parent. Relocate the override DB and configuration into a dedicated
    directory in a separate approved migration before using this runbook.
-5. Keep the terminal open until restart and the real store/search probe both pass.
+5. For every migration root, provisionally record whether the root and `.metadata_never_index`
+   already exist. The authoritative rollback baseline is refreshed after all writers are stopped.
+6. Keep the terminal open until restart and the real store/search probe both pass.
 
 Staging paths:
 
@@ -77,15 +79,33 @@ Python, BrainBar daemon, watcher, drain, hotlane, or enrichment process remains.
 
 Do not let a watchdog restart a writer between this step and the final checkpoint.
 
+After confirming all processes are stopped, re-record whether every root and its marker exist.
+This writer-stop snapshot is the authoritative rollback baseline. If either state changed from the
+provisional preflight inventory, explain and record the change before proceeding; never infer that
+the migration created a marker observed before the first rename.
+
 ### 3. Checkpoint after writers are stopped
 
 ```bash
 brainlayer wal-checkpoint --mode TRUNCATE --retry-busy --json
 ```
 
-Require `busy: false`, a zero-byte or absent `brainlayer.db-wal`, and no process holding
-`brainlayer.db`, `brainlayer.db-wal`, or `brainlayer.db-shm` (`lsof` must return no writer). If any
-condition fails, keep services stopped and investigate; do not move the tree.
+Require `busy: false`. Set `brainlayer_active_db` to the absolute active DB path recorded during
+preflight—not a hardcoded canonical path—and require its WAL to be zero-byte or absent. Check the
+active DB plus its actual `-wal` and `-shm` sidecars; every existing file must have no `lsof`
+holder:
+
+```bash
+brainlayer_active_db="<preflight-resolved-active-db>"
+test "${brainlayer_active_db#/}" != "$brainlayer_active_db"
+test ! -s "${brainlayer_active_db}-wal"
+for brainlayer_db_file in \
+  "$brainlayer_active_db" "${brainlayer_active_db}-wal" "${brainlayer_active_db}-shm"; do
+  test ! -e "$brainlayer_db_file" || ! lsof -- "$brainlayer_db_file"
+done
+```
+
+If any condition fails, keep services stopped and investigate; do not move any tree.
 
 ### 4. Stage, mark, and restore each canonical tree
 
@@ -106,19 +126,32 @@ brainlayer_stage_root="${HOME:?}/.local/share/brainlayer.spotlight-migration-sta
 test -d "$brainlayer_data_root"
 test ! -L "$brainlayer_data_root"
 brainlayer_expected_root="$(cd "${HOME:?}/.local/share" && pwd -P)/brainlayer"
+brainlayer_expected_stage="$(cd "${HOME:?}/.local/share" && pwd -P)/brainlayer.spotlight-migration-staging"
 test "$(realpath "$brainlayer_data_root")" = "$brainlayer_expected_root"
 test ! -e "$brainlayer_stage_root" && test ! -L "$brainlayer_stage_root"
+test "$(stat -f %d "$(dirname "$brainlayer_data_root")")" = \
+  "$(stat -f %d "$(dirname "$brainlayer_stage_root")")"
 mv "$brainlayer_data_root" "$brainlayer_stage_root"
+test -d "$brainlayer_stage_root" && test ! -L "$brainlayer_stage_root"
+test "$(realpath "$brainlayer_stage_root")" = "$brainlayer_expected_stage"
 touch "$brainlayer_stage_root/.metadata_never_index"
 test -f "$brainlayer_stage_root/.metadata_never_index"
+test ! -e "$brainlayer_data_root" && test ! -L "$brainlayer_data_root"
+test "$(stat -f %d "$(dirname "$brainlayer_stage_root")")" = \
+  "$(stat -f %d "$(dirname "$brainlayer_data_root")")"
 mv "$brainlayer_stage_root" "$brainlayer_data_root"
+test -d "$brainlayer_data_root" && test ! -L "$brainlayer_data_root"
+test "$(realpath "$brainlayer_data_root")" = "$brainlayer_expected_root"
+test -f "$brainlayer_data_root/.metadata_never_index"
+test ! -e "$brainlayer_stage_root" && test ! -L "$brainlayer_stage_root"
 ```
 
-Before each `mv`, resolve and print both paths, reject symbolic links (including dangling staging
-links), assert the resolved source is the preflight-recorded canonical root, assert the staging
-target does not exist, and confirm both parents are on the same filesystem. `test -d` alone is not
-sufficient because it accepts a directory symlink and the subsequent `touch` could write through
-that link.
+Before each `mv`, resolve and print both paths, reject symbolic links (including dangling target
+links), and confirm both parents are on the same filesystem. For the first move, assert the source
+resolves to the preflight-recorded canonical root and staging is absent. For the restore move,
+assert the source resolves to the exact staging root and canonical is absent. `test -d` alone is
+not sufficient because it accepts a directory symlink and the subsequent `touch` could write
+through that link.
 Apply this recovery state machine before continuing any root:
 
 - canonical exists, staging absent: expected; continue;
@@ -135,6 +168,10 @@ rename. Never infer completion from the presence of only one path without inspec
 
 ### 5. Re-run setup and verify paths before restart
 
+Confirm none of the four canonical staging paths, or the conditional override staging path,
+remains. Apply the recovery state machine before running setup if any staging path exists; setup
+must never create a fresh canonical tree beside staged data.
+
 ```bash
 brainlayer setup --no-launchd
 brainlayer doctor --json
@@ -146,29 +183,7 @@ override marker exist, and that the DB, WAL, SHM, queue, prompt, scratch, vector
 resolve to their pre-stop locations. No symlink or environment rewrite is expected for the marker
 design; if an override is present, verify it points into a marked ancestor before restart.
 
-### 6. Restart exactly the labels recorded in preflight
-
-Bootstrap the recorded launchd plist set, then verify each expected label is loaded and each daemon
-has a live PID. Do not restore a label that was deliberately disabled before the window.
-
-Confirm none of the four canonical staging paths, or the conditional override staging path, remains
-after its atomic rename back. If one remains, stop and investigate before restarting writers.
-
-Run a real request through a fresh installed MCP client session (not an in-process Python test):
-
-```text
-brain_store(content="spotlight migration live probe", project="brainlayer-maintenance")
-brain_search(query="spotlight migration live probe", project="brainlayer-maintenance")
-```
-
-Then run the CLI status gates:
-
-```bash
-brainlayer status --json
-brainlayer doctor --json
-```
-
-### 7. Spotlight evidence
+### 6. Spotlight evidence while writers remain stopped
 
 First establish that Spotlight is enabled for the containing volume of every migration root. For
 each canonical root and the validated distinct override root, resolve the filesystem mount point,
@@ -213,15 +228,45 @@ If a marker-backed root receives metadata, keep BrainLayer stopped and add that 
 System Settings → Spotlight → Search Privacy, then repeat the probe. Do not disable Spotlight for
 the whole volume.
 
+### 7. Restart exactly the labels recorded in preflight
+
+Only after every root passes Step 6, bootstrap the recorded launchd plist set, then verify each
+expected label is loaded and each daemon has a live PID. Do not restore a label that was
+deliberately disabled before the window.
+
+Run a real request through a fresh installed MCP client session (not an in-process Python test):
+
+```text
+brain_store(content="spotlight migration live probe", project="brainlayer-maintenance")
+brain_search(query="spotlight migration live probe", project="brainlayer-maintenance")
+```
+
+Then run the CLI status gates:
+
+```bash
+brainlayer status --json
+brainlayer doctor --json
+```
+
 ## Rollback
 
-Rollback is allowed only before writers restart. Keep all processes stopped. For each canonical
-root and the conditional override root, first
-apply the same four-state recovery table above: restore staging to canonical when only staging
-exists, and stop on both-exist or both-absent states. Once canonical exists and staging is absent,
-atomically rename canonical to staging, remove only `.metadata_never_index`, then atomically rename
-the same tree back to canonical. This preserves the original root metadata. Verify DB/WAL/SHM and
-queue counts before bootstrapping only the preflight label set. Never overwrite or merge paths.
+Rollback is allowed only before writers restart. Keep all processes stopped. For each root that
+existed in the writer-stop baseline, restore staging to canonical when only staging exists, stop on
+both-exist, and treat both-absent as data loss. Once canonical exists and staging is absent,
+atomically rename canonical to staging. Consult the writer-stop marker record and remove
+`.metadata_never_index` only when this execution created it; preserve every marker that was already
+present. Then atomically rename the same tree back to canonical. This preserves the original root
+metadata.
+
+For an optional root recorded as absent at writer-stop, both-absent is the successfully restored
+state and must stay absent. If the migration created its canonical tree, require staging to be
+absent and prove the tree contains only the marker plus known setup-created empty directories.
+Remove only the exact execution-created marker file, then remove those known empty directories and
+the root with exact, non-recursive `rmdir` operations; stop on any unexpected or nonempty entry.
+Never apply the forward absent/absent rule during rollback.
+
+Verify DB/WAL/SHM and queue counts before bootstrapping only the preflight label set. Never
+overwrite or merge paths.
 
 ## Completion record
 
