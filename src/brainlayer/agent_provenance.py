@@ -207,6 +207,7 @@ def derive_source_class(
     provenance_map: dict[str, SourceClass] = {
         T3_APP_SESSION: "desktop",
         "t3-thread": "desktop",
+        "recon-agent": "brain-worker",
         "fleet-subagent": "fleet-coordination",
         "product-subagent": "subagent",
         "codex-session": "cli-agent",
@@ -214,10 +215,6 @@ def derive_source_class(
         "gemini-session": "cli-agent",
         "direct-session": "cli-agent",
     }
-    if provenance_class == "recon-agent":
-        decision = classify_provenance(source_file, t3_linked_session_ids=set())
-        if decision.source_class is not None:
-            return decision.source_class
     if provenance_class in provenance_map:
         return provenance_map[provenance_class]
     path_class = classify_provenance(

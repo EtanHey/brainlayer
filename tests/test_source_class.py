@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from brainlayer.agent_provenance import classify_provenance
+from brainlayer.agent_provenance import classify_provenance, derive_source_class
 from brainlayer.embeddings import EmbeddedChunk
 from brainlayer.index_new import index_chunks_to_sqlite
 from brainlayer.ingest_denylist import BRAINLAYER_INGEST_DENYLIST_ENV, is_denylisted
@@ -30,6 +30,15 @@ def test_five_value_source_class_taxonomy_and_null_for_ambiguous(tmp_path: Path)
     for source_file, expected in cases:
         decision = classify_provenance(str(source_file))
         assert decision.source_class == expected
+
+    assert (
+        derive_source_class(
+            "/archived/source-no-longer-readable.jsonl",
+            provenance_class="recon-agent",
+            source="claude_code",
+        )
+        == "brain-worker"
+    )
 
 
 def test_generic_workflow_subagent_is_not_blanket_denied(monkeypatch, tmp_path: Path) -> None:
