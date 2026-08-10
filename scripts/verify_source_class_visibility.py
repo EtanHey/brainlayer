@@ -95,6 +95,51 @@ def _find_search_probe(store: VectorStore, source_class: str | None) -> dict[str
     raise RuntimeError(f"could not find a deterministic FTS visibility probe for {label}")
 
 
+def _audit_hidden_class_default_visibility(store: VectorStore, source_class: str) -> dict[str, object]:
+    """Fail on any hidden-class id returned by the sampled default-search corpus."""
+    checked_tokens: set[str] = set()
+    leaked_ids: set[str] = set()
+    cursor = store.conn.cursor()
+    for _chunk_id, content in _candidate_rows(store, source_class):
+        for token in dict.fromkeys(_TOKEN_RE.findall(content)):
+            if token in checked_tokens:
+                continue
+            count_row = cursor.execute(
+                "SELECT COUNT(*) FROM chunks_fts WHERE chunks_fts MATCH ?",
+                (token,),
+            ).fetchone()
+            if count_row is None or not 1 <= int(count_row[0]) <= 50:
+                continue
+            checked_tokens.add(token)
+            result_ids = _ids(
+                store.search(
+                    query_text=token,
+                    n_results=100,
+                    include_audit=True,
+                    include_operational=True,
+                    include_checkpoints=True,
+                )
+            )
+            if result_ids:
+                placeholders = ",".join("?" for _ in result_ids)
+                leaked_ids.update(
+                    str(row[0])
+                    for row in cursor.execute(
+                        f"SELECT id FROM chunks WHERE source_class = ? AND id IN ({placeholders})",
+                        (source_class, *sorted(result_ids)),
+                    )
+                )
+            if len(checked_tokens) >= 250:
+                break
+        if len(checked_tokens) >= 250:
+            break
+    if not checked_tokens:
+        raise RuntimeError(f"could not build aggregate visibility audit for {source_class}")
+    if leaked_ids:
+        raise RuntimeError(f"{source_class} default-search leak: {sorted(leaked_ids)[:20]}")
+    return {"sampled_tokens": len(checked_tokens), "leaked_ids": []}
+
+
 def verify(db_path: Path) -> dict[str, object]:
     store = VectorStore(db_path.expanduser().resolve(), readonly=True)
     try:
@@ -108,6 +153,8 @@ def verify(db_path: Path) -> dict[str, object]:
                 raise RuntimeError(f"exact expansion failed for {label}")
             receipt[label] = probe
 
+        receipt["desktop"]["aggregate_default_visibility"] = _audit_hidden_class_default_visibility(store, "desktop")
+
         brain_worker_row = (
             store.conn.cursor()
             .execute("SELECT id FROM chunks WHERE source_class = 'brain-worker' ORDER BY rowid LIMIT 1")
@@ -117,19 +164,34 @@ def verify(db_path: Path) -> dict[str, object]:
             raise RuntimeError("no brain-worker row exists for exact-expansion verification")
         brain_worker_id = str(brain_worker_row[0])
         context = store.get_context(brain_worker_id, include_audit=True, include_checkpoints=True)
-        fts_count = int(
-            store.conn.cursor()
-            .execute("SELECT COUNT(*) FROM chunk_fts_rowids WHERE chunk_id = ?", (brain_worker_id,))
-            .fetchone()[0]
-        )
-        if (context.get("target") or {}).get("id") != brain_worker_id or fts_count != 0:
+        tables = {
+            str(row[0])
+            for row in store.conn.cursor().execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")
+        }
+        index_counts = {}
+        for table in (
+            "chunks_fts",
+            "chunks_fts_operational",
+            "chunks_fts_trigram",
+            "chunk_fts_rowids",
+            "chunk_vectors",
+            "chunk_vectors_binary",
+        ):
+            if table not in tables:
+                continue
+            index_counts[table] = int(
+                store.conn.cursor()
+                .execute(f'SELECT COUNT(*) FROM "{table}" WHERE chunk_id = ?', (brain_worker_id,))
+                .fetchone()[0]
+            )
+        if (context.get("target") or {}).get("id") != brain_worker_id or any(index_counts.values()):
             raise RuntimeError("brain-worker must expand exactly while remaining outside search indexes")
         receipt["brain-worker"] = {
             "chunk_id": brain_worker_id,
             "default_visible": False,
             "desktop_opt_in_visible": False,
             "exact_expansion": True,
-            "fts_rows": fts_count,
+            "index_rows": index_counts,
         }
         return receipt
     finally:

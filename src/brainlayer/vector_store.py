@@ -43,6 +43,7 @@ from ._helpers import (
 from ._helpers import (
     source_aware_min_chars as source_aware_min_chars,
 )
+from .agent_provenance import normalize_source_class
 from .chunk_origin import (
     CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT,
     CHUNK_ORIGIN_UNKNOWN,
@@ -2537,7 +2538,11 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     for chunk, embedding in sub_batch:
                         chunk_id = chunk["id"]
                         created_at = chunk.get("created_at") or datetime.now(timezone.utc).isoformat()
-                        chunk = {**chunk, "created_at": created_at}
+                        chunk = {
+                            **chunk,
+                            "created_at": created_at,
+                            "source_class": normalize_source_class(chunk.get("source_class")),
+                        }
                         tags_value = chunk.get("tags")
                         tags_json = json.dumps(tags_value) if isinstance(tags_value, (list, dict)) else tags_value
                         # T3 is intentionally a first-class mirror source.  Its

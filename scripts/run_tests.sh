@@ -159,7 +159,7 @@ map_changed_files_to_pytests() {
         done
         ;;
       src/brainlayer/vector_store.py|src/brainlayer/search_repo.py)
-        for rel in test_source_class.py test_vector_store_schema_flags.py test_vector_store_upsert_transactions.py; do
+        for rel in test_source_class.py test_vector_store_schema_flags.py test_vector_store_upsert_transactions.py test_hybrid_search.py test_vector_store_readonly.py test_search_trigram_fts.py test_precompact_chunk_origin.py; do
           test_path="$TEST_ROOT/$rel"
           if [ -f "$test_path" ]; then
             append_unique "$test_path"

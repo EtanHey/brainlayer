@@ -907,6 +907,42 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(results.first?["chunk_id"] as? String, "test-chunk-1")
     }
 
+    func testFTSSearchHidesDesktopAndAlwaysExcludesBrainWorkersWhenSourceClassExists() throws {
+        db.exec("ALTER TABLE chunks ADD COLUMN source_class TEXT")
+        let rows: [(String, String?)] = [
+            ("source-class-cli", "cli-agent"),
+            ("source-class-desktop", "desktop"),
+            ("source-class-subagent", "subagent"),
+            ("source-class-brain-worker", "brain-worker"),
+            ("source-class-fleet", "fleet-coordination"),
+            ("source-class-null", nil),
+        ]
+        for (chunkID, sourceClass) in rows {
+            try db.insertChunk(
+                id: chunkID,
+                content: "SwiftSourceClassNeedle searchable contract \(chunkID)",
+                sessionId: "source-class-session",
+                project: "brainlayer",
+                contentType: "assistant_text",
+                importance: 7
+            )
+            if let sourceClass {
+                db.exec("UPDATE chunks SET source_class = '\(sourceClass)' WHERE id = '\(chunkID)'")
+            }
+        }
+
+        let resultIDs = Set(try db.search(query: "SwiftSourceClassNeedle", limit: 20).compactMap {
+            $0["chunk_id"] as? String
+        })
+        let candidateIDs = Set(try db.searchCandidates(query: "SwiftSourceClassNeedle", limit: 20).map(\.id))
+        let expected = Set(["source-class-cli", "source-class-subagent", "source-class-fleet", "source-class-null"])
+
+        XCTAssertEqual(resultIDs, expected)
+        XCTAssertEqual(candidateIDs, expected)
+        XCTAssertFalse(resultIDs.contains("source-class-desktop"))
+        XCTAssertFalse(resultIDs.contains("source-class-brain-worker"))
+    }
+
     func testSearchSkipsTrigramFallbackWhenTableMissingAndMigrationsDisabled() throws {
         let legacyPath = NSTemporaryDirectory() + "brainbar-no-trigram-\(UUID().uuidString).db"
         try sqliteExecWrite(

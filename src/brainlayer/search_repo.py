@@ -858,12 +858,59 @@ class SearchMixin:
             return expanded_k
         return min(expanded_k, max(n_results, _FILTERED_KNN_MAX))
 
+    def _source_class_filtered_knn_k(
+        self,
+        n_results: int,
+        include_hidden_source_classes: bool,
+        *,
+        cap_filtered: bool = True,
+    ) -> int:
+        if not getattr(self, "_has_source_class", False):
+            return n_results
+        cache_key = "opt_in" if include_hidden_source_classes else "default"
+        cache = getattr(self, "_source_class_count_cache", {})
+        current_data_version = self._checkpoint_cache_data_version()
+        cached = cache.get(cache_key)
+        if cached is not None and (current_data_version is None or cached[0] == current_data_version):
+            hidden_count = int(cached[1])
+        else:
+            hidden_values = ("brain-worker",) if include_hidden_source_classes else ("desktop", "brain-worker")
+            placeholders = ",".join("?" for _ in hidden_values)
+            hidden_count = 0
+            for attempt in range(3):
+                try:
+                    row = (
+                        self._read_cursor()
+                        .execute(
+                            f"SELECT COUNT(*) FROM chunks WHERE source_class IN ({placeholders})",
+                            hidden_values,
+                        )
+                        .fetchone()
+                    )
+                    hidden_count = int(row[0]) if row else 0
+                    cache = dict(cache)
+                    cache[cache_key] = (current_data_version, hidden_count)
+                    setattr(self, "_source_class_count_cache", cache)
+                    break
+                except (apsw.Error, TypeError, IndexError, ValueError) as exc:
+                    if not isinstance(exc, apsw.Error) or not _is_sqlite_busy_error(exc) or attempt == 2:
+                        hidden_count = 0
+                        break
+                    _sleep(0.05 * (2**attempt))
+        if hidden_count <= 0:
+            return n_results
+        expanded_k = n_results + hidden_count
+        if not cap_filtered:
+            return expanded_k
+        return min(expanded_k, max(n_results, _FILTERED_KNN_MAX))
+
     def _effective_knn_k(
         self,
         n_results: int,
         needs_overfetch: bool,
         include_checkpoints: bool,
         include_audit: bool,
+        include_hidden_source_classes: bool = False,
         *,
         cap_filtered: bool = True,
     ) -> int:
@@ -876,6 +923,11 @@ class SearchMixin:
             cap_filtered=cap_filtered,
         )
         effective_k = self._audit_filtered_knn_k(effective_k, include_audit, cap_filtered=cap_filtered)
+        effective_k = self._source_class_filtered_knn_k(
+            effective_k,
+            include_hidden_source_classes,
+            cap_filtered=cap_filtered,
+        )
         return min(effective_k, _SQLITE_VEC_MAX_K)
 
     def _load_chunk_embeddings(self, chunk_ids: List[str]) -> Dict[str, np.ndarray]:
@@ -1214,7 +1266,13 @@ class SearchMixin:
                 or source_file_filter_like
                 or correction_category
             )
-            effective_k = self._effective_knn_k(n_results, bool(needs_overfetch), include_checkpoints, include_audit)
+            effective_k = self._effective_knn_k(
+                n_results,
+                bool(needs_overfetch),
+                include_checkpoints,
+                include_audit,
+                include_hidden_source_classes,
+            )
             params = [query_bytes, effective_k] + filter_params
             chunk_origin_expr = "c.chunk_origin" if getattr(self, "_has_chunk_origin", True) else "'unknown'"
             content_class_expr = _content_class_expr(self, "c")
@@ -1241,6 +1299,7 @@ class SearchMixin:
                     bool(needs_overfetch),
                     include_checkpoints,
                     include_audit,
+                    include_hidden_source_classes,
                     cap_filtered=False,
                 )
                 if retry_k > effective_k:
@@ -1654,7 +1713,13 @@ class SearchMixin:
         if brainbar_helper_fast_profile:
             effective_k = min(max(n_results, _BRAINBAR_HELPER_FAST_K), _SQLITE_VEC_MAX_K)
         else:
-            effective_k = self._effective_knn_k(n_results, bool(needs_overfetch), include_checkpoints, include_audit)
+            effective_k = self._effective_knn_k(
+                n_results,
+                bool(needs_overfetch),
+                include_checkpoints,
+                include_audit,
+                include_hidden_source_classes,
+            )
         params = [query_bytes, effective_k] + filter_params
         chunk_origin_expr = "c.chunk_origin" if getattr(self, "_has_chunk_origin", True) else "'unknown'"
         content_class_expr = _content_class_expr(self, "c")
@@ -1680,6 +1745,7 @@ class SearchMixin:
                 bool(needs_overfetch),
                 include_checkpoints,
                 include_audit,
+                include_hidden_source_classes,
                 cap_filtered=False,
             )
             if retry_k > effective_k:

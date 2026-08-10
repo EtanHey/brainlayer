@@ -139,6 +139,19 @@ def _remove_brain_worker_fts_rows(conn: sqlite3.Connection) -> dict[str, int]:
     return removed
 
 
+def _remove_brain_worker_vector_rows(conn: sqlite3.Connection) -> dict[str, int]:
+    removed: dict[str, int] = {}
+    tables = _tables(conn)
+    target = "SELECT id FROM chunks WHERE source_class = 'brain-worker'"
+    for table in ("chunk_vectors", "chunk_vectors_binary"):
+        if table not in tables or "chunk_id" not in _columns(conn, table):
+            continue
+        count = int(conn.execute(f'SELECT COUNT(*) FROM "{table}" WHERE chunk_id IN ({target})').fetchone()[0])
+        conn.execute(f'DELETE FROM "{table}" WHERE chunk_id IN ({target})')
+        removed[table] = count
+    return removed
+
+
 def migrate_source_class(
     db_path: str | Path,
     *,
@@ -229,6 +242,7 @@ def migrate_source_class(
                 conn.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
 
         fts_removed = _remove_brain_worker_fts_rows(conn)
+        vector_removed = _remove_brain_worker_vector_rows(conn)
         distribution = _distribution(conn)
         _validate_distribution(distribution)
         row_count_after = int(conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
@@ -245,6 +259,7 @@ def migrate_source_class(
             "distribution": distribution,
             "batches": batches,
             "fts_rows_removed": fts_removed,
+            "vector_rows_removed": vector_removed,
             "duration_seconds": duration_seconds,
             "already_applied": False,
         }
@@ -272,7 +287,15 @@ def migrate_source_class(
                 str(path),
                 prior_fingerprint,
                 result_fingerprint,
-                json.dumps(["chunks.source_class", "idx_chunks_source_class", "chunks_fts"]),
+                json.dumps(
+                    [
+                        "chunks.source_class",
+                        "idx_chunks_source_class",
+                        "chunks_fts",
+                        "chunk_vectors",
+                        "chunk_vectors_binary",
+                    ]
+                ),
                 duration_seconds,
                 details,
             ),

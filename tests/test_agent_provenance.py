@@ -118,10 +118,23 @@ def test_classifies_fleet_and_product_subagents_by_transferable_project_token(tm
     assert (hyphenated_fleet.provenance_tag, hyphenated_fleet.search_policy) == ("fleet-subagent", "KEEP")
     assert (product.provenance_tag, product.search_policy) == ("product-subagent", "KEEP")
     assert (product_with_fleet_prefix.provenance_tag, product_with_fleet_prefix.search_policy) == (
-        "product-subagent",
+        "fleet-subagent",
         "KEEP",
     )
     assert (mehayom.provenance_tag, mehayom.search_policy) == ("product-subagent", "KEEP")
+
+    worktree_fleet = classify_provenance(
+        str(
+            home
+            / ".claude"
+            / "projects"
+            / "-Users-someone-Gits-brainlayer--worktrees-brainlayer-worker-rs1wry"
+            / "session"
+            / "subagents"
+            / "agent-worker.jsonl"
+        )
+    )
+    assert (worktree_fleet.provenance_tag, worktree_fleet.search_policy) == ("fleet-subagent", "KEEP")
 
 
 def test_cursor_agent_transcripts_requires_cursor_ancestor(tmp_path: Path) -> None:
@@ -144,8 +157,8 @@ def test_direct_claude_sessions_stay_keep_and_never_isolate_or_out(tmp_path: Pat
     assert decision.search_policy == "KEEP"
 
 
-def test_recon_agent_signature_is_out_and_has_precedence_over_fleet_subagent(tmp_path: Path) -> None:
-    fleet_subagent = (
+def test_recon_agent_class_uses_attribution_not_content_mentions(tmp_path: Path) -> None:
+    ordinary_subagent = (
         tmp_path
         / "home"
         / ".claude"
@@ -153,18 +166,28 @@ def test_recon_agent_signature_is_out_and_has_precedence_over_fleet_subagent(tmp
         / "-Users-etanheyman-Gits-brainlayer"
         / "session"
         / "subagents"
-        / "agent-a25d6b3aa6880db8e.jsonl"
+        / "agent-ordinary.jsonl"
     )
+    ordinary_subagent.parent.mkdir(parents=True)
+    ordinary_subagent.write_text(json.dumps({"attributionAgent": "general-purpose"}) + "\n")
 
-    decision = classify_provenance(
-        str(fleet_subagent),
+    memory_reader = ordinary_subagent.with_name("agent-memory-reader.jsonl")
+    memory_reader.write_text(json.dumps({"attributionAgent": "brain_worker"}) + "\n")
+
+    ordinary = classify_provenance(
+        str(ordinary_subagent),
         content_class="knowledge",
-        content="Task for brain-worker: mine workflow JSONL transcripts and write the recon synthesis.",
+        content="The brain-worker taxonomy and /weave workflow are documented here.",
     )
+    recon = classify_provenance(str(memory_reader), content="ordinary payload with no role words")
 
     assert has_recon_agent_signature("session-miner should inspect these transcripts")
-    assert decision.provenance_tag == "recon-agent"
-    assert decision.search_policy == "OUT"
+    assert (ordinary.provenance_tag, ordinary.search_policy) == ("fleet-subagent", "KEEP")
+    assert (recon.provenance_tag, recon.search_policy, recon.source_class) == (
+        "recon-agent",
+        "OUT",
+        "brain-worker",
+    )
 
 
 def test_recon_agent_signature_does_not_match_plain_weave_verb(tmp_path: Path) -> None:
@@ -200,10 +223,12 @@ def test_recon_path_signature_is_scoped_to_agent_transcript_roots(tmp_path: Path
         / "session-miner"
         / "agent.jsonl"
     )
+    underscore_recon_subagent = recon_subagent.parent.parent / "brain_worker" / "agent.jsonl"
 
     assert classify_provenance(str(normal_project)).search_policy == "KEEP"
     assert classify_provenance(str(direct_weave_repo_session)).provenance_tag == "direct-session"
     assert classify_provenance(str(recon_subagent)).provenance_tag == "recon-agent"
+    assert classify_provenance(str(underscore_recon_subagent)).provenance_tag == "recon-agent"
 
 
 def test_effective_visibility_preserves_searchable_source_classes_and_content_routing(

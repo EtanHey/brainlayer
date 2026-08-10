@@ -812,6 +812,30 @@ class TestFullPipeline:
         conn.close()
         assert len(rows) >= 1
 
+    def test_direct_watcher_insert_is_safe_before_source_class_migration(self, tmp_path):
+        db_path = tmp_path / "legacy-without-source-class.db"
+        store = VectorStore(db_path)
+        store.close()
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("DROP INDEX IF EXISTS idx_chunks_source_class")
+            conn.execute("ALTER TABLE chunks DROP COLUMN source_class")
+
+        source_file = tmp_path / "projects" / "test-project" / "session.jsonl"
+        entry = _make_jsonl_entry(
+            text="LegacySchemaNeedle direct watcher writes must remain safe before the supervised migration.",
+            entry_type="assistant",
+        )
+        entry["_source_file"] = str(source_file)
+
+        result = create_flush_callback(db_path, arbitrated=False)([entry])
+
+        assert result.inserted == 1
+        with sqlite3.connect(db_path) as conn:
+            assert "source_class" not in {row[1] for row in conn.execute("PRAGMA table_info(chunks)")}
+            assert conn.execute("SELECT COUNT(*) FROM chunks WHERE content LIKE '%LegacySchemaNeedle%'").fetchone() == (
+                1,
+            )
+
     def test_fts5_searchable_after_insert(self, tmp_path):
         db_path = tmp_path / "test.db"
         VectorStore(db_path).close()

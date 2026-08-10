@@ -251,6 +251,10 @@ def test_changed_only_scope_maps_source_class_storage_pipeline_to_safe_tests(tmp
         "test_source_class.py",
         "test_vector_store_schema_flags.py",
         "test_vector_store_upsert_transactions.py",
+        "test_hybrid_search.py",
+        "test_vector_store_readonly.py",
+        "test_search_trigram_fts.py",
+        "test_precompact_chunk_origin.py",
         "test_ingest_t3.py",
         "test_context_pipeline.py",
     )

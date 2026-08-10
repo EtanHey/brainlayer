@@ -665,6 +665,13 @@ def merge_existing_chunk_seen(
         updates["importance"] = merged_importance
     if merged_half_life is not None:
         updates["half_life_days"] = merged_half_life
+    from .agent_provenance import normalize_source_class
+
+    incoming_source_class = normalize_source_class(incoming.get("source_class"))
+    if incoming_source_class is not None and "source_class" in {
+        row[1] for row in cursor.execute("PRAGMA table_info(chunks)")
+    }:
+        updates["source_class"] = incoming_source_class
     assignments = ", ".join(f"{column} = ?" for column in updates)
 
     for attempt in range(BUSY_RETRY_ATTEMPTS):

@@ -208,6 +208,21 @@ def test_t3_upsert_persists_provenance_and_accepts_mirrored_duplicates(isolated_
     ]
 
 
+def test_repeat_upsert_validates_and_backfills_source_class(isolated_store):
+    first = {**_chunk("replayed"), "source_class": "brain_worker"}
+    replay = {**_chunk("replayed"), "source_class": "desktop"}
+
+    isolated_store.upsert_chunks([first], [_embedding(1)])
+    assert isolated_store.conn.cursor().execute("SELECT source_class FROM chunks WHERE id = 'replayed'").fetchone() == (
+        None,
+    )
+
+    isolated_store.upsert_chunks([replay], [_embedding(1)])
+    assert isolated_store.conn.cursor().execute("SELECT source_class FROM chunks WHERE id = 'replayed'").fetchone() == (
+        "desktop",
+    )
+
+
 def test_busy_sub_batch_retries_without_replaying_committed_sub_batches(isolated_store, monkeypatch):
     monkeypatch.setenv("BRAINLAYER_INDEX_TXN_BATCH", "2")
     insert_attempts: dict[str, int] = {}

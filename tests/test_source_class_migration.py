@@ -48,6 +48,13 @@ def _legacy_db(path: Path) -> None:
             "INSERT INTO chunk_fts_rowids(chunk_id, rowid) VALUES (?, ?)",
             [(row[0], position) for position, row in enumerate(conn.execute("SELECT id FROM chunks"), start=1)],
         )
+        conn.execute("CREATE TABLE chunk_vectors (chunk_id TEXT PRIMARY KEY, embedding BLOB)")
+        conn.execute("CREATE TABLE chunk_vectors_binary (chunk_id TEXT PRIMARY KEY, embedding BLOB)")
+        for table in ("chunk_vectors", "chunk_vectors_binary"):
+            conn.executemany(
+                f"INSERT INTO {table}(chunk_id, embedding) VALUES (?, X'00')",
+                [(row[0],) for row in conn.execute("SELECT id FROM chunks")],
+            )
 
 
 def test_migration_backfills_only_unambiguous_rows_and_writes_sha_ledgers(tmp_path: Path) -> None:
@@ -66,6 +73,7 @@ def test_migration_backfills_only_unambiguous_rows_and_writes_sha_ledgers(tmp_pa
         "subagent": 1,
     }
     assert receipt["fts_rows_removed"] == {"chunk_fts_rowids": 1, "chunks_fts": 1}
+    assert receipt["vector_rows_removed"] == {"chunk_vectors": 1, "chunk_vectors_binary": 1}
     with sqlite3.connect(db_path) as conn:
         assert dict(conn.execute("SELECT id, source_class FROM chunks")) == {
             "ambiguous": None,
@@ -88,6 +96,10 @@ def test_migration_backfills_only_unambiguous_rows_and_writes_sha_ledgers(tmp_pa
         assert schema_details["git_sha"] == GIT_SHA
         assert event == (GIT_SHA, "pytest", "success")
         assert conn.execute("SELECT COUNT(*) FROM chunks_fts WHERE chunk_id = 'brain-worker'").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM chunk_vectors WHERE chunk_id = 'brain-worker'").fetchone()[0] == 0
+        assert (
+            conn.execute("SELECT COUNT(*) FROM chunk_vectors_binary WHERE chunk_id = 'brain-worker'").fetchone()[0] == 0
+        )
 
     second = migration.migrate_source_class(db_path, git_sha=GIT_SHA, actor="pytest")
     assert second["already_applied"] is True
@@ -107,6 +119,34 @@ def test_migration_rejects_non_commit_sha(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="40-character"):
         migration.migrate_source_class(db_path, git_sha="HEAD", actor="pytest")
+
+
+def test_migration_uses_subagent_attribution_and_not_chunk_role_mentions(tmp_path: Path) -> None:
+    db_path = tmp_path / "copy.db"
+    ordinary = tmp_path / ".claude" / "projects" / "-Users-test-Gits-brainlayer" / "s" / "subagents" / "a.jsonl"
+    worker = ordinary.with_name("b.jsonl")
+    ordinary.parent.mkdir(parents=True)
+    ordinary.write_text(json.dumps({"attributionAgent": "general-purpose"}) + "\n")
+    worker.write_text(json.dumps({"attributionAgent": "brain_worker"}) + "\n")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "CREATE TABLE chunks (id TEXT PRIMARY KEY, content TEXT, source_file TEXT, source TEXT, provenance_class TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO chunks VALUES (?, ?, ?, 'claude_code', NULL)",
+            [
+                ("ordinary", "Discuss the brain-worker and /weave rules.", str(ordinary)),
+                ("worker", "Neutral task text.", str(worker)),
+            ],
+        )
+
+    migration.migrate_source_class(db_path, git_sha=GIT_SHA, actor="pytest")
+
+    with sqlite3.connect(db_path) as conn:
+        assert dict(conn.execute("SELECT id, source_class FROM chunks")) == {
+            "ordinary": "fleet-coordination",
+            "worker": "brain-worker",
+        }
 
 
 def test_migration_rerun_rejects_a_different_code_sha(tmp_path: Path) -> None:

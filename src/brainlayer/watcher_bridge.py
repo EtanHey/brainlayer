@@ -620,6 +620,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                     "tags": tags,
                                     "created_at": created_at,
                                     "last_seen_at": created_at,
+                                    "source_class": source_class,
                                 },
                             ):
                                 record_direct_liveness(chunk_id, ingested_at)
@@ -628,17 +629,20 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                 transaction_started = False
                                 inserted += 1
                                 break
+                            has_source_class = bool(getattr(store, "_has_source_class", False))
+                            source_class_column = ", source_class" if has_source_class else ""
+                            source_class_placeholder = ", ?" if has_source_class else ""
                             cursor.execute(
-                                """INSERT OR IGNORE INTO chunks
+                                f"""INSERT OR IGNORE INTO chunks
                                    (id, content, metadata, source_file, project,
                                     content_type, value_type, char_count, source,
                                     created_at, conversation_id, sender, tags, chunk_origin,
                                     seen_count, last_seen_at, dedupe_hash, simhash,
                                     simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3,
                                     source_end_offset, source_last_queued_at,
-                                    ingested_at, content_class, provenance_class, source_class)
+                                    ingested_at, content_class, provenance_class{source_class_column})
                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                                           ?, ?, ?, ?, ?, ?)""",
+                                           ?, ?, ?, ?, ?{source_class_placeholder})""",
                                 (
                                     chunk_id,
                                     clean_content,
@@ -667,7 +671,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                     ingested_at,
                                     content_class,
                                     provenance_class,
-                                    source_class,
+                                    *([source_class] if has_source_class else []),
                                 ),
                             )
                             changed = store.conn.changes() > 0

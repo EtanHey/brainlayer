@@ -19,6 +19,7 @@ import apsw
 import sqlite_vec
 
 from ._helpers import _is_sqlite_busy_error, serialize_f32
+from .agent_provenance import normalize_source_class
 from .chunk_origin import CHUNK_ORIGIN_UNKNOWN, detect_chunk_origin
 from .content_class import classify_content_class, normalize_content_class
 from .dedupe import (
@@ -926,8 +927,9 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
         values["content_class"] = event.get("content_class")
     if event.get("provenance_class"):
         values["provenance_class"] = event.get("provenance_class")
-    if event.get("source_class") and "source_class" in _columns(conn, "chunks"):
-        values["source_class"] = event.get("source_class")
+    source_class = normalize_source_class(event.get("source_class"))
+    if source_class is not None and "source_class" in _columns(conn, "chunks"):
+        values["source_class"] = source_class
     stored_chunk_id = _insert_or_merge_chunk(
         conn,
         values,

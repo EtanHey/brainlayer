@@ -81,6 +81,22 @@ def _has_memory_reader_path_signature(path: Path) -> bool:
     return bool(markers & MEMORY_READER_ATTRIBUTIONS)
 
 
+def memory_reader_attribution(path: str | Path) -> str | None:
+    """Return an exact memory-reader role from path/JSONL attribution, never task text."""
+    candidate = Path(os.path.abspath(os.path.expanduser(str(path))))
+    if not _is_claude_subagent(candidate):
+        return None
+    if "subagents" in candidate.parts:
+        subagents_index = candidate.parts.index("subagents")
+        for part in candidate.parts[subagents_index + 1 :]:
+            normalized = part.strip().casefold().replace("_", "-")
+            if normalized in MEMORY_READER_ATTRIBUTIONS:
+                return normalized
+    attribution = _claude_subagent_attribution(candidate)
+    normalized = str(attribution or "").strip().casefold().replace("_", "-")
+    return normalized if normalized in MEMORY_READER_ATTRIBUTIONS else None
+
+
 def _claude_subagent_attribution(path: Path) -> str | None:
     """Incrementally read the first stable worker attribution from an appending JSONL."""
     try:
@@ -174,7 +190,7 @@ def is_denylisted(path: str | Path, *, unknown_subagent_is_denylisted: bool = Tr
             if _match_parts(candidate.parts, expanded_pattern.parts):
                 return True
     if BRAINLAYER_INGEST_DENYLIST_ENV not in os.environ and _is_claude_subagent(candidate):
-        if _has_memory_reader_path_signature(candidate):
+        if memory_reader_attribution(candidate) is not None:
             return True
         attribution = _claude_subagent_attribution(candidate)
         normalized = str(attribution or "").strip().casefold().replace("_", "-")

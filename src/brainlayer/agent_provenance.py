@@ -12,15 +12,16 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from .content_class import normalize_content_class
-from .ingest_denylist import is_denylisted
+from .ingest_denylist import is_denylisted, memory_reader_attribution
 from .t3_provenance import T3_APP_SESSION, is_t3_app_initiated_codex_session
 
 SearchPolicy = Literal["KEEP", "ISOLATE", "OUT"]
 EffectiveVisibility = Literal["default", "operational", "cold"]
 SourceClass = Literal["cli-agent", "desktop", "subagent", "brain-worker", "fleet-coordination"]
+SOURCE_CLASSES = frozenset({"cli-agent", "desktop", "subagent", "brain-worker", "fleet-coordination"})
 
 RECON_BRAIN_WORKER_RE = re.compile(r"\bbrain[-_ ]?worker\b", re.IGNORECASE)
 RECON_WEAVE_RE = re.compile(r"(?<!\w)/weave\b|\bweave[-_ ]+(?:worker|agent|recon)\b", re.IGNORECASE)
@@ -93,8 +94,13 @@ def _repo_from_project_segment(segment: str | None) -> str | None:
     for marker in ("-Gits-", "--config-"):
         if marker not in normalized:
             continue
-        repo = normalized.rsplit(marker, 1)[-1].strip("-")
-        return repo.casefold() if repo else None
+        repo = normalized.rsplit(marker, 1)[-1].strip("-").casefold()
+        if not repo:
+            return None
+        for fleet_repo in sorted(FLEET_REPOS, key=len, reverse=True):
+            if repo == fleet_repo or repo.startswith(f"{fleet_repo}-"):
+                return fleet_repo
+        return repo
     return normalized.rsplit("-", 1)[-1].casefold() if normalized else None
 
 
@@ -123,7 +129,7 @@ def has_recon_agent_signature(content: str | None) -> bool:
 def _has_recon_path_signature(path: Path) -> bool:
     markers = {"brain-worker", "session-miner", "weave"}
     parts = path.parts
-    marker_indexes = [index for index, part in enumerate(parts) if part in markers]
+    marker_indexes = [index for index, part in enumerate(parts) if part.casefold().replace("_", "-") in markers]
     if not marker_indexes:
         return False
 
@@ -158,8 +164,9 @@ def classify_provenance(
     if is_t3_app_session:
         return ProvenanceDecision(T3_APP_SESSION, "KEEP", "T3 runtime cursor links Codex session", "desktop")
 
-    if has_recon_agent_signature(content) or _has_recon_path_signature(path):
-        return ProvenanceDecision("recon-agent", "OUT", "recon Agent-tool signature wins precedence", "brain-worker")
+    del content
+    if memory_reader_attribution(path) is not None or _has_recon_path_signature(path):
+        return ProvenanceDecision("recon-agent", "OUT", "memory-reader attribution wins precedence", "brain-worker")
 
     if _has_segment(path, "wf_*"):
         repo = _repo_from_project_segment(_project_segment(path))
@@ -200,7 +207,6 @@ def derive_source_class(
     provenance_map: dict[str, SourceClass] = {
         T3_APP_SESSION: "desktop",
         "t3-thread": "desktop",
-        "recon-agent": "brain-worker",
         "fleet-subagent": "fleet-coordination",
         "product-subagent": "subagent",
         "codex-session": "cli-agent",
@@ -208,6 +214,10 @@ def derive_source_class(
         "gemini-session": "cli-agent",
         "direct-session": "cli-agent",
     }
+    if provenance_class == "recon-agent":
+        decision = classify_provenance(source_file, t3_linked_session_ids=set())
+        if decision.source_class is not None:
+            return decision.source_class
     if provenance_class in provenance_map:
         return provenance_map[provenance_class]
     path_class = classify_provenance(
@@ -223,6 +233,27 @@ def derive_source_class(
     if normalized_source in {"claude_code", "codex", "gemini_cli", "cursor", "antigravity"}:
         return "cli-agent"
     return None
+
+
+def normalize_source_class(value: object) -> SourceClass | None:
+    """Accept only an exact member of the five-value taxonomy."""
+    normalized = str(value or "").strip()
+    return cast(SourceClass, normalized) if normalized in SOURCE_CLASSES else None
+
+
+def resolve_source_class(
+    source_file: str,
+    *,
+    supplied_source_class: object = None,
+    provenance_class: str | None = None,
+    source: str | None = None,
+) -> SourceClass | None:
+    """Prefer independently derived provenance; use only a valid supplied fallback."""
+    return derive_source_class(
+        source_file,
+        provenance_class=provenance_class,
+        source=source,
+    ) or normalize_source_class(supplied_source_class)
 
 
 def effective_visibility(decision: ProvenanceDecision, content_class: str | None) -> EffectiveVisibility:
