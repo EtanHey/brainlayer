@@ -158,6 +158,24 @@ map_changed_files_to_pytests() {
           fi
         done
         ;;
+      src/brainlayer/vector_store.py|src/brainlayer/search_repo.py)
+        for rel in test_source_class.py test_vector_store_schema_flags.py test_vector_store_upsert_transactions.py; do
+          test_path="$TEST_ROOT/$rel"
+          if [ -f "$test_path" ]; then
+            append_unique "$test_path"
+            mapped=1
+          fi
+        done
+        ;;
+      src/brainlayer/index_new.py)
+        for rel in test_source_class.py test_ingest_t3.py test_context_pipeline.py; do
+          test_path="$TEST_ROOT/$rel"
+          if [ -f "$test_path" ]; then
+            append_unique "$test_path"
+            mapped=1
+          fi
+        done
+        ;;
       tests/*.py|tests/**/*.py)
         test_path="$TEST_ROOT/${changed#tests/}"
         if [ -f "$test_path" ]; then

@@ -244,6 +244,47 @@ def test_changed_only_scope_maps_watcher_source_to_jsonl_watcher_tests(tmp_path:
     assert f"{test_root}/ -v" not in logged
 
 
+def test_changed_only_scope_maps_source_class_storage_pipeline_to_safe_tests(tmp_path: Path) -> None:
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    expected = (
+        "test_source_class.py",
+        "test_vector_store_schema_flags.py",
+        "test_vector_store_upsert_transactions.py",
+        "test_ingest_t3.py",
+        "test_context_pipeline.py",
+    )
+    for filename in (*expected, "test_think_recall_integration.py"):
+        (test_root / filename).write_text("test placeholder\n")
+
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+
+    env = _script_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
+    env["BRAINLAYER_CHANGED_FILES"] = "\n".join(
+        [
+            "src/brainlayer/vector_store.py",
+            "src/brainlayer/search_repo.py",
+            "src/brainlayer/index_new.py",
+        ]
+    )
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
+
+    assert result.returncode == 0
+    logged = pytest_log.read_text()
+    assert "falling back to full pytest unit suite" not in result.stdout
+    assert f"{test_root}/ -v" not in logged
+    for filename in expected:
+        assert str(test_root / filename) in logged
+
+
 def test_changed_only_scope_falls_back_when_mapped_and_unmapped_sources_change(tmp_path: Path) -> None:
     test_root = tmp_path / "tests"
     test_root.mkdir()
