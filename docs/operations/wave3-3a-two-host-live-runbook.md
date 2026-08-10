@@ -14,6 +14,7 @@ This runbook is the source-class segment of the Wave 3 maintenance sitting. Exec
 - Final migration rehearsal source: the earlier APFS clone `.tmp-wave3-3a/canonical-pristine.db`, captured 2026-08-10 12:44:04 IDT with 744,335 rows and a clean `PRAGMA quick_check`. Its migrated copy retained exactly 744,335 rows. The 61-row difference from the later online-backup snapshot is therefore between two independently timestamped live snapshots, not a migration row-count discrepancy.
 - Final-code rehearsal migration: 252.02 seconds wall-clock on commit `3964412f8291a083150a424e38df08ece817783d` (`duration_seconds=251.79996774997562`); exact-SHA idempotent rerun: 0.65 seconds.
 - Rehearsal distribution: NULL 69,581; brain-worker 84; cli-agent 536,851; desktop 2,696; fleet-coordination 105,383; subagent 29,740.
+- Shipped-search verifier rerun: code head `065d602651bc14b096f268482cc125eaca450354` against the already-migrated copy, 299.81 seconds under host load; all six visibility/expansion buckets green, 72 sampled desktop tokens with zero leaks, and zero brain-worker rows across all six search indexes.
 - Earlier monitored rehearsal migration WAL: 0 bytes before, 29,181,992-byte observed peak, 0 bytes at close after checkpoints; the final-code rerun was not separately peak-sampled.
 - Rehearsal rollback: restore by APFS re-copy in 0.00 seconds; restored row count 744,335 and `source_class` absent.
 
@@ -122,14 +123,6 @@ test -f "$WAVE3A_DB"
 df -k "$(dirname "$WAVE3A_DB")"
 stat -f '%z' "$WAVE3A_DB"
 stat -f '%z' "$WAVE3A_DB-wal" 2>/dev/null || true
-export WAVE3A_ROWS_BEFORE="$("$WAVE3A_PYTHON" - "$WAVE3A_DB" <<'PY'
-import sqlite3, sys
-c = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
-print(c.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
-c.close()
-PY
-)"
-printf '%s\n' "$WAVE3A_ROWS_BEFORE" | tee "$WAVE3A_RUN_DIR/rows-before.txt"
 cat "$HOME/.local/share/brainlayer/pause.sentinel" 2>/dev/null || true
 pgrep -af '[b]rain_digest|[b]rainlayer.*digest' && exit 1 || true
 pgrep -af '[b]rainlayer.backup_daily|[b]ackup-daily.sh' && exit 1 || true
@@ -204,6 +197,20 @@ stat -f '%z' "$WAVE3A_DB-wal" 2>/dev/null || true
 
 Stop if the checkpoint reports busy or returns nonzero.
 
+Only now, after the writer inventory is stopped and asserted absent and the checkpoint succeeds, capture the canonical row-count invariant. Use this same ordering independently on M1.
+
+```bash
+set -euo pipefail
+export WAVE3A_ROWS_BEFORE="$("$WAVE3A_PYTHON" - "$WAVE3A_DB" <<'PY'
+import sqlite3, sys
+c = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
+print(c.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
+c.close()
+PY
+)"
+printf '%s\n' "$WAVE3A_ROWS_BEFORE" | tee "$WAVE3A_RUN_DIR/rows-before.txt"
+```
+
 Start one persistent read-only SQLite observer before either backup route. Its connection records `PRAGMA data_version` before the snapshot and again only after BrainBarDaemon is stopped. Any intervening commit makes the rollback snapshot non-authoritative, so the observer fails the gate and migration must not start.
 
 ```bash
@@ -277,10 +284,12 @@ import sqlite3, sys
 p, expected_rows = sys.argv[1], int(sys.argv[2])
 c = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
 rows = c.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+quick_check = c.execute("PRAGMA quick_check").fetchone()[0]
 print(rows)
-print(c.execute("PRAGMA quick_check").fetchone()[0])
+print(quick_check)
 c.close()
 assert rows == expected_rows
+assert quick_check == "ok"
 PY
 ```
 
@@ -306,10 +315,12 @@ import sqlite3, sys
 p, expected_rows = sys.argv[1], int(sys.argv[2])
 c = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
 rows = c.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+quick_check = c.execute("PRAGMA quick_check").fetchone()[0]
 print(rows)
-print(c.execute("PRAGMA quick_check").fetchone()[0])
+print(quick_check)
 c.close()
 assert rows == expected_rows
+assert quick_check == "ok"
 PY
 ```
 
@@ -374,7 +385,10 @@ receipt = {
     "rows": c.execute("SELECT COUNT(*) FROM chunks").fetchone()[0],
     "distribution": distribution,
     "invalid_classes": c.execute("SELECT COUNT(*) FROM chunks WHERE source_class IS NOT NULL AND source_class NOT IN ('cli-agent','desktop','subagent','brain-worker','fleet-coordination')").fetchone()[0],
-    "brain_worker_fts_rows": c.execute("SELECT COUNT(*) FROM chunk_fts_rowids r JOIN chunks c ON c.id=r.chunk_id WHERE c.source_class='brain-worker'").fetchone()[0],
+    "brain_worker_fts_mapping_rows": c.execute("SELECT COUNT(*) FROM chunk_fts_rowids r JOIN chunks c ON c.id=r.chunk_id WHERE c.source_class='brain-worker'").fetchone()[0],
+    "brain_worker_default_fts_rows": c.execute("SELECT COUNT(*) FROM chunks_fts i JOIN chunks c ON c.id=i.chunk_id WHERE c.source_class='brain-worker'").fetchone()[0],
+    "brain_worker_operational_fts_rows": c.execute("SELECT COUNT(*) FROM chunks_fts_operational i JOIN chunks c ON c.id=i.chunk_id WHERE c.source_class='brain-worker'").fetchone()[0],
+    "brain_worker_trigram_fts_rows": c.execute("SELECT COUNT(*) FROM chunks_fts_trigram i JOIN chunks c ON c.id=i.chunk_id WHERE c.source_class='brain-worker'").fetchone()[0],
     "brain_worker_float_vector_rows": c.execute("SELECT COUNT(*) FROM chunk_vectors v JOIN chunks c ON c.id=v.chunk_id WHERE c.source_class='brain-worker'").fetchone()[0],
     "brain_worker_binary_vector_rows": c.execute("SELECT COUNT(*) FROM chunk_vectors_binary v JOIN chunks c ON c.id=v.chunk_id WHERE c.source_class='brain-worker'").fetchone()[0],
     "schema_sha": schema.get("git_sha"),
@@ -385,7 +399,10 @@ print(json.dumps(receipt, indent=2, sort_keys=True))
 assert receipt["quick_check"] == "ok"
 assert receipt["rows"] == expected_rows
 assert receipt["invalid_classes"] == 0
-assert receipt["brain_worker_fts_rows"] == 0
+assert receipt["brain_worker_fts_mapping_rows"] == 0
+assert receipt["brain_worker_default_fts_rows"] == 0
+assert receipt["brain_worker_operational_fts_rows"] == 0
+assert receipt["brain_worker_trigram_fts_rows"] == 0
 assert receipt["brain_worker_float_vector_rows"] == 0
 assert receipt["brain_worker_binary_vector_rows"] == 0
 assert receipt["schema_sha"] == expected_sha
@@ -395,6 +412,8 @@ stat -f '%z' "$WAVE3A_DB-wal" 2>/dev/null || true
 ```
 
 Required visibility probes before restart: one exact stored id from each class plus one NULL row. Exact expansion must work for all six; default search must show cli-agent, subagent, fleet-coordination, and NULL, while hiding desktop and brain-worker. The internal desktop opt-in must reveal desktop but never brain-worker:
+
+The live distribution may differ from the rehearsal counts because classification reads current source JSONL attribution from disk. A distribution delta is a receipt to investigate, not by itself a failure; the taxonomy, row-count, zero-index, and visibility assertions above remain the stop gates.
 
 ```bash
 set -o pipefail
@@ -511,6 +530,6 @@ The PR handoff fills the final-code rerun values here and in the collab append:
 | Distribution | NULL 69,581; brain-worker 84; cli-agent 536,851; desktop 2,696; fleet-coordination 105,383; subagent 29,740 |
 | Ledgers | schema and event rows both pin `3964412f8291a083150a424e38df08ece817783d`; event status `success` |
 | Quick check | `ok` in 712.79 seconds; zero invalid classes; zero brain-worker FTS, float-vector, and binary-vector rows |
-| Class visibility / expansion | six source buckets green against real copied rows; aggregate desktop audit sampled 72 tokens with zero leaked IDs |
+| Class visibility / expansion | rerun with shipped search code at `065d602651bc14b096f268482cc125eaca450354`: six source buckets green against real copied rows; aggregate desktop audit sampled 72 tokens with zero leaked IDs; brain-worker zero across all six indexes |
 | Rollback | APFS re-copy, 0.00 seconds; 744,335 rows; `source_class` absent |
 | Repository gates | focused source-class 251 passed; final search/cache 42 passed; additional search scopes 92 passed / 1 xfailed with the protected production-DB latency probe refused by the test-path guard; Swift Database/KG 119 passed; full Swift reached 850 passed / 10 skipped with 7 unrelated timing failures while another lane held 24 deliberate CPU spinners |

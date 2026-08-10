@@ -191,6 +191,47 @@ def test_source_class_knn_count_cache_is_scoped_to_reader_connection(store):
     assert effective_k[-1] == 6
 
 
+def test_hybrid_cache_does_not_stamp_precommit_result_with_postcommit_state(store, monkeypatch):
+    embedding = _embed("cache commit between result and stamp")
+    _insert_chunk(
+        store,
+        chunk_id="cache-interleaved-source-class-row",
+        content="CacheInterleavedSourceClassNeedle",
+        embedding=embedding,
+    )
+
+    committed = False
+
+    def commit_source_class_change(_chunk_ids):
+        nonlocal committed
+        if committed:
+            return
+        writer = apsw.Connection(str(store.db_path))
+        writer.execute(
+            "UPDATE chunks SET source_class = 'desktop' WHERE id = ?",
+            ("cache-interleaved-source-class-row",),
+        )
+        writer.close()
+        committed = True
+
+    monkeypatch.setattr(store, "_queue_retrieval_strengthening", commit_source_class_change)
+    first = store.hybrid_search(
+        query_embedding=embedding,
+        query_text="CacheInterleavedSourceClassNeedle",
+        n_results=5,
+    )
+    assert "cache-interleaved-source-class-row" in first["ids"][0]
+    assert committed
+
+    monkeypatch.setattr(store, "_queue_retrieval_strengthening", lambda _chunk_ids: None)
+    second = store.hybrid_search(
+        query_embedding=embedding,
+        query_text="CacheInterleavedSourceClassNeedle",
+        n_results=5,
+    )
+    assert "cache-interleaved-source-class-row" not in second["ids"][0]
+
+
 class TestBinaryIndexLifecycle:
     def test_binary_table_created(self, store):
         cursor = store.conn.cursor()
