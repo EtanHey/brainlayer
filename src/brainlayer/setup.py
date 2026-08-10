@@ -133,7 +133,7 @@ def migrate_legacy_mcp_configs(
 
 
 def verify_mcp_transport(*, bridge_command: str | None = None, timeout_seconds: float = 10.0) -> int:
-    """Require a real initialize + tools/list exchange through the installed stdio bridge."""
+    """Require initialize + tools/list + one successful tool call on one fresh bridge."""
     resolved_bridge = bridge_command or get_current_mcp_bridge_bin()
     if not resolved_bridge:
         raise FileNotFoundError("brainlayer-mcp-stdio-bridge was not found on PATH")
@@ -200,6 +200,30 @@ def verify_mcp_transport(*, bridge_command: str | None = None, timeout_seconds: 
         tools = tools_result.get("tools") if isinstance(tools_result, dict) else None
         if not isinstance(tools, list) or not tools:
             raise RuntimeError("MCP tools/list response missing tools")
+        tool_names = {
+            tool.get("name") for tool in tools if isinstance(tool, dict) and isinstance(tool.get("name"), str)
+        }
+        if "brain_recall" in tool_names:
+            smoke_tool = "brain_recall"
+            smoke_arguments = {"mode": "stats"}
+        elif "expand_palette" in tool_names:
+            smoke_tool = "expand_palette"
+            smoke_arguments: dict[str, object] = {}
+        else:
+            raise RuntimeError("MCP tools/list has no safe deployment smoke tool")
+        send(
+            process,
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {"name": smoke_tool, "arguments": smoke_arguments},
+            },
+        )
+        call_response = receive(process, 3)
+        call_result = call_response.get("result") if call_response else None
+        if not isinstance(call_result, dict) or call_result.get("isError") is True:
+            raise RuntimeError(f"MCP deployment tool call failed: {smoke_tool}")
         return len(tools)
     finally:
         process.terminate()
