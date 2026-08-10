@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import time
@@ -39,8 +40,11 @@ def _validate_target(db_path: str | Path, git_sha: str) -> Path:
     if not _SHA_RE.fullmatch(git_sha):
         raise ValueError("git_sha must be an exact 40-character hexadecimal commit SHA")
     path = _resolved(db_path)
-    if path == _resolved(get_db_path()):
-        raise ValueError("source_class migration refuses the canonical BrainLayer database")
+    if path == _resolved(get_db_path()) and os.environ.get("BRAINLAYER_OFFLINE_MIGRATOR_GATED_SWAP") != "1":
+        raise ValueError(
+            "source_class migration refuses the canonical BrainLayer database unless "
+            "BRAINLAYER_OFFLINE_MIGRATOR_GATED_SWAP=1 is set for the supervised live run"
+        )
     if not path.is_file():
         raise FileNotFoundError(path)
     return path

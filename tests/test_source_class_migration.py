@@ -123,3 +123,15 @@ def test_migration_refuses_canonical_database_even_when_explicit(monkeypatch, tm
 
     with pytest.raises(ValueError, match="canonical"):
         migration.migrate_source_class(canonical, git_sha=GIT_SHA, actor="pytest")
+
+
+def test_migration_allows_canonical_database_only_with_supervised_gate(monkeypatch, tmp_path: Path) -> None:
+    canonical = tmp_path / "canonical.db"
+    _legacy_db(canonical)
+    monkeypatch.setattr(migration, "get_db_path", lambda: canonical)
+    monkeypatch.setenv("BRAINLAYER_OFFLINE_MIGRATOR_GATED_SWAP", "1")
+
+    receipt = migration.migrate_source_class(canonical, git_sha=GIT_SHA, actor="pytest")
+
+    assert receipt["row_count_before"] == receipt["row_count_after"] == 6
+    assert receipt["git_sha"] == GIT_SHA
