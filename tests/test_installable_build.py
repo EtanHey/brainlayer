@@ -317,7 +317,7 @@ def test_setup_default_data_root_is_not_created_when_later_root_is_invalid(tmp_p
 def test_setup_marks_override_and_canonical_data_roots(tmp_path: Path, monkeypatch) -> None:
     import brainlayer.setup as setup_helpers
 
-    override_data_dir = tmp_path / "override-data"
+    override_data_dir = tmp_path / "brainlayer-override"
     canonical_data_dir = tmp_path / "canonical-data"
     monkeypatch.setattr(setup_helpers, "resolve_db_path", lambda: override_data_dir / "brainlayer.db")
     monkeypatch.setattr(
@@ -337,6 +337,24 @@ def test_setup_marks_override_and_canonical_data_roots(tmp_path: Path, monkeypat
     assert (override_data_dir / ".metadata_never_index").is_file()
     assert (canonical_data_dir / ".metadata_never_index").is_file()
     assert (canonical_data_dir / "prompts").is_dir()
+
+
+def test_setup_rejects_override_parent_that_is_not_dedicated_to_brainlayer(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.setup as setup_helpers
+
+    broad_override_dir = tmp_path / "shared-data"
+    canonical_data_dir = broad_override_dir / ".local" / "share" / "brainlayer"
+    monkeypatch.setattr(setup_helpers, "resolve_db_path", lambda: broad_override_dir / "brainlayer.db")
+    monkeypatch.setattr(setup_helpers, "get_canonical_db_path", lambda: canonical_data_dir / "brainlayer.db")
+
+    with pytest.raises(RuntimeError, match="dedicated BrainLayer directory"):
+        setup_helpers.ensure_spotlight_excluded_layout(
+            runtime_dir=tmp_path / "runtime",
+            launchd_log_dir=tmp_path / "launchd-logs",
+            counter_dir=tmp_path / "counter",
+        )
+
+    assert not broad_override_dir.exists()
 
 
 def test_setup_migrates_legacy_raw_socat_mcp_config_idempotently(tmp_path: Path) -> None:

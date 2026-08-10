@@ -38,7 +38,12 @@ configuration and user-facing exports.
 3. Confirm no staging path below exists. If one exists, stop and inspect it; never overwrite it.
 4. Record `brainlayer status --json`, `brainlayer doctor --json`, DB/WAL/SHM sizes, queue count, and
    loaded `com.brainlayer.*` labels. Resolve and record the active DB parent from `BRAINLAYER_DB`;
-   when it differs from `$HOME/.local/share/brainlayer`, add it as a fifth migration root.
+   when it differs from `$HOME/.local/share/brainlayer`, add it as a fifth migration root only
+   after validating that it is a dedicated BrainLayer-owned directory. Its basename must contain
+   `brainlayer`, and it must not be `/`, `$HOME`, a mount root, an ancestor of the canonical data
+   root, overlap another migration root, or contain unrelated data. If it fails any check, stop:
+   never mark or rename that parent. Relocate the override DB and configuration into a dedicated
+   directory in a separate approved migration before using this runbook.
 5. Keep the terminal open until restart and the real store/search probe both pass.
 
 Staging paths:
@@ -84,8 +89,9 @@ condition fails, keep services stopped and investigate; do not move the tree.
 
 ### 4. Stage, mark, and restore each canonical tree
 
-For each of the four canonical roots, plus the active `BRAINLAYER_DB` parent when it is distinct,
-perform a same-filesystem rename to its exact staging path, create
+For each of the four canonical roots, plus the active `BRAINLAYER_DB` parent when it is distinct
+and passed the dedicated-directory validation above, perform a same-filesystem rename to its exact
+staging path, create
 `.metadata_never_index` inside the staged tree, then atomically rename the same tree back to its
 canonical path. This preserves the root's mode, ownership, ACLs, extended attributes, and children;
 the marker is already present before the canonical path becomes visible again. Never copy the tree.
@@ -158,11 +164,20 @@ brainlayer doctor --json
 
 ### 7. Spotlight evidence
 
-First establish that Spotlight is enabled for the containing volume:
+First establish that Spotlight is enabled for the containing volume of every migration root. For
+each canonical root and the validated distinct override root, resolve the filesystem mount point,
+record the root-to-volume mapping, and query that mount point directly:
 
 ```bash
-mdutil -s /
+brainlayer_probe_root="${HOME:?}/.local/share/brainlayer"
+brainlayer_probe_volume="$(df -P "$brainlayer_probe_root" | awk 'END {print $NF}')"
+printf 'root=%s\nvolume=%s\n' "$brainlayer_probe_root" "$brainlayer_probe_volume"
+mdutil -s "$brainlayer_probe_volume"
 ```
+
+Repeat this check for every migrated root. Do not infer an override root's Spotlight state from
+`mdutil -s /`: an override may reside on another volume. Every containing volume must report that
+indexing is enabled before the exclusion probe can be interpreted.
 
 Then create a unique, non-clobbering plain-text probe beneath the marked data root. Record these
 outputs and retain the two printed variable values with the evidence:

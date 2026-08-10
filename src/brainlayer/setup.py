@@ -33,6 +33,15 @@ _DATA_CHILDREN = (
 _RUNTIME_CHILDREN = ("logs", "quarantine", "queue")
 
 
+def _validate_override_data_root(active_root: Path, canonical_root: Path) -> None:
+    active = active_root.expanduser().resolve(strict=False)
+    canonical = canonical_root.expanduser().resolve(strict=False)
+    if active == canonical:
+        return
+    if active in canonical.parents or "brainlayer" not in active.name.casefold():
+        raise RuntimeError(f"BRAINLAYER_DB must be inside a dedicated BrainLayer directory; unsafe parent: {active}")
+
+
 def _ensure_spotlight_excluded_root(root: Path, children: tuple[str, ...] = ()) -> Path:
     resolved = root.expanduser()
     resolved.mkdir(parents=True, exist_ok=True)
@@ -58,6 +67,7 @@ def ensure_spotlight_excluded_layout(
     else:
         active_data_root = resolve_db_path().parent
         canonical_data_root = get_canonical_db_path().parent
+        _validate_override_data_root(active_data_root, canonical_data_root)
         data_roots = tuple(dict.fromkeys((active_data_root, canonical_data_root)))
     requested_roots = (
         *data_roots,
