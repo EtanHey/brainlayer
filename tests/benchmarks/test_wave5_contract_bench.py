@@ -272,9 +272,10 @@ def test_external_ledger_factory_option_reaches_contract(tmp_path: Path) -> None
 
     assert result.returncode == 1
     assert "external ledger factory selected" in result.stdout
-    assert "test_occurrence_identity_includes_semantic_fingerprint_and_scope" in (
-        cache_dir / "v" / "cache" / "lastfailed"
-    ).read_text()
+    assert (
+        "test_occurrence_identity_includes_semantic_fingerprint_and_scope"
+        in (cache_dir / "v" / "cache" / "lastfailed").read_text()
+    )
 
 
 def test_external_candidate_producer_option_reaches_promotion_benchmark(tmp_path: Path) -> None:
@@ -301,9 +302,10 @@ def test_external_candidate_producer_option_reaches_promotion_benchmark(tmp_path
 
     assert result.returncode == 1
     assert "external candidate producer selected" in result.stdout
-    assert "test_candidate_producer_meets_promotion_thresholds_and_false_positive_budget" in (
-        cache_dir / "v" / "cache" / "lastfailed"
-    ).read_text()
+    assert (
+        "test_candidate_producer_meets_promotion_thresholds_and_false_positive_budget"
+        in (cache_dir / "v" / "cache" / "lastfailed").read_text()
+    )
 
 
 def test_occurrence_identity_includes_semantic_fingerprint_and_scope(
