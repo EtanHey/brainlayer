@@ -134,6 +134,8 @@ final class BrainBarServer: @unchecked Sendable {
     var onDatabaseReady: (@Sendable (BrainDatabase) -> Void)?
     var onStartRejected: (@Sendable (String) -> Void)?
     var onDeferredBackupResponseDropped: (@Sendable (_ descriptorWasReused: Bool) -> Void)?
+    var onClientAccepted: (@Sendable (Int32) -> Void)?
+    var onClientDescriptorClosed: (@Sendable (Int32) -> Void)?
     /// Maximum EAGAIN retries before disconnecting a stalled client.
     /// Each retry sleeps 1ms; 50 retries keeps false-positive disconnects
     /// below the UI budget while still bounding serial-queue stalls.
@@ -459,8 +461,9 @@ final class BrainBarServer: @unchecked Sendable {
         readSource.setEventHandler { [weak self] in
             self?.readFromClient(fd: clientFD)
         }
-        readSource.setCancelHandler {
+        readSource.setCancelHandler { [weak self] in
             close(clientFD)
+            self?.onClientDescriptorClosed?(clientFD)
         }
         readSource.resume()
 
@@ -469,6 +472,7 @@ final class BrainBarServer: @unchecked Sendable {
             framing: MCPFraming(),
             paletteSession: router.makePaletteSession()
         )
+        onClientAccepted?(clientFD)
         NSLog("[BrainBar] Client connected (fd: %d)", clientFD)
         debugLog("CLIENT CONNECTED fd=\(clientFD) (total clients: \(clients.count))")
     }

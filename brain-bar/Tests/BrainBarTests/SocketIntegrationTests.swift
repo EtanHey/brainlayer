@@ -43,6 +43,46 @@ private final class BrainDatabaseCapture: @unchecked Sendable {
     }
 }
 
+private final class ClientLifecycleCapture: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var acceptedFDs: [Int32] = []
+    private var closedFDs = Set<Int32>()
+
+    func recordAccepted(_ fd: Int32) {
+        condition.lock()
+        acceptedFDs.append(fd)
+        condition.broadcast()
+        condition.unlock()
+    }
+
+    func recordClosed(_ fd: Int32) {
+        condition.lock()
+        closedFDs.insert(fd)
+        condition.broadcast()
+        condition.unlock()
+    }
+
+    func waitForAccepted(at index: Int, timeout: TimeInterval = 5) -> Int32? {
+        let deadline = Date().addingTimeInterval(timeout)
+        condition.lock()
+        defer { condition.unlock() }
+        while acceptedFDs.count <= index {
+            guard condition.wait(until: deadline) else { return nil }
+        }
+        return acceptedFDs[index]
+    }
+
+    func waitForClosed(_ fd: Int32, timeout: TimeInterval = 5) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        condition.lock()
+        defer { condition.unlock() }
+        while !closedFDs.contains(fd) {
+            guard condition.wait(until: deadline) else { return false }
+        }
+        return true
+    }
+}
+
 private func blockSQLiteProgress(_ context: UnsafeMutableRawPointer?) -> Int32 {
     guard let context else { return 0 }
     return Unmanaged<SQLiteProgressGate>.fromOpaque(context).takeUnretainedValue().step()
@@ -522,6 +562,7 @@ final class SocketIntegrationTests: XCTestCase {
             enableHybridSearchHelper: false
         )
         let reusedDescriptorDrop = DispatchSemaphore(value: 0)
+        let clientLifecycle = ClientLifecycleCapture()
         server.onDatabaseReady = { database in
             databaseCapture.set(database)
             databaseReady.signal()
@@ -531,29 +572,35 @@ final class SocketIntegrationTests: XCTestCase {
                 reusedDescriptorDrop.signal()
             }
         }
+        server.onClientAccepted = { clientLifecycle.recordAccepted($0) }
+        server.onClientDescriptorClosed = { clientLifecycle.recordClosed($0) }
         server.start()
         XCTAssertTrue(waitForSocket(at: testSocketPath), "Server should bind \(testSocketPath)")
         XCTAssertEqual(databaseReady.wait(timeout: .now() + 1), .success)
         guard let writeDatabase = databaseCapture.get() else {
             return XCTFail("Server should expose its ready write database")
         }
-        // Let the readiness probe's server-side descriptor close before fixing
-        // the allocation order below.
-        Thread.sleep(forTimeInterval: 0.05)
-
-        // Occupy the lowest descriptor holes. The backup client then takes the
-        // next free fd and accept() takes the one after it. Keeping the client fd
-        // allocated with shutdown() while freeing one low spare makes the
-        // replacement client's socket() take the spare and accept() reuse the
-        // disconnected backup client's server-side descriptor deterministically.
-        var spareFDs: [Int32] = []
-        for _ in 0..<8 {
-            let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-            XCTAssertGreaterThanOrEqual(fd, 0)
-            guard fd >= 0 else { return }
-            spareFDs.append(fd)
+        guard let readinessProbeServerFD = clientLifecycle.waitForAccepted(at: 0) else {
+            return XCTFail("Server should observe the readiness probe connection")
         }
-        defer { spareFDs.forEach { close($0) } }
+        XCTAssertTrue(
+            clientLifecycle.waitForClosed(readinessProbeServerFD),
+            "Readiness probe must be fully disconnected before descriptor allocation starts"
+        )
+
+        // Hold one known-low descriptor to release for the replacement client's
+        // socket(). Other holes are filled explicitly after the backup server
+        // descriptor closes, so concurrent fd churn cannot invalidate a fixed
+        // spare-count assumption.
+        let replacementClientHoleFD = socket(AF_UNIX, SOCK_STREAM, 0)
+        XCTAssertGreaterThanOrEqual(replacementClientHoleFD, 0)
+        guard replacementClientHoleFD >= 0 else { return }
+        var replacementClientHoleIsOpen = true
+        defer {
+            if replacementClientHoleIsOpen {
+                close(replacementClientHoleFD)
+            }
+        }
 
         let progressGate = SQLiteProgressGate()
         defer { progressGate.release.signal() }
@@ -572,7 +619,10 @@ final class SocketIntegrationTests: XCTestCase {
 
         let backupFD = try connectClient()
         defer { close(backupFD) }
-        XCTAssertGreaterThan(backupFD, spareFDs.last ?? -1)
+        XCTAssertGreaterThan(backupFD, replacementClientHoleFD)
+        guard let backupServerFD = clientLifecycle.waitForAccepted(at: 1) else {
+            return XCTFail("Server should accept the backup connection")
+        }
         try sendMCPRequest(on: backupFD, request: [
             "jsonrpc": "2.0",
             "id": 40,
@@ -585,12 +635,46 @@ final class SocketIntegrationTests: XCTestCase {
         XCTAssertEqual(progressGate.entered.wait(timeout: .now() + 1), .success)
 
         XCTAssertEqual(shutdown(backupFD, SHUT_RDWR), 0)
-        Thread.sleep(forTimeInterval: 0.2)
-        let releasedSpareFD = spareFDs.removeFirst()
-        close(releasedSpareFD)
+        XCTAssertTrue(
+            clientLifecycle.waitForClosed(backupServerFD),
+            "Backup server descriptor must close before constructing its replacement"
+        )
+
+        // socket() always returns the lowest free descriptor. Fill every free
+        // hole below the known backup server fd, briefly acquire the target to
+        // prove it is free, then release only the target and the one low client
+        // hole. The probe's socket() consumes the low hole; accept() must consume
+        // the target.
+        var fillerFDs: [Int32] = []
+        defer { fillerFDs.forEach { close($0) } }
+        while true {
+            let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+            XCTAssertGreaterThanOrEqual(fd, 0)
+            guard fd >= 0 else { return }
+            if fd == backupServerFD {
+                close(fd)
+                break
+            }
+            XCTAssertLessThan(fd, backupServerFD, "Backup server descriptor should be the next target hole")
+            guard fd < backupServerFD else {
+                close(fd)
+                return
+            }
+            fillerFDs.append(fd)
+        }
+        close(replacementClientHoleFD)
+        replacementClientHoleIsOpen = false
 
         let probeFD = try connectClient()
         defer { close(probeFD) }
+        guard let probeServerFD = clientLifecycle.waitForAccepted(at: 2) else {
+            return XCTFail("Server should accept the replacement connection")
+        }
+        XCTAssertEqual(
+            probeServerFD,
+            backupServerFD,
+            "Replacement connection must reuse the disconnected backup server descriptor"
+        )
         try sendMCPRequest(on: probeFD, request: [
             "jsonrpc": "2.0", "id": 41, "method": "initialize",
             "params": ["protocolVersion": "2024-11-05", "capabilities": [:] as [String: Any],
@@ -600,13 +684,13 @@ final class SocketIntegrationTests: XCTestCase {
         XCTAssertNotNil(initialize["result"])
 
         progressGate.release.signal()
-        let completionDeadline = Date().addingTimeInterval(1)
+        let completionDeadline = Date().addingTimeInterval(5)
         while !FileManager.default.fileExists(atPath: completionMarkerPath), Date() < completionDeadline {
             Thread.sleep(forTimeInterval: 0.01)
         }
         XCTAssertTrue(FileManager.default.fileExists(atPath: completionMarkerPath))
         XCTAssertEqual(
-            reusedDescriptorDrop.wait(timeout: .now() + 1),
+            reusedDescriptorDrop.wait(timeout: .now() + 5),
             .success,
             "The test must reach the session-identity guard with the descriptor occupied by a replacement client"
         )
