@@ -119,8 +119,8 @@ AUDIT_RECURSION_TAG_PATTERNS = (
     "{tag_expr} GLOB 'r0[0-9]'",
 )
 
-# Module-level LRU cache: {cache_key: (result, timestamp)}
-_hybrid_cache: "OrderedDict[tuple, tuple[dict, float]]" = OrderedDict()
+# Module-level LRU cache: {cache_key: (result, timestamp, data_version)}
+_hybrid_cache: "OrderedDict[tuple, tuple[dict, float, int | None]]" = OrderedDict()
 
 
 def _env_flag_enabled(name: str) -> bool:
@@ -1739,7 +1739,8 @@ class SearchMixin:
                 ORDER BY v.distance
                 """
         results = list(cursor.execute(query, params))
-        if len(results) < n_results and not brainbar_helper_fast_profile:
+        source_class_filter_active = bool(getattr(self, "_has_source_class", False))
+        if len(results) < n_results and (not brainbar_helper_fast_profile or source_class_filter_active):
             retry_k = self._effective_knn_k(
                 n_results,
                 bool(needs_overfetch),
@@ -1965,8 +1966,13 @@ class SearchMixin:
         )
         now = time.monotonic()
         if cache_key in _hybrid_cache:
-            cached_result, cached_at = _hybrid_cache[cache_key]
-            if now - cached_at < _HYBRID_CACHE_TTL:
+            cached_result, cached_at, cached_data_version = _hybrid_cache[cache_key]
+            current_data_version = self._checkpoint_cache_data_version()
+            if (
+                now - cached_at < _HYBRID_CACHE_TTL
+                and current_data_version is not None
+                and cached_data_version == current_data_version
+            ):
                 _hybrid_cache.move_to_end(cache_key)  # LRU touch
                 cached_clone = _clone_hybrid_result(cached_result)
                 self._queue_retrieval_strengthening(cached_clone["ids"][0])
@@ -2637,7 +2643,11 @@ class SearchMixin:
         self._queue_retrieval_strengthening(ids)
 
         # ── Cache store ──────────────────────────────────────────────────────
-        _hybrid_cache[cache_key] = (_clone_hybrid_result(result), time.monotonic())
+        _hybrid_cache[cache_key] = (
+            _clone_hybrid_result(result),
+            time.monotonic(),
+            self._checkpoint_cache_data_version(),
+        )
         _hybrid_cache.move_to_end(cache_key)
         if len(_hybrid_cache) > _HYBRID_CACHE_MAX:
             _hybrid_cache.popitem(last=False)  # evict oldest

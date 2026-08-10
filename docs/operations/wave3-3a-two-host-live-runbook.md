@@ -7,7 +7,7 @@ This runbook is the source-class segment of the Wave 3 maintenance sitting. Exec
 ## Pinned artifacts and rehearsal measurements
 
 - Migration/source-class code commit: `3964412f8291a083150a424e38df08ece817783d`.
-- Required deployed release before either host migrates: BrainLayer + BrainBar **v1.5.6 or later**. v1.5.5 carries the backup-race fix; v1.5.6 adds the Swift default-search source-class gate.
+- Required deployed release before either host migrates: BrainLayer + BrainBar **exactly v1.5.6**. v1.5.5 carries the backup-race fix; v1.5.6 adds the Swift default-search source-class gate.
 - Command: `scripts/migrate_source_class.py` from a checkout containing that commit.
 - Rehearsal source: online SQLite backup from canonical opened `mode=ro` into gitignored `.tmp-wave3-3a/` (contingency route, not the LIVE primary route).
 - Timed contingency replay: 26.16 seconds wall-clock while live drain writes continued; 744,396 rows, 4,251,874 pages, 17,415,675,904 bytes. The pristine rehearsal copy passed `PRAGMA quick_check` before migration.
@@ -27,7 +27,7 @@ Fill every blank on each host. Do not copy Main values into M1.
 | Hostname |  |  |
 | Canonical DB path |  |  |
 | Checked-out commit |  |  |
-| Installed BrainLayer / BrainBar versions (must be 1.5.6+) |  |  |
+| Installed BrainLayer / BrainBar versions (must be exactly 1.5.6) |  |  |
 | Installed CLI path + SHA-256 |  |  |
 | Executing BrainBarDaemon PID / path + SHA-256 |  |  |
 | Executing daemon `source_class` capability probe |  |  |
@@ -497,4 +497,4 @@ The PR handoff fills the final-code rerun values here and in the collab append:
 | Quick check | `ok` in 712.79 seconds; zero invalid classes; zero brain-worker FTS, float-vector, and binary-vector rows |
 | Class visibility / expansion | six source buckets green against real copied rows; aggregate desktop audit sampled 72 tokens with zero leaked IDs |
 | Rollback | APFS re-copy, 0.00 seconds; 744,335 rows; `source_class` absent |
-| Repository gates | focused 198 passed; broad 3,969 passed / 10 skipped / 62 deselected / 2 xfailed; one unrelated MPS arbitration test separately diagnosed and deselected after a 997.19s no-progress compute call |
+| Repository gates | focused source-class 251 passed; final search/cache 42 passed; additional search scopes 92 passed / 1 xfailed with the protected production-DB latency probe refused by the test-path guard; Swift Database/KG 119 passed; full Swift reached 850 passed / 10 skipped with 7 unrelated timing failures while another lane held 24 deliberate CPU spinners |

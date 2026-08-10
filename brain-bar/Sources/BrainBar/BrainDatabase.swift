@@ -3129,14 +3129,7 @@ final class BrainDatabase: @unchecked Sendable {
         }
 
         let sourceFilter = normalizedSourceFilter(source)
-        var conditions = [
-            "c.id = ?",
-            "c.superseded_by IS NULL",
-            "c.aggregated_into IS NULL",
-            "c.archived_at IS NULL",
-            "COALESCE(c.archived, 0) = 0",
-            "COALESCE(c.status, 'active') = 'active'"
-        ]
+        var conditions = ["c.id = ?", try searchableChunkWhereClause(alias: "c")]
         if project != nil { conditions.append("(c.project = ? OR c.project IS NULL)") }
         if sourceFilter != nil { conditions.append("c.source = ?") }
         if tag != nil { conditions.append("c.tags LIKE ?") }

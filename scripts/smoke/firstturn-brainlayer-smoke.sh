@@ -61,7 +61,15 @@ if [[ -z "$out" ]]; then
 fi
 
 if [[ -n "$RAW_OUTPUT_PATH" ]]; then
-  printf '%s\n' "$out" > "$RAW_OUTPUT_PATH"
+  if [[ -e "$RAW_OUTPUT_PATH" ]]; then
+    chmod 600 "$RAW_OUTPUT_PATH"
+  fi
+  (
+    umask 077
+    : > "$RAW_OUTPUT_PATH"
+    chmod 600 "$RAW_OUTPUT_PATH"
+    printf '%s\n' "$out" > "$RAW_OUTPUT_PATH"
+  )
 fi
 
 if [[ "$rc" -eq 124 ]]; then

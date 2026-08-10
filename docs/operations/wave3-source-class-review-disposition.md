@@ -34,3 +34,11 @@ Verification after the retry: focused migration suite passes 6/6; runbook shell 
 - DEFERRED (nonblocking N3): retry attempts still overwrite the fixed migration-event row rather than retaining a separate per-attempt audit history. The successful immutable schema ledger and final success event remain exact-SHA pinned; adding an attempt-history table is outside this migration's gate.
 
 Final real-copy evidence at `3964412f8291a083150a424e38df08ece817783d`: 744,335 rows preserved; 84 brain-workers retained as class but removed from all search indexes; six-bucket visibility/expansion green; aggregate desktop audit sampled 72 tokens with no leak; `PRAGMA quick_check=ok`; exact-SHA idempotent rerun green.
+
+## Final local CodeRabbit exact-diff disposition
+
+- MAJOR: Swift exact-ID search bypassed the searchable clause — FIXED. Default `search()` exact-ID lookups now hide desktop and brain-worker; `expandChunk` remains the explicit exact-expansion path for every class.
+- MAJOR: the BrainBar helper fast profile suppressed KNN retry even when hidden source-class rows exhausted the initial 400 candidates — FIXED. It preserves the bounded first attempt and permits only the existing source-class-aware retry.
+- MAJOR: a 60-second hybrid cache entry could survive a cross-process NULL-to-desktop class update — FIXED. Every entry records SQLite `data_version` and is returned only when the current value matches.
+- MINOR: raw MCP smoke receipts inherited caller umask — FIXED. New and existing output files are forced to mode 0600 before the response is written; a real socket smoke verified the mode.
+- MINOR: the prose allowed later v1.5.6+ releases while preflight required exact 1.5.6 — FIXED by making this scheduled Tuesday run require exact v1.5.6 consistently.

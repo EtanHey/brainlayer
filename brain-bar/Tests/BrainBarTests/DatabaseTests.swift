@@ -941,6 +941,8 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(candidateIDs, expected)
         XCTAssertFalse(resultIDs.contains("source-class-desktop"))
         XCTAssertFalse(resultIDs.contains("source-class-brain-worker"))
+        XCTAssertTrue(try db.search(query: "source-class-desktop", limit: 1).isEmpty)
+        XCTAssertTrue(try db.search(query: "source-class-brain-worker", limit: 1).isEmpty)
     }
 
     func testSearchSkipsTrigramFallbackWhenTableMissingAndMigrationsDisabled() throws {

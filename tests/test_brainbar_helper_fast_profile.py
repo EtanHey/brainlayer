@@ -13,6 +13,8 @@ class RecordingCursor:
 
     def execute(self, sql, params=()):
         self.calls.append((sql, list(params)))
+        if sql.strip() == "PRAGMA data_version":
+            return self
         if "FROM chunks_fts " in sql and self.interrupt_fts:
             raise apsw.InterruptError("interrupted")
         if "FROM chunks_fts_trigram" in sql:
@@ -20,6 +22,9 @@ class RecordingCursor:
         if "FROM chunks_fts " in sql:
             return list(self.rows_by_table.get("chunks_fts", []))
         return []
+
+    def fetchone(self):
+        return (1,)
 
     def get_connection(self):
         return None
@@ -129,6 +134,25 @@ def test_brainbar_fast_profile_binary_search_uses_fixed_k_without_count_expansio
     assert len(store.cursor.calls) == 1
     assert store.cursor.calls[0][1][1] == 400
     assert store.effective_k_calls == []
+
+
+def test_brainbar_fast_profile_retries_when_source_class_filter_exhausts_initial_k():
+    store = RecordingBinaryStore()
+    store._has_source_class = True
+
+    results = store._binary_search(
+        query_embedding=[0.1, 0.2, 0.3],
+        n_results=50,
+        brainbar_helper_fast_profile=True,
+    )
+
+    assert results["ids"] == [[]]
+    assert len(store.cursor.calls) == 2
+    assert store.cursor.calls[0][1][1] == 400
+    assert store.cursor.calls[1][1][1] == 4096
+    assert store.effective_k_calls == [
+        ((50, False, False, False, False), {"cap_filtered": False}),
+    ]
 
 
 def test_brainbar_fast_profile_uses_primary_fts_only_and_threads_binary_flag():

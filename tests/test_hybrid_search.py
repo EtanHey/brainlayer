@@ -92,6 +92,34 @@ def _chunk_vector_count(store: VectorStore, table: str) -> int:
     return cursor.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
 
 
+def test_hybrid_cache_rejects_result_after_cross_connection_source_class_change(store):
+    embedding = _embed("cross connection source class cache")
+    _insert_chunk(
+        store,
+        chunk_id="cache-source-class-row",
+        content="CrossConnectionSourceClassCacheNeedle",
+        embedding=embedding,
+    )
+
+    first = store.hybrid_search(
+        query_embedding=embedding,
+        query_text="CrossConnectionSourceClassCacheNeedle",
+        n_results=5,
+    )
+    assert "cache-source-class-row" in first["ids"][0]
+
+    writer = apsw.Connection(str(store.db_path))
+    writer.execute("UPDATE chunks SET source_class = 'desktop' WHERE id = ?", ("cache-source-class-row",))
+    writer.close()
+
+    second = store.hybrid_search(
+        query_embedding=embedding,
+        query_text="CrossConnectionSourceClassCacheNeedle",
+        n_results=5,
+    )
+    assert "cache-source-class-row" not in second["ids"][0]
+
+
 class TestBinaryIndexLifecycle:
     def test_binary_table_created(self, store):
         cursor = store.conn.cursor()
