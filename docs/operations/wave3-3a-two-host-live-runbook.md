@@ -7,6 +7,7 @@ This runbook is the source-class segment of the Wave 3 maintenance sitting. Exec
 ## Pinned artifacts and rehearsal measurements
 
 - Migration/source-class code commit: `3964412f8291a083150a424e38df08ece817783d`.
+- Reviewed execution/verifier code commit: `588ef12bebd82219dd06cb13aaf41307979b39d2`.
 - Required deployed release before either host migrates: BrainLayer + BrainBar **exactly v1.5.6**. v1.5.5 carries the backup-race fix; v1.5.6 adds the Swift default-search source-class gate.
 - Command: `scripts/migrate_source_class.py` from a checkout containing that commit.
 - Rehearsal source: online SQLite backup from canonical opened `mode=ro` into gitignored `.tmp-wave3-3a/` (contingency route, not the LIVE primary route).
@@ -27,7 +28,7 @@ Fill every blank on each host. Do not copy Main values into M1.
 | Operator / Etan go time |  |  |
 | Hostname |  |  |
 | Canonical DB path |  |  |
-| Checked-out commit |  |  |
+| Migration checkout / execution-verifier checkout |  |  |
 | Installed BrainLayer / BrainBar versions (must be exactly 1.5.6) |  |  |
 | Installed CLI path + SHA-256 |  |  |
 | Executing BrainBarDaemon PID / path + SHA-256 |  |  |
@@ -100,24 +101,27 @@ Do not enter host preflight unless all commands pass. Re-run this section indepe
 
 ## 1. Host preflight and writer inventory
 
-From the pinned checkout, set only host-local absolute paths:
+Prepare two clean detached checkouts. The migration checkout pins exactly the code recorded in the ledgers; the execution checkout pins the strengthened verifier/search code reviewed for the shipped release. Never overload one SHA for both purposes.
 
 ```bash
-export WAVE3A_REPO="$PWD"
-export WAVE3A_PYTHON="$WAVE3A_REPO/.venv/bin/python"
+export WAVE3A_MIGRATION_REPO="<absolute clean checkout at 3964412f8291a083150a424e38df08ece817783d>"
+export WAVE3A_EXEC_REPO="<absolute clean checkout at 588ef12bebd82219dd06cb13aaf41307979b39d2>"
+export WAVE3A_PYTHON="$WAVE3A_EXEC_REPO/.venv/bin/python"
 export WAVE3A_CLI="$(command -v brainlayer)"
-export PYTHONPATH="$WAVE3A_REPO/src"
+export PYTHONPATH="$WAVE3A_EXEC_REPO/src"
 export WAVE3A_DB="$($WAVE3A_PYTHON -c 'from brainlayer.paths import get_db_path; print(get_db_path())')"
-export WAVE3A_SHA="3964412f8291a083150a424e38df08ece817783d"
+export WAVE3A_MIGRATION_SHA="3964412f8291a083150a424e38df08ece817783d"
+export WAVE3A_EXEC_SHA="588ef12bebd82219dd06cb13aaf41307979b39d2"
 export WAVE3A_ACTOR="etan+brainlayerCodex"
 export WAVE3A_HOST="$(hostname -s | tr -cd 'A-Za-z0-9_-')"
 export WAVE3A_RUN_DIR="$HOME/.local/share/brainlayer/wave3-live-2026-08-11/$WAVE3A_HOST"
 mkdir -p "$WAVE3A_RUN_DIR"
 test -x "$WAVE3A_PYTHON"
 test -x "$WAVE3A_CLI"
-test "$(git rev-parse "$WAVE3A_SHA")" = "$WAVE3A_SHA"
-test "$(git rev-parse HEAD)" = "$WAVE3A_SHA"
-test -z "$(git status --porcelain)"
+test "$(git -C "$WAVE3A_MIGRATION_REPO" rev-parse HEAD)" = "$WAVE3A_MIGRATION_SHA"
+test "$(git -C "$WAVE3A_EXEC_REPO" rev-parse HEAD)" = "$WAVE3A_EXEC_SHA"
+test -z "$(git -C "$WAVE3A_MIGRATION_REPO" status --porcelain)"
+test -z "$(git -C "$WAVE3A_EXEC_REPO" status --porcelain)"
 test -f "$WAVE3A_DB"
 /usr/libexec/PlistBuddy -c 'Print:CFBundleShortVersionString' /Applications/BrainBar.app/Contents/Info.plist | grep -Fx '1.5.6'
 df -k "$(dirname "$WAVE3A_DB")"
@@ -190,7 +194,7 @@ pgrep -af '[b]rainlayer.*(watch|drain|enrich|p0-counter|jsonl-backup)' && exit 1
 
 ```bash
 set -o pipefail
-/usr/bin/time -p "$WAVE3A_PYTHON" scripts/wal_checkpoint.py --mode TRUNCATE --retry-busy --json \
+/usr/bin/time -p "$WAVE3A_PYTHON" "$WAVE3A_EXEC_REPO/scripts/wal_checkpoint.py" --mode TRUNCATE --retry-busy --json \
   | tee "$WAVE3A_RUN_DIR/checkpoint.json"
 stat -f '%z' "$WAVE3A_DB-wal" 2>/dev/null || true
 ```
@@ -337,7 +341,7 @@ wait "$WAVE3A_FENCE_PID"
 unset WAVE3A_FENCE_PID
 trap - EXIT
 cat "$WAVE3A_FENCE_RESULT"
-"$WAVE3A_PYTHON" scripts/wal_checkpoint.py --mode TRUNCATE --retry-busy --json \
+"$WAVE3A_PYTHON" "$WAVE3A_EXEC_REPO/scripts/wal_checkpoint.py" --mode TRUNCATE --retry-busy --json \
   | tee "$WAVE3A_RUN_DIR/checkpoint-after-backup.json"
 ```
 
@@ -348,9 +352,10 @@ The environment gate is intentionally scoped to this command. Without it the scr
 ```bash
 set -o pipefail
 /usr/bin/time -p env BRAINLAYER_OFFLINE_MIGRATOR_GATED_SWAP=1 \
-  "$WAVE3A_PYTHON" scripts/migrate_source_class.py \
+  PYTHONPATH="$WAVE3A_MIGRATION_REPO/src" \
+  "$WAVE3A_PYTHON" "$WAVE3A_MIGRATION_REPO/scripts/migrate_source_class.py" \
   --db "$WAVE3A_DB" \
-  --git-sha "$WAVE3A_SHA" \
+  --git-sha "$WAVE3A_MIGRATION_SHA" \
   --actor "$WAVE3A_ACTOR" \
   --batch-size 5000 \
   | tee "$WAVE3A_RUN_DIR/source-class-migration.json"
@@ -363,7 +368,7 @@ If additional approved Wave 3 migrations are scheduled for the same maintenance 
 Run this read-only receipt query:
 
 ```bash
-"$WAVE3A_PYTHON" - "$WAVE3A_DB" "$WAVE3A_SHA" "$WAVE3A_ROWS_BEFORE" <<'PY'
+"$WAVE3A_PYTHON" - "$WAVE3A_DB" "$WAVE3A_MIGRATION_SHA" "$WAVE3A_ROWS_BEFORE" <<'PY'
 import json, sqlite3, sys
 import sqlite_vec
 db, expected_sha, expected_rows = sys.argv[1], sys.argv[2], int(sys.argv[3])
@@ -417,7 +422,7 @@ The live distribution may differ from the rehearsal counts because classificatio
 
 ```bash
 set -o pipefail
-"$WAVE3A_PYTHON" scripts/verify_source_class_visibility.py --db "$WAVE3A_DB" \
+"$WAVE3A_PYTHON" "$WAVE3A_EXEC_REPO/scripts/verify_source_class_visibility.py" --db "$WAVE3A_DB" \
   | tee "$WAVE3A_RUN_DIR/source-class-visibility.json"
 ```
 
@@ -472,11 +477,11 @@ with open(sys.argv[2], "w", encoding="utf-8") as handle:
 PY
 source "$WAVE3A_RUN_DIR/live-probes.env"
 QUERY="$WAVE3A_VISIBLE_TOKEN" NUM_RESULTS=100 RAW_OUTPUT_PATH="$WAVE3A_RUN_DIR/real-mcp-visible.raw.jsonl" \
-  DEADLINE_SECS=30 scripts/smoke/firstturn-brainlayer-smoke.sh \
+  DEADLINE_SECS=30 "$WAVE3A_EXEC_REPO/scripts/smoke/firstturn-brainlayer-smoke.sh" \
   | tee "$WAVE3A_RUN_DIR/real-mcp-visible.out"
 grep -F "$WAVE3A_VISIBLE_ID" "$WAVE3A_RUN_DIR/real-mcp-visible.raw.jsonl"
 QUERY="$WAVE3A_DESKTOP_TOKEN" NUM_RESULTS=100 RAW_OUTPUT_PATH="$WAVE3A_RUN_DIR/real-mcp-desktop.raw.jsonl" \
-  DEADLINE_SECS=30 scripts/smoke/firstturn-brainlayer-smoke.sh \
+  DEADLINE_SECS=30 "$WAVE3A_EXEC_REPO/scripts/smoke/firstturn-brainlayer-smoke.sh" \
   | tee "$WAVE3A_RUN_DIR/real-mcp-desktop.out"
 ! grep -F "$WAVE3A_DESKTOP_ID" "$WAVE3A_RUN_DIR/real-mcp-desktop.raw.jsonl"
 "$WAVE3A_CLI" search "source class" -n 3 --text \
