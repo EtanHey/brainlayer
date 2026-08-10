@@ -424,6 +424,22 @@ final class SocketIntegrationTests: XCTestCase {
         ])
         Thread.sleep(forTimeInterval: 0.05)
 
+        let subscriberFD = try connectClient()
+        try initializeClient(fd: subscriberFD, name: "backup-liveness-subscriber")
+        try sendMCPRequest(on: subscriberFD, request: [
+            "jsonrpc": "2.0", "id": 44, "method": "tools/call",
+            "params": ["name": "expand_palette", "arguments": [:] as [String: Any]],
+        ])
+        _ = try readMCPMessage(fd: subscriberFD)
+        try sendMCPRequest(on: subscriberFD, request: [
+            "jsonrpc": "2.0", "id": 45, "method": "tools/call",
+            "params": [
+                "name": "brain_subscribe",
+                "arguments": ["agent_id": "backup-liveness-agent", "tags": ["agent-message"]],
+            ],
+        ])
+        _ = try readMCPMessage(fd: subscriberFD)
+
         let progressGate = SQLiteProgressGate()
         defer { progressGate.release.signal() }
         sqlite3_progress_handler(
@@ -439,7 +455,6 @@ final class SocketIntegrationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(atPath: targetPath + ".complete") }
 
         let backupFD = try connectClient()
-        defer { close(backupFD) }
         try sendMCPRequest(on: backupFD, request: [
             "jsonrpc": "2.0",
             "id": 40,
@@ -450,6 +465,13 @@ final class SocketIntegrationTests: XCTestCase {
             ],
         ])
         XCTAssertEqual(progressGate.entered.wait(timeout: .now() + 1), .success)
+
+        // Both disconnect paths must leave the request queue live: subscriber
+        // cleanup cannot write on the VACUUM connection, and a reused numeric fd
+        // must not receive the original request's deferred response.
+        close(subscriberFD)
+        close(backupFD)
+        Thread.sleep(forTimeInterval: 0.05)
 
         // Deployment health is a held-open, fresh-socket protocol sequence —
         // initialize + tools/list + a real tool call — not a version/plist probe.
@@ -480,7 +502,8 @@ final class SocketIntegrationTests: XCTestCase {
         }
 
         progressGate.release.signal()
-        _ = try readMCPMessage(fd: backupFD, timeout: 2)
+        let staleResponse = try? readMCPMessage(fd: probeFD, timeout: 0.2)
+        XCTAssertNil(staleResponse, "A reused fd must not receive the disconnected backup client's response")
         if initialize == nil {
             _ = try? readMCPMessage(fd: probeFD, timeout: 1)
         }
@@ -1183,12 +1206,28 @@ final class SocketIntegrationTests: XCTestCase {
     private func waitForSocket(at path: String, timeout: TimeInterval = 3.0) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if FileManager.default.fileExists(atPath: path) {
-                return true
+            let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+            guard fd >= 0 else { return false }
+            var addr = sockaddr_un()
+            addr.sun_family = sa_family_t(AF_UNIX)
+            let pathBytes = path.utf8CString
+            withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
+                ptr.withMemoryRebound(to: CChar.self, capacity: 104) { destination in
+                    pathBytes.withUnsafeBufferPointer { source in
+                        _ = memcpy(destination, source.baseAddress!, source.count)
+                    }
+                }
             }
+            let connected = withUnsafePointer(to: &addr) { addrPointer in
+                addrPointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { socketAddress in
+                    connect(fd, socketAddress, socklen_t(MemoryLayout<sockaddr_un>.size)) == 0
+                }
+            }
+            close(fd)
+            if connected { return true }
             Thread.sleep(forTimeInterval: 0.01)
         }
-        return FileManager.default.fileExists(atPath: path)
+        return false
     }
 
     private func sendMCPRequest(_ request: [String: Any]) throws -> [String: Any] {

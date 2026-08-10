@@ -130,6 +130,7 @@ final class BrainBarServer: @unchecked Sendable {
     private var instanceLock: BrainBarInstanceLock?
     private var daemonHeartbeatTimer: DispatchSourceTimer?
     private var backupToolCallInProgress = false
+    private var deferredDisconnectedAgentIDs = Set<String>()
     var onDatabaseReady: (@Sendable (BrainDatabase) -> Void)?
     var onStartRejected: (@Sendable (String) -> Void)?
     /// Maximum EAGAIN retries before disconnecting a stalled client.
@@ -622,7 +623,8 @@ final class BrainBarServer: @unchecked Sendable {
             self.queue.async { [weak self] in
                 guard let self else { return }
                 self.backupToolCallInProgress = false
-                guard self.clients[fd] != nil else { return }
+                self.flushDeferredSubscriberDisconnects()
+                guard self.clients[fd]?.paletteSession === paletteSession else { return }
                 self.sendResponse(fd: fd, response: responseBox.value, useContentLength: useContentLength)
                 self.debugLog("  SENT async response for brain_backup_vacuum_into")
             }
@@ -824,11 +826,23 @@ final class BrainBarServer: @unchecked Sendable {
             brainBus.unsubscribeSynchronously(subscriptionID)
         }
         if let agentID = clients[fd]?.agentID {
-            try? database?.markSubscriberDisconnected(agentID: agentID)
+            if backupToolCallInProgress {
+                deferredDisconnectedAgentIDs.insert(agentID)
+            } else {
+                try? database?.markSubscriberDisconnected(agentID: agentID)
+            }
         }
         clients[fd]?.source.cancel()
         clients.removeValue(forKey: fd)
         NSLog("[BrainBar] Client disconnected (fd: %d)", fd)
+    }
+
+    private func flushDeferredSubscriberDisconnects() {
+        let agentIDs = deferredDisconnectedAgentIDs
+        deferredDisconnectedAgentIDs.removeAll()
+        for agentID in agentIDs {
+            try? database?.markSubscriberDisconnected(agentID: agentID)
+        }
     }
 
     private func cleanup() {
@@ -850,6 +864,7 @@ final class BrainBarServer: @unchecked Sendable {
         // The backup runs off the request queue so protocol traffic stays live.
         // Drain it before closing the shared SQLite connection during shutdown.
         backupToolQueue.sync {}
+        flushDeferredSubscriberDisconnects()
         let writeDatabase = database
         if providedDatabase == nil {
             if let readDatabase, let writeDatabase, readDatabase !== writeDatabase {
