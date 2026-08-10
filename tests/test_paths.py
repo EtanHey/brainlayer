@@ -14,9 +14,10 @@ class TestGetDbPath:
 
     def test_env_var_override(self, tmp_path):
         """BRAINLAYER_DB env var takes highest priority."""
-        db_path = tmp_path / "custom.db"
+        db_path = tmp_path / "missing-parent" / "custom.db"
         with patch.dict(os.environ, {"BRAINLAYER_DB": str(db_path)}):
             assert get_db_path() == db_path
+            assert not db_path.parent.exists()
 
     def test_canonical_path_fresh_install(self, tmp_path, monkeypatch):
         """Canonical path used when no DB exists yet."""

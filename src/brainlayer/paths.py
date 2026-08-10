@@ -54,10 +54,10 @@ def resolve_db_path() -> Path:
 
 
 def get_db_path() -> Path:
-    """Resolve the BrainLayer database path and ensure its parent exists."""
+    """Resolve the DB path, creating only the canonical path's parent."""
     db_path = resolve_db_path()
-
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+    if not os.environ.get("BRAINLAYER_DB"):
+        db_path.parent.mkdir(parents=True, exist_ok=True)
     return db_path
 
 
