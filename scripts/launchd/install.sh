@@ -82,7 +82,8 @@ if [ ! -x "$BRAINLAYER_BIN" ]; then
     exit 1
 fi
 
-case "${1:-all}" in
+BRAINLAYER_INSTALL_ACTION="${1:-all}"
+case "$BRAINLAYER_INSTALL_ACTION" in
     remove|unload)
         ;;
     *)
