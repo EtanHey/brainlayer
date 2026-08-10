@@ -38,8 +38,17 @@ def _validate_override_data_root(active_root: Path, canonical_root: Path) -> Non
     canonical = canonical_root.expanduser().resolve(strict=False)
     if active == canonical:
         return
-    if active in canonical.parents or "brainlayer" not in active.name.casefold():
+    unsafe_location = active == Path.home().resolve() or active == Path(active.anchor) or os.path.ismount(active)
+    if unsafe_location or active in canonical.parents or "brainlayer" not in active.name.casefold():
         raise RuntimeError(f"BRAINLAYER_DB must be inside a dedicated BrainLayer directory; unsafe parent: {active}")
+
+
+def _validate_disjoint_roots(roots: tuple[Path, ...]) -> None:
+    resolved = tuple(root.expanduser().resolve(strict=False) for root in roots)
+    for index, root in enumerate(resolved):
+        for other in resolved[:index]:
+            if root == other or root in other.parents or other in root.parents:
+                raise RuntimeError(f"Spotlight exclusion roots must not overlap: {other} and {root}")
 
 
 def _ensure_spotlight_excluded_root(root: Path, children: tuple[str, ...] = ()) -> Path:
@@ -75,9 +84,10 @@ def ensure_spotlight_excluded_layout(
         launchd_log_dir or Path.home() / "Library" / "Logs" / "brainlayer",
         counter_dir or Path.home() / ".brainlayer-p0-counter",
     )
+    _validate_disjoint_roots(requested_roots)
     resolved_roots = tuple(root.expanduser() for root in requested_roots)
     for root in resolved_roots:
-        if (root.exists() or root.is_symlink()) and not root.is_dir():
+        if root.is_symlink() or (root.exists() and not root.is_dir()):
             raise RuntimeError(f"runtime root {root} must be a directory")
         marker = root / SPOTLIGHT_EXCLUSION_MARKER
         if root.is_dir() and not marker.is_file() and next(root.iterdir(), None) is not None:

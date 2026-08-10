@@ -273,7 +273,7 @@ def test_setup_preflights_all_roots_before_creating_any_marker(tmp_path: Path) -
     assert not (runtime_dir / ".metadata_never_index").exists()
 
 
-@pytest.mark.parametrize("invalid_kind", ["file", "dangling-symlink"])
+@pytest.mark.parametrize("invalid_kind", ["file", "dangling-symlink", "directory-symlink"])
 def test_setup_preflights_invalid_root_types_before_creating_any_marker(tmp_path: Path, invalid_kind: str) -> None:
     import brainlayer.setup as setup_helpers
 
@@ -281,8 +281,12 @@ def test_setup_preflights_invalid_root_types_before_creating_any_marker(tmp_path
     runtime_dir = tmp_path / "invalid-runtime"
     if invalid_kind == "file":
         runtime_dir.write_text("not a directory\n", encoding="utf-8")
-    else:
+    elif invalid_kind == "dangling-symlink":
         runtime_dir.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+    else:
+        target = tmp_path / "runtime-target"
+        target.mkdir()
+        runtime_dir.symlink_to(target, target_is_directory=True)
 
     with pytest.raises(RuntimeError, match="must be a directory"):
         setup_helpers.ensure_spotlight_excluded_layout(
@@ -355,6 +359,24 @@ def test_setup_rejects_override_parent_that_is_not_dedicated_to_brainlayer(tmp_p
         )
 
     assert not broad_override_dir.exists()
+
+
+def test_setup_rejects_override_parent_that_overlaps_runtime_root(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.setup as setup_helpers
+
+    shared_root = tmp_path / "brainlayer-runtime"
+    canonical_data_dir = tmp_path / "canonical-data"
+    monkeypatch.setattr(setup_helpers, "resolve_db_path", lambda: shared_root / "brainlayer.db")
+    monkeypatch.setattr(setup_helpers, "get_canonical_db_path", lambda: canonical_data_dir / "brainlayer.db")
+
+    with pytest.raises(RuntimeError, match="overlap"):
+        setup_helpers.ensure_spotlight_excluded_layout(
+            runtime_dir=shared_root,
+            launchd_log_dir=tmp_path / "launchd-logs",
+            counter_dir=tmp_path / "counter",
+        )
+
+    assert not shared_root.exists()
 
 
 def test_setup_migrates_legacy_raw_socat_mcp_config_idempotently(tmp_path: Path) -> None:

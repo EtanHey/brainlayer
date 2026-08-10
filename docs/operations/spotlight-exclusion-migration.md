@@ -104,15 +104,21 @@ set -euo pipefail
 brainlayer_data_root="${HOME:?}/.local/share/brainlayer"
 brainlayer_stage_root="${HOME:?}/.local/share/brainlayer.spotlight-migration-staging"
 test -d "$brainlayer_data_root"
-test ! -e "$brainlayer_stage_root"
+test ! -L "$brainlayer_data_root"
+brainlayer_expected_root="$(cd "${HOME:?}/.local/share" && pwd -P)/brainlayer"
+test "$(realpath "$brainlayer_data_root")" = "$brainlayer_expected_root"
+test ! -e "$brainlayer_stage_root" && test ! -L "$brainlayer_stage_root"
 mv "$brainlayer_data_root" "$brainlayer_stage_root"
 touch "$brainlayer_stage_root/.metadata_never_index"
 test -f "$brainlayer_stage_root/.metadata_never_index"
 mv "$brainlayer_stage_root" "$brainlayer_data_root"
 ```
 
-Before each `mv`, resolve and print both paths, assert the source is the expected canonical root,
-assert the staging target does not exist, and confirm both parents are on the same filesystem.
+Before each `mv`, resolve and print both paths, reject symbolic links (including dangling staging
+links), assert the resolved source is the preflight-recorded canonical root, assert the staging
+target does not exist, and confirm both parents are on the same filesystem. `test -d` alone is not
+sufficient because it accepts a directory symlink and the subsequent `touch` could write through
+that link.
 Apply this recovery state machine before continuing any root:
 
 - canonical exists, staging absent: expected; continue;
