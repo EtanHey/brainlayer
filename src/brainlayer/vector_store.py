@@ -2051,6 +2051,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             conn.enableloadextension(False)
             _configure_reader_pragmas(conn)
             self._local.read_conn = conn
+            self._local.reader_cache_token = object()
         return conn
 
     def _read_cursor(self):
@@ -2996,6 +2997,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 if read_conn is not None:
                     read_conn.close()
                     self._local.read_conn = None
+                    self._local.reader_cache_token = None
             if hasattr(self, "conn"):
                 self.conn.close()
         finally:

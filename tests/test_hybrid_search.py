@@ -191,6 +191,109 @@ def test_source_class_knn_count_cache_is_scoped_to_reader_connection(store):
     assert effective_k[-1] == 6
 
 
+def test_hybrid_cache_does_not_stamp_precommit_result_with_postcommit_state(store, monkeypatch):
+    embedding = _embed("cache commit between result and stamp")
+    _insert_chunk(
+        store,
+        chunk_id="cache-interleaved-source-class-row",
+        content="CacheInterleavedSourceClassNeedle",
+        embedding=embedding,
+    )
+
+    committed = False
+
+    def commit_source_class_change(_chunk_ids):
+        nonlocal committed
+        if committed:
+            return
+        writer = apsw.Connection(str(store.db_path))
+        writer.execute(
+            "UPDATE chunks SET source_class = 'desktop' WHERE id = ?",
+            ("cache-interleaved-source-class-row",),
+        )
+        writer.close()
+        committed = True
+
+    monkeypatch.setattr(store, "_queue_retrieval_strengthening", commit_source_class_change)
+    first = store.hybrid_search(
+        query_embedding=embedding,
+        query_text="CacheInterleavedSourceClassNeedle",
+        n_results=5,
+    )
+    assert "cache-interleaved-source-class-row" in first["ids"][0]
+    assert committed
+
+    monkeypatch.setattr(store, "_queue_retrieval_strengthening", lambda _chunk_ids: None)
+    second = store.hybrid_search(
+        query_embedding=embedding,
+        query_text="CacheInterleavedSourceClassNeedle",
+        n_results=5,
+    )
+    assert "cache-interleaved-source-class-row" not in second["ids"][0]
+
+
+def test_hybrid_cache_rejects_same_thread_replacement_reader_with_reset_data_version(store):
+    embedding = _embed("same thread replacement reader cache")
+    _insert_chunk(
+        store,
+        chunk_id="cache-replacement-reader-row",
+        content="CacheReplacementReaderNeedle",
+        embedding=embedding,
+    )
+
+    first = store.hybrid_search(
+        query_embedding=embedding,
+        query_text="CacheReplacementReaderNeedle",
+        n_results=5,
+    )
+    assert "cache-replacement-reader-row" in first["ids"][0]
+
+    store._local.read_conn.close()
+    store._local.read_conn = None
+    writer = apsw.Connection(str(store.db_path))
+    writer.execute(
+        "UPDATE chunks SET source_class = 'desktop' WHERE id = ?",
+        ("cache-replacement-reader-row",),
+    )
+    writer.close()
+
+    second = store.hybrid_search(
+        query_embedding=embedding,
+        query_text="CacheReplacementReaderNeedle",
+        n_results=5,
+    )
+    assert "cache-replacement-reader-row" not in second["ids"][0]
+
+
+def test_hybrid_cache_retains_entries_for_multiple_readers_on_same_database(store, monkeypatch):
+    embedding = _embed("pooled reader cache")
+    _insert_chunk(
+        store,
+        chunk_id="cache-pooled-reader-row",
+        content="PooledReaderCacheNeedle",
+        embedding=embedding,
+    )
+    second_reader = VectorStore(store.db_path)
+    try:
+        search_args = {
+            "query_embedding": embedding,
+            "query_text": "PooledReaderCacheNeedle",
+            "n_results": 5,
+        }
+        assert "cache-pooled-reader-row" in store.hybrid_search(**search_args)["ids"][0]
+        assert "cache-pooled-reader-row" in second_reader.hybrid_search(**search_args)["ids"][0]
+        assert len(_hybrid_cache) == 2
+
+        def fail_on_cache_miss(**_kwargs):
+            raise AssertionError("first reader's cache entry was evicted by the second reader")
+
+        monkeypatch.setattr(store, "search", fail_on_cache_miss)
+        monkeypatch.setattr(store, "_binary_search", fail_on_cache_miss)
+        assert "cache-pooled-reader-row" in store.hybrid_search(**search_args)["ids"][0]
+    finally:
+        second_reader.close()
+
+
 class TestBinaryIndexLifecycle:
     def test_binary_table_created(self, store):
         cursor = store.conn.cursor()

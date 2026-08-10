@@ -140,6 +140,34 @@ def _audit_hidden_class_default_visibility(store: VectorStore, source_class: str
     return {"sampled_tokens": len(checked_tokens), "leaked_ids": []}
 
 
+def _brain_worker_index_counts(store: VectorStore) -> dict[str, int]:
+    """Count indexed rows across the complete brain-worker class, not one sample."""
+    tables = {
+        str(row[0])
+        for row in store.conn.cursor().execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")
+    }
+    counts: dict[str, int] = {}
+    for table in (
+        "chunks_fts",
+        "chunks_fts_operational",
+        "chunks_fts_trigram",
+        "chunk_fts_rowids",
+        "chunk_vectors",
+        "chunk_vectors_binary",
+    ):
+        if table not in tables:
+            continue
+        counts[table] = int(
+            store.conn.cursor()
+            .execute(
+                f'SELECT COUNT(*) FROM "{table}" i JOIN chunks c ON c.id = i.chunk_id '
+                "WHERE c.source_class = 'brain-worker'"
+            )
+            .fetchone()[0]
+        )
+    return counts
+
+
 def verify(db_path: Path) -> dict[str, object]:
     store = VectorStore(db_path.expanduser().resolve(), readonly=True)
     try:
@@ -164,26 +192,7 @@ def verify(db_path: Path) -> dict[str, object]:
             raise RuntimeError("no brain-worker row exists for exact-expansion verification")
         brain_worker_id = str(brain_worker_row[0])
         context = store.get_context(brain_worker_id, include_audit=True, include_checkpoints=True)
-        tables = {
-            str(row[0])
-            for row in store.conn.cursor().execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")
-        }
-        index_counts = {}
-        for table in (
-            "chunks_fts",
-            "chunks_fts_operational",
-            "chunks_fts_trigram",
-            "chunk_fts_rowids",
-            "chunk_vectors",
-            "chunk_vectors_binary",
-        ):
-            if table not in tables:
-                continue
-            index_counts[table] = int(
-                store.conn.cursor()
-                .execute(f'SELECT COUNT(*) FROM "{table}" WHERE chunk_id = ?', (brain_worker_id,))
-                .fetchone()[0]
-            )
+        index_counts = _brain_worker_index_counts(store)
         if (context.get("target") or {}).get("id") != brain_worker_id or any(index_counts.values()):
             raise RuntimeError("brain-worker must expand exactly while remaining outside search indexes")
         receipt["brain-worker"] = {

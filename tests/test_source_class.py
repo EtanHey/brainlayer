@@ -10,7 +10,10 @@ from brainlayer.ingest_denylist import BRAINLAYER_INGEST_DENYLIST_ENV, is_denyli
 from brainlayer.pipeline.chunk import Chunk
 from brainlayer.pipeline.classify import ContentType, ContentValue
 from brainlayer.vector_store import VectorStore
-from scripts.verify_source_class_visibility import _audit_hidden_class_default_visibility
+from scripts.verify_source_class_visibility import (
+    _audit_hidden_class_default_visibility,
+    _brain_worker_index_counts,
+)
 
 
 def _claude_subagent(tmp_path: Path, repo: str, name: str = "agent.jsonl") -> Path:
@@ -148,4 +151,31 @@ def test_hidden_class_audit_fails_on_any_sampled_desktop_leak(tmp_path: Path, mo
 
     with pytest.raises(RuntimeError, match="desktop.*leak"):
         _audit_hidden_class_default_visibility(store, "desktop")
+    store.close()
+
+
+def test_brain_worker_index_audit_counts_every_worker_row(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path / "source-class-worker-index-audit.db")
+    cursor = store.conn.cursor()
+    for chunk_id in ("worker-first", "worker-residual"):
+        cursor.execute(
+            """
+            INSERT INTO chunks (
+                id, content, metadata, source_file, project, content_type,
+                char_count, source_class
+            ) VALUES (?, ?, '{}', ?, 'brainlayer', 'assistant_text', 32, 'brain-worker')
+            """,
+            (chunk_id, f"brain worker audit {chunk_id}", f"/{chunk_id}.jsonl"),
+        )
+    cursor.execute("DELETE FROM chunks_fts WHERE chunk_id IN ('worker-first', 'worker-residual')")
+    cursor.execute("DELETE FROM chunk_fts_rowids WHERE chunk_id IN ('worker-first', 'worker-residual')")
+    cursor.execute(
+        "INSERT INTO chunks_fts(content, chunk_id) VALUES (?, ?)",
+        ("residual worker search row", "worker-residual"),
+    )
+
+    counts = _brain_worker_index_counts(store)
+
+    assert counts["chunks_fts"] == 1
+    assert counts["chunk_fts_rowids"] == 0
     store.close()

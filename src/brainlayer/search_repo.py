@@ -806,6 +806,7 @@ class SearchMixin:
         """Return a connection-scoped token plus that connection's data version."""
         for attempt in range(3):
             try:
+                # Resolve the cursor first: _get_read_conn() rotates the token when it creates a replacement connection.
                 cursor = self._read_cursor()
                 row = cursor.execute("PRAGMA data_version").fetchone()
                 if not row:
@@ -1953,7 +1954,7 @@ class SearchMixin:
 
         # ── Cache lookup ─────────────────────────────────────────────────────
         store_key = os.fspath(getattr(self, "db_path", "<unknown-db>"))
-        cache_key = _hybrid_cache_key(
+        base_cache_key = _hybrid_cache_key(
             store_key,
             query_text,
             query_embedding,
@@ -1994,13 +1995,15 @@ class SearchMixin:
             include_hidden_source_classes,
         )
         now = time.monotonic()
+        reader_state_before_search = self._reader_cache_state()
+        reader_cache_token = reader_state_before_search[0] if reader_state_before_search is not None else None
+        cache_key = base_cache_key + (reader_cache_token,)
         if cache_key in _hybrid_cache:
             cached_result, cached_at, cached_reader_state = _hybrid_cache[cache_key]
-            current_reader_state = self._reader_cache_state()
             if (
                 now - cached_at < _HYBRID_CACHE_TTL
-                and current_reader_state is not None
-                and cached_reader_state == current_reader_state
+                and reader_state_before_search is not None
+                and cached_reader_state == reader_state_before_search
             ):
                 _hybrid_cache.move_to_end(cache_key)  # LRU touch
                 cached_clone = _clone_hybrid_result(cached_result)
@@ -2672,14 +2675,16 @@ class SearchMixin:
         self._queue_retrieval_strengthening(ids)
 
         # ── Cache store ──────────────────────────────────────────────────────
-        _hybrid_cache[cache_key] = (
-            _clone_hybrid_result(result),
-            time.monotonic(),
-            self._reader_cache_state(),
-        )
-        _hybrid_cache.move_to_end(cache_key)
-        if len(_hybrid_cache) > _HYBRID_CACHE_MAX:
-            _hybrid_cache.popitem(last=False)  # evict oldest
+        reader_state_after_search = self._reader_cache_state()
+        if reader_state_before_search is not None and reader_state_after_search == reader_state_before_search:
+            _hybrid_cache[cache_key] = (
+                _clone_hybrid_result(result),
+                time.monotonic(),
+                reader_state_after_search,
+            )
+            _hybrid_cache.move_to_end(cache_key)
+            if len(_hybrid_cache) > _HYBRID_CACHE_MAX:
+                _hybrid_cache.popitem(last=False)  # evict oldest
 
         return result
 
