@@ -37,7 +37,8 @@ configuration and user-facing exports.
 2. Confirm the current time is inside the approved window and no backup or release job overlaps it.
 3. Confirm no staging path below exists. If one exists, stop and inspect it; never overwrite it.
 4. Record `brainlayer status --json`, `brainlayer doctor --json`, DB/WAL/SHM sizes, queue count, and
-   loaded `com.brainlayer.*` labels.
+   loaded `com.brainlayer.*` labels. Resolve and record the active DB parent from `BRAINLAYER_DB`;
+   when it differs from `$HOME/.local/share/brainlayer`, add it as a fifth migration root.
 5. Keep the terminal open until restart and the real store/search probe both pass.
 
 Staging paths:
@@ -47,6 +48,7 @@ $HOME/.local/share/brainlayer.spotlight-migration-staging
 $HOME/.brainlayer.spotlight-migration-staging
 $HOME/Library/Logs/brainlayer.spotlight-migration-staging
 $HOME/.brainlayer-p0-counter.spotlight-migration-staging
+<active-BRAINLAYER_DB-parent>.spotlight-migration-staging  # only when outside the canonical root
 ```
 
 ## Execute in one stop window
@@ -82,12 +84,14 @@ condition fails, keep services stopped and investigate; do not move the tree.
 
 ### 4. Stage, mark, and restore each canonical tree
 
-For each of the four roots, perform a same-filesystem rename to its exact staging path, create
+For each of the four canonical roots, plus the active `BRAINLAYER_DB` parent when it is distinct,
+perform a same-filesystem rename to its exact staging path, create
 `.metadata_never_index` inside the staged tree, then atomically rename the same tree back to its
 canonical path. This preserves the root's mode, ownership, ACLs, extended attributes, and children;
 the marker is already present before the canonical path becomes visible again. Never copy the tree.
 
-Example for the data root; repeat with the exact runtime/log/counter pairs listed above:
+Example for the canonical data root; repeat with the exact runtime/log/counter pairs listed above
+and the recorded override parent/staging pair when applicable:
 
 ```bash
 set -euo pipefail
@@ -125,18 +129,18 @@ brainlayer doctor --json
 ```
 
 Doctor may still report daemon liveness while services are intentionally stopped, but it must not
-report `spotlight_indexing_enabled`. Confirm all four marker files exist and the canonical DB, WAL,
-SHM, queue, prompt, scratch, vector, and log paths still resolve to their pre-stop locations. No
-symlink or environment rewrite is expected for the marker design; if an override is present, verify
-it points into a marked ancestor before restart.
+report `spotlight_indexing_enabled`. Confirm all four canonical marker files and the conditional
+override marker exist, and that the DB, WAL, SHM, queue, prompt, scratch, vector, and log paths still
+resolve to their pre-stop locations. No symlink or environment rewrite is expected for the marker
+design; if an override is present, verify it points into a marked ancestor before restart.
 
 ### 6. Restart exactly the labels recorded in preflight
 
 Bootstrap the recorded launchd plist set, then verify each expected label is loaded and each daemon
 has a live PID. Do not restore a label that was deliberately disabled before the window.
 
-Confirm none of the four staging paths remains after its atomic rename back. If one remains, stop
-and investigate before restarting writers.
+Confirm none of the four canonical staging paths, or the conditional override staging path, remains
+after its atomic rename back. If one remains, stop and investigate before restarting writers.
 
 Run a real request through a fresh installed MCP client session (not an in-process Python test):
 
@@ -180,8 +184,9 @@ rm -- "$spotlight_probe_path"
 
 Pass criteria: `mdutil` shows the containing volume is indexed; `mdimport -t` identifies the normal
 importer; the real `mdimport -i` leaves both `mdls` attributes null; `mdfind` returns no probe path.
-Repeat the real import/`mdls`/`mdfind` check once under each of the other three marked roots. Remove
-only the four exact probe files after saving evidence.
+Repeat the real import/`mdls`/`mdfind` check once under each of the other three canonical marked
+roots and under the active override parent when distinct. Remove only the exact probe files after
+saving evidence.
 
 If a marker-backed root receives metadata, keep BrainLayer stopped and add that exact root through
 System Settings → Spotlight → Search Privacy, then repeat the probe. Do not disable Spotlight for
@@ -189,7 +194,8 @@ the whole volume.
 
 ## Rollback
 
-Rollback is allowed only before writers restart. Keep all processes stopped. For each root, first
+Rollback is allowed only before writers restart. Keep all processes stopped. For each canonical
+root and the conditional override root, first
 apply the same four-state recovery table above: restore staging to canonical when only staging
 exists, and stop on both-exist or both-absent states. Once canonical exists and staging is absent,
 atomically rename canonical to staging, remove only `.metadata_never_index`, then atomically rename
@@ -199,5 +205,6 @@ queue counts before bootstrapping only the preflight label set. Never overwrite 
 ## Completion record
 
 Append the exact installed version/head, pre/post DB and WAL sizes, restored labels, real
-store/search output, doctor output, and all four Spotlight probe results to the maintenance source
-task. Only the live-window operator adds the separate live-migration completion marker.
+store/search output, doctor output, all four canonical Spotlight probe results, and the conditional
+override probe result to the maintenance source task. Only the live-window operator adds the
+separate live-migration completion marker.
