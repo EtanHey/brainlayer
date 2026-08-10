@@ -184,6 +184,21 @@ final class MCPRouterTests: XCTestCase {
         )
     }
 
+    func testCoreProfileAllowsBackupVacuumCallWithoutPaletteExpansion() throws {
+        let router = MCPRouter(profile: "core")
+        let response = router.handle(
+            toolCall(
+                id: 20,
+                name: "brain_backup_vacuum_into",
+                arguments: ["target_path": "/tmp/brainlayer-profile-gate-test.db"]
+            )
+        )
+
+        XCTAssertNil(response["error"], "The scheduled backup path must not depend on palette session state")
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertEqual(result["isError"] as? Bool, true, "The unconfigured test router should reach the DB handler")
+    }
+
     func testEnvironmentProfileControlsDefaultRouter() throws {
         let environmentKey = "BRAINLAYER_MCP_PROFILE"
         let originalProfile = ProcessInfo.processInfo.environment[environmentKey]

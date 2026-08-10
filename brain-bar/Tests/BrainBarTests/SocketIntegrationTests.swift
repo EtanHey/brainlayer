@@ -284,6 +284,7 @@ final class SocketIntegrationTests: XCTestCase {
     }
 
     func testBrainBackupVacuumIntoOverSocketCreatesRestorableSnapshot() throws {
+        restartServer(profile: "core")
         let targetPath = NSTemporaryDirectory() + "brainbar-backup-\(UUID().uuidString).db"
         let completionMarkerPath = targetPath + ".complete"
         defer { try? FileManager.default.removeItem(atPath: targetPath) }
@@ -294,6 +295,16 @@ final class SocketIntegrationTests: XCTestCase {
             "params": ["protocolVersion": "2024-11-05", "capabilities": [:] as [String: Any],
                        "clientInfo": ["name": "backup-test", "version": "1.0"]]
         ])
+
+        let toolsResponse = try sendMCPRequest([
+            "jsonrpc": "2.0", "id": 21, "method": "tools/list",
+        ])
+        let listedTools = (toolsResponse["result"] as? [String: Any])?["tools"] as? [[String: Any]] ?? []
+        XCTAssertFalse(
+            listedTools.contains { ($0["name"] as? String) == "brain_backup_vacuum_into" },
+            "The backup allowance must not expand the advertised core palette"
+        )
+
         _ = try sendMCPRequest([
             "jsonrpc": "2.0",
             "id": 21,

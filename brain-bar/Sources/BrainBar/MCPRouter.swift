@@ -23,6 +23,13 @@ final class MCPRouter: @unchecked Sendable {
         "brain_recall",
         "brain_expand",
     ]
+    // Scheduled backup is an internal socket client and must remain callable
+    // without relying on connection-local palette expansion state. Keep it out
+    // of the advertised core inventory while the stateless palette redesign is
+    // owned separately.
+    private static let profileIndependentCallToolNames: Set<String> = [
+        "brain_backup_vacuum_into",
+    ]
     private static let coreToolDescriptions: [String: String] = [
         "brain_search": "Search memory.",
         "brain_store": "Store memory; DEFERRED = stored.",
@@ -502,7 +509,8 @@ final class MCPRouter: @unchecked Sendable {
             return jsonRPCError(id: id, code: -32601, message: "Unknown tool: \(toolName)")
         }
 
-        guard isToolExposed(toolName, session: session) else {
+        guard isToolExposed(toolName, session: session)
+                || Self.profileIndependentCallToolNames.contains(toolName) else {
             let message = "Tool '\(toolName)' is gated by the core MCP profile. "
                 + "Call expand_palette, or set BRAINLAYER_MCP_PROFILE=full on the MCP server."
             return jsonRPCError(id: id, code: -32601, message: message)
