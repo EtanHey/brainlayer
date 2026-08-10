@@ -1,9 +1,8 @@
 # Spotlight Exclusion Migration Runbook
 
-Status: **READY — execute only in the lead-scheduled writer-stop window.** This runbook was written
-for the canonical Etan workstation paths. It must not run during the 03:17 backup window. Prefer the
-Tuesday 20:00 combined stop window so this migration and the other scheduled maintenance operation
-share one writer stop.
+Status: **READY — execute only in an approved writer-stop window.** Never overlap this operation
+with a backup, release, or another write-heavy maintenance job. Exact workstation scheduling and
+operator coordination belong in the restricted maintenance record, not this repository.
 
 ## Why `.metadata_never_index`
 
@@ -22,10 +21,10 @@ because setup must work unattended.
 
 | Excluded root | Covered paths |
 | --- | --- |
-| `/Users/etanheyman/.local/share/brainlayer` | `brainlayer.db`, `brainlayer.db-wal`, `brainlayer.db-shm`; sqlite-vec data and future vector sidecars; `chromadb`, `chromadb.backup`, `style`, `storage`, `experiments`; `enrichment_checkpoints.db`, `reembed_bgem3_checkpoint.json`, `enrichment-scratch`; `prompts`; `offsets.json`, watcher/drain/T3/health state, pause sentinel, pending-store files; `backups`, `jsonl-backups`; `logs` |
-| `/Users/etanheyman/.brainlayer` | `queue`; `quarantine` including stale-queue quarantine; `logs` including drain logs; runtime repository state |
-| `/Users/etanheyman/Library/Logs/brainlayer` | launchd stdout/stderr and BrainBar runtime logs |
-| `/Users/etanheyman/.brainlayer-p0-counter` | longitudinal counter logs |
+| `$HOME/.local/share/brainlayer` | `brainlayer.db`, `brainlayer.db-wal`, `brainlayer.db-shm`; sqlite-vec data and future vector sidecars; `chromadb`, `chromadb.backup`, `style`, `storage`, `experiments`; `enrichment_checkpoints.db`, `reembed_bgem3_checkpoint.json`, `enrichment-scratch`; `prompts`; `offsets.json`, watcher/drain/T3/health state, pause sentinel, pending-store files; `backups`, `jsonl-backups`; `logs` |
+| `$HOME/.brainlayer` | `queue`; `quarantine` including stale-queue quarantine; `logs` including drain logs; runtime repository state |
+| `$HOME/Library/Logs/brainlayer` | launchd stdout/stderr and BrainBar runtime logs |
+| `$HOME/.brainlayer-p0-counter` | longitudinal counter logs |
 
 `/tmp` locks, sockets, and pidfiles are already outside Spotlight's normal user-content scope.
 `~/.config/brainlayer` and `~/.brainlayer-brain` are deliberately not excluded: they are low-churn
@@ -34,7 +33,7 @@ configuration and user-facing exports.
 ## Preconditions
 
 1. Confirm the merged release containing this runbook is installed.
-2. Confirm the current time is inside the approved window and not near 03:17.
+2. Confirm the current time is inside the approved window and no backup or release job overlaps it.
 3. Confirm no staging path below exists. If one exists, stop and inspect it; never overwrite it.
 4. Record `brainlayer status --json`, `brainlayer doctor --json`, DB/WAL/SHM sizes, queue count, and
    loaded `com.brainlayer.*` labels.
@@ -43,10 +42,10 @@ configuration and user-facing exports.
 Staging paths:
 
 ```text
-/Users/etanheyman/.local/share/brainlayer.spotlight-migration-staging
-/Users/etanheyman/.brainlayer.spotlight-migration-staging
-/Users/etanheyman/Library/Logs/brainlayer.spotlight-migration-staging
-/Users/etanheyman/.brainlayer-p0-counter.spotlight-migration-staging
+$HOME/.local/share/brainlayer.spotlight-migration-staging
+$HOME/.brainlayer.spotlight-migration-staging
+$HOME/Library/Logs/brainlayer.spotlight-migration-staging
+$HOME/.brainlayer-p0-counter.spotlight-migration-staging
 ```
 
 ## Execute in one stop window
@@ -90,11 +89,15 @@ the marker is already present before the canonical path becomes visible again. N
 Example for the data root; repeat with the exact runtime/log/counter pairs listed above:
 
 ```bash
-mv /Users/etanheyman/.local/share/brainlayer \
-  /Users/etanheyman/.local/share/brainlayer.spotlight-migration-staging
-touch /Users/etanheyman/.local/share/brainlayer.spotlight-migration-staging/.metadata_never_index
-mv /Users/etanheyman/.local/share/brainlayer.spotlight-migration-staging \
-  /Users/etanheyman/.local/share/brainlayer
+set -euo pipefail
+brainlayer_data_root="${HOME:?}/.local/share/brainlayer"
+brainlayer_stage_root="${HOME:?}/.local/share/brainlayer.spotlight-migration-staging"
+test -d "$brainlayer_data_root"
+test ! -e "$brainlayer_stage_root"
+mv "$brainlayer_data_root" "$brainlayer_stage_root"
+touch "$brainlayer_stage_root/.metadata_never_index"
+test -f "$brainlayer_stage_root/.metadata_never_index"
+mv "$brainlayer_stage_root" "$brainlayer_data_root"
 ```
 
 Before each `mv`, resolve and print both paths, assert the source is the expected canonical root,
@@ -157,7 +160,7 @@ Then create a unique, non-clobbering plain-text probe beneath the marked data ro
 outputs and retain the two printed variable values with the evidence:
 
 ```bash
-spotlight_probe_path="$(mktemp /Users/etanheyman/.local/share/brainlayer/spotlight-exclusion-live-probe.txt.XXXXXX)"
+spotlight_probe_path="$(mktemp "${HOME:?}/.local/share/brainlayer/spotlight-exclusion-live-probe.txt.XXXXXX")"
 spotlight_probe_name="$(basename "$spotlight_probe_path")"
 printf 'BrainLayer Spotlight exclusion live probe %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   > "$spotlight_probe_path"
@@ -166,7 +169,7 @@ mdimport -t -d1 "$spotlight_probe_path"
 mdimport -i "$spotlight_probe_path"
 mdls -name kMDItemFSName -name kMDItemContentType \
   "$spotlight_probe_path"
-mdfind -onlyin /Users/etanheyman/.local/share/brainlayer \
+mdfind -onlyin "${HOME:?}/.local/share/brainlayer" \
   "kMDItemFSName == '$spotlight_probe_name'cd"
 rm -- "$spotlight_probe_path"
 ```
