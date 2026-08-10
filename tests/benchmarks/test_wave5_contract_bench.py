@@ -224,12 +224,15 @@ def _assert_existing_state_after_rejection(ledger: Ledger, event: OccurrenceEven
     assert ledger.weave_accumulation(through=cross_day_repeat.occurred_at.date()) == ()
 
 
-def test_wave5_options_register_for_root_suite_without_collection() -> None:
+def test_wave5_options_register_for_root_suite_without_collection(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "help-cache"
     result = subprocess.run(
         [
             sys.executable,
             "-m",
             "pytest",
+            "-o",
+            f"cache_dir={cache_dir}",
             "--help",
             "--wave5-ledger-factory=tests.benchmarks.wave5_contract:OccurrenceLedger",
             "--wave5-candidate-producer=tests.benchmarks.wave5_contract:oracle_candidate_producer",
@@ -245,12 +248,15 @@ def test_wave5_options_register_for_root_suite_without_collection() -> None:
     assert "--wave5-candidate-producer=MODULE:ATTRIBUTE" in result.stdout
 
 
-def test_external_ledger_factory_option_reaches_contract() -> None:
+def test_external_ledger_factory_option_reaches_contract(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "ledger-cache"
     result = subprocess.run(
         [
             sys.executable,
             "-m",
             "pytest",
+            "-o",
+            f"cache_dir={cache_dir}",
             str(Path(__file__)),
             "-q",
             "-k",
@@ -266,14 +272,20 @@ def test_external_ledger_factory_option_reaches_contract() -> None:
 
     assert result.returncode == 1
     assert "external ledger factory selected" in result.stdout
+    assert "test_occurrence_identity_includes_semantic_fingerprint_and_scope" in (
+        cache_dir / "v" / "cache" / "lastfailed"
+    ).read_text()
 
 
-def test_external_candidate_producer_option_reaches_promotion_benchmark() -> None:
+def test_external_candidate_producer_option_reaches_promotion_benchmark(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "candidate-cache"
     result = subprocess.run(
         [
             sys.executable,
             "-m",
             "pytest",
+            "-o",
+            f"cache_dir={cache_dir}",
             str(Path(__file__)),
             "-q",
             "-k",
@@ -289,6 +301,9 @@ def test_external_candidate_producer_option_reaches_promotion_benchmark() -> Non
 
     assert result.returncode == 1
     assert "external candidate producer selected" in result.stdout
+    assert "test_candidate_producer_meets_promotion_thresholds_and_false_positive_budget" in (
+        cache_dir / "v" / "cache" / "lastfailed"
+    ).read_text()
 
 
 def test_occurrence_identity_includes_semantic_fingerprint_and_scope(
