@@ -232,6 +232,39 @@ def test_hybrid_cache_does_not_stamp_precommit_result_with_postcommit_state(stor
     assert "cache-interleaved-source-class-row" not in second["ids"][0]
 
 
+def test_hybrid_cache_rejects_same_thread_replacement_reader_with_reset_data_version(store):
+    embedding = _embed("same thread replacement reader cache")
+    _insert_chunk(
+        store,
+        chunk_id="cache-replacement-reader-row",
+        content="CacheReplacementReaderNeedle",
+        embedding=embedding,
+    )
+
+    first = store.hybrid_search(
+        query_embedding=embedding,
+        query_text="CacheReplacementReaderNeedle",
+        n_results=5,
+    )
+    assert "cache-replacement-reader-row" in first["ids"][0]
+
+    store._local.read_conn.close()
+    store._local.read_conn = None
+    writer = apsw.Connection(str(store.db_path))
+    writer.execute(
+        "UPDATE chunks SET source_class = 'desktop' WHERE id = ?",
+        ("cache-replacement-reader-row",),
+    )
+    writer.close()
+
+    second = store.hybrid_search(
+        query_embedding=embedding,
+        query_text="CacheReplacementReaderNeedle",
+        n_results=5,
+    )
+    assert "cache-replacement-reader-row" not in second["ids"][0]
+
+
 class TestBinaryIndexLifecycle:
     def test_binary_table_created(self, store):
         cursor = store.conn.cursor()
