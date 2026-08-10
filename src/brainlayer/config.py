@@ -10,6 +10,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 _OP_READ_PREFIX = "$(op read "
+_PROCESS_ENV_AT_IMPORT = dict(os.environ)
 
 
 def get_user_env_path() -> Path:
@@ -89,6 +90,27 @@ def _resolve_op_read_value(value_text: str) -> str | None:
         logger.warning("Could not resolve 1Password env reference %s: op read exited %s", args[2], result.returncode)
         return None
     return result.stdout.rstrip("\n")
+
+
+def configured_brainlayer_env_value(name: str, env_path: Path | None = None) -> str | None:
+    """Return one configured value with original process-env precedence."""
+    if name in _PROCESS_ENV_AT_IMPORT:
+        return _PROCESS_ENV_AT_IMPORT[name]
+
+    target = env_path or get_user_env_path()
+    try:
+        lines = target.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return None
+
+    for line in lines:
+        assignment = _split_env_assignment(line)
+        if assignment is None or assignment[0] != name:
+            continue
+        value = _parse_env_value(assignment[1])
+        if value is not None:
+            return value
+    return None
 
 
 def load_brainlayer_env(

@@ -28,7 +28,11 @@ def _validate_override_data_root(
     home: Path,
     ismount: Callable[[Path], bool],
 ) -> None:
-    active = active_root.expanduser().resolve(strict=False)
+    raw_active = active_root.expanduser().absolute()
+    for component in (*reversed(raw_active.parents), raw_active):
+        if component.is_symlink():
+            raise RuntimeError(f"BRAINLAYER_DB parent must not contain a symbolic link: {raw_active}")
+    active = raw_active.resolve(strict=False)
     canonical = canonical_root.expanduser().resolve(strict=False)
     if active == canonical:
         return

@@ -486,9 +486,9 @@ def init(
     from .wizard import run_wizard
 
     try:
-        if sys.platform == "darwin":
-            ensure_spotlight_excluded_layout()
         config = run_wizard()
+        if sys.platform == "darwin":
+            ensure_spotlight_excluded_layout(env_file=config.gemini_env_file)
         if should_install_launchd:
             install_launchd_agents("all", env_file=config.gemini_env_file)
     except (
@@ -547,13 +547,13 @@ def setup(
     )
 
     try:
-        if sys.platform == "darwin":
-            ensure_spotlight_excluded_layout()
         resolved_env_file = ensure_brainlayer_env(
             env_file,
             google_api_key_op_ref=google_api_key_op_ref,
             overwrite_google_key=overwrite_google_key,
         )
+        if sys.platform == "darwin":
+            ensure_spotlight_excluded_layout(env_file=resolved_env_file)
         if launchd:
             install_launchd(target, env_file=resolved_env_file)
         migrated_configs = migrate_legacy_mcp_configs() if migrate_mcp else []

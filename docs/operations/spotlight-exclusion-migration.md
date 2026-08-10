@@ -191,8 +191,14 @@ record the root-to-volume mapping, and query that mount point directly:
 
 ```bash
 brainlayer_probe_root="${HOME:?}/.local/share/brainlayer"
-brainlayer_probe_volume="$(stat -f %m "$brainlayer_probe_root")"
-printf 'root=%s\nvolume=%s\n' "$brainlayer_probe_root" "$brainlayer_probe_volume"
+brainlayer_probe_device="$(df -P "$brainlayer_probe_root" | awk 'NR == 2 { print $1 }')"
+brainlayer_probe_volume="$(
+  diskutil info -plist "$brainlayer_probe_device" |
+    plutil -extract MountPoint raw -
+)"
+test -n "$brainlayer_probe_device" && test -n "$brainlayer_probe_volume"
+printf 'root=%s\ndevice=%s\nvolume=%s\n' \
+  "$brainlayer_probe_root" "$brainlayer_probe_device" "$brainlayer_probe_volume"
 mdutil -s "$brainlayer_probe_volume"
 ```
 
