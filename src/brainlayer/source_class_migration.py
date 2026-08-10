@@ -129,18 +129,13 @@ def _validate_distribution(distribution: dict[str, int]) -> None:
 def _remove_brain_worker_fts_rows(conn: sqlite3.Connection) -> dict[str, int]:
     removed: dict[str, int] = {}
     tables = _tables(conn)
-    for table in ("chunks_fts", "chunks_fts_operational", "chunks_fts_trigram"):
+    target = "SELECT id FROM chunks WHERE source_class = 'brain-worker'"
+    for table in ("chunks_fts", "chunks_fts_operational", "chunks_fts_trigram", "chunk_fts_rowids"):
         if table not in tables or "chunk_id" not in _columns(conn, table):
             continue
-        before = conn.total_changes
-        conn.execute(
-            f"DELETE FROM \"{table}\" WHERE chunk_id IN (SELECT id FROM chunks WHERE source_class = 'brain-worker')"
-        )
-        removed[table] = conn.total_changes - before
-    if "chunk_fts_rowids" in tables:
-        conn.execute(
-            "DELETE FROM chunk_fts_rowids WHERE chunk_id IN (SELECT id FROM chunks WHERE source_class = 'brain-worker')"
-        )
+        count = int(conn.execute(f'SELECT COUNT(*) FROM "{table}" WHERE chunk_id IN ({target})').fetchone()[0])
+        conn.execute(f'DELETE FROM "{table}" WHERE chunk_id IN ({target})')
+        removed[table] = count
     return removed
 
 
@@ -167,25 +162,26 @@ def migrate_source_class(
     _ensure_ledgers(conn)
     prior = conn.execute("SELECT details FROM schema_migrations WHERE name = ?", (MIGRATION_NAME,)).fetchone()
     if prior is not None and "source_class" in _columns(conn, "chunks"):
-        receipt = json.loads(prior[0]) if prior[0] else {}
-        recorded_sha = str(receipt.get("git_sha") or "").casefold()
-        if recorded_sha != git_sha.casefold():
-            conn.close()
-            raise RuntimeError(
-                f"migration ledger SHA mismatch: recorded {recorded_sha or 'missing'}, requested {git_sha.casefold()}"
+        try:
+            receipt = json.loads(prior[0]) if prior[0] else {}
+            recorded_sha = str(receipt.get("git_sha") or "").casefold()
+            if recorded_sha != git_sha.casefold():
+                raise RuntimeError(
+                    f"migration ledger SHA mismatch: recorded {recorded_sha or 'missing'}, requested {git_sha.casefold()}"
+                )
+            distribution = _distribution(conn)
+            _validate_distribution(distribution)
+            receipt.update(
+                {
+                    "already_applied": True,
+                    "row_count_before": row_count_before,
+                    "row_count_after": row_count_before,
+                    "distribution": distribution,
+                }
             )
-        distribution = _distribution(conn)
-        _validate_distribution(distribution)
-        receipt.update(
-            {
-                "already_applied": True,
-                "row_count_before": row_count_before,
-                "row_count_after": row_count_before,
-                "distribution": distribution,
-            }
-        )
-        conn.close()
-        return receipt
+            return receipt
+        finally:
+            conn.close()
 
     error: str | None = None
     try:

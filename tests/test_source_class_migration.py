@@ -43,6 +43,11 @@ def _legacy_db(path: Path) -> None:
             "INSERT INTO chunks_fts(content, chunk_id) VALUES (?, ?)",
             [("visibility token", row[0]) for row in conn.execute("SELECT id FROM chunks")],
         )
+        conn.execute("CREATE TABLE chunk_fts_rowids (chunk_id TEXT PRIMARY KEY, rowid INTEGER NOT NULL)")
+        conn.executemany(
+            "INSERT INTO chunk_fts_rowids(chunk_id, rowid) VALUES (?, ?)",
+            [(row[0], position) for position, row in enumerate(conn.execute("SELECT id FROM chunks"), start=1)],
+        )
 
 
 def test_migration_backfills_only_unambiguous_rows_and_writes_sha_ledgers(tmp_path: Path) -> None:
@@ -60,6 +65,7 @@ def test_migration_backfills_only_unambiguous_rows_and_writes_sha_ledgers(tmp_pa
         "fleet-coordination": 1,
         "subagent": 1,
     }
+    assert receipt["fts_rows_removed"] == {"chunk_fts_rowids": 1, "chunks_fts": 1}
     with sqlite3.connect(db_path) as conn:
         assert dict(conn.execute("SELECT id, source_class FROM chunks")) == {
             "ambiguous": None,
@@ -135,3 +141,42 @@ def test_migration_allows_canonical_database_only_with_supervised_gate(monkeypat
 
     assert receipt["row_count_before"] == receipt["row_count_after"] == 6
     assert receipt["git_sha"] == GIT_SHA
+
+
+def test_idempotent_malformed_receipt_closes_connection(monkeypatch, tmp_path: Path) -> None:
+    db_path = tmp_path / "copy.db"
+    _legacy_db(db_path)
+    migration.migrate_source_class(db_path, git_sha=GIT_SHA, actor="pytest")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE schema_migrations SET details = 'not-json' WHERE name = ?",
+            (migration.MIGRATION_NAME,),
+        )
+
+    real_connect = sqlite3.connect
+    tracked: list[object] = []
+
+    class TrackedConnection:
+        def __init__(self, *args, **kwargs) -> None:
+            self.connection = real_connect(*args, **kwargs)
+            self.closed = False
+
+        def __getattr__(self, name):
+            return getattr(self.connection, name)
+
+        def close(self) -> None:
+            self.closed = True
+            self.connection.close()
+
+    def connect(*args, **kwargs):
+        connection = TrackedConnection(*args, **kwargs)
+        tracked.append(connection)
+        return connection
+
+    monkeypatch.setattr(migration.sqlite3, "connect", connect)
+
+    with pytest.raises(json.JSONDecodeError):
+        migration.migrate_source_class(db_path, git_sha=GIT_SHA, actor="pytest")
+
+    assert len(tracked) == 1
+    assert tracked[0].closed is True
