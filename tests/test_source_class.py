@@ -78,7 +78,7 @@ def test_per_class_default_visibility_opt_in_and_exact_expansion(tmp_path: Path)
 
     assert default_ids == {"cli", "subagent", "fleet", "legacy"}
     assert opt_in_ids == {"cli", "desktop", "subagent", "fleet", "legacy"}
-    for chunk_id in ("cli", "desktop", "subagent", "fleet", "legacy"):
+    for chunk_id in ("cli", "desktop", "subagent", "brain-worker", "fleet", "legacy"):
         assert store.get_context(chunk_id)["target"]["id"] == chunk_id
 
     store.close()
