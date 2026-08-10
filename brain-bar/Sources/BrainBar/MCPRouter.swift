@@ -23,10 +23,10 @@ final class MCPRouter: @unchecked Sendable {
         "brain_recall",
         "brain_expand",
     ]
-    // Scheduled backup is an internal socket client and must remain callable
-    // without relying on connection-local palette expansion state. Keep it out
-    // of the advertised core inventory while the stateless palette redesign is
-    // owned separately.
+    // BrainBar's Unix socket is owner-only (chmod 0600), which is the trust
+    // boundary for local callers including scheduled backup. Keep backup
+    // callable without connection-local palette state, but out of the
+    // advertised core inventory while the stateless redesign is owned elsewhere.
     private static let profileIndependentCallToolNames: Set<String> = [
         "brain_backup_vacuum_into",
     ]

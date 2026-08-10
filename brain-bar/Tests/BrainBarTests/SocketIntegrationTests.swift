@@ -285,11 +285,17 @@ final class SocketIntegrationTests: XCTestCase {
 
     func testBrainBackupVacuumIntoOverSocketCreatesRestorableSnapshot() throws {
         restartServer(profile: "core")
+        let socketAttributes = try FileManager.default.attributesOfItem(atPath: testSocketPath)
+        let socketPermissions = try XCTUnwrap(socketAttributes[.posixPermissions] as? NSNumber)
+        XCTAssertEqual(socketPermissions.intValue & 0o777, 0o600, "The local MCP trust boundary must be owner-only")
+
         let targetPath = NSTemporaryDirectory() + "brainbar-backup-\(UUID().uuidString).db"
         let completionMarkerPath = targetPath + ".complete"
         defer { try? FileManager.default.removeItem(atPath: targetPath) }
         defer { try? FileManager.default.removeItem(atPath: completionMarkerPath) }
 
+        // Each helper call opens a fresh socket, matching the scheduled Python
+        // client and proving that the allowance is independent of session state.
         _ = try sendMCPRequest([
             "jsonrpc": "2.0", "id": 20, "method": "initialize",
             "params": ["protocolVersion": "2024-11-05", "capabilities": [:] as [String: Any],
@@ -299,7 +305,9 @@ final class SocketIntegrationTests: XCTestCase {
         let toolsResponse = try sendMCPRequest([
             "jsonrpc": "2.0", "id": 21, "method": "tools/list",
         ])
-        let listedTools = (toolsResponse["result"] as? [String: Any])?["tools"] as? [[String: Any]] ?? []
+        XCTAssertNil(toolsResponse["error"], "Core tools/list should succeed before checking its inventory")
+        let toolsResult = try XCTUnwrap(toolsResponse["result"] as? [String: Any])
+        let listedTools = try XCTUnwrap(toolsResult["tools"] as? [[String: Any]])
         XCTAssertFalse(
             listedTools.contains { ($0["name"] as? String) == "brain_backup_vacuum_into" },
             "The backup allowance must not expand the advertised core palette"
