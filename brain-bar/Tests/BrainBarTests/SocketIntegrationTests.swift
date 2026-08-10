@@ -455,6 +455,7 @@ final class SocketIntegrationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(atPath: targetPath + ".complete") }
 
         let backupFD = try connectClient()
+        defer { close(backupFD) }
         try sendMCPRequest(on: backupFD, request: [
             "jsonrpc": "2.0",
             "id": 40,
@@ -466,11 +467,9 @@ final class SocketIntegrationTests: XCTestCase {
         ])
         XCTAssertEqual(progressGate.entered.wait(timeout: .now() + 1), .success)
 
-        // Both disconnect paths must leave the request queue live: subscriber
-        // cleanup cannot write on the VACUUM connection, and a reused numeric fd
-        // must not receive the original request's deferred response.
+        // Subscriber cleanup cannot write on the VACUUM connection and block
+        // the request queue while the backup is held.
         close(subscriberFD)
-        close(backupFD)
         Thread.sleep(forTimeInterval: 0.05)
 
         // Deployment health is a held-open, fresh-socket protocol sequence —
@@ -502,11 +501,123 @@ final class SocketIntegrationTests: XCTestCase {
         }
 
         progressGate.release.signal()
-        let staleResponse = try? readMCPMessage(fd: probeFD, timeout: 0.2)
-        XCTAssertNil(staleResponse, "A reused fd must not receive the disconnected backup client's response")
-        if initialize == nil {
-            _ = try? readMCPMessage(fd: probeFD, timeout: 1)
+        let backupResponse = try readMCPMessage(fd: backupFD, timeout: 2)
+        XCTAssertEqual(backupResponse["id"] as? Int, 40)
+        XCTAssertNil(backupResponse["error"])
+        XCTAssertNotNil(backupResponse["result"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: targetPath + ".complete"))
+    }
+
+    func testDisconnectedBackupResponseDoesNotLeakToReusedServerDescriptor() throws {
+        // Use the production topology so VACUUM and normal protocol traffic use
+        // separate write/read SQLite connections.
+        server.stop()
+        db.close()
+        setenv("BRAINLAYER_MCP_PROFILE", "core", 1)
+        let databaseReady = DispatchSemaphore(value: 0)
+        let databaseCapture = BrainDatabaseCapture()
+        server = BrainBarServer(
+            socketPath: testSocketPath,
+            dbPath: tempDBPath,
+            enableHybridSearchHelper: false
+        )
+        let reusedDescriptorDrop = DispatchSemaphore(value: 0)
+        server.onDatabaseReady = { database in
+            databaseCapture.set(database)
+            databaseReady.signal()
         }
+        server.onDeferredBackupResponseDropped = { descriptorWasReused in
+            if descriptorWasReused {
+                reusedDescriptorDrop.signal()
+            }
+        }
+        server.start()
+        XCTAssertTrue(waitForSocket(at: testSocketPath), "Server should bind \(testSocketPath)")
+        XCTAssertEqual(databaseReady.wait(timeout: .now() + 1), .success)
+        guard let writeDatabase = databaseCapture.get() else {
+            return XCTFail("Server should expose its ready write database")
+        }
+        // Let the readiness probe's server-side descriptor close before fixing
+        // the allocation order below.
+        Thread.sleep(forTimeInterval: 0.05)
+
+        // Occupy the lowest descriptor holes. The backup client then takes the
+        // next free fd and accept() takes the one after it. Keeping the client fd
+        // allocated with shutdown() while freeing one low spare makes the
+        // replacement client's socket() take the spare and accept() reuse the
+        // disconnected backup client's server-side descriptor deterministically.
+        var spareFDs: [Int32] = []
+        for _ in 0..<8 {
+            let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+            XCTAssertGreaterThanOrEqual(fd, 0)
+            guard fd >= 0 else { return }
+            spareFDs.append(fd)
+        }
+        defer { spareFDs.forEach { close($0) } }
+
+        let progressGate = SQLiteProgressGate()
+        defer { progressGate.release.signal() }
+        sqlite3_progress_handler(
+            writeDatabase.dbHandle,
+            1,
+            blockSQLiteProgress,
+            Unmanaged.passUnretained(progressGate).toOpaque()
+        )
+        defer { sqlite3_progress_handler(writeDatabase.dbHandle, 0, nil, nil) }
+
+        let targetPath = NSTemporaryDirectory() + "brainbar-reused-fd-backup-\(UUID().uuidString).db"
+        let completionMarkerPath = targetPath + ".complete"
+        defer { try? FileManager.default.removeItem(atPath: targetPath) }
+        defer { try? FileManager.default.removeItem(atPath: completionMarkerPath) }
+
+        let backupFD = try connectClient()
+        defer { close(backupFD) }
+        XCTAssertGreaterThan(backupFD, spareFDs.last ?? -1)
+        try sendMCPRequest(on: backupFD, request: [
+            "jsonrpc": "2.0",
+            "id": 40,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_backup_vacuum_into",
+                "arguments": ["target_path": targetPath],
+            ],
+        ])
+        XCTAssertEqual(progressGate.entered.wait(timeout: .now() + 1), .success)
+
+        XCTAssertEqual(shutdown(backupFD, SHUT_RDWR), 0)
+        Thread.sleep(forTimeInterval: 0.2)
+        let releasedSpareFD = spareFDs.removeFirst()
+        close(releasedSpareFD)
+
+        let probeFD = try connectClient()
+        defer { close(probeFD) }
+        try sendMCPRequest(on: probeFD, request: [
+            "jsonrpc": "2.0", "id": 41, "method": "initialize",
+            "params": ["protocolVersion": "2024-11-05", "capabilities": [:] as [String: Any],
+                       "clientInfo": ["name": "backup-fd-reuse-probe", "version": "1.0"]],
+        ])
+        let initialize = try readMCPMessage(fd: probeFD, timeout: 0.5)
+        XCTAssertNotNil(initialize["result"])
+
+        progressGate.release.signal()
+        let completionDeadline = Date().addingTimeInterval(1)
+        while !FileManager.default.fileExists(atPath: completionMarkerPath), Date() < completionDeadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: completionMarkerPath))
+        XCTAssertEqual(
+            reusedDescriptorDrop.wait(timeout: .now() + 1),
+            .success,
+            "The test must reach the session-identity guard with the descriptor occupied by a replacement client"
+        )
+
+        let unsolicited = try? readMCPMessage(fd: probeFD, timeout: 1)
+        XCTAssertNotEqual(
+            unsolicited?["id"] as? Int,
+            40,
+            "The replacement connection received the disconnected backup client's response"
+        )
+        XCTAssertNil(unsolicited, "The replacement connection must not receive an unsolicited response")
     }
 
     func testBrainBackupVacuumIntoRefusesExistingCompletionMarkerWithoutOverwritingIt() throws {

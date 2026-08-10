@@ -133,6 +133,7 @@ final class BrainBarServer: @unchecked Sendable {
     private var deferredDisconnectedAgentIDs = Set<String>()
     var onDatabaseReady: (@Sendable (BrainDatabase) -> Void)?
     var onStartRejected: (@Sendable (String) -> Void)?
+    var onDeferredBackupResponseDropped: (@Sendable (_ descriptorWasReused: Bool) -> Void)?
     /// Maximum EAGAIN retries before disconnecting a stalled client.
     /// Each retry sleeps 1ms; 50 retries keeps false-positive disconnects
     /// below the UI budget while still bounding serial-queue stalls.
@@ -624,7 +625,10 @@ final class BrainBarServer: @unchecked Sendable {
                 guard let self else { return }
                 self.backupToolCallInProgress = false
                 self.flushDeferredSubscriberDisconnects()
-                guard self.clients[fd]?.paletteSession === paletteSession else { return }
+                guard self.clients[fd]?.paletteSession === paletteSession else {
+                    self.onDeferredBackupResponseDropped?(self.clients[fd] != nil)
+                    return
+                }
                 self.sendResponse(fd: fd, response: responseBox.value, useContentLength: useContentLength)
                 self.debugLog("  SENT async response for brain_backup_vacuum_into")
             }
