@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .alarm import BrainLayerAlarm, build_alarm, emit_alarm
+from .config import get_brainlayer_db_config_error
 from .deploy_drift import DEFAULT_DEPLOY_DRIFT_LABELS, default_deploy_provenance_dir, detect_deploy_drift
 from .drain_liveness import (
     DEFAULT_DRAIN_LIVENESS_STALE_SECONDS,
@@ -457,6 +458,15 @@ def run_doctor(
 
     def warning(code: str, message: str, **details: Any) -> None:
         result.issues.append(DoctorIssue(code, "warning", message, details))
+
+    db_config_error = get_brainlayer_db_config_error()
+    if db_config_error is not None:
+        fatal(
+            "brainlayer_db_config_invalid",
+            "BRAINLAYER_DB configuration is invalid; runtime fell back to the canonical database",
+            error=db_config_error,
+            remediation="fix BRAINLAYER_DB in ~/.config/brainlayer/brainlayer.env, then rerun doctor",
+        )
 
     if config.version_check_enabled:
         _check_brainbar_version_consistency(

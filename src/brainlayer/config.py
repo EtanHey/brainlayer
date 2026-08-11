@@ -10,6 +10,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 _OP_READ_PREFIX = "$(op read "
+_brainlayer_db_config_error: str | None = None
 
 
 def get_user_env_path() -> Path:
@@ -143,6 +144,11 @@ def configured_brainlayer_env_value(name: str, env_path: Path | None = None) -> 
     return selected
 
 
+def get_brainlayer_db_config_error() -> str | None:
+    """Return the runtime DB env validation error that triggered canonical fallback."""
+    return _brainlayer_db_config_error
+
+
 def load_brainlayer_env(
     env_path: Path | None = None,
     *,
@@ -154,37 +160,57 @@ def load_brainlayer_env(
     .env files are deliberately ignored; pass repo_env_path only to document
     that it is not part of the loader contract.
     """
+    global _brainlayer_db_config_error
+
     del repo_env_path
 
     target = env_path or get_user_env_path()
+    record_db_error = env_path is None or target == get_user_env_path()
     if not target.exists():
+        if record_db_error:
+            _brainlayer_db_config_error = None
         return {}
 
     try:
         lines = target.read_text(encoding="utf-8").splitlines()
     except OSError as exc:
         logger.warning("Could not read BrainLayer env file %s: %s", target, exc)
+        if record_db_error:
+            _brainlayer_db_config_error = f"Could not read BrainLayer env file {target}: {exc}"
         return {}
     except UnicodeDecodeError as exc:
         logger.warning("Could not decode BrainLayer env file %s: %s", target, exc)
+        if record_db_error:
+            _brainlayer_db_config_error = f"Could not decode BrainLayer env file {target}: {exc}"
         return {}
 
     loaded: dict[str, str] = {}
     if "BRAINLAYER_DB" not in os.environ:
-        configured_db = configured_brainlayer_env_value("BRAINLAYER_DB", target)
-        direct_db_values = []
-        for line in lines:
-            assignment = _split_env_assignment(line)
-            if assignment is None or assignment[0] != "BRAINLAYER_DB":
-                continue
-            value = _parse_env_value(assignment[1])
-            if value is not None:
-                direct_db_values.append(value)
-        if any(value != configured_db for value in direct_db_values):
-            raise RuntimeError(f"BRAINLAYER_DB must parse identically for launchd and direct CLI use in {target}")
-        if configured_db is not None:
-            os.environ["BRAINLAYER_DB"] = configured_db
-            loaded["BRAINLAYER_DB"] = configured_db
+        try:
+            configured_db = configured_brainlayer_env_value("BRAINLAYER_DB", target)
+            direct_db_values = []
+            for line in lines:
+                assignment = _split_env_assignment(line)
+                if assignment is None or assignment[0] != "BRAINLAYER_DB":
+                    continue
+                value = _parse_env_value(assignment[1])
+                if value is not None:
+                    direct_db_values.append(value)
+            if any(value != configured_db for value in direct_db_values):
+                raise RuntimeError(f"BRAINLAYER_DB must parse identically for launchd and direct CLI use in {target}")
+        except RuntimeError as exc:
+            if record_db_error:
+                _brainlayer_db_config_error = str(exc)
+            logger.error("Invalid BRAINLAYER_DB configuration; falling back to the canonical database: %s", exc)
+        else:
+            if record_db_error:
+                _brainlayer_db_config_error = None
+            if configured_db is not None:
+                os.environ["BRAINLAYER_DB"] = configured_db
+                loaded["BRAINLAYER_DB"] = configured_db
+    else:
+        if record_db_error:
+            _brainlayer_db_config_error = None
 
     for line in lines:
         assignment = _split_env_assignment(line)

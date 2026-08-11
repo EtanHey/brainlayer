@@ -1112,19 +1112,22 @@ def test_config_loader_does_not_resolve_op_when_process_env_already_has_key(tmp_
         "export  BRAINLAYER_DB=/ignored/by/launchd/brainlayer.db",
     ],
 )
-def test_config_loader_rejects_db_syntax_that_launchd_parses_differently(
-    tmp_path: Path, monkeypatch, assignment: str
+def test_config_loader_logs_and_falls_back_for_db_syntax_that_launchd_parses_differently(
+    tmp_path: Path, monkeypatch, caplog, assignment: str
 ) -> None:
-    from brainlayer.config import load_brainlayer_env
+    import brainlayer.config as runtime_config
 
     user_env = tmp_path / "brainlayer.env"
     user_env.write_text(f"{assignment}\n", encoding="utf-8")
     monkeypatch.delenv("BRAINLAYER_DB", raising=False)
+    monkeypatch.setattr(runtime_config, "get_user_env_path", lambda: user_env)
+    monkeypatch.setattr(runtime_config, "_brainlayer_db_config_error", None)
 
-    with pytest.raises(RuntimeError, match="launchd and direct CLI"):
-        load_brainlayer_env(user_env)
+    assert runtime_config.load_brainlayer_env() == {}
 
     assert "BRAINLAYER_DB" not in os.environ
+    assert runtime_config.get_brainlayer_db_config_error() is not None
+    assert "falling back to the canonical database" in caplog.text
 
 
 def test_config_loader_ignores_unreadable_user_env(monkeypatch, tmp_path: Path) -> None:

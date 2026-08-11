@@ -455,6 +455,39 @@ def test_run_doctor_reports_unexcluded_data_directory_as_warning(tmp_path):
     assert result.exit_code == 0
 
 
+def test_poisoned_db_env_falls_back_and_doctor_reports_configuration_error(tmp_path, monkeypatch, caplog):
+    import brainlayer.config as runtime_config
+    from brainlayer.doctor import run_doctor
+
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text(
+        "BRAINLAYER_DB=/first/brainlayer.db\nBRAINLAYER_DB=/second/brainlayer.db\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("BRAINLAYER_DB", raising=False)
+    monkeypatch.setattr(runtime_config, "get_user_env_path", lambda: env_file)
+    monkeypatch.setattr(runtime_config, "_brainlayer_db_config_error", None, raising=False)
+
+    assert runtime_config.load_brainlayer_env() == {}
+    assert "BRAINLAYER_DB" not in os.environ
+    assert "falling back to the canonical database" in caplog.text
+
+    db_path = tmp_path / "canonical" / "brainlayer.db"
+    db_path.parent.mkdir()
+    _build_db(db_path)
+    result = run_doctor(
+        _doctor_config(tmp_path, db_path),
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+
+    issue = next(issue for issue in result.issues if issue.code == "brainlayer_db_config_invalid")
+    assert issue.severity == "fatal"
+    assert "duplicate valid BRAINLAYER_DB assignments" in issue.details["error"]
+    assert result.exit_code == 1
+
+
 def test_run_doctor_reports_unavailable_process_snapshot_without_false_daemon_death(tmp_path):
     from brainlayer.doctor import run_doctor
 
