@@ -128,6 +128,8 @@ def configured_brainlayer_env_value(name: str, env_path: Path | None = None) -> 
         assignment = _split_launchd_env_assignment(line)
         if assignment is None or assignment[0] != name:
             continue
+        if _OP_READ_PREFIX in assignment[1]:
+            raise RuntimeError(f"{name} must not use an op command substitution in {target}")
         if "$(" in assignment[1] or "`" in assignment[1]:
             continue
         selected = _parse_launchd_env_value(assignment[1])

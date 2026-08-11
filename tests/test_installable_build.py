@@ -1249,7 +1249,12 @@ def test_configured_env_value_matches_selected_file_last_assignment(tmp_path: Pa
         raise AssertionError("BRAINLAYER_DB command substitutions must be skipped")
 
     monkeypatch.setattr(config.subprocess, "run", fail_op_read)
-    assert config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file) == "/from/runtime/brainlayer.db"
+    with pytest.raises(RuntimeError, match="command substitution"):
+        config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file)
+
+    env_file.write_text("BRAINLAYER_DB=\"$(op read 'op://Private/Database/path')\"\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="command substitution"):
+        config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file)
 
     env_file.write_text(r"BRAINLAYER_DB=/Volumes/brainlayer\ data/brainlayer.db" + "\n", encoding="utf-8")
     assert config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file) == (
