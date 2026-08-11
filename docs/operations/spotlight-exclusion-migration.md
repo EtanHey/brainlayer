@@ -65,6 +65,15 @@ $HOME/.brainlayer-p0-counter.spotlight-migration-staging
 <active-BRAINLAYER_DB-parent>.spotlight-migration-staging  # only when outside the canonical root
 ```
 
+Measured planning budget from this workstation on 2026-08-11: the data root was 197 GB,
+`brainlayer.db` was 16 GB, and its WAL was 66 MB. All four canonical roots were on device
+`16777232`, so every required move is a same-filesystem metadata rename—O(1), normally seconds,
+regardless of tree size. The variable I/O step is the Step 3 `TRUNCATE` checkpoint; a 66 MB WAL
+should take seconds. Step 6 can spend up to 30 seconds polling each of four or five roots. Budget
+roughly 15–30 minutes of writer downtime, dominated by operator verification rather than I/O.
+Re-measure the current root/device/WAL values during preflight; these measurements are planning
+evidence, not permission to shorten a gate.
+
 ## Execute in one stop window
 
 ### 1. Reduce the live WAL before the stop
@@ -307,7 +316,7 @@ stopped because an evidence command failed.
 
 ```bash
 set -euo pipefail
-spotlight_probe_root="$(mktemp -d "${HOME:?}/.local/share/brainlayer/.spotlight-exclusion-live-probe.XXXXXX")"
+spotlight_probe_root="$(mktemp -d "${HOME:?}/.local/share/brainlayer/spotlight-exclusion-live-probe.XXXXXX")"
 spotlight_probe_path="$spotlight_probe_root/spotlight-exclusion-live-probe.txt"
 spotlight_probe_name="$(basename "$spotlight_probe_path")"
 # For an override on another volume, replace this with a preflight-verified searchable,
