@@ -9,6 +9,13 @@ import os
 from pathlib import Path
 
 _CANONICAL_DB_PATH = Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db"
+SPOTLIGHT_EXCLUSION_MARKER = ".metadata_never_index"
+
+
+def is_spotlight_excluded(path: Path) -> bool:
+    """Return whether *path* is beneath a marker-backed Spotlight exclusion."""
+    resolved = path.expanduser().resolve(strict=False)
+    return any((directory / SPOTLIGHT_EXCLUSION_MARKER).is_file() for directory in (resolved, *resolved.parents))
 
 
 def _guard_test_runtime_path(path: Path, *, source: str) -> Path:
@@ -37,19 +44,27 @@ def _guard_test_runtime_path(path: Path, *, source: str) -> Path:
     return path
 
 
-def get_db_path() -> Path:
-    """Resolve the BrainLayer database path.
-
-    Checks BRAINLAYER_DB env var first, then uses the canonical path.
-    """
+def resolve_db_path() -> Path:
+    """Resolve the BrainLayer database path without creating its parent."""
     env = os.environ.get("BRAINLAYER_DB")
     if env:
-        return _guard_test_runtime_path(Path(env), source="BRAINLAYER_DB")
+        return _guard_test_runtime_path(Path(env).expanduser(), source="BRAINLAYER_DB")
 
-    db_path = _guard_test_runtime_path(_CANONICAL_DB_PATH, source="canonical database path")
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+    return get_canonical_db_path()
+
+
+def get_canonical_db_path() -> Path:
+    """Return the canonical database path without creating its parent."""
+    return _guard_test_runtime_path(_CANONICAL_DB_PATH, source="canonical database path")
+
+
+def get_db_path() -> Path:
+    """Resolve the DB path, creating only the canonical path's parent."""
+    db_path = resolve_db_path()
+    if not os.environ.get("BRAINLAYER_DB"):
+        db_path.parent.mkdir(parents=True, exist_ok=True)
     return db_path
 
 
-# Convenience: pre-resolved default for import
-DEFAULT_DB_PATH = get_db_path()
+# Convenience: pre-resolved default without import-time filesystem mutation.
+DEFAULT_DB_PATH = resolve_db_path()

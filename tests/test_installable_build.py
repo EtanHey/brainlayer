@@ -85,6 +85,13 @@ def _write_fake_ps(fake_bin: Path) -> None:
     fake_ps.chmod(0o755)
 
 
+def _copy_packaged_launchd(launchd_dir: Path) -> None:
+    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    package_dir = launchd_dir.parent
+    for name in ("__init__.py", "config.py", "paths.py", "spotlight.py"):
+        shutil.copy2(REPO_ROOT / "src" / "brainlayer" / name, package_dir / name)
+
+
 def test_brainlayer_cli_entrypoint_imports_typer_app(monkeypatch) -> None:
     monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
 
@@ -193,6 +200,359 @@ def test_install_launchd_default_defers_to_bounded_installer_shutdown_waits(tmp_
     install_launchd("all", launchd_dir=launchd_dir)
 
     assert calls == [([str(install_script), "all"], None)]
+
+
+def test_setup_creates_complete_spotlight_excluded_layout_idempotently(tmp_path: Path) -> None:
+    import brainlayer.setup as setup_helpers
+
+    data_dir = tmp_path / "data"
+    runtime_dir = tmp_path / "runtime"
+    launchd_log_dir = tmp_path / "launchd-logs"
+    counter_dir = tmp_path / "counter"
+
+    first = setup_helpers.ensure_spotlight_excluded_layout(
+        data_dir=data_dir,
+        runtime_dir=runtime_dir,
+        launchd_log_dir=launchd_log_dir,
+        counter_dir=counter_dir,
+    )
+    second = setup_helpers.ensure_spotlight_excluded_layout(
+        data_dir=data_dir,
+        runtime_dir=runtime_dir,
+        launchd_log_dir=launchd_log_dir,
+        counter_dir=counter_dir,
+    )
+
+    roots = (data_dir, runtime_dir, launchd_log_dir, counter_dir)
+    assert first == roots
+    assert second == roots
+    assert all((root / ".metadata_never_index").is_file() for root in roots)
+    assert {path.name for path in data_dir.iterdir() if path.is_dir()} == {
+        "backups",
+        "chromadb",
+        "chromadb.backup",
+        "enrichment-scratch",
+        "experiments",
+        "jsonl-backups",
+        "logs",
+        "prompts",
+        "style",
+        "storage",
+    }
+    assert {path.name for path in runtime_dir.iterdir() if path.is_dir()} == {"logs", "quarantine", "queue"}
+
+
+def test_setup_refuses_to_mark_legacy_nonempty_runtime_tree(tmp_path: Path) -> None:
+    import brainlayer.setup as setup_helpers
+
+    data_dir = tmp_path / "legacy-data"
+    data_dir.mkdir()
+    (data_dir / "brainlayer.db").write_bytes(b"existing production data")
+
+    with pytest.raises(RuntimeError, match="requires the Spotlight exclusion migration runbook"):
+        setup_helpers.ensure_spotlight_excluded_layout(
+            data_dir=data_dir,
+            runtime_dir=tmp_path / "runtime",
+            launchd_log_dir=tmp_path / "launchd-logs",
+            counter_dir=tmp_path / "counter",
+        )
+
+    assert not (data_dir / ".metadata_never_index").exists()
+
+
+def test_setup_preflights_all_roots_before_creating_any_marker(tmp_path: Path) -> None:
+    import brainlayer.setup as setup_helpers
+
+    data_dir = tmp_path / "new-data"
+    runtime_dir = tmp_path / "legacy-runtime"
+    runtime_dir.mkdir()
+    (runtime_dir / "queue-item.jsonl").write_text("pending\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="requires the Spotlight exclusion migration runbook"):
+        setup_helpers.ensure_spotlight_excluded_layout(
+            data_dir=data_dir,
+            runtime_dir=runtime_dir,
+            launchd_log_dir=tmp_path / "launchd-logs",
+            counter_dir=tmp_path / "counter",
+        )
+
+    assert not data_dir.exists()
+    assert not (runtime_dir / ".metadata_never_index").exists()
+
+
+@pytest.mark.parametrize("invalid_kind", ["file", "dangling-symlink", "directory-symlink"])
+def test_setup_preflights_invalid_root_types_before_creating_any_marker(tmp_path: Path, invalid_kind: str) -> None:
+    import brainlayer.setup as setup_helpers
+
+    data_dir = tmp_path / "new-data"
+    runtime_dir = tmp_path / "invalid-runtime"
+    if invalid_kind == "file":
+        runtime_dir.write_text("not a directory\n", encoding="utf-8")
+    elif invalid_kind == "dangling-symlink":
+        runtime_dir.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+    else:
+        target = tmp_path / "runtime-target"
+        target.mkdir()
+        runtime_dir.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="must be a directory"):
+        setup_helpers.ensure_spotlight_excluded_layout(
+            data_dir=data_dir,
+            runtime_dir=runtime_dir,
+            launchd_log_dir=tmp_path / "launchd-logs",
+            counter_dir=tmp_path / "counter",
+        )
+
+    assert not data_dir.exists()
+
+
+def test_setup_default_data_root_is_not_created_when_later_root_is_invalid(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.setup as setup_helpers
+
+    data_dir = tmp_path / "default-data"
+    runtime_dir = tmp_path / "invalid-runtime"
+    runtime_dir.write_text("not a directory\n", encoding="utf-8")
+    monkeypatch.setattr(setup_helpers, "resolve_db_path", lambda: data_dir / "brainlayer.db")
+    monkeypatch.setattr(setup_helpers, "get_canonical_db_path", lambda: data_dir / "brainlayer.db", raising=False)
+
+    with pytest.raises(RuntimeError, match="must be a directory"):
+        setup_helpers.ensure_spotlight_excluded_layout(
+            runtime_dir=runtime_dir,
+            launchd_log_dir=tmp_path / "launchd-logs",
+            counter_dir=tmp_path / "counter",
+        )
+
+    assert not data_dir.exists()
+
+
+def test_setup_marks_override_and_canonical_data_roots(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.setup as setup_helpers
+
+    override_data_dir = tmp_path / "brainlayer-override"
+    canonical_data_dir = tmp_path / "canonical-data"
+    monkeypatch.setattr(setup_helpers, "resolve_db_path", lambda: override_data_dir / "brainlayer.db")
+    monkeypatch.setattr(
+        setup_helpers,
+        "get_canonical_db_path",
+        lambda: canonical_data_dir / "brainlayer.db",
+        raising=False,
+    )
+
+    roots = setup_helpers.ensure_spotlight_excluded_layout(
+        runtime_dir=tmp_path / "runtime",
+        launchd_log_dir=tmp_path / "launchd-logs",
+        counter_dir=tmp_path / "counter",
+    )
+
+    assert roots[:2] == (override_data_dir, canonical_data_dir)
+    assert (override_data_dir / ".metadata_never_index").is_file()
+    assert (canonical_data_dir / ".metadata_never_index").is_file()
+    assert (canonical_data_dir / "prompts").is_dir()
+
+
+def test_setup_uses_selected_env_file_db_override(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.setup as setup_helpers
+
+    home = tmp_path / "home"
+    override_data_dir = tmp_path / "brainlayer-selected"
+    canonical_data_dir = tmp_path / "canonical-data"
+    env_file = tmp_path / "selected.env"
+    env_file.write_text(f"BRAINLAYER_DB={override_data_dir / 'brainlayer.db'}\n", encoding="utf-8")
+    monkeypatch.setattr(setup_helpers, "get_canonical_db_path", lambda: canonical_data_dir / "brainlayer.db")
+
+    roots = setup_helpers.ensure_spotlight_excluded_layout(
+        env_file=env_file,
+        runtime_dir=home / ".brainlayer",
+        launchd_log_dir=home / "Library" / "Logs" / "brainlayer",
+        counter_dir=home / ".brainlayer-p0-counter",
+    )
+
+    assert roots[:2] == (override_data_dir, canonical_data_dir)
+    assert (override_data_dir / ".metadata_never_index").is_file()
+
+
+def test_setup_rejects_selected_env_db_file_symlink_before_creating_roots(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.setup as setup_helpers
+
+    target = tmp_path / "target.db"
+    target.touch()
+    override_data_dir = tmp_path / "brainlayer-selected"
+    override_data_dir.mkdir()
+    linked_db = override_data_dir / "brainlayer.db"
+    linked_db.symlink_to(target)
+    canonical_data_dir = tmp_path / "canonical-data"
+    env_file = tmp_path / "selected.env"
+    env_file.write_text(f"BRAINLAYER_DB={linked_db}\n", encoding="utf-8")
+    monkeypatch.setattr(setup_helpers, "get_canonical_db_path", lambda: canonical_data_dir / "brainlayer.db")
+
+    with pytest.raises(RuntimeError, match="must not be a symbolic link"):
+        setup_helpers.ensure_spotlight_excluded_layout(
+            env_file=env_file,
+            runtime_dir=tmp_path / "runtime",
+            launchd_log_dir=tmp_path / "launchd-logs",
+            counter_dir=tmp_path / "counter",
+        )
+
+    assert not canonical_data_dir.exists()
+
+
+def test_setup_rejects_selected_env_runtime_path_override_before_creating_roots(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.setup as setup_helpers
+
+    canonical_data_dir = tmp_path / "canonical-data"
+    env_file = tmp_path / "selected.env"
+    env_file.write_text(f"BRAINLAYER_QUEUE_DIR={tmp_path / 'queue-override'}\n", encoding="utf-8")
+    monkeypatch.setattr(setup_helpers, "get_canonical_db_path", lambda: canonical_data_dir / "brainlayer.db")
+
+    with pytest.raises(RuntimeError, match="BRAINLAYER_QUEUE_DIR"):
+        setup_helpers.ensure_spotlight_excluded_layout(
+            env_file=env_file,
+            runtime_dir=tmp_path / "runtime",
+            launchd_log_dir=tmp_path / "launchd-logs",
+            counter_dir=tmp_path / "counter",
+        )
+
+    assert not canonical_data_dir.exists()
+
+
+def test_spotlight_env_file_without_db_uses_canonical_not_process_override(tmp_path: Path, monkeypatch) -> None:
+    from brainlayer.spotlight import ensure_spotlight_excluded_layout
+
+    env_file = tmp_path / "selected.env"
+    env_file.write_text("BRAINLAYER_ENRICH_ENABLED=0\n", encoding="utf-8")
+    process_data_dir = tmp_path / "brainlayer-process"
+    canonical_data_dir = tmp_path / "canonical-data"
+    monkeypatch.setenv("BRAINLAYER_DB", str(process_data_dir / "brainlayer.db"))
+
+    roots = ensure_spotlight_excluded_layout(
+        env_file=env_file,
+        runtime_dir=tmp_path / "runtime",
+        launchd_log_dir=tmp_path / "launchd-logs",
+        counter_dir=tmp_path / "counter",
+        resolve_db_path_fn=lambda: process_data_dir / "brainlayer.db",
+        get_canonical_db_path_fn=lambda: canonical_data_dir / "brainlayer.db",
+        home_fn=lambda: tmp_path,
+    )
+
+    assert roots[0] == canonical_data_dir
+    assert not process_data_dir.exists()
+
+
+def test_setup_deduplicates_equivalent_resolved_data_roots(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.setup as setup_helpers
+
+    canonical_data_dir = tmp_path / "brainlayer"
+    equivalent_data_dir = canonical_data_dir / ".." / "brainlayer"
+    monkeypatch.setattr(setup_helpers, "resolve_db_path", lambda: equivalent_data_dir / "brainlayer.db")
+    monkeypatch.setattr(setup_helpers, "get_canonical_db_path", lambda: canonical_data_dir / "brainlayer.db")
+
+    roots = setup_helpers.ensure_spotlight_excluded_layout(
+        runtime_dir=tmp_path / "runtime",
+        launchd_log_dir=tmp_path / "launchd-logs",
+        counter_dir=tmp_path / "counter",
+    )
+
+    assert roots[0] == canonical_data_dir
+    assert roots.count(canonical_data_dir) == 1
+
+
+def test_setup_rejects_override_parent_that_is_not_dedicated_to_brainlayer(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.setup as setup_helpers
+
+    broad_override_dir = tmp_path / "shared-data"
+    canonical_data_dir = broad_override_dir / ".local" / "share" / "brainlayer"
+    monkeypatch.setattr(setup_helpers, "resolve_db_path", lambda: broad_override_dir / "brainlayer.db")
+    monkeypatch.setattr(setup_helpers, "get_canonical_db_path", lambda: canonical_data_dir / "brainlayer.db")
+
+    with pytest.raises(RuntimeError, match="dedicated BrainLayer directory"):
+        setup_helpers.ensure_spotlight_excluded_layout(
+            runtime_dir=tmp_path / "runtime",
+            launchd_log_dir=tmp_path / "launchd-logs",
+            counter_dir=tmp_path / "counter",
+        )
+
+    assert not broad_override_dir.exists()
+
+
+def test_setup_rejects_override_parent_that_overlaps_runtime_root(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.setup as setup_helpers
+
+    shared_root = tmp_path / "brainlayer-runtime"
+    canonical_data_dir = tmp_path / "canonical-data"
+    monkeypatch.setattr(setup_helpers, "resolve_db_path", lambda: shared_root / "brainlayer.db")
+    monkeypatch.setattr(setup_helpers, "get_canonical_db_path", lambda: canonical_data_dir / "brainlayer.db")
+
+    with pytest.raises(RuntimeError, match="overlap"):
+        setup_helpers.ensure_spotlight_excluded_layout(
+            runtime_dir=shared_root,
+            launchd_log_dir=tmp_path / "launchd-logs",
+            counter_dir=tmp_path / "counter",
+        )
+
+    assert not shared_root.exists()
+
+
+def test_setup_rejects_override_parent_that_is_mount_root(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.setup as setup_helpers
+
+    mount_root = tmp_path / "brainlayer-mounted-volume"
+    canonical_data_dir = tmp_path / "canonical-data"
+    monkeypatch.setattr(setup_helpers, "resolve_db_path", lambda: mount_root / "brainlayer.db")
+    monkeypatch.setattr(setup_helpers, "get_canonical_db_path", lambda: canonical_data_dir / "brainlayer.db")
+    monkeypatch.setattr(
+        setup_helpers.os.path,
+        "ismount",
+        lambda path: Path(path).resolve(strict=False) == mount_root.resolve(strict=False),
+    )
+
+    with pytest.raises(RuntimeError, match="dedicated BrainLayer directory"):
+        setup_helpers.ensure_spotlight_excluded_layout(
+            runtime_dir=tmp_path / "runtime",
+            launchd_log_dir=tmp_path / "launchd-logs",
+            counter_dir=tmp_path / "counter",
+        )
+
+    assert not mount_root.exists()
+
+
+def test_setup_rejects_override_beneath_symlinked_parent(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.setup as setup_helpers
+
+    real_parent = tmp_path / "real"
+    real_parent.mkdir()
+    linked_parent = tmp_path / "linked"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+    override_data_dir = linked_parent / "brainlayer-data"
+    canonical_data_dir = tmp_path / "canonical-data"
+    monkeypatch.setattr(setup_helpers, "resolve_db_path", lambda: override_data_dir / "brainlayer.db")
+    monkeypatch.setattr(setup_helpers, "get_canonical_db_path", lambda: canonical_data_dir / "brainlayer.db")
+
+    with pytest.raises(RuntimeError, match="symbolic link"):
+        setup_helpers.ensure_spotlight_excluded_layout(
+            runtime_dir=tmp_path / "runtime",
+            launchd_log_dir=tmp_path / "launchd-logs",
+            counter_dir=tmp_path / "counter",
+        )
+
+    assert not override_data_dir.exists()
+
+
+def test_setup_rejects_relative_db_override(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.setup as setup_helpers
+
+    monkeypatch.setattr(setup_helpers, "resolve_db_path", lambda: Path("brainlayer-relative/brainlayer.db"))
+    monkeypatch.setattr(
+        setup_helpers,
+        "get_canonical_db_path",
+        lambda: tmp_path / "canonical-data" / "brainlayer.db",
+    )
+
+    with pytest.raises(RuntimeError, match="absolute path"):
+        setup_helpers.ensure_spotlight_excluded_layout(
+            runtime_dir=tmp_path / "runtime",
+            launchd_log_dir=tmp_path / "launchd-logs",
+            counter_dir=tmp_path / "counter",
+        )
 
 
 def test_setup_migrates_legacy_raw_socat_mcp_config_idempotently(tmp_path: Path) -> None:
@@ -459,6 +819,55 @@ def test_setup_command_writes_op_backed_env_without_plaintext_and_can_skip_launc
     assert oct(env_file.stat().st_mode & 0o777) == "0o600"
 
 
+def test_setup_command_excludes_runtime_layout_for_selected_env(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.cli as cli
+    import brainlayer.config as config
+    import brainlayer.setup as setup_helpers
+
+    calls: list[str] = []
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    env_file = tmp_path / "brainlayer.env"
+    monkeypatch.setattr(config, "get_user_env_path", lambda: env_file)
+    monkeypatch.setattr(
+        setup_helpers,
+        "ensure_spotlight_excluded_layout",
+        lambda *, env_file: calls.append(f"layout:{env_file}"),
+    )
+    monkeypatch.setattr(
+        setup_helpers,
+        "ensure_brainlayer_env",
+        lambda *_args, **_kwargs: calls.append("env") or env_file,
+    )
+
+    result = CliRunner().invoke(cli.app, ["setup", "--no-launchd"])
+
+    assert result.exit_code == 0, result.stdout
+    assert calls == [f"layout:{env_file}", "env"]
+
+
+def test_setup_command_skips_spotlight_layout_outside_macos(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.cli as cli
+    import brainlayer.setup as setup_helpers
+
+    calls: list[str] = []
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+    monkeypatch.setattr(
+        setup_helpers,
+        "ensure_spotlight_excluded_layout",
+        lambda *, env_file: calls.append(f"layout:{env_file}"),
+    )
+    monkeypatch.setattr(
+        setup_helpers,
+        "ensure_brainlayer_env",
+        lambda *_args, **_kwargs: calls.append("env") or tmp_path / "brainlayer.env",
+    )
+
+    result = CliRunner().invoke(cli.app, ["setup", "--no-launchd"])
+
+    assert result.exit_code == 0, result.stdout
+    assert calls == ["env"]
+
+
 def test_launchd_env_runner_makes_homebrew_op_available_before_loading_env() -> None:
     runner = REPO_ROOT / "scripts" / "launchd" / "brainlayer-env-run.sh"
     content = runner.read_text(encoding="utf-8")
@@ -602,6 +1011,32 @@ def test_init_command_reports_launchd_failure_without_traceback(monkeypatch) -> 
     assert "Traceback" not in result.stdout
 
 
+def test_init_command_excludes_layout_before_wizard_and_launchd(monkeypatch) -> None:
+    import brainlayer.cli as cli
+    import brainlayer.cli.wizard as wizard
+    import brainlayer.setup as setup_helpers
+
+    calls: list[str] = []
+
+    class Config:
+        gemini_env_file = Path("/tmp/brainlayer.env")
+
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    monkeypatch.setattr(wizard, "get_default_env_file", lambda: Path("/tmp/brainlayer.env"))
+    monkeypatch.setattr(
+        setup_helpers,
+        "ensure_spotlight_excluded_layout",
+        lambda *, env_file: calls.append(f"layout:{env_file}"),
+    )
+    monkeypatch.setattr(wizard, "run_wizard", lambda: calls.append("wizard") or Config())
+    monkeypatch.setattr(setup_helpers, "install_launchd", lambda *_args, **_kwargs: calls.append("launchd"))
+
+    result = CliRunner().invoke(cli.app, ["init", "--install-launchd"])
+
+    assert result.exit_code == 0, result.stdout
+    assert calls == ["layout:/tmp/brainlayer.env", "wizard", "launchd"]
+
+
 def test_config_loader_prefers_process_env_then_user_env_and_ignores_repo_root_dotenv(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -667,6 +1102,32 @@ def test_config_loader_does_not_resolve_op_when_process_env_already_has_key(tmp_
 
     assert load_brainlayer_env(user_env) == {}
     assert os.environ["GOOGLE_API_KEY"] == "from-process"
+
+
+@pytest.mark.parametrize(
+    "assignment",
+    [
+        r"BRAINLAYER_DB=/Volumes/brainlayer\ data/brainlayer.db",
+        'BRAINLAYER_DB="/outer"inner"/brainlayer.db"',
+        "export  BRAINLAYER_DB=/ignored/by/launchd/brainlayer.db",
+    ],
+)
+def test_config_loader_logs_and_falls_back_for_db_syntax_that_launchd_parses_differently(
+    tmp_path: Path, monkeypatch, caplog, assignment: str
+) -> None:
+    import brainlayer.config as runtime_config
+
+    user_env = tmp_path / "brainlayer.env"
+    user_env.write_text(f"{assignment}\n", encoding="utf-8")
+    monkeypatch.delenv("BRAINLAYER_DB", raising=False)
+    monkeypatch.setattr(runtime_config, "get_user_env_path", lambda: user_env)
+    monkeypatch.setattr(runtime_config, "_brainlayer_db_config_error", None)
+
+    assert runtime_config.load_brainlayer_env() == {}
+
+    assert "BRAINLAYER_DB" not in os.environ
+    assert runtime_config.get_brainlayer_db_config_error() is not None
+    assert "falling back to the canonical database" in caplog.text
 
 
 def test_config_loader_ignores_unreadable_user_env(monkeypatch, tmp_path: Path) -> None:
@@ -747,6 +1208,315 @@ def test_launchd_installer_preflights_all_before_loading_without_google_key(tmp_
     assert not list((home / "Library" / "LaunchAgents").glob("com.brainlayer.*.plist"))
 
 
+def test_standalone_launchd_installer_runs_spotlight_preflight_before_mkdir(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_uname = fake_bin / "uname"
+    fake_uname.write_text("#!/bin/sh\nprintf 'Darwin\\n'\n", encoding="utf-8")
+    fake_uname.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    fake_brainlayer = tmp_path / "brainlayer"
+    fake_brainlayer.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_brainlayer.chmod(0o755)
+    preflight_log = tmp_path / "preflight.log"
+    python_shim = tmp_path / "python-shim"
+    python_shim.write_text(
+        '#!/bin/sh\nprintf \'%s\\n\' "$*" > "$PREFLIGHT_LOG"\nexit 73\n',
+        encoding="utf-8",
+    )
+    python_shim.chmod(0o755)
+
+    result = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "watch"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": str(fake_brainlayer),
+            "PYTHON_BIN": str(python_shim),
+            "PREFLIGHT_LOG": str(preflight_log),
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 73
+    assert "ensure_spotlight_excluded_layout" in preflight_log.read_text(encoding="utf-8")
+    assert not (home / "Library" / "LaunchAgents").exists()
+    assert not (home / ".local" / "share" / "brainlayer").exists()
+
+
+def test_standalone_launchd_installer_preflights_selected_env_db(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_uname = fake_bin / "uname"
+    fake_uname.write_text("#!/bin/sh\nprintf 'Darwin\\n'\n", encoding="utf-8")
+    fake_uname.chmod(0o755)
+    fake_launchctl = fake_bin / "launchctl"
+    launchctl_log = tmp_path / "launchctl.log"
+    fake_launchctl.write_text("\n".join(_fake_launchctl_lines()), encoding="utf-8")
+    fake_launchctl.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    fake_brainlayer = tmp_path / "brainlayer"
+    fake_brainlayer.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_brainlayer.chmod(0o755)
+    override_data_dir = tmp_path / "brainlayer-selected"
+    transient_process_data_dir = tmp_path / "brainlayer-transient-process"
+    env_file = tmp_path / "selected.env"
+    env_file.write_text(f"BRAINLAYER_DB={override_data_dir / 'brainlayer.db'}\n", encoding="utf-8")
+    run_env = os.environ.copy()
+    run_env.update(
+        {
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": str(fake_brainlayer),
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_DB": str(transient_process_data_dir / "brainlayer.db"),
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+        }
+    )
+
+    result = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "watch"],
+        env=run_env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (override_data_dir / ".metadata_never_index").is_file()
+    assert not transient_process_data_dir.exists()
+
+
+def test_configured_env_value_matches_launchd_grammar_and_rejects_runtime_ambiguity(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import brainlayer.config as config
+
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("BRAINLAYER_DB=/from/selected/brainlayer.db\n", encoding="utf-8")
+    monkeypatch.setenv("BRAINLAYER_DB", "/from/process/brainlayer.db")
+    assert config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file) == "/from/selected/brainlayer.db"
+
+    env_file.write_text(
+        "BRAINLAYER_DB=$(not-allowed)\n"
+        "BRAINLAYER_DB=/from/first/brainlayer.db\n"
+        "BRAINLAYER_DB=/from/later/brainlayer.db\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="duplicate"):
+        config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file)
+
+    env_file.write_text(
+        "BRAINLAYER_DB=$(not-allowed)\nBRAINLAYER_DB=/from/runtime/brainlayer.db\n",
+        encoding="utf-8",
+    )
+    assert config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file) == "/from/runtime/brainlayer.db"
+
+    env_file.write_text(
+        "BRAINLAYER_DB=/from/runtime/brainlayer.db\nBRAINLAYER_DB=\"$(op read 'op://Private/Database/path')\"\n",
+        encoding="utf-8",
+    )
+
+    def fail_op_read(*args, **kwargs):
+        raise AssertionError("BRAINLAYER_DB command substitutions must be skipped")
+
+    monkeypatch.setattr(config.subprocess, "run", fail_op_read)
+    with pytest.raises(RuntimeError, match="command substitution"):
+        config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file)
+
+    env_file.write_text("BRAINLAYER_DB=\"$(op read 'op://Private/Database/path')\"\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="command substitution"):
+        config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file)
+
+    env_file.write_text(r"BRAINLAYER_DB=/Volumes/brainlayer\ data/brainlayer.db" + "\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="parse identically"):
+        config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file)
+
+    env_file.write_text('BRAINLAYER_DB="/outer"inner"/brainlayer.db"\n', encoding="utf-8")
+    with pytest.raises(RuntimeError, match="parse identically"):
+        config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file)
+
+    env_file.write_text('BRAINLAYER_DB="/Volumes/brainlayer data/brainlayer.db"\n', encoding="utf-8")
+    assert config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file) == (
+        "/Volumes/brainlayer data/brainlayer.db"
+    )
+
+    env_file.write_text(
+        "BRAINLAYER_DB=/from/runtime/brainlayer.db\nexport  BRAINLAYER_DB=/ignored/by/launchd/brainlayer.db\n",
+        encoding="utf-8",
+    )
+    assert config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file) == "/from/runtime/brainlayer.db"
+
+
+def test_configured_env_value_rejects_unreadable_file(tmp_path: Path, monkeypatch, caplog) -> None:
+    import brainlayer.config as config
+
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("BRAINLAYER_DB=/unused/brainlayer.db\n", encoding="utf-8")
+    original_read_text = Path.read_text
+
+    def fail_read(path: Path, *args, **kwargs):
+        if path == env_file:
+            raise PermissionError("blocked")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fail_read)
+
+    with pytest.raises(RuntimeError, match="Could not read BrainLayer env file"):
+        config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file)
+    assert "Could not read BrainLayer env file" in caplog.text
+
+
+def test_launchd_installer_rejects_unknown_target_before_creating_roots(tmp_path: Path) -> None:
+    fake_brainlayer = tmp_path / "brainlayer"
+    fake_brainlayer.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_brainlayer.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+
+    result = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "not-a-target"],
+        env={**os.environ, "HOME": str(home), "BRAINLAYER_BIN": str(fake_brainlayer)},
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "Usage:" in result.stdout
+    assert not (home / ".local" / "share" / "brainlayer").exists()
+    assert not (home / ".brainlayer").exists()
+
+
+@pytest.mark.parametrize("action", ["remove", "unload"])
+def test_launchd_teardown_does_not_create_runtime_roots(tmp_path: Path, action: str) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_launchctl.chmod(0o755)
+    fake_brainlayer = tmp_path / "brainlayer"
+    fake_brainlayer.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_brainlayer.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+
+    result = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), action],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": str(fake_brainlayer),
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not (home / ".local" / "share" / "brainlayer").exists()
+    assert not (home / ".brainlayer").exists()
+    assert not (home / "Library" / "Logs" / "brainlayer").exists()
+
+
+def test_launchd_load_existing_unmarked_install_skips_spotlight_preflight(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text("\n".join(_fake_launchctl_lines()), encoding="utf-8")
+    fake_launchctl.chmod(0o755)
+    fake_brainlayer = tmp_path / "brainlayer"
+    fake_brainlayer.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_brainlayer.chmod(0o755)
+    home = tmp_path / "home"
+    launch_dir = home / "Library" / "LaunchAgents"
+    launch_dir.mkdir(parents=True)
+    (launch_dir / "com.brainlayer.enrichment.plist").write_bytes(
+        plistlib.dumps({"Label": "com.brainlayer.enrichment", "ProgramArguments": ["/usr/bin/true"]})
+    )
+    legacy_data = home / ".local" / "share" / "brainlayer"
+    legacy_data.mkdir(parents=True)
+    (legacy_data / "brainlayer.db").touch()
+
+    result = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "load", "enrichment"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": str(fake_brainlayer),
+            "PYTHON_BIN": sys.executable,
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "bootstrap" in launchctl_log.read_text(encoding="utf-8")
+    assert not (legacy_data / ".metadata_never_index").exists()
+
+
+def test_launchd_install_preflight_refusal_names_runbook_without_traceback(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_uname = fake_bin / "uname"
+    fake_uname.write_text("#!/bin/sh\nprintf 'Darwin\\n'\n", encoding="utf-8")
+    fake_uname.chmod(0o755)
+    fake_brainlayer = tmp_path / "brainlayer"
+    fake_brainlayer.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_brainlayer.chmod(0o755)
+    home = tmp_path / "home"
+    legacy_data = home / ".local" / "share" / "brainlayer"
+    legacy_data.mkdir(parents=True)
+    (legacy_data / "brainlayer.db").touch()
+
+    result = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "watch"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": str(fake_brainlayer),
+            "PYTHON_BIN": sys.executable,
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "docs/operations/spotlight-exclusion-migration.md" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_spotlight_runbook_has_fail_closed_positive_control_and_complete_writer_fence() -> None:
+    runbook = (REPO_ROOT / "docs" / "operations" / "spotlight-exclusion-migration.md").read_text(encoding="utf-8")
+
+    assert "spotlight_positive_control_path" in runbook
+    assert 'spotlight_positive_control_parent="${HOME:?}/Documents"' in runbook
+    assert "/.local/share/brainlayer-spotlight-positive-control" not in runbook
+    assert "SPOTLIGHT PROBE INCONCLUSIVE" in runbook
+    assert "com.mcplayer.brainlayer-proxy" in runbook
+    assert "com.brainlayer.gemini-loopback" in runbook
+    assert "com.brainlayer.t3-ingest" in runbook
+    assert "-iTCP:48123" in runbook
+
+
 def test_launchd_installer_renders_brainlayer_python_override(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -789,7 +1559,7 @@ def test_launchd_installer_renders_brainlayer_python_override(tmp_path: Path) ->
 
 def test_packaged_launchd_installer_renders_p0_counter_console_shim(tmp_path: Path) -> None:
     launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
-    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    _copy_packaged_launchd(launchd_dir)
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     launchctl_log = tmp_path / "launchctl.log"
@@ -841,7 +1611,7 @@ def test_packaged_launchd_installer_renders_p0_counter_console_shim(tmp_path: Pa
 
 def test_packaged_launchd_installer_installs_tier0_watchdog_without_env_runner(tmp_path: Path) -> None:
     launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
-    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    _copy_packaged_launchd(launchd_dir)
     source_script = REPO_ROOT / "scripts" / "tier0-watchdog.sh"
     assert source_script.exists(), "Tier-0 runtime script is missing"
     shutil.copy2(source_script, launchd_dir / "tier0-watchdog.sh")
@@ -905,7 +1675,7 @@ def test_packaged_launchd_installer_installs_tier0_watchdog_without_env_runner(t
 
 def test_packaged_launchd_installer_installs_throughput_watchdog(tmp_path: Path) -> None:
     launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
-    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    _copy_packaged_launchd(launchd_dir)
     source_script = REPO_ROOT / "scripts" / "launchd" / "throughput-watchdog.py"
 
     fake_bin = tmp_path / "bin"
@@ -964,7 +1734,7 @@ def test_packaged_launchd_installer_installs_throughput_watchdog(tmp_path: Path)
 
 def test_packaged_launchd_installer_installs_hotlane_daemon(tmp_path: Path) -> None:
     launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
-    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    _copy_packaged_launchd(launchd_dir)
     source_script = REPO_ROOT / "scripts" / "hotlane_brainbar_daemon.py"
     shutil.copy2(source_script, launchd_dir / "hotlane_brainbar_daemon.py")
 
@@ -1027,7 +1797,7 @@ def test_packaged_launchd_installer_installs_hotlane_daemon(tmp_path: Path) -> N
 
 def test_hotlane_installer_accepts_resolved_python_interpreter(tmp_path: Path) -> None:
     launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
-    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    _copy_packaged_launchd(launchd_dir)
     shutil.copy2(
         REPO_ROOT / "scripts" / "hotlane_brainbar_daemon.py",
         launchd_dir / "hotlane_brainbar_daemon.py",
@@ -1080,7 +1850,7 @@ def test_hotlane_installer_accepts_resolved_python_interpreter(tmp_path: Path) -
 
 def test_hotlane_installer_rejects_unload_timeout_before_bootstrap(tmp_path: Path) -> None:
     launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
-    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    _copy_packaged_launchd(launchd_dir)
     shutil.copy2(
         REPO_ROOT / "scripts" / "hotlane_brainbar_daemon.py",
         launchd_dir / "hotlane_brainbar_daemon.py",
@@ -1141,7 +1911,7 @@ def test_hotlane_installer_rejects_unload_timeout_before_bootstrap(tmp_path: Pat
 
 def test_launchd_installer_derives_unload_window_from_plist_exit_timeout(tmp_path: Path) -> None:
     launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
-    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    _copy_packaged_launchd(launchd_dir)
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -1232,7 +2002,7 @@ def test_launchd_installer_rejects_invalid_unload_attempt_overrides(tmp_path: Pa
     for index, (service, env_name, value) in enumerate(cases):
         case_dir = tmp_path / str(index)
         launchd_dir = case_dir / "site-packages" / "brainlayer" / "launchd"
-        shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+        _copy_packaged_launchd(launchd_dir)
         if service == "hotlane":
             shutil.copy2(
                 REPO_ROOT / "scripts" / "hotlane_brainbar_daemon.py",
@@ -1278,7 +2048,7 @@ def test_launchd_installer_rejects_invalid_unload_attempt_overrides(tmp_path: Pa
 
 def test_hotlane_installer_accepts_supervisor_reload_before_unload_poll(tmp_path: Path) -> None:
     launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
-    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    _copy_packaged_launchd(launchd_dir)
     shutil.copy2(
         REPO_ROOT / "scripts" / "hotlane_brainbar_daemon.py",
         launchd_dir / "hotlane_brainbar_daemon.py",
@@ -1364,7 +2134,7 @@ def test_hotlane_installer_accepts_supervisor_reload_before_unload_poll(tmp_path
 
 def test_launchd_installer_accepts_supervisor_reload_for_healed_service(tmp_path: Path) -> None:
     launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
-    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    _copy_packaged_launchd(launchd_dir)
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -1439,7 +2209,7 @@ def test_launchd_installer_accepts_supervisor_reload_for_healed_service(tmp_path
 
 def test_hotlane_installer_rejects_pid_change_after_failed_bootout(tmp_path: Path) -> None:
     launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
-    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    _copy_packaged_launchd(launchd_dir)
     shutil.copy2(
         REPO_ROOT / "scripts" / "hotlane_brainbar_daemon.py",
         launchd_dir / "hotlane_brainbar_daemon.py",
@@ -1517,7 +2287,7 @@ def test_hotlane_installer_rejects_pid_change_after_failed_bootout(tmp_path: Pat
 
 def test_hotlane_installer_rejects_launchd_job_that_is_not_running(tmp_path: Path) -> None:
     launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
-    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    _copy_packaged_launchd(launchd_dir)
     shutil.copy2(
         REPO_ROOT / "scripts" / "hotlane_brainbar_daemon.py",
         launchd_dir / "hotlane_brainbar_daemon.py",
@@ -1567,7 +2337,7 @@ def test_hotlane_installer_rejects_launchd_job_that_is_not_running(tmp_path: Pat
 
 def test_hotlane_installer_rejects_stable_disabled_env_runner_pid(tmp_path: Path) -> None:
     launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
-    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    _copy_packaged_launchd(launchd_dir)
     shutil.copy2(
         REPO_ROOT / "scripts" / "hotlane_brainbar_daemon.py",
         launchd_dir / "hotlane_brainbar_daemon.py",
@@ -1623,7 +2393,7 @@ def test_hotlane_installer_rejects_stable_disabled_env_runner_pid(tmp_path: Path
 
 def test_hotlane_installer_accepts_supervisor_bootstrap_race_after_confirmed_unload(tmp_path: Path) -> None:
     launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
-    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    _copy_packaged_launchd(launchd_dir)
     shutil.copy2(
         REPO_ROOT / "scripts" / "hotlane_brainbar_daemon.py",
         launchd_dir / "hotlane_brainbar_daemon.py",
@@ -1748,7 +2518,7 @@ def test_launchd_installer_renders_homebrew_opt_symlink_instead_of_cellar_versio
     cellar_root = fake_homebrew / "Cellar" / "brainlayer" / "9.9.9"
     opt_root = fake_homebrew / "opt" / "brainlayer"
     launchd_dir = cellar_root / "libexec" / "lib" / "python3.12" / "site-packages" / "brainlayer" / "launchd"
-    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    _copy_packaged_launchd(launchd_dir)
     opt_root.parent.mkdir(parents=True)
     opt_root.symlink_to(cellar_root)
     fake_bin = tmp_path / "bin"
@@ -1882,6 +2652,7 @@ def test_launchd_installer_does_not_load_services_when_env_runner_install_fails(
             "HOME": str(home),
             "BRAINLAYER_BIN": sys.executable,
             "PYTHON_BIN": sys.executable,
+            "PYTHONPATH": str(REPO_ROOT / "src"),
             "BRAINLAYER_ENV_FILE": str(env_file),
             "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
         },

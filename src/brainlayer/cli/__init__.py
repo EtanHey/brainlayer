@@ -481,10 +481,13 @@ def init(
     """Interactive setup wizard — detects your environment and configures BrainLayer."""
     import subprocess
 
+    from ..setup import ensure_spotlight_excluded_layout
     from ..setup import install_launchd as install_launchd_agents
-    from .wizard import run_wizard
+    from .wizard import get_default_env_file, run_wizard
 
     try:
+        if sys.platform == "darwin":
+            ensure_spotlight_excluded_layout(env_file=get_default_env_file())
         config = run_wizard()
         if should_install_launchd:
             install_launchd_agents("all", env_file=config.gemini_env_file)
@@ -493,6 +496,7 @@ def init(
         FileExistsError,
         PermissionError,
         TimeoutError,
+        RuntimeError,
         ValueError,
         subprocess.CalledProcessError,
     ) as exc:
@@ -534,9 +538,18 @@ def setup(
     """Create brainlayer.env and optionally bootstrap launchd agents."""
     import subprocess
 
-    from ..setup import ensure_brainlayer_env, install_launchd, migrate_legacy_mcp_configs, verify_mcp_transport
+    from ..config import get_user_env_path
+    from ..setup import (
+        ensure_brainlayer_env,
+        ensure_spotlight_excluded_layout,
+        install_launchd,
+        migrate_legacy_mcp_configs,
+        verify_mcp_transport,
+    )
 
     try:
+        if sys.platform == "darwin":
+            ensure_spotlight_excluded_layout(env_file=env_file or get_user_env_path())
         resolved_env_file = ensure_brainlayer_env(
             env_file,
             google_api_key_op_ref=google_api_key_op_ref,

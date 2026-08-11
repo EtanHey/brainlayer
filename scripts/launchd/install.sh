@@ -82,8 +82,55 @@ if [ ! -x "$BRAINLAYER_BIN" ]; then
     exit 1
 fi
 
-mkdir -p "$LAUNCH_DIR" "$LOG_DIR" "$LOG_DIR/brainlayer" "$BRAINLAYER_LOG_DIR" "$BRAINLAYER_LIB_DIR"
-mkdir -p "$HOME/.brainlayer/logs" "$HOME/.brainlayer/queue"
+BRAINLAYER_INSTALL_ACTION="${1:-all}"
+launchd_install_usage() {
+    echo "Usage: $0 [index|t3-ingest|watch|enrich|enrichment|decay|drain|hotlane|hotlane-brainbar|repair-fts|load [name]|unload [name]|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|tier0|tier0-watchdog|throughput-watchdog|p0-counter|all|remove]"
+}
+
+case "$BRAINLAYER_INSTALL_ACTION" in
+    index|t3-ingest|watch|enrich|enrichment|decay|drain|hotlane|hotlane-brainbar|repair-fts|load|unload|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|tier0|tier0-watchdog|throughput-watchdog|p0-counter|all|remove)
+        ;;
+    *)
+        launchd_install_usage
+        exit 1
+        ;;
+esac
+
+case "$BRAINLAYER_INSTALL_ACTION" in
+    remove|unload|load)
+        ;;
+    *)
+        if [ "$(uname -s)" = "Darwin" ]; then
+            if [ -d "$BRAINLAYER_DIR/src/brainlayer" ]; then
+                BRAINLAYER_PREFLIGHT_PYTHONPATH="$BRAINLAYER_DIR/src"
+            else
+                BRAINLAYER_PREFLIGHT_PYTHONPATH="$BRAINLAYER_DIR"
+            fi
+            if [ -x "$PYTHON_BIN" ]; then
+                BRAINLAYER_PREFLIGHT_PYTHON="$PYTHON_BIN"
+            else
+                BRAINLAYER_PREFLIGHT_PYTHON="$(command -v python3)"
+            fi
+            PYTHONPATH="$BRAINLAYER_PREFLIGHT_PYTHONPATH${PYTHONPATH:+:$PYTHONPATH}" \
+                "$BRAINLAYER_PREFLIGHT_PYTHON" -c \
+                '
+import os
+from pathlib import Path
+from brainlayer.spotlight import ensure_spotlight_excluded_layout
+
+env_file = Path(os.environ["BRAINLAYER_ENV_FILE"]) if os.environ.get("BRAINLAYER_ENV_FILE") else None
+try:
+    ensure_spotlight_excluded_layout(env_file=env_file)
+except RuntimeError as exc:
+    raise SystemExit(
+        f"ERROR: {exc}; run docs/operations/spotlight-exclusion-migration.md before installing launchd jobs"
+    ) from None
+'
+        fi
+        mkdir -p "$LAUNCH_DIR" "$LOG_DIR" "$LOG_DIR/brainlayer" "$BRAINLAYER_LOG_DIR" "$BRAINLAYER_LIB_DIR"
+        mkdir -p "$HOME/.brainlayer/logs" "$HOME/.brainlayer/queue"
+        ;;
+esac
 
 install_env_runner() {
     local src="$SCRIPT_DIR/brainlayer-env-run.sh"
@@ -735,7 +782,7 @@ case "${1:-all}" in
         rm -f "$HOTLANE_BRAINBAR_DST"
         ;;
     *)
-        echo "Usage: $0 [index|t3-ingest|watch|enrich|enrichment|decay|drain|hotlane|repair-fts|load [name]|unload [name]|checkpoint|backup|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|tier0-watchdog|throughput-watchdog|p0-counter|all|remove]"
+        launchd_install_usage
         exit 1
         ;;
 esac

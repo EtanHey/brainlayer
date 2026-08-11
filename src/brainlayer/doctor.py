@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .alarm import BrainLayerAlarm, build_alarm, emit_alarm
+from .config import get_brainlayer_db_config_error
 from .deploy_drift import DEFAULT_DEPLOY_DRIFT_LABELS, default_deploy_provenance_dir, detect_deploy_drift
 from .drain_liveness import (
     DEFAULT_DRAIN_LIVENESS_STALE_SECONDS,
@@ -43,7 +45,7 @@ from .launchd_primitive import (
     is_launchd_label_loaded,
     verify_launchd_label_loaded,
 )
-from .paths import get_db_path
+from .paths import SPOTLIGHT_EXCLUSION_MARKER, get_db_path, is_spotlight_excluded
 from .search_repo import clear_hybrid_search_cache
 from .vector_store import VectorStore
 
@@ -72,6 +74,34 @@ class DoctorIssue:
     details: dict[str, Any] = field(default_factory=dict)
 
 
+def _spotlight_exclusion_issue(db_path: Path) -> DoctorIssue | None:
+    try:
+        data_dir = db_path.expanduser().parent.resolve(strict=False)
+        excluded = is_spotlight_excluded(data_dir)
+    except (OSError, RuntimeError) as exc:
+        return DoctorIssue(
+            "spotlight_exclusion_check_failed",
+            "warning",
+            "Could not verify Spotlight exclusion for the BrainLayer data directory",
+            {"db_path": str(db_path), "error": str(exc)},
+        )
+    if excluded:
+        return None
+    return DoctorIssue(
+        "spotlight_indexing_enabled",
+        "warning",
+        "BrainLayer data directory is not excluded from Spotlight indexing",
+        {
+            "data_dir": str(data_dir),
+            "marker": SPOTLIGHT_EXCLUSION_MARKER,
+            "remediation": (
+                "run `brainlayer setup` for a fresh or empty layout; "
+                "for existing data, follow the Spotlight exclusion migration runbook"
+            ),
+        },
+    )
+
+
 @dataclass
 class DoctorConfig:
     db_path: Path = field(default_factory=get_db_path)
@@ -98,6 +128,7 @@ class DoctorConfig:
     version_check_enabled: bool = True
     version_check_required: bool = False
     version_check_path: Path = field(default_factory=default_version_check_path)
+    spotlight_check_enabled: bool = field(default_factory=lambda: sys.platform == "darwin")
 
 
 @dataclass
@@ -428,6 +459,15 @@ def run_doctor(
     def warning(code: str, message: str, **details: Any) -> None:
         result.issues.append(DoctorIssue(code, "warning", message, details))
 
+    db_config_error = get_brainlayer_db_config_error()
+    if db_config_error is not None:
+        fatal(
+            "brainlayer_db_config_invalid",
+            "BRAINLAYER_DB configuration is invalid; runtime fell back to the canonical database",
+            error=db_config_error,
+            remediation="fix BRAINLAYER_DB in ~/.config/brainlayer/brainlayer.env, then rerun doctor",
+        )
+
     if config.version_check_enabled:
         _check_brainbar_version_consistency(
             result,
@@ -435,6 +475,11 @@ def run_doctor(
             version_check_required=config.version_check_required,
             command_runner=command_runner,
         )
+
+    if config.spotlight_check_enabled:
+        spotlight_issue = _spotlight_exclusion_issue(config.db_path)
+        if spotlight_issue is not None:
+            result.issues.append(spotlight_issue)
 
     store: VectorStore | None = None
     try:

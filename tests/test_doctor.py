@@ -382,6 +382,112 @@ def test_run_doctor_exits_zero_on_healthy_fixture(tmp_path):
     assert not [issue for issue in result.issues if issue.severity == "fatal"]
 
 
+def test_spotlight_exclusion_issue_warns_for_unmarked_db_directory(tmp_path):
+    from brainlayer import doctor
+
+    db_path = tmp_path / "data" / "brainlayer.db"
+    db_path.parent.mkdir()
+
+    issue = doctor._spotlight_exclusion_issue(db_path)
+
+    assert issue is not None
+    assert issue.code == "spotlight_indexing_enabled"
+    assert issue.severity == "warning"
+    assert issue.details["data_dir"] == str(db_path.parent)
+    assert issue.details["marker"] == ".metadata_never_index"
+
+
+def test_spotlight_exclusion_issue_accepts_marker_on_data_directory(tmp_path):
+    from brainlayer import doctor
+
+    db_path = tmp_path / "data" / "brainlayer.db"
+    db_path.parent.mkdir()
+    (db_path.parent / ".metadata_never_index").touch()
+
+    assert doctor._spotlight_exclusion_issue(db_path) is None
+
+
+def test_spotlight_exclusion_issue_reports_path_check_failure(tmp_path, monkeypatch):
+    from brainlayer import doctor
+
+    monkeypatch.setattr(
+        doctor,
+        "is_spotlight_excluded",
+        lambda _path: (_ for _ in ()).throw(RuntimeError("symlink loop")),
+    )
+
+    issue = doctor._spotlight_exclusion_issue(tmp_path / "brainlayer.db")
+
+    assert issue is not None
+    assert issue.code == "spotlight_exclusion_check_failed"
+    assert issue.severity == "warning"
+
+
+@pytest.mark.parametrize(("platform", "expected"), [("darwin", True), ("linux", False)])
+def test_doctor_config_defaults_spotlight_check_by_platform(tmp_path, monkeypatch, platform, expected):
+    from brainlayer import doctor
+
+    monkeypatch.setattr(doctor.sys, "platform", platform)
+
+    config = doctor.DoctorConfig(db_path=tmp_path / "brainlayer.db")
+
+    assert config.spotlight_check_enabled is expected
+
+
+def test_run_doctor_reports_unexcluded_data_directory_as_warning(tmp_path):
+    from brainlayer.doctor import run_doctor
+
+    db_path = tmp_path / "unexcluded" / "healthy.db"
+    db_path.parent.mkdir()
+    _build_db(db_path)
+    config = _doctor_config(tmp_path, db_path)
+    config.spotlight_check_enabled = True
+
+    result = run_doctor(
+        config,
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+
+    issue = next(issue for issue in result.issues if issue.code == "spotlight_indexing_enabled")
+    assert issue.severity == "warning"
+    assert result.exit_code == 0
+
+
+def test_poisoned_db_env_falls_back_and_doctor_reports_configuration_error(tmp_path, monkeypatch, caplog):
+    import brainlayer.config as runtime_config
+    from brainlayer.doctor import run_doctor
+
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text(
+        "BRAINLAYER_DB=/first/brainlayer.db\nBRAINLAYER_DB=/second/brainlayer.db\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("BRAINLAYER_DB", raising=False)
+    monkeypatch.setattr(runtime_config, "get_user_env_path", lambda: env_file)
+    monkeypatch.setattr(runtime_config, "_brainlayer_db_config_error", None, raising=False)
+
+    assert runtime_config.load_brainlayer_env() == {}
+    assert "BRAINLAYER_DB" not in os.environ
+    assert "falling back to the canonical database" in caplog.text
+
+    db_path = tmp_path / "canonical" / "brainlayer.db"
+    db_path.parent.mkdir()
+    _build_db(db_path)
+    result = run_doctor(
+        _doctor_config(tmp_path, db_path),
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+
+    issue = next(issue for issue in result.issues if issue.code == "brainlayer_db_config_invalid")
+    assert issue.severity == "fatal"
+    assert "duplicate valid BRAINLAYER_DB assignments" in issue.details["error"]
+    assert result.exit_code == 1
+
+
 def test_run_doctor_reports_unavailable_process_snapshot_without_false_daemon_death(tmp_path):
     from brainlayer.doctor import run_doctor
 

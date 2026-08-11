@@ -13,9 +13,33 @@ from importlib import resources
 from pathlib import Path
 
 from .cli.wizard import DEFAULT_BRAINLAYER_CONFIG, write_gemini_env_file
+from .paths import get_canonical_db_path, resolve_db_path
+from .spotlight import ensure_spotlight_excluded_layout as _ensure_spotlight_excluded_layout
 
 DEFAULT_GOOGLE_API_KEY_OP_REF = "op://Private/Google AI/Gemini API key"
 DEFAULT_MCP_PROTOCOL_VERSION = "2025-06-18"
+
+
+def ensure_spotlight_excluded_layout(
+    *,
+    data_dir: Path | None = None,
+    env_file: Path | None = None,
+    runtime_dir: Path | None = None,
+    launchd_log_dir: Path | None = None,
+    counter_dir: Path | None = None,
+) -> tuple[Path, ...]:
+    """Create marker-backed roots for every high-churn BrainLayer runtime path."""
+    return _ensure_spotlight_excluded_layout(
+        data_dir=data_dir,
+        env_file=env_file,
+        runtime_dir=runtime_dir,
+        launchd_log_dir=launchd_log_dir,
+        counter_dir=counter_dir,
+        resolve_db_path_fn=resolve_db_path,
+        get_canonical_db_path_fn=get_canonical_db_path,
+        home_fn=Path.home,
+        ismount_fn=os.path.ismount,
+    )
 
 
 def get_default_env_file() -> Path:
