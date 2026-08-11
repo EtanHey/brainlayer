@@ -170,11 +170,29 @@ def load_brainlayer_env(
         return {}
 
     loaded: dict[str, str] = {}
+    if "BRAINLAYER_DB" not in os.environ:
+        configured_db = configured_brainlayer_env_value("BRAINLAYER_DB", target)
+        direct_db_values = []
+        for line in lines:
+            assignment = _split_env_assignment(line)
+            if assignment is None or assignment[0] != "BRAINLAYER_DB":
+                continue
+            value = _parse_env_value(assignment[1])
+            if value is not None:
+                direct_db_values.append(value)
+        if any(value != configured_db for value in direct_db_values):
+            raise RuntimeError(f"BRAINLAYER_DB must parse identically for launchd and direct CLI use in {target}")
+        if configured_db is not None:
+            os.environ["BRAINLAYER_DB"] = configured_db
+            loaded["BRAINLAYER_DB"] = configured_db
+
     for line in lines:
         assignment = _split_env_assignment(line)
         if assignment is None:
             continue
         key, raw_value = assignment
+        if key == "BRAINLAYER_DB":
+            continue
         if key in os.environ:
             continue
         value = _parse_env_value(raw_value)

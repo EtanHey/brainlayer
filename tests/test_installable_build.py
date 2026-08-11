@@ -1104,6 +1104,29 @@ def test_config_loader_does_not_resolve_op_when_process_env_already_has_key(tmp_
     assert os.environ["GOOGLE_API_KEY"] == "from-process"
 
 
+@pytest.mark.parametrize(
+    "assignment",
+    [
+        r"BRAINLAYER_DB=/Volumes/brainlayer\ data/brainlayer.db",
+        'BRAINLAYER_DB="/outer"inner"/brainlayer.db"',
+        "export  BRAINLAYER_DB=/ignored/by/launchd/brainlayer.db",
+    ],
+)
+def test_config_loader_rejects_db_syntax_that_launchd_parses_differently(
+    tmp_path: Path, monkeypatch, assignment: str
+) -> None:
+    from brainlayer.config import load_brainlayer_env
+
+    user_env = tmp_path / "brainlayer.env"
+    user_env.write_text(f"{assignment}\n", encoding="utf-8")
+    monkeypatch.delenv("BRAINLAYER_DB", raising=False)
+
+    with pytest.raises(RuntimeError, match="launchd and direct CLI"):
+        load_brainlayer_env(user_env)
+
+    assert "BRAINLAYER_DB" not in os.environ
+
+
 def test_config_loader_ignores_unreadable_user_env(monkeypatch, tmp_path: Path) -> None:
     from brainlayer.config import load_brainlayer_env
 
