@@ -60,6 +60,21 @@ def _parse_launchd_env_value(raw_value: str) -> str:
     return value
 
 
+def _split_launchd_env_assignment(line: str) -> tuple[str, str] | None:
+    """Match brainlayer-env-run.sh's deliberately simple assignment grammar."""
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or "=" not in stripped:
+        return None
+    if stripped.startswith("export "):
+        stripped = stripped.removeprefix("export ")
+
+    key, raw_value = stripped.split("=", 1)
+    key = key.rstrip()
+    if not key or not key.replace("_", "").isalnum() or key[0].isdigit():
+        return None
+    return key, raw_value.lstrip()
+
+
 def _resolve_op_read_value(value_text: str) -> str | None:
     """Resolve exactly quoted $(op read 'op://...') values without a shell."""
     try:
@@ -110,7 +125,7 @@ def configured_brainlayer_env_value(name: str, env_path: Path | None = None) -> 
 
     selected: str | None = None
     for line in lines:
-        assignment = _split_env_assignment(line)
+        assignment = _split_launchd_env_assignment(line)
         if assignment is None or assignment[0] != name:
             continue
         if "$(" in assignment[1] or "`" in assignment[1]:

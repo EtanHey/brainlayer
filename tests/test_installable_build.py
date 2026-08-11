@@ -1261,6 +1261,12 @@ def test_configured_env_value_matches_selected_file_last_assignment(tmp_path: Pa
         "/Volumes/brainlayer data/brainlayer.db"
     )
 
+    env_file.write_text(
+        "BRAINLAYER_DB=/from/runtime/brainlayer.db\nexport  BRAINLAYER_DB=/ignored/by/launchd/brainlayer.db\n",
+        encoding="utf-8",
+    )
+    assert config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file) == "/from/runtime/brainlayer.db"
+
 
 def test_configured_env_value_logs_unreadable_file(tmp_path: Path, monkeypatch, caplog) -> None:
     import brainlayer.config as config
