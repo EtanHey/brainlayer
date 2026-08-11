@@ -371,6 +371,50 @@ def test_setup_uses_selected_env_file_db_override(tmp_path: Path, monkeypatch) -
     assert (override_data_dir / ".metadata_never_index").is_file()
 
 
+def test_setup_rejects_selected_env_db_file_symlink_before_creating_roots(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.setup as setup_helpers
+
+    target = tmp_path / "target.db"
+    target.touch()
+    override_data_dir = tmp_path / "brainlayer-selected"
+    override_data_dir.mkdir()
+    linked_db = override_data_dir / "brainlayer.db"
+    linked_db.symlink_to(target)
+    canonical_data_dir = tmp_path / "canonical-data"
+    env_file = tmp_path / "selected.env"
+    env_file.write_text(f"BRAINLAYER_DB={linked_db}\n", encoding="utf-8")
+    monkeypatch.setattr(setup_helpers, "get_canonical_db_path", lambda: canonical_data_dir / "brainlayer.db")
+
+    with pytest.raises(RuntimeError, match="must not be a symbolic link"):
+        setup_helpers.ensure_spotlight_excluded_layout(
+            env_file=env_file,
+            runtime_dir=tmp_path / "runtime",
+            launchd_log_dir=tmp_path / "launchd-logs",
+            counter_dir=tmp_path / "counter",
+        )
+
+    assert not canonical_data_dir.exists()
+
+
+def test_setup_rejects_selected_env_runtime_path_override_before_creating_roots(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.setup as setup_helpers
+
+    canonical_data_dir = tmp_path / "canonical-data"
+    env_file = tmp_path / "selected.env"
+    env_file.write_text(f"BRAINLAYER_QUEUE_DIR={tmp_path / 'queue-override'}\n", encoding="utf-8")
+    monkeypatch.setattr(setup_helpers, "get_canonical_db_path", lambda: canonical_data_dir / "brainlayer.db")
+
+    with pytest.raises(RuntimeError, match="BRAINLAYER_QUEUE_DIR"):
+        setup_helpers.ensure_spotlight_excluded_layout(
+            env_file=env_file,
+            runtime_dir=tmp_path / "runtime",
+            launchd_log_dir=tmp_path / "launchd-logs",
+            counter_dir=tmp_path / "counter",
+        )
+
+    assert not canonical_data_dir.exists()
+
+
 def test_spotlight_env_file_without_db_uses_canonical_not_process_override(tmp_path: Path, monkeypatch) -> None:
     from brainlayer.spotlight import ensure_spotlight_excluded_layout
 
@@ -1282,7 +1326,7 @@ def test_configured_env_value_matches_launchd_grammar_and_rejects_runtime_ambigu
     assert config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file) == "/from/runtime/brainlayer.db"
 
 
-def test_configured_env_value_logs_unreadable_file(tmp_path: Path, monkeypatch, caplog) -> None:
+def test_configured_env_value_rejects_unreadable_file(tmp_path: Path, monkeypatch, caplog) -> None:
     import brainlayer.config as config
 
     env_file = tmp_path / "brainlayer.env"
@@ -1296,7 +1340,8 @@ def test_configured_env_value_logs_unreadable_file(tmp_path: Path, monkeypatch, 
 
     monkeypatch.setattr(Path, "read_text", fail_read)
 
-    assert config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file) is None
+    with pytest.raises(RuntimeError, match="Could not read BrainLayer env file"):
+        config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file)
     assert "Could not read BrainLayer env file" in caplog.text
 
 

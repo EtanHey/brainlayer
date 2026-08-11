@@ -19,6 +19,42 @@ _DATA_CHILDREN = (
     "storage",
 )
 _RUNTIME_CHILDREN = ("logs", "quarantine", "queue")
+_UNSUPPORTED_RUNTIME_PATH_OVERRIDES = (
+    "BRAINLAYER_BACKUP_LOG_PATH",
+    "BRAINLAYER_BACKUP_STAGING_DIR",
+    "BRAINLAYER_DRAIN_HEALTH_PATH",
+    "BRAINLAYER_DRAIN_LOG_PATH",
+    "BRAINLAYER_ENRICH_COST_DIR",
+    "BRAINLAYER_JSONL_BACKUP_LOG_PATH",
+    "BRAINLAYER_JSONL_BACKUP_STAGING_DIR",
+    "BRAINLAYER_JSONL_BACKUP_STATE_PATH",
+    "BRAINLAYER_LOG_DIR",
+    "BRAINLAYER_OFFSETS_PATH",
+    "BRAINLAYER_P0_COUNTER_DIR",
+    "BRAINLAYER_QUEUE_DIR",
+    "BRAINLAYER_WATCHER_HEALTH_PATH",
+    "BRAINLAYER_WATCHER_OFFSETS_PATH",
+    "BRAINLAYER_WATCHER_QUARANTINE_DIR",
+    "BRAINLAYER_WRITER_HEARTBEAT_DIR",
+    "BRAINLAYER_WRITER_TELEMETRY_PATH",
+)
+
+
+def _data_root_from_db_path(db_path: Path) -> Path:
+    expanded = db_path.expanduser()
+    if expanded.is_symlink():
+        raise RuntimeError(f"BRAINLAYER_DB must not be a symbolic link: {expanded}")
+    return expanded.parent
+
+
+def _reject_runtime_path_overrides(env_file: Path) -> None:
+    from .config import configured_brainlayer_env_value
+
+    for name in _UNSUPPORTED_RUNTIME_PATH_OVERRIDES:
+        if configured_brainlayer_env_value(name, env_file) not in (None, ""):
+            raise RuntimeError(
+                f"{name} is not supported by the Spotlight preflight; remove the override before installation"
+            )
 
 
 def _validate_override_data_root(
@@ -77,6 +113,8 @@ def ensure_spotlight_excluded_layout(
 ) -> Tuple[Path, ...]:
     """Create marker-backed roots for every high-churn BrainLayer runtime path."""
     home = home_fn()
+    if env_file is not None:
+        _reject_runtime_path_overrides(env_file)
     if data_dir is not None:
         data_roots = (data_dir,)
     else:
@@ -85,9 +123,9 @@ def ensure_spotlight_excluded_layout(
             from .config import configured_brainlayer_env_value
 
             configured_db = configured_brainlayer_env_value("BRAINLAYER_DB", env_file)
-            active_data_root = Path(configured_db).expanduser().parent if configured_db else canonical_data_root
+            active_data_root = _data_root_from_db_path(Path(configured_db)) if configured_db else canonical_data_root
         else:
-            active_data_root = resolve_db_path_fn().parent
+            active_data_root = _data_root_from_db_path(resolve_db_path_fn())
         _validate_override_data_root(active_data_root, canonical_data_root, home=home, ismount=ismount_fn)
         data_roots = tuple(
             dict.fromkeys(root.expanduser().resolve(strict=False) for root in (active_data_root, canonical_data_root))

@@ -119,9 +119,11 @@ def configured_brainlayer_env_value(name: str, env_path: Path | None = None) -> 
     target = env_path or get_user_env_path()
     try:
         lines = target.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return None
     except (OSError, UnicodeDecodeError) as exc:
         logger.warning("Could not read BrainLayer env file %s: %s", target, exc)
-        return None
+        raise RuntimeError(f"Could not read BrainLayer env file {target}: {exc}") from exc
 
     selected: str | None = None
     for line in lines:

@@ -19,6 +19,13 @@ class TestGetDbPath:
             assert get_db_path() == db_path
             assert not db_path.parent.exists()
 
+    def test_env_var_override_expands_home(self, tmp_path, monkeypatch):
+        """Runtime resolution matches the Spotlight preflight for tilde paths."""
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("BRAINLAYER_DB", "~/brainlayer-data/brainlayer.db")
+
+        assert resolve_db_path() == tmp_path / "brainlayer-data" / "brainlayer.db"
+
     def test_canonical_path_fresh_install(self, tmp_path, monkeypatch):
         """Canonical path used when no DB exists yet."""
         canonical = tmp_path / "brainlayer" / "brainlayer.db"

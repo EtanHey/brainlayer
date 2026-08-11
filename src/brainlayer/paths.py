@@ -48,7 +48,7 @@ def resolve_db_path() -> Path:
     """Resolve the BrainLayer database path without creating its parent."""
     env = os.environ.get("BRAINLAYER_DB")
     if env:
-        return _guard_test_runtime_path(Path(env), source="BRAINLAYER_DB")
+        return _guard_test_runtime_path(Path(env).expanduser(), source="BRAINLAYER_DB")
 
     return get_canonical_db_path()
 
