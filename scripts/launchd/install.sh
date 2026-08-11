@@ -83,6 +83,19 @@ if [ ! -x "$BRAINLAYER_BIN" ]; then
 fi
 
 BRAINLAYER_INSTALL_ACTION="${1:-all}"
+launchd_install_usage() {
+    echo "Usage: $0 [index|t3-ingest|watch|enrich|enrichment|decay|drain|hotlane|hotlane-brainbar|repair-fts|load [name]|unload [name]|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|tier0|tier0-watchdog|throughput-watchdog|p0-counter|all|remove]"
+}
+
+case "$BRAINLAYER_INSTALL_ACTION" in
+    index|t3-ingest|watch|enrich|enrichment|decay|drain|hotlane|hotlane-brainbar|repair-fts|load|unload|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|tier0|tier0-watchdog|throughput-watchdog|p0-counter|all|remove)
+        ;;
+    *)
+        launchd_install_usage
+        exit 1
+        ;;
+esac
+
 case "$BRAINLAYER_INSTALL_ACTION" in
     remove|unload)
         ;;
@@ -100,7 +113,7 @@ case "$BRAINLAYER_INSTALL_ACTION" in
             fi
             PYTHONPATH="$BRAINLAYER_PREFLIGHT_PYTHONPATH${PYTHONPATH:+:$PYTHONPATH}" \
                 "$BRAINLAYER_PREFLIGHT_PYTHON" -c \
-                'import os; from pathlib import Path; from brainlayer.config import configured_brainlayer_env_value; from brainlayer.spotlight import ensure_spotlight_excluded_layout; env_file = Path(os.environ["BRAINLAYER_ENV_FILE"]) if os.environ.get("BRAINLAYER_ENV_FILE") else None; configured_db = configured_brainlayer_env_value("BRAINLAYER_DB", env_file); kwargs = {"resolve_db_path_fn": lambda: Path(configured_db).expanduser()} if configured_db else {}; ensure_spotlight_excluded_layout(**kwargs)'
+                'import os; from pathlib import Path; from brainlayer.spotlight import ensure_spotlight_excluded_layout; env_file = Path(os.environ["BRAINLAYER_ENV_FILE"]) if os.environ.get("BRAINLAYER_ENV_FILE") else None; ensure_spotlight_excluded_layout(env_file=env_file)'
         fi
         mkdir -p "$LAUNCH_DIR" "$LOG_DIR" "$LOG_DIR/brainlayer" "$BRAINLAYER_LOG_DIR" "$BRAINLAYER_LIB_DIR"
         mkdir -p "$HOME/.brainlayer/logs" "$HOME/.brainlayer/queue"
@@ -757,7 +770,7 @@ case "${1:-all}" in
         rm -f "$HOTLANE_BRAINBAR_DST"
         ;;
     *)
-        echo "Usage: $0 [index|t3-ingest|watch|enrich|enrichment|decay|drain|hotlane|repair-fts|load [name]|unload [name]|checkpoint|backup|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|tier0-watchdog|throughput-watchdog|p0-counter|all|remove]"
+        launchd_install_usage
         exit 1
         ;;
 esac

@@ -96,13 +96,16 @@ def configured_brainlayer_env_value(name: str, env_path: Path | None = None) -> 
     target = env_path or get_user_env_path()
     try:
         lines = target.read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeDecodeError):
+    except (OSError, UnicodeDecodeError) as exc:
+        logger.warning("Could not read BrainLayer env file %s: %s", target, exc)
         return None
 
     selected: str | None = None
     for line in lines:
         assignment = _split_env_assignment(line)
         if assignment is None or assignment[0] != name:
+            continue
+        if "$(" in assignment[1] or "`" in assignment[1]:
             continue
         value = _parse_env_value(assignment[1])
         if value is not None:

@@ -483,12 +483,12 @@ def init(
 
     from ..setup import ensure_spotlight_excluded_layout
     from ..setup import install_launchd as install_launchd_agents
-    from .wizard import run_wizard
+    from .wizard import get_default_env_file, run_wizard
 
     try:
-        config = run_wizard()
         if sys.platform == "darwin":
-            ensure_spotlight_excluded_layout(env_file=config.gemini_env_file)
+            ensure_spotlight_excluded_layout(env_file=get_default_env_file())
+        config = run_wizard()
         if should_install_launchd:
             install_launchd_agents("all", env_file=config.gemini_env_file)
     except (
@@ -538,6 +538,7 @@ def setup(
     """Create brainlayer.env and optionally bootstrap launchd agents."""
     import subprocess
 
+    from ..config import get_user_env_path
     from ..setup import (
         ensure_brainlayer_env,
         ensure_spotlight_excluded_layout,
@@ -547,13 +548,13 @@ def setup(
     )
 
     try:
+        if sys.platform == "darwin":
+            ensure_spotlight_excluded_layout(env_file=env_file or get_user_env_path())
         resolved_env_file = ensure_brainlayer_env(
             env_file,
             google_api_key_op_ref=google_api_key_op_ref,
             overwrite_google_key=overwrite_google_key,
         )
-        if sys.platform == "darwin":
-            ensure_spotlight_excluded_layout(env_file=resolved_env_file)
         if launchd:
             install_launchd(target, env_file=resolved_env_file)
         migrated_configs = migrate_legacy_mcp_configs() if migrate_mcp else []

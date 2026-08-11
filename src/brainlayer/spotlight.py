@@ -28,7 +28,9 @@ def _validate_override_data_root(
     home: Path,
     ismount: Callable[[Path], bool],
 ) -> None:
-    raw_active = active_root.expanduser().absolute()
+    raw_active = active_root.expanduser()
+    if not raw_active.is_absolute():
+        raise RuntimeError(f"BRAINLAYER_DB must be an absolute path; got: {raw_active}")
     for component in (*reversed(raw_active.parents), raw_active):
         if component.is_symlink():
             raise RuntimeError(f"BRAINLAYER_DB parent must not contain a symbolic link: {raw_active}")
@@ -64,6 +66,7 @@ def _ensure_spotlight_excluded_root(root: Path, children: Tuple[str, ...] = ()) 
 def ensure_spotlight_excluded_layout(
     *,
     data_dir: Optional[Path] = None,
+    env_file: Optional[Path] = None,
     runtime_dir: Optional[Path] = None,
     launchd_log_dir: Optional[Path] = None,
     counter_dir: Optional[Path] = None,
@@ -77,8 +80,14 @@ def ensure_spotlight_excluded_layout(
     if data_dir is not None:
         data_roots = (data_dir,)
     else:
-        active_data_root = resolve_db_path_fn().parent
         canonical_data_root = get_canonical_db_path_fn().parent
+        if env_file is not None:
+            from .config import configured_brainlayer_env_value
+
+            configured_db = configured_brainlayer_env_value("BRAINLAYER_DB", env_file)
+            active_data_root = Path(configured_db).expanduser().parent if configured_db else canonical_data_root
+        else:
+            active_data_root = resolve_db_path_fn().parent
         _validate_override_data_root(active_data_root, canonical_data_root, home=home, ismount=ismount_fn)
         data_roots = tuple(
             dict.fromkeys(root.expanduser().resolve(strict=False) for root in (active_data_root, canonical_data_root))

@@ -29,18 +29,13 @@ def ensure_spotlight_excluded_layout(
     counter_dir: Path | None = None,
 ) -> tuple[Path, ...]:
     """Create marker-backed roots for every high-churn BrainLayer runtime path."""
-    resolve_db_path_fn = resolve_db_path
-    if data_dir is None and env_file is not None:
-        from .config import configured_brainlayer_env_value
-
-        configured_db = configured_brainlayer_env_value("BRAINLAYER_DB", env_file)
-        resolve_db_path_fn = (lambda: Path(configured_db).expanduser()) if configured_db else get_canonical_db_path
     return _ensure_spotlight_excluded_layout(
         data_dir=data_dir,
+        env_file=env_file,
         runtime_dir=runtime_dir,
         launchd_log_dir=launchd_log_dir,
         counter_dir=counter_dir,
-        resolve_db_path_fn=resolve_db_path_fn,
+        resolve_db_path_fn=resolve_db_path,
         get_canonical_db_path_fn=get_canonical_db_path,
         home_fn=Path.home,
         ismount_fn=os.path.ismount,
