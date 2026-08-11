@@ -135,6 +135,8 @@ def configured_brainlayer_env_value(name: str, env_path: Path | None = None) -> 
         if "$(" in assignment[1] or "`" in assignment[1]:
             continue
         value = _parse_launchd_env_value(assignment[1])
+        if _parse_env_value(assignment[1]) != value:
+            raise RuntimeError(f"{name} must parse identically for launchd and direct CLI use in {target}")
         if selected is not None:
             raise RuntimeError(f"duplicate valid {name} assignments in {target}")
         selected = value

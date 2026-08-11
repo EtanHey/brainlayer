@@ -1310,9 +1310,12 @@ def test_configured_env_value_matches_launchd_grammar_and_rejects_runtime_ambigu
         config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file)
 
     env_file.write_text(r"BRAINLAYER_DB=/Volumes/brainlayer\ data/brainlayer.db" + "\n", encoding="utf-8")
-    assert config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file) == (
-        r"/Volumes/brainlayer\ data/brainlayer.db"
-    )
+    with pytest.raises(RuntimeError, match="parse identically"):
+        config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file)
+
+    env_file.write_text('BRAINLAYER_DB="/outer"inner"/brainlayer.db"\n', encoding="utf-8")
+    with pytest.raises(RuntimeError, match="parse identically"):
+        config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file)
 
     env_file.write_text('BRAINLAYER_DB="/Volumes/brainlayer data/brainlayer.db"\n', encoding="utf-8")
     assert config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file) == (
