@@ -38,7 +38,10 @@ configuration and user-facing exports.
 3. Confirm no staging path below exists. If one exists, stop and inspect it; never overwrite it.
 4. Record `brainlayer status --json`, `brainlayer doctor --json`, DB/WAL/SHM sizes, queue count, and
    loaded `com.brainlayer.*` labels. Resolve and record the active DB parent from `BRAINLAYER_DB`;
-   when it differs from `$HOME/.local/share/brainlayer`, add it as a fifth migration root only
+   write a path containing spaces as a quoted assignment such as
+   `BRAINLAYER_DB="/Volumes/brainlayer data/brainlayer.db"`; backslash-escaped spaces are rejected.
+   When the active DB parent differs from `$HOME/.local/share/brainlayer`, add it as a fifth
+   migration root only
    after validating that it is a dedicated BrainLayer-owned directory. Its basename must contain
    `brainlayer`, and it must not be `/`, `$HOME`, a mount root, an ancestor of the canonical data
    root, overlap another migration root, or contain unrelated data. If it fails any check, stop:
@@ -46,7 +49,11 @@ configuration and user-facing exports.
    directory in a separate approved migration before using this runbook.
 5. For every migration root, provisionally record whether the root and `.metadata_never_index`
    already exist. The authoritative rollback baseline is refreshed after all writers are stopped.
-6. Keep the terminal open until restart and the real store/search probe both pass.
+6. Grant Full Disk Access to the terminal application used for Step 6, then confirm `mdls` and
+   `mdfind` can inspect a known indexed file in the selected positive-control parent. Without that
+   access, treat every Spotlight probe as inconclusive.
+7. Keep the terminal open until the recorded labels have restarted. Run the real store/search probe
+   only when every Spotlight exclusion probe is verified.
 
 Staging paths:
 
@@ -57,6 +64,15 @@ $HOME/Library/Logs/brainlayer.spotlight-migration-staging
 $HOME/.brainlayer-p0-counter.spotlight-migration-staging
 <active-BRAINLAYER_DB-parent>.spotlight-migration-staging  # only when outside the canonical root
 ```
+
+Measured planning budget from this workstation on 2026-08-11: the data root was 197 GB,
+`brainlayer.db` was 16 GB, and its WAL was 66 MB. All four canonical roots were on device
+`16777232`, so every required move is a same-filesystem metadata rename—O(1), normally seconds,
+regardless of tree size. The variable I/O step is the Step 3 `TRUNCATE` checkpoint; a 66 MB WAL
+should take seconds. Step 6 can spend up to 30 seconds polling each of four or five roots. Budget
+roughly 15–30 minutes of writer downtime, dominated by operator verification rather than I/O.
+Re-measure the current root/device/WAL values during preflight; these measurements are planning
+evidence, not permission to shorten a gate.
 
 ## Execute in one stop window
 
@@ -122,14 +138,44 @@ for label in "${spotlight_stop_labels[@]}"; do
   ! grep -Fxq "$label" "$spotlight_run_dir/active-labels.after-stop"
 done
 ! lsof -nP -iTCP:48123 -sTCP:LISTEN
-pgrep -fal '[b]rainlayer|[B]rainBar' > "$spotlight_run_dir/processes.after-stop" || true
+capture_brainlayer_writer_processes() {
+  ps -axo pid=,command= | awk '
+    function path_basename(path, value) {
+      value = path
+      sub(/^.*\//, "", value)
+      return value
+    }
+    function writer_subcommand(value) {
+      return value ~ /^(health-check|wal-checkpoint|repair-fts|decay|p0-counter|index|watch|drain|enrich|ingest-t3)$/
+    }
+    {
+      executable = path_basename($2)
+      if ((executable == "BrainBar" || executable == "BrainBarDaemon") ||
+          (executable == "bun" && path_basename($3) == "mcplayer-brainlayer-proxy") ||
+          (executable == "socat" && $3 ~ /^TCP4-LISTEN:48123,/) ||
+          (executable == "brainlayer" && writer_subcommand($3)) ||
+          ((executable ~ /^(Python|python([0-9.]*)?)$/) &&
+           ((path_basename($3) == "brainlayer" && writer_subcommand($4)) ||
+            ($3 == "-m" && $4 ~ /^brainlayer\.(maintenance|brainbar_hybrid_helper)$/) ||
+            (path_basename($3) ~ /^(hotlane_brainbar_daemon|throughput-watchdog)\.py$/))) ||
+          ((executable == "sh" || executable == "bash") &&
+           path_basename($3) ~ /^(tier0-watchdog|backup-daily|jsonl-backup)\.sh$/))
+        print
+    }
+  '
+}
+capture_brainlayer_writer_processes > "$spotlight_run_dir/processes.after-stop"
 test ! -s "$spotlight_run_dir/processes.after-stop"
 ```
 
-The stop and absence assertions deliberately share the single `spotlight_stop_labels` list; never
-maintain a shorter assertion list. Verify with `launchctl`, the TCP assertion, and the captured
-process inventory that no BrainLayer Python, BrainBar daemon, watcher, drain, hotlane, enrichment,
-T3 ingest, or proxy process remains.
+The stop and launchd absence assertions deliberately share the single `spotlight_stop_labels`
+list; never maintain a shorter assertion list. The process fence is intentionally narrower than a
+text search for `brainlayer`: it matches only installed BrainLayer writer commands and their known
+helper/listener processes. Before every window, dry-run the exact `capture_brainlayer_writer_processes`
+function against live `ps` output while writers are running. Prove every returned PID is one of the
+labels above or its writer child, and prove known non-writers such as MCP clients, Phoenix, Codex,
+and collab monitors are absent. Save that dry-run evidence before stopping any label. After the
+stop, require the same capture to be empty.
 
 Do not let a watchdog restart a writer between this step and the final checkpoint.
 
@@ -260,28 +306,35 @@ Repeat this check for every migrated root. Do not infer an override root's Spotl
 `mdutil -s /`: an override may reside on another volume. Every containing volume must report that
 indexing is enabled before the exclusion probe can be interpreted.
 
-Then create two unique plain-text probes on the same volume in the same command: the exclusion
-probe beneath the marked root and a positive control in an unmarked sibling directory. The control
-is mandatory. If Spotlight cannot find the control, the result is inconclusive even when it cannot
-find the excluded probe; keep writers stopped and do not declare the marker effective.
+Then create two unique directories containing fixed-suffix `.txt` files on the same volume in the
+same command: the exclusion probe beneath the marked root and a positive control in an unmarked
+sibling directory. A random suffix after `.txt` can prevent the text importer from claiming the
+file, so the filename itself must end in `.txt`. The control is mandatory. If Spotlight cannot find
+the control, the result is inconclusive even when it cannot find the excluded probe. Record that
+state, clean up the exact probes, and follow the safe restart path in Step 7; do not leave writers
+stopped because an evidence command failed.
 
 ```bash
 set -euo pipefail
-spotlight_probe_path="$(mktemp "${HOME:?}/.local/share/brainlayer/spotlight-exclusion-live-probe.txt.XXXXXX")"
+spotlight_probe_root="$(mktemp -d "${HOME:?}/.local/share/brainlayer/spotlight-exclusion-live-probe.XXXXXX")"
+spotlight_probe_path="$spotlight_probe_root/spotlight-exclusion-live-probe.txt"
 spotlight_probe_name="$(basename "$spotlight_probe_path")"
 # For an override on another volume, replace this with a preflight-verified searchable,
 # non-hidden directory on that same volume.
 spotlight_positive_control_parent="${HOME:?}/Documents"
 test -d "$spotlight_positive_control_parent" && test ! -L "$spotlight_positive_control_parent"
 spotlight_positive_control_root="$(mktemp -d "$spotlight_positive_control_parent/brainlayer-spotlight-positive-control.XXXXXX")"
-spotlight_positive_control_path="$(mktemp "$spotlight_positive_control_root/spotlight-index-positive-control.txt.XXXXXX")"
+spotlight_positive_control_path="$spotlight_positive_control_root/spotlight-index-positive-control.txt"
 spotlight_positive_control_name="$(basename "$spotlight_positive_control_path")"
 cleanup_spotlight_probes() {
   rm -f -- "$spotlight_probe_path" "$spotlight_positive_control_path"
+  rmdir "$spotlight_probe_root" 2>/dev/null || true
   rmdir "$spotlight_positive_control_root" 2>/dev/null || true
 }
 trap cleanup_spotlight_probes EXIT
-test "$(stat -f %d "$spotlight_probe_path")" = "$(stat -f %d "$spotlight_positive_control_path")"
+: > "$spotlight_probe_path"
+: > "$spotlight_positive_control_path"
+test "$(stat -f %d "$spotlight_probe_root")" = "$(stat -f %d "$spotlight_positive_control_root")"
 
 # A marker on any control ancestor would invalidate the positive control.
 spotlight_control_ancestor="$spotlight_positive_control_root"
@@ -317,24 +370,36 @@ for _ in $(jot 30); do
 done
 if test "$spotlight_control_found" -ne 1; then
   printf '%s\n' 'SPOTLIGHT PROBE INCONCLUSIVE: the unmarked positive control was not indexed' >&2
-  exit 1
+  printf 'root=%s state=INCONCLUSIVE\n' "$brainlayer_probe_root" \
+    >> "$spotlight_run_dir/spotlight-probe-results"
+  cleanup_spotlight_probes
+  trap - EXIT
+else
+  mdls -name kMDItemFSName -name kMDItemContentType \
+    "$spotlight_probe_path"
+  spotlight_probe_fsname="$(mdls -raw -name kMDItemFSName "$spotlight_probe_path" || true)"
+  spotlight_probe_content_type="$(mdls -raw -name kMDItemContentType "$spotlight_probe_path" || true)"
+  case "$spotlight_probe_fsname" in
+    ''|'(null)') ;;
+    *) printf 'excluded probe unexpectedly has FSName metadata: %s\n' "$spotlight_probe_fsname" >&2; exit 1 ;;
+  esac
+  case "$spotlight_probe_content_type" in
+    ''|'(null)') ;;
+    *) printf 'excluded probe unexpectedly has content-type metadata: %s\n' "$spotlight_probe_content_type" >&2; exit 1 ;;
+  esac
+  ! mdfind -onlyin "${HOME:?}/.local/share/brainlayer" \
+    "kMDItemFSName == '$spotlight_probe_name'cd" | grep -Fxq "$spotlight_probe_path"
+  printf 'root=%s state=VERIFIED\n' "$brainlayer_probe_root" \
+    >> "$spotlight_run_dir/spotlight-probe-results"
+  cleanup_spotlight_probes
+  trap - EXIT
 fi
-
-mdls -name kMDItemFSName -name kMDItemContentType \
-  "$spotlight_probe_path"
-test "$(mdls -raw -name kMDItemFSName "$spotlight_probe_path")" = '(null)'
-test "$(mdls -raw -name kMDItemContentType "$spotlight_probe_path")" = '(null)'
-! mdfind -onlyin "${HOME:?}/.local/share/brainlayer" \
-  "kMDItemFSName == '$spotlight_probe_name'cd" | grep -Fxq "$spotlight_probe_path"
-rm -- "$spotlight_probe_path" "$spotlight_positive_control_path"
-rmdir "$spotlight_positive_control_root"
-trap - EXIT
 ```
 
 Pass criteria: `mdutil` shows the containing volume is indexed; `mdimport -t` identifies the normal
-importer for both files; after the same real `mdimport -i`, the unmarked positive control has
+importer for both `.txt` files; after the same real `mdimport -i`, the unmarked positive control has
 non-null metadata and is returned at its exact path by `mdfind`, while the marked-root probe leaves
-both `mdls` attributes null and is not returned at its exact path by `mdfind`.
+both `mdls` attributes empty or `(null)` and is not returned at its exact path by `mdfind`.
 Repeat the real import/`mdls`/`mdfind` check once under each of the other three canonical marked
 roots and under the active override parent when distinct. Create the control beside each tested
 root and prove it is on the same containing volume. Remove only the exact probe files and empty
@@ -346,9 +411,15 @@ the whole volume.
 
 ### 7. Restart exactly the labels recorded in preflight
 
-Only after every root passes Step 6, bootstrap the recorded launchd plist set, then verify each
-expected label is loaded and each daemon has a live PID. Do not restore a label that was
-deliberately disabled before the window.
+After Step 6 reaches either `VERIFIED` or `INCONCLUSIVE`, bootstrap the recorded launchd plist set,
+then verify each expected label is loaded and each daemon has a live PID. Do not restore a label
+that was deliberately disabled before the window. Restart is the safe recovery path in both states:
+an inconclusive Spotlight control must not strand the fleet in a stopped state.
+
+If any root is `INCONCLUSIVE`, record the exclusion as **UNPROVEN**, omit the store/search completion
+probe below, and schedule a new dedicated stop window with Full Disk Access corrected or Search
+Privacy configured for the exact root. Do not call the migration complete. If every root is
+`VERIFIED`, run the live completion probes below.
 
 Run a real request through a fresh installed MCP client session (not an in-process Python test):
 
