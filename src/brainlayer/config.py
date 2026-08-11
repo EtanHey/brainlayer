@@ -52,6 +52,14 @@ def _parse_env_assignment(line: str) -> tuple[str, str] | None:
     return (key, value) if value is not None else None
 
 
+def _parse_launchd_env_value(raw_value: str) -> str:
+    """Match brainlayer-env-run.sh: trim and remove one pair of matching quotes."""
+    value = raw_value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        return value[1:-1]
+    return value
+
+
 def _resolve_op_read_value(value_text: str) -> str | None:
     """Resolve exactly quoted $(op read 'op://...') values without a shell."""
     try:
@@ -107,9 +115,7 @@ def configured_brainlayer_env_value(name: str, env_path: Path | None = None) -> 
             continue
         if "$(" in assignment[1] or "`" in assignment[1]:
             continue
-        value = _parse_env_value(assignment[1])
-        if value is not None:
-            selected = value
+        selected = _parse_launchd_env_value(assignment[1])
     return selected
 
 
