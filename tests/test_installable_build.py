@@ -1325,6 +1325,94 @@ def test_launchd_teardown_does_not_create_runtime_roots(tmp_path: Path, action: 
     assert not (home / "Library" / "Logs" / "brainlayer").exists()
 
 
+def test_launchd_load_existing_unmarked_install_skips_spotlight_preflight(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text("\n".join(_fake_launchctl_lines()), encoding="utf-8")
+    fake_launchctl.chmod(0o755)
+    fake_brainlayer = tmp_path / "brainlayer"
+    fake_brainlayer.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_brainlayer.chmod(0o755)
+    home = tmp_path / "home"
+    launch_dir = home / "Library" / "LaunchAgents"
+    launch_dir.mkdir(parents=True)
+    (launch_dir / "com.brainlayer.enrichment.plist").write_bytes(
+        plistlib.dumps({"Label": "com.brainlayer.enrichment", "ProgramArguments": ["/usr/bin/true"]})
+    )
+    legacy_data = home / ".local" / "share" / "brainlayer"
+    legacy_data.mkdir(parents=True)
+    (legacy_data / "brainlayer.db").touch()
+
+    result = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "load", "enrichment"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": str(fake_brainlayer),
+            "PYTHON_BIN": sys.executable,
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "bootstrap" in launchctl_log.read_text(encoding="utf-8")
+    assert not (legacy_data / ".metadata_never_index").exists()
+
+
+def test_launchd_install_preflight_refusal_names_runbook_without_traceback(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_uname = fake_bin / "uname"
+    fake_uname.write_text("#!/bin/sh\nprintf 'Darwin\\n'\n", encoding="utf-8")
+    fake_uname.chmod(0o755)
+    fake_brainlayer = tmp_path / "brainlayer"
+    fake_brainlayer.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_brainlayer.chmod(0o755)
+    home = tmp_path / "home"
+    legacy_data = home / ".local" / "share" / "brainlayer"
+    legacy_data.mkdir(parents=True)
+    (legacy_data / "brainlayer.db").touch()
+
+    result = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "watch"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": str(fake_brainlayer),
+            "PYTHON_BIN": sys.executable,
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "docs/operations/spotlight-exclusion-migration.md" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_spotlight_runbook_has_fail_closed_positive_control_and_complete_writer_fence() -> None:
+    runbook = (REPO_ROOT / "docs" / "operations" / "spotlight-exclusion-migration.md").read_text(encoding="utf-8")
+
+    assert "spotlight_positive_control_path" in runbook
+    assert 'spotlight_positive_control_parent="${HOME:?}/Documents"' in runbook
+    assert "/.local/share/brainlayer-spotlight-positive-control" not in runbook
+    assert "SPOTLIGHT PROBE INCONCLUSIVE" in runbook
+    assert "com.mcplayer.brainlayer-proxy" in runbook
+    assert "com.brainlayer.gemini-loopback" in runbook
+    assert "com.brainlayer.t3-ingest" in runbook
+    assert "-iTCP:48123" in runbook
+
+
 def test_launchd_installer_renders_brainlayer_python_override(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()

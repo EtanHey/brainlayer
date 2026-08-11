@@ -97,7 +97,7 @@ case "$BRAINLAYER_INSTALL_ACTION" in
 esac
 
 case "$BRAINLAYER_INSTALL_ACTION" in
-    remove|unload)
+    remove|unload|load)
         ;;
     *)
         if [ "$(uname -s)" = "Darwin" ]; then
@@ -113,7 +113,19 @@ case "$BRAINLAYER_INSTALL_ACTION" in
             fi
             PYTHONPATH="$BRAINLAYER_PREFLIGHT_PYTHONPATH${PYTHONPATH:+:$PYTHONPATH}" \
                 "$BRAINLAYER_PREFLIGHT_PYTHON" -c \
-                'import os; from pathlib import Path; from brainlayer.spotlight import ensure_spotlight_excluded_layout; env_file = Path(os.environ["BRAINLAYER_ENV_FILE"]) if os.environ.get("BRAINLAYER_ENV_FILE") else None; ensure_spotlight_excluded_layout(env_file=env_file)'
+                '
+import os
+from pathlib import Path
+from brainlayer.spotlight import ensure_spotlight_excluded_layout
+
+env_file = Path(os.environ["BRAINLAYER_ENV_FILE"]) if os.environ.get("BRAINLAYER_ENV_FILE") else None
+try:
+    ensure_spotlight_excluded_layout(env_file=env_file)
+except RuntimeError as exc:
+    raise SystemExit(
+        f"ERROR: {exc}; run docs/operations/spotlight-exclusion-migration.md before installing launchd jobs"
+    ) from None
+'
         fi
         mkdir -p "$LAUNCH_DIR" "$LOG_DIR" "$LOG_DIR/brainlayer" "$BRAINLAYER_LOG_DIR" "$BRAINLAYER_LIB_DIR"
         mkdir -p "$HOME/.brainlayer/logs" "$HOME/.brainlayer/queue"

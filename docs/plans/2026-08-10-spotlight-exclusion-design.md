@@ -8,11 +8,18 @@ of the existing production tree is deliberately deferred to a coordinated writer
 
 ## Mechanism
 
-Use a `.metadata_never_index` marker in each high-churn root. A disposable probe on macOS 26.5.1
-(25F80) showed that a marker-bearing directory refused metadata import, while a `.noindex`
-directory still received `kMDItemFSName` and `kMDItemContentType` after recursive `mdimport -i`.
-`mdimport -t` is retained as importer evidence only: its own manual says test imports do not write
-the Spotlight index, so `mdls`/`mdfind` after `mdimport -i` are the exclusion verdict.
+Use a `.metadata_never_index` marker in each high-churn root. `mdimport -t` is importer evidence
+only: its manual says test imports do not write the Spotlight index, so a live verdict must compare
+`mdls`/`mdfind` after a real `mdimport -i` against an unmarked positive control on the same volume.
+
+The mandatory pair review at exact head `e3659579` invalidated the earlier uncontrolled mechanism
+claim. Its macOS 26.5.1 (25F80) transcript recorded indexing enabled, a normal RichText importer
+returning 29 attributes for the test import, and then null `mdls` plus zero `mdfind` results after a
+real import for *all* cases—including the unmarked control in both `$HOME` and `~/Documents`.
+Therefore a missing excluded-file result alone is vacuous on that workstation. The runbook now
+fails closed unless an identical unmarked control, imported in the same command, receives non-null
+metadata and is returned at its exact path by `mdfind`. The source transcript and verdict are under
+`DONE_SPOTLIGHT_REVIEW` in the Wave 25 collaboration record.
 
 The marker approach preserves existing canonical paths and needs no environment rewiring on fresh
 installs. [Apple documents Search Privacy](https://support.apple.com/guide/mac-help/mchl1bb43b84/mac)
@@ -48,7 +55,9 @@ Configuration and user-facing exports remain searchable: `~/.config/brainlayer` 
 This PR does not touch `~/.local/share/brainlayer` or any live writer. The runbook requires one
 coordinated stop window: checkpoint WAL, stop all writers, move the data/runtime trees to staging,
 create marker-bearing targets, move data back without crossing filesystems, restore configured
-paths, restart, then prove exclusion with `mdimport`, `mdls`, `mdfind`, and `mdutil` volume status.
+paths, restart, then prove exclusion with a same-volume positive control plus `mdimport`, `mdls`,
+`mdfind`, and `mdutil` volume status. An unindexed positive control makes the result inconclusive
+and stops the window.
 Rollback keeps the stopped trees intact and reverses the move before writers restart.
 
 ## Tests

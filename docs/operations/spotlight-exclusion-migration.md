@@ -6,12 +6,12 @@ operator coordination belong in the restricted maintenance record, not this repo
 
 ## Why `.metadata_never_index`
 
-BrainLayer uses a marker in each high-churn root. On macOS 26.5.1 (25F80), a disposable recursive
-`mdimport -i` probe gave a file below `excluded.noindex` normal `kMDItemFSName` and
-`kMDItemContentType` attributes. The equivalent file below a directory containing
-`.metadata_never_index` retained null attributes. `mdimport -t` is useful importer evidence but not
+BrainLayer uses a marker in each high-churn root. `mdimport -t` is useful importer evidence but not
 an exclusion verdict: its manual says test imports return attributes without writing the Spotlight
-index.
+index. A mandatory macOS 26.5.1 (25F80) pair-review probe showed why negative results alone are
+insufficient: after a real `mdimport -i`, both marker-backed files and an unmarked control had null
+`mdls` attributes and no `mdfind` result on that workstation. Step 6 therefore requires an
+unmarked same-volume positive control to be indexed before a marker-backed negative is accepted.
 
 [Apple's documented Search Privacy UI](https://support.apple.com/guide/mac-help/mchl1bb43b84/mac)
 remains the fallback if a post-migration marker probe fails. It is not the primary mechanism
@@ -71,11 +71,65 @@ brainlayer wal-checkpoint --mode PASSIVE --json
 
 ### 2. Stop every writer, scheduler, and self-healer
 
-Disable/kick out the installed `com.brainlayer.*` labels as a group, including BrainBar daemon,
-watch, drain, hotlane, enrichment, index, T3 ingest, maintenance, repair, decay, WAL checkpoint,
-backup jobs, watchdogs, and the P0 counter. Record the exact loaded-label list before stopping it so
-only that list is restored. Verify with both `launchctl print` and `pgrep -fal` that no BrainLayer
-Python, BrainBar daemon, watcher, drain, hotlane, or enrichment process remains.
+Use the same complete writer fence as the Wave 3a live runbook. The broader inventory pattern is
+intentional: `com.mcplayer.brainlayer-proxy` is a write-capable bridge even though its label does
+not begin with `com.brainlayer`. `com.mcplayer.bus` may remain loaded because it is the event bus,
+not the BrainLayer MCP proxy or a DB writer. Set `spotlight_run_dir` to the restricted maintenance
+evidence directory, then record the exact active set and stop only labels that were active:
+
+```bash
+set -euo pipefail
+spotlight_run_dir="<absolute restricted maintenance evidence directory>"
+test "${spotlight_run_dir#/}" != "$spotlight_run_dir"
+mkdir -p "$spotlight_run_dir"
+launchctl list | awk '$3 ~ /^(com\.brainlayer\.|com\.mcplayer\.)/ {print $3}' | sort \
+  > "$spotlight_run_dir/active-labels.before"
+: > "$spotlight_run_dir/stopped-labels"
+
+spotlight_stop_labels=(
+  com.brainlayer.tier0-watchdog
+  com.brainlayer.throughput-watchdog
+  com.brainlayer.health-check
+  com.brainlayer.backup-daily
+  com.brainlayer.jsonl-backup
+  com.brainlayer.maintenance-nightly
+  com.brainlayer.maintenance-weekly
+  com.brainlayer.wal-checkpoint
+  com.brainlayer.repair-fts
+  com.brainlayer.decay
+  com.brainlayer.p0-counter
+  com.brainlayer.index
+  com.brainlayer.watch
+  com.brainlayer.drain
+  com.brainlayer.hotlane-brainbar
+  com.brainlayer.enrichment
+  com.brainlayer.brainbar
+  com.brainlayer.gemini-loopback
+  com.mcplayer.brainlayer-proxy
+  com.brainlayer.brainbar-daemon
+  com.brainlayer.t3-ingest
+)
+for label in "${spotlight_stop_labels[@]}"; do
+  if grep -Fxq "$label" "$spotlight_run_dir/active-labels.before"; then
+    launchctl bootout "gui/$(id -u)/$label"
+    printf '%s\n' "$label" >> "$spotlight_run_dir/stopped-labels"
+  fi
+done
+
+launchctl list | awk '$3 ~ /^(com\.brainlayer\.|com\.mcplayer\.)/ {print $3}' | sort \
+  > "$spotlight_run_dir/active-labels.after-stop"
+for label in "${spotlight_stop_labels[@]}"; do
+  ! grep -Fxq "$label" "$spotlight_run_dir/active-labels.after-stop"
+done
+! lsof -nP -iTCP:48123 -sTCP:LISTEN
+pgrep -fal '[b]rainlayer|[B]rainBar' > "$spotlight_run_dir/processes.after-stop" || true
+test ! -s "$spotlight_run_dir/processes.after-stop"
+```
+
+The stop and absence assertions deliberately share the single `spotlight_stop_labels` list; never
+maintain a shorter assertion list. Verify with `launchctl`, the TCP assertion, and the captured
+process inventory that no BrainLayer Python, BrainBar daemon, watcher, drain, hotlane, enrichment,
+T3 ingest, or proxy process remains.
 
 Do not let a watchdog restart a writer between this step and the final checkpoint.
 
@@ -206,29 +260,85 @@ Repeat this check for every migrated root. Do not infer an override root's Spotl
 `mdutil -s /`: an override may reside on another volume. Every containing volume must report that
 indexing is enabled before the exclusion probe can be interpreted.
 
-Then create a unique, non-clobbering plain-text probe beneath the marked data root. Record these
-outputs and retain the two printed variable values with the evidence:
+Then create two unique plain-text probes on the same volume in the same command: the exclusion
+probe beneath the marked root and a positive control in an unmarked sibling directory. The control
+is mandatory. If Spotlight cannot find the control, the result is inconclusive even when it cannot
+find the excluded probe; keep writers stopped and do not declare the marker effective.
 
 ```bash
+set -euo pipefail
 spotlight_probe_path="$(mktemp "${HOME:?}/.local/share/brainlayer/spotlight-exclusion-live-probe.txt.XXXXXX")"
 spotlight_probe_name="$(basename "$spotlight_probe_path")"
+# For an override on another volume, replace this with a preflight-verified searchable,
+# non-hidden directory on that same volume.
+spotlight_positive_control_parent="${HOME:?}/Documents"
+test -d "$spotlight_positive_control_parent" && test ! -L "$spotlight_positive_control_parent"
+spotlight_positive_control_root="$(mktemp -d "$spotlight_positive_control_parent/brainlayer-spotlight-positive-control.XXXXXX")"
+spotlight_positive_control_path="$(mktemp "$spotlight_positive_control_root/spotlight-index-positive-control.txt.XXXXXX")"
+spotlight_positive_control_name="$(basename "$spotlight_positive_control_path")"
+cleanup_spotlight_probes() {
+  rm -f -- "$spotlight_probe_path" "$spotlight_positive_control_path"
+  rmdir "$spotlight_positive_control_root" 2>/dev/null || true
+}
+trap cleanup_spotlight_probes EXIT
+test "$(stat -f %d "$spotlight_probe_path")" = "$(stat -f %d "$spotlight_positive_control_path")"
+
+# A marker on any control ancestor would invalidate the positive control.
+spotlight_control_ancestor="$spotlight_positive_control_root"
+while :; do
+  test ! -e "$spotlight_control_ancestor/.metadata_never_index"
+  spotlight_control_parent="$(dirname "$spotlight_control_ancestor")"
+  test "$spotlight_control_parent" != "$spotlight_control_ancestor" || break
+  spotlight_control_ancestor="$spotlight_control_parent"
+done
+
 printf 'BrainLayer Spotlight exclusion live probe %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   > "$spotlight_probe_path"
-printf 'probe_path=%s\nprobe_name=%s\n' "$spotlight_probe_path" "$spotlight_probe_name"
+cp "$spotlight_probe_path" "$spotlight_positive_control_path"
+printf 'probe_path=%s\nprobe_name=%s\ncontrol_path=%s\ncontrol_name=%s\n' \
+  "$spotlight_probe_path" "$spotlight_probe_name" \
+  "$spotlight_positive_control_path" "$spotlight_positive_control_name"
 mdimport -t -d1 "$spotlight_probe_path"
-mdimport -i "$spotlight_probe_path"
+mdimport -t -d1 "$spotlight_positive_control_path"
+mdimport -i "$spotlight_probe_path" "$spotlight_positive_control_path"
+
+spotlight_control_found=0
+for _ in $(jot 30); do
+  if test "$(mdls -raw -name kMDItemFSName "$spotlight_positive_control_path")" = \
+      "$spotlight_positive_control_name" \
+    && test "$(mdls -raw -name kMDItemContentType "$spotlight_positive_control_path")" != '(null)' \
+    && mdfind -onlyin "$spotlight_positive_control_root" \
+      "kMDItemFSName == '$spotlight_positive_control_name'cd" \
+      | grep -Fxq "$spotlight_positive_control_path"; then
+    spotlight_control_found=1
+    break
+  fi
+  sleep 1
+done
+if test "$spotlight_control_found" -ne 1; then
+  printf '%s\n' 'SPOTLIGHT PROBE INCONCLUSIVE: the unmarked positive control was not indexed' >&2
+  exit 1
+fi
+
 mdls -name kMDItemFSName -name kMDItemContentType \
   "$spotlight_probe_path"
-mdfind -onlyin "${HOME:?}/.local/share/brainlayer" \
-  "kMDItemFSName == '$spotlight_probe_name'cd"
-rm -- "$spotlight_probe_path"
+test "$(mdls -raw -name kMDItemFSName "$spotlight_probe_path")" = '(null)'
+test "$(mdls -raw -name kMDItemContentType "$spotlight_probe_path")" = '(null)'
+! mdfind -onlyin "${HOME:?}/.local/share/brainlayer" \
+  "kMDItemFSName == '$spotlight_probe_name'cd" | grep -Fxq "$spotlight_probe_path"
+rm -- "$spotlight_probe_path" "$spotlight_positive_control_path"
+rmdir "$spotlight_positive_control_root"
+trap - EXIT
 ```
 
 Pass criteria: `mdutil` shows the containing volume is indexed; `mdimport -t` identifies the normal
-importer; the real `mdimport -i` leaves both `mdls` attributes null; `mdfind` returns no probe path.
+importer for both files; after the same real `mdimport -i`, the unmarked positive control has
+non-null metadata and is returned at its exact path by `mdfind`, while the marked-root probe leaves
+both `mdls` attributes null and is not returned at its exact path by `mdfind`.
 Repeat the real import/`mdls`/`mdfind` check once under each of the other three canonical marked
-roots and under the active override parent when distinct. Remove only the exact probe files after
-saving evidence.
+roots and under the active override parent when distinct. Create the control beside each tested
+root and prove it is on the same containing volume. Remove only the exact probe files and empty
+control directories after saving evidence.
 
 If a marker-backed root receives metadata, keep BrainLayer stopped and add that exact root through
 System Settings → Spotlight → Search Privacy, then repeat the probe. Do not disable Spotlight for
