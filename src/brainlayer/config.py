@@ -115,7 +115,7 @@ def _resolve_op_read_value(value_text: str) -> str | None:
 
 
 def configured_brainlayer_env_value(name: str, env_path: Path | None = None) -> str | None:
-    """Return the final valid assignment from the selected BrainLayer env file."""
+    """Return one unambiguous launchd-compatible assignment from the selected env file."""
     target = env_path or get_user_env_path()
     try:
         lines = target.read_text(encoding="utf-8").splitlines()
@@ -132,7 +132,10 @@ def configured_brainlayer_env_value(name: str, env_path: Path | None = None) -> 
             raise RuntimeError(f"{name} must not use an op command substitution in {target}")
         if "$(" in assignment[1] or "`" in assignment[1]:
             continue
-        selected = _parse_launchd_env_value(assignment[1])
+        value = _parse_launchd_env_value(assignment[1])
+        if selected is not None:
+            raise RuntimeError(f"duplicate valid {name} assignments in {target}")
+        selected = value
     return selected
 
 

@@ -1224,7 +1224,9 @@ def test_standalone_launchd_installer_preflights_selected_env_db(tmp_path: Path)
     assert not transient_process_data_dir.exists()
 
 
-def test_configured_env_value_matches_selected_file_last_assignment(tmp_path: Path, monkeypatch) -> None:
+def test_configured_env_value_matches_launchd_grammar_and_rejects_runtime_ambiguity(
+    tmp_path: Path, monkeypatch
+) -> None:
     import brainlayer.config as config
 
     env_file = tmp_path / "brainlayer.env"
@@ -1238,7 +1240,14 @@ def test_configured_env_value_matches_selected_file_last_assignment(tmp_path: Pa
         "BRAINLAYER_DB=/from/later/brainlayer.db\n",
         encoding="utf-8",
     )
-    assert config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file) == "/from/later/brainlayer.db"
+    with pytest.raises(RuntimeError, match="duplicate"):
+        config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file)
+
+    env_file.write_text(
+        "BRAINLAYER_DB=$(not-allowed)\nBRAINLAYER_DB=/from/runtime/brainlayer.db\n",
+        encoding="utf-8",
+    )
+    assert config.configured_brainlayer_env_value("BRAINLAYER_DB", env_file) == "/from/runtime/brainlayer.db"
 
     env_file.write_text(
         "BRAINLAYER_DB=/from/runtime/brainlayer.db\nBRAINLAYER_DB=\"$(op read 'op://Private/Database/path')\"\n",
