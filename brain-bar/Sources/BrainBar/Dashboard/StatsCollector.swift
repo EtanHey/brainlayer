@@ -162,6 +162,8 @@ private func statsCollectorDarwinNotificationCallback(
 
 @MainActor
 final class StatsCollector: ObservableObject {
+    typealias DashboardStatsProvider = @Sendable () throws -> DashboardStats
+    typealias SignalCoverageProvider = @Sendable () throws -> BrainDatabase.SignalCoverageSnapshot
     typealias WindowedBucketsProvider = @Sendable (
         _ windowMinutes: Int,
         _ bucketCount: Int
@@ -170,6 +172,8 @@ final class StatsCollector: ObservableObject {
     static let defaultActivityWindowMinutes = 60
     static let defaultBucketCount = 12
     static let snapshotFreshnessThreshold: TimeInterval = 60
+    static let defaultSignalCoverageStartDelay: TimeInterval = 2
+    static let defaultSignalCoverageRefreshInterval: TimeInterval = 300
 
     @Published private(set) var stats: DashboardStats
     @Published private(set) var daemon: DaemonHealthSnapshot?
@@ -182,6 +186,8 @@ final class StatsCollector: ObservableObject {
     @Published private(set) var lastFetchError: String?
     @Published private(set) var snapshotFreshnessState: SnapshotFreshnessState
     @Published private(set) var heartbeat: DashboardHeartbeat
+    @Published private(set) var isSignalCoverageRefreshing = false
+    @Published private(set) var lastSignalCoverageError: String?
     /// REAL windowed buckets for the shared Live/3h/24h selector. `nil` means
     /// "no wider window selected yet" — the views fall back to the live `stats`
     /// buckets (the resting 1h view). When the selector picks 3h/24h, the view
@@ -199,6 +205,10 @@ final class StatsCollector: ObservableObject {
     private let databaseOpenConfiguration: BrainDatabase.OpenConfiguration
     private let daemonMonitor: DaemonHealthMonitor
     private let watcherProcessProbe: any WatcherProcessProbing
+    private let dashboardStatsProvider: DashboardStatsProvider
+    private let signalCoverageProvider: SignalCoverageProvider
+    private let signalCoverageStartDelay: TimeInterval
+    private let signalCoverageRefreshInterval: TimeInterval
     private let windowedBucketsProvider: WindowedBucketsProvider
     private let agentActivityMonitor: AgentActivityMonitor
     private let agentActivitySampleInterval: TimeInterval
@@ -216,6 +226,9 @@ final class StatsCollector: ObservableObject {
     private var pendingStatsRefreshBypassesCoalescing = false
     private var dashboardRefreshTask: Task<Void, Never>?
     private var dashboardRefreshGeneration = 0
+    private var signalCoverageTask: Task<Void, Never>?
+    private var signalCoverageGeneration = 0
+    private var lastSignalCoverageAttemptedAt: Date?
     private var watcherProcessRefreshTask: Task<Void, Never>?
     private var watcherProcessRefreshGeneration = 0
     private var isRunning = false
@@ -240,6 +253,10 @@ final class StatsCollector: ObservableObject {
         freshnessTickerInterval: TimeInterval = 1,
         nowProvider: @escaping () -> Date = Date.init,
         brainBusEvents: BrainBusEventSource? = nil,
+        dashboardStatsProvider: DashboardStatsProvider? = nil,
+        signalCoverageProvider: SignalCoverageProvider? = nil,
+        signalCoverageStartDelay: TimeInterval = 2,
+        signalCoverageRefreshInterval: TimeInterval = 300,
         windowedBucketsProvider: WindowedBucketsProvider? = nil,
         databaseOpenConfiguration: BrainDatabase.OpenConfiguration = BrainDatabase.OpenConfiguration()
     ) {
@@ -247,6 +264,26 @@ final class StatsCollector: ObservableObject {
         self.databaseOpenConfiguration = databaseOpenConfiguration
         self.daemonMonitor = daemonMonitor
         self.watcherProcessProbe = watcherProcessProbe
+        let defaultActivityWindowMinutes = Self.defaultActivityWindowMinutes
+        let defaultBucketCount = Self.defaultBucketCount
+        self.dashboardStatsProvider = dashboardStatsProvider ?? {
+            let backgroundDatabase = BrainDatabase(path: dbPath, openConfiguration: databaseOpenConfiguration)
+            defer { backgroundDatabase.close() }
+            backgroundDatabase.reopenIfNeeded()
+            return try backgroundDatabase.dashboardStats(
+                activityWindowMinutes: defaultActivityWindowMinutes,
+                bucketCount: defaultBucketCount,
+                includeSignalCoverage: false
+            )
+        }
+        self.signalCoverageProvider = signalCoverageProvider ?? {
+            let backgroundDatabase = BrainDatabase(path: dbPath, openConfiguration: databaseOpenConfiguration)
+            defer { backgroundDatabase.close() }
+            backgroundDatabase.reopenIfNeeded()
+            return try backgroundDatabase.dashboardSignalCoverageSnapshot()
+        }
+        self.signalCoverageStartDelay = max(0, signalCoverageStartDelay)
+        self.signalCoverageRefreshInterval = max(1, signalCoverageRefreshInterval)
         self.windowedBucketsProvider = windowedBucketsProvider ?? { windowMinutes, bucketCount in
             let backgroundDatabase = BrainDatabase(path: dbPath, openConfiguration: databaseOpenConfiguration)
             defer { backgroundDatabase.close() }
@@ -274,7 +311,9 @@ final class StatsCollector: ObservableObject {
             recentActivityBuckets: Array(repeating: 0, count: Self.defaultBucketCount),
             recentEnrichmentBuckets: Array(repeating: 0, count: Self.defaultBucketCount),
             activityWindowMinutes: Self.defaultActivityWindowMinutes,
-            bucketCount: Self.defaultBucketCount
+            bucketCount: Self.defaultBucketCount,
+            signalEligibleChunkCount: 0,
+            signalCoverageIsAvailable: false
         )
         self.agentActivity = .empty
         self.state = .degraded
@@ -320,6 +359,10 @@ final class StatsCollector: ObservableObject {
         freshnessTicker = nil
         dashboardRefreshTask?.cancel()
         dashboardRefreshTask = nil
+        signalCoverageTask?.cancel()
+        signalCoverageTask = nil
+        signalCoverageGeneration += 1
+        isSignalCoverageRefreshing = false
         watcherProcessRefreshTask?.cancel()
         watcherProcessRefreshTask = nil
         watcherProcessRefreshGeneration += 1
@@ -437,10 +480,7 @@ final class StatsCollector: ObservableObject {
         watcherProcessRefreshGeneration += 1
         let watcherProcessGeneration = watcherProcessRefreshGeneration
         let generation = dashboardRefreshGeneration
-        let dbPath = self.dbPath
-        let openConfiguration = self.databaseOpenConfiguration
-        let activityWindowMinutes = Self.defaultActivityWindowMinutes
-        let bucketCount = Self.defaultBucketCount
+        let dashboardStatsProvider = self.dashboardStatsProvider
         let startStats = stats
         let watcherProcessProbe = self.watcherProcessProbe
         let startUnix = snapshotTime.timeIntervalSince1970
@@ -464,13 +504,7 @@ final class StatsCollector: ObservableObject {
         dashboardRefreshTask = Task.detached(priority: .utility) { [weak self] in
             let nextWatcherProcess = watcherProcessProbe.sample()
             let result: Result<DashboardStats, Error> = Result {
-                let backgroundDatabase = BrainDatabase(path: dbPath, openConfiguration: openConfiguration)
-                defer { backgroundDatabase.close() }
-                backgroundDatabase.reopenIfNeeded()
-                return try backgroundDatabase.dashboardStats(
-                    activityWindowMinutes: activityWindowMinutes,
-                    bucketCount: bucketCount
-                )
+                try dashboardStatsProvider()
             }
 
             await self?.finishRequestedRefreshIfCurrent(
@@ -484,6 +518,54 @@ final class StatsCollector: ObservableObject {
                 generation: generation,
                 watcherProcessGeneration: watcherProcessGeneration
             )
+        }
+    }
+
+    private func requestSignalCoverageRefresh(force: Bool) {
+        guard signalCoverageTask == nil else { return }
+        let now = nowProvider()
+        if !force, let lastSignalCoverageAttemptedAt,
+           now.timeIntervalSince(lastSignalCoverageAttemptedAt) < signalCoverageRefreshInterval {
+            return
+        }
+
+        signalCoverageGeneration += 1
+        let generation = signalCoverageGeneration
+        let provider = signalCoverageProvider
+        let startDelay = signalCoverageStartDelay
+        isSignalCoverageRefreshing = true
+        lastSignalCoverageError = nil
+        signalCoverageTask = Task.detached(priority: .utility) { [weak self] in
+            if startDelay > 0 {
+                do {
+                    try await Task.sleep(for: .seconds(startDelay))
+                } catch {
+                    return
+                }
+            }
+            guard !Task.isCancelled else { return }
+            let result: Result<BrainDatabase.SignalCoverageSnapshot, Error> = Result {
+                try provider()
+            }
+            await self?.finishSignalCoverageRefresh(result, generation: generation)
+        }
+    }
+
+    private func finishSignalCoverageRefresh(
+        _ result: Result<BrainDatabase.SignalCoverageSnapshot, Error>,
+        generation: Int
+    ) {
+        guard !isStopped, generation == signalCoverageGeneration else { return }
+        signalCoverageTask = nil
+        isSignalCoverageRefreshing = false
+        lastSignalCoverageAttemptedAt = nowProvider()
+        switch result {
+        case .success(let coverage):
+            stats = stats.withSignalCoverage(coverage)
+            state = PipelineState.derive(daemon: daemon, stats: stats)
+            lastSignalCoverageError = nil
+        case .failure(let error):
+            lastSignalCoverageError = String(describing: error)
         }
     }
 
@@ -569,9 +651,15 @@ final class StatsCollector: ObservableObject {
         let finishDaemon = daemonMonitor.sample() ?? nextDaemon
         switch result {
         case .success(let nextStats):
-            let queueFlushRate = recordPendingStoreQueueDepth(nextStats.pendingStoreFlushQueueDepth, now: snapshotTime)
+            let hotStats: DashboardStats
+            if let cachedCoverage = stats.signalCoverageSnapshot {
+                hotStats = nextStats.withSignalCoverage(cachedCoverage)
+            } else {
+                hotStats = nextStats
+            }
+            let queueFlushRate = recordPendingStoreQueueDepth(hotStats.pendingStoreFlushQueueDepth, now: snapshotTime)
             stats = applyingWatcherProcessResultIfCurrent(
-                to: nextStats.withPendingStoreFlushRate(queueFlushRate),
+                to: hotStats.withPendingStoreFlushRate(queueFlushRate),
                 candidate: watcherProcess,
                 generation: watcherProcessGeneration
             )
@@ -585,6 +673,7 @@ final class StatsCollector: ObservableObject {
             if !force {
                 lastNonForcedStatsRefreshAt = snapshotTime
             }
+            requestSignalCoverageRefresh(force: force)
         case .failure(let error):
             daemon = finishDaemon
             stats = applyingWatcherProcessResultIfCurrent(

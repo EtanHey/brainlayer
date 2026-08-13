@@ -394,6 +394,7 @@ private struct BrainBarDashboardView: View {
             totalCount: collector.stats.signalEligibleChunkCount,
             backlogCount: collector.stats.vectorBacklogCount,
             coveragePercent: collector.stats.vectorCoveragePercent,
+            isAvailable: collector.stats.signalCoverageIsAvailable,
             accentColor: .brainBarSignalVector,
             showsDetail: true,
             vectorNetDrainRatePerHour: collector.stats.vectorNetDrainRatePerHour,
@@ -1171,6 +1172,7 @@ private struct BrainBarSignalCoveragePanel: View {
                 totalCount: stats.signalEligibleChunkCount,
                 backlogCount: stats.vectorBacklogCount,
                 coveragePercent: stats.vectorCoveragePercent,
+                isAvailable: stats.signalCoverageIsAvailable,
                 accentColor: .brainBarSignalVector,
                 showsDetail: true,
                 vectorNetDrainRatePerHour: stats.vectorNetDrainRatePerHour,
@@ -1182,6 +1184,7 @@ private struct BrainBarSignalCoveragePanel: View {
                 totalCount: stats.signalEligibleChunkCount,
                 backlogCount: stats.ftsBacklogCount,
                 coveragePercent: stats.ftsCoveragePercent,
+                isAvailable: stats.signalCoverageIsAvailable,
                 accentColor: .brainBarSignalFTS5,
                 showsDetail: false,
                 vectorNetDrainRatePerHour: nil,
@@ -1193,6 +1196,7 @@ private struct BrainBarSignalCoveragePanel: View {
                 totalCount: stats.signalEligibleChunkCount,
                 backlogCount: stats.trigramBacklogCount,
                 coveragePercent: stats.trigramCoveragePercent,
+                isAvailable: stats.signalCoverageIsAvailable,
                 accentColor: .brainBarSignalTrigram,
                 showsDetail: false,
                 vectorNetDrainRatePerHour: nil,
@@ -1416,6 +1420,7 @@ private struct BrainBarSignalCoverage: Identifiable {
     let totalCount: Int
     let backlogCount: Int
     let coveragePercent: Double
+    let isAvailable: Bool
     let accentColor: Color
     let showsDetail: Bool
     let vectorNetDrainRatePerHour: Double?
@@ -1424,7 +1429,8 @@ private struct BrainBarSignalCoverage: Identifiable {
     var id: String { name }
 
     var percentText: String {
-        String(format: "%.0f%%", coveragePercent)
+        guard isAvailable else { return "computing…" }
+        return String(format: "%.0f%%", coveragePercent)
     }
 
     var clampedCoveragePercent: Double {
@@ -1432,7 +1438,8 @@ private struct BrainBarSignalCoverage: Identifiable {
     }
 
     var backlogText: String {
-        NumberFormatter.localizedString(from: NSNumber(value: backlogCount), number: .decimal)
+        guard isAvailable else { return "computing…" }
+        return NumberFormatter.localizedString(from: NSNumber(value: backlogCount), number: .decimal)
     }
 }
 
@@ -1455,8 +1462,14 @@ private struct BrainBarSignalCoverageRow: View {
                     .monospacedDigit()
             }
 
-            BrainBarAnimatedCoverageBar(percent: signal.clampedCoveragePercent, accentColor: signal.accentColor)
-            .frame(height: 6)
+            if signal.isAvailable {
+                BrainBarAnimatedCoverageBar(percent: signal.clampedCoveragePercent, accentColor: signal.accentColor)
+                    .frame(height: 6)
+            } else {
+                Capsule()
+                    .fill(signal.accentColor.opacity(0.16))
+                    .frame(height: 6)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
