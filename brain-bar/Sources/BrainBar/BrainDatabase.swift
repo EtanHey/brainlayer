@@ -72,6 +72,13 @@ final class BrainDatabase: @unchecked Sendable {
         }
     }
 
+    struct SignalCoverageSnapshot: Sendable, Equatable {
+        let eligibleChunkCount: Int
+        let vectorIndexedChunkCount: Int
+        let ftsIndexedChunkCount: Int
+        let trigramIndexedChunkCount: Int
+    }
+
     struct DashboardStats: Sendable, Equatable {
         struct WatcherHealth: Sendable, Equatable {
             let alerting: Bool
@@ -139,6 +146,7 @@ final class BrainDatabase: @unchecked Sendable {
         let vectorIndexedChunkCount: Int
         let ftsIndexedChunkCount: Int
         let trigramIndexedChunkCount: Int
+        let signalCoverageIsAvailable: Bool
         let pendingStoreQueueDepth: Int
         let pendingStoreFlushQueueDepth: Int
         let pendingStoreOldestQueuedAt: Date?
@@ -173,6 +181,7 @@ final class BrainDatabase: @unchecked Sendable {
             vectorIndexedChunkCount: Int = 0,
             ftsIndexedChunkCount: Int = 0,
             trigramIndexedChunkCount: Int = 0,
+            signalCoverageIsAvailable: Bool = true,
             pendingStoreQueueDepth: Int = 0,
             pendingStoreFlushQueueDepth: Int? = nil,
             pendingStoreOldestQueuedAt: Date? = nil,
@@ -206,6 +215,7 @@ final class BrainDatabase: @unchecked Sendable {
             self.vectorIndexedChunkCount = vectorIndexedChunkCount
             self.ftsIndexedChunkCount = ftsIndexedChunkCount
             self.trigramIndexedChunkCount = trigramIndexedChunkCount
+            self.signalCoverageIsAvailable = signalCoverageIsAvailable
             self.pendingStoreQueueDepth = pendingStoreQueueDepth
             self.pendingStoreFlushQueueDepth = pendingStoreFlushQueueDepth ?? pendingStoreQueueDepth
             self.pendingStoreOldestQueuedAt = pendingStoreOldestQueuedAt
@@ -343,6 +353,7 @@ final class BrainDatabase: @unchecked Sendable {
                 vectorIndexedChunkCount: vectorIndexedChunkCount,
                 ftsIndexedChunkCount: ftsIndexedChunkCount,
                 trigramIndexedChunkCount: trigramIndexedChunkCount,
+                signalCoverageIsAvailable: signalCoverageIsAvailable,
                 pendingStoreQueueDepth: pendingStoreQueueDepth,
                 pendingStoreFlushQueueDepth: pendingStoreFlushQueueDepth,
                 pendingStoreOldestQueuedAt: pendingStoreOldestQueuedAt,
@@ -380,6 +391,7 @@ final class BrainDatabase: @unchecked Sendable {
                 vectorIndexedChunkCount: vectorIndexedChunkCount,
                 ftsIndexedChunkCount: ftsIndexedChunkCount,
                 trigramIndexedChunkCount: trigramIndexedChunkCount,
+                signalCoverageIsAvailable: signalCoverageIsAvailable,
                 pendingStoreQueueDepth: pendingStoreQueueDepth,
                 pendingStoreFlushQueueDepth: pendingStoreFlushQueueDepth,
                 pendingStoreOldestQueuedAt: pendingStoreOldestQueuedAt,
@@ -417,6 +429,7 @@ final class BrainDatabase: @unchecked Sendable {
                 vectorIndexedChunkCount: vectorIndexedChunkCount,
                 ftsIndexedChunkCount: ftsIndexedChunkCount,
                 trigramIndexedChunkCount: trigramIndexedChunkCount,
+                signalCoverageIsAvailable: signalCoverageIsAvailable,
                 pendingStoreQueueDepth: pendingStoreQueueDepth,
                 pendingStoreFlushQueueDepth: pendingStoreFlushQueueDepth,
                 pendingStoreOldestQueuedAt: pendingStoreOldestQueuedAt,
@@ -426,6 +439,54 @@ final class BrainDatabase: @unchecked Sendable {
                 watcherProcessProbeResult: result,
                 watcherRecentDistinctChunkCount: watcherRecentDistinctChunkCount,
                 watcherFlowReadability: watcherFlowReadability
+            )
+        }
+
+        func withSignalCoverage(_ coverage: SignalCoverageSnapshot) -> DashboardStats {
+            DashboardStats(
+                chunkCount: chunkCount,
+                enrichedChunkCount: enrichedChunkCount,
+                failedEnrichmentCount: failedEnrichmentCount,
+                skippedEnrichmentCount: skippedEnrichmentCount,
+                pendingEnrichmentCount: pendingEnrichmentCount,
+                enrichmentPercent: enrichmentPercent,
+                enrichmentRatePerMinute: enrichmentRatePerMinute,
+                databaseSizeBytes: databaseSizeBytes,
+                recentActivityBuckets: recentActivityBuckets,
+                recentAgentWriteBuckets: recentAgentWriteBuckets,
+                recentWatcherWriteBuckets: recentWatcherWriteBuckets,
+                recentEnrichmentBuckets: recentEnrichmentBuckets,
+                recentWriteFiveMinuteCount: recentWriteFiveMinuteCount,
+                recentEnrichmentFiveMinuteCount: recentEnrichmentFiveMinuteCount,
+                activityWindowMinutes: activityWindowMinutes,
+                bucketCount: bucketCount,
+                liveWindowMinutes: liveWindowMinutes,
+                lastWriteAt: lastWriteAt,
+                lastEnrichedAt: lastEnrichedAt,
+                signalEligibleChunkCount: coverage.eligibleChunkCount,
+                vectorIndexedChunkCount: coverage.vectorIndexedChunkCount,
+                ftsIndexedChunkCount: coverage.ftsIndexedChunkCount,
+                trigramIndexedChunkCount: coverage.trigramIndexedChunkCount,
+                signalCoverageIsAvailable: true,
+                pendingStoreQueueDepth: pendingStoreQueueDepth,
+                pendingStoreFlushQueueDepth: pendingStoreFlushQueueDepth,
+                pendingStoreOldestQueuedAt: pendingStoreOldestQueuedAt,
+                pendingStoreFlushRatePerMinute: pendingStoreFlushRatePerMinute,
+                watcherHealth: watcherHealth,
+                replayDebtBreakdown: replayDebtBreakdown,
+                watcherProcessProbeResult: watcherProcessProbeResult,
+                watcherRecentDistinctChunkCount: watcherRecentDistinctChunkCount,
+                watcherFlowReadability: watcherFlowReadability
+            )
+        }
+
+        var signalCoverageSnapshot: SignalCoverageSnapshot? {
+            guard signalCoverageIsAvailable else { return nil }
+            return SignalCoverageSnapshot(
+                eligibleChunkCount: signalEligibleChunkCount,
+                vectorIndexedChunkCount: vectorIndexedChunkCount,
+                ftsIndexedChunkCount: ftsIndexedChunkCount,
+                trigramIndexedChunkCount: trigramIndexedChunkCount
             )
         }
     }
@@ -2039,7 +2100,11 @@ final class BrainDatabase: @unchecked Sendable {
         return Int(sqlite3_column_int(stmt, 0))
     }
 
-    func dashboardStats(activityWindowMinutes: Int = 30, bucketCount: Int = 12) throws -> DashboardStats {
+    func dashboardStats(
+        activityWindowMinutes: Int = 30,
+        bucketCount: Int = 12,
+        includeSignalCoverage: Bool = true
+    ) throws -> DashboardStats {
         let replayDebtBreakdown = replayDebtBreakdown()
         let pendingStoreFlushQueue = replayDebtBreakdown.pendingStores.snapshot
         let pendingStoreQueue = replayDebtBreakdown.deduplicatedSnapshot
@@ -2067,7 +2132,18 @@ final class BrainDatabase: @unchecked Sendable {
             }
 
             let counts = try dashboardCounts()
-            let signalCounts = try dashboardSignalCoverageCounts()
+            let signalCoverage: SignalCoverageSnapshot?
+            if includeSignalCoverage {
+                let counts = try dashboardSignalCoverageCounts()
+                signalCoverage = SignalCoverageSnapshot(
+                    eligibleChunkCount: counts.eligibleChunkCount,
+                    vectorIndexedChunkCount: counts.vectorIndexedChunkCount,
+                    ftsIndexedChunkCount: counts.ftsIndexedChunkCount,
+                    trigramIndexedChunkCount: counts.trigramIndexedChunkCount
+                )
+            } else {
+                signalCoverage = nil
+            }
             let lastEvents = try dashboardLastEvents(now: now)
             let chunkCount = counts.chunkCount
             let enrichedChunkCount = counts.enrichedChunkCount
@@ -2123,10 +2199,11 @@ final class BrainDatabase: @unchecked Sendable {
                 liveWindowMinutes: liveWindowMinutes,
                 lastWriteAt: lastEvents.lastWriteAt,
                 lastEnrichedAt: lastEvents.lastEnrichedAt,
-                signalEligibleChunkCount: signalCounts.eligibleChunkCount,
-                vectorIndexedChunkCount: signalCounts.vectorIndexedChunkCount,
-                ftsIndexedChunkCount: signalCounts.ftsIndexedChunkCount,
-                trigramIndexedChunkCount: signalCounts.trigramIndexedChunkCount,
+                signalEligibleChunkCount: signalCoverage?.eligibleChunkCount ?? 0,
+                vectorIndexedChunkCount: signalCoverage?.vectorIndexedChunkCount ?? 0,
+                ftsIndexedChunkCount: signalCoverage?.ftsIndexedChunkCount ?? 0,
+                trigramIndexedChunkCount: signalCoverage?.trigramIndexedChunkCount ?? 0,
+                signalCoverageIsAvailable: signalCoverage != nil,
                 pendingStoreQueueDepth: pendingStoreQueue.depth,
                 pendingStoreFlushQueueDepth: pendingStoreFlushQueue.depth,
                 pendingStoreOldestQueuedAt: pendingStoreQueue.oldestQueuedAt,
@@ -2134,6 +2211,18 @@ final class BrainDatabase: @unchecked Sendable {
                 replayDebtBreakdown: replayDebtBreakdown,
                 watcherRecentDistinctChunkCount: recentWatcherTruth.total,
                 watcherFlowReadability: recentWatcherTruth.readability
+            )
+        }
+    }
+
+    func dashboardSignalCoverageSnapshot() throws -> SignalCoverageSnapshot {
+        try withReadTransaction {
+            let counts = try dashboardSignalCoverageCounts()
+            return SignalCoverageSnapshot(
+                eligibleChunkCount: counts.eligibleChunkCount,
+                vectorIndexedChunkCount: counts.vectorIndexedChunkCount,
+                ftsIndexedChunkCount: counts.ftsIndexedChunkCount,
+                trigramIndexedChunkCount: counts.trigramIndexedChunkCount
             )
         }
     }

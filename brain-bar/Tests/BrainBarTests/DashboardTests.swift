@@ -214,6 +214,29 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.trigramCoveragePercent, 66.666, accuracy: 0.01)
     }
 
+    func testDashboardStatsCanSkipSignalCoverageForHotSnapshot() throws {
+        try db.insertChunk(
+            id: "hot-snapshot",
+            content: "The hot snapshot must not wait for signal coverage.",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+
+        let stats = try db.dashboardStats(
+            activityWindowMinutes: 30,
+            bucketCount: 6,
+            includeSignalCoverage: false
+        )
+
+        XCTAssertFalse(stats.signalCoverageIsAvailable)
+        XCTAssertEqual(stats.signalEligibleChunkCount, 0)
+        XCTAssertEqual(stats.vectorIndexedChunkCount, 0)
+        XCTAssertEqual(stats.ftsIndexedChunkCount, 0)
+        XCTAssertEqual(stats.trigramIndexedChunkCount, 0)
+    }
+
     func testDashboardStatsTreatsLegacyFtsTableWithoutChunkIdAsUnknownCoverage() throws {
         try db.insertChunk(
             id: "legacy-fts-1",
@@ -579,6 +602,15 @@ final class DashboardTests: XCTestCase {
         XCTAssertTrue(source.contains("vectorBacklogCount"))
         XCTAssertTrue(source.contains("ftsBacklogCount"))
         XCTAssertTrue(source.contains("trigramBacklogCount"))
+    }
+
+    func testDashboardRendersUnavailableCoverageAsComputingWithoutNumericBar() throws {
+        let source = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
+
+        XCTAssertTrue(source.contains("stats.signalCoverageIsAvailable"))
+        XCTAssertTrue(source.contains("isAvailable: Bool"))
+        XCTAssertTrue(source.contains("return \"computing…\""))
+        XCTAssertTrue(source.contains("if signal.isAvailable"))
     }
 
     func testVectorSignalDetailMountsAtRootToEscapePipelineAndScrollClips() throws {

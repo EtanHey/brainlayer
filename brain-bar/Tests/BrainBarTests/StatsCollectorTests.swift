@@ -80,6 +80,84 @@ private final class CompletingWindowBucketsProvider: @unchecked Sendable {
     }
 }
 
+private final class BlockingSignalCoverageProvider: @unchecked Sendable {
+    private let lock = NSLock()
+    private let startedSemaphore = DispatchSemaphore(value: 0)
+    private let releaseSemaphore = DispatchSemaphore(value: 0)
+    private let snapshot: BrainDatabase.SignalCoverageSnapshot
+    private var calls = 0
+
+    init(snapshot: BrainDatabase.SignalCoverageSnapshot) {
+        self.snapshot = snapshot
+    }
+
+    func fetch() -> BrainDatabase.SignalCoverageSnapshot {
+        lock.lock()
+        calls += 1
+        lock.unlock()
+        startedSemaphore.signal()
+        releaseSemaphore.wait()
+        return snapshot
+    }
+
+    var callCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return calls
+    }
+
+    func waitUntilStarted(timeout: DispatchTime) -> Bool {
+        startedSemaphore.wait(timeout: timeout) == .success
+    }
+
+    func release() {
+        releaseSemaphore.signal()
+    }
+}
+
+private struct SignalCoverageProviderFailure: Error {}
+
+private final class FailingSignalCoverageProvider: @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls = 0
+
+    var callCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return calls
+    }
+
+    func fetch() throws -> BrainDatabase.SignalCoverageSnapshot {
+        lock.lock()
+        calls += 1
+        lock.unlock()
+        throw SignalCoverageProviderFailure()
+    }
+}
+
+private final class CountingDashboardStatsProvider: @unchecked Sendable {
+    private let lock = NSLock()
+    private let stats: DashboardStats
+    private var calls = 0
+
+    init(stats: DashboardStats) {
+        self.stats = stats
+    }
+
+    var callCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return calls
+    }
+
+    func fetch() -> DashboardStats {
+        lock.lock()
+        calls += 1
+        lock.unlock()
+        return stats
+    }
+}
+
 private final class SequencedBlockingWatcherProbe: WatcherProcessProbing, @unchecked Sendable {
     private let lock = NSLock()
     private let blockedSampleStarted = DispatchSemaphore(value: 0)
@@ -264,6 +342,136 @@ final class StatsCollectorTests: XCTestCase {
         """
         let execRC = sqlite3_exec(db, sql, nil, nil, nil)
         guard execRC == SQLITE_OK else { throw NSError(domain: "StatsCollectorTests", code: Int(execRC)) }
+    }
+
+    func testHotSnapshotPublishesBeforeExactSignalCoverage() async throws {
+        let hotStats = DashboardStats(
+            chunkCount: 3,
+            enrichedChunkCount: 1,
+            pendingEnrichmentCount: 2,
+            enrichmentPercent: 100.0 / 3.0,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 1_024,
+            recentActivityBuckets: [1, 2],
+            recentAgentWriteBuckets: [1, 0],
+            recentWatcherWriteBuckets: [0, 2],
+            recentEnrichmentBuckets: [0, 1],
+            activityWindowMinutes: 60,
+            bucketCount: 2,
+            signalEligibleChunkCount: 0,
+            signalCoverageIsAvailable: false
+        )
+        let exactCoverage = BrainDatabase.SignalCoverageSnapshot(
+            eligibleChunkCount: 3,
+            vectorIndexedChunkCount: 2,
+            ftsIndexedChunkCount: 3,
+            trigramIndexedChunkCount: 2
+        )
+        let coverageProvider = BlockingSignalCoverageProvider(snapshot: exactCoverage)
+        let hotProvider = CountingDashboardStatsProvider(stats: hotStats)
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            statsRefreshCoalesceInterval: 0,
+            dashboardStatsProvider: hotProvider.fetch,
+            signalCoverageProvider: coverageProvider.fetch,
+            signalCoverageStartDelay: 0,
+            databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
+        )
+        defer {
+            coverageProvider.release()
+            collector.stop()
+        }
+
+        collector.start()
+        let hotDeadline = Date().addingTimeInterval(2)
+        while (collector.isRefreshing || collector.lastDataFetchedAt == nil), Date() < hotDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        XCTAssertNotNil(collector.lastDataFetchedAt)
+        XCTAssertFalse(collector.snapshotFreshnessState.isLoading)
+        XCTAssertFalse(collector.stats.signalCoverageIsAvailable)
+        XCTAssertEqual(collector.stats.recentActivityBuckets, [1, 2])
+        XCTAssertTrue(
+            coverageProvider.waitUntilStarted(timeout: .now() + 1),
+            "Exact coverage should start only after the hot snapshot can publish."
+        )
+
+        coverageProvider.release()
+        let coverageDeadline = Date().addingTimeInterval(2)
+        while !collector.stats.signalCoverageIsAvailable, Date() < coverageDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        XCTAssertTrue(collector.stats.signalCoverageIsAvailable)
+        XCTAssertEqual(collector.stats.signalEligibleChunkCount, 3)
+        XCTAssertEqual(collector.stats.vectorIndexedChunkCount, 2)
+        XCTAssertEqual(collector.stats.ftsIndexedChunkCount, 3)
+        XCTAssertEqual(collector.stats.trigramIndexedChunkCount, 2)
+        XCTAssertEqual(collector.stats.recentActivityBuckets, [1, 2])
+
+        collector.refresh(force: false)
+        let secondHotDeadline = Date().addingTimeInterval(2)
+        while (collector.isRefreshing || hotProvider.callCount < 2), Date() < secondHotDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        XCTAssertEqual(hotProvider.callCount, 2, "The cache assertion must follow a real second hot snapshot.")
+        XCTAssertTrue(collector.stats.signalCoverageIsAvailable)
+        XCTAssertEqual(collector.stats.signalEligibleChunkCount, 3)
+        XCTAssertEqual(coverageProvider.callCount, 1, "Hot refreshes must reuse the last exact coverage until its interval expires.")
+    }
+
+    func testFailedSignalCoverageAttemptIsThrottledWithoutFailingHotSnapshot() async throws {
+        let hotStats = DashboardStats(
+            chunkCount: 3,
+            enrichedChunkCount: 1,
+            pendingEnrichmentCount: 2,
+            enrichmentPercent: 100.0 / 3.0,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 1_024,
+            recentActivityBuckets: [1, 2],
+            recentEnrichmentBuckets: [0, 1],
+            activityWindowMinutes: 60,
+            bucketCount: 2,
+            signalEligibleChunkCount: 0,
+            signalCoverageIsAvailable: false
+        )
+        let coverageProvider = FailingSignalCoverageProvider()
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            statsRefreshCoalesceInterval: 0,
+            dashboardStatsProvider: { hotStats },
+            signalCoverageProvider: coverageProvider.fetch,
+            signalCoverageStartDelay: 0,
+            signalCoverageRefreshInterval: 300,
+            databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
+        )
+        defer { collector.stop() }
+
+        collector.start()
+        let failureDeadline = Date().addingTimeInterval(2)
+        while collector.lastSignalCoverageError == nil, Date() < failureDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        XCTAssertNotNil(collector.lastSignalCoverageError)
+        XCTAssertNil(collector.lastFetchError)
+        XCTAssertFalse(collector.stats.signalCoverageIsAvailable)
+        XCTAssertEqual(coverageProvider.callCount, 1)
+
+        collector.refresh(force: false)
+        let secondHotDeadline = Date().addingTimeInterval(2)
+        while collector.isRefreshing, Date() < secondHotDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertEqual(coverageProvider.callCount, 1, "A failed exact scan must not retry before the periodic interval expires.")
+        XCTAssertNil(collector.lastFetchError)
+        XCTAssertEqual(collector.stats.recentActivityBuckets, [1, 2])
     }
 
     func testSelectTimeframeLiveClearsWindowedBuckets() async throws {
