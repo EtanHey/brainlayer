@@ -2301,7 +2301,11 @@ final class BrainDatabase: @unchecked Sendable {
         ftsIndexedChunkCount: Int,
         trigramIndexedChunkCount: Int
     ) {
+        guard let db else { throw DBError.notOpen }
         let searchableWhereClause = try searchableChunkWhereClause(alias: "c")
+        let mappedFTSColumns = try tableExists("chunk_fts_rowids")
+            ? try tableColumns(name: "chunk_fts_rowids", on: db)
+            : []
         return (
             eligibleChunkCount: try scalarInt("SELECT COUNT(*) FROM chunks AS c WHERE \(searchableWhereClause)"),
             vectorIndexedChunkCount: try joinedCoverageCount(
@@ -2309,17 +2313,30 @@ final class BrainDatabase: @unchecked Sendable {
                 idColumn: "id",
                 searchableWhereClause: searchableWhereClause
             ),
-            ftsIndexedChunkCount: try joinedCoverageCount(
-                tableName: "chunks_fts",
-                idColumn: "chunk_id",
-                searchableWhereClause: searchableWhereClause
-            ),
-            trigramIndexedChunkCount: try joinedCoverageCount(
-                tableName: "chunks_fts_trigram",
-                idColumn: "chunk_id",
-                searchableWhereClause: searchableWhereClause
-            )
+            ftsIndexedChunkCount: mappedFTSColumns.contains("fts_rowid")
+                ? try mappedFTSRowCount(rowIDColumn: "fts_rowid")
+                : try joinedCoverageCount(
+                    tableName: "chunks_fts",
+                    idColumn: "chunk_id",
+                    searchableWhereClause: searchableWhereClause
+                ),
+            trigramIndexedChunkCount: mappedFTSColumns.contains("trigram_rowid")
+                ? try mappedFTSRowCount(rowIDColumn: "trigram_rowid")
+                : try joinedCoverageCount(
+                    tableName: "chunks_fts_trigram",
+                    idColumn: "chunk_id",
+                    searchableWhereClause: searchableWhereClause
+                )
         )
+    }
+
+    private func mappedFTSRowCount(rowIDColumn: String) throws -> Int {
+        guard ["fts_rowid", "trigram_rowid"].contains(rowIDColumn) else {
+            throw DBError.exec(SQLITE_ERROR, "invalid FTS rowid map column")
+        }
+        // This map is trigger-maintained and keyed by chunk_id. Rejoining it to chunks would
+        // reintroduce the content-heavy scan this dashboard path exists to avoid.
+        return try scalarInt("SELECT COUNT(*) FROM chunk_fts_rowids WHERE \(rowIDColumn) IS NOT NULL")
     }
 
     private func joinedCoverageCount(tableName: String, idColumn: String, searchableWhereClause: String) throws -> Int {
