@@ -1235,9 +1235,7 @@ def test_drain_store_events_merge_duplicates_and_write_alias(tmp_path):
     assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10) == 2
 
     with sqlite3.connect(db_path) as conn:
-        rows = conn.execute(
-            "SELECT id, seen_count, importance, tags FROM chunks WHERE COALESCE(archived, 0) = 0"
-        ).fetchall()
+        rows = conn.execute("SELECT id, seen_count, importance, tags FROM chunks WHERE archived_at IS NULL").fetchall()
         alias = conn.execute("SELECT old_chunk_id, canonical_chunk_id FROM chunk_id_alias").fetchone()
 
     assert len(rows) == 1

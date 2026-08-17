@@ -13,6 +13,8 @@ from types import SimpleNamespace
 import pytest
 
 import brainlayer.health_check as health_check
+
+# Repair (c): health SQL uses archived_at + lineage only.
 from brainlayer.health_check import HealthCheckConfig, run_health_check
 from brainlayer.vector_store import VectorStore
 

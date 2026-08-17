@@ -6,6 +6,8 @@ import sqlite3
 from brainlayer._helpers import serialize_f32
 from brainlayer.vector_store import VectorStore
 
+# Repair (c): duplicate merge archives via archived_at only.
+
 
 def _chunk(
     chunk_id: str,
@@ -103,7 +105,7 @@ def test_identical_reposts_collapse_to_single_chunk_with_seen_count_and_alias(tm
 
     row = (
         store.conn.cursor()
-        .execute("SELECT id, seen_count, importance, tags, last_seen_at FROM chunks WHERE archived = 0")
+        .execute("SELECT id, seen_count, importance, tags, last_seen_at FROM chunks WHERE archived_at IS NULL")
         .fetchone()
     )
     alias = (
@@ -257,7 +259,7 @@ def test_weekly_standups_remain_distinct_chunks(tmp_path):
         [[0.1] * 1024, [0.2] * 1024],
     )
 
-    count = store.conn.cursor().execute("SELECT COUNT(*) FROM chunks WHERE archived = 0").fetchone()[0]
+    count = store.conn.cursor().execute("SELECT COUNT(*) FROM chunks WHERE archived_at IS NULL").fetchone()[0]
     aliases = store.conn.cursor().execute("SELECT COUNT(*) FROM chunk_id_alias").fetchone()[0]
 
     assert count == 2
@@ -361,7 +363,7 @@ def test_timestamp_only_changes_remain_distinct_chunks(tmp_path):
         [[0.1] * 1024, [0.2] * 1024],
     )
 
-    count = store.conn.cursor().execute("SELECT COUNT(*) FROM chunks WHERE archived = 0").fetchone()[0]
+    count = store.conn.cursor().execute("SELECT COUNT(*) FROM chunks WHERE archived_at IS NULL").fetchone()[0]
     aliases = store.conn.cursor().execute("SELECT COUNT(*) FROM chunk_id_alias").fetchone()[0]
 
     assert count == 2
@@ -383,7 +385,7 @@ def test_enrichment_content_hash_does_not_disable_dedupe(tmp_path):
 
     store.upsert_chunks([_chunk("hash-b", content, created_at="2026-05-16T10:00:00Z")], [[0.2] * 1024])
 
-    row = store.conn.cursor().execute("SELECT id, seen_count FROM chunks WHERE COALESCE(archived, 0) = 0").fetchone()
+    row = store.conn.cursor().execute("SELECT id, seen_count FROM chunks WHERE archived_at IS NULL").fetchone()
     alias = (
         store.conn.cursor()
         .execute("SELECT canonical_chunk_id FROM chunk_id_alias WHERE old_chunk_id = 'hash-b'")
@@ -413,12 +415,10 @@ def test_upsert_archives_existing_row_before_aliasing_same_id_to_canonical(tmp_p
         [[0.2] * 1024],
     )
 
-    active_rows = (
-        store.conn.cursor().execute("SELECT id FROM chunks WHERE COALESCE(archived, 0) = 0 ORDER BY id").fetchall()
-    )
+    active_rows = store.conn.cursor().execute("SELECT id FROM chunks WHERE archived_at IS NULL ORDER BY id").fetchall()
     archived_row = (
         store.conn.cursor()
-        .execute("SELECT archived, superseded_by FROM chunks WHERE id = 'deterministic-row'")
+        .execute("SELECT archived_at IS NOT NULL, superseded_by FROM chunks WHERE id = 'deterministic-row'")
         .fetchone()
     )
     alias = (
@@ -536,7 +536,7 @@ def test_backfill_merges_snapshot_duplicates_and_preserves_alias_refs(tmp_path):
     checked = VectorStore(snapshot_path)
     active_rows = (
         checked.conn.cursor()
-        .execute("SELECT id, seen_count, importance, tags FROM chunks WHERE archived = 0")
+        .execute("SELECT id, seen_count, importance, tags FROM chunks WHERE archived_at IS NULL")
         .fetchall()
     )
     alias = (

@@ -10,6 +10,9 @@ from types import SimpleNamespace
 import pytest
 
 
+# Repair (c): hotlane eligibility uses archived_at + lineage, not archived/status twins.
+
+
 def _load_hotlane_module():
     importlib.invalidate_caches()
     sys.modules.pop("scripts.hotlane_brainbar_daemon", None)

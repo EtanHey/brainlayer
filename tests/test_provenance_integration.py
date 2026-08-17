@@ -1360,7 +1360,7 @@ def test_reject_pending_deletes_all_pending_rows_for_archived_chunk(con):
     )
 
     assert reject_pending(con, "pending-arbitration") is True
-    assert con.execute("SELECT status FROM chunks WHERE id = 'c-shared-infer'").fetchone()[0] == "archived"
+    assert con.execute("SELECT archived_at IS NOT NULL FROM chunks WHERE id = 'c-shared-infer'").fetchone()[0] == 1
     assert con.execute("SELECT COUNT(*) FROM provenance_pending_user_confirm").fetchone()[0] == 0
 
 
@@ -1760,7 +1760,7 @@ def test_pending_reject_archives_inference_and_removes_queue_row(con):
     assert reject_pending(con, "c-infer") is True
 
     assert list_pending_confirm(con) == []
-    assert con.execute("SELECT status FROM chunks WHERE id = 'c-infer'").fetchone()[0] == "archived"
+    assert con.execute("SELECT archived_at IS NOT NULL FROM chunks WHERE id = 'c-infer'").fetchone()[0] == 1
 
 
 def test_entity_authority_annotations_show_authoritative_and_superseded_values(con):

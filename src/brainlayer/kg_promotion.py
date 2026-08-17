@@ -143,7 +143,6 @@ def _matching_rows(store: Any, limit: int | None = None) -> list[dict[str, Any]]
                     SELECT chunk_id FROM chunk_tags WHERE tag GLOB '*-identification'
                 )
             )
-              AND COALESCE(c.status, 'active') = 'active'
               AND c.superseded_by IS NULL
               AND c.aggregated_into IS NULL
               AND c.archived_at IS NULL
@@ -365,7 +364,6 @@ def promote_chunk_raw_entities(
                 )
                 OR (c.raw_entities_json IS NOT NULL AND c.raw_entities_json != '')
             )
-              AND COALESCE(c.status, 'active') = 'active'
               AND c.superseded_by IS NULL
               AND c.aggregated_into IS NULL
               AND c.archived_at IS NULL

@@ -4,6 +4,8 @@ import json
 
 from brainlayer.drain import run_daemon
 
+# Repair (c): rewind archive writes archived_at only. See also test_rewind_batch_archival.py.
+
 
 def test_run_daemon_writes_progress_heartbeat(tmp_path):
     health_path = tmp_path / "drain-health.json"

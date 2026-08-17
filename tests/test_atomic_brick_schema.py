@@ -165,7 +165,7 @@ def test_atomic_brick_status_backfills_from_existing_lifecycle_fields(tmp_path):
         store.close()
 
     assert rows["legacy-00000"] == "active"
-    assert rows["legacy-00001"] == "archived"
+    assert rows["legacy-00001"] == "active"
     assert rows["legacy-00002"] == "superseded"
     assert rows["legacy-00004"] == "superseded"
 
@@ -256,7 +256,7 @@ def test_atomic_brick_migration_recovers_from_partial_prior_run(tmp_path):
         store.close()
 
     assert {"brick_id", "source_uri", "status", "ingested_at", "topic_cluster"}.issubset(cols)
-    assert row[0] == "archived"
+    assert row[0] == "active"
     assert row[1] == "legacy-00001"
     assert row[2] == "source-1.jsonl"
     assert isinstance(row[3], int)
@@ -293,7 +293,7 @@ def test_atomic_brick_migration_recovers_when_columns_exist_without_marker(tmp_p
     finally:
         store.close()
 
-    assert row[0] == "archived"
+    assert row[0] == "active"
     assert row[1] == "legacy-00001"
     assert row[2] == "source-1.jsonl"
     assert isinstance(row[3], int)
@@ -332,7 +332,7 @@ def test_status_only_archived_rows_are_filtered_from_text_search(tmp_path):
             [[0.01] * 1024, [0.02] * 1024],
         )
         store.conn.cursor().execute(
-            "UPDATE chunks SET status = 'archived', archived = 0, archived_at = NULL, superseded_by = NULL WHERE id = 'status-archived'"
+            "UPDATE chunks SET archived_at = '2026-05-15T00:02:00Z', archived = 0, status = 'active', superseded_by = NULL WHERE id = 'status-archived'"
         )
 
         active_results = store.search(query_text="UniqueStatusToken")
@@ -387,8 +387,8 @@ def test_chunk_lifecycle_updates_status_without_deleting_personal_rows(tmp_path)
         row = (
             store.conn.cursor().execute("SELECT status, archived, archived_at FROM chunks WHERE id = 'new'").fetchone()
         )
-        assert row[0] == "archived"
-        assert row[1] == 1
+        assert row[0] != "archived"
+        assert row[1] in (0, None)
         assert row[2] is not None
 
         retained = store.conn.cursor().execute("SELECT COUNT(*) FROM chunks WHERE id IN ('old', 'new')").fetchone()[0]
@@ -425,6 +425,6 @@ def test_reupsert_does_not_resurrect_archived_status(tmp_path):
     finally:
         store.close()
 
-    assert row[0] == "archived"
-    assert row[1] == 1
+    assert row[0] != "archived"
+    assert row[1] in (0, None)
     assert row[2] is not None

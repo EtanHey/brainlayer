@@ -2448,12 +2448,6 @@ final class BrainDatabase: @unchecked Sendable {
         if columns.contains("archived_at") {
             clauses.append("\(alias).archived_at IS NULL")
         }
-        if columns.contains("archived") {
-            clauses.append("COALESCE(\(alias).archived, 0) = 0")
-        }
-        if columns.contains("status") {
-            clauses.append("COALESCE(\(alias).status, 'active') = 'active'")
-        }
         if columns.contains("source_class") {
             clauses.append("(\(alias).source_class IS NULL OR \(alias).source_class NOT IN ('desktop', 'brain-worker'))")
         }
@@ -3425,24 +3419,18 @@ final class BrainDatabase: @unchecked Sendable {
             try execute("""
                 UPDATE chunks
                 SET status = CASE
-                    WHEN COALESCE(archived, 0) = 1
-                      OR value_type = 'ARCHIVED'
-                      OR archived_at IS NOT NULL
-                        THEN 'archived'
                     WHEN superseded_by IS NOT NULL
                       OR aggregated_into IS NOT NULL
                         THEN 'superseded'
                     ELSE 'active'
                 END
                 WHERE status IS NULL
-                   OR status NOT IN ('active', 'superseded', 'archived')
+                   OR status NOT IN ('active', 'superseded')
+                   OR status = 'archived'
                    OR (
                         status = 'active'
                         AND (
-                            COALESCE(archived, 0) = 1
-                            OR value_type = 'ARCHIVED'
-                            OR archived_at IS NOT NULL
-                            OR superseded_by IS NOT NULL
+                            superseded_by IS NOT NULL
                             OR aggregated_into IS NOT NULL
                         )
                     )
@@ -4798,8 +4786,6 @@ final class BrainDatabase: @unchecked Sendable {
               AND project IS ?
               AND content_type = ?
               AND conversation_id = ?
-              AND COALESCE(status, 'active') = 'active'
-              AND COALESCE(archived, 0) = 0
               AND superseded_by IS NULL
               AND aggregated_into IS NULL
               AND archived_at IS NULL
@@ -6062,9 +6048,7 @@ final class BrainDatabase: @unchecked Sendable {
         try executeUpdate(
             """
             UPDATE chunks
-            SET archived = 1,
-                archived_at = ?,
-                status = 'archived'
+            SET archived_at = ?
             WHERE id = ?
             """
         ) { stmt in
@@ -6233,9 +6217,7 @@ final class BrainDatabase: @unchecked Sendable {
         var conditions = [
             "superseded_by IS NULL",
             "aggregated_into IS NULL",
-            "archived_at IS NULL",
-            "COALESCE(archived, 0) = 0",
-            "COALESCE(status, 'active') = 'active'"
+            "archived_at IS NULL"
         ]
         if chunkIDs == nil {
             conditions.append("enriched_at IS NULL")

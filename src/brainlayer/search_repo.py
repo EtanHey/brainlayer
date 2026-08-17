@@ -18,6 +18,7 @@ import numpy as np
 from . import search_profile
 from ._helpers import _escape_fts5_query, _is_sqlite_busy_error, serialize_f32
 from .agent_profiles import boost_weight, source_weight, validate_agent_profile
+from .archive_lifecycle import lifecycle_active_clauses
 from .chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, is_precompact_checkpoint_content
 from .content_class import DEFAULT_CONTENT_CLASS, normalize_content_class
 from .dedupe import resolve_chunk_id
@@ -1275,11 +1276,7 @@ class SearchMixin:
             if temporal_clause:
                 where_clauses.append(temporal_clause)
             if not include_archived:
-                where_clauses.append("c.superseded_by IS NULL")
-                where_clauses.append("c.aggregated_into IS NULL")
-                where_clauses.append("c.archived_at IS NULL")
-                where_clauses.append("COALESCE(c.archived, 0) = 0")
-                where_clauses.append("COALESCE(c.status, 'active') = 'active'")
+                where_clauses.extend(lifecycle_active_clauses("c"))
 
             where_sql = ""
             if where_clauses:
@@ -1409,11 +1406,7 @@ class SearchMixin:
             if temporal_clause:
                 where_clauses.append(temporal_clause)
             if not include_archived:
-                where_clauses.append("superseded_by IS NULL")
-                where_clauses.append("aggregated_into IS NULL")
-                where_clauses.append("archived_at IS NULL")
-                where_clauses.append("COALESCE(archived, 0) = 0")
-                where_clauses.append("COALESCE(status, 'active') = 'active'")
+                where_clauses.extend(lifecycle_active_clauses())
 
             params.append(n_results)
 
@@ -1723,11 +1716,7 @@ class SearchMixin:
         if temporal_clause:
             where_clauses.append(temporal_clause)
         if not include_archived:
-            where_clauses.append("c.superseded_by IS NULL")
-            where_clauses.append("c.aggregated_into IS NULL")
-            where_clauses.append("c.archived_at IS NULL")
-            where_clauses.append("COALESCE(c.archived, 0) = 0")
-            where_clauses.append("COALESCE(c.status, 'active') = 'active'")
+            where_clauses.extend(lifecycle_active_clauses("c"))
 
         where_sql = ""
         if where_clauses:
@@ -2205,11 +2194,8 @@ class SearchMixin:
                     fts_extra.append("AND LOWER(c.content) NOT LIKE ?")
                     fts_filter_params.append(f"%{pattern}%")
             if not include_archived:
-                fts_extra.append("AND c.superseded_by IS NULL")
-                fts_extra.append("AND c.aggregated_into IS NULL")
-                fts_extra.append("AND c.archived_at IS NULL")
-                fts_extra.append("AND COALESCE(c.archived, 0) = 0")
-                fts_extra.append("AND COALESCE(c.status, 'active') = 'active'")
+                for clause in lifecycle_active_clauses("c"):
+                    fts_extra.append(f"AND {clause}")
 
             chunk_origin_expr = "c.chunk_origin" if getattr(self, "_has_chunk_origin", True) else "'unknown'"
             content_class_expr = _content_class_expr(self, "c")
@@ -2404,11 +2390,8 @@ class SearchMixin:
                     recent_extra.append("AND LOWER(content) NOT LIKE ?")
                     recent_params.append(f"%{pattern}%")
             if not include_archived:
-                recent_extra.append("AND superseded_by IS NULL")
-                recent_extra.append("AND aggregated_into IS NULL")
-                recent_extra.append("AND archived_at IS NULL")
-                recent_extra.append("AND COALESCE(archived, 0) = 0")
-                recent_extra.append("AND COALESCE(status, 'active') = 'active'")
+                for clause in lifecycle_active_clauses():
+                    recent_extra.append(f"AND {clause}")
 
             chunk_origin_expr = "chunk_origin" if getattr(self, "_has_chunk_origin", True) else "'unknown'"
             content_class_expr = _content_class_expr(self)

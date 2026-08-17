@@ -488,8 +488,6 @@ def embed_pending_chunks(
               AND c.archived_at IS NULL
               AND c.superseded_by IS NULL
               AND c.aggregated_into IS NULL
-              AND COALESCE(c.archived, 0) = 0
-              AND COALESCE(c.status, 'active') = 'active'
             ORDER BY c.created_at ASC
             LIMIT ?
             """,
@@ -560,8 +558,6 @@ def embed_hot_chunk(
           AND c.archived_at IS NULL
           AND c.superseded_by IS NULL
           AND c.aggregated_into IS NULL
-          AND COALESCE(c.archived, 0) = 0
-          AND COALESCE(c.status, 'active') = 'active'
         """,
         (chunk_id,),
     ).fetchone()

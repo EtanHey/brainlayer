@@ -99,7 +99,6 @@ def fetch_rows(conn):
         FROM chunks
         WHERE id LIKE 'rt-%'
           AND content_type = 'user_message'
-          AND archived = 0
           AND aggregated_into IS NULL
           AND archived_at IS NULL
           AND lower(content) GLOB '*fuck*'
@@ -228,7 +227,7 @@ def archive_originals(conn, cluster, agg_id, now_iso):
         conn.execute(
             """
             UPDATE chunks
-            SET aggregated_into = ?, archived = 1, archived_at = ?, value_type = 'ARCHIVED'
+            SET aggregated_into = ?, archived_at = ?
             WHERE id = ?
             """,
             (agg_id, now_iso, row["id"]),

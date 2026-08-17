@@ -191,8 +191,6 @@ def _candidates_from_scanned_rows(
             and archived_at is None
             and superseded_by is None
             and aggregated_into is None
-            and not archived
-            and status == "active"
         )
         if eligible:
             if first_candidate_rowid is None:
@@ -233,8 +231,6 @@ class HotCandidateScanner:
               AND c.archived_at IS NULL
               AND c.superseded_by IS NULL
               AND c.aggregated_into IS NULL
-              AND COALESCE(c.archived, 0) = 0
-              AND COALESCE(c.status, 'active') = 'active'
             """,
             tuple(self._retries),
         )
@@ -355,8 +351,6 @@ def _candidate_chunk_ids(store: VectorStore, *, limit: int) -> list[str]:
           AND c.archived_at IS NULL
           AND c.superseded_by IS NULL
           AND c.aggregated_into IS NULL
-          AND COALESCE(c.archived, 0) = 0
-          AND COALESCE(c.status, 'active') = 'active'
         ORDER BY c.created_at DESC
         LIMIT ?
         """,
@@ -392,8 +386,6 @@ def _candidate_chunk_rows(store: VectorStore, *, limit: int) -> list[EmbedCandid
             and archived_at is None
             and superseded_by is None
             and aggregated_into is None
-            and not archived
-            and status == "active"
         ):
             candidates.append(EmbedCandidate(str(chunk_id), str(content)))
             if len(candidates) >= limit:
@@ -468,7 +460,7 @@ def _pending_chunk_rows(
         content_by_id = {
             str(row[0]): str(row[1])
             for row in content_rows
-            if row[1] and row[2] is None and row[3] is None and row[4] is None and not row[5] and row[6] == "active"
+            if row[1] and row[2] is None and row[3] is None and row[4] is None
         }
         candidates.extend(
             EmbedCandidate(chunk_id, content_by_id[chunk_id]) for chunk_id in candidate_ids if chunk_id in content_by_id
@@ -643,8 +635,6 @@ def _write_embedded_vectors(store_or_path: VectorStore | Path | str, vectors: li
                       AND c.archived_at IS NULL
                       AND c.superseded_by IS NULL
                       AND c.aggregated_into IS NULL
-                      AND COALESCE(c.archived, 0) = 0
-                      AND COALESCE(c.status, 'active') = 'active'
                     """,
                     (chunk_id, content),
                 ).fetchone()
