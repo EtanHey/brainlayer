@@ -1737,6 +1737,7 @@ def test_drain_persists_enrichment_provenance_in_chunk_metadata(tmp_path):
     assert metadata["existing"] is True
     assert metadata["enrichment_model"] == "gemini-2.5-flash-lite"
     assert metadata["enrichment_backend"] == "gemini-flex"
+    assert metadata["enriched_by"] == "gemini-2.5-flash-lite"
 
 
 def _create_burn_drain_db(path):

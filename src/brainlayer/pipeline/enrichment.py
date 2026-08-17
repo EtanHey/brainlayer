@@ -45,7 +45,6 @@ _prompt_signature_emitted = False
 _prompt_signature_lock = threading.Lock()
 _sleep = time.sleep
 
-from ..chunk_origin import CHUNK_ORIGIN_GROQ, CHUNK_ORIGIN_MLX, CHUNK_ORIGIN_OLLAMA
 from ..tag_normalization import (
     enrichment_tag_mode,
     normalize_enrichment_tag_values,
@@ -94,15 +93,15 @@ def _detect_default_backend() -> str:
 ENRICH_BACKEND = _detect_default_backend()
 
 
-def _chunk_origin_for_backend(backend: Optional[str] = None) -> str:
+def _enrichment_model_for_backend(backend: Optional[str] = None) -> str:
     effective = str(backend or ENRICH_BACKEND or "ollama").strip().lower()
     if _fallback_active and effective != "groq":
         effective = "ollama" if effective == "mlx" else "mlx"
     if effective == "groq":
-        return CHUNK_ORIGIN_GROQ
+        return GROQ_MODEL
     if effective == "mlx":
-        return CHUNK_ORIGIN_MLX
-    return CHUNK_ORIGIN_OLLAMA
+        return MLX_MODEL
+    return MODEL
 
 
 OLLAMA_URL = os.environ.get("BRAINLAYER_OLLAMA_URL", "http://127.0.0.1:11434/api/generate")
@@ -322,6 +321,7 @@ def enrichment_version_metadata(*, model: str | None = None, backend: str | None
         "taxonomy_content_sha": taxonomy_content_sha(),
         "tag_mode": enrichment_tag_mode(),
         "model": model or os.environ.get("BRAINLAYER_ENRICHMENT_MODEL_STAMP", MODEL),
+        "enriched_by": model or os.environ.get("BRAINLAYER_ENRICHMENT_MODEL_STAMP", MODEL),
         "backend": backend or os.environ.get("BRAINLAYER_ENRICHMENT_BACKEND_STAMP", ENRICH_BACKEND),
         "run_id": os.environ.get("BRAINLAYER_ENRICHMENT_RUN_ID", f"pid-{os.getpid()}"),
     }
@@ -1060,7 +1060,8 @@ def _enrich_one(
             "sentiment_label": sentiment_label,
             "sentiment_score": sentiment_score,
             "sentiment_signals": sentiment_signals,
-            "chunk_origin": _chunk_origin_for_backend(backend),
+            "enrichment_model": _enrichment_model_for_backend(backend),
+            "enrichment_backend": str(backend or ENRICH_BACKEND or "ollama"),
         }
         enrichment_version = enrichment.get("enrichment_metadata", {}).get("prompt_version")
         if enrichment_version:

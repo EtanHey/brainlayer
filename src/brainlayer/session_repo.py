@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Optional
 import apsw
 
 from ._helpers import _safe_json_loads, source_aware_min_chars
-from .chunk_origin import CHUNK_ORIGIN_UNKNOWN
 
 logger = logging.getLogger(__name__)
 
@@ -308,16 +307,11 @@ class SessionMixin:
         if enrichment_version is not None:
             sets.append("enrichment_version = ?")
             params.append(enrichment_version)
-        normalized_origin = str(chunk_origin or "").strip()
-        if (
-            normalized_origin
-            and normalized_origin != CHUNK_ORIGIN_UNKNOWN
-            and getattr(self, "_has_chunk_origin", False)
-        ):
-            sets.append(
-                "chunk_origin = CASE WHEN chunk_origin IS NULL OR chunk_origin = ? THEN ? ELSE chunk_origin END"
-            )
-            params.extend([CHUNK_ORIGIN_UNKNOWN, normalized_origin])
+        # chunk_origin is ingest provenance. Enrichment model goes to metadata.enriched_by.
+        _ = chunk_origin
+        if enrichment_model is not None:
+            sets.append("metadata = json_set(COALESCE(metadata, '{}'), '$.enriched_by', ?)")
+            params.append(enrichment_model)
 
         params.append(chunk_id)
         for attempt in range(3):

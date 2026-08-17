@@ -25,7 +25,6 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-from .chunk_origin import CHUNK_ORIGIN_GEMINI_FLASH_LITE
 from .pipeline.enrichment import build_external_prompt, parse_enrichment
 from .pipeline.rate_limiter import TokenBucket
 from .pipeline.sanitize import Sanitizer
@@ -47,7 +46,6 @@ DEFAULT_ENRICH_IDLE_POLL_SECONDS = 30.0
 DEFAULT_ENRICH_WATCHER_IDLE_SECONDS = 5.0
 DEFAULT_ENRICH_DAILY_USD_CAP = 5.0
 ENRICH_DAILY_COST_COUNTER_FILENAME = "enrich-daily-cost.json"
-_DEFAULT_CHUNK_ORIGIN = object()
 _ENRICHMENT_QUEUE_WRITES_OVERRIDE = threading.local()
 
 # Gemini Developer API paid-tier text prices per 1M tokens for gemini-2.5-flash-lite.
@@ -720,8 +718,15 @@ def _current_post_write_yield_seconds() -> float:
     )
 
 
-def _current_enrichment_chunk_origin() -> str:
-    return str(GEMINI_REALTIME_MODEL).strip() or CHUNK_ORIGIN_GEMINI_FLASH_LITE
+def _with_enriched_by(enrichment: dict[str, Any], model: str | None) -> dict[str, Any]:
+    stamped = dict(enrichment)
+    name = str(model or "").strip()
+    if not name:
+        return stamped
+    meta = dict(stamped.get("enrichment_metadata") or {})
+    meta["enriched_by"] = name
+    stamped["enrichment_metadata"] = meta
+    return stamped
 
 
 def _current_enrichment_backend() -> str:
@@ -795,24 +800,24 @@ def _enrichment_update_payload(
     chunk: dict[str, Any],
     enrichment: dict[str, Any],
     *,
-    chunk_origin: str | None | object = _DEFAULT_CHUNK_ORIGIN,
+    chunk_origin: str | None | object = None,
 ) -> dict[str, Any]:
     content = chunk.get("content", "")
-    if chunk_origin is _DEFAULT_CHUNK_ORIGIN:
-        normalized_origin = _current_enrichment_chunk_origin()
-    else:
-        normalized_origin = str(chunk_origin or "").strip() or None
     provenance_class = _derive_chunk_provenance_class(chunk, content)
+    model = str(GEMINI_REALTIME_MODEL or "").strip()
+    stamped = _with_enriched_by(enrichment, model)
+    # chunk_origin is ingest provenance. Ignore any enrichment-provided origin.
+    _ = chunk_origin
     return {
         "chunk_id": chunk["id"],
-        "enrichment": enrichment,
+        "enrichment": stamped,
         "content_hash": _content_hash(content) if content else None,
-        "entities": enrichment.get("entities", []),
-        "chunk_origin": normalized_origin,
+        "entities": stamped.get("entities", []),
+        "chunk_origin": None,
         "provenance_class": provenance_class,
-        "enrichment_model": GEMINI_REALTIME_MODEL,
+        "enrichment_model": model or GEMINI_REALTIME_MODEL,
         "enrichment_backend": _current_enrichment_backend(),
-        "enrichment_version": (enrichment.get("enrichment_metadata") or {}).get("prompt_version"),
+        "enrichment_version": (stamped.get("enrichment_metadata") or {}).get("prompt_version"),
     }
 
 
@@ -820,7 +825,7 @@ def _enqueue_enrichment_write(
     chunk: dict[str, Any],
     enrichment: dict[str, Any],
     *,
-    chunk_origin: str | None | object = _DEFAULT_CHUNK_ORIGIN,
+    chunk_origin: str | None = None,
 ) -> None:
     from .queue_io import enqueue_enrichment_updates
 
@@ -839,14 +844,7 @@ def _enqueue_enrichment_write_batch(items: list[tuple[dict[str, Any], dict[str, 
 
     try:
         enqueue_enrichment_updates(
-            [
-                _enrichment_update_payload(
-                    chunk,
-                    enrichment,
-                    chunk_origin=None if counted_as == "skipped" else _DEFAULT_CHUNK_ORIGIN,
-                )
-                for chunk, enrichment, counted_as in items
-            ]
+            [_enrichment_update_payload(chunk, enrichment) for chunk, enrichment, _counted_as in items]
         )
     except Exception:
         chunk_ids = ",".join(str(chunk.get("id")) for chunk, _, _ in items)
@@ -1495,7 +1493,8 @@ def _apply_enrichment_impl(
         legacy_resolved_query = enrichment.get("resolved_query")
         if not legacy_resolved_query and isinstance(resolved_queries, list) and resolved_queries:
             legacy_resolved_query = resolved_queries[0]
-        normalized_origin = str(chunk_origin or _current_enrichment_chunk_origin()).strip()
+        model = str(enrichment_model or GEMINI_REALTIME_MODEL or "").strip()
+        _ = chunk_origin
 
         update_kwargs = {
             "chunk_id": chunk["id"],
@@ -1514,8 +1513,7 @@ def _apply_enrichment_impl(
             "sentiment_label": enrichment.get("sentiment_label"),
             "sentiment_score": enrichment.get("sentiment_score"),
             "sentiment_signals": enrichment.get("sentiment_signals"),
-            "chunk_origin": normalized_origin or None,
-            "enrichment_model": enrichment_model or GEMINI_REALTIME_MODEL,
+            "enrichment_model": model or GEMINI_REALTIME_MODEL,
             "enrichment_backend": enrichment_backend or _current_enrichment_backend(),
         }
         enrichment_version = (enrichment.get("enrichment_metadata") or {}).get("prompt_version")
