@@ -14,6 +14,16 @@ def _get_tools():
     return _full_tool_definitions()
 
 
+def _tool_input_schema(tool: Any) -> dict[str, Any]:
+    schema = getattr(tool, "input_schema", None)
+    if isinstance(schema, dict):
+        return schema
+    schema = getattr(tool, "inputSchema", None)
+    if isinstance(schema, dict):
+        return schema
+    raise AssertionError(f"{tool.name} is missing MCP input schema payload")
+
+
 def _iter_string_fields(schema: dict[str, Any], path: str = ""):
     schema_type = schema.get("type")
     if schema_type == "string":
@@ -48,7 +58,7 @@ def _iter_string_arrays(schema: dict[str, Any], path: str = ""):
 
 def test_all_string_input_fields_have_max_length_and_string_arrays_have_max_items():
     for tool in _get_tools():
-        schema = tool.inputSchema
+        schema = _tool_input_schema(tool)
         for field_path, string_schema in _iter_string_fields(schema):
             assert "maxLength" in string_schema, f"{tool.name}.{field_path} is missing maxLength"
 
@@ -59,7 +69,7 @@ def test_all_string_input_fields_have_max_length_and_string_arrays_have_max_item
 
 def test_brain_digest_schema_limits_content_length():
     digest_tool = next(tool for tool in _get_tools() if tool.name == "brain_digest")
-    content_schema = digest_tool.inputSchema["properties"]["content"]
+    content_schema = _tool_input_schema(digest_tool)["properties"]["content"]
     assert content_schema["maxLength"] == 200_000
 
 
