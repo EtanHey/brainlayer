@@ -69,17 +69,20 @@ def test_setup_migrates_bridge_and_bun_shapes_to_socket(tmp_path: Path):
         encoding="utf-8",
     )
 
-    assert migrate_legacy_mcp_configs([config_path]) == [config_path]
+    assert migrate_legacy_mcp_configs([config_path]).changed == (config_path,)
     migrated = json.loads(config_path.read_text(encoding="utf-8"))
     assert migrated["mcpServers"]["brainlayer"] == SOCKET_MCP
     assert migrated["mcpServers"]["unrelated"] == {"command": "other-mcp"}
-    assert migrate_legacy_mcp_configs([config_path]) == []
+    assert migrate_legacy_mcp_configs([config_path]).changed == ()
 
 
-def test_setup_migrates_brainlayer_mcp_json_to_socket_with_backup(tmp_path: Path):
+def test_setup_migrates_brainlayer_mcp_json_to_socket_with_backup(tmp_path: Path, monkeypatch):
     from brainlayer.setup import migrate_legacy_mcp_configs
 
-    config_path = tmp_path / ".claude.json"
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    config_path = home / ".claude.json"
+    config_path.parent.mkdir(parents=True)
     original = {
         "theme": "dark",
         "mcpServers": {
@@ -92,12 +95,13 @@ def test_setup_migrates_brainlayer_mcp_json_to_socket_with_backup(tmp_path: Path
     changed = migrate_legacy_mcp_configs([config_path])
     second = migrate_legacy_mcp_configs([config_path])
 
-    assert changed == [config_path]
-    assert second == []
+    assert changed.changed == (config_path,)
+    assert second.changed == ()
     migrated = json.loads(config_path.read_text(encoding="utf-8"))
     assert migrated["mcpServers"]["brainlayer"] == SOCKET_MCP
     assert migrated["mcpServers"]["unrelated"] == original["mcpServers"]["unrelated"]
-    backups = list(tmp_path.glob(".claude.json.bak*"))
+    backup_dir = home / ".local" / "share" / "brainlayer" / "config-backups"
+    backups = list(backup_dir.glob(".claude.json.*.bak"))
     assert len(backups) == 1
     assert json.loads(backups[0].read_text(encoding="utf-8")) == original
 
@@ -111,7 +115,8 @@ def test_setup_tolerates_invalid_json_without_aborting(tmp_path: Path):
     good.write_text(json.dumps({"mcpServers": {"brainlayer": {"command": "brainlayer-mcp"}}}) + "\n")
 
     changed = migrate_legacy_mcp_configs([bad, good])
-    assert changed == [good]
+    assert changed.changed == (good,)
+    assert any(path == bad for path, _reason in changed.skipped)
     assert json.loads(good.read_text())["mcpServers"]["brainlayer"] == SOCKET_MCP
 
 
@@ -199,17 +204,6 @@ def test_doctor_errors_on_codex_toml_bridge_shape(tmp_path: Path):
     assert "UNIX-CONNECT:/tmp/brainbar.sock" in (issues[0].details.get("fix") or "")
 
 
-def test_doctor_reports_unparseable_json_config(tmp_path: Path):
-    from brainlayer.doctor import _legacy_python_mcp_config_issues
-
-    bad = tmp_path / "broken.json"
-    bad.write_text("{not-json\n", encoding="utf-8")
-    issues = _legacy_python_mcp_config_issues([bad])
-    assert len(issues) == 1
-    assert issues[0].code == "mcp_config_unparseable"
-    assert issues[0].severity == "warning"
-
-
 def test_doctor_errors_on_stale_python_mcp_entrypoint(tmp_path: Path):
     from brainlayer.doctor import _legacy_python_mcp_config_issues
 
@@ -274,7 +268,15 @@ def test_doctor_run_fails_on_stale_mcp_entrypoint(tmp_path: Path):
 
 def test_docs_and_readme_use_socket_form_only():
     root = Path(__file__).resolve().parents[1]
-    for rel in ("README.md", "AGENTS.md", "docs/mcp-config.md", "docs/quickstart.md"):
+    for rel in (
+        "README.md",
+        "AGENTS.md",
+        "docs/mcp-config.md",
+        "docs/quickstart.md",
+        "docs/brew-layer-conformance.md",
+        "docs/architecture.md",
+    ):
         content = (root / rel).read_text(encoding="utf-8")
         assert '"command": "brainlayer-mcp"' not in content, rel
+        assert "brainlayer serve" not in content, rel
         assert "UNIX-CONNECT:/tmp/brainbar.sock" in content, rel

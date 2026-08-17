@@ -111,13 +111,13 @@ Current native Swift BrainBar tools (PR #135, 2026-03-30):
 - Textual TUI (`dashboard/`) and Next.js dashboard
 - Source data: JSONL in `~/.claude/projects/`
 
-<!-- COMMANDS: `python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"` | test: `pytest` | lint: `ruff check src/ && ruff format src/` | run: `brainlayer index && brainlayer serve` -->
+<!-- COMMANDS: `python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"` | test: `pytest` | lint: `ruff check src/ && ruff format src/` | run: `brainlayer index && brainlayer setup` -->
 ## Workflow (HOW)
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 brainlayer index
-brainlayer serve
+brainlayer setup
 brainlayer search "how did I implement authentication"
 brainlayer enrich
 ```

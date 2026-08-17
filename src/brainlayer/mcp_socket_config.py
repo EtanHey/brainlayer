@@ -20,6 +20,8 @@ SOCKET_MCP_SERVER: dict[str, Any] = {
 
 BRAINLAYER_SERVER_NAMES = frozenset({"brainlayer", "brainlayer-mcp", "brainbar", "brain-bar"})
 _KNOWN_LEGACY_BASENAMES = frozenset({"brainlayer-mcp", "brainlayer-mcp-stdio-bridge"})
+_SKIP_GITS_DIR_PARTS = frozenset({".worktrees", ".git", "docs.local", "node_modules", ".tmp"})
+_HTTP_TRANSPORT_KEYS = frozenset({"type", "url", "headers"})
 
 
 def mcp_command_basename(server: object) -> str | None:
@@ -50,7 +52,8 @@ def is_canonical_socket_mcp_server(server: object) -> bool:
 
 def is_brainlayer_mcp_entry(name: str, server: object) -> bool:
     """True when this MCP entry is BrainLayer memory wiring (by name or known transport)."""
-    if name.lower() in BRAINLAYER_SERVER_NAMES:
+    normalized_name = name.lower()
+    if normalized_name in BRAINLAYER_SERVER_NAMES:
         return True
     if not isinstance(server, dict):
         return False
@@ -58,7 +61,7 @@ def is_brainlayer_mcp_entry(name: str, server: object) -> bool:
     if basename in _KNOWN_LEGACY_BASENAMES:
         return True
     args = server.get("args")
-    if isinstance(args, list):
+    if normalized_name in BRAINLAYER_SERVER_NAMES and isinstance(args, list):
         for arg in args:
             if not isinstance(arg, str):
                 continue
@@ -91,10 +94,14 @@ def owned_mcp_config_paths(*, home: Path | None = None) -> tuple[Path, ...]:
     ]
     gits = root / "Gits"
     if gits.is_dir():
-        for path in sorted(gits.rglob(".mcp.json")):
-            if ".worktrees" in path.parts or ".git" in path.parts:
+        for repo_dir in sorted(gits.iterdir()):
+            if not repo_dir.is_dir():
                 continue
-            paths.append(path)
+            if any(part in _SKIP_GITS_DIR_PARTS for part in repo_dir.parts):
+                continue
+            mcp_json = repo_dir / ".mcp.json"
+            if mcp_json.is_file():
+                paths.append(mcp_json)
     return tuple(paths)
 
 
@@ -132,5 +139,24 @@ def socket_server_preserving(server: object) -> dict[str, Any]:
     """Canonical socket transport, keeping unrelated keys (disabled/env/timeout)."""
     preserved: dict[str, Any] = {}
     if isinstance(server, dict):
-        preserved = {k: v for k, v in server.items() if k not in {"command", "args", "path"}}
+        drop_keys = {"command", "args", "path", *_HTTP_TRANSPORT_KEYS}
+        preserved = {k: v for k, v in server.items() if k not in drop_keys}
     return {**SOCKET_MCP_SERVER, **preserved}
+
+
+def mcp_server_public_summary(server: object) -> dict[str, Any]:
+    """Safe MCP server shape for doctor JSON output (no env secrets)."""
+    if not isinstance(server, dict):
+        return {"shape": type(server).__name__}
+    summary: dict[str, Any] = {}
+    command = server.get("command")
+    if command is not None:
+        summary["command"] = mcp_command_basename(server) or str(command)
+    args = server.get("args")
+    if isinstance(args, list):
+        summary["args_count"] = len(args)
+        summary["args_preview"] = [str(arg)[:120] for arg in args[:3]]
+    transport_type = server.get("type")
+    if isinstance(transport_type, str):
+        summary["type"] = transport_type
+    return summary

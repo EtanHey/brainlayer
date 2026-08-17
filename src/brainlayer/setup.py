@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import select
 import shutil
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 
@@ -24,6 +26,27 @@ from .spotlight import ensure_spotlight_excluded_layout as _ensure_spotlight_exc
 
 DEFAULT_GOOGLE_API_KEY_OP_REF = "op://Private/Google AI/Gemini API key"
 DEFAULT_MCP_PROTOCOL_VERSION = "2025-06-18"
+_TOML_TRANSPORT_KEYS = frozenset({"command", "args"})
+
+
+@dataclass(frozen=True)
+class McpMigrationReport:
+    changed: tuple[Path, ...] = ()
+    skipped: tuple[tuple[Path, str], ...] = ()
+
+
+def _config_backup_dir() -> Path:
+    return Path.home() / ".local" / "share" / "brainlayer" / "config-backups"
+
+
+def _backup_config_file(target_path: Path) -> Path:
+    backup_dir = _config_backup_dir()
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d%H%M%S")
+    backup = backup_dir / f"{target_path.name}.{stamp}.{os.getpid()}.bak"
+    backup.write_bytes(target_path.read_bytes())
+    backup.chmod(target_path.stat().st_mode & 0o777)
+    return backup
 
 
 def ensure_spotlight_excluded_layout(
@@ -95,12 +118,54 @@ def get_default_mcp_config_paths() -> tuple[Path, ...]:
     return owned_mcp_config_paths()
 
 
-def _backup_config_file(target_path: Path) -> Path:
-    stamp = time.strftime("%Y%m%d%H%M%S")
-    backup = target_path.with_name(f"{target_path.name}.bak.{stamp}")
-    backup.write_bytes(target_path.read_bytes())
-    backup.chmod(target_path.stat().st_mode & 0o777)
-    return backup
+def _validate_toml_text(text: str) -> None:
+    import tomllib
+
+    try:
+        tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(f"rewritten TOML is invalid: {exc}") from exc
+
+
+def _strip_toml_table_assignments(body: str, keys: frozenset[str]) -> str:
+    key_pattern = "|".join(re.escape(key) for key in sorted(keys, key=len, reverse=True))
+    lines = body.splitlines(keepends=True)
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if not re.match(rf"^\s*({key_pattern})\s*=", line):
+            out.append(line)
+            i += 1
+            continue
+        rhs = line.split("=", 1)[1] if "=" in line else ""
+        if "[" in rhs and "]" not in rhs:
+            i += 1
+            while i < len(lines) and "]" not in lines[i]:
+                i += 1
+            if i < len(lines):
+                i += 1
+        else:
+            i += 1
+    return "".join(out)
+
+
+def _rewrite_codex_mcp_servers_to_socket(text: str, names: list[str]) -> str:
+    """Rewrite matching [mcp_servers.NAME] / [mcpServers.NAME] blocks to socket form."""
+    result = text
+    for name in names:
+        for table in ("mcp_servers", "mcpServers"):
+            pattern = re.compile(
+                rf"(?ms)^(\[{re.escape(table)}\.{re.escape(name)}\]\s*\n)(.*?)(?=^\[|\Z)",
+            )
+            match = pattern.search(result)
+            if not match:
+                continue
+            header, body = match.group(1), match.group(2)
+            kept_lines = _strip_toml_table_assignments(body, _TOML_TRANSPORT_KEYS)
+            new_body = 'command = "socat"\nargs = ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]\n' + kept_lines
+            result = result[: match.start()] + header + new_body + result[match.end() :]
+    return result
 
 
 def _rewrite_json_mcp_servers(payload: dict) -> bool:
@@ -138,45 +203,21 @@ def _toml_servers_needing_migration(text: str) -> list[str]:
     return [name for name, server in iter_toml_mcp_servers(payload) if needs_socket_migration(name, server)]
 
 
-def _rewrite_codex_mcp_servers_to_socket(text: str, names: list[str]) -> str:
-    """Rewrite matching [mcp_servers.NAME] / [mcpServers.NAME] blocks to socket form."""
-    import re
-
-    result = text
-    for name in names:
-        for table in ("mcp_servers", "mcpServers"):
-            pattern = re.compile(
-                rf"(?ms)^(\[{re.escape(table)}\.{re.escape(name)}\]\s*\n)(.*?)(?=^\[|\Z)",
-            )
-            match = pattern.search(result)
-            if not match:
-                continue
-            header, body = match.group(1), match.group(2)
-            kept_lines = []
-            for line in body.splitlines(keepends=True):
-                stripped = line.lstrip()
-                if stripped.startswith("command") or stripped.startswith("args"):
-                    continue
-                kept_lines.append(line)
-            new_body = 'command = "socat"\nargs = ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]\n' + "".join(kept_lines)
-            result = result[: match.start()] + header + new_body + result[match.end() :]
-    return result
-
-
 def migrate_legacy_mcp_configs(
     config_paths: list[Path] | tuple[Path, ...] | None = None,
     *,
     bridge_command: str | None = None,
-) -> list[Path]:
+) -> McpMigrationReport:
     """Rewrite any non-socket BrainLayer MCP entry to the canonical socat form.
 
     Shape-matcher (not name-matcher): bun wrappers, stdio-bridge, deleted
     ``brainlayer-mcp``, and python entrypoints are all rewritten. Each rewritten
-    file is backed up beside the original first. Unreadable/malformed files are
-    skipped (doctor reports them); they do not abort the whole run.
+    file is backed up under ~/.local/share/brainlayer/config-backups/ first.
+    Unreadable/malformed inputs and failed writes are reported in ``skipped``.
     """
     del bridge_command  # socket form is the only rewrite target
     changed: list[Path] = []
+    skipped: list[tuple[Path, str]] = []
     paths = config_paths if config_paths is not None else get_default_mcp_config_paths()
     for config_path in paths:
         path = config_path.expanduser()
@@ -185,7 +226,8 @@ def migrate_legacy_mcp_configs(
         try:
             target_path = path.resolve()
             original_text = target_path.read_text(encoding="utf-8")
-        except OSError:
+        except OSError as exc:
+            skipped.append((path, f"could not read config: {exc}"))
             continue
 
         suffix = target_path.suffix.lower()
@@ -197,6 +239,11 @@ def migrate_legacy_mcp_configs(
             if new_text == original_text:
                 continue
             try:
+                _validate_toml_text(new_text)
+            except ValueError as exc:
+                skipped.append((path, str(exc)))
+                continue
+            try:
                 _backup_config_file(target_path)
                 mode = target_path.stat().st_mode & 0o777
                 temporary = target_path.with_name(f".{target_path.name}.{os.getpid()}.tmp")
@@ -206,16 +253,19 @@ def migrate_legacy_mcp_configs(
                     os.replace(temporary, target_path)
                 finally:
                     temporary.unlink(missing_ok=True)
-            except OSError:
+            except OSError as exc:
+                skipped.append((path, f"could not write config: {exc}"))
                 continue
             changed.append(path)
             continue
 
         try:
             payload = json.loads(original_text)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
+            skipped.append((path, f"invalid JSON: {exc}"))
             continue
         if not isinstance(payload, dict):
+            skipped.append((path, "MCP config root must be a JSON object"))
             continue
         if not _rewrite_json_mcp_servers(payload):
             continue
@@ -230,10 +280,11 @@ def migrate_legacy_mcp_configs(
                 os.replace(temporary, target_path)
             finally:
                 temporary.unlink(missing_ok=True)
-        except OSError:
+        except OSError as exc:
+            skipped.append((path, f"could not write config: {exc}"))
             continue
         changed.append(path)
-    return changed
+    return McpMigrationReport(changed=tuple(changed), skipped=tuple(skipped))
 
 
 def verify_mcp_transport(*, bridge_command: str | None = None, timeout_seconds: float = 10.0) -> int:

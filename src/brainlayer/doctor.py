@@ -48,6 +48,7 @@ from .launchd_primitive import (
 from .mcp_socket_config import (
     iter_json_mcp_servers,
     iter_toml_mcp_servers,
+    mcp_server_public_summary,
     needs_socket_migration,
     owned_mcp_config_paths,
 )
@@ -120,7 +121,7 @@ def _legacy_python_mcp_config_issues(
                 issues.append(
                     DoctorIssue(
                         "mcp_config_unparseable",
-                        "warning",
+                        "fatal",
                         f"{path}: MCP config is unparseable TOML; fix or remove it",
                         {"config_path": str(path), "error": str(exc)},
                     )
@@ -134,7 +135,7 @@ def _legacy_python_mcp_config_issues(
                 issues.append(
                     DoctorIssue(
                         "mcp_config_unparseable",
-                        "warning",
+                        "fatal",
                         f"{path}: MCP config is unparseable JSON; fix or remove it",
                         {"config_path": str(path), "error": str(exc)},
                     )
@@ -156,7 +157,7 @@ def _legacy_python_mcp_config_issues(
                     {
                         "config_path": str(path),
                         "server_name": name,
-                        "server": server,
+                        "server": mcp_server_public_summary(server),
                         "fix": LEGACY_PYTHON_MCP_FIX,
                         "remediation": LEGACY_PYTHON_MCP_FIX,
                     },

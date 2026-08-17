@@ -555,10 +555,13 @@ def test_setup_rejects_relative_db_override(tmp_path: Path, monkeypatch) -> None
         )
 
 
-def test_setup_migrates_retired_brainlayer_mcp_to_socket_idempotently(tmp_path: Path) -> None:
+def test_setup_migrates_retired_brainlayer_mcp_to_socket_idempotently(tmp_path: Path, monkeypatch) -> None:
     from brainlayer.setup import migrate_legacy_mcp_configs
 
-    config_path = tmp_path / ".claude.json"
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    config_path = home / ".claude.json"
+    config_path.parent.mkdir(parents=True)
     original = {
         "theme": "dark",
         "mcpServers": {
@@ -577,8 +580,8 @@ def test_setup_migrates_retired_brainlayer_mcp_to_socket_idempotently(tmp_path: 
     second_changed = migrate_legacy_mcp_configs([config_path])
 
     migrated = json.loads(config_path.read_text(encoding="utf-8"))
-    assert changed == [config_path]
-    assert second_changed == []
+    assert changed.changed == (config_path,)
+    assert second_changed.changed == ()
     assert migrated["theme"] == "dark"
     assert migrated["mcpServers"]["unrelated"] == original["mcpServers"]["unrelated"]
     assert migrated["mcpServers"]["brainlayer"] == {
@@ -588,7 +591,7 @@ def test_setup_migrates_retired_brainlayer_mcp_to_socket_idempotently(tmp_path: 
         "env": {"BRAINLAYER_MCP_SOCKET": "/tmp/brainbar.sock"},
         "timeout": 30,
     }
-    assert list(tmp_path.glob(".claude.json.bak*"))
+    assert list((home / ".local" / "share" / "brainlayer" / "config-backups").glob(".claude.json.*.bak"))
 
 
 def test_setup_mcp_migration_leaves_socket_form_untouched(tmp_path: Path) -> None:
@@ -606,7 +609,7 @@ def test_setup_mcp_migration_leaves_socket_form_untouched(tmp_path: Path) -> Non
     original_text = json.dumps(original) + "\n"
     config_path.write_text(original_text, encoding="utf-8")
 
-    assert migrate_legacy_mcp_configs([config_path]) == []
+    assert migrate_legacy_mcp_configs([config_path]).changed == ()
     assert config_path.read_text(encoding="utf-8") == original_text
 
 
@@ -629,8 +632,10 @@ def test_setup_mcp_migration_preserves_original_and_cleans_temp_on_replace_failu
 
     monkeypatch.setattr(setup_helpers.os, "replace", fail_replace)
 
-    # Malformed/IO failures must not abort the whole migrate run.
-    assert setup_helpers.migrate_legacy_mcp_configs([config_path]) == []
+    report = setup_helpers.migrate_legacy_mcp_configs([config_path])
+    assert report.changed == ()
+    assert any(path == config_path for path, reason in report.skipped)
+    assert "replace denied" in report.skipped[0][1]
     assert config_path.read_text(encoding="utf-8") == original_text
     assert not (tmp_path / f".{config_path.name}.{os.getpid()}.tmp").exists()
 
@@ -658,7 +663,7 @@ def test_setup_mcp_migration_preserves_symlink_and_updates_target(tmp_path: Path
 
     changed = migrate_legacy_mcp_configs([config_path])
 
-    assert changed == [config_path]
+    assert changed.changed == (config_path,)
     assert config_path.is_symlink()
     assert json.loads(target.read_text(encoding="utf-8"))["mcpServers"]["brainlayer"] == {
         "command": "socat",

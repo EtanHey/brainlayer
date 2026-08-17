@@ -68,12 +68,30 @@ def test_all_string_input_fields_have_max_length_and_string_arrays_have_max_item
 
 
 def test_brain_digest_schema_limits_content_length():
+    """maxLength is schema metadata for BrainBar; Python library does not reject oversize input."""
     digest_tool = next(tool for tool in _get_tools() if tool.name == "brain_digest")
     content_schema = _tool_input_schema(digest_tool)["properties"]["content"]
     assert content_schema["maxLength"] == 200_000
 
 
-def test_mcp_v2_adapter_preserves_combined_tool_results(monkeypatch):
+def test_call_tool_does_not_enforce_schema_max_length_at_python_library_layer(monkeypatch):
+    """BrainBar enforces maxLength at runtime; the Python library path is advisory-only."""
+    captured = {}
+
+    async def fake_digest(**kwargs):
+        captured.update(kwargs)
+        return ([TextContent(type="text", text="ok")], {"entities": 0})
+
+    monkeypatch.setattr(mcp_module, "_tool_palette", ToolPalette("full"))
+    monkeypatch.setattr(mcp_module, "_brain_digest", fake_digest)
+
+    oversized = "x" * 200_001
+    result = asyncio.run(mcp_module.call_tool("brain_digest", {"content": oversized}))
+    assert captured["content"] == oversized
+    assert result[0][0].text == "ok"
+
+
+def test_call_tool_success_results_return_content_tuple(monkeypatch):
     async def fake_store_new(**_kwargs):
         return (
             [TextContent(type="text", text="stored")],
@@ -83,26 +101,20 @@ def test_mcp_v2_adapter_preserves_combined_tool_results(monkeypatch):
     monkeypatch.setattr(mcp_module, "_tool_palette", ToolPalette("full"))
     monkeypatch.setattr(mcp_module, "_store_new", fake_store_new)
 
-    async def call_store():
-        return await mcp_module.call_tool("brain_store", {"content": "remember this"})
-
-    result = asyncio.run(call_store())
+    result = asyncio.run(mcp_module.call_tool("brain_store", {"content": "remember this"}))
     assert isinstance(result, tuple)
     assert result[0][0].text == "stored"
     assert result[1] == {"chunk_id": "chunk-1", "related": []}
 
 
-def test_mcp_v2_adapter_preserves_brain_store_error_message(monkeypatch):
+def test_call_tool_error_results_use_call_tool_result(monkeypatch):
     async def failing_store_new(**_kwargs):
         return mcp_module._error_result("Store failed: database is locked")
 
     monkeypatch.setattr(mcp_module, "_tool_palette", ToolPalette("full"))
     monkeypatch.setattr(mcp_module, "_store_new", failing_store_new)
 
-    async def call_store():
-        return await mcp_module.call_tool("brain_store", {"content": "remember this"})
-
-    result = asyncio.run(call_store())
+    result = asyncio.run(mcp_module.call_tool("brain_store", {"content": "remember this"}))
 
     assert result.is_error is True
     assert result.content[0].text == "Store failed: database is locked"
