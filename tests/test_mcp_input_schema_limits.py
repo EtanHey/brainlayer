@@ -94,13 +94,7 @@ def test_call_tool_does_not_enforce_schema_max_length_at_python_library_layer(mo
 
 def test_brain_digest_max_length_enforced_in_brainbar_mcp_router_tests():
     """Cite the enforcing-layer behavioral test (BrainBar Swift, not Python library)."""
-    swift_tests = (
-        Path(__file__).resolve().parents[1]
-        / "brain-bar"
-        / "Tests"
-        / "BrainBarTests"
-        / "MCPRouterTests.swift"
-    )
+    swift_tests = Path(__file__).resolve().parents[1] / "brain-bar" / "Tests" / "BrainBarTests" / "MCPRouterTests.swift"
     source = swift_tests.read_text(encoding="utf-8")
     assert "func testBrainDigestRejectsOversizedContentAtSchemaLayer" in source
     assert "content length 200001 exceeds maxLength 200000" in source
