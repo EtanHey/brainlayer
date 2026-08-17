@@ -9,9 +9,34 @@ from typing import Any, Dict, List, Optional
 import apsw
 
 from ._helpers import _safe_json_loads, source_aware_min_chars
-from .chunk_origin import CHUNK_ORIGIN_UNKNOWN
 
 logger = logging.getLogger(__name__)
+
+
+def _metadata_with_enriched_by(cursor: Any, chunk_id: str, model: str) -> str | None:
+    """Merge enrichment model into chunks.metadata.enriched_by without touching chunk_origin."""
+    name = str(model or "").strip()
+    if not name:
+        return None
+    try:
+        row = cursor.execute("SELECT metadata FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+    except Exception:
+        return None
+    if row is None:
+        return None
+    raw = row[0]
+    if isinstance(raw, dict):
+        metadata = dict(raw)
+    elif raw:
+        try:
+            parsed = json.loads(str(raw))
+            metadata = parsed if isinstance(parsed, dict) else {"_previous_metadata_raw": raw}
+        except (TypeError, json.JSONDecodeError):
+            metadata = {"_previous_metadata_raw": raw}
+    else:
+        metadata = {}
+    metadata["enriched_by"] = name
+    return json.dumps(metadata)
 
 
 class SessionMixin:
@@ -308,16 +333,13 @@ class SessionMixin:
         if enrichment_version is not None:
             sets.append("enrichment_version = ?")
             params.append(enrichment_version)
-        normalized_origin = str(chunk_origin or "").strip()
-        if (
-            normalized_origin
-            and normalized_origin != CHUNK_ORIGIN_UNKNOWN
-            and getattr(self, "_has_chunk_origin", False)
-        ):
-            sets.append(
-                "chunk_origin = CASE WHEN chunk_origin IS NULL OR chunk_origin = ? THEN ? ELSE chunk_origin END"
-            )
-            params.extend([CHUNK_ORIGIN_UNKNOWN, normalized_origin])
+        # chunk_origin is ingest provenance. Enrichment model goes to metadata.enriched_by.
+        _ = chunk_origin
+        if enrichment_model is not None:
+            stamped = _metadata_with_enriched_by(cursor, chunk_id, enrichment_model)
+            if stamped is not None:
+                sets.append("metadata = ?")
+                params.append(stamped)
 
         params.append(chunk_id)
         for attempt in range(3):

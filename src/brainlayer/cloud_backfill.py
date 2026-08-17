@@ -985,7 +985,6 @@ def _commit_batch_enrichment(
         store,
         chunk,
         enrichment,
-        chunk_origin=model.replace("models/", ""),
         enrichment_model=model,
         enrichment_backend="gemini-batch",
     )

@@ -14,7 +14,9 @@ def test_enrichment_update_payload_stamps_gemini_model(monkeypatch):
         {"summary": "summary", "entities": []},
     )
 
-    assert payload["chunk_origin"] == "gemini-test-model"
+    assert payload.get("chunk_origin") in (None, "")
+    assert payload["enrichment_model"] == "gemini-test-model"
+    assert (payload["enrichment"].get("enrichment_metadata") or {})["enriched_by"] == "gemini-test-model"
 
 
 def test_meta_research_enrichment_queue_does_not_stamp_backend(monkeypatch, tmp_path):
@@ -63,7 +65,8 @@ def test_direct_apply_enrichment_stamps_backend_origin(monkeypatch):
         {"summary": "summary", "entities": []},
     )
 
-    assert store.update_enrichment.call_args.kwargs["chunk_origin"] == "gemini-test-model"
+    assert "chunk_origin" not in store.update_enrichment.call_args.kwargs
+    assert store.update_enrichment.call_args.kwargs["enrichment_model"] == "gemini-test-model"
 
 
 def test_queue_io_preserves_enrichment_chunk_origin(tmp_path):
@@ -85,7 +88,7 @@ def test_queue_io_preserves_enrichment_chunk_origin(tmp_path):
     assert event["chunk_origin"] == "gemini-2.5-flash-lite"
 
 
-def test_drain_enrichment_update_stamps_chunk_origin():
+def test_drain_enrichment_update_does_not_stamp_chunk_origin():
     from brainlayer.drain import _apply_enrichment
 
     conn = sqlite3.connect(":memory:")
@@ -114,13 +117,16 @@ def test_drain_enrichment_update_stamps_chunk_origin():
             "chunk_id": "chunk-1",
             "enrichment": {"summary": "summary"},
             "chunk_origin": "gemini-2.5-flash-lite",
+            "enrichment_model": "gemini-2.5-flash-lite",
         },
     )
 
     assert conn.execute("SELECT summary, chunk_origin FROM chunks WHERE id = 'chunk-1'").fetchone() == (
         "summary",
-        "gemini-2.5-flash-lite",
+        "unknown",
     )
+    metadata = json.loads(conn.execute("SELECT metadata FROM chunks WHERE id = 'chunk-1'").fetchone()[0])
+    assert metadata["enriched_by"] == "gemini-2.5-flash-lite"
 
 
 def test_drain_enrichment_update_preserves_existing_chunk_origin():
@@ -161,7 +167,7 @@ def test_drain_enrichment_update_preserves_existing_chunk_origin():
     )
 
 
-def test_update_enrichment_only_fills_unknown_chunk_origin():
+def test_update_enrichment_never_overwrites_chunk_origin():
     from brainlayer.session_repo import SessionMixin
 
     class Store(SessionMixin):
@@ -177,7 +183,9 @@ def test_update_enrichment_only_fills_unknown_chunk_origin():
             enriched_at TEXT,
             enrich_status TEXT,
             summary TEXT,
-            chunk_origin TEXT DEFAULT 'unknown'
+            chunk_origin TEXT DEFAULT 'unknown',
+            enrichment_model TEXT,
+            metadata TEXT DEFAULT '{}'
         )
         """
     )
@@ -186,16 +194,24 @@ def test_update_enrichment_only_fills_unknown_chunk_origin():
         [("unknown-1", "unknown"), ("manual-1", "manual")],
     )
 
-    store.update_enrichment("unknown-1", summary="summary", chunk_origin="gemini-2.5-flash-lite")
-    store.update_enrichment("manual-1", summary="summary", chunk_origin="gemini-2.5-flash-lite")
+    store.update_enrichment(
+        "unknown-1", summary="summary", chunk_origin="gemini-2.5-flash-lite", enrichment_model="gemini-2.5-flash-lite"
+    )
+    store.update_enrichment(
+        "manual-1", summary="summary", chunk_origin="gemini-2.5-flash-lite", enrichment_model="gemini-2.5-flash-lite"
+    )
 
     assert dict(store.conn.execute("SELECT id, chunk_origin FROM chunks")) == {
-        "unknown-1": "gemini-2.5-flash-lite",
+        "unknown-1": "unknown",
         "manual-1": "manual",
+    }
+    assert dict(store.conn.execute("SELECT id, json_extract(metadata, '$.enriched_by') FROM chunks")) == {
+        "unknown-1": "gemini-2.5-flash-lite",
+        "manual-1": "gemini-2.5-flash-lite",
     }
 
 
-def test_local_enrichment_pipeline_stamps_backend_origin():
+def test_local_enrichment_pipeline_records_model_not_chunk_origin():
     from unittest.mock import MagicMock, patch
 
     from brainlayer.pipeline import enrichment
@@ -219,7 +235,9 @@ def test_local_enrichment_pipeline_stamps_backend_origin():
         result = enrichment._enrich_one(store, chunk, with_context=False, backend="mlx")
 
     assert result is True
-    assert store.update_enrichment.call_args.kwargs["chunk_origin"] == "mlx"
+    kwargs = store.update_enrichment.call_args.kwargs
+    assert kwargs.get("chunk_origin") in (None, "")
+    assert kwargs["enrichment_model"]
 
 
 def test_backfill_chunk_origin_provenance_dry_run_and_apply(tmp_path):
