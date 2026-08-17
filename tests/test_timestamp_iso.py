@@ -14,7 +14,8 @@ def test_normalize_timestamp_appends_z_to_naive_iso():
     assert is_iso_utc(converted)
 
 
-def test_normalize_timestamp_rewrites_offset_to_z():
-    converted = normalize_timestamp("2026-02-18T08:54:21.632818+00:00")
-    assert converted == "2026-02-18T08:54:21.632818Z"
+def test_normalize_timestamp_converts_non_utc_offset_to_z():
+    converted = normalize_timestamp("2026-06-09T13:37:11+03:00")
+    assert converted == "2026-06-09T10:37:11Z"
     assert is_iso_utc(converted)
+    assert not is_iso_utc("2026-06-09T13:37:11+03:00")

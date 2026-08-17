@@ -24,7 +24,7 @@ from .chunk_origin_wipe import live_canonical_db_path as live_canonical_db_path
 PREIMAGE_TABLE = "timestamp_iso_preimage"
 MIGRATION_NAME = "2026_08_18_timestamp_iso_utc"
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
-_ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$")
+_ISO_UTC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|\+00:00)$")
 
 ISO_TIMESTAMP_COLUMNS = (
     "created_at",
@@ -56,7 +56,7 @@ def is_iso_utc(value: Any) -> bool:
     if value is None:
         return False
     text = str(value).strip()
-    return bool(text) and _ISO_RE.match(text) is not None
+    return bool(text) and _ISO_UTC_RE.match(text) is not None
 
 
 def _from_unix(number: float) -> str:
@@ -81,7 +81,7 @@ def normalize_timestamp(value: Any) -> str | None:
     text = str(value).strip()
     if not text:
         return None
-    if _ISO_RE.match(text):
+    if _ISO_UTC_RE.match(text):
         return text.replace("+00:00", "Z")
     iso_candidate = text[:-1] + "+00:00" if text.endswith("Z") else text
     try:

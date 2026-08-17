@@ -43,7 +43,8 @@ def _make_db(path: Path) -> sqlite3.Connection:
           ('iso_already', 'already iso', '2026-08-18T00:00:00Z', '2026-08-18T00:00:01+00:00',
            '2026-08-17T21:00:00Z', '2026-08-17T21:01:00.123Z'),
           ('created_unix', 'unix created', '1780190105', NULL, NULL, NULL),
-          ('naive_iso', 'naive created', '2026-07-14T11:45:26.994441', NULL, NULL, NULL)
+          ('naive_iso', 'naive created', '2026-07-14T11:45:26.994441', NULL, NULL, NULL),
+          ('offset_jerusalem', 'local offset', '2026-06-09T13:37:11+03:00', NULL, NULL, NULL)
         """
     )
     conn.commit()
@@ -92,6 +93,7 @@ def test_apply_rewrites_unix_floats_and_keeps_iso(tmp_path):
     assert is_iso_utc(rows["created_unix"][0])
     assert is_iso_utc(rows["iso_already"][0])
     assert rows["naive_iso"][0] == "2026-07-14T11:45:26.994441Z"
+    assert rows["offset_jerusalem"][0] == "2026-06-09T10:37:11Z"
     assert PREIMAGE_TABLE in names
     assert applied is not None
     assert all(item["ok"] for item in result.spot_checks)
