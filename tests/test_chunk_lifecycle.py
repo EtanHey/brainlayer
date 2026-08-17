@@ -136,10 +136,14 @@ class TestArchiveChunkLifecycle:
 
         chunk = store.get_chunk(result["id"], include_archived=True)
         assert chunk["archived_at"] is not None
-        after = store.conn.cursor().execute(
-            "SELECT archived, status, value_type FROM chunks WHERE id = ?",
-            (result["id"],),
-        ).fetchone()
+        after = (
+            store.conn.cursor()
+            .execute(
+                "SELECT archived, status, value_type FROM chunks WHERE id = ?",
+                (result["id"],),
+            )
+            .fetchone()
+        )
         assert after[0] in (0, None)
         assert after[1] != "archived"
         assert (after[2] or "").lower() != "archived"

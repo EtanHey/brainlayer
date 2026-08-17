@@ -6,6 +6,21 @@ allow_live=True after a lead-scheduled writer window.
 Twin representations that this repair migrates-then-clears:
   archived INTEGER, status='archived', value_type='ARCHIVED'
 Canonical remainder: archived_at. Lineage columns superseded_by / aggregated_into are kept.
+
+On apply this also DROP+CREATE idx_chunks_decay_score and idx_chunks_last_retrieved
+so they predicate on archived_at IS NULL. CREATE INDEX IF NOT EXISTS cannot retarget an
+existing name; leaving the archived=0 partial indexes in place would full-scan decay.
+
+Rollback (lead window only), lossless against archive_collapse_preimage:
+
+  BEGIN IMMEDIATE;
+  UPDATE chunks SET
+    archived_at = (SELECT p.archived_at FROM archive_collapse_preimage p WHERE p.id = chunks.id),
+    archived    = (SELECT p.archived    FROM archive_collapse_preimage p WHERE p.id = chunks.id),
+    status      = (SELECT p.status      FROM archive_collapse_preimage p WHERE p.id = chunks.id),
+    value_type  = (SELECT p.value_type  FROM archive_collapse_preimage p WHERE p.id = chunks.id)
+  WHERE id IN (SELECT id FROM archive_collapse_preimage);
+  COMMIT;
 """
 
 from __future__ import annotations
@@ -35,6 +50,22 @@ TWIN_PREDICATE = """(
   OR lower(COALESCE(status, '')) = 'archived'
 )"""
 
+PARTIAL_INDEXES = (
+    ("idx_chunks_decay_score", "decay_score"),
+    ("idx_chunks_last_retrieved", "last_retrieved"),
+)
+
+ROLLBACK_SQL = """
+BEGIN IMMEDIATE;
+UPDATE chunks SET
+  archived_at = (SELECT p.archived_at FROM archive_collapse_preimage p WHERE p.id = chunks.id),
+  archived    = (SELECT p.archived    FROM archive_collapse_preimage p WHERE p.id = chunks.id),
+  status      = (SELECT p.status      FROM archive_collapse_preimage p WHERE p.id = chunks.id),
+  value_type  = (SELECT p.value_type  FROM archive_collapse_preimage p WHERE p.id = chunks.id)
+WHERE id IN (SELECT id FROM archive_collapse_preimage);
+COMMIT;
+"""
+
 
 @dataclass
 class ArchiveCollapseResult:
@@ -48,6 +79,7 @@ class ArchiveCollapseResult:
     aux_counts_after: dict[str, int] = field(default_factory=dict)
     spot_checks: list[dict[str, Any]] = field(default_factory=list)
     backfill_timestamp: str = ""
+    indexes_rebuilt: list[str] = field(default_factory=list)
 
 
 def _validate_git_sha(git_sha: str) -> str:
@@ -75,6 +107,19 @@ def _checkpoint(conn: sqlite3.Connection) -> None:
 
 def _twin_count(conn: sqlite3.Connection) -> int:
     return int(conn.execute(f"SELECT COUNT(*) FROM chunks WHERE {TWIN_PREDICATE}").fetchone()[0])
+
+
+def _rebuild_archived_at_partial_indexes(conn: sqlite3.Connection) -> list[str]:
+    """Replace archived=0 partial indexes. IF NOT EXISTS is a silent no-op on the name."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)")}
+    rebuilt: list[str] = []
+    for name, column in PARTIAL_INDEXES:
+        if column not in columns:
+            continue
+        conn.execute(f"DROP INDEX IF EXISTS {name}")
+        conn.execute(f"CREATE INDEX {name} ON chunks({column}) WHERE archived_at IS NULL")
+        rebuilt.append(name)
+    return rebuilt
 
 
 def _ensure_preimage(conn: sqlite3.Connection) -> None:
@@ -271,6 +316,8 @@ def collapse_archive_representations(
         result.post_twin_count = _twin_count(conn)
         result.aux_counts_after = _aux_counts(conn)
         if apply:
+            result.indexes_rebuilt = _rebuild_archived_at_partial_indexes(conn)
+            conn.commit()
             _ensure_schema_migrations(conn)
             receipt = {
                 "migration": MIGRATION_NAME,
@@ -279,6 +326,7 @@ def collapse_archive_representations(
                 "updated": result.updated,
                 "post_twin_count": result.post_twin_count,
                 "backfill_timestamp": backfill_ts,
+                "indexes_rebuilt": result.indexes_rebuilt,
             }
             conn.execute(
                 "INSERT OR REPLACE INTO schema_migrations(name, applied_at, details) VALUES (?, ?, ?)",
@@ -305,6 +353,7 @@ def _result_payload(db_path: Path, *, apply: bool, result: ArchiveCollapseResult
         "aux_counts_before": result.aux_counts_before,
         "aux_counts_after": result.aux_counts_after,
         "backfill_timestamp": result.backfill_timestamp,
+        "indexes_rebuilt": result.indexes_rebuilt,
         "spot_checks_ok": (
             "n/a-dry-run"
             if not apply

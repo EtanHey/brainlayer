@@ -33,7 +33,9 @@ def _make_db(path: Path) -> sqlite3.Connection:
             status TEXT DEFAULT 'active',
             value_type TEXT,
             superseded_by TEXT,
-            aggregated_into TEXT
+            aggregated_into TEXT,
+            decay_score REAL,
+            last_retrieved REAL
         )
         """
     )
@@ -280,3 +282,113 @@ def test_dry_run_cli_spot_check_exits_zero(tmp_path):
     conn.close()
 
     assert main(["--db", str(db_path), "--git-sha", GIT_SHA, "--spot-check", "3"]) == 0
+
+
+def _install_legacy_archived_partial_indexes(conn: sqlite3.Connection) -> None:
+    conn.execute("DROP INDEX IF EXISTS idx_chunks_decay_score")
+    conn.execute("DROP INDEX IF EXISTS idx_chunks_last_retrieved")
+    conn.execute("CREATE INDEX idx_chunks_decay_score ON chunks(decay_score) WHERE archived = 0")
+    conn.execute("CREATE INDEX idx_chunks_last_retrieved ON chunks(last_retrieved) WHERE archived = 0")
+    conn.commit()
+
+
+def _index_sql(conn: sqlite3.Connection, name: str) -> str:
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE type='index' AND name=?", (name,)).fetchone()
+    assert row is not None
+    return row[0]
+
+
+def test_dry_run_does_not_retarget_legacy_partial_indexes(tmp_path):
+    from brainlayer.archive_collapse import collapse_archive_representations
+
+    db_path = tmp_path / "copy.db"
+    conn = _make_db(db_path)
+    _install_chunks_fts_update_trigger(conn)
+    _seed(conn)
+    _install_legacy_archived_partial_indexes(conn)
+    conn.close()
+
+    collapse_archive_representations(db_path, git_sha=GIT_SHA, apply=False)
+    conn = sqlite3.connect(db_path)
+    decay_sql = _index_sql(conn, "idx_chunks_decay_score")
+    retrieved_sql = _index_sql(conn, "idx_chunks_last_retrieved")
+    conn.close()
+    assert "archived = 0" in decay_sql
+    assert "archived_at IS NULL" not in decay_sql
+    assert "archived = 0" in retrieved_sql
+
+
+def test_apply_drop_creates_archived_at_partial_indexes(tmp_path):
+    from brainlayer.archive_collapse import collapse_archive_representations
+
+    db_path = tmp_path / "copy.db"
+    conn = _make_db(db_path)
+    _install_chunks_fts_update_trigger(conn)
+    _seed(conn)
+    _install_legacy_archived_partial_indexes(conn)
+    conn.execute(
+        "INSERT INTO chunks(id, content, created_at, decay_score, archived) VALUES ('idx-row', 'index probe', '2026-07-01T00:00:00Z', 0.5, 0)"
+    )
+    conn.commit()
+    conn.close()
+
+    result = collapse_archive_representations(db_path, git_sha=GIT_SHA, apply=True)
+    assert result.indexes_rebuilt == ["idx_chunks_decay_score", "idx_chunks_last_retrieved"]
+    conn = sqlite3.connect(db_path)
+    decay_sql = _index_sql(conn, "idx_chunks_decay_score")
+    retrieved_sql = _index_sql(conn, "idx_chunks_last_retrieved")
+    plan = " ".join(
+        row[-1]
+        for row in conn.execute(
+            "EXPLAIN QUERY PLAN SELECT decay_score FROM chunks WHERE archived_at IS NULL ORDER BY decay_score"
+        )
+    )
+    conn.close()
+    assert "archived_at IS NULL" in decay_sql
+    assert "archived = 0" not in decay_sql
+    assert "archived_at IS NULL" in retrieved_sql
+    assert "idx_chunks_decay_score" in plan
+
+
+def test_apply_rebuilds_partial_indexes_even_when_no_twins_remain(tmp_path):
+    from brainlayer.archive_collapse import collapse_archive_representations
+
+    db_path = tmp_path / "copy.db"
+    conn = _make_db(db_path)
+    _install_chunks_fts_update_trigger(conn)
+    conn.execute(
+        "INSERT INTO chunks(id, content, created_at, archived, status, value_type) VALUES ('clean', 'no twins', '2026-07-01T00:00:00Z', 0, 'active', 'high')"
+    )
+    _install_legacy_archived_partial_indexes(conn)
+    conn.close()
+
+    result = collapse_archive_representations(db_path, git_sha=GIT_SHA, apply=True)
+    assert result.updated == 0
+    assert result.indexes_rebuilt == ["idx_chunks_decay_score", "idx_chunks_last_retrieved"]
+    conn = sqlite3.connect(db_path)
+    assert "archived_at IS NULL" in _index_sql(conn, "idx_chunks_decay_score")
+    conn.close()
+
+
+def test_preimage_rollback_restores_four_columns(tmp_path):
+    from brainlayer.archive_collapse import ROLLBACK_SQL, collapse_archive_representations
+
+    db_path = tmp_path / "copy.db"
+    conn = _make_db(db_path)
+    _install_chunks_fts_update_trigger(conn)
+    _seed(conn)
+    before = {
+        row[0]: row[1:] for row in conn.execute("SELECT id, archived_at, archived, status, value_type FROM chunks")
+    }
+    conn.close()
+
+    collapse_archive_representations(db_path, git_sha=GIT_SHA, apply=True)
+    conn = sqlite3.connect(db_path)
+    conn.executescript(ROLLBACK_SQL)
+    after = {
+        row[0]: row[1:] for row in conn.execute("SELECT id, archived_at, archived, status, value_type FROM chunks")
+    }
+    conn.close()
+    for chunk_id, values in before.items():
+        if chunk_id in {"flag-only", "status-only", "value-only", "all-four"}:
+            assert after[chunk_id] == values

@@ -1,3 +1,5 @@
+"""Repair (c): hotlane eligibility uses archived_at + lineage, not archived/status twins."""
+
 from __future__ import annotations
 
 import importlib
@@ -8,9 +10,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
-
-# Repair (c): hotlane eligibility uses archived_at + lineage, not archived/status twins.
 
 
 def _load_hotlane_module():

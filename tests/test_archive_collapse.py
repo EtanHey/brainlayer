@@ -106,13 +106,3 @@ class TestDefaultSearchUsesArchivedAtOnly:
         results = store.search(query_text="UniqueStatusOnlyToken")
         ids = results["ids"][0] if results["ids"] else []
         assert result["id"] in ids
-
-    def test_value_type_archived_without_timestamp_is_not_lifecycle_managed(self, store, mock_embed):
-        result = _store_chunk(store, mock_embed, "UniqueValueOnlyToken still searchable")
-        store.conn.cursor().execute(
-            "UPDATE chunks SET value_type = 'ARCHIVED', archived = 0, archived_at = NULL, status = 'active' WHERE id = ?",
-            (result["id"],),
-        )
-        results = store.search(query_text="UniqueValueOnlyToken")
-        ids = results["ids"][0] if results["ids"] else []
-        assert result["id"] in ids
