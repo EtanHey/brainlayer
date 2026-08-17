@@ -379,7 +379,7 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps(_result_payload(args.db.expanduser(), apply=args.apply, result=result), sort_keys=True))
     if args.apply and result.post_twin_count:
         return 1
-    if result.spot_checks and not all(item["ok"] for item in result.spot_checks):
+    if args.apply and result.spot_checks and not all(item["ok"] for item in result.spot_checks):
         return 1
     return 0
 

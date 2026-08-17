@@ -268,3 +268,15 @@ def test_spot_check_rereads_stored_values(tmp_path):
         assert item["stored_status"] == status
         assert item["stored_value_type"] == value_type
         assert item["ok"] is True
+
+
+def test_dry_run_cli_spot_check_exits_zero(tmp_path):
+    from brainlayer.archive_collapse import main
+
+    db_path = tmp_path / "copy.db"
+    conn = _make_db(db_path)
+    _install_chunks_fts_update_trigger(conn)
+    _seed(conn)
+    conn.close()
+
+    assert main(["--db", str(db_path), "--git-sha", GIT_SHA, "--spot-check", "3"]) == 0
