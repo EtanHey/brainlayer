@@ -46,7 +46,6 @@ DEFAULT_ENRICH_IDLE_POLL_SECONDS = 30.0
 DEFAULT_ENRICH_WATCHER_IDLE_SECONDS = 5.0
 DEFAULT_ENRICH_DAILY_USD_CAP = 5.0
 ENRICH_DAILY_COST_COUNTER_FILENAME = "enrich-daily-cost.json"
-_DEFAULT_CHUNK_ORIGIN = object()
 _ENRICHMENT_QUEUE_WRITES_OVERRIDE = threading.local()
 
 # Gemini Developer API paid-tier text prices per 1M tokens for gemini-2.5-flash-lite.
@@ -826,7 +825,7 @@ def _enqueue_enrichment_write(
     chunk: dict[str, Any],
     enrichment: dict[str, Any],
     *,
-    chunk_origin: str | None | object = _DEFAULT_CHUNK_ORIGIN,
+    chunk_origin: str | None = None,
 ) -> None:
     from .queue_io import enqueue_enrichment_updates
 
@@ -845,14 +844,7 @@ def _enqueue_enrichment_write_batch(items: list[tuple[dict[str, Any], dict[str, 
 
     try:
         enqueue_enrichment_updates(
-            [
-                _enrichment_update_payload(
-                    chunk,
-                    enrichment,
-                    chunk_origin=None if counted_as == "skipped" else _DEFAULT_CHUNK_ORIGIN,
-                )
-                for chunk, enrichment, counted_as in items
-            ]
+            [_enrichment_update_payload(chunk, enrichment) for chunk, enrichment, _counted_as in items]
         )
     except Exception:
         chunk_ids = ",".join(str(chunk.get("id")) for chunk, _, _ in items)
@@ -1502,7 +1494,6 @@ def _apply_enrichment_impl(
         if not legacy_resolved_query and isinstance(resolved_queries, list) and resolved_queries:
             legacy_resolved_query = resolved_queries[0]
         model = str(enrichment_model or GEMINI_REALTIME_MODEL or "").strip()
-        enrichment = _with_enriched_by(enrichment, model)
         _ = chunk_origin
 
         update_kwargs = {

@@ -19,12 +19,19 @@ VALID_CHUNK_ORIGINS = frozenset(
         CHUNK_ORIGIN_AGENT_EXPLICIT,
         CHUNK_ORIGIN_AUTO_SUMMARY,
         CHUNK_ORIGIN_MANUAL,
+        CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT,
+        CHUNK_ORIGIN_UNKNOWN,
+    }
+)
+
+# Historical enrichment-model labels that were wrongly stored as chunk_origin.
+# Kept so wipe-lane code can name them; they are not valid ingest origins.
+LEGACY_MODEL_CHUNK_ORIGINS = frozenset(
+    {
         CHUNK_ORIGIN_GEMINI_FLASH_LITE,
         CHUNK_ORIGIN_GROQ,
         CHUNK_ORIGIN_OLLAMA,
         CHUNK_ORIGIN_MLX,
-        CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT,
-        CHUNK_ORIGIN_UNKNOWN,
     }
 )
 

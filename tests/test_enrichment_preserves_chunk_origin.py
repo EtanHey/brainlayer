@@ -175,4 +175,4 @@ def test_local_enrichment_pipeline_does_not_stamp_backend_as_chunk_origin():
     assert result is True
     kwargs = store.update_enrichment.call_args.kwargs
     assert kwargs.get("chunk_origin") in (None, "")
-    assert kwargs.get("enrichment_model")
+    assert kwargs["enrichment_model"] == enrichment.MLX_MODEL

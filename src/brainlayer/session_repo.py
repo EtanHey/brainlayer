@@ -13,32 +13,6 @@ from ._helpers import _safe_json_loads, source_aware_min_chars
 logger = logging.getLogger(__name__)
 
 
-def _metadata_with_enriched_by(cursor: Any, chunk_id: str, model: str) -> str | None:
-    """Merge enrichment model into chunks.metadata.enriched_by without touching chunk_origin."""
-    name = str(model or "").strip()
-    if not name:
-        return None
-    try:
-        row = cursor.execute("SELECT metadata FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
-    except Exception:
-        return None
-    if row is None:
-        return None
-    raw = row[0]
-    if isinstance(raw, dict):
-        metadata = dict(raw)
-    elif raw:
-        try:
-            parsed = json.loads(str(raw))
-            metadata = parsed if isinstance(parsed, dict) else {"_previous_metadata_raw": raw}
-        except (TypeError, json.JSONDecodeError):
-            metadata = {"_previous_metadata_raw": raw}
-    else:
-        metadata = {}
-    metadata["enriched_by"] = name
-    return json.dumps(metadata)
-
-
 class SessionMixin:
     """Session management and enrichment methods, mixed into VectorStore."""
 
@@ -336,10 +310,8 @@ class SessionMixin:
         # chunk_origin is ingest provenance. Enrichment model goes to metadata.enriched_by.
         _ = chunk_origin
         if enrichment_model is not None:
-            stamped = _metadata_with_enriched_by(cursor, chunk_id, enrichment_model)
-            if stamped is not None:
-                sets.append("metadata = ?")
-                params.append(stamped)
+            sets.append("metadata = json_set(COALESCE(metadata, '{}'), '$.enriched_by', ?)")
+            params.append(enrichment_model)
 
         params.append(chunk_id)
         for attempt in range(3):

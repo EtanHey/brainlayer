@@ -10,12 +10,9 @@ from pathlib import Path
 from typing import Any
 
 from .chunk_origin import (
-    CHUNK_ORIGIN_GEMINI_FLASH_LITE,
-    CHUNK_ORIGIN_GROQ,
     CHUNK_ORIGIN_MANUAL,
-    CHUNK_ORIGIN_MLX,
-    CHUNK_ORIGIN_OLLAMA,
     CHUNK_ORIGIN_UNKNOWN,
+    VALID_CHUNK_ORIGINS,
 )
 
 
@@ -26,10 +23,6 @@ class ChunkOriginBackfillResult:
     batches: int = 0
     checkpoints: int = 0
     inferred: dict[str, int] = field(default_factory=dict)
-
-
-def _text_contains(value: Any, needle: str) -> bool:
-    return needle in str(value or "").casefold()
 
 
 def _metadata_object(value: Any) -> dict[str, Any]:
@@ -44,44 +37,21 @@ def _metadata_object(value: Any) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _known_backend_origin(value: Any, *, gemini_origin: str) -> str | None:
-    normalized = str(value or "").casefold()
-    if "gemini-2.5-flash-lite" in normalized:
-        return gemini_origin
-    if "groq" in normalized:
-        return CHUNK_ORIGIN_GROQ
-    if "ollama" in normalized:
-        return CHUNK_ORIGIN_OLLAMA
-    if "mlx" in normalized:
-        return CHUNK_ORIGIN_MLX
-    return None
-
-
-def infer_chunk_origin(row: sqlite3.Row, *, gemini_origin: str = CHUNK_ORIGIN_GEMINI_FLASH_LITE) -> str | None:
-    """Infer a legacy row's provenance only when there is a direct signal."""
+def infer_chunk_origin(row: sqlite3.Row, *, gemini_origin: str | None = None) -> str | None:
+    """Infer ingest provenance only. Enrichment model names are not chunk_origin."""
+    _ = gemini_origin
     chunk_id = str(row["id"] or "")
     source = str(row["source"] or "")
     source_file = str(row["source_file"] or "")
-    metadata = row["metadata"]
-    enrichment_version = str(row["enrichment_version"] or "")
-    summary_v2 = str(row["summary_v2"] or "")
 
     if chunk_id.startswith("manual-") or source == CHUNK_ORIGIN_MANUAL or "manual" in source_file.casefold():
         return CHUNK_ORIGIN_MANUAL
 
-    metadata_obj = _metadata_object(metadata)
-    for key in ("chunk_origin", "origin", "backend", "enrichment_backend", "enrichment_model", "model"):
-        origin = _known_backend_origin(metadata_obj.get(key), gemini_origin=gemini_origin)
-        if origin:
-            return origin
-
-    if (
-        metadata_obj.get("prompt_version") == "r81"
-        or enrichment_version == "r81"
-        or _text_contains(summary_v2, "prompt=r81")
-    ):
-        return gemini_origin
-
+    metadata_obj = _metadata_object(row["metadata"])
+    for key in ("chunk_origin", "origin"):
+        value = str(metadata_obj.get(key) or "").strip()
+        if value in VALID_CHUNK_ORIGINS and value != CHUNK_ORIGIN_UNKNOWN:
+            return value
     return None
 
 
@@ -99,14 +69,16 @@ def backfill_chunk_origin_provenance(
     apply: bool = False,
     batch_size: int = 5000,
     checkpoint_every: int = 5,
-    gemini_origin: str = CHUNK_ORIGIN_GEMINI_FLASH_LITE,
+    gemini_origin: str | None = None,
 ) -> ChunkOriginBackfillResult:
     """Backfill unknown chunk_origin rows in bounded batches.
 
-    The backfill deliberately updates only rows with direct provenance signals.
+    The backfill deliberately updates only rows with ingest provenance signals.
+    Enrichment backend/model metadata is not a chunk_origin signal.
     Operators should stop enrichment/drain workers or coordinate a quiet window
     before running with apply=True against the live DB.
     """
+    _ = gemini_origin
     batch_size = max(1, int(batch_size))
     checkpoint_every = max(1, int(checkpoint_every))
 
