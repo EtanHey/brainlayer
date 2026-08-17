@@ -10,15 +10,35 @@ SOCKET_MCP = {
 }
 
 
-def test_shape_matcher_does_not_clobber_third_party_servers_via_args_substring():
+def test_shape_matcher_does_not_clobber_third_party_servers_via_heuristics():
     from brainlayer.mcp_socket_config import needs_socket_migration
 
-    voicelayer = {
+    voicelayer_bun = {
         "command": "/Users/me/.bun/bin/bun",
         "args": ["/Users/me/.local/bin/brainlayer-mcp-stdio-bridge"],
     }
-    assert not needs_socket_migration("voicelayer", voicelayer)
-    assert not needs_socket_migration("exa", {"command": "npx", "args": ["-y", "brainlayer.mcp.stub"]})
+    assert not needs_socket_migration("voicelayer", voicelayer_bun)
+
+    # Reviewer's python3 case verbatim — must not match without brainlayer server name.
+    assert not needs_socket_migration(
+        "voicelayer",
+        {"command": "python3", "args": ["-m", "voicelayer.server", "--mem", "brainlayer.mcp"]},
+    )
+    assert not needs_socket_migration(
+        "mytool",
+        {"command": "python", "args": ["-m", "vendor.brainlayer.mcp_shim"]},
+    )
+    assert not needs_socket_migration("daemon", {"command": "brainlayer", "args": ["serve"]})
+
+
+def test_brainlayer_stdio_bridge_is_acceptable_without_migration():
+    from brainlayer.mcp_socket_config import needs_socket_migration
+
+    assert not needs_socket_migration("brainlayer", {"command": "brainlayer-mcp-stdio-bridge"})
+    assert needs_socket_migration(
+        "brainlayer",
+        {"command": "/Users/me/.bun/bin/bun", "args": ["/Users/me/.local/bin/brainlayer-mcp-stdio-bridge"]},
+    )
 
 
 def test_owned_paths_are_one_level_deep_and_skip_scratch_dirs(tmp_path: Path):

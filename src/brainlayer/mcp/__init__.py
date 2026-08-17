@@ -43,9 +43,6 @@ from ._shared import (
 from ._shared import (
     _normalize_project_name as _normalize_project_name,
 )
-from ._shared import (
-    validate_config as validate_config,
-)
 from .enrich_handler import _brain_enrich
 from .entity_handler import _brain_entity as _brain_entity
 from .entity_handler import _brain_get_person
@@ -1748,6 +1745,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
 
 
 # --- Server entry point retired (ONE MCP = BrainBar on /tmp/brainbar.sock) ---
-# `brainlayer-mcp` console script removed. Agents must use:
+# `brainlayer-mcp` console script removed. Agents must use one of:
 #   {"command":"socat","args":["STDIO","UNIX-CONNECT:/tmp/brainbar.sock"]}
-# or brainlayer-mcp-stdio-bridge. Library handlers above remain for tests/helpers.
+#   {"command":"brainlayer-mcp-stdio-bridge"}  — reconnecting stdio bridge (also accepted by doctor/setup)
+# Library handlers above remain for tests/helpers.

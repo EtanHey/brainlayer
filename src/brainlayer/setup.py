@@ -225,6 +225,7 @@ def migrate_legacy_mcp_configs(
             continue
         try:
             target_path = path.resolve()
+            original_stat = target_path.stat()
             original_text = target_path.read_text(encoding="utf-8")
         except OSError as exc:
             skipped.append((path, f"could not read config: {exc}"))
@@ -237,6 +238,7 @@ def migrate_legacy_mcp_configs(
                 continue
             new_text = _rewrite_codex_mcp_servers_to_socket(original_text, names)
             if new_text == original_text:
+                skipped.append((path, f"TOML servers {names!r} need migration but table headers were not rewritten"))
                 continue
             try:
                 _validate_toml_text(new_text)
@@ -246,6 +248,9 @@ def migrate_legacy_mcp_configs(
             try:
                 _backup_config_file(target_path)
                 mode = target_path.stat().st_mode & 0o777
+                if target_path.stat().st_mtime_ns != original_stat.st_mtime_ns:
+                    skipped.append((path, "config changed during migration; skipped to avoid lost update"))
+                    continue
                 temporary = target_path.with_name(f".{target_path.name}.{os.getpid()}.tmp")
                 try:
                     temporary.write_text(new_text, encoding="utf-8")
@@ -273,6 +278,9 @@ def migrate_legacy_mcp_configs(
         try:
             _backup_config_file(target_path)
             mode = target_path.stat().st_mode & 0o777
+            if target_path.stat().st_mtime_ns != original_stat.st_mtime_ns:
+                skipped.append((path, "config changed during migration; skipped to avoid lost update"))
+                continue
             temporary = target_path.with_name(f".{target_path.name}.{os.getpid()}.tmp")
             try:
                 temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")

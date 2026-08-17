@@ -45,7 +45,7 @@ def test_shape_matcher_flags_bridge_and_bun_not_only_literal_name():
     from brainlayer.mcp_socket_config import needs_socket_migration
 
     assert needs_socket_migration("brainlayer", {"command": "brainlayer-mcp"})
-    assert needs_socket_migration("brainlayer", {"command": "brainlayer-mcp-stdio-bridge"})
+    assert not needs_socket_migration("brainlayer", {"command": "brainlayer-mcp-stdio-bridge"})
     assert needs_socket_migration("brainlayer", BRIDGE_VIA_BUN)
     assert needs_socket_migration("brainlayer", CELLAR_BRIDGE_VIA_BUN)
     assert not needs_socket_migration("brainlayer", SOCKET_MCP)
@@ -152,7 +152,7 @@ def test_setup_cli_migrates_all_four_owned_shapes_under_temp_home(tmp_path: Path
 
     claude.write_text(json.dumps({"mcpServers": {"brainlayer": {"command": "brainlayer-mcp"}}}) + "\n")
     cursor.write_text(json.dumps({"mcpServers": {"brainlayer": BRIDGE_VIA_BUN}}) + "\n")
-    gemini.write_text(json.dumps({"mcpServers": {"brainlayer": {"command": "brainlayer-mcp-stdio-bridge"}}}) + "\n")
+    gemini.write_text(json.dumps({"mcpServers": {"brainlayer": {"command": "brainlayer-mcp"}}}) + "\n")
     codex.write_text(
         "[mcp_servers.brainlayer]\n"
         'command = "/Users/me/.bun/bin/bun"\n'

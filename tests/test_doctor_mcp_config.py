@@ -30,3 +30,4 @@ def test_doctor_legacy_issue_details_exclude_full_server_dict(tmp_path: Path):
     details = issues[0].details
     assert "env" not in str(details)
     assert details["server"]["command"] == "brainlayer-mcp"
+    assert "args_preview" not in details["server"]

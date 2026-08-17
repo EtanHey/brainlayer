@@ -19,7 +19,7 @@ SOCKET_MCP_SERVER: dict[str, Any] = {
 }
 
 BRAINLAYER_SERVER_NAMES = frozenset({"brainlayer", "brainlayer-mcp", "brainbar", "brain-bar"})
-_KNOWN_LEGACY_BASENAMES = frozenset({"brainlayer-mcp", "brainlayer-mcp-stdio-bridge"})
+_STDIO_BRIDGE_COMMAND = "brainlayer-mcp-stdio-bridge"
 _SKIP_GITS_DIR_PARTS = frozenset({".worktrees", ".git", "docs.local", "node_modules", ".tmp"})
 _HTTP_TRANSPORT_KEYS = frozenset({"type", "url", "headers"})
 
@@ -50,37 +50,26 @@ def is_canonical_socket_mcp_server(server: object) -> bool:
     return "STDIO" in string_args and "UNIX-CONNECT:/tmp/brainbar.sock" in string_args
 
 
-def is_brainlayer_mcp_entry(name: str, server: object) -> bool:
-    """True when this MCP entry is BrainLayer memory wiring (by name or known transport)."""
-    normalized_name = name.lower()
-    if normalized_name in BRAINLAYER_SERVER_NAMES:
-        return True
+def is_canonical_stdio_bridge_mcp_server(server: object) -> bool:
+    """True for the shipped reconnecting stdio bridge (supported alternate to socat)."""
     if not isinstance(server, dict):
         return False
-    basename = mcp_command_basename(server)
-    if basename in _KNOWN_LEGACY_BASENAMES:
-        return True
-    args = server.get("args")
-    if normalized_name in BRAINLAYER_SERVER_NAMES and isinstance(args, list):
-        for arg in args:
-            if not isinstance(arg, str):
-                continue
-            if Path(arg).name in _KNOWN_LEGACY_BASENAMES:
-                return True
-            if "brainlayer.mcp" in arg:
-                return True
-    if basename in {"python", "python3"} and isinstance(args, list):
-        joined = " ".join(str(a) for a in args)
-        if "brainlayer.mcp" in joined:
-            return True
-    if basename == "brainlayer" and isinstance(args, list) and any(str(a) == "serve" for a in args):
-        return True
-    return False
+    return mcp_command_basename(server) == _STDIO_BRIDGE_COMMAND
+
+
+def is_acceptable_brainlayer_mcp_transport(server: object) -> bool:
+    """Socat socket or stdio-bridge — both are supported BrainLayer agent transports."""
+    return is_canonical_socket_mcp_server(server) or is_canonical_stdio_bridge_mcp_server(server)
+
+
+def is_brainlayer_mcp_entry(name: str, server: object) -> bool:
+    """True only for MCP table entries BrainLayer owns by server name."""
+    return name.lower() in BRAINLAYER_SERVER_NAMES
 
 
 def needs_socket_migration(name: str, server: object) -> bool:
-    """Shape-matcher: BrainLayer MCP entry that is not the canonical socket form."""
-    return is_brainlayer_mcp_entry(name, server) and not is_canonical_socket_mcp_server(server)
+    """Named BrainLayer MCP entry that is not socat socket or stdio-bridge."""
+    return is_brainlayer_mcp_entry(name, server) and not is_acceptable_brainlayer_mcp_transport(server)
 
 
 def owned_mcp_config_paths(*, home: Path | None = None) -> tuple[Path, ...]:
@@ -144,6 +133,20 @@ def socket_server_preserving(server: object) -> dict[str, Any]:
     return {**SOCKET_MCP_SERVER, **preserved}
 
 
+def _arg_public_shape(arg: object) -> str:
+    if isinstance(arg, bool):
+        return "bool"
+    if isinstance(arg, int):
+        return "int"
+    if not isinstance(arg, str):
+        return type(arg).__name__
+    if arg.startswith("--") and "=" in arg:
+        return arg.split("=", 1)[0] + "=…"
+    if len(arg) > 40:
+        return f"str(len={len(arg)})"
+    return "str"
+
+
 def mcp_server_public_summary(server: object) -> dict[str, Any]:
     """Safe MCP server shape for doctor JSON output (no env secrets)."""
     if not isinstance(server, dict):
@@ -155,7 +158,7 @@ def mcp_server_public_summary(server: object) -> dict[str, Any]:
     args = server.get("args")
     if isinstance(args, list):
         summary["args_count"] = len(args)
-        summary["args_preview"] = [str(arg)[:120] for arg in args[:3]]
+        summary["args_shape"] = [_arg_public_shape(arg) for arg in args[:3]]
     transport_type = server.get("type")
     if isinstance(transport_type, str):
         summary["type"] = transport_type
