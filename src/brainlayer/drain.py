@@ -21,9 +21,9 @@ import sqlite_vec
 from ._helpers import _is_sqlite_busy_error, serialize_f32
 from .agent_provenance import normalize_source_class
 from .chunk_origin import detect_chunk_origin
-from .content_class import classify_content_class, normalize_content_class
+from .chunk_write import insert_canonical_chunk
+from .content_class import classify_content_class
 from .dedupe import (
-    compute_dedupe_fields,
     ensure_dedupe_schema,
     find_duplicate,
     merge_duplicate_chunk,
@@ -369,50 +369,8 @@ def _content_hash(content: str) -> str:
     return hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
 
 
-def _preview_text(values: dict[str, Any]) -> str:
-    summary = str(values.get("summary") or "").strip()
-    content = str(values.get("content") or "").strip()
-    source = summary or content
-    return source.replace("\n", " ").replace("\r", " ").replace("\t", " ")[:220]
-
-
 def _insert_chunk(conn: apsw.Connection, values: dict[str, Any]) -> None:
-    cols = _columns(conn, "chunks")
-    if "preview_text" in cols and not str(values.get("preview_text") or "").strip():
-        values = {**values, "preview_text": _preview_text(values)}
-    if "content" in values:
-        fields = compute_dedupe_fields(str(values["content"]), values.get("created_at"))
-        content_class = normalize_content_class(values.get("content_class"))
-        if "content_class" not in values:
-            content_class = classify_content_class(
-                str(values["content"]),
-                content_type=values.get("content_type"),
-                tags=values.get("tags"),
-                source=values.get("source"),
-                source_file=values.get("source_file"),
-                project=values.get("project"),
-            )
-        values = {
-            **values,
-            "seen_count": values.get("seen_count") or 1,
-            "last_seen_at": values.get("last_seen_at") or values.get("created_at"),
-            "content_class": content_class,
-            "dedupe_hash": fields.dedupe_hash,
-            "simhash": fields.simhash,
-            "simhash_band_0": fields.bands[0],
-            "simhash_band_1": fields.bands[1],
-            "simhash_band_2": fields.bands[2],
-            "simhash_band_3": fields.bands[3],
-        }
-    row = {key: value for key, value in values.items() if key in cols}
-    if "id" not in row and "chunk_id" in cols:
-        row["chunk_id"] = values["id"]
-    if "chunk_id" not in row and "id" in cols:
-        row["id"] = values["id"]
-    names = list(row)
-    placeholders = ", ".join("?" for _ in names)
-    sql = f"INSERT OR IGNORE INTO chunks ({', '.join(names)}) VALUES ({placeholders})"
-    conn.execute(sql, [row[name] for name in names])
+    insert_canonical_chunk(conn, values, on_conflict="ignore")
 
 
 def _insert_or_merge_chunk(conn: apsw.Connection, values: dict[str, Any]) -> str:

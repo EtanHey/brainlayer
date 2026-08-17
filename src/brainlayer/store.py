@@ -41,6 +41,7 @@ from typing import Any, Callable, Dict, List, Optional
 import apsw
 
 from .chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, detect_chunk_origin
+from .chunk_write import insert_canonical_chunk
 from .content_class import classify_content_class
 from .dedupe import find_duplicate, merge_duplicate_chunk, merge_existing_chunk_content, merge_existing_chunk_seen
 from .ingest_guard import reject_recursive_mcp_output
@@ -286,69 +287,39 @@ def store_memory(
                             store._upsert_chunk_vector(cursor, stored_chunk_id, embedding)
                 else:
                     stored_chunk_id = incoming_chunk_id
-                    chunk_columns = {row[1] for row in cursor.execute("PRAGMA table_info(chunks)")}
-                    insert_columns = [
-                        "id",
-                        "content",
-                        "metadata",
-                        "source_file",
-                        "project",
-                        "content_type",
-                        "value_type",
-                        "char_count",
-                        "source",
-                        "created_at",
-                        "enriched_at",
-                        "enrich_status",
-                        "summary",
-                        "tags",
-                        "importance",
-                        "chunk_origin",
-                        "seen_count",
-                        "last_seen_at",
-                        "dedupe_hash",
-                        "simhash",
-                        "simhash_band_0",
-                        "simhash_band_1",
-                        "simhash_band_2",
-                        "simhash_band_3",
-                        "content_class",
-                    ]
-                    insert_values = [
-                        incoming_chunk_id,
-                        content,
-                        json.dumps(meta),
-                        "brainlayer-store",
-                        project,
-                        memory_type,
-                        "high",
-                        len(content),
-                        "manual",
-                        effective_created_at,
-                        now,
-                        "success",
-                        content[:200],
-                        tags_json,
-                        float(importance) if importance is not None else None,
-                        resolved_chunk_origin,
-                        1,
-                        now,
-                        dedupe_fields.dedupe_hash,
-                        dedupe_fields.simhash,
-                        dedupe_fields.bands[0],
-                        dedupe_fields.bands[1],
-                        dedupe_fields.bands[2],
-                        dedupe_fields.bands[3],
-                        content_class,
-                    ]
-                    optional_values = {
+                    insert_values = {
+                        "id": incoming_chunk_id,
+                        "content": content,
+                        "metadata": json.dumps(meta),
+                        "source_file": "brainlayer-store",
+                        "project": project,
+                        "content_type": memory_type,
+                        "value_type": "high",
+                        "char_count": len(content),
+                        "source": "manual",
+                        "created_at": effective_created_at,
+                        "enriched_at": now,
+                        "enrich_status": "success",
+                        "summary": content[:200],
+                        "tags": tags_json,
+                        "importance": float(importance) if importance is not None else None,
+                        "chunk_origin": resolved_chunk_origin,
+                        "seen_count": 1,
+                        "last_seen_at": now,
+                        "content_class": content_class,
                         "content_hash": content_hash,
                         "valid_from": effective_created_at,
                         "invalid_at": None,
                         "sys_period_start": now,
                         "sys_period_end": "9999-12-31T23:59:59.999999Z",
+                        "dedupe_hash": dedupe_fields.dedupe_hash,
+                        "simhash": dedupe_fields.simhash,
+                        "simhash_band_0": dedupe_fields.bands[0],
+                        "simhash_band_1": dedupe_fields.bands[1],
+                        "simhash_band_2": dedupe_fields.bands[2],
+                        "simhash_band_3": dedupe_fields.bands[3],
                     }
-                    if conversation_id is not None and "conversation_id" in chunk_columns:
+                    if conversation_id is not None:
                         position_row = cursor.execute(
                             """
                             SELECT COALESCE(MAX(position), -1) + 1
@@ -357,22 +328,9 @@ def store_memory(
                             """,
                             (conversation_id,),
                         ).fetchone()
-                        optional_values["conversation_id"] = conversation_id
-                        if "position" in chunk_columns:
-                            optional_values["position"] = int(position_row[0]) if position_row else 0
-                    for column, value in optional_values.items():
-                        if column in chunk_columns:
-                            insert_columns.append(column)
-                            insert_values.append(value)
-                    column_sql = ", ".join(insert_columns)
-                    placeholders = ", ".join("?" for _ in insert_values)
-                    cursor.execute(
-                        f"""
-                        INSERT INTO chunks ({column_sql}, ingested_at)
-                        VALUES ({placeholders}, CAST(strftime('%s', 'now') AS INTEGER))
-                        """,
-                        insert_values,
-                    )
+                        insert_values["conversation_id"] = conversation_id
+                        insert_values["position"] = int(position_row[0]) if position_row else 0
+                    insert_canonical_chunk(cursor, insert_values, on_conflict="abort")
                     if embedding is not None:
                         store._upsert_chunk_vector(cursor, stored_chunk_id, embedding)
 

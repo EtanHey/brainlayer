@@ -1253,7 +1253,10 @@ async def test_busy_queue_fallback_flushes_reservation_timestamp_and_project(tmp
     finally:
         conn.close()
 
-    assert row == (reservation_created_at, "brainlayer", "mcp-server-session", 0)
+    from brainlayer.timestamp_iso import normalize_timestamp
+
+    assert row[1:] == ("brainlayer", "mcp-server-session", 0)
+    assert row[0] == normalize_timestamp(reservation_created_at)
 
 
 @pytest.mark.asyncio

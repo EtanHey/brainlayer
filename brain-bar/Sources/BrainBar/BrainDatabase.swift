@@ -1411,8 +1411,8 @@ final class BrainDatabase: @unchecked Sendable {
         let tagsJSON = (try? encodeJSON(tags)) ?? "[]"
         let metadataJSON = Self.storeMetadataJSON(queueID: queueID)
         let sql = """
-            INSERT INTO chunks (id, content, metadata, source_file, project, tags, importance, source, content_type, char_count, created_at, preview_text, conversation_id, position, content_hash)
-            VALUES (?, ?, ?, 'brainbar-store', ?, ?, ?, ?, 'user_message', ?, ?, ?, ?, ?, ?)
+            INSERT INTO chunks (id, content, metadata, source_file, project, tags, importance, source, content_type, char_count, created_at, preview_text, conversation_id, position, content_hash, chunk_origin, ingested_at, seen_count, last_seen_at, content_class, brick_id, source_uri, status)
+            VALUES (?, ?, ?, 'brainbar-store', ?, ?, ?, ?, 'user_message', ?, ?, ?, ?, ?, ?, 'user_explicit', ?, 1, ?, 'knowledge', ?, 'brainbar-store', 'active')
         """
         let previousBusyTimeout = busyTimeoutMillis.flatMap { _ in queryPragma(db, name: "busy_timeout") }
         if let busyTimeoutMillis {
@@ -1466,6 +1466,9 @@ final class BrainDatabase: @unchecked Sendable {
                     sqlite3_bind_null(stmt, 12)
                 }
                 bindText(contentHash, to: stmt, index: 13)
+                sqlite3_bind_int64(stmt, 14, Int64(Date().timeIntervalSince1970))
+                bindText(createdAt, to: stmt, index: 15)
+                bindText(chunkID, to: stmt, index: 16)
             }
             if failNextStoreAfterInsertForTesting {
                 failNextStoreAfterInsertForTesting = false
