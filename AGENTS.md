@@ -111,7 +111,7 @@ Current native Swift BrainBar tools (PR #135, 2026-03-30):
 - Textual TUI (`dashboard/`) and Next.js dashboard
 - Source data: JSONL in `~/.claude/projects/`
 
-<!-- COMMANDS: `python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"` | test: `pytest` | lint: `ruff check src/ && ruff format src/` | run: `brainlayer index && brainlayer setup` -->
+<!-- COMMANDS: `python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"` | test: `pytest` | lint: `ruff check src/ tests/ && ruff format src/ tests/` | run: `brainlayer index && brainlayer setup` -->
 ## Workflow (HOW)
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
@@ -121,7 +121,7 @@ brainlayer setup
 brainlayer search "how did I implement authentication"
 brainlayer enrich
 ```
-- Lint/format: `ruff check src/ && ruff format src/`
+- Lint/format: `ruff check src/ tests/ && ruff format src/ tests/`
 - Pre-push: `.githooks/pre-push` runs `scripts/run_tests.sh` with `BRAINLAYER_PREPUSH=1`; full
   runs are deduped by git tree hash in `.git/brainlayer-prepush-cache`.
 - Scoped worker pushes: use `BRAINLAYER_PREPUSH_SCOPE=changed-only git push` to map changed files
