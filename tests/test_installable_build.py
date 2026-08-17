@@ -898,13 +898,14 @@ def test_setup_command_does_not_install_launchd_by_default(tmp_path: Path, monke
 def test_setup_command_can_migrate_and_verify_mcp_transport(tmp_path: Path, monkeypatch) -> None:
     import brainlayer.setup as setup_helpers
     from brainlayer.cli import app
+    from brainlayer.setup import McpMigrationReport
 
     migrated_path = tmp_path / ".claude.json"
     calls: list[str] = []
     monkeypatch.setattr(
         setup_helpers,
         "migrate_legacy_mcp_configs",
-        lambda: calls.append("migrate") or [migrated_path],
+        lambda: calls.append("migrate") or McpMigrationReport(changed=(migrated_path,)),
     )
     monkeypatch.setattr(
         setup_helpers,
