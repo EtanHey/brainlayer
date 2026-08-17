@@ -361,6 +361,7 @@ def _doctor_config(tmp_path: Path, db_path: Path):
         deploy_provenance_dir=tmp_path / "daemon-provenance",
         queue_movement_sample_seconds=0,
         version_check_enabled=False,
+        mcp_config_check_enabled=False,
     )
 
 

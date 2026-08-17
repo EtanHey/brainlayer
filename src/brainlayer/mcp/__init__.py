@@ -1,4 +1,9 @@
-"""BrainLayer MCP Server - Model Context Protocol interface for Claude Code."""
+"""BrainLayer MCP library — tool handlers + palette used by tests and helpers.
+
+The agent-facing MCP server is BrainBar on `/tmp/brainbar.sock`. The legacy
+Python `brainlayer-mcp` entrypoint is retired; keep this module as library-only
+tooling and do not reintroduce a Python stdio MCP server path.
+"""
 
 import asyncio
 import json
@@ -8,20 +13,12 @@ import uuid
 from copy import deepcopy
 from typing import Any
 
-import jsonschema
-
 logger = logging.getLogger(__name__)
 
-from mcp.server import Server
-from mcp.server.stdio import stdio_server
 from mcp.types import (
-    CallToolRequestParams,
     CallToolResult,
-    CompleteRequestParams,
     CompleteResult,
     Completion,
-    ListToolsResult,
-    PaginatedRequestParams,
     TextContent,
     Tool,
     ToolAnnotations,
@@ -40,10 +37,12 @@ from ._shared import (
 from ._shared import (
     _error_result,
     _get_vector_store,
-    validate_config,
 )
 from ._shared import (
     _normalize_project_name as _normalize_project_name,
+)
+from ._shared import (
+    validate_config as validate_config,
 )
 from .enrich_handler import _brain_enrich
 from .entity_handler import _brain_entity as _brain_entity
@@ -103,80 +102,26 @@ async def _with_timeout(coro, timeout: float | None = None):
         )
 
 
-async def _handle_list_tools_request(_ctx: Any, _params: PaginatedRequestParams | None) -> ListToolsResult:
-    """Adapt BrainLayer's tool palette to the MCP v2 low-level handler contract."""
-    return ListToolsResult(tools=await list_tools())
+# Retired: Python stdio MCP Server. Agent hosts must use BrainBar via the
+# reconnecting stdio bridge (or socat to /tmp/brainbar.sock). Kept as None so
+# accidental references fail closed instead of constructing an SDK-fragile Server.
+server = None
 
-
-async def _handle_completion_request(_ctx: Any, params: CompleteRequestParams) -> CompleteResult:
-    """Adapt typed MCP v2 completion params to the existing completion logic."""
-    return await handle_completion(params.ref, params.argument)
-
-
-def _normalize_call_tool_result(result: Any) -> CallToolResult:
-    """Preserve the result forms accepted by the MCP v1 call-tool decorator."""
-    if isinstance(result, CallToolResult):
-        return result
-    if isinstance(result, tuple) and len(result) == 2:
-        content, structured_content = result
-    elif isinstance(result, dict):
-        content = [TextContent(type="text", text=json.dumps(result, indent=2))]
-        structured_content = result
-    elif hasattr(result, "__iter__"):
-        content = result
-        structured_content = None
-    else:
-        raise TypeError(f"Unexpected return type from tool: {type(result).__name__}")
-    return CallToolResult(content=list(content), structured_content=structured_content, is_error=False)
-
-
-async def _handle_call_tool_request(_ctx: Any, params: CallToolRequestParams) -> CallToolResult:
-    """Validate and route a typed MCP v2 tool call while preserving v1 behavior."""
-    arguments = params.arguments or {}
-    try:
-        tool = next((candidate for candidate in await list_tools() if candidate.name == params.name), None)
-        if tool is not None:
-            try:
-                jsonschema.validate(instance=arguments, schema=tool.input_schema)
-            except jsonschema.ValidationError as exc:
-                return _error_result(f"Input validation error: {exc.message}")
-
-        result = _normalize_call_tool_result(await call_tool(params.name, arguments))
-
-        if tool is not None and tool.output_schema is not None and not result.is_error:
-            if result.structured_content is None:
-                return _error_result("Output validation error: output_schema defined but no structured output returned")
-            try:
-                jsonschema.validate(instance=result.structured_content, schema=tool.output_schema)
-            except jsonschema.ValidationError as exc:
-                return _error_result(f"Output validation error: {exc.message}")
-        return result
-    except Exception as exc:
-        return _error_result(str(exc))
-
-
-# Create MCP server using the MCP v2 low-level handler API.
-server = Server(
-    "brainlayer",
-    instructions=(
-        "Memory layer for Claude Code. Primary routing:\n"
-        "- brain_search(query): persistent memory lookup. Use when: recalling past decisions, implementation history, "
-        "preferences, or file/topic history. Don't use when: you need current session context or stats (brain_recall), "
-        "a named entity graph lookup (brain_entity), or to save new information (brain_store).\n"
-        "- brain_store(content): durable write for decisions, learnings, corrections, and issues. Use when: something "
-        "worth remembering just happened. Don't use when: you need retrieval (brain_search) or deep extraction from "
-        "long text (brain_digest).\n"
-        "- brain_recall(...): unified context, stats, session, and routing entry point. Use when: asking what you are "
-        "working on, browsing sessions, plan links, operations, or knowledge-base stats. Don't use when: you already "
-        "know this is a topical memory search (brain_search).\n"
-        "- brain_entity(name): look up known entities and their relationships from the knowledge graph.\n"
-        "- brain_digest(content): extract entities and structured knowledge from large content.\n"
-        "brain_expand/brain_tags are deprecated — see their descriptions for alternatives.\n"
-        'Project scoping: auto-inferred from cwd. Override with project="all".'
-    ),
-    on_list_tools=_handle_list_tools_request,
-    on_call_tool=_handle_call_tool_request,
-    on_completion=_handle_completion_request,
+SERVER_INSTRUCTIONS = (
+    "Memory layer for Claude Code. Primary routing:\n"
+    "- brain_search(query): persistent memory lookup. Use when: recalling past decisions, implementation history, "
+    "preferences, or file/topic history. Don't use when: you need current session context or stats (brain_recall), "
+    "a named entity graph lookup (brain_entity), or to save new information (brain_store).\n"
+    "- brain_store(content): durable write for decisions, learnings, corrections, and issues. Use when: something "
+    "worth remembering just happened. Don't use when: you need retrieval (brain_search) or deep extraction from "
+    "long text (brain_digest).\n"
+    "- brain_recall(...): unified context, stats, session, and routing entry point. Use when: asking what you are "
+    "working on, browsing sessions, plan links, operations, or knowledge-base stats. Don't use when: you already "
+    "know this is a topical memory search (brain_search).\n"
+    "- brain_entity(name): look up known entities and their relationships from the knowledge graph.\n"
+    "- brain_digest(content): extract entities and structured knowledge from large content.\n"
+    "brain_expand/brain_tags are deprecated — see their descriptions for alternatives.\n"
+    'Project scoping: auto-inferred from cwd. Override with project="all".'
 )
 
 _MCP_PROCESS_SESSION_ID = f"mcp-{uuid.uuid4().hex}"
@@ -199,6 +144,8 @@ def _server_owned_conversation_id(session: Any) -> str:
 
 def _calling_session_id() -> str:
     """Return a server-owned identifier for the active MCP transport session."""
+    if server is None:
+        return _MCP_PROCESS_SESSION_ID
     try:
         session = server.request_context.session
     except (AttributeError, LookupError):
@@ -1787,40 +1734,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
         return _error_result(f"Unknown tool: {name}")
 
 
-# --- Server entry point ---
-
-
-def serve():
-    """Start the MCP server using stdio.
-
-    Note: MCP uses stdin/stdout for communication, not network ports.
-    This is designed for integration with Claude Code via mcpServers config.
-    """
-    from brainlayer.parent_death import install_parent_death_watcher
-
-    install_parent_death_watcher()
-
-    # A prior process may have died after acknowledging a legacy-fallback store
-    # but before its replay ran; re-arm the replay so that receipt stays true.
-    try:
-        from .store_handler import rearm_stranded_pending_stores
-
-        rearm_stranded_pending_stores()
-    except Exception:
-        logger.debug("Startup pending-store replay arming failed", exc_info=True)
-
-    # Validate configuration at startup
-    config_errors = validate_config()
-    fatal = [e for e in config_errors if e["severity"] == "error"]
-    if fatal:
-        logger.error("BrainLayer MCP: %d config error(s), server may not function correctly", len(fatal))
-
-    async def main():
-        async with stdio_server() as (read_stream, write_stream):
-            await server.run(read_stream, write_stream, server.create_initialization_options())
-
-    asyncio.run(main())
-
-
-if __name__ == "__main__":
-    serve()
+# --- Server entry point retired (ONE MCP = BrainBar on /tmp/brainbar.sock) ---
+# `brainlayer-mcp` console script removed. Agents must use:
+#   {"command":"socat","args":["STDIO","UNIX-CONNECT:/tmp/brainbar.sock"]}
+# or brainlayer-mcp-stdio-bridge. Library handlers above remain for tests/helpers.

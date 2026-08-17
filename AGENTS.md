@@ -174,13 +174,13 @@ brainlayer enrich
 - Rate configurable via `BRAINLAYER_ENRICH_RATE` env var (default 0.2 = 12 RPM)
 - Adds metadata (summary, tags, importance, intent); session enrichment captures decisions/corrections
 
-<!-- MCP-SERVERS: add new MCP tool entries to mcp/ dir; entrypoint is `brainlayer-mcp`; 13 tools: brain_search, brain_store, brain_recall, brain_resume, brain_entity, brain_expand, brain_update, brain_digest, brain_get_person, brain_enrich, brain_tags, brain_supersede, brain_archive -->
+<!-- MCP-SERVERS: agent MCP is BrainBar on /tmp/brainbar.sock (socat STDIO UNIX-CONNECT); brainlayer-mcp Python entrypoint DELETED; library handlers live under mcp/; 13 tools: brain_search, brain_store, brain_recall, brain_resume, brain_entity, brain_expand, brain_update, brain_digest, brain_get_person, brain_enrich, brain_tags, brain_supersede, brain_archive -->
 ## Interfaces
 - Daemon API (core): `/health`, `/stats`, `/search`, `/context/{chunk_id}`, `/session/{session_id}`
 - Brain graph API: `/brain/graph`, `/brain/node/{node_id}`
 - Backlog API: `/backlog/items` (GET/POST/PATCH/DELETE)
 - MCP tools (13): `brain_search`, `brain_store`, `brain_recall`, `brain_resume`, `brain_entity`, `brain_expand`, `brain_update`, `brain_digest`, `brain_get_person`, `brain_enrich`, `brain_tags`, `brain_supersede`, `brain_archive` (legacy `brainlayer_*` aliases still work; note: `brain_expand` and `brain_tags` are deprecated in the Python MCP path and return errors — use the BrainBar native path for those two)
-- MCP server entrypoint: `brainlayer-mcp`
+- MCP server: BrainBar on `/tmp/brainbar.sock` only. Wire agents with `{"command":"socat","args":["STDIO","UNIX-CONNECT:/tmp/brainbar.sock"]}`. The Python `brainlayer-mcp` entrypoint is deleted; `brainlayer setup` rewrites owned configs to the socket form.
 
 <!-- COMMANDS: `brainlayer brain-export` → graph JSON for dashboard | `brainlayer export-obsidian` → Markdown vault with backlinks + tags -->
 ## Exports

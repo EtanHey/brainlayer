@@ -13,6 +13,12 @@ from importlib import resources
 from pathlib import Path
 
 from .cli.wizard import DEFAULT_BRAINLAYER_CONFIG, write_gemini_env_file
+from .mcp_socket_config import (
+    iter_toml_mcp_servers,
+    needs_socket_migration,
+    owned_mcp_config_paths,
+    socket_server_preserving,
+)
 from .paths import get_canonical_db_path, resolve_db_path
 from .spotlight import ensure_spotlight_excluded_layout as _ensure_spotlight_excluded_layout
 
@@ -85,23 +91,83 @@ def get_current_mcp_bridge_bin() -> str | None:
 
 
 def get_default_mcp_config_paths() -> tuple[Path, ...]:
-    home = Path.home()
-    return (
-        home / ".claude.json",
-        home / ".cursor" / "mcp.json",
-        home / ".gemini" / "settings.json",
-    )
+    """Configs BrainLayer owns and may rewrite on setup/upgrade."""
+    return owned_mcp_config_paths()
 
 
-def _is_legacy_brainbar_socat(server: object) -> bool:
-    if not isinstance(server, dict):
-        return False
-    command = server.get("command")
-    args = server.get("args")
-    if not isinstance(command, str) or Path(command).name != "socat" or not isinstance(args, list):
-        return False
-    string_args = [arg for arg in args if isinstance(arg, str)]
-    return "STDIO" in string_args and "UNIX-CONNECT:/tmp/brainbar.sock" in string_args
+def _backup_config_file(target_path: Path) -> Path:
+    stamp = time.strftime("%Y%m%d%H%M%S")
+    backup = target_path.with_name(f"{target_path.name}.bak.{stamp}")
+    backup.write_bytes(target_path.read_bytes())
+    backup.chmod(target_path.stat().st_mode & 0o777)
+    return backup
+
+
+def _rewrite_json_mcp_servers(payload: dict) -> bool:
+    changed = False
+    servers = payload.get("mcpServers")
+    if isinstance(servers, dict):
+        for name, server in list(servers.items()):
+            if needs_socket_migration(str(name), server):
+                servers[name] = socket_server_preserving(server)
+                changed = True
+    projects = payload.get("projects")
+    if isinstance(projects, dict):
+        for project_data in projects.values():
+            if not isinstance(project_data, dict):
+                continue
+            nested = project_data.get("mcpServers")
+            if not isinstance(nested, dict):
+                continue
+            for name, server in list(nested.items()):
+                if needs_socket_migration(str(name), server):
+                    nested[name] = socket_server_preserving(server)
+                    changed = True
+    return changed
+
+
+def _toml_servers_needing_migration(text: str) -> list[str]:
+    try:
+        import tomllib
+    except ImportError:  # pragma: no cover
+        return []
+    try:
+        payload = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return []
+    return [
+        name
+        for name, server in iter_toml_mcp_servers(payload)
+        if needs_socket_migration(name, server)
+    ]
+
+
+def _rewrite_codex_mcp_servers_to_socket(text: str, names: list[str]) -> str:
+    """Rewrite matching [mcp_servers.NAME] / [mcpServers.NAME] blocks to socket form."""
+    import re
+
+    result = text
+    for name in names:
+        for table in ("mcp_servers", "mcpServers"):
+            pattern = re.compile(
+                rf"(?ms)^(\[{re.escape(table)}\.{re.escape(name)}\]\s*\n)(.*?)(?=^\[|\Z)",
+            )
+            match = pattern.search(result)
+            if not match:
+                continue
+            header, body = match.group(1), match.group(2)
+            kept_lines = []
+            for line in body.splitlines(keepends=True):
+                stripped = line.lstrip()
+                if stripped.startswith("command") or stripped.startswith("args"):
+                    continue
+                kept_lines.append(line)
+            new_body = (
+                'command = "socat"\n'
+                'args = ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]\n' + "".join(kept_lines)
+            )
+            result = result[: match.start()] + header + new_body + result[match.end() :]
+    return result
 
 
 def migrate_legacy_mcp_configs(
@@ -109,49 +175,70 @@ def migrate_legacy_mcp_configs(
     *,
     bridge_command: str | None = None,
 ) -> list[Path]:
-    """Replace known raw-socat BrainBar transports without touching unrelated MCP entries."""
-    resolved_bridge = bridge_command
+    """Rewrite any non-socket BrainLayer MCP entry to the canonical socat form.
+
+    Shape-matcher (not name-matcher): bun wrappers, stdio-bridge, deleted
+    ``brainlayer-mcp``, and python entrypoints are all rewritten. Each rewritten
+    file is backed up beside the original first. Unreadable/malformed files are
+    skipped (doctor reports them); they do not abort the whole run.
+    """
+    del bridge_command  # socket form is the only rewrite target
     changed: list[Path] = []
     paths = config_paths if config_paths is not None else get_default_mcp_config_paths()
     for config_path in paths:
         path = config_path.expanduser()
         if not path.is_file():
             continue
-        target_path = path.resolve()
         try:
-            payload = json.loads(target_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError(f"could not read MCP config {path}: {exc}") from exc
+            target_path = path.resolve()
+            original_text = target_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+
+        suffix = target_path.suffix.lower()
+        if suffix == ".toml" or target_path.name == "config.toml":
+            names = _toml_servers_needing_migration(original_text)
+            if not names:
+                continue
+            new_text = _rewrite_codex_mcp_servers_to_socket(original_text, names)
+            if new_text == original_text:
+                continue
+            try:
+                _backup_config_file(target_path)
+                mode = target_path.stat().st_mode & 0o777
+                temporary = target_path.with_name(f".{target_path.name}.{os.getpid()}.tmp")
+                try:
+                    temporary.write_text(new_text, encoding="utf-8")
+                    temporary.chmod(mode)
+                    os.replace(temporary, target_path)
+                finally:
+                    temporary.unlink(missing_ok=True)
+            except OSError:
+                continue
+            changed.append(path)
+            continue
+
+        try:
+            payload = json.loads(original_text)
+        except json.JSONDecodeError:
+            continue
         if not isinstance(payload, dict):
             continue
-        servers = payload.get("mcpServers")
-        if not isinstance(servers, dict):
+        if not _rewrite_json_mcp_servers(payload):
             continue
 
-        migrated = False
-        for name, server in list(servers.items()):
-            if not _is_legacy_brainbar_socat(server):
-                continue
-            if resolved_bridge is None:
-                resolved_bridge = get_current_mcp_bridge_bin()
-            if not resolved_bridge:
-                raise FileNotFoundError("brainlayer-mcp-stdio-bridge was not found on PATH")
-            migrated_server = dict(server)
-            migrated_server["command"] = resolved_bridge
-            migrated_server.pop("args", None)
-            servers[name] = migrated_server
-            migrated = True
-        if not migrated:
-            continue
-
-        mode = target_path.stat().st_mode & 0o777
-        temporary = target_path.with_name(f".{target_path.name}.{os.getpid()}.tmp")
         try:
-            temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-            temporary.chmod(mode)
-            os.replace(temporary, target_path)
-        finally:
-            temporary.unlink(missing_ok=True)
+            _backup_config_file(target_path)
+            mode = target_path.stat().st_mode & 0o777
+            temporary = target_path.with_name(f".{target_path.name}.{os.getpid()}.tmp")
+            try:
+                temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                temporary.chmod(mode)
+                os.replace(temporary, target_path)
+            finally:
+                temporary.unlink(missing_ok=True)
+        except OSError:
+            continue
         changed.append(path)
     return changed
 

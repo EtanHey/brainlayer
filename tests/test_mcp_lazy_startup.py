@@ -138,7 +138,7 @@ def test_handshake_fast_under_db_write_lock():
     assert ready_event.wait(timeout=10), "could not acquire exclusive DB lock"
 
     proc = subprocess.Popen(
-        [sys.executable, "-c", "from brainlayer.mcp import serve; serve()"],
+        [sys.executable, "-c", "from brainlayer.mcp_stdio_bridge import main; main()"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,

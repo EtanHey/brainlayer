@@ -45,6 +45,12 @@ from .launchd_primitive import (
     is_launchd_label_loaded,
     verify_launchd_label_loaded,
 )
+from .mcp_socket_config import (
+    iter_json_mcp_servers,
+    iter_toml_mcp_servers,
+    needs_socket_migration,
+    owned_mcp_config_paths,
+)
 from .paths import SPOTLIGHT_EXCLUSION_MARKER, get_db_path, is_spotlight_excluded
 from .search_repo import clear_hybrid_search_cache
 from .vector_store import VectorStore
@@ -54,6 +60,9 @@ DEFAULT_ROUNDTRIP_TIMEOUT_SECONDS = 60.0
 DEFAULT_QUEUE_WARNING_COUNT = 25
 DEFAULT_QUEUE_MOVEMENT_SAMPLE_SECONDS = 10.0
 DOCTOR_PROBE_PROJECT = "brainlayer-doctor"
+LEGACY_PYTHON_MCP_FIX = (
+    '{"mcpServers":{"brainlayer":{"command":"socat","args":["STDIO","UNIX-CONNECT:/tmp/brainbar.sock"]}}}'
+)
 
 
 def default_version_check_path() -> Path:
@@ -72,6 +81,88 @@ class DoctorIssue:
     severity: str
     message: str
     details: dict[str, Any] = field(default_factory=dict)
+
+
+def default_mcp_config_paths() -> tuple[Path, ...]:
+    return owned_mcp_config_paths()
+
+
+def _legacy_python_mcp_config_issues(
+    config_paths: list[Path] | tuple[Path, ...] | None = None,
+) -> list[DoctorIssue]:
+    """Fatal when any BrainLayer MCP entry is not the canonical socat socket form."""
+    paths = config_paths if config_paths is not None else default_mcp_config_paths()
+    issues: list[DoctorIssue] = []
+    for config_path in paths:
+        path = config_path.expanduser()
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            issues.append(
+                DoctorIssue(
+                    "mcp_config_unreadable",
+                    "warning",
+                    f"{path}: could not read MCP config ({exc})",
+                    {"config_path": str(path), "error": str(exc)},
+                )
+            )
+            continue
+
+        servers: list[tuple[str, object]] = []
+        if path.suffix.lower() == ".toml" or path.name == "config.toml":
+            try:
+                import tomllib
+
+                payload = tomllib.loads(text)
+            except Exception as exc:  # TOMLDecodeError or unexpected
+                issues.append(
+                    DoctorIssue(
+                        "mcp_config_unparseable",
+                        "warning",
+                        f"{path}: MCP config is unparseable TOML; fix or remove it",
+                        {"config_path": str(path), "error": str(exc)},
+                    )
+                )
+                continue
+            servers = iter_toml_mcp_servers(payload)
+        else:
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError as exc:
+                issues.append(
+                    DoctorIssue(
+                        "mcp_config_unparseable",
+                        "warning",
+                        f"{path}: MCP config is unparseable JSON; fix or remove it",
+                        {"config_path": str(path), "error": str(exc)},
+                    )
+                )
+                continue
+            servers = iter_json_mcp_servers(payload)
+
+        for name, server in servers:
+            if not needs_socket_migration(name, server):
+                continue
+            issues.append(
+                DoctorIssue(
+                    "legacy_python_mcp_entrypoint",
+                    "fatal",
+                    (
+                        f"{path}: mcp server {name!r} is not the BrainBar socket form; "
+                        f"replace with {LEGACY_PYTHON_MCP_FIX}"
+                    ),
+                    {
+                        "config_path": str(path),
+                        "server_name": name,
+                        "server": server,
+                        "fix": LEGACY_PYTHON_MCP_FIX,
+                        "remediation": LEGACY_PYTHON_MCP_FIX,
+                    },
+                )
+            )
+    return issues
 
 
 def _spotlight_exclusion_issue(db_path: Path) -> DoctorIssue | None:
@@ -129,6 +220,8 @@ class DoctorConfig:
     version_check_required: bool = False
     version_check_path: Path = field(default_factory=default_version_check_path)
     spotlight_check_enabled: bool = field(default_factory=lambda: sys.platform == "darwin")
+    mcp_config_paths: tuple[Path, ...] | None = None
+    mcp_config_check_enabled: bool = True
 
 
 @dataclass
@@ -480,6 +573,10 @@ def run_doctor(
         spotlight_issue = _spotlight_exclusion_issue(config.db_path)
         if spotlight_issue is not None:
             result.issues.append(spotlight_issue)
+
+    if config.mcp_config_check_enabled:
+        mcp_paths = config.mcp_config_paths if config.mcp_config_paths is not None else default_mcp_config_paths()
+        result.issues.extend(_legacy_python_mcp_config_issues(mcp_paths))
 
     store: VectorStore | None = None
     try:

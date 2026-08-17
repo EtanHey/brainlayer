@@ -508,9 +508,12 @@ def init(
 def setup(
     launchd: bool = typer.Option(False, "--launchd/--no-launchd", help="Install launchd agents after writing config."),
     migrate_mcp: bool = typer.Option(
-        False,
+        True,
         "--migrate-mcp/--no-migrate-mcp",
-        help="Migrate known raw-socat BrainBar MCP entries to the reconnecting stdio bridge.",
+        help=(
+            "Rewrite retired brainlayer-mcp MCP entries to "
+            'socat STDIO UNIX-CONNECT:/tmp/brainbar.sock (backs up each file first).'
+        ),
     ),
     verify_mcp: bool = typer.Option(
         False,
@@ -2403,24 +2406,6 @@ def analyze_evolution(
         import traceback
 
         traceback.print_exc()
-        raise typer.Exit(1)
-
-
-@app.command()
-def serve() -> None:
-    """Start the MCP server for Claude Code integration.
-
-    Note: MCP uses stdio (stdin/stdout), not network ports.
-    Configure in ~/.claude/settings.json under mcpServers.
-    """
-    try:
-        from ..mcp import serve as mcp_serve
-
-        rprint("[bold blue]זיכרון[/] - Starting MCP server (stdio mode)")
-        mcp_serve()
-
-    except Exception as e:
-        rprint(f"[bold red]Error:[/] {e}")
         raise typer.Exit(1)
 
 
