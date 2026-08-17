@@ -481,3 +481,60 @@ def test_wipe_refuses_hardlink_and_account_home_divergence(tmp_path, monkeypatch
         wipe_legacy_model_chunk_origins(alias, apply=True)
     with pytest.raises(RuntimeError, match="live BrainLayer DB"):
         wipe_legacy_model_chunk_origins(live, apply=True)
+
+
+def test_preimage_captures_new_legacy_rows_on_later_run(tmp_path):
+    """R1: a later apply against freshly inserted legacy rows must extend the pre-image."""
+    from brainlayer.chunk_origin_wipe import wipe_legacy_model_chunk_origins
+
+    db_path = tmp_path / "copy.db"
+    conn = _make_db(db_path)
+    _install_chunks_fts_update_trigger(conn)
+    _seed(conn)
+    conn.close()
+
+    wipe_legacy_model_chunk_origins(db_path, apply=True)
+
+    conn = sqlite3.connect(db_path)
+    first_count = conn.execute(f"SELECT COUNT(*) FROM {PREIMAGE_TABLE}").fetchone()[0]
+    conn.executemany(
+        "INSERT INTO chunks (id, content, chunk_origin) VALUES (?, ?, ?)",
+        [
+            ("gemini-late-1", "late memory one", CHUNK_ORIGIN_GEMINI_FLASH_LITE),
+            ("gemini-late-2", "late memory two", CHUNK_ORIGIN_GEMINI_FLASH_LITE),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    wipe_legacy_model_chunk_origins(db_path, apply=True)
+
+    conn = sqlite3.connect(db_path)
+    preimage = dict(conn.execute(f"SELECT id, chunk_origin FROM {PREIMAGE_TABLE}"))
+    current = dict(conn.execute("SELECT id, chunk_origin FROM chunks"))
+    conn.close()
+    assert first_count == 4
+    assert preimage["gemini-late-1"] == CHUNK_ORIGIN_GEMINI_FLASH_LITE
+    assert preimage["gemini-late-2"] == CHUNK_ORIGIN_GEMINI_FLASH_LITE
+    assert current["gemini-late-1"] == CHUNK_ORIGIN_UNKNOWN
+    assert current["gemini-late-2"] == CHUNK_ORIGIN_UNKNOWN
+    assert preimage["gemini-plain"] == CHUNK_ORIGIN_GEMINI_FLASH_LITE
+
+
+def test_dry_run_spot_check_is_na_and_rows_stay_legacy(tmp_path, capsys):
+    """R2: dry-run --spot-check must say n/a-dry-run and prove sampled rows are still legacy."""
+    from brainlayer.chunk_origin_wipe import main
+
+    db_path = tmp_path / "copy.db"
+    conn = _make_db(db_path)
+    _install_chunks_fts_update_trigger(conn)
+    _seed(conn)
+    conn.close()
+
+    assert main(["--db", str(db_path), "--spot-check", "4"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["mode"] == "dry-run"
+    assert payload["spot_checks_ok"] == "n/a-dry-run"
+    assert payload["spot_checks"]
+    assert all(item["stored"] in LEGACY_MODEL_CHUNK_ORIGINS for item in payload["spot_checks"])
+    assert all(item["ok"] for item in payload["spot_checks"])

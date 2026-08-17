@@ -134,6 +134,15 @@ def _ensure_preimage(conn: sqlite3.Connection, legacy: tuple[str, ...], placehol
         (PREIMAGE_TABLE,),
     ).fetchone()
     if exists:
+        conn.execute(
+            f"""
+            INSERT INTO {PREIMAGE_TABLE}(id, chunk_origin)
+            SELECT id, chunk_origin FROM chunks
+            WHERE chunk_origin IN ({placeholders}) AND id NOT IN (SELECT id FROM {PREIMAGE_TABLE})
+            """,
+            legacy,
+        )
+        conn.commit()
         return
     conn.execute(
         f"""
@@ -148,6 +157,8 @@ def _ensure_preimage(conn: sqlite3.Connection, legacy: tuple[str, ...], placehol
 def _spot_checks_from_store(
     conn: sqlite3.Connection,
     samples: list[tuple[str, str, str]],
+    *,
+    apply: bool,
 ) -> list[dict[str, Any]]:
     checks: list[dict[str, Any]] = []
     for chunk_id, _content, derived_origin in samples:
@@ -158,13 +169,17 @@ def _spot_checks_from_store(
         stored = None if row is None else row["chunk_origin"]
         stored_content = "" if row is None else row["content"]
         expected = detect_chunk_origin(stored_content)
+        if apply:
+            ok = stored == expected and stored not in LEGACY_MODEL_CHUNK_ORIGINS
+        else:
+            ok = stored in LEGACY_MODEL_CHUNK_ORIGINS
         checks.append(
             {
                 "id": chunk_id,
                 "derived": derived_origin,
                 "stored": stored,
                 "expected": expected,
-                "ok": stored == expected and stored not in LEGACY_MODEL_CHUNK_ORIGINS,
+                "ok": ok,
             }
         )
     return checks
@@ -276,8 +291,8 @@ def wipe_legacy_model_chunk_origins(
         result.post_wipe_distribution = _origin_distribution(conn)
         result.post_wipe_legacy = _legacy_count(conn, legacy)
         result.aux_counts_after = _aux_counts(conn)
-        if apply:
-            result.spot_checks = _spot_checks_from_store(conn, samples)
+        if samples:
+            result.spot_checks = _spot_checks_from_store(conn, samples, apply=apply)
         return result
     finally:
         conn.close()
@@ -298,7 +313,11 @@ def _result_payload(db_path: Path, *, apply: bool, result: ChunkOriginWipeResult
         "post_wipe_distribution": result.post_wipe_distribution,
         "aux_counts_before": result.aux_counts_before,
         "aux_counts_after": result.aux_counts_after,
-        "spot_checks_ok": all(item["ok"] for item in result.spot_checks) if result.spot_checks else None,
+        "spot_checks_ok": (
+            "n/a-dry-run"
+            if not apply
+            else (all(item["ok"] for item in result.spot_checks) if result.spot_checks else None)
+        ),
         "spot_checks": result.spot_checks,
         "next": (
             "verify remaining legacy count is 0 and review live-window plan"
