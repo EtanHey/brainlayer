@@ -19,8 +19,8 @@ from mcp.types import (
     CallToolResult,
     CompleteResult,
     Completion,
+    Tool as _McpTool,
     TextContent,
-    Tool,
     ToolAnnotations,
 )
 
@@ -68,6 +68,17 @@ from .search_handler import (
 from .store_handler import _brain_archive, _brain_digest, _brain_supersede, _store, _store_new
 from .store_handler import _brain_update as _brain_update
 from .tags_handler import _brain_tags_mcp as _brain_tags_mcp
+
+
+class Tool(_McpTool):
+    """Compat wrapper for MCP Tool schema field names across SDK versions."""
+
+    def __init__(self, **data: Any) -> None:
+        if "input_schema" in data and "inputSchema" not in data:
+            data["inputSchema"] = data.pop("input_schema")
+        if "output_schema" in data and "outputSchema" not in data:
+            data["outputSchema"] = data.pop("output_schema")
+        super().__init__(**data)
 
 
 def _mcp_query_timeout() -> float:
