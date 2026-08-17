@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import pwd
 import random
 import sqlite3
 import sys
@@ -27,6 +29,7 @@ AUX_COUNT_TABLES = (
 )
 
 _LIVE_DB_RELATIVE = Path(".local") / "share" / "brainlayer" / "brainlayer.db"
+PREIMAGE_TABLE = "chunk_origin_wipe_preimage"
 
 
 @dataclass
@@ -50,15 +53,46 @@ def live_canonical_db_path() -> Path:
     return Path.home() / _LIVE_DB_RELATIVE
 
 
+def account_home() -> Path:
+    """Return the account home from the passwd database, ignoring a diverging $HOME."""
+    try:
+        return Path(pwd.getpwuid(os.getuid()).pw_dir)
+    except Exception:
+        return Path.home()
+
+
+def _same_file(left: Path, right: Path) -> bool:
+    """True when both paths exist as the same inode, or resolve to the same missing path."""
+    try:
+        left_stat = left.expanduser().stat()
+        right_stat = right.expanduser().stat()
+    except OSError:
+        return left.expanduser().resolve(strict=False) == right.expanduser().resolve(strict=False)
+    return (left_stat.st_dev, left_stat.st_ino) == (right_stat.st_dev, right_stat.st_ino)
+
+
+def _live_db_candidates() -> list[Path]:
+    candidates = [live_canonical_db_path(), account_home() / _LIVE_DB_RELATIVE]
+    try:
+        from .paths import resolve_db_path
+
+        candidates.append(resolve_db_path())
+    except Exception:
+        pass
+    return candidates
+
+
 def assert_not_live_db(db_path: Path, *, allow_live: bool = False) -> Path:
     """Refuse the live canonical DB unless a lead-scheduled window set allow_live."""
-    resolved = db_path.expanduser().resolve()
-    canonical = live_canonical_db_path().expanduser().resolve()
-    if resolved == canonical and not allow_live:
-        raise RuntimeError(
-            f"refusing to write the live BrainLayer DB at {canonical}; "
-            "pass a rehearsal copy via --db, or --allow-live after a lead-scheduled window"
-        )
+    resolved = db_path.expanduser().resolve(strict=False)
+    if allow_live:
+        return resolved
+    for candidate in _live_db_candidates():
+        if _same_file(resolved, candidate):
+            raise RuntimeError(
+                f"refusing to write the live BrainLayer DB at {resolved}; "
+                "pass a rehearsal copy via --db, or --allow-live after a lead-scheduled window"
+            )
     return resolved
 
 
@@ -92,6 +126,48 @@ def _aux_counts(conn: sqlite3.Connection) -> dict[str, int]:
 
 def _checkpoint(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA wal_checkpoint(FULL)")
+
+
+def _ensure_preimage(conn: sqlite3.Connection, legacy: tuple[str, ...], placeholders: str) -> None:
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (PREIMAGE_TABLE,),
+    ).fetchone()
+    if exists:
+        return
+    conn.execute(
+        f"""
+        CREATE TABLE {PREIMAGE_TABLE} AS
+        SELECT id, chunk_origin FROM chunks WHERE chunk_origin IN ({placeholders})
+        """,
+        legacy,
+    )
+    conn.commit()
+
+
+def _spot_checks_from_store(
+    conn: sqlite3.Connection,
+    samples: list[tuple[str, str, str]],
+) -> list[dict[str, Any]]:
+    checks: list[dict[str, Any]] = []
+    for chunk_id, _content, derived_origin in samples:
+        row = conn.execute(
+            "SELECT content, chunk_origin FROM chunks WHERE id = ?",
+            (chunk_id,),
+        ).fetchone()
+        stored = None if row is None else row["chunk_origin"]
+        stored_content = "" if row is None else row["content"]
+        expected = detect_chunk_origin(stored_content)
+        checks.append(
+            {
+                "id": chunk_id,
+                "derived": derived_origin,
+                "stored": stored,
+                "expected": expected,
+                "ok": stored == expected and stored not in LEGACY_MODEL_CHUNK_ORIGINS,
+            }
+        )
+    return checks
 
 
 def wipe_legacy_model_chunk_origins(
@@ -132,6 +208,7 @@ def wipe_legacy_model_chunk_origins(
         result.aux_counts_before = _aux_counts(conn)
 
         if apply:
+            _ensure_preimage(conn, legacy, placeholders)
             _checkpoint(conn)
             result.checkpoints += 1
 
@@ -199,16 +276,8 @@ def wipe_legacy_model_chunk_origins(
         result.post_wipe_distribution = _origin_distribution(conn)
         result.post_wipe_legacy = _legacy_count(conn, legacy)
         result.aux_counts_after = _aux_counts(conn)
-        result.spot_checks = [
-            {
-                "id": chunk_id,
-                "derived": derived_origin,
-                "expected": detect_chunk_origin(content),
-                "ok": derived_origin == detect_chunk_origin(content)
-                and derived_origin not in LEGACY_MODEL_CHUNK_ORIGINS,
-            }
-            for chunk_id, content, derived_origin in samples
-        ]
+        if apply:
+            result.spot_checks = _spot_checks_from_store(conn, samples)
         return result
     finally:
         conn.close()
