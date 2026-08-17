@@ -455,6 +455,10 @@ def test_status_doctor_gate_marks_roundtrip_skipped_without_latency():
     assert "brainlayer doctor --json" in vector_roundtrip["green_gate"]
 
 
+def test_status_doctor_child_code_disables_mcp_config_check():
+    assert "mcp_config_check_enabled=False" in cli._STATUS_DOCTOR_CHILD_CODE
+
+
 def test_status_doctor_runner_execs_child_without_multiprocessing_spawn(tmp_path, monkeypatch):
     from brainlayer.doctor import DoctorConfig
 

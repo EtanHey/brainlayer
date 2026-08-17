@@ -13,10 +13,9 @@ BrainLayer is the standard's reference **two-consumer split**:
 - **App / fleet (socket + daemon):** `BrainBarDaemon` serves `brain_search` over the
   **canonical socket `/tmp/brainbar.sock`** for the live BrainBar UI and for
   cross-repo fleet agents. This is the genuinely-needed daemon case (§0).
-- **Agents (stdio MCP):** `brainlayer-mcp` (`brainlayer serve`) is a **stdio** server
-  launched per-agent that talks to the SQLite store directly — *not* through the
-  app's socket. This removes the agent path's dependency on the socket/daemon
-  failure classes (7a/7b/7c) entirely.
+- **Agents (stdio MCP):** BrainBar on `/tmp/brainbar.sock` via
+  `{"command":"socat","args":["STDIO","UNIX-CONNECT:/tmp/brainbar.sock"]}` —
+  the only supported BrainLayer memory transport after Python MCP retirement.
 
 ### Write-path invariant (§0.1 hard requirement)
 
@@ -39,7 +38,7 @@ and the write-path invariant is stated.
 
 | § | Class | Status | Evidence |
 |---|---|---|---|
-| 0 / 0.1 | stdio-preferred / split + write-path invariant documented | ✅ | This doc; `brainlayer-mcp` stdio + `BrainBarDaemon` socket; drain = single writer |
+| 0 / 0.1 | stdio-preferred / split + write-path invariant documented | ✅ | This doc; BrainBar socket via socat; drain = single writer |
 | 1 | account-rename self-heal (no interactive sudo) | ⚠️ **partial** | Cask `preflight` self-heals dangling `localaiengine`-tainted Caskroom symlinks (account-agnostic via `start_with?`, user-owned only, no sudo) — **M1-verified**. **Gap:** no standalone `brainlayer doctor --fix` CLI (the §1 MUST form). |
 | 2 | sudo-free cask uninstall / upgrade | ✅ | brainbar installs **user** LaunchAgents (`gui/$uid`), no privileged helper → uninstall needs no sudo; `zap` stanza present; caveats document the two genuine sudo edge-cases (root-owned leftover after rename; clone-upgrade heuristic) |
 | 3 | tap-add + trust documented | ✅ (shared runbook, orc-owned) | M1 install succeeded → tap trusted; brainbar resolves as `etanhey/layers/brainbar` |

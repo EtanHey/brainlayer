@@ -214,61 +214,6 @@ def _get_embedding_model():
     return _embedding_model
 
 
-def validate_config() -> list[dict]:
-    """Validate startup configuration. Returns list of {field, message, severity} dicts."""
-    errors = []
-    from ..paths import DEFAULT_DB_PATH
-
-    # Check DB file exists and is readable
-    if not DEFAULT_DB_PATH.exists():
-        errors.append(
-            {
-                "field": "database",
-                "message": f"Database not found at {DEFAULT_DB_PATH}. Run 'brainlayer index' first.",
-                "severity": "warning",
-            }
-        )
-    elif not os.access(DEFAULT_DB_PATH, os.R_OK):
-        errors.append(
-            {
-                "field": "database",
-                "message": f"Database not readable: {DEFAULT_DB_PATH}",
-                "severity": "error",
-            }
-        )
-
-    # Check DB parent directory is writable (for WAL mode)
-    db_parent = DEFAULT_DB_PATH.parent
-    if db_parent.exists() and not os.access(db_parent, os.W_OK):
-        errors.append(
-            {
-                "field": "database_dir",
-                "message": f"Database directory not writable: {db_parent}",
-                "severity": "error",
-            }
-        )
-
-    # Check embedding model availability
-    try:
-        from ..embeddings import get_embedding_model
-
-        get_embedding_model()
-    except Exception as e:
-        errors.append(
-            {
-                "field": "embedding_model",
-                "message": f"Embedding model failed to load: {e}",
-                "severity": "error",
-            }
-        )
-
-    for err in errors:
-        level = logging.ERROR if err["severity"] == "error" else logging.WARNING
-        logger.log(level, "Config: [%s] %s", err["field"], err["message"])
-
-    return errors
-
-
 def _normalize_project_name(project: str | None) -> str | None:
     """Normalize project names for consistent filtering.
 

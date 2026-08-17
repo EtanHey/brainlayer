@@ -111,17 +111,17 @@ Current native Swift BrainBar tools (PR #135, 2026-03-30):
 - Textual TUI (`dashboard/`) and Next.js dashboard
 - Source data: JSONL in `~/.claude/projects/`
 
-<!-- COMMANDS: `python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"` | test: `pytest` | lint: `ruff check src/ && ruff format src/` | run: `brainlayer index && brainlayer serve` -->
+<!-- COMMANDS: `python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"` | test: `pytest` | lint: `ruff check src/ tests/ && ruff format src/ tests/` | run: `brainlayer index && brainlayer setup` -->
 ## Workflow (HOW)
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 brainlayer index
-brainlayer serve
+brainlayer setup
 brainlayer search "how did I implement authentication"
 brainlayer enrich
 ```
-- Lint/format: `ruff check src/ && ruff format src/`
+- Lint/format: `ruff check src/ tests/ && ruff format src/ tests/`
 - Pre-push: `.githooks/pre-push` runs `scripts/run_tests.sh` with `BRAINLAYER_PREPUSH=1`; full
   runs are deduped by git tree hash in `.git/brainlayer-prepush-cache`.
 - Scoped worker pushes: use `BRAINLAYER_PREPUSH_SCOPE=changed-only git push` to map changed files
@@ -174,13 +174,13 @@ brainlayer enrich
 - Rate configurable via `BRAINLAYER_ENRICH_RATE` env var (default 0.2 = 12 RPM)
 - Adds metadata (summary, tags, importance, intent); session enrichment captures decisions/corrections
 
-<!-- MCP-SERVERS: add new MCP tool entries to mcp/ dir; entrypoint is `brainlayer-mcp`; 13 tools: brain_search, brain_store, brain_recall, brain_resume, brain_entity, brain_expand, brain_update, brain_digest, brain_get_person, brain_enrich, brain_tags, brain_supersede, brain_archive -->
+<!-- MCP-SERVERS: agent MCP is BrainBar on /tmp/brainbar.sock (socat STDIO UNIX-CONNECT); brainlayer-mcp Python entrypoint DELETED; library handlers live under mcp/; 13 tools: brain_search, brain_store, brain_recall, brain_resume, brain_entity, brain_expand, brain_update, brain_digest, brain_get_person, brain_enrich, brain_tags, brain_supersede, brain_archive -->
 ## Interfaces
 - Daemon API (core): `/health`, `/stats`, `/search`, `/context/{chunk_id}`, `/session/{session_id}`
 - Brain graph API: `/brain/graph`, `/brain/node/{node_id}`
 - Backlog API: `/backlog/items` (GET/POST/PATCH/DELETE)
 - MCP tools (13): `brain_search`, `brain_store`, `brain_recall`, `brain_resume`, `brain_entity`, `brain_expand`, `brain_update`, `brain_digest`, `brain_get_person`, `brain_enrich`, `brain_tags`, `brain_supersede`, `brain_archive` (legacy `brainlayer_*` aliases still work; note: `brain_expand` and `brain_tags` are deprecated in the Python MCP path and return errors — use the BrainBar native path for those two)
-- MCP server entrypoint: `brainlayer-mcp`
+- MCP server: BrainBar on `/tmp/brainbar.sock` only. Wire agents with `{"command":"socat","args":["STDIO","UNIX-CONNECT:/tmp/brainbar.sock"]}`. The Python `brainlayer-mcp` entrypoint is deleted; `brainlayer setup` rewrites owned configs to the socket form.
 
 <!-- COMMANDS: `brainlayer brain-export` → graph JSON for dashboard | `brainlayer export-obsidian` → Markdown vault with backlinks + tags -->
 ## Exports

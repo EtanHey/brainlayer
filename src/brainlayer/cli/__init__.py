@@ -508,9 +508,12 @@ def init(
 def setup(
     launchd: bool = typer.Option(False, "--launchd/--no-launchd", help="Install launchd agents after writing config."),
     migrate_mcp: bool = typer.Option(
-        False,
+        True,
         "--migrate-mcp/--no-migrate-mcp",
-        help="Migrate known raw-socat BrainBar MCP entries to the reconnecting stdio bridge.",
+        help=(
+            "Rewrite retired brainlayer-mcp MCP entries to "
+            "socat STDIO UNIX-CONNECT:/tmp/brainbar.sock (backs up each file first)."
+        ),
     ),
     verify_mcp: bool = typer.Option(
         False,
@@ -540,6 +543,7 @@ def setup(
 
     from ..config import get_user_env_path
     from ..setup import (
+        McpMigrationReport,
         ensure_brainlayer_env,
         ensure_spotlight_excluded_layout,
         install_launchd,
@@ -557,7 +561,7 @@ def setup(
         )
         if launchd:
             install_launchd(target, env_file=resolved_env_file)
-        migrated_configs = migrate_legacy_mcp_configs() if migrate_mcp else []
+        migrated_configs = migrate_legacy_mcp_configs() if migrate_mcp else McpMigrationReport()
         tool_count = verify_mcp_transport() if verify_mcp else None
     except (
         FileNotFoundError,
@@ -571,8 +575,10 @@ def setup(
         rprint(f"[red]BrainLayer setup failed:[/] {exc}")
         raise typer.Exit(1) from exc
     rprint(f"[green]BrainLayer env file:[/] {resolved_env_file}")
-    for migrated_config in migrated_configs:
+    for migrated_config in migrated_configs.changed:
         rprint(f"[green]Migrated MCP config:[/] {migrated_config}")
+    for skipped_path, reason in migrated_configs.skipped:
+        rprint(f"[yellow]Skipped MCP config migration:[/] {skipped_path} ({reason})")
     if tool_count is not None:
         rprint(f"[green]MCP transport verified:[/] {tool_count} tools")
 
@@ -990,6 +996,7 @@ try:
         roundtrip_timeout_seconds=_float_env("BRAINLAYER_STATUS_DOCTOR_ROUNDTRIP_TIMEOUT_SECONDS"),
         roundtrip_probe_enabled=_bool_env("BRAINLAYER_STATUS_DOCTOR_ROUNDTRIP_PROBE_ENABLED"),
         queue_movement_sample_seconds=_float_env("BRAINLAYER_STATUS_DOCTOR_QUEUE_SAMPLE_SECONDS"),
+        mcp_config_check_enabled=False,
     )
     print(json.dumps(run_doctor(config).to_dict(), sort_keys=True))
 except BaseException as exc:
@@ -1121,6 +1128,11 @@ def doctor_command(
         help="Drain health JSON path.",
     ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+    no_mcp_config_check: bool = typer.Option(
+        False,
+        "--no-mcp-config-check",
+        help="Skip owned MCP config shape checks (socket migration gate).",
+    ),
 ) -> None:
     """Run the read-only BrainLayer doctor health gate."""
     from ..doctor import DoctorConfig
@@ -1131,6 +1143,7 @@ def doctor_command(
             queue_dir=queue_dir.expanduser(),
             watcher_health_path=watcher_health_path.expanduser(),
             drain_health_path=drain_health_path.expanduser(),
+            mcp_config_check_enabled=not no_mcp_config_check,
         )
     )
     payload = result.to_dict()
@@ -2403,24 +2416,6 @@ def analyze_evolution(
         import traceback
 
         traceback.print_exc()
-        raise typer.Exit(1)
-
-
-@app.command()
-def serve() -> None:
-    """Start the MCP server for Claude Code integration.
-
-    Note: MCP uses stdio (stdin/stdout), not network ports.
-    Configure in ~/.claude/settings.json under mcpServers.
-    """
-    try:
-        from ..mcp import serve as mcp_serve
-
-        rprint("[bold blue]זיכרון[/] - Starting MCP server (stdio mode)")
-        mcp_serve()
-
-    except Exception as e:
-        rprint(f"[bold red]Error:[/] {e}")
         raise typer.Exit(1)
 
 

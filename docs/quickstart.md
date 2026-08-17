@@ -54,19 +54,16 @@ Add to each agent's MCP settings under `mcpServers`:
 {
   "mcpServers": {
     "brainlayer": {
-      "command": "brainlayer-mcp-stdio-bridge"
+      "command": "socat",
+      "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]
     }
   }
 }
 ```
 
-The bridge requires BrainBar to be running. It defaults to `/tmp/brainbar.sock`,
-supports `BRAINLAYER_MCP_SOCKET` for alternate socket paths, and reconnects if
-the BrainBar socket is replaced while the agent is still running.
-If your editor is launched from the macOS GUI and cannot resolve
-`brainlayer-mcp-stdio-bridge`, replace the command with the absolute executable
-path from `command -v brainlayer-mcp-stdio-bridge`, usually
-`/opt/homebrew/bin/brainlayer-mcp-stdio-bridge` for Homebrew installs.
+BrainBar must be running and owning `/tmp/brainbar.sock`. `brainlayer setup`
+rewrites any owned config still pointing at the deleted `brainlayer-mcp`
+entrypoint to this socket form.
 
 ### Zed
 
@@ -77,16 +74,13 @@ Add the same socket command to `settings.json`:
   "context_servers": {
     "brainlayer": {
       "command": {
-        "path": "brainlayer-mcp-stdio-bridge",
-        "args": []
+        "path": "socat",
+        "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]
       }
     }
   }
 }
 ```
-
-Use the absolute executable path here too if Zed cannot find the command from
-its GUI environment.
 
 ### VS Code
 
@@ -96,7 +90,8 @@ Add to `.vscode/mcp.json`:
 {
   "servers": {
     "brainlayer": {
-      "command": "brainlayer-mcp-stdio-bridge"
+      "command": "socat",
+      "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]
     }
   }
 }

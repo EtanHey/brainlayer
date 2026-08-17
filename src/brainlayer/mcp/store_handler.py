@@ -691,7 +691,11 @@ def _pending_store_has_data(path) -> bool:
 
 def rearm_stranded_pending_stores() -> bool:
     """Re-arm the legacy replay if a prior process died with pending-stores.jsonl
-    non-empty after acknowledging the write. Returns True when a replay was armed."""
+    non-empty after acknowledging the write. Returns True when a replay was armed.
+
+    Runtime replay for agent writes is owned by BrainBar; this helper remains for
+    the Python library write path and regression tests only.
+    """
     path = _get_pending_store_path()
     if _pending_store_has_data(path):
         _schedule_pending_store_replay()

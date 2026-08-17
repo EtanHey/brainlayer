@@ -16,7 +16,6 @@ def test_pyproject_declares_pure_engine_package_boundary() -> None:
     assert payload["project"]["name"] == "brainlayer"
     assert payload["project"]["scripts"] == {
         "brainlayer": "brainlayer.cli:app",
-        "brainlayer-mcp": "brainlayer.mcp:serve",
         "brainlayer-mcp-stdio-bridge": "brainlayer.mcp_stdio_bridge:main",
     }
     assert wheel_config["packages"] == ["src/brainlayer"]

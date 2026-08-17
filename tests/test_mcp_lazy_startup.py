@@ -1,17 +1,12 @@
 """Lazy-connect / non-blocking MCP startup contract (fix/mcp-lazy-connect).
 
 Root cause of the Codex boot-hang: brainlayer-mcp's initialize+tools/list
-handshake was delayed 4-9s because serve() -> validate_config() eagerly imported
-`torch` (via embeddings.py module-load), routinely exceeding Codex's
-startup_timeout_sec=5. The DB itself was never the blocker (the store is already
-lazy; the handshake never touches it).
+handshake was delayed 4-9s because serve() eagerly imported `torch` (via
+embeddings.py module-load), routinely exceeding Codex's startup_timeout_sec=5.
 
-These tests pin the contract: importing the MCP/embeddings modules and running
-startup validation must NOT pull in torch, and the live handshake must return
+These tests pin the contract for the live stdio-bridge path: importing the MCP/
+embeddings modules must NOT pull in torch, and the bridge handshake must return
 quickly even when the DB is held under an exclusive write lock.
-
-Each "no torch" check runs in a fresh interpreter subprocess so a torch import
-elsewhere in the test session can't mask a regression.
 """
 
 import json
@@ -62,12 +57,6 @@ def test_importing_embeddings_does_not_load_torch():
         "print('torch' in sys.modules or 'sentence_transformers' in sys.modules)"
     )
     assert out == "False", "importing brainlayer.embeddings eagerly loaded torch/sentence_transformers"
-
-
-def test_validate_config_does_not_load_torch():
-    """serve()'s startup validation must not pull torch onto the critical path."""
-    out = _run_snippet("import sys, brainlayer.mcp as m; m.validate_config(); print('torch' in sys.modules)")
-    assert out == "False", "validate_config() eagerly imported torch (blocks the MCP handshake)"
 
 
 def test_get_embedding_model_is_cheap_wrapper():
@@ -138,7 +127,7 @@ def test_handshake_fast_under_db_write_lock():
     assert ready_event.wait(timeout=10), "could not acquire exclusive DB lock"
 
     proc = subprocess.Popen(
-        [sys.executable, "-c", "from brainlayer.mcp import serve; serve()"],
+        [sys.executable, "-c", "from brainlayer.mcp_stdio_bridge import main; main()"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,

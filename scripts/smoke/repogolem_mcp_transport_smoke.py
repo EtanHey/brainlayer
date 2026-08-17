@@ -55,7 +55,7 @@ async def smoke_context(name: str, *, cwd: Path, timeout: float, live_store: boo
         env["BRAINLAYER_ARBITRATED"] = "1"
     server = StdioServerParameters(
         command=sys.executable,
-        args=["-c", "from brainlayer.mcp import serve; serve()"],
+        args=["-c", "from brainlayer.mcp_stdio_bridge import main; main()"],
         cwd=str(cwd),
         env=env,
     )

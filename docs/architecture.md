@@ -33,7 +33,7 @@ graph TD
     end
 
     subgraph Interfaces
-        E1["MCP Server<br/>brainlayer-mcp (8 tools)"]
+        E1["MCP Server<br/>BrainBar socket via UNIX-CONNECT:/tmp/brainbar.sock"]
         E2["CLI<br/>brainlayer direct SQLite"]
         E4["TUI Dashboard"]
     end

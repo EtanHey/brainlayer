@@ -33,13 +33,15 @@ Add to your MCP config (`~/.claude.json` for Claude Code):
 {
   "mcpServers": {
     "brainlayer": {
-      "command": "brainlayer-mcp"
+      "command": "socat",
+      "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]
     }
   }
 }
 ```
 
-That's it. Your agent now remembers everything.
+That's it. Your agent now remembers everything. BrainBar must be running and
+owning `/tmp/brainbar.sock`.
 
 <details>
 <summary>Other editors (Cursor, Zed, VS Code)</summary>
@@ -49,7 +51,8 @@ That's it. Your agent now remembers everything.
 {
   "mcpServers": {
     "brainlayer": {
-      "command": "brainlayer-mcp"
+      "command": "socat",
+      "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]
     }
   }
 }
@@ -60,7 +63,7 @@ That's it. Your agent now remembers everything.
 {
   "context_servers": {
     "brainlayer": {
-      "command": { "path": "brainlayer-mcp" }
+      "command": { "path": "socat", "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"] }
     }
   }
 }
@@ -71,7 +74,8 @@ That's it. Your agent now remembers everything.
 {
   "servers": {
     "brainlayer": {
-      "command": "brainlayer-mcp"
+      "command": "socat",
+      "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]
     }
   }
 }
@@ -195,7 +199,7 @@ Two-week stability sprint behind the next presentation. Every line below traces 
 - Restores the resizable dashboard panel via a floating `NSPanel` (`BrainBarDashboardPanelController`) instead of MenuBarExtra(.window).
 - Adds trigram FTS5 (`chunks_fts_trigram`) with a startup-safety guard: synchronous backfill is skipped when the desynced trigram table exceeds 10K chunks, so BrainBar never blocks the live ~360K-chunk database before `/tmp/brainbar.sock` opens.
 - KG atlas presentation (importance-based altitude filtering, region backdrops, deterministic seeding) and `AgentActivityMonitor` for live CLI presence on the dashboard.
-- Pub/sub plane on `/tmp/brainbar.sock` is explicitly preserved (`brain_subscribe`, `brain_unsubscribe`, `notifications/claude/channel`) — only search/store handlers move to the Python MCP path.
+- Pub/sub plane on `/tmp/brainbar.sock` is explicitly preserved (`brain_subscribe`, `brain_unsubscribe`, `notifications/claude/channel`) — agent MCP is BrainBar; Python keeps library handlers only.
 
 **Phase 5 ship wave (2026-05-17)** — ingest hygiene + KG regression fix
 - **Diagnostic + PreCompact noise rejection at ingest** ([#289](https://github.com/EtanHey/brainlayer/pull/289)) — `recursive_mcp_output_reason` now detects BrainLayer-MCP-unavailable diagnostics and PreCompact checkpoint payloads, rejecting them at the watcher / drain / store ingestion heads so tooling failures do not become durable memory. The hybrid reranker *demotes* (not removes) any chunk tagged with precompact/quarantine signals so explicit `include_checkpoints` callers still see them. Pre-push gate: `1995 passed, 9 skipped, 75 deselected, 1 xfailed`. A dry-run-first `scripts/quarantine_noise.py` is available for back-filling existing infra noise — live DB mutation requires explicit `--apply`.
