@@ -19,9 +19,11 @@ from mcp.types import (
     CallToolResult,
     CompleteResult,
     Completion,
-    Tool as _McpTool,
     TextContent,
     ToolAnnotations,
+)
+from mcp.types import (
+    Tool as _McpTool,
 )
 
 from ..config import DEFAULT_REALTIME_ENRICH_SINCE_HOURS

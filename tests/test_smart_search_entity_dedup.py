@@ -395,6 +395,6 @@ class TestMCPSchemaChanges:
 
     def test_server_instructions_mention_brain_expand(self):
         """Server instructions mention brain_expand tool."""
-        from brainlayer.mcp import server
+        from brainlayer.mcp import SERVER_INSTRUCTIONS
 
-        assert "brain_expand" in server.instructions
+        assert "brain_expand" in SERVER_INSTRUCTIONS
