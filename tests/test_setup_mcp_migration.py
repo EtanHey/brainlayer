@@ -25,6 +25,31 @@ MULTILINE_CODEX_TOML = (
 )
 
 
+def test_backup_config_files_with_same_basename_do_not_collide(tmp_path: Path, monkeypatch):
+    from brainlayer import setup as setup_module
+
+    home = tmp_path / "home"
+    monkeypatch.setattr(
+        setup_module,
+        "_config_backup_dir",
+        lambda: home / ".local" / "share" / "brainlayer" / "config-backups",
+    )
+    repo_a = tmp_path / "repoA" / ".mcp.json"
+    repo_b = tmp_path / "repoB" / ".mcp.json"
+    repo_a.parent.mkdir()
+    repo_b.parent.mkdir()
+    repo_a.write_text("from-a", encoding="utf-8")
+    repo_b.write_text("from-b", encoding="utf-8")
+
+    bak_a = setup_module._backup_config_file(repo_a)
+    bak_b = setup_module._backup_config_file(repo_b)
+
+    assert bak_a != bak_b
+    assert bak_a.exists() and bak_b.exists()
+    assert bak_a.read_text(encoding="utf-8") == "from-a"
+    assert bak_b.read_text(encoding="utf-8") == "from-b"
+
+
 def test_setup_toml_migrator_preserves_multiline_args_and_unrelated_keys(tmp_path: Path):
     from brainlayer.setup import migrate_legacy_mcp_configs
 

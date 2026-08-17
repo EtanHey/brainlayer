@@ -100,7 +100,7 @@ def _legacy_python_mcp_config_issues(
             continue
         try:
             text = path.read_text(encoding="utf-8")
-        except OSError as exc:
+        except (OSError, UnicodeDecodeError) as exc:
             issues.append(
                 DoctorIssue(
                     "mcp_config_unreadable",

@@ -5,6 +5,21 @@ from __future__ import annotations
 from pathlib import Path
 
 
+def test_doctor_does_not_crash_on_invalid_utf8_mcp_config(tmp_path: Path):
+    from brainlayer.doctor import _legacy_python_mcp_config_issues
+
+    bad = tmp_path / ".mcp.json"
+    bad.write_bytes(b"\xff\xfe not utf-8")
+    good = tmp_path / "good.json"
+    good.write_text(
+        '{"mcpServers":{"brainlayer":{"command":"socat","args":["STDIO","UNIX-CONNECT:/tmp/brainbar.sock"]}}}\n',
+        encoding="utf-8",
+    )
+    issues = _legacy_python_mcp_config_issues([bad, good])
+    assert any(i.code == "mcp_config_unreadable" and i.details.get("config_path") == str(bad) for i in issues)
+    assert not any(i.code == "legacy_python_mcp_entrypoint" for i in issues)
+
+
 def test_doctor_reports_unparseable_json_config_as_fatal(tmp_path: Path):
     from brainlayer.doctor import _legacy_python_mcp_config_issues
 

@@ -1,9 +1,8 @@
 {
-  "_comment": "Requires BrainBar running and owning /tmp/brainbar.sock. Prefer socat; brainlayer setup rewrites bridge/bun/brainlayer-mcp leftovers to this form.",
+  "_comment": "Requires BrainBar running and owning /tmp/brainbar.sock. brainlayer-mcp-stdio-bridge reconnects and needs no Homebrew socat (GUI hosts lack /opt/homebrew/bin on PATH). Manual alternative: {\"command\":\"socat\",\"args\":[\"STDIO\",\"UNIX-CONNECT:/tmp/brainbar.sock\"]}.",
   "mcpServers": {
     "brainlayer": {
-      "command": "socat",
-      "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]
+      "command": "brainlayer-mcp-stdio-bridge"
     }
   }
 }

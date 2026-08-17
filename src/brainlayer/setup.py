@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -43,7 +44,8 @@ def _backup_config_file(target_path: Path) -> Path:
     backup_dir = _config_backup_dir()
     backup_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d%H%M%S")
-    backup = backup_dir / f"{target_path.name}.{stamp}.{os.getpid()}.bak"
+    digest = hashlib.sha256(str(target_path.resolve()).encode("utf-8")).hexdigest()[:12]
+    backup = backup_dir / f"{target_path.name}.{digest}.{stamp}.{os.getpid()}.bak"
     backup.write_bytes(target_path.read_bytes())
     backup.chmod(target_path.stat().st_mode & 0o777)
     return backup

@@ -34,5 +34,7 @@ def test_agent_mcp_example_configs_prefer_socket_or_bridge() -> None:
         brainlayer = config["mcpServers"]["brainlayer"]
         command = brainlayer.get("command", "")
         assert Path(str(command)).name != "brainlayer-mcp", str(path)
+        if path == plugin_config:
+            assert Path(str(command)).name == "brainlayer-mcp-stdio-bridge", str(path)
         serialized = json.dumps(config)
         assert '"command": "brainlayer-mcp"' not in serialized

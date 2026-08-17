@@ -65,6 +65,32 @@ def test_owned_paths_are_one_level_deep_and_skip_scratch_dirs(tmp_path: Path):
     assert not any(p.parent.name == "nested" for p in paths)
 
 
+def test_canonical_socket_requires_exact_args_not_membership():
+    from brainlayer.mcp_socket_config import is_canonical_socket_mcp_server, needs_socket_migration
+
+    dirty = {
+        "command": "socat",
+        "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock", "--exec", "/bin/evil"],
+    }
+    nested = {
+        "command": "socat",
+        "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock", {"x": 1}],
+    }
+    assert is_canonical_socket_mcp_server(SOCKET_MCP) is True
+    assert is_canonical_socket_mcp_server(dirty) is False
+    assert is_canonical_socket_mcp_server(nested) is False
+    assert needs_socket_migration("brainlayer", dirty)
+    assert needs_socket_migration("brainlayer", nested)
+
+
+def test_mcp_server_public_summary_does_not_stringify_dict_command():
+    from brainlayer.mcp_socket_config import mcp_server_public_summary
+
+    summary = mcp_server_public_summary({"command": {"kind": "exec", "token": "sk-SUPERSECRET"}, "args": ["-x"]})
+    assert "sk-SUPERSECRET" not in str(summary)
+    assert summary["command"] == {"shape": "dict"}
+
+
 def test_socket_server_preserving_strips_remote_http_transport_keys():
     from brainlayer.mcp_socket_config import socket_server_preserving
 

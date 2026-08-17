@@ -44,10 +44,9 @@ def is_canonical_socket_mcp_server(server: object) -> bool:
     if mcp_command_basename(server) != "socat":
         return False
     args = server.get("args")
-    if not isinstance(args, list):
+    if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
         return False
-    string_args = [arg for arg in args if isinstance(arg, str)]
-    return "STDIO" in string_args and "UNIX-CONNECT:/tmp/brainbar.sock" in string_args
+    return args == ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]
 
 
 def is_canonical_stdio_bridge_mcp_server(server: object) -> bool:
@@ -154,7 +153,11 @@ def mcp_server_public_summary(server: object) -> dict[str, Any]:
     summary: dict[str, Any] = {}
     command = server.get("command")
     if command is not None:
-        summary["command"] = mcp_command_basename(server) or str(command)
+        basename = mcp_command_basename(server)
+        if basename:
+            summary["command"] = basename
+        else:
+            summary["command"] = {"shape": type(command).__name__}
     args = server.get("args")
     if isinstance(args, list):
         summary["args_count"] = len(args)
