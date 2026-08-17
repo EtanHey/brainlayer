@@ -208,11 +208,11 @@ def migrate_legacy_mcp_configs(
     *,
     bridge_command: str | None = None,
 ) -> McpMigrationReport:
-    """Rewrite any non-socket BrainLayer MCP entry to the canonical socat form.
+    """Rewrite owned BrainLayer MCP entries (by server name) to the canonical socat form.
 
-    Shape-matcher (not name-matcher): bun wrappers, stdio-bridge, deleted
-    ``brainlayer-mcp``, and python entrypoints are all rewritten. Each rewritten
-    file is backed up under ~/.local/share/brainlayer/config-backups/ first.
+    Name-matcher: only ``mcpServers`` keys in ``BRAINLAYER_SERVER_NAMES`` are
+    rewritten when not already socat socket or ``brainlayer-mcp-stdio-bridge``.
+    Each rewritten file is backed up under ~/.local/share/brainlayer/config-backups/.
     Unreadable/malformed inputs and failed writes are reported in ``skipped``.
     """
     del bridge_command  # socket form is the only rewrite target
