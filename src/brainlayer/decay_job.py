@@ -51,7 +51,7 @@ def run_decay_job(
                 """
                 SELECT rowid
                 FROM chunks
-                WHERE archived = 0 AND rowid > ?
+                WHERE archived_at IS NULL AND rowid > ?
                 ORDER BY rowid
                 LIMIT ?
                 """,
@@ -115,37 +115,26 @@ def run_decay_job(
                     + """
                     UPDATE chunks
                     SET decay_score = (SELECT new_decay_score FROM batch WHERE batch.rowid = chunks.rowid),
-                        archived = CASE
-                            WHEN (SELECT pinned FROM batch WHERE batch.rowid = chunks.rowid) = 1 THEN 0
-                            WHEN (SELECT new_decay_score FROM batch WHERE batch.rowid = chunks.rowid) < ? THEN 1
-                            ELSE 0
-                        END,
                         archived_at = CASE
                             WHEN (SELECT pinned FROM batch WHERE batch.rowid = chunks.rowid) = 1 THEN NULL
                             WHEN (SELECT new_decay_score FROM batch WHERE batch.rowid = chunks.rowid) < ? THEN ?
                             ELSE NULL
-                        END,
-                        status = CASE
-                            WHEN (SELECT new_decay_score FROM batch WHERE batch.rowid = chunks.rowid) < ? THEN 'archived'
-                            ELSE status
                         END
                     WHERE rowid IN (SELECT rowid FROM batch)
-                    RETURNING rowid, decay_score, archived, pinned
+                    RETURNING rowid, decay_score, archived_at, pinned
                     """,
                     (
                         current_time,
                         current_time,
                         *batch_rowids,
                         ARCHIVE_THRESHOLD,
-                        ARCHIVE_THRESHOLD,
                         current_time,
-                        ARCHIVE_THRESHOLD,
                     ),
                 )
             )
         rows_processed += len(updated_rows)
         pinned_rows += sum(int(bool(row[3])) for row in updated_rows)
-        archived_rows += sum(int(row[2]) for row in updated_rows)
+        archived_rows += sum(1 for row in updated_rows if row[2] not in (None, 0, "0"))
         total_decay += sum(float(row[1]) for row in updated_rows)
         batch_number += 1
         if not dry_run and batch_number % 3 == 0:

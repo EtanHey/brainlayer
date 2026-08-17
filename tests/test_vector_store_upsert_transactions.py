@@ -161,7 +161,7 @@ def test_upsert_chunks_preserves_dedupe_and_repeat_upsert_shape(isolated_store, 
     assert isolated_store.upsert_chunks(chunks, [_embedding(1), _embedding(2), _embedding(3)]) == 3
 
     cursor = isolated_store.conn.cursor()
-    active_rows = cursor.execute("SELECT id FROM chunks WHERE COALESCE(archived, 0) = 0 ORDER BY id").fetchall()
+    active_rows = cursor.execute("SELECT id FROM chunks WHERE archived_at IS NULL ORDER BY id").fetchall()
     aliases = cursor.execute(
         "SELECT old_chunk_id, canonical_chunk_id FROM chunk_id_alias ORDER BY old_chunk_id"
     ).fetchall()

@@ -63,8 +63,6 @@ MISSING_EMBEDDINGS_SQL = """
       AND c.archived_at IS NULL
       AND c.superseded_by IS NULL
       AND c.aggregated_into IS NULL
-      AND COALESCE(c.archived, 0) = 0
-      AND COALESCE(c.status, 'active') = 'active'
 """
 
 ENRICHMENT_BACKLOG_SQL = """
@@ -78,8 +76,6 @@ ENRICHMENT_BACKLOG_SQL = """
       AND archived_at IS NULL
       AND superseded_by IS NULL
       AND aggregated_into IS NULL
-      AND COALESCE(archived, 0) = 0
-      AND COALESCE(status, 'active') = 'active'
 """
 
 

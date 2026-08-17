@@ -175,13 +175,12 @@ def test_execute_aggregates_cluster_and_preserves_searchability(tmp_path, capsys
     assert "ship" in (agg[6] or "")
     assert agg[7] == "sess-1"
     originals = conn.execute(
-        "SELECT value_type FROM chunks WHERE id IN ('rt-a1','rt-a2','rt-a3') AND aggregated_into = ? AND archived = 1 AND archived_at IS NOT NULL",
+        "SELECT archived_at FROM chunks WHERE id IN ('rt-a1','rt-a2','rt-a3') AND aggregated_into = ? AND archived_at IS NOT NULL",
         (agg[0],),
     ).fetchall()
     assert len(originals) == 3
-    assert {row[0] for row in originals} == {"ARCHIVED"}
     untouched = conn.execute(
-        "SELECT COUNT(*) FROM chunks WHERE id IN ('rt-b1','rt-b2','rt-bad-metadata') AND aggregated_into IS NULL AND archived = 0"
+        "SELECT COUNT(*) FROM chunks WHERE id IN ('rt-b1','rt-b2','rt-bad-metadata') AND aggregated_into IS NULL AND archived_at IS NULL"
     ).fetchone()[0]
     assert untouched == 3
     match = conn.execute(

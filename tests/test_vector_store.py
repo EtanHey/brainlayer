@@ -1,4 +1,9 @@
-"""Tests for vector_store.py — date filtering, search metadata, schema."""
+"""Tests for vector_store.py — date filtering, search metadata, schema.
+
+Archive collapse (repair c): archive_chunk writes archived_at only. Behavior is
+covered by tests/test_archive_collapse.py and tests/test_chunk_lifecycle.py on
+temp DBs; this module stays the opt-in live-DB integration suite.
+"""
 
 import os
 

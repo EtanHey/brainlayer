@@ -1,3 +1,5 @@
+"""Repair (c): hotlane eligibility uses archived_at + lineage, not archived/status twins."""
+
 from __future__ import annotations
 
 import importlib

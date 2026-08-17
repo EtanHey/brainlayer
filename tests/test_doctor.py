@@ -13,6 +13,8 @@ from typer.testing import CliRunner
 
 from brainlayer.vector_store import VectorStore
 
+# Repair (c): doctor backlog counts use archived_at, not archived/status twins.
+
 NOW = datetime(2026, 6, 22, 12, 0, tzinfo=UTC)
 
 

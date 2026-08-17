@@ -267,8 +267,6 @@ def _recent_unvectored_chunks(db_path: Path, now: datetime, window_hours: int) -
               AND c.archived_at IS NULL
               AND c.superseded_by IS NULL
               AND c.aggregated_into IS NULL
-              AND COALESCE(c.archived, 0) = 0
-              AND COALESCE(c.status, 'active') = 'active'
             """,
             (cutoff,),
         ).fetchone()
@@ -289,8 +287,6 @@ def _enrichment_backlog(db_path: Path) -> int:
               AND archived_at IS NULL
               AND superseded_by IS NULL
               AND aggregated_into IS NULL
-              AND COALESCE(archived, 0) = 0
-              AND COALESCE(status, 'active') = 'active'
             """
         ).fetchone()
     return int(row[0] if row else 0)

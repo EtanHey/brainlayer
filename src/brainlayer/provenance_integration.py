@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from .archive_lifecycle import lifecycle_active_clauses_present
 from .provenance import (
     AGENT_INFERENCE,
     RAW_ETAN_DIRECT,
@@ -582,14 +583,7 @@ def _entity_chunk_rows(conn, entity_ids: list[str], *, include_archived: bool = 
     status_filter = ""
     lifecycle_filters: list[str] = []
     if not include_archived:
-        if "status" in chunk_cols:
-            lifecycle_filters.append("COALESCE(c.status, 'active') NOT IN ('archived', 'superseded')")
-        if "superseded_by" in chunk_cols:
-            lifecycle_filters.append("c.superseded_by IS NULL")
-        if "archived_at" in chunk_cols:
-            lifecycle_filters.append("c.archived_at IS NULL")
-        if "archived" in chunk_cols:
-            lifecycle_filters.append("COALESCE(c.archived, 0) = 0")
+        lifecycle_filters.extend(lifecycle_active_clauses_present(chunk_cols, "c"))
     if lifecycle_filters:
         status_filter = "AND " + " AND ".join(lifecycle_filters)
 
@@ -774,31 +768,17 @@ def _archive_chunk(store, conn, chunk_id: str) -> bool:
     if not conn.execute("SELECT 1 FROM chunks WHERE id = ?", (chunk_id,)).fetchone():
         return False
     cols = _columns(conn, "chunks")
-    updates = []
-    params: list[Any] = []
-    if "status" in cols:
-        updates.append("status = 'archived'")
-    if "archived" in cols:
-        updates.append("archived = 1")
-    if "archived_at" in cols:
-        updates.append("archived_at = ?")
-        params.append(datetime.now(timezone.utc).isoformat())
-    if not updates:
-        updates.append("status = 'archived'")
-        conn.execute("ALTER TABLE chunks ADD COLUMN status TEXT DEFAULT 'active'")
-    params.append(chunk_id)
-    conn.execute(f"UPDATE chunks SET {', '.join(updates)} WHERE id = ?", params)
+    if "archived_at" not in cols:
+        conn.execute("ALTER TABLE chunks ADD COLUMN archived_at TEXT")
+    conn.execute(
+        "UPDATE chunks SET archived_at = ? WHERE id = ?",
+        (datetime.now(timezone.utc).isoformat(), chunk_id),
+    )
     return True
 
 
 def _is_active_row(row: dict[str, Any]) -> bool:
-    status = str(row.get("status") or "active").lower()
-    return (
-        status not in {"archived", "superseded"}
-        and not row.get("superseded_by")
-        and not row.get("archived_at")
-        and not bool(row.get("archived"))
-    )
+    return not row.get("superseded_by") and not row.get("aggregated_into") and not row.get("archived_at")
 
 
 def _is_superseded_row(row: dict[str, Any]) -> bool:

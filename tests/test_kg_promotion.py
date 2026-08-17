@@ -3,6 +3,8 @@ import json
 from brainlayer.pipeline.digest import entity_lookup
 from brainlayer.vector_store import VectorStore
 
+# Repair (c): promotion skips archived_at/lineage, not status='archived'.
+
 
 def _insert_chunk(
     store: VectorStore,

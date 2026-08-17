@@ -4,6 +4,7 @@ TDD: Tests written BEFORE implementation.
 
 Goal: brain_store returns immediately without blocking on embedding generation.
 Embeddings are generated in the background and backfilled.
+Repair (c): embed_pending_chunks excludes archived_at/lineage, not archived/status twins.
 """
 
 import threading
@@ -315,8 +316,8 @@ class TestBackgroundEmbedder:
         cursor.execute("UPDATE chunks SET archived_at = '2026-06-14T00:00:00+00:00' WHERE id = 'archived-pending'")
         cursor.execute("UPDATE chunks SET superseded_by = 'replacement' WHERE id = 'superseded-pending'")
         cursor.execute("UPDATE chunks SET aggregated_into = 'aggregate' WHERE id = 'aggregated-pending'")
-        cursor.execute("UPDATE chunks SET archived = 1 WHERE id = 'archived-flag-pending'")
-        cursor.execute("UPDATE chunks SET status = 'inactive' WHERE id = 'inactive-pending'")
+        cursor.execute("UPDATE chunks SET archived_at = '2026-06-14T00:00:00+00:00' WHERE id = 'archived-flag-pending'")
+        cursor.execute("UPDATE chunks SET archived_at = '2026-06-14T00:00:00+00:00' WHERE id = 'inactive-pending'")
 
         count = embed_pending_chunks(store=store, embed_fn=fast_embed, batch_size=20)
 

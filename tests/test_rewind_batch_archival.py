@@ -185,14 +185,19 @@ def test_drain_archives_only_reverted_offset_window_and_fails_closed_for_legacy_
     assert not list(queue_dir.glob("*.jsonl"))
     with sqlite3.connect(db_path) as conn:
         rows = dict(conn.execute("SELECT id, archived_at IS NOT NULL FROM chunks"))
-        lifecycle = conn.execute("SELECT value_type, archived, status FROM chunks WHERE id = 'reverted-a'").fetchone()
+        lifecycle = conn.execute(
+            "SELECT archived_at IS NOT NULL, value_type, archived, status FROM chunks WHERE id = 'reverted-a'"
+        ).fetchone()
 
     assert {chunk_id for chunk_id, archived in rows.items() if archived} == {
         "reverted-a",
         "reverted-b",
         "already-archived",
     }
-    assert lifecycle == ("ARCHIVED", 1, "archived")
+    assert lifecycle[0] == 1
+    assert (lifecycle[1] or "").lower() != "archived"
+    assert lifecycle[2] in (0, None)
+    assert lifecycle[3] != "archived"
 
 
 def test_watcher_offset_is_persisted_and_same_source_replay_reactivates_archived_chunk(

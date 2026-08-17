@@ -1017,11 +1017,6 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 ),
             )
 
-        cursor.execute("""
-            UPDATE chunks
-            SET archived = 1
-            WHERE lower(value_type) = 'archived' AND COALESCE(archived, 0) = 0
-        """)
         if needs_atomic_brick_backfill:
             self._backfill_atomic_brick_columns(cursor)
             cursor.execute("""
@@ -1056,9 +1051,11 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         cursor.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_chunks_brick_id ON chunks(brick_id) WHERE brick_id IS NOT NULL"
         )
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_decay_score ON chunks(decay_score) WHERE archived = 0")
         cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_chunks_last_retrieved ON chunks(last_retrieved) WHERE archived = 0"
+            "CREATE INDEX IF NOT EXISTS idx_chunks_decay_score ON chunks(decay_score) WHERE archived_at IS NULL"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chunks_last_retrieved ON chunks(last_retrieved) WHERE archived_at IS NULL"
         )
 
         # Vector table (1024 dims for bge-large-en-v1.5)
@@ -1948,24 +1945,18 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         cursor.execute("""
             UPDATE chunks
             SET status = CASE
-                WHEN COALESCE(archived, 0) = 1
-                  OR lower(value_type) = 'archived'
-                  OR archived_at IS NOT NULL
-                    THEN 'archived'
                 WHEN superseded_by IS NOT NULL
                   OR aggregated_into IS NOT NULL
                     THEN 'superseded'
                 ELSE 'active'
             END
             WHERE status IS NULL
-               OR status NOT IN ('active', 'superseded', 'archived')
+               OR status NOT IN ('active', 'superseded')
+               OR status = 'archived'
                OR (
                     status = 'active'
                     AND (
-                        COALESCE(archived, 0) = 1
-                        OR lower(value_type) = 'archived'
-                        OR archived_at IS NOT NULL
-                        OR superseded_by IS NOT NULL
+                        superseded_by IS NOT NULL
                         OR aggregated_into IS NOT NULL
                     )
                )
@@ -2818,7 +2809,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         return True
 
     def archive_chunk(self, chunk_id: str) -> bool:
-        """Soft-delete a chunk by setting value_type to ARCHIVED and archived_at."""
+        """Soft-delete a chunk by setting archived_at. Archive is time or NULL."""
         cursor = self.conn.cursor()
         rows = list(cursor.execute("SELECT id FROM chunks WHERE id = ?", (chunk_id,)))
         if not rows:
@@ -2827,7 +2818,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
 
         now = datetime.now(timezone.utc).isoformat()
         cursor.execute(
-            "UPDATE chunks SET value_type = 'ARCHIVED', archived = 1, archived_at = ?, status = 'archived' WHERE id = ?",
+            "UPDATE chunks SET archived_at = ? WHERE id = ?",
             (now, chunk_id),
         )
         self._delete_chunk_vector(cursor, chunk_id)
@@ -2874,23 +2865,20 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 return name
             return f"NULL AS {output}"
 
-        archived_expr = "COALESCE(archived, 0) AS archived" if "archived" in cols else "0 AS archived"
+        from .archive_lifecycle import lifecycle_active_clauses_present
+
+        archived_expr = (
+            "(CASE WHEN archived_at IS NOT NULL THEN 1 ELSE 0 END) AS archived"
+            if "archived_at" in cols
+            else "0 AS archived"
+        )
         status_expr = "COALESCE(status, 'active') AS status" if "status" in cols else "'active' AS status"
         chunk_origin_expr = (
             "chunk_origin AS chunk_origin" if "chunk_origin" in cols else f"'{CHUNK_ORIGIN_UNKNOWN}' AS chunk_origin"
         )
         lifecycle_clauses = []
         if not include_archived:
-            if "superseded_by" in cols:
-                lifecycle_clauses.append("superseded_by IS NULL")
-            if "aggregated_into" in cols:
-                lifecycle_clauses.append("aggregated_into IS NULL")
-            if "archived_at" in cols:
-                lifecycle_clauses.append("archived_at IS NULL")
-            if "archived" in cols:
-                lifecycle_clauses.append("COALESCE(archived, 0) = 0")
-            if "status" in cols:
-                lifecycle_clauses.append("COALESCE(status, 'active') = 'active'")
+            lifecycle_clauses.extend(lifecycle_active_clauses_present(cols))
         if "invalid_at" in cols:
             lifecycle_clauses.append("invalid_at IS NULL")
         lifecycle_filter = "".join(f" AND {clause}" for clause in lifecycle_clauses)

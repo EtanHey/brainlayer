@@ -7,6 +7,8 @@ import pytest
 
 from brainlayer.vector_store import VectorStore
 
+# Repair (c): decay archives via archived_at only.
+
 
 @pytest.fixture
 def store(tmp_path):
@@ -216,9 +218,8 @@ def test_decay_job_updates_scores_and_archives_stale_chunks(store):
         "SELECT decay_score, archived, archived_at, status FROM chunks WHERE id = 'archive-target'"
     ).fetchone()
     assert row[0] == pytest.approx(0.05)
-    assert row[1] == 1
+    assert row[2] is not None
     assert float(row[2]) == 1_800_000_000.0
-    assert row[3] == "archived"
     assert stats["archived_rows"] >= 1
 
 
@@ -361,12 +362,12 @@ def test_archive_chunk_sets_archived_flag(store):
     assert store.archive_chunk("archive-flag") is True
 
     row = cursor.execute("SELECT archived, archived_at, value_type FROM chunks WHERE id = 'archive-flag'").fetchone()
-    assert row[0] == 1
+    assert row[0] in (0, None)
     assert row[1] is not None
-    assert row[2] == "ARCHIVED"
+    assert (row[2] or "").lower() != "archived"
 
 
-def test_init_backfills_archived_flag_for_preexisting_archived_rows(tmp_path):
+def test_init_does_not_backfill_archived_flag_from_value_type(tmp_path):
     database_path = tmp_path / "archived-backfill.db"
     connection = sqlite3.connect(database_path)
     connection.execute(
@@ -433,4 +434,4 @@ def test_init_backfills_archived_flag_for_preexisting_archived_rows(tmp_path):
     row = store.conn.cursor().execute("SELECT archived FROM chunks WHERE id = 'legacy-archived'").fetchone()
     store.close()
 
-    assert row[0] == 1
+    assert row[0] in (0, None)

@@ -136,7 +136,17 @@ class TestArchiveChunkLifecycle:
 
         chunk = store.get_chunk(result["id"], include_archived=True)
         assert chunk["archived_at"] is not None
-        assert chunk["value_type"] == "ARCHIVED"
+        after = (
+            store.conn.cursor()
+            .execute(
+                "SELECT archived, status, value_type FROM chunks WHERE id = ?",
+                (result["id"],),
+            )
+            .fetchone()
+        )
+        assert after[0] in (0, None)
+        assert after[1] != "archived"
+        assert (after[2] or "").lower() != "archived"
 
     def test_archive_timestamp_is_iso(self, store, mock_embed):
         result = _store_chunk(store, mock_embed, "Archive me")

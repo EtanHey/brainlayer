@@ -1,4 +1,7 @@
-"""Tests for the noise-quarantine script."""
+"""Tests for the noise-quarantine script.
+
+Repair (c): quarantine writes archived_at only, not archived/status twins.
+"""
 
 from __future__ import annotations
 
@@ -186,13 +189,11 @@ def test_apply_updates_only_quarantine_fields_and_tag(tmp_path: Path):
         ).fetchone()
 
     assert row_a[0] == 0
-    assert row_a[1] == 1
-    assert row_a[2] == "archived"
+    assert row_a[3] is not None
     assert row_a[4] is not None
     assert "quarantined/noise" in row_a[4]
     assert "keep-me" in row_a[4]
 
     assert row_b[0] == 0
-    assert row_b[1] == 1
-    assert row_b[2] == "archived"
+    assert row_b[3] is not None
     assert row_b[4] == "not-json"

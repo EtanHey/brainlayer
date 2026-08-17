@@ -34,10 +34,9 @@ def _candidate_rows(store: VectorStore, source_class: str | None) -> list[tuple[
             FROM chunks c
             JOIN chunk_fts_rowids r ON r.chunk_id = c.id
             WHERE {predicate}
-              AND COALESCE(c.archived, 0) = 0
+              AND c.archived_at IS NULL
               AND c.superseded_by IS NULL
               AND c.aggregated_into IS NULL
-              AND c.archived_at IS NULL
               AND LENGTH(COALESCE(c.content, '')) >= 16
             ORDER BY c.rowid
             LIMIT 250

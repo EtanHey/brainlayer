@@ -208,7 +208,6 @@ def _fetch_candidates(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         "source_file",
         "created_at",
         "importance",
-        "archived",
         "status",
         "archived_at",
     ]
@@ -255,7 +254,6 @@ def _candidate_map(rows: list[sqlite3.Row]) -> dict[str, dict[str, Any]]:
         existing.setdefault("tags", row["tags"])
         existing.setdefault("chunk_origin", row["chunk_origin"])
         existing.setdefault("importance", row["importance"])
-        existing.setdefault("archived", _to_bool(row["archived"]))
         existing.setdefault("status", row["status"])
         existing.setdefault("archived_at", row["archived_at"])
         existing.setdefault("content_preview", content_preview)
@@ -272,7 +270,7 @@ def _summarize_rows(rows: list[dict[str, Any]]) -> dict[str, int | float]:
         "total": len(rows),
         "f_infra_root": sum("f_infra_root" in row["reasons"] for row in rows),
         "precompact": sum("precompact" in row["reasons"] for row in rows),
-        "already_archived": sum(bool(_to_bool(row["archived"])) for row in rows),
+        "already_archived": sum(bool(row.get("archived_at")) for row in rows),
         "taggable": sum(_parse_tags(row["tags"]) is not None for row in rows),
     }
 
@@ -306,9 +304,7 @@ def _apply_quarantine(conn: sqlite3.Connection, rows: list[dict[str, Any]]) -> d
     base_stmt = """
         UPDATE chunks
            SET importance = ?,
-               archived = ?,
-               archived_at = ?,
-               status = ?
+               archived_at = ?
          WHERE id = ?
     """
     tag_stmt = "UPDATE chunks SET tags = ? WHERE id = ?"
@@ -319,7 +315,7 @@ def _apply_quarantine(conn: sqlite3.Connection, rows: list[dict[str, Any]]) -> d
         cursor = conn.cursor()
         cursor.execute("BEGIN IMMEDIATE")
         for row in rows:
-            cursor.execute(base_stmt, (0, 1, now, "archived", row["id"]))
+            cursor.execute(base_stmt, (0, now, row["id"]))
             updated += 1
             parsed = _parse_tags(row["tags"])
             if parsed is None:

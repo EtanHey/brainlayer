@@ -16,6 +16,7 @@ from typing import Any, Iterable
 import apsw
 import sqlite_vec
 
+from .archive_lifecycle import lifecycle_active_clauses_present
 from .paths import get_db_path
 
 logger = logging.getLogger(__name__)
@@ -241,6 +242,7 @@ def ensure_dedupe_schema(conn: Any) -> None:
         ("archived", "INTEGER DEFAULT 0"),
         ("superseded_by", "TEXT"),
         ("archived_at", "TEXT"),
+        ("aggregated_into", "TEXT"),
         ("seen_count", "INTEGER DEFAULT 1"),
         ("last_seen_at", "TEXT"),
         ("content_hash", "TEXT"),
@@ -278,8 +280,10 @@ def ensure_dedupe_schema(conn: Any) -> None:
         cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_chunks_simhash_band_{index} ON chunks(simhash_band_{index})")
 
 
-def _active_clause() -> str:
-    return "COALESCE(archived, 0) = 0 AND archived_at IS NULL AND superseded_by IS NULL"
+def _active_clause(conn: Any) -> str:
+    cols = {row[1] for row in conn.cursor().execute("PRAGMA table_info(chunks)")}
+    clauses = lifecycle_active_clauses_present(cols)
+    return " AND ".join(clauses) if clauses else "1=1"
 
 
 def _scope_key(project: Any, content_type: Any) -> tuple[str | None, str | None]:
@@ -322,7 +326,7 @@ def find_duplicate(
         SELECT id FROM chunks
         WHERE dedupe_hash = ?
           AND id != ?
-          AND {_active_clause()}
+          AND {_active_clause(conn)}
           AND {scope_sql}
         ORDER BY created_at ASC, id ASC
         LIMIT 1
@@ -339,7 +343,7 @@ def find_duplicate(
         f"""
         SELECT id, simhash, content, created_at FROM chunks
         WHERE id != ?
-          AND {_active_clause()}
+          AND {_active_clause(conn)}
           AND {scope_sql}
           AND simhash IS NOT NULL
           AND (
@@ -589,9 +593,7 @@ def merge_duplicate_chunk(
                 cursor.execute(
                     """
                     UPDATE chunks
-                    SET value_type = 'ARCHIVED',
-                        archived = 1,
-                        archived_at = COALESCE(archived_at, ?),
+                    SET archived_at = COALESCE(archived_at, ?),
                         superseded_by = COALESCE(superseded_by, ?)
                     WHERE id = ?
                     """,
@@ -863,7 +865,7 @@ def backfill_dedupe_database(
         ensure_dedupe_schema(conn)
         cursor = conn.cursor()
         cursor.execute("PRAGMA wal_checkpoint(FULL)")
-        total = cursor.execute(f"SELECT COUNT(*) FROM chunks WHERE {_active_clause()}").fetchone()[0]
+        total = cursor.execute(f"SELECT COUNT(*) FROM chunks WHERE {_active_clause(conn)}").fetchone()[0]
         seen_hashes: dict[tuple[str | None, str | None, str], str] = {}
         band_index: dict[tuple[str | None, str | None, str | None, str], set[str]] = {}
         fingerprints: dict[str, str] = {}
@@ -880,7 +882,7 @@ def backfill_dedupe_database(
                     SELECT id, content, created_at, tags, importance, half_life_days,
                            COALESCE(seen_count, 1), last_seen_at, project, content_type
                 FROM chunks
-                WHERE {_active_clause()}
+                WHERE {_active_clause(conn)}
                   AND (COALESCE(created_at, '') > ?
                        OR (COALESCE(created_at, '') = ? AND id > ?))
                 ORDER BY COALESCE(created_at, '') ASC, id ASC
@@ -898,7 +900,7 @@ def backfill_dedupe_database(
                 incoming = row_to_incoming(row)
                 chunk_id = str(incoming["id"])
                 still_active = cursor.execute(
-                    f"SELECT 1 FROM chunks WHERE id = ? AND {_active_clause()}",
+                    f"SELECT 1 FROM chunks WHERE id = ? AND {_active_clause(conn)}",
                     (chunk_id,),
                 ).fetchone()
                 if not still_active:

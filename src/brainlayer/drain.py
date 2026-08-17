@@ -474,18 +474,20 @@ def _merge_watcher_source_position(
     required = {"source", "source_file", "source_end_offset", "source_last_queued_at"}
     if not required.issubset(cols):
         return
+    select_cols = ["source", "source_file", "source_end_offset", "source_last_queued_at"]
+    has_archived_at = "archived_at" in cols
+    if has_archived_at:
+        select_cols.append("archived_at")
     row = conn.execute(
-        """
-        SELECT source, source_file, source_end_offset, source_last_queued_at, archived_at
-        FROM chunks WHERE id = ?
-        """,
+        f"SELECT {', '.join(select_cols)} FROM chunks WHERE id = ?",
         (chunk_id,),
     ).fetchone()
     if not row or row[0] != "realtime_watcher" or row[1] != incoming.get("source_file"):
         return
     existing_offset = row[2]
     incoming_offset = int(incoming["source_end_offset"])
-    reactivating = reactivate and row[4] is not None
+    existing_archived_at = row[4] if has_archived_at else None
+    reactivating = reactivate and existing_archived_at is not None
     if reactivating:
         merged_offset = incoming_offset
     else:
@@ -956,14 +958,10 @@ def _apply_rewind_archive(conn: apsw.Connection, event: dict[str, Any]) -> Apply
         logger.warning("Skipping malformed rewind archive bounds for %s", source_file or "unknown")
         return ApplyResult()
     cols = _columns(conn, "chunks")
-    if not {"source_end_offset", "source_last_queued_at", "archived_at", "value_type"}.issubset(cols):
+    if not {"source_end_offset", "source_last_queued_at", "archived_at"}.issubset(cols):
         raise RuntimeError("rewind archival schema is incomplete")
-    assignments = ["archived_at = ?", "value_type = 'ARCHIVED'"]
+    assignments = ["archived_at = ?"]
     params: list[Any] = [datetime.now(timezone.utc).isoformat()]
-    if "archived" in cols:
-        assignments.append("archived = 1")
-    if "status" in cols:
-        assignments.append("status = 'archived'")
     params.extend([source_file, conversation_id, new_offset, old_offset, detected_at])
     conn.execute(
         f"""
