@@ -330,7 +330,7 @@ def test_backup_wall_clock_timeout_has_safe_default_and_rejects_disable(monkeypa
     from brainlayer import backup_daily
 
     monkeypatch.delenv("BRAINLAYER_BACKUP_TIMEOUT_SECONDS", raising=False)
-    assert backup_daily._configured_backup_timeout_seconds() == 21600
+    assert backup_daily._configured_backup_timeout_seconds() == 28800
 
     monkeypatch.setenv("BRAINLAYER_BACKUP_TIMEOUT_SECONDS", "0")
     with pytest.raises(ValueError, match="must be at least 1 second"):
@@ -1165,7 +1165,7 @@ def test_launchd_installer_knows_backup_target():
     assert "<key>ExitTimeOut</key>" in plist
     assert "<integer>300</integer>" in plist
     assert "BRAINLAYER_BACKUP_CLIENT_TIMEOUT_SECONDS:=0" in wrapper
-    assert "BRAINLAYER_BACKUP_TIMEOUT_SECONDS:=21600" in wrapper
+    assert "BRAINLAYER_BACKUP_TIMEOUT_SECONDS:=28800" in wrapper
     assert "BRAINLAYER_BACKUP_SQLITE_CHECK_TIMEOUT_SECONDS:=0" in wrapper
     assert "BRAINLAYER_BACKUP_ATTEMPT_MAX_AGE_SECONDS:=86400" in wrapper
     assert "BRAINLAYER_BACKUP_LOG_PROVENANCE:=real" in wrapper
