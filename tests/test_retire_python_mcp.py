@@ -147,9 +147,7 @@ def test_setup_cli_migrates_all_four_owned_shapes_under_temp_home(tmp_path: Path
 
     claude.write_text(json.dumps({"mcpServers": {"brainlayer": {"command": "brainlayer-mcp"}}}) + "\n")
     cursor.write_text(json.dumps({"mcpServers": {"brainlayer": BRIDGE_VIA_BUN}}) + "\n")
-    gemini.write_text(
-        json.dumps({"mcpServers": {"brainlayer": {"command": "brainlayer-mcp-stdio-bridge"}}}) + "\n"
-    )
+    gemini.write_text(json.dumps({"mcpServers": {"brainlayer": {"command": "brainlayer-mcp-stdio-bridge"}}}) + "\n")
     codex.write_text(
         "[mcp_servers.brainlayer]\n"
         'command = "/Users/me/.bun/bin/bun"\n'

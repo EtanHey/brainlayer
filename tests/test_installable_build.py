@@ -610,9 +610,7 @@ def test_setup_mcp_migration_leaves_socket_form_untouched(tmp_path: Path) -> Non
     assert config_path.read_text(encoding="utf-8") == original_text
 
 
-def test_setup_mcp_migration_preserves_original_and_cleans_temp_on_replace_failure(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_setup_mcp_migration_preserves_original_and_cleans_temp_on_replace_failure(tmp_path: Path, monkeypatch) -> None:
     import brainlayer.setup as setup_helpers
 
     config_path = tmp_path / ".claude.json"
@@ -635,7 +633,6 @@ def test_setup_mcp_migration_preserves_original_and_cleans_temp_on_replace_failu
     assert setup_helpers.migrate_legacy_mcp_configs([config_path]) == []
     assert config_path.read_text(encoding="utf-8") == original_text
     assert not (tmp_path / f".{config_path.name}.{os.getpid()}.tmp").exists()
-
 
 
 def test_setup_mcp_migration_preserves_symlink_and_updates_target(tmp_path: Path) -> None:

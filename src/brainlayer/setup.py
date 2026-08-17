@@ -135,11 +135,7 @@ def _toml_servers_needing_migration(text: str) -> list[str]:
         payload = tomllib.loads(text)
     except tomllib.TOMLDecodeError:
         return []
-    return [
-        name
-        for name, server in iter_toml_mcp_servers(payload)
-        if needs_socket_migration(name, server)
-    ]
+    return [name for name, server in iter_toml_mcp_servers(payload) if needs_socket_migration(name, server)]
 
 
 def _rewrite_codex_mcp_servers_to_socket(text: str, names: list[str]) -> str:
@@ -162,10 +158,7 @@ def _rewrite_codex_mcp_servers_to_socket(text: str, names: list[str]) -> str:
                 if stripped.startswith("command") or stripped.startswith("args"):
                     continue
                 kept_lines.append(line)
-            new_body = (
-                'command = "socat"\n'
-                'args = ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]\n' + "".join(kept_lines)
-            )
+            new_body = 'command = "socat"\nargs = ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]\n' + "".join(kept_lines)
             result = result[: match.start()] + header + new_body + result[match.end() :]
     return result
 
