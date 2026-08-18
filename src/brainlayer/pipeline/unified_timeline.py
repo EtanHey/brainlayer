@@ -399,7 +399,9 @@ def _yield_gemini_messages(activity_path: Path) -> Iterator[UnifiedMessage]:
             continue
 
         try:
-            timestamp = datetime.fromisoformat(time_str.replace("Z", "+00:00")) if time_str else datetime.now(timezone.utc)
+            timestamp = (
+                datetime.fromisoformat(time_str.replace("Z", "+00:00")) if time_str else datetime.now(timezone.utc)
+            )
         except (ValueError, AttributeError):
             timestamp = datetime.now(timezone.utc)
         timestamp = normalize_timestamp(timestamp)

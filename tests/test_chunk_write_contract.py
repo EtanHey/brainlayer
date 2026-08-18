@@ -300,7 +300,9 @@ def test_brainbar_store_sql_prepares_on_fresh_schema():
         )
         assert match, path
         insert_sql = " ".join(match.group(1).split())
-        columns = [part.strip() for part in re.search(r"INSERT INTO chunks \(([^)]+)\)", insert_sql).group(1).split(",")]
+        columns = [
+            part.strip() for part in re.search(r"INSERT INTO chunks \(([^)]+)\)", insert_sql).group(1).split(",")
+        ]
         for column in SWIFT_CANONICAL_COLUMNS:
             assert column in columns, (path.name, column)
         column_defs = ", ".join(f"{column} {type_map.get(column, 'TEXT')}" for column in columns)

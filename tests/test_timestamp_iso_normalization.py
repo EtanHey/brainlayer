@@ -125,16 +125,10 @@ def test_spot_check_fails_when_stored_instant_differs_from_preimage():
     conn.row_factory = sqlite3.Row
     conn.execute("CREATE TABLE chunks (id TEXT, source TEXT, created_at TEXT)")
     conn.execute("CREATE TABLE timestamp_iso_preimage (id TEXT PRIMARY KEY, created_at TEXT)")
-    conn.execute(
-        "INSERT INTO chunks VALUES ('w1', 'whatsapp', '2019-02-11T16:05:15Z')"
-    )
-    conn.execute(
-        "INSERT INTO timestamp_iso_preimage VALUES ('w1', '2019-02-11T16:05:15')"
-    )
+    conn.execute("INSERT INTO chunks VALUES ('w1', 'whatsapp', '2019-02-11T16:05:15Z')")
+    conn.execute("INSERT INTO timestamp_iso_preimage VALUES ('w1', '2019-02-11T16:05:15')")
     stored = conn.execute("SELECT id, source, created_at FROM chunks WHERE id='w1'").fetchone()
-    preimage = conn.execute(
-        "SELECT id, created_at FROM timestamp_iso_preimage WHERE id='w1'"
-    ).fetchone()
+    preimage = conn.execute("SELECT id, created_at FROM timestamp_iso_preimage WHERE id='w1'").fetchone()
     assert not _spot_ok(stored, preimage, ["created_at"], source="whatsapp")
     conn.close()
 
