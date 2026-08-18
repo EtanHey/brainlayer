@@ -665,17 +665,47 @@ def run_doctor(
                 # BOTH directions, and never a count comparison: a surplus aux
                 # row hides a missing one, which is how 3,536 chunks went
                 # unfindable while fts5_health reported the index in sync.
-                if completeness["chunk_to_aux"]["total"] > 0:
+                #
+                # The fatal gates are LEXICAL only. Ordinary embed lag is always
+                # non-zero on a live DB, so folding it in here would leave doctor
+                # permanently red and make "completeness codes silent" an exit
+                # criterion no repair run could ever satisfy. Missing vectors
+                # already have an owner and a check of their own
+                # (`vector_parity_gap` above, `brainlayer reembed-backfill`).
+                if completeness["lexical_chunk_to_aux"] > 0:
                     fatal(
                         "index_completeness_chunk_to_aux",
-                        "active chunks are missing the lexical or vector rows their class routes to",
+                        "active chunks are missing the lexical rows their class routes to",
                         **completeness["chunk_to_aux"],
                     )
-                if completeness["aux_to_chunk"]["total"] > 0:
+                if completeness["lexical_aux_to_chunk"] > 0:
                     fatal(
                         "index_completeness_aux_to_chunk",
-                        "aux index rows or pointers do not resolve back to a live chunk",
+                        "lexical index rows or pointers do not resolve back to a live chunk",
                         **completeness["aux_to_chunk"],
+                    )
+                # A phantom vector IS worth a fatal: the pointer exists, so
+                # `vector_parity_gap` counts the chunk as embedded while
+                # semantic search can never return it. Nothing else looks.
+                if completeness["phantom_vectors"] > 0:
+                    fatal(
+                        "index_completeness_phantom_vectors",
+                        "chunk_vectors_rowids rows whose vec0 payload is dead (invalid bit, missing blob, or all-zero)",
+                        count=completeness["phantom_vectors"],
+                        checked=completeness["aux_to_chunk"]["vector_payload_checked"],
+                        remediation="re-embed these chunks via brainlayer reembed-backfill",
+                    )
+                orphan_vectors = completeness["aux_to_chunk"]["orphan_vector_rowids"]
+                orphan_binary = completeness["aux_to_chunk"]["orphan_binary_rowids"]
+                if orphan_vectors or orphan_binary:
+                    # Warning, not fatal: no code path in this repo removes a
+                    # vec0 rowid row, so fataling would paint doctor permanently
+                    # red with no owner able to clear it.
+                    warning(
+                        "index_completeness_orphan_vector_rowids",
+                        "vec0 rowid rows point at chunks that no longer exist; no automated repair owns these",
+                        orphan_vector_rowids=orphan_vectors,
+                        orphan_binary_rowids=orphan_binary,
                     )
             except Exception as exc:
                 fatal("index_completeness_failed", f"could not check index completeness: {exc}")

@@ -1868,3 +1868,39 @@ def test_doctor_index_completeness_is_quiet_on_a_healthy_db(tmp_path):
     assert result.index_completeness["total"] == 0
     codes = {issue.code for issue in result.issues}
     assert not {code for code in codes if code.startswith("index_completeness")}
+
+
+def test_doctor_index_completeness_does_not_fatal_on_ordinary_embed_lag(tmp_path):
+    """A chunk waiting on the embed queue must not make the completeness gate red.
+
+    Ordinary embed lag is never zero on a live DB, so folding it into this gate
+    would make "both completeness codes silent" an exit criterion no repair run
+    could satisfy. Missing vectors have their own check and their own owner.
+    """
+    from brainlayer.doctor import run_doctor
+
+    db_path = tmp_path / "completeness-embed-lag.db"
+    store = VectorStore(db_path)
+    try:
+        _insert_chunk(store, "lag-vectored", content="doctor completeness vectored content")
+        _insert_vector(store, "lag-vectored", 1.0)
+        # indexed lexically by the write path, but no vector yet
+        _insert_chunk(store, "lag-unvectored", content="doctor completeness unvectored content")
+        store.conn.cursor().execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        store.close()
+
+    result = run_doctor(
+        _doctor_config(tmp_path, db_path),
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+
+    assert result.index_completeness["chunk_to_aux"]["missing_vector_rowid"] == 1
+    assert result.index_completeness["lexical_total"] == 0
+    codes = {issue.code for issue in result.issues}
+    assert "index_completeness_chunk_to_aux" not in codes
+    assert "index_completeness_aux_to_chunk" not in codes
+    # the pre-existing vector check still owns this signal
+    assert "vector_parity_gap" in codes

@@ -36,6 +36,7 @@ is reported for the embed pipeline rather than surgically patched here.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sqlite3
 import subprocess
@@ -118,6 +119,7 @@ class CompletenessCensus:
     # aux -> chunk
     orphan_index_rows: dict[str, list[int]] = field(default_factory=dict)
     orphan_vector_rowids: list[str] = field(default_factory=list)
+    orphan_binary_rowids: list[str] = field(default_factory=list)
     orphan_pointer_rows: list[str] = field(default_factory=list)
     dangling_pointers: dict[str, list[str]] = field(default_factory=dict)
     mismatched_pointers: dict[str, list[str]] = field(default_factory=dict)
@@ -132,6 +134,7 @@ class CompletenessCensus:
             + sum(len(ids) for ids in self.duplicate_index_rows.values())
             + sum(len(ids) for ids in self.misrouted_index_rows.values())
             + len(self.missing_vector_rowid)
+            + len(self.missing_binary_vector)
         )
 
     @property
@@ -139,6 +142,7 @@ class CompletenessCensus:
         return (
             sum(len(ids) for ids in self.orphan_index_rows.values())
             + len(self.orphan_vector_rowids)
+            + len(self.orphan_binary_rowids)
             + len(self.orphan_pointer_rows)
             + sum(len(ids) for ids in self.dangling_pointers.values())
             + sum(len(ids) for ids in self.mismatched_pointers.values())
@@ -146,22 +150,39 @@ class CompletenessCensus:
         )
 
     @property
-    def lexical_total(self) -> int:
-        """Gaps this migration can close: everything deterministic from chunks.content."""
+    def lexical_chunk_to_aux(self) -> int:
+        """Lexical defects a chunk has against the indexes it routes to."""
         return (
             sum(len(ids) for ids in self.missing_index_rows.values())
             + sum(len(ids) for ids in self.duplicate_index_rows.values())
             + sum(len(ids) for ids in self.misrouted_index_rows.values())
-            + sum(len(ids) for ids in self.orphan_index_rows.values())
+        )
+
+    @property
+    def lexical_aux_to_chunk(self) -> int:
+        """Lexical index rows and pointers that do not resolve back to a live chunk."""
+        return (
+            sum(len(ids) for ids in self.orphan_index_rows.values())
             + len(self.orphan_pointer_rows)
             + sum(len(ids) for ids in self.dangling_pointers.values())
             + sum(len(ids) for ids in self.mismatched_pointers.values())
         )
 
     @property
+    def lexical_total(self) -> int:
+        """Gaps this migration can close: everything deterministic from chunks.content."""
+        return self.lexical_chunk_to_aux + self.lexical_aux_to_chunk
+
+    @property
     def vector_total(self) -> int:
         """Gaps only the embed pipeline can close. Never repaired in a migration."""
-        return len(self.missing_vector_rowid) + len(self.orphan_vector_rowids) + len(self.phantom_vectors)
+        return (
+            len(self.missing_vector_rowid)
+            + len(self.missing_binary_vector)
+            + len(self.orphan_vector_rowids)
+            + len(self.orphan_binary_rowids)
+            + len(self.phantom_vectors)
+        )
 
     @property
     def total(self) -> int:
@@ -180,6 +201,7 @@ class CompletenessCensus:
             "aux_to_chunk": {
                 "orphan_index_rows": {k: len(v) for k, v in self.orphan_index_rows.items()},
                 "orphan_vector_rowids": len(self.orphan_vector_rowids),
+                "orphan_binary_rowids": len(self.orphan_binary_rowids),
                 "orphan_pointer_rows": len(self.orphan_pointer_rows),
                 "dangling_pointers": {k: len(v) for k, v in self.dangling_pointers.items()},
                 "mismatched_pointers": {k: len(v) for k, v in self.mismatched_pointers.items()},
@@ -187,7 +209,10 @@ class CompletenessCensus:
                 "vector_payload_checked": self.vector_payload_checked,
                 "total": self.aux_to_chunk_total,
             },
+            "lexical_chunk_to_aux": self.lexical_chunk_to_aux,
+            "lexical_aux_to_chunk": self.lexical_aux_to_chunk,
             "lexical_total": self.lexical_total,
+            "phantom_vectors": len(self.phantom_vectors),
             "vector_total": self.vector_total,
             "total": self.total,
         }
@@ -358,6 +383,17 @@ def census(
                 WHERE r.active = 1
                   AND NOT EXISTS (SELECT 1 FROM chunk_vectors_binary_rowids v WHERE v.id = r.chunk_id)
                 ORDER BY r.chunk_id
+                """,
+                collect=collect_ids,
+            )
+            # Symmetry with the float index: without this, binary-side drift is
+            # only ever visible in one direction.
+            result.orphan_binary_rowids = _ids(
+                conn,
+                """
+                SELECT v.id FROM chunk_vectors_binary_rowids v
+                WHERE NOT EXISTS (SELECT 1 FROM temp._ic_route r WHERE r.chunk_id = v.id)
+                ORDER BY v.id
                 """,
                 collect=collect_ids,
             )
@@ -554,13 +590,16 @@ def _next_rowid(conn: sqlite3.Connection, table: str) -> int:
 
 
 def _existing_index_rows(
-    conn: sqlite3.Connection, chunk_ids: Sequence[str]
-) -> tuple[dict[str, dict[str, list[int]]], dict[str, int]]:
-    """Every existing FTS rowid for the chunks about to be repaired, in one scan each.
+    conn: sqlite3.Connection, chunk_ids: Sequence[str], *, include_text: bool = False
+) -> tuple[dict[str, dict[str, list[Any]]], dict[str, int]]:
+    """Every existing FTS rowid for the given chunks, in one scan per index.
 
     Also returns the first free rowid per index. New rows are appended above
     the current maximum and rowids freed by a delete are never reused, so a
     pointer written in this run can never collide with a row this run removed.
+
+    `include_text=True` also pulls the indexed content, which is what lets the
+    spot-check compare stored VALUES without paying a scan per chunk.
     """
     present = _table_names(conn)
     conn.execute("PRAGMA temp_store = FILE")
@@ -572,14 +611,15 @@ def _existing_index_rows(
     for table in ROUTED_TABLES:
         if table not in present:
             continue
-        found: dict[str, list[int]] = {}
-        for rowid, chunk_id in conn.execute(
+        found: dict[str, list[Any]] = {}
+        columns = "c.id, c.c6, c.c0" if include_text else "c.id, c.c6, NULL"
+        for rowid, chunk_id, text in conn.execute(
             f"""
-            SELECT c.id, c.c6 FROM {table}_content c
+            SELECT {columns} FROM {table}_content c
             JOIN temp._ic_touched t ON t.chunk_id = c.c6
             """
         ):
-            found.setdefault(str(chunk_id), []).append(int(rowid))
+            found.setdefault(str(chunk_id), []).append((int(rowid), text) if include_text else int(rowid))
         rows[table] = found
         next_rowid[table] = _next_rowid(conn, table)
     return rows, next_rowid
@@ -623,6 +663,11 @@ def _rewrite_pointer(conn: sqlite3.Connection, chunk_id: str, updates: dict[str,
     }
     desired.update(updates)
     if before is not None and tuple(desired.values()) == tuple(before):
+        return False
+    if before is None and not any(value is not None for value in desired.values()):
+        # Nothing to point at and no row to correct. Writing an all-NULL pointer
+        # row would leave behind a row that never existed -- invisible to the
+        # census, but still a row this migration invented.
         return False
     conn.execute(
         f"INSERT INTO {PREIMAGE_TABLE}(run_id, chunk_id, table_name, action, rowid_value, payload) VALUES (?,?,?,?,?,?)",
@@ -695,17 +740,38 @@ def _record_migration(conn: sqlite3.Connection, *, git_sha: str, actor: str, pay
 def _spot_check(conn: sqlite3.Connection, chunk_ids: Iterable[str]) -> list[dict[str, Any]]:
     """Re-read repaired chunks and verify VALUES, not counts.
 
-    For each sampled chunk: exactly one row in every index its class routes to,
-    the indexed text byte-equal to `chunks.content`, no row in any index it
-    does not route to, and a pointer that resolves back to this same chunk.
+    The gate has to assert what the migration actually promises, and that
+    differs by lifecycle:
+
+    * Routed index, either lifecycle: exactly one row, indexed text byte-equal
+      to `chunks.content`, pointer resolving back to that row.
+    * Non-routed index, ACTIVE chunk: no row -- the leak was deleted.
+    * Non-routed index, lifecycle-managed chunk: at most one row, pointer
+      resolving to it. The row is deliberately kept (the census never reported
+      it), so demanding its absence would make this gate fail the migration's
+      own correct behaviour -- and `main()` exits non-zero on a failed
+      spot-check, which would send a live operator to `--rollback` on a good
+      run. Measured population where that would bite: 1 chunk in 10,478, so a
+      50-sample stride hits it about half a percent of the time -- a trap that
+      only springs during the live window.
     """
+    sample = list(chunk_ids)
+    # One scan per index for the whole sample, not one per chunk: `c6` carries
+    # no index, so the per-chunk form costs a full scan of a multi-GB content
+    # table every time -- fine for 50 samples off a warm cache, hours if the
+    # live window ever asks to spot-check everything it touched.
+    indexed_rows, _ = _existing_index_rows(conn, sample, include_text=True)
     checks: list[dict[str, Any]] = []
-    for chunk_id in chunk_ids:
-        row = conn.execute("SELECT content, content_class FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+    for chunk_id in sample:
+        row = conn.execute(
+            f"SELECT content, content_class, CASE WHEN {ACTIVE_CHUNK_SQL.strip()} THEN 1 ELSE 0 END "
+            "FROM chunks WHERE id = ?",
+            (chunk_id,),
+        ).fetchone()
         if row is None:
             checks.append({"chunk_id": chunk_id, "ok": False, "why": ["chunk_missing"]})
             continue
-        content, content_class = row
+        content, content_class, is_active = row[0], row[1], bool(row[2])
         route = route_of(content_class)
         why: list[str] = []
         pointers = conn.execute(
@@ -716,8 +782,8 @@ def _spot_check(conn: sqlite3.Connection, chunk_ids: Iterable[str]) -> list[dict
             zip(("chunks_fts", "chunks_fts_trigram", "chunks_fts_operational"), pointers or (None, None, None))
         )
         for table, wanted_route in ROUTED_TABLES.items():
-            rows = conn.execute(f"SELECT id, c0 FROM {table}_content WHERE c6 = ?", (chunk_id,)).fetchall()
-            if wanted_route == route:
+            rows = sorted(indexed_rows.get(table, {}).get(chunk_id, ()))
+            if wanted_route == route and content:
                 if len(rows) != 1:
                     why.append(f"{table}:expected_1_row_got_{len(rows)}")
                     continue
@@ -726,9 +792,17 @@ def _spot_check(conn: sqlite3.Connection, chunk_ids: Iterable[str]) -> list[dict
                     why.append(f"{table}:indexed_text_differs_from_chunk_content")
                 if pointer_by_table.get(table) != rowid:
                     why.append(f"{table}:pointer_does_not_resolve_to_this_row")
+            elif wanted_route != route and is_active:
+                if rows:
+                    why.append(f"{table}:present_but_class_routes_to_{route}")
             elif rows:
-                why.append(f"{table}:present_but_class_routes_to_{route}")
-        checks.append({"chunk_id": chunk_id, "route": route, "ok": not why, "why": why})
+                # Lifecycle-managed chunk in an index its class does not route
+                # to: kept on purpose, but deduped and pointed at.
+                if len(rows) != 1:
+                    why.append(f"{table}:lifecycle_row_not_deduped_got_{len(rows)}")
+                elif pointer_by_table.get(table) != rows[0][0]:
+                    why.append(f"{table}:lifecycle_pointer_does_not_resolve_to_this_row")
+        checks.append({"chunk_id": chunk_id, "route": route, "active": is_active, "ok": not why, "why": why})
     return checks
 
 
@@ -931,6 +1005,60 @@ def repair_index_completeness(
         conn.close()
 
 
+def fingerprint(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Content-addressed identity of every structure this migration can write.
+
+    Counts cannot answer "did the rollback put it back": a pointer aimed at a
+    different chunk, text altered in place, or two chunk_ids swapped all leave
+    row counts untouched. This hashes the VALUES instead -- every
+    `(rowid, chunk_id, indexed text)` triple in each index, plus the pointer
+    triples, plus a `chunks` digest that must never move at all.
+
+    It ships rather than living in a rehearsal script because the live window
+    has to be able to prove its own before/after identity, and a claim only the
+    author can reproduce is not evidence.
+    """
+    present = _table_names(conn)
+    out: dict[str, Any] = {}
+    for table in ROUTED_TABLES:
+        if table not in present:
+            continue
+        digest = hashlib.blake2b(digest_size=16)
+        rows = 0
+        for rowid, chunk_id, content in conn.execute(f"SELECT id, c6, c0 FROM {table}_content ORDER BY id"):
+            rows += 1
+            digest.update(f"{rowid}\x1f{chunk_id}\x1f{content}\x1e".encode(errors="replace"))
+        out[table] = {"rows": rows, "digest": digest.hexdigest()}
+
+    if "chunk_fts_rowids" in present:
+        digest = hashlib.blake2b(digest_size=16)
+        rows = 0
+        for row in conn.execute(
+            "SELECT chunk_id, fts_rowid, trigram_rowid, operational_rowid FROM chunk_fts_rowids ORDER BY chunk_id"
+        ):
+            rows += 1
+            digest.update(("\x1f".join("" if value is None else str(value) for value in row) + "\x1e").encode())
+        out["chunk_fts_rowids"] = {"rows": rows, "digest": digest.hexdigest()}
+
+    # The migration writes no chunk data, so this digest is the claim's teeth:
+    # it must be identical before and after every run.
+    digest = hashlib.blake2b(digest_size=16)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)")}
+    wanted = [
+        c
+        for c in ("id", "content_hash", "content_class", "archived_at", "superseded_by", "aggregated_into")
+        if c in columns
+    ]
+    for row in conn.execute(f"SELECT {', '.join(wanted)} FROM chunks ORDER BY id"):
+        digest.update(("\x1f".join("" if value is None else str(value) for value in row) + "\x1e").encode())
+    out["chunks"] = {
+        "rows": conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0],
+        "digest": digest.hexdigest(),
+        "columns": wanted,
+    }
+    return out
+
+
 def _rollbackable_run(conn: sqlite3.Connection) -> str | None:
     """The newest apply that has not already been reversed."""
     reversed_runs = {
@@ -946,15 +1074,27 @@ def _rollbackable_run(conn: sqlite3.Connection) -> str | None:
     return None
 
 
-def rollback_repair(db_path: Path, *, allow_live: bool = False, run_id: str | None = None) -> dict[str, Any]:
-    """Undo ONE apply from its preimages, newest write first.
+def rollback_repair(
+    db_path: Path,
+    *,
+    allow_live: bool = False,
+    run_id: str | None = None,
+    all_runs: bool = False,
+) -> dict[str, Any]:
+    """Undo applies from their preimages, newest write first.
 
     Inserted rows are deleted; deleted rows are re-inserted at their original
     rowid with their recorded text; pointer rows are restored to their recorded
     triple. The preimage table is retained afterwards as the audit trail
-    (repair-b/d/e precedent), so the scope has to be a single run: replaying the
-    whole table would try to undo applies already undone, and on an
+    (repair-b/d/e precedent), so each undo is scoped to a single run: replaying
+    the whole table would try to reverse applies already reversed, and on an
     apply/rollback/apply cycle it aborts on a rowid collision instead.
+
+    One run is not always the whole story. Batches commit individually, so an
+    interrupted window leaves run A partly applied and the re-run becomes run B
+    -- and undoing only B lands on an intermediate state, not the pre-apply one.
+    `all_runs=True` keeps going until nothing is left to reverse, which is what
+    an exit path on a personal-memory DB has to mean.
     """
     resolved = assert_not_live_db(Path(db_path), allow_live=allow_live)
     conn = sqlite3.connect(resolved, timeout=60)
@@ -964,82 +1104,94 @@ def rollback_repair(db_path: Path, *, allow_live: bool = False, run_id: str | No
         "removed_rows": 0,
         "restored_pointers": 0,
         "preimage_tables": "retained",
+        "runs": [],
     }
     try:
         if PREIMAGE_TABLE not in _table_names(conn):
-            return {**stats, "preimage": "absent"}
+            return {**stats, "run_id": None, "preimage": "absent"}
         _ensure_preimage(conn)
-        target = run_id or _rollbackable_run(conn)
-        stats["run_id"] = target
-        if target is None:
+        while True:
+            target = run_id or _rollbackable_run(conn)
+            if target is None:
+                break
+            _undo_one_run(conn, target, stats)
+            stats["runs"].append(target)
+            if run_id is not None or not all_runs:
+                break
+        stats["run_id"] = stats["runs"][-1] if stats["runs"] else None
+        if not stats["runs"]:
             return {**stats, "preimage": "nothing left to roll back"}
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            rows = conn.execute(
-                f"SELECT seq, chunk_id, table_name, action, rowid_value, payload FROM {PREIMAGE_TABLE} "
-                "WHERE run_id = ? AND action NOT LIKE 'rolled_back:%' ORDER BY seq DESC",
-                (target,),
-            ).fetchall()
-            for _seq, chunk_id, table, action, rowid_value, payload in rows:
-                if action == "insert":
-                    found = conn.execute(f"SELECT c6 FROM {table}_content WHERE id = ?", (rowid_value,)).fetchone()
-                    if found is not None and str(found[0]) == chunk_id:
-                        conn.execute(f"DELETE FROM {table} WHERE rowid = ?", (rowid_value,))
-                        stats["removed_rows"] += 1
-                elif action in {"rebuild", "misroute", "orphan", "dedupe"}:
-                    # Restore at the ORIGINAL rowid, not wherever FTS5 would put
-                    # a fresh row. The pointer preimages restore the old rowid
-                    # numbers, so a row that comes back at a different rowid
-                    # leaves every restored pointer dangling -- a rollback that
-                    # reports success while breaking what it claimed to fix.
-                    values = json.loads(payload)
-                    # Clear the slot first: this run may have inserted its own
-                    # row at that rowid, and FTS5 has no upsert.
-                    conn.execute(f"DELETE FROM {table} WHERE rowid = ?", (rowid_value,))
-                    columns = ", ".join(("rowid", *FTS_INSERT_COLUMNS))
-                    marks = ", ".join("?" for _ in range(len(FTS_INSERT_COLUMNS) + 1))
-                    conn.execute(f"INSERT INTO {table}({columns}) VALUES ({marks})", [rowid_value, *values])
-                    stats["restored_rows"] += 1
-                elif action == "pointer":
-                    before = json.loads(payload).get("before")
-                    if before is None:
-                        conn.execute("DELETE FROM chunk_fts_rowids WHERE chunk_id = ?", (chunk_id,))
-                    else:
-                        conn.execute(
-                            """
-                            INSERT INTO chunk_fts_rowids(chunk_id, fts_rowid, trigram_rowid, operational_rowid)
-                            VALUES (?,?,?,?)
-                            ON CONFLICT(chunk_id) DO UPDATE SET
-                                fts_rowid = excluded.fts_rowid,
-                                trigram_rowid = excluded.trigram_rowid,
-                                operational_rowid = excluded.operational_rowid
-                            """,
-                            (chunk_id, *before),
-                        )
-                    stats["restored_pointers"] += 1
-                elif action == "orphan_pointer":
-                    before = json.loads(payload)
-                    if before:
-                        conn.execute(
-                            "INSERT OR REPLACE INTO chunk_fts_rowids"
-                            "(chunk_id, fts_rowid, trigram_rowid, operational_rowid) VALUES (?,?,?,?)",
-                            (chunk_id, *before),
-                        )
-                        stats["restored_pointers"] += 1
-            # Mark the run reversed so a second --rollback moves on to the run
-            # before it instead of replaying this one.
-            conn.execute(
-                f"INSERT INTO {PREIMAGE_TABLE}(run_id, chunk_id, table_name, action, rowid_value, payload) "
-                "VALUES (?,?,?,?,?,?)",
-                (target, "", "", _rollback_marker(target), None, json.dumps(stats, sort_keys=True)),
-            )
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
         return stats
     finally:
         conn.close()
+
+
+def _undo_one_run(conn: sqlite3.Connection, target: str, stats: dict[str, Any]) -> None:
+    """Reverse exactly one apply, in one transaction."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        rows = conn.execute(
+            f"SELECT seq, chunk_id, table_name, action, rowid_value, payload FROM {PREIMAGE_TABLE} "
+            "WHERE run_id = ? AND action NOT LIKE 'rolled_back:%' ORDER BY seq DESC",
+            (target,),
+        ).fetchall()
+        for _seq, chunk_id, table, action, rowid_value, payload in rows:
+            if action == "insert":
+                found = conn.execute(f"SELECT c6 FROM {table}_content WHERE id = ?", (rowid_value,)).fetchone()
+                if found is not None and str(found[0]) == chunk_id:
+                    conn.execute(f"DELETE FROM {table} WHERE rowid = ?", (rowid_value,))
+                    stats["removed_rows"] += 1
+            elif action in {"rebuild", "misroute", "orphan", "dedupe"}:
+                # Restore at the ORIGINAL rowid, not wherever FTS5 would put
+                # a fresh row. The pointer preimages restore the old rowid
+                # numbers, so a row that comes back at a different rowid
+                # leaves every restored pointer dangling -- a rollback that
+                # reports success while breaking what it claimed to fix.
+                values = json.loads(payload)
+                # Clear the slot first: this run may have inserted its own
+                # row at that rowid, and FTS5 has no upsert.
+                conn.execute(f"DELETE FROM {table} WHERE rowid = ?", (rowid_value,))
+                columns = ", ".join(("rowid", *FTS_INSERT_COLUMNS))
+                marks = ", ".join("?" for _ in range(len(FTS_INSERT_COLUMNS) + 1))
+                conn.execute(f"INSERT INTO {table}({columns}) VALUES ({marks})", [rowid_value, *values])
+                stats["restored_rows"] += 1
+            elif action == "pointer":
+                before = json.loads(payload).get("before")
+                if before is None:
+                    conn.execute("DELETE FROM chunk_fts_rowids WHERE chunk_id = ?", (chunk_id,))
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO chunk_fts_rowids(chunk_id, fts_rowid, trigram_rowid, operational_rowid)
+                        VALUES (?,?,?,?)
+                        ON CONFLICT(chunk_id) DO UPDATE SET
+                            fts_rowid = excluded.fts_rowid,
+                            trigram_rowid = excluded.trigram_rowid,
+                            operational_rowid = excluded.operational_rowid
+                        """,
+                        (chunk_id, *before),
+                    )
+                stats["restored_pointers"] += 1
+            elif action == "orphan_pointer":
+                before = json.loads(payload)
+                if before:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO chunk_fts_rowids"
+                        "(chunk_id, fts_rowid, trigram_rowid, operational_rowid) VALUES (?,?,?,?)",
+                        (chunk_id, *before),
+                    )
+                    stats["restored_pointers"] += 1
+        # Mark the run reversed so a second --rollback moves on to the run
+        # before it instead of replaying this one.
+        conn.execute(
+            f"INSERT INTO {PREIMAGE_TABLE}(run_id, chunk_id, table_name, action, rowid_value, payload) "
+            "VALUES (?,?,?,?,?,?)",
+            (target, "", "", _rollback_marker(target), None, json.dumps(stats, sort_keys=True)),
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1060,17 +1212,41 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--keep-orphans", action="store_true", help="Do not delete orphan aux index rows")
     parser.add_argument("--actor", default="repair-f")
     parser.add_argument("--rollback", action="store_true", help="Undo the newest apply not yet reversed")
+    parser.add_argument(
+        "--rollback-all",
+        dest="rollback_all",
+        action="store_true",
+        help="Undo every apply still on record — the exit path after an interrupted window",
+    )
     parser.add_argument("--rollback-run", dest="rollback_run", help="Undo this run_id instead of the newest")
     parser.add_argument("--census-only", action="store_true", help="Print the census and exit")
+    parser.add_argument(
+        "--fingerprint",
+        action="store_true",
+        help="Print the content-addressed fingerprint and exit (run before and after a live window)",
+    )
     args = parser.parse_args(argv)
 
-    if args.rollback or args.rollback_run:
+    if args.rollback or args.rollback_all or args.rollback_run:
         print(
             json.dumps(
-                rollback_repair(args.db.expanduser(), allow_live=args.allow_live, run_id=args.rollback_run),
+                rollback_repair(
+                    args.db.expanduser(),
+                    allow_live=args.allow_live,
+                    run_id=args.rollback_run,
+                    all_runs=args.rollback_all,
+                ),
                 sort_keys=True,
             )
         )
+        return 0
+
+    if args.fingerprint:
+        conn = sqlite3.connect(f"file:{args.db.expanduser()}?mode=ro", uri=True)
+        try:
+            print(json.dumps(fingerprint(conn), indent=2, sort_keys=True))
+        finally:
+            conn.close()
         return 0
 
     if args.census_only:

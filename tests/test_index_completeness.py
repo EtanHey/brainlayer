@@ -513,6 +513,61 @@ def test_apply_rollback_apply_rollback_cycle(store: VectorStore):
     assert _fts_snapshot(store) == snapshot
 
 
+def test_spot_check_passes_a_lifecycle_row_the_repair_keeps_on_purpose(store: VectorStore):
+    """The success gate must not fail the migration's own correct behaviour.
+
+    A lifecycle-managed chunk in an index its class does not route to is KEPT by
+    design (the census never reported it). If `--spot-check` calls that a
+    failure, `main()` exits non-zero and a live operator reads a good run as a
+    bad one and reaches for `--rollback`. On the canonical copy exactly 1 chunk
+    of the 10,478-chunk work set is in that state, so the 50-sample stride hits
+    it about half a percent of the time -- invisible in rehearsal, live only.
+    """
+    _add(store, "kept", content="kept lifecycle content")
+    cursor = store.conn.cursor()
+    cursor.execute("UPDATE chunks SET content_class = 'test' WHERE id = 'kept'")
+    cursor.execute("UPDATE chunks SET archived_at = '2026-01-01T00:00:00Z' WHERE id = 'kept'")
+    cursor.execute(
+        "INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id) "
+        "VALUES ('kept lifecycle content', NULL, NULL, NULL, NULL, NULL, 'kept')"
+    )
+    # a broken pointer is what pulls this chunk into the work set at all
+    cursor.execute(
+        "INSERT INTO chunk_fts_rowids(chunk_id, fts_rowid) VALUES ('kept', 4242) "
+        "ON CONFLICT(chunk_id) DO UPDATE SET fts_rowid = excluded.fts_rowid"
+    )
+
+    # spot-check every touched chunk, so the sample cannot miss it
+    result = repair_index_completeness(store.db_path, git_sha=GIT_SHA, apply=True, spot_check=100)
+
+    assert result.census_after["lexical_total"] == 0
+    sampled = {check["chunk_id"] for check in result.spot_checks}
+    assert "kept" in sampled, "the fixture must actually be sampled"
+    failures = [check for check in result.spot_checks if not check["ok"]]
+    assert failures == [], failures
+
+
+def test_spot_check_still_fails_an_active_chunk_left_in_the_wrong_index(store: VectorStore):
+    """Relaxing the gate for lifecycle rows must not relax it for active ones."""
+    from brainlayer import index_completeness
+
+    _add(store, "leaky", content="leaky active content")
+    cursor = store.conn.cursor()
+    cursor.execute("UPDATE chunks SET content_class = 'operational' WHERE id = 'leaky'")
+    cursor.execute(
+        "INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id) "
+        "VALUES ('leaky active content', NULL, NULL, NULL, NULL, NULL, 'leaky')"
+    )
+
+    conn = _sqlite(store)
+    try:
+        checks = index_completeness._spot_check(conn, ["leaky"])
+    finally:
+        conn.close()
+    assert checks[0]["ok"] is False
+    assert any("present_but_class_routes_to" in reason for reason in checks[0]["why"])
+
+
 def test_repair_converges_to_zero_on_a_lifecycle_duplicate(store: VectorStore):
     """Everything the census reports must be repairable, or it never reaches zero.
 
@@ -541,6 +596,127 @@ def test_repair_converges_to_zero_on_a_lifecycle_duplicate(store: VectorStore):
         conn.close()
     assert len(rows) == 1, "the surplus copy goes, the chunk stays indexed"
     assert pointer == rows[0][0]
+
+
+def test_rollback_all_unwinds_an_interrupted_then_resumed_apply(store: VectorStore, monkeypatch):
+    """One `--rollback` is not an exit path after an interrupted window.
+
+    Batches commit individually, so a killed run leaves run A partly applied and
+    the re-run becomes run B. Undoing only B lands on an intermediate state --
+    which, on a personal-memory DB, is not an exit path at all.
+    """
+    from brainlayer import index_completeness
+
+    for index in range(12):
+        _add(store, f"gap-{index}", content=f"gap content number {index}")
+    cursor = store.conn.cursor()
+    for index in range(12):
+        rowid = cursor.execute("SELECT id FROM chunks_fts_content WHERE c6 = ?", (f"gap-{index}",)).fetchone()[0]
+        cursor.execute("DELETE FROM chunks_fts WHERE rowid = ?", (rowid,))
+    before = _fts_snapshot(store)
+
+    # interrupt after the first batch commits, exactly as a killed window would
+    real_delete = index_completeness._delete_index_row
+    state = {"batches": 0}
+
+    def exploding_checkpoint(conn):
+        state["batches"] += 1
+        if state["batches"] >= 1:
+            raise KeyboardInterrupt("window killed mid-apply")
+
+    monkeypatch.setattr(index_completeness, "_checkpoint", exploding_checkpoint)
+    with pytest.raises(KeyboardInterrupt):
+        repair_index_completeness(store.db_path, git_sha=GIT_SHA, apply=True, batch_size=4, checkpoint_every=1)
+    monkeypatch.undo()
+    assert index_completeness._delete_index_row is real_delete
+
+    interrupted = _fts_snapshot(store)
+    assert interrupted != before, "the interrupted run must have committed something"
+
+    # resume: a second, complete apply, recorded as its own run
+    repair_index_completeness(store.db_path, git_sha=GIT_SHA, apply=True, batch_size=4)
+
+    # the runbook's old exit path — one rollback — does NOT get back to pre-apply
+    single = rollback_repair(store.db_path)
+    assert single["run_id"] is not None
+    assert _fts_snapshot(store) != before, "one rollback lands on an intermediate state"
+
+    # --rollback-all does
+    every = rollback_repair(store.db_path, all_runs=True)
+    assert len(every["runs"]) >= 1
+    assert _fts_snapshot(store) == before, "rollback-all must reach the pre-apply state"
+    assert rollback_repair(store.db_path, all_runs=True)["run_id"] is None
+
+
+@pytest.mark.parametrize(
+    "sabotage",
+    [
+        pytest.param("pointer_swap", id="pointer aimed at another chunk's row"),
+        pytest.param("text_edit", id="indexed text altered in place"),
+        pytest.param("chunk_id_swap", id="two rows' chunk_ids swapped"),
+    ],
+)
+def test_fingerprint_has_teeth_at_identical_row_counts(store: VectorStore, sabotage):
+    """The fingerprint must move where counts cannot.
+
+    Every sabotage here leaves row counts untouched. If the digest does not
+    change, "rollback is exact" and "apply is deterministic" are claims resting
+    on nothing.
+    """
+    from brainlayer.index_completeness import fingerprint
+
+    _add(store, "one", content="first content")
+    _add(store, "two", content="second content")
+
+    conn = _sqlite(store)
+    try:
+        before = fingerprint(conn)
+        counts_before = {k: v["rows"] for k, v in before.items()}
+        rows = dict(conn.execute("SELECT c6, id FROM chunks_fts_content"))
+        if sabotage == "pointer_swap":
+            conn.execute("UPDATE chunk_fts_rowids SET fts_rowid = ? WHERE chunk_id = 'one'", (rows["two"],))
+        elif sabotage == "text_edit":
+            conn.execute("UPDATE chunks_fts_content SET c0 = 'tampered' WHERE id = ?", (rows["one"],))
+        else:
+            conn.execute("UPDATE chunks_fts_content SET c6 = 'two' WHERE id = ?", (rows["one"],))
+            conn.execute("UPDATE chunks_fts_content SET c6 = 'one' WHERE id = ?", (rows["two"],))
+        conn.commit()
+        after = fingerprint(conn)
+        counts_after = {k: v["rows"] for k, v in after.items()}
+    finally:
+        conn.close()
+
+    assert counts_after == counts_before, "the sabotage must be invisible to counts"
+    assert after != before, "but visible to the fingerprint"
+
+
+def test_fingerprint_survives_apply_and_rollback(store: VectorStore):
+    """The shipped fingerprint is what the live window uses to prove reversibility."""
+    from brainlayer.index_completeness import fingerprint
+
+    _damage(store)
+    conn = _sqlite(store)
+    try:
+        before = fingerprint(conn)
+    finally:
+        conn.close()
+
+    repair_index_completeness(store.db_path, git_sha=GIT_SHA, apply=True)
+    conn = _sqlite(store)
+    try:
+        applied = fingerprint(conn)
+    finally:
+        conn.close()
+    assert applied != before
+    assert applied["chunks"] == before["chunks"], "chunk data must never move"
+
+    rollback_repair(store.db_path, all_runs=True)
+    conn = _sqlite(store)
+    try:
+        restored = fingerprint(conn)
+    finally:
+        conn.close()
+    assert restored == before
 
 
 def test_repair_refuses_the_live_db(tmp_path: Path, monkeypatch):
