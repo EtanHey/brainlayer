@@ -105,10 +105,6 @@ def route_of(content_class: str | None) -> str:
     return KNOWLEDGE_ROUTE
 
 
-def tables_for_route(route: str) -> tuple[str, ...]:
-    return tuple(table for table, wanted in ROUTED_TABLES.items() if wanted == route)
-
-
 @dataclass
 class CompletenessCensus:
     """Both-direction completeness, as chunk-id sets rather than counts."""
@@ -775,23 +771,22 @@ def repair_index_completeness(
             "phantom_sample": before.phantom_vectors[:10],
         }
 
-        # Chunks needing lexical work, and what to do with each.
-        work: dict[str, dict[str, list[int] | None]] = {}
-        for table, ids in before.missing_index_rows.items():
-            for chunk_id in ids:
-                work.setdefault(chunk_id, {}).setdefault(table, None)
-        for table, ids in before.duplicate_index_rows.items():
-            for chunk_id in ids:
-                work.setdefault(chunk_id, {}).setdefault(table, None)
-        for table, ids in before.misrouted_index_rows.items():
-            for chunk_id in ids:
-                work.setdefault(chunk_id, {}).setdefault(table, None)
-        for table, ids in before.dangling_pointers.items():
-            for chunk_id in ids:
-                work.setdefault(chunk_id, {}).setdefault(table, None)
-        for table, ids in before.mismatched_pointers.items():
-            for chunk_id in ids:
-                work.setdefault(chunk_id, {}).setdefault(table, None)
+        # Chunks needing lexical work. Every chunk the census named for any
+        # lexical defect gets its full routed set rebuilt, rather than a
+        # per-defect patch: the rebuild is deterministic from `chunks`, and
+        # patching one index while trusting the others is how the pointers got
+        # out of step in the first place. (Orphans have no chunk to key on and
+        # are handled separately, after the batches.)
+        work: set[str] = set()
+        for defect in (
+            before.missing_index_rows,
+            before.duplicate_index_rows,
+            before.misrouted_index_rows,
+            before.dangling_pointers,
+            before.mismatched_pointers,
+        ):
+            for ids in defect.values():
+                work.update(ids)
 
         result.chunks_touched = len(work)
         if not apply:
@@ -844,11 +839,19 @@ def repair_index_completeness(
                             pointer_updates[POINTER_COLUMN[table]] = None
                         else:
                             # Lifecycle-managed chunk sitting in an index its class
-                            # does not route to. The census does not report this --
+                            # does not route to. The census does not report that --
                             # its misroute check is scoped to active chunks -- and a
-                            # migration must not delete more than it reported. Leave
-                            # the rows and just re-aim the pointer at one of them, so
-                            # the delete trigger can still find it.
+                            # migration must not delete more than it reported, so the
+                            # row stays and the pointer is re-aimed at it, keeping
+                            # the delete trigger able to find it.
+                            #
+                            # A duplicate here IS reported (the duplicate check spans
+                            # every chunk), so the surplus copies still go: dropping
+                            # a second copy is not unindexing the chunk, and leaving
+                            # them would mean the migration never converges to zero.
+                            for rowid in existing[1:]:
+                                if _delete_index_row(conn, table, rowid, chunk_id, "dedupe", run_id):
+                                    result.deleted_rows += 1
                             pointer_updates[POINTER_COLUMN[table]] = existing[0] if existing else None
                     if _rewrite_pointer(conn, chunk_id, pointer_updates, run_id):
                         result.pointers_rewritten += 1
@@ -983,7 +986,7 @@ def rollback_repair(db_path: Path, *, allow_live: bool = False, run_id: str | No
                     if found is not None and str(found[0]) == chunk_id:
                         conn.execute(f"DELETE FROM {table} WHERE rowid = ?", (rowid_value,))
                         stats["removed_rows"] += 1
-                elif action in {"rebuild", "misroute", "orphan"}:
+                elif action in {"rebuild", "misroute", "orphan", "dedupe"}:
                     # Restore at the ORIGINAL rowid, not wherever FTS5 would put
                     # a fresh row. The pointer preimages restore the old rowid
                     # numbers, so a row that comes back at a different rowid
@@ -1096,6 +1099,9 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(
             {
                 "apply": result.apply,
+                # Printed so an operator can name this run to --rollback-run
+                # without going digging in the preimage table.
+                "run_id": result.run_id,
                 "chunks_touched": result.chunks_touched,
                 "inserted_rows": result.inserted_rows,
                 "deleted_rows": result.deleted_rows,

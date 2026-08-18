@@ -513,6 +513,36 @@ def test_apply_rollback_apply_rollback_cycle(store: VectorStore):
     assert _fts_snapshot(store) == snapshot
 
 
+def test_repair_converges_to_zero_on_a_lifecycle_duplicate(store: VectorStore):
+    """Everything the census reports must be repairable, or it never reaches zero.
+
+    An archived chunk whose class routes elsewhere keeps its row (the misroute
+    check does not cover it) -- but a *duplicate* is reported for every chunk,
+    so the surplus copy still has to go.
+    """
+    _add(store, "twin", content="twin content")
+    cursor = store.conn.cursor()
+    cursor.execute("UPDATE chunks SET content_class = 'cold' WHERE id = 'twin'")
+    cursor.execute("UPDATE chunks SET archived_at = '2026-01-01T00:00:00Z' WHERE id = 'twin'")
+    for _ in range(2):
+        cursor.execute(
+            "INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id) "
+            "VALUES ('twin content', NULL, NULL, NULL, NULL, NULL, 'twin')"
+        )
+
+    result = repair_index_completeness(store.db_path, git_sha=GIT_SHA, apply=True)
+    assert result.census_after["lexical_total"] == 0, result.census_after
+
+    conn = _sqlite(store)
+    try:
+        rows = conn.execute("SELECT id FROM chunks_fts_content WHERE c6 = 'twin'").fetchall()
+        pointer = conn.execute("SELECT fts_rowid FROM chunk_fts_rowids WHERE chunk_id = 'twin'").fetchone()[0]
+    finally:
+        conn.close()
+    assert len(rows) == 1, "the surplus copy goes, the chunk stays indexed"
+    assert pointer == rows[0][0]
+
+
 def test_repair_refuses_the_live_db(tmp_path: Path, monkeypatch):
     from brainlayer import chunk_origin_wipe
 
