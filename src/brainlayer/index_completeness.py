@@ -474,16 +474,26 @@ class RepairResult:
     pointers_rewritten: int = 0
     orphans_deleted: int = 0
     chunks_touched: int = 0
+    run_id: str | None = None
     vector_debt: dict[str, Any] = field(default_factory=dict)
     spot_checks: list[dict[str, Any]] = field(default_factory=list)
     batches: int = 0
 
 
 def _ensure_preimage(conn: sqlite3.Connection) -> None:
+    """Create (or migrate) the preimage table.
+
+    `run_id` is what makes a second rollback safe. Preimages accumulate -- they
+    are the retained audit trail, per the repair-b/d/e precedent -- so a rollback
+    that replayed the whole table would try to undo runs already undone, and on
+    an apply/rollback/apply cycle it aborts on a rowid collision. Rollback is
+    therefore scoped to one run: the newest that has not already been reversed.
+    """
     conn.execute(
         f"""
         CREATE TABLE IF NOT EXISTS {PREIMAGE_TABLE} (
             seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL DEFAULT 'legacy',
             chunk_id TEXT NOT NULL,
             table_name TEXT NOT NULL,
             action TEXT NOT NULL,
@@ -493,7 +503,21 @@ def _ensure_preimage(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({PREIMAGE_TABLE})")}
+    if "run_id" not in columns:
+        conn.execute(f"ALTER TABLE {PREIMAGE_TABLE} ADD COLUMN run_id TEXT NOT NULL DEFAULT 'legacy'")
     conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{PREIMAGE_TABLE}_chunk ON {PREIMAGE_TABLE}(chunk_id)")
+    conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{PREIMAGE_TABLE}_run ON {PREIMAGE_TABLE}(run_id)")
+
+
+def _new_run_id(conn: sqlite3.Connection) -> str:
+    """A monotonic id for this apply, derived from the DB's own clock."""
+    stamp = conn.execute("SELECT strftime('%Y%m%dT%H%M%f','now')").fetchone()[0]
+    return f"run-{stamp}"
+
+
+def _rollback_marker(run_id: str) -> str:
+    return f"rolled_back:{run_id}"
 
 
 def _chunk_payload(conn: sqlite3.Connection, chunk_id: str) -> tuple[Any, ...] | None:
@@ -507,7 +531,9 @@ def _chunk_payload(conn: sqlite3.Connection, chunk_id: str) -> tuple[Any, ...] |
     return tuple(row) if row else None
 
 
-def _delete_index_row(conn: sqlite3.Connection, table: str, rowid: int, chunk_id: str, action: str) -> bool:
+def _delete_index_row(
+    conn: sqlite3.Connection, table: str, rowid: int, chunk_id: str, action: str, run_id: str
+) -> bool:
     """Delete one aux index row after re-verifying it belongs to chunk_id.
 
     The verification is the whole point: a rowid recorded during the census is
@@ -519,8 +545,8 @@ def _delete_index_row(conn: sqlite3.Connection, table: str, rowid: int, chunk_id
     if row is None or str(row[6]) != chunk_id:
         return False
     conn.execute(
-        f"INSERT INTO {PREIMAGE_TABLE}(chunk_id, table_name, action, rowid_value, payload) VALUES (?,?,?,?,?)",
-        (chunk_id, table, action, rowid, json.dumps(list(row), default=str)),
+        f"INSERT INTO {PREIMAGE_TABLE}(run_id, chunk_id, table_name, action, rowid_value, payload) VALUES (?,?,?,?,?,?)",
+        (run_id, chunk_id, table, action, rowid, json.dumps(list(row), default=str)),
     )
     conn.execute(f"DELETE FROM {table} WHERE rowid = ?", (rowid,))
     return True
@@ -563,7 +589,9 @@ def _existing_index_rows(
     return rows, next_rowid
 
 
-def _insert_index_row(conn: sqlite3.Connection, table: str, payload: Sequence[Any], chunk_id: str, rowid: int) -> int:
+def _insert_index_row(
+    conn: sqlite3.Connection, table: str, payload: Sequence[Any], chunk_id: str, rowid: int, run_id: str
+) -> int:
     """Insert one FTS row at an explicitly chosen rowid.
 
     The rowid is assigned by the caller rather than read back afterwards. Two
@@ -579,13 +607,13 @@ def _insert_index_row(conn: sqlite3.Connection, table: str, payload: Sequence[An
     placeholders = ", ".join("?" for _ in range(len(FTS_INSERT_COLUMNS) + 1))
     conn.execute(f"INSERT INTO {table}({columns}) VALUES ({placeholders})", [rowid, *payload])
     conn.execute(
-        f"INSERT INTO {PREIMAGE_TABLE}(chunk_id, table_name, action, rowid_value, payload) VALUES (?,?,?,?,?)",
-        (chunk_id, table, "insert", rowid, None),
+        f"INSERT INTO {PREIMAGE_TABLE}(run_id, chunk_id, table_name, action, rowid_value, payload) VALUES (?,?,?,?,?,?)",
+        (run_id, chunk_id, table, "insert", rowid, None),
     )
     return rowid
 
 
-def _rewrite_pointer(conn: sqlite3.Connection, chunk_id: str, updates: dict[str, int | None]) -> bool:
+def _rewrite_pointer(conn: sqlite3.Connection, chunk_id: str, updates: dict[str, int | None], run_id: str) -> bool:
     if not updates:
         return False
     before = conn.execute(
@@ -601,8 +629,9 @@ def _rewrite_pointer(conn: sqlite3.Connection, chunk_id: str, updates: dict[str,
     if before is not None and tuple(desired.values()) == tuple(before):
         return False
     conn.execute(
-        f"INSERT INTO {PREIMAGE_TABLE}(chunk_id, table_name, action, rowid_value, payload) VALUES (?,?,?,?,?)",
+        f"INSERT INTO {PREIMAGE_TABLE}(run_id, chunk_id, table_name, action, rowid_value, payload) VALUES (?,?,?,?,?,?)",
         (
+            run_id,
             chunk_id,
             "chunk_fts_rowids",
             "pointer",
@@ -770,6 +799,8 @@ def repair_index_completeness(
             return result
 
         _ensure_preimage(conn)
+        run_id = _new_run_id(conn)
+        result.run_id = run_id
         touched: list[str] = sorted(work)
         # One scan per FTS table to find the touched chunks' existing rows.
         # `c6` (chunk_id) carries no index, so asking per chunk would be one
@@ -780,10 +811,15 @@ def repair_index_completeness(
             conn.execute("BEGIN IMMEDIATE")
             try:
                 for chunk_id in batch:
-                    row = conn.execute("SELECT content_class FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+                    row = conn.execute(
+                        f"SELECT content_class, CASE WHEN {ACTIVE_CHUNK_SQL.strip()} THEN 1 ELSE 0 END "
+                        "FROM chunks WHERE id = ?",
+                        (chunk_id,),
+                    ).fetchone()
                     if row is None:
                         continue
                     route = route_of(row[0])
+                    is_active = bool(row[1])
                     payload = _chunk_payload(conn, chunk_id)
                     pointer_updates: dict[str, int | None] = {}
                     for table, wanted_route in ROUTED_TABLES.items():
@@ -793,20 +829,28 @@ def repair_index_completeness(
                         if wanted_route == route and payload is not None and payload[0]:
                             # Rebuild to exactly one row carrying current content.
                             for rowid in existing:
-                                if _delete_index_row(conn, table, rowid, chunk_id, "rebuild"):
+                                if _delete_index_row(conn, table, rowid, chunk_id, "rebuild", run_id):
                                     result.deleted_rows += 1
                             new_rowid = next_rowid[table]
                             next_rowid[table] += 1
-                            _insert_index_row(conn, table, payload, chunk_id, new_rowid)
+                            _insert_index_row(conn, table, payload, chunk_id, new_rowid, run_id)
                             result.inserted_rows += 1
                             pointer_updates[POINTER_COLUMN[table]] = new_rowid
-                        else:
+                        elif is_active:
                             # Wrong index for this class: drop the leaked rows.
                             for rowid in existing:
-                                if _delete_index_row(conn, table, rowid, chunk_id, "misroute"):
+                                if _delete_index_row(conn, table, rowid, chunk_id, "misroute", run_id):
                                     result.deleted_rows += 1
                             pointer_updates[POINTER_COLUMN[table]] = None
-                    if _rewrite_pointer(conn, chunk_id, pointer_updates):
+                        else:
+                            # Lifecycle-managed chunk sitting in an index its class
+                            # does not route to. The census does not report this --
+                            # its misroute check is scoped to active chunks -- and a
+                            # migration must not delete more than it reported. Leave
+                            # the rows and just re-aim the pointer at one of them, so
+                            # the delete trigger can still find it.
+                            pointer_updates[POINTER_COLUMN[table]] = existing[0] if existing else None
+                    if _rewrite_pointer(conn, chunk_id, pointer_updates, run_id):
                         result.pointers_rewritten += 1
                 conn.execute("COMMIT")
             except Exception:
@@ -831,7 +875,7 @@ def repair_index_completeness(
                         still_gone = conn.execute("SELECT 1 FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
                         if still_gone is not None:
                             continue
-                        if _delete_index_row(conn, table, rowid, chunk_id, "orphan"):
+                        if _delete_index_row(conn, table, rowid, chunk_id, "orphan", run_id):
                             result.orphans_deleted += 1
                 for chunk_id in before.orphan_pointer_rows:
                     if conn.execute("SELECT 1 FROM chunks WHERE id = ?", (chunk_id,)).fetchone() is not None:
@@ -841,9 +885,16 @@ def repair_index_completeness(
                         (chunk_id,),
                     ).fetchone()
                     conn.execute(
-                        f"INSERT INTO {PREIMAGE_TABLE}(chunk_id, table_name, action, rowid_value, payload) "
-                        "VALUES (?,?,?,?,?)",
-                        (chunk_id, "chunk_fts_rowids", "orphan_pointer", None, json.dumps(list(row) if row else None)),
+                        f"INSERT INTO {PREIMAGE_TABLE}(run_id, chunk_id, table_name, action, rowid_value, payload) "
+                        "VALUES (?,?,?,?,?,?)",
+                        (
+                            run_id,
+                            chunk_id,
+                            "chunk_fts_rowids",
+                            "orphan_pointer",
+                            None,
+                            json.dumps(list(row) if row else None),
+                        ),
                     )
                     conn.execute("DELETE FROM chunk_fts_rowids WHERE chunk_id = ?", (chunk_id,))
                     result.orphans_deleted += 1
@@ -877,23 +928,54 @@ def repair_index_completeness(
         conn.close()
 
 
-def rollback_repair(db_path: Path, *, allow_live: bool = False) -> dict[str, Any]:
-    """Undo the lexical repair from its preimages, newest write first.
+def _rollbackable_run(conn: sqlite3.Connection) -> str | None:
+    """The newest apply that has not already been reversed."""
+    reversed_runs = {
+        str(row[0]).split(":", 1)[1]
+        for row in conn.execute(f"SELECT action FROM {PREIMAGE_TABLE} WHERE action LIKE 'rolled_back:%'")
+    }
+    for (run_id,) in conn.execute(
+        f"SELECT run_id FROM {PREIMAGE_TABLE} WHERE action NOT LIKE 'rolled_back:%' "
+        "GROUP BY run_id ORDER BY MAX(seq) DESC"
+    ):
+        if str(run_id) not in reversed_runs:
+            return str(run_id)
+    return None
 
-    Inserted rows are deleted; deleted rows are re-inserted with their recorded
-    text; pointer rows are restored to their recorded triple. The preimage table
-    is retained afterwards as the audit trail (repair-b/d/e precedent).
+
+def rollback_repair(db_path: Path, *, allow_live: bool = False, run_id: str | None = None) -> dict[str, Any]:
+    """Undo ONE apply from its preimages, newest write first.
+
+    Inserted rows are deleted; deleted rows are re-inserted at their original
+    rowid with their recorded text; pointer rows are restored to their recorded
+    triple. The preimage table is retained afterwards as the audit trail
+    (repair-b/d/e precedent), so the scope has to be a single run: replaying the
+    whole table would try to undo applies already undone, and on an
+    apply/rollback/apply cycle it aborts on a rowid collision instead.
     """
     resolved = assert_not_live_db(Path(db_path), allow_live=allow_live)
     conn = sqlite3.connect(resolved, timeout=60)
-    stats = {"restored_rows": 0, "removed_rows": 0, "restored_pointers": 0, "preimage_tables": "retained"}
+    conn.isolation_level = None
+    stats: dict[str, Any] = {
+        "restored_rows": 0,
+        "removed_rows": 0,
+        "restored_pointers": 0,
+        "preimage_tables": "retained",
+    }
     try:
         if PREIMAGE_TABLE not in _table_names(conn):
             return {**stats, "preimage": "absent"}
+        _ensure_preimage(conn)
+        target = run_id or _rollbackable_run(conn)
+        stats["run_id"] = target
+        if target is None:
+            return {**stats, "preimage": "nothing left to roll back"}
         conn.execute("BEGIN IMMEDIATE")
         try:
             rows = conn.execute(
-                f"SELECT seq, chunk_id, table_name, action, rowid_value, payload FROM {PREIMAGE_TABLE} ORDER BY seq DESC"
+                f"SELECT seq, chunk_id, table_name, action, rowid_value, payload FROM {PREIMAGE_TABLE} "
+                "WHERE run_id = ? AND action NOT LIKE 'rolled_back:%' ORDER BY seq DESC",
+                (target,),
             ).fetchall()
             for _seq, chunk_id, table, action, rowid_value, payload in rows:
                 if action == "insert":
@@ -908,6 +990,9 @@ def rollback_repair(db_path: Path, *, allow_live: bool = False) -> dict[str, Any
                     # leaves every restored pointer dangling -- a rollback that
                     # reports success while breaking what it claimed to fix.
                     values = json.loads(payload)
+                    # Clear the slot first: this run may have inserted its own
+                    # row at that rowid, and FTS5 has no upsert.
+                    conn.execute(f"DELETE FROM {table} WHERE rowid = ?", (rowid_value,))
                     columns = ", ".join(("rowid", *FTS_INSERT_COLUMNS))
                     marks = ", ".join("?" for _ in range(len(FTS_INSERT_COLUMNS) + 1))
                     conn.execute(f"INSERT INTO {table}({columns}) VALUES ({marks})", [rowid_value, *values])
@@ -938,6 +1023,13 @@ def rollback_repair(db_path: Path, *, allow_live: bool = False) -> dict[str, Any
                             (chunk_id, *before),
                         )
                         stats["restored_pointers"] += 1
+            # Mark the run reversed so a second --rollback moves on to the run
+            # before it instead of replaying this one.
+            conn.execute(
+                f"INSERT INTO {PREIMAGE_TABLE}(run_id, chunk_id, table_name, action, rowid_value, payload) "
+                "VALUES (?,?,?,?,?,?)",
+                (target, "", "", _rollback_marker(target), None, json.dumps(stats, sort_keys=True)),
+            )
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
@@ -964,12 +1056,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--spot-check", type=int, default=0)
     parser.add_argument("--keep-orphans", action="store_true", help="Do not delete orphan aux index rows")
     parser.add_argument("--actor", default="repair-f")
-    parser.add_argument("--rollback", action="store_true")
+    parser.add_argument("--rollback", action="store_true", help="Undo the newest apply not yet reversed")
+    parser.add_argument("--rollback-run", dest="rollback_run", help="Undo this run_id instead of the newest")
     parser.add_argument("--census-only", action="store_true", help="Print the census and exit")
     args = parser.parse_args(argv)
 
-    if args.rollback:
-        print(json.dumps(rollback_repair(args.db.expanduser(), allow_live=args.allow_live), sort_keys=True))
+    if args.rollback or args.rollback_run:
+        print(
+            json.dumps(
+                rollback_repair(args.db.expanduser(), allow_live=args.allow_live, run_id=args.rollback_run),
+                sort_keys=True,
+            )
+        )
         return 0
 
     if args.census_only:

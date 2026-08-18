@@ -46,6 +46,22 @@ def _sqlite(store: VectorStore) -> sqlite3.Connection:
     return sqlite3.connect(store.db_path)
 
 
+def _fts_snapshot(store: VectorStore) -> dict[str, list[tuple]]:
+    """Rowid-level state of every lexical index plus the pointer table."""
+    conn = _sqlite(store)
+    try:
+        snapshot = {
+            table: sorted(conn.execute(f"SELECT id, c6, c0 FROM {table}_content"))
+            for table in ("chunks_fts", "chunks_fts_trigram", "chunks_fts_operational")
+        }
+        snapshot["pointers"] = sorted(
+            conn.execute("SELECT chunk_id, fts_rowid, trigram_rowid, operational_rowid FROM chunk_fts_rowids")
+        )
+        return snapshot
+    finally:
+        conn.close()
+
+
 # ── the write path must produce lexical rows synchronously ───────────────────
 
 
@@ -321,7 +337,10 @@ def test_repair_skips_a_row_that_changed_owner_under_it(store: VectorStore):
     try:
         rowid = conn.execute("SELECT id FROM chunks_fts_content WHERE c6 = 'victim'").fetchone()[0]
         index_completeness._ensure_preimage(conn)
-        assert index_completeness._delete_index_row(conn, "chunks_fts", rowid, "someone-else", "rebuild") is False
+        assert (
+            index_completeness._delete_index_row(conn, "chunks_fts", rowid, "someone-else", "rebuild", "run-test")
+            is False
+        )
         assert conn.execute("SELECT COUNT(*) FROM chunks_fts_content WHERE c6 = 'victim'").fetchone()[0] == 1
     finally:
         conn.close()
@@ -360,6 +379,7 @@ def test_rollback_restores_rows_at_their_original_rowids(store: VectorStore):
     Restoring the text at a fresh rowid looks identical by content and by count,
     and leaves every restored pointer dangling.
     """
+
     def snapshot() -> tuple[dict[str, list[tuple]], int]:
         conn = _sqlite(store)
         try:
@@ -422,6 +442,75 @@ def test_repair_receipt_survives_a_rerun(store: VectorStore):
     repair_index_completeness(store.db_path, git_sha=GIT_SHA, apply=True)
     again = repair_index_completeness(store.db_path, git_sha=GIT_SHA, apply=True)
     assert again.census_after["lexical_total"] == 0
+
+
+def test_repair_leaves_lifecycle_rows_the_census_did_not_report(store: VectorStore):
+    """A migration must not delete more than its census reported.
+
+    The misroute check is scoped to active chunks. An archived chunk whose class
+    routes elsewhere is therefore never reported -- and must not be silently
+    unindexed just because a pointer defect pulled it into the work set.
+    """
+    _add(store, "retired", content="retired but still indexed")
+    cursor = store.conn.cursor()
+    cursor.execute("UPDATE chunks SET content_class = 'cold' WHERE id = 'retired'")
+    cursor.execute("UPDATE chunks SET archived_at = '2026-01-01T00:00:00Z' WHERE id = 'retired'")
+    # put a row back in the knowledge index and aim a broken pointer at nothing
+    cursor.execute(
+        "INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id) "
+        "VALUES ('retired but still indexed', NULL, NULL, NULL, NULL, NULL, 'retired')"
+    )
+    cursor.execute(
+        "INSERT INTO chunk_fts_rowids(chunk_id, fts_rowid) VALUES ('retired', 987654) "
+        "ON CONFLICT(chunk_id) DO UPDATE SET fts_rowid = excluded.fts_rowid"
+    )
+
+    conn = _sqlite(store)
+    try:
+        reported = census(conn)
+    finally:
+        conn.close()
+    assert "retired" not in reported.misrouted_index_rows.get("chunks_fts", [])
+    assert "retired" in reported.dangling_pointers["chunks_fts"]
+
+    repair_index_completeness(store.db_path, git_sha=GIT_SHA, apply=True)
+
+    conn = _sqlite(store)
+    try:
+        rows = conn.execute("SELECT id FROM chunks_fts_content WHERE c6 = 'retired'").fetchall()
+        pointer = conn.execute("SELECT fts_rowid FROM chunk_fts_rowids WHERE chunk_id = 'retired'").fetchone()[0]
+    finally:
+        conn.close()
+    assert len(rows) == 1, "the unreported row must survive"
+    assert pointer == rows[0][0], "and the pointer must resolve to it"
+
+
+def test_apply_rollback_apply_rollback_cycle(store: VectorStore):
+    """Preimages accumulate, so rollback must be scoped to ONE run.
+
+    Replaying the whole table on the second rollback tries to undo an apply that
+    was already undone and dies on a rowid collision -- which is how this was
+    found, on the canonical-size copy.
+    """
+    _damage(store)
+    snapshot = _fts_snapshot(store)
+
+    first = repair_index_completeness(store.db_path, git_sha=GIT_SHA, apply=True)
+    rollback_repair(store.db_path)
+    assert _fts_snapshot(store) == snapshot
+
+    second = repair_index_completeness(store.db_path, git_sha=GIT_SHA, apply=True)
+    assert second.run_id != first.run_id
+    stats = rollback_repair(store.db_path)
+    assert stats["run_id"] == second.run_id
+    assert _fts_snapshot(store) == snapshot, "the second rollback must land on the same state"
+
+    # Both runs are now reversed, so a further rollback is a no-op rather than a
+    # replay of an apply that was already undone.
+    third = rollback_repair(store.db_path)
+    assert third["run_id"] is None
+    assert third["restored_rows"] == 0 and third["removed_rows"] == 0
+    assert _fts_snapshot(store) == snapshot
 
 
 def test_repair_refuses_the_live_db(tmp_path: Path, monkeypatch):
