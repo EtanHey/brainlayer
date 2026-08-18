@@ -44,6 +44,7 @@ class TimestampIsoResult:
     scanned: int = 0
     updated: int = 0
     would_update: int = 0
+    skipped_unparseable: int = 0
     batches: int = 0
     checkpoints: int = 0
     aux_counts_before: dict[str, int] = field(default_factory=dict)
@@ -95,9 +96,9 @@ def normalize_timestamp(value: Any) -> str | None:
     try:
         number = float(text)
     except ValueError:
-        return text
+        return None
     if number <= 0:
-        return text
+        return None
     return _from_unix(number)
 
 
@@ -221,9 +222,13 @@ def normalize_timestamps(
                     old_values.append(current)
                     if _needs_normalize(current):
                         converted = normalize_timestamp(current)
-                        new_values.append(converted)
-                        changed = True
-                        result.column_counts[column] = result.column_counts.get(column, 0) + 1
+                        if converted is not None and is_iso_utc(converted):
+                            new_values.append(converted)
+                            changed = True
+                            result.column_counts[column] = result.column_counts.get(column, 0) + 1
+                        else:
+                            new_values.append(current)
+                            result.skipped_unparseable += 1
                     else:
                         new_values.append(current)
                 if not changed:
@@ -281,6 +286,7 @@ def normalize_timestamps(
                 "git_sha": sha,
                 "actor": actor,
                 "updated": result.updated,
+                "skipped_unparseable": result.skipped_unparseable,
                 "column_counts": result.column_counts,
             }
             conn.execute(
@@ -318,6 +324,7 @@ def _result_payload(db_path: Path, *, apply: bool, result: TimestampIsoResult) -
         "scanned": result.scanned,
         "updated": result.updated,
         "would_update": result.would_update,
+        "skipped_unparseable": result.skipped_unparseable,
         "batches": result.batches,
         "checkpoints": result.checkpoints,
         "column_counts": result.column_counts,

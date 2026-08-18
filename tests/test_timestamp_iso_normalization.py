@@ -44,7 +44,8 @@ def _make_db(path: Path) -> sqlite3.Connection:
            '2026-08-17T21:00:00Z', '2026-08-17T21:01:00.123Z'),
           ('created_unix', 'unix created', '1780190105', NULL, NULL, NULL),
           ('naive_iso', 'naive created', '2026-07-14T11:45:26.994441', NULL, NULL, NULL),
-          ('offset_jerusalem', 'local offset', '2026-06-09T13:37:11+03:00', NULL, NULL, NULL)
+          ('offset_jerusalem', 'local offset', '2026-06-09T13:37:11+03:00', NULL, NULL, NULL),
+          ('tilde_garbage', 'unparseable', '2026-05-28T~12:35:00Z', NULL, NULL, NULL)
         """
     )
     conn.commit()
@@ -94,6 +95,8 @@ def test_apply_rewrites_unix_floats_and_keeps_iso(tmp_path):
     assert is_iso_utc(rows["iso_already"][0])
     assert rows["naive_iso"][0] == "2026-07-14T11:45:26.994441Z"
     assert rows["offset_jerusalem"][0] == "2026-06-09T10:37:11Z"
+    assert rows["tilde_garbage"][0] == "2026-05-28T~12:35:00Z"
+    assert result.skipped_unparseable >= 1
     assert PREIMAGE_TABLE in names
     assert applied is not None
     assert all(item["ok"] for item in result.spot_checks)
