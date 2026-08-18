@@ -224,6 +224,11 @@ class DoctorConfig:
     spotlight_check_enabled: bool = field(default_factory=lambda: sys.platform == "darwin")
     mcp_config_paths: tuple[Path, ...] | None = None
     mcp_config_check_enabled: bool = True
+    index_completeness_enabled: bool = True
+    #: Decoding every vector's payload reads the whole vec0 blob store (~3GB on
+    #: the canonical DB). Doctor decodes the validity bitmaps only, which is
+    #: cheap; the full payload sweep belongs to the census script.
+    index_completeness_verify_payload: bool = False
 
 
 @dataclass
@@ -235,6 +240,7 @@ class DoctorResult:
     chunk_count: int | None = None
     recent_unvectored_chunks: int | None = None
     missing_vectors: int | None = None
+    index_completeness: dict[str, Any] | None = None
     enrichment_backlog: int | None = None
     queue_count: int | None = None
     queue_bytes: int | None = None
@@ -272,6 +278,29 @@ def _recent_unvectored_chunks(db_path: Path, now: datetime, window_hours: int) -
             (cutoff,),
         ).fetchone()
     return int(row[0] if row else 0)
+
+
+def _index_completeness(db_path: Path, *, verify_payload: bool = False) -> dict[str, Any]:
+    """Set-difference completeness in both directions (repair f).
+
+    chunk -> aux: an active chunk with no row in the FTS index its content_class
+    routes to, or with no vector rowid.
+    aux -> chunk: an index row, pointer, or vector rowid that does not resolve
+    back to a live chunk -- including a pointer aimed at a row owned by a
+    different chunk, which turns the next delete on this chunk into silent
+    collateral damage against that one.
+    """
+    from .index_completeness import census as index_census
+
+    # Not `_ro_conn`: the census stages its working set in TEMP tables, and
+    # `PRAGMA query_only` refuses writes to the temp database too. `mode=ro` is
+    # the guarantee that matters -- the main DB stays physically read-only.
+    conn = sqlite3.connect(f"file:{db_path.expanduser()}?mode=ro", uri=True, timeout=30)
+    conn.isolation_level = None
+    try:
+        return index_census(conn, verify_vector_payload=verify_payload, collect_ids=False).summary()
+    finally:
+        conn.close()
 
 
 def _enrichment_backlog(db_path: Path) -> int:
@@ -625,6 +654,31 @@ def run_doctor(
                 )
         except Exception as exc:
             fatal("vector_parity_failed", f"could not check vector parity: {exc}")
+
+        if config.index_completeness_enabled:
+            try:
+                completeness = _index_completeness(
+                    config.db_path,
+                    verify_payload=config.index_completeness_verify_payload,
+                )
+                result.index_completeness = completeness
+                # BOTH directions, and never a count comparison: a surplus aux
+                # row hides a missing one, which is how 3,536 chunks went
+                # unfindable while fts5_health reported the index in sync.
+                if completeness["chunk_to_aux"]["total"] > 0:
+                    fatal(
+                        "index_completeness_chunk_to_aux",
+                        "active chunks are missing the lexical or vector rows their class routes to",
+                        **completeness["chunk_to_aux"],
+                    )
+                if completeness["aux_to_chunk"]["total"] > 0:
+                    fatal(
+                        "index_completeness_aux_to_chunk",
+                        "aux index rows or pointers do not resolve back to a live chunk",
+                        **completeness["aux_to_chunk"],
+                    )
+            except Exception as exc:
+                fatal("index_completeness_failed", f"could not check index completeness: {exc}")
 
         if config.roundtrip_probe_enabled:
             ok, latency, reason = _roundtrip_probe(config.db_path, config.roundtrip_timeout_seconds)
