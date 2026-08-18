@@ -1204,6 +1204,52 @@ final class DatabaseTests: XCTestCase {
         XCTAssertGreaterThan(stats.recentWriteFiveMinuteCount, 0)
     }
 
+    // Honest-NULL contract for BrainBar dedupe columns.
+    //
+    // A from-scratch Swift port of Python's simhash64 shipped briefly and diverged: byte-identical
+    // content produced fingerprints 25-31 hamming bits apart, so BrainBar rows carried values that
+    // looked computed but could never match a Python-written row (find_duplicate's threshold is 3).
+    // Until a faithful port lands with exact-hex parity tests against Python, store() must bind NULL
+    // for all six columns. This test exists so nobody reintroduces a divergent port casually: a
+    // shape assertion ("16 hex chars", "4 chars") passes for any wrong value, NULL does not.
+    func testStoreBindsNullDedupeColumns() throws {
+        let stored = try db.store(
+            content: "Honest-NULL dedupe payload",
+            tags: ["dedupe"],
+            importance: 5,
+            source: "mcp"
+        )
+
+        let escapedID = stored.chunkID.replacingOccurrences(of: "'", with: "''")
+
+        // Guard the assertion below: if the row were missing, every IS NULL sum would be over an
+        // empty result set and prove nothing.
+        XCTAssertEqual(
+            try sqliteScalarInt(path: tempDBPath, sql: "SELECT COUNT(*) FROM chunks WHERE id = '\(escapedID)'"),
+            1,
+            "stored chunk row must exist before asserting its dedupe columns"
+        )
+
+        let nullCount = try sqliteScalarInt(
+            path: tempDBPath,
+            sql: """
+            SELECT (dedupe_hash IS NULL)
+                 + (simhash IS NULL)
+                 + (simhash_band_0 IS NULL)
+                 + (simhash_band_1 IS NULL)
+                 + (simhash_band_2 IS NULL)
+                 + (simhash_band_3 IS NULL)
+            FROM chunks WHERE id = '\(escapedID)'
+            """
+        )
+
+        XCTAssertEqual(
+            nullCount,
+            6,
+            "BrainBar must bind NULL for dedupe_hash, simhash and simhash_band_0..3 — a non-NULL value here is a dedupe port that has not been proven byte-identical to Python"
+        )
+    }
+
     func testAnalyzePopulatesStatsForSearchIndexes() throws {
         try db.insertChunk(
             id: "analyze-1",

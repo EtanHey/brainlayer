@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .alarm import BrainLayerAlarm, build_alarm, emit_alarm
+from .chunk_write import insert_canonical_chunk
 from .config import get_brainlayer_db_config_error
 from .deploy_drift import DEFAULT_DEPLOY_DRIFT_LABELS, default_deploy_provenance_dir, detect_deploy_drift
 from .drain_liveness import (
@@ -344,28 +345,27 @@ def _roundtrip_probe(db_path: Path, timeout_seconds: float) -> tuple[bool, float
         try:
             store = VectorStore(db_path)
             cursor = store.conn.cursor()
-            cursor.execute(
-                """
-                INSERT INTO chunks (
-                    id, content, metadata, source_file, project, content_type,
-                    value_type, char_count, source, tags, summary, created_at,
-                    enriched_at, enrich_status, chunk_origin, seen_count, last_seen_at,
-                    content_class
-                ) VALUES (?, ?, ?, 'doctor-probe', ?, 'doctor_probe',
-                    'HIGH', ?, 'doctor', ?, ?, ?, NULL, NULL, 'raw', 1, ?,
-                    'operational')
-                """,
-                (
-                    chunk_id,
-                    content,
-                    json.dumps({"doctor_probe": True}),
-                    DOCTOR_PROBE_PROJECT,
-                    len(content),
-                    json.dumps(["doctor-probe"]),
-                    content,
-                    datetime.now(UTC).isoformat(),
-                    datetime.now(UTC).isoformat(),
-                ),
+            insert_canonical_chunk(
+                cursor,
+                {
+                    "id": chunk_id,
+                    "content": content,
+                    "metadata": {"doctor_probe": True},
+                    "source_file": "doctor-probe",
+                    "project": DOCTOR_PROBE_PROJECT,
+                    "content_type": "doctor_probe",
+                    "value_type": "HIGH",
+                    "char_count": len(content),
+                    "source": "doctor",
+                    "tags": ["doctor-probe"],
+                    "summary": content,
+                    "created_at": datetime.now(UTC).isoformat(),
+                    "chunk_origin": "unknown",
+                    "seen_count": 1,
+                    "last_seen_at": datetime.now(UTC).isoformat(),
+                    "content_class": "operational",
+                },
+                on_conflict="abort",
             )
             store._upsert_chunk_vector(cursor, chunk_id, _probe_embedding(content))
             clear_hybrid_search_cache(getattr(store, "db_path", None))

@@ -13,6 +13,7 @@ from pathlib import Path
 
 from ._helpers import serialize_f32
 from .chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT
+from .chunk_write import insert_canonical_chunk
 from .scoping import ConsumerScope, resolve_consumer_scope
 from .search_repo import clear_hybrid_search_cache
 from .vector_store import VectorStore
@@ -90,20 +91,21 @@ def _insert_proof_chunk(
     chunk_origin: str | None = None,
 ) -> None:
     cursor = store.conn.cursor()
-    cursor.execute(
-        """INSERT INTO chunks (
-            id, content, metadata, source_file, project, content_type,
-            char_count, source, created_at, chunk_origin
-        ) VALUES (?, ?, ?, 'happy-camper-isolation-proof.jsonl', ?, 'assistant_text', ?, 'claude_code', ?, ?)""",
-        (
-            chunk_id,
-            content,
-            json.dumps({"proof_fixture": "happy-camper-isolation"}),
-            project,
-            len(content),
-            created_at,
-            chunk_origin,
-        ),
+    insert_canonical_chunk(
+        cursor,
+        {
+            "id": chunk_id,
+            "content": content,
+            "metadata": {"proof_fixture": "happy-camper-isolation"},
+            "source_file": "happy-camper-isolation-proof.jsonl",
+            "project": project,
+            "content_type": "assistant_text",
+            "char_count": len(content),
+            "source": "claude_code",
+            "created_at": created_at,
+            "chunk_origin": chunk_origin,
+        },
+        on_conflict="abort",
     )
     cursor.execute(
         "INSERT INTO chunk_vectors (chunk_id, embedding) VALUES (?, ?)",

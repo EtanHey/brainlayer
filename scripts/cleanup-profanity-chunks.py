@@ -13,6 +13,7 @@ from pathlib import Path
 SRC_DIR = Path(__file__).resolve().parent.parent / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
+from brainlayer.chunk_write import insert_canonical_chunk
 from brainlayer.paths import get_db_path
 
 DB_PATH = get_db_path()
@@ -255,30 +256,25 @@ def run_cleanup(db_path, dry_run=False):
     with conn:
         for cluster in clusters.values():
             aggregate = build_aggregate(cluster, total_docs, df)
-            conn.execute(
-                """
-                INSERT INTO chunks (
-                    id, content, metadata, source_file, project, content_type, char_count, tags,
-                    summary, importance, created_at, conversation_id, resolved_query, resolved_queries, content_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    aggregate["id"],
-                    aggregate["content"],
-                    aggregate["metadata"],
-                    aggregate["source_file"],
-                    aggregate["project"],
-                    aggregate["content_type"],
-                    aggregate["char_count"],
-                    aggregate["tags"],
-                    aggregate["summary"],
-                    aggregate["importance"],
-                    aggregate["created_at"],
-                    aggregate["conversation_id"],
-                    aggregate["resolved_query"],
-                    aggregate["resolved_queries"],
-                    aggregate["content_hash"],
-                ),
+            insert_canonical_chunk(
+                conn,
+                {
+                    "id": aggregate["id"],
+                    "content": aggregate["content"],
+                    "metadata": aggregate["metadata"],
+                    "source_file": aggregate["source_file"],
+                    "project": aggregate["project"],
+                    "content_type": aggregate["content_type"],
+                    "char_count": aggregate["char_count"],
+                    "tags": aggregate["tags"],
+                    "summary": aggregate["summary"],
+                    "importance": aggregate["importance"],
+                    "created_at": aggregate["created_at"],
+                    "conversation_id": aggregate["conversation_id"],
+                    "resolved_query": aggregate["resolved_query"],
+                    "resolved_queries": aggregate["resolved_queries"],
+                    "content_hash": aggregate["content_hash"],
+                },
             )
             archive_originals(conn, cluster, aggregate["id"], now_iso)
     conn.close()

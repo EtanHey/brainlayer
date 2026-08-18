@@ -362,7 +362,7 @@ class TestCreatedAtUpsert:
 
         cursor = store.conn.cursor()
         row = list(cursor.execute("SELECT created_at FROM chunks WHERE id = 'dated-chunk'"))
-        assert row[0][0] == "2026-02-19T10:00:00+00:00"
+        assert row[0][0] == "2026-02-19T10:00:00Z"
 
     def test_created_at_stamped_when_missing(self, tmp_path):
         """Chunks without created_at should be forward-stamped at write time."""

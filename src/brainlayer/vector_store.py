@@ -49,6 +49,7 @@ from .chunk_origin import (
     CHUNK_ORIGIN_UNKNOWN,
     detect_chunk_origin,
 )
+from .chunk_write import prepare_canonical_insert
 from .dedupe import (
     compute_dedupe_fields,
     ensure_dedupe_schema,
@@ -910,6 +911,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             ("source_end_offset", "INTEGER"),
             ("source_last_queued_at", "REAL"),
             ("topic_cluster", "TEXT"),
+            ("preview_text", "TEXT"),
         ]:
             if col not in existing_cols:
                 cursor.execute(f"ALTER TABLE chunks ADD COLUMN {col} {typ}")
@@ -2608,6 +2610,23 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                             if has_source_class
                             else ""
                         )
+                        prepared = prepare_canonical_insert(
+                            {
+                                **chunk,
+                                "id": chunk_id,
+                                "tags": tags_json,
+                                "created_at": created_at,
+                                "dedupe_hash": dedupe_fields.dedupe_hash,
+                                "simhash": dedupe_fields.simhash,
+                                "simhash_band_0": dedupe_fields.bands[0],
+                                "simhash_band_1": dedupe_fields.bands[1],
+                                "simhash_band_2": dedupe_fields.bands[2],
+                                "simhash_band_3": dedupe_fields.bands[3],
+                            }
+                        )
+                        metadata_json = prepared.get("metadata")
+                        if not isinstance(metadata_json, str):
+                            metadata_json = json.dumps(chunk.get("metadata") or {})
                         cursor.execute(
                             f"""
                             INSERT INTO chunks
@@ -2616,8 +2635,9 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                              conversation_id, position, sender, chunk_origin, tags, importance,
                              half_life_days, seen_count, last_seen_at, dedupe_hash, simhash,
                              simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3,
-                             brick_id, source_uri, status, ingested_at, topic_cluster{provenance_column}{source_class_column})
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?{provenance_value}{source_class_value})
+                             brick_id, source_uri, status, ingested_at, topic_cluster,
+                             content_hash, preview_text, content_class{provenance_column}{source_class_column})
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?{provenance_value}{source_class_value})
                             ON CONFLICT(id) DO UPDATE SET
                                 content = excluded.content,
                                 metadata = excluded.metadata,
@@ -2651,6 +2671,9 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                                 END,
                                 ingested_at = COALESCE(chunks.ingested_at, excluded.ingested_at),
                                 topic_cluster = COALESCE(excluded.topic_cluster, chunks.topic_cluster),
+                                content_hash = COALESCE(excluded.content_hash, chunks.content_hash),
+                                preview_text = COALESCE(excluded.preview_text, chunks.preview_text),
+                                content_class = COALESCE(excluded.content_class, chunks.content_class),
                                 chunk_origin = CASE
                                     WHEN excluded.content != chunks.content
                                         THEN COALESCE(excluded.chunk_origin, 'unknown')
@@ -2662,38 +2685,45 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                                 END{provenance_update}{source_class_update}
                         """,
                             (
-                                chunk_id,
-                                chunk["content"],
-                                json.dumps(chunk["metadata"]),
-                                chunk["source_file"],
-                                chunk.get("project"),
-                                chunk.get("content_type"),
-                                chunk.get("value_type"),
-                                chunk.get("char_count", 0),
-                                chunk.get("source", "claude_code"),
-                                chunk.get("created_at"),
+                                prepared["id"],
+                                prepared["content"],
+                                metadata_json,
+                                prepared["source_file"],
+                                prepared.get("project"),
+                                prepared.get("content_type"),
+                                prepared.get("value_type"),
+                                prepared.get("char_count", 0),
+                                prepared.get("source", "claude_code"),
+                                prepared.get("created_at"),
                                 chunk.get("conversation_id"),
                                 chunk.get("position"),
                                 chunk.get("sender"),
-                                detect_chunk_origin(chunk.get("content"), chunk.get("chunk_origin")),
-                                tags_json,
-                                float(chunk["importance"]) if chunk.get("importance") is not None else None,
-                                float(chunk["half_life_days"]) if chunk.get("half_life_days") is not None else None,
-                                int(chunk.get("seen_count") or 1),
-                                chunk.get("last_seen_at") or created_at,
-                                dedupe_fields.dedupe_hash,
-                                dedupe_fields.simhash,
-                                dedupe_fields.bands[0],
-                                dedupe_fields.bands[1],
-                                dedupe_fields.bands[2],
-                                dedupe_fields.bands[3],
-                                chunk.get("brick_id", chunk_id),
-                                chunk.get("source_uri") or chunk["source_file"],
-                                chunk.get("status", "active"),
-                                chunk.get("ingested_at") or int(time.time()),
+                                prepared["chunk_origin"],
+                                prepared.get("tags"),
+                                float(prepared["importance"]) if prepared.get("importance") is not None else None,
+                                float(prepared["half_life_days"])
+                                if prepared.get("half_life_days") is not None
+                                else (
+                                    float(chunk["half_life_days"]) if chunk.get("half_life_days") is not None else None
+                                ),
+                                int(prepared.get("seen_count") or 1),
+                                prepared.get("last_seen_at"),
+                                prepared["dedupe_hash"],
+                                prepared["simhash"],
+                                prepared["simhash_band_0"],
+                                prepared["simhash_band_1"],
+                                prepared["simhash_band_2"],
+                                prepared["simhash_band_3"],
+                                prepared.get("brick_id"),
+                                prepared.get("source_uri"),
+                                prepared.get("status"),
+                                prepared.get("ingested_at"),
                                 chunk.get("topic_cluster"),
+                                prepared.get("content_hash"),
+                                prepared.get("preview_text"),
+                                prepared.get("content_class"),
                                 *([chunk.get("provenance_class")] if has_provenance_class else []),
-                                *([chunk.get("source_class")] if has_source_class else []),
+                                *([prepared.get("source_class")] if has_source_class else []),
                             ),
                         )
                         self._upsert_chunk_vector(cursor, chunk_id, embedding)

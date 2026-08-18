@@ -710,11 +710,21 @@ def test_roundtrip_probe_attempts_search_after_slow_setup(tmp_path, monkeypatch)
     class FakeCursor:
         def __init__(self, store):
             self.store = store
+            self._rows = []
 
         def execute(self, sql, params=()):
+            if "PRAGMA table_info" in sql:
+                from brainlayer.chunk_write import CANONICAL_INSERT_COLUMNS
+
+                self._rows = [(index, name) for index, name in enumerate(sorted(CANONICAL_INSERT_COLUMNS))]
+                return self
             if "INSERT INTO chunks" in sql:
                 self.store.chunk_id = params[0]
+            self._rows = []
             return self
+
+        def __iter__(self):
+            return iter(self._rows)
 
     class FakeConnection:
         def __init__(self, store):
