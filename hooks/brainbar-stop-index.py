@@ -86,9 +86,10 @@ def main():
     else:
         content = f"Assistant: {response_text}"
 
-    # Content hash for dedup
-    content_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
-    chunk_id = f"rt-{session_id[:8]}-{content_hash}"
+    # Truncated digest that NAMES the chunk (id suffix + queue key). It is not a
+    # content hash: insert_canonical_chunk fills content_hash from the contract.
+    id_digest = hashlib.sha256(content.encode()).hexdigest()[:16]
+    chunk_id = f"rt-{session_id[:8]}-{id_digest}"
     project = Path(cwd.rstrip("/")).name if cwd else "unknown"
 
     # Store in DB (matches production schema: id, content, metadata, source, etc.)
@@ -96,7 +97,7 @@ def main():
     metadata = json.dumps(
         {
             "session_id": session_id,
-            "content_hash": content_hash,
+            "id_digest": id_digest,
             "cwd": cwd,
             "has_prompt": prompt_text is not None,
         }
@@ -137,7 +138,7 @@ def main():
             "chunk_id": chunk_id,
             "session_id": session_id,
             "content": content,
-            "content_hash": content_hash,
+            "content_hash": id_digest,
             "project": project,
             "timestamp": time.time(),
             "created_at": datetime.now(timezone.utc).isoformat(),

@@ -347,3 +347,64 @@ def test_production_inserts_go_through_chunk_write():
             if INSERT_GUARD.search(body):
                 offenders.append(str(path.relative_to(REPO_ROOT)))
     assert offenders == []
+
+
+# --- repair (e): ONE content_hash contract -------------------------------------
+# The live DB carried four hash schemes at once (64-char sha256, a 32-char scheme,
+# 16-char truncations from drain, and 52k rows with none). Rows hashed under
+# different schemes never group, so duplicates accrue faster than dedupe removes
+# them. The contract is now: content_hash is ALWAYS sha256 over the stripped
+# content, recomputed at write time, and a caller-supplied value never wins.
+
+CANONICAL_CONTENT_HASH_CONTENT = "  Etan said: ship the fenced migration.\n\n"
+
+
+def canonical_content_hash(content: str) -> str:
+    return hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
+
+
+def test_content_hash_is_sha256_of_stripped_content():
+    from brainlayer.chunk_write import prepare_canonical_insert
+
+    row = prepare_canonical_insert({"id": "hash-contract-1", "content": CANONICAL_CONTENT_HASH_CONTENT})
+    assert row["content_hash"] == canonical_content_hash(CANONICAL_CONTENT_HASH_CONTENT)
+    assert len(row["content_hash"]) == 64
+
+
+def test_content_hash_ignores_surrounding_whitespace():
+    """Two writers disagreeing only on trailing newlines must agree on the hash."""
+    from brainlayer.chunk_write import prepare_canonical_insert
+
+    bare = prepare_canonical_insert({"id": "hash-contract-2", "content": "same text"})
+    padded = prepare_canonical_insert({"id": "hash-contract-3", "content": "\n  same text  \n"})
+    assert bare["content_hash"] == padded["content_hash"]
+
+
+def test_caller_supplied_content_hash_never_wins():
+    """A truncated or stale hash handed in by a legacy caller must be overridden."""
+    from brainlayer.chunk_write import prepare_canonical_insert
+
+    row = prepare_canonical_insert(
+        {
+            "id": "hash-contract-4",
+            "content": CANONICAL_CONTENT_HASH_CONTENT,
+            "content_hash": "deadbeefdeadbeef",  # 16-char legacy scheme
+        }
+    )
+    assert row["content_hash"] == canonical_content_hash(CANONICAL_CONTENT_HASH_CONTENT)
+
+
+def test_no_truncated_content_hash_schemes_remain_in_production_code():
+    """No production path may store a truncated sha256 as a chunk content_hash."""
+    offenders = []
+    # Assignments only: `content_hash = ...hexdigest()[:16]` or a
+    # `"content_hash": ...hexdigest()[:16]` dict entry. Reading a legacy queue
+    # key named content_hash is not a violation -- storing a truncated digest is.
+    pattern = re.compile(r"""(?:^|[^"'\w])content_hash\s*(?:=|:)\s*[^\n=]{0,80}hexdigest\(\)\[:\d+\]""", re.M)
+    for root in (REPO_ROOT / "src/brainlayer", REPO_ROOT / "hooks", REPO_ROOT / "scripts"):
+        for path in root.rglob("*.py"):
+            body = path.read_text(encoding="utf-8")
+            for match in pattern.finditer(body):
+                line = body[: match.start()].count("\n") + 1
+                offenders.append(f"{path.relative_to(REPO_ROOT)}:{line}")
+    assert offenders == [], f"truncated content_hash schemes: {offenders}"
