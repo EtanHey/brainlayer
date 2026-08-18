@@ -57,6 +57,7 @@ SWIFT_CANONICAL_COLUMNS = (
     "importance",
     "source",
     "content_type",
+    "value_type",
     "char_count",
     "created_at",
     "preview_text",
@@ -68,10 +69,18 @@ SWIFT_CANONICAL_COLUMNS = (
     "seen_count",
     "last_seen_at",
     "content_class",
+    "dedupe_hash",
+    "simhash",
+    "simhash_band_0",
+    "simhash_band_1",
+    "simhash_band_2",
+    "simhash_band_3",
     "brick_id",
     "source_uri",
     "status",
 )
+
+INSERT_GUARD = re.compile(r"INSERT\s+(OR\s+\w+\s+)?INTO\s+chunks\b", re.IGNORECASE)
 
 CONTENT = "Repair-d writer alignment contract payload about authentication decisions."
 PROJECT = "brainlayer"
@@ -273,17 +282,34 @@ def test_python_writers_agree_on_canonical_subset(store):
         assert row["status"] == "active", name
 
 
-def test_brainbar_store_sql_includes_canonical_columns():
+def test_brainbar_store_sql_prepares_on_fresh_schema():
+    import sqlite3
+
+    type_map = {
+        "importance": "INTEGER",
+        "char_count": "INTEGER",
+        "ingested_at": "INTEGER",
+        "seen_count": "INTEGER",
+    }
     for path in SWIFT_STORE_FILES:
         text = path.read_text(encoding="utf-8")
         match = re.search(
-            r"INSERT INTO chunks \(([^)]+)\)",
+            r'let sql = """\s*(INSERT INTO chunks \([^)]+\)\s*VALUES \([^"]+\))',
             text,
+            re.DOTALL,
         )
         assert match, path
-        columns = [part.strip() for part in match.group(1).split(",")]
+        insert_sql = " ".join(match.group(1).split())
+        columns = [part.strip() for part in re.search(r"INSERT INTO chunks \(([^)]+)\)", insert_sql).group(1).split(",")]
         for column in SWIFT_CANONICAL_COLUMNS:
             assert column in columns, (path.name, column)
+        column_defs = ", ".join(f"{column} {type_map.get(column, 'TEXT')}" for column in columns)
+        conn = sqlite3.connect(":memory:")
+        conn.execute(f"CREATE TABLE chunks ({column_defs})")
+        placeholder_count = insert_sql.count("?")
+        values = [1 if index in {5, 7, 13, 14} else "test" for index in range(placeholder_count)]
+        conn.execute(insert_sql, values)
+        conn.close()
 
 
 def test_production_inserts_go_through_chunk_write():
@@ -292,10 +318,16 @@ def test_production_inserts_go_through_chunk_write():
         REPO_ROOT / "src/brainlayer/vector_store.py",
     }
     offenders = []
-    for path in (REPO_ROOT / "src/brainlayer").rglob("*.py"):
-        if path in allowed:
-            continue
-        body = path.read_text(encoding="utf-8")
-        if re.search(r"INSERT INTO chunks\b", body):
-            offenders.append(str(path.relative_to(REPO_ROOT)))
+    scan_roots = (
+        REPO_ROOT / "src/brainlayer",
+        REPO_ROOT / "scripts",
+        REPO_ROOT / "hooks",
+    )
+    for root in scan_roots:
+        for path in root.rglob("*.py"):
+            if path in allowed:
+                continue
+            body = path.read_text(encoding="utf-8")
+            if INSERT_GUARD.search(body):
+                offenders.append(str(path.relative_to(REPO_ROOT)))
     assert offenders == []

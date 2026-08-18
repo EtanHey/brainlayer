@@ -26,6 +26,7 @@ from .agent_provenance import classify_provenance, effective_visibility
 from .alarm import BrainLayerAlarm
 from .chunk_origin import detect_chunk_origin
 from .claude_paths import extract_claude_conversation_id as _extract_claude_conversation_id
+from .chunk_write import insert_canonical_chunk
 from .content_class import classify_content_class
 from .dedupe import find_duplicate, merge_duplicate_chunk, merge_existing_chunk_seen, normalized_exact_hash
 from .ingest_guard import recursive_mcp_output_reason
@@ -630,49 +631,39 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                 inserted += 1
                                 break
                             has_source_class = bool(getattr(store, "_has_source_class", False))
-                            source_class_column = ", source_class" if has_source_class else ""
-                            source_class_placeholder = ", ?" if has_source_class else ""
-                            cursor.execute(
-                                f"""INSERT OR IGNORE INTO chunks
-                                   (id, content, metadata, source_file, project,
-                                    content_type, value_type, char_count, source,
-                                    created_at, conversation_id, sender, tags, chunk_origin,
-                                    seen_count, last_seen_at, dedupe_hash, simhash,
-                                    simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3,
-                                    source_end_offset, source_last_queued_at,
-                                    ingested_at, content_class, provenance_class{source_class_column})
-                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                                           ?, ?, ?, ?, ?{source_class_placeholder})""",
-                                (
-                                    chunk_id,
-                                    clean_content,
-                                    json.dumps(metadata),
-                                    source_file,
-                                    project,
-                                    chunk.content_type.value,
-                                    chunk.value.value,
-                                    len(clean_content),
-                                    "realtime_watcher",
-                                    created_at,
-                                    conversation_id,
-                                    metadata.get("sender"),
-                                    tags,
-                                    chunk_origin,
-                                    1,
-                                    created_at,
-                                    dedupe_fields.dedupe_hash,
-                                    dedupe_fields.simhash,
-                                    dedupe_fields.bands[0],
-                                    dedupe_fields.bands[1],
-                                    dedupe_fields.bands[2],
-                                    dedupe_fields.bands[3],
-                                    source_end_offset,
-                                    source_position_recorded_at,
-                                    ingested_at,
-                                    content_class,
-                                    provenance_class,
-                                    *([source_class] if has_source_class else []),
-                                ),
+                            insert_canonical_chunk(
+                                store.conn,
+                                {
+                                    "id": chunk_id,
+                                    "content": clean_content,
+                                    "metadata": metadata,
+                                    "source_file": source_file,
+                                    "project": project,
+                                    "content_type": chunk.content_type.value,
+                                    "value_type": chunk.value.value,
+                                    "char_count": len(clean_content),
+                                    "source": "realtime_watcher",
+                                    "created_at": created_at,
+                                    "conversation_id": conversation_id,
+                                    "sender": metadata.get("sender"),
+                                    "tags": tags,
+                                    "chunk_origin": chunk_origin,
+                                    "seen_count": 1,
+                                    "last_seen_at": created_at,
+                                    "dedupe_hash": dedupe_fields.dedupe_hash,
+                                    "simhash": dedupe_fields.simhash,
+                                    "simhash_band_0": dedupe_fields.bands[0],
+                                    "simhash_band_1": dedupe_fields.bands[1],
+                                    "simhash_band_2": dedupe_fields.bands[2],
+                                    "simhash_band_3": dedupe_fields.bands[3],
+                                    "source_end_offset": source_end_offset,
+                                    "source_last_queued_at": source_position_recorded_at,
+                                    "ingested_at": ingested_at,
+                                    "content_class": content_class,
+                                    "provenance_class": provenance_class,
+                                    **({"source_class": source_class} if has_source_class else {}),
+                                },
+                                on_conflict="ignore",
                             )
                             changed = store.conn.changes() > 0
                             if changed:

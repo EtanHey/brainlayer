@@ -14,11 +14,10 @@ from typing import Iterator, Optional
 
 
 def normalize_timestamp(dt: datetime) -> datetime:
-    """Convert any datetime to naive UTC for consistent comparison."""
-    if dt.tzinfo is not None:
-        # Convert to UTC then remove timezone info
-        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
-    return dt
+    """Convert any datetime to timezone-aware UTC."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 @dataclass
@@ -128,7 +127,7 @@ def load_whatsapp_messages(
     cursor.execute(query)
 
     for row in cursor:
-        timestamp = datetime.fromtimestamp(row["message_date"] + core_data_epoch)
+        timestamp = datetime.fromtimestamp(row["message_date"] + core_data_epoch, tz=timezone.utc)
         text = row["text"]
         contact_name = row["contact_name"] or row["to_jid"]  # fallback to JID if no name
         chat_id = row["chat_id"]
@@ -191,7 +190,7 @@ def load_claude_messages(
                 try:
                     timestamp = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
                 except (ValueError, AttributeError):
-                    timestamp = datetime.now()
+                    timestamp = datetime.now(timezone.utc)
 
             conv_id = conv.get("uuid") or conv.get("id") or conv_name
             yield UnifiedMessage(
@@ -251,9 +250,9 @@ def load_instagram_messages(export_path: Path) -> Iterator[UnifiedMessage]:
             continue
 
         try:
-            timestamp = datetime.fromtimestamp(timestamp_val)
+            timestamp = datetime.fromtimestamp(timestamp_val, tz=timezone.utc)
         except (ValueError, TypeError, OSError):
-            timestamp = datetime.now()
+            timestamp = datetime.now(timezone.utc)
 
         yield UnifiedMessage(
             timestamp=timestamp,
@@ -400,9 +399,9 @@ def _yield_gemini_messages(activity_path: Path) -> Iterator[UnifiedMessage]:
             continue
 
         try:
-            timestamp = datetime.fromisoformat(time_str.replace("Z", "+00:00")) if time_str else datetime.now()
+            timestamp = datetime.fromisoformat(time_str.replace("Z", "+00:00")) if time_str else datetime.now(timezone.utc)
         except (ValueError, AttributeError):
-            timestamp = datetime.now()
+            timestamp = datetime.now(timezone.utc)
         timestamp = normalize_timestamp(timestamp)
 
         yield UnifiedMessage(
@@ -515,7 +514,7 @@ class UnifiedTimeline:
     def get_date_range(self) -> tuple[datetime, datetime]:
         """Get the date range of all messages."""
         if not self.messages:
-            return (datetime.now(), datetime.now())
+            return (datetime.now(timezone.utc), datetime.now(timezone.utc))
 
         dates = [m.timestamp for m in self.messages]
         return (min(dates), max(dates))

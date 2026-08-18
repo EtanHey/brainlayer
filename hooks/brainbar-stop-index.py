@@ -18,6 +18,12 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+SRC_DIR = Path(__file__).resolve().parents[1] / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from brainlayer.chunk_write import insert_canonical_chunk
+
 PENDING_DIR = Path.home() / ".brainlayer" / "pending"
 QUEUE_DIR = Path.home() / ".brainlayer" / "queue"
 
@@ -101,25 +107,25 @@ def main():
         conn.execute("PRAGMA busy_timeout = 5000")
 
         transcript = payload.get("transcript_path", "realtime-hook")
-        cursor = conn.execute(
-            """INSERT OR IGNORE INTO chunks
-               (id, content, metadata, source_file, source, project, content_type,
-                char_count, conversation_id, importance, created_at)
-               VALUES (?, ?, ?, ?, 'realtime', ?, 'assistant_text',
-                ?, ?, 5, ?)""",
-            (
-                chunk_id,
-                content,
-                metadata,
-                transcript,
-                project,
-                len(content),
-                session_id,
-                datetime.now(timezone.utc).isoformat(),
-            ),
+        created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        insert_canonical_chunk(
+            conn,
+            {
+                "id": chunk_id,
+                "content": content,
+                "metadata": metadata,
+                "source_file": transcript,
+                "source": "realtime",
+                "project": project,
+                "content_type": "assistant_text",
+                "char_count": len(content),
+                "conversation_id": session_id,
+                "importance": 5,
+                "created_at": created_at,
+            },
+            on_conflict="ignore",
         )
-
-        if cursor.rowcount > 0:
+        if conn.total_changes > 0:
             conn.commit()
 
         conn.close()

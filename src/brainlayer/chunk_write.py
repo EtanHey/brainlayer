@@ -16,7 +16,7 @@ from typing import Any, Iterable, Mapping
 from .agent_provenance import resolve_source_class
 from .chunk_origin import detect_chunk_origin
 from .content_class import classify_content_class, normalize_content_class
-from .dedupe import compute_dedupe_fields
+from .dedupe import DedupeFields, compute_dedupe_fields
 
 CANONICAL_INSERT_COLUMNS = frozenset(
     {
@@ -167,7 +167,26 @@ def prepare_canonical_insert(
             source_file=str(source_file),
             project=values.get("project"),
         )
-    fields = compute_dedupe_fields(content, created_at)
+    if (
+        values.get("dedupe_hash") is not None
+        and values.get("simhash") is not None
+        and values.get("simhash_band_0") is not None
+        and values.get("simhash_band_1") is not None
+        and values.get("simhash_band_2") is not None
+        and values.get("simhash_band_3") is not None
+    ):
+        fields = DedupeFields(
+            dedupe_hash=str(values["dedupe_hash"]),
+            simhash=str(values["simhash"]),
+            bands=(
+                str(values["simhash_band_0"]),
+                str(values["simhash_band_1"]),
+                str(values["simhash_band_2"]),
+                str(values["simhash_band_3"]),
+            ),
+        )
+    else:
+        fields = compute_dedupe_fields(content, created_at)
     resolved_origin = detect_chunk_origin(content, values.get("chunk_origin"))
     source_class = resolve_source_class(
         str(source_file),
@@ -205,12 +224,12 @@ def prepare_canonical_insert(
             "brick_id": values.get("brick_id") or chunk_id,
             "source_uri": values.get("source_uri") or source_file,
             "status": values.get("status") or "active",
-            "dedupe_hash": values.get("dedupe_hash") or fields.dedupe_hash,
-            "simhash": values.get("simhash") or fields.simhash,
-            "simhash_band_0": values.get("simhash_band_0") or fields.bands[0],
-            "simhash_band_1": values.get("simhash_band_1") or fields.bands[1],
-            "simhash_band_2": values.get("simhash_band_2") or fields.bands[2],
-            "simhash_band_3": values.get("simhash_band_3") or fields.bands[3],
+            "dedupe_hash": fields.dedupe_hash if values.get("dedupe_hash") is None else values["dedupe_hash"],
+            "simhash": fields.simhash if values.get("simhash") is None else values["simhash"],
+            "simhash_band_0": fields.bands[0] if values.get("simhash_band_0") is None else values["simhash_band_0"],
+            "simhash_band_1": fields.bands[1] if values.get("simhash_band_1") is None else values["simhash_band_1"],
+            "simhash_band_2": fields.bands[2] if values.get("simhash_band_2") is None else values["simhash_band_2"],
+            "simhash_band_3": fields.bands[3] if values.get("simhash_band_3") is None else values["simhash_band_3"],
         }
     )
     if source_class is not None:

@@ -20,6 +20,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ..chunk_write import insert_canonical_chunk
 from ..queue_io import enqueue_hook_chunk, get_queue_dir
 
 logger = logging.getLogger(__name__)
@@ -143,7 +144,7 @@ class RealtimeIndexer:
                     source_file=cwd,
                     created_at=created_at,
                 )
-                if cursor.rowcount == 0:
+                if cursor.fetchone()[0] == 0:
                     # INSERT OR IGNORE skipped — duplicate
                     return None
                 self._db.commit()
@@ -231,30 +232,26 @@ class RealtimeIndexer:
         if not self._db:
             raise RuntimeError("database is not open")
         columns = self._chunk_columns()
-        values = {
-            "chunk_id": chunk_id,
+        payload: dict[str, object] = {
             "id": chunk_id,
-            "session_id": session_id,
-            "conversation_id": session_id,
             "content": content,
-            "metadata": json.dumps({"session_id": session_id, "content_hash": content_hash}),
+            "metadata": {"session_id": session_id, "content_hash": content_hash},
             "content_hash": content_hash,
             "source_file": source_file,
             "project": project,
             "content_type": "assistant_text",
-            "value_type": "HIGH",
+            "value_type": "high",
             "char_count": len(content),
             "source": "realtime",
             "created_at": created_at,
+            "conversation_id": session_id,
         }
-        row = {column: values[column] for column in values if column in columns}
-        id_column = "chunk_id" if "chunk_id" in columns else "id"
-        if id_column not in row:
-            raise RuntimeError("chunks table must expose chunk_id or id")
-        names = list(row)
-        placeholders = ", ".join("?" for _ in names)
-        sql = f"INSERT OR IGNORE INTO chunks ({', '.join(names)}) VALUES ({placeholders})"
-        return self._db.execute(sql, [row[name] for name in names])
+        if "chunk_id" in columns:
+            payload["chunk_id"] = chunk_id
+        if "session_id" in columns:
+            payload["session_id"] = session_id
+        insert_canonical_chunk(self._db, payload, on_conflict="ignore")
+        return self._db.execute("SELECT changes()")
 
     def _write_to_queue(
         self,

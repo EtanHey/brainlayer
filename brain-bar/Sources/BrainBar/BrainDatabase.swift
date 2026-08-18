@@ -4,6 +4,7 @@
 // BrainLayer database so agent state and chunk writes share one durable store.
 
 import Darwin
+import BrainBarLifecycle
 import CryptoKit
 import Foundation
 import SQLite3
@@ -886,7 +887,17 @@ final class BrainDatabase: @unchecked Sendable {
                     status TEXT DEFAULT 'active',
                     ingested_at INTEGER,
                     topic_cluster TEXT,
-                    content_hash TEXT
+                    content_hash TEXT,
+                    chunk_origin TEXT DEFAULT 'user_explicit',
+                    seen_count INTEGER DEFAULT 1,
+                    last_seen_at TEXT,
+                    content_class TEXT DEFAULT 'knowledge',
+                    dedupe_hash TEXT,
+                    simhash TEXT,
+                    simhash_band_0 TEXT,
+                    simhash_band_1 TEXT,
+                    simhash_band_2 TEXT,
+                    simhash_band_3 TEXT
                 )
             """)
         }
@@ -1408,11 +1419,12 @@ final class BrainDatabase: @unchecked Sendable {
         let chunkID = chunkID ?? Self.makeChunkID()
         let createdAt = createdAt ?? Self.timestamp()
         let contentHash = Self.bodySHA256(content)
+        let dedupeFields = ChunkDedupe.computeDedupeFields(content: content, createdAt: createdAt)
         let tagsJSON = (try? encodeJSON(tags)) ?? "[]"
         let metadataJSON = Self.storeMetadataJSON(queueID: queueID)
         let sql = """
-            INSERT INTO chunks (id, content, metadata, source_file, project, tags, importance, source, content_type, char_count, created_at, preview_text, conversation_id, position, content_hash, chunk_origin, ingested_at, seen_count, last_seen_at, content_class, brick_id, source_uri, status)
-            VALUES (?, ?, ?, 'brainbar-store', ?, ?, ?, ?, 'user_message', ?, ?, ?, ?, ?, ?, 'user_explicit', ?, 1, ?, 'knowledge', ?, 'brainbar-store', 'active')
+            INSERT INTO chunks (id, content, metadata, source_file, project, tags, importance, source, content_type, value_type, char_count, created_at, preview_text, conversation_id, position, content_hash, chunk_origin, ingested_at, seen_count, last_seen_at, content_class, dedupe_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3, brick_id, source_uri, status)
+            VALUES (?, ?, ?, 'brainbar-store', ?, ?, ?, ?, 'user_message', 'high', ?, ?, ?, ?, ?, ?, 'user_explicit', ?, 1, ?, 'knowledge', ?, ?, ?, ?, ?, ?, ?, 'brainbar-store', 'active')
         """
         let previousBusyTimeout = busyTimeoutMillis.flatMap { _ in queryPragma(db, name: "busy_timeout") }
         if let busyTimeoutMillis {
@@ -1468,7 +1480,13 @@ final class BrainDatabase: @unchecked Sendable {
                 bindText(contentHash, to: stmt, index: 13)
                 sqlite3_bind_int64(stmt, 14, Int64(Date().timeIntervalSince1970))
                 bindText(createdAt, to: stmt, index: 15)
-                bindText(chunkID, to: stmt, index: 16)
+                bindText(dedupeFields.dedupeHash, to: stmt, index: 16)
+                bindText(dedupeFields.simhash, to: stmt, index: 17)
+                bindText(dedupeFields.bands.0, to: stmt, index: 18)
+                bindText(dedupeFields.bands.1, to: stmt, index: 19)
+                bindText(dedupeFields.bands.2, to: stmt, index: 20)
+                bindText(dedupeFields.bands.3, to: stmt, index: 21)
+                bindText(chunkID, to: stmt, index: 22)
             }
             if failNextStoreAfterInsertForTesting {
                 failNextStoreAfterInsertForTesting = false
@@ -3403,6 +3421,39 @@ final class BrainDatabase: @unchecked Sendable {
         }
         if !existingColumns.contains("topic_cluster") {
             try execute("ALTER TABLE chunks ADD COLUMN topic_cluster TEXT")
+        }
+        if !existingColumns.contains("content_hash") {
+            try execute("ALTER TABLE chunks ADD COLUMN content_hash TEXT")
+        }
+        if !existingColumns.contains("chunk_origin") {
+            try execute("ALTER TABLE chunks ADD COLUMN chunk_origin TEXT DEFAULT 'user_explicit'")
+        }
+        if !existingColumns.contains("seen_count") {
+            try execute("ALTER TABLE chunks ADD COLUMN seen_count INTEGER DEFAULT 1")
+        }
+        if !existingColumns.contains("last_seen_at") {
+            try execute("ALTER TABLE chunks ADD COLUMN last_seen_at TEXT")
+        }
+        if !existingColumns.contains("content_class") {
+            try execute("ALTER TABLE chunks ADD COLUMN content_class TEXT DEFAULT 'knowledge'")
+        }
+        if !existingColumns.contains("dedupe_hash") {
+            try execute("ALTER TABLE chunks ADD COLUMN dedupe_hash TEXT")
+        }
+        if !existingColumns.contains("simhash") {
+            try execute("ALTER TABLE chunks ADD COLUMN simhash TEXT")
+        }
+        if !existingColumns.contains("simhash_band_0") {
+            try execute("ALTER TABLE chunks ADD COLUMN simhash_band_0 TEXT")
+        }
+        if !existingColumns.contains("simhash_band_1") {
+            try execute("ALTER TABLE chunks ADD COLUMN simhash_band_1 TEXT")
+        }
+        if !existingColumns.contains("simhash_band_2") {
+            try execute("ALTER TABLE chunks ADD COLUMN simhash_band_2 TEXT")
+        }
+        if !existingColumns.contains("simhash_band_3") {
+            try execute("ALTER TABLE chunks ADD COLUMN simhash_band_3 TEXT")
         }
         if needsAtomicBackfill {
             try execute("UPDATE chunks SET brick_id = id WHERE brick_id IS NULL")

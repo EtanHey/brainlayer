@@ -14,6 +14,7 @@ from brainlayer.timestamp_iso import (
     PREIMAGE_TABLE,
     is_iso_utc,
     normalize_timestamp,
+    normalize_timestamp_for_migration,
     normalize_timestamps,
 )
 
@@ -27,6 +28,7 @@ def _make_db(path: Path) -> sqlite3.Connection:
         CREATE TABLE chunks (
             id TEXT PRIMARY KEY,
             content TEXT NOT NULL,
+            source TEXT,
             created_at TEXT,
             last_seen_at TEXT,
             archived_at TEXT,
@@ -36,16 +38,17 @@ def _make_db(path: Path) -> sqlite3.Connection:
     )
     conn.execute(
         """
-        INSERT INTO chunks(id, content, created_at, last_seen_at, archived_at, enriched_at)
+        INSERT INTO chunks(id, content, source, created_at, last_seen_at, archived_at, enriched_at)
         VALUES
-          ('style_53_unix', 'unix archived', '2026-08-18T00:00:00Z', '2026-08-18T00:00:00Z',
+          ('style_53_unix', 'unix archived', 'claude_code', '2026-08-18T00:00:00Z', '2026-08-18T00:00:00Z',
            '1780190105.85048', NULL),
-          ('iso_already', 'already iso', '2026-08-18T00:00:00Z', '2026-08-18T00:00:01+00:00',
+          ('iso_already', 'already iso', 'claude_code', '2026-08-18T00:00:00Z', '2026-08-18T00:00:01+00:00',
            '2026-08-17T21:00:00Z', '2026-08-17T21:01:00.123Z'),
-          ('created_unix', 'unix created', '1780190105', NULL, NULL, NULL),
-          ('naive_iso', 'naive created', '2026-07-14T11:45:26.994441', NULL, NULL, NULL),
-          ('offset_jerusalem', 'local offset', '2026-06-09T13:37:11+03:00', NULL, NULL, NULL),
-          ('tilde_garbage', 'unparseable', '2026-05-28T~12:35:00Z', NULL, NULL, NULL)
+          ('created_unix', 'unix created', 'claude_code', '1780190105', NULL, NULL, NULL),
+          ('naive_iso', 'naive created', 'claude_code', '2026-07-14T11:45:26.994441', NULL, NULL, NULL),
+          ('whatsapp_local', 'whatsapp local', 'whatsapp', '2019-02-11T16:05:15', NULL, NULL, NULL),
+          ('offset_jerusalem', 'local offset', 'claude_code', '2026-06-09T13:37:11+03:00', NULL, NULL, NULL),
+          ('tilde_garbage', 'unparseable', 'claude_code', '2026-05-28T~12:35:00Z', NULL, NULL, NULL)
         """
     )
     conn.commit()
@@ -77,6 +80,16 @@ def test_dry_run_does_not_write(tmp_path):
     assert archived == "1780190105.85048"
 
 
+def test_normalize_timestamp_for_migration_whatsapp_jerusalem():
+    converted = normalize_timestamp_for_migration("2019-02-11T16:05:15", source="whatsapp")
+    assert converted == "2019-02-11T14:05:15Z"
+    assert is_iso_utc(converted)
+
+
+def test_normalize_timestamp_for_migration_unknown_naive_returns_none():
+    assert normalize_timestamp_for_migration("2026-07-14T11:45:26.994441", source="claude_code") is None
+
+
 def test_apply_rewrites_unix_floats_and_keeps_iso(tmp_path):
     db_path = tmp_path / "copy.db"
     _make_db(db_path).close()
@@ -93,13 +106,37 @@ def test_apply_rewrites_unix_floats_and_keeps_iso(tmp_path):
     assert is_iso_utc(rows["style_53_unix"][2])
     assert is_iso_utc(rows["created_unix"][0])
     assert is_iso_utc(rows["iso_already"][0])
-    assert rows["naive_iso"][0] == "2026-07-14T11:45:26.994441Z"
+    assert rows["naive_iso"][0] == "2026-07-14T11:45:26.994441"
+    assert rows["whatsapp_local"][0] == "2019-02-11T14:05:15Z"
     assert rows["offset_jerusalem"][0] == "2026-06-09T10:37:11Z"
     assert rows["tilde_garbage"][0] == "2026-05-28T~12:35:00Z"
     assert result.skipped_unparseable >= 1
     assert PREIMAGE_TABLE in names
     assert applied is not None
     assert all(item["ok"] for item in result.spot_checks)
+
+
+def test_spot_check_fails_when_stored_instant_differs_from_preimage():
+    import sqlite3
+
+    from brainlayer.timestamp_iso import _spot_ok
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE chunks (id TEXT, source TEXT, created_at TEXT)")
+    conn.execute("CREATE TABLE timestamp_iso_preimage (id TEXT PRIMARY KEY, created_at TEXT)")
+    conn.execute(
+        "INSERT INTO chunks VALUES ('w1', 'whatsapp', '2019-02-11T16:05:15Z')"
+    )
+    conn.execute(
+        "INSERT INTO timestamp_iso_preimage VALUES ('w1', '2019-02-11T16:05:15')"
+    )
+    stored = conn.execute("SELECT id, source, created_at FROM chunks WHERE id='w1'").fetchone()
+    preimage = conn.execute(
+        "SELECT id, created_at FROM timestamp_iso_preimage WHERE id='w1'"
+    ).fetchone()
+    assert not _spot_ok(stored, preimage, ["created_at"], source="whatsapp")
+    conn.close()
 
 
 def test_refuses_live_db_without_allow_live(tmp_path, monkeypatch):

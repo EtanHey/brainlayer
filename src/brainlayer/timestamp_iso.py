@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from .chunk_origin_wipe import AUX_COUNT_TABLES, assert_not_live_db
 from .chunk_origin_wipe import live_canonical_db_path as live_canonical_db_path
@@ -25,6 +26,8 @@ PREIMAGE_TABLE = "timestamp_iso_preimage"
 MIGRATION_NAME = "2026_08_18_timestamp_iso_utc"
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 _ISO_UTC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|\+00:00)$")
+_JERUSALEM = ZoneInfo("Asia/Jerusalem")
+KNOWN_LOCAL_NAIVE_SOURCES = frozenset({"whatsapp", "instagram"})
 
 ISO_TIMESTAMP_COLUMNS = (
     "created_at",
@@ -45,6 +48,8 @@ class TimestampIsoResult:
     updated: int = 0
     would_update: int = 0
     skipped_unparseable: int = 0
+    skipped_unknown_naive: int = 0
+    skipped_unknown_naive_by_source: dict[str, int] = field(default_factory=dict)
     batches: int = 0
     checkpoints: int = 0
     aux_counts_before: dict[str, int] = field(default_factory=dict)
@@ -70,13 +75,32 @@ def _from_unix(number: float) -> str:
     return stamp.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
+def _to_utc_z(stamp: datetime) -> str:
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return stamp.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _parse_instant(value: Any) -> datetime | None:
+    normalized = normalize_timestamp(value)
+    if normalized is None:
+        return None
+    candidate = normalized[:-1] + "+00:00" if normalized.endswith("Z") else normalized
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def normalize_timestamp(value: Any) -> str | None:
-    """Return ISO-8601 UTC, or None for empty inputs."""
+    """Return ISO-8601 UTC for writer paths. Naive ISO is treated as UTC."""
     if value is None:
         return None
     if isinstance(value, datetime):
-        stamp = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-        return stamp.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        return _to_utc_z(value)
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return _from_unix(float(value))
     text = str(value).strip()
@@ -92,7 +116,42 @@ def normalize_timestamp(value: Any) -> str | None:
     if parsed is not None:
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        return _to_utc_z(parsed)
+    try:
+        number = float(text)
+    except ValueError:
+        return None
+    if number <= 0:
+        return None
+    return _from_unix(number)
+
+
+def normalize_timestamp_for_migration(value: Any, *, source: str | None = None) -> str | None:
+    """Migration conversion with provenance-aware naive handling."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return _to_utc_z(value)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return _from_unix(float(value))
+    text = str(value).strip()
+    if not text:
+        return None
+    if _ISO_UTC_RE.match(text):
+        return text.replace("+00:00", "Z")
+    iso_candidate = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+        parsed = datetime.fromisoformat(iso_candidate)
+    except ValueError:
+        parsed = None
+    if parsed is not None:
+        if parsed.tzinfo is None:
+            source_key = str(source or "").strip().lower()
+            if source_key in KNOWN_LOCAL_NAIVE_SOURCES:
+                parsed = parsed.replace(tzinfo=_JERUSALEM)
+                return _to_utc_z(parsed)
+            return None
+        return _to_utc_z(parsed)
     try:
         number = float(text)
     except ValueError:
@@ -135,23 +194,50 @@ def _needs_normalize(value: Any) -> bool:
 
 
 def _ensure_preimage(conn: sqlite3.Connection, columns: list[str]) -> None:
+    expected = ["id", *columns]
     exists = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
         (PREIMAGE_TABLE,),
     ).fetchone()
-    select_cols = ", ".join(["id", *columns])
     if exists:
+        present = [row[1] for row in conn.execute(f"PRAGMA table_info({PREIMAGE_TABLE})")]
+        if present != expected:
+            raise RuntimeError(
+                f"{PREIMAGE_TABLE} columns {present!r} do not match expected {expected!r}; "
+                "restore from backup before re-running"
+            )
         return
-    conn.execute(f"CREATE TABLE {PREIMAGE_TABLE} AS SELECT {select_cols} FROM chunks WHERE 0")
+    column_defs = ", ".join(["id TEXT PRIMARY KEY", *(f"{column} TEXT" for column in columns)])
+    conn.execute(f"CREATE TABLE {PREIMAGE_TABLE} ({column_defs})")
     conn.commit()
 
 
-def _spot_ok(row: sqlite3.Row, columns: list[str]) -> bool:
+def _spot_ok(
+    stored_row: sqlite3.Row,
+    preimage_row: sqlite3.Row | None,
+    columns: list[str],
+    *,
+    source: str | None,
+) -> bool:
+    if preimage_row is None:
+        return False
     for column in columns:
-        value = row[column]
-        if value in (None, ""):
+        preimage = preimage_row[column]
+        stored = stored_row[column]
+        if preimage in (None, ""):
             continue
-        if not is_iso_utc(value):
+        if stored in (None, ""):
+            return False
+        expected = normalize_timestamp_for_migration(preimage, source=source)
+        if expected is None:
+            if stored != preimage:
+                return False
+            continue
+        if stored != expected:
+            return False
+        stored_instant = _parse_instant(stored)
+        expected_instant = _parse_instant(expected)
+        if stored_instant is None or expected_instant is None or stored_instant != expected_instant:
             return False
     return True
 
@@ -186,6 +272,8 @@ def normalize_timestamps(
         columns = [column for column in ISO_TIMESTAMP_COLUMNS if column in present]
         if not columns:
             raise RuntimeError("chunks has no ISO timestamp columns to normalize")
+        has_source = "source" in present
+        select_source = ", source" if has_source else ", NULL AS source"
         result.aux_counts_before = _aux_counts(conn)
         if apply:
             _ensure_preimage(conn, columns)
@@ -197,7 +285,7 @@ def normalize_timestamps(
             rows = list(
                 conn.execute(
                     f"""
-                    SELECT rowid, id, {", ".join(columns)}
+                    SELECT rowid, id{select_source}, {", ".join(columns)}
                     FROM chunks
                     WHERE rowid > ?
                     ORDER BY rowid
@@ -214,6 +302,7 @@ def normalize_timestamps(
             for row in rows:
                 last_rowid = int(row["rowid"])
                 result.scanned += 1
+                source = row["source"] if has_source else None
                 changed = False
                 new_values: list[Any] = []
                 old_values: list[Any] = [row["id"]]
@@ -221,11 +310,24 @@ def normalize_timestamps(
                     current = row[column]
                     old_values.append(current)
                     if _needs_normalize(current):
-                        converted = normalize_timestamp(current)
+                        converted = normalize_timestamp_for_migration(current, source=source)
                         if converted is not None and is_iso_utc(converted):
                             new_values.append(converted)
                             changed = True
                             result.column_counts[column] = result.column_counts.get(column, 0) + 1
+                        elif (
+                            converted is None
+                            and current is not None
+                            and str(current).strip()
+                            and "T" in str(current)
+                            and normalize_timestamp(current) is not None
+                        ):
+                            new_values.append(current)
+                            result.skipped_unknown_naive += 1
+                            source_key = str(source or "unknown").strip().lower() or "unknown"
+                            result.skipped_unknown_naive_by_source[source_key] = (
+                                result.skipped_unknown_naive_by_source.get(source_key, 0) + 1
+                            )
                         else:
                             new_values.append(current)
                             result.skipped_unparseable += 1
@@ -287,6 +389,8 @@ def normalize_timestamps(
                 "actor": actor,
                 "updated": result.updated,
                 "skipped_unparseable": result.skipped_unparseable,
+                "skipped_unknown_naive": result.skipped_unknown_naive,
+                "skipped_unknown_naive_by_source": result.skipped_unknown_naive_by_source,
                 "column_counts": result.column_counts,
             }
             conn.execute(
@@ -298,16 +402,22 @@ def normalize_timestamps(
             checks: list[dict[str, Any]] = []
             for chunk_id in samples:
                 stored = conn.execute(
-                    f"SELECT id, {', '.join(columns)} FROM chunks WHERE id = ?",
+                    f"SELECT id, source, {', '.join(columns)} FROM chunks WHERE id = ?",
                     (chunk_id,),
                 ).fetchone()
                 if stored is None:
                     checks.append({"id": chunk_id, "ok": False})
                     continue
+                preimage = conn.execute(
+                    f"SELECT id, {', '.join(columns)} FROM {PREIMAGE_TABLE} WHERE id = ?",
+                    (chunk_id,),
+                ).fetchone()
+                row_source = stored["source"] if has_source else None
+                ok = _spot_ok(stored, preimage, columns, source=row_source)
                 checks.append(
                     {
                         "id": chunk_id,
-                        "ok": _spot_ok(stored, columns),
+                        "ok": ok,
                         **{column: stored[column] for column in columns},
                     }
                 )
@@ -325,6 +435,8 @@ def _result_payload(db_path: Path, *, apply: bool, result: TimestampIsoResult) -
         "updated": result.updated,
         "would_update": result.would_update,
         "skipped_unparseable": result.skipped_unparseable,
+        "skipped_unknown_naive": result.skipped_unknown_naive,
+        "skipped_unknown_naive_by_source": result.skipped_unknown_naive_by_source,
         "batches": result.batches,
         "checkpoints": result.checkpoints,
         "column_counts": result.column_counts,
