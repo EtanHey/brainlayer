@@ -543,9 +543,21 @@ def _ensure_preimage(conn: sqlite3.Connection) -> None:
 
 
 def _new_run_id(conn: sqlite3.Connection) -> str:
-    """A monotonic id for this apply, derived from the DB's own clock."""
+    """A unique id for this apply, derived from the DB's own clock.
+
+    The stamp is millisecond-resolution, which is ample for a ~1-minute apply
+    but not a guarantee: two applies scripted back to back could land in the
+    same millisecond, and sharing a run_id would fuse them into one rollback
+    unit. So collisions are resolved rather than assumed away.
+    """
     stamp = conn.execute("SELECT strftime('%Y%m%dT%H%M%f','now')").fetchone()[0]
-    return f"run-{stamp}"
+    base = f"run-{stamp}"
+    candidate = base
+    suffix = 1
+    while conn.execute(f"SELECT 1 FROM {PREIMAGE_TABLE} WHERE run_id = ? LIMIT 1", (candidate,)).fetchone():
+        candidate = f"{base}-{suffix}"
+        suffix += 1
+    return candidate
 
 
 def _rollback_marker(run_id: str) -> str:
