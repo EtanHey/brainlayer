@@ -30,7 +30,6 @@ Usage:
     )
 """
 
-import hashlib
 import json
 import logging
 import time
@@ -41,7 +40,7 @@ from typing import Any, Callable, Dict, List, Optional
 import apsw
 
 from .chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, detect_chunk_origin
-from .chunk_write import insert_canonical_chunk
+from .chunk_write import canonical_content_hash, insert_canonical_chunk
 from .content_class import classify_content_class
 from .dedupe import find_duplicate, merge_duplicate_chunk, merge_existing_chunk_content, merge_existing_chunk_seen
 from .ingest_guard import reject_recursive_mcp_output
@@ -168,7 +167,7 @@ def store_memory(
     chunk_id = chunk_id or f"manual-{uuid.uuid4().hex[:16]}"
     now = datetime.now(timezone.utc).isoformat()
     effective_created_at = created_at or now
-    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    content_hash = canonical_content_hash(content)
 
     # Embed at write time (if embed_fn provided), otherwise defer
     embedding = None

@@ -21,7 +21,7 @@ import sqlite_vec
 from ._helpers import _is_sqlite_busy_error, serialize_f32
 from .agent_provenance import normalize_source_class
 from .chunk_origin import detect_chunk_origin
-from .chunk_write import insert_canonical_chunk
+from .chunk_write import canonical_content_hash, insert_canonical_chunk
 from .content_class import classify_content_class
 from .dedupe import (
     ensure_dedupe_schema,
@@ -365,8 +365,9 @@ def _ensure_rewind_archive_schema(conn: apsw.Connection) -> None:
             cols.add(col)
 
 
-def _content_hash(content: str) -> str:
-    return hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
+# One implementation only -- see chunk_write.canonical_content_hash. drain writes
+# content_hash on its INSERT payloads, so it must not carry its own copy.
+_content_hash = canonical_content_hash
 
 
 def _insert_chunk(conn: apsw.Connection, values: dict[str, Any]) -> None:
@@ -948,9 +949,11 @@ def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     if not content:
         logger.warning("Skipping malformed hook event with empty content")
         return ApplyResult()
-    content_hash = event.get("content_hash") or hashlib.sha256(content.encode()).hexdigest()[:16]
+    # Truncated digest that NAMES the chunk (id suffix + queue key). It is not a
+    # content hash: the content_hash column is filled by the canonical contract.
+    id_digest = event.get("content_hash") or hashlib.sha256(content.encode()).hexdigest()[:16]
     session_id = event.get("session_id") or "unknown"
-    chunk_id = event.get("chunk_id") or f"rt-{str(session_id)[:8]}-{content_hash}"
+    chunk_id = event.get("chunk_id") or f"rt-{str(session_id)[:8]}-{id_digest}"
     source_file = event.get("source_file") or "realtime-hook"
     recursive_reason = recursive_mcp_output_reason(
         content,
@@ -977,7 +980,7 @@ def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
         {
             "id": chunk_id,
             "content": content,
-            "metadata": json.dumps({"session_id": session_id, "content_hash": content_hash}),
+            "metadata": json.dumps({"session_id": session_id, "id_digest": id_digest}),
             "source_file": source_file,
             "project": event.get("project"),
             "content_type": "assistant_text",

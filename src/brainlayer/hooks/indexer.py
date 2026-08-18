@@ -124,9 +124,11 @@ class RealtimeIndexer:
         else:
             content = f"Assistant: {response_text}"
 
-        # Content hash for dedup (scoped to session via UNIQUE constraint)
-        content_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
-        chunk_id = f"rt-{session_id[:8]}-{content_hash}"
+        # Truncated digest that NAMES the chunk (id suffix + queue key). It is not
+        # a content hash: the content_hash column is filled by the canonical
+        # contract in chunk_write, which is the single scheme for that column.
+        id_digest = hashlib.sha256(content.encode()).hexdigest()[:16]
+        chunk_id = f"rt-{session_id[:8]}-{id_digest}"
         project = self._extract_project(cwd)
         created_at = datetime.now(timezone.utc).isoformat()
 
@@ -138,7 +140,7 @@ class RealtimeIndexer:
                     chunk_id=chunk_id,
                     session_id=session_id,
                     content=content,
-                    content_hash=content_hash,
+                    id_digest=id_digest,
                     project=project,
                     source_file=cwd,
                     created_at=created_at,
@@ -150,10 +152,10 @@ class RealtimeIndexer:
                 return chunk_id
             except Exception as exc:
                 logger.warning("DB write failed: %s", exc)
-                self._write_to_queue(session_id, content, content_hash, project, source_file=cwd, created_at=created_at)
+                self._write_to_queue(session_id, content, id_digest, project, source_file=cwd, created_at=created_at)
                 return None
         else:
-            self._write_to_queue(session_id, content, content_hash, project, source_file=cwd, created_at=created_at)
+            self._write_to_queue(session_id, content, id_digest, project, source_file=cwd, created_at=created_at)
             return None
 
     # MARK: - Chapter boundaries (PostCompact)
@@ -223,7 +225,7 @@ class RealtimeIndexer:
         chunk_id: str,
         session_id: str,
         content: str,
-        content_hash: str,
+        id_digest: str,
         project: str,
         source_file: str,
         created_at: str,
@@ -234,8 +236,7 @@ class RealtimeIndexer:
         payload: dict[str, object] = {
             "id": chunk_id,
             "content": content,
-            "metadata": {"session_id": session_id, "content_hash": content_hash},
-            "content_hash": content_hash,
+            "metadata": {"session_id": session_id, "id_digest": id_digest},
             "source_file": source_file,
             "project": project,
             "content_type": "assistant_text",

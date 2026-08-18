@@ -1,6 +1,10 @@
+import re
 import sqlite3
+from pathlib import Path
 
 import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _init_chunks(conn: sqlite3.Connection) -> None:
@@ -139,197 +143,69 @@ def test_migrate_fts_compact_dual_preserves_trigram_table(tmp_path):
     assert counts == (1, 1)
 
 
-def test_dedupe_deletes_duplicates_and_repoints_refs(tmp_path):
-    from brainlayer.db_shrink import apply_content_dedup
+# --- repair (e): the physical-delete dedupe path must stay gone ---------------
+# db_shrink once carried apply_content_dedup -> _merge_duplicate_references ->
+# `DELETE FROM chunks`, stamped mechanism='normalized_content_physical_delete'
+# and keyed on the lossy normalized_exact_hash. It contradicted the lifecycle law
+# (duplicates archive with aggregated_into lineage, never delete) and had never
+# run on the canonical DB. Merging now lives in brainlayer.dedupe_merge, which
+# only writes lifecycle columns.
 
-    db_path = tmp_path / "dedup.db"
-    conn = sqlite3.connect(db_path)
-    _init_chunks(conn)
-    conn.executescript(
-        """
-        CREATE TABLE chunk_id_alias (
-            old_chunk_id TEXT PRIMARY KEY,
-            canonical_chunk_id TEXT NOT NULL,
-            deprecated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE dedupe_audit (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chunk_id_dropped TEXT NOT NULL,
-            chunk_id_kept TEXT NOT NULL,
-            mechanism TEXT NOT NULL,
-            hamming_distance INTEGER,
-            ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE chunk_tags (
-            chunk_id TEXT NOT NULL,
-            tag TEXT NOT NULL,
-            PRIMARY KEY (chunk_id, tag)
-        );
-        CREATE TABLE kg_entity_chunks (
-            entity_id TEXT NOT NULL,
-            chunk_id TEXT NOT NULL,
-            relevance REAL,
-            context TEXT,
-            PRIMARY KEY (entity_id, chunk_id)
-        );
-        CREATE TABLE chunk_vectors (
-            chunk_id TEXT PRIMARY KEY,
-            embedding BLOB
-        );
-        CREATE TABLE correction_pairs (
-            id INTEGER PRIMARY KEY,
-            chunk_id TEXT
-        );
-        CREATE TABLE file_interactions (
-            id INTEGER PRIMARY KEY,
-            chunk_id TEXT
-        );
-        CREATE TABLE kg_relations (
-            id TEXT PRIMARY KEY,
-            source_chunk_id TEXT
-        );
-        CREATE VIRTUAL TABLE chunks_fts USING fts5(
-            content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id UNINDEXED
-        );
-        """
-    )
-    rows = [
-        ("qrel-id", "Duplicate content for the eval target", "2026-01-02"),
-        ("dupe-id", "duplicate   content for the eval target", "2026-01-01"),
-        ("old-id", "Another duplicate memory", "2026-01-01"),
-        ("new-id", "another duplicate memory", "2026-01-03"),
-        ("unique-id", "Unique memory", "2026-01-04"),
-    ]
-    conn.executemany(
-        """
-        INSERT INTO chunks(id, content, summary, tags, resolved_query, key_facts, resolved_queries, created_at)
-        VALUES (?, ?, '', '', '', '', '', ?)
-        """,
-        rows,
-    )
-    conn.executemany(
-        "INSERT INTO chunk_tags(chunk_id, tag) VALUES (?, ?)", [("dupe-id", "dupe-tag"), ("qrel-id", "qrel-tag")]
-    )
-    conn.execute(
-        "INSERT INTO kg_entity_chunks(entity_id, chunk_id, relevance, context) VALUES ('e1', 'dupe-id', 0.7, 'ctx')"
-    )
-    conn.execute("INSERT INTO chunk_vectors(chunk_id, embedding) VALUES ('dupe-id', X'00')")
-    conn.execute("INSERT INTO correction_pairs(id, chunk_id) VALUES (1, 'dupe-id')")
-    conn.execute("INSERT INTO file_interactions(id, chunk_id) VALUES (1, 'dupe-id')")
-    conn.execute("INSERT INTO kg_relations(id, source_chunk_id) VALUES ('r1', 'dupe-id')")
-    conn.commit()
-    conn.close()
-
-    result = apply_content_dedup(db_path, protected_chunk_ids={"qrel-id"}, batch_size=2)
-
-    checked = sqlite3.connect(db_path)
-    chunk_ids = {row[0] for row in checked.execute("SELECT id FROM chunks")}
-    alias = dict(checked.execute("SELECT old_chunk_id, canonical_chunk_id FROM chunk_id_alias"))
-    tags = set(checked.execute("SELECT chunk_id, tag FROM chunk_tags"))
-    entity_link = checked.execute("SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = 'e1'").fetchone()[0]
-    correction = checked.execute("SELECT chunk_id FROM correction_pairs WHERE id = 1").fetchone()[0]
-    interaction = checked.execute("SELECT chunk_id FROM file_interactions WHERE id = 1").fetchone()[0]
-    relation = checked.execute("SELECT source_chunk_id FROM kg_relations WHERE id = 'r1'").fetchone()[0]
-    vector = checked.execute("SELECT 1 FROM chunk_vectors WHERE chunk_id = 'dupe-id'").fetchone()
-    checked.close()
-
-    assert result.duplicate_rows == 2
-    assert result.deleted_rows == 2
-    assert "dupe-id" not in chunk_ids
-    assert "new-id" not in chunk_ids
-    assert "qrel-id" in chunk_ids
-    assert "old-id" in chunk_ids
-    assert alias["dupe-id"] == "qrel-id"
-    assert alias["new-id"] == "old-id"
-    assert ("qrel-id", "dupe-tag") in tags
-    assert entity_link == "qrel-id"
-    assert correction == "qrel-id"
-    assert interaction == "qrel-id"
-    assert relation == "qrel-id"
-    assert vector is None
+REMOVED_DEDUP_SYMBOLS = (
+    "apply_content_dedup",
+    "analyze_content_duplicates",
+    "_merge_duplicate_references",
+    "_record_alias",
+    "_delete_by_chunk_id",
+    "_delete_fts_rows_for_chunk",
+    "_insert_or_ignore_repoint",
+    "_bulk_repoint_direct_refs",
+    "_bulk_repoint_chunk_self_refs",
+    "load_protected_qrel_ids",
+    "DedupResult",
+)
 
 
-def test_dedupe_without_fts_rebuild_preserves_fts_consistency(tmp_path):
-    from brainlayer.db_shrink import apply_content_dedup
+def test_physical_delete_dedup_path_is_gone():
+    from brainlayer import db_shrink
 
-    db_path = tmp_path / "dedup-skip-fts.db"
-    conn = sqlite3.connect(db_path)
-    _init_chunks(conn)
-    conn.executescript(
-        """
-        CREATE TABLE chunk_id_alias (
-            old_chunk_id TEXT PRIMARY KEY,
-            canonical_chunk_id TEXT NOT NULL,
-            deprecated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE dedupe_audit (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chunk_id_dropped TEXT NOT NULL,
-            chunk_id_kept TEXT NOT NULL,
-            mechanism TEXT NOT NULL,
-            hamming_distance INTEGER,
-            ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE VIRTUAL TABLE chunks_fts USING fts5(
-            content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id UNINDEXED
-        );
-        CREATE TRIGGER chunks_fts_insert AFTER INSERT ON chunks BEGIN
-            INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
-            VALUES (
-                new.content,
-                new.summary,
-                new.tags,
-                new.resolved_query,
-                new.key_facts,
-                new.resolved_queries,
-                new.id
-            );
-            INSERT INTO chunk_fts_rowids(chunk_id, fts_rowid, trigram_rowid)
-            VALUES (new.id, last_insert_rowid(), NULL)
-            ON CONFLICT(chunk_id) DO UPDATE SET
-                fts_rowid = excluded.fts_rowid,
-                trigram_rowid = NULL;
-        END;
-        CREATE TRIGGER chunks_fts_delete AFTER DELETE ON chunks BEGIN
-            DELETE FROM chunks_fts
-            WHERE rowid = (SELECT fts_rowid FROM chunk_fts_rowids WHERE chunk_id = old.id);
-            DELETE FROM chunk_fts_rowids WHERE chunk_id = old.id;
-        END;
-        """
-    )
-    rows = [
-        ("canonical-id", "Duplicate content that should collapse", "2026-01-01"),
-        ("dupe-id", "duplicate   content that should collapse", "2026-01-02"),
-    ]
-    conn.executemany(
-        """
-        INSERT INTO chunks(id, content, summary, tags, resolved_query, key_facts, resolved_queries, created_at)
-        VALUES (?, ?, '', '', '', '', '', ?)
-        """,
-        rows,
-    )
-    conn.commit()
-    conn.close()
+    present = [name for name in REMOVED_DEDUP_SYMBOLS if hasattr(db_shrink, name)]
+    assert present == [], f"physical-delete dedupe path reintroduced: {present}"
 
-    result = apply_content_dedup(db_path, rebuild_fts=False)
 
-    checked = sqlite3.connect(db_path)
-    remaining_fts_ids = {
-        row[0] for row in checked.execute("SELECT chunk_id FROM chunks_fts WHERE chunk_id IS NOT NULL")
-    }
-    delete_trigger = checked.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'chunks_fts_delete'"
-    ).fetchone()
-    checked.execute(
-        """
-        INSERT INTO chunks(id, content, summary, tags, resolved_query, key_facts, resolved_queries, created_at)
-        VALUES ('fresh-id', 'Fresh searchable note', '', '', '', '', '', '2026-01-03')
-        """
-    )
-    fresh_fts = checked.execute("SELECT COUNT(*) FROM chunks_fts WHERE chunk_id = 'fresh-id'").fetchone()[0]
-    checked.close()
+def test_db_shrink_never_deletes_chunk_rows():
+    source = (REPO_ROOT / "src/brainlayer/db_shrink.py").read_text(encoding="utf-8")
+    code = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
+    body = code.split('"""', 2)[-1] if code.count('"""') >= 2 else code
+    offenders = re.findall(r"DELETE\s+FROM\s+chunks\b(?!_fts)", body, re.I)
+    assert offenders == [], f"db_shrink must not delete chunk rows: {offenders}"
 
-    assert result.deleted_rows == 1
-    assert remaining_fts_ids == {"canonical-id"}
-    assert delete_trigger is not None
-    assert fresh_fts == 1
+
+def test_no_physical_delete_mechanism_anywhere_in_production_code():
+    """No writer may stamp a physical-delete dedupe mechanism.
+
+    Scans real string VALUES via the AST, not raw text: a docstring explaining
+    why the path was removed is documentation, while a literal carrying the
+    mechanism name is a writer about to stamp it.
+    """
+    import ast
+
+    offenders = []
+    for root in (REPO_ROOT / "src/brainlayer", REPO_ROOT / "scripts", REPO_ROOT / "hooks"):
+        for path in root.rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            docstrings = set()
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                    doc = node.body[0] if node.body else None
+                    if isinstance(doc, ast.Expr) and isinstance(doc.value, ast.Constant):
+                        docstrings.add(id(doc.value))
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.Constant)
+                    and isinstance(node.value, str)
+                    and id(node) not in docstrings
+                    and "physical_delete" in node.value
+                ):
+                    offenders.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}")
+    assert offenders == [], f"physical-delete dedupe mechanism present: {offenders}"

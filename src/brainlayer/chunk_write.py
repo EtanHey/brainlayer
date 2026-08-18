@@ -126,8 +126,21 @@ def _json_text(value: Any, *, default: str = "{}") -> str:
     return text if text else default
 
 
-def _content_hash(content: str) -> str:
-    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+def canonical_content_hash(content: str) -> str:
+    """The one content_hash contract: sha256 over the whitespace-stripped content.
+
+    Repair (e) census found four schemes live in this column at once (64-char
+    sha256, a 32-char scheme, 16-char truncations, and 52k rows with none).
+    Rows hashed under different schemes can never group as duplicates even when
+    byte-identical, which is why duplicates accrued faster than write-time
+    dedupe removed them. Every writer routed through this module now emits one
+    scheme, and a caller-supplied hash never overrides it.
+    """
+    return hashlib.sha256(str(content).strip().encode("utf-8")).hexdigest()
+
+
+# Back-compat alias for existing internal callers.
+_content_hash = canonical_content_hash
 
 
 def _table_columns(conn: Any, table: str) -> set[str]:
@@ -215,7 +228,7 @@ def prepare_canonical_insert(
             "source": source,
             "created_at": created_at,
             "chunk_origin": resolved_origin,
-            "content_hash": values.get("content_hash") or _content_hash(content),
+            "content_hash": canonical_content_hash(content),
             "ingested_at": epoch,
             "seen_count": int(values.get("seen_count") or 1),
             "last_seen_at": last_seen_at,
