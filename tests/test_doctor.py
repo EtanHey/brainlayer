@@ -1779,3 +1779,128 @@ def test_doctor_cli_json_uses_injected_runner_and_db_option(tmp_path, monkeypatc
     payload = json.loads(result.output)
     assert payload["ok"] is True
     assert payload["db_path"] == str(db_path)
+
+
+# ── repair (f): index completeness, both directions ──────────────────────────
+
+
+def _doctor_db_with_index_gap(path: Path, *, direction: str) -> None:
+    """Build a doctor fixture whose aux/chunk sets diverge without the counts diverging."""
+    store = VectorStore(path)
+    try:
+        _insert_chunk(store, "completeness-1", content="doctor completeness alpha content")
+        _insert_chunk(store, "completeness-2", content="doctor completeness beta content")
+        _insert_vector(store, "completeness-1", 1.0)
+        _insert_vector(store, "completeness-2", 2.0)
+        cursor = store.conn.cursor()
+        if direction == "chunk_to_aux":
+            rowid = cursor.execute("SELECT id FROM chunks_fts_content WHERE c6 = 'completeness-1'").fetchone()[0]
+            cursor.execute("DELETE FROM chunks_fts WHERE rowid = ?", (rowid,))
+            # counterweight so COUNT(chunks) == COUNT(chunks_fts) still holds
+            cursor.execute(
+                "INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, "
+                "resolved_queries, chunk_id) VALUES ('doctor completeness beta content', NULL, "
+                "NULL, NULL, NULL, NULL, 'completeness-2')"
+            )
+        elif direction == "aux_to_chunk":
+            cursor.execute(
+                "INSERT INTO chunk_fts_rowids(chunk_id, fts_rowid) VALUES ('completeness-gone', 8675309) "
+                "ON CONFLICT(chunk_id) DO UPDATE SET fts_rowid = excluded.fts_rowid"
+            )
+        cursor.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        store.close()
+
+
+def test_doctor_index_completeness_catches_a_gap_counts_cannot_see(tmp_path):
+    """3,536 chunks went unfindable while fts5_health called the index synced."""
+    from brainlayer.doctor import run_doctor
+
+    db_path = tmp_path / "completeness-chunk-to-aux.db"
+    _doctor_db_with_index_gap(db_path, direction="chunk_to_aux")
+
+    result = run_doctor(
+        _doctor_config(tmp_path, db_path),
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+
+    codes = {issue.code for issue in result.issues if issue.severity == "fatal"}
+    assert "index_completeness_chunk_to_aux" in codes
+    assert result.index_completeness["chunk_to_aux"]["missing_index_rows"]["chunks_fts"] == 1
+    assert result.index_completeness["chunk_to_aux"]["duplicate_index_rows"]["chunks_fts"] == 1
+    assert result.exit_code != 0
+
+
+def test_doctor_index_completeness_catches_the_reverse_direction(tmp_path):
+    from brainlayer.doctor import run_doctor
+
+    db_path = tmp_path / "completeness-aux-to-chunk.db"
+    _doctor_db_with_index_gap(db_path, direction="aux_to_chunk")
+
+    result = run_doctor(
+        _doctor_config(tmp_path, db_path),
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+
+    codes = {issue.code for issue in result.issues if issue.severity == "fatal"}
+    assert "index_completeness_aux_to_chunk" in codes
+    assert result.index_completeness["aux_to_chunk"]["orphan_pointer_rows"] == 1
+    assert result.index_completeness["aux_to_chunk"]["dangling_pointers"]["chunks_fts"] == 1
+
+
+def test_doctor_index_completeness_is_quiet_on_a_healthy_db(tmp_path):
+    from brainlayer.doctor import run_doctor
+
+    db_path = tmp_path / "completeness-healthy.db"
+    _build_db(db_path)
+
+    result = run_doctor(
+        _doctor_config(tmp_path, db_path),
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+
+    assert result.index_completeness["total"] == 0
+    codes = {issue.code for issue in result.issues}
+    assert not {code for code in codes if code.startswith("index_completeness")}
+
+
+def test_doctor_index_completeness_does_not_fatal_on_ordinary_embed_lag(tmp_path):
+    """A chunk waiting on the embed queue must not make the completeness gate red.
+
+    Ordinary embed lag is never zero on a live DB, so folding it into this gate
+    would make "both completeness codes silent" an exit criterion no repair run
+    could satisfy. Missing vectors have their own check and their own owner.
+    """
+    from brainlayer.doctor import run_doctor
+
+    db_path = tmp_path / "completeness-embed-lag.db"
+    store = VectorStore(db_path)
+    try:
+        _insert_chunk(store, "lag-vectored", content="doctor completeness vectored content")
+        _insert_vector(store, "lag-vectored", 1.0)
+        # indexed lexically by the write path, but no vector yet
+        _insert_chunk(store, "lag-unvectored", content="doctor completeness unvectored content")
+        store.conn.cursor().execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        store.close()
+
+    result = run_doctor(
+        _doctor_config(tmp_path, db_path),
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+
+    assert result.index_completeness["chunk_to_aux"]["missing_vector_rowid"] == 1
+    assert result.index_completeness["lexical_total"] == 0
+    codes = {issue.code for issue in result.issues}
+    assert "index_completeness_chunk_to_aux" not in codes
+    assert "index_completeness_aux_to_chunk" not in codes
+    # the pre-existing vector check still owns this signal
+    assert "vector_parity_gap" in codes
