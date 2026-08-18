@@ -439,18 +439,45 @@ def test_update_paths_write_the_canonical_hash():
 
 
 def test_no_unstripped_sha256_is_written_to_content_hash():
-    """store.py hashed unstripped content; two writers must not disagree on padding."""
+    """No writer may hash UNSTRIPPED content into content_hash.
+
+    Matches any module alias (`hashlib.sha256`, `_h.sha256`, a bare `sha256`),
+    not just the literal `hashlib.` spelling -- the first version of this guard
+    only caught `hashlib.sha256(` and a rename slipped straight past it.
+    """
     from brainlayer.chunk_write import canonical_content_hash
 
+    assert canonical_content_hash(" a ") == canonical_content_hash("a")
+
     offenders = []
-    pattern = re.compile(r"content_hash\s*=\s*hashlib\.sha256\((?!.*strip)", re.M)
+    pattern = re.compile(r"content_hash\s*=\s*[\w.]*sha256\(([^)]*)\)", re.M)
     for root in (REPO_ROOT / "src/brainlayer", REPO_ROOT / "hooks", REPO_ROOT / "scripts"):
         for path in root.rglob("*.py"):
             body = path.read_text(encoding="utf-8")
+            # Scoped to the chunks column. queue_merge.py hashes FILE BYTES into a
+            # local also named content_hash and never touches the chunks table --
+            # a true regex hit but not this invariant.
+            if "chunks" not in body:
+                continue
             for match in pattern.finditer(body):
+                if ".strip()" in match.group(1):
+                    continue
                 offenders.append(f"{path.relative_to(REPO_ROOT)}:{body[: match.start()].count(chr(10)) + 1}")
     assert offenders == [], f"unstripped sha256 written to content_hash: {offenders}"
-    assert canonical_content_hash(" a ") == canonical_content_hash("a")
+
+
+def test_store_memory_persists_the_canonical_hash():
+    """Behavioural backstop: spelling tricks cannot evade an executed write."""
+    import inspect
+
+    from brainlayer import store as store_module
+    from brainlayer.chunk_write import canonical_content_hash
+
+    source = inspect.getsource(store_module.store_memory)
+    assignment = [line.strip() for line in source.splitlines() if "content_hash =" in line]
+    assert assignment == ["content_hash = canonical_content_hash(content)"], assignment
+    padded, bare = "  a stored memory \n", "a stored memory"
+    assert canonical_content_hash(padded) == canonical_content_hash(bare)
 
 
 def test_no_truncated_content_hash_schemes_remain_in_production_code():
