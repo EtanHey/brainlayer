@@ -1419,12 +1419,11 @@ final class BrainDatabase: @unchecked Sendable {
         let chunkID = chunkID ?? Self.makeChunkID()
         let createdAt = createdAt ?? Self.timestamp()
         let contentHash = Self.bodySHA256(content)
-        let dedupeFields = ChunkDedupe.computeDedupeFields(content: content, createdAt: createdAt)
         let tagsJSON = (try? encodeJSON(tags)) ?? "[]"
         let metadataJSON = Self.storeMetadataJSON(queueID: queueID)
         let sql = """
-            INSERT INTO chunks (id, content, metadata, source_file, project, tags, importance, source, content_type, value_type, char_count, created_at, preview_text, conversation_id, position, content_hash, chunk_origin, ingested_at, seen_count, last_seen_at, content_class, dedupe_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3, brick_id, source_uri, status)
-            VALUES (?, ?, ?, 'brainbar-store', ?, ?, ?, ?, 'user_message', 'high', ?, ?, ?, ?, ?, ?, 'user_explicit', ?, 1, ?, 'knowledge', ?, ?, ?, ?, ?, ?, ?, 'brainbar-store', 'active')
+            INSERT INTO chunks (id, content, metadata, source_file, project, tags, importance, source, content_type, value_type, char_count, created_at, preview_text, conversation_id, position, content_hash, chunk_origin, ingested_at, seen_count, last_seen_at, content_class, brick_id, source_uri, status)
+            VALUES (?, ?, ?, 'brainbar-store', ?, ?, ?, ?, 'user_message', 'high', ?, ?, ?, ?, ?, ?, 'user_explicit', ?, 1, ?, 'knowledge', ?, 'brainbar-store', 'active')
         """
         let previousBusyTimeout = busyTimeoutMillis.flatMap { _ in queryPragma(db, name: "busy_timeout") }
         if let busyTimeoutMillis {
@@ -1480,13 +1479,14 @@ final class BrainDatabase: @unchecked Sendable {
                 bindText(contentHash, to: stmt, index: 13)
                 sqlite3_bind_int64(stmt, 14, Int64(Date().timeIntervalSince1970))
                 bindText(createdAt, to: stmt, index: 15)
-                bindText(dedupeFields.dedupeHash, to: stmt, index: 16)
-                bindText(dedupeFields.simhash, to: stmt, index: 17)
-                bindText(dedupeFields.bands.0, to: stmt, index: 18)
-                bindText(dedupeFields.bands.1, to: stmt, index: 19)
-                bindText(dedupeFields.bands.2, to: stmt, index: 20)
-                bindText(dedupeFields.bands.3, to: stmt, index: 21)
-                bindText(chunkID, to: stmt, index: 22)
+                // dedupe_hash, simhash and simhash_band_0..3 are deliberately absent from the
+                // INSERT above, so SQLite stores them as NULL. BrainBar does not compute them: the
+                // Swift port that briefly lived here diverged from Python's simhash64 (hamming
+                // distance 25-31 on byte-identical content, against a match threshold of 3), so it
+                // wrote columns that looked computed but could never match a Python-written row.
+                // A faithful port with exact-hex parity tests against Python is its own lane; until
+                // then honest NULL lets a reader tell "not computed" from "computed differently".
+                bindText(chunkID, to: stmt, index: 16)
             }
             if failNextStoreAfterInsertForTesting {
                 failNextStoreAfterInsertForTesting = false

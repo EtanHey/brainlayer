@@ -69,15 +69,23 @@ SWIFT_CANONICAL_COLUMNS = (
     "seen_count",
     "last_seen_at",
     "content_class",
+    "brick_id",
+    "source_uri",
+    "status",
+)
+
+# BrainBar must NOT reference these in its INSERT. Its Swift simhash port diverged from Python's
+# (hamming distance 25-31 on byte-identical content, against find_duplicate's threshold of 3), so
+# computing them here produced values no Python row could ever match. They are omitted from the
+# INSERT entirely -- SQLite stores NULL -- so "not computed" is distinguishable from "computed
+# differently". Reintroducing them requires a faithful port pinned by exact-Python-hex tests.
+SWIFT_ABSENT_DEDUPE_COLUMNS = (
     "dedupe_hash",
     "simhash",
     "simhash_band_0",
     "simhash_band_1",
     "simhash_band_2",
     "simhash_band_3",
-    "brick_id",
-    "source_uri",
-    "status",
 )
 
 INSERT_GUARD = re.compile(r"INSERT\s+(OR\s+\w+\s+)?INTO\s+chunks\b", re.IGNORECASE)
@@ -305,6 +313,12 @@ def test_brainbar_store_sql_prepares_on_fresh_schema():
         ]
         for column in SWIFT_CANONICAL_COLUMNS:
             assert column in columns, (path.name, column)
+        for column in SWIFT_ABSENT_DEDUPE_COLUMNS:
+            assert column not in columns, (
+                path.name,
+                column,
+                "BrainBar must not write dedupe columns until its simhash is byte-identical to Python",
+            )
         column_defs = ", ".join(f"{column} {type_map.get(column, 'TEXT')}" for column in columns)
         conn = sqlite3.connect(":memory:")
         conn.execute(f"CREATE TABLE chunks ({column_defs})")
