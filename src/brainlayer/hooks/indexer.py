@@ -13,7 +13,6 @@ Designed to swap backend from direct DB to BrainBar socket when it merges.
 """
 
 import hashlib
-import json
 import logging
 import sqlite3
 import time

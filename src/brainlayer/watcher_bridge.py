@@ -25,8 +25,8 @@ import apsw
 from .agent_provenance import classify_provenance, effective_visibility
 from .alarm import BrainLayerAlarm
 from .chunk_origin import detect_chunk_origin
-from .claude_paths import extract_claude_conversation_id as _extract_claude_conversation_id
 from .chunk_write import insert_canonical_chunk
+from .claude_paths import extract_claude_conversation_id as _extract_claude_conversation_id
 from .content_class import classify_content_class
 from .dedupe import find_duplicate, merge_duplicate_chunk, merge_existing_chunk_seen, normalized_exact_hash
 from .ingest_guard import recursive_mcp_output_reason

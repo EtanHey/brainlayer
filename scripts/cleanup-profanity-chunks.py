@@ -13,8 +13,8 @@ from pathlib import Path
 SRC_DIR = Path(__file__).resolve().parent.parent / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
-from brainlayer.paths import get_db_path
 from brainlayer.chunk_write import insert_canonical_chunk
+from brainlayer.paths import get_db_path
 
 DB_PATH = get_db_path()
 TOKEN_RE = re.compile(r"[a-zA-Z][a-zA-Z'-]{2,}")
