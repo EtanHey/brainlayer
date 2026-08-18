@@ -1794,9 +1794,7 @@ def _doctor_db_with_index_gap(path: Path, *, direction: str) -> None:
         _insert_vector(store, "completeness-2", 2.0)
         cursor = store.conn.cursor()
         if direction == "chunk_to_aux":
-            rowid = cursor.execute(
-                "SELECT id FROM chunks_fts_content WHERE c6 = 'completeness-1'"
-            ).fetchone()[0]
+            rowid = cursor.execute("SELECT id FROM chunks_fts_content WHERE c6 = 'completeness-1'").fetchone()[0]
             cursor.execute("DELETE FROM chunks_fts WHERE rowid = ?", (rowid,))
             # counterweight so COUNT(chunks) == COUNT(chunks_fts) still holds
             cursor.execute(
