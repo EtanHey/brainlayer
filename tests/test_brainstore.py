@@ -244,6 +244,8 @@ class TestStoreMemory:
         from brainlayer.store import store_memory
 
         reservation_created_at = "2026-01-01T00:00:00+00:00"
+        from brainlayer.timestamp_iso import normalize_timestamp
+
         before = datetime.now(timezone.utc).isoformat()
         result = store_memory(
             store=store,
@@ -262,7 +264,7 @@ class TestStoreMemory:
         ).fetchone()
 
         assert row is not None
-        assert row[0] == reservation_created_at
+        assert row[0] == normalize_timestamp(reservation_created_at)
         assert before <= row[1] <= after
         assert before <= row[2] <= after
 
