@@ -394,6 +394,65 @@ def test_caller_supplied_content_hash_never_wins():
     assert row["content_hash"] == canonical_content_hash(CANONICAL_CONTENT_HASH_CONTENT)
 
 
+def test_only_one_content_hash_implementation_exists():
+    """A second implementation is how four schemes got into the column.
+
+    Byte-identical duplicates count: `enrichment_controller` had its own
+    `_content_hash` feeding four `UPDATE chunks SET content_hash` sites, and
+    `store.py` computed an UNSTRIPPED sha256. Both now import the contract.
+    """
+    from brainlayer import enrichment_controller
+    from brainlayer.chunk_write import canonical_content_hash
+
+    assert enrichment_controller._content_hash is canonical_content_hash
+
+    offenders = []
+    definition = re.compile(r"^def _?content_hash\(", re.M)
+    for root in (REPO_ROOT / "src/brainlayer", REPO_ROOT / "hooks", REPO_ROOT / "scripts"):
+        for path in root.rglob("*.py"):
+            if path == REPO_ROOT / "src/brainlayer/chunk_write.py":
+                continue
+            body = path.read_text(encoding="utf-8")
+            for match in definition.finditer(body):
+                line = body[: match.start()].count("\n") + 1
+                offenders.append(f"{path.relative_to(REPO_ROOT)}:{line}")
+    assert offenders == [], f"content_hash must be defined once, in chunk_write: {offenders}"
+
+
+def test_update_paths_write_the_canonical_hash():
+    """The contract must cover UPDATE, not only INSERT."""
+    import sqlite3
+
+    from brainlayer.chunk_write import canonical_content_hash
+    from brainlayer.enrichment_controller import _content_hash
+
+    content = "  enrichment rewrote this row\n\n"
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, content TEXT, content_hash TEXT)")
+    conn.execute("INSERT INTO chunks VALUES ('u1', ?, 'stale-16char0000')", (content,))
+    # the exact statement shape used at enrichment_controller UPDATE sites
+    conn.execute("UPDATE chunks SET content_hash = ? WHERE id = ?", (_content_hash(content), "u1"))
+    stored = conn.execute("SELECT content_hash FROM chunks WHERE id = 'u1'").fetchone()[0]
+    conn.close()
+    assert stored == canonical_content_hash(content)
+    assert len(stored) == 64
+
+
+def test_no_unstripped_sha256_is_written_to_content_hash():
+    """store.py hashed unstripped content; two writers must not disagree on padding."""
+    from brainlayer.chunk_write import canonical_content_hash
+
+    offenders = []
+    pattern = re.compile(r"content_hash\s*=\s*hashlib\.sha256\((?!.*strip)", re.M)
+    for root in (REPO_ROOT / "src/brainlayer", REPO_ROOT / "hooks", REPO_ROOT / "scripts"):
+        for path in root.rglob("*.py"):
+            body = path.read_text(encoding="utf-8")
+            for match in pattern.finditer(body):
+                offenders.append(f"{path.relative_to(REPO_ROOT)}:{body[: match.start()].count(chr(10)) + 1}")
+    assert offenders == [], f"unstripped sha256 written to content_hash: {offenders}"
+    assert canonical_content_hash(" a ") == canonical_content_hash("a")
+
+
 def test_no_truncated_content_hash_schemes_remain_in_production_code():
     """No production path may store a truncated sha256 as a chunk content_hash."""
     offenders = []

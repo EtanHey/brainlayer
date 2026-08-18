@@ -21,7 +21,7 @@ import sqlite_vec
 from ._helpers import _is_sqlite_busy_error, serialize_f32
 from .agent_provenance import normalize_source_class
 from .chunk_origin import detect_chunk_origin
-from .chunk_write import insert_canonical_chunk
+from .chunk_write import canonical_content_hash, insert_canonical_chunk
 from .content_class import classify_content_class
 from .dedupe import (
     ensure_dedupe_schema,
@@ -365,8 +365,9 @@ def _ensure_rewind_archive_schema(conn: apsw.Connection) -> None:
             cols.add(col)
 
 
-def _content_hash(content: str) -> str:
-    return hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
+# One implementation only -- see chunk_write.canonical_content_hash. drain writes
+# content_hash on its INSERT payloads, so it must not carry its own copy.
+_content_hash = canonical_content_hash
 
 
 def _insert_chunk(conn: apsw.Connection, values: dict[str, Any]) -> None:

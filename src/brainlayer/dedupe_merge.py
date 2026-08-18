@@ -21,9 +21,19 @@ Policy (POLICY_REPAIR_E, lead-ACKed 2026-08-18, census in
   rows already lifecycle-managed are never chosen. Oldest-wins would have
   discarded enrichment in 23,359 of 42,082 eligible groups; richest-wins, 1,243.
 * **Losers** — `aggregated_into` + `archived_at` + `status='superseded'`. Content,
-  ids, tags, FTS rows and vectors all stay. No DELETE, in any table, ever.
-  `status='superseded'` and not `'archived'` because `vector_store.py` rewrites
-  `status='archived'` on startup, which would silently revert the migration.
+  ids, tags, FTS rows and vectors all stay. **No chunk row is ever deleted, in any
+  table.** `status='superseded'` and not `'archived'` because `vector_store.py`
+  rewrites `status='archived'` on startup, which would silently revert the migration.
+* **One approved deletion, scoped to redirect metadata.** Lead ruling 2026-08-18,
+  recorded verbatim in `ALIAS_DELETE_EXCEPTION` and in every on-DB receipt: *"The 64
+  survivor-source alias DELETEs are APPROVED as a narrow chain-correctness exception
+  to 'no deletes': alias redirect metadata only, never chunk rows."* It is step 2 of
+  `_converge_aliases` — a live survivor must not itself be a deprecated id, or the
+  chain walks off the canonical row. It is preimaged and it reverses. The counters
+  `aliases_written` / `aliases_repointed` / `aliases_dropped_survivor_source` are in
+  the durable receipt so the audit trail records it, and the result payload reports
+  `chunks_deleted` and `alias_rows_deleted` separately rather than a flat
+  `deleted_rows: 0`.
 
 Both serving paths already exclude `aggregated_into IS NOT NULL` and
 `archived_at IS NOT NULL` from default search, so this removes duplicate noise
@@ -76,6 +86,20 @@ WRITTEN_COLUMNS = (
 )
 
 LIFECYCLE_COLUMNS = ("archived_at", "superseded_by", "aggregated_into")
+
+#: Lead ruling, 2026-08-18, recorded verbatim in the on-DB receipt.
+ALIAS_DELETE_EXCEPTION = (
+    "The 64 survivor-source alias DELETEs are APPROVED as a narrow chain-correctness "
+    "exception to 'no deletes': alias redirect metadata only, never chunk rows."
+)
+
+#: Stated so a reviewer's count reproduces exactly. The rehearsal reported 755,048
+#: with this predicate; the reviewer's 755,059 omits the content clause. Both give
+#: the same delta of 61,445 -- it was a predicate gap, not a data disagreement.
+DEFAULT_SEARCHABLE_PREDICATE = (
+    "superseded_by IS NULL AND aggregated_into IS NULL AND archived_at IS NULL "
+    "AND content IS NOT NULL AND content <> ''"
+)
 
 
 @dataclass
@@ -140,14 +164,26 @@ def _instant(value: Any) -> str:
     return "" if _blank(value) else str(value).strip()
 
 
-def pick_survivor(members: list[dict], present: set[str]) -> dict | None:
-    """Richest enrichment -> oldest created_at -> smallest id, among live rows."""
+def pick_survivor(members: list[dict], present: set[str], alias_sources: frozenset[str] = frozenset()) -> dict | None:
+    """Richest enrichment -> oldest created_at -> not-an-alias-source -> smallest id.
+
+    The alias-source preference sits AT the id tiebreak, so the lead-ACKed ordering
+    (richest -> oldest -> smallest id) is untouched: it only decides cases the id
+    tiebreak would otherwise have settled arbitrarily. Choosing a row that is
+    already a deprecated id forces `_converge_aliases` to drop that redirect, so
+    preferring a non-source shrinks those deletes toward zero for free.
+    """
     live = [m for m in members if not _is_managed(m)]
     if not live:
         return None
     return min(
         live,
-        key=lambda m: (-_enrich_score(m, present), _instant(m.get("created_at")) or "9999", str(m["id"])),
+        key=lambda m: (
+            -_enrich_score(m, present),
+            _instant(m.get("created_at")) or "9999",
+            str(m["id"]) in alias_sources,
+            str(m["id"]),
+        ),
     )
 
 
@@ -246,6 +282,9 @@ def merge_duplicates(
         select_cols = sorted({"id", "content", "conversation_id", "created_at", *LIFECYCLE_COLUMNS, *written} & present)
         has_alias = _ensure_alias_table(conn)
 
+        alias_sources: frozenset[str] = frozenset()
+        if has_alias:
+            alias_sources = frozenset(str(row[0]) for row in conn.execute("SELECT old_chunk_id FROM chunk_id_alias"))
         result.aux_counts_before = _aux_counts(conn)
         if apply:
             _ensure_preimage(conn, written)
@@ -297,7 +336,7 @@ def merge_duplicates(
                 result.groups_held += 1
                 result.held_reasons[reason] = result.held_reasons.get(reason, 0) + 1
                 continue
-            survivor = pick_survivor(members, present)
+            survivor = pick_survivor(members, present, alias_sources)
             if survivor is None:
                 result.groups_held += 1
                 result.held_reasons["all_members_lifecycle_managed"] = (
@@ -499,6 +538,13 @@ def merge_duplicates(
             "git_sha": sha,
             "actor": actor,
             "policy": "POLICY_REPAIR_E",
+            "chunks_deleted": 0,
+            "alias_rows_deleted": result.aliases_dropped_survivor_source,
+            "alias_delete_exception": ALIAS_DELETE_EXCEPTION,
+            "aliases_written": result.aliases_written,
+            "aliases_repointed": result.aliases_repointed,
+            "aliases_dropped_survivor_source": result.aliases_dropped_survivor_source,
+            "default_searchable_predicate": DEFAULT_SEARCHABLE_PREDICATE,
             "groups_merged": result.groups_merged,
             "losers_archived": result.losers_archived,
             "groups_held": result.groups_held,
@@ -699,6 +745,66 @@ def _spot_check(conn: sqlite3.Connection, samples: list[str], written: list[str]
     return checks
 
 
+def _assert_rollback_restored_values(conn: sqlite3.Connection, tables: set[str]) -> dict[str, int]:
+    """Compare restored VALUES against the earliest preimage. Counts are not enough.
+
+    The rehearsal checked `chunk_id_alias` by row count -- 69,269 -> 130,576 ->
+    69,269 -- and a swapped pointer preserves the count perfectly, so the count
+    check could not see the defect it existed to catch (issue #722's shape).
+    This audit compares every restored value against the preimage that recorded
+    the true pre-migration state, and raises rather than reporting a clean count
+    over wrong data.
+    """
+    audited = {"chunks_checked": 0, "aliases_checked": 0}
+    mismatches: list[str] = []
+
+    columns = [r[1] for r in conn.execute(f"PRAGMA table_info({PREIMAGE_TABLE})") if r[1] != "id"]
+    for row in conn.execute(
+        f"SELECT p.id, {', '.join(f'p.{c} AS pre_{c}' for c in columns)}, "
+        f"{', '.join(f'c.{c} AS now_{c}' for c in columns)} "
+        f"FROM {PREIMAGE_TABLE} p JOIN chunks c ON c.id = p.id"
+    ):
+        audited["chunks_checked"] += 1
+        for column in columns:
+            if row[f"pre_{column}"] != row[f"now_{column}"]:
+                if len(mismatches) < 5:
+                    mismatches.append(
+                        f"chunks.{row['id']}.{column}: {row[f'now_{column}']!r} != {row[f'pre_{column}']!r}"
+                    )
+
+    if ALIAS_PREIMAGE_TABLE in tables and "chunk_id_alias" in tables:
+        live = {
+            str(old): (canonical, deprecated)
+            for old, canonical, deprecated in conn.execute(
+                "SELECT old_chunk_id, canonical_chunk_id, deprecated_at FROM chunk_id_alias"
+            )
+        }
+        for row in conn.execute(
+            f"""
+            SELECT p.old_chunk_id, p.canonical_chunk_id, p.deprecated_at, p.action
+            FROM {ALIAS_PREIMAGE_TABLE} p
+            JOIN (
+                SELECT old_chunk_id, MIN(rowid) AS first_rowid
+                FROM {ALIAS_PREIMAGE_TABLE}
+                GROUP BY old_chunk_id
+            ) f ON f.first_rowid = p.rowid
+            """
+        ):
+            audited["aliases_checked"] += 1
+            old = str(row["old_chunk_id"])
+            if row["action"] == "insert":
+                if old in live and len(mismatches) < 5:
+                    mismatches.append(f"chunk_id_alias.{old}: present, expected absent")
+                continue
+            expected = (row["canonical_chunk_id"], row["deprecated_at"])
+            if live.get(old) != expected and len(mismatches) < 5:
+                mismatches.append(f"chunk_id_alias.{old}: {live.get(old)!r} != {expected!r}")
+
+    if mismatches:
+        raise RuntimeError(f"rollback did not restore the pre-migration values: {mismatches}")
+    return audited
+
+
 def rollback_migration(db_path: Path, *, allow_live: bool = False) -> dict[str, Any]:
     """Restore every row this migration wrote, from its preimages.
 
@@ -737,11 +843,27 @@ def rollback_migration(db_path: Path, *, allow_live: bool = False) -> dict[str, 
             out["chunks_restored"] = len(rows)
 
             if ALIAS_PREIMAGE_TABLE in tables and "chunk_id_alias" in tables:
-                alias_rows = conn.execute(
-                    f"SELECT old_chunk_id, canonical_chunk_id, deprecated_at, action FROM {ALIAS_PREIMAGE_TABLE}"
+                # EARLIEST preimage per old_chunk_id wins. One alias row can be
+                # touched by two groups (step-1 repoint in group A, then step-3
+                # overwrite in group B); the second preimage records the value
+                # THIS MIGRATION already wrote, so replaying in table order with
+                # INSERT OR REPLACE restores the migration's own value instead of
+                # the original. The chunks preimage is immune (INSERT OR IGNORE on
+                # an id PRIMARY KEY = first-write-wins); this table has no key, so
+                # the ordering has to be explicit.
+                earliest = conn.execute(
+                    f"""
+                    SELECT p.old_chunk_id, p.canonical_chunk_id, p.deprecated_at, p.action
+                    FROM {ALIAS_PREIMAGE_TABLE} p
+                    JOIN (
+                        SELECT old_chunk_id, MIN(rowid) AS first_rowid
+                        FROM {ALIAS_PREIMAGE_TABLE}
+                        GROUP BY old_chunk_id
+                    ) f ON f.first_rowid = p.rowid
+                    """
                 ).fetchall()
-                created = [r["old_chunk_id"] for r in alias_rows if r["action"] == "insert"]
-                restore = [r for r in alias_rows if r["action"] != "insert"]
+                created = [r["old_chunk_id"] for r in earliest if r["action"] == "insert"]
+                restore = [r for r in earliest if r["action"] != "insert"]
                 if created:
                     conn.executemany("DELETE FROM chunk_id_alias WHERE old_chunk_id = ?", [(old,) for old in created])
                     out["aliases_removed"] = len(created)
@@ -758,6 +880,7 @@ def rollback_migration(db_path: Path, *, allow_live: bool = False) -> dict[str, 
             conn.execute("ROLLBACK")
             raise
         _checkpoint(conn)
+        out["value_audit"] = _assert_rollback_restored_values(conn, tables)
         return out
     finally:
         conn.close()
@@ -790,7 +913,12 @@ def _result_payload(db_path: Path, *, apply: bool, result: DedupeMergeResult) ->
         "aux_counts_before": result.aux_counts_before,
         "aux_counts_after": result.aux_counts_after,
         "aux_counts_unchanged": result.aux_counts_before == result.aux_counts_after,
-        "deleted_rows": 0,
+        # Scoped, honest names. "deleted_rows: 0" was a hardcoded lie while step 2
+        # of alias convergence deleted 64 redirect rows on the real rehearsal.
+        "chunks_deleted": 0,
+        "alias_rows_deleted": result.aliases_dropped_survivor_source,
+        "alias_delete_exception": ALIAS_DELETE_EXCEPTION,
+        "default_searchable_predicate": DEFAULT_SEARCHABLE_PREDICATE,
         "spot_checks_ok": (
             "n/a-dry-run"
             if not apply

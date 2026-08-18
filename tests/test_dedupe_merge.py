@@ -710,3 +710,138 @@ def test_rollback_retains_the_preimage_audit_trail(tmp_path):
     conn.close()
     assert PREIMAGE_TABLE in tables, "the preimage is the audit trail; removal is a separate human step"
     assert result["preimage_tables"] == "retained"
+
+
+# --- MUST_FIX 1: the rollback must restore the EARLIEST preimage ------------------
+# One alias row can be touched by two groups (step-1 repoint in group A, then
+# step-3 overwrite in group B). The second preimage records the value the
+# migration itself just wrote, so replaying in table order with INSERT OR REPLACE
+# restores the migration's value, not the original. Counts cannot see this: a
+# swapped pointer preserves the row count exactly (issue #722's shape).
+
+
+def _alias_full(db_path: Path) -> dict[str, tuple]:
+    conn = sqlite3.connect(db_path)
+    rows = {
+        r[0]: (r[1], r[2])
+        for r in conn.execute("SELECT old_chunk_id, canonical_chunk_id, deprecated_at FROM chunk_id_alias")
+    }
+    conn.close()
+    return rows
+
+
+def _two_group_db(tmp_path: Path) -> Path:
+    """Two duplicate groups, plus one alias row that BOTH groups will touch."""
+    rows = []
+    for group, text in (("g1", "first shared memory"), ("g2", "second shared memory")):
+        rows += [
+            {
+                "id": f"{group}-old",
+                "content": text,
+                "conversation_id": group,
+                "created_at": "2026-01-01T00:00:00Z",
+                "seen_count": 1,
+            },
+            {
+                "id": f"{group}-new",
+                "content": text,
+                "conversation_id": group,
+                "created_at": "2026-01-02T00:00:00Z",
+                "summary": "s",
+                "seen_count": 1,
+            },
+        ]
+    db_path = _db(tmp_path, rows)
+    conn = sqlite3.connect(db_path)
+    # `shared` points at g1's loser (group 1 will repoint it), and is itself
+    # g2's loser id... so group 2 overwrites the same row at step 3.
+    conn.execute("INSERT INTO chunk_id_alias VALUES ('g2-old', 'g1-old', '2026-06-30T23:08:29Z')")
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def test_rollback_restores_the_earliest_alias_preimage_not_the_latest(tmp_path):
+    from brainlayer.dedupe_merge import rollback_migration
+
+    db_path = _two_group_db(tmp_path)
+    before = _alias_full(db_path)
+    assert before["g2-old"] == ("g1-old", "2026-06-30T23:08:29Z")
+
+    merge_duplicates(db_path, git_sha=GIT_SHA, apply=True)
+    rollback_migration(db_path)
+
+    after = _alias_full(db_path)
+    assert after["g2-old"] == before["g2-old"], (
+        "the doubly-touched alias must return to its ORIGINAL target, "
+        f"not the value the migration wrote: {after['g2-old']} != {before['g2-old']}"
+    )
+    assert after == before
+
+
+def test_rollback_value_audit_reports_what_it_checked(tmp_path):
+    from brainlayer.dedupe_merge import rollback_migration
+
+    db_path = _two_group_db(tmp_path)
+    merge_duplicates(db_path, git_sha=GIT_SHA, apply=True)
+    result = rollback_migration(db_path)
+    assert result["value_audit"]["chunks_checked"] > 0
+    assert result["value_audit"]["aliases_checked"] > 0
+
+
+def test_rollback_value_audit_raises_on_a_swapped_pointer(tmp_path):
+    """A swapped pointer is count-identical; only a value check can see it."""
+    import brainlayer.dedupe_merge as dm
+    from brainlayer.dedupe_merge import rollback_migration
+
+    db_path = _two_group_db(tmp_path)
+    merge_duplicates(db_path, git_sha=GIT_SHA, apply=True)
+    rollback_migration(db_path)
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    before_count = conn.execute("SELECT COUNT(*) FROM chunk_id_alias").fetchone()[0]
+    # swap one pointer to a different EXISTING-shaped value: count unchanged
+    conn.execute("UPDATE chunk_id_alias SET canonical_chunk_id = 'swapped' WHERE old_chunk_id = 'g2-old'")
+    conn.commit()
+    after_count = conn.execute("SELECT COUNT(*) FROM chunk_id_alias").fetchone()[0]
+    assert after_count == before_count, "the count check is blind to this by construction"
+
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    with pytest.raises(RuntimeError, match="did not restore the pre-migration values"):
+        dm._assert_rollback_restored_values(conn, tables)
+    conn.close()
+
+
+def test_rollback_value_audit_catches_an_unrestored_chunk_value(tmp_path):
+    import brainlayer.dedupe_merge as dm
+    from brainlayer.dedupe_merge import rollback_migration
+
+    db_path = _db(tmp_path, _pair())
+    merge_duplicates(db_path, git_sha=GIT_SHA, apply=True)
+    rollback_migration(db_path)
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("UPDATE chunks SET archived_at = '2026-08-18T00:00:00Z' WHERE id = 'old-one'")
+    conn.commit()
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    with pytest.raises(RuntimeError, match="did not restore the pre-migration values"):
+        dm._assert_rollback_restored_values(conn, tables)
+    conn.close()
+
+
+def test_rollback_value_audit_passes_on_a_clean_rollback(tmp_path):
+    import brainlayer.dedupe_merge as dm
+    from brainlayer.dedupe_merge import rollback_migration
+
+    db_path = _two_group_db(tmp_path)
+    merge_duplicates(db_path, git_sha=GIT_SHA, apply=True)
+    result = rollback_migration(db_path)
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    audited = dm._assert_rollback_restored_values(conn, tables)
+    conn.close()
+    assert audited == result["value_audit"]

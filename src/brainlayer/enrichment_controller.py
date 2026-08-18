@@ -7,7 +7,6 @@ Replaces scattered enrichment scripts with a single controller:
 
 from __future__ import annotations
 
-import hashlib
 import importlib.util
 import json
 import logging
@@ -1254,9 +1253,10 @@ def call_gemini_for_extraction(prompt: str) -> Optional[str]:
 # ── Content-hash dedup ─────────────────────────────────────────────────────────
 
 
-def _content_hash(content: str) -> str:
-    """SHA256 hash of content for dedup. Strips whitespace for normalization."""
-    return hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
+# The content_hash contract lives in ONE place. A second implementation of this
+# function -- even a byte-identical one -- is precisely how four hash schemes got
+# into the column, so the UPDATE paths below import it rather than redefine it.
+from .chunk_write import canonical_content_hash as _content_hash  # noqa: E402
 
 
 def is_meta_research(content: str) -> bool:
