@@ -32,7 +32,19 @@ final class MCPRouter: @unchecked Sendable {
     ]
     private static let coreToolDescriptions: [String: String] = [
         "brain_search": "Search memory.",
-        "brain_store": "Store memory; DEFERRED = stored.",
+        // The core palette is token-terse, but it is also the ONLY description a
+        // default agent sees (the full text needs expand_palette), so it has to
+        // carry the outcome contract Etan asked for on 2026-08-19 -- compressed to
+        // the six words plus the one rule that stops the re-store loop.
+        //
+        // NOTE: this costs ~100 bytes of the core tools/list boot payload, which
+        // sat at 1499/1500. testCoreToolsListStaysWithinBootBudget was raised to
+        // 1600 to fit it. If that budget is load-bearing in a way this lane does
+        // not see, revert this one string to "Store memory; DEFERRED = stored."
+        // and the budget with it -- the full-palette description still carries
+        // the complete contract either way.
+        "brain_store": "Store memory. status: STORED|DUPLICATE|MERGED|DEFERRED all = success, "
+            + "do NOT re-store; REJECTED|ERROR = nothing stored, no chunk_id.",
         "brain_recall": "Recall context.",
         "brain_expand": "Expand chunk.",
     ]
@@ -527,12 +539,34 @@ final class MCPRouter: @unchecked Sendable {
                 "id": id,
                 "result": [
                     "content": [
-                        ["type": "text", "text": "Error: \(error.localizedDescription)"]
+                        ["type": "text", "text": Self.failureText(for: toolName, error: error)]
                     ],
                     "isError": true
                 ] as [String: Any]
             ]
         }
+    }
+
+    /// brain_store failures speak the store outcome vocabulary, so an agent can
+    /// tell "nothing was stored, and nothing is queued either" from a DEFERRED
+    /// receipt. A bad request is REJECTED (resending it cannot succeed); anything
+    /// else is ERROR (worth one retry). Other tools keep the generic wording.
+    private static func failureText(for toolName: String, error: Error) -> String {
+        guard toolName == "brain_store" else {
+            return "Error: \(error.localizedDescription)"
+        }
+        let outcome: StoreOutcome
+        switch error as? ToolError {
+        case .missingParameter, .schemaValidation, .unknownTool:
+            outcome = .rejected
+        default:
+            outcome = .error
+        }
+        return Formatters.formatStoreFailure(
+            outcome: outcome,
+            reason: error.localizedDescription,
+            useColor: false
+        )
     }
 
     private func toolCallResult(id: Any, output: ToolOutput) -> [String: Any] {
@@ -844,9 +878,20 @@ final class MCPRouter: @unchecked Sendable {
             case .stored(let stored):
                 let flushedStores = db.flushPendingStores()
                 return ToolOutput(
-                    text: Formatters.formatStoreResult(chunkId: stored.chunkID, tags: tags, useColor: false),
+                    text: Formatters.formatStoreResult(
+                        chunkId: stored.chunkID,
+                        tags: tags,
+                        outcome: stored.outcome,
+                        useColor: false
+                    ),
                     metadata: [
                         "queued": false,
+                        // STORED vs DUPLICATE: both resolve to chunk_id and both are
+                        // success, but only one of them wrote a row. An agent that
+                        // cannot tell them apart re-stores.
+                        "status": stored.outcome.status,
+                        "stored_new": stored.outcome.storedNew,
+                        "chunk_id": stored.chunkID,
                         "flushed_count": flushedStores.count,
                         "_brainbarStoredChunk": [
                             "chunk_id": stored.chunkID,
@@ -1662,7 +1707,7 @@ final class MCPRouter: @unchecked Sendable {
         ],
         [
             "name": "brain_store",
-            "description": "Save a decision, learning, mistake, idea, or todo to durable memory so future sessions can retrieve it with brain_search. Returns the new chunk_id. Add tags, importance (1-10), and project to improve later retrieval. A STORED (deferred) result is SUCCESS: the memory is durably queued while the DB is busy and the drain persists it automatically \u{2014} never call brain_store again for it and never save a fallback copy. For digesting long raw text use brain_digest instead.",
+            "description": "Save a decision, learning, mistake, idea, or todo to durable memory so future sessions can retrieve it with brain_search. Add tags, importance (1-10), and project to improve later retrieval. Every call returns exactly one of six outcomes, named in the response text and in the structured `status` field: STORED (a new chunk was written); DUPLICATE (an identical memory already existed and was refreshed, not re-inserted); MERGED (a near-identical memory existed and your content was folded into it); STORED (deferred), status DEFERRED (accepted and durably queued while the DB is busy \u{2014} it WILL be stored automatically under the same chunk_id); REJECTED (a content gate refused it \u{2014} nothing stored, nothing queued); ERROR (the write failed \u{2014} nothing stored, nothing queued). STORED, DUPLICATE, MERGED, and DEFERRED all resolve to a canonical chunk_id and are all SUCCESS: do NOT re-store, do NOT retry, and never save a fallback copy. Only REJECTED and ERROR store nothing, and they return no chunk_id. For digesting long raw text use brain_digest instead.",
             "annotations": MCPRouter.writeAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",

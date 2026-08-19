@@ -5,6 +5,30 @@
 
 import Foundation
 
+/// The canonical brain_store outcome vocabulary, shared with the Python MCP path
+/// (`src/brainlayer/mcp/_format.py: STORE_OUTCOMES`) so an agent can branch on the
+/// outcome without knowing which server answered.
+///
+/// `merged` is Python-only in practice: BrainBar deliberately writes NULL simhash
+/// columns (see the comment in `BrainDatabase.store`), so it has no near-duplicate
+/// merge to report and its dedupe surfaces as `duplicate`. It is still rendered
+/// here so both paths speak one vocabulary.
+enum StoreOutcome: String, Sendable, Equatable {
+    case stored
+    case duplicate
+    case merged
+    case deferred
+    case rejected
+    case error
+
+    /// The value published in the MCP response's structured `status` field.
+    var status: String { rawValue.uppercased() }
+
+    /// Whether a new chunk row was written. `false` means the content is already
+    /// in BrainLayer under the returned chunk_id and re-storing it is wrong.
+    var storedNew: Bool { self == .stored }
+}
+
 enum Formatters {
 
     // MARK: - ANSI Color Codes
@@ -164,28 +188,82 @@ enum Formatters {
 
     // MARK: - Store Result
 
+    /// Render one brain_store outcome that resolved to a chunk, so an agent cannot
+    /// misread it. Every rendering states three things, because agents that could
+    /// not tell a fresh write from a suppressed duplicate kept re-storing:
+    ///   (a) the OUTCOME WORD — branchable without parsing prose;
+    ///   (b) the CANONICAL chunk_id the write resolved to;
+    ///   (c) the INSTRUCTION — above all, whether re-storing is right or wrong.
+    ///
+    /// For the outcomes that store nothing (`rejected`, `error`) use
+    /// `formatStoreFailure`, which has no chunk_id to report.
     static func formatStoreResult(
         chunkId: String,
         superseded: String? = nil,
         tags: [String] = [],
         queued: Bool = false,
         queuedReason: String = "DB_BUSY",
+        outcome: StoreOutcome? = nil,
         useColor: Bool = true
     ) -> String {
-        if queued {
-            let idSuffix = chunkId.isEmpty ? "" : " \u{2192} \(val(chunkId, useColor))"
+        let resolved = outcome ?? (queued ? .deferred : .stored)
+        let id = val(chunkId, useColor)
+
+        switch resolved {
+        case .deferred:
+            // The prefix stays "STORED (deferred)": Etan retired a bare "DEFERRED:"
+            // on 2026-08-09 because it read as failure and agents re-stored on it.
+            // The 2026-08-19 ask is met by the explicit WILL-be-stored promise, not
+            // by renaming the prefix back. Machines branch on the structured status.
+            let idSuffix = chunkId.isEmpty ? "" : " \u{2192} \(id)"
             let reasonLabel = queuedReason == "DB_BUSY" ? "DB busy" : queuedReason
             return "\u{2502} \u{2714} STORED (deferred): \(reasonLabel)\(idSuffix) \u{2500} durably queued; "
-                + "the drain persists it automatically. Do NOT re-store or save a fallback copy."
+                + "the drain persists it automatically \u{2500} it WILL be stored under exactly this "
+                + "chunk_id. Do NOT re-store, do NOT retry, and do NOT save a fallback copy."
+
+        case .duplicate:
+            return "\u{2714} DUPLICATE \u{2192} \(id) \u{2500} an identical memory was already stored; "
+                + "the existing chunk was refreshed, not re-inserted. Do NOT re-store \u{2500} reference \(id)."
+
+        case .merged:
+            return "\u{2714} MERGED \u{2192} \(id) \u{2500} a near-identical memory already existed and "
+                + "your content was merged into it. Do NOT re-store \u{2500} reference \(id)."
+
+        case .rejected, .error:
+            // No chunk exists for these; callers should use formatStoreFailure.
+            return formatStoreFailure(outcome: resolved, reason: nil, useColor: useColor)
+
+        case .stored:
+            var parts = ["\u{2714} STORED \u{2192} \(id) \u{2500} new memory written"]
+            if !tags.isEmpty {
+                parts.append(" [tags: \(tags.joined(separator: ", "))]")
+            }
+            if let superseded {
+                parts.append(", superseding \(val(superseded, useColor))")
+            }
+            parts.append(". Nothing further to do.")
+            return parts.joined()
         }
-        var parts = ["\u{2714} Stored \u{2192} \(val(chunkId, useColor))"]
-        if !tags.isEmpty {
-            parts.append(" [tags: \(tags.joined(separator: ", "))]")
+    }
+
+    /// Render a brain_store outcome that stored nothing. These are the only two
+    /// outcomes with no chunk_id, and saying so explicitly is what stops an agent
+    /// from treating a failure as a deferred write it must not retry.
+    static func formatStoreFailure(
+        outcome: StoreOutcome,
+        reason: String?,
+        useColor: Bool = true
+    ) -> String {
+        switch outcome {
+        case .rejected:
+            return "\u{2716} REJECTED: \(reason ?? "content is not eligible for storage") \u{2500} "
+                + "nothing was stored and there is no chunk_id. Do NOT retry the same content; "
+                + "rewrite it or drop it."
+        default:
+            return "\u{2716} ERROR: \(reason ?? "store failed") \u{2500} the memory was NOT stored and "
+                + "there is no chunk_id. Retry once; if it repeats, report it \u{2500} do NOT save a "
+                + "fallback copy."
         }
-        if let superseded {
-            parts.append(" (superseded \(val(superseded, useColor)))")
-        }
-        return parts.joined()
     }
 
     // MARK: - Entity Card

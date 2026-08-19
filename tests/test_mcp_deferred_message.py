@@ -22,9 +22,19 @@ def test_deferred_store_receipt_carries_non_busy_reason() -> None:
     assert "Do NOT re-store" in msg
 
 
-def test_non_queued_store_receipt_unchanged() -> None:
+def test_non_queued_store_receipt_names_the_outcome_and_is_not_confusable_with_deferred() -> None:
+    """A fresh write says STORED and says it is new (Etan, 2026-08-19).
+
+    The old text was a bare "Stored -> <id>", which read identically to a
+    suppressed duplicate and to a deferred write -- the ambiguity that had
+    agents re-storing the same memory.
+    """
     msg = format_store_result("brainbar-abc123")
-    assert msg == "✔ Stored → brainbar-abc123"
+    assert "STORED" in msg
+    assert "brainbar-abc123" in msg
+    assert "new" in msg.lower()
+    assert "deferred" not in msg.lower()
+    assert "DUPLICATE" not in msg
 
 
 def test_deferred_receipt_for_legacy_queue_schedules_replay(monkeypatch, tmp_path) -> None:

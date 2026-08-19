@@ -183,7 +183,7 @@ class TestFormatStoreResult:
         result = format_store_result("new_id", superseded="old_id")
         assert "new_id" in result
         assert "old_id" in result
-        assert "superseded" in result
+        assert "superseding" in result
 
     def test_queued(self):
         result = format_store_result("manual-test123", queued=True)

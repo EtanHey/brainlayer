@@ -209,6 +209,7 @@ def store_memory(
     tags_json = json.dumps(tags) if tags else None
     incoming_chunk_id = chunk_id
     stored_chunk_id = chunk_id
+    outcome = "stored"
     pending_reembed: tuple[str, str] | None = None
     incoming = {
         "id": incoming_chunk_id,
@@ -245,6 +246,10 @@ def store_memory(
                         chunk_id=incoming_chunk_id,
                         incoming=incoming,
                     )
+                # Re-arriving on a reserved id: the row already exists either way.
+                # Content that changed was folded in (MERGED); content that did not
+                # was a bare re-send (DUPLICATE). Neither wrote a new chunk.
+                outcome = "merged" if content_changed else "duplicate"
                 if embedding is not None:
                     if content_changed:
                         merged_row = cursor.execute(
@@ -274,6 +279,10 @@ def store_memory(
                         hamming_distance_value=duplicate.hamming_distance,
                     )
                     stored_chunk_id = duplicate.canonical_chunk_id
+                    # An exact-hash hit that changed nothing is a plain DUPLICATE;
+                    # a near-duplicate (simhash) or one that updated the canonical
+                    # row is a MERGE. Both resolve to a pre-existing chunk.
+                    outcome = "duplicate" if duplicate.mechanism == "sha256" and not content_changed else "merged"
                     if embedding is not None:
                         if content_changed:
                             merged_row = cursor.execute(
@@ -286,6 +295,7 @@ def store_memory(
                             store._upsert_chunk_vector(cursor, stored_chunk_id, embedding)
                 else:
                     stored_chunk_id = incoming_chunk_id
+                    outcome = "stored"
                     insert_values = {
                         "id": incoming_chunk_id,
                         "content": content,
@@ -406,6 +416,10 @@ def store_memory(
     return {
         "id": stored_chunk_id,
         "related": related,
+        # Which write actually happened. The MCP layer turns this into the
+        # STORED / DUPLICATE / MERGED wording an agent branches on; without it
+        # a suppressed duplicate is indistinguishable from a fresh insert.
+        "outcome": outcome,
     }
 
 

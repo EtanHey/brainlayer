@@ -230,7 +230,13 @@ final class MCPRouterTests: XCTestCase {
         let tools = listedTools(MCPRouter(profile: "core"))
         let data = try JSONSerialization.data(withJSONObject: tools, options: [.sortedKeys])
 
-        XCTAssertLessThanOrEqual(data.count, 1_500)
+        // Raised 1500 -> 1600 on 2026-08-19 to fit the brain_store outcome
+        // vocabulary into the DEFAULT palette (Etan: responses must tell agents
+        // exactly what happened so they stop re-storing). The payload had been
+        // sitting at 1499/1500 with no headroom, so naming the outcomes where a
+        // default agent can actually see them costs ~100 bytes of boot payload.
+        // See the coreToolDescriptions comment in MCPRouter for how to revert.
+        XCTAssertLessThanOrEqual(data.count, 1_600)
     }
 
     func testCorePaletteExpandsOnceAndDispatchesDeferredTools() throws {
@@ -670,7 +676,11 @@ No results found.
         let storedChunk = try XCTUnwrap(result["_brainbarStoredChunk"] as? [String: Any])
         let chunkID = try XCTUnwrap(storedChunk["chunk_id"] as? String)
 
-        XCTAssertEqual(text, "\u{2714} Stored \u{2192} \(chunkID) [tags: correction, orc, phoenix]")
+        XCTAssertEqual(
+            text,
+            "\u{2714} STORED \u{2192} \(chunkID) \u{2500} new memory written "
+                + "[tags: correction, orc, phoenix]. Nothing further to do."
+        )
         XCTAssertFalse(text.contains("\u{1b}["))
         XCTAssertFalse(text.contains(fullContent))
     }
@@ -2130,7 +2140,8 @@ No results found.
         XCTAssertEqual(
             text,
             "\u{2502} \u{2714} STORED (deferred): DB_NOT_OPEN \u{2192} \(chunkID) \u{2500} durably queued; "
-                + "the drain persists it automatically. Do NOT re-store or save a fallback copy."
+                + "the drain persists it automatically \u{2500} it WILL be stored under exactly this "
+                + "chunk_id. Do NOT re-store, do NOT retry, and do NOT save a fallback copy."
         )
         XCTAssertFalse(text.contains("\u{1b}["))
 
@@ -2231,7 +2242,8 @@ No results found.
         XCTAssertEqual(
             text,
             "\u{2502} \u{2714} STORED (deferred): DB_NOT_OPEN \u{2192} \(chunkID) \u{2500} durably queued; "
-                + "the drain persists it automatically. Do NOT re-store or save a fallback copy."
+                + "the drain persists it automatically \u{2500} it WILL be stored under exactly this "
+                + "chunk_id. Do NOT re-store, do NOT retry, and do NOT save a fallback copy."
         )
         XCTAssertFalse(text.contains("\u{1b}["))
 
@@ -2291,7 +2303,8 @@ No results found.
         XCTAssertEqual(
             text,
             "\u{2502} \u{2714} STORED (deferred): DB busy \u{2192} \(chunkID) \u{2500} durably queued; "
-                + "the drain persists it automatically. Do NOT re-store or save a fallback copy."
+                + "the drain persists it automatically \u{2500} it WILL be stored under exactly this "
+                + "chunk_id. Do NOT re-store, do NOT retry, and do NOT save a fallback copy."
         )
         XCTAssertFalse(text.contains("\u{1b}["))
         XCTAssertTrue(FileManager.default.fileExists(atPath: queuePath.path))

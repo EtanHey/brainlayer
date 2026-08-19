@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 import apsw
 from mcp.types import CallToolResult, TextContent
 
-from ._format import format_digest_result, format_store_result
+from ._format import STORE_OUTCOMES, format_digest_result, format_store_result
 from ._shared import (
     _auto_importance,
     _detect_memory_type,
@@ -563,6 +563,37 @@ def _clear_hybrid_search_cache_if_loaded() -> None:
         clear_cache()
 
 
+def _store_receipt(chunk_id: str, *, outcome: str, related: list) -> tuple[str, dict]:
+    """Build the (text, structured) pair for a write that resolved to a chunk.
+
+    `stored_new` is the one boolean an agent needs: False means the content is
+    already in BrainLayer under `chunk_id` and re-storing it is wrong.
+    """
+    if outcome not in STORE_OUTCOMES:
+        raise ValueError(f"unknown store outcome {outcome!r}; expected one of {', '.join(STORE_OUTCOMES)}")
+    if outcome not in ("stored", "duplicate", "merged"):
+        # DEFERRED has its own receipt builder; REJECTED and ERROR resolve to no
+        # chunk at all, so neither belongs on this path.
+        raise ValueError(f"_store_receipt handles resolved writes only, got {outcome!r}")
+    structured = {
+        "chunk_id": chunk_id,
+        "status": outcome.upper(),
+        "stored_new": outcome == "stored",
+        "related": related,
+    }
+    return format_store_result(chunk_id, outcome=outcome), structured
+
+
+def _rejected_store_result(reason: str) -> CallToolResult:
+    """Content the store gates refused. Nothing was written; retrying is futile."""
+    return _error_result(format_store_result(None, outcome="rejected", reason=reason))
+
+
+def _error_store_result(reason: str) -> CallToolResult:
+    """The write failed outright. Unlike DEFERRED, nothing is queued for later."""
+    return _error_result(format_store_result(None, outcome="error", reason=reason))
+
+
 def _deferred_store_receipt(chunk_id: str, queue_path, *, reason: str = "DB_BUSY") -> dict:
     action = "queued_for_replay" if str(queue_path).endswith("pending-stores.jsonl") else "queued_for_drain"
     if action == "queued_for_replay":
@@ -1044,16 +1075,21 @@ async def _store(
         t.start()
 
         superseded_id = supersedes if supersedes and superseded_ok else None
-        formatted = format_store_result(chunk_id, superseded=superseded_id)
+        outcome = result.get("outcome", "stored")
+        formatted, structured = _store_receipt(chunk_id, outcome=outcome, related=result["related"])
+        if superseded_id:
+            formatted = format_store_result(chunk_id, outcome=outcome, superseded=superseded_id)
         if supersedes and not superseded_ok:
             formatted += f"\n  warn: could not supersede {supersedes} (not found)"
-        structured = {"chunk_id": chunk_id, "related": result["related"]}
         if supersedes:
             structured["superseded"] = supersedes if superseded_ok else None
         return ([TextContent(type="text", text=formatted)], structured)
 
     except ValueError as e:
-        return _error_result(f"Validation error: {str(e)}")
+        # The gates in _validate_store_request (empty content, bad memory_type,
+        # recursive MCP output, system-prompt text). Nothing was written and
+        # nothing is queued -- resending the identical content cannot succeed.
+        return _rejected_store_result(str(e))
     except Exception as e:
         if _is_lock_error(e):
             from ..runtime_store import SchemaFingerprintMismatch
@@ -1088,4 +1124,4 @@ async def _store(
                 [TextContent(type="text", text=formatted)],
                 structured,
             )
-        return _error_result(f"Store error: {str(e)}")
+        return _error_store_result(str(e))

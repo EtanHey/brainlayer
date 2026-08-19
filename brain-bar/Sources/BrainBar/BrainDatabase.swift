@@ -647,6 +647,22 @@ final class BrainDatabase: @unchecked Sendable {
         let chunkID: String
         let rowID: Int64
         let contentIntegrity: StoredContentIntegrity?
+        /// Which write actually happened. Without it a suppressed duplicate is
+        /// indistinguishable from a fresh insert, which is what had agents
+        /// re-storing the same memory.
+        let outcome: StoreOutcome
+
+        init(
+            chunkID: String,
+            rowID: Int64,
+            contentIntegrity: StoredContentIntegrity?,
+            outcome: StoreOutcome = .stored
+        ) {
+            self.chunkID = chunkID
+            self.rowID = rowID
+            self.contentIntegrity = contentIntegrity
+            self.outcome = outcome
+        }
     }
 
     struct StoredContentIntegrity: Sendable, Equatable {
@@ -4866,7 +4882,8 @@ final class BrainDatabase: @unchecked Sendable {
             return StoredChunk(
                 chunkID: chunkID,
                 rowID: sqlite3_column_int64(stmt, 1),
-                contentIntegrity: nil
+                contentIntegrity: nil,
+                outcome: .duplicate
             )
         case SQLITE_DONE:
             return nil

@@ -421,6 +421,18 @@ _STORE_OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
         "chunk_id": {"type": "string"},
+        # Which write actually happened, so a client can branch without parsing
+        # the response prose. All four are SUCCESS and all resolve to chunk_id;
+        # REJECTED and ERROR never reach this schema because they are error
+        # results with no chunk to report.
+        "status": {
+            "type": "string",
+            "enum": ["STORED", "DUPLICATE", "MERGED", "DEFERRED"],
+        },
+        "stored_new": {
+            "type": "boolean",
+            "description": "False when the content was already in BrainLayer under chunk_id.",
+        },
         "related": {
             "type": "array",
             "items": {
@@ -658,7 +670,7 @@ def _full_tool_definitions() -> list[Tool]:
         Tool(
             name="brain_store",
             title="Store Memory",
-            description="""Save decisions, learnings, corrections, issues, and other durable memories so future sessions can retrieve the reasoning with brain_search. Use when: you made a decision, learned something important, hit a bug worth tracking, or received a correction that should persist. Don't use when: you are retrieving existing knowledge (use brain_search), deeply extracting entities from large text with richer indexing (use brain_digest), or archiving/superseding old chunks without writing new content (use brain_archive or brain_supersede). content should explain what happened and why; type auto-detects if omitted, and project, tags, and importance improve retrieval. For decisions, add confidence_score, outcome, reversibility, and files_changed; for issues, add status, severity, file_path, function_name, and line_number. Returns a new chunk_id plus related similar memories, and supersedes can replace an older chunk in the same write.""",
+            description="""Save decisions, learnings, corrections, and issues so future sessions can retrieve the reasoning with brain_search. Use when: you decided something, learned something important, hit a bug worth tracking, or were corrected. Don't use when: retrieving knowledge (brain_search), indexing large text (brain_digest), or archiving/superseding (brain_archive, brain_supersede). content explains what happened and why; type auto-detects, and project, tags, importance improve retrieval. Decision fields, issue fields, and supersedes are described in the schema. Every call returns ONE outcome, in the text and in structured `status`: STORED (new chunk); DUPLICATE (identical memory already stored); MERGED (near-identical, folded in); DEFERRED (queued while the DB is busy — it WILL be stored under the same chunk_id). All four resolve to a canonical chunk_id and are SUCCESS: do NOT re-store, do NOT retry, never save a fallback copy. REJECTED (gate refused) and ERROR (write failed) store nothing and return no chunk_id.""",
             annotations=_WRITE,
             input_schema=_bounded_input_schema(
                 {
