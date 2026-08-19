@@ -197,8 +197,12 @@ assert_no_root_owned_paths() {
     local path owner
     for path in "${candidates[@]}"; do
         [[ -e "$path" ]] || continue
-        owner="$(stat -f '%u' "$path" 2>/dev/null || printf '%s' "$me")"
-        if [[ "$owner" != "$me" ]]; then
+        # `-O` is "owned by the effective uid" and is built into the shell, so the
+        # decision needs no external tool. `stat` differs between BSD and GNU (`-f`
+        # means format on macOS and FILESYSTEM on Linux), and a safety guard must not
+        # hinge on which one it got. stat is used only to name the owner in the message.
+        if [[ ! -O "$path" ]]; then
+            owner="$(stat -f '%u' "$path" 2>/dev/null || stat -c '%u' "$path" 2>/dev/null || printf 'unknown')"
             offender="$offender  $path (uid $owner)\n"
         fi
     done

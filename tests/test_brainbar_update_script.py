@@ -267,26 +267,34 @@ def test_dry_run_changes_nothing(tmp_path: Path) -> None:
 
 
 def test_root_owned_path_stops_before_touching_anything(tmp_path: Path) -> None:
+    """The guard must fire BEFORE the mv, not after — a half-destroyed install is worse."""
     h = _Harness(tmp_path)
     h.install_stubs(offered="1.5.8", registered="1.5.2")
-    _make_app(h.app_path, "1.5.8")
     (h.caskroom / "1.5.2").mkdir(parents=True)
 
-    # `stat` is what the guard consults; stub it to report a root-owned app.
-    _write_exec(
-        h.bin_dir / "stat",
-        f"""#!/usr/bin/env bash
-if [ "$3" = "{h.app_path}" ]; then printf '0\n'; else printf '%s\n' "$(id -u)"; fi
-""",
-    )
+    # A genuinely root-owned path on both macOS and Linux — no stubbing of the
+    # ownership probe, so this exercises the real `-O` check.
+    root_owned = Path("/usr")
+    assert root_owned.exists() and root_owned.stat().st_uid == 0, "precondition: /usr is root-owned"
 
-    result = h.run()
+    result = h.run(BRAINLAYER_UPDATE_BRAINBAR_APP=str(root_owned))
 
     assert result.returncode == 3, result.stdout + result.stderr
     assert "would shell out to sudo and abort without a TTY" in result.stderr
     assert "Nothing has been changed." in result.stderr
+    assert str(root_owned) in result.stderr
     assert h.caskroom.exists(), "the guard fired AFTER destroying the registration"
     assert "install --cask" not in h.brew_calls
+
+
+def test_ownership_guard_does_not_depend_on_bsd_or_gnu_stat() -> None:
+    """`stat -f` means format on BSD and FILESYSTEM on GNU; the decision must not use it."""
+    script = UPDATE_SCRIPT.read_text(encoding="utf-8")
+    guard = script[script.index("assert_no_root_owned_paths()") : script.index("# --- drift detection")]
+    decision = guard[: guard.index("owner=")]
+    code = "\n".join(line for line in decision.splitlines() if not line.lstrip().startswith("#"))
+    assert '[[ ! -O "$path" ]]' in code
+    assert "stat" not in code, "the ownership DECISION still shells out to stat"
 
 
 def test_script_never_invokes_sudo(tmp_path: Path) -> None:
