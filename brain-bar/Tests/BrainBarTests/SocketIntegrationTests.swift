@@ -1647,4 +1647,227 @@ final class SocketIntegrationTests: XCTestCase {
         }
         throw NSError(domain: "test", code: 5, userInfo: [NSLocalizedDescriptionKey: "Timeout reading line JSON"])
     }
+
+    // MARK: - Issue #726 — tool descriptions must survive every profile x framing
+
+    /// Fetches tools/list over a REAL socket in the given framing, returning the
+    /// tools plus the exact byte count that went over the wire. Unit tests at
+    /// `router.handle()` sit one layer above the raw-line compaction and stayed
+    /// green while the wire was wrong twice — these assertions run on the wire.
+    private func wireToolsList(
+        palette: WirePalette,
+        framing: WireFraming
+    ) throws -> (tools: [[String: Any]], byteCount: Int) {
+        restartServer(profile: palette.serverProfile)
+        let fd = try connectClient()
+        defer { close(fd) }
+
+        var nextID = 1
+        func exchange(_ request: [String: Any]) throws -> (json: [String: Any], byteCount: Int) {
+            var payload = request
+            payload["id"] = nextID
+            nextID += 1
+            switch framing {
+            case .contentLength:
+                try sendMCPRequest(on: fd, request: payload)
+                let json = try readMCPMessage(fd: fd)
+                let encoded = try MCPFraming.encodeJSONResponse(json)
+                return (json, encoded.count)
+            case .newline:
+                try sendRawLineJSON(on: fd, object: payload)
+                let line = try readRawLineJSONData(fd: fd)
+                let json = try JSONSerialization.jsonObject(with: line) as? [String: Any] ?? [:]
+                // +1 for the delimiter newline the server appends.
+                return (json, line.count + 1)
+            }
+        }
+
+        _ = try exchange([
+            "jsonrpc": "2.0",
+            "method": "initialize",
+            "params": [
+                "protocolVersion": "2024-11-05",
+                "capabilities": [:] as [String: Any],
+                "clientInfo": ["name": "wire-\(palette.rawValue)-\(framing.rawValue)", "version": "1.0"],
+            ],
+        ])
+
+        if palette.requiresExpansion {
+            let expansion = try exchange([
+                "jsonrpc": "2.0",
+                "method": "tools/call",
+                "params": ["name": "expand_palette", "arguments": [:] as [String: Any]],
+            ])
+            XCTAssertNil(expansion.json["error"], "expand_palette should succeed on the core profile")
+        }
+
+        let listed = try exchange(["jsonrpc": "2.0", "method": "tools/list"])
+        let tools = (listed.json["result"] as? [String: Any])?["tools"] as? [[String: Any]] ?? []
+        return (tools, listed.byteCount)
+    }
+
+    func testEveryToolCarriesADescriptionOnEveryProfileAndFraming() throws {
+        for framing in WireFraming.allCases {
+            for palette in WirePalette.allCases {
+                let label = "palette=\(palette.rawValue) framing=\(framing.rawValue)"
+                let listed = try wireToolsList(palette: palette, framing: framing)
+
+                print("[#726] \(label) tools=\(listed.tools.count) bytes=\(listed.byteCount)")
+
+                XCTAssertFalse(listed.tools.isEmpty, "\(label): tools/list returned no tools")
+                let expectedCount = palette == .core ? 5 : 17
+                XCTAssertEqual(listed.tools.count, expectedCount, "\(label): unexpected tool count")
+
+                for tool in listed.tools {
+                    let name = tool["name"] as? String ?? "unknown"
+                    let description = tool["description"] as? String
+                    XCTAssertNotNil(
+                        description,
+                        "\(label): \(name) reached the agent with NO description — descriptions are the contract (#726)"
+                    )
+                    XCTAssertFalse(
+                        (description ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                        "\(label): \(name) reached the agent with an EMPTY description (#726)"
+                    )
+                }
+            }
+        }
+    }
+
+    func testRawLineToolsListStaysUnderTheChunkLimitOnEveryProfile() throws {
+        for palette in WirePalette.allCases {
+            let listed = try wireToolsList(palette: palette, framing: .newline)
+            XCTAssertLessThan(
+                listed.byteCount,
+                8192,
+                "palette=\(palette.rawValue): raw newline tools/list must fit Claude Desktop's 8192-byte MCPB chunk"
+            )
+        }
+    }
+
+    /// Etan, 2026-08-19: brain_store must be a default (core) tool whose description
+    /// is on the wire at boot with no expand_palette call, in BOTH framings.
+    func testBrainStoreIsInTheDefaultPaletteWithItsDescriptionOnBoot() throws {
+        for framing in WireFraming.allCases {
+            let listed = try wireToolsList(palette: .core, framing: framing)
+            let store = listed.tools.first { ($0["name"] as? String) == "brain_store" }
+            XCTAssertNotNil(store, "framing=\(framing.rawValue): brain_store must be in the boot palette")
+            let description = (store?["description"] as? String) ?? ""
+            XCTAssertFalse(
+                description.isEmpty,
+                "framing=\(framing.rawValue): brain_store's description must be present on boot"
+            )
+            XCTAssertTrue(
+                description.contains("STORED"),
+                "framing=\(framing.rawValue): brain_store must carry its outcome contract on boot"
+            )
+        }
+    }
+
+    /// Rung 2 of the ladder: a payload too big even without annotations/schema prose
+    /// must SHORTEN descriptions with an explicit notice, never silently drop them.
+    func testOversizedRawToolsListTruncatesDescriptionsWithAnExplicitNotice() throws {
+        let longDescription = String(repeating: "contract sentence. ", count: 40)
+        let tools: [[String: Any]] = (0..<40).map { index in
+            [
+                "name": "tool_\(index)",
+                "description": longDescription,
+                "annotations": ["readOnlyHint": true] as [String: Any],
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "query": ["type": "string", "description": longDescription] as [String: Any],
+                    ] as [String: Any],
+                ] as [String: Any],
+            ]
+        }
+        let response: [String: Any] = [
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": ["tools": tools] as [String: Any],
+        ]
+
+        let encoded = try XCTUnwrap(BrainBarServer.encodeRawJSONResponse(response))
+        XCTAssertLessThan(encoded.count, 8192, "the ladder should land under the chunk limit")
+
+        let decoded = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        let result = try XCTUnwrap(decoded["result"] as? [String: Any])
+        let decodedTools = try XCTUnwrap(result["tools"] as? [[String: Any]])
+        XCTAssertEqual(decodedTools.count, 40, "no tool may be dropped to fit")
+
+        for tool in decodedTools {
+            let description = (tool["description"] as? String) ?? ""
+            XCTAssertFalse(
+                description.isEmpty,
+                "\(tool["name"] ?? "unknown") lost its description instead of being truncated (#726)"
+            )
+            XCTAssertTrue(
+                description.hasSuffix("…[truncated]"),
+                "a shortened description must say so"
+            )
+            XCTAssertNil(tool["annotations"], "annotations drop before descriptions")
+        }
+
+        let meta = try XCTUnwrap(result["_meta"] as? [String: Any])
+        let notice = try XCTUnwrap(meta["brainlayer/descriptionsTruncated"] as? [String: Any])
+        XCTAssertEqual((notice["tools"] as? [String])?.count, 40, "the notice must name what was shortened")
+        XCTAssertEqual(notice["limitBytes"] as? Int, 8192)
+        XCTAssertNotNil(notice["reason"] as? String)
+    }
+
+    /// The shipped palette must fit rung 1 — full descriptions, no truncation at all.
+    /// If a new tool pushes the raw line over, this fails LOUDLY here instead of
+    /// quietly shipping shortened contracts to every agent.
+    func testShippedPalettesFitWithoutAnyDescriptionTruncation() throws {
+        for palette in WirePalette.allCases {
+            _ = try wireToolsList(palette: palette, framing: .newline)
+        }
+
+        // Re-fetch full with the raw notice visible.
+        restartServer(profile: "full")
+        let fd = try connectClient()
+        defer { close(fd) }
+        try sendRawLineJSON(on: fd, object: [
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": [
+                "protocolVersion": "2024-11-05",
+                "capabilities": [:] as [String: Any],
+                "clientInfo": ["name": "headroom", "version": "1.0"],
+            ],
+        ])
+        _ = try readRawLineJSONData(fd: fd)
+        try sendRawLineJSON(on: fd, object: ["jsonrpc": "2.0", "id": 2, "method": "tools/list"])
+        let line = try readRawLineJSONData(fd: fd)
+        let response = try XCTUnwrap(try JSONSerialization.jsonObject(with: line) as? [String: Any])
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+
+        XCTAssertNil(
+            (result["_meta"] as? [String: Any])?["brainlayer/descriptionsTruncated"],
+            "the shipped palette must fit with FULL descriptions; shorten descriptions rather than "
+                + "letting the ladder truncate them (#726)"
+        )
+        for tool in (result["tools"] as? [[String: Any]]) ?? [] {
+            XCTAssertFalse(
+                ((tool["description"] as? String) ?? "").hasSuffix("…[truncated]"),
+                "\(tool["name"] ?? "unknown") shipped a truncated description"
+            )
+        }
+        print("[#726] shipped full raw-line bytes=\(line.count + 1)")
+    }
+}
+
+private enum WireFraming: String, CaseIterable {
+    case contentLength
+    case newline
+}
+
+private enum WirePalette: String, CaseIterable {
+    case core
+    case expanded
+    case full
+
+    var serverProfile: String { self == .full ? "full" : "core" }
+    var requiresExpansion: Bool { self == .expanded }
 }

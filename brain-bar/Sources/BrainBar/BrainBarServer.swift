@@ -765,14 +765,31 @@ final class BrainBarServer: @unchecked Sendable {
 
     private static let claudeExtensionRawChunkLimit = 8192
 
-    private static func encodeRawJSONResponse(_ response: [String: Any]) -> Data? {
+    /// Floor for a truncated tool description. A description is the tool's
+    /// contract with the agent ("The rules for agents USING it live in the tool
+    /// descriptions" — AGENTS.md), so it is the LAST thing the raw-line encoder
+    /// gives up: annotations and inputSchema prose go first, and a description is
+    /// truncated-with-notice rather than removed. Issue #726.
+    private static let minimumRawToolDescriptionLength = 48
+
+    /// Marker appended to a description the raw-line encoder had to shorten, so a
+    /// truncated contract never reads as a complete one.
+    private static let rawToolDescriptionTruncationMarker = "…[truncated]"
+
+    /// Internal (not private) so the compaction ladder can be exercised directly on
+    /// payloads larger than the real palette — the wire tests cover the shipped
+    /// palettes, this covers the rung a future tool addition would hit.
+    static func encodeRawJSONResponse(_ response: [String: Any]) -> Data? {
         guard let jsonData = try? MCPFraming.encodeJSONResponse(response) else { return nil }
         guard jsonData.count >= claudeExtensionRawChunkLimit else { return jsonData }
         guard let compacted = compactRawJSONResponseIfNeeded(response),
               let compactData = try? MCPFraming.encodeJSONResponse(compacted) else {
             return jsonData
         }
-        return compactData
+        guard compactData.count >= claudeExtensionRawChunkLimit else { return compactData }
+        // Rung 2: still over budget with annotations and schema prose gone. Shorten
+        // the descriptions — never delete them — and say so in the response.
+        return truncatedRawJSONResponse(compacted) ?? compactData
     }
 
     private static func compactRawJSONResponseIfNeeded(_ response: [String: Any]) -> [String: Any]? {
@@ -782,18 +799,18 @@ final class BrainBarServer: @unchecked Sendable {
         }
 
         // Claude Desktop's MCPB utility process currently parses raw extension
-        // stdout in 8192-byte chunks. Raw newline transport omits optional tool
-        // annotations and the verbose human-readable description prose (both the
-        // top-level tool descriptions and the per-property inputSchema
-        // descriptions). The Content-Length transport keeps the canonical, fully
-        // described tools/list; the raw line keeps only the machine-required
-        // shape (name + inputSchema structure) so the response stays under the
-        // 8192-byte MCPB chunk limit without dropping any tool.
+        // stdout in 8192-byte chunks. Rung 1 of the compaction ladder drops only
+        // what an agent needs neither to PICK a tool nor to CALL it: optional
+        // annotations and the per-property inputSchema prose. The top-level tool
+        // `description` — the contract that tells the agent what the tool is for —
+        // survives this rung unconditionally (issue #726: it used to be dropped
+        // here, which silently downgraded every expanded palette to 0/17
+        // descriptions). The Content-Length transport keeps the canonical,
+        // fully described tools/list.
         var compactResult = result
         compactResult["tools"] = tools.map { tool in
             var compact = tool
             compact.removeValue(forKey: "annotations")
-            compact.removeValue(forKey: "description")
             if let schema = compact["inputSchema"] as? [String: Any] {
                 compact["inputSchema"] = stripSchemaDescriptions(schema)
             }
@@ -803,6 +820,99 @@ final class BrainBarServer: @unchecked Sendable {
         var compactResponse = response
         compactResponse["result"] = compactResult
         return compactResponse
+    }
+
+    /// Rung 2: binary-search the largest per-tool description budget whose encoded
+    /// response still fits the chunk limit, and attach an explicit `_meta` notice
+    /// naming every tool that was shortened. If even the floor budget does not fit,
+    /// the floor payload is returned anyway — an over-limit response that still
+    /// carries its contract beats an under-limit one that silently lost it.
+    private static func truncatedRawJSONResponse(_ response: [String: Any]) -> Data? {
+        guard let result = response["result"] as? [String: Any],
+              let tools = result["tools"] as? [[String: Any]] else {
+            return nil
+        }
+        let longest = tools.compactMap { ($0["description"] as? String)?.count }.max() ?? 0
+        guard longest > minimumRawToolDescriptionLength else { return nil }
+
+        var low = minimumRawToolDescriptionLength
+        var high = longest
+        var best: Data?
+        while low <= high {
+            let budget = (low + high) / 2
+            guard let candidate = try? MCPFraming.encodeJSONResponse(
+                responseTruncatingDescriptions(response, result: result, tools: tools, budget: budget)
+            ) else {
+                break
+            }
+            if candidate.count < claudeExtensionRawChunkLimit {
+                best = candidate
+                low = budget + 1
+            } else {
+                high = budget - 1
+            }
+        }
+
+        if best == nil {
+            NSLog(
+                "[BrainBar] ⚠️ raw tools/list exceeds %d bytes even at a %d-char description budget; sending it over-limit rather than dropping the tool contract (issue #726)",
+                claudeExtensionRawChunkLimit,
+                minimumRawToolDescriptionLength
+            )
+            best = try? MCPFraming.encodeJSONResponse(
+                responseTruncatingDescriptions(
+                    response,
+                    result: result,
+                    tools: tools,
+                    budget: minimumRawToolDescriptionLength
+                )
+            )
+        }
+        return best
+    }
+
+    private static func responseTruncatingDescriptions(
+        _ response: [String: Any],
+        result: [String: Any],
+        tools: [[String: Any]],
+        budget: Int
+    ) -> [String: Any] {
+        var truncatedNames: [String] = []
+        let truncatedTools = tools.map { tool -> [String: Any] in
+            guard let description = tool["description"] as? String,
+                  description.count > budget else {
+                return tool
+            }
+            var shortened = tool
+            shortened["description"] = truncate(description, to: budget)
+            truncatedNames.append((tool["name"] as? String) ?? "unknown")
+            return shortened
+        }
+
+        var truncatedResult = result
+        truncatedResult["tools"] = truncatedTools
+        if !truncatedNames.isEmpty {
+            var meta = (result["_meta"] as? [String: Any]) ?? [:]
+            meta["brainlayer/descriptionsTruncated"] = [
+                "reason": "raw newline tools/list must fit the client's \(claudeExtensionRawChunkLimit)-byte chunk limit",
+                "limitBytes": claudeExtensionRawChunkLimit,
+                "budgetChars": budget,
+                "tools": truncatedNames,
+                "fullDescriptionsAvailableOver": "Content-Length framing",
+            ] as [String: Any]
+            truncatedResult["_meta"] = meta
+        }
+
+        var truncatedResponse = response
+        truncatedResponse["result"] = truncatedResult
+        return truncatedResponse
+    }
+
+    private static func truncate(_ description: String, to budget: Int) -> String {
+        let keep = max(1, budget - rawToolDescriptionTruncationMarker.count)
+        let head = String(description.prefix(keep))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return head + rawToolDescriptionTruncationMarker
     }
 
     /// Recursively removes human-readable `description` keys from a JSON schema
