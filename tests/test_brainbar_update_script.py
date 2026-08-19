@@ -81,6 +81,21 @@ exit 0
         )
         _write_exec(self.bin_dir / "launchctl", "#!/usr/bin/env bash\nexit 0\n")
         _write_exec(
+            self.bin_dir / "defaults",
+            """#!/usr/bin/env bash
+# usage: defaults read <plist> <key>
+exec python3 - "$2" "$3" <<'PY'
+import plistlib, sys
+try:
+    with open(sys.argv[1], "rb") as handle:
+        value = plistlib.load(handle)[sys.argv[2]]
+except Exception:
+    raise SystemExit(1)
+print(value)
+PY
+""",
+        )
+        _write_exec(
             self.bin_dir / "sudo",
             f"""#!/usr/bin/env bash
 printf '%s\\n' "$*" >> {self.sudo_log!s}
@@ -96,6 +111,7 @@ exit 1
             "BRAINLAYER_UPDATE_BREW_BIN": str(self.bin_dir / "brew"),
             "BRAINLAYER_UPDATE_GIT_BIN": str(self.bin_dir / "git"),
             "BRAINLAYER_UPDATE_LAUNCHCTL_BIN": str(self.bin_dir / "launchctl"),
+            "BRAINLAYER_UPDATE_DEFAULTS_BIN": str(self.bin_dir / "defaults"),
             "BRAINLAYER_UPDATE_BRAINBAR_APP": str(self.app_path),
             "BRAINLAYER_UPDATE_TAP_DIR": str(self.tap_dir),
             "BRAINLAYER_UPDATE_QUARANTINE_DIR": str(self.quarantine),
