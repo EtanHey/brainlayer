@@ -401,7 +401,8 @@ class TestStoreAutoEnrich:
 
         content_items, structured = result
         assert structured["chunk_id"] != "queued"
-        assert content_items[0].text == f"✔ Stored → {structured['chunk_id']}"
+        assert "STORED" in content_items[0].text
+        assert structured["chunk_id"] in content_items[0].text
 
         assert len(started_threads) == 1
         started_threads[0].join(timeout=5.0)

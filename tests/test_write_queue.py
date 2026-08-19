@@ -1532,7 +1532,14 @@ class TestStoreRetryOnLock:
             )
 
         assert attempts == 3
-        assert structured == {"chunk_id": "manual-landed", "related": []}
+        # A landed write now names its outcome: STORED, and stored_new=True says
+        # a new row was written rather than a duplicate being resolved (2026-08-19).
+        assert structured == {
+            "chunk_id": "manual-landed",
+            "status": "STORED",
+            "stored_new": True,
+            "related": [],
+        }
         assert any("manual-landed" in item.text for item in texts)
         assert not list(queue_dir.glob("mcp-*.jsonl"))
 

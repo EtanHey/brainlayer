@@ -6,6 +6,16 @@ No ANSI color codes (MCP tool output doesn't support them in Claude Code).
 
 import os
 
+# The canonical brain_store outcome vocabulary, shared by the response text, the
+# structured receipt, and the tool description. Both MCP paths (Python here and
+# Swift in brain-bar/Sources/BrainBar/Formatters.swift) render the same words so
+# an agent can branch on the outcome without knowing which server answered.
+#
+# MERGED is reachable only on the Python path today: BrainBar deliberately
+# writes NULL simhash columns (see BrainDatabase.store), so it has no
+# near-duplicate merge to report and its dedupe surfaces as DUPLICATE.
+STORE_OUTCOMES = ("stored", "duplicate", "merged", "deferred", "rejected", "error")
+
 
 def _truncate(text: str, max_len: int = 80) -> str:
     """Truncate text with ellipsis."""
@@ -156,22 +166,83 @@ def format_recalled_context(query: str, chunks: list[dict]) -> str:
 
 
 def format_store_result(
-    chunk_id: str,
+    chunk_id: str | None,
     superseded: str | None = None,
     queued: bool = False,
     queued_reason: str = "DB_BUSY",
+    outcome: str | None = None,
+    reason: str | None = None,
 ) -> str:
-    """Format store confirmation as a clean one-liner."""
-    if queued:
+    """Render one brain_store outcome so an agent cannot misread it.
+
+    Every rendering states three things, because agents that could not tell a
+    fresh write from a suppressed duplicate kept re-storing the same memory:
+
+      (a) the OUTCOME WORD, in caps, first -- branchable without parsing prose;
+      (b) the CANONICAL chunk_id the write resolved to, or an explicit
+          "no chunk_id" for the outcomes that store nothing;
+      (c) the INSTRUCTION -- above all, whether re-storing is right or wrong.
+
+    Args:
+        chunk_id: Canonical chunk the call resolved to. None for REJECTED/ERROR.
+        superseded: Chunk id replaced by this store, when `supersedes` was used.
+        queued: Back-compatible shorthand for outcome="deferred".
+        queued_reason: Why the write was deferred (DB_BUSY, INTERACTIVE_PRIORITY, ...).
+        outcome: One of STORE_OUTCOMES. Defaults to "stored".
+        reason: Human-readable cause, required for REJECTED and ERROR.
+
+    Raises:
+        ValueError: On an outcome outside STORE_OUTCOMES. Falling back to
+            "Stored" for an unrecognised outcome is exactly the silent
+            ambiguity this contract exists to remove.
+    """
+    if queued and outcome is None:
+        outcome = "deferred"
+    outcome = outcome or "stored"
+    if outcome not in STORE_OUTCOMES:
+        raise ValueError(f"unknown store outcome {outcome!r}; expected one of {', '.join(STORE_OUTCOMES)}")
+
+    if outcome == "deferred":
         reason_label = "DB busy" if queued_reason == "DB_BUSY" else queued_reason
+        # The prefix stays "STORED (deferred)": Etan retired a bare "DEFERRED:" on
+        # 2026-08-09 because it read as failure and agents re-stored on it. The
+        # 2026-08-19 ask is satisfied by the explicit WILL-be-stored promise, not
+        # by renaming the prefix back. Machines branch on the structured status
+        # field, which is "DEFERRED".
         return (
             f"\u2502 \u2714 STORED (deferred): {reason_label} \u2192 {chunk_id} \u2500 durably queued; "
-            "the drain persists it automatically. Do NOT re-store or save a fallback copy."
+            "the drain persists it automatically \u2500 it WILL be stored under exactly this "
+            "chunk_id. Do NOT re-store, do NOT retry, and do NOT save a fallback copy."
         )
 
-    parts = [f"\u2714 Stored \u2192 {chunk_id}"]
+    if outcome == "duplicate":
+        return (
+            f"\u2714 DUPLICATE \u2192 {chunk_id} \u2500 an identical memory was already stored; the "
+            f"existing chunk was refreshed, not re-inserted. Do NOT re-store \u2500 reference {chunk_id}."
+        )
+
+    if outcome == "merged":
+        return (
+            f"\u2714 MERGED \u2192 {chunk_id} \u2500 a near-identical memory already existed and your "
+            f"content was merged into it. Do NOT re-store \u2500 reference {chunk_id}."
+        )
+
+    if outcome == "rejected":
+        return (
+            f"\u2716 REJECTED: {reason or 'content is not eligible for storage'} \u2500 nothing was "
+            "stored and there is no chunk_id. Do NOT retry the same content; rewrite it or drop it."
+        )
+
+    if outcome == "error":
+        return (
+            f"\u2716 ERROR: {reason or 'store failed'} \u2500 the memory was NOT stored and there is "
+            "no chunk_id. Retry once; if it repeats, report it \u2500 do NOT save a fallback copy."
+        )
+
+    parts = [f"\u2714 STORED \u2192 {chunk_id} \u2500 new memory written"]
     if superseded:
-        parts.append(f" (superseded {superseded})")
+        parts.append(f", superseding {superseded}")
+    parts.append(". Nothing further to do.")
     return "".join(parts)
 
 

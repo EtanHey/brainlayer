@@ -66,16 +66,24 @@ final class FormattersTests: XCTestCase {
 
     // MARK: - Store Result
 
+    // A fresh write says STORED and says it is new (Etan, 2026-08-19). The old
+    // text was a bare "Stored -> <id>", which read identically to a suppressed
+    // duplicate and to a deferred write -- the ambiguity that had agents
+    // re-storing the same memory.
+
     func testFormatStoreResult() {
         let out = Formatters.formatStoreResult(chunkId: "rt-abc123-xyz")
         XCTAssertTrue(out.contains("\u{2714}"))  // ✔
-        XCTAssertTrue(out.contains("Stored"))
+        XCTAssertTrue(out.contains("STORED"))
         XCTAssertTrue(out.contains("rt-abc123-xyz"))
     }
 
     func testFormatStoreResultPlainOutputOmitsANSIWhenColorDisabled() {
         let out = Formatters.formatStoreResult(chunkId: "brainbar-abc123", useColor: false)
-        XCTAssertEqual(out, "\u{2714} Stored \u{2192} brainbar-abc123")
+        XCTAssertEqual(
+            out,
+            "\u{2714} STORED \u{2192} brainbar-abc123 \u{2500} new memory written. Nothing further to do."
+        )
         XCTAssertFalse(out.contains("\u{1b}["))
     }
 
@@ -85,18 +93,25 @@ final class FormattersTests: XCTestCase {
             tags: ["correction", "orc", "phoenix"],
             useColor: false
         )
-        XCTAssertEqual(out, "\u{2714} Stored \u{2192} brainbar-tags123 [tags: correction, orc, phoenix]")
+        XCTAssertEqual(
+            out,
+            "\u{2714} STORED \u{2192} brainbar-tags123 \u{2500} new memory written "
+                + "[tags: correction, orc, phoenix]. Nothing further to do."
+        )
     }
 
     func testFormatStoreResultOmitsEmptyTags() {
         let out = Formatters.formatStoreResult(chunkId: "brainbar-notags", tags: [], useColor: false)
-        XCTAssertEqual(out, "\u{2714} Stored \u{2192} brainbar-notags")
+        XCTAssertEqual(
+            out,
+            "\u{2714} STORED \u{2192} brainbar-notags \u{2500} new memory written. Nothing further to do."
+        )
     }
 
     func testFormatStoreResultWithSuperseded() {
         let out = Formatters.formatStoreResult(chunkId: "new-1", superseded: "old-1")
         XCTAssertTrue(out.contains("new-1"))
-        XCTAssertTrue(out.contains("superseded"))
+        XCTAssertTrue(out.contains("superseding"))
         XCTAssertTrue(out.contains("old-1"))
     }
 
@@ -107,7 +122,8 @@ final class FormattersTests: XCTestCase {
         XCTAssertEqual(
             out,
             "\u{2502} \u{2714} STORED (deferred): DB busy \u{2192} brainbar-queued123 \u{2500} durably queued; "
-                + "the drain persists it automatically. Do NOT re-store or save a fallback copy."
+                + "the drain persists it automatically \u{2500} it WILL be stored under exactly this "
+                + "chunk_id. Do NOT re-store, do NOT retry, and do NOT save a fallback copy."
         )
         XCTAssertFalse(out.contains("\u{1b}["))
     }

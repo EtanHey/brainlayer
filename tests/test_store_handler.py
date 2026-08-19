@@ -179,7 +179,12 @@ async def test_store_validates_before_busy_deferral(tmp_path):
         )
 
     assert result.is_error is True
-    assert "Validation error" in result.content[0].text
+    # REJECTED, not a vague "Validation error": nothing was stored, nothing is
+    # queued, and resending the identical content cannot succeed (2026-08-19).
+    text = result.content[0].text
+    assert "REJECTED" in text
+    assert "no chunk_id" in text.lower()
+    assert "Do NOT retry" in text
     assert not list(queue_dir.glob("mcp-*.jsonl"))
 
 

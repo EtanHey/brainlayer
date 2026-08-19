@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 import apsw
 from mcp.types import CallToolResult, TextContent
 
-from ._format import format_digest_result, format_store_result
+from ._format import STORE_OUTCOMES, format_digest_result, format_store_result
 from ._shared import (
     _auto_importance,
     _detect_memory_type,
@@ -34,6 +34,18 @@ _MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 _STORE_BUSY_TIMEOUT_LOCK = threading.Lock()
 _NO_EXEC_TRACE = object()
 _fsync = os.fsync
+
+
+class StoreRejected(ValueError):
+    """A pre-write content gate refused the request; nothing was written.
+
+    REJECTED tells an agent "nothing was stored ... Do NOT retry the same
+    content". That is only safe to say when no write has happened, so the gates
+    that can truthfully say it get their own exception type. A bare ValueError
+    from anywhere in the write path -- including this PR's own outcome-vocabulary
+    guards, which fire AFTER the commit -- must never be turned into REJECTED
+    (PR725 review, MUST-FIX 1).
+    """
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -563,6 +575,54 @@ def _clear_hybrid_search_cache_if_loaded() -> None:
         clear_cache()
 
 
+def _nothing_was_written(store, chunk_id: str) -> bool:
+    """True when the reserved chunk is provably absent from the DB.
+
+    REJECTED and its "nothing was stored" promise may only be returned when this
+    holds. If the check itself cannot run we answer False: an unverifiable claim
+    about the disk is exactly what MUST-FIX 1 was about.
+    """
+    if store is None:
+        return True
+    try:
+        row = store.conn.cursor().execute("SELECT 1 FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Could not verify %s was not written: %s", chunk_id, exc)
+        return False
+    return row is None
+
+
+def _store_receipt(chunk_id: str, *, outcome: str, related: list) -> tuple[str, dict]:
+    """Build the (text, structured) pair for a write that resolved to a chunk.
+
+    `stored_new` is the one boolean an agent needs: False means the content is
+    already in BrainLayer under `chunk_id` and re-storing it is wrong.
+    """
+    if outcome not in STORE_OUTCOMES:
+        raise ValueError(f"unknown store outcome {outcome!r}; expected one of {', '.join(STORE_OUTCOMES)}")
+    if outcome not in ("stored", "duplicate", "merged"):
+        # DEFERRED has its own receipt builder; REJECTED and ERROR resolve to no
+        # chunk at all, so neither belongs on this path.
+        raise ValueError(f"_store_receipt handles resolved writes only, got {outcome!r}")
+    structured = {
+        "chunk_id": chunk_id,
+        "status": outcome.upper(),
+        "stored_new": outcome == "stored",
+        "related": related,
+    }
+    return format_store_result(chunk_id, outcome=outcome), structured
+
+
+def _rejected_store_result(reason: str) -> CallToolResult:
+    """Content the store gates refused. Nothing was written; retrying is futile."""
+    return _error_result(format_store_result(None, outcome="rejected", reason=reason))
+
+
+def _error_store_result(reason: str) -> CallToolResult:
+    """The write failed outright. Unlike DEFERRED, nothing is queued for later."""
+    return _error_result(format_store_result(None, outcome="error", reason=reason))
+
+
 def _deferred_store_receipt(chunk_id: str, queue_path, *, reason: str = "DB_BUSY") -> dict:
     action = "queued_for_replay" if str(queue_path).endswith("pending-stores.jsonl") else "queued_for_drain"
     if action == "queued_for_replay":
@@ -871,18 +931,27 @@ def _get_store_vector_store(deadline: float):
 
 
 def _validate_store_request(content: str, memory_type: str) -> str:
+    """Run the pre-write content gates. Raises StoreRejected, never a bare ValueError.
+
+    Every gate here runs BEFORE anything is written, which is what makes
+    REJECTED's promise ("nothing was stored") true. The dedicated exception type
+    is how `_store` catches these and only these -- see StoreRejected.
+    """
     from ..ingest_guard import reject_recursive_mcp_output
     from ..memory_types import VALID_MEMORY_TYPES
     from ..system_prompt_guard import looks_like_system_prompt
 
     if not content or not content.strip():
-        raise ValueError("content must be non-empty")
+        raise StoreRejected("content must be non-empty")
     content = content.strip()
     if memory_type not in VALID_MEMORY_TYPES:
-        raise ValueError(f"type must be one of: {', '.join(VALID_MEMORY_TYPES)}")
-    reject_recursive_mcp_output(content)
+        raise StoreRejected(f"type must be one of: {', '.join(VALID_MEMORY_TYPES)}")
+    try:
+        reject_recursive_mcp_output(content)
+    except ValueError as exc:
+        raise StoreRejected(str(exc)) from exc
     if looks_like_system_prompt(content):
-        raise ValueError("system prompt content is not stored in BrainLayer")
+        raise StoreRejected("system prompt content is not stored in BrainLayer")
     return content
 
 
@@ -912,6 +981,8 @@ async def _store(
     """
     promised_chunk_id = _new_manual_chunk_id()
     reservation_created_at = datetime.now(timezone.utc).isoformat()
+    store = None
+    committed = False
     try:
         content = _validate_store_request(content, memory_type)
 
@@ -986,6 +1057,14 @@ async def _store(
             conversation_id=conversation_id,
         )
 
+        committed = True
+        # ---- COMMIT FENCE ---------------------------------------------------
+        # `committed` is True from here on. REJECTED and ERROR both tell the
+        # agent nothing was stored, so neither may be returned past this point
+        # -- including from this PR's own outcome-vocabulary guards, which run
+        # after the row is durable. Failing loudly there is correct; claiming
+        # the write never happened is what sent agents back to re-store.
+
         chunk_id = result["id"]
 
         # If supersedes is set, mark the old chunk as superseded by the new one
@@ -1044,16 +1123,28 @@ async def _store(
         t.start()
 
         superseded_id = supersedes if supersedes and superseded_ok else None
-        formatted = format_store_result(chunk_id, superseded=superseded_id)
+        outcome = result.get("outcome", "stored")
+        formatted, structured = _store_receipt(chunk_id, outcome=outcome, related=result["related"])
+        if superseded_id:
+            formatted = format_store_result(chunk_id, outcome=outcome, superseded=superseded_id)
         if supersedes and not superseded_ok:
             formatted += f"\n  warn: could not supersede {supersedes} (not found)"
-        structured = {"chunk_id": chunk_id, "related": result["related"]}
         if supersedes:
             structured["superseded"] = supersedes if superseded_ok else None
         return ([TextContent(type="text", text=formatted)], structured)
 
+    except StoreRejected as e:
+        # A pre-write gate refused it: nothing was written and nothing queued,
+        # so REJECTED's "nothing was stored / do NOT retry" is literally true.
+        return _rejected_store_result(str(e))
     except ValueError as e:
-        return _error_result(f"Validation error: {str(e)}")
+        # Everything below the commit fence is barred from REJECTED. Other
+        # pre-write ValueErrors (e.g. an unknown entity_id) roll their
+        # transaction back -- but REJECTED is a promise about the disk, so
+        # verify it rather than take it on faith.
+        if committed or not _nothing_was_written(store, promised_chunk_id):
+            raise
+        return _rejected_store_result(str(e))
     except Exception as e:
         if _is_lock_error(e):
             from ..runtime_store import SchemaFingerprintMismatch
@@ -1088,4 +1179,8 @@ async def _store(
                 [TextContent(type="text", text=formatted)],
                 structured,
             )
-        return _error_result(f"Store error: {str(e)}")
+        if committed:
+            # The row is on disk. ERROR says "the memory was NOT stored" -- a
+            # committed write may never answer it (PR725 review, MUST-FIX 1).
+            raise
+        return _error_store_result(str(e))
