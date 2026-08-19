@@ -37,12 +37,11 @@ final class MCPRouter: @unchecked Sendable {
         // carry the outcome contract Etan asked for on 2026-08-19 -- compressed to
         // the six words plus the one rule that stops the re-store loop.
         //
-        // NOTE: this costs ~100 bytes of the core tools/list boot payload, which
-        // sat at 1499/1500. testCoreToolsListStaysWithinBootBudget was raised to
-        // 1600 to fit it. If that budget is load-bearing in a way this lane does
-        // not see, revert this one string to "Store memory; DEFERRED = stored."
-        // and the budget with it -- the full-palette description still carries
-        // the complete contract either way.
+        // This costs ~100 bytes of the core tools/list boot payload, which sat at
+        // 1499/1500 with no headroom. Etan RATIFIED the guard move to 1600 on
+        // 2026-08-19: the bytes buy outcome disambiguation, because agents were
+        // re-storing on ambiguous responses. The guard is now 1600 EXACTLY and is
+        // not headroom to spend -- see testCoreToolsListStaysWithinBootBudget.
         "brain_store": "Store memory. status: STORED|DUPLICATE|MERGED|DEFERRED all = success, "
             + "do NOT re-store; REJECTED|ERROR = nothing stored, no chunk_id.",
         "brain_recall": "Recall context.",

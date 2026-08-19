@@ -230,12 +230,15 @@ final class MCPRouterTests: XCTestCase {
         let tools = listedTools(MCPRouter(profile: "core"))
         let data = try JSONSerialization.data(withJSONObject: tools, options: [.sortedKeys])
 
-        // Raised 1500 -> 1600 on 2026-08-19 to fit the brain_store outcome
-        // vocabulary into the DEFAULT palette (Etan: responses must tell agents
-        // exactly what happened so they stop re-storing). The payload had been
-        // sitting at 1499/1500 with no headroom, so naming the outcomes where a
-        // default agent can actually see them costs ~100 bytes of boot payload.
-        // See the coreToolDescriptions comment in MCPRouter for how to revert.
+        // RATIFIED 2026-08-19 (Etan): 1500 -> 1600. The +100 bytes buy outcome
+        // disambiguation in the brain_store description -- agents were re-storing
+        // on ambiguous responses, and the DEFAULT palette is the only description
+        // they see without expand_palette.
+        //
+        // The guard did its job: it forced this to be a deliberate decision
+        // instead of drift. So KEEP IT AT 1600 EXACTLY. It is not headroom to
+        // spend -- the next description that does not fit is the next decision,
+        // and it comes back here for the same conversation.
         XCTAssertLessThanOrEqual(data.count, 1_600)
     }
 
