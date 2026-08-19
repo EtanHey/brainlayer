@@ -217,6 +217,48 @@ final class StoreResponseClarityTests: XCTestCase {
         return try XCTUnwrap(store["description"] as? String)
     }
 
+    func testBrainStoreDescriptionDoesNotPromiseStatusForRejectedOrError() throws {
+        // PR725 review, MUST-FIX 2: the description claimed all six outcomes are
+        // named "in the response text and in the structured `status` field". On
+        // the wire REJECTED and ERROR return {content, isError} and carry no
+        // `status` at all. Python's description already scopes `status` to the
+        // four success outcomes; this one must too. AGENTS.md: "The rules for
+        // agents USING it live in the tool descriptions -- keep those true."
+        let router = MCPRouter(profile: "full")
+        let session = router.makePaletteSession()
+
+        // Wire truth first: a refused store carries no structured status.
+        let refused = router.handle(
+            clarityToolCall(id: 906, name: "brain_store", arguments: ["tags": ["clarity"]]),
+            session: session
+        )
+        let refusedResult = try XCTUnwrap(refused["result"] as? [String: Any])
+        XCTAssertEqual(refusedResult["isError"] as? Bool, true)
+        let refusedStructured = refusedResult["structuredContent"] as? [String: Any]
+        XCTAssertNil(
+            refusedStructured?["status"],
+            "REJECTED/ERROR carry no structured status: \(String(describing: refusedResult))"
+        )
+
+        let response = router.handle(
+            ["jsonrpc": "2.0", "id": 907, "method": "tools/list"],
+            session: session
+        )
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        let tools = try XCTUnwrap(result["tools"] as? [[String: Any]])
+        let store = try XCTUnwrap(tools.first { ($0["name"] as? String) == "brain_store" })
+        let description = try XCTUnwrap(store["description"] as? String)
+
+        XCTAssertFalse(
+            description.contains("six outcomes, named in the response text and in the structured `status` field"),
+            "the description must not claim REJECTED/ERROR carry a `status` field: \(description)"
+        )
+        XCTAssertTrue(
+            description.contains("no `status`"),
+            "the description must say REJECTED/ERROR return no `status`: \(description)"
+        )
+    }
+
     func testBrainStoreDescriptionEnumeratesEveryOutcome() throws {
         let router = MCPRouter(profile: "full")
         let response = router.handle(
