@@ -258,11 +258,18 @@ final class MCPRouter: @unchecked Sendable {
         exposedToolDefinitions(for: session).contains { ($0["name"] as? String) == name }
     }
 
-    private static func compactCoreToolDefinition(_ definition: [String: Any]) -> [String: Any] {
+    static func compactCoreToolDefinition(_ definition: [String: Any]) -> [String: Any] {
         guard let name = definition["name"] as? String else { return definition }
+        guard let description = coreToolDescriptions[name]
+            ?? (definition["description"] as? String),
+              !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            preconditionFailure("Core tool '\(name)' has no usable description")
+        }
 
-        var compact: [String: Any] = ["name": name]
-        compact["description"] = coreToolDescriptions[name]
+        var compact: [String: Any] = [
+            "name": name,
+            "description": description,
+        ]
         if let inputSchema = definition["inputSchema"] as? [String: Any] {
             compact["inputSchema"] = removingDescriptions(from: inputSchema)
         }
@@ -1686,7 +1693,7 @@ final class MCPRouter: @unchecked Sendable {
     nonisolated(unsafe) static let toolDefinitions: [[String: Any]] = [
         [
             "name": "brain_search",
-            "description": "Search BrainLayer's memory (past decisions, learnings, notes, project history) with hybrid semantic + keyword ranking. Pass a natural-language query; narrow with project, tag, source, or importance_min. Returns ranked snippets (title, source, date, preview).",
+            "description": "Search memory for past decisions, bugs, notes, and project history by topic. Use when asked \"have we done this\", \"what did we decide\", \"how did I implement X\". For session context, not topics, use brain_recall.",
             "annotations": MCPRouter.readOnlyAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
@@ -1706,7 +1713,7 @@ final class MCPRouter: @unchecked Sendable {
         ],
         [
             "name": "brain_store",
-            "description": "Save a decision, learning, mistake, idea, or todo to durable memory so future sessions can retrieve it with brain_search. Add tags, importance (1-10), and project to improve later retrieval. Every call returns exactly one of six outcomes, named in the response text; the four SUCCESS outcomes also carry a structured `status` field: STORED (a new chunk was written); DUPLICATE (an identical memory already existed and was refreshed, not re-inserted); MERGED (a near-identical memory existed and your content was folded into it); STORED (deferred), status DEFERRED (accepted and durably queued while the DB is busy \u{2014} it WILL be stored automatically under the same chunk_id). The other two come back as errors with no `status`: REJECTED (a content gate refused it \u{2014} nothing stored, nothing queued); ERROR (the write failed \u{2014} nothing stored, nothing queued). STORED, DUPLICATE, MERGED, and DEFERRED all resolve to a canonical chunk_id and are all SUCCESS: do NOT re-store, do NOT retry, and never save a fallback copy. Only REJECTED and ERROR store nothing, and they return no chunk_id. For digesting long raw text use brain_digest instead.",
+            "description": "Store a decision, correction, bug cause, or learning so future sessions find it. status STORED|DUPLICATE|MERGED|DEFERRED all = success, do NOT re-store (DEFERRED is queued and will be stored); REJECTED|ERROR store nothing and return no `status` or chunk_id. For long raw text use brain_digest.",
             "annotations": MCPRouter.writeAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
@@ -1721,7 +1728,7 @@ final class MCPRouter: @unchecked Sendable {
         ],
         [
             "name": "brain_recall",
-            "description": "Get session-level context, not topical search. Modes: context = what you're working on now; sessions = recent session history; operations/summary = details for one session_id; plan = plan linkage; stats = knowledge-base health stats. For looking up facts or past decisions by topic, use brain_search.",
+            "description": "Get session-level context: what you are working on now, recent sessions, one session's detail, or knowledge-base stats. For topic lookup use brain_search.",
             "annotations": MCPRouter.recallAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
@@ -1733,7 +1740,7 @@ final class MCPRouter: @unchecked Sendable {
         ],
         [
             "name": "brain_entity",
-            "description": "Look up a named entity (person, project, company, tool) in the knowledge graph and return its profile and graph relations. Returns 'No entity found' if the name isn't in the graph yet — for fuzzy topical recall across memories use brain_search instead.",
+            "description": "Look up a named person, project, company, or tool in the knowledge graph and return its relations. For fuzzy topical recall use brain_search.",
             "annotations": MCPRouter.readOnlyAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
@@ -1745,7 +1752,7 @@ final class MCPRouter: @unchecked Sendable {
         ],
         [
             "name": "brain_get_person",
-            "description": "Get a person's profile, relations, and linked memories in one call.",
+            "description": "Get one person's profile, relations, and linked memories in a single call.",
             "annotations": MCPRouter.readOnlyAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
@@ -1759,7 +1766,7 @@ final class MCPRouter: @unchecked Sendable {
         ],
         [
             "name": "brain_digest",
-            "description": "Digest a large block of raw text (transcript, doc, article) into one durable, enriched memory chunk that brain_search can find. Pass `project` to scope the chunk so brain_search(project=...) finds it, and an optional `title` to label the digest. Extracted entities are written to the knowledge graph and become resolvable via brain_entity. For a short scoped note use brain_store with a project instead.",
+            "description": "Digest a large block of raw text (transcript, doc, article) into one searchable memory chunk: it enriches the text and connects the entities it extracts into the knowledge graph. For a short note use brain_store.",
             "annotations": MCPRouter.writeAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
@@ -1773,7 +1780,7 @@ final class MCPRouter: @unchecked Sendable {
         ],
         [
             "name": "brain_update",
-            "description": "Update the importance and/or tags of an existing memory chunk in place. Provide chunk_id plus at least one of importance or tags (tags replace the chunk's existing tag list). This does NOT edit content — to replace content store a new memory with brain_store, to hide a chunk use brain_archive, to mark a replacement use brain_supersede.",
+            "description": "Change an existing chunk's importance or tags. Does not edit content: store new content with brain_store, hide a chunk with brain_archive.",
             "annotations": MCPRouter.writeIdempotentAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
@@ -1787,7 +1794,7 @@ final class MCPRouter: @unchecked Sendable {
         ],
         [
             "name": "brain_expand",
-            "description": "Drill into a specific search result. Returns full content + surrounding chunks.",
+            "description": "Open one search result in full, with the chunks around it.",
             "annotations": MCPRouter.expandAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
@@ -1801,7 +1808,7 @@ final class MCPRouter: @unchecked Sendable {
         ],
         [
             "name": "brain_tags",
-            "description": "List tags used across the knowledge base, each with its usage count. Pass an optional query to filter to tags containing that substring.",
+            "description": "List the tags in use with their counts; filter by substring.",
             "annotations": MCPRouter.readOnlyAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
@@ -1812,7 +1819,7 @@ final class MCPRouter: @unchecked Sendable {
         ],
         [
             "name": "brain_supersede",
-            "description": "Mark an old chunk as replaced by a newer one and hide it from default search.",
+            "description": "Mark an old chunk as replaced by a newer one and hide it from search. To hide with no replacement use brain_archive.",
             "annotations": MCPRouter.toolAnnotations(readOnly: false, destructive: true, idempotent: false),
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
@@ -1827,7 +1834,7 @@ final class MCPRouter: @unchecked Sendable {
         ],
         [
             "name": "brain_archive",
-            "description": "Archive a chunk so it stops appearing in default search but remains recoverable.",
+            "description": "Hide a chunk from default search, recoverably. To point at a replacement instead use brain_supersede.",
             "annotations": MCPRouter.toolAnnotations(readOnly: false, destructive: true, idempotent: false),
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
@@ -1856,7 +1863,7 @@ final class MCPRouter: @unchecked Sendable {
         ],
         [
             "name": "brain_subscribe",
-            "description": "Subscribe an agent to push notifications for matching tags.",
+            "description": "Subscribe an agent to live notifications for the given tags.",
             "annotations": MCPRouter.writeAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
@@ -1869,7 +1876,7 @@ final class MCPRouter: @unchecked Sendable {
         ],
         [
             "name": "brain_unsubscribe",
-            "description": "Remove some or all tag subscriptions for an agent.",
+            "description": "Remove some or all of an agent's tag subscriptions.",
             "annotations": MCPRouter.writeIdempotentAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
@@ -1882,7 +1889,7 @@ final class MCPRouter: @unchecked Sendable {
         ],
         [
             "name": "brain_ack",
-            "description": "Acknowledge that an agent processed messages through the given chunk rowid.",
+            "description": "Acknowledge that an agent processed messages up to a chunk rowid.",
             "annotations": MCPRouter.writeIdempotentAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
@@ -1895,7 +1902,7 @@ final class MCPRouter: @unchecked Sendable {
         ],
         [
             "name": "brain_backup_vacuum_into",
-            "description": "Create a SQLite backup snapshot using VACUUM INTO on BrainBar's single-writer connection.",
+            "description": "Write a SQLite backup snapshot (VACUUM INTO) to a target path.",
             "annotations": MCPRouter.writeIdempotentAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",

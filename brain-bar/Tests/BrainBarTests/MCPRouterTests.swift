@@ -242,6 +242,21 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertLessThanOrEqual(data.count, 1_600)
     }
 
+    func testCoreCompactionFallsBackToTheCanonicalDescription() throws {
+        let brainTags = try XCTUnwrap(
+            MCPRouter.toolDefinitions.first { ($0["name"] as? String) == "brain_tags" }
+        )
+
+        let compacted = MCPRouter.compactCoreToolDefinition(brainTags)
+
+        XCTAssertEqual(compacted["name"] as? String, "brain_tags")
+        XCTAssertEqual(
+            compacted["description"] as? String,
+            brainTags["description"] as? String,
+            "a core tool without a terse override must retain its canonical description"
+        )
+    }
+
     func testCorePaletteExpandsOnceAndDispatchesDeferredTools() throws {
         let router = MCPRouter(profile: "core")
 
@@ -3358,4 +3373,86 @@ private func openSQLiteConnection(path: String) throws -> OpaquePointer {
         throw NSError(domain: "MCPRouterTests", code: Int(rc))
     }
     return db
+}
+
+// MARK: - Issue #726 Part B — tool-description house style
+//
+// skillCreator's measured norm across 86 golems skills (check-skill-library.mjs):
+// median 125 chars, p90 263, max 475. Etan, 2026-08-19: "the tool descriptions
+// should be extremely short. Just tell them what to do with it." The shape is
+// (a) what it does as a verb phrase, (b) the words a user actually says, and
+// (c) a one-clause not-for ONLY where a sibling tool is genuinely confusable.
+final class ToolDescriptionHouseStyleTests: XCTestCase {
+    /// Tools with a near-neighbour an agent can plausibly pick instead. Only these
+    /// owe a not-for clause; a tool with no near-neighbour does not.
+    private static let confusableSiblings: [String: [String]] = [
+        "brain_search": ["brain_recall"],
+        "brain_recall": ["brain_search"],
+        "brain_entity": ["brain_search"],
+        "brain_store": ["brain_digest"],
+        "brain_digest": ["brain_store"],
+        "brain_update": ["brain_store", "brain_archive"],
+        "brain_archive": ["brain_supersede"],
+        "brain_supersede": ["brain_archive"],
+    ]
+
+    private func descriptions() -> [String: String] {
+        var result: [String: String] = [:]
+        for definition in MCPRouter.toolDefinitions {
+            guard let name = definition["name"] as? String,
+                  let description = definition["description"] as? String else { continue }
+            result[name] = description
+        }
+        return result
+    }
+
+    func testEveryToolHasANonEmptyDescription() {
+        for definition in MCPRouter.toolDefinitions {
+            let name = (definition["name"] as? String) ?? "unknown"
+            let description = (definition["description"] as? String) ?? ""
+            XCTAssertFalse(description.isEmpty, "\(name) has no description")
+        }
+    }
+
+    func testDescriptionsStayWithinTheHouseStyleBudget() {
+        let lengths = descriptions().values.map(\.count).sorted()
+        XCTAssertFalse(lengths.isEmpty)
+
+        for (name, description) in descriptions() {
+            // Hard cap, parity with tests/test_tool_description_quality.py.
+            XCTAssertLessThan(description.count, 1024, "\(name) is \(description.count) chars")
+            // Doctrine max is 475; BrainBar's palette is small enough to sit well under it.
+            XCTAssertLessThanOrEqual(
+                description.count,
+                320,
+                "\(name) is \(description.count) chars — over the per-tool ceiling"
+            )
+        }
+
+        let median = lengths[lengths.count / 2]
+        XCTAssertLessThanOrEqual(median, 175, "median description length is \(median) chars")
+    }
+
+    func testConfusableToolsNameTheSiblingToUseInstead() {
+        let all = descriptions()
+        for (name, siblings) in Self.confusableSiblings {
+            let description = try? XCTUnwrap(all[name])
+            let text = description ?? ""
+            XCTAssertTrue(
+                siblings.contains { text.contains($0) },
+                "\(name) is confusable with \(siblings.joined(separator: "/")) and must name the alternative"
+            )
+        }
+    }
+
+    /// PR #725's outcome contract must survive the shortening — compressed, not cut.
+    /// Its ENFORCEMENT is the write-time dedupe, not this sentence; the sentence only
+    /// stops an agent re-storing on an ambiguous response.
+    func testBrainStoreKeepsItsOutcomeContract() throws {
+        let description = try XCTUnwrap(descriptions()["brain_store"])
+        for outcome in ["STORED", "DUPLICATE", "MERGED", "DEFERRED", "REJECTED", "ERROR"] {
+            XCTAssertTrue(description.contains(outcome), "brain_store lost the \(outcome) outcome")
+        }
+        XCTAssertTrue(description.contains("do NOT re-store"))
+    }
 }

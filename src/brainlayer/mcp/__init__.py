@@ -461,7 +461,7 @@ def _full_tool_definitions() -> list[Tool]:
         Tool(
             name="brain_search",
             title="Search Knowledge Base",
-            description="""Search BrainLayer's persistent memory for past decisions, project history, debugging notes, preferences, and other stored knowledge. Use when: the user asks what was decided before, how something was implemented, what happened to a file, or what you are working on. Don't use when: you need current session context or stats (use brain_recall), a named entity graph lookup (use brain_entity), or to save new information (use brain_store). query should be a natural-language lookup phrase; file_path switches to file-history routing, chunk_id expands a known result, and project narrows scope. num_results defaults to 5 and detail defaults to 'compact'; add date, tag, intent, or source filters only when they materially narrow the search. Returns ranked matches with scores, metadata, and compact snippets or full content; after finding a promising chunk, call brain_search with chunk_id or use brain_recall for session-level context.""",
+            description="""Search memory for past decisions, bugs, notes, and project history by topic. Use when asked "have we done this", "what did we decide", "how did I implement X". For session context, not topics, use brain_recall.""",
             annotations=_READ_ONLY,
             meta=_MAX_RESULT_META,
             input_schema=_bounded_input_schema(
@@ -644,7 +644,7 @@ def _full_tool_definitions() -> list[Tool]:
         Tool(
             name="brain_resume",
             title="Resume From PreCompact Checkpoint",
-            description="""Return recent PreCompact checkpoint chunks for session recovery. Use when: an agent asks what it was working on after compaction or needs explicit session-restore state. Don't use for normal topical search; brain_search excludes checkpoints by default to avoid checkpoint pollution. session_id narrows to one session when known, and lookback_days defaults to 7.""",
+            description="""Return the recent PreCompact checkpoints so an agent can pick up what it was doing after a compaction. For topic lookup use brain_search.""",
             annotations=_READ_ONLY,
             meta=_MAX_RESULT_META,
             input_schema=_bounded_input_schema(
@@ -670,7 +670,7 @@ def _full_tool_definitions() -> list[Tool]:
         Tool(
             name="brain_store",
             title="Store Memory",
-            description="""Save decisions, learnings, corrections, and issues so future sessions can retrieve the reasoning with brain_search. Use when: you decided something, learned something important, hit a bug worth tracking, or were corrected. Don't use when: retrieving knowledge (brain_search), indexing large text (brain_digest), or archiving/superseding (brain_archive, brain_supersede). content explains what happened and why; type auto-detects, and project, tags, importance improve retrieval. Decision fields, issue fields, and supersedes are described in the schema. Every call returns ONE outcome, in the text and in structured `status`: STORED (new chunk); DUPLICATE (identical memory already stored); MERGED (near-identical, folded in); DEFERRED (queued while the DB is busy — it WILL be stored under the same chunk_id). All four resolve to a canonical chunk_id and are SUCCESS: do NOT re-store, do NOT retry, never save a fallback copy. REJECTED (gate refused) and ERROR (write failed) store nothing and return no chunk_id.""",
+            description="""Store a decision, correction, bug cause, or learning so future sessions find it. status STORED|DUPLICATE|MERGED|DEFERRED all = success, do NOT re-store (DEFERRED is queued and will be stored); REJECTED|ERROR store nothing and return no `status` or chunk_id. For long raw text use brain_digest.""",
             annotations=_WRITE,
             input_schema=_bounded_input_schema(
                 {
@@ -774,7 +774,7 @@ def _full_tool_definitions() -> list[Tool]:
         Tool(
             name="brain_get_person",
             title="Get Person Context",
-            description="""Get a person's profile, graph relations, and linked memories in one call. Use when: preparing for a meeting, recalling someone's preferences or constraints, or gathering person-specific context before taking action. Don't use when: you need fuzzy topic search across all memories (use brain_search), generic entity lookup without scoped memories (use brain_entity), or you are storing new information about the person (use brain_store). name should be the best-known person name; context reranks memories for the current task, and num_memories defaults to 10. Returns profile fields, related entities, and relevant memory chunks; after identifying the right person, use brain_search for broader topic recall if needed.""",
+            description="""Get one person's profile, relations, and linked memories in a single call.""",
             annotations=_READ_ONLY,
             meta=_MAX_RESULT_META,
             input_schema=_bounded_input_schema(
@@ -804,7 +804,7 @@ def _full_tool_definitions() -> list[Tool]:
         Tool(
             name="brain_recall",
             title="Recall / Search / Entity Lookup",
-            description="""Get working context, recent sessions, plan/session links, per-session operations, summaries, stats, or routed search from one entry point. Use when: you need 'what am I working on', recent session history, plan linkage, operation groups for a session, or knowledge-base health stats. Don't use when: you already know you want topical memory search (use brain_search), a direct entity graph lookup (use brain_entity), or to store or digest new content (use brain_store or brain_digest). mode can be explicit or auto-detected from query; session_id is required for operations and summary, plan_name targets plan mode, and hours, days, and limit control context windows. In search mode, file_path, chunk_id, content filters, num_results, and detail='compact'|'full' behave like brain_search. Returns structured context, search results, or stats depending on mode; use brain_search after broad routing when you need tighter topical retrieval.""",
+            description="""Get session-level context: what you are working on now, recent sessions, one session's detail, or knowledge-base stats. For topic lookup use brain_search.""",
             annotations=_RECALL_READ_ONLY,
             meta=_MAX_RESULT_META,
             input_schema=_bounded_input_schema(
@@ -988,7 +988,7 @@ def _full_tool_definitions() -> list[Tool]:
         Tool(
             name="brain_digest",
             title="Digest Content",
-            description="""Digest large text content into searchable memory plus extracted entities and relations in the knowledge graph. Use when: processing research notes, audits, transcripts, or other large text that should be deeply indexed instead of stored as a quick note. Don't use when: a short decision or learning can be saved directly with brain_store, you only need to retrieve knowledge with brain_search, or you want a specific entity lookup with brain_entity. mode='digest' writes a new enriched chunk, mode='connect' compares content to existing knowledge and returns a proposed connection or supersede plan without storing, and mode='enrich' backfills existing chunks using limit. content should be the raw text; title, project, and participants improve extraction quality. Returns extracted entity and relation counts or a proposal, and you can inspect the indexed result later with brain_search or brain_entity.""",
+            description="""Digest a large block of raw text (transcript, doc, article) into one searchable memory chunk: it enriches the text and connects the entities it extracts into the knowledge graph. For a short note use brain_store.""",
             annotations=_WRITE,
             input_schema=_bounded_input_schema(
                 {
@@ -1031,7 +1031,7 @@ def _full_tool_definitions() -> list[Tool]:
         Tool(
             name="brain_entity",
             title="Entity Lookup",
-            description="""Look up a known entity and traverse its relationships in the knowledge graph. Use when: the user names a specific person, project, company, library, tool, or technology and you need structured connections rather than fuzzy search. Don't use when: you need broad topical recall across memories (use brain_search), person-specific profile plus memories in one call (use brain_get_person), or to save new facts (use brain_store or brain_digest). query should be the likely entity name; action defaults to 'lookup', while action='list' browses an entity_type with limit and offset pagination. Returns entity records plus connected relations, and after finding the right entity you can use brain_search to pull narrative memory around it.""",
+            description="""Look up a named person, project, company, or tool in the knowledge graph and return its relations. For fuzzy topical recall use brain_search.""",
             annotations=_READ_ONLY,
             meta=_MAX_RESULT_META,
             input_schema=_bounded_input_schema(
@@ -1210,7 +1210,7 @@ def _full_tool_definitions() -> list[Tool]:
         Tool(
             name="brain_supersede",
             title="Supersede Memory",
-            description="""Mark an old chunk as replaced by a newer one and remove the old chunk from default search while keeping history. Use when: a technical fact, decision, or learning has been updated and search should prefer the replacement. Don't use when: you are writing the new memory itself (use brain_store with supersedes if you are creating it now) or you only need to hide a stale chunk without a replacement (use brain_archive). old_chunk_id and new_chunk_id are required; safety_check defaults to 'auto' for technical content, while personal data requires safety_check='confirm' and confirm=True. Returns the action taken, and you can verify the surviving record with brain_search.""",
+            description="""Mark an old chunk as replaced by a newer one and hide it from search. To hide with no replacement use brain_archive.""",
             annotations=_DESTRUCTIVE,
             input_schema=_bounded_input_schema(
                 {
@@ -1243,7 +1243,7 @@ def _full_tool_definitions() -> list[Tool]:
         Tool(
             name="brain_archive",
             title="Archive Memory",
-            description="""Archive a chunk with a soft-delete timestamp so it disappears from default search but remains recoverable. Use when: a memory is stale, irrelevant, or duplicative and should stop surfacing without being permanently deleted. Don't use when: a newer chunk should explicitly replace it (use brain_supersede) or you are writing fresh information (use brain_store). chunk_id is required and reason is optional audit metadata. Returns the archived chunk_id, and you can use brain_search or direct chunk lookup later if you need the history.""",
+            description="""Hide a chunk from default search, recoverably. To point at a replacement instead use brain_supersede.""",
             annotations=_DESTRUCTIVE,
             input_schema=_bounded_input_schema(
                 {
@@ -1265,7 +1265,7 @@ def _full_tool_definitions() -> list[Tool]:
         Tool(
             name="brain_enrich",
             title="Enrich Chunks",
-            description="""Run enrichment on existing chunks to backfill entities, summaries, and related metadata without rewriting the original memory text. Use when: you want realtime enrichment for recent writes, cheaper batch processing for backlog, local offline enrichment, or progress stats for the enrichment system. Don't use when: you are ingesting brand-new long-form content (use brain_digest), saving a quick note (use brain_store), or retrieving knowledge (use brain_search). mode defaults to 'realtime'; batch uses phase='submit'|'poll'|'import'|'run', stats=True returns progress only, and limit, since_hours, or chunk_ids narrow scope. Returns enrichment progress or per-run results, and you can inspect enriched chunks afterward with brain_search or brain_entity.""",
+            description="""Backfill summaries and enrichment metadata on existing chunks.""",
             annotations=_WRITE,
             input_schema=_bounded_input_schema(
                 {
