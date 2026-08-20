@@ -789,7 +789,15 @@ final class BrainBarServer: @unchecked Sendable {
         guard compactData.count >= claudeExtensionRawChunkLimit else { return compactData }
         // Rung 2: still over budget with annotations and schema prose gone. Shorten
         // the descriptions — never delete them — and say so in the response.
-        return truncatedRawJSONResponse(compacted) ?? compactData
+        let finalData = truncatedRawJSONResponse(compacted) ?? compactData
+        if finalData.count >= claudeExtensionRawChunkLimit {
+            NSLog(
+                "[BrainBar] ⚠️ raw tools/list exceeds %d bytes even at a %d-char description budget; sending it over-limit rather than dropping the tool contract (issue #726)",
+                claudeExtensionRawChunkLimit,
+                minimumRawToolDescriptionLength
+            )
+        }
+        return finalData
     }
 
     private static func compactRawJSONResponseIfNeeded(_ response: [String: Any]) -> [String: Any]? {
@@ -833,7 +841,6 @@ final class BrainBarServer: @unchecked Sendable {
             return nil
         }
         let longest = tools.compactMap { ($0["description"] as? String)?.count }.max() ?? 0
-        guard longest > minimumRawToolDescriptionLength else { return nil }
 
         var low = minimumRawToolDescriptionLength
         var high = longest
@@ -854,17 +861,13 @@ final class BrainBarServer: @unchecked Sendable {
         }
 
         if best == nil {
-            NSLog(
-                "[BrainBar] ⚠️ raw tools/list exceeds %d bytes even at a %d-char description budget; sending it over-limit rather than dropping the tool contract (issue #726)",
-                claudeExtensionRawChunkLimit,
-                minimumRawToolDescriptionLength
-            )
             best = try? MCPFraming.encodeJSONResponse(
                 responseTruncatingDescriptions(
                     response,
                     result: result,
                     tools: tools,
-                    budget: minimumRawToolDescriptionLength
+                    budget: minimumRawToolDescriptionLength,
+                    forceNotice: true
                 )
             )
         }
@@ -875,7 +878,8 @@ final class BrainBarServer: @unchecked Sendable {
         _ response: [String: Any],
         result: [String: Any],
         tools: [[String: Any]],
-        budget: Int
+        budget: Int,
+        forceNotice: Bool = false
     ) -> [String: Any] {
         var truncatedNames: [String] = []
         let truncatedTools = tools.map { tool -> [String: Any] in
@@ -891,10 +895,12 @@ final class BrainBarServer: @unchecked Sendable {
 
         var truncatedResult = result
         truncatedResult["tools"] = truncatedTools
-        if !truncatedNames.isEmpty {
+        if !truncatedNames.isEmpty || forceNotice {
             var meta = (result["_meta"] as? [String: Any]) ?? [:]
             meta["brainlayer/descriptionsTruncated"] = [
-                "reason": "raw newline tools/list must fit the client's \(claudeExtensionRawChunkLimit)-byte chunk limit",
+                "reason": forceNotice && truncatedNames.isEmpty
+                    ? "raw newline tools/list exceeds the client's \(claudeExtensionRawChunkLimit)-byte chunk limit even though every description is already at or below the \(minimumRawToolDescriptionLength)-char floor"
+                    : "raw newline tools/list must fit the client's \(claudeExtensionRawChunkLimit)-byte chunk limit",
                 "limitBytes": claudeExtensionRawChunkLimit,
                 "budgetChars": budget,
                 "tools": truncatedNames,

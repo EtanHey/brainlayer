@@ -258,11 +258,18 @@ final class MCPRouter: @unchecked Sendable {
         exposedToolDefinitions(for: session).contains { ($0["name"] as? String) == name }
     }
 
-    private static func compactCoreToolDefinition(_ definition: [String: Any]) -> [String: Any] {
+    static func compactCoreToolDefinition(_ definition: [String: Any]) -> [String: Any] {
         guard let name = definition["name"] as? String else { return definition }
+        guard let description = coreToolDescriptions[name]
+            ?? (definition["description"] as? String),
+              !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            preconditionFailure("Core tool '\(name)' has no usable description")
+        }
 
-        var compact: [String: Any] = ["name": name]
-        compact["description"] = coreToolDescriptions[name]
+        var compact: [String: Any] = [
+            "name": name,
+            "description": description,
+        ]
         if let inputSchema = definition["inputSchema"] as? [String: Any] {
             compact["inputSchema"] = removingDescriptions(from: inputSchema)
         }

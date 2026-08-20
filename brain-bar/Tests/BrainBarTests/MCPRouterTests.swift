@@ -242,6 +242,21 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertLessThanOrEqual(data.count, 1_600)
     }
 
+    func testCoreCompactionFallsBackToTheCanonicalDescription() throws {
+        let brainTags = try XCTUnwrap(
+            MCPRouter.toolDefinitions.first { ($0["name"] as? String) == "brain_tags" }
+        )
+
+        let compacted = MCPRouter.compactCoreToolDefinition(brainTags)
+
+        XCTAssertEqual(compacted["name"] as? String, "brain_tags")
+        XCTAssertEqual(
+            compacted["description"] as? String,
+            brainTags["description"] as? String,
+            "a core tool without a terse override must retain its canonical description"
+        )
+    }
+
     func testCorePaletteExpandsOnceAndDispatchesDeferredTools() throws {
         let router = MCPRouter(profile: "core")
 

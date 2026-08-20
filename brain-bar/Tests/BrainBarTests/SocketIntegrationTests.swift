@@ -1817,6 +1817,39 @@ final class SocketIntegrationTests: XCTestCase {
         XCTAssertNotNil(notice["reason"] as? String)
     }
 
+    func testOverLimitRawToolsListAlreadyAtDescriptionFloorEmitsNotice() throws {
+        let shortDescription = "Short tool contract."
+        let tools: [[String: Any]] = (0..<617).map { index in
+            [
+                "name": "floor_tool_\(index)",
+                "description": shortDescription,
+                "inputSchema": ["type": "object"] as [String: Any],
+            ]
+        }
+        let response: [String: Any] = [
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": ["tools": tools] as [String: Any],
+        ]
+
+        let encoded = try XCTUnwrap(BrainBarServer.encodeRawJSONResponse(response))
+        XCTAssertGreaterThanOrEqual(encoded.count, 8192, "the floor case must remain over the limit")
+
+        let decoded = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        let result = try XCTUnwrap(decoded["result"] as? [String: Any])
+        let decodedTools = try XCTUnwrap(result["tools"] as? [[String: Any]])
+        XCTAssertEqual(decodedTools.count, tools.count, "the floor path must preserve every tool")
+        XCTAssertTrue(decodedTools.allSatisfy { ($0["description"] as? String) == shortDescription })
+
+        let meta = try XCTUnwrap(result["_meta"] as? [String: Any])
+        let notice = try XCTUnwrap(meta["brainlayer/descriptionsTruncated"] as? [String: Any])
+        XCTAssertEqual(notice["budgetChars"] as? Int, 48)
+        XCTAssertEqual(notice["tools"] as? [String], [])
+        XCTAssertNotNil(notice["reason"] as? String)
+    }
+
     /// The shipped palette must fit rung 1 — full descriptions, no truncation at all.
     /// If a new tool pushes the raw line over, this fails LOUDLY here instead of
     /// quietly shipping shortened contracts to every agent.
