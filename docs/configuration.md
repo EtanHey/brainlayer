@@ -32,7 +32,7 @@ exec their service command. API keys stay out of rendered LaunchAgent plists.
 | `BRAINLAYER_MLX_URL` | `http://127.0.0.1:8080/v1/chat/completions` | MLX server endpoint |
 | `GOOGLE_API_KEY` | empty | Google AI API key used by realtime Gemini enrichment. Prefer a 1Password `op read` reference in the config file. |
 | `BRAINLAYER_ENV_FILE` | `~/.config/brainlayer/brainlayer.env` | Override path for the config file that launchd templates source. |
-| `BRAINLAYER_ENRICH_RATE` | `15` | Realtime Gemini enrichment rate used by launchd jobs. |
+| `BRAINLAYER_ENRICH_RATE` | `5.0` | Realtime enrichment rate, requests/second (`5.0` = 300 RPM). The packaged launchd jobs override it to `15`. |
 | `BRAINLAYER_ENRICH_CONCURRENCY` | `4` | Realtime Gemini enrichment concurrency used by launchd jobs. |
 | `BRAINLAYER_MAX_COMMIT_BATCH` | `25` | Max enrichment write batch used by launchd jobs. |
 | `BRAINLAYER_GEMINI_SERVICE_TIER` | `flex` | Gemini service tier used by launchd jobs. |

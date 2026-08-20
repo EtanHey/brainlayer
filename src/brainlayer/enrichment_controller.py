@@ -1223,7 +1223,7 @@ GEMINI_EXTRACTION_MODEL = os.environ.get("BRAINLAYER_GEMINI_EXTRACTION_MODEL", "
 def call_gemini_for_extraction(prompt: str) -> Optional[str]:
     """Call Gemini for entity/relation extraction. Returns raw text response.
 
-    Rate-limited by BRAINLAYER_ENRICH_RATE (default 0.2 = 12 RPM).
+    Rate-limited by BRAINLAYER_ENRICH_RATE (default 5.0 req/s = 300 RPM).
     Timeout: 30 seconds per call.
     """
     try:

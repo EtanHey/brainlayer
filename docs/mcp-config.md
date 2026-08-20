@@ -38,9 +38,10 @@ Manual alternative when you already have `socat` on PATH (Homebrew:
 }
 ```
 
-`brainlayer setup` rewrites owned configs still pointing at `brainlayer-mcp`
-to the socat socket form (backs up each file first). Direct
-`brainlayer-mcp-stdio-bridge` wiring is already accepted and left in place.
+`brainlayer setup --migrate-mcp` rewrites owned configs still pointing at the deleted
+`brainlayer-mcp` entrypoint to the socat socket form (backing up each file first). It matches by
+server name and leaves entries that already use socat **or** `brainlayer-mcp-stdio-bridge`
+untouched — so wiring the bridge yourself, as recommended above, is not undone by setup.
 
 ## Testing the MCP Server
 
@@ -53,7 +54,12 @@ to the socat socket form (backs up each file first). Direct
    grep '"id":1' /tmp/brainlayer-mcp-smoke.out
    ```
 
-2. In Claude Code, the tools should appear:
-   - `brain_search` - Unified semantic search (query, file_path, chunk_id, filters)
-   - `brain_store` - Persist memories (ideas, decisions, learnings)
+2. In Claude Code, the **core palette** should appear — 5 tools, not all 17:
+   - `brain_search` - Search memory by topic
+   - `brain_store` - Persist decisions, corrections, learnings
    - `brain_recall` - Session context and stats
+   - `brain_expand` - Open one search result in full, with surrounding chunks
+   - `expand_palette` - Expose the other 13 tools for this session
+
+   Calling `expand_palette` (or starting the server with `BRAINLAYER_MCP_PROFILE=full`) returns all
+   17 with their full descriptions. A gated tool called before expanding returns an error saying so.

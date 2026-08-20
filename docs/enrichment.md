@@ -1,23 +1,28 @@
 # Enrichment
 
-BrainLayer enriches indexed chunks with structured metadata using a local LLM. Think of it as a librarian cataloging every conversation snippet.
+BrainLayer enriches indexed chunks with structured metadata using an LLM (Groq by default; Gemini, MLX, or Ollama). Think of it as a librarian cataloging every conversation snippet.
 
 ## Chunk Enrichment
 
-Each chunk gets 10 metadata fields:
+Each chunk gets 15 metadata fields:
 
 | Field | Description | Example |
 |-------|-------------|---------|
-| `summary` | 1-2 sentence gist | "Debugging Telegram bot message drops under load" |
+| `summary` | 2-4 dense sentences of key facts, decisions, names, numbers | "Debugging Telegram bot message drops under load" |
+| `key_facts` | Verbatim specific values (PR numbers, dates, paths, versions) | "PR #727, grammy 1.32" |
 | `tags` | Topic tags (comma-separated) | "telegram, debugging, performance" |
 | `importance` | Relevance score 1-10 | 8 (architectural decision) vs 2 (directory listing) |
 | `intent` | What was happening | `debugging`, `designing`, `implementing`, `configuring`, `deciding`, `reviewing` |
 | `primary_symbols` | Key code entities | "TelegramBot, handleMessage, grammy" |
-| `resolved_query` | Question this answers (HyDE-style) | "How does the Telegram bot handle rate limiting?" |
+| `resolved_queries` | HyDE-style question, keyword-dense query, and hypothetical answer snippet | "How does the Telegram bot handle rate limiting?" |
 | `epistemic_level` | How proven is this | `hypothesis`, `substantiated`, `validated` |
 | `version_scope` | System state context | "grammy 1.32, Node 22" |
 | `debt_impact` | Technical debt signal | `introduction`, `resolution`, `none` |
 | `external_deps` | Libraries/APIs mentioned | "grammy, Supabase, Railway" |
+| `entities` | Name/type/subtype/relation records fed into the knowledge graph | `{"name": "grammy", "type": "technology"}` |
+| `sentiment_label` | Chunk-level sentiment | `frustration`, `confusion`, `positive`, `satisfaction`, `neutral` |
+| `sentiment_score` | Sentiment magnitude | `-1.0` to `1.0` |
+| `sentiment_signals` | Words/phrases that indicate the sentiment | "still broken, third time" |
 
 ### Running Enrichment
 

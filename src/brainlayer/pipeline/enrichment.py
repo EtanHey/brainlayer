@@ -1,16 +1,20 @@
 """Batch enrichment pipeline — add LLM-generated metadata to BrainLayer chunks.
 
-Processes unenriched chunks through local GLM-4.7-Flash (Ollama) to add:
-- summary: 1-sentence description
+Processes unenriched chunks through the configured backend (Groq by default; Gemini, MLX, or
+Ollama) to add 15 fields:
+- summary: 2-4 dense sentences extracting key facts, decisions, names, numbers, outcomes
+- key_facts: verbatim specific values (PR numbers, dates, paths, versions, error codes)
 - tags: structured tags from fixed taxonomy
 - importance: 1-10 score
-- intent: debugging | designing | configuring | discussing | deciding
+- intent: debugging | designing | configuring | discussing | deciding | implementing | reviewing
 - primary_symbols: classes, functions, files mentioned
-- resolved_query: hypothetical question this chunk answers (HyDE-style)
+- resolved_queries: HyDE-style question, keyword-dense query, and hypothetical answer snippet
 - epistemic_level: hypothesis | substantiated | validated
 - version_scope: version or system state discussed
 - debt_impact: introduction | resolution | none
 - external_deps: libraries or external APIs used
+- entities: name/type/subtype/relation records fed into the knowledge graph
+- sentiment_label, sentiment_score, sentiment_signals: chunk-level sentiment
 
 Usage:
     python -m brainlayer.pipeline.enrichment                    # Process 100 chunks

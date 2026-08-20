@@ -1,3 +1,3 @@
 """BrainLayer (זיכרון) - Local knowledge pipeline for Claude Code conversations."""
 
-__version__ = "1.5.8"
+__version__ = "1.5.9"

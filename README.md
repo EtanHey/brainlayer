@@ -5,8 +5,8 @@
 [![PyPI](https://img.shields.io/pypi/v/brainlayer.svg)](https://pypi.org/project/brainlayer/)
 [![CI](https://github.com/EtanHey/brainlayer/actions/workflows/ci.yml/badge.svg)](https://github.com/EtanHey/brainlayer/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![MCP](https://img.shields.io/badge/MCP-13%20tools-green.svg)](https://modelcontextprotocol.io)
-[![Tests](https://img.shields.io/badge/tests-1%2C848%20Python%20%2B%2054%20Swift-brightgreen.svg)](#testing)
+[![MCP](https://img.shields.io/badge/MCP-17%20tools-green.svg)](https://modelcontextprotocol.io)
+[![Tests](https://img.shields.io/badge/tests-4%2C386%20Python%20%2B%20890%20Swift-brightgreen.svg)](#testing)
 [![Website](https://img.shields.io/badge/site-brainlayer.etanheyman.com-d4956a.svg)](https://brainlayer.etanheyman.com)
 
 Every architecture decision, every debugging session, every preference you've expressed — **gone between sessions.** You repeat yourself constantly. Your agents rediscover bugs they already fixed, and re-make choices the team already reasoned through.
@@ -33,15 +33,18 @@ Add to your MCP config (`~/.claude.json` for Claude Code):
 {
   "mcpServers": {
     "brainlayer": {
-      "command": "socat",
-      "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]
+      "command": "brainlayer-mcp-stdio-bridge"
     }
   }
 }
 ```
 
 That's it. Your agent now remembers everything. BrainBar must be running and
-owning `/tmp/brainbar.sock`.
+owning `/tmp/brainbar.sock`; `brainlayer-mcp-stdio-bridge` ships with the package,
+reconnects if BrainBar restarts, and needs nothing on PATH beyond itself. If you
+already have `socat`, `{"command": "socat", "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]}`
+works too — but it dies with the socket, and GUI hosts often lack `/opt/homebrew/bin` on PATH.
+See [docs/mcp-config.md](docs/mcp-config.md).
 
 <details>
 <summary>Other editors (Cursor, Zed, VS Code)</summary>
@@ -51,8 +54,7 @@ owning `/tmp/brainbar.sock`.
 {
   "mcpServers": {
     "brainlayer": {
-      "command": "socat",
-      "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]
+      "command": "brainlayer-mcp-stdio-bridge"
     }
   }
 }
@@ -63,7 +65,7 @@ owning `/tmp/brainbar.sock`.
 {
   "context_servers": {
     "brainlayer": {
-      "command": { "path": "socat", "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"] }
+      "command": { "path": "brainlayer-mcp-stdio-bridge", "args": [] }
     }
   }
 }
@@ -74,8 +76,7 @@ owning `/tmp/brainbar.sock`.
 {
   "servers": {
     "brainlayer": {
-      "command": "socat",
-      "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]
+      "command": "brainlayer-mcp-stdio-bridge"
     }
   }
 }
@@ -83,33 +84,72 @@ owning `/tmp/brainbar.sock`.
 
 </details>
 
-## MCP Tools (13)
+## MCP Tools (17)
 
-Every tool includes [ToolAnnotations](https://modelcontextprotocol.io/specification/2025-03-26/server/tools#annotations) so agents know which calls are safe to run without confirmation.
+The agent-facing MCP server is **BrainBar** on `/tmp/brainbar.sock`. It defines 17 tools, and
+every definition carries [ToolAnnotations](https://modelcontextprotocol.io/specification/2025-03-26/server/tools#annotations)
+so agents know which calls are safe to run without confirmation.
 
-| Tool | Type | What it does |
-|------|------|-------------|
-| `brain_search` | read | Semantic + keyword hybrid search across all memories. Lifecycle-aware. |
-| `brain_store` | write | Persist decisions, learnings, mistakes. Auto-importance scoring. Per-agent scoping via `agent_id`. |
-| `brain_recall` | read | Proactive retrieval — session context, summaries, recent work. |
-| `brain_resume` | read | Recover recent PreCompact checkpoints for explicit session restoration. |
-| `brain_tags` | read | Browse tags and discover what's in memory without a query. |
-| `brain_digest` | write | Ingest raw content — entity extraction, relations, action items. |
-| `brain_entity` | read | Look up knowledge graph entities — type, relations, evidence. |
-| `brain_expand` | read | Get a chunk with N surrounding chunks for full context. |
-| `brain_update` | write | Update importance, tags, or archive existing memories. |
-| `brain_get_person` | read | Person lookup — entity details, interactions, preferences. |
-| `brain_enrich` | write | Run LLM enrichment — Gemini, Groq, or local MLX/Ollama. |
-| `brain_supersede` | destructive | Replace old memory with new. Safety gate on personal data. |
-| `brain_archive` | destructive | Soft-delete with timestamp. Recoverable via direct lookup. |
+**Sessions boot into a core palette of 5.** By default `tools/list` returns `brain_search`,
+`brain_store`, `brain_recall`, `brain_expand`, and `expand_palette` — with short descriptions, to
+keep the boot payload small. Call `expand_palette` (or set `BRAINLAYER_MCP_PROFILE=full` on the
+server) to get all 17 with their full descriptions. Calling a gated tool before expanding returns
+an error that tells you to expand.
 
-All 14 legacy `brainlayer_*` tool names still work as aliases.
+| Tool | Type | Core | What it does |
+|------|------|:----:|-------------|
+| `brain_search` | read | ● | Semantic + keyword hybrid search across all memories. Lifecycle-aware, MMR-deduped. |
+| `brain_store` | write | ● | Persist decisions, corrections, bug causes, learnings. Auto-importance scoring. |
+| `brain_recall` | read | ● | Session-level context — current work, recent sessions, one session's detail, or stats. |
+| `brain_expand` | read | ● | Open one search result in full, with the chunks around it. |
+| `brain_entity` | read | | Look up a person, project, company, or tool in the knowledge graph and its relations. |
+| `brain_get_person` | read | | One person's profile, relations, and linked memories in a single call. |
+| `brain_tags` | read | | List tags in use with counts; filter by substring. |
+| `brain_digest` | write | | Digest a large raw block (transcript, doc, article) into a searchable chunk and connect its entities into the KG. |
+| `brain_update` | write | | Change an existing chunk's importance or tags. Does not edit content. |
+| `brain_enrich` | write | | Backfill summaries and enrichment metadata on existing chunks. |
+| `brain_subscribe` | write | | Subscribe an agent to live notifications for given tags. |
+| `brain_unsubscribe` | write | | Remove some or all of an agent's tag subscriptions. |
+| `brain_ack` | write | | Acknowledge that an agent processed messages up to a chunk rowid. |
+| `brain_backup_vacuum_into` | write | | Write a SQLite backup snapshot (`VACUUM INTO`) to a target path. |
+| `brain_maintenance_rebuild_trigram` | write | | Operator-triggered rebuild of the trigram FTS table in lock-aware batches. |
+| `brain_supersede` | destructive | | Replace an old memory with a newer one and hide the old. Safety gate on personal data. |
+| `brain_archive` | destructive | | Hide a chunk from default search, recoverably. |
+
+### `brain_store` outcomes
+
+`brain_store` answers with an explicit outcome word, so an agent never has to guess whether a write
+landed ([#725](https://github.com/EtanHey/brainlayer/pull/725)):
+
+- `STORED`, `DUPLICATE`, `MERGED`, `DEFERRED` — **all four are success. Do not re-store.**
+  (`DEFERRED` means the write is queued and *will* be persisted.)
+- `REJECTED`, `ERROR` — nothing was stored. These return no `status` field and no `chunk_id`;
+  `REJECTED` means the request itself cannot succeed as sent, `ERROR` is worth one retry.
+
+Once a row is committed, the handler can no longer answer `REJECTED` or `ERROR` — a durable write
+is never reported as "nothing was stored".
+
+### Tool descriptions on the wire
+
+The rules for agents using BrainLayer live in the tool descriptions, so `tools/list` never drops a
+description to fit a transport limit ([#727](https://github.com/EtanHey/brainlayer/pull/727)). When
+a response would exceed the frame budget, compaction runs as a ladder: first annotations and
+inputSchema prose are dropped, and only if that still does not fit are descriptions *shortened* to
+the largest budget that does — each marked `…[truncated]`, with a
+`result._meta["brainlayer/descriptionsTruncated"]` notice naming every affected tool. Descriptions
+are never removed outright; if even the floor does not fit, the response ships over the limit with
+its contract intact and logs why. The shipped palettes are covered by a test that fails if a newly
+added tool ever pushes them into truncation.
+
+Legacy `brainlayer_*` names (`brainlayer_search`, `brainlayer_store`, `brainlayer_recall`, and 11
+more) are still accepted by the Python library handlers under `src/brainlayer/mcp/`. They are **not**
+served by BrainBar, which is the agent transport — new wiring should use the `brain_*` names.
 
 ## Architecture
 
 ```mermaid
 graph LR
-    A["Claude Code / Cursor / Zed"] -->|MCP| B["BrainLayer<br/>13 tools"]
+    A["Claude Code / Cursor / Zed"] -->|MCP| B["BrainLayer<br/>17 tools"]
     B --> C["Hybrid Search<br/>vector + FTS5"]
     C --> D["SQLite + sqlite-vec<br/>single .db file"]
     B --> KG["Knowledge Graph<br/>entities + relations"]
@@ -128,14 +168,14 @@ graph LR
 | **Embeddings** | `bge-large-en-v1.5` (1024 dims, CPU/MPS) |
 | **Search** | Vector similarity + FTS5, merged with Reciprocal Rank Fusion |
 | **Watcher** | Real-time JSONL indexing (~1s), 4-layer content filters, offset-persistent |
-| **Enrichment** | 10 metadata fields per chunk — Groq, Gemini, MLX, or Ollama |
+| **Enrichment** | 15 metadata fields per chunk — Groq, Gemini, MLX, or Ollama |
 | **Knowledge Graph** | Entities, relations, co-occurrence extraction, person lookup |
 
 ## Why BrainLayer?
 
 | | BrainLayer | Mem0 | Zep/Graphiti | Letta |
 |---|:---:|:---:|:---:|:---:|
-| **MCP tools** | 13 | 1 | 1 | 0 |
+| **MCP tools** | 17 | 1 | 1 | 0 |
 | **Local-first** | SQLite | Cloud-first | Cloud-only | Docker+PG |
 | **Zero infra** | `pip install` | API key | API key | Docker |
 | **Real-time indexing** | ~1s | No | No | No |
@@ -193,9 +233,9 @@ Two-week stability sprint behind the next presentation. Every line below traces 
 - Stale-index regression fixture ([#255](https://github.com/EtanHey/brainlayer/pull/255)) and Deepchecks regression harness ([#259](https://github.com/EtanHey/brainlayer/pull/259)).
 
 **Security**
-- All 11 Swift `MCPRouter` tools exposed via BrainBar now ship `ToolAnnotations` (cyberMaster H1) ([#253](https://github.com/EtanHey/brainlayer/pull/253)).
+- Every Swift `MCPRouter` tool exposed via BrainBar ships `ToolAnnotations` (cyberMaster H1) ([#253](https://github.com/EtanHey/brainlayer/pull/253)) — 11 tools at the time, 17 today.
 
-**In flight (2026-05-02 reliability sprint)** — [PR #251](https://github.com/EtanHey/brainlayer/pull/251)
+**Reliability sprint (2026-05-02)** — [PR #251](https://github.com/EtanHey/brainlayer/pull/251), merged
 - Restores the resizable dashboard panel via a floating `NSPanel` (`BrainBarDashboardPanelController`) instead of MenuBarExtra(.window).
 - Adds trigram FTS5 (`chunks_fts_trigram`) with a startup-safety guard: synchronous backfill is skipped when the desynced trigram table exceeds 10K chunks, so BrainBar never blocks the live ~360K-chunk database before `/tmp/brainbar.sock` opens.
 - KG atlas presentation (importance-based altitude filtering, region backdrops, deterministic seeding) and `AgentActivityMonitor` for live CLI presence on the dashboard.
@@ -210,7 +250,7 @@ Two-week stability sprint behind the next presentation. Every line below traces 
 - **Hook failures are now loud** ([#433](https://github.com/EtanHey/brainlayer/pull/433)) — BrainLayer hook DB failures raise clearly instead of silently swallowing errors.
 - **Drain hardening** ([#435](https://github.com/EtanHey/brainlayer/pull/435)) — drain is now resilient to DB open locks under writer contention.
 - **chunk_origin provenance** ([#436](https://github.com/EtanHey/brainlayer/pull/436), corrected in [#717](https://github.com/EtanHey/brainlayer/pull/717)) — `chunk_origin` is ingest provenance, not the enrichment model. Enrichment records the model in `metadata.enriched_by`; a backfill pass covers existing unknowns from ingest signals only.
-- **MMR diversity is now on by default** ([#439](https://github.com/EtanHey/brainlayer/pull/439)) — `brain_search` applies Maximal Marginal Relevance post-retrieval dedup automatically; pass `mmr=false` to opt out.
+- **MMR diversity is now on by default** ([#439](https://github.com/EtanHey/brainlayer/pull/439)) — `brain_search` applies Maximal Marginal Relevance post-retrieval dedup on every hybrid query. There is no opt-out parameter.
 - **KG entity dedup tooling** ([#441](https://github.com/EtanHey/brainlayer/pull/441)–[#443](https://github.com/EtanHey/brainlayer/pull/443)) — new path-detector and APSW-safe dedup suggestions for cleaning duplicate KG entities; slash-command reclassify collisions also resolved ([#444](https://github.com/EtanHey/brainlayer/pull/444)).
 - **KG boost reconnected to entity FTS** ([#445](https://github.com/EtanHey/brainlayer/pull/445)) — entity-aware ranking is now wired end-to-end through the FTS path.
 
@@ -218,18 +258,24 @@ Two-week stability sprint behind the next presentation. Every line below traces 
 
 | Source | Indexer |
 |--------|---------|
-| Claude Code | `brainlayer index` (JSONL from `~/.claude/projects/`) |
-| Claude Desktop | `brainlayer index --source desktop` |
+| Claude Code | `brainlayer index [DIR]` (JSONL, defaults to `~/.claude/projects/`) |
+| Claude Code (real-time) | `brainlayer watch` LaunchAgent (~1s, 4-layer filters) |
 | Codex CLI | `brainlayer ingest-codex` |
-| WhatsApp | `brainlayer index --source whatsapp` |
-| YouTube | `brainlayer index --source youtube` |
-| Markdown | `brainlayer index --source markdown` |
-| Manual | `brain_store` MCP tool |
-| Real-time | `brainlayer watch` LaunchAgent (~1s, 4-layer filters) |
+| T3 threads | `brainlayer ingest-t3` |
+| YouTube | `python scripts/index_youtube.py` |
+| Manual | `brain_store` / `brain_digest` MCP tools |
+
+`index` takes a source *directory* as a positional argument — there is no `--source` flag.
+Claude Desktop, WhatsApp, and Markdown have extractors in `src/brainlayer/pipeline/`
+(`extract_claude_desktop.py`, `extract_whatsapp.py`, `extract_markdown.py`) but no CLI subcommand
+wired to them yet.
 
 ## Enrichment
 
-Each chunk gets 10 structured metadata fields from a local or cloud LLM:
+Each chunk gets 15 structured metadata fields from a local or cloud LLM
+(`summary`, `key_facts`, `tags`, `importance`, `intent`, `primary_symbols`, `resolved_queries`,
+`epistemic_level`, `version_scope`, `debt_impact`, `external_deps`, `entities`, `sentiment_label`,
+`sentiment_score`, `sentiment_signals`). A sample:
 
 | Field | Example |
 |-------|---------|
@@ -266,10 +312,10 @@ brainlayer dashboard          # Interactive TUI
 ```bash
 pip install -e ".[dev]"
 git config core.hooksPath .githooks     # install repo pre-push hook once per clone
-pytest tests/                           # 1,848 Python tests
+pytest tests/                           # 4,386 Python tests
 pytest tests/ -m "not integration"      # Unit tests only (fast)
 ruff check src/ && ruff format src/     # Lint + format
-# BrainBar: 54 Swift tests via Xcode
+# BrainBar: 890 Swift tests (cd brain-bar && swift test)
 ```
 
 <details>

@@ -60,14 +60,18 @@ BrainLayer is the memory layer for the entire ecosystem. If it breaks, every gol
 - Canonical DB: `~/.local/share/brainlayer/brainlayer.db`
 
 ## MCP Tools
-- `brain_search`
-- `brain_store`
-- `brain_recall`
-- `brain_expand`
-- `brain_digest`
-- `brain_entity`
-- `brain_update`
-- `brain_tags`
+Served by BrainBar (`MCPRouter.toolDefinitions`), 17 total. A session boots into the **core
+palette** — `brain_search`, `brain_store`, `brain_recall`, `brain_expand`, plus `expand_palette`.
+Call `expand_palette` or set `BRAINLAYER_MCP_PROFILE=full` for the rest.
+
+- Core: `brain_search`, `brain_store`, `brain_recall`, `brain_expand`
+- Gated: `brain_entity`, `brain_get_person`, `brain_tags`, `brain_digest`, `brain_update`,
+  `brain_enrich`, `brain_supersede`, `brain_archive`, `brain_subscribe`, `brain_unsubscribe`,
+  `brain_ack`, `brain_backup_vacuum_into`, `brain_maintenance_rebuild_trigram`
+- `brain_backup_vacuum_into` is callable regardless of profile (owner-only socket is the trust
+  boundary), but stays out of the advertised core inventory.
+- `brain_resume` exists only in the Python library handlers under `src/brainlayer/mcp/`. BrainBar
+  does not serve it, so agents cannot call it.
 
 ## Concurrency Rules
 - One write at a time.
@@ -76,7 +80,7 @@ BrainLayer is the memory layer for the entire ecosystem. If it breaks, every gol
 
 ## Tests
 - Run `pytest` before claiming behavior changed safely.
-- Current suite size: 929 tests.
+- Current suite size: 4,386 Python tests (`pytest tests/ --collect-only -q`) + 890 Swift tests in `brain-bar/Tests/`.
 
 ## PR Workflow
 - Request `@codex review`.
@@ -90,24 +94,28 @@ BrainLayer is the memory layer for the entire ecosystem. If it breaks, every gol
 <!-- IDENTITY: brainlayer, owner=EtanHey, purpose=the fleet's memory — see the letter at the top of this file -->
 ## BrainBar Native Tools
 
-Current native Swift BrainBar tools (PR #135, 2026-03-30):
-- **brain_search** — FTS5 hybrid search with BM25 ranking, AND matching, ANSI formatted output
-- **brain_store** — Store chunks with tags and importance
-- **brain_recall** — Stats mode (counts, enrichment %) or context mode (session lookup by conversation_id)
-- **brain_entity** — Entity lookup (exact/LIKE) with relations from kg_relations
-- **brain_digest** — Rule-based entity extraction (capitalized names, PascalCase, URLs, code paths)
-- **brain_update** — Update chunk importance and/or tags by chunk_id
-- **brain_expand** — Get chunk + surrounding session context (before/after)
-- **brain_tags** — List unique tags with counts, filter by query prefix
+BrainBar is the only agent MCP transport. The authoritative tool list, descriptions, schemas, and
+ToolAnnotations live in `brain-bar/Sources/BrainBar/MCPRouter.swift` (`toolDefinitions`) — read that,
+not a copy here. Two contracts an agent must know:
+
+- **`brain_store` outcomes (#725):** `STORED|DUPLICATE|MERGED|DEFERRED` are all success — do NOT
+  re-store; `DEFERRED` is queued and will be persisted. `REJECTED|ERROR` stored nothing and return
+  no `status` and no `chunk_id`. A committed write can never answer `REJECTED` or `ERROR`.
+- **Descriptions survive the wire (#727):** oversized `tools/list` responses compact as a ladder —
+  annotations and inputSchema prose go first; only then are descriptions *shortened* (marked
+  `…[truncated]`, with a `result._meta["brainlayer/descriptionsTruncated"]` notice naming each one).
+  Descriptions are never removed; below the floor the response ships over-limit with its contract
+  intact and logs why.
 
 ---
 
-<!-- ARCHITECTURE: Python/Typer CLI, sqlite-vec storage via APSW, bge-large embeddings, FastAPI daemon, MCP server, Textual TUI + Next.js dashboard -->
+<!-- ARCHITECTURE: Python/Typer CLI, sqlite-vec storage via APSW, bge-large embeddings, BrainBar Swift MCP daemon over /tmp/brainbar.sock, library MCP handlers under mcp/, Textual TUI + Next.js dashboard -->
 ## Stack (WHAT)
 - Python package + Typer CLI in `src/brainlayer/`
 - sqlite-vec storage via APSW (`vector_store.py`)
 - bge-large-en-v1.5 embeddings (`embeddings.py`)
-- FastAPI daemon (`daemon.py`), MCP server (`mcp/`)
+- BrainBar (Swift) owns the MCP daemon and `/tmp/brainbar.sock`; Python keeps library handlers under `mcp/`
+- The FastAPI daemon was removed (`fix(arch): remove FastAPI daemon`, 692839cc) — there is no HTTP API
 - Textual TUI (`dashboard/`) and Next.js dashboard
 - Source data: JSONL in `~/.claude/projects/`
 
@@ -171,16 +179,23 @@ brainlayer enrich
 - Primary backend: **Groq** (cloud, configured in launchd plist)
 - Fallback: Gemini via `enrichment_controller.py`, Ollama as offline last-resort
 - Override with `BRAINLAYER_ENRICH_BACKEND=ollama|mlx|groq`
-- Rate configurable via `BRAINLAYER_ENRICH_RATE` env var (default 0.2 = 12 RPM)
-- Adds metadata (summary, tags, importance, intent); session enrichment captures decisions/corrections
+- Rate configurable via `BRAINLAYER_ENRICH_RATE` env var (default 5.0 req/s = 300 RPM; see `enrichment_controller.py:RATE_LIMITS`)
+- Adds 15 metadata fields (summary, key_facts, tags, importance, intent, primary_symbols, resolved_queries, epistemic_level, version_scope, debt_impact, external_deps, entities, sentiment_label, sentiment_score, sentiment_signals); session enrichment captures decisions/corrections
 
-<!-- MCP-SERVERS: agent MCP is BrainBar on /tmp/brainbar.sock (socat STDIO UNIX-CONNECT); brainlayer-mcp Python entrypoint DELETED; library handlers live under mcp/; 13 tools: brain_search, brain_store, brain_recall, brain_resume, brain_entity, brain_expand, brain_update, brain_digest, brain_get_person, brain_enrich, brain_tags, brain_supersede, brain_archive -->
+<!-- MCP-SERVERS: agent MCP is BrainBar on /tmp/brainbar.sock (brainlayer-mcp-stdio-bridge, or socat STDIO UNIX-CONNECT); brainlayer-mcp Python entrypoint DELETED; no HTTP daemon API; library handlers live under mcp/; 17 tools in MCPRouter.toolDefinitions, core palette = brain_search/brain_store/brain_recall/brain_expand + expand_palette -->
 ## Interfaces
-- Daemon API (core): `/health`, `/stats`, `/search`, `/context/{chunk_id}`, `/session/{session_id}`
-- Brain graph API: `/brain/graph`, `/brain/node/{node_id}`
-- Backlog API: `/backlog/items` (GET/POST/PATCH/DELETE)
-- MCP tools (13): `brain_search`, `brain_store`, `brain_recall`, `brain_resume`, `brain_entity`, `brain_expand`, `brain_update`, `brain_digest`, `brain_get_person`, `brain_enrich`, `brain_tags`, `brain_supersede`, `brain_archive` (legacy `brainlayer_*` aliases still work; note: `brain_expand` and `brain_tags` are deprecated in the Python MCP path and return errors — use the BrainBar native path for those two)
-- MCP server: BrainBar on `/tmp/brainbar.sock` only. Wire agents with `{"command":"socat","args":["STDIO","UNIX-CONNECT:/tmp/brainbar.sock"]}`. The Python `brainlayer-mcp` entrypoint is deleted; `brainlayer setup` rewrites owned configs to the socket form.
+- **There is no HTTP API.** The FastAPI daemon and its `/health`, `/stats`, `/search`, `/brain/graph`,
+  `/backlog/items` routes were removed. Anything still calling them is calling a surface that is gone.
+- MCP tools: 17, defined in `brain-bar/Sources/BrainBar/MCPRouter.swift` — see **MCP Tools** above for
+  the core/gated split. Legacy `brainlayer_*` names are still handled by the Python library handlers
+  under `src/brainlayer/mcp/`, but BrainBar does not serve them.
+- `brain_expand` and `brain_tags` are deprecated in the Python MCP path and return errors there; the
+  BrainBar path serves both normally.
+- MCP server: BrainBar on `/tmp/brainbar.sock` only. Preferred wiring is
+  `{"command":"brainlayer-mcp-stdio-bridge"}` (ships with the package, reconnects across BrainBar
+  restarts, needs nothing else on PATH); `{"command":"socat","args":["STDIO","UNIX-CONNECT:/tmp/brainbar.sock"]}`
+  also works. The Python `brainlayer-mcp` entrypoint is deleted. `brainlayer setup --migrate-mcp`
+  rewrites owned legacy configs to the **socat** form and leaves existing bridge entries in place.
 
 <!-- COMMANDS: `brainlayer brain-export` → graph JSON for dashboard | `brainlayer export-obsidian` → Markdown vault with backlinks + tags -->
 ## Exports
