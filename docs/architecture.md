@@ -27,7 +27,7 @@ graph TD
     end
 
     subgraph Post-Processing
-        D1["Chunk Enrichment<br/>10-field LLM metadata"]
+        D1["Chunk Enrichment<br/>15-field LLM metadata"]
         D2["Session Enrichment<br/>decisions, learnings"]
         D3["Brain Graph<br/>Leiden clustering"]
     end
@@ -118,8 +118,11 @@ Both result sets are merged using RRF: `score = Σ 1/(k + rank_i)` where k=60. T
 Everything lives in a single SQLite database file:
 
 ```
-~/.local/share/brainlayer/brainlayer.db  (~1.4GB for 260K+ chunks)
+~/.local/share/brainlayer/brainlayer.db
 ```
+
+Size scales with the corpus, dominated by the 1024-dim embeddings. The dev machine's database holds
+763K chunks in ~15GB. A WAL file sits alongside it and can grow large between checkpoints.
 
 Key tables:
 

@@ -8,14 +8,15 @@ BrainLayer fixes this. It's a **local-first memory layer** that gives any MCP-co
 
 ## Key Features
 
-- **7 MCP tools** — 3 core (search, store, recall) + 4 knowledge graph (digest, entity, update, get_person)
+- **17 MCP tools** — served by BrainBar on `/tmp/brainbar.sock`; a session boots into a core palette of 5 (`brain_search`, `brain_store`, `brain_recall`, `brain_expand`, `expand_palette`) and `expand_palette` exposes the rest
 - **Local-first** — SQLite + sqlite-vec, single file, no cloud, no Docker
 - **Hybrid search** — semantic vectors + keyword, merged with Reciprocal Rank Fusion
-- **10-field enrichment** — summary, tags, importance, intent, and more via local LLM
-- **Multi-source** — Claude Code, WhatsApp, YouTube, Markdown, Claude Desktop, manual
+- **15-field enrichment** — summary, key facts, tags, importance, intent, entities, sentiment, and more, via Groq/Gemini/MLX/Ollama
+- **Multi-source** — Claude Code (batch + real-time watcher), Codex CLI, T3 threads, YouTube, manual
 - **Works everywhere** — Claude Code, Cursor, Zed, VS Code, any MCP client
 
-All old `brainlayer_*` tool names (14 aliases) still work alongside new consolidated names.
+The 14 old `brainlayer_*` names are still handled by the Python library handlers under
+`src/brainlayer/mcp/`, but BrainBar — the agent transport — does not serve them. Use `brain_*`.
 
 ## Quick Example
 
@@ -30,17 +31,21 @@ Add to Claude Code (`~/.claude.json`):
 {
   "mcpServers": {
     "brainlayer": {
-      "command": "socat",
-      "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]
+      "command": "brainlayer-mcp-stdio-bridge"
     }
   }
 }
 ```
 
+BrainBar must be running and owning `/tmp/brainbar.sock`. The bridge ships with the package and
+reconnects across BrainBar restarts. If you already have `socat`, the manual equivalent is
+`{"command": "socat", "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]}` — see
+[MCP Config](mcp-config.md).
+
 Your agent now has persistent memory. Ask it:
 
 - *"What approach did I use for auth last month?"* → `brain_search`
-- *"Show me everything about this file"* → `brain_recall`
+- *"Open this result in full"* → `brain_expand`
 - *"What was I working on yesterday?"* → `brain_recall`
 - *"Remember this for later"* → `brain_store`
 
@@ -48,11 +53,11 @@ Your agent now has persistent memory. Ask it:
 
 ```mermaid
 graph LR
-    A["Claude Code / Cursor / Zed"] -->|MCP| B["BrainLayer MCP Server<br/>7 tools"]
+    A["Claude Code / Cursor / Zed"] -->|MCP| B["BrainBar MCP Server<br/>17 tools"]
     B --> C["Hybrid Search<br/>semantic + keyword (RRF)"]
     C --> D["SQLite + sqlite-vec<br/>single .db file"]
 
-    E["Conversations<br/>JSONL / WhatsApp / YouTube"] --> F["Pipeline"]
+    E["Conversations<br/>Claude Code JSONL / Codex / YouTube"] --> F["Pipeline"]
     F -->|extract → classify → chunk → embed| D
     G["Local LLM<br/>Ollama / MLX"] -->|enrich| D
 ```
@@ -60,6 +65,6 @@ graph LR
 ## Next Steps
 
 - [Quick Start](quickstart.md) — full setup guide
-- [MCP Tools Reference](mcp-tools.md) — all 7 tools documented
+- [MCP Tools Reference](mcp-tools.md) — the tool surface and the core palette
 - [Configuration](configuration.md) — environment variables and options
 - [Architecture](architecture.md) — how it works under the hood

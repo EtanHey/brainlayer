@@ -1,6 +1,43 @@
 # MCP Tools Reference
 
-BrainLayer exposes **8 MCP tools** — 3 core (search/store/recall) + 5 knowledge graph (digest/entity/expand/update/get_person).
+The agent-facing MCP server is **BrainBar** on `/tmp/brainbar.sock`. It defines **17 tools**
+(`brain-bar/Sources/BrainBar/MCPRouter.swift`, `toolDefinitions`), each with ToolAnnotations.
+
+**A session boots into a core palette of 5**, not all 17: `brain_search`, `brain_store`,
+`brain_recall`, `brain_expand`, and `expand_palette` — with short descriptions, so the boot payload
+stays small. Call `expand_palette` (or set `BRAINLAYER_MCP_PROFILE=full` on the server) to expose the
+rest with their full descriptions. Calling a gated tool before expanding returns an error telling
+you to expand. `brain_backup_vacuum_into` is callable regardless of profile.
+
+| Tool | Type | Core |
+|------|------|:----:|
+| `brain_search` | read | ● |
+| `brain_store` | write | ● |
+| `brain_recall` | read | ● |
+| `brain_expand` | read | ● |
+| `brain_entity` | read | |
+| `brain_get_person` | read | |
+| `brain_tags` | read | |
+| `brain_digest` | write | |
+| `brain_update` | write | |
+| `brain_enrich` | write | |
+| `brain_subscribe` | write | |
+| `brain_unsubscribe` | write | |
+| `brain_ack` | write | |
+| `brain_backup_vacuum_into` | write | |
+| `brain_maintenance_rebuild_trigram` | write | |
+| `brain_supersede` | destructive | |
+| `brain_archive` | destructive | |
+
+The per-tool sections below document the main eight. For the remaining nine
+(`brain_tags`, `brain_enrich`, `brain_supersede`, `brain_archive`, `brain_subscribe`,
+`brain_unsubscribe`, `brain_ack`, `brain_backup_vacuum_into`, `brain_maintenance_rebuild_trigram`),
+`MCPRouter.toolDefinitions` carries the authoritative schema and description.
+
+> **Which schema are these tables?** They document the **Python library handlers** under
+> `src/brainlayer/mcp/`, whose parameter sets are wider than what BrainBar puts on the wire.
+> For what an agent can actually send, `MCPRouter.toolDefinitions` is authoritative. Known
+> divergences are called out inline below.
 
 ## brain_search
 
@@ -42,7 +79,17 @@ Persist a memory (idea, decision, learning, mistake, etc.) for future retrieval.
 
 Issue type supports lifecycle tracking: status (open→in_progress→done→archived), severity (critical/high/medium/low), and code references (file_path, function_name, line_number).
 
-**Returns:** Chunk ID and related existing memories.
+**Returns:** An explicit outcome word plus, on success, the chunk ID and related existing memories.
+
+- `STORED`, `DUPLICATE`, `MERGED`, `DEFERRED` — **all four are success. Do not re-store.**
+  `DEFERRED` means the write is queued and will be persisted.
+- `REJECTED`, `ERROR` — nothing was stored. Both return **no `status` field and no `chunk_id`**.
+  `REJECTED` means the request as sent cannot succeed; `ERROR` is worth one retry.
+
+Once a row is committed the handler can no longer answer `REJECTED` or `ERROR`, so a durable write is
+never reported as "nothing was stored" ([#725](https://github.com/EtanHey/brainlayer/pull/725)).
+
+**Annotations:** write (`readOnlyHint: false`, `destructiveHint: false`)
 
 **Use when:** An agent discovers something worth remembering for future sessions.
 
@@ -114,6 +161,9 @@ Expand a chunk_id with N surrounding chunks for full context. Useful when a sear
 | `radius` | integer | No | Number of chunks to include on each side (default: 3) |
 | `project` | string | No | Scope to a project |
 
+> **On the BrainBar wire** the parameters are `chunk_id` (required), `before` (default 3), and
+> `after` (default 3) — there is no `radius` and no `project`.
+
 **Returns:** The target chunk plus N preceding and N following chunks in order.
 
 **Annotations:** `readOnlyHint: true`
@@ -125,6 +175,12 @@ Expand a chunk_id with N surrounding chunks for full context. Useful when a sear
 ## brain_update
 
 Update, archive, or merge existing memories.
+
+> **On the BrainBar wire, `brain_update` only changes `importance` and `tags`.** It takes
+> `chunk_id` (required), `importance`, `tags` — no `action`, no `content`, no `merge_chunk_ids`,
+> and it does not edit content. To replace content, store new content with `brain_store`; to hide a
+> chunk, use `brain_archive` or `brain_supersede`. The `action`/`merge` form below is the Python
+> library handler.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -158,7 +214,9 @@ Look up a person by name — returns entity details, recent interactions, prefer
 
 ## Aliases
 
-Old `brainlayer_*` names still work as backward-compat aliases.
+Old `brainlayer_*` names are still handled by the **Python library handlers** under
+`src/brainlayer/mcp/`. They are **not** served by BrainBar, which is the agent transport — so an
+agent connected over `/tmp/brainbar.sock` cannot call them. New wiring should use `brain_*`.
 
 - `brain_search` aliases: `brainlayer_search`, `brainlayer_context`, `brainlayer_stats`, `brainlayer_list_projects`, `brainlayer_file_timeline`, `brainlayer_operations`, `brainlayer_regression`, `brainlayer_plan_links`, `brainlayer_think`
 - `brain_store` alias: `brainlayer_store`
