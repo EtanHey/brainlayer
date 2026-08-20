@@ -1,0 +1,1611 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Persistent memory for AI agents — search, think, recall across every conversation">
+      
+      
+      
+        <link rel="canonical" href="https://etanhey.github.io/brainlayer/operations/spotlight-exclusion-migration/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/logo.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Spotlight Exclusion Migration Runbook - BrainLayer</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#spotlight-exclusion-migration-runbook" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="BrainLayer" class="md-header__button md-logo" aria-label="BrainLayer" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            BrainLayer
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Spotlight Exclusion Migration Runbook
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/EtanHey/brainlayer" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    EtanHey/brainlayer
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="BrainLayer" class="md-nav__button md-logo" aria-label="BrainLayer" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="logo">
+
+    </a>
+    BrainLayer
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/EtanHey/brainlayer" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    EtanHey/brainlayer
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../mcp-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../enrichment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Enrichment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../kg-spec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    KG Specification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../data-locations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Locations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../enrichment-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Enrichment Runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../local-models-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local Models
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../mcp-config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Config
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decisions
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Decisions
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0000-template/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR Template
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0001-sqlite-vec-over-dedicated-vector-db/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0001: sqlite-vec
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0002-reciprocal-rank-fusion-for-hybrid-search/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0002: RRF Hybrid Search
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../roadmap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roadmap
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#why-metadata_never_index" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why .metadata_never_index
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#complete-high-churn-inventory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Complete high-churn inventory
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#preconditions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Preconditions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#execute-in-one-stop-window" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Execute in one stop window
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Execute in one stop window">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-reduce-the-live-wal-before-the-stop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Reduce the live WAL before the stop
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-stop-every-writer-scheduler-and-self-healer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Stop every writer, scheduler, and self-healer
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-checkpoint-after-writers-are-stopped" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Checkpoint after writers are stopped
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-stage-mark-and-restore-each-canonical-tree" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Stage, mark, and restore each canonical tree
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-re-run-setup-and-verify-paths-before-restart" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Re-run setup and verify paths before restart
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-spotlight-evidence-while-writers-remain-stopped" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Spotlight evidence while writers remain stopped
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#7-restart-exactly-the-labels-recorded-in-preflight" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Restart exactly the labels recorded in preflight
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rollback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rollback
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#completion-record" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Completion record
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="spotlight-exclusion-migration-runbook">Spotlight Exclusion Migration Runbook</h1>
+<p>Status: <strong>READY — execute only in an approved writer-stop window.</strong> Never overlap this operation
+with a backup, release, or another write-heavy maintenance job. Exact workstation scheduling and
+operator coordination belong in the restricted maintenance record, not this repository.</p>
+<h2 id="why-metadata_never_index">Why <code>.metadata_never_index</code></h2>
+<p>BrainLayer uses a marker in each high-churn root. <code>mdimport -t</code> is useful importer evidence but not
+an exclusion verdict: its manual says test imports return attributes without writing the Spotlight
+index. A mandatory macOS 26.5.1 (25F80) pair-review probe showed why negative results alone are
+insufficient: after a real <code>mdimport -i</code>, both marker-backed files and an unmarked control had null
+<code>mdls</code> attributes and no <code>mdfind</code> result on that workstation. Step 6 therefore requires an
+unmarked same-volume positive control to be indexed before a marker-backed negative is accepted.</p>
+<p><a href="https://support.apple.com/guide/mac-help/mchl1bb43b84/mac">Apple's documented Search Privacy UI</a>
+remains the fallback if a post-migration marker probe fails. It is not the primary mechanism
+because setup must work unattended.</p>
+<h2 id="complete-high-churn-inventory">Complete high-churn inventory</h2>
+<table>
+<thead>
+<tr>
+<th>Excluded root</th>
+<th>Covered paths</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>$HOME/.local/share/brainlayer</code></td>
+<td><code>brainlayer.db</code>, <code>brainlayer.db-wal</code>, <code>brainlayer.db-shm</code>; sqlite-vec data and future vector sidecars; <code>chromadb</code>, <code>chromadb.backup</code>, <code>style</code>, <code>storage</code>, <code>experiments</code>; <code>enrichment_checkpoints.db</code>, <code>reembed_bgem3_checkpoint.json</code>, <code>enrichment-scratch</code>; <code>prompts</code>; <code>offsets.json</code>, watcher/drain/T3/health state, pause sentinel, pending-store files; <code>backups</code>, <code>jsonl-backups</code>; <code>logs</code></td>
+</tr>
+<tr>
+<td>active <code>BRAINLAYER_DB</code> parent, when outside the canonical root</td>
+<td>overridden DB, WAL, SHM, and adjacent vector sidecars; setup marks both this parent and the canonical root</td>
+</tr>
+<tr>
+<td><code>$HOME/.brainlayer</code></td>
+<td><code>queue</code>; <code>quarantine</code> including stale-queue quarantine; <code>logs</code> including drain logs; runtime repository state</td>
+</tr>
+<tr>
+<td><code>$HOME/Library/Logs/brainlayer</code></td>
+<td>launchd stdout/stderr and BrainBar runtime logs</td>
+</tr>
+<tr>
+<td><code>$HOME/.brainlayer-p0-counter</code></td>
+<td>longitudinal counter logs</td>
+</tr>
+</tbody>
+</table>
+<p><code>/tmp</code> locks, sockets, and pidfiles are already outside Spotlight's normal user-content scope.
+<code>~/.config/brainlayer</code> and <code>~/.brainlayer-brain</code> are deliberately not excluded: they are low-churn
+configuration and user-facing exports.</p>
+<h2 id="preconditions">Preconditions</h2>
+<ol>
+<li>Confirm the merged release containing this runbook is installed.</li>
+<li>Confirm the current time is inside the approved window and no backup or release job overlaps it.</li>
+<li>Confirm no staging path below exists. If one exists, stop and inspect it; never overwrite it.</li>
+<li>Record <code>brainlayer status --json</code>, <code>brainlayer doctor --json</code>, DB/WAL/SHM sizes, queue count, and
+   loaded <code>com.brainlayer.*</code> labels. Resolve and record the active DB parent from <code>BRAINLAYER_DB</code>;
+   write a path containing spaces as a quoted assignment such as
+   <code>BRAINLAYER_DB="/Volumes/brainlayer data/brainlayer.db"</code>; backslash-escaped spaces are rejected.
+   When the active DB parent differs from <code>$HOME/.local/share/brainlayer</code>, add it as a fifth
+   migration root only
+   after validating that it is a dedicated BrainLayer-owned directory. Its basename must contain
+   <code>brainlayer</code>, and it must not be <code>/</code>, <code>$HOME</code>, a mount root, an ancestor of the canonical data
+   root, overlap another migration root, or contain unrelated data. If it fails any check, stop:
+   never mark or rename that parent. Relocate the override DB and configuration into a dedicated
+   directory in a separate approved migration before using this runbook.</li>
+<li>For every migration root, provisionally record whether the root and <code>.metadata_never_index</code>
+   already exist. The authoritative rollback baseline is refreshed after all writers are stopped.</li>
+<li>Grant Full Disk Access to the terminal application used for Step 6, then confirm <code>mdls</code> and
+   <code>mdfind</code> can inspect a known indexed file in the selected positive-control parent. Without that
+   access, treat every Spotlight probe as inconclusive.</li>
+<li>Keep the terminal open until the recorded labels have restarted. Run the real store/search probe
+   only when every Spotlight exclusion probe is verified.</li>
+</ol>
+<p>Staging paths:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>$HOME/.local/share/brainlayer.spotlight-migration-staging
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>$HOME/.brainlayer.spotlight-migration-staging
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>$HOME/Library/Logs/brainlayer.spotlight-migration-staging
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>$HOME/.brainlayer-p0-counter.spotlight-migration-staging
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>&lt;active-BRAINLAYER_DB-parent&gt;.spotlight-migration-staging  # only when outside the canonical root
+</code></pre></div>
+<p>Measured planning budget from this workstation on 2026-08-11: the data root was 197 GB,
+<code>brainlayer.db</code> was 16 GB, and its WAL was 66 MB. All four canonical roots were on device
+<code>16777232</code>, so every required move is a same-filesystem metadata rename—O(1), normally seconds,
+regardless of tree size. The variable I/O step is the Step 3 <code>TRUNCATE</code> checkpoint; a 66 MB WAL
+should take seconds. Step 6 can spend up to 30 seconds polling each of four or five roots. Budget
+roughly 15–30 minutes of writer downtime, dominated by operator verification rather than I/O.
+Re-measure the current root/device/WAL values during preflight; these measurements are planning
+evidence, not permission to shorten a gate.</p>
+<h2 id="execute-in-one-stop-window">Execute in one stop window</h2>
+<h3 id="1-reduce-the-live-wal-before-the-stop">1. Reduce the live WAL before the stop</h3>
+<p>This first checkpoint is deliberately non-destructive and may report busy. Do not proceed to moves
+from this result alone.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>brainlayer<span class="w"> </span>wal-checkpoint<span class="w"> </span>--mode<span class="w"> </span>PASSIVE<span class="w"> </span>--json
+</code></pre></div>
+<h3 id="2-stop-every-writer-scheduler-and-self-healer">2. Stop every writer, scheduler, and self-healer</h3>
+<p>Use the same complete writer fence as the Wave 3a live runbook. The broader inventory pattern is
+intentional: <code>com.mcplayer.brainlayer-proxy</code> is a write-capable bridge even though its label does
+not begin with <code>com.brainlayer</code>. <code>com.mcplayer.bus</code> may remain loaded because it is the event bus,
+not the BrainLayer MCP proxy or a DB writer. Set <code>spotlight_run_dir</code> to the restricted maintenance
+evidence directory, then record the exact active set and stop only labels that were active:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nb">set</span><span class="w"> </span>-euo<span class="w"> </span>pipefail
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nv">spotlight_run_dir</span><span class="o">=</span><span class="s2">"&lt;absolute restricted maintenance evidence directory&gt;"</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nb">test</span><span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">spotlight_run_dir</span><span class="p">#/</span><span class="si">}</span><span class="s2">"</span><span class="w"> </span>!<span class="o">=</span><span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_run_dir</span><span class="s2">"</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>mkdir<span class="w"> </span>-p<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_run_dir</span><span class="s2">"</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>launchctl<span class="w"> </span>list<span class="w"> </span><span class="p">|</span><span class="w"> </span>awk<span class="w"> </span><span class="s1">'$3 ~ /^(com\.brainlayer\.|com\.mcplayer\.)/ {print $3}'</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>sort<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span>&gt;<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_run_dir</span><span class="s2">/active-labels.before"</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>:<span class="w"> </span>&gt;<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_run_dir</span><span class="s2">/stopped-labels"</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="nv">spotlight_stop_labels</span><span class="o">=(</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">  </span>com.brainlayer.tier0-watchdog
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">  </span>com.brainlayer.throughput-watchdog
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">  </span>com.brainlayer.health-check
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="w">  </span>com.brainlayer.backup-daily
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="w">  </span>com.brainlayer.jsonl-backup
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="w">  </span>com.brainlayer.maintenance-nightly
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="w">  </span>com.brainlayer.maintenance-weekly
+<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="w">  </span>com.brainlayer.wal-checkpoint
+<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="w">  </span>com.brainlayer.repair-fts
+<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a><span class="w">  </span>com.brainlayer.decay
+<a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a><span class="w">  </span>com.brainlayer.p0-counter
+<a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a><span class="w">  </span>com.brainlayer.index
+<a id="__codelineno-2-22" name="__codelineno-2-22" href="#__codelineno-2-22"></a><span class="w">  </span>com.brainlayer.watch
+<a id="__codelineno-2-23" name="__codelineno-2-23" href="#__codelineno-2-23"></a><span class="w">  </span>com.brainlayer.drain
+<a id="__codelineno-2-24" name="__codelineno-2-24" href="#__codelineno-2-24"></a><span class="w">  </span>com.brainlayer.hotlane-brainbar
+<a id="__codelineno-2-25" name="__codelineno-2-25" href="#__codelineno-2-25"></a><span class="w">  </span>com.brainlayer.enrichment
+<a id="__codelineno-2-26" name="__codelineno-2-26" href="#__codelineno-2-26"></a><span class="w">  </span>com.brainlayer.brainbar
+<a id="__codelineno-2-27" name="__codelineno-2-27" href="#__codelineno-2-27"></a><span class="w">  </span>com.brainlayer.gemini-loopback
+<a id="__codelineno-2-28" name="__codelineno-2-28" href="#__codelineno-2-28"></a><span class="w">  </span>com.mcplayer.brainlayer-proxy
+<a id="__codelineno-2-29" name="__codelineno-2-29" href="#__codelineno-2-29"></a><span class="w">  </span>com.brainlayer.brainbar-daemon
+<a id="__codelineno-2-30" name="__codelineno-2-30" href="#__codelineno-2-30"></a><span class="w">  </span>com.brainlayer.t3-ingest
+<a id="__codelineno-2-31" name="__codelineno-2-31" href="#__codelineno-2-31"></a><span class="o">)</span>
+<a id="__codelineno-2-32" name="__codelineno-2-32" href="#__codelineno-2-32"></a><span class="k">for</span><span class="w"> </span>label<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">spotlight_stop_labels</span><span class="p">[@]</span><span class="si">}</span><span class="s2">"</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<a id="__codelineno-2-33" name="__codelineno-2-33" href="#__codelineno-2-33"></a><span class="w">  </span><span class="k">if</span><span class="w"> </span>grep<span class="w"> </span>-Fxq<span class="w"> </span><span class="s2">"</span><span class="nv">$label</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_run_dir</span><span class="s2">/active-labels.before"</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<a id="__codelineno-2-34" name="__codelineno-2-34" href="#__codelineno-2-34"></a><span class="w">    </span>launchctl<span class="w"> </span>bootout<span class="w"> </span><span class="s2">"gui/</span><span class="k">$(</span>id<span class="w"> </span>-u<span class="k">)</span><span class="s2">/</span><span class="nv">$label</span><span class="s2">"</span>
+<a id="__codelineno-2-35" name="__codelineno-2-35" href="#__codelineno-2-35"></a><span class="w">    </span><span class="nb">printf</span><span class="w"> </span><span class="s1">'%s\n'</span><span class="w"> </span><span class="s2">"</span><span class="nv">$label</span><span class="s2">"</span><span class="w"> </span>&gt;&gt;<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_run_dir</span><span class="s2">/stopped-labels"</span>
+<a id="__codelineno-2-36" name="__codelineno-2-36" href="#__codelineno-2-36"></a><span class="w">  </span><span class="k">fi</span>
+<a id="__codelineno-2-37" name="__codelineno-2-37" href="#__codelineno-2-37"></a><span class="k">done</span>
+<a id="__codelineno-2-38" name="__codelineno-2-38" href="#__codelineno-2-38"></a>
+<a id="__codelineno-2-39" name="__codelineno-2-39" href="#__codelineno-2-39"></a>launchctl<span class="w"> </span>list<span class="w"> </span><span class="p">|</span><span class="w"> </span>awk<span class="w"> </span><span class="s1">'$3 ~ /^(com\.brainlayer\.|com\.mcplayer\.)/ {print $3}'</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>sort<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-40" name="__codelineno-2-40" href="#__codelineno-2-40"></a><span class="w">  </span>&gt;<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_run_dir</span><span class="s2">/active-labels.after-stop"</span>
+<a id="__codelineno-2-41" name="__codelineno-2-41" href="#__codelineno-2-41"></a><span class="k">for</span><span class="w"> </span>label<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">spotlight_stop_labels</span><span class="p">[@]</span><span class="si">}</span><span class="s2">"</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<a id="__codelineno-2-42" name="__codelineno-2-42" href="#__codelineno-2-42"></a><span class="w">  </span>!<span class="w"> </span>grep<span class="w"> </span>-Fxq<span class="w"> </span><span class="s2">"</span><span class="nv">$label</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_run_dir</span><span class="s2">/active-labels.after-stop"</span>
+<a id="__codelineno-2-43" name="__codelineno-2-43" href="#__codelineno-2-43"></a><span class="k">done</span>
+<a id="__codelineno-2-44" name="__codelineno-2-44" href="#__codelineno-2-44"></a>!<span class="w"> </span>lsof<span class="w"> </span>-nP<span class="w"> </span>-iTCP:48123<span class="w"> </span>-sTCP:LISTEN
+<a id="__codelineno-2-45" name="__codelineno-2-45" href="#__codelineno-2-45"></a>capture_brainlayer_writer_processes<span class="o">()</span><span class="w"> </span><span class="o">{</span>
+<a id="__codelineno-2-46" name="__codelineno-2-46" href="#__codelineno-2-46"></a><span class="w">  </span>ps<span class="w"> </span>-axo<span class="w"> </span><span class="nv">pid</span><span class="o">=</span>,command<span class="o">=</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>awk<span class="w"> </span><span class="s1">'</span>
+<a id="__codelineno-2-47" name="__codelineno-2-47" href="#__codelineno-2-47"></a><span class="s1">    function path_basename(path, value) {</span>
+<a id="__codelineno-2-48" name="__codelineno-2-48" href="#__codelineno-2-48"></a><span class="s1">      value = path</span>
+<a id="__codelineno-2-49" name="__codelineno-2-49" href="#__codelineno-2-49"></a><span class="s1">      sub(/^.*\//, "", value)</span>
+<a id="__codelineno-2-50" name="__codelineno-2-50" href="#__codelineno-2-50"></a><span class="s1">      return value</span>
+<a id="__codelineno-2-51" name="__codelineno-2-51" href="#__codelineno-2-51"></a><span class="s1">    }</span>
+<a id="__codelineno-2-52" name="__codelineno-2-52" href="#__codelineno-2-52"></a><span class="s1">    function writer_subcommand(value) {</span>
+<a id="__codelineno-2-53" name="__codelineno-2-53" href="#__codelineno-2-53"></a><span class="s1">      return value ~ /^(health-check|wal-checkpoint|repair-fts|decay|p0-counter|index|watch|drain|enrich|ingest-t3)$/</span>
+<a id="__codelineno-2-54" name="__codelineno-2-54" href="#__codelineno-2-54"></a><span class="s1">    }</span>
+<a id="__codelineno-2-55" name="__codelineno-2-55" href="#__codelineno-2-55"></a><span class="s1">    {</span>
+<a id="__codelineno-2-56" name="__codelineno-2-56" href="#__codelineno-2-56"></a><span class="s1">      executable = path_basename($2)</span>
+<a id="__codelineno-2-57" name="__codelineno-2-57" href="#__codelineno-2-57"></a><span class="s1">      if ((executable == "BrainBar" || executable == "BrainBarDaemon") ||</span>
+<a id="__codelineno-2-58" name="__codelineno-2-58" href="#__codelineno-2-58"></a><span class="s1">          (executable == "bun" &amp;&amp; path_basename($3) == "mcplayer-brainlayer-proxy") ||</span>
+<a id="__codelineno-2-59" name="__codelineno-2-59" href="#__codelineno-2-59"></a><span class="s1">          (executable == "socat" &amp;&amp; $3 ~ /^TCP4-LISTEN:48123,/) ||</span>
+<a id="__codelineno-2-60" name="__codelineno-2-60" href="#__codelineno-2-60"></a><span class="s1">          (executable == "brainlayer" &amp;&amp; writer_subcommand($3)) ||</span>
+<a id="__codelineno-2-61" name="__codelineno-2-61" href="#__codelineno-2-61"></a><span class="s1">          ((executable ~ /^(Python|python([0-9.]*)?)$/) &amp;&amp;</span>
+<a id="__codelineno-2-62" name="__codelineno-2-62" href="#__codelineno-2-62"></a><span class="s1">           ((path_basename($3) == "brainlayer" &amp;&amp; writer_subcommand($4)) ||</span>
+<a id="__codelineno-2-63" name="__codelineno-2-63" href="#__codelineno-2-63"></a><span class="s1">            ($3 == "-m" &amp;&amp; $4 ~ /^brainlayer\.(maintenance|brainbar_hybrid_helper)$/) ||</span>
+<a id="__codelineno-2-64" name="__codelineno-2-64" href="#__codelineno-2-64"></a><span class="s1">            (path_basename($3) ~ /^(hotlane_brainbar_daemon|throughput-watchdog)\.py$/))) ||</span>
+<a id="__codelineno-2-65" name="__codelineno-2-65" href="#__codelineno-2-65"></a><span class="s1">          ((executable == "sh" || executable == "bash") &amp;&amp;</span>
+<a id="__codelineno-2-66" name="__codelineno-2-66" href="#__codelineno-2-66"></a><span class="s1">           path_basename($3) ~ /^(tier0-watchdog|backup-daily|jsonl-backup)\.sh$/))</span>
+<a id="__codelineno-2-67" name="__codelineno-2-67" href="#__codelineno-2-67"></a><span class="s1">        print</span>
+<a id="__codelineno-2-68" name="__codelineno-2-68" href="#__codelineno-2-68"></a><span class="s1">    }</span>
+<a id="__codelineno-2-69" name="__codelineno-2-69" href="#__codelineno-2-69"></a><span class="s1">  '</span>
+<a id="__codelineno-2-70" name="__codelineno-2-70" href="#__codelineno-2-70"></a><span class="o">}</span>
+<a id="__codelineno-2-71" name="__codelineno-2-71" href="#__codelineno-2-71"></a>capture_brainlayer_writer_processes<span class="w"> </span>&gt;<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_run_dir</span><span class="s2">/processes.after-stop"</span>
+<a id="__codelineno-2-72" name="__codelineno-2-72" href="#__codelineno-2-72"></a><span class="nb">test</span><span class="w"> </span>!<span class="w"> </span>-s<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_run_dir</span><span class="s2">/processes.after-stop"</span>
+</code></pre></div>
+<p>The stop and launchd absence assertions deliberately share the single <code>spotlight_stop_labels</code>
+list; never maintain a shorter assertion list. The process fence is intentionally narrower than a
+text search for <code>brainlayer</code>: it matches only installed BrainLayer writer commands and their known
+helper/listener processes. Before every window, dry-run the exact <code>capture_brainlayer_writer_processes</code>
+function against live <code>ps</code> output while writers are running. Prove every returned PID is one of the
+labels above or its writer child, and prove known non-writers such as MCP clients, Phoenix, Codex,
+and collab monitors are absent. Save that dry-run evidence before stopping any label. After the
+stop, require the same capture to be empty.</p>
+<p>Do not let a watchdog restart a writer between this step and the final checkpoint.</p>
+<p>After confirming all processes are stopped, re-record whether every root and its marker exist.
+This writer-stop snapshot is the authoritative rollback baseline. If either state changed from the
+provisional preflight inventory, explain and record the change before proceeding; never infer that
+the migration created a marker observed before the first rename.</p>
+<h3 id="3-checkpoint-after-writers-are-stopped">3. Checkpoint after writers are stopped</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>brainlayer<span class="w"> </span>wal-checkpoint<span class="w"> </span>--mode<span class="w"> </span>TRUNCATE<span class="w"> </span>--retry-busy<span class="w"> </span>--json
+</code></pre></div>
+<p>Require <code>busy: false</code>. Set <code>brainlayer_active_db</code> to the absolute active DB path recorded during
+preflight—not a hardcoded canonical path—and require its WAL to be zero-byte or absent. Check the
+active DB plus its actual <code>-wal</code> and <code>-shm</code> sidecars; every existing file must have no <code>lsof</code>
+holder:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nv">brainlayer_active_db</span><span class="o">=</span><span class="s2">"&lt;preflight-resolved-active-db&gt;"</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="nb">test</span><span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">brainlayer_active_db</span><span class="p">#/</span><span class="si">}</span><span class="s2">"</span><span class="w"> </span>!<span class="o">=</span><span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_active_db</span><span class="s2">"</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="nb">test</span><span class="w"> </span>!<span class="w"> </span>-s<span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">brainlayer_active_db</span><span class="si">}</span><span class="s2">-wal"</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="k">for</span><span class="w"> </span>brainlayer_db_file<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span><span class="s2">"</span><span class="nv">$brainlayer_active_db</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">brainlayer_active_db</span><span class="si">}</span><span class="s2">-wal"</span><span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">brainlayer_active_db</span><span class="si">}</span><span class="s2">-shm"</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span><span class="nb">test</span><span class="w"> </span>!<span class="w"> </span>-e<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_db_file</span><span class="s2">"</span><span class="w"> </span><span class="o">||</span><span class="w"> </span>!<span class="w"> </span>lsof<span class="w"> </span>--<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_db_file</span><span class="s2">"</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="k">done</span>
+</code></pre></div>
+<p>If any condition fails, keep services stopped and investigate; do not move any tree.</p>
+<h3 id="4-stage-mark-and-restore-each-canonical-tree">4. Stage, mark, and restore each canonical tree</h3>
+<p>For each of the four canonical roots, plus the active <code>BRAINLAYER_DB</code> parent when it is distinct
+and passed the dedicated-directory validation above, perform a same-filesystem rename to its exact
+staging path, create
+<code>.metadata_never_index</code> inside the staged tree, then atomically rename the same tree back to its
+canonical path. This preserves the root's mode, ownership, ACLs, extended attributes, and children;
+the marker is already present before the canonical path becomes visible again. Never copy the tree.</p>
+<p>Example for the canonical data root; repeat with the exact runtime/log/counter pairs listed above
+and the recorded override parent/staging pair when applicable:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nb">set</span><span class="w"> </span>-euo<span class="w"> </span>pipefail
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nv">brainlayer_data_root</span><span class="o">=</span><span class="s2">"</span><span class="si">${</span><span class="nv">HOME</span><span class="p">:?</span><span class="si">}</span><span class="s2">/.local/share/brainlayer"</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="nv">brainlayer_stage_root</span><span class="o">=</span><span class="s2">"</span><span class="si">${</span><span class="nv">HOME</span><span class="p">:?</span><span class="si">}</span><span class="s2">/.local/share/brainlayer.spotlight-migration-staging"</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="nb">test</span><span class="w"> </span>-d<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_data_root</span><span class="s2">"</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="nb">test</span><span class="w"> </span>!<span class="w"> </span>-L<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_data_root</span><span class="s2">"</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="nv">brainlayer_expected_root</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span><span class="nb">cd</span><span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">HOME</span><span class="p">:?</span><span class="si">}</span><span class="s2">/.local/share"</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">pwd</span><span class="w"> </span>-P<span class="k">)</span><span class="s2">/brainlayer"</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="nv">brainlayer_expected_stage</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span><span class="nb">cd</span><span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">HOME</span><span class="p">:?</span><span class="si">}</span><span class="s2">/.local/share"</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">pwd</span><span class="w"> </span>-P<span class="k">)</span><span class="s2">/brainlayer.spotlight-migration-staging"</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="nb">test</span><span class="w"> </span><span class="s2">"</span><span class="k">$(</span>realpath<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_data_root</span><span class="s2">"</span><span class="k">)</span><span class="s2">"</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_expected_root</span><span class="s2">"</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="nb">test</span><span class="w"> </span>!<span class="w"> </span>-e<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_stage_root</span><span class="s2">"</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">test</span><span class="w"> </span>!<span class="w"> </span>-L<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_stage_root</span><span class="s2">"</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="nb">test</span><span class="w"> </span><span class="s2">"</span><span class="k">$(</span>stat<span class="w"> </span>-f<span class="w"> </span>%d<span class="w"> </span><span class="s2">"</span><span class="k">$(</span>dirname<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_data_root</span><span class="s2">"</span><span class="k">)</span><span class="s2">"</span><span class="k">)</span><span class="s2">"</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">  </span><span class="s2">"</span><span class="k">$(</span>stat<span class="w"> </span>-f<span class="w"> </span>%d<span class="w"> </span><span class="s2">"</span><span class="k">$(</span>dirname<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_stage_root</span><span class="s2">"</span><span class="k">)</span><span class="s2">"</span><span class="k">)</span><span class="s2">"</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>mv<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_data_root</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_stage_root</span><span class="s2">"</span>
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="nb">test</span><span class="w"> </span>-d<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_stage_root</span><span class="s2">"</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">test</span><span class="w"> </span>!<span class="w"> </span>-L<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_stage_root</span><span class="s2">"</span>
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="nb">test</span><span class="w"> </span><span class="s2">"</span><span class="k">$(</span>realpath<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_stage_root</span><span class="s2">"</span><span class="k">)</span><span class="s2">"</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_expected_stage</span><span class="s2">"</span>
+<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a>touch<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_stage_root</span><span class="s2">/.metadata_never_index"</span>
+<a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="nb">test</span><span class="w"> </span>-f<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_stage_root</span><span class="s2">/.metadata_never_index"</span>
+<a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a><span class="nb">test</span><span class="w"> </span>!<span class="w"> </span>-e<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_data_root</span><span class="s2">"</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">test</span><span class="w"> </span>!<span class="w"> </span>-L<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_data_root</span><span class="s2">"</span>
+<a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a><span class="nb">test</span><span class="w"> </span><span class="s2">"</span><span class="k">$(</span>stat<span class="w"> </span>-f<span class="w"> </span>%d<span class="w"> </span><span class="s2">"</span><span class="k">$(</span>dirname<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_stage_root</span><span class="s2">"</span><span class="k">)</span><span class="s2">"</span><span class="k">)</span><span class="s2">"</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a><span class="w">  </span><span class="s2">"</span><span class="k">$(</span>stat<span class="w"> </span>-f<span class="w"> </span>%d<span class="w"> </span><span class="s2">"</span><span class="k">$(</span>dirname<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_data_root</span><span class="s2">"</span><span class="k">)</span><span class="s2">"</span><span class="k">)</span><span class="s2">"</span>
+<a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a>mv<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_stage_root</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_data_root</span><span class="s2">"</span>
+<a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a><span class="nb">test</span><span class="w"> </span>-d<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_data_root</span><span class="s2">"</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">test</span><span class="w"> </span>!<span class="w"> </span>-L<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_data_root</span><span class="s2">"</span>
+<a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a><span class="nb">test</span><span class="w"> </span><span class="s2">"</span><span class="k">$(</span>realpath<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_data_root</span><span class="s2">"</span><span class="k">)</span><span class="s2">"</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_expected_root</span><span class="s2">"</span>
+<a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a><span class="nb">test</span><span class="w"> </span>-f<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_data_root</span><span class="s2">/.metadata_never_index"</span>
+<a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a><span class="nb">test</span><span class="w"> </span>!<span class="w"> </span>-e<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_stage_root</span><span class="s2">"</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">test</span><span class="w"> </span>!<span class="w"> </span>-L<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_stage_root</span><span class="s2">"</span>
+</code></pre></div>
+<p>Before each <code>mv</code>, resolve and print both paths, reject symbolic links (including dangling target
+links), and confirm both parents are on the same filesystem. For the first move, assert the source
+resolves to the preflight-recorded canonical root and staging is absent. For the restore move,
+assert the source resolves to the exact staging root and canonical is absent. <code>test -d</code> alone is
+not sufficient because it accepts a directory symlink and the subsequent <code>touch</code> could write
+through that link.
+Apply this recovery state machine before continuing any root:</p>
+<ul>
+<li>canonical exists, staging absent: expected; continue;</li>
+<li>canonical missing, staging exists: restore with an atomic staging-to-canonical rename, verify the
+  tree, and restart this root's preflight from the beginning;</li>
+<li>both exist: duplicate/conflict; stop without moving or merging either tree;</li>
+<li>both absent: for the canonical/override data root, stop because data is missing. For an optional
+  runtime/log/counter root, first prove from the preflight label and path inventory that it was never
+  created and never held data; record that evidence, create the exact canonical directory with mode
+  <code>0700</code>, create and verify <code>.metadata_never_index</code>, and do not perform a staging rename for it.</li>
+</ul>
+<p>This same state machine is the recovery procedure if the shell or machine stops between either
+rename. Never infer completion from the presence of only one path without inspecting it.</p>
+<h3 id="5-re-run-setup-and-verify-paths-before-restart">5. Re-run setup and verify paths before restart</h3>
+<p>Confirm none of the four canonical staging paths, or the conditional override staging path,
+remains. Apply the recovery state machine before running setup if any staging path exists; setup
+must never create a fresh canonical tree beside staged data.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>brainlayer<span class="w"> </span>setup<span class="w"> </span>--no-launchd
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>brainlayer<span class="w"> </span>doctor<span class="w"> </span>--json
+</code></pre></div>
+<p>Doctor may still report daemon liveness while services are intentionally stopped, but it must not
+report <code>spotlight_indexing_enabled</code>. Confirm all four canonical marker files and the conditional
+override marker exist, and that the DB, WAL, SHM, queue, prompt, scratch, vector, and log paths still
+resolve to their pre-stop locations. No symlink or environment rewrite is expected for the marker
+design; if an override is present, verify it points into a marked ancestor before restart.</p>
+<h3 id="6-spotlight-evidence-while-writers-remain-stopped">6. Spotlight evidence while writers remain stopped</h3>
+<p>First establish that Spotlight is enabled for the containing volume of every migration root. For
+each canonical root and the validated distinct override root, resolve the filesystem mount point,
+record the root-to-volume mapping, and query that mount point directly:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nv">brainlayer_probe_root</span><span class="o">=</span><span class="s2">"</span><span class="si">${</span><span class="nv">HOME</span><span class="p">:?</span><span class="si">}</span><span class="s2">/.local/share/brainlayer"</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="nv">brainlayer_probe_device</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>df<span class="w"> </span>-P<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_probe_root</span><span class="s2">"</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>awk<span class="w"> </span><span class="s1">'NR == 2 { print $1 }'</span><span class="k">)</span><span class="s2">"</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="nv">brainlayer_probe_volume</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span>diskutil<span class="w"> </span>info<span class="w"> </span>-plist<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_probe_device</span><span class="s2">"</span><span class="w"> </span><span class="p">|</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">    </span>plutil<span class="w"> </span>-extract<span class="w"> </span>MountPoint<span class="w"> </span>raw<span class="w"> </span>-
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="k">)</span><span class="s2">"</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="nb">test</span><span class="w"> </span>-n<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_probe_device</span><span class="s2">"</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">test</span><span class="w"> </span>-n<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_probe_volume</span><span class="s2">"</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="nb">printf</span><span class="w"> </span><span class="s1">'root=%s\ndevice=%s\nvolume=%s\n'</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">  </span><span class="s2">"</span><span class="nv">$brainlayer_probe_root</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_probe_device</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_probe_volume</span><span class="s2">"</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>mdutil<span class="w"> </span>-s<span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_probe_volume</span><span class="s2">"</span>
+</code></pre></div>
+<p>Repeat this check for every migrated root. Do not infer an override root's Spotlight state from
+<code>mdutil -s /</code>: an override may reside on another volume. Every containing volume must report that
+indexing is enabled before the exclusion probe can be interpreted.</p>
+<p>Then create two unique directories containing fixed-suffix <code>.txt</code> files on the same volume in the
+same command: the exclusion probe beneath the marked root and a positive control in an unmarked
+sibling directory. A random suffix after <code>.txt</code> can prevent the text importer from claiming the
+file, so the filename itself must end in <code>.txt</code>. The control is mandatory. If Spotlight cannot find
+the control, the result is inconclusive even when it cannot find the excluded probe. Record that
+state, clean up the exact probes, and follow the safe restart path in Step 7; do not leave writers
+stopped because an evidence command failed.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nb">set</span><span class="w"> </span>-euo<span class="w"> </span>pipefail
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="nv">spotlight_probe_root</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>mktemp<span class="w"> </span>-d<span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">HOME</span><span class="p">:?</span><span class="si">}</span><span class="s2">/.local/share/brainlayer/spotlight-exclusion-live-probe.XXXXXX"</span><span class="k">)</span><span class="s2">"</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="nv">spotlight_probe_path</span><span class="o">=</span><span class="s2">"</span><span class="nv">$spotlight_probe_root</span><span class="s2">/spotlight-exclusion-live-probe.txt"</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="nv">spotlight_probe_name</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>basename<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_probe_path</span><span class="s2">"</span><span class="k">)</span><span class="s2">"</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="c1"># For an override on another volume, replace this with a preflight-verified searchable,</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="c1"># non-hidden directory on that same volume.</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="nv">spotlight_positive_control_parent</span><span class="o">=</span><span class="s2">"</span><span class="si">${</span><span class="nv">HOME</span><span class="p">:?</span><span class="si">}</span><span class="s2">/Documents"</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="nb">test</span><span class="w"> </span>-d<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_positive_control_parent</span><span class="s2">"</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">test</span><span class="w"> </span>!<span class="w"> </span>-L<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_positive_control_parent</span><span class="s2">"</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="nv">spotlight_positive_control_root</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>mktemp<span class="w"> </span>-d<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_positive_control_parent</span><span class="s2">/brainlayer-spotlight-positive-control.XXXXXX"</span><span class="k">)</span><span class="s2">"</span>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="nv">spotlight_positive_control_path</span><span class="o">=</span><span class="s2">"</span><span class="nv">$spotlight_positive_control_root</span><span class="s2">/spotlight-index-positive-control.txt"</span>
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="nv">spotlight_positive_control_name</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>basename<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_positive_control_path</span><span class="s2">"</span><span class="k">)</span><span class="s2">"</span>
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>cleanup_spotlight_probes<span class="o">()</span><span class="w"> </span><span class="o">{</span>
+<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="w">  </span>rm<span class="w"> </span>-f<span class="w"> </span>--<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_probe_path</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_positive_control_path</span><span class="s2">"</span>
+<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a><span class="w">  </span>rmdir<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_probe_root</span><span class="s2">"</span><span class="w"> </span><span class="m">2</span>&gt;/dev/null<span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+<a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a><span class="w">  </span>rmdir<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_positive_control_root</span><span class="s2">"</span><span class="w"> </span><span class="m">2</span>&gt;/dev/null<span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+<a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a><span class="o">}</span>
+<a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a><span class="nb">trap</span><span class="w"> </span>cleanup_spotlight_probes<span class="w"> </span>EXIT
+<a id="__codelineno-8-18" name="__codelineno-8-18" href="#__codelineno-8-18"></a>:<span class="w"> </span>&gt;<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_probe_path</span><span class="s2">"</span>
+<a id="__codelineno-8-19" name="__codelineno-8-19" href="#__codelineno-8-19"></a>:<span class="w"> </span>&gt;<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_positive_control_path</span><span class="s2">"</span>
+<a id="__codelineno-8-20" name="__codelineno-8-20" href="#__codelineno-8-20"></a><span class="nb">test</span><span class="w"> </span><span class="s2">"</span><span class="k">$(</span>stat<span class="w"> </span>-f<span class="w"> </span>%d<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_probe_root</span><span class="s2">"</span><span class="k">)</span><span class="s2">"</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"</span><span class="k">$(</span>stat<span class="w"> </span>-f<span class="w"> </span>%d<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_positive_control_root</span><span class="s2">"</span><span class="k">)</span><span class="s2">"</span>
+<a id="__codelineno-8-21" name="__codelineno-8-21" href="#__codelineno-8-21"></a>
+<a id="__codelineno-8-22" name="__codelineno-8-22" href="#__codelineno-8-22"></a><span class="c1"># A marker on any control ancestor would invalidate the positive control.</span>
+<a id="__codelineno-8-23" name="__codelineno-8-23" href="#__codelineno-8-23"></a><span class="nv">spotlight_control_ancestor</span><span class="o">=</span><span class="s2">"</span><span class="nv">$spotlight_positive_control_root</span><span class="s2">"</span>
+<a id="__codelineno-8-24" name="__codelineno-8-24" href="#__codelineno-8-24"></a><span class="k">while</span><span class="w"> </span>:<span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<a id="__codelineno-8-25" name="__codelineno-8-25" href="#__codelineno-8-25"></a><span class="w">  </span><span class="nb">test</span><span class="w"> </span>!<span class="w"> </span>-e<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_control_ancestor</span><span class="s2">/.metadata_never_index"</span>
+<a id="__codelineno-8-26" name="__codelineno-8-26" href="#__codelineno-8-26"></a><span class="w">  </span><span class="nv">spotlight_control_parent</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>dirname<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_control_ancestor</span><span class="s2">"</span><span class="k">)</span><span class="s2">"</span>
+<a id="__codelineno-8-27" name="__codelineno-8-27" href="#__codelineno-8-27"></a><span class="w">  </span><span class="nb">test</span><span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_control_parent</span><span class="s2">"</span><span class="w"> </span>!<span class="o">=</span><span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_control_ancestor</span><span class="s2">"</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="k">break</span>
+<a id="__codelineno-8-28" name="__codelineno-8-28" href="#__codelineno-8-28"></a><span class="w">  </span><span class="nv">spotlight_control_ancestor</span><span class="o">=</span><span class="s2">"</span><span class="nv">$spotlight_control_parent</span><span class="s2">"</span>
+<a id="__codelineno-8-29" name="__codelineno-8-29" href="#__codelineno-8-29"></a><span class="k">done</span>
+<a id="__codelineno-8-30" name="__codelineno-8-30" href="#__codelineno-8-30"></a>
+<a id="__codelineno-8-31" name="__codelineno-8-31" href="#__codelineno-8-31"></a><span class="nb">printf</span><span class="w"> </span><span class="s1">'BrainLayer Spotlight exclusion live probe %s\n'</span><span class="w"> </span><span class="s2">"</span><span class="k">$(</span>date<span class="w"> </span>-u<span class="w"> </span>+%Y-%m-%dT%H:%M:%SZ<span class="k">)</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-32" name="__codelineno-8-32" href="#__codelineno-8-32"></a><span class="w">  </span>&gt;<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_probe_path</span><span class="s2">"</span>
+<a id="__codelineno-8-33" name="__codelineno-8-33" href="#__codelineno-8-33"></a>cp<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_probe_path</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_positive_control_path</span><span class="s2">"</span>
+<a id="__codelineno-8-34" name="__codelineno-8-34" href="#__codelineno-8-34"></a><span class="nb">printf</span><span class="w"> </span><span class="s1">'probe_path=%s\nprobe_name=%s\ncontrol_path=%s\ncontrol_name=%s\n'</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-35" name="__codelineno-8-35" href="#__codelineno-8-35"></a><span class="w">  </span><span class="s2">"</span><span class="nv">$spotlight_probe_path</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_probe_name</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-36" name="__codelineno-8-36" href="#__codelineno-8-36"></a><span class="w">  </span><span class="s2">"</span><span class="nv">$spotlight_positive_control_path</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_positive_control_name</span><span class="s2">"</span>
+<a id="__codelineno-8-37" name="__codelineno-8-37" href="#__codelineno-8-37"></a>mdimport<span class="w"> </span>-t<span class="w"> </span>-d1<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_probe_path</span><span class="s2">"</span>
+<a id="__codelineno-8-38" name="__codelineno-8-38" href="#__codelineno-8-38"></a>mdimport<span class="w"> </span>-t<span class="w"> </span>-d1<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_positive_control_path</span><span class="s2">"</span>
+<a id="__codelineno-8-39" name="__codelineno-8-39" href="#__codelineno-8-39"></a>mdimport<span class="w"> </span>-i<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_probe_path</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_positive_control_path</span><span class="s2">"</span>
+<a id="__codelineno-8-40" name="__codelineno-8-40" href="#__codelineno-8-40"></a>
+<a id="__codelineno-8-41" name="__codelineno-8-41" href="#__codelineno-8-41"></a><span class="nv">spotlight_control_found</span><span class="o">=</span><span class="m">0</span>
+<a id="__codelineno-8-42" name="__codelineno-8-42" href="#__codelineno-8-42"></a><span class="k">for</span><span class="w"> </span>_<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">$(</span>jot<span class="w"> </span><span class="m">30</span><span class="k">)</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<a id="__codelineno-8-43" name="__codelineno-8-43" href="#__codelineno-8-43"></a><span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="nb">test</span><span class="w"> </span><span class="s2">"</span><span class="k">$(</span>mdls<span class="w"> </span>-raw<span class="w"> </span>-name<span class="w"> </span>kMDItemFSName<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_positive_control_path</span><span class="s2">"</span><span class="k">)</span><span class="s2">"</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-44" name="__codelineno-8-44" href="#__codelineno-8-44"></a><span class="w">      </span><span class="s2">"</span><span class="nv">$spotlight_positive_control_name</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-45" name="__codelineno-8-45" href="#__codelineno-8-45"></a><span class="w">    </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">test</span><span class="w"> </span><span class="s2">"</span><span class="k">$(</span>mdls<span class="w"> </span>-raw<span class="w"> </span>-name<span class="w"> </span>kMDItemContentType<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_positive_control_path</span><span class="s2">"</span><span class="k">)</span><span class="s2">"</span><span class="w"> </span>!<span class="o">=</span><span class="w"> </span><span class="s1">'(null)'</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-46" name="__codelineno-8-46" href="#__codelineno-8-46"></a><span class="w">    </span><span class="o">&amp;&amp;</span><span class="w"> </span>mdfind<span class="w"> </span>-onlyin<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_positive_control_root</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-47" name="__codelineno-8-47" href="#__codelineno-8-47"></a><span class="w">      </span><span class="s2">"kMDItemFSName == '</span><span class="nv">$spotlight_positive_control_name</span><span class="s2">'cd"</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-48" name="__codelineno-8-48" href="#__codelineno-8-48"></a><span class="w">      </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-Fxq<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_positive_control_path</span><span class="s2">"</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<a id="__codelineno-8-49" name="__codelineno-8-49" href="#__codelineno-8-49"></a><span class="w">    </span><span class="nv">spotlight_control_found</span><span class="o">=</span><span class="m">1</span>
+<a id="__codelineno-8-50" name="__codelineno-8-50" href="#__codelineno-8-50"></a><span class="w">    </span><span class="k">break</span>
+<a id="__codelineno-8-51" name="__codelineno-8-51" href="#__codelineno-8-51"></a><span class="w">  </span><span class="k">fi</span>
+<a id="__codelineno-8-52" name="__codelineno-8-52" href="#__codelineno-8-52"></a><span class="w">  </span>sleep<span class="w"> </span><span class="m">1</span>
+<a id="__codelineno-8-53" name="__codelineno-8-53" href="#__codelineno-8-53"></a><span class="k">done</span>
+<a id="__codelineno-8-54" name="__codelineno-8-54" href="#__codelineno-8-54"></a><span class="k">if</span><span class="w"> </span><span class="nb">test</span><span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_control_found</span><span class="s2">"</span><span class="w"> </span>-ne<span class="w"> </span><span class="m">1</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<a id="__codelineno-8-55" name="__codelineno-8-55" href="#__codelineno-8-55"></a><span class="w">  </span><span class="nb">printf</span><span class="w"> </span><span class="s1">'%s\n'</span><span class="w"> </span><span class="s1">'SPOTLIGHT PROBE INCONCLUSIVE: the unmarked positive control was not indexed'</span><span class="w"> </span>&gt;<span class="p">&amp;</span><span class="m">2</span>
+<a id="__codelineno-8-56" name="__codelineno-8-56" href="#__codelineno-8-56"></a><span class="w">  </span><span class="nb">printf</span><span class="w"> </span><span class="s1">'root=%s state=INCONCLUSIVE\n'</span><span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_probe_root</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-57" name="__codelineno-8-57" href="#__codelineno-8-57"></a><span class="w">    </span>&gt;&gt;<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_run_dir</span><span class="s2">/spotlight-probe-results"</span>
+<a id="__codelineno-8-58" name="__codelineno-8-58" href="#__codelineno-8-58"></a><span class="w">  </span>cleanup_spotlight_probes
+<a id="__codelineno-8-59" name="__codelineno-8-59" href="#__codelineno-8-59"></a><span class="w">  </span><span class="nb">trap</span><span class="w"> </span>-<span class="w"> </span>EXIT
+<a id="__codelineno-8-60" name="__codelineno-8-60" href="#__codelineno-8-60"></a><span class="k">else</span>
+<a id="__codelineno-8-61" name="__codelineno-8-61" href="#__codelineno-8-61"></a><span class="w">  </span>mdls<span class="w"> </span>-name<span class="w"> </span>kMDItemFSName<span class="w"> </span>-name<span class="w"> </span>kMDItemContentType<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-62" name="__codelineno-8-62" href="#__codelineno-8-62"></a><span class="w">    </span><span class="s2">"</span><span class="nv">$spotlight_probe_path</span><span class="s2">"</span>
+<a id="__codelineno-8-63" name="__codelineno-8-63" href="#__codelineno-8-63"></a><span class="w">  </span><span class="nv">spotlight_probe_fsname</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>mdls<span class="w"> </span>-raw<span class="w"> </span>-name<span class="w"> </span>kMDItemFSName<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_probe_path</span><span class="s2">"</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span><span class="k">)</span><span class="s2">"</span>
+<a id="__codelineno-8-64" name="__codelineno-8-64" href="#__codelineno-8-64"></a><span class="w">  </span><span class="nv">spotlight_probe_content_type</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>mdls<span class="w"> </span>-raw<span class="w"> </span>-name<span class="w"> </span>kMDItemContentType<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_probe_path</span><span class="s2">"</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span><span class="k">)</span><span class="s2">"</span>
+<a id="__codelineno-8-65" name="__codelineno-8-65" href="#__codelineno-8-65"></a><span class="w">  </span><span class="k">case</span><span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_probe_fsname</span><span class="s2">"</span><span class="w"> </span><span class="k">in</span>
+<a id="__codelineno-8-66" name="__codelineno-8-66" href="#__codelineno-8-66"></a><span class="w">    </span><span class="s1">''</span><span class="p">|</span><span class="s1">'(null)'</span><span class="o">)</span><span class="w"> </span><span class="p">;;</span>
+<a id="__codelineno-8-67" name="__codelineno-8-67" href="#__codelineno-8-67"></a><span class="w">    </span>*<span class="o">)</span><span class="w"> </span><span class="nb">printf</span><span class="w"> </span><span class="s1">'excluded probe unexpectedly has FSName metadata: %s\n'</span><span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_probe_fsname</span><span class="s2">"</span><span class="w"> </span>&gt;<span class="p">&amp;</span><span class="m">2</span><span class="p">;</span><span class="w"> </span><span class="nb">exit</span><span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="p">;;</span>
+<a id="__codelineno-8-68" name="__codelineno-8-68" href="#__codelineno-8-68"></a><span class="w">  </span><span class="k">esac</span>
+<a id="__codelineno-8-69" name="__codelineno-8-69" href="#__codelineno-8-69"></a><span class="w">  </span><span class="k">case</span><span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_probe_content_type</span><span class="s2">"</span><span class="w"> </span><span class="k">in</span>
+<a id="__codelineno-8-70" name="__codelineno-8-70" href="#__codelineno-8-70"></a><span class="w">    </span><span class="s1">''</span><span class="p">|</span><span class="s1">'(null)'</span><span class="o">)</span><span class="w"> </span><span class="p">;;</span>
+<a id="__codelineno-8-71" name="__codelineno-8-71" href="#__codelineno-8-71"></a><span class="w">    </span>*<span class="o">)</span><span class="w"> </span><span class="nb">printf</span><span class="w"> </span><span class="s1">'excluded probe unexpectedly has content-type metadata: %s\n'</span><span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_probe_content_type</span><span class="s2">"</span><span class="w"> </span>&gt;<span class="p">&amp;</span><span class="m">2</span><span class="p">;</span><span class="w"> </span><span class="nb">exit</span><span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="p">;;</span>
+<a id="__codelineno-8-72" name="__codelineno-8-72" href="#__codelineno-8-72"></a><span class="w">  </span><span class="k">esac</span>
+<a id="__codelineno-8-73" name="__codelineno-8-73" href="#__codelineno-8-73"></a><span class="w">  </span>!<span class="w"> </span>mdfind<span class="w"> </span>-onlyin<span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">HOME</span><span class="p">:?</span><span class="si">}</span><span class="s2">/.local/share/brainlayer"</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-74" name="__codelineno-8-74" href="#__codelineno-8-74"></a><span class="w">    </span><span class="s2">"kMDItemFSName == '</span><span class="nv">$spotlight_probe_name</span><span class="s2">'cd"</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-Fxq<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_probe_path</span><span class="s2">"</span>
+<a id="__codelineno-8-75" name="__codelineno-8-75" href="#__codelineno-8-75"></a><span class="w">  </span><span class="nb">printf</span><span class="w"> </span><span class="s1">'root=%s state=VERIFIED\n'</span><span class="w"> </span><span class="s2">"</span><span class="nv">$brainlayer_probe_root</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-76" name="__codelineno-8-76" href="#__codelineno-8-76"></a><span class="w">    </span>&gt;&gt;<span class="w"> </span><span class="s2">"</span><span class="nv">$spotlight_run_dir</span><span class="s2">/spotlight-probe-results"</span>
+<a id="__codelineno-8-77" name="__codelineno-8-77" href="#__codelineno-8-77"></a><span class="w">  </span>cleanup_spotlight_probes
+<a id="__codelineno-8-78" name="__codelineno-8-78" href="#__codelineno-8-78"></a><span class="w">  </span><span class="nb">trap</span><span class="w"> </span>-<span class="w"> </span>EXIT
+<a id="__codelineno-8-79" name="__codelineno-8-79" href="#__codelineno-8-79"></a><span class="k">fi</span>
+</code></pre></div>
+<p>Pass criteria: <code>mdutil</code> shows the containing volume is indexed; <code>mdimport -t</code> identifies the normal
+importer for both <code>.txt</code> files; after the same real <code>mdimport -i</code>, the unmarked positive control has
+non-null metadata and is returned at its exact path by <code>mdfind</code>, while the marked-root probe leaves
+both <code>mdls</code> attributes empty or <code>(null)</code> and is not returned at its exact path by <code>mdfind</code>.
+Repeat the real import/<code>mdls</code>/<code>mdfind</code> check once under each of the other three canonical marked
+roots and under the active override parent when distinct. Create the control beside each tested
+root and prove it is on the same containing volume. Remove only the exact probe files and empty
+control directories after saving evidence.</p>
+<p>If a marker-backed root receives metadata, keep BrainLayer stopped and add that exact root through
+System Settings → Spotlight → Search Privacy, then repeat the probe. Do not disable Spotlight for
+the whole volume.</p>
+<h3 id="7-restart-exactly-the-labels-recorded-in-preflight">7. Restart exactly the labels recorded in preflight</h3>
+<p>After Step 6 reaches either <code>VERIFIED</code> or <code>INCONCLUSIVE</code>, bootstrap the recorded launchd plist set,
+then verify each expected label is loaded and each daemon has a live PID. Do not restore a label
+that was deliberately disabled before the window. Restart is the safe recovery path in both states:
+an inconclusive Spotlight control must not strand the fleet in a stopped state.</p>
+<p>If any root is <code>INCONCLUSIVE</code>, record the exclusion as <strong>UNPROVEN</strong>, omit the store/search completion
+probe below, and schedule a new dedicated stop window with Full Disk Access corrected or Search
+Privacy configured for the exact root. Do not call the migration complete. If every root is
+<code>VERIFIED</code>, run the live completion probes below.</p>
+<p>Run a real request through a fresh installed MCP client session (not an in-process Python test):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>brain_store(content="spotlight migration live probe", project="brainlayer-maintenance")
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>brain_search(query="spotlight migration live probe", project="brainlayer-maintenance")
+</code></pre></div>
+<p>Then run the CLI status gates:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>brainlayer<span class="w"> </span>status<span class="w"> </span>--json
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>brainlayer<span class="w"> </span>doctor<span class="w"> </span>--json
+</code></pre></div>
+<h2 id="rollback">Rollback</h2>
+<p>Rollback is allowed only before writers restart. Keep all processes stopped. For each root that
+existed in the writer-stop baseline, restore staging to canonical when only staging exists, stop on
+both-exist, and treat both-absent as data loss. Once canonical exists and staging is absent,
+atomically rename canonical to staging. Consult the writer-stop marker record and remove
+<code>.metadata_never_index</code> only when this execution created it; preserve every marker that was already
+present. Then atomically rename the same tree back to canonical. This preserves the original root
+metadata.</p>
+<p>For an optional root recorded as absent at writer-stop, both-absent is the successfully restored
+state and must stay absent. If the migration created its canonical tree, require staging to be
+absent and prove the tree contains only the marker plus known setup-created empty directories.
+Remove only the exact execution-created marker file, then remove those known empty directories and
+the root with exact, non-recursive <code>rmdir</code> operations; stop on any unexpected or nonempty entry.
+Never apply the forward absent/absent rule during rollback.</p>
+<p>Verify DB/WAL/SHM and queue counts before bootstrapping only the preflight label set. Never
+overwrite or merge paths.</p>
+<h2 id="completion-record">Completion record</h2>
+<p>Append the exact installed version/head, pre/post DB and WAL sizes, restored labels, real
+store/search output, doctor output, all four canonical Spotlight probe results, and the conditional
+override probe result to the maintenance source task. Only the live-window operator adds the
+separate live-migration completion marker.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+  <div class="ecosystem-links">
+    <a href="https://brainlayer.etanheyman.com">BrainLayer</a>
+    <span class="sep">/</span>
+    <a href="https://voicelayer.etanheyman.com">VoiceLayer</a>
+    <span class="sep">/</span>
+    <a href="https://cmuxlayer.etanheyman.com">cmuxLayer</a>
+    <span class="sep">/</span>
+    <a href="https://github.com/EtanHey">Golems</a>
+  </div>
+  
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+  
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  <script>
+    // Inject back-to-site link into the header, after the title
+    (function() {
+      var title = document.querySelector('.md-header__title');
+      if (!title) return;
+      var link = document.createElement('a');
+      link.href = 'https://brainlayer.etanheyman.com';
+      link.className = 'header-back';
+      link.innerHTML = '&larr; Site';
+      title.after(link);
+    })();
+  </script>
+
+  </body>
+</html>
