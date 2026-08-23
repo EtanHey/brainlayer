@@ -84,6 +84,9 @@ def _run_build_script(
     env.pop("BRAINBAR_APP_DIR", None)
     env["HOME"] = str(home)
     env["BRAINBAR_CANONICAL_REPO_ROOT"] = str(canonical_root)
+    # Default every test to "Homebrew does not manage BrainBar here" so the
+    # brew-managed refusal guard cannot depend on the developer's real machine.
+    env["BRAINBAR_BREW_BIN"] = str(repo / "no-such-brew")
     if extra_env:
         env.update(extra_env)
     cmd = ["bash", str(script)]
@@ -572,6 +575,7 @@ def test_build_app_refuses_to_clobber_notarized_resident_with_unnotarized_rebuil
             **_fake_build_env(tmp_path, tool_dir, bin_dir),
             "BRAINBAR_APP_DIR": f"{resident_app}/",
             "BRAINBAR_PROTECTED_APPLICATIONS_DIR": str(resident_apps),
+            "BRAINBAR_BREW_BIN": str(_brew_stub(tmp_path, manages=False)),
             "BRAINBAR_FAKE_SPCTL_LOG": str(spctl_log),
         },
     )
@@ -579,7 +583,7 @@ def test_build_app_refuses_to_clobber_notarized_resident_with_unnotarized_rebuil
     assert result.returncode == 1
     assert f"Refusing to replace notarized {resident_app} with an unnotarized local rebuild" in result.stderr
     assert "BRAINBAR_NOTARY_PROFILE=notary-layers" in result.stderr
-    assert "brew reinstall --cask etanhey/layers/brainbar" in result.stderr
+    assert "bash scripts/brainlayer-update-brainbar.sh" in result.stderr
     spctl_calls = spctl_log.read_text(encoding="utf-8")
     assert "--assess --type execute" in spctl_calls
     assert str(resident_app) in spctl_calls
@@ -605,6 +609,7 @@ def test_build_app_refuses_equivalent_protected_resident_path(tmp_path: Path) ->
             **_fake_build_env(tmp_path, tool_dir, bin_dir),
             "BRAINBAR_APP_DIR": str(linked_apps / "BrainBar.app"),
             "BRAINBAR_PROTECTED_APPLICATIONS_DIR": str(resident_apps),
+            "BRAINBAR_BREW_BIN": str(_brew_stub(tmp_path, manages=False)),
             "BRAINBAR_FAKE_SPCTL_LOG": str(spctl_log),
         },
     )
@@ -638,6 +643,7 @@ def test_build_app_keeps_notarized_resident_when_notarization_fails(tmp_path: Pa
             **_fake_build_env(tmp_path, tool_dir, bin_dir),
             "BRAINBAR_APP_DIR": str(resident_app),
             "BRAINBAR_PROTECTED_APPLICATIONS_DIR": str(resident_apps),
+            "BRAINBAR_BREW_BIN": str(_brew_stub(tmp_path, manages=False)),
             "BRAINBAR_NOTARY_PROFILE": "notary-layers",
             "BRAINBAR_FAKE_NOTARYTOOL_FAIL": "1",
         },
@@ -665,6 +671,7 @@ def test_build_app_allows_notarized_resident_rebuild_when_notary_profile_is_set(
             **_fake_build_env(tmp_path, tool_dir, bin_dir),
             "BRAINBAR_APP_DIR": f"{resident_app}/",
             "BRAINBAR_PROTECTED_APPLICATIONS_DIR": str(resident_apps),
+            "BRAINBAR_BREW_BIN": str(_brew_stub(tmp_path, manages=False)),
             "BRAINBAR_NOTARY_PROFILE": "notary-layers",
         },
     )
@@ -1231,3 +1238,157 @@ def test_brainbar_package_declares_separate_ui_and_daemon_products() -> None:
     assert '.executable(name: "BrainBar", targets: ["BrainBar"])' in content
     assert '.executable(name: "BrainBarDaemon", targets: ["BrainBarDaemon"])' in content
     assert 'path: "Sources/BrainBarDaemon"' in content
+
+
+# --- drift-proof contract rule 7: stop the drift at its source ------------------------------
+
+
+def _brew_stub(
+    tmp_path: Path,
+    *,
+    manages: bool,
+    log: Path | None = None,
+    query_error: bool = False,
+) -> Path:
+    stub = tmp_path / ("brew-manages" if manages else "brew-clean")
+    log_line = f"printf '%s\\n' \"$*\" >> {log}\n" if log else ""
+    list_output = "printf 'brainbar\\n'" if manages else "true"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        + log_line
+        + f"""if [[ "$*" == "list --cask" ]]; then
+  {"exit 42" if query_error else f"{list_output}; exit 0"}
+fi
+if [[ "$*" == "list --cask brainbar" ]]; then
+  {"exit 42" if query_error else f"exit {0 if manages else 1}"}
+fi
+exit 1
+""",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    return stub
+
+
+def test_build_app_refuses_to_overwrite_a_brew_managed_resident_app(tmp_path: Path) -> None:
+    """VoiceBar's root cause: building in place over a brew-managed app creates silent drift."""
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    resident_apps = tmp_path / "Applications"
+    resident_app = resident_apps / "BrainBar.app"
+    resident_app.mkdir(parents=True)
+    brew_log = tmp_path / "brew.log"
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+        extra_env={
+            "BRAINBAR_APP_DIR": str(resident_app),
+            "BRAINBAR_PROTECTED_APPLICATIONS_DIR": str(resident_apps),
+            "BRAINBAR_BREW_BIN": str(_brew_stub(tmp_path, manages=True, log=brew_log)),
+        },
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert f"refusing to build over the Homebrew-managed app at {resident_app}" in result.stderr
+    assert "bash scripts/brainlayer-update-brainbar.sh" in result.stderr
+    assert "BRAINBAR_APP_DIR=" in result.stderr
+    assert "list --cask" in brew_log.read_text(encoding="utf-8")
+
+
+def test_build_app_allows_the_resident_path_when_brew_does_not_manage_it(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    resident_apps = tmp_path / "Applications"
+    resident_apps.mkdir(parents=True)
+    resident_app = resident_apps / "BrainBar.app"
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+        extra_env={
+            "BRAINBAR_APP_DIR": str(resident_app),
+            "BRAINBAR_PROTECTED_APPLICATIONS_DIR": str(resident_apps),
+            "BRAINBAR_BREW_BIN": str(_brew_stub(tmp_path, manages=False)),
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Dry run OK" in result.stdout
+    assert "refusing to build over the Homebrew-managed app" not in result.stderr
+
+
+def test_build_app_does_not_consult_brew_for_non_resident_paths(tmp_path: Path) -> None:
+    """A ~/Applications build is never brew-managed, so it must not be blocked."""
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    resident_apps = tmp_path / "Applications"
+    resident_apps.mkdir(parents=True)
+    brew_log = tmp_path / "brew.log"
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+        extra_env={
+            "BRAINBAR_PROTECTED_APPLICATIONS_DIR": str(resident_apps),
+            "BRAINBAR_BREW_BIN": str(_brew_stub(tmp_path, manages=True, log=brew_log)),
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert str(home / "Applications" / "BrainBar.app") in result.stdout
+    assert not brew_log.exists(), "consulted brew for a path Homebrew can never own"
+
+
+def test_build_app_fails_closed_when_brew_inventory_query_errors(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    resident_apps = tmp_path / "Applications"
+    resident_app = resident_apps / "BrainBar.app"
+    resident_app.mkdir(parents=True)
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+        extra_env={
+            "BRAINBAR_APP_DIR": str(resident_app),
+            "BRAINBAR_PROTECTED_APPLICATIONS_DIR": str(resident_apps),
+            "BRAINBAR_BREW_BIN": str(_brew_stub(tmp_path, manages=False, query_error=True)),
+        },
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "could not determine whether Homebrew manages" in result.stderr
+
+
+def test_build_app_fails_closed_for_unusable_explicit_brew_path(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    resident_apps = tmp_path / "Applications"
+    resident_app = resident_apps / "BrainBar.app"
+    resident_app.mkdir(parents=True)
+    missing_brew = tmp_path / "missing-brew"
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+        extra_env={
+            "BRAINBAR_APP_DIR": str(resident_app),
+            "BRAINBAR_PROTECTED_APPLICATIONS_DIR": str(resident_apps),
+            "BRAINBAR_BREW_BIN": str(missing_brew),
+        },
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert str(missing_brew) in result.stderr
+    assert "could not determine whether Homebrew manages" in result.stderr

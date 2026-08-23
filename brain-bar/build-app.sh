@@ -59,6 +59,11 @@ BRAINBAR_NOTARY_KEY="${BRAINBAR_NOTARY_KEY:-}"
 BRAINBAR_NOTARY_KEY_ID="${BRAINBAR_NOTARY_KEY_ID:-}"
 BRAINBAR_NOTARY_ISSUER="${BRAINBAR_NOTARY_ISSUER:-}"
 BRAINBAR_PROTECTED_APPLICATIONS_DIR="${BRAINBAR_PROTECTED_APPLICATIONS_DIR:-/Applications}"
+# Rule 5 of the drift-proof contract: bare `brew` is not on a non-interactive ssh PATH.
+# Set BRAINBAR_BREW_BIN explicitly to pin (or, with a bogus path, to disable) the lookup.
+BRAINBAR_BREW_BIN="${BRAINBAR_BREW_BIN-}"
+BRAINBAR_CASK_NAME="${BRAINBAR_CASK_NAME:-brainbar}"
+
 UI_PLIST_LABEL="com.brainlayer.brainbar"
 DAEMON_PLIST_LABEL="com.brainlayer.brainbar-daemon"
 UI_PLIST_FILENAME="$UI_PLIST_LABEL.plist"
@@ -141,6 +146,71 @@ app_dir_targets_protected_resident() {
     [ "$(canonical_compare_path "$APP_DIR")" = "$(canonical_compare_path "$(protected_resident_app_path)")" ]
 }
 
+brew_bin() {
+    # An explicit setting is authoritative, but an unusable value is uncertainty,
+    # not evidence that the protected resident app is unmanaged.
+    if [ -n "$BRAINBAR_BREW_BIN" ]; then
+        if [ -x "$BRAINBAR_BREW_BIN" ]; then
+            printf '%s\n' "$BRAINBAR_BREW_BIN"
+            return 0
+        fi
+        return 2
+    fi
+    if [ -x /opt/homebrew/bin/brew ]; then
+        printf '%s\n' /opt/homebrew/bin/brew
+        return 0
+    fi
+    command -v brew 2>/dev/null || return 2
+}
+
+brew_manages_cask() {
+    local brew casks cask
+    brew="$(brew_bin)" || return 2
+    [ -n "$brew" ] || return 2
+    casks="$("$brew" list --cask 2>/dev/null)" || return 2
+    while IFS= read -r cask; do
+        [ "$cask" = "$BRAINBAR_CASK_NAME" ] && return 0
+    done <<< "$casks"
+    return 1
+}
+
+# Contract rule 7 -- stop the drift at its source.
+#
+# VoiceBar lost eight weeks to exactly this: build-app.sh wrote a fresh bundle into
+# /Applications in place, brew was never told, and its ledger kept claiming the old
+# version. The next `brew upgrade --cask` then ran the OLD version's uninstall recipe
+# (`delete:` -> `sudo rm`), which has no TTY over ssh, aborted, and destroyed the
+# LaunchAgents without ever reinstalling.
+#
+# So: refuse to write over a brew-managed BrainBar.app. Never re-register silently --
+# a build script that mutates Homebrew's ledger is a second source of truth.
+refuse_brew_managed_app_dir() {
+    local brew_status
+    app_dir_targets_protected_resident || return 0
+    if brew_manages_cask; then
+        brew_status=0
+    else
+        brew_status=$?
+    fi
+    if [ "$brew_status" -eq 1 ]; then
+        return 0
+    fi
+    if [ "$brew_status" -ne 0 ]; then
+        echo "[build-app] ERROR: could not determine whether Homebrew manages $BRAINBAR_CASK_NAME" >&2
+        echo "[build-app] using ${BRAINBAR_BREW_BIN:-brew discovery}; refusing to overwrite $APP_DIR." >&2
+        echo "[build-app] Build elsewhere with BRAINBAR_APP_DIR=\"\$HOME/Applications/BrainBar.app\"." >&2
+        exit 1
+    fi
+
+    echo "[build-app] ERROR: refusing to build over the Homebrew-managed app at $APP_DIR" >&2
+    echo "[build-app] Homebrew has $BRAINBAR_CASK_NAME registered; writing here in place creates" >&2
+    echo "[build-app] silent drift, and the next 'brew upgrade --cask' destroys the install." >&2
+    echo "[build-app] Do one of these instead:" >&2
+    echo "[build-app]   * update from the cask:  bash scripts/brainlayer-update-brainbar.sh" >&2
+    echo "[build-app]   * build somewhere else:  BRAINBAR_APP_DIR=\"\$HOME/Applications/BrainBar.app\" bash brain-bar/build-app.sh" >&2
+    exit 1
+}
+
 notary_credentials_available() {
     if [ -n "$BRAINBAR_NOTARY_PROFILE" ]; then
         return 0
@@ -173,7 +243,10 @@ protect_notarized_resident_before_rebuild() {
     fi
 
     echo "[build-app] ERROR: Refusing to replace notarized $(protected_resident_app_path) with an unnotarized local rebuild." >&2
-    echo "[build-app] Set BRAINBAR_NOTARY_PROFILE=notary-layers or use Homebrew: brew reinstall --cask etanhey/layers/brainbar" >&2
+    echo "[build-app] Set BRAINBAR_NOTARY_PROFILE=notary-layers or install from the cask:" >&2
+    echo "[build-app]   bash scripts/brainlayer-update-brainbar.sh" >&2
+    echo "[build-app] (Do not run 'brew reinstall'/'brew upgrade' by hand: both execute the OLD" >&2
+    echo "[build-app]  installed version's uninstall recipe, which can shell to sudo and abort.)" >&2
     return 1
 }
 
@@ -402,6 +475,7 @@ else
     APP_DIR="${BRAINBAR_APP_DIR:-$HOME/Applications/BrainBar.app}"
 fi
 normalize_app_dir_path
+refuse_brew_managed_app_dir
 
 DIRTY_STATUS="$(git -C "$CURRENT_REPO_ROOT" status --porcelain --untracked-files=all)"
 if [ -n "$DIRTY_STATUS" ] && [ "$FORCE_DIRTY" -ne 1 ]; then
