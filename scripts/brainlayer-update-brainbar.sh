@@ -359,7 +359,7 @@ verify() {
 
     path_cli="$(command -v brainlayer 2>/dev/null || true)"
     if [[ -z "$path_cli" ]]; then
-        check "brainlayer PATH" 0 "<not on PATH> (expected $canonical_cli)"
+        log "  [WARN] brainlayer PATH: <not on PATH>; add ${canonical_cli%/*} to PATH to invoke brainlayer by name"
     elif [[ "$path_cli" != "$canonical_cli" ]]; then
         check "brainlayer PATH" 0 "$path_cli shadows $canonical_cli"
     else

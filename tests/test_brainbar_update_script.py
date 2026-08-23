@@ -10,7 +10,9 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import socket
 import subprocess
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -378,7 +380,7 @@ def test_ownership_guard_does_not_depend_on_bsd_or_gnu_stat() -> None:
 
 
 def test_script_never_invokes_sudo(tmp_path: Path) -> None:
-    """Behavioral, not grep: a logging `sudo` stub must never be called, from any state."""
+    """Future tripwire: the updater itself must not call a logging `sudo` stub."""
     for label, registered, installed in (
         ("unmanaged", None, "1.5.8"),
         ("stale-ledger", "1.5.2", "1.5.8"),
@@ -508,19 +510,26 @@ def test_verify_rejects_a_non_homebrew_brainlayer_shadow_on_path(tmp_path: Path)
     assert f"[FAIL] brainlayer PATH: {shadow_cli} shadows {h.bin_dir / 'brainlayer'}" in result.stdout
 
 
-def test_verify_rejects_non_login_path_without_homebrew_cli(tmp_path: Path) -> None:
+def test_verify_warns_but_passes_non_login_path_without_homebrew_cli(tmp_path: Path) -> None:
     h = _Harness(tmp_path)
     h.install_stubs(offered="1.5.8", registered="1.5.8", formula="1.5.8")
     _make_app(h.app_path, "1.5.8")
+    non_login_bin = tmp_path / "non-login-bin"
+    _write_exec(non_login_bin / "pgrep", "#!/usr/bin/env bash\nexit 0\n")
 
-    result = h.run(
-        "--verify-only",
-        BRAINLAYER_UPDATE_SKIP_VERIFY="0",
-        PATH=f"/usr/bin{os.pathsep}/bin",
-    )
+    with tempfile.TemporaryDirectory(prefix="pr729-", dir="/tmp") as socket_dir:
+        socket_path = Path(socket_dir) / "brainbar.sock"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as brainbar_socket:
+            brainbar_socket.bind(str(socket_path))
+            result = h.run(
+                "--verify-only",
+                BRAINLAYER_UPDATE_SKIP_VERIFY="0",
+                BRAINLAYER_UPDATE_SOCKET_PATH=str(socket_path),
+                PATH=f"{non_login_bin}{os.pathsep}/usr/bin{os.pathsep}/bin",
+            )
 
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert f"[FAIL] brainlayer PATH: <not on PATH> (expected {h.bin_dir / 'brainlayer'})" in result.stdout
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"[WARN] brainlayer PATH: <not on PATH>; add {h.bin_dir} to PATH" in result.stdout
 
 
 def test_verify_checks_every_contracted_signal() -> None:
