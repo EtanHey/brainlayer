@@ -53,8 +53,9 @@ What it does:
      newly tapped one. A pre-fix 'delete:' stanza there shells to 'sudo rm', which
      has no TTY over ssh, aborts, and destroys the LaunchAgents without reinstalling.
   4. Refuse BEFORE touching anything if any path we would remove is root-owned.
-  5. Verify at the end: app version, cask version, formula, process, launchd
-     services, socket. Exit non-zero and say why if any of it is red.
+  5. Verify at the end: app version, cask version, formula, canonical CLI,
+     PATH resolution, process, launchd services, socket. Exit non-zero and say
+     why if any of it is red.
 
 recovery-no-sudo:
   If brew ever fails mid-uninstall on root-owned leftovers, do not rebuild locally.
@@ -143,7 +144,8 @@ update_tap() {
     fi
     # The tap has no upstream tracking branch, so a bare `git pull` fails. Be explicit.
     if ! run_cmd "$GIT_BIN" -C "$TAP_DIR" pull --ff-only origin "$TAP_BRANCH"; then
-        warn "Could not fast-forward $TAP_DIR from origin/$TAP_BRANCH; continuing with the tap as-is."
+        err "Could not fast-forward $TAP_DIR from origin/$TAP_BRANCH; aborting before using stale metadata."
+        return 1
     fi
 }
 
@@ -223,15 +225,28 @@ OFFERED_VERSION=""
 DRIFT_KIND=""   # none | unmanaged | stale-ledger | missing | outdated
 
 detect_state() {
+    local registered_app_version offered_app_version
     APP_VERSION="$(app_version || true)"
     REGISTERED_VERSION="$(registered_version || true)"
     OFFERED_VERSION="$(offered_version || true)"
+
+    if [[ -d "$APP_PATH" && -z "$APP_VERSION" ]]; then
+        if [[ "$VERIFY_ONLY" -eq 0 && "$DRY_RUN" -eq 0 && ! -O "$APP_PATH" ]]; then
+            assert_no_root_owned_paths
+        fi
+        err "Could not read CFBundleShortVersionString from $APP_PATH/Contents/Info.plist."
+        err "Refusing to classify or replace a present app whose version is unknown."
+        exit 4
+    fi
 
     if [[ -z "$OFFERED_VERSION" ]]; then
         err "Could not read the offered version for $CASK_TOKEN from the tap."
         err "Is the tap present? Try: $BREW_BIN tap $TAP_NAME"
         exit 4
     fi
+
+    registered_app_version="${REGISTERED_VERSION%%,*}"
+    offered_app_version="${OFFERED_VERSION%%,*}"
 
     if [[ -z "$APP_VERSION" && -z "$REGISTERED_VERSION" ]]; then
         DRIFT_KIND="missing"
@@ -240,9 +255,9 @@ detect_state() {
         DRIFT_KIND="unmanaged"
     elif [[ -z "$APP_VERSION" && -n "$REGISTERED_VERSION" ]]; then
         DRIFT_KIND="stale-ledger"
-    elif [[ "$APP_VERSION" != "$REGISTERED_VERSION" ]]; then
+    elif [[ "$APP_VERSION" != "$registered_app_version" ]]; then
         DRIFT_KIND="stale-ledger"
-    elif [[ "$APP_VERSION" != "$OFFERED_VERSION" ]]; then
+    elif [[ "$REGISTERED_VERSION" != "$OFFERED_VERSION" || "$APP_VERSION" != "$offered_app_version" ]]; then
         DRIFT_KIND="outdated"
     else
         DRIFT_KIND="none"
@@ -266,22 +281,16 @@ quarantine_stale_registration() {
     caskroom="$(caskroom_dir)"
     [[ -e "$caskroom" ]] || return 0
     stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-    dest="$QUARANTINE_ROOT/$stamp"
     log "Clearing the stale Caskroom registration (user-owned mv, fully reversible)."
-    run_cmd mkdir -p "$dest"
+    run_cmd mkdir -p "$QUARANTINE_ROOT"
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        dest="$QUARANTINE_ROOT/$stamp.XXXXXX"
+    else
+        log "+ mktemp -d $QUARANTINE_ROOT/$stamp.XXXXXX"
+        dest="$(mktemp -d "$QUARANTINE_ROOT/$stamp.XXXXXX")"
+    fi
     run_cmd mv "$caskroom" "$dest/"
     log "  quarantined -> $dest/$CASK_NAME"
-}
-
-bootout_services() {
-    local domain label
-    domain="gui/$(id -u)"
-    for label in "$UI_LABEL" "$DAEMON_LABEL"; do
-        log "+ $LAUNCHCTL_BIN bootout $domain/$label (best effort)"
-        if [[ "$DRY_RUN" -eq 0 ]]; then
-            "$LAUNCHCTL_BIN" bootout "$domain/$label" >/dev/null 2>&1 || true
-        fi
-    done
 }
 
 adopt_install() {
@@ -302,7 +311,8 @@ apply_update() {
         unmanaged|stale-ledger|outdated)
             log "Drift detected ($DRIFT_KIND). Adopting $OFFERED_VERSION without running any uninstall recipe."
             quarantine_stale_registration
-            bootout_services
+            # Keep the current services alive until installation succeeds. The cask's
+            # postflight bootouts, bootstraps, and kickstarts both services atomically.
             adopt_install
             ;;
         *)
@@ -325,20 +335,36 @@ check() {
 }
 
 verify() {
-    local v ok
+    local v ok formula_version canonical_cli canonical_version path_cli expected_app_version
     log "Verification:"
 
+    expected_app_version="${OFFERED_VERSION%%,*}"
     v="$(app_version || true)"
-    [[ "$v" = "$OFFERED_VERSION" ]] && ok=1 || ok=0
-    check "app version" "$ok" "${v:-<absent>} (expected $OFFERED_VERSION)"
+    [[ "$v" = "$expected_app_version" ]] && ok=1 || ok=0
+    check "app version" "$ok" "${v:-<absent>} (expected $expected_app_version)"
 
     v="$(registered_version || true)"
     [[ "$v" = "$OFFERED_VERSION" ]] && ok=1 || ok=0
     check "cask version" "$ok" "${v:-<not registered>} (expected $OFFERED_VERSION)"
 
-    v="$("$BREW_BIN" list --versions brainlayer 2>/dev/null | awk '{print $2}')"
-    [[ -n "$v" ]] && ok=1 || ok=0
-    check "brainlayer formula" "$ok" "${v:-<not installed>}"
+    formula_version="$("$BREW_BIN" list --versions brainlayer 2>/dev/null | awk '{print $2}' || true)"
+    [[ -n "$formula_version" ]] && ok=1 || ok=0
+    check "brainlayer formula" "$ok" "${formula_version:-<not installed>}"
+
+    canonical_cli="${BREW_BIN%/*}/brainlayer"
+    canonical_version="$("$canonical_cli" --version 2>/dev/null | awk 'NF {print $NF; exit}' || true)"
+    [[ -n "$formula_version" && "$canonical_version" = "$formula_version" ]] && ok=1 || ok=0
+    check "canonical brainlayer CLI" "$ok" \
+        "$canonical_cli ${canonical_version:-<missing>} (expected ${formula_version:-installed formula version})"
+
+    path_cli="$(command -v brainlayer 2>/dev/null || true)"
+    if [[ -z "$path_cli" ]]; then
+        check "brainlayer PATH" 0 "<not on PATH> (expected $canonical_cli)"
+    elif [[ "$path_cli" != "$canonical_cli" ]]; then
+        check "brainlayer PATH" 0 "$path_cli shadows $canonical_cli"
+    else
+        check "brainlayer PATH" 1 "$path_cli"
+    fi
 
     if pgrep -x BrainBar >/dev/null 2>&1; then ok=1; else ok=0; fi
     check "BrainBar process" "$ok" "$([[ "$ok" = 1 ]] && printf running || printf 'not running')"

@@ -147,25 +147,31 @@ app_dir_targets_protected_resident() {
 }
 
 brew_bin() {
-    # An explicit setting is authoritative: a non-executable value means "no brew here".
+    # An explicit setting is authoritative, but an unusable value is uncertainty,
+    # not evidence that the protected resident app is unmanaged.
     if [ -n "$BRAINBAR_BREW_BIN" ]; then
         if [ -x "$BRAINBAR_BREW_BIN" ]; then
             printf '%s\n' "$BRAINBAR_BREW_BIN"
+            return 0
         fi
-        return 0
+        return 2
     fi
     if [ -x /opt/homebrew/bin/brew ]; then
         printf '%s\n' /opt/homebrew/bin/brew
         return 0
     fi
-    command -v brew 2>/dev/null || true
+    command -v brew 2>/dev/null || return 2
 }
 
 brew_manages_cask() {
-    local brew
-    brew="$(brew_bin)"
-    [ -n "$brew" ] || return 1
-    "$brew" list --cask "$BRAINBAR_CASK_NAME" >/dev/null 2>&1
+    local brew casks cask
+    brew="$(brew_bin)" || return 2
+    [ -n "$brew" ] || return 2
+    casks="$("$brew" list --cask 2>/dev/null)" || return 2
+    while IFS= read -r cask; do
+        [ "$cask" = "$BRAINBAR_CASK_NAME" ] && return 0
+    done <<< "$casks"
+    return 1
 }
 
 # Contract rule 7 -- stop the drift at its source.
@@ -179,8 +185,22 @@ brew_manages_cask() {
 # So: refuse to write over a brew-managed BrainBar.app. Never re-register silently --
 # a build script that mutates Homebrew's ledger is a second source of truth.
 refuse_brew_managed_app_dir() {
+    local brew_status
     app_dir_targets_protected_resident || return 0
-    brew_manages_cask || return 0
+    if brew_manages_cask; then
+        brew_status=0
+    else
+        brew_status=$?
+    fi
+    if [ "$brew_status" -eq 1 ]; then
+        return 0
+    fi
+    if [ "$brew_status" -ne 0 ]; then
+        echo "[build-app] ERROR: could not determine whether Homebrew manages $BRAINBAR_CASK_NAME" >&2
+        echo "[build-app] using ${BRAINBAR_BREW_BIN:-brew discovery}; refusing to overwrite $APP_DIR." >&2
+        echo "[build-app] Build elsewhere with BRAINBAR_APP_DIR=\"\$HOME/Applications/BrainBar.app\"." >&2
+        exit 1
+    fi
 
     echo "[build-app] ERROR: refusing to build over the Homebrew-managed app at $APP_DIR" >&2
     echo "[build-app] Homebrew has $BRAINBAR_CASK_NAME registered; writing here in place creates" >&2

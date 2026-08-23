@@ -48,14 +48,24 @@ class _Harness:
         self.app_path = tmp_path / "Applications" / "BrainBar.app"
         self.brew_log = tmp_path / "brew.log"
         self.git_log = tmp_path / "git.log"
+        self.launchctl_log = tmp_path / "launchctl.log"
         self.sudo_log = tmp_path / "sudo.log"
         self.bin_dir = tmp_path / "bin"
         self.tap_dir = tmp_path / "tap"
         (self.tap_dir / ".git").mkdir(parents=True, exist_ok=True)
 
-    def install_stubs(self, *, offered: str, registered: str | None) -> None:
+    def install_stubs(
+        self,
+        *,
+        offered: str,
+        registered: str | None,
+        formula: str | None = "0.1.0",
+        install_exit: int = 0,
+        git_exit: int = 0,
+    ) -> None:
         info = json.dumps({"casks": [{"version": offered}]})
         listed_cmd = "printf '%s\\n' " + repr(f"brainbar {registered}") if registered else "true"
+        formula_cmd = "printf '%s\\n' " + repr(f"brainlayer {formula}") if formula else "exit 1"
         _write_exec(
             self.bin_dir / "brew",
             f"""#!/usr/bin/env bash
@@ -67,19 +77,28 @@ esac
 case "$*" in
   "list --versions --cask brainbar") {listed_cmd}; exit 0 ;;
   "info --cask --json=v2 {CASK_TOKEN}") printf '%s\\n' {info!r}; exit 0 ;;
-  "list --versions brainlayer") printf 'brainlayer 0.1.0\\n'; exit 0 ;;
+  "list --versions brainlayer") {formula_cmd}; exit 0 ;;
+  "install --cask --force {CASK_TOKEN}") exit {install_exit} ;;
 esac
 exit 0
 """,
         )
+        if formula:
+            _write_exec(
+                self.bin_dir / "brainlayer",
+                f"#!/usr/bin/env bash\nprintf 'brainlayer {formula}\\n'\n",
+            )
         _write_exec(
             self.bin_dir / "git",
             f"""#!/usr/bin/env bash
 printf '%s\\n' "$*" >> {self.git_log!s}
-exit 0
+exit {git_exit}
 """,
         )
-        _write_exec(self.bin_dir / "launchctl", "#!/usr/bin/env bash\nexit 0\n")
+        _write_exec(
+            self.bin_dir / "launchctl",
+            f"#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> {self.launchctl_log!s}\nexit 0\n",
+        )
         _write_exec(
             self.bin_dir / "defaults",
             """#!/usr/bin/env bash
@@ -115,6 +134,7 @@ exit 1
             "BRAINLAYER_UPDATE_BRAINBAR_APP": str(self.app_path),
             "BRAINLAYER_UPDATE_TAP_DIR": str(self.tap_dir),
             "BRAINLAYER_UPDATE_QUARANTINE_DIR": str(self.quarantine),
+            "BRAINLAYER_UPDATE_SOCKET_PATH": str(self.tmp_path / "brainbar.sock"),
             "BRAINLAYER_UPDATE_SKIP_VERIFY": "1",
         }
         env.update(extra)
@@ -141,6 +161,10 @@ exit 1
     @property
     def sudo_calls(self) -> str:
         return self.sudo_log.read_text(encoding="utf-8") if self.sudo_log.exists() else ""
+
+    @property
+    def launchctl_calls(self) -> str:
+        return self.launchctl_log.read_text(encoding="utf-8") if self.launchctl_log.exists() else ""
 
 
 # --- rule 1: detect drift before acting ---------------------------------------------------
@@ -193,6 +217,28 @@ def test_missing_install_is_reported_as_missing(tmp_path: Path) -> None:
     assert "drift:       missing" in result.stdout
 
 
+def test_unreadable_present_app_fails_closed_instead_of_guessing_drift(tmp_path: Path) -> None:
+    h = _Harness(tmp_path)
+    h.install_stubs(offered="1.5.8", registered="1.5.8")
+    (h.app_path / "Contents").mkdir(parents=True)
+
+    result = h.run("--dry-run")
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "Could not read CFBundleShortVersionString" in result.stderr
+
+
+def test_revision_suffix_does_not_make_matching_bundle_look_stale(tmp_path: Path) -> None:
+    h = _Harness(tmp_path)
+    h.install_stubs(offered="1.5.8,42", registered="1.5.8,42")
+    _make_app(h.app_path, "1.5.8")
+
+    result = h.run("--dry-run")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "drift:       none" in result.stdout
+
+
 # --- rule 2: on drift, never `brew upgrade`/`reinstall`; clear the ledger and force-adopt ---
 
 
@@ -211,6 +257,40 @@ def test_drift_clears_stale_caskroom_then_force_adopts(tmp_path: Path) -> None:
     assert quarantined, "quarantine is not reversible — the old registration was destroyed"
     assert quarantined[0].read_text(encoding="utf-8") == "stale"
     assert f"install --cask --force {CASK_TOKEN}" in h.brew_calls
+
+
+def test_quarantine_destination_is_unique_when_timestamp_already_exists(tmp_path: Path) -> None:
+    h = _Harness(tmp_path)
+    h.install_stubs(offered="1.5.8", registered="1.5.2")
+    _make_app(h.app_path, "1.5.8")
+    (h.caskroom / "1.5.2").mkdir(parents=True)
+    (h.caskroom / "1.5.2" / "new-marker").write_text("new", encoding="utf-8")
+    existing = h.quarantine / "20260823T120000Z" / "brainbar"
+    existing.mkdir(parents=True)
+    (existing / "old-marker").write_text("old", encoding="utf-8")
+    _write_exec(h.bin_dir / "date", "#!/usr/bin/env bash\nprintf '20260823T120000Z\\n'\n")
+
+    result = h.run()
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    quarantined = list(h.quarantine.glob("20260823T120000Z*/brainbar"))
+    assert len(quarantined) == 2
+    assert (existing / "old-marker").read_text(encoding="utf-8") == "old"
+    assert any((path / "1.5.2" / "new-marker").exists() for path in quarantined)
+
+
+def test_failed_adopt_keeps_running_services_alive(tmp_path: Path) -> None:
+    h = _Harness(tmp_path)
+    h.install_stubs(offered="1.5.8", registered="1.5.2", install_exit=42)
+    _make_app(h.app_path, "1.5.8")
+    (h.caskroom / "1.5.2").mkdir(parents=True)
+
+    result = h.run()
+
+    assert result.returncode == 42, result.stdout + result.stderr
+    assert "bootout" not in h.launchctl_calls
+    assert h.app_path.exists(), "failed adoption removed the still-runnable app"
+    assert list(h.quarantine.glob("*/brainbar/1.5.2")), "stale receipt was not recoverable"
 
 
 def test_update_never_runs_brew_upgrade_or_reinstall(tmp_path: Path) -> None:
@@ -344,6 +424,19 @@ def test_skip_tap_update_flag_suppresses_the_pull(tmp_path: Path) -> None:
     assert h.git_calls == ""
 
 
+def test_failed_tap_refresh_aborts_before_using_stale_metadata(tmp_path: Path) -> None:
+    h = _Harness(tmp_path)
+    h.install_stubs(offered="1.5.8", registered="1.5.2", git_exit=23)
+    _make_app(h.app_path, "1.5.8")
+
+    result = h.run()
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "Could not fast-forward" in result.stderr
+    assert "aborting" in result.stderr
+    assert "install --cask" not in h.brew_calls
+
+
 # --- rule 5: absolute brew path ------------------------------------------------------------
 
 
@@ -383,12 +476,61 @@ def test_verify_only_fails_loudly_when_not_green(tmp_path: Path) -> None:
     assert "BrainBar is NOT green" in result.stderr
 
 
+def test_verify_reports_formula_absence_and_continues_remaining_checks(tmp_path: Path) -> None:
+    h = _Harness(tmp_path)
+    h.install_stubs(offered="1.5.8", registered="1.5.8", formula=None)
+    _make_app(h.app_path, "1.5.8")
+
+    result = h.run("--verify-only", BRAINLAYER_UPDATE_SKIP_VERIFY="0")
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "[FAIL] brainlayer formula: <not installed>" in result.stdout
+    assert "[FAIL] socket:" in result.stdout, "verification stopped at the first failed probe"
+
+
+def test_verify_rejects_a_non_homebrew_brainlayer_shadow_on_path(tmp_path: Path) -> None:
+    h = _Harness(tmp_path)
+    h.install_stubs(offered="1.5.8", registered="1.5.8", formula="1.5.8")
+    _make_app(h.app_path, "1.5.8")
+    shadow_dir = tmp_path / "pip-shadow"
+    shadow_cli = _write_exec(
+        shadow_dir / "brainlayer",
+        "#!/usr/bin/env bash\nprintf 'brainlayer 1.5.7\\n'\n",
+    )
+
+    result = h.run(
+        "--verify-only",
+        BRAINLAYER_UPDATE_SKIP_VERIFY="0",
+        PATH=f"{shadow_dir}{os.pathsep}{h.bin_dir}{os.pathsep}/usr/bin{os.pathsep}/bin",
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert f"[FAIL] brainlayer PATH: {shadow_cli} shadows {h.bin_dir / 'brainlayer'}" in result.stdout
+
+
+def test_verify_rejects_non_login_path_without_homebrew_cli(tmp_path: Path) -> None:
+    h = _Harness(tmp_path)
+    h.install_stubs(offered="1.5.8", registered="1.5.8", formula="1.5.8")
+    _make_app(h.app_path, "1.5.8")
+
+    result = h.run(
+        "--verify-only",
+        BRAINLAYER_UPDATE_SKIP_VERIFY="0",
+        PATH=f"/usr/bin{os.pathsep}/bin",
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert f"[FAIL] brainlayer PATH: <not on PATH> (expected {h.bin_dir / 'brainlayer'})" in result.stdout
+
+
 def test_verify_checks_every_contracted_signal() -> None:
     script = UPDATE_SCRIPT.read_text(encoding="utf-8")
     for signal in (
         '"app version"',
         '"cask version"',
         '"brainlayer formula"',
+        '"canonical brainlayer CLI"',
+        '"brainlayer PATH"',
         '"BrainBar process"',
         '"launchd $label"',
         '"socket"',
