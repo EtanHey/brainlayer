@@ -43,6 +43,13 @@ MAX_BACKLOG_BATCH = 16
 DEFAULT_HOTLANE_WRITE_BUSY_TIMEOUT_MS = 1000
 MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 VECTOR_WRITE_YIELD_SECONDS = 0.005
+
+# Incident 2026-08-24: the loop slept a fixed `interval` (1.0s) whether or not a cycle
+# did any work, so an idle hotlane re-scanned a 14.8 GB SQLite DB once per second
+# forever and held ~120% CPU. Idle cycles now back off geometrically; any real work
+# snaps the cadence straight back to `interval`, so hot writes stay hot.
+IDLE_BACKOFF_FACTOR = 2.0
+MAX_IDLE_INTERVAL_SECONDS = 30.0
 MAX_PENDING_CANDIDATE_SCAN_PAGES = 16
 HOT_CANDIDATE_SCAN_LIMIT = 256
 HOT_CANDIDATE_HEAD_LIMIT = HOT_CANDIDATE_SCAN_LIMIT // 2
@@ -873,9 +880,11 @@ def run(
     cycles = 0
     backlog_batch = min(max(backlog_batch, 0), MAX_BACKLOG_BATCH)
     LOGGER.info("hotlane adapter started db=%s", db_path)
+    idle_sleep = interval
     while not STOP:
         if max_cycles is not None and cycles >= max_cycles:
             break
+        did_work = False
         try:
             now = time_fn()
             queue_has_backlog = queue_depth_fn(queue_dir) > 0
@@ -888,6 +897,9 @@ def run(
                 queue_backpressure_active = True
                 if cycle_backlog_batch <= 0:
                     cycles += 1
+                    # Backpressure is not idleness: hold the configured cadence so the
+                    # reserved backlog slice resumes on time.
+                    idle_sleep = interval
                     sleep_fn(interval)
                     continue
                 cycle_recent_limit = 0
@@ -941,6 +953,10 @@ def run(
             if result.enrich_daily_cap_reached:
                 enrich_disabled = True
                 LOGGER.warning("enrichment daily cap reached; disabling hotlane enrichment until restart")
+            # A queued backlog means the system has work even when THIS cycle embedded
+            # nothing (the hot slice is deliberately suppressed to yield to the drain),
+            # so it must not be treated as idle -- backing off there would slow recovery.
+            did_work = bool(result.embedded or result.enrich_attempted) or queue_has_backlog
             if result.embedded or result.enrich_attempted:
                 LOGGER.info(
                     "embedded=%d enrich_attempted=%d enriched=%d skipped=%d failed=%d",
@@ -954,7 +970,13 @@ def run(
             LOGGER.exception("hotlane adapter cycle failed")
             sleep_fn(min(interval * 2, 5.0))
         cycles += 1
-        sleep_fn(interval)
+        # Work resets the cadence so latency stays at `interval`; an idle cycle backs
+        # off geometrically up to MAX_IDLE_INTERVAL_SECONDS instead of re-scanning the DB.
+        if did_work:
+            idle_sleep = interval
+        sleep_fn(idle_sleep)
+        if not did_work:
+            idle_sleep = min(idle_sleep * IDLE_BACKOFF_FACTOR, MAX_IDLE_INTERVAL_SECONDS)
 
 
 def main() -> None:

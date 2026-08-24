@@ -10,17 +10,59 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
 import signal
 import socket
 import sys
+import threading
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from . import search_profile
 
 _ACCEPT_TIMEOUT_SECONDS = 0.25
 _CONNECTION_TIMEOUT_SECONDS = 5.0
+
+LOGGER = logging.getLogger(__name__)
+
+# Incident 2026-08-24: helper pid 1216 held 100% of a core for ~7 hours (46m12s of
+# CPU) inside a single query. `serve_forever()` handles one connection at a time and
+# _CONNECTION_TIMEOUT_SECONDS bounds only the SOCKET -- nothing bounded request
+# PROCESSING, so one pathological query blocked every later hybrid search forever.
+# A request that outruns this deadline is a wedge, not a slow search: we log what it
+# was running and recycle the process. BrainBar respawns the helper (verified: ~9s to
+# a warm 0%-CPU replacement), so recycling costs a warmup and loses no durable state.
+_DEFAULT_REQUEST_DEADLINE_SECONDS = 90.0
+_REQUEST_DEADLINE_EXIT_CODE = 75  # EX_TEMPFAIL -- "retryable", not a config error
+
+
+def _request_deadline_default() -> float:
+    raw = os.environ.get("BRAINLAYER_HYBRID_REQUEST_DEADLINE_S")
+    if not raw:
+        return _DEFAULT_REQUEST_DEADLINE_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        return _DEFAULT_REQUEST_DEADLINE_SECONDS
+    return value if value > 0 else _DEFAULT_REQUEST_DEADLINE_SECONDS
+
+
+def _recycle_on_wedge(info: dict[str, Any]) -> None:
+    """Default abort hook: name the wedging request, then let BrainBar respawn us.
+
+    os._exit is deliberate -- the wedged thread is stuck inside SQLite and will not
+    unwind, so a graceful shutdown would just hang next to it.
+    """
+    LOGGER.critical(
+        "hybrid helper request exceeded deadline (%.1fs elapsed, limit %.1fs); recycling. request=%s",
+        info.get("elapsed_seconds", -1.0),
+        info.get("deadline_seconds", -1.0),
+        info.get("request"),
+    )
+    sys.stderr.flush()
+    os._exit(_REQUEST_DEADLINE_EXIT_CODE)
 
 
 def _json_safe(value: Any) -> Any:
@@ -36,12 +78,47 @@ def _json_safe(value: Any) -> Any:
 
 
 class HybridSearchHelper:
-    def __init__(self, socket_path: Path, db_path: Path):
+    def __init__(
+        self,
+        socket_path: Path,
+        db_path: Path,
+        request_deadline_seconds: float | None = None,
+        on_deadline_expired: Callable[[dict[str, Any]], None] = _recycle_on_wedge,
+    ):
         self.socket_path = socket_path
         self.db_path = db_path
+        self.request_deadline_seconds = (
+            _request_deadline_default() if request_deadline_seconds is None else float(request_deadline_seconds)
+        )
+        self._on_deadline_expired = on_deadline_expired
         self._stopped = False
         self._warm_called = False
         self._ready = False
+
+    def _dispatch_with_deadline(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Run one request under a hard wall-clock deadline.
+
+        The timer fires on a separate thread because the request thread is exactly the
+        one that is stuck; it cannot time itself out.
+        """
+        started = time.monotonic()
+
+        def _expired() -> None:
+            self._on_deadline_expired(
+                {
+                    "elapsed_seconds": time.monotonic() - started,
+                    "deadline_seconds": self.request_deadline_seconds,
+                    "request": request,
+                }
+            )
+
+        timer = threading.Timer(self.request_deadline_seconds, _expired)
+        timer.daemon = True
+        timer.start()
+        try:
+            return self._handle_request(request)
+        finally:
+            timer.cancel()
 
     def warm(self) -> None:
         self._warm_called = True
@@ -102,7 +179,7 @@ class HybridSearchHelper:
         try:
             raw = self._read_line(conn)
             request = json.loads(raw.decode("utf-8"))
-            response = self._handle_request(request)
+            response = self._dispatch_with_deadline(request)
         except Exception as exc:
             response = {"ok": False, "error": str(exc)}
 
