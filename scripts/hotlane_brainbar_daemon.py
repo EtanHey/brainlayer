@@ -43,6 +43,20 @@ MAX_BACKLOG_BATCH = 16
 DEFAULT_HOTLANE_WRITE_BUSY_TIMEOUT_MS = 1000
 MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 VECTOR_WRITE_YIELD_SECONDS = 0.005
+
+# Incident 2026-08-24: the loop slept a fixed `interval` (1.0s) whether or not a cycle
+# did any work, so an idle hotlane kept probing once per second forever. Idle cycles now
+# back off geometrically; any real work snaps the cadence straight back to `interval`.
+#
+# The cap is deliberately SMALL, and it is not a tuning knob to raise casually (PR #735
+# review, codex P2): a normal `brain_store` writes straight to SQLite and does not touch
+# the durable queue, so nothing here wakes on arrival — this cap IS the worst-case time a
+# freshly stored chunk stays unembedded, during which a related search can miss it.
+# Note the per-cycle idle probe is already bounded by rowid lanes (HotCandidateScanner),
+# so backing off further buys little; hotlane's real CPU burn is continuous enrichment
+# inference, tracked separately in #738.
+IDLE_BACKOFF_FACTOR = 2.0
+MAX_IDLE_INTERVAL_SECONDS = 5.0
 MAX_PENDING_CANDIDATE_SCAN_PAGES = 16
 HOT_CANDIDATE_SCAN_LIMIT = 256
 HOT_CANDIDATE_HEAD_LIMIT = HOT_CANDIDATE_SCAN_LIMIT // 2
@@ -873,9 +887,11 @@ def run(
     cycles = 0
     backlog_batch = min(max(backlog_batch, 0), MAX_BACKLOG_BATCH)
     LOGGER.info("hotlane adapter started db=%s", db_path)
+    idle_sleep = interval
     while not STOP:
         if max_cycles is not None and cycles >= max_cycles:
             break
+        did_work = False
         try:
             now = time_fn()
             queue_has_backlog = queue_depth_fn(queue_dir) > 0
@@ -888,6 +904,9 @@ def run(
                 queue_backpressure_active = True
                 if cycle_backlog_batch <= 0:
                     cycles += 1
+                    # Backpressure is not idleness: hold the configured cadence so the
+                    # reserved backlog slice resumes on time.
+                    idle_sleep = interval
                     sleep_fn(interval)
                     continue
                 cycle_recent_limit = 0
@@ -941,6 +960,10 @@ def run(
             if result.enrich_daily_cap_reached:
                 enrich_disabled = True
                 LOGGER.warning("enrichment daily cap reached; disabling hotlane enrichment until restart")
+            # A queued backlog means the system has work even when THIS cycle embedded
+            # nothing (the hot slice is deliberately suppressed to yield to the drain),
+            # so it must not be treated as idle -- backing off there would slow recovery.
+            did_work = bool(result.embedded or result.enrich_attempted) or queue_has_backlog
             if result.embedded or result.enrich_attempted:
                 LOGGER.info(
                     "embedded=%d enrich_attempted=%d enriched=%d skipped=%d failed=%d",
@@ -952,9 +975,22 @@ def run(
                 )
         except Exception:
             LOGGER.exception("hotlane adapter cycle failed")
+            cycles += 1
+            # A raised cycle is a RETRY, not an idle cycle (PR #735 review, macroscope):
+            # it already slept its own backoff here, and letting it fall through to the
+            # geometric idle path would compound repeated transient failures into a much
+            # longer retry gap. Reset the idle cadence so recovery stays prompt.
+            idle_sleep = interval
             sleep_fn(min(interval * 2, 5.0))
+            continue
         cycles += 1
-        sleep_fn(interval)
+        # Work resets the cadence so latency stays at `interval`; an idle cycle backs off
+        # geometrically up to MAX_IDLE_INTERVAL_SECONDS instead of probing every second.
+        if did_work:
+            idle_sleep = interval
+        sleep_fn(idle_sleep)
+        if not did_work:
+            idle_sleep = min(idle_sleep * IDLE_BACKOFF_FACTOR, MAX_IDLE_INTERVAL_SECONDS)
 
 
 def main() -> None:
