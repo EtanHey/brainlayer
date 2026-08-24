@@ -9,8 +9,14 @@
 set -euo pipefail
 
 # --- configuration (env overrides exist so tests can stub every external tool) -----------
-CASK_TOKEN="${BRAINLAYER_UPDATE_BRAINBAR_CASK_TOKEN:-etanhey/layers/brainbar}"
-CASK_NAME="${CASK_TOKEN##*/}"
+if [[ -n "${BRAINLAYER_UPDATE_BRAINBAR_CASK_REF:-}" ]]; then
+    CASK_REF="$BRAINLAYER_UPDATE_BRAINBAR_CASK_REF"
+elif [[ -n "${BRAINLAYER_UPDATE_BRAINBAR_CASK_TOKEN:-}" ]]; then # deprecated, still honoured
+    CASK_REF="$BRAINLAYER_UPDATE_BRAINBAR_CASK_TOKEN"
+else
+    CASK_REF="etanhey/layers/brainbar"
+fi
+CASK_NAME="${CASK_REF##*/}"
 APP_PATH="${BRAINLAYER_UPDATE_BRAINBAR_APP:-/Applications/BrainBar.app}"
 # Rule 5: bare `brew` is not on the M1's non-interactive ssh PATH.
 BREW_BIN="${BRAINLAYER_UPDATE_BREW_BIN:-/opt/homebrew/bin/brew}"
@@ -163,7 +169,7 @@ registered_version() {
 }
 
 offered_version() {
-    "$BREW_BIN" info --cask --json=v2 "$CASK_TOKEN" 2>/dev/null | python3 -c '
+    "$BREW_BIN" info --cask --json=v2 "$CASK_REF" 2>/dev/null | python3 -c '
 import json, sys
 try:
     payload = json.load(sys.stdin)
@@ -240,7 +246,7 @@ detect_state() {
     fi
 
     if [[ -z "$OFFERED_VERSION" ]]; then
-        err "Could not read the offered version for $CASK_TOKEN from the tap."
+        err "Could not read the offered version for $CASK_REF from the tap."
         err "Is the tap present? Try: $BREW_BIN tap $TAP_NAME"
         exit 4
     fi
@@ -268,7 +274,7 @@ print_state() {
     log "BrainBar drift-proof update"
     log "  mode:        $([[ "$DRY_RUN" -eq 1 ]] && printf 'dry-run' || { [[ "$VERIFY_ONLY" -eq 1 ]] && printf 'verify-only' || printf 'apply'; })"
     log "  brew:        $BREW_BIN"
-    log "  cask:        $CASK_TOKEN"
+    log "  cask:        $CASK_REF"
     log "  app path:    $APP_PATH"
     log "  app version: ${APP_VERSION:-<absent>}"
     log "  registered:  ${REGISTERED_VERSION:-<not registered with brew>}"
@@ -296,7 +302,7 @@ quarantine_stale_registration() {
 adopt_install() {
     # --force adopts an app already sitting at the target path. Without it brew says
     # "It seems there is already an App at '<path>'" and does nothing.
-    run_cmd "$BREW_BIN" install --cask --force "$CASK_TOKEN"
+    run_cmd "$BREW_BIN" install --cask --force "$CASK_REF"
 }
 
 apply_update() {

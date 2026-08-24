@@ -19,7 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 UPDATE_SCRIPT = REPO_ROOT / "scripts" / "brainlayer-update-brainbar.sh"
 DEDUPE_SCRIPT = REPO_ROOT / "scripts" / "brainlayer-dedupe-brainbar.sh"
 
-CASK_TOKEN = "etanhey/layers/brainbar"
+CASK_REF = "etanhey/layers/brainbar"
 
 
 def _write_exec(path: Path, body: str) -> Path:
@@ -61,11 +61,13 @@ class _Harness:
         *,
         offered: str,
         registered: str | None,
+        cask_ref: str = CASK_REF,
         formula: str | None = "0.1.0",
         install_exit: int = 0,
         git_exit: int = 0,
     ) -> None:
         info = json.dumps({"casks": [{"version": offered}]})
+        cask_name = cask_ref.rsplit("/", 1)[-1]
         listed_cmd = "printf '%s\\n' " + repr(f"brainbar {registered}") if registered else "true"
         formula_cmd = "printf '%s\\n' " + repr(f"brainlayer {formula}") if formula else "exit 1"
         _write_exec(
@@ -77,10 +79,10 @@ case "$1 $2" in
   "--repository ") printf '%s\\n' {self.tmp_path!s}/brew-repo; exit 0 ;;
 esac
 case "$*" in
-  "list --versions --cask brainbar") {listed_cmd}; exit 0 ;;
-  "info --cask --json=v2 {CASK_TOKEN}") printf '%s\\n' {info!r}; exit 0 ;;
+  "list --versions --cask {cask_name}") {listed_cmd}; exit 0 ;;
+  "info --cask --json=v2 {cask_ref}") printf '%s\\n' {info!r}; exit 0 ;;
   "list --versions brainlayer") {formula_cmd}; exit 0 ;;
-  "install --cask --force {CASK_TOKEN}") exit {install_exit} ;;
+  "install --cask --force {cask_ref}") exit {install_exit} ;;
 esac
 exit 0
 """,
@@ -241,6 +243,37 @@ def test_revision_suffix_does_not_make_matching_bundle_look_stale(tmp_path: Path
     assert "drift:       none" in result.stdout
 
 
+def test_cask_ref_env_takes_precedence_over_deprecated_token(tmp_path: Path) -> None:
+    h = _Harness(tmp_path)
+    preferred_ref = "example/tap/preferred-brainbar"
+    h.install_stubs(offered="1.5.8", registered="1.5.8", cask_ref=preferred_ref)
+    _make_app(h.app_path, "1.5.8")
+
+    result = h.run(
+        "--dry-run",
+        BRAINLAYER_UPDATE_BRAINBAR_CASK_REF=preferred_ref,
+        BRAINLAYER_UPDATE_BRAINBAR_CASK_TOKEN="example/tap/deprecated-brainbar",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"cask:        {preferred_ref}" in result.stdout
+
+
+def test_deprecated_cask_token_env_still_sets_qualified_ref(tmp_path: Path) -> None:
+    h = _Harness(tmp_path)
+    deprecated_ref = "example/tap/legacy-brainbar"
+    h.install_stubs(offered="1.5.8", registered="1.5.8", cask_ref=deprecated_ref)
+    _make_app(h.app_path, "1.5.8")
+
+    result = h.run(
+        "--dry-run",
+        BRAINLAYER_UPDATE_BRAINBAR_CASK_TOKEN=deprecated_ref,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"cask:        {deprecated_ref}" in result.stdout
+
+
 # --- rule 2: on drift, never `brew upgrade`/`reinstall`; clear the ledger and force-adopt ---
 
 
@@ -258,7 +291,7 @@ def test_drift_clears_stale_caskroom_then_force_adopts(tmp_path: Path) -> None:
     quarantined = list(h.quarantine.glob("*/brainbar/1.5.2/marker"))
     assert quarantined, "quarantine is not reversible — the old registration was destroyed"
     assert quarantined[0].read_text(encoding="utf-8") == "stale"
-    assert f"install --cask --force {CASK_TOKEN}" in h.brew_calls
+    assert f"install --cask --force {CASK_REF}" in h.brew_calls
 
 
 def test_quarantine_destination_is_unique_when_timestamp_already_exists(tmp_path: Path) -> None:
@@ -328,7 +361,7 @@ def test_missing_install_uses_force_adopt(tmp_path: Path) -> None:
     result = h.run()
 
     assert result.returncode == 0, result.stderr
-    assert f"install --cask --force {CASK_TOKEN}" in h.brew_calls
+    assert f"install --cask --force {CASK_REF}" in h.brew_calls
 
 
 def test_dry_run_changes_nothing(tmp_path: Path) -> None:
