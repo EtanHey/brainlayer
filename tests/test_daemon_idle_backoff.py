@@ -112,3 +112,33 @@ def test_enrichment_attempt_also_counts_as_work():
     _run(hotlane, cycle_fn=cycle_fn, cycles=6, sleeps=sleeps)
 
     assert sleeps[4] == 1.0, f"enrichment work must reset backoff: {sleeps}"
+
+
+def test_failing_cycle_is_a_retry_not_an_idle_cycle():
+    """Review finding (macroscope, PR #735): a raised cycle must not compound delays.
+
+    The exception handler already sleeps its own backoff. If the failed cycle then also
+    took the geometric idle path, repeated transient failures would stretch the retry
+    gap to ~35s (5s exception delay + a 30s idle sleep).
+    """
+    hotlane = _load_hotlane_module()
+    sleeps: list[float] = []
+
+    def always_raises(**_kwargs):
+        raise RuntimeError("transient")
+
+    _run(hotlane, cycle_fn=always_raises, cycles=6, sleeps=sleeps)
+
+    # Only the exception delay should be slept -- never a grown idle sleep on top.
+    assert max(sleeps) <= 5.0, f"failure path compounded into the idle backoff: {sleeps}"
+    assert all(s <= 5.0 for s in sleeps), f"unexpected long sleep on the failure path: {sleeps}"
+
+
+def test_idle_cap_keeps_hot_write_latency_bounded():
+    """Review finding (codex P2, PR #735): brain_store writes SQLite directly.
+
+    Nothing interrupts an idle sleep when a hot write lands, so the cap IS the
+    worst-case embed latency for a freshly stored chunk. Keep it small.
+    """
+    hotlane = _load_hotlane_module()
+    assert hotlane.MAX_IDLE_INTERVAL_SECONDS <= 5.0, "idle cap is the worst-case hot-write embed latency; keep it small"

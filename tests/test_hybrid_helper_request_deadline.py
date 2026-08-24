@@ -63,11 +63,13 @@ def test_fast_request_does_not_trip_the_deadline(tmp_path):
     assert not tripped.is_set(), "a fast request must never trip the deadline"
 
 
-def test_deadline_hook_receives_the_query_for_diagnosis(tmp_path):
-    """When a query wedges the helper we must be able to name it afterwards.
+def test_deadline_hook_receives_enough_to_diagnose_without_the_raw_query(tmp_path):
+    """When a query wedges the helper we must be able to characterise it afterwards.
 
-    The 2026-08-24 wedge was unattributable because the process died with no record
-    of what it was running.
+    The 2026-08-24 wedge was unattributable because the process died with no record of
+    what it was running. But the record must be a DESCRIPTOR, not the text: the helper's
+    stderr lands in brainbar.err.log, so the raw query would become a second plaintext
+    copy of personal memory (PR #735 review, codex P2).
     """
     seen: list[dict] = []
     helper = _helper(tmp_path, request_deadline_seconds=0.05, on_deadline_expired=seen.append)
@@ -83,5 +85,36 @@ def test_deadline_hook_receives_the_query_for_diagnosis(tmp_path):
     done.set()
 
     assert seen, "abort hook never fired"
-    assert "the wedging query" in str(seen[0]), f"hook must carry the query text: {seen[0]}"
+    rendered = str(seen[0])
+    assert "the wedging query" not in rendered, f"raw query must not reach the hook: {rendered}"
+    assert "brain_search" in rendered, "must still identify the method"
+    assert "query_sha256" in rendered, "must still carry a correlatable fingerprint"
     assert seen[0].get("elapsed_seconds") is not None
+
+
+def test_deadline_log_does_not_leak_the_raw_query(caplog):
+    """Review finding (codex P2, PR #735): the helper inherits BrainBar's stderr, which
+    launchd redirects to brainbar.err.log. Logging the full request would write a
+    plaintext copy of potentially personal or secret-bearing memory to a second file.
+
+    The hook still needs enough to DIAGNOSE the wedge, so a bounded descriptor is kept.
+    """
+    import logging
+
+    from brainlayer.brainbar_hybrid_helper import _describe_request_for_log
+
+    secret = "my private therapy notes about SECRET_TOKEN_abc123"
+    described = _describe_request_for_log(
+        {"method": "brain_search", "arguments": {"query": secret, "project": "brainlayer", "num_results": 5}}
+    )
+    rendered = str(described)
+
+    assert secret not in rendered, f"raw query leaked into the log payload: {rendered}"
+    assert "SECRET_TOKEN_abc123" not in rendered
+    # still diagnosable
+    assert "brain_search" in rendered
+    assert "query_chars" in rendered, "must keep enough shape to diagnose the wedge"
+    assert "query_sha256" in rendered, "a stable fingerprint lets repeat wedges be correlated"
+    # non-sensitive structural fields are useful and safe
+    assert "brainlayer" in rendered or "project" in rendered
+    del caplog, logging

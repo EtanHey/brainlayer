@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -49,6 +50,39 @@ def _request_deadline_default() -> float:
     return value if value > 0 else _DEFAULT_REQUEST_DEADLINE_SECONDS
 
 
+_LOG_SAFE_ARG_KEYS = frozenset(
+    {"project", "source", "tag", "num_results", "max_results", "detail", "content_class", "importance_min"}
+)
+
+
+def _describe_request_for_log(request: Any) -> dict[str, Any]:
+    """Bounded, non-sensitive descriptor of a request, for the deadline log.
+
+    The helper inherits BrainBar's stderr, which launchd redirects to brainbar.err.log, so
+    logging the raw request would write a second plaintext copy of potentially personal or
+    secret-bearing memory to disk (PR #735 review, codex P2). Keep the shape and a stable
+    fingerprint -- enough to diagnose and to correlate repeat wedges -- never the text.
+    """
+    if not isinstance(request, dict):
+        return {"method": "<malformed>", "query_chars": 0, "query_sha256": ""}
+
+    arguments = request.get("arguments")
+    arguments = arguments if isinstance(arguments, dict) else {}
+    query = arguments.get("query")
+    query = query if isinstance(query, str) else ""
+
+    described: dict[str, Any] = {
+        "method": str(request.get("method") or "<none>"),
+        "query_chars": len(query),
+        "query_sha256": hashlib.sha256(query.encode("utf-8")).hexdigest()[:16],
+        "arg_keys": sorted(str(key) for key in arguments),
+    }
+    # Structural filters are safe and are often the thing that makes a query pathological.
+    for key in sorted(_LOG_SAFE_ARG_KEYS & set(arguments)):
+        described[key] = arguments[key]
+    return described
+
+
 def _recycle_on_wedge(info: dict[str, Any]) -> None:
     """Default abort hook: name the wedging request, then let BrainBar respawn us.
 
@@ -59,7 +93,7 @@ def _recycle_on_wedge(info: dict[str, Any]) -> None:
         "hybrid helper request exceeded deadline (%.1fs elapsed, limit %.1fs); recycling. request=%s",
         info.get("elapsed_seconds", -1.0),
         info.get("deadline_seconds", -1.0),
-        info.get("request"),
+        info.get("request_descriptor"),
     )
     sys.stderr.flush()
     os._exit(_REQUEST_DEADLINE_EXIT_CODE)
@@ -108,7 +142,9 @@ class HybridSearchHelper:
                 {
                     "elapsed_seconds": time.monotonic() - started,
                     "deadline_seconds": self.request_deadline_seconds,
-                    "request": request,
+                    # Descriptor only -- the raw request must not reach stderr, which
+                    # launchd redirects to brainbar.err.log (PR #735 review, codex P2).
+                    "request_descriptor": _describe_request_for_log(request),
                 }
             )
 

@@ -45,11 +45,18 @@ MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 VECTOR_WRITE_YIELD_SECONDS = 0.005
 
 # Incident 2026-08-24: the loop slept a fixed `interval` (1.0s) whether or not a cycle
-# did any work, so an idle hotlane re-scanned a 14.8 GB SQLite DB once per second
-# forever and held ~120% CPU. Idle cycles now back off geometrically; any real work
-# snaps the cadence straight back to `interval`, so hot writes stay hot.
+# did any work, so an idle hotlane kept probing once per second forever. Idle cycles now
+# back off geometrically; any real work snaps the cadence straight back to `interval`.
+#
+# The cap is deliberately SMALL, and it is not a tuning knob to raise casually (PR #735
+# review, codex P2): a normal `brain_store` writes straight to SQLite and does not touch
+# the durable queue, so nothing here wakes on arrival — this cap IS the worst-case time a
+# freshly stored chunk stays unembedded, during which a related search can miss it.
+# Note the per-cycle idle probe is already bounded by rowid lanes (HotCandidateScanner),
+# so backing off further buys little; hotlane's real CPU burn is continuous enrichment
+# inference, tracked separately in #738.
 IDLE_BACKOFF_FACTOR = 2.0
-MAX_IDLE_INTERVAL_SECONDS = 30.0
+MAX_IDLE_INTERVAL_SECONDS = 5.0
 MAX_PENDING_CANDIDATE_SCAN_PAGES = 16
 HOT_CANDIDATE_SCAN_LIMIT = 256
 HOT_CANDIDATE_HEAD_LIMIT = HOT_CANDIDATE_SCAN_LIMIT // 2
@@ -968,10 +975,17 @@ def run(
                 )
         except Exception:
             LOGGER.exception("hotlane adapter cycle failed")
+            cycles += 1
+            # A raised cycle is a RETRY, not an idle cycle (PR #735 review, macroscope):
+            # it already slept its own backoff here, and letting it fall through to the
+            # geometric idle path would compound repeated transient failures into a much
+            # longer retry gap. Reset the idle cadence so recovery stays prompt.
+            idle_sleep = interval
             sleep_fn(min(interval * 2, 5.0))
+            continue
         cycles += 1
-        # Work resets the cadence so latency stays at `interval`; an idle cycle backs
-        # off geometrically up to MAX_IDLE_INTERVAL_SECONDS instead of re-scanning the DB.
+        # Work resets the cadence so latency stays at `interval`; an idle cycle backs off
+        # geometrically up to MAX_IDLE_INTERVAL_SECONDS instead of probing every second.
         if did_work:
             idle_sleep = interval
         sleep_fn(idle_sleep)
