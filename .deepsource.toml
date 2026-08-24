@@ -1,0 +1,56 @@
+version = 1
+
+exclude_patterns = [
+  ".venv/**",
+  ".worktrees/**",
+  "**/node_modules/**",
+  "**/__pycache__/**",
+  "brain-bar/.build/**",
+  "**/checkouts/**",
+  "**/*.xcodeproj/**",
+  "site/.next/**",
+  "scripts/backfill_data/**",
+]
+
+test_patterns = [
+  "tests/**",
+  "brain-bar/Tests/**",
+  "**/*.test.ts",
+  "**/*.test.tsx",
+]
+
+[[analyzers]]
+name = "python"
+enabled = true
+
+  [analyzers.meta]
+  runtime_version = "3.x.x"
+
+[[analyzers]]
+name = "swift"
+enabled = true
+
+  [analyzers.meta]
+  swift_version = "6.0"
+
+[[analyzers]]
+name = "javascript"
+enabled = true
+
+  [analyzers.meta]
+  dependency_file_paths = ["site/package.json"]
+  dialect = "typescript"
+  module_system = "es-modules"
+  environment = ["nodejs", "browser"]
+  plugins = ["react"]
+
+[[analyzers]]
+name = "shell"
+enabled = true
+
+  [analyzers.meta]
+  dialect = "bash"
+
+[[analyzers]]
+name = "secrets"
+enabled = true
