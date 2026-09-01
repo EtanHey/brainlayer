@@ -1,0 +1,1 @@
+{"checks":["wal_bound"],"wal_samples_bytes":[2],"thresholds":{"wal_ceiling_bytes":1}}

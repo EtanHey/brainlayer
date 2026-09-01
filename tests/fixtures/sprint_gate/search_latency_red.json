@@ -1,0 +1,1 @@
+{"checks":["search_latency"],"latency_baseline_ms":{"p50":100,"p95":100},"latency_samples_ms":[111,111,111,111,111,111,111,111,111,111]}
