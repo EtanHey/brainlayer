@@ -31,6 +31,12 @@ def wal_size(path: Path) -> int:
         return 0
 
 
+def contains_key(value, key: str) -> bool:
+    if isinstance(value, dict):
+        return key in value or any(contains_key(item, key) for item in value.values())
+    return isinstance(value, list) and any(contains_key(item, key) for item in value)
+
+
 class MCPClient:
     def __init__(self, path: str, timeout: float):
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -160,8 +166,24 @@ def validate_tools(result: dict) -> tuple[bool, dict]:
     truncated = [tool.get("name", "unknown") for tool in tools if tool.get("description", "").endswith("…[truncated]")]
     notice = result.get("_meta", {}).get("brainlayer/descriptionsTruncated")
     notice_names = set(notice.get("tools", [])) if isinstance(notice, dict) else set()
-    intact = bool(tools) and not missing and notice_names == set(truncated)
-    return intact, {"tool_count": len(tools), "missing_descriptions": missing, "truncated_descriptions": truncated}
+    missing_annotations = [tool.get("name", "unknown") for tool in tools if "annotations" not in tool]
+    missing_input_schema_prose = [
+        tool.get("name", "unknown") for tool in tools if not contains_key(tool.get("inputSchema"), "description")
+    ]
+    truncation_evidenced = bool(truncated) or isinstance(notice, dict)
+    truncation_order_valid = not truncation_evidenced or (
+        len(missing_annotations) == len(tools) and len(missing_input_schema_prose) == len(tools)
+    )
+    intact = bool(tools) and not missing and notice_names == set(truncated) and truncation_order_valid
+    return intact, {
+        "tool_count": len(tools),
+        "missing_descriptions": missing,
+        "truncated_descriptions": truncated,
+        "missing_annotations": missing_annotations,
+        "missing_input_schema_prose": missing_input_schema_prose,
+        "truncation_evidenced": truncation_evidenced,
+        "truncation_order_valid": truncation_order_valid,
+    }
 
 
 def check_mcp(config: dict) -> dict:
@@ -174,6 +196,11 @@ def check_mcp(config: dict) -> dict:
     client = MCPClient(config["socket_path"], config["mcp_timeout_seconds"])
     try:
         client.initialize()
+        try:
+            client.call("expand_palette", {})
+        except RuntimeError as error:
+            if "-32601" not in str(error) or "Unknown tool" not in str(error):
+                raise
         intact, tool_details = validate_tools(client.request("tools/list"))
         marker = f"SPRINT-GATE-TEST-{socket.gethostname()}-{time.time_ns()}"
         stored = client.call(
