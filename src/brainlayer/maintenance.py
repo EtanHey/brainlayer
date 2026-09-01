@@ -12,7 +12,7 @@ import sys
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 import apsw
 
@@ -356,6 +356,14 @@ def _bootout_service(service: str) -> None:
     run_command(["launchctl", "bootout", f"gui/{os.getuid()}/{_launchd_label(service)}"], check=False)
 
 
+def _service_is_loaded(service: str) -> bool:
+    result = run_command(
+        ["launchctl", "print", f"gui/{os.getuid()}/{_launchd_label(service)}"],
+        check=False,
+    )
+    return result.returncode == 0
+
+
 def _as_launchd_dir(path: Path) -> Path:
     if (path / "install.sh").exists() or (path / "brainlayer.env.example").exists():
         return path
@@ -507,9 +515,33 @@ def _service_is_deliberately_paused(service: str) -> bool:
     return pause_applies_to_label(payload, f"com.brainlayer.{service}")
 
 
-def _resume_services(repo_root: Path, services: Sequence[str]) -> list[tuple[str, Exception]]:
+def _maintenance_keep_down_services() -> set[str]:
+    """Services that the launchd job must stop and leave down.
+
+    Launchd reads this variable from ``~/.config/brainlayer/brainlayer.env``.
+    """
+    prefix = "com.brainlayer."
+    entries = os.environ.get("BRAINLAYER_MAINTENANCE_KEEP_DOWN", "").split(",")
+    return {entry.removeprefix(prefix) for raw_entry in entries if (entry := raw_entry.strip())}
+
+
+def _resume_services(
+    repo_root: Path,
+    services: Sequence[str],
+    loaded_before: Mapping[str, bool] | None = None,
+) -> list[tuple[str, Exception]]:
     failures: list[tuple[str, Exception]] = []
+    keep_down = _maintenance_keep_down_services()
     for service in services:
+        if loaded_before is not None and not loaded_before.get(service, False):
+            print(f"service {service} was not loaded before maintenance; leaving it down", file=sys.stderr)
+            continue
+        if service in keep_down:
+            print(
+                f"service {service} is listed in BRAINLAYER_MAINTENANCE_KEEP_DOWN; leaving it down",
+                file=sys.stderr,
+            )
+            continue
         if _service_is_deliberately_paused(service):
             print(f"skipping resume of {service}: pause sentinel is active", file=sys.stderr)
             continue
@@ -630,6 +662,7 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
         services = (*REFEED_SERVICES, "drain")
     resume_failures: list[tuple[str, Exception]] = []
     body_error: BaseException | None = None
+    loaded_before = {service: _service_is_loaded(service) for service in services}
     _quiesce_services(services)
     try:
         result.checkpoint = _checkpoint_full(config.db_path)
@@ -654,7 +687,7 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
         body_error = exc
         raise
     finally:
-        resume_failures = _resume_services(config.repo_root, services)
+        resume_failures = _resume_services(config.repo_root, services, loaded_before)
         if resume_failures and body_error is not None:
             resume_failure_reason = _format_resume_failures(resume_failures)
             body_error.add_note(resume_failure_reason)
