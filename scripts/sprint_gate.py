@@ -276,7 +276,32 @@ def main(argv: list[str] | None = None) -> int:
     config = json.loads(CORPUS.read_text(encoding="utf-8"))
     if args.fixture:
         config = merge(config, json.loads(args.fixture.read_text(encoding="utf-8")))
+    machine = {"hostname": socket.gethostname(), "os": platform.system(), "architecture": platform.machine()}
+
+    def fail(error: str) -> int:
+        payload = {
+            "mode": "live",
+            "fixture": None,
+            "status": "FAIL",
+            "machine": machine,
+            "checks": [],
+            "error": error,
+        }
+        print(json.dumps(payload, indent=None if args.json else 2, sort_keys=True))
+        return 1
+
+    machine_target = config.get("machine_target")
+    if not args.fixture and machine_target is None:
+        return fail("machine target is missing")
+    if not args.fixture and any(key not in machine or machine[key] != value for key, value in machine_target.items()):
+        return fail("machine target mismatch")
     selected = config.get("checks", list(CHECKS))
+    latency_baseline = config.get("latency_baseline_ms")
+    if not args.fixture and "search_latency" in selected and latency_baseline is None:
+        return fail("latency baseline is missing")
+    calibrated_hostname = latency_baseline.get("hostname") if latency_baseline else None
+    if not args.fixture and "search_latency" in selected and not calibrated_hostname:
+        return fail("latency baseline is missing its calibrated hostname")
     wal_monitor = None
     if "wal_bound" in selected and "wal_samples_bytes" not in config:
         wal_monitor = WalMonitor()
@@ -285,6 +310,19 @@ def main(argv: list[str] | None = None) -> int:
     runners = {"search_latency": check_search, "mcp_roundtrip": check_mcp, "resource_budget": check_resource}
     for name in selected:
         if name == "wal_bound":
+            continue
+        if name == "search_latency" and not args.fixture and machine["hostname"] != calibrated_hostname:
+            results.append(
+                {
+                    "name": name,
+                    "status": "SKIPPED",
+                    "details": {
+                        "reason": "uncalibrated host",
+                        "running_hostname": machine["hostname"],
+                        "calibrated_hostname": calibrated_hostname,
+                    },
+                }
+            )
             continue
         try:
             results.append(runners[name](config))
@@ -296,9 +334,11 @@ def main(argv: list[str] | None = None) -> int:
     payload = {
         "mode": "replay" if args.fixture else "live",
         "fixture": str(args.fixture) if args.fixture else None,
-        "status": "PASS" if all(item["status"] == "PASS" for item in results) else "FAIL",
-        "machine": {"hostname": socket.gethostname(), "os": platform.system(), "architecture": platform.machine()},
+        # Option (b): rc stays 0; release consumers must reject skipped checks (w6-REPORT.md).
+        "status": "PASS" if all(item["status"] in {"PASS", "SKIPPED"} for item in results) else "FAIL",
+        "machine": machine,
         "checks": results,
+        "skipped": [item["name"] for item in results if item["status"] == "SKIPPED"],
     }
     print(json.dumps(payload, indent=None if args.json else 2, sort_keys=True))
     return 0 if payload["status"] == "PASS" else 1
