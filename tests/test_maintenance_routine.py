@@ -398,7 +398,8 @@ def test_maintenance_resume_attempts_all_services_after_mid_resume_failure(tmp_p
     quiesced: list[str] = []
     resumed: list[str] = []
     monkeypatch.setattr(maintenance, "collect_lsof_entries", lambda _paths: [])
-    monkeypatch.setattr(maintenance, "_bootout_service", lambda service: quiesced.append(service))
+    monkeypatch.setattr(maintenance, "_service_is_loaded", lambda _service: True)
+    monkeypatch.setattr(maintenance, "_bootout_service", lambda service: quiesced.append(service) or True)
     monkeypatch.setattr(maintenance, "_checkpoint_full", lambda _db_path: (0, 0, 0))
     monkeypatch.setattr(maintenance, "_verify_search_latency", lambda _db_path: 1.0)
 
@@ -416,6 +417,74 @@ def test_maintenance_resume_attempts_all_services_after_mid_resume_failure(tmp_p
     assert resumed == list(maintenance.DEFAULT_SERVICES)
 
 
+def test_maintenance_leaves_service_down_when_not_loaded_before_quiesce(tmp_path, monkeypatch, capsys):
+    from brainlayer import maintenance
+
+    config = _config(tmp_path, now=dt.datetime(2026, 5, 30, 4, 5, tzinfo=dt.timezone.utc))
+    config.queue_dir.mkdir(parents=True)
+    config.db_path.write_bytes(b"db")
+    events: list[tuple[str, str]] = []
+    resumed: list[str] = []
+    monkeypatch.setattr(maintenance, "collect_lsof_entries", lambda _paths: [])
+
+    def fake_launchctl(args, **_kwargs):
+        assert args[:2] == ["launchctl", "print"]
+        service = args[-1].rsplit(".", 1)[-1]
+        if ("probe", service) not in events:
+            events.append(("probe", service))
+        returncode = 113 if service in {"watch", "enrichment"} else 0
+        stderr = "Could not find service" if returncode else ""
+        return maintenance.subprocess.CompletedProcess(args, returncode, "", stderr)
+
+    def fake_bootout(service: str) -> bool:
+        events.append(("bootout", service))
+        return service != "watch"
+
+    monkeypatch.setattr(maintenance, "run_command", fake_launchctl)
+    monkeypatch.setattr(maintenance, "_bootout_service", fake_bootout)
+    monkeypatch.setattr(maintenance, "_checkpoint_full", lambda _db_path: (0, 0, 0))
+    monkeypatch.setattr(maintenance, "_verify_search_latency", lambda _db_path: 1.0)
+    monkeypatch.setattr(maintenance, "_service_is_deliberately_paused", lambda _service: False)
+    monkeypatch.setattr(maintenance, "_resume_service", lambda _root, service: resumed.append(service))
+
+    maintenance.run_maintenance("light", config=config)
+
+    assert "watch" not in resumed, "maintenance resurrected a service that was down before quiesce"
+    expected_services = list(maintenance.DEFAULT_SERVICES)
+    expected_events = [("probe", service) for service in expected_services]
+    expected_events.extend(("bootout", service) for service in expected_services)
+    assert events == expected_events
+    assert resumed == ["enrichment", "index", "drain"]
+    assert "maintenance did not boot out service watch; leaving it down" in capsys.readouterr().err
+
+
+def test_maintenance_aborts_before_db_work_when_launchd_state_is_unsafe(tmp_path, monkeypatch):
+    from brainlayer import maintenance
+
+    config = _config(tmp_path, now=dt.datetime(2026, 5, 30, 4, 5, tzinfo=dt.timezone.utc))
+    config.queue_dir.mkdir(parents=True)
+    config.db_path.write_bytes(b"db")
+    commands: list[list[str]] = []
+    monkeypatch.setattr(maintenance, "collect_lsof_entries", lambda _paths: [])
+
+    def fake_launchctl(args, **_kwargs):
+        commands.append(args)
+        return maintenance.subprocess.CompletedProcess(args, 1, "", "launchctl temporarily unavailable")
+
+    monkeypatch.setattr(maintenance, "run_command", fake_launchctl)
+    monkeypatch.setattr(maintenance, "_checkpoint_full", lambda _db_path: (0, 0, 0))
+    monkeypatch.setattr(maintenance, "_verify_search_latency", lambda _db_path: 1.0)
+
+    with pytest.raises(maintenance.MaintenanceAbort, match="cannot determine whether launchd service watch is loaded"):
+        maintenance.run_maintenance("light", config=config)
+
+    assert commands == [["launchctl", "print", f"gui/{maintenance.os.getuid()}/com.brainlayer.watch"]]
+    monkeypatch.setattr(maintenance, "_bootout_service", lambda _service: False)
+    monkeypatch.setattr(maintenance, "_service_is_loaded", lambda _service: True)
+    with pytest.raises(maintenance.MaintenanceAbort, match="failed to quiesce launchd service watch"):
+        maintenance._quiesce_services(("watch",), {})
+
+
 def test_maintenance_body_error_reports_resume_failures_as_exception_note(tmp_path, monkeypatch):
     from brainlayer import maintenance
 
@@ -424,7 +493,8 @@ def test_maintenance_body_error_reports_resume_failures_as_exception_note(tmp_pa
     config.db_path.write_bytes(b"db")
     resumed: list[str] = []
     monkeypatch.setattr(maintenance, "collect_lsof_entries", lambda _paths: [])
-    monkeypatch.setattr(maintenance, "_bootout_service", lambda _service: None)
+    monkeypatch.setattr(maintenance, "_service_is_loaded", lambda _service: True)
+    monkeypatch.setattr(maintenance, "_bootout_service", lambda _service: True)
     monkeypatch.setattr(
         maintenance,
         "_checkpoint_full",

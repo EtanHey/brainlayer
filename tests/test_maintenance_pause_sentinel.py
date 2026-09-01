@@ -47,3 +47,21 @@ def test_no_sentinel_resumes_everything(tmp_path, monkeypatch, sentinel):
     maintenance._resume_services(tmp_path, ("watch", "enrichment", "drain"))
 
     assert resumed == ["watch", "enrichment", "drain"], "no sentinel means resume all"
+
+
+def test_keep_down_accepts_service_names_and_launchd_labels(tmp_path, monkeypatch, sentinel):
+    resumed: list[str] = []
+    monkeypatch.setenv(
+        "BRAINLAYER_MAINTENANCE_KEEP_DOWN",
+        "watch, com.brainlayer.enrichment",
+    )
+    monkeypatch.setattr(maintenance, "_resume_service", lambda root, svc: resumed.append(svc))
+
+    failures = maintenance._resume_services(
+        tmp_path,
+        ("watch", "enrichment", "index", "drain"),
+        {"watch": True, "enrichment": True, "index": True, "drain": True},
+    )
+
+    assert resumed == ["index", "drain"]
+    assert failures == []
