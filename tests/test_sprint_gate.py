@@ -2,6 +2,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -38,6 +39,7 @@ def test_corpus_freezes_the_ten_verbatim_queries():
     assert corpus["thresholds"]["resource_window_seconds"] == 60
     assert corpus["thresholds"]["cpu_percent"] == 30
     assert corpus["thresholds"]["helper_rss_bytes"] == 2 * 1024**3
+    assert corpus["thresholds"]["deferred_visibility_wait_seconds"] == 5
     assert sprint_gate.resource_sample_count(corpus["thresholds"]) == 61
     assert corpus["machine_target"] == {"os": "Darwin", "architecture": "arm64"}
 
@@ -51,6 +53,32 @@ def test_truncation_notice_and_marker_must_match():
 
 def test_missing_wal_is_zero(tmp_path: Path):
     assert sprint_gate.wal_size(tmp_path / "gone") == 0
+
+
+def test_search_visibility_rejects_zero_result_header_echo(monkeypatch):
+    ticks = iter([0.0, 0.0, 1.0])
+    monkeypatch.setattr(sprint_gate.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(sprint_gate.time, "sleep", lambda _: None)
+    response = '## Entity: related context\n\n## Search results for "MARKER" - 0 of 0 shown\n\nNo results found.'
+    client = SimpleNamespace(call=lambda _name, _arguments: {"content": [{"type": "text", "text": response}]})
+    assert sprint_gate.search_visible(client, "MARKER", 0.5) is False
+
+
+def test_deferred_roundtrip_uses_configured_wait_and_reports_observed(monkeypatch):
+    waits = []
+    client = SimpleNamespace(initialize=lambda: None, call=lambda *_: {"status": "DEFERRED"}, close=lambda: None)
+    client.request = lambda _method: {"tools": [{"name": "brain_search", "description": "Search memory"}]}
+    monkeypatch.setattr(sprint_gate, "MCPClient", lambda _path, _timeout: client)
+    monkeypatch.setattr(sprint_gate, "search_visible", lambda _client, _marker, timeout: waits.append(timeout) or True)
+    ticks = iter([10.0, 12.5])
+    monkeypatch.setattr(sprint_gate.time, "monotonic", lambda: next(ticks))
+
+    config = {"socket_path": "unused", "mcp_timeout_seconds": 20, "thresholds": {"deferred_visibility_wait_seconds": 5}}
+    result = sprint_gate.check_mcp(config)
+
+    assert result["status"] == "PASS"
+    assert waits == [5]
+    assert result["details"]["planted_hit_wait_seconds"] == 2.5
 
 
 @pytest.mark.parametrize(

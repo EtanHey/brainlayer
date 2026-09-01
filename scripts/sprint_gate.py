@@ -7,6 +7,7 @@ import argparse
 import json
 import math
 import platform
+import re
 import socket
 import subprocess
 import sys
@@ -103,6 +104,24 @@ def tool_text(result: dict) -> str:
     return "\n".join(item.get("text", "") for item in result.get("content", []) if item.get("type") == "text")
 
 
+def search_result_rows(text: str) -> list[str]:
+    header = re.search(r"^## Search results for .+ - (\d+) of \d+ shown$", text, re.MULTILINE)
+    if not header or int(header.group(1)) < 1:
+        return []
+    body = text[header.end() :]
+    return re.findall(r"^### \d+\..*?(?=^### \d+\.|\Z)", body, re.MULTILINE | re.DOTALL)
+
+
+def search_visible(client: MCPClient, marker: str, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        text = tool_text(client.call("brain_search", {"query": marker, "num_results": 5}))
+        if any(marker in row for row in search_result_rows(text)):
+            return True
+        time.sleep(0.25)
+    return False
+
+
 def percentile(samples: list[float], fraction: float) -> float:
     ordered = sorted(samples)
     return ordered[max(0, math.ceil(len(ordered) * fraction) - 1)]
@@ -167,14 +186,19 @@ def check_mcp(config: dict) -> dict:
             },
         )
         store_status = stored.get("status")
-        hit = False
-        for _ in range(5):
-            hit = marker in tool_text(client.call("brain_search", {"query": marker, "num_results": 5}))
-            if hit:
-                break
-            time.sleep(0.25)
+        wait_budget = config["thresholds"]["deferred_visibility_wait_seconds"] if store_status == "DEFERRED" else 1.25
+        wait_started = time.monotonic()
+        hit = search_visible(client, marker, wait_budget)
+        observed_wait = round(time.monotonic() - wait_started, 3)
         passed = intact and store_status in SUCCESS_STATUSES and hit
-        return status("mcp_roundtrip", passed, **tool_details, store_status=store_status, planted_hit=hit)
+        return status(
+            "mcp_roundtrip",
+            passed,
+            **tool_details,
+            store_status=store_status,
+            planted_hit=hit,
+            planted_hit_wait_seconds=observed_wait,
+        )
     finally:
         client.close()
 
