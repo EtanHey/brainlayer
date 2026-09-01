@@ -10,7 +10,7 @@ from scripts import sprint_gate
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "sprint_gate.py"
-CORPUS = ROOT / "docs.local" / "plans" / "2026-09-01-sprint-gate" / "corpus.json"
+CORPUS = ROOT / "tests" / "fixtures" / "sprint_gate" / "corpus.json"
 FIXTURES = ROOT / "tests" / "fixtures" / "sprint_gate"
 QUERIES = (
     "watch bootout typing lag|hybrid helper CPU respawn|brainlayer sprint plan ready milestone|v1.5.10 release install.sh python package|tag filter exact match test socat|enrichment pause sentinel 2026-08-04|cmuxlayer tight-loop contract smaller PRs|how did I implement authentication|agada-bench recall placebo|deploy-local-prod M1 receipts"
