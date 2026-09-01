@@ -51,7 +51,7 @@ def test_truncation_notice_and_marker_must_match():
     assert sprint_gate.validate_tools(result)[0] is False
 
 
-def test_validate_tools_reports_first_truncation_rung():
+def test_validate_tools_reports_absent_optional_fields_without_failing_rung_zero():
     result = {
         "tools": [
             {
@@ -64,8 +64,8 @@ def test_validate_tools_reports_first_truncation_rung():
 
     intact, details = sprint_gate.validate_tools(result)
 
-    assert intact is False
-    assert details["truncation_ladder_valid"] is False
+    assert intact is True
+    assert details["truncation_order_valid"] is True
     assert details["missing_annotations"] == ["brain_search"]
     assert details["missing_input_schema_prose"] == ["brain_search"]
 
@@ -86,21 +86,25 @@ def test_validate_tools_rejects_description_truncation_before_first_rung():
     intact, details = sprint_gate.validate_tools(result)
 
     assert intact is False
-    assert details["truncation_ladder_valid"] is False
+    assert details["truncation_order_valid"] is False
 
 
-def test_validate_tools_accepts_intentionally_compact_core_palette():
+def test_validate_tools_accepts_correctly_ordered_description_truncation():
     result = {
         "tools": [
-            {"name": name, "description": "Core tool", "inputSchema": {"type": "object"}}
-            for name in sprint_gate.CORE_TOOL_NAMES
-        ]
+            {
+                "name": "brain_search",
+                "description": "Search…[truncated]",
+                "inputSchema": {"type": "object"},
+            }
+        ],
+        "_meta": {"brainlayer/descriptionsTruncated": {"tools": ["brain_search"]}},
     }
 
     intact, details = sprint_gate.validate_tools(result)
 
     assert intact is True
-    assert details["truncation_ladder_valid"] is True
+    assert details["truncation_order_valid"] is True
 
 
 def test_missing_wal_is_zero(tmp_path: Path):
@@ -118,7 +122,12 @@ def test_search_visibility_rejects_zero_result_header_echo(monkeypatch):
 
 def test_deferred_roundtrip_uses_configured_wait_and_reports_observed(monkeypatch):
     waits = []
-    client = SimpleNamespace(initialize=lambda: None, call=lambda *_: {"status": "DEFERRED"}, close=lambda: None)
+    calls = []
+    client = SimpleNamespace(
+        initialize=lambda: None,
+        call=lambda name, *_: calls.append(name) or {"status": "DEFERRED"},
+        close=lambda: None,
+    )
     client.request = lambda _method: {
         "tools": [
             {
@@ -138,6 +147,7 @@ def test_deferred_roundtrip_uses_configured_wait_and_reports_observed(monkeypatc
     result = sprint_gate.check_mcp(config)
 
     assert result["status"] == "PASS"
+    assert calls == ["expand_palette", "brain_store"]
     assert waits == [5]
     assert result["details"]["planted_hit_wait_seconds"] == 2.5
 
