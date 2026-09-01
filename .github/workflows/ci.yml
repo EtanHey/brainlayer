@@ -156,6 +156,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Reject tracked docs.local files
+        shell: bash
+        run: |
+          tracked_docs_local="$(git ls-files docs.local)"
+          if [[ -n "$tracked_docs_local" ]]; then
+            echo "::error::docs.local is ignored but contains tracked files:"
+            printf '%s\n' "$tracked_docs_local"
+            exit 1
+          fi
+          echo "No tracked files under docs.local/."
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
