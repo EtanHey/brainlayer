@@ -8,6 +8,21 @@ def _pragma_value(conn, name: str) -> int:
     return int(row[0])
 
 
+def test_read_mmap_bytes_defaults_to_two_gb(monkeypatch):
+    from brainlayer import vector_store
+
+    monkeypatch.delenv("BRAINLAYER_READ_MMAP_BYTES", raising=False)
+    assert vector_store._read_mmap_bytes() == 2_000_000_000
+
+
+@pytest.mark.parametrize("override", [4_000_000_000, 500_000_000])
+def test_read_mmap_bytes_env_override_wins(monkeypatch, override):
+    from brainlayer import vector_store
+
+    monkeypatch.setenv("BRAINLAYER_READ_MMAP_BYTES", str(override))
+    assert vector_store._read_mmap_bytes() == override
+
+
 def test_read_connection_sets_mmap_size(tmp_path, monkeypatch):
     monkeypatch.delenv("BRAINLAYER_READ_MMAP_BYTES", raising=False)
     store = VectorStore(tmp_path / "pragma-read.db")

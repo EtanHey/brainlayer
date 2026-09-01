@@ -243,7 +243,7 @@ def _int_env(name: str, default: int) -> int:
 
 
 def _read_mmap_bytes() -> int:
-    return max(_int_env("BRAINLAYER_READ_MMAP_BYTES", 30_000_000_000), 0)
+    return max(_int_env("BRAINLAYER_READ_MMAP_BYTES", 2_000_000_000), 0)
 
 
 def _configure_reader_pragmas(conn: apsw.Connection) -> None:
