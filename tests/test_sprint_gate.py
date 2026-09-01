@@ -157,6 +157,36 @@ def test_live_gate_rejects_unknown_machine_target_key(monkeypatch, capsys, tmp_p
 
 
 @pytest.mark.parametrize(
+    ("machine_target", "error"),
+    [
+        ({}, "machine target is incomplete"),
+        ({"os": "Darwin"}, "machine target is incomplete"),
+        ("Darwin/arm64", "machine target is invalid"),
+    ],
+)
+def test_live_gate_rejects_invalid_machine_target(
+    monkeypatch, capsys, tmp_path: Path, machine_target: object, error: str
+):
+    config = deterministic_live_config()
+    config["machine_target"] = machine_target
+    returncode, payload = run_live_config(monkeypatch, capsys, tmp_path, config)
+    assert returncode == 1
+    assert payload["status"] == "FAIL"
+    assert payload["checks"] == []
+    assert payload["error"] == error
+
+
+def test_live_gate_rejects_non_object_latency_baseline(monkeypatch, capsys, tmp_path: Path):
+    config = deterministic_live_config()
+    config["latency_baseline_ms"] = "not-an-object"
+    returncode, payload = run_live_config(monkeypatch, capsys, tmp_path, config)
+    assert returncode == 1
+    assert payload["status"] == "FAIL"
+    assert payload["checks"] == []
+    assert payload["error"] == "latency baseline is invalid"
+
+
+@pytest.mark.parametrize(
     ("missing_key", "error"),
     [
         ("machine_target", "machine target is missing"),

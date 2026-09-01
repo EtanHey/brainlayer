@@ -293,13 +293,19 @@ def main(argv: list[str] | None = None) -> int:
     machine_target = config.get("machine_target")
     if not args.fixture and machine_target is None:
         return fail("machine target is missing")
+    if not args.fixture and not isinstance(machine_target, dict):
+        return fail("machine target is invalid")
+    if not args.fixture and not {"os", "architecture"}.issubset(machine_target):
+        return fail("machine target is incomplete")
     if not args.fixture and any(key not in machine or machine[key] != value for key, value in machine_target.items()):
         return fail("machine target mismatch")
     selected = config.get("checks", list(CHECKS))
     latency_baseline = config.get("latency_baseline_ms")
     if not args.fixture and "search_latency" in selected and latency_baseline is None:
         return fail("latency baseline is missing")
-    calibrated_hostname = latency_baseline.get("hostname") if latency_baseline else None
+    if not args.fixture and latency_baseline is not None and not isinstance(latency_baseline, dict):
+        return fail("latency baseline is invalid")
+    calibrated_hostname = latency_baseline.get("hostname") if isinstance(latency_baseline, dict) else None
     if not args.fixture and "search_latency" in selected and not calibrated_hostname:
         return fail("latency baseline is missing its calibrated hostname")
     wal_monitor = None
