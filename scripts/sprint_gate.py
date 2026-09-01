@@ -196,7 +196,11 @@ def check_mcp(config: dict) -> dict:
     client = MCPClient(config["socket_path"], config["mcp_timeout_seconds"])
     try:
         client.initialize()
-        client.call("expand_palette", {})
+        try:
+            client.call("expand_palette", {})
+        except RuntimeError as error:
+            if "-32601" not in str(error) or "Unknown tool" not in str(error):
+                raise
         intact, tool_details = validate_tools(client.request("tools/list"))
         marker = f"SPRINT-GATE-TEST-{socket.gethostname()}-{time.time_ns()}"
         stored = client.call(

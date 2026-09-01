@@ -120,12 +120,20 @@ def test_search_visibility_rejects_zero_result_header_echo(monkeypatch):
     assert sprint_gate.search_visible(client, "MARKER", 0.5) is False
 
 
-def test_deferred_roundtrip_uses_configured_wait_and_reports_observed(monkeypatch):
+@pytest.mark.parametrize("expand_error", [None, RuntimeError("{'code': -32601, 'message': 'Unknown tool'}")])
+def test_deferred_roundtrip_uses_configured_wait_and_reports_observed(monkeypatch, expand_error):
     waits = []
     calls = []
+
+    def call(name, *_):
+        calls.append(name)
+        if name == "expand_palette" and expand_error:
+            raise expand_error
+        return {"status": "DEFERRED"}
+
     client = SimpleNamespace(
         initialize=lambda: None,
-        call=lambda name, *_: calls.append(name) or {"status": "DEFERRED"},
+        call=call,
         close=lambda: None,
     )
     client.request = lambda _method: {
