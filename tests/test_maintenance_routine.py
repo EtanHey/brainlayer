@@ -430,15 +430,15 @@ def test_maintenance_leaves_service_down_when_not_loaded_before_quiesce(tmp_path
     def fake_launchctl(args, **_kwargs):
         assert args[:2] == ["launchctl", "print"]
         service = args[-1].rsplit(".", 1)[-1]
-        events.append(("probe", service))
-        missing = service in {"watch", "enrichment"}
-        return maintenance.subprocess.CompletedProcess(
-            args, 113 if missing else 0, "", "Could not find service" if missing else ""
-        )
+        if ("probe", service) not in events:
+            events.append(("probe", service))
+        returncode = 113 if service in {"watch", "enrichment"} else 0
+        stderr = "Could not find service" if returncode else ""
+        return maintenance.subprocess.CompletedProcess(args, returncode, "", stderr)
 
     def fake_bootout(service: str) -> bool:
         events.append(("bootout", service))
-        return service in {"enrichment", "drain"}
+        return service != "watch"
 
     monkeypatch.setattr(maintenance, "run_command", fake_launchctl)
     monkeypatch.setattr(maintenance, "_bootout_service", fake_bootout)
@@ -454,11 +454,11 @@ def test_maintenance_leaves_service_down_when_not_loaded_before_quiesce(tmp_path
     expected_events = [("probe", service) for service in expected_services]
     expected_events.extend(("bootout", service) for service in expected_services)
     assert events == expected_events
-    assert resumed == ["enrichment", "drain"]
+    assert resumed == ["enrichment", "index", "drain"]
     assert "maintenance did not boot out service watch; leaving it down" in capsys.readouterr().err
 
 
-def test_maintenance_aborts_before_quiesce_when_service_state_is_indeterminate(tmp_path, monkeypatch):
+def test_maintenance_aborts_before_db_work_when_launchd_state_is_unsafe(tmp_path, monkeypatch):
     from brainlayer import maintenance
 
     config = _config(tmp_path, now=dt.datetime(2026, 5, 30, 4, 5, tzinfo=dt.timezone.utc))
@@ -479,6 +479,10 @@ def test_maintenance_aborts_before_quiesce_when_service_state_is_indeterminate(t
         maintenance.run_maintenance("light", config=config)
 
     assert commands == [["launchctl", "print", f"gui/{maintenance.os.getuid()}/com.brainlayer.watch"]]
+    monkeypatch.setattr(maintenance, "_bootout_service", lambda _service: False)
+    monkeypatch.setattr(maintenance, "_service_is_loaded", lambda _service: True)
+    with pytest.raises(maintenance.MaintenanceAbort, match="failed to quiesce launchd service watch"):
+        maintenance._quiesce_services(("watch",), {})
 
 
 def test_maintenance_body_error_reports_resume_failures_as_exception_note(tmp_path, monkeypatch):

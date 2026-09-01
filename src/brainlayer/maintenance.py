@@ -417,8 +417,11 @@ def _resume_service(repo_root: Path, service: str) -> None:
     run_command([str(launchd_dir / "install.sh"), service], check=True)
 
 
-def _quiesce_services(services: Sequence[str]) -> dict[str, bool]:
-    return {service: bool(_bootout_service(service)) for service in services}
+def _quiesce_services(services: Sequence[str], booted_out: dict[str, bool]) -> None:
+    for service in services:
+        booted_out[service] = bool(_bootout_service(service))
+        if not booted_out[service] and _service_is_loaded(service):
+            raise MaintenanceAbort(f"failed to quiesce launchd service {service}; it remains loaded")
 
 
 def _git_head_sha(repo_root: Path) -> str | None:
@@ -522,10 +525,7 @@ def _service_is_deliberately_paused(service: str) -> bool:
 
 
 def _maintenance_keep_down_services() -> set[str]:
-    """Services that the launchd job must stop and leave down.
-
-    Launchd reads this variable from ``~/.config/brainlayer/brainlayer.env``.
-    """
+    """Services launchd reads from ``~/.config/brainlayer/brainlayer.env`` and leaves down."""
     prefix = "com.brainlayer."
     entries = os.environ.get("BRAINLAYER_MAINTENANCE_KEEP_DOWN", "").split(",")
     return {entry.removeprefix(prefix) for raw_entry in entries if (entry := raw_entry.strip())}
@@ -669,12 +669,9 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
     resume_failures: list[tuple[str, Exception]] = []
     body_error: BaseException | None = None
     loaded_before = {service: _service_is_loaded(service) for service in services}
-    booted_out = _quiesce_services(services)
-    resume_eligible = {service: booted_out.get(service, False) for service in services}
-    for service in services:
-        if loaded_before[service] != resume_eligible[service]:
-            print(f"service {service} changed loaded state during maintenance quiesce", file=sys.stderr)
+    booted_out: dict[str, bool] = {}
     try:
+        _quiesce_services(tuple(loaded_before), booted_out)
         result.checkpoint = _checkpoint_full(config.db_path)
         if mode == "full":
             backup = run_backup(retention_policy=WEEKLY_RETENTION)
@@ -697,7 +694,7 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
         body_error = exc
         raise
     finally:
-        resume_failures = _resume_services(config.repo_root, services, resume_eligible)
+        resume_failures = _resume_services(config.repo_root, services, booted_out)
         if resume_failures and body_error is not None:
             resume_failure_reason = _format_resume_failures(resume_failures)
             body_error.add_note(resume_failure_reason)
