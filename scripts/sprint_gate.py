@@ -22,6 +22,7 @@ from brainlayer.paths import get_db_path
 CORPUS = ROOT / "tests" / "fixtures" / "sprint_gate" / "corpus.json"
 SUCCESS_STATUSES = {"STORED", "DUPLICATE", "MERGED", "DEFERRED"}
 CHECKS = ("search_latency", "mcp_roundtrip", "resource_budget", "wal_bound")
+CORE_TOOL_NAMES = {"brain_search", "brain_store", "brain_recall", "brain_expand", "expand_palette"}
 
 
 def wal_size(path: Path) -> int:
@@ -29,6 +30,12 @@ def wal_size(path: Path) -> int:
         return path.stat().st_size
     except FileNotFoundError:
         return 0
+
+
+def contains_key(value, key: str) -> bool:
+    if isinstance(value, dict):
+        return key in value or any(contains_key(item, key) for item in value.values())
+    return isinstance(value, list) and any(contains_key(item, key) for item in value)
 
 
 class MCPClient:
@@ -156,12 +163,33 @@ def check_search(config: dict) -> dict:
 
 def validate_tools(result: dict) -> tuple[bool, dict]:
     tools = result.get("tools", [])
+    tool_names = [tool.get("name", "unknown") for tool in tools]
     missing = [tool.get("name", "unknown") for tool in tools if not tool.get("description")]
     truncated = [tool.get("name", "unknown") for tool in tools if tool.get("description", "").endswith("…[truncated]")]
     notice = result.get("_meta", {}).get("brainlayer/descriptionsTruncated")
     notice_names = set(notice.get("tools", [])) if isinstance(notice, dict) else set()
-    intact = bool(tools) and not missing and notice_names == set(truncated)
-    return intact, {"tool_count": len(tools), "missing_descriptions": missing, "truncated_descriptions": truncated}
+    core_palette = len(tool_names) == len(CORE_TOOL_NAMES) and set(tool_names) == CORE_TOOL_NAMES
+    missing_annotations = (
+        [] if core_palette else [tool.get("name", "unknown") for tool in tools if "annotations" not in tool]
+    )
+    missing_input_schema_prose = (
+        []
+        if core_palette
+        else [tool.get("name", "unknown") for tool in tools if not contains_key(tool.get("inputSchema"), "description")]
+    )
+    truncation_order_valid = not truncated or all(
+        "annotations" not in tool and not contains_key(tool.get("inputSchema"), "description") for tool in tools
+    )
+    ladder_clean = not missing_annotations and not missing_input_schema_prose and truncation_order_valid
+    intact = bool(tools) and not missing and notice_names == set(truncated) and ladder_clean
+    return intact, {
+        "tool_count": len(tools),
+        "missing_descriptions": missing,
+        "truncated_descriptions": truncated,
+        "missing_annotations": missing_annotations,
+        "missing_input_schema_prose": missing_input_schema_prose,
+        "truncation_ladder_valid": ladder_clean,
+    }
 
 
 def check_mcp(config: dict) -> dict:

@@ -51,6 +51,58 @@ def test_truncation_notice_and_marker_must_match():
     assert sprint_gate.validate_tools(result)[0] is False
 
 
+def test_validate_tools_reports_first_truncation_rung():
+    result = {
+        "tools": [
+            {
+                "name": "brain_search",
+                "description": "Search memory",
+                "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}},
+            }
+        ]
+    }
+
+    intact, details = sprint_gate.validate_tools(result)
+
+    assert intact is False
+    assert details["truncation_ladder_valid"] is False
+    assert details["missing_annotations"] == ["brain_search"]
+    assert details["missing_input_schema_prose"] == ["brain_search"]
+
+
+def test_validate_tools_rejects_description_truncation_before_first_rung():
+    result = {
+        "tools": [
+            {
+                "name": "brain_search",
+                "description": "Search…[truncated]",
+                "annotations": {},
+                "inputSchema": {"properties": {"query": {"description": "Search query"}}},
+            }
+        ],
+        "_meta": {"brainlayer/descriptionsTruncated": {"tools": ["brain_search"]}},
+    }
+
+    intact, details = sprint_gate.validate_tools(result)
+
+    assert intact is False
+    assert details["truncation_ladder_valid"] is False
+
+
+def test_validate_tools_accepts_intentionally_compact_core_palette():
+    result = {
+        "tools": [
+            {"name": name, "description": "Core tool", "inputSchema": {"type": "object"}}
+            for name in sprint_gate.CORE_TOOL_NAMES
+        ]
+    }
+
+    intact, details = sprint_gate.validate_tools(result)
+
+    assert intact is True
+    assert details["truncation_ladder_valid"] is True
+
+
 def test_missing_wal_is_zero(tmp_path: Path):
     assert sprint_gate.wal_size(tmp_path / "gone") == 0
 
@@ -67,7 +119,16 @@ def test_search_visibility_rejects_zero_result_header_echo(monkeypatch):
 def test_deferred_roundtrip_uses_configured_wait_and_reports_observed(monkeypatch):
     waits = []
     client = SimpleNamespace(initialize=lambda: None, call=lambda *_: {"status": "DEFERRED"}, close=lambda: None)
-    client.request = lambda _method: {"tools": [{"name": "brain_search", "description": "Search memory"}]}
+    client.request = lambda _method: {
+        "tools": [
+            {
+                "name": "brain_search",
+                "description": "Search memory",
+                "annotations": {},
+                "inputSchema": {"properties": {"query": {"description": "Search query"}}},
+            }
+        ]
+    }
     monkeypatch.setattr(sprint_gate, "MCPClient", lambda _path, _timeout: client)
     monkeypatch.setattr(sprint_gate, "search_visible", lambda _client, _marker, timeout: waits.append(timeout) or True)
     ticks = iter([10.0, 12.5])
