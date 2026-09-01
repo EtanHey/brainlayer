@@ -18,6 +18,7 @@ import apsw
 
 from .backup_daily import WEEKLY_RETENTION, run_backup
 from .drain import BurnDrainResult, burn_drain_once
+from .launchd_primitive import is_launchd_label_loaded
 from .paths import get_db_path
 from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
 from .queue_io import get_queue_dir
@@ -361,11 +362,13 @@ def _bootout_service(service: str) -> bool:
 
 
 def _service_is_loaded(service: str) -> bool:
-    result = run_command(
-        ["launchctl", "print", f"gui/{os.getuid()}/{_launchd_label(service)}"],
-        check=False,
+    state = is_launchd_label_loaded(
+        _launchd_label(service),
+        command_runner=lambda args: run_command(args, check=False),
     )
-    return result.returncode == 0
+    if state is None:
+        raise MaintenanceAbort(f"cannot determine whether launchd service {service} is loaded")
+    return state
 
 
 def _as_launchd_dir(path: Path) -> Path:
@@ -667,7 +670,6 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
     body_error: BaseException | None = None
     loaded_before = {service: _service_is_loaded(service) for service in services}
     booted_out = _quiesce_services(services)
-    # A successful bootout is the authoritative, race-safe proof that maintenance changed the state.
     resume_eligible = {service: booted_out.get(service, False) for service in services}
     for service in services:
         if loaded_before[service] != resume_eligible[service]:

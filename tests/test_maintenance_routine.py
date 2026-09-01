@@ -431,11 +431,14 @@ def test_maintenance_leaves_service_down_when_not_loaded_before_quiesce(tmp_path
         assert args[:2] == ["launchctl", "print"]
         service = args[-1].rsplit(".", 1)[-1]
         events.append(("probe", service))
-        return maintenance.subprocess.CompletedProcess(args, 1 if service == "watch" else 0, "", "")
+        missing = service in {"watch", "enrichment"}
+        return maintenance.subprocess.CompletedProcess(
+            args, 113 if missing else 0, "", "Could not find service" if missing else ""
+        )
 
     def fake_bootout(service: str) -> bool:
         events.append(("bootout", service))
-        return service != "watch"
+        return service in {"enrichment", "drain"}
 
     monkeypatch.setattr(maintenance, "run_command", fake_launchctl)
     monkeypatch.setattr(maintenance, "_bootout_service", fake_bootout)
@@ -451,35 +454,31 @@ def test_maintenance_leaves_service_down_when_not_loaded_before_quiesce(tmp_path
     expected_events = [("probe", service) for service in expected_services]
     expected_events.extend(("bootout", service) for service in expected_services)
     assert events == expected_events
-    assert resumed == ["enrichment", "index", "drain"]
+    assert resumed == ["enrichment", "drain"]
     assert "maintenance did not boot out service watch; leaving it down" in capsys.readouterr().err
 
 
-def test_maintenance_restores_service_started_between_probe_and_bootout(tmp_path, monkeypatch):
+def test_maintenance_aborts_before_quiesce_when_service_state_is_indeterminate(tmp_path, monkeypatch):
     from brainlayer import maintenance
 
     config = _config(tmp_path, now=dt.datetime(2026, 5, 30, 4, 5, tzinfo=dt.timezone.utc))
     config.queue_dir.mkdir(parents=True)
     config.db_path.write_bytes(b"db")
-    resumed: list[str] = []
+    commands: list[list[str]] = []
     monkeypatch.setattr(maintenance, "collect_lsof_entries", lambda _paths: [])
 
     def fake_launchctl(args, **_kwargs):
-        service = args[-1].rsplit(".", 1)[-1]
-        if args[:2] == ["launchctl", "print"]:
-            return maintenance.subprocess.CompletedProcess(args, 1 if service == "watch" else 0, "", "")
-        assert args[:2] == ["launchctl", "bootout"]
-        return maintenance.subprocess.CompletedProcess(args, 0 if service == "watch" else 1, "", "")
+        commands.append(args)
+        return maintenance.subprocess.CompletedProcess(args, 1, "", "launchctl temporarily unavailable")
 
     monkeypatch.setattr(maintenance, "run_command", fake_launchctl)
     monkeypatch.setattr(maintenance, "_checkpoint_full", lambda _db_path: (0, 0, 0))
     monkeypatch.setattr(maintenance, "_verify_search_latency", lambda _db_path: 1.0)
-    monkeypatch.setattr(maintenance, "_service_is_deliberately_paused", lambda _service: False)
-    monkeypatch.setattr(maintenance, "_resume_service", lambda _root, service: resumed.append(service))
 
-    maintenance.run_maintenance("light", config=config)
+    with pytest.raises(maintenance.MaintenanceAbort, match="cannot determine whether launchd service watch is loaded"):
+        maintenance.run_maintenance("light", config=config)
 
-    assert resumed == ["watch"], "maintenance must restore only services that it successfully booted out"
+    assert commands == [["launchctl", "print", f"gui/{maintenance.os.getuid()}/com.brainlayer.watch"]]
 
 
 def test_maintenance_body_error_reports_resume_failures_as_exception_note(tmp_path, monkeypatch):
