@@ -352,8 +352,12 @@ def _launchd_label(service: str) -> str:
     return f"com.brainlayer.{service}"
 
 
-def _bootout_service(service: str) -> None:
-    run_command(["launchctl", "bootout", f"gui/{os.getuid()}/{_launchd_label(service)}"], check=False)
+def _bootout_service(service: str) -> bool:
+    result = run_command(
+        ["launchctl", "bootout", f"gui/{os.getuid()}/{_launchd_label(service)}"],
+        check=False,
+    )
+    return result.returncode == 0
 
 
 def _service_is_loaded(service: str) -> bool:
@@ -410,9 +414,8 @@ def _resume_service(repo_root: Path, service: str) -> None:
     run_command([str(launchd_dir / "install.sh"), service], check=True)
 
 
-def _quiesce_services(services: Sequence[str]) -> None:
-    for service in services:
-        _bootout_service(service)
+def _quiesce_services(services: Sequence[str]) -> dict[str, bool]:
+    return {service: bool(_bootout_service(service)) for service in services}
 
 
 def _git_head_sha(repo_root: Path) -> str | None:
@@ -534,7 +537,7 @@ def _resume_services(
     keep_down = _maintenance_keep_down_services()
     for service in services:
         if loaded_before is not None and not loaded_before.get(service, False):
-            print(f"service {service} was not loaded before maintenance; leaving it down", file=sys.stderr)
+            print(f"maintenance did not boot out service {service}; leaving it down", file=sys.stderr)
             continue
         if service in keep_down:
             print(
@@ -663,7 +666,12 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
     resume_failures: list[tuple[str, Exception]] = []
     body_error: BaseException | None = None
     loaded_before = {service: _service_is_loaded(service) for service in services}
-    _quiesce_services(services)
+    booted_out = _quiesce_services(services)
+    # A successful bootout is the authoritative, race-safe proof that maintenance changed the state.
+    resume_eligible = {service: booted_out.get(service, False) for service in services}
+    for service in services:
+        if loaded_before[service] != resume_eligible[service]:
+            print(f"service {service} changed loaded state during maintenance quiesce", file=sys.stderr)
     try:
         result.checkpoint = _checkpoint_full(config.db_path)
         if mode == "full":
@@ -687,7 +695,7 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
         body_error = exc
         raise
     finally:
-        resume_failures = _resume_services(config.repo_root, services, loaded_before)
+        resume_failures = _resume_services(config.repo_root, services, resume_eligible)
         if resume_failures and body_error is not None:
             resume_failure_reason = _format_resume_failures(resume_failures)
             body_error.add_note(resume_failure_reason)
