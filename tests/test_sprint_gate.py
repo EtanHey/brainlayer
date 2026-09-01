@@ -31,6 +31,40 @@ def run_fixture(name: str) -> tuple[subprocess.CompletedProcess[str], dict]:
     return result, json.loads(result.stdout)
 
 
+def deterministic_live_config() -> dict:
+    config = json.loads(CORPUS.read_text(encoding="utf-8"))
+    config.update(
+        {
+            "checks": list(sprint_gate.CHECKS),
+            "latency_samples_ms": [100],
+            "mcp_fixture": {"tools_intact": True, "store_status": "STORED", "planted_hit": True},
+            "resource_samples": [
+                {
+                    "daemon": {"cpu_pct": 0, "rss_bytes": 0, "pids": [1]},
+                    "helper": {"cpu_pct": 0, "rss_bytes": 0, "pids": []},
+                    "watcher": {"cpu_pct": 0, "rss_bytes": 0, "pids": []},
+                    "drain": {"cpu_pct": 0, "rss_bytes": 0, "pids": []},
+                }
+            ],
+            "wal_samples_bytes": [0],
+        }
+    )
+    return config
+
+
+def run_live_config(monkeypatch, capsys, tmp_path: Path, config: dict, hostname: str | None = None) -> tuple[int, dict]:
+    live_config = tmp_path / "live.json"
+    live_config.write_text(json.dumps(config), encoding="utf-8")
+    monkeypatch.setattr(sprint_gate, "CORPUS", live_config)
+    target = config.get("machine_target", {})
+    for key, attribute in (("os", "system"), ("architecture", "machine")):
+        if key in target:
+            monkeypatch.setattr(sprint_gate.platform, attribute, lambda key=key: target[key])
+    if hostname:
+        monkeypatch.setattr(sprint_gate.socket, "gethostname", lambda: hostname)
+    return sprint_gate.main(["--json"]), json.loads(capsys.readouterr().out)
+
+
 def test_corpus_freezes_the_ten_verbatim_queries():
     assert CORPUS.is_file(), "frozen corpus is missing"
     corpus = json.loads(CORPUS.read_text(encoding="utf-8"))
@@ -158,6 +192,110 @@ def test_deferred_roundtrip_uses_configured_wait_and_reports_observed(monkeypatc
     assert calls == ["expand_palette", "brain_store"]
     assert waits == [5]
     assert result["details"]["planted_hit_wait_seconds"] == 2.5
+
+
+def test_live_gate_rejects_wrong_machine(monkeypatch, capsys):
+    monkeypatch.setattr(sprint_gate, "CHECKS", ())
+    monkeypatch.setattr(sprint_gate.platform, "machine", lambda: "wrong")
+    assert sprint_gate.main(["--json"]) == 1
+    assert "machine target mismatch" in json.loads(capsys.readouterr().out)["error"]
+
+
+def test_live_gate_skips_latency_on_uncalibrated_host(monkeypatch, capsys, tmp_path: Path):
+    config = deterministic_live_config()
+    returncode, payload = run_live_config(monkeypatch, capsys, tmp_path, config, "uncalibrated.local")
+    assert returncode == 0
+    assert [check["name"] for check in payload["checks"]] == list(sprint_gate.CHECKS)
+    assert payload["skipped"] == ["search_latency"]
+    assert payload["checks"][0] == {
+        "name": "search_latency",
+        "status": "SKIPPED",
+        "details": {
+            "reason": "uncalibrated host",
+            "running_hostname": "uncalibrated.local",
+            "calibrated_hostname": "MacBook-Pro.local",
+        },
+    }
+    assert {check["status"] for check in payload["checks"][1:]} == {"PASS"}
+
+
+def test_live_gate_rejects_missing_baseline_hostname(monkeypatch, capsys, tmp_path: Path):
+    config = deterministic_live_config()
+    del config["latency_baseline_ms"]["hostname"]
+    returncode, payload = run_live_config(monkeypatch, capsys, tmp_path, config)
+    assert returncode == 1
+    assert payload["error"] == "latency baseline is missing its calibrated hostname"
+
+
+def test_live_gate_rejects_unknown_machine_target_key(monkeypatch, capsys, tmp_path: Path):
+    config = deterministic_live_config()
+    config["machine_target"]["model"] = "Mac14,7"
+    returncode, payload = run_live_config(monkeypatch, capsys, tmp_path, config)
+    assert returncode == 1
+    assert payload["error"] == "machine target mismatch"
+
+
+@pytest.mark.parametrize(
+    ("machine_target", "error"),
+    [
+        ({}, "machine target is incomplete"),
+        ({"os": "Darwin"}, "machine target is incomplete"),
+        ("Darwin/arm64", "machine target is invalid"),
+    ],
+)
+def test_live_gate_rejects_invalid_machine_target(
+    monkeypatch, capsys, tmp_path: Path, machine_target: object, error: str
+):
+    config = deterministic_live_config()
+    config["machine_target"] = machine_target
+    returncode, payload = run_live_config(monkeypatch, capsys, tmp_path, config)
+    assert returncode == 1
+    assert payload["status"] == "FAIL"
+    assert payload["checks"] == []
+    assert payload["error"] == error
+
+
+def test_live_gate_rejects_non_object_latency_baseline(monkeypatch, capsys, tmp_path: Path):
+    config = deterministic_live_config()
+    config["latency_baseline_ms"] = "not-an-object"
+    returncode, payload = run_live_config(monkeypatch, capsys, tmp_path, config)
+    assert returncode == 1
+    assert payload["status"] == "FAIL"
+    assert payload["checks"] == []
+    assert payload["error"] == "latency baseline is invalid"
+
+
+@pytest.mark.parametrize(
+    ("missing_key", "error"),
+    [
+        ("machine_target", "machine target is missing"),
+        ("latency_baseline_ms", "latency baseline is missing"),
+    ],
+)
+def test_live_gate_rejects_missing_config_block(monkeypatch, capsys, tmp_path: Path, missing_key: str, error: str):
+    config = deterministic_live_config()
+    del config[missing_key]
+    returncode, payload = run_live_config(monkeypatch, capsys, tmp_path, config)
+    assert returncode == 1
+    assert payload["error"] == error
+
+
+def test_live_gate_does_not_require_baseline_without_latency(monkeypatch, capsys, tmp_path: Path):
+    config = deterministic_live_config()
+    config["checks"] = ["mcp_roundtrip"]
+    del config["latency_baseline_ms"]
+    returncode, payload = run_live_config(monkeypatch, capsys, tmp_path, config)
+    assert returncode == 0
+    assert payload["checks"][0]["status"] == "PASS"
+
+
+def test_live_gate_runs_latency_on_calibrated_host(monkeypatch, capsys, tmp_path: Path):
+    config = deterministic_live_config()
+    hostname = config["latency_baseline_ms"]["hostname"]
+    returncode, payload = run_live_config(monkeypatch, capsys, tmp_path, config, hostname)
+    assert returncode == 0
+    assert payload["skipped"] == []
+    assert payload["checks"][0]["status"] == "PASS"
 
 
 @pytest.mark.parametrize(
