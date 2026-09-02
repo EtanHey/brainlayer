@@ -426,6 +426,24 @@ def _launchctl_running(output: str) -> bool:
     return any(line.strip() == "state = running" for line in output.splitlines())
 
 
+def _watch_disabled_state(config: Config, command_runner: CommandRunner) -> str:
+    """An operator `launchctl disable` is a standing order: revivers check print-disabled first.
+
+    Returns "disabled", "enabled", or "unknown". Unknown must be treated as disabled (fail closed).
+    """
+    try:
+        completed = command_runner(["launchctl", "print-disabled", f"gui/{os.getuid()}"])
+    except Exception:
+        return "unknown"
+    if int(getattr(completed, "returncode", 0)) != 0:
+        return "unknown"
+    # Current macOS prints `=> disabled`; older releases print `=> true`. Both mean disabled.
+    needles = {f'"{config.watch_label}" => disabled', f'"{config.watch_label}" => true'}
+    if any(line.strip() in needles for line in str(getattr(completed, "stdout", "") or "").splitlines()):
+        return "disabled"
+    return "enabled"
+
+
 def _restart_watch(
     config: Config,
     command_runner: CommandRunner,
@@ -618,11 +636,17 @@ def run_once(
     elif evidence.pending_files == 0:
         action = "idle"
         stalled_ticks = 0
+    elif (disabled_state := _watch_disabled_state(config, command_runner)) != "enabled":
+        # The queue growing while ingestion is intentionally off is not a stall:
+        # never bootstrap or kickstart a label the operator disabled — or one whose
+        # disabled state could not be read (fail closed).
+        action = "disabled_by_operator" if disabled_state == "disabled" else "disabled_state_unknown"
+        stalled_ticks = 0
     else:
         action = "stalled"
         stalled_ticks = previous_stalled + 1
 
-    if action in {"baseline", "progress", "idle"}:
+    if action in {"baseline", "progress", "idle", "disabled_by_operator", "disabled_state_unknown"}:
         previous_checkpoint_deferred = 0
         checkpoint_deferral_alerted = False
 
@@ -648,6 +672,14 @@ def run_once(
         drained_total=operational_progress.drained_total,
         drained_total_delta=drained_total_delta,
     )
+
+    if result.action == "disabled_state_unknown" and state.get("last_action") != "disabled_state_unknown":
+        # Fail closed, never silently: page once per episode when launchd's disabled state is unreadable.
+        try:
+            alert_fn(config, result)
+        except Exception as exc:
+            result.alert_error = str(exc)
+            print(f"throughput-watchdog disabled-state alert failed: {exc}", file=sys.stderr)
 
     previous_last_progress = state.get("last_progress_epoch")
     if action in {"baseline", "progress", "idle"} or not isinstance(previous_last_progress, int):
@@ -868,7 +900,13 @@ def main(argv: list[str] | None = None) -> int:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     print(json.dumps(asdict(result), sort_keys=True) if args.json else f"{result.action}: {result}")
-    return 1 if result.action in {"recovery_failed", "checkpoint_guard_error", "checkpoint_deferral_alert"} else 0
+    failure_actions = {
+        "recovery_failed",
+        "checkpoint_guard_error",
+        "checkpoint_deferral_alert",
+        "disabled_state_unknown",
+    }
+    return 1 if result.action in failure_actions else 0
 
 
 if __name__ == "__main__":

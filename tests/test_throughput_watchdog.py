@@ -11,6 +11,8 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "launchd" / "throughput-watchdog.py"
 PLIST_PATH = REPO_ROOT / "scripts" / "launchd" / "com.brainlayer.throughput-watchdog.plist"
@@ -53,6 +55,17 @@ def _progress(module, chunk_rowid: int, liveness_rowid: int = 0):
         chunk_rowid=chunk_rowid,
         liveness_rowid=liveness_rowid,
     )
+
+
+def _enabled_command_runner(args: list[str]):
+    """Shared runner for ticks that never recover: launchd reports the label enabled, everything else succeeds.
+
+    Tests must never shell the real launchctl (absent on Linux CI, and a real query would fail closed).
+    """
+    if args[:2] == ["launchctl", "print-disabled"]:
+        stdout = '\tdisabled services = {\n\t\t"com.example.brainlayer.watch" => enabled\n\t}\n'
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+    return SimpleNamespace(returncode=0, stdout="", stderr="")
 
 
 def _successful_recovery_runner(events: list[str] | None = None):
@@ -145,8 +158,10 @@ def test_process_alive_zero_throughput_with_pending_bytes_kickstarts_after_thres
     assert [first.stalled_ticks, second.stalled_ticks] == [1, 2]
     assert third.action == "kickstart:com.example.brainlayer.watch"
     assert third.stalled_ticks == 0
-    assert command_events[0] == "alert"
-    assert command_events[1:] == [
+    # Every stalled tick first asks launchd whether the operator disabled the label.
+    assert command_events[:3] == [f"command:launchctl print-disabled gui/{os.getuid()}"] * 3
+    assert command_events[3] == "alert"
+    assert command_events[4:] == [
         f"command:launchctl print gui/{os.getuid()}/com.example.brainlayer.watch",
         f"command:launchctl print gui/{os.getuid()}/com.example.brainlayer.watch",
         "command:/bin/kill -9 4321",
@@ -265,24 +280,28 @@ def test_chunk_progress_or_no_pending_input_resets_stall_counter(tmp_path: Path)
         now_epoch=1_000,
         progress_reader=lambda _path: _progress(module, 40),
         source_probe=lambda _config, _now: pending,
+        command_runner=_enabled_command_runner,
     )
     stalled = module.run_once(
         config,
         now_epoch=1_060,
         progress_reader=lambda _path: _progress(module, 40),
         source_probe=lambda _config, _now: pending,
+        command_runner=_enabled_command_runner,
     )
     progressed = module.run_once(
         config,
         now_epoch=1_120,
         progress_reader=lambda _path: _progress(module, 41),
         source_probe=lambda _config, _now: pending,
+        command_runner=_enabled_command_runner,
     )
     idle_result = module.run_once(
         config,
         now_epoch=1_180,
         progress_reader=lambda _path: _progress(module, 41),
         source_probe=lambda _config, _now: idle,
+        command_runner=_enabled_command_runner,
     )
 
     assert stalled.stalled_ticks == 1
@@ -302,6 +321,7 @@ def test_restart_failure_is_visible_and_not_recorded_as_recovered(tmp_path: Path
         now_epoch=1_000,
         progress_reader=lambda _path: _progress(module, 40),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
 
     def command_runner(args: list[str]):
@@ -346,6 +366,7 @@ def test_alert_failure_does_not_block_watcher_recovery(tmp_path: Path) -> None:
         now_epoch=1_000,
         progress_reader=lambda _path: _progress(module, 40),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
     command_events: list[str] = []
 
@@ -572,6 +593,7 @@ def test_liveness_progress_prevents_false_restart_for_dedupe_only_ingest(tmp_pat
         now_epoch=1_000,
         progress_reader=lambda _path: _progress(module, 40, 10),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
 
     result = module.run_once(
@@ -606,6 +628,7 @@ def test_offset_progress_prevents_restart_when_db_highwaters_are_flat(tmp_path: 
         progress_reader=lambda _path: _progress(module, 40, 10),
         operational_progress_reader=lambda _config: next(operational),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
     result = module.run_once(
         config,
@@ -660,6 +683,7 @@ def test_drain_progress_prevents_restart_when_offsets_and_db_are_flat(tmp_path: 
         progress_reader=lambda _path: _progress(module, 40, 10),
         operational_progress_reader=lambda _config: next(operational),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
     result = module.run_once(
         config,
@@ -667,6 +691,7 @@ def test_drain_progress_prevents_restart_when_offsets_and_db_are_flat(tmp_path: 
         progress_reader=lambda _path: _progress(module, 40, 10),
         operational_progress_reader=lambda _config: next(operational),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
 
     assert result.action == "progress"
@@ -690,6 +715,7 @@ def test_drain_cycle_progress_prevents_restart_when_no_items_are_drained(tmp_pat
         progress_reader=lambda _path: _progress(module, 40, 10),
         operational_progress_reader=lambda _config: next(operational),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
     result = module.run_once(
         config,
@@ -697,6 +723,7 @@ def test_drain_cycle_progress_prevents_restart_when_no_items_are_drained(tmp_pat
         progress_reader=lambda _path: _progress(module, 40, 10),
         operational_progress_reader=lambda _config: next(operational),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
 
     assert result.action == "progress"
@@ -720,6 +747,7 @@ def test_drain_counter_reset_rebaselines_instead_of_triggering_recovery(tmp_path
         progress_reader=lambda _path: _progress(module, 40, 10),
         operational_progress_reader=lambda _config: next(operational),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
     result = module.run_once(
         config,
@@ -727,6 +755,7 @@ def test_drain_counter_reset_rebaselines_instead_of_triggering_recovery(tmp_path
         progress_reader=lambda _path: _progress(module, 40, 10),
         operational_progress_reader=lambda _config: next(operational),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
 
     assert result.action == "baseline"
@@ -750,6 +779,7 @@ def test_offset_counter_reset_rebaselines_instead_of_looking_like_progress(tmp_p
         progress_reader=lambda _path: _progress(module, 40, 10),
         operational_progress_reader=lambda _config: next(operational),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
     result = module.run_once(
         config,
@@ -757,6 +787,7 @@ def test_offset_counter_reset_rebaselines_instead_of_looking_like_progress(tmp_p
         progress_reader=lambda _path: _progress(module, 40, 10),
         operational_progress_reader=lambda _config: next(operational),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
 
     assert result.action == "baseline"
@@ -788,6 +819,7 @@ def test_operational_progress_counts_toward_healthy_episode_reset(tmp_path: Path
         progress_reader=lambda _path: _progress(module, 40, 10),
         operational_progress_reader=lambda _config: module.OperationalProgress(120, 11, 4),
         source_probe=lambda _config, _now: module.SourceEvidence(1, 20, 1, 999.0),
+        command_runner=_enabled_command_runner,
     )
 
     assert result.action == "progress"
@@ -810,6 +842,7 @@ def test_recovery_waits_for_elapsed_progress_slo_not_only_tick_count(tmp_path: P
         progress_reader=lambda _path: _progress(module, 40, 10),
         operational_progress_reader=lambda _config: frozen,
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
     early = module.run_once(
         config,
@@ -850,6 +883,7 @@ def test_recovery_defers_without_signaling_while_checkpoint_guard_is_held(tmp_pa
         progress_reader=lambda _path: _progress(module, 40, 10),
         operational_progress_reader=lambda _config: frozen,
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
     with checkpoint_guard(config.db_path, blocking=False) as acquired:
         assert acquired is True
@@ -866,7 +900,7 @@ def test_recovery_defers_without_signaling_while_checkpoint_guard_is_held(tmp_pa
     assert result.action == "checkpoint_deferred"
     assert result.stalled_ticks == 1
     assert result.checkpoint_deferred_ticks == 1
-    assert commands == []
+    assert commands == [["launchctl", "print-disabled", f"gui/{os.getuid()}"]]
     state = json.loads(config.state_path.read_text(encoding="utf-8"))
     assert "last_restart_epoch" not in state
 
@@ -892,6 +926,7 @@ def test_sustained_checkpoint_deferral_pages_once_and_remains_nonzero(tmp_path: 
         progress_reader=lambda _path: _progress(module, 40, 10),
         operational_progress_reader=lambda _config: frozen,
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
     with checkpoint_guard(config.db_path, blocking=False) as acquired:
         assert acquired is True
@@ -916,7 +951,7 @@ def test_sustained_checkpoint_deferral_pages_once_and_remains_nonzero(tmp_path: 
     ]
     assert [result.checkpoint_deferred_ticks for result in results] == [1, 2, 3, 4]
     assert alerts == [("checkpoint_deferral_alert", 3)]
-    assert commands == []
+    assert commands == [["launchctl", "print-disabled", f"gui/{os.getuid()}"]] * 4
     state = json.loads(config.state_path.read_text(encoding="utf-8"))
     assert state["checkpoint_deferred_ticks"] == 4
     assert state["checkpoint_deferral_alerted"] is True
@@ -967,6 +1002,7 @@ def test_recovery_requires_kickstarted_job_to_reach_running_state(tmp_path: Path
         now_epoch=1_000,
         progress_reader=lambda _path: _progress(module, 40),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
 
     def command_runner(args: list[str]):
@@ -995,6 +1031,7 @@ def test_recovery_attempt_is_persisted_before_external_kickstart(tmp_path: Path,
         now_epoch=1_000,
         progress_reader=lambda _path: _progress(module, 40),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
     events: list[str] = []
     original_write = module._atomic_write_json
@@ -1031,6 +1068,7 @@ def test_recovery_attempt_survives_a_post_kickstart_state_write_failure(tmp_path
         now_epoch=1_000,
         progress_reader=lambda _path: _progress(module, 40),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
     original_write = module._atomic_write_json
     writes = 0
@@ -1195,3 +1233,108 @@ def test_failed_alert_does_not_latch_episode_and_retries(tmp_path: Path) -> None
     tick()  # stall 2
     tick()  # stall 3 -> kickstart, alert RETRIES in same episode (call 2)
     assert calls["n"] == 2  # retried, not silenced by the earlier failure
+
+
+@pytest.mark.parametrize("form", ["disabled", "true"])
+def test_operator_disabled_watch_label_is_never_bootstrapped_or_kickstarted(tmp_path: Path, form: str) -> None:
+    """launchctl disable is a standing operator order: no bootstrap, no kickstart, and not a stall."""
+    module = _load_module()
+    config = _config(module, tmp_path, stall_threshold=1)
+    evidence = module.SourceEvidence(2, 120, 3, 999.0)
+    commands: list[list[str]] = []
+
+    def command_runner(args: list[str]):
+        commands.append(args)
+        if args[:2] == ["launchctl", "print-disabled"]:
+            stdout = f'\tdisabled services = {{\n\t\t"com.brainlayer.watch" => enabled\n\t\t"com.example.brainlayer.watch" => {form}\n\t}}\n'
+            return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+        return SimpleNamespace(returncode=0, stdout="state = running\npid = 4321\n", stderr="")
+
+    module.run_once(
+        config,
+        now_epoch=1_000,
+        progress_reader=lambda _path: _progress(module, 40),
+        source_probe=lambda _config, _now: evidence,
+        command_runner=command_runner,
+        alert_fn=lambda _config, _result: None,
+    )
+    results = [
+        module.run_once(
+            config,
+            now_epoch=now,
+            progress_reader=lambda _path: _progress(module, 40),
+            source_probe=lambda _config, _now: evidence,
+            command_runner=command_runner,
+            alert_fn=lambda _config, _result: None,
+        )
+        for now in (1_060, 1_120, 1_180)
+    ]
+
+    assert [result.action for result in results] == ["disabled_by_operator"] * 3
+    assert [result.stalled_ticks for result in results] == [0, 0, 0]
+    assert commands == [["launchctl", "print-disabled", f"gui/{os.getuid()}"]] * 3
+    state = json.loads(config.state_path.read_text(encoding="utf-8"))
+    assert state["last_action"] == "disabled_by_operator"
+    assert state["stalled_ticks"] == 0
+    assert "last_restart_epoch" not in state
+
+
+def test_unreadable_disabled_state_fails_closed_without_bootstrap_or_kickstart(tmp_path: Path) -> None:
+    """If `launchctl print-disabled` fails, the watchdog must not guess "enabled" and revive the label."""
+    module = _load_module()
+    config = _config(module, tmp_path, stall_threshold=1)
+    evidence = module.SourceEvidence(2, 120, 3, 999.0)
+    commands: list[list[str]] = []
+
+    def command_runner(args: list[str]):
+        commands.append(args)
+        if args[:2] == ["launchctl", "print-disabled"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="Could not find domain")
+        return SimpleNamespace(returncode=0, stdout="state = running\npid = 4321\n", stderr="")
+
+    alerts: list[str] = []
+    for now in (1_000, 1_060, 1_120):
+        result = module.run_once(
+            config,
+            now_epoch=now,
+            progress_reader=lambda _path: _progress(module, 40),
+            source_probe=lambda _config, _now: evidence,
+            command_runner=command_runner,
+            alert_fn=lambda _config, _result: alerts.append(_result.action),
+        )
+
+    assert result.action == "disabled_state_unknown"
+    assert result.stalled_ticks == 0
+    assert commands == [["launchctl", "print-disabled", f"gui/{os.getuid()}"]] * 2
+    assert alerts == ["disabled_state_unknown"], "page once per episode, not every tick"
+    state = json.loads(config.state_path.read_text(encoding="utf-8"))
+    assert "last_restart_epoch" not in state
+
+
+def test_unreadable_disabled_state_exits_nonzero(tmp_path: Path, monkeypatch, capsys) -> None:
+    """Never silently degrade: a wedged watchdog with an unreadable disabled state must fail its LaunchAgent run."""
+    module = _load_module()
+    unknown = module.WatchdogResult(
+        checked_at_epoch=1_180,
+        watcher_highwater_rowid=40,
+        watcher_highwater_delta=0,
+        watcher_liveness_highwater_rowid=10,
+        watcher_liveness_highwater_delta=0,
+        pending_files=1,
+        pending_bytes=20,
+        recent_files=1,
+        untracked_recent_files=0,
+        newest_source_mtime=999.0,
+        scan_errors=0,
+        stalled_ticks=0,
+        action="disabled_state_unknown",
+        checkpoint_deferred_ticks=0,
+    )
+    monkeypatch.setattr(module, "run_once", lambda _config, now_epoch=None: unknown)
+
+    exit_code = module.main(
+        ["--db", str(tmp_path / "brainlayer.db"), "--state", str(tmp_path / "state.json"), "--json"]
+    )
+
+    assert exit_code == 1
+    assert json.loads(capsys.readouterr().out)["action"] == "disabled_state_unknown"

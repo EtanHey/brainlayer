@@ -22,9 +22,18 @@
 #   ./scripts/launchd/install.sh p0-counter   # Install daily P0 longitudinal counter only
 #   ./scripts/launchd/install.sh t3-ingest    # Install T3 thread ingestion only
 #   ./scripts/launchd/install.sh remove       # Unload and remove all
+#
+# Operator disable is a standing order. Any reviver of a com.brainlayer.* label
+# (this installer, throughput-watchdog.py, fleet watchdogs) checks
+# `launchctl print-disabled gui/$UID` FIRST and leaves a `=> disabled` label
+# alone: no enable, no bootstrap, no kickstart. Re-arm explicitly with
+# `launchctl enable gui/$UID/<label>`. (w11, 2026-09-02: com.brainlayer.watch
+# was disabled for burning a core and two revivers kept fighting the disable.)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Set by load_plist when an operator-disabled label was left alone (callers skip runtime verification).
+LOAD_PLIST_SKIPPED=0
 
 stable_brainlayer_path() {
     local value="${1:-}"
@@ -234,6 +243,22 @@ verify_config_file() {
     fi
 }
 
+# 0 = disabled, 1 = enabled, 2 = state unreadable (callers must fail closed: never enable/bootstrap).
+label_disabled_by_operator() {
+    local label="$1"
+    local listing=""
+    local rc=0
+    listing="$(launchctl print-disabled "gui/$UID" 2>/dev/null)" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "ERROR: could not read launchd disabled state for $label (launchctl print-disabled rc=$rc); refusing to load" >&2
+        return 2
+    fi
+    case "$listing" in
+        *"\"$label\" => disabled"*|*"\"$label\" => true"*) return 0 ;;
+    esac
+    return 1
+}
+
 load_plist() {
     local name="$1"
     local dst="$LAUNCH_DIR/com.brainlayer.${name}.plist"
@@ -306,6 +331,21 @@ if isinstance(value, (int, float)) and value >= 0:
         echo "ERROR: unload attempts must be a positive integer for $label; got '$unload_attempts'" >&2
         return 1
     fi
+    # Operator-disable check runs only after argument/override validation, so a rejected
+    # invocation exits before any launchctl call.
+    LOAD_PLIST_SKIPPED=0
+    local disabled_rc=0
+    label_disabled_by_operator "$label" || disabled_rc=$?
+    case "$disabled_rc" in
+        0)
+            echo "SKIP: $label disabled by operator (launchctl enable gui/$UID/$label to re-arm)"
+            LOAD_PLIST_SKIPPED=1
+            return 0
+            ;;
+        1) ;;
+        *) return 1 ;;
+    esac
+
     if [ "$supervisor_managed" -eq 1 ]; then
         if initial_output="$(launchctl print "$domain" 2>/dev/null)"; then
             initial_pid="$(
@@ -526,7 +566,7 @@ install_plist() {
     if ! load_plist "$name"; then
         return 1
     fi
-    if [ "$name" = "hotlane-brainbar" ] && ! verify_hotlane_runtime; then
+    if [ "$name" = "hotlane-brainbar" ] && [ "$LOAD_PLIST_SKIPPED" -ne 1 ] && ! verify_hotlane_runtime; then
         return 1
     fi
 }
