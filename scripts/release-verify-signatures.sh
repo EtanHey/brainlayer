@@ -28,6 +28,7 @@ fi
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
+# -type f skips symlinked extensions (none in current wheels); descends into dot-dirs like PIL/.dylibs.
 find "$native_root" -type f \( -name '*.so' -o -name '*.dylib' \) -print0 >"$tmp_dir/native-files"
 
 valid=0
@@ -45,4 +46,8 @@ while IFS= read -r -d '' native_file; do
 done <"$tmp_dir/native-files"
 
 printf 'valid: %d\ninvalid: %d\n' "$valid" "$invalid"
+if [[ $((valid + invalid)) -eq 0 ]]; then
+    printf 'ERROR: no native extensions found under %s\n' "$native_root" >&2
+    exit 1
+fi
 [[ "$invalid" -eq 0 ]]

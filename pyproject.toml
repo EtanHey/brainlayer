@@ -133,6 +133,7 @@ exclude = [
 "scripts/launchd" = "brainlayer/launchd"
 "scripts/hotlane_brainbar_daemon.py" = "brainlayer/launchd/hotlane_brainbar_daemon.py"
 "scripts/tier0-watchdog.sh" = "brainlayer/launchd/tier0-watchdog.sh"
+"scripts/release-verify-signatures.sh" = "brainlayer/launchd/release-verify-signatures.sh"
 
 [tool.hatch.build.targets.sdist]
 only-include = [
@@ -140,6 +141,7 @@ only-include = [
     "scripts/launchd",
     "scripts/hotlane_brainbar_daemon.py",
     "scripts/tier0-watchdog.sh",
+    "scripts/release-verify-signatures.sh",
     "README.md",
     "LICENSE",
     "server.json",

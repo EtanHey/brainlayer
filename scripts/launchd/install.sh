@@ -96,12 +96,49 @@ case "$BRAINLAYER_INSTALL_ACTION" in
         ;;
 esac
 
+# Installed kegs run this script from site-packages/brainlayer/launchd, so the keg
+# root is an ancestor of SCRIPT_DIR, never BRAINLAYER_DIR. Source checkouts have no keg.
+find_brainlayer_keg() {
+    local dir="$SCRIPT_DIR"
+    while [ "$dir" != "/" ] && [ -n "$dir" ]; do
+        if [ -d "$dir/libexec/venv" ]; then
+            printf "%s" "$dir"
+            return 0
+        fi
+        dir="$(dirname "$dir")"
+    done
+    case "$SCRIPT_DIR" in
+        */Cellar/brainlayer/*|*/opt/brainlayer/*)
+            if command -v brew >/dev/null 2>&1; then
+                brew --prefix brainlayer
+                return 0
+            fi
+            ;;
+    esac
+    return 1
+}
+
+find_release_verify_script() {
+    local candidate
+    for candidate in "$SCRIPT_DIR/release-verify-signatures.sh" "$SCRIPT_DIR/../release-verify-signatures.sh"; do
+        if [ -f "$candidate" ]; then
+            printf "%s" "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
 case "$BRAINLAYER_INSTALL_ACTION" in
     remove|unload|load)
         ;;
     *)
-        if [ -d "$BRAINLAYER_DIR/libexec/venv" ]; then
-            "$SCRIPT_DIR/../release-verify-signatures.sh" "$BRAINLAYER_DIR"
+        if BRAINLAYER_KEG="$(find_brainlayer_keg)"; then
+            if ! BRAINLAYER_RELEASE_VERIFY="$(find_release_verify_script)"; then
+                echo "ERROR: release-verify-signatures.sh not found beside or above $SCRIPT_DIR" >&2
+                exit 1
+            fi
+            "$BRAINLAYER_RELEASE_VERIFY" "$BRAINLAYER_KEG"
         fi
         ;;
 esac
