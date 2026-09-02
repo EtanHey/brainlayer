@@ -101,6 +101,31 @@ extract_cask_version() {
     ' "$1"
 }
 
+# Prints -1 when $1 < $2, 0 when equal, 1 when $1 > $2. Exits non-zero when
+# either side is not a dotted numeric version (callers must treat that as a
+# hard mismatch rather than an allowed lag).
+compare_versions() {
+    python3 - "$1" "$2" <<'PY'
+import sys
+
+
+def parse(value):
+    parts = value.split(".")
+    if not value or not all(part.isdigit() for part in parts):
+        raise SystemExit(2)
+    return tuple(int(part) for part in parts)
+
+
+left = parse(sys.argv[1])
+right = parse(sys.argv[2])
+print(-1 if left < right else (1 if left > right else 0))
+PY
+}
+
+warn() {
+    printf '[brainlayer-version-check] WARN: %s\n' "$*"
+}
+
 GIT_LOCAL_ENV_VARS=(
     GIT_ALTERNATE_OBJECT_DIRECTORIES
     GIT_CONFIG
@@ -191,7 +216,19 @@ if [[ ! "$plist_bundle_version" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
     err "Info.plist CFBundleVersion '$plist_bundle_version' must contain one to three numeric components"
     FAILED=1
 fi
-require_equal "Casks/brainbar.rb version" "$cask_version" "$canonical_version"
+cask_lag_reason="${BRAINLAYER_VERSION_CHECK_CASK_LAG_REASON:-}"
+cask_lag_allowed=0
+if [[ "$cask_version" == "$canonical_version" ]]; then
+    :
+elif [[ -n "$cask_lag_reason" ]] && cask_order="$(compare_versions "$cask_version" "$canonical_version" 2>/dev/null)" \
+    && [[ "$cask_order" == "-1" ]]; then
+    # BrainBar.app ships as its own GitHub-release artifact, so the cask may
+    # legitimately trail the Python package when no Swift change was released.
+    cask_lag_allowed=1
+    warn "Casks/brainbar.rb is $cask_version (package $canonical_version) — allowed: $cask_lag_reason"
+else
+    require_equal "Casks/brainbar.rb version" "$cask_version" "$canonical_version"
+fi
 if [[ -z "$git_tag" ]]; then
     err "latest git tag could not be determined under $PACKAGE_ROOT"
     FAILED=1
@@ -203,4 +240,9 @@ if [[ "$FAILED" -ne 0 ]]; then
     exit 1
 fi
 
-printf '[brainlayer-version-check] PASS: BrainLayer/BrainBar %s release metadata is consistent\n' "$canonical_version"
+if [[ "$cask_lag_allowed" -eq 1 ]]; then
+    printf '[brainlayer-version-check] PASS: BrainLayer/BrainBar %s release metadata is consistent (cask %s lag allowed: %s)\n' \
+        "$canonical_version" "$cask_version" "$cask_lag_reason"
+else
+    printf '[brainlayer-version-check] PASS: BrainLayer/BrainBar %s release metadata is consistent\n' "$canonical_version"
+fi

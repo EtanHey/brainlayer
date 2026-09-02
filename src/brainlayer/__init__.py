@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-__version__ = "1.5.10"
+__version__ = "1.5.11"
 # Git sha the distributed package was built from; stamped by the release build, None in a source tree.
 # scripts/sprint_gate.py reads it in "keg" mode to prove the served package is the code under test.
-# Keep the annotation lazy (future import above): launchd/install.sh imports this under /usr/bin/python3.
-__build_sha__: str | None = None
+# No runtime `str | None` annotation: launchd/install.sh imports this under /usr/bin/python3 (3.9).
+try:
+    from ._build import BUILD_SHA as __build_sha__
+except ImportError:  # source checkout / editable install: no stamp
+    __build_sha__ = None

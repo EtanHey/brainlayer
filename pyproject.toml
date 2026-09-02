@@ -1,6 +1,6 @@
 [project]
 name = "brainlayer"
-version = "1.5.10"
+version = "1.5.11"
 description = "Persistent memory MCP server for AI agents — 17 tools, semantic search, knowledge graph, on-device SQLite"
 license = {text = "Apache-2.0"}
 readme = "README.md"
@@ -122,6 +122,10 @@ markers = [
     "live: tests that need the live production DB or mutable local hooks state",
     "slow: tests that load ML models or take >30s",
 ]
+
+[tool.hatch.build]
+# VCS-ignored files are dropped from wheel+sdist unless listed here; the build-sha stamp must ship.
+artifacts = ["src/brainlayer/_build.py"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/brainlayer"]

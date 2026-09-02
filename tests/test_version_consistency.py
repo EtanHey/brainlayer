@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tomllib
@@ -66,6 +67,14 @@ def _run(
     if git_tag is not None:
         env["BRAINLAYER_VERSION_CHECK_GIT_TAG"] = git_tag
     return subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, env=env, timeout=30)
+
+
+def _write_cask_version(tap_root: Path, version: str) -> None:
+    cask = tap_root / "Casks" / "brainbar.rb"
+    cask.write_text(
+        re.sub(r'version "[^"]+"', f'version "{version}"', cask.read_text(encoding="utf-8"), count=1),
+        encoding="utf-8",
+    )
 
 
 def _repo_git_env() -> dict[str, str]:
@@ -152,6 +161,70 @@ def test_version_check_fails_loudly_when_cask_version_drifts(tmp_path: Path) -> 
 
     assert result.returncode == 1
     assert f"Casks/brainbar.rb version is '0.0.0', expected '{package_version}'" in result.stderr
+
+
+def test_version_check_allows_lagging_cask_with_a_stated_reason(tmp_path: Path) -> None:
+    fixture_root, tap_root, package_version = _copy_version_fixture(tmp_path)
+    _write_cask_version(tap_root, "1.5.9")
+
+    result = _run(
+        fixture_root,
+        tap_root,
+        git_tag=f"v{package_version}",
+        extra_env={"BRAINLAYER_VERSION_CHECK_CASK_LAG_REASON": "no BrainBar release for 1.5.11"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (
+        f"WARN: Casks/brainbar.rb is 1.5.9 (package {package_version}) "
+        "— allowed: no BrainBar release for 1.5.11" in result.stdout
+    )
+    assert (
+        f"PASS: BrainLayer/BrainBar {package_version} release metadata is consistent "
+        "(cask 1.5.9 lag allowed: no BrainBar release for 1.5.11)" in result.stdout
+    )
+
+
+def test_version_check_still_fails_for_a_lagging_cask_without_a_reason(tmp_path: Path) -> None:
+    fixture_root, tap_root, package_version = _copy_version_fixture(tmp_path)
+    _write_cask_version(tap_root, "1.5.9")
+
+    result = _run(fixture_root, tap_root, git_tag=f"v{package_version}")
+
+    assert result.returncode == 1
+    assert f"Casks/brainbar.rb version is '1.5.9', expected '{package_version}'" in result.stderr
+    assert "WARN" not in result.stdout
+
+
+def test_version_check_fails_when_cask_is_ahead_even_with_a_reason(tmp_path: Path) -> None:
+    fixture_root, tap_root, package_version = _copy_version_fixture(tmp_path)
+    _write_cask_version(tap_root, "99.0.0")
+
+    result = _run(
+        fixture_root,
+        tap_root,
+        git_tag=f"v{package_version}",
+        extra_env={"BRAINLAYER_VERSION_CHECK_CASK_LAG_REASON": "no BrainBar release for 1.5.11"},
+    )
+
+    assert result.returncode == 1
+    assert f"Casks/brainbar.rb version is '99.0.0', expected '{package_version}'" in result.stderr
+    assert "WARN" not in result.stdout
+
+
+def test_version_check_fails_for_an_uncomparable_cask_version_even_with_a_reason(tmp_path: Path) -> None:
+    fixture_root, tap_root, package_version = _copy_version_fixture(tmp_path)
+    _write_cask_version(tap_root, "1.5.9-beta")
+
+    result = _run(
+        fixture_root,
+        tap_root,
+        git_tag=f"v{package_version}",
+        extra_env={"BRAINLAYER_VERSION_CHECK_CASK_LAG_REASON": "no BrainBar release for 1.5.11"},
+    )
+
+    assert result.returncode == 1
+    assert f"Casks/brainbar.rb version is '1.5.9-beta', expected '{package_version}'" in result.stderr
 
 
 def test_version_check_fails_loudly_when_checked_in_info_plist_drifts(tmp_path: Path) -> None:
