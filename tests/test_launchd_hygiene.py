@@ -694,3 +694,44 @@ def test_launchd_installer_hotlane_skip_bypasses_runtime_verification(tmp_path):
     assert "SKIP: com.brainlayer.hotlane-brainbar disabled by operator" in result.stdout
     assert not verify_marker.exists(), "verify_hotlane_runtime must not run after an operator-disable skip"
     assert launchctl_log.read_text(encoding="utf-8").splitlines() == [f"print-disabled gui/{os.getuid()}"]
+
+
+def test_launchd_installer_refuses_to_load_when_disabled_state_is_unreadable(tmp_path):
+    """`launchctl print-disabled` failing must fail closed: no enable, no bootstrap, rc 1 with a clear error."""
+    install_source = (REPO_ROOT / "scripts/launchd/install.sh").read_text(encoding="utf-8")
+
+    def _fn(name: str) -> str:
+        head = name + "() {"
+        return head + install_source.split("\n" + head, 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    (fake_bin / "launchctl").write_text(
+        "#!/usr/bin/env bash\n"
+        'printf "%s\\n" "$*" >> "$LAUNCHCTL_LOG"\n'
+        '[ "$1" = "print-disabled" ] && { echo "Could not find domain" >&2; exit 1; }\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    (fake_bin / "launchctl").chmod(0o755)
+    harness = tmp_path / "harness.sh"
+    harness.write_text(
+        "set -euo pipefail\n"
+        f'LAUNCH_DIR="{tmp_path}"\nPYTHON_BIN=/usr/bin/true\nLOAD_PLIST_SKIPPED=0\n'
+        + _fn("label_disabled_by_operator")
+        + _fn("load_plist")
+        + "\nload_plist watch\n",
+        encoding="utf-8",
+    )
+    env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}", "LAUNCHCTL_LOG": str(launchctl_log)}
+
+    result = subprocess.run(["/bin/bash", str(harness)], env=env, capture_output=True, text=True, check=False)
+
+    assert result.returncode == 1
+    assert (
+        "ERROR: could not read launchd disabled state for com.brainlayer.watch "
+        "(launchctl print-disabled rc=1); refusing to load"
+    ) in result.stderr
+    assert "SKIP:" not in result.stdout
+    assert launchctl_log.read_text(encoding="utf-8").splitlines() == [f"print-disabled gui/{os.getuid()}"]

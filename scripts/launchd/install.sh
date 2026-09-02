@@ -243,10 +243,16 @@ verify_config_file() {
     fi
 }
 
+# 0 = disabled, 1 = enabled, 2 = state unreadable (callers must fail closed: never enable/bootstrap).
 label_disabled_by_operator() {
     local label="$1"
     local listing=""
-    listing="$(launchctl print-disabled "gui/$UID" 2>/dev/null || true)"
+    local rc=0
+    listing="$(launchctl print-disabled "gui/$UID" 2>/dev/null)" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "ERROR: could not read launchd disabled state for $label (launchctl print-disabled rc=$rc); refusing to load" >&2
+        return 2
+    fi
     case "$listing" in
         *"\"$label\" => disabled"*|*"\"$label\" => true"*) return 0 ;;
     esac
@@ -275,11 +281,17 @@ load_plist() {
     local plist_exit_timeout=""
 
     LOAD_PLIST_SKIPPED=0
-    if label_disabled_by_operator "$label"; then
-        echo "SKIP: $label disabled by operator (launchctl enable gui/$UID/$label to re-arm)"
-        LOAD_PLIST_SKIPPED=1
-        return 0
-    fi
+    local disabled_rc=0
+    label_disabled_by_operator "$label" || disabled_rc=$?
+    case "$disabled_rc" in
+        0)
+            echo "SKIP: $label disabled by operator (launchctl enable gui/$UID/$label to re-arm)"
+            LOAD_PLIST_SKIPPED=1
+            return 0
+            ;;
+        1) ;;
+        *) return 1 ;;
+    esac
 
     case "$name" in
         hotlane-brainbar|watch|drain|health-check|enrichment)

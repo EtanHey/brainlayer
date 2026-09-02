@@ -1243,3 +1243,33 @@ def test_operator_disabled_watch_label_is_never_bootstrapped_or_kickstarted(tmp_
     assert state["last_action"] == "disabled_by_operator"
     assert state["stalled_ticks"] == 0
     assert "last_restart_epoch" not in state
+
+
+def test_unreadable_disabled_state_fails_closed_without_bootstrap_or_kickstart(tmp_path: Path) -> None:
+    """If `launchctl print-disabled` fails, the watchdog must not guess "enabled" and revive the label."""
+    module = _load_module()
+    config = _config(module, tmp_path, stall_threshold=1)
+    evidence = module.SourceEvidence(2, 120, 3, 999.0)
+    commands: list[list[str]] = []
+
+    def command_runner(args: list[str]):
+        commands.append(args)
+        if args[:2] == ["launchctl", "print-disabled"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="Could not find domain")
+        return SimpleNamespace(returncode=0, stdout="state = running\npid = 4321\n", stderr="")
+
+    for now in (1_000, 1_060, 1_120):
+        result = module.run_once(
+            config,
+            now_epoch=now,
+            progress_reader=lambda _path: _progress(module, 40),
+            source_probe=lambda _config, _now: evidence,
+            command_runner=command_runner,
+            alert_fn=lambda _config, _result: None,
+        )
+
+    assert result.action == "disabled_state_unknown"
+    assert result.stalled_ticks == 0
+    assert commands == [["launchctl", "print-disabled", f"gui/{os.getuid()}"]] * 2
+    state = json.loads(config.state_path.read_text(encoding="utf-8"))
+    assert "last_restart_epoch" not in state
