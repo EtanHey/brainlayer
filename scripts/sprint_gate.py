@@ -6,9 +6,16 @@ How to get proof_eligible (``--require-code-under-test``)
 "Code under test" means the served package was BUILT FROM this working tree's sha, not that
 it lives under this path. Two modes; ``provenance.provenance_mode`` says which one ran:
 
-* ``dev-tree`` -- BrainBar's hybrid helper imports ``brainlayer`` from under this repo (an
+* ``dev-tree`` -- BrainBar's hybrid helper imports ``brainlayer`` from this repo's ``src/`` (an
   editable install, or BrainBar launched with ``BRAINLAYER_SOURCE_FALLBACK=1`` and
-  ``BRAINLAYER_REPO_ROOT`` pointing here) AND ``git status --porcelain`` is empty.
+  ``BRAINLAYER_REPO_ROOT`` pointing here) AND ``git status --porcelain`` is empty AND the helper
+  process started AFTER the newest file mtime under ``src/brainlayer/`` (a helper that loaded
+  commit A and survived a checkout to commit B still serves A). Package data counts too: a branch
+  that changes only ``lexical_defense_dictionary.json`` changes search behaviour. ``ps`` reports
+  start times at whole-second resolution, so a helper restarted in the same second a file was
+  written is refused (``helper_older_than_tree``) rather than accepted: the window errs closed.
+  Only ``src/brainlayer`` counts: a stale copy under ``.venv/.../site-packages`` lives under this
+  repo too but is a keg, not the tree.
 * ``keg`` -- the served package (e.g. the brew Cellar venv) exposes ``brainlayer.__build_sha__``
   equal to ``git rev-parse HEAD`` AND the tree is clean. No release build stamps the sha yet
   (planned for 1.5.11), so every keg today refuses with ``served_build_sha_missing``.
@@ -16,17 +23,20 @@ it lives under this path. Two modes; ``provenance.provenance_mode`` says which o
 Version equality alone is never accepted: an installed 1.5.10 and 1.5.10-plus-a-branch share a
 string while being different code. A refusal names every predicate that fired: ``version``,
 ``package_path_outside_tree`` (the keg-mode qualifier: dev-tree cannot apply, so the build sha
-must), ``served_build_sha_missing``, ``build_sha_mismatch``, ``working_tree_dirty``. Replay (``--fixture``) under the flag is REJECTED by design: a fixture
-is not evidence about any served code. Provenance that cannot be resolved (no helper, ``lsof``
-or ``git`` failure) is reported as ``provenance_error`` in the normal payload shape, never as a
-traceback.
+must), ``served_build_sha_missing``, ``build_sha_mismatch``, ``helper_older_than_tree``,
+``working_tree_dirty``. Replay (``--fixture``) under the flag is REJECTED by design: a fixture
+is not evidence about any served code, so replay never shells out to ``git`` at all. Live
+provenance that cannot be resolved (no helper, ``lsof``, ``ps`` or ``git`` failure) is reported as
+``provenance_error`` in the normal payload shape, never as a traceback.
 """
 
 from __future__ import annotations
 
 import argparse
+import calendar
 import json
 import math
+import os
 import platform
 import re
 import shlex
@@ -36,16 +46,22 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+SRC = (ROOT / "src").resolve()
+PACKAGE = SRC / "brainlayer"
+sys.path.insert(0, str(SRC))
 from brainlayer import __version__
 from brainlayer.paths import get_db_path
 
 CORPUS = ROOT / "tests" / "fixtures" / "sprint_gate" / "corpus.json"
 SUCCESS_STATUSES = {"STORED", "DUPLICATE", "MERGED", "DEFERRED"}
 CHECKS = ("search_latency", "mcp_roundtrip", "resource_budget", "wal_bound")
+PS_LSTART_FORMAT = "%a %b %d %H:%M:%S %Y"
+PLACEHOLDER_TREE = {"working_tree_version": __version__, "working_tree_sha": None, "working_tree_dirty": None}
 
 
 def wal_size(path: Path) -> int:
@@ -331,12 +347,18 @@ def working_tree_provenance() -> dict:
     return {"working_tree_version": __version__, "working_tree_sha": sha, "working_tree_dirty": dirty}
 
 
+def warmup_query() -> str:
+    """A nonce, never a corpus query: hybrid_search caches identical requests for 60 s, so warming
+    with ``queries[0]`` would hand check_search a cache hit as its first timed sample."""
+    return f"warmup-{uuid.uuid4()}"
+
+
 def warm_helper(config: dict) -> None:
     """The hybrid helper is spawned on demand by the first search; idle == 0 helpers is normal."""
     client = MCPClient(config["socket_path"], config["mcp_timeout_seconds"])
     try:
         client.initialize()
-        client.call("brain_search", {"query": config["queries"][0], "num_results": 1})
+        client.call("brain_search", {"query": warmup_query(), "num_results": 1})
     finally:
         client.close()
 
@@ -356,6 +378,37 @@ def find_helper() -> tuple[int, Path]:
     if len(helpers) != 1:
         raise RuntimeError(f"expected one serving hybrid helper, found {len(helpers)}")
     return helpers[0]
+
+
+def helper_started_at(helper_pid: int) -> float:
+    """Epoch seconds the helper process started.
+
+    ``ps -o lstart=`` prints a naive wall-clock in the zone IT runs in, so both sides are pinned
+    to UTC: ``TZ=UTC`` for ps and ``calendar.timegm`` for the parse. Parsing in the parent's zone
+    would date every helper hours into the future for a ``TZ`` east of the system zone and the
+    predicate would silently stop firing (pair review, #749).
+    """
+    started = subprocess.run(
+        ["ps", "-o", "lstart=", "-p", str(helper_pid)],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={"LC_ALL": "C", "TZ": "UTC", "PATH": os.environ.get("PATH", os.defpath)},
+    ).stdout.strip()
+    if not started:
+        raise RuntimeError(f"helper pid {helper_pid} has no start time (exited?)")
+    return float(calendar.timegm(time.strptime(started, PS_LSTART_FORMAT)))
+
+
+def newest_source_mtime() -> float:
+    """Newest mtime of any file under ``src/brainlayer/`` -- code and package data a fresh helper
+    would load. ``__pycache__`` is excluded: bytecode is written AFTER the helper starts importing."""
+    files = (path for path in PACKAGE.rglob("*") if path.is_file() and "__pycache__" not in path.parts)
+    return max((path.stat().st_mtime for path in files), default=0.0)
+
+
+def iso_utc(epoch: float | None) -> str | None:
+    return None if epoch is None else datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
 
 
 def helper_python(helper_pid: int) -> Path:
@@ -392,7 +445,9 @@ def served_package(python: Path) -> dict:
 def resolve_served(config: dict) -> tuple[dict, Path]:
     warm_helper(config)
     helper_pid, db_path = find_helper()
-    return served_package(helper_python(helper_pid)), db_path
+    served = served_package(helper_python(helper_pid))
+    served["helper_started_at"] = helper_started_at(helper_pid)
+    return served, db_path
 
 
 def db_provenance(db_path: Path) -> dict:
@@ -406,9 +461,15 @@ def db_provenance(db_path: Path) -> dict:
     return {"db_path": str(db_path), "db_size_bytes": db_path.stat().st_size, "chunk_count": chunk_count}
 
 
-def eligibility(served: dict, tree: dict) -> tuple[str, list[str]]:
-    """Return (provenance_mode, refusals). Eligible iff refusals is empty. Never version-equality alone."""
-    mode = "dev-tree" if Path(served["path"]).resolve().is_relative_to(ROOT) else "keg"
+def eligibility(served: dict, tree: dict, source_newest_mtime: float) -> tuple[str, list[str]]:
+    """Return (provenance_mode, refusals). Eligible iff refusals is empty. Never version-equality alone.
+
+    Pure: ``source_newest_mtime`` is measured once by the caller and the same number is recorded in
+    the payload, so the evidence published is the evidence that decided. dev-tree means the served
+    file is under ``src/brainlayer`` specifically: ``.venv/.../site-packages`` sits under ROOT as
+    well and must not skip the build-sha check (Macroscope, #749).
+    """
+    mode = "dev-tree" if Path(served["path"]).resolve().is_relative_to(PACKAGE) else "keg"
     refusals = []
     if served["version"] != tree["working_tree_version"]:
         refusals.append("version")
@@ -417,13 +478,15 @@ def eligibility(served: dict, tree: dict) -> tuple[str, list[str]]:
             refusals += ["package_path_outside_tree", "served_build_sha_missing"]
         elif served["build_sha"] != tree["working_tree_sha"]:
             refusals += ["package_path_outside_tree", "build_sha_mismatch"]
+    elif served["helper_started_at"] <= source_newest_mtime:  # must be strictly newer than the tree
+        refusals.append("helper_older_than_tree")
     if tree["working_tree_dirty"]:
         refusals.append("working_tree_dirty")
     return mode, refusals
 
 
 def unresolved_provenance(error: str) -> dict:
-    tree = {"working_tree_version": __version__, "working_tree_sha": None, "working_tree_dirty": None}
+    tree = dict(PLACEHOLDER_TREE)
     try:
         tree = working_tree_provenance()
     except Exception:
@@ -433,6 +496,8 @@ def unresolved_provenance(error: str) -> dict:
         "served_package_path": None,
         **tree,
         "served_build_sha": None,
+        "helper_started_at": None,
+        "source_newest_mtime": None,
         "provenance_mode": None,
         "proof_refusals": ["provenance_unresolved"],
         "served_matches_working_tree": False,
@@ -448,12 +513,15 @@ def collect_live_provenance(config: dict) -> dict:
     try:
         served, db_path = resolve_served(config)
         tree = working_tree_provenance()
-        mode, refusals = eligibility(served, tree)
+        source_newest = newest_source_mtime()
+        mode, refusals = eligibility(served, tree, source_newest)
         return {
             "served_version": served["version"],
             "served_package_path": str(Path(served["path"]).resolve()),
             **tree,
             "served_build_sha": served["build_sha"],
+            "helper_started_at": iso_utc(served["helper_started_at"]),
+            "source_newest_mtime": iso_utc(source_newest),
             "provenance_mode": mode,
             "proof_refusals": refusals,
             "served_matches_working_tree": not refusals,
@@ -484,8 +552,9 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help=(
             "Refuse (rc=1, structured payload, no checks run) unless the served package is provably built "
-            "from this working tree: dev-tree mode (served path under this repo, clean tree) or keg mode "
-            "(served brainlayer.__build_sha__ == HEAD, clean tree). Replay is always refused."
+            "from this working tree: dev-tree mode (served path under src/brainlayer, helper started after "
+            "the newest source mtime, clean tree) or keg mode (served brainlayer.__build_sha__ == HEAD, clean tree). "
+            "Replay is always refused."
         ),
     )
     args = parser.parse_args(argv)
@@ -495,10 +564,13 @@ def main(argv: list[str] | None = None) -> int:
     machine = {"hostname": socket.gethostname(), "os": platform.system(), "architecture": platform.machine()}
     provenance = (
         {
+            # Replay never touches git: a fixture is not evidence, so its tree metadata is a placeholder.
             "served_version": "fixture",
             "served_package_path": None,
-            **working_tree_provenance(),
+            **PLACEHOLDER_TREE,
             "served_build_sha": None,
+            "helper_started_at": None,
+            "source_newest_mtime": None,
             "provenance_mode": "replay",
             "proof_refusals": ["replay"],
             "served_matches_working_tree": False,
