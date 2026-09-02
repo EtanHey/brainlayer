@@ -130,7 +130,7 @@ find_release_verify_script() {
 }
 
 case "$BRAINLAYER_INSTALL_ACTION" in
-    remove|unload|load)
+    remove|unload)
         ;;
     *)
         if BRAINLAYER_KEG="$(find_brainlayer_keg)"; then

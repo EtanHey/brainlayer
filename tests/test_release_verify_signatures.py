@@ -81,24 +81,38 @@ def _first_unsigned_macho_copy(dest: Path) -> Path | None:
     return None
 
 
-@pytest.mark.skipif(sys.platform != "darwin" or shutil.which("codesign") is None, reason="needs macOS codesign")
-def test_packaged_install_sh_runs_signature_gate_and_fails_on_unsigned_keg(tmp_path: Path) -> None:
-    """Fake keg laid out like a brew install: install.sh lives under site-packages, keg root is an ancestor."""
+NEEDS_CODESIGN = pytest.mark.skipif(
+    sys.platform != "darwin" or shutil.which("codesign") is None, reason="needs macOS codesign"
+)
+
+
+def _fake_packaged_keg(tmp_path: Path) -> tuple[Path, Path]:
+    """Fake keg laid out like a brew install: install.sh lives under site-packages, keg root is an ancestor.
+
+    Returns ``(launchd_dir, unsigned_macho)``; the unsigned Mach-O sits in a dot-dir like ``PIL/.dylibs``.
+    """
     keg = tmp_path / "keg"
-    launchd_dir = keg / "libexec" / "venv" / "lib" / "python3.13" / "site-packages" / "brainlayer" / "launchd"
+    site_packages = keg / "libexec" / "venv" / "lib" / "python3.13" / "site-packages"
+    launchd_dir = site_packages / "brainlayer" / "launchd"
     launchd_dir.mkdir(parents=True)
     shutil.copy(INSTALL_SH, launchd_dir / "install.sh")
     shutil.copy(SCRIPT, launchd_dir / "release-verify-signatures.sh")
-    native_dir = keg / "libexec" / "venv" / "lib" / "python3.13" / "site-packages" / "PIL" / ".dylibs"
+    native_dir = site_packages / "PIL" / ".dylibs"
     native_dir.mkdir(parents=True)
     unsigned = _first_unsigned_macho_copy(native_dir)
     assert unsigned is not None, "no strippable Mach-O in lib-dynload"
+    return launchd_dir, unsigned
 
-    result = _run(
-        launchd_dir / "install.sh",
-        "all",
-        env={"HOME": str(tmp_path), "BRAINLAYER_BIN": "/usr/bin/true", "PYTHON_BIN": "/usr/bin/true"},
-    )
+
+def _install_env(tmp_path: Path, **extra: str) -> dict[str, str]:
+    return {"HOME": str(tmp_path), "BRAINLAYER_BIN": "/usr/bin/true", "PYTHON_BIN": "/usr/bin/true", **extra}
+
+
+@NEEDS_CODESIGN
+def test_packaged_install_sh_runs_signature_gate_and_fails_on_unsigned_keg(tmp_path: Path) -> None:
+    launchd_dir, unsigned = _fake_packaged_keg(tmp_path)
+
+    result = _run(launchd_dir / "install.sh", "all", env=_install_env(tmp_path))
 
     assert result.returncode != 0
     assert (
@@ -107,6 +121,37 @@ def test_packaged_install_sh_runs_signature_gate_and_fails_on_unsigned_keg(tmp_p
     )
     assert "invalid: 1" in result.stdout
     assert not (tmp_path / "Library" / "LaunchAgents").exists(), "gate must abort before any plist is installed"
+
+
+@NEEDS_CODESIGN
+def test_packaged_install_sh_load_is_gated_before_any_launchctl_call(tmp_path: Path) -> None:
+    """`install.sh load <name>` bootstraps a service from the keg, so it must not bypass the gate (#748 P1)."""
+    launchd_dir, unsigned = _fake_packaged_keg(tmp_path)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_calls = tmp_path / "launchctl.calls"
+    (fake_bin / "launchctl").write_text(f'#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "{launchctl_calls}"\n')
+    (fake_bin / "launchctl").chmod(0o755)
+
+    result = _run(
+        launchd_dir / "install.sh",
+        "load",
+        "drain",
+        env=_install_env(tmp_path, PATH=f"{fake_bin}:{os.environ['PATH']}"),
+    )
+
+    assert result.returncode != 0
+    assert f"INVALID lib/python3.13/site-packages/PIL/.dylibs/{unsigned.name}" in result.stdout
+    assert "invalid: 1" in result.stdout
+    assert not launchctl_calls.exists(), "gate must fail before install.sh touches launchctl"
+
+
+def test_install_sh_gate_bypass_is_only_for_teardown_actions() -> None:
+    """Static guard for the #748 P1: only remove/unload skip the gate; load (which bootstraps) must not."""
+    install = INSTALL_SH.read_text(encoding="utf-8")
+    gate_case = install.split("find_release_verify_script()", 1)[1].split("esac", 1)[0]
+
+    assert 'case "$BRAINLAYER_INSTALL_ACTION" in\n    remove|unload)\n        ;;\n    *)\n' in gate_case
 
 
 def test_source_checkout_install_sh_skips_gate_without_keg(tmp_path: Path) -> None:
@@ -122,6 +167,9 @@ def test_source_checkout_install_sh_skips_gate_without_keg(tmp_path: Path) -> No
     )
     assert marker in install_source, "install.sh gate-block marker moved; update this test"
     gate_only = install_source.split(marker, 1)[0]
+    # The slice must carry the whole signature-gate block, so the skip branch below really executes it.
+    assert '"$BRAINLAYER_RELEASE_VERIFY" "$BRAINLAYER_KEG"' in gate_only
+    assert gate_only.rstrip().endswith("esac"), "gate block must be complete through its closing esac"
     harness = launchd_dir / "install.sh"
     harness.write_text(gate_only + '\necho "GATE_SKIPPED"\n', encoding="utf-8")
     harness.chmod(0o755)
