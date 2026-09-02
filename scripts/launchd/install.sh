@@ -280,19 +280,6 @@ load_plist() {
     local current_pid=""
     local plist_exit_timeout=""
 
-    LOAD_PLIST_SKIPPED=0
-    local disabled_rc=0
-    label_disabled_by_operator "$label" || disabled_rc=$?
-    case "$disabled_rc" in
-        0)
-            echo "SKIP: $label disabled by operator (launchctl enable gui/$UID/$label to re-arm)"
-            LOAD_PLIST_SKIPPED=1
-            return 0
-            ;;
-        1) ;;
-        *) return 1 ;;
-    esac
-
     case "$name" in
         hotlane-brainbar|watch|drain|health-check|enrichment)
             supervisor_managed=1
@@ -344,6 +331,21 @@ if isinstance(value, (int, float)) and value >= 0:
         echo "ERROR: unload attempts must be a positive integer for $label; got '$unload_attempts'" >&2
         return 1
     fi
+    # Operator-disable check runs only after argument/override validation, so a rejected
+    # invocation exits before any launchctl call.
+    LOAD_PLIST_SKIPPED=0
+    local disabled_rc=0
+    label_disabled_by_operator "$label" || disabled_rc=$?
+    case "$disabled_rc" in
+        0)
+            echo "SKIP: $label disabled by operator (launchctl enable gui/$UID/$label to re-arm)"
+            LOAD_PLIST_SKIPPED=1
+            return 0
+            ;;
+        1) ;;
+        *) return 1 ;;
+    esac
+
     if [ "$supervisor_managed" -eq 1 ]; then
         if initial_output="$(launchctl print "$domain" 2>/dev/null)"; then
             initial_pid="$(
