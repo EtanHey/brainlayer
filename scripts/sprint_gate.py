@@ -17,17 +17,20 @@ it lives under this path. Two modes; ``provenance.provenance_mode`` says which o
   Only ``src/brainlayer`` counts: a stale copy under ``.venv/.../site-packages`` lives under this
   repo too but is a keg, not the tree.
 * ``keg`` -- the served package (e.g. the brew Cellar venv) exposes ``brainlayer.__build_sha__``
-  equal to ``git rev-parse HEAD`` AND the tree is clean. No release build stamps the sha yet
+  equal to ``git rev-parse HEAD`` AND the helper process started after the keg's newest file
+  (else ``helper_older_than_keg``: the sha proves the disk, not the process) AND the tree is clean. No release build stamps the sha yet
   (planned for 1.5.11), so every keg today refuses with ``served_build_sha_missing``.
 
 Version equality alone is never accepted: an installed 1.5.10 and 1.5.10-plus-a-branch share a
 string while being different code. A refusal names every predicate that fired: ``version``,
 ``package_path_outside_tree`` (the keg-mode qualifier: dev-tree cannot apply, so the build sha
 must), ``served_build_sha_missing``, ``build_sha_mismatch``, ``helper_older_than_tree``,
-``working_tree_dirty``. Replay (``--fixture``) under the flag is REJECTED by design: a fixture
+``helper_older_than_keg``, ``working_tree_dirty``. Replay (``--fixture``) under the flag is REJECTED by design: a fixture
 is not evidence about any served code, so replay never shells out to ``git`` at all. Live
-provenance that cannot be resolved (no helper, ``lsof``, ``ps`` or ``git`` failure) is reported as
-``provenance_error`` in the normal payload shape, never as a traceback.
+provenance that cannot be resolved (no helper, ``lsof``, ``ps`` or ``git`` failure, or a helper
+whose environment cannot be read) is reported as ``provenance_error`` in the normal payload shape,
+never as a traceback. The served package is probed under the helper's OWN ``PYTHONPATH`` (read from
+``ps -wwwE``), recorded as ``served_pythonpath``.
 """
 
 from __future__ import annotations
@@ -400,11 +403,17 @@ def helper_started_at(helper_pid: int) -> float:
     return float(calendar.timegm(time.strptime(started, PS_LSTART_FORMAT)))
 
 
-def newest_source_mtime() -> float:
-    """Newest mtime of any file under ``src/brainlayer/`` -- code and package data a fresh helper
-    would load. ``__pycache__`` is excluded: bytecode is written AFTER the helper starts importing."""
-    files = (path for path in PACKAGE.rglob("*") if path.is_file() and "__pycache__" not in path.parts)
+def newest_mtime(directory: Path) -> float:
+    """Newest mtime of any file under a package directory -- code, extensions (``.so``/``.dylib``)
+    and package data a fresh helper would load. ``__pycache__`` is excluded: bytecode is written
+    AFTER the helper starts importing."""
+    files = (path for path in directory.rglob("*") if path.is_file() and "__pycache__" not in path.parts)
     return max((path.stat().st_mtime for path in files), default=0.0)
+
+
+def newest_source_mtime() -> float:
+    """What a fresh dev-tree helper would import: the newest file under ``src/brainlayer/``."""
+    return newest_mtime(PACKAGE)
 
 
 def iso_utc(epoch: float | None) -> str | None:
@@ -425,12 +434,53 @@ def helper_python(helper_pid: int) -> Path:
     return next(iter(site_dirs)).parents[2] / "bin" / "python"
 
 
-def served_package(python: Path) -> dict:
+ENV_TOKEN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
+
+
+def helper_env(helper_pid: int) -> dict[str, str]:
+    """The helper's REAL environment as BrainBar launched it (``ps -E`` reports the launch-time
+    block). ``ps -wwwE -o command=`` prints the argv and then every ``KEY=value`` pair, so the env
+    block is that output minus the plain ``-o command=`` output.
+    An empty block means the environment could not be read (not ours, or ps refused): that is a
+    provenance error, never a guess (Codex, #749: source-fallback helpers import ONLY via PYTHONPATH).
+    """
+
+    def command_line(*flags: str) -> str:
+        return subprocess.run(
+            ["ps", "-p", str(helper_pid), "-www", *flags, "-o", "command="],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.rstrip("\n")
+
+    plain, with_env = command_line(), command_line("-E")
+    block = with_env[len(plain) :] if with_env.startswith(plain) else ""
+    if not block.strip():
+        raise RuntimeError(f"could not read the environment of helper pid {helper_pid}")
+    env: dict[str, str] = {}
+    key = None
+    for token in block.strip().split(" "):
+        if match := ENV_TOKEN.match(token):
+            key = match.group(1)
+            env[key] = match.group(2)
+        elif key is not None:  # a value containing spaces was split by ps; stitch it back
+            env[key] += " " + token
+    return env
+
+
+def served_package(python: Path, pythonpath: str | None) -> dict:
+    """Probe what a fresh interpreter of the helper's venv imports, under the helper's own
+    PYTHONPATH. ``-s`` (no user site) rather than ``-I``: ``-I`` implies ``-E`` and drops PYTHONPATH,
+    which is the only way a BRAINLAYER_SOURCE_FALLBACK=1 helper sees the checkout. The env is built
+    explicitly so the gate's own PYTHONPATH never leaks in."""
+    env = {"PATH": os.environ.get("PATH", os.defpath)}
+    if pythonpath is not None:
+        env["PYTHONPATH"] = pythonpath
     return json.loads(
         subprocess.run(
             [
                 str(python),
-                "-I",
+                "-s",
                 "-c",
                 "import brainlayer,json; print(json.dumps({'version':brainlayer.__version__,"
                 "'path':brainlayer.__file__,'build_sha':getattr(brainlayer,'__build_sha__',None)}))",
@@ -438,6 +488,7 @@ def served_package(python: Path) -> dict:
             check=True,
             capture_output=True,
             text=True,
+            env=env,
         ).stdout
     )
 
@@ -445,8 +496,12 @@ def served_package(python: Path) -> dict:
 def resolve_served(config: dict) -> tuple[dict, Path]:
     warm_helper(config)
     helper_pid, db_path = find_helper()
-    served = served_package(helper_python(helper_pid))
+    env = helper_env(helper_pid)
+    served = served_package(helper_python(helper_pid), env.get("PYTHONPATH"))
+    served["pythonpath"] = env.get("PYTHONPATH")
+    served["repo_root"] = env.get("BRAINLAYER_REPO_ROOT")
     served["helper_started_at"] = helper_started_at(helper_pid)
+    served["package_newest_mtime"] = newest_mtime(Path(served["path"]).resolve().parent)
     return served, db_path
 
 
@@ -478,6 +533,10 @@ def eligibility(served: dict, tree: dict, source_newest_mtime: float) -> tuple[s
             refusals += ["package_path_outside_tree", "served_build_sha_missing"]
         elif served["build_sha"] != tree["working_tree_sha"]:
             refusals += ["package_path_outside_tree", "build_sha_mismatch"]
+        # The sha proves the keg ON DISK; a helper that started before the keg was replaced still
+        # serves the old build (CodeRabbit, #749). Same rule as dev-tree, against the keg's files.
+        if served["helper_started_at"] <= served["package_newest_mtime"]:
+            refusals.append("helper_older_than_keg")
     elif served["helper_started_at"] <= source_newest_mtime:  # must be strictly newer than the tree
         refusals.append("helper_older_than_tree")
     if tree["working_tree_dirty"]:
@@ -496,8 +555,11 @@ def unresolved_provenance(error: str) -> dict:
         "served_package_path": None,
         **tree,
         "served_build_sha": None,
+        "served_pythonpath": None,
+        "served_repo_root": None,
         "helper_started_at": None,
         "source_newest_mtime": None,
+        "served_package_newest_mtime": None,
         "provenance_mode": None,
         "proof_refusals": ["provenance_unresolved"],
         "served_matches_working_tree": False,
@@ -520,8 +582,11 @@ def collect_live_provenance(config: dict) -> dict:
             "served_package_path": str(Path(served["path"]).resolve()),
             **tree,
             "served_build_sha": served["build_sha"],
+            "served_pythonpath": served["pythonpath"],
+            "served_repo_root": served["repo_root"],
             "helper_started_at": iso_utc(served["helper_started_at"]),
             "source_newest_mtime": iso_utc(source_newest),
+            "served_package_newest_mtime": iso_utc(served["package_newest_mtime"]),
             "provenance_mode": mode,
             "proof_refusals": refusals,
             "served_matches_working_tree": not refusals,
@@ -569,8 +634,11 @@ def main(argv: list[str] | None = None) -> int:
             "served_package_path": None,
             **PLACEHOLDER_TREE,
             "served_build_sha": None,
+            "served_pythonpath": None,
+            "served_repo_root": None,
             "helper_started_at": None,
             "source_newest_mtime": None,
+            "served_package_newest_mtime": None,
             "provenance_mode": "replay",
             "proof_refusals": ["replay"],
             "served_matches_working_tree": False,

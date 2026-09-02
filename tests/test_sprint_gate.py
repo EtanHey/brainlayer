@@ -1,5 +1,6 @@
 import json
 import os
+import pwd
 import subprocess
 import sys
 import time
@@ -72,27 +73,21 @@ def run_live_config(
             monkeypatch.setattr(sprint_gate.platform, attribute, lambda key=key: target[key])
     if hostname:
         monkeypatch.setattr(sprint_gate.socket, "gethostname", lambda: hostname)
-    monkeypatch.setattr(
-        sprint_gate,
-        "collect_live_provenance",
-        lambda _config: (
-            provenance
-            or {
-                "served_version": "1.5.10",
-                "served_package_path": str(ROOT / "src" / "brainlayer" / "__init__.py"),
-                "working_tree_version": "1.5.10",
-                "working_tree_sha": "abc123",
-                "working_tree_dirty": False,
-                "served_build_sha": None,
-                "provenance_mode": "dev-tree",
-                "proof_refusals": [],
-                "served_matches_working_tree": True,
-                "db_path": "/tmp/test.db",
-                "db_size_bytes": 1,
-                "chunk_count": 796_098,
-            }
-        ),
+    default = fake_provenance(
+        served_version="1.5.10",
+        served_package_path=str(ROOT / "src" / "brainlayer" / "__init__.py"),
+        working_tree_version="1.5.10",
+        working_tree_sha="abc123",
+        working_tree_dirty=False,
+        provenance_mode="dev-tree",
+        proof_refusals=[],
+        served_matches_working_tree=True,
+        db_path="/tmp/test.db",
+        db_size_bytes=1,
+        chunk_count=796_098,
+        provenance_error=None,
     )
+    monkeypatch.setattr(sprint_gate, "collect_live_provenance", lambda _config: provenance or default)
     return sprint_gate.main(["--json", *(extra_args or [])]), json.loads(capsys.readouterr().out)
 
 
@@ -102,6 +97,28 @@ DEV_PATH = str(ROOT / "src" / "brainlayer" / "__init__.py")
 VENV_PATH = str(ROOT / ".venv" / "lib" / "python3.13" / "site-packages" / "brainlayer" / "__init__.py")
 FRESH_HELPER = 4102444800.0  # 2100-01-01: a helper that started after every source file was written
 MTIME = 1_000_000.0  # the tree's newest source mtime as handed to eligibility()
+
+
+def fake_served(path: str, **overrides) -> dict:
+    """The full `served` shape resolve_served() produces, so a key the code reads cannot be missing."""
+    served = {
+        "version": "1.5.10",
+        "path": path,
+        "build_sha": None,
+        "helper_started_at": FRESH_HELPER,
+        "pythonpath": None,  # today's case: BrainBar sets neither PYTHONPATH nor BRAINLAYER_REPO_ROOT
+        "repo_root": None,
+        "package_newest_mtime": MTIME,
+    }
+    assert set(overrides) <= set(served), overrides
+    return {**served, **overrides}
+
+
+def fake_provenance(**overrides) -> dict:
+    """A payload-shaped provenance dict derived from the real shape (CodeRabbit, #749)."""
+    base = sprint_gate.unresolved_provenance("")
+    assert set(overrides) <= set(base), overrides
+    return {**base, **overrides}
 
 
 def run_live_with_served(monkeypatch, capsys, tmp_path: Path, served: dict, tree: dict, extra_args=None):
@@ -357,17 +374,20 @@ def test_live_gate_runs_latency_on_calibrated_host(monkeypatch, capsys, tmp_path
 
 def test_mismatch_is_not_proof_without_requirement(monkeypatch, capsys, tmp_path: Path):
     config = deterministic_live_config()
-    mismatch = {
-        "served_version": "1.5.9",
-        "served_package_path": "/opt/homebrew/Cellar/brainlayer/1.5.9/brainlayer/__init__.py",
-        "working_tree_version": "1.5.10",
-        "working_tree_sha": "abc123",
-        "working_tree_dirty": False,
-        "served_matches_working_tree": False,
-        "db_path": "/tmp/test.db",
-        "db_size_bytes": 1,
-        "chunk_count": 796_098,
-    }
+    mismatch = fake_provenance(
+        served_version="1.5.9",
+        served_package_path="/opt/homebrew/Cellar/brainlayer/1.5.9/brainlayer/__init__.py",
+        working_tree_version="1.5.10",
+        working_tree_sha="abc123",
+        working_tree_dirty=False,
+        provenance_mode="keg",
+        proof_refusals=["version", "package_path_outside_tree", "served_build_sha_missing"],
+        served_matches_working_tree=False,
+        db_path="/tmp/test.db",
+        db_size_bytes=1,
+        chunk_count=796_098,
+        provenance_error=None,
+    )
     returncode, payload = run_live_config(monkeypatch, capsys, tmp_path, config, provenance=mismatch)
 
     assert returncode == 0
@@ -376,20 +396,20 @@ def test_mismatch_is_not_proof_without_requirement(monkeypatch, capsys, tmp_path
 
 def test_require_code_under_test_fails_before_checks_on_mismatch(monkeypatch, capsys, tmp_path: Path):
     config = deterministic_live_config()
-    mismatch = {
-        "served_version": "1.5.9",
-        "served_package_path": "/opt/homebrew/Cellar/brainlayer/1.5.9/brainlayer/__init__.py",
-        "working_tree_version": "1.5.10",
-        "working_tree_sha": "abc123",
-        "working_tree_dirty": False,
-        "served_build_sha": None,
-        "provenance_mode": "keg",
-        "proof_refusals": ["version", "package_path_outside_tree", "served_build_sha_missing"],
-        "served_matches_working_tree": False,
-        "db_path": "/tmp/test.db",
-        "db_size_bytes": 1,
-        "chunk_count": 796_098,
-    }
+    mismatch = fake_provenance(
+        served_version="1.5.9",
+        served_package_path="/opt/homebrew/Cellar/brainlayer/1.5.9/brainlayer/__init__.py",
+        working_tree_version="1.5.10",
+        working_tree_sha="abc123",
+        working_tree_dirty=False,
+        provenance_mode="keg",
+        proof_refusals=["version", "package_path_outside_tree", "served_build_sha_missing"],
+        served_matches_working_tree=False,
+        db_path="/tmp/test.db",
+        db_size_bytes=1,
+        chunk_count=796_098,
+        provenance_error=None,
+    )
     returncode, payload = run_live_config(
         monkeypatch, capsys, tmp_path, config, extra_args=["--require-code-under-test"], provenance=mismatch
     )
@@ -410,7 +430,7 @@ def test_require_code_under_test_fails_before_checks_on_mismatch(monkeypatch, ca
 
 
 def test_eligibility_keg_without_build_sha_is_refused_even_when_versions_match():
-    served = {"version": "1.5.10", "path": KEG_PATH, "build_sha": None, "helper_started_at": FRESH_HELPER}
+    served = fake_served(KEG_PATH)
     assert sprint_gate.eligibility(served, CLEAN_TREE, MTIME) == (
         "keg",
         ["package_path_outside_tree", "served_build_sha_missing"],
@@ -418,12 +438,12 @@ def test_eligibility_keg_without_build_sha_is_refused_even_when_versions_match()
 
 
 def test_eligibility_keg_with_matching_build_sha_is_eligible():
-    served = {"version": "1.5.10", "path": KEG_PATH, "build_sha": "abc123", "helper_started_at": FRESH_HELPER}
+    served = fake_served(KEG_PATH, build_sha="abc123")
     assert sprint_gate.eligibility(served, CLEAN_TREE, MTIME) == ("keg", [])
 
 
 def test_eligibility_keg_with_foreign_build_sha_names_the_mismatch():
-    served = {"version": "1.5.10", "path": KEG_PATH, "build_sha": "def456", "helper_started_at": FRESH_HELPER}
+    served = fake_served(KEG_PATH, build_sha="def456")
     assert sprint_gate.eligibility(served, CLEAN_TREE, MTIME) == (
         "keg",
         ["package_path_outside_tree", "build_sha_mismatch"],
@@ -431,7 +451,7 @@ def test_eligibility_keg_with_foreign_build_sha_names_the_mismatch():
 
 
 def test_eligibility_dev_tree_clean_is_eligible_and_dirty_alone_blocks():
-    served = {"version": "1.5.10", "path": DEV_PATH, "build_sha": None, "helper_started_at": FRESH_HELPER}
+    served = fake_served(DEV_PATH)
     assert sprint_gate.eligibility(served, CLEAN_TREE, MTIME) == ("dev-tree", [])
     assert sprint_gate.eligibility(served, {**CLEAN_TREE, "working_tree_dirty": True}, MTIME) == (
         "dev-tree",
@@ -441,7 +461,7 @@ def test_eligibility_dev_tree_clean_is_eligible_and_dirty_alone_blocks():
 
 def test_eligibility_site_packages_under_root_is_keg_not_dev_tree():
     """Macroscope #749: ROOT/.venv/.../site-packages is under ROOT but is NOT the source tree."""
-    served = {"version": "1.5.10", "path": VENV_PATH, "build_sha": None, "helper_started_at": FRESH_HELPER}
+    served = fake_served(VENV_PATH)
     assert sprint_gate.eligibility(served, CLEAN_TREE, MTIME) == (
         "keg",
         ["package_path_outside_tree", "served_build_sha_missing"],
@@ -450,29 +470,43 @@ def test_eligibility_site_packages_under_root_is_keg_not_dev_tree():
 
 def test_eligibility_dev_tree_refuses_helper_older_than_tree():
     """Codex #749: a helper that loaded commit A and survived a checkout to B still serves A."""
-    stale = {"version": "1.5.10", "path": DEV_PATH, "build_sha": None, "helper_started_at": MTIME - 1}
+    stale = fake_served(DEV_PATH, helper_started_at=MTIME - 1)
     assert sprint_gate.eligibility(stale, CLEAN_TREE, MTIME) == ("dev-tree", ["helper_older_than_tree"])
     same_second = {**stale, "helper_started_at": MTIME}
     assert sprint_gate.eligibility(same_second, CLEAN_TREE, MTIME) == ("dev-tree", ["helper_older_than_tree"])
     fresh = {**stale, "helper_started_at": MTIME + 1}
     assert sprint_gate.eligibility(fresh, CLEAN_TREE, MTIME) == ("dev-tree", [])
-    # Lead ruling (#749 round 1): keg mode keeps the sha predicate only; process age is dev-tree's.
-    keg = {"version": "1.5.10", "path": KEG_PATH, "build_sha": "abc123", "helper_started_at": MTIME - 1}
-    assert sprint_gate.eligibility(keg, CLEAN_TREE, MTIME) == ("keg", [])
 
 
-def test_newest_source_mtime_counts_package_data_but_not_bytecode(monkeypatch, tmp_path):
+def test_eligibility_keg_refuses_helper_older_than_keg():
+    """CodeRabbit #749: the sha proves the keg on disk; a helper started before the keg was replaced
+    still serves the old build. The keg's own files are the bound, not the source tree."""
+    fresh_keg = fake_served(KEG_PATH, build_sha="abc123", helper_started_at=MTIME + 1, package_newest_mtime=MTIME)
+    assert sprint_gate.eligibility(fresh_keg, CLEAN_TREE, MTIME + 500) == ("keg", []), "tree mtime is irrelevant"
+    stale = {**fresh_keg, "helper_started_at": MTIME}
+    assert sprint_gate.eligibility(stale, CLEAN_TREE, MTIME) == ("keg", ["helper_older_than_keg"])
+    stale_and_unstamped = {**stale, "build_sha": None}
+    assert sprint_gate.eligibility(stale_and_unstamped, CLEAN_TREE, MTIME) == (
+        "keg",
+        ["package_path_outside_tree", "served_build_sha_missing", "helper_older_than_keg"],
+    )
+
+
+def test_newest_mtime_counts_package_data_and_extensions_but_not_bytecode(monkeypatch, tmp_path):
     package = tmp_path / "brainlayer"
     (package / "__pycache__").mkdir(parents=True)
     (package / "core.py").write_text("x = 1")
     os.utime(package / "core.py", (100, 100))
     (package / "taxonomy.json").write_text("{}")
     os.utime(package / "taxonomy.json", (200, 200))
+    (package / "_native.cpython-313-darwin.so").write_bytes(b"")
+    os.utime(package / "_native.cpython-313-darwin.so", (250, 250))
     (package / "__pycache__" / "core.cpython-313.pyc").write_bytes(b"")
     os.utime(package / "__pycache__" / "core.cpython-313.pyc", (300, 300))
     monkeypatch.setattr(sprint_gate, "PACKAGE", package)
 
-    assert sprint_gate.newest_source_mtime() == 200.0
+    assert sprint_gate.newest_mtime(package) == 250.0
+    assert sprint_gate.newest_source_mtime() == 250.0
 
 
 def test_helper_started_at_parses_ps_lstart(monkeypatch):
@@ -510,7 +544,7 @@ def test_helper_started_at_parses_real_ps_output_independent_of_parent_tz(monkey
 
 def test_stale_helper_blocks_dev_tree_proof_and_payload_records_both_timestamps(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(sprint_gate, "newest_source_mtime", lambda: 1_000_000.0)
-    served = {"version": "1.5.10", "path": DEV_PATH, "build_sha": None, "helper_started_at": 999_999.0}
+    served = fake_served(DEV_PATH, helper_started_at=999_999.0)
     returncode, payload = run_live_with_served(
         monkeypatch, capsys, tmp_path, served, CLEAN_TREE, ["--require-code-under-test"]
     )
@@ -521,6 +555,7 @@ def test_stale_helper_blocks_dev_tree_proof_and_payload_records_both_timestamps(
     assert payload["provenance"]["proof_refusals"] == ["helper_older_than_tree"]
     assert payload["provenance"]["helper_started_at"] == "1970-01-12T13:46:39+00:00"
     assert payload["provenance"]["source_newest_mtime"] == "1970-01-12T13:46:40+00:00"
+    assert payload["provenance"]["served_package_newest_mtime"] == "1970-01-12T13:46:40+00:00"
     assert payload["error"].startswith("not proof-eligible [dev-tree]: helper_older_than_tree")
 
 
@@ -546,7 +581,7 @@ def test_warmup_query_is_a_nonce_never_a_corpus_query(monkeypatch):
 
 
 def test_version_equality_alone_is_not_proof_and_message_names_the_path_predicate(monkeypatch, capsys, tmp_path):
-    served = {"version": "1.5.10", "path": KEG_PATH, "build_sha": None, "helper_started_at": FRESH_HELPER}
+    served = fake_served(KEG_PATH)
     returncode, payload = run_live_with_served(
         monkeypatch, capsys, tmp_path, served, CLEAN_TREE, ["--require-code-under-test"]
     )
@@ -563,7 +598,7 @@ def test_version_equality_alone_is_not_proof_and_message_names_the_path_predicat
 
 
 def test_dirty_tree_alone_blocks_dev_tree_proof(monkeypatch, capsys, tmp_path):
-    served = {"version": "1.5.10", "path": DEV_PATH, "build_sha": None, "helper_started_at": FRESH_HELPER}
+    served = fake_served(DEV_PATH)
     dirty = {**CLEAN_TREE, "working_tree_dirty": True}
     returncode, payload = run_live_with_served(
         monkeypatch, capsys, tmp_path, served, dirty, ["--require-code-under-test"]
@@ -576,7 +611,7 @@ def test_dirty_tree_alone_blocks_dev_tree_proof(monkeypatch, capsys, tmp_path):
 
 
 def test_keg_built_from_this_sha_is_proof_eligible(monkeypatch, capsys, tmp_path):
-    served = {"version": "1.5.10", "path": KEG_PATH, "build_sha": "abc123", "helper_started_at": FRESH_HELPER}
+    served = fake_served(KEG_PATH, build_sha="abc123")
     returncode, payload = run_live_with_served(
         monkeypatch, capsys, tmp_path, served, CLEAN_TREE, ["--require-code-under-test"]
     )
@@ -585,6 +620,7 @@ def test_keg_built_from_this_sha_is_proof_eligible(monkeypatch, capsys, tmp_path
     assert payload["proof_eligible"] is True
     assert payload["provenance"]["provenance_mode"] == "keg"
     assert payload["provenance"]["served_build_sha"] == "abc123"
+    assert payload["provenance"]["served_pythonpath"] is None
     assert [check["status"] for check in payload["checks"]] == ["PASS"] * 4
 
 
@@ -702,7 +738,7 @@ def test_live_git_failure_is_a_structured_refusal_not_a_traceback(monkeypatch, c
     monkeypatch.setattr(sprint_gate, "CORPUS", live_config)
     monkeypatch.setattr(sprint_gate.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(sprint_gate.platform, "machine", lambda: "arm64")
-    served = {"version": "1.5.10", "path": DEV_PATH, "build_sha": None, "helper_started_at": FRESH_HELPER}
+    served = fake_served(DEV_PATH)
     monkeypatch.setattr(sprint_gate, "resolve_served", lambda _config: (served, Path("/tmp/test.db")))
 
     def no_git():
@@ -719,6 +755,141 @@ def test_live_git_failure_is_a_structured_refusal_not_a_traceback(monkeypatch, c
     assert payload["provenance"]["working_tree_sha"] is None
     assert payload["provenance"]["provenance_error"] == "FileNotFoundError: git"
     assert payload["error"] == "served code could not be resolved: FileNotFoundError: git"
+
+
+# --- Round 3 (Codex P1): probe under the helper's own PYTHONPATH -------------------------------
+
+
+def fake_ps_env(plain: str, with_env: str):
+    def run(argv, **_kwargs):
+        assert argv[:2] == ["ps", "-p"] and argv[-2:] == ["-o", "command="]
+        return subprocess.CompletedProcess(argv, 0, stdout=(with_env if "-E" in argv else plain) + "\n", stderr="")
+
+    return run
+
+
+def test_helper_env_is_the_ps_E_block_and_stitches_spaced_values(monkeypatch):
+    plain = "/venv/bin/python -m brainlayer.brainbar_hybrid_helper --db-path /tmp/x.db"
+    block = " PATH=/usr/bin:/bin HOME=/Users/e PYTHONPATH=/Users/e/My Gits/brainlayer/src BRAINLAYER_REPO_ROOT=/Users/e/My Gits/brainlayer"
+    monkeypatch.setattr(sprint_gate.subprocess, "run", fake_ps_env(plain, plain + block))
+
+    env = sprint_gate.helper_env(4242)
+
+    assert env["PYTHONPATH"] == "/Users/e/My Gits/brainlayer/src"
+    assert env["BRAINLAYER_REPO_ROOT"] == "/Users/e/My Gits/brainlayer"
+    assert env["PATH"] == "/usr/bin:/bin"
+
+
+def test_helper_env_unreadable_is_an_error_not_a_guess(monkeypatch):
+    plain = "/venv/bin/python -m brainlayer.brainbar_hybrid_helper --db-path /tmp/x.db"
+    monkeypatch.setattr(sprint_gate.subprocess, "run", fake_ps_env(plain, plain))
+    with pytest.raises(RuntimeError, match="could not read the environment of helper pid 4242"):
+        sprint_gate.helper_env(4242)
+
+
+def test_helper_env_reads_a_real_process():
+    """`ps -E` reports the LAUNCH-time environment (pytest's conftest rewrites HOME afterwards),
+    which is exactly the env BrainBar handed the helper."""
+    env = sprint_gate.helper_env(os.getpid())
+    assert env["USER"] == pwd.getpwuid(os.getuid()).pw_name
+    assert "PATH" in env
+
+
+def fake_package(tmp_path: Path) -> Path:
+    package = tmp_path / "shadow" / "brainlayer"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("__version__ = '9.9.9'\n__build_sha__ = 'shadow'\n")
+    return package.parent
+
+
+def test_probe_honours_exactly_the_helpers_pythonpath(tmp_path):
+    """(a)/(b): a source-fallback helper imports via PYTHONPATH only; the probe must see the same copy."""
+    shadow = fake_package(tmp_path)
+    served = sprint_gate.served_package(Path(sys.executable), str(shadow))
+    assert served == {"version": "9.9.9", "path": str(shadow / "brainlayer" / "__init__.py"), "build_sha": "shadow"}
+
+    served = sprint_gate.served_package(Path(sys.executable), str(ROOT / "src"))
+    assert Path(served["path"]).resolve().is_relative_to(sprint_gate.PACKAGE)
+    served.update(helper_started_at=FRESH_HELPER)
+    assert sprint_gate.eligibility(served, CLEAN_TREE, MTIME)[0] == "dev-tree"
+
+
+def test_probe_without_helper_pythonpath_never_inherits_the_gates_own(monkeypatch, tmp_path):
+    shadow = fake_package(tmp_path)
+    monkeypatch.setenv("PYTHONPATH", str(shadow))  # the gate's own env must not leak into the probe
+    served = sprint_gate.served_package(Path(sys.executable), None)
+    assert not Path(served["path"]).is_relative_to(shadow)
+    assert served["version"] != "9.9.9"
+
+
+def test_probe_uses_dash_s_not_dash_I(monkeypatch):
+    seen = {}
+
+    def run(argv, **kwargs):
+        seen["argv"], seen["env"] = argv, kwargs["env"]
+        return subprocess.CompletedProcess(argv, 0, stdout='{"version":"1","path":"/p","build_sha":null}', stderr="")
+
+    monkeypatch.setattr(sprint_gate.subprocess, "run", run)
+    sprint_gate.served_package(Path("/venv/bin/python"), None)
+    assert seen["argv"][1] == "-s" and "-I" not in seen["argv"] and "PYTHONPATH" not in seen["env"]
+    sprint_gate.served_package(Path("/venv/bin/python"), "/x/src")
+    assert seen["env"]["PYTHONPATH"] == "/x/src"
+
+
+def test_resolve_served_records_pythonpath_and_repo_root(monkeypatch):
+    monkeypatch.setattr(sprint_gate, "warm_helper", lambda _config: None)
+    monkeypatch.setattr(sprint_gate, "find_helper", lambda: (4242, Path("/tmp/x.db")))
+    monkeypatch.setattr(sprint_gate, "helper_python", lambda _pid: Path("/venv/bin/python"))
+    monkeypatch.setattr(sprint_gate, "helper_started_at", lambda _pid: FRESH_HELPER)
+    monkeypatch.setattr(sprint_gate, "helper_env", lambda _pid: {"PYTHONPATH": "/r/src", "BRAINLAYER_REPO_ROOT": "/r"})
+    seen = {}
+
+    def probe(python, pythonpath):
+        seen["pp"] = pythonpath
+        return {"version": "1.5.10", "path": "/r/src/brainlayer/__init__.py", "build_sha": None}
+
+    monkeypatch.setattr(sprint_gate, "served_package", probe)
+    monkeypatch.setattr(sprint_gate, "newest_mtime", lambda directory: seen.update(dir=directory) or 42.0)
+
+    served, db_path = sprint_gate.resolve_served({})
+
+    assert seen["pp"] == "/r/src"
+    assert served["pythonpath"] == "/r/src" and served["repo_root"] == "/r"
+    assert seen["dir"] == Path("/r/src/brainlayer") and served["package_newest_mtime"] == 42.0
+    assert db_path == Path("/tmp/x.db")
+
+
+def test_unreadable_helper_env_is_a_structured_refusal(monkeypatch, capsys, tmp_path):
+    """(c): the gate must say it could not read the helper, not probe blind."""
+    live_config = tmp_path / "live.json"
+    live_config.write_text(json.dumps(deterministic_live_config()), encoding="utf-8")
+    monkeypatch.setattr(sprint_gate, "CORPUS", live_config)
+    monkeypatch.setattr(sprint_gate.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(sprint_gate.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(sprint_gate, "warm_helper", lambda _config: None)
+    monkeypatch.setattr(sprint_gate, "find_helper", lambda: (4242, Path("/tmp/x.db")))
+    monkeypatch.setattr(sprint_gate, "working_tree_provenance", lambda: dict(CLEAN_TREE))
+    plain = "/venv/bin/python -m brainlayer.brainbar_hybrid_helper --db-path /tmp/x.db"
+    monkeypatch.setattr(sprint_gate.subprocess, "run", fake_ps_env(plain, plain))
+
+    returncode = sprint_gate.main(["--json", "--require-code-under-test"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert returncode == 1
+    assert payload["checks"] == []
+    assert payload["provenance"]["proof_refusals"] == ["provenance_unresolved"]
+    assert payload["provenance"]["served_pythonpath"] is None
+    assert (
+        payload["provenance"]["provenance_error"] == "RuntimeError: could not read the environment of helper pid 4242"
+    )
+
+
+def test_payload_records_served_pythonpath(monkeypatch, capsys, tmp_path):
+    served = fake_served(DEV_PATH, pythonpath=str(ROOT / "src"), repo_root=str(ROOT))
+    returncode, payload = run_live_with_served(monkeypatch, capsys, tmp_path, served, CLEAN_TREE)
+    assert returncode == 0
+    assert payload["provenance"]["served_pythonpath"] == str(ROOT / "src")
+    assert payload["provenance"]["served_repo_root"] == str(ROOT)
 
 
 def test_package_exposes_build_sha_slot_for_keg_mode():
