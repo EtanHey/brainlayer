@@ -85,6 +85,7 @@ Call `expand_palette` or set `BRAINLAYER_MCP_PROFILE=full` for the rest.
 ## Release safety
 - Every Homebrew release must run `scripts/release-verify-signatures.sh <keg-path>` after installation.
 - Any invalid `*.so` or `*.dylib` blocks release/deploy; never restart services until the gate passes.
+- A `Casks/brainbar.rb` version lower than the package version is allowed only when `BRAINLAYER_VERSION_CHECK_CASK_LAG_REASON="no BrainBar release for <ver>"` is set for `scripts/brainlayer-version-check.sh`; a cask ahead of the package still fails hard.
 
 ## PR Workflow
 - Request `@codex review`.
