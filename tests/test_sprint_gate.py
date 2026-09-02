@@ -73,18 +73,43 @@ def run_live_config(
     monkeypatch.setattr(
         sprint_gate,
         "collect_live_provenance",
-        lambda _config: provenance
-        or {
-            "served_version": "1.5.10",
-            "served_package_path": str(ROOT / "src" / "brainlayer" / "__init__.py"),
-            "working_tree_version": "1.5.10",
-            "working_tree_sha": "abc123",
-            "working_tree_dirty": False,
-            "served_matches_working_tree": True,
-            "db_path": "/tmp/test.db",
-            "db_size_bytes": 1,
-            "chunk_count": 796_098,
-        },
+        lambda _config: (
+            provenance
+            or {
+                "served_version": "1.5.10",
+                "served_package_path": str(ROOT / "src" / "brainlayer" / "__init__.py"),
+                "working_tree_version": "1.5.10",
+                "working_tree_sha": "abc123",
+                "working_tree_dirty": False,
+                "served_build_sha": None,
+                "provenance_mode": "dev-tree",
+                "proof_refusals": [],
+                "served_matches_working_tree": True,
+                "db_path": "/tmp/test.db",
+                "db_size_bytes": 1,
+                "chunk_count": 796_098,
+            }
+        ),
+    )
+    return sprint_gate.main(["--json", *(extra_args or [])]), json.loads(capsys.readouterr().out)
+
+
+CLEAN_TREE = {"working_tree_version": "1.5.10", "working_tree_sha": "abc123", "working_tree_dirty": False}
+KEG_PATH = "/opt/homebrew/Cellar/brainlayer/1.5.10/libexec/venv/lib/python3.13/site-packages/brainlayer/__init__.py"
+DEV_PATH = str(ROOT / "src" / "brainlayer" / "__init__.py")
+
+
+def run_live_with_served(monkeypatch, capsys, tmp_path: Path, served: dict, tree: dict, extra_args=None):
+    """Drive main() with only the I/O leaves faked; eligibility and payload assembly run for real."""
+    live_config = tmp_path / "live.json"
+    live_config.write_text(json.dumps(deterministic_live_config()), encoding="utf-8")
+    monkeypatch.setattr(sprint_gate, "CORPUS", live_config)
+    monkeypatch.setattr(sprint_gate.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(sprint_gate.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(sprint_gate, "resolve_served", lambda _config: (served, Path("/tmp/test.db")))
+    monkeypatch.setattr(sprint_gate, "working_tree_provenance", lambda: dict(tree))
+    monkeypatch.setattr(
+        sprint_gate, "db_provenance", lambda path: {"db_path": str(path), "db_size_bytes": 1, "chunk_count": 7}
     )
     return sprint_gate.main(["--json", *(extra_args or [])]), json.loads(capsys.readouterr().out)
 
@@ -349,6 +374,9 @@ def test_require_code_under_test_fails_before_checks_on_mismatch(monkeypatch, ca
         "working_tree_version": "1.5.10",
         "working_tree_sha": "abc123",
         "working_tree_dirty": False,
+        "served_build_sha": None,
+        "provenance_mode": "keg",
+        "proof_refusals": ["version", "package_path_outside_tree", "served_build_sha_missing"],
         "served_matches_working_tree": False,
         "db_path": "/tmp/test.db",
         "db_size_bytes": 1,
@@ -363,7 +391,172 @@ def test_require_code_under_test_fails_before_checks_on_mismatch(monkeypatch, ca
     assert payload["checks"] == []
     assert payload["provenance"] == mismatch
     assert payload["proof_eligible"] is False
-    assert payload["error"] == "served code 1.5.9 does not match working tree 1.5.10 at abc123"
+    assert payload["error"] == (
+        "not proof-eligible [keg]: version, package_path_outside_tree, served_build_sha_missing "
+        "(served 1.5.9 build_sha=None from /opt/homebrew/Cellar/brainlayer/1.5.9/brainlayer/__init__.py; "
+        "working tree 1.5.10 at abc123, dirty=False)"
+    )
+
+
+# --- Finding 6: pin the predicate itself, not the wire it hangs on -------------------------------
+
+
+def test_eligibility_keg_without_build_sha_is_refused_even_when_versions_match():
+    served = {"version": "1.5.10", "path": KEG_PATH, "build_sha": None}
+    assert sprint_gate.eligibility(served, CLEAN_TREE) == (
+        "keg",
+        ["package_path_outside_tree", "served_build_sha_missing"],
+    )
+
+
+def test_eligibility_keg_with_matching_build_sha_is_eligible():
+    served = {"version": "1.5.10", "path": KEG_PATH, "build_sha": "abc123"}
+    assert sprint_gate.eligibility(served, CLEAN_TREE) == ("keg", [])
+
+
+def test_eligibility_keg_with_foreign_build_sha_names_the_mismatch():
+    served = {"version": "1.5.10", "path": KEG_PATH, "build_sha": "def456"}
+    assert sprint_gate.eligibility(served, CLEAN_TREE) == ("keg", ["package_path_outside_tree", "build_sha_mismatch"])
+
+
+def test_eligibility_dev_tree_clean_is_eligible_and_dirty_alone_blocks():
+    served = {"version": "1.5.10", "path": DEV_PATH, "build_sha": None}
+    assert sprint_gate.eligibility(served, CLEAN_TREE) == ("dev-tree", [])
+    assert sprint_gate.eligibility(served, {**CLEAN_TREE, "working_tree_dirty": True}) == (
+        "dev-tree",
+        ["working_tree_dirty"],
+    )
+
+
+def test_version_equality_alone_is_not_proof_and_message_names_the_path_predicate(monkeypatch, capsys, tmp_path):
+    served = {"version": "1.5.10", "path": KEG_PATH, "build_sha": None}
+    returncode, payload = run_live_with_served(
+        monkeypatch, capsys, tmp_path, served, CLEAN_TREE, ["--require-code-under-test"]
+    )
+
+    assert returncode == 1
+    assert payload["checks"] == []
+    assert payload["proof_eligible"] is False
+    assert payload["provenance"]["provenance_mode"] == "keg"
+    assert payload["provenance"]["served_matches_working_tree"] is False
+    assert payload["provenance"]["proof_refusals"] == ["package_path_outside_tree", "served_build_sha_missing"]
+    assert "package_path_outside_tree" in payload["error"]
+    assert "served_build_sha_missing" in payload["error"]
+    assert "1.5.10 does not match" not in payload["error"]
+
+
+def test_dirty_tree_alone_blocks_dev_tree_proof(monkeypatch, capsys, tmp_path):
+    served = {"version": "1.5.10", "path": DEV_PATH, "build_sha": None}
+    dirty = {**CLEAN_TREE, "working_tree_dirty": True}
+    returncode, payload = run_live_with_served(
+        monkeypatch, capsys, tmp_path, served, dirty, ["--require-code-under-test"]
+    )
+
+    assert returncode == 1
+    assert payload["provenance"]["provenance_mode"] == "dev-tree"
+    assert payload["provenance"]["proof_refusals"] == ["working_tree_dirty"]
+    assert payload["error"].startswith("not proof-eligible [dev-tree]: working_tree_dirty")
+
+
+def test_keg_built_from_this_sha_is_proof_eligible(monkeypatch, capsys, tmp_path):
+    served = {"version": "1.5.10", "path": KEG_PATH, "build_sha": "abc123"}
+    returncode, payload = run_live_with_served(
+        monkeypatch, capsys, tmp_path, served, CLEAN_TREE, ["--require-code-under-test"]
+    )
+
+    assert returncode == 0
+    assert payload["proof_eligible"] is True
+    assert payload["provenance"]["provenance_mode"] == "keg"
+    assert payload["provenance"]["served_build_sha"] == "abc123"
+    assert [check["status"] for check in payload["checks"]] == ["PASS"] * 4
+
+
+def fake_ps(helper_count: int, calls: list[str] | None = None):
+    helper = "  4242 /venv/bin/python -m brainlayer.brainbar_hybrid_helper --db-path /tmp/x.db --socket /tmp/h.sock"
+    lines = ["     1 /sbin/launchd", *([helper] * helper_count)]
+
+    def run(argv, **_kwargs):
+        assert argv[0] == "ps", f"collector reached {argv[0]} with {helper_count} helpers"
+        if calls is not None:
+            calls.append("ps")
+        return subprocess.CompletedProcess(argv, 0, stdout="\n".join(lines) + "\n", stderr="")
+
+    return run
+
+
+@pytest.mark.parametrize("helper_count", [0, 2])
+def test_collector_failure_emits_structured_payload_not_traceback(monkeypatch, capsys, tmp_path, helper_count):
+    live_config = tmp_path / "live.json"
+    live_config.write_text(json.dumps(deterministic_live_config()), encoding="utf-8")
+    monkeypatch.setattr(sprint_gate, "CORPUS", live_config)
+    monkeypatch.setattr(sprint_gate.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(sprint_gate.platform, "machine", lambda: "arm64")
+    calls: list[str] = []
+    monkeypatch.setattr(sprint_gate, "warm_helper", lambda _config: calls.append("warm"))
+    monkeypatch.setattr(sprint_gate, "working_tree_provenance", lambda: dict(CLEAN_TREE))
+    monkeypatch.setattr(sprint_gate.subprocess, "run", fake_ps(helper_count, calls))
+
+    returncode, payload = sprint_gate.main(["--json", "--require-code-under-test"]), json.loads(capsys.readouterr().out)
+
+    assert calls == ["warm", "ps"], "helper must be warmed over the socket before ps resolves it"
+    assert returncode == 1
+    assert payload["checks"] == []
+    assert payload["proof_eligible"] is False
+    provenance = payload["provenance"]
+    assert provenance["served_version"] is None
+    assert provenance["served_package_path"] is None
+    assert provenance["served_matches_working_tree"] is False
+    assert provenance["provenance_mode"] is None
+    assert provenance["proof_refusals"] == ["provenance_unresolved"]
+    assert provenance["working_tree_sha"] == "abc123"
+    assert provenance["provenance_error"] == f"RuntimeError: expected one serving hybrid helper, found {helper_count}"
+    assert payload["error"] == f"served code could not be resolved: {provenance['provenance_error']}"
+
+
+def test_collector_failure_without_requirement_keeps_rc_and_records_error(monkeypatch, capsys, tmp_path):
+    live_config = tmp_path / "live.json"
+    live_config.write_text(json.dumps(deterministic_live_config()), encoding="utf-8")
+    monkeypatch.setattr(sprint_gate, "CORPUS", live_config)
+    monkeypatch.setattr(sprint_gate.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(sprint_gate.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(sprint_gate, "warm_helper", lambda _config: None)
+    monkeypatch.setattr(sprint_gate, "working_tree_provenance", lambda: dict(CLEAN_TREE))
+    monkeypatch.setattr(sprint_gate.subprocess, "run", fake_ps(0))
+
+    returncode, payload = sprint_gate.main(["--json"]), json.loads(capsys.readouterr().out)
+
+    assert returncode == 0
+    assert payload["status"] == "PASS"
+    assert payload["proof_eligible"] is False
+    assert payload["provenance"]["provenance_error"] == "RuntimeError: expected one serving hybrid helper, found 0"
+
+
+def test_replay_under_requirement_is_rejected_and_labelled_as_replay():
+    fixture = FIXTURES / "all_green.json"
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--json", "--fixture", str(fixture), "--require-code-under-test"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    payload = json.loads(result.stdout)
+
+    assert result.returncode == 1
+    assert "Traceback" not in result.stderr
+    assert payload["mode"] == "replay"
+    assert payload["fixture"].endswith("all_green.json")
+    assert payload["checks"] == []
+    assert payload["proof_eligible"] is False
+    assert payload["provenance"]["provenance_mode"] == "replay"
+    assert payload["error"] == "replay is never proof-eligible: a fixture is not evidence about any served code"
+
+
+def test_package_exposes_build_sha_slot_for_keg_mode():
+    import brainlayer
+
+    assert hasattr(brainlayer, "__build_sha__")
+    assert brainlayer.__build_sha__ is None or isinstance(brainlayer.__build_sha__, str)
 
 
 @pytest.mark.parametrize(

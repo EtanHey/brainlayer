@@ -1,5 +1,26 @@
 #!/usr/bin/env python3
-"""Executable zero-regression gate for the BrainLayer sprint."""
+"""Executable zero-regression gate for the BrainLayer sprint.
+
+How to get proof_eligible (``--require-code-under-test``)
+---------------------------------------------------------
+"Code under test" means the served package was BUILT FROM this working tree's sha, not that
+it lives under this path. Two modes; ``provenance.provenance_mode`` says which one ran:
+
+* ``dev-tree`` -- BrainBar's hybrid helper imports ``brainlayer`` from under this repo (an
+  editable install, or BrainBar launched with ``BRAINLAYER_SOURCE_FALLBACK=1`` and
+  ``BRAINLAYER_REPO_ROOT`` pointing here) AND ``git status --porcelain`` is empty.
+* ``keg`` -- the served package (e.g. the brew Cellar venv) exposes ``brainlayer.__build_sha__``
+  equal to ``git rev-parse HEAD`` AND the tree is clean. No release build stamps the sha yet
+  (planned for 1.5.11), so every keg today refuses with ``served_build_sha_missing``.
+
+Version equality alone is never accepted: an installed 1.5.10 and 1.5.10-plus-a-branch share a
+string while being different code. A refusal names every predicate that fired: ``version``,
+``package_path_outside_tree`` (the keg-mode qualifier: dev-tree cannot apply, so the build sha
+must), ``served_build_sha_missing``, ``build_sha_mismatch``, ``working_tree_dirty``. Replay (``--fixture``) under the flag is REJECTED by design: a fixture
+is not evidence about any served code. Provenance that cannot be resolved (no helper, ``lsof``
+or ``git`` failure) is reported as ``provenance_error`` in the normal payload shape, never as a
+traceback.
+"""
 
 from __future__ import annotations
 
@@ -310,7 +331,17 @@ def working_tree_provenance() -> dict:
     return {"working_tree_version": __version__, "working_tree_sha": sha, "working_tree_dirty": dirty}
 
 
-def collect_live_provenance(config: dict) -> dict:
+def warm_helper(config: dict) -> None:
+    """The hybrid helper is spawned on demand by the first search; idle == 0 helpers is normal."""
+    client = MCPClient(config["socket_path"], config["mcp_timeout_seconds"])
+    try:
+        client.initialize()
+        client.call("brain_search", {"query": config["queries"][0], "num_results": 1})
+    finally:
+        client.close()
+
+
+def find_helper() -> tuple[int, Path]:
     processes = subprocess.run(
         ["ps", "-axo", "pid=,command="], check=True, capture_output=True, text=True
     ).stdout.splitlines()
@@ -324,7 +355,10 @@ def collect_live_provenance(config: dict) -> dict:
             helpers.append((int(fields[0]), Path(arguments[arguments.index("--db-path") + 1])))
     if len(helpers) != 1:
         raise RuntimeError(f"expected one serving hybrid helper, found {len(helpers)}")
-    helper_pid, db_path = helpers[0]
+    return helpers[0]
+
+
+def helper_python(helper_pid: int) -> Path:
     open_files = subprocess.run(
         ["lsof", "-p", str(helper_pid), "-Fn"], check=True, capture_output=True, text=True
     ).stdout.splitlines()
@@ -335,47 +369,125 @@ def collect_live_provenance(config: dict) -> dict:
     }
     if len(site_dirs) != 1:
         raise RuntimeError(f"could not resolve one site-packages for helper pid {helper_pid}")
-    helper_python = next(iter(site_dirs)).parents[2] / "bin" / "python"
-    served = json.loads(
+    return next(iter(site_dirs)).parents[2] / "bin" / "python"
+
+
+def served_package(python: Path) -> dict:
+    return json.loads(
         subprocess.run(
             [
-                str(helper_python),
+                str(python),
                 "-I",
                 "-c",
-                "import brainlayer,json; print(json.dumps({'version':brainlayer.__version__,'path':brainlayer.__file__}))",
+                "import brainlayer,json; print(json.dumps({'version':brainlayer.__version__,"
+                "'path':brainlayer.__file__,'build_sha':getattr(brainlayer,'__build_sha__',None)}))",
             ],
             check=True,
             capture_output=True,
             text=True,
         ).stdout
     )
-    tree = working_tree_provenance()
-    served_path = Path(served["path"]).resolve()
+
+
+def resolve_served(config: dict) -> tuple[dict, Path]:
+    warm_helper(config)
+    helper_pid, db_path = find_helper()
+    return served_package(helper_python(helper_pid)), db_path
+
+
+def db_provenance(db_path: Path) -> dict:
     db_path = db_path.expanduser().resolve()
-    with sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True) as connection:
+    connection = sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True)
+    try:
         connection.execute("PRAGMA query_only=ON")
         chunk_count = connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-    matches = (
-        served["version"] == tree["working_tree_version"]
-        and served_path.is_relative_to(ROOT)
-        and not tree["working_tree_dirty"]
-    )
+    finally:
+        connection.close()
+    return {"db_path": str(db_path), "db_size_bytes": db_path.stat().st_size, "chunk_count": chunk_count}
+
+
+def eligibility(served: dict, tree: dict) -> tuple[str, list[str]]:
+    """Return (provenance_mode, refusals). Eligible iff refusals is empty. Never version-equality alone."""
+    mode = "dev-tree" if Path(served["path"]).resolve().is_relative_to(ROOT) else "keg"
+    refusals = []
+    if served["version"] != tree["working_tree_version"]:
+        refusals.append("version")
+    if mode == "keg":
+        if served["build_sha"] is None:
+            refusals += ["package_path_outside_tree", "served_build_sha_missing"]
+        elif served["build_sha"] != tree["working_tree_sha"]:
+            refusals += ["package_path_outside_tree", "build_sha_mismatch"]
+    if tree["working_tree_dirty"]:
+        refusals.append("working_tree_dirty")
+    return mode, refusals
+
+
+def unresolved_provenance(error: str) -> dict:
+    tree = {"working_tree_version": __version__, "working_tree_sha": None, "working_tree_dirty": None}
+    try:
+        tree = working_tree_provenance()
+    except Exception:
+        pass
     return {
-        "served_version": served["version"],
-        "served_package_path": str(served_path),
+        "served_version": None,
+        "served_package_path": None,
         **tree,
-        "served_matches_working_tree": matches,
-        "db_path": str(db_path),
-        "db_size_bytes": db_path.stat().st_size,
-        "chunk_count": chunk_count,
+        "served_build_sha": None,
+        "provenance_mode": None,
+        "proof_refusals": ["provenance_unresolved"],
+        "served_matches_working_tree": False,
+        "db_path": None,
+        "db_size_bytes": 0,
+        "chunk_count": 0,
+        "provenance_error": error,
     }
 
 
+def collect_live_provenance(config: dict) -> dict:
+    """Never raises: refusing to know is a provenance answer, a traceback is not."""
+    try:
+        served, db_path = resolve_served(config)
+        tree = working_tree_provenance()
+        mode, refusals = eligibility(served, tree)
+        return {
+            "served_version": served["version"],
+            "served_package_path": str(Path(served["path"]).resolve()),
+            **tree,
+            "served_build_sha": served["build_sha"],
+            "provenance_mode": mode,
+            "proof_refusals": refusals,
+            "served_matches_working_tree": not refusals,
+            **db_provenance(db_path),
+            "provenance_error": None,
+        }
+    except Exception as exc:
+        return unresolved_provenance(f"{type(exc).__name__}: {exc}")
+
+
+def refusal_message(provenance: dict) -> str:
+    if error := provenance.get("provenance_error"):
+        return f"served code could not be resolved: {error}"
+    return (
+        f"not proof-eligible [{provenance['provenance_mode']}]: {', '.join(provenance['proof_refusals'])} "
+        f"(served {provenance['served_version']} build_sha={provenance['served_build_sha']} "
+        f"from {provenance['served_package_path']}; working tree {provenance['working_tree_version']} "
+        f"at {provenance['working_tree_sha']}, dirty={provenance['working_tree_dirty']})"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
     parser.add_argument("--fixture", type=Path, help="Replay a deterministic RED/GREEN fixture")
-    parser.add_argument("--require-code-under-test", action="store_true")
+    parser.add_argument(
+        "--require-code-under-test",
+        action="store_true",
+        help=(
+            "Refuse (rc=1, structured payload, no checks run) unless the served package is provably built "
+            "from this working tree: dev-tree mode (served path under this repo, clean tree) or keg mode "
+            "(served brainlayer.__build_sha__ == HEAD, clean tree). Replay is always refused."
+        ),
+    )
     args = parser.parse_args(argv)
     config = json.loads(CORPUS.read_text(encoding="utf-8"))
     if args.fixture:
@@ -386,10 +498,14 @@ def main(argv: list[str] | None = None) -> int:
             "served_version": "fixture",
             "served_package_path": None,
             **working_tree_provenance(),
+            "served_build_sha": None,
+            "provenance_mode": "replay",
+            "proof_refusals": ["replay"],
             "served_matches_working_tree": False,
             "db_path": None,
             "db_size_bytes": 0,
             "chunk_count": 0,
+            "provenance_error": None,
         }
         if args.fixture
         else collect_live_provenance(config)
@@ -398,8 +514,8 @@ def main(argv: list[str] | None = None) -> int:
 
     def fail(error: str) -> int:
         payload = {
-            "mode": "live",
-            "fixture": None,
+            "mode": "replay" if args.fixture else "live",
+            "fixture": str(args.fixture) if args.fixture else None,
             "status": "FAIL",
             "machine": machine,
             "provenance": provenance,
@@ -410,11 +526,10 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(payload, indent=None if args.json else 2, sort_keys=True))
         return 1
 
+    if args.require_code_under_test and args.fixture:
+        return fail("replay is never proof-eligible: a fixture is not evidence about any served code")
     if args.require_code_under_test and not proof_eligible:
-        return fail(
-            f"served code {provenance['served_version']} does not match working tree "
-            f"{provenance['working_tree_version']} at {provenance['working_tree_sha']}"
-        )
+        return fail(refusal_message(provenance))
 
     machine_target = config.get("machine_target")
     if not args.fixture and machine_target is None:
