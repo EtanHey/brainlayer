@@ -57,6 +57,17 @@ def _progress(module, chunk_rowid: int, liveness_rowid: int = 0):
     )
 
 
+def _enabled_command_runner(args: list[str]):
+    """Shared runner for ticks that never recover: launchd reports the label enabled, everything else succeeds.
+
+    Tests must never shell the real launchctl (absent on Linux CI, and a real query would fail closed).
+    """
+    if args[:2] == ["launchctl", "print-disabled"]:
+        stdout = '\tdisabled services = {\n\t\t"com.example.brainlayer.watch" => enabled\n\t}\n'
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+    return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+
 def _successful_recovery_runner(events: list[str] | None = None):
     print_count = 0
     kickstarted = False
@@ -269,24 +280,28 @@ def test_chunk_progress_or_no_pending_input_resets_stall_counter(tmp_path: Path)
         now_epoch=1_000,
         progress_reader=lambda _path: _progress(module, 40),
         source_probe=lambda _config, _now: pending,
+        command_runner=_enabled_command_runner,
     )
     stalled = module.run_once(
         config,
         now_epoch=1_060,
         progress_reader=lambda _path: _progress(module, 40),
         source_probe=lambda _config, _now: pending,
+        command_runner=_enabled_command_runner,
     )
     progressed = module.run_once(
         config,
         now_epoch=1_120,
         progress_reader=lambda _path: _progress(module, 41),
         source_probe=lambda _config, _now: pending,
+        command_runner=_enabled_command_runner,
     )
     idle_result = module.run_once(
         config,
         now_epoch=1_180,
         progress_reader=lambda _path: _progress(module, 41),
         source_probe=lambda _config, _now: idle,
+        command_runner=_enabled_command_runner,
     )
 
     assert stalled.stalled_ticks == 1
@@ -306,6 +321,7 @@ def test_restart_failure_is_visible_and_not_recorded_as_recovered(tmp_path: Path
         now_epoch=1_000,
         progress_reader=lambda _path: _progress(module, 40),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
 
     def command_runner(args: list[str]):
@@ -350,6 +366,7 @@ def test_alert_failure_does_not_block_watcher_recovery(tmp_path: Path) -> None:
         now_epoch=1_000,
         progress_reader=lambda _path: _progress(module, 40),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
     command_events: list[str] = []
 
@@ -576,6 +593,7 @@ def test_liveness_progress_prevents_false_restart_for_dedupe_only_ingest(tmp_pat
         now_epoch=1_000,
         progress_reader=lambda _path: _progress(module, 40, 10),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
 
     result = module.run_once(
@@ -610,6 +628,7 @@ def test_offset_progress_prevents_restart_when_db_highwaters_are_flat(tmp_path: 
         progress_reader=lambda _path: _progress(module, 40, 10),
         operational_progress_reader=lambda _config: next(operational),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
     result = module.run_once(
         config,
@@ -664,6 +683,7 @@ def test_drain_progress_prevents_restart_when_offsets_and_db_are_flat(tmp_path: 
         progress_reader=lambda _path: _progress(module, 40, 10),
         operational_progress_reader=lambda _config: next(operational),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
     result = module.run_once(
         config,
@@ -671,6 +691,7 @@ def test_drain_progress_prevents_restart_when_offsets_and_db_are_flat(tmp_path: 
         progress_reader=lambda _path: _progress(module, 40, 10),
         operational_progress_reader=lambda _config: next(operational),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
 
     assert result.action == "progress"
@@ -694,6 +715,7 @@ def test_drain_cycle_progress_prevents_restart_when_no_items_are_drained(tmp_pat
         progress_reader=lambda _path: _progress(module, 40, 10),
         operational_progress_reader=lambda _config: next(operational),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
     result = module.run_once(
         config,
@@ -701,6 +723,7 @@ def test_drain_cycle_progress_prevents_restart_when_no_items_are_drained(tmp_pat
         progress_reader=lambda _path: _progress(module, 40, 10),
         operational_progress_reader=lambda _config: next(operational),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
 
     assert result.action == "progress"
@@ -724,6 +747,7 @@ def test_drain_counter_reset_rebaselines_instead_of_triggering_recovery(tmp_path
         progress_reader=lambda _path: _progress(module, 40, 10),
         operational_progress_reader=lambda _config: next(operational),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
     result = module.run_once(
         config,
@@ -731,6 +755,7 @@ def test_drain_counter_reset_rebaselines_instead_of_triggering_recovery(tmp_path
         progress_reader=lambda _path: _progress(module, 40, 10),
         operational_progress_reader=lambda _config: next(operational),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
 
     assert result.action == "baseline"
@@ -754,6 +779,7 @@ def test_offset_counter_reset_rebaselines_instead_of_looking_like_progress(tmp_p
         progress_reader=lambda _path: _progress(module, 40, 10),
         operational_progress_reader=lambda _config: next(operational),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
     result = module.run_once(
         config,
@@ -761,6 +787,7 @@ def test_offset_counter_reset_rebaselines_instead_of_looking_like_progress(tmp_p
         progress_reader=lambda _path: _progress(module, 40, 10),
         operational_progress_reader=lambda _config: next(operational),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
 
     assert result.action == "baseline"
@@ -792,6 +819,7 @@ def test_operational_progress_counts_toward_healthy_episode_reset(tmp_path: Path
         progress_reader=lambda _path: _progress(module, 40, 10),
         operational_progress_reader=lambda _config: module.OperationalProgress(120, 11, 4),
         source_probe=lambda _config, _now: module.SourceEvidence(1, 20, 1, 999.0),
+        command_runner=_enabled_command_runner,
     )
 
     assert result.action == "progress"
@@ -814,6 +842,7 @@ def test_recovery_waits_for_elapsed_progress_slo_not_only_tick_count(tmp_path: P
         progress_reader=lambda _path: _progress(module, 40, 10),
         operational_progress_reader=lambda _config: frozen,
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
     early = module.run_once(
         config,
@@ -854,6 +883,7 @@ def test_recovery_defers_without_signaling_while_checkpoint_guard_is_held(tmp_pa
         progress_reader=lambda _path: _progress(module, 40, 10),
         operational_progress_reader=lambda _config: frozen,
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
     with checkpoint_guard(config.db_path, blocking=False) as acquired:
         assert acquired is True
@@ -896,6 +926,7 @@ def test_sustained_checkpoint_deferral_pages_once_and_remains_nonzero(tmp_path: 
         progress_reader=lambda _path: _progress(module, 40, 10),
         operational_progress_reader=lambda _config: frozen,
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
     with checkpoint_guard(config.db_path, blocking=False) as acquired:
         assert acquired is True
@@ -971,6 +1002,7 @@ def test_recovery_requires_kickstarted_job_to_reach_running_state(tmp_path: Path
         now_epoch=1_000,
         progress_reader=lambda _path: _progress(module, 40),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
 
     def command_runner(args: list[str]):
@@ -999,6 +1031,7 @@ def test_recovery_attempt_is_persisted_before_external_kickstart(tmp_path: Path,
         now_epoch=1_000,
         progress_reader=lambda _path: _progress(module, 40),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
     events: list[str] = []
     original_write = module._atomic_write_json
@@ -1035,6 +1068,7 @@ def test_recovery_attempt_survives_a_post_kickstart_state_write_failure(tmp_path
         now_epoch=1_000,
         progress_reader=lambda _path: _progress(module, 40),
         source_probe=lambda _config, _now: evidence,
+        command_runner=_enabled_command_runner,
     )
     original_write = module._atomic_write_json
     writes = 0
