@@ -2817,6 +2817,7 @@ def test_launchd_enable_missing_service_is_retried_after_bootstrap(tmp_path: Pat
     commands = launchctl_log.read_text(encoding="utf-8").splitlines()
     assert result.returncode == 0, result.stdout + result.stderr
     assert [command.split()[0] for command in commands] == [
+        "print-disabled",
         "bootout",
         "print",
         "enable",
