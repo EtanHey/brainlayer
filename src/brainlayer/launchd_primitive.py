@@ -147,10 +147,13 @@ def is_launchd_label_disabled(
     result = command_runner(["launchctl", "print-disabled", domain])
     if _command_returncode(result) != 0:
         return None
-    match = re.search(rf'["\']?{re.escape(label)}["\']?\s*=>\s*(true|false)', _command_stdout(result), re.I)
+    # launchctl prints `=> disabled|enabled` on current macOS and `=> true|false` on older releases.
+    match = re.search(
+        rf'["\']?{re.escape(label)}["\']?\s*=>\s*(true|false|disabled|enabled)', _command_stdout(result), re.I
+    )
     if match is None:
         return False
-    return match.group(1).lower() == "true"
+    return match.group(1).lower() in {"true", "disabled"}
 
 
 def verify_launchd_label_loaded(

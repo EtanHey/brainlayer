@@ -426,6 +426,18 @@ def _launchctl_running(output: str) -> bool:
     return any(line.strip() == "state = running" for line in output.splitlines())
 
 
+def _watch_disabled_by_operator(config: Config, command_runner: CommandRunner) -> bool:
+    """An operator `launchctl disable` is a standing order: revivers check print-disabled first."""
+    try:
+        completed = command_runner(["launchctl", "print-disabled", f"gui/{os.getuid()}"])
+    except Exception:
+        return False
+    if int(getattr(completed, "returncode", 0)) != 0:
+        return False
+    needle = f'"{config.watch_label}" => disabled'
+    return any(line.strip() == needle for line in str(getattr(completed, "stdout", "") or "").splitlines())
+
+
 def _restart_watch(
     config: Config,
     command_runner: CommandRunner,
@@ -618,11 +630,16 @@ def run_once(
     elif evidence.pending_files == 0:
         action = "idle"
         stalled_ticks = 0
+    elif _watch_disabled_by_operator(config, command_runner):
+        # The queue growing while ingestion is intentionally off is not a stall:
+        # never bootstrap or kickstart a label the operator disabled.
+        action = "disabled_by_operator"
+        stalled_ticks = 0
     else:
         action = "stalled"
         stalled_ticks = previous_stalled + 1
 
-    if action in {"baseline", "progress", "idle"}:
+    if action in {"baseline", "progress", "idle", "disabled_by_operator"}:
         previous_checkpoint_deferred = 0
         checkpoint_deferral_alerted = False
 

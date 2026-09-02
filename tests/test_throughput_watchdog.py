@@ -145,8 +145,10 @@ def test_process_alive_zero_throughput_with_pending_bytes_kickstarts_after_thres
     assert [first.stalled_ticks, second.stalled_ticks] == [1, 2]
     assert third.action == "kickstart:com.example.brainlayer.watch"
     assert third.stalled_ticks == 0
-    assert command_events[0] == "alert"
-    assert command_events[1:] == [
+    # Every stalled tick first asks launchd whether the operator disabled the label.
+    assert command_events[:3] == [f"command:launchctl print-disabled gui/{os.getuid()}"] * 3
+    assert command_events[3] == "alert"
+    assert command_events[4:] == [
         f"command:launchctl print gui/{os.getuid()}/com.example.brainlayer.watch",
         f"command:launchctl print gui/{os.getuid()}/com.example.brainlayer.watch",
         "command:/bin/kill -9 4321",
@@ -866,7 +868,7 @@ def test_recovery_defers_without_signaling_while_checkpoint_guard_is_held(tmp_pa
     assert result.action == "checkpoint_deferred"
     assert result.stalled_ticks == 1
     assert result.checkpoint_deferred_ticks == 1
-    assert commands == []
+    assert commands == [["launchctl", "print-disabled", f"gui/{os.getuid()}"]]
     state = json.loads(config.state_path.read_text(encoding="utf-8"))
     assert "last_restart_epoch" not in state
 
@@ -916,7 +918,7 @@ def test_sustained_checkpoint_deferral_pages_once_and_remains_nonzero(tmp_path: 
     ]
     assert [result.checkpoint_deferred_ticks for result in results] == [1, 2, 3, 4]
     assert alerts == [("checkpoint_deferral_alert", 3)]
-    assert commands == []
+    assert commands == [["launchctl", "print-disabled", f"gui/{os.getuid()}"]] * 4
     state = json.loads(config.state_path.read_text(encoding="utf-8"))
     assert state["checkpoint_deferred_ticks"] == 4
     assert state["checkpoint_deferral_alerted"] is True
@@ -1195,3 +1197,46 @@ def test_failed_alert_does_not_latch_episode_and_retries(tmp_path: Path) -> None
     tick()  # stall 2
     tick()  # stall 3 -> kickstart, alert RETRIES in same episode (call 2)
     assert calls["n"] == 2  # retried, not silenced by the earlier failure
+
+
+def test_operator_disabled_watch_label_is_never_bootstrapped_or_kickstarted(tmp_path: Path) -> None:
+    """launchctl disable is a standing operator order: no bootstrap, no kickstart, and not a stall."""
+    module = _load_module()
+    config = _config(module, tmp_path, stall_threshold=1)
+    evidence = module.SourceEvidence(2, 120, 3, 999.0)
+    commands: list[list[str]] = []
+
+    def command_runner(args: list[str]):
+        commands.append(args)
+        if args[:2] == ["launchctl", "print-disabled"]:
+            stdout = '\tdisabled services = {\n\t\t"com.brainlayer.watch" => enabled\n\t\t"com.example.brainlayer.watch" => disabled\n\t}\n'
+            return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+        return SimpleNamespace(returncode=0, stdout="state = running\npid = 4321\n", stderr="")
+
+    module.run_once(
+        config,
+        now_epoch=1_000,
+        progress_reader=lambda _path: _progress(module, 40),
+        source_probe=lambda _config, _now: evidence,
+        command_runner=command_runner,
+        alert_fn=lambda _config, _result: None,
+    )
+    results = [
+        module.run_once(
+            config,
+            now_epoch=now,
+            progress_reader=lambda _path: _progress(module, 40),
+            source_probe=lambda _config, _now: evidence,
+            command_runner=command_runner,
+            alert_fn=lambda _config, _result: None,
+        )
+        for now in (1_060, 1_120, 1_180)
+    ]
+
+    assert [result.action for result in results] == ["disabled_by_operator"] * 3
+    assert [result.stalled_ticks for result in results] == [0, 0, 0]
+    assert commands == [["launchctl", "print-disabled", f"gui/{os.getuid()}"]] * 3
+    state = json.loads(config.state_path.read_text(encoding="utf-8"))
+    assert state["last_action"] == "disabled_by_operator"
+    assert state["stalled_ticks"] == 0
+    assert "last_restart_epoch" not in state

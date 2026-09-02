@@ -22,6 +22,13 @@
 #   ./scripts/launchd/install.sh p0-counter   # Install daily P0 longitudinal counter only
 #   ./scripts/launchd/install.sh t3-ingest    # Install T3 thread ingestion only
 #   ./scripts/launchd/install.sh remove       # Unload and remove all
+#
+# Operator disable is a standing order. Any reviver of a com.brainlayer.* label
+# (this installer, throughput-watchdog.py, fleet watchdogs) checks
+# `launchctl print-disabled gui/$UID` FIRST and leaves a `=> disabled` label
+# alone: no enable, no bootstrap, no kickstart. Re-arm explicitly with
+# `launchctl enable gui/$UID/<label>`. (w11, 2026-09-02: com.brainlayer.watch
+# was disabled for burning a core and two revivers kept fighting the disable.)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -234,6 +241,16 @@ verify_config_file() {
     fi
 }
 
+label_disabled_by_operator() {
+    local label="$1"
+    local listing=""
+    listing="$(launchctl print-disabled "gui/$UID" 2>/dev/null || true)"
+    case "$listing" in
+        *"\"$label\" => disabled"*) return 0 ;;
+    esac
+    return 1
+}
+
 load_plist() {
     local name="$1"
     local dst="$LAUNCH_DIR/com.brainlayer.${name}.plist"
@@ -254,6 +271,11 @@ load_plist() {
     local unload_output=""
     local current_pid=""
     local plist_exit_timeout=""
+
+    if label_disabled_by_operator "$label"; then
+        echo "SKIP: $label disabled by operator (launchctl enable gui/$UID/$label to re-arm)"
+        return 0
+    fi
 
     case "$name" in
         hotlane-brainbar|watch|drain|health-check|enrichment)

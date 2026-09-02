@@ -565,3 +565,71 @@ def test_launchd_installer_uses_bootstrap_not_legacy_load_unload():
     assert "launchctl print" in load_plist_body
     assert "launchctl load" not in load_plist_body
     assert "launchctl unload" not in load_plist_body
+
+
+def test_launchd_installer_load_plist_skips_operator_disabled_label(tmp_path):
+    """An operator `launchctl disable` is a standing order: load_plist must not enable/bootstrap it."""
+    install_source = (REPO_ROOT / "scripts/launchd/install.sh").read_text(encoding="utf-8")
+    load_plist_body = (
+        "load_plist() {" + install_source.split("\nload_plist() {", 1)[1].split("\nunload_plist() {", 1)[0]
+    )
+    helper_name = "label_disabled_by_operator() {"
+    assert helper_name in install_source, "install.sh must define label_disabled_by_operator()"
+    helper_body = helper_name + install_source.split("\n" + helper_name, 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "#!/usr/bin/env bash\n"
+        'printf "%s\\n" "$*" >> "$LAUNCHCTL_LOG"\n'
+        'if [ "$1" = "print-disabled" ]; then\n'
+        '    printf \'\\tdisabled services = {\\n\\t\\t"com.brainlayer.watch" => disabled\\n'
+        '\\t\\t"com.brainlayer.drain" => enabled\\n\\t}\\n\'\n'
+        "fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+    harness = tmp_path / "harness.sh"
+    harness.write_text(
+        "set -euo pipefail\n"
+        f'LAUNCH_DIR="{tmp_path}"\nPYTHON_BIN=/usr/bin/true\n' + helper_body + load_plist_body + '\nload_plist "$1"\n',
+        encoding="utf-8",
+    )
+    env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}", "LAUNCHCTL_LOG": str(launchctl_log)}
+
+    result = subprocess.run(["/bin/bash", str(harness), "watch"], env=env, capture_output=True, text=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+    uid = os.getuid()
+    assert (
+        f"SKIP: com.brainlayer.watch disabled by operator (launchctl enable gui/{uid}/com.brainlayer.watch to re-arm)"
+        in result.stdout
+    )
+    calls = launchctl_log.read_text(encoding="utf-8").splitlines()
+    assert calls == [f"print-disabled gui/{uid}"], calls
+
+
+def test_launchd_primitive_reads_current_print_disabled_vocabulary():
+    """macOS 14+ prints `=> disabled|enabled`; older releases print `=> true|false`. Both must be honored."""
+    from types import SimpleNamespace
+
+    from brainlayer.launchd_primitive import is_launchd_label_disabled
+
+    listing = (
+        "\tdisabled services = {\n"
+        '\t\t"com.brainlayer.watch" => disabled\n'
+        '\t\t"com.brainlayer.drain" => enabled\n'
+        '\t\t"com.legacy.off" => true\n'
+        '\t\t"com.legacy.on" => false\n'
+        "\t}\n"
+    )
+    runner = lambda _args: SimpleNamespace(returncode=0, stdout=listing, stderr="")  # noqa: E731
+
+    assert is_launchd_label_disabled("com.brainlayer.watch", command_runner=runner) is True
+    assert is_launchd_label_disabled("com.brainlayer.drain", command_runner=runner) is False
+    assert is_launchd_label_disabled("com.legacy.off", command_runner=runner) is True
+    assert is_launchd_label_disabled("com.legacy.on", command_runner=runner) is False
+    assert is_launchd_label_disabled("com.absent", command_runner=runner) is False
