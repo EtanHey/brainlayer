@@ -15,6 +15,12 @@ INIT_PY = REPO_ROOT / "src" / "brainlayer" / "__init__.py"
 STAMP_REL = "src/brainlayer/_build.py"
 
 
+def _clean_git_env() -> dict[str, str]:
+    # An inherited GIT_DIR/GIT_WORK_TREE (a git hook runs the suite) overrides `-C`, so check-ignore
+    # would answer for the wrong repo's .gitignore.
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
 def _import_build_sha(tmp_path: Path, stamp: str | None) -> str:
     # Import a bare copy of the real __init__.py so a stale local _build.py cannot leak in. No build, no network.
     package = tmp_path / "brainlayer"
@@ -57,7 +63,7 @@ def _hatch_build_config() -> dict:
 def test_stamp_module_is_gitignored_but_shipped() -> None:
     # hatchling drops VCS-ignored files from a target unless `artifacts` names them for that target;
     # `[tool.hatch.build] artifacts` is the global default a target inherits unless it sets its own.
-    rc = subprocess.run(["git", "-C", str(REPO_ROOT), "check-ignore", "-q", STAMP_REL]).returncode
+    rc = subprocess.run(["git", "-C", str(REPO_ROOT), "check-ignore", "-q", STAMP_REL], env=_clean_git_env()).returncode
     assert rc == 0, f"{STAMP_REL} must be gitignored (never committed)"
 
     build = _hatch_build_config()
