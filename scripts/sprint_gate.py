@@ -8,7 +8,9 @@ import json
 import math
 import platform
 import re
+import shlex
 import socket
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -17,6 +19,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
+from brainlayer import __version__
 from brainlayer.paths import get_db_path
 
 CORPUS = ROOT / "tests" / "fixtures" / "sprint_gate" / "corpus.json"
@@ -295,15 +298,103 @@ def merge(base: dict, override: dict) -> dict:
     return result
 
 
+def working_tree_provenance() -> dict:
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    dirty = bool(
+        subprocess.run(
+            ["git", "status", "--porcelain"], cwd=ROOT, check=True, capture_output=True, text=True
+        ).stdout.strip()
+    )
+    return {"working_tree_version": __version__, "working_tree_sha": sha, "working_tree_dirty": dirty}
+
+
+def collect_live_provenance(config: dict) -> dict:
+    processes = subprocess.run(
+        ["ps", "-axo", "pid=,command="], check=True, capture_output=True, text=True
+    ).stdout.splitlines()
+    helpers = []
+    for line in processes:
+        fields = line.strip().split(None, 1)
+        if len(fields) != 2 or "brainlayer.brainbar_hybrid_helper" not in fields[1]:
+            continue
+        arguments = shlex.split(fields[1])
+        if "--db-path" in arguments:
+            helpers.append((int(fields[0]), Path(arguments[arguments.index("--db-path") + 1])))
+    if len(helpers) != 1:
+        raise RuntimeError(f"expected one serving hybrid helper, found {len(helpers)}")
+    helper_pid, db_path = helpers[0]
+    open_files = subprocess.run(
+        ["lsof", "-p", str(helper_pid), "-Fn"], check=True, capture_output=True, text=True
+    ).stdout.splitlines()
+    site_dirs = {
+        Path(line[1:].split("/site-packages/", 1)[0] + "/site-packages")
+        for line in open_files
+        if line.startswith("n") and "/site-packages/" in line
+    }
+    if len(site_dirs) != 1:
+        raise RuntimeError(f"could not resolve one site-packages for helper pid {helper_pid}")
+    helper_python = next(iter(site_dirs)).parents[2] / "bin" / "python"
+    served = json.loads(
+        subprocess.run(
+            [
+                str(helper_python),
+                "-I",
+                "-c",
+                "import brainlayer,json; print(json.dumps({'version':brainlayer.__version__,'path':brainlayer.__file__}))",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    )
+    tree = working_tree_provenance()
+    served_path = Path(served["path"]).resolve()
+    db_path = db_path.expanduser().resolve()
+    with sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True) as connection:
+        connection.execute("PRAGMA query_only=ON")
+        chunk_count = connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    matches = (
+        served["version"] == tree["working_tree_version"]
+        and served_path.is_relative_to(ROOT)
+        and not tree["working_tree_dirty"]
+    )
+    return {
+        "served_version": served["version"],
+        "served_package_path": str(served_path),
+        **tree,
+        "served_matches_working_tree": matches,
+        "db_path": str(db_path),
+        "db_size_bytes": db_path.stat().st_size,
+        "chunk_count": chunk_count,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
     parser.add_argument("--fixture", type=Path, help="Replay a deterministic RED/GREEN fixture")
+    parser.add_argument("--require-code-under-test", action="store_true")
     args = parser.parse_args(argv)
     config = json.loads(CORPUS.read_text(encoding="utf-8"))
     if args.fixture:
         config = merge(config, json.loads(args.fixture.read_text(encoding="utf-8")))
     machine = {"hostname": socket.gethostname(), "os": platform.system(), "architecture": platform.machine()}
+    provenance = (
+        {
+            "served_version": "fixture",
+            "served_package_path": None,
+            **working_tree_provenance(),
+            "served_matches_working_tree": False,
+            "db_path": None,
+            "db_size_bytes": 0,
+            "chunk_count": 0,
+        }
+        if args.fixture
+        else collect_live_provenance(config)
+    )
+    proof_eligible = provenance["served_matches_working_tree"]
 
     def fail(error: str) -> int:
         payload = {
@@ -311,11 +402,19 @@ def main(argv: list[str] | None = None) -> int:
             "fixture": None,
             "status": "FAIL",
             "machine": machine,
+            "provenance": provenance,
+            "proof_eligible": proof_eligible,
             "checks": [],
             "error": error,
         }
         print(json.dumps(payload, indent=None if args.json else 2, sort_keys=True))
         return 1
+
+    if args.require_code_under_test and not proof_eligible:
+        return fail(
+            f"served code {provenance['served_version']} does not match working tree "
+            f"{provenance['working_tree_version']} at {provenance['working_tree_sha']}"
+        )
 
     machine_target = config.get("machine_target")
     if not args.fixture and machine_target is None:
@@ -370,6 +469,8 @@ def main(argv: list[str] | None = None) -> int:
         # Option (b): rc stays 0; release consumers must reject skipped checks (w6-REPORT.md).
         "status": "PASS" if all(item["status"] in {"PASS", "SKIPPED"} for item in results) else "FAIL",
         "machine": machine,
+        "provenance": provenance,
+        "proof_eligible": proof_eligible,
         "checks": results,
         "skipped": [item["name"] for item in results if item["status"] == "SKIPPED"],
     }

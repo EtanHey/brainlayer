@@ -52,7 +52,15 @@ def deterministic_live_config() -> dict:
     return config
 
 
-def run_live_config(monkeypatch, capsys, tmp_path: Path, config: dict, hostname: str | None = None) -> tuple[int, dict]:
+def run_live_config(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+    config: dict,
+    hostname: str | None = None,
+    extra_args: list[str] | None = None,
+    provenance: dict | None = None,
+) -> tuple[int, dict]:
     live_config = tmp_path / "live.json"
     live_config.write_text(json.dumps(config), encoding="utf-8")
     monkeypatch.setattr(sprint_gate, "CORPUS", live_config)
@@ -62,7 +70,23 @@ def run_live_config(monkeypatch, capsys, tmp_path: Path, config: dict, hostname:
             monkeypatch.setattr(sprint_gate.platform, attribute, lambda key=key: target[key])
     if hostname:
         monkeypatch.setattr(sprint_gate.socket, "gethostname", lambda: hostname)
-    return sprint_gate.main(["--json"]), json.loads(capsys.readouterr().out)
+    monkeypatch.setattr(
+        sprint_gate,
+        "collect_live_provenance",
+        lambda _config: provenance
+        or {
+            "served_version": "1.5.10",
+            "served_package_path": str(ROOT / "src" / "brainlayer" / "__init__.py"),
+            "working_tree_version": "1.5.10",
+            "working_tree_sha": "abc123",
+            "working_tree_dirty": False,
+            "served_matches_working_tree": True,
+            "db_path": "/tmp/test.db",
+            "db_size_bytes": 1,
+            "chunk_count": 796_098,
+        },
+    )
+    return sprint_gate.main(["--json", *(extra_args or [])]), json.loads(capsys.readouterr().out)
 
 
 def test_corpus_freezes_the_ten_verbatim_queries():
@@ -296,6 +320,50 @@ def test_live_gate_runs_latency_on_calibrated_host(monkeypatch, capsys, tmp_path
     assert returncode == 0
     assert payload["skipped"] == []
     assert payload["checks"][0]["status"] == "PASS"
+
+
+def test_mismatch_is_not_proof_without_requirement(monkeypatch, capsys, tmp_path: Path):
+    config = deterministic_live_config()
+    mismatch = {
+        "served_version": "1.5.9",
+        "served_package_path": "/opt/homebrew/Cellar/brainlayer/1.5.9/brainlayer/__init__.py",
+        "working_tree_version": "1.5.10",
+        "working_tree_sha": "abc123",
+        "working_tree_dirty": False,
+        "served_matches_working_tree": False,
+        "db_path": "/tmp/test.db",
+        "db_size_bytes": 1,
+        "chunk_count": 796_098,
+    }
+    returncode, payload = run_live_config(monkeypatch, capsys, tmp_path, config, provenance=mismatch)
+
+    assert returncode == 0
+    assert payload["proof_eligible"] is False
+
+
+def test_require_code_under_test_fails_before_checks_on_mismatch(monkeypatch, capsys, tmp_path: Path):
+    config = deterministic_live_config()
+    mismatch = {
+        "served_version": "1.5.9",
+        "served_package_path": "/opt/homebrew/Cellar/brainlayer/1.5.9/brainlayer/__init__.py",
+        "working_tree_version": "1.5.10",
+        "working_tree_sha": "abc123",
+        "working_tree_dirty": False,
+        "served_matches_working_tree": False,
+        "db_path": "/tmp/test.db",
+        "db_size_bytes": 1,
+        "chunk_count": 796_098,
+    }
+    returncode, payload = run_live_config(
+        monkeypatch, capsys, tmp_path, config, extra_args=["--require-code-under-test"], provenance=mismatch
+    )
+
+    assert returncode == 1
+    assert payload["status"] == "FAIL"
+    assert payload["checks"] == []
+    assert payload["provenance"] == mismatch
+    assert payload["proof_eligible"] is False
+    assert payload["error"] == "served code 1.5.9 does not match working tree 1.5.10 at abc123"
 
 
 @pytest.mark.parametrize(
