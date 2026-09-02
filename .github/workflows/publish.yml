@@ -34,6 +34,33 @@ jobs:
             echo "::error title=Release tag mismatch::Tag '$GITHUB_REF_NAME' must equal '$expected_tag' from pyproject.toml"
             exit 1
           fi
+      - name: Stamp build sha into src/brainlayer/_build.py
+        run: |
+          set -euo pipefail
+          head="$(git rev-parse HEAD)"
+          tagged="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          if [[ "$head" != "$tagged" ]]; then
+            echo "::error title=Build sha mismatch::checkout HEAD '$head' != tag commit '$tagged'"
+            exit 1
+          fi
+          printf 'BUILD_SHA = "%s"\n' "$head" > src/brainlayer/_build.py
+          echo "BUILD_SHA=$head" >> "$GITHUB_ENV"
       - run: pip install build
       - run: python -m build
+      - name: Audit built artifacts (stamp present, no database files shipped)
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import glob, os, tarfile, zipfile
+          sha = os.environ["BUILD_SHA"]
+          (wheel,) = glob.glob("dist/*.whl")
+          (sdist,) = glob.glob("dist/*.tar.gz")
+          stamp = zipfile.ZipFile(wheel).read("brainlayer/_build.py").decode()
+          assert stamp == f'BUILD_SHA = "{sha}"\n', f"wheel stamp mismatch: {stamp!r}"
+          names = tarfile.open(sdist).getnames()
+          assert any(n.endswith("/src/brainlayer/_build.py") for n in names), "sdist lacks _build.py"
+          dbs = [n for n in names if n.endswith((".db", ".db-wal", ".db-shm", ".sqlite", ".sqlite3"))]
+          assert not dbs, f"database files in sdist (never ship the database): {dbs}"
+          print(f"audit ok: {wheel} stamped {sha}; sdist has {len(names)} entries, 0 db files")
+          PY
       - uses: pypa/gh-action-pypi-publish@release/v1

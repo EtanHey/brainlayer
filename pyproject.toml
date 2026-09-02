@@ -123,6 +123,10 @@ markers = [
     "slow: tests that load ML models or take >30s",
 ]
 
+[tool.hatch.build]
+# VCS-ignored files are dropped from wheel+sdist unless listed here; the build-sha stamp must ship.
+artifacts = ["src/brainlayer/_build.py"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/brainlayer"]
 exclude = [
