@@ -1,27 +1,70 @@
 #!/usr/bin/env python3
-"""Executable zero-regression gate for the BrainLayer sprint."""
+"""Executable zero-regression gate for the BrainLayer sprint.
+
+How to get proof_eligible (``--require-code-under-test``)
+---------------------------------------------------------
+"Code under test" means the served package was BUILT FROM this working tree's sha, not that
+it lives under this path. Two modes; ``provenance.provenance_mode`` says which one ran:
+
+* ``dev-tree`` -- BrainBar's hybrid helper imports ``brainlayer`` from this repo's ``src/`` (an
+  editable install, or BrainBar launched with ``BRAINLAYER_SOURCE_FALLBACK=1`` and
+  ``BRAINLAYER_REPO_ROOT`` pointing here) AND ``git status --porcelain`` is empty AND the helper
+  process started AFTER the newest file mtime under ``src/brainlayer/`` (a helper that loaded
+  commit A and survived a checkout to commit B still serves A). Package data counts too: a branch
+  that changes only ``lexical_defense_dictionary.json`` changes search behaviour. ``ps`` reports
+  start times at whole-second resolution, so a helper restarted in the same second a file was
+  written is refused (``helper_older_than_tree``) rather than accepted: the window errs closed.
+  Only ``src/brainlayer`` counts: a stale copy under ``.venv/.../site-packages`` lives under this
+  repo too but is a keg, not the tree.
+* ``keg`` -- the served package (e.g. the brew Cellar venv) exposes ``brainlayer.__build_sha__``
+  equal to ``git rev-parse HEAD`` AND the helper process started after the keg's newest file
+  (else ``helper_older_than_keg``: the sha proves the disk, not the process) AND the tree is clean. No release build stamps the sha yet
+  (planned for 1.5.11), so every keg today refuses with ``served_build_sha_missing``.
+
+Version equality alone is never accepted: an installed 1.5.10 and 1.5.10-plus-a-branch share a
+string while being different code. A refusal names every predicate that fired: ``version``,
+``package_path_outside_tree`` (the keg-mode qualifier: dev-tree cannot apply, so the build sha
+must), ``served_build_sha_missing``, ``build_sha_mismatch``, ``helper_older_than_tree``,
+``helper_older_than_keg``, ``working_tree_dirty``. Replay (``--fixture``) under the flag is REJECTED by design: a fixture
+is not evidence about any served code, so replay never shells out to ``git`` at all. Live
+provenance that cannot be resolved (no helper, ``lsof``, ``ps`` or ``git`` failure, or a helper
+whose environment cannot be read) is reported as ``provenance_error`` in the normal payload shape,
+never as a traceback. The served package is probed under the helper's OWN ``PYTHONPATH`` (read from
+``ps -wwwE``), recorded as ``served_pythonpath``.
+"""
 
 from __future__ import annotations
 
 import argparse
+import calendar
 import json
 import math
+import os
 import platform
 import re
+import shlex
 import socket
+import sqlite3
 import subprocess
 import sys
 import threading
 import time
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+SRC = (ROOT / "src").resolve()
+PACKAGE = SRC / "brainlayer"
+sys.path.insert(0, str(SRC))
+from brainlayer import __version__
 from brainlayer.paths import get_db_path
 
 CORPUS = ROOT / "tests" / "fixtures" / "sprint_gate" / "corpus.json"
 SUCCESS_STATUSES = {"STORED", "DUPLICATE", "MERGED", "DEFERRED"}
 CHECKS = ("search_latency", "mcp_roundtrip", "resource_budget", "wal_bound")
+PS_LSTART_FORMAT = "%a %b %d %H:%M:%S %Y"
+PLACEHOLDER_TREE = {"working_tree_version": __version__, "working_tree_sha": None, "working_tree_dirty": None}
 
 
 def wal_size(path: Path) -> int:
@@ -295,27 +338,339 @@ def merge(base: dict, override: dict) -> dict:
     return result
 
 
+def working_tree_provenance() -> dict:
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    dirty = bool(
+        subprocess.run(
+            ["git", "status", "--porcelain"], cwd=ROOT, check=True, capture_output=True, text=True
+        ).stdout.strip()
+    )
+    return {"working_tree_version": __version__, "working_tree_sha": sha, "working_tree_dirty": dirty}
+
+
+def warmup_query() -> str:
+    """A nonce, never a corpus query: hybrid_search caches identical requests for 60 s, so warming
+    with ``queries[0]`` would hand check_search a cache hit as its first timed sample."""
+    return f"warmup-{uuid.uuid4()}"
+
+
+def warm_helper(config: dict) -> None:
+    """The hybrid helper is spawned on demand by the first search; idle == 0 helpers is normal."""
+    client = MCPClient(config["socket_path"], config["mcp_timeout_seconds"])
+    try:
+        client.initialize()
+        client.call("brain_search", {"query": warmup_query(), "num_results": 1})
+    finally:
+        client.close()
+
+
+def find_helper() -> tuple[int, Path]:
+    processes = subprocess.run(
+        ["ps", "-axo", "pid=,command="], check=True, capture_output=True, text=True
+    ).stdout.splitlines()
+    helpers = []
+    for line in processes:
+        fields = line.strip().split(None, 1)
+        if len(fields) != 2 or "brainlayer.brainbar_hybrid_helper" not in fields[1]:
+            continue
+        arguments = shlex.split(fields[1])
+        if "--db-path" in arguments:
+            helpers.append((int(fields[0]), Path(arguments[arguments.index("--db-path") + 1])))
+    if len(helpers) != 1:
+        raise RuntimeError(f"expected one serving hybrid helper, found {len(helpers)}")
+    return helpers[0]
+
+
+def helper_started_at(helper_pid: int) -> float:
+    """Epoch seconds the helper process started.
+
+    ``ps -o lstart=`` prints a naive wall-clock in the zone IT runs in, so both sides are pinned
+    to UTC: ``TZ=UTC`` for ps and ``calendar.timegm`` for the parse. Parsing in the parent's zone
+    would date every helper hours into the future for a ``TZ`` east of the system zone and the
+    predicate would silently stop firing (pair review, #749).
+    """
+    started = subprocess.run(
+        ["ps", "-o", "lstart=", "-p", str(helper_pid)],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={"LC_ALL": "C", "TZ": "UTC", "PATH": os.environ.get("PATH", os.defpath)},
+    ).stdout.strip()
+    if not started:
+        raise RuntimeError(f"helper pid {helper_pid} has no start time (exited?)")
+    return float(calendar.timegm(time.strptime(started, PS_LSTART_FORMAT)))
+
+
+def newest_mtime(directory: Path) -> float:
+    """Newest mtime of any file under a package directory -- code, extensions (``.so``/``.dylib``)
+    and package data a fresh helper would load. ``__pycache__`` is excluded: bytecode is written
+    AFTER the helper starts importing."""
+    files = (path for path in directory.rglob("*") if path.is_file() and "__pycache__" not in path.parts)
+    return max((path.stat().st_mtime for path in files), default=0.0)
+
+
+def newest_source_mtime() -> float:
+    """What a fresh dev-tree helper would import: the newest file under ``src/brainlayer/``."""
+    return newest_mtime(PACKAGE)
+
+
+def iso_utc(epoch: float | None) -> str | None:
+    return None if epoch is None else datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
+
+
+def helper_python(helper_pid: int) -> Path:
+    open_files = subprocess.run(
+        ["lsof", "-p", str(helper_pid), "-Fn"], check=True, capture_output=True, text=True
+    ).stdout.splitlines()
+    site_dirs = {
+        Path(line[1:].split("/site-packages/", 1)[0] + "/site-packages")
+        for line in open_files
+        if line.startswith("n") and "/site-packages/" in line
+    }
+    if len(site_dirs) != 1:
+        raise RuntimeError(f"could not resolve one site-packages for helper pid {helper_pid}")
+    return next(iter(site_dirs)).parents[2] / "bin" / "python"
+
+
+ENV_TOKEN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
+
+
+def helper_env(helper_pid: int) -> dict[str, str]:
+    """The helper's REAL environment as BrainBar launched it (``ps -E`` reports the launch-time
+    block). ``ps -wwwE -o command=`` prints the argv and then every ``KEY=value`` pair, so the env
+    block is that output minus the plain ``-o command=`` output.
+    An empty block means the environment could not be read (not ours, or ps refused): that is a
+    provenance error, never a guess (Codex, #749: source-fallback helpers import ONLY via PYTHONPATH).
+    """
+
+    def command_line(*flags: str) -> str:
+        return subprocess.run(
+            ["ps", "-p", str(helper_pid), "-www", *flags, "-o", "command="],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.rstrip("\n")
+
+    plain, with_env = command_line(), command_line("-E")
+    block = with_env[len(plain) :] if with_env.startswith(plain) else ""
+    if not block.strip():
+        raise RuntimeError(f"could not read the environment of helper pid {helper_pid}")
+    env: dict[str, str] = {}
+    key = None
+    for token in block.strip().split(" "):
+        if match := ENV_TOKEN.match(token):
+            key = match.group(1)
+            env[key] = match.group(2)
+        elif key is not None:  # a value containing spaces was split by ps; stitch it back
+            env[key] += " " + token
+    return env
+
+
+def served_package(python: Path, pythonpath: str | None) -> dict:
+    """Probe what a fresh interpreter of the helper's venv imports, the way BrainBar launches the
+    helper: no isolation flags at all (``-I`` implies ``-E`` and drops PYTHONPATH, the only import
+    path of a BRAINLAYER_SOURCE_FALLBACK=1 helper; ``-s`` would hide user site the helper sees).
+    ``cwd="/"`` so this worktree can never shadow the import; the env is built explicitly so the
+    gate's own PYTHONPATH never leaks in."""
+    env = {"PATH": os.environ.get("PATH", os.defpath)}
+    if pythonpath is not None:
+        env["PYTHONPATH"] = pythonpath
+    return json.loads(
+        subprocess.run(
+            [
+                str(python),
+                "-c",
+                "import brainlayer,json; print(json.dumps({'version':brainlayer.__version__,"
+                "'path':brainlayer.__file__,'build_sha':getattr(brainlayer,'__build_sha__',None)}))",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd="/",
+        ).stdout
+    )
+
+
+def resolve_served(config: dict) -> tuple[dict, Path]:
+    warm_helper(config)
+    helper_pid, db_path = find_helper()
+    env = helper_env(helper_pid)
+    served = served_package(helper_python(helper_pid), env.get("PYTHONPATH"))
+    served["pythonpath"] = env.get("PYTHONPATH")
+    served["repo_root"] = env.get("BRAINLAYER_REPO_ROOT")
+    served["helper_started_at"] = helper_started_at(helper_pid)
+    served["package_newest_mtime"] = newest_mtime(Path(served["path"]).resolve().parent)
+    return served, db_path
+
+
+def db_provenance(db_path: Path) -> dict:
+    db_path = db_path.expanduser().resolve()
+    connection = sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True)
+    try:
+        connection.execute("PRAGMA query_only=ON")
+        chunk_count = connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    finally:
+        connection.close()
+    return {"db_path": str(db_path), "db_size_bytes": db_path.stat().st_size, "chunk_count": chunk_count}
+
+
+def eligibility(served: dict, tree: dict, source_newest_mtime: float) -> tuple[str, list[str]]:
+    """Return (provenance_mode, refusals). Eligible iff refusals is empty. Never version-equality alone.
+
+    Pure: ``source_newest_mtime`` is measured once by the caller and the same number is recorded in
+    the payload, so the evidence published is the evidence that decided. dev-tree means the served
+    file is under ``src/brainlayer`` specifically: ``.venv/.../site-packages`` sits under ROOT as
+    well and must not skip the build-sha check (Macroscope, #749).
+    """
+    mode = "dev-tree" if Path(served["path"]).resolve().is_relative_to(PACKAGE) else "keg"
+    refusals = []
+    if served["version"] != tree["working_tree_version"]:
+        refusals.append("version")
+    if mode == "keg":
+        if served["build_sha"] is None:
+            refusals += ["package_path_outside_tree", "served_build_sha_missing"]
+        elif served["build_sha"] != tree["working_tree_sha"]:
+            refusals += ["package_path_outside_tree", "build_sha_mismatch"]
+        # The sha proves the keg ON DISK; a helper that started before the keg was replaced still
+        # serves the old build (CodeRabbit, #749). Same rule as dev-tree, against the keg's files.
+        if served["helper_started_at"] <= served["package_newest_mtime"]:
+            refusals.append("helper_older_than_keg")
+    elif served["helper_started_at"] <= source_newest_mtime:  # must be strictly newer than the tree
+        refusals.append("helper_older_than_tree")
+    if tree["working_tree_dirty"]:
+        refusals.append("working_tree_dirty")
+    return mode, refusals
+
+
+def unresolved_provenance(error: str) -> dict:
+    tree = dict(PLACEHOLDER_TREE)
+    try:
+        tree = working_tree_provenance()
+    except Exception:
+        pass
+    return {
+        "served_version": None,
+        "served_package_path": None,
+        **tree,
+        "served_build_sha": None,
+        "served_pythonpath": None,
+        "served_repo_root": None,
+        "helper_started_at": None,
+        "source_newest_mtime": None,
+        "served_package_newest_mtime": None,
+        "provenance_mode": None,
+        "proof_refusals": ["provenance_unresolved"],
+        "served_matches_working_tree": False,
+        "db_path": None,
+        "db_size_bytes": 0,
+        "chunk_count": 0,
+        "provenance_error": error,
+    }
+
+
+def collect_live_provenance(config: dict) -> dict:
+    """Never raises: refusing to know is a provenance answer, a traceback is not."""
+    try:
+        served, db_path = resolve_served(config)
+        tree = working_tree_provenance()
+        source_newest = newest_source_mtime()
+        mode, refusals = eligibility(served, tree, source_newest)
+        return {
+            "served_version": served["version"],
+            "served_package_path": str(Path(served["path"]).resolve()),
+            **tree,
+            "served_build_sha": served["build_sha"],
+            "served_pythonpath": served["pythonpath"],
+            "served_repo_root": served["repo_root"],
+            "helper_started_at": iso_utc(served["helper_started_at"]),
+            "source_newest_mtime": iso_utc(source_newest),
+            "served_package_newest_mtime": iso_utc(served["package_newest_mtime"]),
+            "provenance_mode": mode,
+            "proof_refusals": refusals,
+            "served_matches_working_tree": not refusals,
+            **db_provenance(db_path),
+            "provenance_error": None,
+        }
+    except Exception as exc:
+        return unresolved_provenance(f"{type(exc).__name__}: {exc}")
+
+
+def refusal_message(provenance: dict) -> str:
+    if error := provenance.get("provenance_error"):
+        return f"served code could not be resolved: {error}"
+    return (
+        f"not proof-eligible [{provenance['provenance_mode']}]: {', '.join(provenance['proof_refusals'])} "
+        f"(served {provenance['served_version']} build_sha={provenance['served_build_sha']} "
+        f"from {provenance['served_package_path']}; working tree {provenance['working_tree_version']} "
+        f"at {provenance['working_tree_sha']}, dirty={provenance['working_tree_dirty']})"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
     parser.add_argument("--fixture", type=Path, help="Replay a deterministic RED/GREEN fixture")
+    parser.add_argument(
+        "--require-code-under-test",
+        action="store_true",
+        help=(
+            "Refuse (rc=1, structured payload, no checks run) unless the served package is provably built "
+            "from this working tree: dev-tree mode (served path under src/brainlayer, helper started after "
+            "the newest source mtime, clean tree) or keg mode (served brainlayer.__build_sha__ == HEAD, clean tree). "
+            "Replay is always refused."
+        ),
+    )
     args = parser.parse_args(argv)
     config = json.loads(CORPUS.read_text(encoding="utf-8"))
     if args.fixture:
         config = merge(config, json.loads(args.fixture.read_text(encoding="utf-8")))
     machine = {"hostname": socket.gethostname(), "os": platform.system(), "architecture": platform.machine()}
+    provenance = (
+        {
+            # Replay never touches git: a fixture is not evidence, so its tree metadata is a placeholder.
+            "served_version": "fixture",
+            "served_package_path": None,
+            **PLACEHOLDER_TREE,
+            "served_build_sha": None,
+            "served_pythonpath": None,
+            "served_repo_root": None,
+            "helper_started_at": None,
+            "source_newest_mtime": None,
+            "served_package_newest_mtime": None,
+            "provenance_mode": "replay",
+            "proof_refusals": ["replay"],
+            "served_matches_working_tree": False,
+            "db_path": None,
+            "db_size_bytes": 0,
+            "chunk_count": 0,
+            "provenance_error": None,
+        }
+        if args.fixture
+        else collect_live_provenance(config)
+    )
+    proof_eligible = provenance["served_matches_working_tree"]
 
     def fail(error: str) -> int:
         payload = {
-            "mode": "live",
-            "fixture": None,
+            "mode": "replay" if args.fixture else "live",
+            "fixture": str(args.fixture) if args.fixture else None,
             "status": "FAIL",
             "machine": machine,
+            "provenance": provenance,
+            "proof_eligible": proof_eligible,
             "checks": [],
             "error": error,
         }
         print(json.dumps(payload, indent=None if args.json else 2, sort_keys=True))
         return 1
+
+    if args.require_code_under_test and args.fixture:
+        return fail("replay is never proof-eligible: a fixture is not evidence about any served code")
+    if args.require_code_under_test and not proof_eligible:
+        return fail(refusal_message(provenance))
 
     machine_target = config.get("machine_target")
     if not args.fixture and machine_target is None:
@@ -370,6 +725,8 @@ def main(argv: list[str] | None = None) -> int:
         # Option (b): rc stays 0; release consumers must reject skipped checks (w6-REPORT.md).
         "status": "PASS" if all(item["status"] in {"PASS", "SKIPPED"} for item in results) else "FAIL",
         "machine": machine,
+        "provenance": provenance,
+        "proof_eligible": proof_eligible,
         "checks": results,
         "skipped": [item["name"] for item in results if item["status"] == "SKIPPED"],
     }
