@@ -1258,6 +1258,7 @@ def test_unreadable_disabled_state_fails_closed_without_bootstrap_or_kickstart(t
             return SimpleNamespace(returncode=1, stdout="", stderr="Could not find domain")
         return SimpleNamespace(returncode=0, stdout="state = running\npid = 4321\n", stderr="")
 
+    alerts: list[str] = []
     for now in (1_000, 1_060, 1_120):
         result = module.run_once(
             config,
@@ -1265,11 +1266,41 @@ def test_unreadable_disabled_state_fails_closed_without_bootstrap_or_kickstart(t
             progress_reader=lambda _path: _progress(module, 40),
             source_probe=lambda _config, _now: evidence,
             command_runner=command_runner,
-            alert_fn=lambda _config, _result: None,
+            alert_fn=lambda _config, _result: alerts.append(_result.action),
         )
 
     assert result.action == "disabled_state_unknown"
     assert result.stalled_ticks == 0
     assert commands == [["launchctl", "print-disabled", f"gui/{os.getuid()}"]] * 2
+    assert alerts == ["disabled_state_unknown"], "page once per episode, not every tick"
     state = json.loads(config.state_path.read_text(encoding="utf-8"))
     assert "last_restart_epoch" not in state
+
+
+def test_unreadable_disabled_state_exits_nonzero(tmp_path: Path, monkeypatch, capsys) -> None:
+    """Never silently degrade: a wedged watchdog with an unreadable disabled state must fail its LaunchAgent run."""
+    module = _load_module()
+    unknown = module.WatchdogResult(
+        checked_at_epoch=1_180,
+        watcher_highwater_rowid=40,
+        watcher_highwater_delta=0,
+        watcher_liveness_highwater_rowid=10,
+        watcher_liveness_highwater_delta=0,
+        pending_files=1,
+        pending_bytes=20,
+        recent_files=1,
+        untracked_recent_files=0,
+        newest_source_mtime=999.0,
+        scan_errors=0,
+        stalled_ticks=0,
+        action="disabled_state_unknown",
+        checkpoint_deferred_ticks=0,
+    )
+    monkeypatch.setattr(module, "run_once", lambda _config, now_epoch=None: unknown)
+
+    exit_code = module.main(
+        ["--db", str(tmp_path / "brainlayer.db"), "--state", str(tmp_path / "state.json"), "--json"]
+    )
+
+    assert exit_code == 1
+    assert json.loads(capsys.readouterr().out)["action"] == "disabled_state_unknown"

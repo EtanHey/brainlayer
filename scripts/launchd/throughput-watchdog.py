@@ -673,6 +673,14 @@ def run_once(
         drained_total_delta=drained_total_delta,
     )
 
+    if result.action == "disabled_state_unknown" and state.get("last_action") != "disabled_state_unknown":
+        # Fail closed, never silently: page once per episode when launchd's disabled state is unreadable.
+        try:
+            alert_fn(config, result)
+        except Exception as exc:
+            result.alert_error = str(exc)
+            print(f"throughput-watchdog disabled-state alert failed: {exc}", file=sys.stderr)
+
     previous_last_progress = state.get("last_progress_epoch")
     if action in {"baseline", "progress", "idle"} or not isinstance(previous_last_progress, int):
         last_progress_epoch = checked_at
@@ -892,7 +900,13 @@ def main(argv: list[str] | None = None) -> int:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     print(json.dumps(asdict(result), sort_keys=True) if args.json else f"{result.action}: {result}")
-    return 1 if result.action in {"recovery_failed", "checkpoint_guard_error", "checkpoint_deferral_alert"} else 0
+    failure_actions = {
+        "recovery_failed",
+        "checkpoint_guard_error",
+        "checkpoint_deferral_alert",
+        "disabled_state_unknown",
+    }
+    return 1 if result.action in failure_actions else 0
 
 
 if __name__ == "__main__":
