@@ -787,6 +787,7 @@ def test_helper_env_unreadable_is_an_error_not_a_guess(monkeypatch):
         sprint_gate.helper_env(4242)
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="ps -E is a BSD flag; Linux ps rejects it")
 def test_helper_env_reads_a_real_process():
     """`ps -E` reports the LAUNCH-time environment (pytest's conftest rewrites HOME afterwards),
     which is exactly the env BrainBar handed the helper."""
@@ -822,16 +823,17 @@ def test_probe_without_helper_pythonpath_never_inherits_the_gates_own(monkeypatc
     assert served["version"] != "9.9.9"
 
 
-def test_probe_uses_dash_s_not_dash_I(monkeypatch):
+def test_probe_mirrors_brainbar_launch_no_isolation_flags_and_neutral_cwd(monkeypatch):
     seen = {}
 
     def run(argv, **kwargs):
-        seen["argv"], seen["env"] = argv, kwargs["env"]
+        seen["argv"], seen["env"], seen["cwd"] = argv, kwargs["env"], kwargs["cwd"]
         return subprocess.CompletedProcess(argv, 0, stdout='{"version":"1","path":"/p","build_sha":null}', stderr="")
 
     monkeypatch.setattr(sprint_gate.subprocess, "run", run)
     sprint_gate.served_package(Path("/venv/bin/python"), None)
-    assert seen["argv"][1] == "-s" and "-I" not in seen["argv"] and "PYTHONPATH" not in seen["env"]
+    assert seen["argv"][1] == "-c", "no -I/-s/-E: BrainBar launches the helper with no isolation flags"
+    assert "PYTHONPATH" not in seen["env"] and seen["cwd"] == "/"
     sprint_gate.served_package(Path("/venv/bin/python"), "/x/src")
     assert seen["env"]["PYTHONPATH"] == "/x/src"
 

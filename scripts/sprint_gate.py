@@ -469,10 +469,11 @@ def helper_env(helper_pid: int) -> dict[str, str]:
 
 
 def served_package(python: Path, pythonpath: str | None) -> dict:
-    """Probe what a fresh interpreter of the helper's venv imports, under the helper's own
-    PYTHONPATH. ``-s`` (no user site) rather than ``-I``: ``-I`` implies ``-E`` and drops PYTHONPATH,
-    which is the only way a BRAINLAYER_SOURCE_FALLBACK=1 helper sees the checkout. The env is built
-    explicitly so the gate's own PYTHONPATH never leaks in."""
+    """Probe what a fresh interpreter of the helper's venv imports, the way BrainBar launches the
+    helper: no isolation flags at all (``-I`` implies ``-E`` and drops PYTHONPATH, the only import
+    path of a BRAINLAYER_SOURCE_FALLBACK=1 helper; ``-s`` would hide user site the helper sees).
+    ``cwd="/"`` so this worktree can never shadow the import; the env is built explicitly so the
+    gate's own PYTHONPATH never leaks in."""
     env = {"PATH": os.environ.get("PATH", os.defpath)}
     if pythonpath is not None:
         env["PYTHONPATH"] = pythonpath
@@ -480,7 +481,6 @@ def served_package(python: Path, pythonpath: str | None) -> dict:
         subprocess.run(
             [
                 str(python),
-                "-s",
                 "-c",
                 "import brainlayer,json; print(json.dumps({'version':brainlayer.__version__,"
                 "'path':brainlayer.__file__,'build_sha':getattr(brainlayer,'__build_sha__',None)}))",
@@ -489,6 +489,7 @@ def served_package(python: Path, pythonpath: str | None) -> dict:
             capture_output=True,
             text=True,
             env=env,
+            cwd="/",
         ).stdout
     )
 
