@@ -82,6 +82,10 @@ Call `expand_palette` or set `BRAINLAYER_MCP_PROFILE=full` for the rest.
 - Run `pytest` before claiming behavior changed safely.
 - Current suite size: 4,386 Python tests (`pytest tests/ --collect-only -q`) + 890 Swift tests in `brain-bar/Tests/`.
 
+## Release safety
+- Every Homebrew release must run `scripts/release-verify-signatures.sh <keg-path>` after installation.
+- Any invalid `*.so` or `*.dylib` blocks release/deploy; never restart services until the gate passes.
+
 ## PR Workflow
 - Request `@codex review`.
 - Request a lead-routed Claude pair review through the active collab lane.

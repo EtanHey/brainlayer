@@ -100,6 +100,16 @@ case "$BRAINLAYER_INSTALL_ACTION" in
     remove|unload|load)
         ;;
     *)
+        if [ -d "$BRAINLAYER_DIR/libexec/venv" ]; then
+            "$SCRIPT_DIR/../release-verify-signatures.sh" "$BRAINLAYER_DIR"
+        fi
+        ;;
+esac
+
+case "$BRAINLAYER_INSTALL_ACTION" in
+    remove|unload|load)
+        ;;
+    *)
         if [ "$(uname -s)" = "Darwin" ]; then
             if [ -d "$BRAINLAYER_DIR/src/brainlayer" ]; then
                 BRAINLAYER_PREFLIGHT_PYTHONPATH="$BRAINLAYER_DIR/src"
