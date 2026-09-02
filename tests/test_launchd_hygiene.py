@@ -7,6 +7,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from brainlayer.cli import app
@@ -567,7 +568,8 @@ def test_launchd_installer_uses_bootstrap_not_legacy_load_unload():
     assert "launchctl unload" not in load_plist_body
 
 
-def test_launchd_installer_load_plist_skips_operator_disabled_label(tmp_path):
+@pytest.mark.parametrize("name", ["watch", "hotlane-brainbar", "enrichment"])
+def test_launchd_installer_load_plist_skips_operator_disabled_label(tmp_path, name):
     """An operator `launchctl disable` is a standing order: load_plist must not enable/bootstrap it."""
     install_source = (REPO_ROOT / "scripts/launchd/install.sh").read_text(encoding="utf-8")
     load_plist_body = (
@@ -586,6 +588,7 @@ def test_launchd_installer_load_plist_skips_operator_disabled_label(tmp_path):
         'printf "%s\\n" "$*" >> "$LAUNCHCTL_LOG"\n'
         'if [ "$1" = "print-disabled" ]; then\n'
         '    printf \'\\tdisabled services = {\\n\\t\\t"com.brainlayer.watch" => disabled\\n'
+        '\\t\\t"com.brainlayer.hotlane-brainbar" => disabled\\n\\t\\t"com.brainlayer.enrichment" => disabled\\n'
         '\\t\\t"com.brainlayer.drain" => enabled\\n\\t}\\n\'\n'
         "fi\n"
         "exit 0\n",
@@ -600,12 +603,12 @@ def test_launchd_installer_load_plist_skips_operator_disabled_label(tmp_path):
     )
     env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}", "LAUNCHCTL_LOG": str(launchctl_log)}
 
-    result = subprocess.run(["/bin/bash", str(harness), "watch"], env=env, capture_output=True, text=True, check=False)
+    result = subprocess.run(["/bin/bash", str(harness), name], env=env, capture_output=True, text=True, check=False)
 
     assert result.returncode == 0, result.stderr
     uid = os.getuid()
     assert (
-        f"SKIP: com.brainlayer.watch disabled by operator (launchctl enable gui/{uid}/com.brainlayer.watch to re-arm)"
+        f"SKIP: com.brainlayer.{name} disabled by operator (launchctl enable gui/{uid}/com.brainlayer.{name} to re-arm)"
         in result.stdout
     )
     calls = launchctl_log.read_text(encoding="utf-8").splitlines()
