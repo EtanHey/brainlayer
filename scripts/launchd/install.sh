@@ -32,6 +32,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Set by load_plist when an operator-disabled label was left alone (callers skip runtime verification).
+LOAD_PLIST_SKIPPED=0
 
 stable_brainlayer_path() {
     local value="${1:-}"
@@ -246,7 +248,7 @@ label_disabled_by_operator() {
     local listing=""
     listing="$(launchctl print-disabled "gui/$UID" 2>/dev/null || true)"
     case "$listing" in
-        *"\"$label\" => disabled"*) return 0 ;;
+        *"\"$label\" => disabled"*|*"\"$label\" => true"*) return 0 ;;
     esac
     return 1
 }
@@ -272,8 +274,10 @@ load_plist() {
     local current_pid=""
     local plist_exit_timeout=""
 
+    LOAD_PLIST_SKIPPED=0
     if label_disabled_by_operator "$label"; then
         echo "SKIP: $label disabled by operator (launchctl enable gui/$UID/$label to re-arm)"
+        LOAD_PLIST_SKIPPED=1
         return 0
     fi
 
@@ -548,7 +552,7 @@ install_plist() {
     if ! load_plist "$name"; then
         return 1
     fi
-    if [ "$name" = "hotlane-brainbar" ] && ! verify_hotlane_runtime; then
+    if [ "$name" = "hotlane-brainbar" ] && [ "$LOAD_PLIST_SKIPPED" -ne 1 ] && ! verify_hotlane_runtime; then
         return 1
     fi
 }

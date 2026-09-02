@@ -11,6 +11,8 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "launchd" / "throughput-watchdog.py"
 PLIST_PATH = REPO_ROOT / "scripts" / "launchd" / "com.brainlayer.throughput-watchdog.plist"
@@ -1199,7 +1201,8 @@ def test_failed_alert_does_not_latch_episode_and_retries(tmp_path: Path) -> None
     assert calls["n"] == 2  # retried, not silenced by the earlier failure
 
 
-def test_operator_disabled_watch_label_is_never_bootstrapped_or_kickstarted(tmp_path: Path) -> None:
+@pytest.mark.parametrize("form", ["disabled", "true"])
+def test_operator_disabled_watch_label_is_never_bootstrapped_or_kickstarted(tmp_path: Path, form: str) -> None:
     """launchctl disable is a standing operator order: no bootstrap, no kickstart, and not a stall."""
     module = _load_module()
     config = _config(module, tmp_path, stall_threshold=1)
@@ -1209,7 +1212,7 @@ def test_operator_disabled_watch_label_is_never_bootstrapped_or_kickstarted(tmp_
     def command_runner(args: list[str]):
         commands.append(args)
         if args[:2] == ["launchctl", "print-disabled"]:
-            stdout = '\tdisabled services = {\n\t\t"com.brainlayer.watch" => enabled\n\t\t"com.example.brainlayer.watch" => disabled\n\t}\n'
+            stdout = f'\tdisabled services = {{\n\t\t"com.brainlayer.watch" => enabled\n\t\t"com.example.brainlayer.watch" => {form}\n\t}}\n'
             return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
         return SimpleNamespace(returncode=0, stdout="state = running\npid = 4321\n", stderr="")
 

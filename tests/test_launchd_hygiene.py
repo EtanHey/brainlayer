@@ -568,8 +568,9 @@ def test_launchd_installer_uses_bootstrap_not_legacy_load_unload():
     assert "launchctl unload" not in load_plist_body
 
 
+@pytest.mark.parametrize("form", ["disabled", "true"])
 @pytest.mark.parametrize("name", ["watch", "hotlane-brainbar", "enrichment"])
-def test_launchd_installer_load_plist_skips_operator_disabled_label(tmp_path, name):
+def test_launchd_installer_load_plist_skips_operator_disabled_label(tmp_path, name, form):
     """An operator `launchctl disable` is a standing order: load_plist must not enable/bootstrap it."""
     install_source = (REPO_ROOT / "scripts/launchd/install.sh").read_text(encoding="utf-8")
     load_plist_body = (
@@ -586,22 +587,32 @@ def test_launchd_installer_load_plist_skips_operator_disabled_label(tmp_path, na
     fake_launchctl.write_text(
         "#!/usr/bin/env bash\n"
         'printf "%s\\n" "$*" >> "$LAUNCHCTL_LOG"\n'
-        'if [ "$1" = "print-disabled" ]; then\n'
-        '    printf \'\\tdisabled services = {\\n\\t\\t"com.brainlayer.watch" => disabled\\n'
-        '\\t\\t"com.brainlayer.hotlane-brainbar" => disabled\\n\\t\\t"com.brainlayer.enrichment" => disabled\\n'
-        '\\t\\t"com.brainlayer.drain" => enabled\\n\\t}\\n\'\n'
-        "fi\n"
+        '[ "$1" = "print-disabled" ] && printf "%s\\n" "$LAUNCHCTL_LISTING"\n'
         "exit 0\n",
         encoding="utf-8",
+    )
+    listing = (
+        "\tdisabled services = {\n"
+        f'\t\t"com.brainlayer.watch" => {form}\n\t\t"com.brainlayer.hotlane-brainbar" => {form}\n'
+        f'\t\t"com.brainlayer.enrichment" => {form}\n\t\t"com.brainlayer.drain" => enabled\n'
+        "\t}"
     )
     fake_launchctl.chmod(0o755)
     harness = tmp_path / "harness.sh"
     harness.write_text(
         "set -euo pipefail\n"
-        f'LAUNCH_DIR="{tmp_path}"\nPYTHON_BIN=/usr/bin/true\n' + helper_body + load_plist_body + '\nload_plist "$1"\n',
+        f'LAUNCH_DIR="{tmp_path}"\nPYTHON_BIN=/usr/bin/true\nLOAD_PLIST_SKIPPED=0\n'
+        + helper_body
+        + load_plist_body
+        + '\nload_plist "$1"\n',
         encoding="utf-8",
     )
-    env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}", "LAUNCHCTL_LOG": str(launchctl_log)}
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "LAUNCHCTL_LOG": str(launchctl_log),
+        "LAUNCHCTL_LISTING": listing,
+    }
 
     result = subprocess.run(["/bin/bash", str(harness), name], env=env, capture_output=True, text=True, check=False)
 
@@ -636,3 +647,50 @@ def test_launchd_primitive_reads_current_print_disabled_vocabulary():
     assert is_launchd_label_disabled("com.legacy.off", command_runner=runner) is True
     assert is_launchd_label_disabled("com.legacy.on", command_runner=runner) is False
     assert is_launchd_label_disabled("com.absent", command_runner=runner) is False
+
+
+def test_launchd_installer_hotlane_skip_bypasses_runtime_verification(tmp_path):
+    """install.sh hotlane-brainbar on an operator-disabled label: rc 0, no verify_hotlane_runtime, no bootout."""
+    install_source = (REPO_ROOT / "scripts/launchd/install.sh").read_text(encoding="utf-8")
+
+    def _fn(name: str) -> str:
+        head = name + "() {"
+        return head + install_source.split("\n" + head, 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    (fake_bin / "launchctl").write_text(
+        "#!/usr/bin/env bash\n"
+        'printf "%s\\n" "$*" >> "$LAUNCHCTL_LOG"\n'
+        '[ "$1" = "print-disabled" ] && printf \'\\t"com.brainlayer.hotlane-brainbar" => disabled\\n\'\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    (fake_bin / "launchctl").chmod(0o755)
+    script_dir = tmp_path / "launchd"
+    script_dir.mkdir()
+    (script_dir / "com.brainlayer.hotlane-brainbar.plist").write_text("<plist/>\n", encoding="utf-8")
+    verify_marker = tmp_path / "verify-ran"
+    harness = tmp_path / "harness.sh"
+    harness.write_text(
+        "set -euo pipefail\n"
+        f'SCRIPT_DIR="{script_dir}"\nLAUNCH_DIR="{tmp_path}"\nLOG_DIR="{tmp_path}"\nBRAINLAYER_LOG_DIR="{tmp_path}"\n'
+        "PYTHON_BIN=/usr/bin/true\nBRAINLAYER_BIN=x\nBRAINLAYER_DIR=x\nBRAINLAYER_LAUNCHD_DIR=x\nBRAINLAYER_PYTHON=x\n"
+        "BRAINLAYER_ENV_FILE=x\nBRAINLAYER_ENV_RUN=x\nHOTLANE_BRAINBAR_DST=x\nLOAD_PLIST_SKIPPED=0\n"
+        "install_hotlane_brainbar_daemon() { :; }\ninstall_env_runner() { :; }\nverify_config_file() { :; }\n"
+        f'verify_hotlane_runtime() {{ touch "{verify_marker}"; return 1; }}\n'
+        + _fn("label_disabled_by_operator")
+        + _fn("load_plist")
+        + _fn("install_plist")
+        + "\ninstall_plist hotlane-brainbar\n",
+        encoding="utf-8",
+    )
+    env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}", "LAUNCHCTL_LOG": str(launchctl_log)}
+
+    result = subprocess.run(["/bin/bash", str(harness)], env=env, capture_output=True, text=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+    assert "SKIP: com.brainlayer.hotlane-brainbar disabled by operator" in result.stdout
+    assert not verify_marker.exists(), "verify_hotlane_runtime must not run after an operator-disable skip"
+    assert launchctl_log.read_text(encoding="utf-8").splitlines() == [f"print-disabled gui/{os.getuid()}"]

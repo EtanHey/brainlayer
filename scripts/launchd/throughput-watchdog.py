@@ -434,8 +434,9 @@ def _watch_disabled_by_operator(config: Config, command_runner: CommandRunner) -
         return False
     if int(getattr(completed, "returncode", 0)) != 0:
         return False
-    needle = f'"{config.watch_label}" => disabled'
-    return any(line.strip() == needle for line in str(getattr(completed, "stdout", "") or "").splitlines())
+    # Current macOS prints `=> disabled`; older releases print `=> true`. Both mean disabled.
+    needles = {f'"{config.watch_label}" => disabled', f'"{config.watch_label}" => true'}
+    return any(line.strip() in needles for line in str(getattr(completed, "stdout", "") or "").splitlines())
 
 
 def _restart_watch(
