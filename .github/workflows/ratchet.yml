@@ -1,0 +1,133 @@
+name: Ratchet
+
+# Posts the bench-brain ratchet table as ONE comment per PR and refreshes it in place on every
+# commit. Pure CI: no agent is ever involved. scripts/ci_ratchet_table.py owns the rule that a row
+# prints a measured number or `n/a — <reason>`, never a guess; a RED row fails this job because it
+# is a finding the PR author has to clear.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+# One in-flight run per PR. This plus `!cancelled()` on every writer means a superseded run stops
+# before it starts writing, so it cannot PATCH its table over a newer run's. Residual, stated rather
+# than papered over: a run cancelled while ALREADY INSIDE its POST can still land that create. The
+# window is one in-flight HTTP request and no observed occurrence -- but it is not zero, and the
+# 3-for-3 record is not the argument.
+concurrency:
+  group: ratchet-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  table:
+    name: ratchet table
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # Same stamp publish.yml applies at release time, so the provenance row measures the real
+      # release path on every PR instead of discovering a dropped stamp after a tag.
+      - name: Stamp build sha and build the wheel
+        run: |
+          set -euo pipefail
+          head="$(git rev-parse HEAD)"
+          printf 'BUILD_SHA = "%s"\n' "$head" > src/brainlayer/_build.py
+          pip install build
+          python -m build --wheel
+
+      # `!cancelled()`, never `always()`. Two different failures ride on this one condition:
+      #   - it runs when an EARLIER STEP FAILED (a broken build), so this run still publishes a table
+      #     instead of leaving the previous commit's GREEN table sitting on the PR -- a run that
+      #     cannot measure must overwrite its predecessor's claim, never inherit it;
+      #   - it does NOT run when this job was CANCELLED, because `always()` is true for cancelled
+      #     jobs, and a superseded run reaching the comment step could PATCH a stale table over the
+      #     newer run's.
+      - name: Collect ratchet rows
+        id: collect
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          # --wheel-glob, not a shell glob: `$(ls dist/*.whl)` collapses "no wheel" and "three wheels"
+          # into an empty --wheel, which the collector would have called `n/a` while the job stayed
+          # green -- a false green in the ratchet itself. The collector now fails closed and reports
+          # RED for either case. rc is captured without `set +e` so a real crash still cannot pass.
+          rc=0
+          python scripts/ci_ratchet_table.py \
+            --wheel-glob 'dist/*.whl' \
+            --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --out ratchet.md || rc=$?
+          if [[ ! -s ratchet.md ]]; then
+            printf '%s\n\n%s\n' '<!-- brainlayer-ratchet-table -->' \
+              'The ratchet collector produced no table (it exited '"$rc"'). No numbers, because none were measured.' > ratchet.md
+            rc=1
+          fi
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+
+      # If collect never ran, there is no table -- and silence would leave the previous commit's
+      # claim standing. Say plainly that this run measured nothing.
+      - name: Guarantee this run publishes its own table
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          if [[ ! -s ratchet.md ]]; then
+            {
+              echo '<!-- brainlayer-ratchet-table -->'
+              echo '### BrainLayer ratchet'
+              echo
+              echo 'This run measured nothing: the job failed before the collector could run (see the run log).'
+              echo 'No row claims a value, and **the previous commit'"'"'s table does not apply to this commit.**'
+            } > ratchet.md
+          fi
+
+      - name: Publish the table to the run summary
+        if: ${{ !cancelled() }}
+        run: cat ratchet.md >> "$GITHUB_STEP_SUMMARY"
+
+      # Fork PRs and Dependabot PRs get a read-only GITHUB_TOKEN, so the comment cannot be written.
+      # We say so in the log and the run summary rather than failing or leaving a silent hole; the
+      # table itself is always in the step summary above. Fixing this needs pull_request_target,
+      # which would run a write-token job against untrusted code — not worth it for a comment.
+      - name: Skip the comment on fork or Dependabot PRs (read-only token)
+        if: ${{ !cancelled() && (github.event.pull_request.head.repo.fork || github.event.pull_request.user.login == 'dependabot[bot]') }}
+        run: |
+          echo "::notice title=Ratchet table not commented::fork and Dependabot PRs get a read-only token; the table is in the run summary."
+          echo '> Ratchet table not posted as a comment: this PR gets a read-only `GITHUB_TOKEN` (fork or Dependabot).' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post or refresh the one ratchet comment
+        if: ${{ !cancelled() && !github.event.pull_request.head.repo.fork && github.event.pull_request.user.login != 'dependabot[bot]' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          marker='<!-- brainlayer-ratchet-table -->'
+          # Pages land in a file first. Piping `gh api --paginate` into `head -n1` closes the pipe
+          # while gh is still fetching, and under `pipefail` that SIGPIPE fails the step -- on the
+          # PATCH path, which is the whole point of this job. `jq -s add` merges whether gh emits one
+          # array or one per page.
+          gh api "repos/${REPO}/issues/${PR}/comments" --paginate > comments.json
+          # Oldest bot comment carrying the marker wins, so a duplicate could never be created twice.
+          comment_id="$(jq -rs --arg marker "$marker" \
+            'add | map(select(.user.login == "github-actions[bot]" and (.body | startswith($marker)))) | .[0].id // empty' \
+            comments.json)"
+          jq -Rs '{body: .}' ratchet.md > body.json
+          if [[ -n "$comment_id" ]]; then
+            gh api -X PATCH "repos/${REPO}/issues/comments/${comment_id}" --input body.json --jq .html_url
+          else
+            gh api -X POST "repos/${REPO}/issues/${PR}/comments" --input body.json --jq .html_url
+          fi
+
+      - name: Fail on a RED row
+        if: ${{ !cancelled() && steps.collect.outputs.rc != '' && steps.collect.outputs.rc != '0' }}
+        run: |
+          echo "::error title=Ratchet RED::the ratchet table has a RED row; see the PR comment or run summary."
+          exit 1
