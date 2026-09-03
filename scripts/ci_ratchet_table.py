@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import glob as glob_module
 import json
+import os
 import platform
 import re
 import shutil
@@ -143,6 +144,13 @@ def canonical_db_path() -> Path:
     return Path(get_db_path())
 
 
+def _clean_git_env() -> dict[str, str]:
+    # Same guard as tests/test_build_sha.py and src/brainlayer/deploy_drift.py: an inherited
+    # GIT_DIR/GIT_WORK_TREE OVERRIDES `-C`, so HEAD and dirty-tree would answer for another repo --
+    # a stamp that matches it is a false GREEN, and a stamp that does not is a false RED.
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
 def _git(*args: str) -> str | None:
     # Resolved absolutely rather than left to PATH: this decides a provenance verdict, so the
     # binary it asks is worth pinning, and a machine without git answers None instead of raising.
@@ -150,7 +158,14 @@ def _git(*args: str) -> str | None:
     if git is None:
         return None
     try:
-        result = subprocess.run([git, "-C", str(ROOT), *args], check=True, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(
+            [git, "-C", str(ROOT), *args],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=_clean_git_env(),
+        )
     except (OSError, subprocess.SubprocessError):
         return None
     return result.stdout.strip()

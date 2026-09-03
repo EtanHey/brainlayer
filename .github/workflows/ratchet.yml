@@ -13,7 +13,11 @@ permissions:
   contents: read
   pull-requests: write
 
-# One in-flight run per PR, so two pushes can never race into two comments.
+# One in-flight run per PR. This plus `!cancelled()` on every writer means a superseded run stops
+# before it starts writing, so it cannot PATCH its table over a newer run's. Residual, stated rather
+# than papered over: a run cancelled while ALREADY INSIDE its POST can still land that create. The
+# window is one in-flight HTTP request and no observed occurrence -- but it is not zero, and the
+# 3-for-3 record is not the argument.
 concurrency:
   group: ratchet-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -39,8 +43,16 @@ jobs:
           pip install build
           python -m build --wheel
 
+      # `!cancelled()`, never `always()`. Two different failures ride on this one condition:
+      #   - it runs when an EARLIER STEP FAILED (a broken build), so this run still publishes a table
+      #     instead of leaving the previous commit's GREEN table sitting on the PR -- a run that
+      #     cannot measure must overwrite its predecessor's claim, never inherit it;
+      #   - it does NOT run when this job was CANCELLED, because `always()` is true for cancelled
+      #     jobs, and a superseded run reaching the comment step could PATCH a stale table over the
+      #     newer run's.
       - name: Collect ratchet rows
         id: collect
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           # --wheel-glob, not a shell glob: `$(ls dist/*.whl)` collapses "no wheel" and "three wheels"
@@ -59,8 +71,24 @@ jobs:
           fi
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
 
+      # If collect never ran, there is no table -- and silence would leave the previous commit's
+      # claim standing. Say plainly that this run measured nothing.
+      - name: Guarantee this run publishes its own table
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          if [[ ! -s ratchet.md ]]; then
+            {
+              echo '<!-- brainlayer-ratchet-table -->'
+              echo '### BrainLayer ratchet'
+              echo
+              echo 'This run measured nothing: the job failed before the collector could run (see the run log).'
+              echo 'No row claims a value, and **the previous commit'"'"'s table does not apply to this commit.**'
+            } > ratchet.md
+          fi
+
       - name: Publish the table to the run summary
-        if: always() && steps.collect.outputs.rc != ''
+        if: ${{ !cancelled() }}
         run: cat ratchet.md >> "$GITHUB_STEP_SUMMARY"
 
       # Fork PRs get a read-only GITHUB_TOKEN, so the comment cannot be written. We say so in the
@@ -68,13 +96,13 @@ jobs:
       # always in the step summary above. Fixing this needs pull_request_target, which would run a
       # write-token job against fork-authored code — not worth it for a comment.
       - name: Skip the comment on fork PRs (read-only token)
-        if: always() && steps.collect.outputs.rc != '' && github.event.pull_request.head.repo.fork
+        if: ${{ !cancelled() && github.event.pull_request.head.repo.fork }}
         run: |
           echo "::notice title=Ratchet table not commented::fork PRs get a read-only token; the table is in the run summary."
           echo '> Ratchet table not posted as a comment: fork PRs get a read-only `GITHUB_TOKEN`.' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Post or refresh the one ratchet comment
-        if: always() && steps.collect.outputs.rc != '' && !github.event.pull_request.head.repo.fork
+        if: ${{ !cancelled() && !github.event.pull_request.head.repo.fork }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number }}
@@ -99,7 +127,7 @@ jobs:
           fi
 
       - name: Fail on a RED row
-        if: steps.collect.outputs.rc != '0'
+        if: ${{ !cancelled() && steps.collect.outputs.rc != '' && steps.collect.outputs.rc != '0' }}
         run: |
           echo "::error title=Ratchet RED::the ratchet table has a RED row; see the PR comment or run summary."
           exit 1

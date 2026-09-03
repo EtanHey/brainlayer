@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
 import zipfile
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+import yaml
 
 from scripts import ci_ratchet_table as ratchet
 
@@ -59,6 +62,16 @@ def mac_probe(tmp_path: Path, **overrides) -> ratchet.Probe:
         "db_path": db,
     }
     return replace(linux_probe(tmp_path), **{**ready, **overrides})
+
+
+def workflow_steps() -> dict[str, dict]:
+    """The job's steps parsed as YAML, keyed by name.
+
+    Counting `if: always()` occurrences is not a contract — it says nothing about WHICH step carries
+    it, and it rejected the correct fix. These assertions read the real conditions.
+    """
+    document = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    return {step["name"]: step for step in document["jobs"]["table"]["steps"] if "name" in step}
 
 
 def workflow_code() -> str:
@@ -152,6 +165,31 @@ def test_provenance_says_na_with_a_reason_when_it_cannot_measure(
     assert result.status == ratchet.NA
     assert result.value.startswith("n/a — ")
     assert expected in result.value
+
+
+def test_git_ignores_an_inherited_GIT_DIR_from_another_repo(tmp_path: Path, monkeypatch) -> None:
+    """An inherited GIT_DIR/GIT_WORK_TREE OVERRIDES `-C`, so HEAD would come from the wrong repo — a
+    stamp matching it is a false GREEN, one that does not is a false RED. Same guard as
+    tests/test_build_sha.py and src/brainlayer/deploy_drift.py."""
+    other = tmp_path / "other"
+    other.mkdir()
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@e",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@e",
+    }
+    for args in (["init", "-q"], ["commit", "-q", "--allow-empty", "-m", "other repo"]):
+        subprocess.run(["git", "-C", str(other), *args], check=True, env=env, capture_output=True)
+    decoy = subprocess.run(
+        ["git", "-C", str(other), "rev-parse", "HEAD"], check=True, capture_output=True, text=True, env=env
+    ).stdout.strip()
+
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(other))
+    head = ratchet.git_head()
+    assert head is not None and head != decoy, "provenance read HEAD from the inherited GIT_DIR"
 
 
 # --- fail-closed wheel selection: a promised wheel that never arrived is RED, not n/a ---
@@ -372,17 +410,58 @@ def test_workflow_can_write_the_comment_and_cannot_double_post() -> None:
     assert "head.repo.fork" in workflow  # fork PRs are handled, not silently broken
 
 
-def test_workflow_fails_closed_rather_than_reporting_a_green_it_did_not_earn() -> None:
-    """Pin the CONTRACT, not just the mechanics: RED must be able to fail this job."""
-    workflow = workflow_code()
-    # collect RECORDS the exit code instead of exiting on it, so the table still gets posted...
-    assert "|| rc=$?" in workflow and 'echo "rc=$rc" >> "$GITHUB_OUTPUT"' in workflow
-    # ...but `set +e` must never come back: it would swallow a crash before rc is ever read.
-    assert "set +e" not in workflow
-    # ...and the comment is posted even on a RED run.
-    assert workflow.count("if: always()") >= 3
-    # The step that turns a RED row into a failed job must exist and be spelled exactly.
-    assert "if: steps.collect.outputs.rc != '0'" in workflow
+def test_collect_runs_even_when_an_earlier_step_failed() -> None:
+    """A build failure must not leave the previous commit's GREEN table standing on the PR.
+
+    Without this, GitHub skips collect, which skips the comment steps, which leaves a GREEN
+    provenance row this run never measured — the same crime as printing an unmeasured number,
+    committed by omission.
+    """
+    assert workflow_steps()["Collect ratchet rows"]["if"] == "${{ !cancelled() }}"
+
+
+@pytest.mark.parametrize(
+    "step",
+    [
+        "Collect ratchet rows",
+        "Guarantee this run publishes its own table",
+        "Publish the table to the run summary",
+        "Post or refresh the one ratchet comment",
+        "Fail on a RED row",
+    ],
+)
+def test_no_writer_runs_after_this_job_is_cancelled(step: str) -> None:
+    """`always()` is TRUE for cancelled jobs, so a superseded run would still reach the comment step
+    and could PATCH its stale table over the newer run's. `!cancelled()` still runs on failure."""
+    condition = workflow_steps()[step]["if"]
+    assert "!cancelled()" in condition
+    assert "always()" not in condition
+
+
+def test_a_run_that_measured_nothing_still_replaces_the_previous_table() -> None:
+    guarantee = workflow_steps()["Guarantee this run publishes its own table"]["run"]
+    assert ratchet.MARKER in guarantee
+    assert "does not apply to this commit" in guarantee
+    # It must not be gated on collect having produced output — that is exactly the skipped case.
+    assert "steps.collect.outputs.rc" not in workflow_steps()["Guarantee this run publishes its own table"]["if"]
+
+
+def test_the_comment_is_posted_on_a_red_run_not_only_a_green_one() -> None:
+    condition = workflow_steps()["Post or refresh the one ratchet comment"]["if"]
+    assert "success()" not in condition  # would silence RED tables entirely
+
+
+def test_a_red_row_can_still_fail_the_job() -> None:
+    fail_step = workflow_steps()["Fail on a RED row"]
+    assert "steps.collect.outputs.rc != '0'" in fail_step["if"]
+    assert "exit 1" in fail_step["run"]
+
+
+def test_collect_records_the_exit_code_instead_of_dying_on_it() -> None:
+    collect = workflow_steps()["Collect ratchet rows"]["run"]
+    assert "|| rc=$?" in collect and 'echo "rc=$rc" >> "$GITHUB_OUTPUT"' in collect
+    # `set +e` must never come back: it would swallow a crash before rc is ever read.
+    assert "set +e" not in workflow_code()
 
 
 def test_workflow_resolves_the_wheel_fail_closed_not_through_a_shell_glob() -> None:
