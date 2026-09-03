@@ -18,6 +18,9 @@
 #   ./scripts/launchd/install.sh health-check # Install stability health check only
 #   ./scripts/launchd/install.sh tier0-watchdog # Install /bin/sh meta-watchdog only
 #   ./scripts/launchd/install.sh throughput-watchdog # Install watcher throughput watchdog only
+#   ./scripts/launchd/install.sh fleet-watchdog # Install com.brainlayer.* revival watchdog only
+#   ./scripts/launchd/install.sh fleet-watchdog-quiesce # Disable + bootout the fleet watchdog (upgrades)
+#   ./scripts/launchd/install.sh fleet-watchdog-resume  # Re-enable + bootstrap the fleet watchdog
 #   ./scripts/launchd/install.sh hotlane      # Install BrainBar hotlane embed/enrich daemon only
 #   ./scripts/launchd/install.sh p0-counter   # Install daily P0 longitudinal counter only
 #   ./scripts/launchd/install.sh t3-ingest    # Install T3 thread ingestion only
@@ -76,6 +79,11 @@ BRAINLAYER_ENV_FILE="${BRAINLAYER_ENV_FILE:-$HOME/.config/brainlayer/brainlayer.
 BRAINLAYER_ENV_RUN="$BRAINLAYER_LIB_DIR/brainlayer-env-run.sh"
 TIER0_WATCHDOG_DST="$BRAINLAYER_LIB_DIR/tier0-watchdog.sh"
 THROUGHPUT_WATCHDOG_DST="$BRAINLAYER_LIB_DIR/throughput-watchdog.py"
+FLEET_WATCHDOG_DST="$BRAINLAYER_LIB_DIR/fleet-watchdog.sh"
+# Namespaced com.etanhey.* on purpose: the fleet watchdog globs com.brainlayer.*.plist, so a
+# com.brainlayer.* label would land in its own revival glob and in BrainLayer's maintenance pause.
+FLEET_WATCHDOG_LABEL="com.etanhey.brainlayer-fleet-watchdog"
+FLEET_WATCHDOG_PLIST_NAME="$FLEET_WATCHDOG_LABEL.plist"
 HOTLANE_BRAINBAR_DST="$BRAINLAYER_LIB_DIR/hotlane_brainbar_daemon.py"
 
 if [ -z "$PYTHON_BIN" ]; then
@@ -93,11 +101,11 @@ fi
 
 BRAINLAYER_INSTALL_ACTION="${1:-all}"
 launchd_install_usage() {
-    echo "Usage: $0 [index|t3-ingest|watch|enrich|enrichment|decay|drain|hotlane|hotlane-brainbar|repair-fts|load [name]|unload [name]|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|tier0|tier0-watchdog|throughput-watchdog|p0-counter|all|remove]"
+    echo "Usage: $0 [index|t3-ingest|watch|enrich|enrichment|decay|drain|hotlane|hotlane-brainbar|repair-fts|load [name]|unload [name]|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|tier0|tier0-watchdog|throughput-watchdog|fleet-watchdog|fleet-watchdog-quiesce|fleet-watchdog-resume|p0-counter|all|remove]"
 }
 
 case "$BRAINLAYER_INSTALL_ACTION" in
-    index|t3-ingest|watch|enrich|enrichment|decay|drain|hotlane|hotlane-brainbar|repair-fts|load|unload|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|tier0|tier0-watchdog|throughput-watchdog|p0-counter|all|remove)
+    index|t3-ingest|watch|enrich|enrichment|decay|drain|hotlane|hotlane-brainbar|repair-fts|load|unload|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|tier0|tier0-watchdog|throughput-watchdog|fleet|fleet-watchdog|fleet-watchdog-quiesce|fleet-watchdog-resume|p0-counter|all|remove)
         ;;
     *)
         launchd_install_usage
@@ -722,6 +730,129 @@ install_throughput_watchdog() {
     load_plist throughput-watchdog
 }
 
+# The fleet watchdog carries a com.etanhey.* label, so the generic load/unload/remove
+# helpers (which hardcode com.brainlayer.${name}.plist) cannot drive it. These four
+# functions are its explicit-path equivalents, modelled on install_tier0_watchdog.
+load_fleet_watchdog() {
+    local plist_dst="$LAUNCH_DIR/$FLEET_WATCHDOG_PLIST_NAME"
+    local domain="gui/$UID/$FLEET_WATCHDOG_LABEL"
+    local disabled_rc=0
+
+    label_disabled_by_operator "$FLEET_WATCHDOG_LABEL" || disabled_rc=$?
+    case "$disabled_rc" in
+        0)
+            echo "SKIP: $FLEET_WATCHDOG_LABEL disabled by operator ($0 fleet-watchdog-resume to re-arm)"
+            return 0
+            ;;
+        1) ;;
+        *) return 1 ;;
+    esac
+
+    launchctl bootout "$domain" 2>/dev/null || true
+    launchctl enable "$domain" 2>/dev/null || true
+    if ! launchctl bootstrap "gui/$UID" "$plist_dst"; then
+        echo "ERROR: launchctl bootstrap failed for $FLEET_WATCHDOG_LABEL" >&2
+        return 1
+    fi
+    if ! launchctl print "$domain" >/dev/null; then
+        echo "ERROR: launchctl print failed for $FLEET_WATCHDOG_LABEL after bootstrap" >&2
+        return 1
+    fi
+    echo "  Loaded: $FLEET_WATCHDOG_LABEL"
+}
+
+install_fleet_watchdog() {
+    local script_src="$SCRIPT_DIR/fleet-watchdog.sh"
+    local plist_src="$SCRIPT_DIR/$FLEET_WATCHDOG_PLIST_NAME"
+    local plist_dst="$LAUNCH_DIR/$FLEET_WATCHDOG_PLIST_NAME"
+    local escaped_home
+    local escaped_fleet_watchdog_dst
+
+    if [ ! -f "$script_src" ]; then
+        echo "ERROR: fleet-watchdog.sh not found in $SCRIPT_DIR"
+        return 1
+    fi
+    if [ ! -f "$plist_src" ]; then
+        echo "ERROR: $plist_src not found"
+        return 1
+    fi
+
+    escaped_home="$(
+        printf '%s' "$HOME" \
+            | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/[\\&|]/\\&/g'
+    )" || return 1
+    escaped_fleet_watchdog_dst="$(
+        printf '%s' "$FLEET_WATCHDOG_DST" \
+            | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/[\\&|]/\\&/g'
+    )" || return 1
+
+    install -m 0755 "$script_src" "$FLEET_WATCHDOG_DST" || return 1
+    sed \
+        -e "s|__HOME__|$escaped_home|g" \
+        -e "s|__FLEET_WATCHDOG_SCRIPT__|$escaped_fleet_watchdog_dst|g" \
+        "$plist_src" > "$plist_dst" || return 1
+
+    echo "Installed: $FLEET_WATCHDOG_DST"
+    echo "Installed: $plist_dst"
+    echo "  Logs: $LOG_DIR/brainlayer/"
+    echo "  NOTE: while this watchdog runs, 'launchctl bootout' on a com.brainlayer.* label does"
+    echo "        NOT hold -- it is re-bootstrapped within 300s. Quiesce for upgrades with:"
+    echo "          $0 fleet-watchdog-quiesce"
+    load_fleet_watchdog
+}
+
+# The only supported way to make a bootout hold across an upgrade. `launchctl bootout`
+# alone is reverted within 300s (M1 false green, 2026-09-02: 1.5.11 installed, 1.5.10
+# still served, every pid green). `launchctl disable` is what actually holds, because
+# every reviver -- this installer, throughput-watchdog.py, fleet-watchdog.sh -- consults
+# `launchctl print-disabled` first.
+quiesce_fleet_watchdog() {
+    local domain="gui/$UID/$FLEET_WATCHDOG_LABEL"
+    local disabled_rc=0
+
+    if ! launchctl disable "$domain"; then
+        echo "ERROR: launchctl disable failed for $FLEET_WATCHDOG_LABEL" >&2
+        return 1
+    fi
+    launchctl bootout "$domain" 2>/dev/null || true
+
+    label_disabled_by_operator "$FLEET_WATCHDOG_LABEL" || disabled_rc=$?
+    if [ "$disabled_rc" -ne 0 ]; then
+        echo "ERROR: $FLEET_WATCHDOG_LABEL is not reported disabled after launchctl disable" >&2
+        return 1
+    fi
+    echo "Quiesced: $FLEET_WATCHDOG_LABEL (disabled; bootout of com.brainlayer.* labels now holds)"
+    echo "  Re-arm with: $0 fleet-watchdog-resume"
+}
+
+resume_fleet_watchdog() {
+    local plist_dst="$LAUNCH_DIR/$FLEET_WATCHDOG_PLIST_NAME"
+    local domain="gui/$UID/$FLEET_WATCHDOG_LABEL"
+
+    if ! launchctl enable "$domain"; then
+        echo "ERROR: launchctl enable failed for $FLEET_WATCHDOG_LABEL" >&2
+        return 1
+    fi
+    if [ ! -f "$plist_dst" ]; then
+        echo "ERROR: $plist_dst not found; run '$0 fleet-watchdog' first" >&2
+        return 1
+    fi
+    launchctl bootout "$domain" 2>/dev/null || true
+    if ! launchctl bootstrap "gui/$UID" "$plist_dst"; then
+        echo "ERROR: launchctl bootstrap failed for $FLEET_WATCHDOG_LABEL" >&2
+        return 1
+    fi
+    echo "Resumed: $FLEET_WATCHDOG_LABEL"
+}
+
+remove_fleet_watchdog() {
+    local plist_dst="$LAUNCH_DIR/$FLEET_WATCHDOG_PLIST_NAME"
+    launchctl bootout "gui/$UID/$FLEET_WATCHDOG_LABEL" 2>/dev/null || true
+    rm -f "$plist_dst"
+    rm -f "$FLEET_WATCHDOG_DST"
+    echo "Removed: $FLEET_WATCHDOG_LABEL"
+}
+
 remove_plist() {
     local name="$1"
     local dst="$LAUNCH_DIR/com.brainlayer.${name}.plist"
@@ -789,6 +920,15 @@ case "${1:-all}" in
     throughput-watchdog)
         install_throughput_watchdog
         ;;
+    fleet|fleet-watchdog)
+        install_fleet_watchdog
+        ;;
+    fleet-watchdog-quiesce)
+        quiesce_fleet_watchdog
+        ;;
+    fleet-watchdog-resume)
+        resume_fleet_watchdog
+        ;;
     hotlane|hotlane-brainbar)
         verify_gemini_env_file
         install_plist hotlane-brainbar
@@ -835,6 +975,9 @@ case "${1:-all}" in
         if ! install_throughput_watchdog; then
             failures=1
         fi
+        if ! install_fleet_watchdog; then
+            failures=1
+        fi
         # Remove old enrich plist only after the replacement enrichment service loads.
         if [ "$enrichment_ok" -eq 1 ]; then
             remove_plist enrich 2>/dev/null || true
@@ -860,6 +1003,7 @@ case "${1:-all}" in
         remove_plist health-check 2>/dev/null || true
         remove_plist tier0-watchdog 2>/dev/null || true
         remove_plist throughput-watchdog 2>/dev/null || true
+        remove_fleet_watchdog 2>/dev/null || true
         remove_plist hotlane-brainbar 2>/dev/null || true
         remove_plist p0-counter 2>/dev/null || true
         rm -f "$BRAINLAYER_LIB_DIR/backup-daily.sh"
