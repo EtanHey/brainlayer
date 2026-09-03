@@ -186,7 +186,7 @@ def _is_protected_runtime_path(candidate: object) -> bool:
     if isinstance(candidate, int) or candidate is None:
         return False
     text = str(candidate)
-    if not text or text.startswith(":") or text.startswith("file::memory:"):
+    if not text or text.startswith((":", "file::memory:")):
         return False
     try:
         resolved = Path(text).expanduser().resolve(strict=False)

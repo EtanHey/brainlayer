@@ -793,50 +793,62 @@ def gate_status(results: list[dict]) -> str:
     return "PASS" if all(item["status"] in {"PASS", "SKIPPED"} for item in results) else "FAIL"
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
-    config = load_config(args.fixture)
-    machine = {"hostname": socket.gethostname(), "os": platform.system(), "architecture": platform.machine()}
-    provenance = replay_provenance() if args.fixture else collect_live_provenance(config)
-    proof_eligible = provenance["served_matches_working_tree"]
-
-    def fail(error: str) -> int:
-        payload = {
-            "mode": "replay" if args.fixture else "live",
-            "fixture": str(args.fixture) if args.fixture else None,
-            "status": "FAIL",
-            "machine": machine,
-            "provenance": provenance,
-            "proof_eligible": proof_eligible,
-            "checks": [],
-            "error": error,
-        }
-        print(json.dumps(payload, indent=None if args.json else 2, sort_keys=True))
-        return 1
-
+def gate_refusal(
+    args: argparse.Namespace, config: dict, machine: dict, provenance: dict, selected: list[str]
+) -> str | None:
+    """The first reason this run may not measure anything, or None. Order is the reported order."""
     if refusal := proof_refusal(args, provenance):
-        return fail(refusal)
-    selected = config.get("checks", list(CHECKS))
-    if not args.fixture:
-        if refusal := machine_target_refusal(config, machine):
-            return fail(refusal)
-        if refusal := latency_baseline_refusal(config, selected):
-            return fail(refusal)
+        return refusal
+    if args.fixture:
+        return None
+    return machine_target_refusal(config, machine) or latency_baseline_refusal(config, selected)
 
-    results = run_checks(config, selected, machine, replay=bool(args.fixture))
-    payload = {
+
+def base_payload(args: argparse.Namespace, machine: dict, provenance: dict) -> dict:
+    """Everything a payload reports about the RUN, before it reports any measurement."""
+    return {
         "mode": "replay" if args.fixture else "live",
         "fixture": str(args.fixture) if args.fixture else None,
-        "status": gate_status(results),
         "machine": machine,
         "provenance": provenance,
-        "proof_eligible": proof_eligible,
+        "proof_eligible": provenance["served_matches_working_tree"],
+    }
+
+
+def refusal_payload(base: dict, error: str) -> dict:
+    return {**base, "status": "FAIL", "checks": [], "error": error}
+
+
+def result_payload(base: dict, results: list[dict]) -> dict:
+    payload = {
+        **base,
+        "status": gate_status(results),
         "checks": results,
         "skipped": [item["name"] for item in results if item["status"] == "SKIPPED"],
     }
     if payload["status"] == UNMEASURED:
         payload["error"] = "no checks were selected, so this run measured nothing and cannot report PASS"
-    print(json.dumps(payload, indent=None if args.json else 2, sort_keys=True))
+    return payload
+
+
+def emit(payload: dict, *, as_json: bool) -> None:
+    print(json.dumps(payload, indent=None if as_json else 2, sort_keys=True))
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    config = load_config(args.fixture)
+    machine = {"hostname": socket.gethostname(), "os": platform.system(), "architecture": platform.machine()}
+    provenance = replay_provenance() if args.fixture else collect_live_provenance(config)
+    base = base_payload(args, machine, provenance)
+    selected = config.get("checks", list(CHECKS))
+
+    if refusal := gate_refusal(args, config, machine, provenance, selected):
+        emit(refusal_payload(base, refusal), as_json=args.json)
+        return 1
+
+    payload = result_payload(base, run_checks(config, selected, machine, replay=bool(args.fixture)))
+    emit(payload, as_json=args.json)
     return 0 if payload["status"] == "PASS" else 1
 
 

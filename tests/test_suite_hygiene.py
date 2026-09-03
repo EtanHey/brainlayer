@@ -74,6 +74,7 @@ def test_the_refusal_survives_a_process_boundary(tmp_path: Path) -> None:
         text=True,
         timeout=120,
         cwd=tmp_path,
+        check=False,  # the refusal IS the assertion below; a raise here would hide it
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
