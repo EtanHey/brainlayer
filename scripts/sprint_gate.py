@@ -255,12 +255,14 @@ def retire_probe_chunk(client: MCPClient, stored: dict) -> dict:
     """
     chunk_id = stored.get("chunk_id")
     if not chunk_id:
-        # DEFERRED stores are queued and answer without a chunk id, so there is nothing addressable
-        # to archive yet. Say so; do not claim a cleanup that did not happen.
+        # No exemption for DEFERRED. BrainBar's queued store DOES return a `chunk_id`
+        # (`queuedBrainStoreOutput`), and the deferred drain persists that chunk -- so calling a
+        # DEFERRED store "retired" would have been the exact false green this helper exists to
+        # prevent: a chunk left in the production corpus, reported as cleaned up (Macroscope, #755).
         return {
-            "probe_retired": stored.get("status") == "DEFERRED",
+            "probe_retired": False,
             "probe_chunk_id": None,
-            "probe_retire_error": None if stored.get("status") == "DEFERRED" else "store returned no chunk_id",
+            "probe_retire_error": "the store returned no chunk_id, so the probe chunk cannot be retired",
         }
     try:
         client.call("brain_archive", {"chunk_id": chunk_id, "reason": "sprint-gate probe"})
@@ -298,9 +300,16 @@ def check_mcp(config: dict) -> dict:
         store_status = stored.get("status")
         wait_budget = config["thresholds"]["deferred_visibility_wait_seconds"] if store_status == "DEFERRED" else 1.25
         wait_started = time.monotonic()
-        hit = search_visible(client, marker, wait_budget)
-        observed_wait = round(time.monotonic() - wait_started, 3)
-        cleanup = retire_probe_chunk(client, stored)
+        hit = False
+        try:
+            hit = search_visible(client, marker, wait_budget)
+        finally:
+            # `finally`, not a straight line: a `search_visible` that RAISES would otherwise skip
+            # cleanup entirely and leave the chunk it planted in the production corpus, so every
+            # failing gate run would grow the corpus it measures (Macroscope, #755). The outer
+            # `finally` only closes the socket.
+            observed_wait = round(time.monotonic() - wait_started, 3)
+            cleanup = retire_probe_chunk(client, stored)
         passed = intact and store_status in SUCCESS_STATUSES and hit and cleanup["probe_retired"]
         return status(
             "mcp_roundtrip",

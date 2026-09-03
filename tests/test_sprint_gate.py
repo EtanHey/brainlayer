@@ -321,6 +321,23 @@ def test_roundtrip_fails_when_it_cannot_retire_its_own_probe_chunk(monkeypatch):
     assert "archive refused" in result["details"]["probe_retire_error"]
 
 
+def test_roundtrip_retires_its_probe_chunk_even_when_the_search_raises(monkeypatch):
+    """A gate run that BLOWS UP still cleans up. Otherwise every failing run grows the corpus."""
+    client, calls = _roundtrip_client({"status": "STORED", "chunk_id": "chunk-42"})
+    monkeypatch.setattr(sprint_gate, "MCPClient", lambda _path, _timeout: client)
+
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("socket died mid-search")
+
+    monkeypatch.setattr(sprint_gate, "search_visible", explode)
+    monkeypatch.setattr(sprint_gate.time, "monotonic", lambda: 0.0)
+
+    with pytest.raises(RuntimeError, match="socket died mid-search"):
+        sprint_gate.check_mcp(ROUNDTRIP_CONFIG)
+
+    assert ("brain_archive", {"chunk_id": "chunk-42", "reason": "sprint-gate probe"}) in calls
+
+
 def test_roundtrip_reports_a_store_that_returned_no_chunk_id(monkeypatch):
     client, calls = _roundtrip_client({"status": "STORED"})
     monkeypatch.setattr(sprint_gate, "MCPClient", lambda _path, _timeout: client)
@@ -330,7 +347,9 @@ def test_roundtrip_reports_a_store_that_returned_no_chunk_id(monkeypatch):
     result = sprint_gate.check_mcp(ROUNDTRIP_CONFIG)
 
     assert result["status"] == "FAIL"
-    assert result["details"]["probe_retire_error"] == "store returned no chunk_id"
+    assert result["details"]["probe_retire_error"] == (
+        "the store returned no chunk_id, so the probe chunk cannot be retired"
+    )
     assert [name for name, _ in calls] == ["expand_palette", "brain_store"]
 
 
@@ -356,7 +375,9 @@ def test_deferred_roundtrip_uses_configured_wait_and_reports_observed(monkeypatc
         calls.append(name)
         if name == "expand_palette" and expand_error:
             raise expand_error
-        return {"status": "DEFERRED"}
+        # BrainBar's queued store returns a chunk_id (`queuedBrainStoreOutput`), so the fake does
+        # too -- otherwise this test would be measuring a response shape the daemon never sends.
+        return {"status": "DEFERRED", "chunk_id": "chunk-deferred"}
 
     client = SimpleNamespace(
         initialize=lambda: None,
@@ -382,9 +403,10 @@ def test_deferred_roundtrip_uses_configured_wait_and_reports_observed(monkeypatc
     result = sprint_gate.check_mcp(config)
 
     assert result["status"] == "PASS"
-    assert calls == ["expand_palette", "brain_store"]
+    assert calls == ["expand_palette", "brain_store", "brain_archive"]
     assert waits == [5]
     assert result["details"]["planted_hit_wait_seconds"] == 2.5
+    assert result["details"]["probe_chunk_id"] == "chunk-deferred"
 
 
 def test_empty_check_list_is_unmeasured_never_pass(monkeypatch, capsys, tmp_path: Path):
