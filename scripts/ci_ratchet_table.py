@@ -124,7 +124,12 @@ def select_wheel(explicit: Path | None, pattern: str | None) -> WheelSelection:
         return WheelSelection(
             problem=f"{len(matches)} wheels matched `{pattern}` ({listed}) — provenance needs exactly one"
         )
-    return WheelSelection(path=matches[0])
+    path = matches[0]
+    if not path.is_file():
+        return WheelSelection(
+            problem=(f"`{path.name}` matched `{pattern}` but is not a file — provenance needs exactly one wheel")
+        )
+    return WheelSelection(path=path)
 
 
 def canonical_db_path() -> Path:
@@ -212,9 +217,19 @@ def row_provenance(probe: Probe, _corpus: dict) -> Row:
     if probe.wheel_problem:
         # Never `n/a`: a wheel this job promised and did not deliver is a finding, not a capability gap.
         return Row("provenance", RED, probe.wheel_problem, method, PROVENANCE_NOTES)
+    if wheel is not None and not wheel.is_file():
+        # select_wheel already required is_file(); if the path is gone now, that is still a finding.
+        # Feeding it to first_unmet would render `n/a` and let the job go green (Macroscope, #752).
+        return Row(
+            "provenance",
+            RED,
+            f"selected wheel `{wheel}` is not a file — provenance was promised a wheel and lost it",
+            method,
+            PROVENANCE_NOTES,
+        )
     reason = first_unmet(
         [
-            (wheel is not None and wheel.is_file(), "no packaged wheel in this job (pass --wheel or --wheel-glob)"),
+            (wheel is not None, "no packaged wheel in this job (pass --wheel or --wheel-glob)"),
             (head is not None, "git HEAD could not be read"),
             (probe.tree_dirty is not None, "`git status --porcelain` could not be read"),
         ]

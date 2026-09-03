@@ -206,6 +206,23 @@ def test_main_exits_one_when_the_wheel_glob_matches_nothing(tmp_path: Path, caps
     assert "1 RED row(s) to clear:" in captured.out
 
 
+def test_a_glob_matching_a_non_file_is_a_finding(tmp_path: Path) -> None:
+    named_like_a_wheel = tmp_path / "brainlayer-0.0.0-py3-none-any.whl"
+    named_like_a_wheel.mkdir()
+    selection = ratchet.select_wheel(None, str(tmp_path / "*.whl"))
+    assert selection.path is None
+    assert selection.problem is not None and "not a file" in selection.problem
+
+
+def test_a_selected_wheel_that_is_gone_is_red_not_na(tmp_path: Path) -> None:
+    gone = tmp_path / "vanished.whl"
+    probe = linux_probe(tmp_path, wheel=gone, wheel_problem=None)
+    result = ratchet.row_provenance(probe, CORPUS)
+    assert result.status == ratchet.RED
+    assert not result.value.startswith("n/a")
+    assert "not a file" in result.value
+
+
 # --- the four rows a runner cannot measure ---------------------------------------------------
 
 
