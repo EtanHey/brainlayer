@@ -10,6 +10,10 @@ name: Ratchet
 #   signatures (macOS)   installs the published keg and codesign-verifies it -- `signature_valid`
 #   table      (ubuntu)  measures `provenance`, folds in the signature report, posts the comment
 # `table` never depends on `signatures` HAVING RUN; see its `if:` below.
+#
+# Every scratch file goes to $RUNNER_TEMP, never the checkout. An untracked file in the workspace
+# makes `git status --porcelain --untracked-files=all` dirty, and the provenance row reads exactly
+# that: two scratch files in the checkout turned it RED on this workflow's first run.
 
 on:
   pull_request:
@@ -40,7 +44,7 @@ jobs:
   # from source (the formula forces `--no-binary` for six Rust/C packages). Charging that to every
   # PR would spend it overwhelmingly on PRs that cannot change a signature. So the job is gated on
   # (a) the paths that decide what a keg ships or how it gets signed, and (b) an explicit label for
-  # everything else. The gate itself is a ~15 s ubuntu job.
+  # everything else. The gate itself is a ~2 s ubuntu job.
   # ------------------------------------------------------------------------------------------
   gate:
     name: signature parity trigger
@@ -58,19 +62,20 @@ jobs:
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
           set -euo pipefail
+          changed="${RUNNER_TEMP}/changed-files.txt"
           # Packaging decides WHAT native extensions land in the keg; scripts/release-* and
           # publish.yml decide HOW they are signed and verified; ratchet.yml is this measurement.
           release_paths='^(pyproject\.toml|MANIFEST\.in|setup\.py|setup\.cfg)$|^scripts/release-|^scripts/brainlayer-version-check\.sh$|^\.github/workflows/(publish|ratchet)\.yml$'
-          if jq -e 'index("ratchet:signatures")' <<<"$LABELS" >/dev/null; then
+          if jq -e 'index("ratchet:signatures")' <<<"$LABELS" > /dev/null; then
             decision=true
             reason='opted in with the `ratchet:signatures` label'
           else
             # A file, not a pipe into `grep`: `gh api --paginate` closing early under `pipefail` is
             # the SIGPIPE footgun the comment step already learned once.
-            gh api "repos/${REPO}/pulls/${PR}/files" --paginate --jq '.[].filename' > changed-files.txt
-            if grep -Eq "$release_paths" changed-files.txt; then
+            gh api "repos/${REPO}/pulls/${PR}/files" --paginate --jq '.[].filename' > "$changed"
+            if grep -Eq "$release_paths" "$changed"; then
               decision=true
-              reason="touches release/signing paths: $(grep -E "$release_paths" changed-files.txt | tr '\n' ' ')"
+              reason="touches release/signing paths: $(grep -E "$release_paths" "$changed" | tr '\n' ' ')"
             else
               decision=false
               reason='the macOS signature-parity job is trigger-gated and did not run on this PR: it touches no release or signing path (`pyproject.toml`, `scripts/release-*`, `scripts/brainlayer-version-check.sh`, `publish.yml`, `ratchet.yml`) and carries no `ratchet:signatures` label — a GitHub macOS runner bills at ~10× Linux minutes and rebuilds the keg venv from source'
@@ -136,26 +141,42 @@ jobs:
           # the pass/fail from the count alone left `unmeasured` looking like a pass.
           verdict=unmeasured
           invalid=""
-          if [[ "$INSTALL_OUTCOME" != "success" ]]; then
+          keg=""
+          version=""
+          out="${RUNNER_TEMP}/verify.out"
+          err="${RUNNER_TEMP}/verify.err"
+          if command -v brew > /dev/null 2>&1; then
+            keg="$(brew --prefix brainlayer 2> /dev/null || true)"
+            version="$(brew list --versions brainlayer 2> /dev/null | awk 'NR == 1 { print $NF }' || true)"
+          fi
+          # Deliberately NOT gated on the install step's exit code, and this workflow's first run is
+          # why. Homebrew `ofail`s a relocation failure -- `MachO::HeaderPadError` on
+          # `cramjam.cpython-313-darwin.so`, homebrew-layers #37 -- so `brew install` exits 1 while
+          # still installing the keg AND running `post_install`, which is where the codesign sweep
+          # lives. Refusing to verify a keg that is sitting right there would skip the exact
+          # post-relocation state this row exists to check. What decides measurability is whether
+          # there is a native-extension root to sweep.
+          if [[ -z "$keg" || ! -d "$keg/libexec/venv" ]]; then
             report="$(jq -nc \
               --arg stage 'brew install etanhey/layers/brainlayer' \
-              --arg detail "the keg did not install (step outcome: ${INSTALL_OUTCOME}); see the run log" \
+              --arg detail "no keg with a native-extension root to verify (install step outcome: ${INSTALL_OUTCOME}); see the run log" \
               '{status: "failed", stage: $stage, detail: $detail}')"
           else
-            keg="$(brew --prefix brainlayer)"
-            version="$(brew list --versions brainlayer | awk 'NR == 1 { print $NF }')"
+            if [[ "$INSTALL_OUTCOME" != "success" ]]; then
+              echo "::warning title=brew install exited non-zero::the keg installed, so it is being verified anyway (outcome: ${INSTALL_OUTCOME}). A relocation ofail is homebrew-layers #37, which the formula's post_install sweep exists to sign over -- the counts below are the measurement of whether it did."
+            fi
             # The same script AGENTS.md makes mandatory at release time. A CI-only reimplementation
             # would be a second definition of "valid", free to drift from the release gate's.
             rc=0
-            bash scripts/release-verify-signatures.sh "$keg" > verify.out 2> verify.err || rc=$?
-            cat verify.out
-            cat verify.err >&2
-            valid="$(sed -n 's/^valid: \([0-9][0-9]*\)$/\1/p' verify.out | tail -n1)"
-            invalid="$(sed -n 's/^invalid: \([0-9][0-9]*\)$/\1/p' verify.out | tail -n1)"
+            bash scripts/release-verify-signatures.sh "$keg" > "$out" 2> "$err" || rc=$?
+            cat "$out"
+            cat "$err" >&2
+            valid="$(sed -n 's/^valid: \([0-9][0-9]*\)$/\1/p' "$out" | tail -n1)"
+            invalid="$(sed -n 's/^invalid: \([0-9][0-9]*\)$/\1/p' "$out" | tail -n1)"
             if [[ -z "$valid" || -z "$invalid" ]]; then
               # The script exits 2 without counts when the keg has no venv or codesign is missing.
               # That is a failure to measure, and it must not become a green row or a bare `n/a`.
-              detail="$(awk 'NF { print; exit }' verify.err)"
+              detail="$(awk 'NF { print; exit }' "$err")"
               report="$(jq -nc \
                 --arg stage 'scripts/release-verify-signatures.sh' \
                 --arg detail "exited ${rc} without reporting counts: ${detail:-no diagnostic on stderr}" \
@@ -164,14 +185,16 @@ jobs:
             else
               verdict=clean
               [[ "$invalid" -eq 0 ]] || verdict=invalid
-              grep '^INVALID ' verify.out > invalid-files.txt || true
+              grep '^INVALID ' "$out" > "${RUNNER_TEMP}/invalid-files.txt" || true
               report="$(jq -nc \
                 --argjson valid "$valid" \
                 --argjson invalid "$invalid" \
                 --arg keg "brainlayer ${version}" \
                 --arg runner "$RUNNER_LABEL" \
-                --rawfile lines invalid-files.txt \
+                --arg install_outcome "$INSTALL_OUTCOME" \
+                --rawfile lines "${RUNNER_TEMP}/invalid-files.txt" \
                 '{status: "measured", valid: $valid, invalid: $invalid, keg: $keg, runner: $runner,
+                  install_outcome: $install_outcome,
                   invalid_files: ($lines | split("\n") | map(select(length > 0) | ltrimstr("INVALID ")))}')"
             fi
           fi
@@ -182,7 +205,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "invalid=${invalid}" >> "$GITHUB_OUTPUT"
           echo "verdict=${verdict}" >> "$GITHUB_OUTPUT"
-          echo "Keg install took ${INSTALL_SECONDS:-?} s on ${RUNNER_LABEL}." >> "$GITHUB_STEP_SUMMARY"
+          echo "Keg install took ${INSTALL_SECONDS:-?} s on ${RUNNER_LABEL} (brew outcome: ${INSTALL_OUTCOME})." >> "$GITHUB_STEP_SUMMARY"
 
       # The ratchet table fails on RED all by itself, but this job staying green would read as a
       # pass at a glance -- and AGENTS.md is explicit that an invalid `*.so`/`*.dylib` blocks
@@ -217,7 +240,9 @@ jobs:
           python-version: "3.13"
 
       # Same stamp publish.yml applies at release time, so the provenance row measures the real
-      # release path on every PR instead of discovering a dropped stamp after a tag.
+      # release path on every PR instead of discovering a dropped stamp after a tag. This is the
+      # ONLY step in this job allowed to write into the checkout, and only because
+      # `src/brainlayer/_build.py` and `dist/` are both gitignored.
       - name: Stamp build sha and build the wheel
         run: |
           set -euo pipefail
@@ -240,23 +265,28 @@ jobs:
           SIGNATURE_REPORT: ${{ needs.signatures.outputs.report }}
         run: |
           set -euo pipefail
+          # $RUNNER_TEMP, never the checkout. These two files landed in the workspace on this
+          # workflow's first run and made `git status --porcelain` dirty, which turned PROVENANCE
+          # RED -- the ratchet caught its own author writing scratch into the tree it audits.
+          report_path="${RUNNER_TEMP}/signature-report.json"
+          args_path="${RUNNER_TEMP}/signature-args.txt"
           if [[ "$GATE_RESULT" != "success" ]]; then
             jq -nc \
               --arg detail "the trigger gate ended as '${GATE_RESULT}', so this run cannot tell whether signatures should have been measured" \
-              '{status: "failed", stage: "trigger gate", detail: $detail}' > signature-report.json
-            printf '%s\n%s\n' --signature-report signature-report.json > signature-args.txt
+              '{status: "failed", stage: "trigger gate", detail: $detail}' > "$report_path"
+            printf '%s\n%s\n' --signature-report "$report_path" > "$args_path"
           elif [[ "$SIGNATURE_RESULT" == "skipped" ]]; then
-            printf '%s\n%s\n' --signature-unavailable "$GATE_REASON" > signature-args.txt
+            printf '%s\n%s\n' --signature-unavailable "$GATE_REASON" > "$args_path"
           elif [[ -z "$SIGNATURE_REPORT" ]]; then
             jq -nc \
               --arg detail "the macOS parity job ended as '${SIGNATURE_RESULT}' and published no report" \
-              '{status: "failed", stage: "macOS signature-parity job", detail: $detail}' > signature-report.json
-            printf '%s\n%s\n' --signature-report signature-report.json > signature-args.txt
+              '{status: "failed", stage: "macOS signature-parity job", detail: $detail}' > "$report_path"
+            printf '%s\n%s\n' --signature-report "$report_path" > "$args_path"
           else
-            printf '%s' "$SIGNATURE_REPORT" > signature-report.json
-            printf '%s\n%s\n' --signature-report signature-report.json > signature-args.txt
+            printf '%s' "$SIGNATURE_REPORT" > "$report_path"
+            printf '%s\n%s\n' --signature-report "$report_path" > "$args_path"
           fi
-          cat signature-args.txt
+          cat "$args_path"
 
       # `!cancelled()`, never `always()`. Two different failures ride on this one condition:
       #   - it runs when an EARLIER STEP FAILED (a broken build), so this run still publishes a table
@@ -279,7 +309,7 @@ jobs:
           SIGNATURE_ARGS=()
           while IFS= read -r signature_arg; do
             SIGNATURE_ARGS+=("$signature_arg")
-          done < signature-args.txt
+          done < "${RUNNER_TEMP}/signature-args.txt"
           # --wheel-glob, not a shell glob: `$(ls dist/*.whl)` collapses "no wheel" and "three wheels"
           # into an empty --wheel, which the collector would have called `n/a` while the job stayed
           # green -- a false green in the ratchet itself. The collector now fails closed and reports
@@ -289,10 +319,10 @@ jobs:
             --wheel-glob 'dist/*.whl' \
             "${SIGNATURE_ARGS[@]}" \
             --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-            --out ratchet.md || rc=$?
-          if [[ ! -s ratchet.md ]]; then
+            --out "${RUNNER_TEMP}/ratchet.md" || rc=$?
+          if [[ ! -s "${RUNNER_TEMP}/ratchet.md" ]]; then
             printf '%s\n\n%s\n' '<!-- brainlayer-ratchet-table -->' \
-              'The ratchet collector produced no table (it exited '"$rc"'). No numbers, because none were measured.' > ratchet.md
+              'The ratchet collector produced no table (it exited '"$rc"'). No numbers, because none were measured.' > "${RUNNER_TEMP}/ratchet.md"
             rc=1
           fi
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
@@ -303,19 +333,19 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          if [[ ! -s ratchet.md ]]; then
+          if [[ ! -s "${RUNNER_TEMP}/ratchet.md" ]]; then
             {
               echo '<!-- brainlayer-ratchet-table -->'
               echo '### BrainLayer ratchet'
               echo
               echo 'This run measured nothing: the job failed before the collector could run (see the run log).'
               echo 'No row claims a value, and **the previous commit'"'"'s table does not apply to this commit.**'
-            } > ratchet.md
+            } > "${RUNNER_TEMP}/ratchet.md"
           fi
 
       - name: Publish the table to the run summary
         if: ${{ !cancelled() }}
-        run: cat ratchet.md >> "$GITHUB_STEP_SUMMARY"
+        run: cat "${RUNNER_TEMP}/ratchet.md" >> "$GITHUB_STEP_SUMMARY"
 
       # Fork PRs and Dependabot PRs get a read-only GITHUB_TOKEN, so the comment cannot be written.
       # We say so in the log and the run summary rather than failing or leaving a silent hole; the
@@ -340,16 +370,16 @@ jobs:
           # while gh is still fetching, and under `pipefail` that SIGPIPE fails the step -- on the
           # PATCH path, which is the whole point of this job. `jq -s add` merges whether gh emits one
           # array or one per page.
-          gh api "repos/${REPO}/issues/${PR}/comments" --paginate > comments.json
+          gh api "repos/${REPO}/issues/${PR}/comments" --paginate > "${RUNNER_TEMP}/comments.json"
           # Oldest bot comment carrying the marker wins, so a duplicate could never be created twice.
           comment_id="$(jq -rs --arg marker "$marker" \
             'add | map(select(.user.login == "github-actions[bot]" and (.body | startswith($marker)))) | .[0].id // empty' \
-            comments.json)"
-          jq -Rs '{body: .}' ratchet.md > body.json
+            "${RUNNER_TEMP}/comments.json")"
+          jq -Rs '{body: .}' "${RUNNER_TEMP}/ratchet.md" > "${RUNNER_TEMP}/body.json"
           if [[ -n "$comment_id" ]]; then
-            gh api -X PATCH "repos/${REPO}/issues/comments/${comment_id}" --input body.json --jq .html_url
+            gh api -X PATCH "repos/${REPO}/issues/comments/${comment_id}" --input "${RUNNER_TEMP}/body.json" --jq .html_url
           else
-            gh api -X POST "repos/${REPO}/issues/${PR}/comments" --input body.json --jq .html_url
+            gh api -X POST "repos/${REPO}/issues/${PR}/comments" --input "${RUNNER_TEMP}/body.json" --jq .html_url
           fi
 
       - name: Fail on a RED row

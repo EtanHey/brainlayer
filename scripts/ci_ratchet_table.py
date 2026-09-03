@@ -184,6 +184,10 @@ class SignatureReport:
     invalid_files: tuple[str, ...] = ()
     stage: str = ""
     detail: str = ""
+    # `brew install`'s own step outcome. Homebrew `ofail`s a relocation failure and exits non-zero
+    # while still installing the keg, so this is NOT what decides whether the row was measured --
+    # but a green row must not hide that brew complained.
+    install_outcome: str = ""
 
 
 @dataclass(frozen=True)
@@ -257,6 +261,7 @@ def select_signature(report_path: Path | None, unavailable: str | None) -> Signa
             invalid=invalid,
             keg=str(payload.get("keg", "")).strip(),
             runner=str(payload.get("runner", "")).strip(),
+            install_outcome=str(payload.get("install_outcome", "")).strip(),
             invalid_files=tuple(str(name) for name in files if str(name).strip()),
         )
     )
@@ -532,6 +537,13 @@ def row_signature_valid(probe: Probe, _corpus: dict) -> Row:
     valid, invalid = report.valid or 0, report.invalid or 0
     where = " · ".join(part for part in (report.keg, report.runner) if part)
     measured = f"{valid} valid / {invalid} invalid" + (f" · {where}" if where else "")
+    if report.install_outcome and report.install_outcome != "success":
+        # A clean sweep after Homebrew `ofail`ed relocation is the #37 fix WORKING, so it stays
+        # GREEN -- but silently, it would read as an unremarkable install. Say what happened.
+        measured += (
+            f" · `brew install` exited non-zero (outcome: {report.install_outcome}); "
+            "the keg installed and the sweep ran after it"
+        )
     if valid + invalid == 0:
         # An empty sweep proves nothing: release-verify-signatures.sh itself treats it as fatal.
         return Row(

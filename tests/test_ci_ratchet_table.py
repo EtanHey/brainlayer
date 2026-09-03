@@ -96,6 +96,7 @@ def signature_report(**overrides) -> ratchet.SignatureReport:
         "invalid": 0,
         "keg": "brainlayer 1.5.11",
         "runner": "macos-15 · arm64",
+        "install_outcome": "success",
     }
     return ratchet.SignatureReport(**{**base, **overrides})
 
@@ -760,7 +761,9 @@ def test_workflow_never_pipes_a_paginated_stream_into_head() -> None:
     # SIGPIPE under `pipefail` would fail the step on the PATCH path -- the refresh this job exists for.
     workflow = workflow_code()
     assert "head -n1" not in workflow
-    assert "--paginate > comments.json" in workflow
+    assert '--paginate > "${RUNNER_TEMP}/comments.json"' in workflow
+    # The gate lists changed files the same way, and must not learn the footgun either.
+    assert '''--jq '.[].filename' > "$changed"''' in workflow
 
 
 # --- the macOS signature-parity job -----------------------------------------------------------
@@ -820,9 +823,85 @@ def test_the_signature_job_publishes_its_report_even_when_the_install_failed() -
     """
     verify = workflow_steps("signatures")["Codesign-verify every native extension in the keg"]
     assert "!cancelled()" in verify["if"] and "always()" not in verify["if"]
-    # ...and it must branch on how the install actually went, not just survive it.
     assert "steps.install.outcome" in verify["env"]["INSTALL_OUTCOME"]
-    assert "INSTALL_OUTCOME" in verify["run"] and '"failed"' in verify["run"]
+    assert '"failed"' in verify["run"]
+
+
+def test_the_sweep_runs_on_an_installed_keg_whatever_brew_exited_with() -> None:
+    """The bug this workflow's first run found, and it is the interesting one.
+
+    Homebrew `ofail`s a relocation failure -- `MachO::HeaderPadError` on cramjam, homebrew-layers
+    #37 -- so `brew install` exits 1 while STILL installing the keg and running the `post_install`
+    codesign sweep. Gating the verification on the install step's exit code therefore refused to
+    measure a keg that was sitting right there, and reported `could not measure` for the exact
+    post-relocation state this row exists to check.
+
+    What decides measurability is whether there is a native-extension root to sweep.
+    """
+    verify = workflow_steps("signatures")["Codesign-verify every native extension in the keg"]["run"]
+    assert 'if [[ -z "$keg" || ! -d "$keg/libexec/venv" ]]; then' in verify
+    # The install outcome may only shape the message and the report field -- never skip the sweep.
+    guard = verify.split("release-verify-signatures.sh")[0]
+    assert '"$INSTALL_OUTCOME" != "success"' in guard
+    assert "::warning title=brew install exited non-zero" in guard
+    assert "--arg install_outcome" in verify
+
+
+def test_a_clean_sweep_after_a_brew_ofail_is_green_but_says_so(tmp_path: Path) -> None:
+    # GREEN because the signatures ARE valid, and a clean sweep after an aborted relocation is the
+    # #37 post_install fix working. Silent, though, it would read as an unremarkable install.
+    probe = linux_probe(tmp_path, signature=signature_report(install_outcome="failure"))
+    result = ratchet.row_signature_valid(probe, CORPUS)
+    assert result.status == ratchet.GREEN
+    assert "442 valid / 0 invalid" in result.value
+    assert "exited non-zero" in result.value and "failure" in result.value
+
+
+def test_a_successful_install_adds_no_noise_to_the_value(tmp_path: Path) -> None:
+    result = ratchet.row_signature_valid(
+        linux_probe(tmp_path, signature=signature_report(install_outcome="success")), CORPUS
+    )
+    assert result.value == "442 valid / 0 invalid · brainlayer 1.5.11 · macos-15 · arm64"
+
+
+def test_no_step_leaves_scratch_in_the_checkout() -> None:
+    """An untracked file in the workspace makes the tree dirty, which turns PROVENANCE RED.
+
+    Not hypothetical: this workflow's first run wrote `signature-args.txt` and
+    `signature-report.json` into the checkout and the ratchet caught its own author with
+    `stamping dirtied the tree`. Scratch belongs in $RUNNER_TEMP. The stamp step is the one
+    exception, and only because `src/brainlayer/_build.py` and `dist/` are gitignored.
+    """
+    scratch = (
+        "ratchet.md",
+        "signature-report.json",
+        "signature-args.txt",
+        "comments.json",
+        "body.json",
+        "changed-files.txt",
+        "verify.out",
+        "verify.err",
+        "invalid-files.txt",
+    )
+    code = workflow_code()
+    for name in scratch:
+        # Trailing boundary, or `verify.out` matches inside `steps.verify.outputs.report`.
+        for match in re.finditer(re.escape(name) + r"(?![A-Za-z0-9_])", code):
+            prefix = code[max(0, match.start() - 18) : match.start()]
+            assert "RUNNER_TEMP}/" in prefix, f"`{name}` is used without a $RUNNER_TEMP prefix"
+
+
+def test_no_redirect_targets_a_relative_path_in_the_checkout() -> None:
+    # Belt to the braces above: catches a NEW scratch filename nobody thought to list.
+    allowed = {"src/brainlayer/_build.py", "/dev/null"}
+    for job in ("gate", "signatures", "table"):
+        for name, step in workflow_steps(job).items():
+            for raw in re.findall(r">>?\s*(\S+)", step.get("run", "")):
+                target = raw.strip('";')
+                looks_like_a_path = re.fullmatch(r"[A-Za-z0-9_./-]+", target) and ("/" in target or "." in target)
+                if not looks_like_a_path or target.startswith("$") or target in allowed:
+                    continue
+                assert target.startswith("/"), f"{job} :: {name} writes `{target}` into the checkout"
 
 
 def test_the_signature_job_fails_on_anything_but_a_clean_measurement() -> None:
