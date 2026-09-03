@@ -25,7 +25,7 @@ import pytest
 
 from brainlayer import paths as brain_paths
 from brainlayer.embeddings import FORBID_MODEL_LOAD_ENV, guard_embedding_model_load
-from tests.conftest import EMBEDDING_MODEL_MODULES
+from tests.conftest import EMBEDDING_MODEL_MODULES, hygiene_exemptions
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REEMBED_SCRIPT = REPO_ROOT / "scripts" / "reembed_bgem3.py"
@@ -125,6 +125,43 @@ def test_no_test_module_binds_an_embedding_model_class_directly() -> None:
         "these test modules bind an embedding-model class directly, which the suite-hygiene guard "
         f"cannot intercept: {offenders}"
     )
+
+
+class _StubNode:
+    """The only thing `hygiene_exemptions` reads off a pytest item."""
+
+    def __init__(self, *marks: str) -> None:
+        self._marks = set(marks)
+
+    def get_closest_marker(self, name: str) -> object | None:
+        return object() if name in self._marks else None
+
+
+def test_the_two_guards_have_separate_escapes() -> None:
+    """`embedding_model` must NOT lift the canonical-DB guard.
+
+    One bit used to control both, so a test marked only `embedding_model` got the DB guard lifted
+    as well — a hole at exactly *model + production DB together*, which is the incident these
+    guards exist to prevent. `scripts/reembed_bgem3.py` makes that concrete: `main()` opens its
+    `--db` (defaulting to the CANONICAL path) at line 277, BEFORE `load_model()` at line 285.
+    """
+    assert hygiene_exemptions(_StubNode()) == (False, False)
+    assert hygiene_exemptions(_StubNode("embedding_model")) == (True, False)
+    assert hygiene_exemptions(_StubNode("integration")) == (False, True)
+    assert hygiene_exemptions(_StubNode("live")) == (False, True)
+    # A test that genuinely needs both has to say both.
+    assert hygiene_exemptions(_StubNode("embedding_model", "live")) == (True, True)
+
+
+@pytest.mark.embedding_model
+def test_a_model_marked_test_still_cannot_open_the_canonical_db() -> None:
+    """End-to-end proof of the split, from inside a test that really carries the model marker."""
+    assert os.environ.get(FORBID_MODEL_LOAD_ENV) != "1"
+
+    with pytest.raises(RuntimeError, match="canonical BrainLayer DB"):
+        sqlite3.connect(str(PRODUCTION_DB_PATH))
+    with pytest.raises(RuntimeError, match="canonical BrainLayer DB"):
+        sqlite3.connect(f"file:{PRODUCTION_DB_PATH}?mode=ro", uri=True)
 
 
 def test_the_canonical_db_is_refused_through_a_file_uri(tmp_path: Path) -> None:

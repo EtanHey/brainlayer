@@ -165,10 +165,10 @@ def isolate_brainlayer_runtime_paths(monkeypatch, tmp_path, request):
 # guards path RESOLUTION; these guard the two things that actually cost: the model LOAD and the
 # connection OPEN, including the ones that reach them without going through `paths.py` at all.
 #
-# The single escape is an explicit marker. `embedding_model` says a test deliberately loads a real
-# model; `scripts/run_tests.sh` deselects it, so it runs only where a run declares it can afford
-# one (CI, which warms the HF cache on purpose). `integration` and `live` already mean "this test
-# is an opt-in against real state" and keep that meaning here.
+# Each guard has its OWN escape. `embedding_model` lifts only the model guard -- `run_tests.sh`
+# deselects it, so it runs where a run declares it can afford a model (CI, which warms the HF cache
+# on purpose). `integration`/`live` lift only the DB guard, keeping the meaning they already had.
+# A test that needs both declares both.
 # --------------------------------------------------------------------------------------------
 
 EMBEDDING_MODEL_MARK = "embedding_model"
@@ -182,7 +182,20 @@ _PROTECTED_BRAINLAYER_ROOTS = (
     _PROTECTED_TEST_HOME / ".brainlayer",
     _PROTECTED_TEST_HOME / ".local" / "share" / "brainlayer",
 )
-_HYGIENE_EXEMPT_MARKS = (EMBEDDING_MODEL_MARK, "integration", "live")
+# TWO switches, deliberately not one. `embedding_model` says "this test loads a real model"; it says
+# nothing about the production DB. Collapsing both into one bit put the hole exactly at
+# *model + canonical DB together*, which is the incident these guards exist to prevent: a test
+# marked only `embedding_model` got the DB guard lifted too, and `scripts/reembed_bgem3.py` opens
+# its `--db` (defaulting to the CANONICAL path, `_get_default_db()`) at main():277 -- BEFORE
+# `load_model()` at :285. A test that genuinely needs both must declare both.
+DB_GUARD_EXEMPT_MARKS = ("integration", "live")
+
+
+def hygiene_exemptions(node) -> tuple[bool, bool]:
+    """`(model guard lifted, DB guard lifted)` for *node*, from its markers."""
+    model_exempt = node.get_closest_marker(EMBEDDING_MODEL_MARK) is not None
+    db_exempt = any(node.get_closest_marker(mark) for mark in DB_GUARD_EXEMPT_MARKS)
+    return model_exempt, db_exempt
 
 
 class _DbGuardState:
@@ -281,11 +294,11 @@ def _install_db_open_guards() -> None:
 @pytest.fixture(autouse=True)
 def forbid_embedding_models_and_canonical_db(monkeypatch, request):
     """Fail a test that loads an embedding model or opens the canonical BrainLayer DB."""
-    exempt = any(request.node.get_closest_marker(mark) for mark in _HYGIENE_EXEMPT_MARKS)
+    model_exempt, db_exempt = hygiene_exemptions(request.node)
     previous = _DbGuardState.suspended
-    _DbGuardState.suspended = exempt
+    _DbGuardState.suspended = db_exempt
     try:
-        if not exempt:
+        if not model_exempt:
             _arm_embedding_model_refusal(monkeypatch)
         yield
     finally:
