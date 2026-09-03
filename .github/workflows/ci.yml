@@ -11,6 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       brain_bar: ${{ steps.filter.outputs.brain_bar }}
+      launchd: ${{ steps.filter.outputs.launchd }}
     steps:
       - uses: actions/checkout@v4
 
@@ -20,6 +21,11 @@ jobs:
           filters: |
             brain_bar:
               - 'brain-bar/**'
+            launchd:
+              - 'scripts/launchd/**'
+              - 'src/brainlayer/pause.py'
+              - 'tests/test_fleet_watchdog.py'
+              - '.github/workflows/ci.yml'
 
   swift:
     name: swift (macos-15)
@@ -58,6 +64,31 @@ jobs:
       - name: Skip BrainBar Swift build
         if: needs.changes.outputs.brain_bar != 'true'
         run: echo "no brain-bar changes — swift build/test skipped"
+
+  launchd:
+    # fleet-watchdog.sh reads the pause sentinel with plutil and BSD `date -j`, so those drills
+    # skip themselves on the ubuntu matrix. This is the runner that actually executes them;
+    # tests/test_fleet_watchdog.py asserts this job exists and runs that file.
+    name: launchd (macos-15)
+    needs: changes
+    if: needs.changes.outputs.launchd == 'true'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # The drills need pytest, pyyaml and stdlib-only brainlayer.pause off PYTHONPATH -- not
+      # the full dev extra, which would pull torch onto a macOS runner for no benefit.
+      - name: Install test deps
+        run: pip install pytest pyyaml
+
+      - name: Fleet-watchdog and pause-sentinel drills
+        env:
+          PYTHONPATH: src
+        run: pytest tests/test_fleet_watchdog.py -v --tb=short
 
   test:
     runs-on: ubuntu-latest
