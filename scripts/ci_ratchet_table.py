@@ -25,6 +25,7 @@ import argparse
 import json
 import platform
 import re
+import shutil
 import socket as socket_module
 import subprocess
 import sys
@@ -95,8 +96,13 @@ def canonical_db_path() -> Path:
 
 
 def _git(*args: str) -> str | None:
+    # Resolved absolutely rather than left to PATH: this decides a provenance verdict, so the
+    # binary it asks is worth pinning, and a machine without git answers None instead of raising.
+    git = shutil.which("git")
+    if git is None:
+        return None
     try:
-        result = subprocess.run(["git", "-C", str(ROOT), *args], check=True, capture_output=True, text=True, timeout=30)
+        result = subprocess.run([git, "-C", str(ROOT), *args], check=True, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return None
     return result.stdout.strip()
@@ -120,15 +126,32 @@ def first_unmet(requirements: list[tuple[bool, str]]) -> str | None:
     return None
 
 
-def read_wheel_stamp(wheel: Path) -> str | None:
-    """The sha ``brainlayer.__build_sha__`` will report from this wheel, or None if it ships none."""
-    with zipfile.ZipFile(wheel) as archive:
-        try:
+@dataclass(frozen=True)
+class WheelStamp:
+    """What ``brainlayer.__build_sha__`` would report from a wheel, or why it would report nothing."""
+
+    sha: str | None = None
+    problem: str | None = None
+
+
+def read_wheel_stamp(wheel: Path) -> WheelStamp:
+    # Each failure gets its own sentence. "Unreadable wheel" and "wheel with no stamp" are
+    # different findings for the author to clear, and a crash here would cost the whole table.
+    try:
+        with zipfile.ZipFile(wheel) as archive:
             raw = archive.read(STAMP_MEMBER).decode("utf-8")
-        except KeyError:
-            return None
+    except KeyError:
+        return WheelStamp(
+            problem=f"wheel ships no `{STAMP_MEMBER}` — a keg built from it can never prove its provenance"
+        )
+    except (zipfile.BadZipFile, OSError, UnicodeDecodeError) as error:
+        return WheelStamp(
+            problem=f"wheel could not be read ({type(error).__name__}) — provenance is unprovable, not proven"
+        )
     match = STAMP_PATTERN.match(raw.strip() + "\n")
-    return match.group(1) if match else None
+    if match is None:
+        return WheelStamp(problem=f"`{STAMP_MEMBER}` declares no 40-hex BUILD_SHA")
+    return WheelStamp(sha=match.group(1))
 
 
 # --------------------------------------------------------------------------------------------
@@ -142,23 +165,23 @@ PROVENANCE_NOTES = (
 )
 
 
-def row_provenance(probe: Probe, corpus: dict) -> Row:
+def row_provenance(probe: Probe, _corpus: dict) -> Row:
     method = "wheel stamp · in-process · runner"
+    wheel, head = probe.wheel, probe.head_sha
     reason = first_unmet(
         [
-            (probe.wheel is not None and probe.wheel.is_file(), "no packaged wheel in this job (pass --wheel)"),
-            (probe.head_sha is not None, "git HEAD could not be read"),
+            (wheel is not None and wheel.is_file(), "no packaged wheel in this job (pass --wheel)"),
+            (head is not None, "git HEAD could not be read"),
             (probe.tree_dirty is not None, "`git status --porcelain` could not be read"),
         ]
     )
-    if reason:
-        return Row("provenance", NA, f"n/a — {reason}", method, PROVENANCE_NOTES)
-    assert probe.wheel is not None and probe.head_sha is not None
-    stamp = read_wheel_stamp(probe.wheel)
-    head = probe.head_sha
-    if stamp is None:
-        value = f"wheel ships no `{STAMP_MEMBER}` — a keg built from it can never prove its provenance"
-        return Row("provenance", RED, value, method, PROVENANCE_NOTES)
+    # The requirement list above is the guard: past it, wheel and head are both known good.
+    if reason or wheel is None or head is None:
+        return Row("provenance", NA, f"n/a — {reason or 'provenance inputs unavailable'}", method, PROVENANCE_NOTES)
+    stamped = read_wheel_stamp(wheel)
+    if stamped.problem or stamped.sha is None:
+        return Row("provenance", RED, stamped.problem or "wheel stamp unreadable", method, PROVENANCE_NOTES)
+    stamp = stamped.sha
     if stamp != head:
         return Row("provenance", RED, f"stamped `{stamp[:12]}` ≠ HEAD `{head[:12]}`", method, PROVENANCE_NOTES)
     if probe.tree_dirty:
@@ -232,7 +255,7 @@ def row_idle_cpu(probe: Probe, corpus: dict) -> Row:
     return Row("idle CPU", NA, f"n/a — {reason}", "ps sampling · installed Mac", notes)
 
 
-def row_signature_valid(probe: Probe, corpus: dict) -> Row:
+def row_signature_valid(probe: Probe, _corpus: dict) -> Row:
     notes = (
         "`scripts/release-verify-signatures.sh <keg-path>` codesign-verifies every installed "
         "`*.so`/`*.dylib`. It needs an installed keg, which a runner does not have. Not measured by "

@@ -82,6 +82,37 @@ def test_provenance_is_red_when_the_wheel_ships_no_stamp(tmp_path: Path) -> None
     assert ratchet.STAMP_MEMBER in result.value
 
 
+def test_provenance_is_red_when_the_wheel_is_unreadable(tmp_path: Path) -> None:
+    # A truncated wheel used to crash the collector, costing the whole table (Macroscope, #752).
+    corrupt = tmp_path / "corrupt" / "brainlayer-0.0.0-py3-none-any.whl"
+    corrupt.parent.mkdir(parents=True)
+    corrupt.write_bytes(b"PK\x03\x04 not actually a zip")
+    result = ratchet.row_provenance(linux_probe(tmp_path, wheel=corrupt), CORPUS)
+    assert result.status == ratchet.RED
+    # Unreadable is its own finding, never blurred into "ships no stamp".
+    assert "could not be read" in result.value and "ships no" not in result.value
+
+
+def test_provenance_is_red_when_the_stamp_declares_no_sha(tmp_path: Path) -> None:
+    odd = tmp_path / "odd" / "brainlayer-0.0.0-py3-none-any.whl"
+    odd.parent.mkdir(parents=True)
+    with zipfile.ZipFile(odd, "w") as archive:
+        archive.writestr(ratchet.STAMP_MEMBER, "BUILD_SHA = None\n")
+    result = ratchet.row_provenance(linux_probe(tmp_path, wheel=odd), CORPUS)
+    assert result.status == ratchet.RED
+    assert "declares no 40-hex BUILD_SHA" in result.value
+
+
+def test_collect_still_renders_a_table_when_the_wheel_is_unreadable(tmp_path: Path) -> None:
+    corrupt = tmp_path / "corrupt2" / "brainlayer-0.0.0-py3-none-any.whl"
+    corrupt.parent.mkdir(parents=True)
+    corrupt.write_bytes(b"")
+    probe = linux_probe(tmp_path, wheel=corrupt)
+    table = ratchet.render(ratchet.collect(probe, CORPUS), probe, None, NOW)
+    assert table.startswith(ratchet.MARKER)
+    assert "1 RED row(s) to clear:" in table
+
+
 def test_provenance_is_red_when_the_stamp_is_a_different_commit(tmp_path: Path) -> None:
     probe = linux_probe(tmp_path, wheel=make_wheel(tmp_path / "skew", stamp="b" * 40))
     result = ratchet.row_provenance(probe, CORPUS)
