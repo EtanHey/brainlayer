@@ -183,9 +183,18 @@ _PROTECTED_BRAINLAYER_ROOTS = (
     _PROTECTED_TEST_HOME / ".local" / "share" / "brainlayer",
 )
 _HYGIENE_EXEMPT_MARKS = (EMBEDDING_MODEL_MARK, "integration", "live")
-# Flipped per test by the autouse fixture. The DB guards themselves are installed once, before
-# collection, so they cannot be aliased around; this is what still lets a marked test opt out.
-_DB_GUARD_SUSPENDED = False
+
+
+class _DbGuardState:
+    """The session-level switch the module-scope DB guards read.
+
+    An attribute rather than a module global: the guards are installed once before collection and
+    live for the whole session, so the per-test exemption has to reach them through some shared
+    piece of state -- and rebinding a class attribute says where that state lives without a
+    `global` statement scattered through the fixture (DeepSource, #755).
+    """
+
+    suspended = False
 
 
 def _sqlite_target_path(target: object) -> Path | None:
@@ -224,7 +233,7 @@ def _is_protected_runtime_path(candidate: object) -> bool:
 
 
 def _refuse_protected_db(target: object, opener: str) -> None:
-    if _DB_GUARD_SUSPENDED or not _is_protected_runtime_path(target):
+    if _DbGuardState.suspended or not _is_protected_runtime_path(target):
         return
     raise RuntimeError(
         f"suite hygiene: this test opened the canonical BrainLayer DB via {opener} ({target}). "
@@ -238,7 +247,7 @@ def _install_db_open_guards() -> None:
 
     Before collection, because a module that binds `from sqlite3 import connect` (or
     `from apsw import Connection`) at import time captures the original callable and would never
-    see a fixture-scoped patch (CodeRabbit, #755). The wrappers read `_DB_GUARD_SUSPENDED`, so
+    see a fixture-scoped patch (CodeRabbit, #755). The wrappers read `_DbGuardState.suspended`, so
     marker-based exemptions still work per test.
     """
     if not getattr(sqlite3.connect, "_brainlayer_hygiene_guard", False):
@@ -272,16 +281,15 @@ def _install_db_open_guards() -> None:
 @pytest.fixture(autouse=True)
 def forbid_embedding_models_and_canonical_db(monkeypatch, request):
     """Fail a test that loads an embedding model or opens the canonical BrainLayer DB."""
-    global _DB_GUARD_SUSPENDED
     exempt = any(request.node.get_closest_marker(mark) for mark in _HYGIENE_EXEMPT_MARKS)
-    previous = _DB_GUARD_SUSPENDED
-    _DB_GUARD_SUSPENDED = exempt
+    previous = _DbGuardState.suspended
+    _DbGuardState.suspended = exempt
     try:
         if not exempt:
             _arm_embedding_model_refusal(monkeypatch)
         yield
     finally:
-        _DB_GUARD_SUSPENDED = previous
+        _DbGuardState.suspended = previous
 
 
 def _arm_embedding_model_refusal(monkeypatch) -> None:
