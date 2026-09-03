@@ -211,10 +211,11 @@ def read_signature_payload(report_path: Path) -> tuple[dict | None, str | None]:
         )
     try:
         payload = json.loads(report_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, ValueError) as error:
-        # `ValueError`, not just `json.JSONDecodeError` (which is a subclass of it): a count with
-        # more than sys.get_int_max_str_digits() digits raises a bare ValueError out of json.loads,
-        # and that has to render RED like any other malformed report instead of killing the table.
+    except (OSError, ValueError) as error:
+        # `ValueError` covers all three ways this line fails, which is why it is listed alone:
+        # `json.JSONDecodeError` and `UnicodeDecodeError` both subclass it, and so does the bare
+        # ValueError that a count past sys.get_int_max_str_digits() raises out of json.loads. Each
+        # has to render RED like any other malformed report instead of killing the whole table.
         return None, (
             f"the macOS parity job's report could not be read ({type(error).__name__}) — "
             "signatures are unverified, not verified"

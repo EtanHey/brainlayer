@@ -1072,7 +1072,7 @@ def test_no_malformed_report_can_take_the_whole_table_down(tmp_path: Path) -> No
     for index, payload in enumerate(payloads):
         report = tmp_path / f"report-{index}.json"
         report.write_text(payload, encoding="utf-8")
-        probe = linux_probe(tmp_path, **{key: value for key, value in _signature_fields(report).items()})
+        probe = linux_probe(tmp_path, **_signature_fields(report))
         table = ratchet.render(ratchet.collect(probe, CORPUS), probe, None, NOW)
         assert table.startswith(ratchet.MARKER), payload
         assert "| signature_valid | 🔴 RED |" in table, payload
