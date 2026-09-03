@@ -16,6 +16,13 @@ import yaml
 
 from scripts import ci_ratchet_table as ratchet
 
+
+def _clean_git_env() -> dict[str, str]:
+    # An inherited GIT_DIR/GIT_WORK_TREE (a git hook runs the suite) overrides `-C`, so the decoy
+    # repo's commits would land in the REAL repo. Same guard as tests/test_build_sha.py and
+    # src/brainlayer/deploy_drift.py.
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "ratchet.yml"
 CORPUS = json.loads((ROOT / "tests" / "fixtures" / "sprint_gate" / "corpus.json").read_text(encoding="utf-8"))
@@ -180,7 +187,6 @@ def test_git_ignores_an_inherited_GIT_DIR_from_another_repo(tmp_path: Path, monk
     other = tmp_path / "other"
     other.mkdir()
     # Identity via -c, never via GIT_* env: GIT_DIR/GIT_WORK_TREE would redirect these writes.
-    clean_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
 
     def decoy_git(*args: str) -> str:
         return subprocess.run(
@@ -188,7 +194,7 @@ def test_git_ignores_an_inherited_GIT_DIR_from_another_repo(tmp_path: Path, monk
             check=True,
             capture_output=True,
             text=True,
-            env=clean_env,
+            env=_clean_git_env(),
         ).stdout.strip()
 
     decoy_git("init", "-q")
@@ -210,7 +216,6 @@ def test_git_tree_dirty_sees_untracked_files_when_show_untracked_is_no(tmp_path:
     """`status.showUntrackedFiles=no` would hide an untracked `_build.py` and GREEN a dirty stamp."""
     repo = tmp_path / "repo"
     repo.mkdir()
-    clean_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
 
     def repo_git(*args: str) -> str:
         return subprocess.run(
@@ -218,7 +223,7 @@ def test_git_tree_dirty_sees_untracked_files_when_show_untracked_is_no(tmp_path:
             check=True,
             capture_output=True,
             text=True,
-            env=clean_env,
+            env=_clean_git_env(),
         ).stdout.strip()
 
     repo_git("init", "-q")
