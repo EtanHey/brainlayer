@@ -206,6 +206,38 @@ def test_git_ignores_an_inherited_GIT_DIR_from_another_repo(tmp_path: Path, monk
     assert head is not None and head != decoy, "provenance read HEAD from the inherited GIT_DIR"
 
 
+def test_git_tree_dirty_sees_untracked_files_when_show_untracked_is_no(tmp_path: Path, monkeypatch) -> None:
+    """`status.showUntrackedFiles=no` would hide an untracked `_build.py` and GREEN a dirty stamp."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    clean_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+    def repo_git(*args: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@e", *args],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=clean_env,
+        ).stdout.strip()
+
+    repo_git("init", "-q")
+    repo_git("commit", "-q", "--allow-empty", "-m", "init")
+    repo_git("config", "status.showUntrackedFiles", "no")
+    (repo / "src-brainlayer-_build.py").write_text("BUILD_SHA = x\n", encoding="utf-8")
+    monkeypatch.setattr(ratchet, "ROOT", repo)
+    assert ratchet.git_tree_dirty() is True
+
+
+def test_git_invalid_pathname_bytes_are_a_capability_gap_not_a_crash(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*_args, **_kwargs):
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid")
+
+    monkeypatch.setattr(ratchet.subprocess, "run", boom)
+    assert ratchet.git_head() is None
+    assert ratchet.git_tree_dirty() is None
+
+
 # --- fail-closed wheel selection: a promised wheel that never arrived is RED, not n/a ---
 
 
@@ -422,6 +454,14 @@ def test_workflow_can_write_the_comment_and_cannot_double_post() -> None:
     # find-then-update, create only if absent
     assert re.search(r"comment_id=", workflow) and "-X PATCH" in workflow and "-X POST" in workflow
     assert "head.repo.fork" in workflow  # fork PRs are handled, not silently broken
+    assert "dependabot[bot]" in workflow  # same read-only token as forks
+
+
+def test_dependabot_prs_do_not_attempt_the_comment() -> None:
+    post = workflow_steps()["Post or refresh the one ratchet comment"]["if"]
+    skip = workflow_steps()["Skip the comment on fork or Dependabot PRs (read-only token)"]["if"]
+    assert "dependabot[bot]" in post and "!=" in post
+    assert "dependabot[bot]" in skip
 
 
 def test_collect_runs_even_when_an_earlier_step_failed() -> None:

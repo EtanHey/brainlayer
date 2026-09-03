@@ -91,18 +91,18 @@ jobs:
         if: ${{ !cancelled() }}
         run: cat ratchet.md >> "$GITHUB_STEP_SUMMARY"
 
-      # Fork PRs get a read-only GITHUB_TOKEN, so the comment cannot be written. We say so in the
-      # log and the run summary rather than failing or leaving a silent hole; the table itself is
-      # always in the step summary above. Fixing this needs pull_request_target, which would run a
-      # write-token job against fork-authored code — not worth it for a comment.
-      - name: Skip the comment on fork PRs (read-only token)
-        if: ${{ !cancelled() && github.event.pull_request.head.repo.fork }}
+      # Fork PRs and Dependabot PRs get a read-only GITHUB_TOKEN, so the comment cannot be written.
+      # We say so in the log and the run summary rather than failing or leaving a silent hole; the
+      # table itself is always in the step summary above. Fixing this needs pull_request_target,
+      # which would run a write-token job against untrusted code — not worth it for a comment.
+      - name: Skip the comment on fork or Dependabot PRs (read-only token)
+        if: ${{ !cancelled() && (github.event.pull_request.head.repo.fork || github.event.pull_request.user.login == 'dependabot[bot]') }}
         run: |
-          echo "::notice title=Ratchet table not commented::fork PRs get a read-only token; the table is in the run summary."
-          echo '> Ratchet table not posted as a comment: fork PRs get a read-only `GITHUB_TOKEN`.' >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=Ratchet table not commented::fork and Dependabot PRs get a read-only token; the table is in the run summary."
+          echo '> Ratchet table not posted as a comment: this PR gets a read-only `GITHUB_TOKEN` (fork or Dependabot).' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Post or refresh the one ratchet comment
-        if: ${{ !cancelled() && !github.event.pull_request.head.repo.fork }}
+        if: ${{ !cancelled() && !github.event.pull_request.head.repo.fork && github.event.pull_request.user.login != 'dependabot[bot]' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number }}

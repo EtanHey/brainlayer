@@ -166,7 +166,7 @@ def _git(*args: str) -> str | None:
             timeout=30,
             env=_clean_git_env(),
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError):
         return None
     return result.stdout.strip()
 
@@ -177,7 +177,9 @@ def git_head() -> str | None:
 
 
 def git_tree_dirty() -> bool | None:
-    porcelain = _git("status", "--porcelain")
+    # `--untracked-files=all` so `status.showUntrackedFiles=no` cannot hide an untracked
+    # `_build.py` and turn a dirty stamp into a false GREEN.
+    porcelain = _git("status", "--porcelain", "--untracked-files=all")
     return None if porcelain is None else bool(porcelain)
 
 
