@@ -1,8 +1,11 @@
 """Shared test fixtures for BrainLayer tests."""
 
+import functools
 import os
 import sqlite3
 import sys
+import urllib.parse
+import urllib.request
 import uuid
 from pathlib import Path
 
@@ -61,7 +64,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 def pytest_configure(config):
-    """Register custom pytest marks."""
+    """Register custom pytest marks, and arm the DB-open guards before anything is collected."""
+    _install_db_open_guards()
     config.addinivalue_line(
         "markers",
         "engine: pure-library engine tests (excludes CLI, dashboard, BrainBar, launchd, and root orchestration surfaces)",
@@ -179,29 +183,109 @@ _PROTECTED_BRAINLAYER_ROOTS = (
     _PROTECTED_TEST_HOME / ".local" / "share" / "brainlayer",
 )
 _HYGIENE_EXEMPT_MARKS = (EMBEDDING_MODEL_MARK, "integration", "live")
+# Flipped per test by the autouse fixture. The DB guards themselves are installed once, before
+# collection, so they cannot be aliased around; this is what still lets a marked test opt out.
+_DB_GUARD_SUSPENDED = False
+
+
+def _sqlite_target_path(target: object) -> Path | None:
+    """The filesystem path a sqlite3/apsw target names, or None when it names no local file.
+
+    `file:` URIs are parsed rather than fed to `Path`. BrainLayer's read paths open the DB as
+    `file:{db_path}?mode=ro` almost everywhere (`backup_daily`, `maintenance`, `kg_judge`,
+    `t3_provenance`, …), and `Path("file:///Users/…/brainlayer.db?mode=ro")` resolves to a
+    nonexistent relative path — so a string guard would have missed every real reader in the
+    codebase while looking like it worked (CodeRabbit, #755).
+    """
+    if isinstance(target, int) or target is None:
+        return None
+    text = os.fsdecode(target) if isinstance(target, (bytes, os.PathLike)) else str(target)
+    if not text or text.startswith(":"):
+        return None
+    if text.startswith("file:"):
+        parsed = urllib.parse.urlparse(text)
+        if parsed.netloc not in ("", "localhost"):
+            return None
+        text = urllib.request.url2pathname(parsed.path)
+        if not text or text.startswith(":"):
+            return None
+    try:
+        return Path(text).expanduser().resolve(strict=False)
+    except (OSError, ValueError, RuntimeError):
+        return None
 
 
 def _is_protected_runtime_path(candidate: object) -> bool:
     """Whether *candidate* names a file inside the real user's BrainLayer runtime state."""
-    if isinstance(candidate, int) or candidate is None:
-        return False
-    text = str(candidate)
-    if not text or text.startswith((":", "file::memory:")):
-        return False
-    try:
-        resolved = Path(text).expanduser().resolve(strict=False)
-    except (OSError, ValueError, RuntimeError):
+    resolved = _sqlite_target_path(candidate)
+    if resolved is None:
         return False
     return any(resolved == root or root in resolved.parents for root in _PROTECTED_BRAINLAYER_ROOTS)
+
+
+def _refuse_protected_db(target: object, opener: str) -> None:
+    if _DB_GUARD_SUSPENDED or not _is_protected_runtime_path(target):
+        return
+    raise RuntimeError(
+        f"suite hygiene: this test opened the canonical BrainLayer DB via {opener} ({target}). "
+        "Tests never touch ~/.local/share/brainlayer; mark the test `integration` or `live` if it "
+        "is a deliberate production-DB check."
+    )
+
+
+def _install_db_open_guards() -> None:
+    """Wrap the DB entry points ONCE, from `pytest_configure` — before any test module is imported.
+
+    Before collection, because a module that binds `from sqlite3 import connect` (or
+    `from apsw import Connection`) at import time captures the original callable and would never
+    see a fixture-scoped patch (CodeRabbit, #755). The wrappers read `_DB_GUARD_SUSPENDED`, so
+    marker-based exemptions still work per test.
+    """
+    if not getattr(sqlite3.connect, "_brainlayer_hygiene_guard", False):
+        sqlite_connect = sqlite3.connect
+
+        @functools.wraps(sqlite_connect)
+        def guarded_sqlite_connect(database, *args, **kwargs):
+            _refuse_protected_db(database, "sqlite3.connect")
+            return sqlite_connect(database, *args, **kwargs)
+
+        guarded_sqlite_connect._brainlayer_hygiene_guard = True
+        sqlite3.connect = guarded_sqlite_connect
+
+    try:
+        import apsw
+    except ImportError:  # apsw is a hard dependency, but a guard must never be the thing that fails
+        return
+    if getattr(apsw.Connection, "_brainlayer_hygiene_guard", False):
+        return
+
+    class GuardedConnection(apsw.Connection):
+        _brainlayer_hygiene_guard = True
+
+        def __init__(self, filename, *args, **kwargs):
+            _refuse_protected_db(filename, "apsw.Connection")
+            super().__init__(filename, *args, **kwargs)
+
+    apsw.Connection = GuardedConnection
 
 
 @pytest.fixture(autouse=True)
 def forbid_embedding_models_and_canonical_db(monkeypatch, request):
     """Fail a test that loads an embedding model or opens the canonical BrainLayer DB."""
-    if any(request.node.get_closest_marker(mark) for mark in _HYGIENE_EXEMPT_MARKS):
-        return
+    global _DB_GUARD_SUSPENDED
+    exempt = any(request.node.get_closest_marker(mark) for mark in _HYGIENE_EXEMPT_MARKS)
+    previous = _DB_GUARD_SUSPENDED
+    _DB_GUARD_SUSPENDED = exempt
+    try:
+        if not exempt:
+            _arm_embedding_model_refusal(monkeypatch)
+        yield
+    finally:
+        _DB_GUARD_SUSPENDED = previous
 
-    def _refuse_model(*_args, **_kwargs):
+
+def _arm_embedding_model_refusal(monkeypatch) -> None:
+    def refuse(*_args, **_kwargs):
         raise RuntimeError(
             "suite hygiene: this test loaded a real embedding model. Mark it "
             f"`@pytest.mark.{EMBEDDING_MODEL_MARK}` if that is deliberate."
@@ -223,37 +307,7 @@ def forbid_embedding_models_and_canonical_db(monkeypatch, request):
             continue
         for attribute in ("SentenceTransformer", "BGEM3FlagModel", "FlagModel"):
             if hasattr(module, attribute):
-                monkeypatch.setattr(module, attribute, _refuse_model)
-
-    def _guard_open(database: object, opener: str) -> None:
-        if _is_protected_runtime_path(database):
-            raise RuntimeError(
-                f"suite hygiene: this test opened the canonical BrainLayer DB via {opener} "
-                f"({database}). Tests never touch ~/.local/share/brainlayer; mark the test "
-                "`integration` or `live` if it is a deliberate production-DB check."
-            )
-
-    sqlite_connect = sqlite3.connect
-
-    def guarded_sqlite_connect(database, *args, **kwargs):
-        _guard_open(database, "sqlite3.connect")
-        return sqlite_connect(database, *args, **kwargs)
-
-    monkeypatch.setattr(sqlite3, "connect", guarded_sqlite_connect)
-
-    # apsw is patched only when it is already imported: forcing the import here would pay for a C
-    # extension in every test that has nothing to do with storage. brainlayer.vector_store imports
-    # it at module scope, so any test that can open the DB through apsw has already loaded it.
-    apsw = sys.modules.get("apsw")
-    if apsw is not None:
-        apsw_connection = apsw.Connection
-
-        class GuardedConnection(apsw_connection):
-            def __init__(self, filename, *args, **kwargs):
-                _guard_open(filename, "apsw.Connection")
-                super().__init__(filename, *args, **kwargs)
-
-        monkeypatch.setattr(apsw, "Connection", GuardedConnection)
+                monkeypatch.setattr(module, attribute, refuse)
 
 
 @pytest.fixture(autouse=True)

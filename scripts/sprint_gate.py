@@ -203,44 +203,52 @@ def check_search(config: dict) -> dict:
     )
 
 
+def annotation_gaps(tools: list) -> dict:
+    """The two optional rungs the compaction ladder sheds BEFORE it shortens any description."""
+    return {
+        "missing_annotations": [tool.get("name", "unknown") for tool in tools if "annotations" not in tool],
+        "missing_input_schema_prose": [
+            tool.get("name", "unknown") for tool in tools if not contains_key(tool.get("inputSchema"), "description")
+        ],
+    }
+
+
+def truncation_report(tools: list, notice: object, gaps: dict) -> dict:
+    """What the truncation rung is judged on: evidenced, named, and correctly ordered."""
+    truncated = [tool.get("name", "unknown") for tool in tools if tool.get("description", "").endswith("…[truncated]")]
+    names = sorted(notice.get("tools", [])) if isinstance(notice, dict) else []
+    evidenced = bool(truncated) or isinstance(notice, dict)
+    shed_both = len(gaps["missing_annotations"]) == len(tools) and len(gaps["missing_input_schema_prose"]) == len(tools)
+    return {
+        "truncated_descriptions": truncated,
+        "truncation_notice_names": names,
+        # A notice that names nobody is the same false-green shape as a table row with no number:
+        # the contract (#727) is that the notice NAMES each shortened description. An empty `tools`
+        # list next to an empty `truncated` list used to satisfy the equality by both sides being
+        # empty, so a notice could claim a truncation happened and be believed without saying what.
+        "truncation_notice_names_nobody": isinstance(notice, dict) and not names,
+        "truncation_evidenced": evidenced,
+        "truncation_order_valid": not evidenced or shed_both,
+    }
+
+
+def truncation_intact(report: dict) -> bool:
+    """The rung passes only when the notice named exactly the descriptions that were shortened."""
+    if report["truncation_notice_names_nobody"]:
+        return False
+    if report["truncation_notice_names"] != sorted(report["truncated_descriptions"]):
+        return False
+    return report["truncation_order_valid"]
+
+
 def validate_tools(result: dict) -> tuple[bool, dict]:
     tools = result.get("tools", [])
     missing = [tool.get("name", "unknown") for tool in tools if not tool.get("description")]
-    truncated = [tool.get("name", "unknown") for tool in tools if tool.get("description", "").endswith("…[truncated]")]
+    gaps = annotation_gaps(tools)
     notice = result.get("_meta", {}).get("brainlayer/descriptionsTruncated")
-    notice_names = set(notice.get("tools", [])) if isinstance(notice, dict) else set()
-    missing_annotations = [tool.get("name", "unknown") for tool in tools if "annotations" not in tool]
-    missing_input_schema_prose = [
-        tool.get("name", "unknown") for tool in tools if not contains_key(tool.get("inputSchema"), "description")
-    ]
-    truncation_evidenced = bool(truncated) or isinstance(notice, dict)
-    truncation_order_valid = not truncation_evidenced or (
-        len(missing_annotations) == len(tools) and len(missing_input_schema_prose) == len(tools)
-    )
-    # A notice that names nobody is the same false-green shape as a table row with no number: the
-    # contract (#727) is that the notice NAMES each shortened description. An empty `tools` list --
-    # or none at all -- next to an empty `truncated` list used to satisfy `notice_names ==
-    # set(truncated)` by both sides being empty, so a notice could claim a truncation happened and
-    # be believed without ever saying what.
-    notice_names_nobody = isinstance(notice, dict) and not notice_names
-    intact = (
-        bool(tools)
-        and not missing
-        and not notice_names_nobody
-        and notice_names == set(truncated)
-        and truncation_order_valid
-    )
-    return intact, {
-        "tool_count": len(tools),
-        "missing_descriptions": missing,
-        "truncated_descriptions": truncated,
-        "missing_annotations": missing_annotations,
-        "missing_input_schema_prose": missing_input_schema_prose,
-        "truncation_evidenced": truncation_evidenced,
-        "truncation_order_valid": truncation_order_valid,
-        "truncation_notice_names": sorted(notice_names),
-        "truncation_notice_names_nobody": notice_names_nobody,
-    }
+    truncation = truncation_report(tools, notice, gaps)
+    intact = bool(tools) and not missing and truncation_intact(truncation)
+    return intact, {"tool_count": len(tools), "missing_descriptions": missing, **gaps, **truncation}
 
 
 def retire_probe_chunk(client: MCPClient, stored: dict) -> dict:
@@ -266,7 +274,10 @@ def retire_probe_chunk(client: MCPClient, stored: dict) -> dict:
         }
     try:
         client.call("brain_archive", {"chunk_id": chunk_id, "reason": "sprint-gate probe"})
-    except (RuntimeError, OSError) as error:
+    except Exception as error:
+        # Deliberately broad: this runs from a `finally`, so ANY exception escaping here would
+        # REPLACE the failure that sent us there -- the gate would report a cleanup error and lose
+        # the search error that is the actual finding. Cleanup reports itself; it never masks.
         return {"probe_retired": False, "probe_chunk_id": chunk_id, "probe_retire_error": str(error)}
     return {"probe_retired": True, "probe_chunk_id": chunk_id, "probe_retire_error": None}
 
@@ -755,38 +766,43 @@ def calibrated_hostname(config: dict) -> str | None:
     return baseline.get("hostname") if isinstance(baseline, dict) else None
 
 
+CHECK_RUNNERS = {"search_latency": check_search, "mcp_roundtrip": check_mcp, "resource_budget": check_resource}
+
+
+def uncalibrated_host_skip(name: str, machine: dict, expected_host: str | None) -> dict:
+    return {
+        "name": name,
+        "status": "SKIPPED",
+        "details": {
+            "reason": "uncalibrated host",
+            "running_hostname": machine["hostname"],
+            "calibrated_hostname": expected_host,
+        },
+    }
+
+
+def run_one_check(name: str, config: dict, machine: dict, *, replay: bool) -> dict | None:
+    """One check's result, or None when this name is not run here (`wal_bound` is timed apart)."""
+    if name == "wal_bound":
+        return None
+    expected_host = calibrated_hostname(config)
+    if name == "search_latency" and not replay and machine["hostname"] != expected_host:
+        return uncalibrated_host_skip(name, machine, expected_host)
+    try:
+        return CHECK_RUNNERS[name](config)
+    except Exception as exc:
+        return status(name, False, error=f"{type(exc).__name__}: {exc}")
+
+
 def run_checks(config: dict, selected: list[str], machine: dict, *, replay: bool) -> list[dict]:
     """Run every selected check, in the order the corpus lists them."""
     wal_monitor = None
     if "wal_bound" in selected and "wal_samples_bytes" not in config:
         wal_monitor = WalMonitor()
         wal_monitor.start()
-    expected_host = calibrated_hostname(config)
-    runners = {"search_latency": check_search, "mcp_roundtrip": check_mcp, "resource_budget": check_resource}
-    results: list[dict] = []
-    for name in selected:
-        if name == "wal_bound":
-            continue
-        if name == "search_latency" and not replay and machine["hostname"] != expected_host:
-            results.append(
-                {
-                    "name": name,
-                    "status": "SKIPPED",
-                    "details": {
-                        "reason": "uncalibrated host",
-                        "running_hostname": machine["hostname"],
-                        "calibrated_hostname": expected_host,
-                    },
-                }
-            )
-            continue
-        try:
-            results.append(runners[name](config))
-        except Exception as exc:
-            results.append(status(name, False, error=f"{type(exc).__name__}: {exc}"))
+    results = [result for name in selected if (result := run_one_check(name, config, machine, replay=replay))]
     if "wal_bound" in selected:
-        samples = wal_monitor.stop() if wal_monitor else None
-        results.append(check_wal(config, samples))
+        results.append(check_wal(config, wal_monitor.stop() if wal_monitor else None))
     return results
 
 

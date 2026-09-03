@@ -19,6 +19,7 @@ import sys
 import textwrap
 from pathlib import Path
 
+import apsw
 import pytest
 
 from brainlayer import paths as brain_paths
@@ -29,6 +30,8 @@ REEMBED_SCRIPT = REPO_ROOT / "scripts" / "reembed_bgem3.py"
 # The real path, read before conftest's isolation fixture rewrites the module attribute -- the
 # guard has to refuse THIS one, not the tmp path every test is pointed at.
 PRODUCTION_DB_PATH = Path("~/.local/share/brainlayer/brainlayer.db").expanduser()
+# Bound at MODULE IMPORT, which is exactly the shape a fixture-scoped patch cannot reach.
+_CONNECT_ALIAS = sqlite3.connect
 
 
 def test_unmarked_tests_are_forbidden_from_loading_an_embedding_model() -> None:
@@ -94,6 +97,44 @@ def test_opening_the_canonical_db_is_refused(tmp_path: Path) -> None:
     connection.execute("CREATE TABLE t (id INTEGER)")
     connection.close()
     assert scratch.is_file()
+
+
+def test_the_canonical_db_is_refused_through_a_file_uri(tmp_path: Path) -> None:
+    """`file:` URIs are how BrainLayer actually reads the DB, so the guard must parse them.
+
+    `backup_daily`, `maintenance`, `kg_judge`, `t3_provenance` and friends all open
+    `file:{db_path}?mode=ro`. A guard that fed that string to `Path` would resolve a nonexistent
+    relative path, match nothing, and let every real reader through while looking like it worked.
+    """
+    for uri in (
+        f"file:{PRODUCTION_DB_PATH}?mode=ro",
+        f"{PRODUCTION_DB_PATH.as_uri()}?mode=ro&immutable=1",
+        f"file://localhost{PRODUCTION_DB_PATH}",
+    ):
+        with pytest.raises(RuntimeError, match="canonical BrainLayer DB"):
+            sqlite3.connect(uri, uri=True)
+
+    # Still not a blanket ban: a temp-path URI, and the in-memory forms, must keep working.
+    scratch = tmp_path / "scratch.db"
+    sqlite3.connect(f"{scratch.as_uri()}?mode=rwc", uri=True).close()
+    sqlite3.connect("file::memory:?cache=shared", uri=True).close()
+    assert scratch.is_file()
+
+
+def test_an_alias_bound_before_the_fixture_ran_is_still_guarded() -> None:
+    """The guards are installed in `pytest_configure`, so import-time aliases cannot dodge them.
+
+    `from sqlite3 import connect` at a test module's top binds whatever `sqlite3.connect` is at
+    IMPORT time. A fixture-scoped patch would be invisible to that alias (CodeRabbit, #755).
+    """
+    assert getattr(sqlite3.connect, "_brainlayer_hygiene_guard", False) is True
+    assert getattr(apsw.Connection, "_brainlayer_hygiene_guard", False) is True
+
+    with pytest.raises(RuntimeError, match="canonical BrainLayer DB"):
+        _CONNECT_ALIAS(str(PRODUCTION_DB_PATH))
+
+    with pytest.raises(RuntimeError, match="canonical BrainLayer DB"):
+        apsw.Connection(str(PRODUCTION_DB_PATH), flags=apsw.SQLITE_OPEN_READONLY)
 
 
 def test_the_isolated_canonical_path_is_not_the_production_one() -> None:
