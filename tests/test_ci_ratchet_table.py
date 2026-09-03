@@ -61,6 +61,16 @@ def mac_probe(tmp_path: Path, **overrides) -> ratchet.Probe:
     return replace(linux_probe(tmp_path), **{**ready, **overrides})
 
 
+def workflow_code() -> str:
+    """The workflow with whole-line comments stripped.
+
+    These assertions are about what the job DOES. A comment explaining why `set +e` and
+    `$(ls dist/*.whl)` were removed must not read as the job still using them.
+    """
+    lines = WORKFLOW.read_text(encoding="utf-8").splitlines()
+    return "\n".join(line for line in lines if not line.lstrip().startswith("#"))
+
+
 def row(rows: list[ratchet.Row], name: str) -> ratchet.Row:
     (found,) = [item for item in rows if item.name == name]
     return found
@@ -130,7 +140,7 @@ def test_provenance_is_red_when_stamping_dirtied_the_tree(tmp_path: Path) -> Non
 @pytest.mark.parametrize(
     ("overrides", "expected"),
     [
-        ({"wheel": None}, "no packaged wheel"),
+        ({"wheel": None}, "no packaged wheel"),  # nobody asked this job to package anything
         ({"head_sha": None}, "git HEAD"),
         ({"tree_dirty": None}, "git status"),
     ],
@@ -142,6 +152,58 @@ def test_provenance_says_na_with_a_reason_when_it_cannot_measure(
     assert result.status == ratchet.NA
     assert result.value.startswith("n/a — ")
     assert expected in result.value
+
+
+# --- fail-closed wheel selection: a promised wheel that never arrived is RED, not n/a ---
+
+
+def test_no_wheel_argument_at_all_is_a_capability_gap(tmp_path: Path) -> None:
+    assert ratchet.select_wheel(None, None) == ratchet.WheelSelection()
+
+
+def test_a_glob_matching_nothing_is_a_finding_not_a_capability_gap(tmp_path: Path) -> None:
+    selection = ratchet.select_wheel(None, str(tmp_path / "empty" / "*.whl"))
+    assert selection.path is None
+    assert selection.problem is not None and "should have produced exactly one" in selection.problem
+
+
+def test_an_ambiguous_glob_is_a_finding(tmp_path: Path) -> None:
+    for name in ("brainlayer-1.0-py3-none-any.whl", "brainlayer-2.0-py3-none-any.whl"):
+        (tmp_path / name).write_bytes(b"")
+    selection = ratchet.select_wheel(None, str(tmp_path / "*.whl"))
+    assert selection.path is None
+    assert selection.problem is not None and "needs exactly one" in selection.problem
+
+
+def test_an_explicit_wheel_that_is_not_there_is_a_finding(tmp_path: Path) -> None:
+    selection = ratchet.select_wheel(tmp_path / "gone.whl", None)
+    assert selection.problem is not None and "produced none" in selection.problem
+
+
+def test_a_glob_matching_one_wheel_resolves_it(tmp_path: Path) -> None:
+    wheel = make_wheel(tmp_path / "one", HEAD)
+    assert ratchet.select_wheel(None, str(tmp_path / "one" / "*.whl")) == ratchet.WheelSelection(path=wheel)
+
+
+def test_a_missing_wheel_makes_provenance_RED_so_the_job_cannot_go_green(tmp_path: Path) -> None:
+    # The regression this pins: an empty --wheel used to render `n/a — no packaged wheel`, exit 0,
+    # and a GREEN job. The only measurable row would vanish while CI reported success.
+    probe = linux_probe(
+        tmp_path,
+        wheel=None,
+        wheel_problem="no wheel matched `dist/*.whl` — the build step should have produced exactly one",
+    )
+    result = ratchet.row_provenance(probe, CORPUS)
+    assert result.status == ratchet.RED
+    assert not result.value.startswith("n/a")
+
+
+def test_main_exits_one_when_the_wheel_glob_matches_nothing(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(ratchet, "git_tree_dirty", lambda: False)
+    assert ratchet.main(["--wheel-glob", str(tmp_path / "nothing" / "*.whl")]) == 1
+    captured = capsys.readouterr()
+    assert "::error title=Ratchet RED: provenance::" in captured.err
+    assert "1 RED row(s) to clear:" in captured.out
 
 
 # --- the four rows a runner cannot measure ---------------------------------------------------
@@ -158,6 +220,13 @@ def test_signature_row_on_a_runner_names_macos(tmp_path: Path) -> None:
     result = row(ratchet.collect(linux_probe(tmp_path), CORPUS), "signature_valid")
     assert result.status == ratchet.NA
     assert result.value == "n/a — runner is Linux; codesign verification needs macOS"
+
+
+def test_signature_row_on_darwin_names_the_missing_keg(tmp_path: Path) -> None:
+    # Without this, dropping the keg requirement would leave the Linux string still looking right.
+    result = row(ratchet.collect(mac_probe(tmp_path), CORPUS), "signature_valid")
+    assert result.status == ratchet.NA
+    assert "no installed keg here" in result.value
 
 
 @pytest.mark.parametrize(
@@ -266,3 +335,31 @@ def test_workflow_can_write_the_comment_and_cannot_double_post() -> None:
     # find-then-update, create only if absent
     assert re.search(r"comment_id=", workflow) and "-X PATCH" in workflow and "-X POST" in workflow
     assert "head.repo.fork" in workflow  # fork PRs are handled, not silently broken
+
+
+def test_workflow_fails_closed_rather_than_reporting_a_green_it_did_not_earn() -> None:
+    """Pin the CONTRACT, not just the mechanics: RED must be able to fail this job."""
+    workflow = workflow_code()
+    # collect RECORDS the exit code instead of exiting on it, so the table still gets posted...
+    assert "|| rc=$?" in workflow and 'echo "rc=$rc" >> "$GITHUB_OUTPUT"' in workflow
+    # ...but `set +e` must never come back: it would swallow a crash before rc is ever read.
+    assert "set +e" not in workflow
+    # ...and the comment is posted even on a RED run.
+    assert workflow.count("if: always()") >= 3
+    # The step that turns a RED row into a failed job must exist and be spelled exactly.
+    assert "if: steps.collect.outputs.rc != '0'" in workflow
+
+
+def test_workflow_resolves_the_wheel_fail_closed_not_through_a_shell_glob() -> None:
+    # `--wheel "$(ls dist/*.whl)"` made zero-or-many wheels an empty --wheel, which rendered `n/a`
+    # and exited 0: the one measurable row vanished and the job went green anyway.
+    workflow = workflow_code()
+    assert "--wheel-glob 'dist/*.whl'" in workflow
+    assert "$(ls dist/" not in workflow
+
+
+def test_workflow_never_pipes_a_paginated_stream_into_head() -> None:
+    # SIGPIPE under `pipefail` would fail the step on the PATCH path -- the refresh this job exists for.
+    workflow = workflow_code()
+    assert "head -n1" not in workflow
+    assert "--paginate > comments.json" in workflow

@@ -42,13 +42,16 @@ jobs:
       - name: Collect ratchet rows
         id: collect
         run: |
-          set +e
+          set -euo pipefail
+          # --wheel-glob, not a shell glob: `$(ls dist/*.whl)` collapses "no wheel" and "three wheels"
+          # into an empty --wheel, which the collector would have called `n/a` while the job stayed
+          # green -- a false green in the ratchet itself. The collector now fails closed and reports
+          # RED for either case. rc is captured without `set +e` so a real crash still cannot pass.
+          rc=0
           python scripts/ci_ratchet_table.py \
-            --wheel "$(ls dist/*.whl)" \
+            --wheel-glob 'dist/*.whl' \
             --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-            --out ratchet.md
-          rc=$?
-          set -e
+            --out ratchet.md || rc=$?
           if [[ ! -s ratchet.md ]]; then
             printf '%s\n\n%s\n' '<!-- brainlayer-ratchet-table -->' \
               'The ratchet collector produced no table (it exited '"$rc"'). No numbers, because none were measured.' > ratchet.md
@@ -79,10 +82,15 @@ jobs:
         run: |
           set -euo pipefail
           marker='<!-- brainlayer-ratchet-table -->'
+          # Pages land in a file first. Piping `gh api --paginate` into `head -n1` closes the pipe
+          # while gh is still fetching, and under `pipefail` that SIGPIPE fails the step -- on the
+          # PATCH path, which is the whole point of this job. `jq -s add` merges whether gh emits one
+          # array or one per page.
+          gh api "repos/${REPO}/issues/${PR}/comments" --paginate > comments.json
           # Oldest bot comment carrying the marker wins, so a duplicate could never be created twice.
-          comment_id="$(gh api "repos/${REPO}/issues/${PR}/comments" --paginate \
-            --jq '.[] | select(.user.login == "github-actions[bot]") | select(.body | startswith("'"$marker"'")) | .id' \
-            | head -n1)"
+          comment_id="$(jq -rs --arg marker "$marker" \
+            'add | map(select(.user.login == "github-actions[bot]" and (.body | startswith($marker)))) | .[0].id // empty' \
+            comments.json)"
           jq -Rs '{body: .}' ratchet.md > body.json
           if [[ -n "$comment_id" ]]; then
             gh api -X PATCH "repos/${REPO}/issues/comments/${comment_id}" --input body.json --jq .html_url

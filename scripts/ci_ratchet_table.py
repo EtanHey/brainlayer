@@ -22,6 +22,7 @@ measurement on a GitHub runner are different measurements, not better and worse 
 from __future__ import annotations
 
 import argparse
+import glob as glob_module
 import json
 import platform
 import re
@@ -71,19 +72,59 @@ class Probe:
     wheel: Path | None
     head_sha: str | None
     tree_dirty: bool | None
+    # Set when this job MEANT to hand over a wheel and could not. That is a finding to clear, not a
+    # capability this machine lacks, so it renders RED and never `n/a`.
+    wheel_problem: str | None = None
 
     @classmethod
-    def detect(cls, corpus: dict, wheel: Path | None) -> Probe:
+    def detect(cls, corpus: dict, wheel: Path | None, wheel_glob: str | None) -> Probe:
+        selected = select_wheel(wheel, wheel_glob)
         return cls(
             os_name=platform.system(),
             architecture=platform.machine(),
             hostname=socket_module.gethostname(),
             socket_path=Path(corpus["socket_path"]),
             db_path=canonical_db_path(),
-            wheel=wheel,
+            wheel=selected.path,
             head_sha=git_head(),
             tree_dirty=git_tree_dirty(),
+            wheel_problem=selected.problem,
         )
+
+
+@dataclass(frozen=True)
+class WheelSelection:
+    """Which wheel the provenance row reads, or why the job failed to name exactly one."""
+
+    path: Path | None = None
+    problem: str | None = None
+
+
+def select_wheel(explicit: Path | None, pattern: str | None) -> WheelSelection:
+    """Resolve the wheel FAIL-CLOSED.
+
+    A job that packaged nothing passes neither argument and gets `n/a` — a real capability gap. But a
+    job that asked for a wheel and cannot produce exactly one has a **finding**: the only row this
+    runner can measure would otherwise vanish into a principled-looking `n/a` while CI stayed green,
+    which is the false green this whole file exists to prevent.
+    """
+    if explicit is None and pattern is None:
+        return WheelSelection()
+    if explicit is not None:
+        if explicit.is_file():
+            return WheelSelection(path=explicit)
+        return WheelSelection(
+            problem=f"`--wheel {explicit}` is not a file — the build was asked for a wheel and produced none"
+        )
+    matches = sorted(Path(match) for match in glob_module.glob(pattern or ""))
+    if not matches:
+        return WheelSelection(problem=f"no wheel matched `{pattern}` — the build step should have produced exactly one")
+    if len(matches) > 1:
+        listed = ", ".join(f"`{match.name}`" for match in matches)
+        return WheelSelection(
+            problem=f"{len(matches)} wheels matched `{pattern}` ({listed}) — provenance needs exactly one"
+        )
+    return WheelSelection(path=matches[0])
 
 
 def canonical_db_path() -> Path:
@@ -168,9 +209,12 @@ PROVENANCE_NOTES = (
 def row_provenance(probe: Probe, _corpus: dict) -> Row:
     method = "wheel stamp · in-process · runner"
     wheel, head = probe.wheel, probe.head_sha
+    if probe.wheel_problem:
+        # Never `n/a`: a wheel this job promised and did not deliver is a finding, not a capability gap.
+        return Row("provenance", RED, probe.wheel_problem, method, PROVENANCE_NOTES)
     reason = first_unmet(
         [
-            (wheel is not None and wheel.is_file(), "no packaged wheel in this job (pass --wheel)"),
+            (wheel is not None and wheel.is_file(), "no packaged wheel in this job (pass --wheel or --wheel-glob)"),
             (head is not None, "git HEAD could not be read"),
             (probe.tree_dirty is not None, "`git status --porcelain` could not be read"),
         ]
@@ -328,12 +372,16 @@ def render(rows: list[Row], probe: Probe, run_url: str | None, now: datetime) ->
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--wheel", type=Path, help="Wheel built from the checked-out tree (provenance row)")
+    parser.add_argument(
+        "--wheel-glob",
+        help="Glob that must match exactly one built wheel, e.g. 'dist/*.whl'. Zero or several is RED, never n/a.",
+    )
     parser.add_argument("--run-url", help="Link back to the workflow run that produced this table")
     parser.add_argument("--out", type=Path, help="Also write the rendered table here")
     args = parser.parse_args(argv)
 
     corpus = json.loads(CORPUS.read_text(encoding="utf-8"))
-    probe = Probe.detect(corpus, args.wheel)
+    probe = Probe.detect(corpus, args.wheel, args.wheel_glob)
     rows = collect(probe, corpus)
     table = render(rows, probe, args.run_url, datetime.now(timezone.utc))
 
