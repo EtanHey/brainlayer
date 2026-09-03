@@ -23,6 +23,7 @@ def _clean_git_env() -> dict[str, str]:
     # src/brainlayer/deploy_drift.py.
     return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
 
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "ratchet.yml"
 CORPUS = json.loads((ROOT / "tests" / "fixtures" / "sprint_gate" / "corpus.json").read_text(encoding="utf-8"))
