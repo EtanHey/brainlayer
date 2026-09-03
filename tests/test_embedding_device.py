@@ -4,6 +4,10 @@ from brainlayer import embeddings
 
 
 def test_embedding_model_forwards_explicit_device_without_mps_probe(monkeypatch):
+    # This test constructs a FAKE SentenceTransformer, so the suite-hygiene refusal that
+    # tests/conftest.py arms for every unmarked test does not apply -- and lifting it explicitly,
+    # here, is the point: the exemption is one visible line in the test that earns it, not a hole.
+    monkeypatch.delenv("BRAINLAYER_FORBID_EMBEDDING_MODEL", raising=False)
     constructor_calls = []
 
     class FakeSentenceTransformer:

@@ -126,6 +126,16 @@ def get_chunks_to_process(db_path: str, already_done: set[str], limit: int | Non
 
 def load_model():
     """Load BGE-M3 model via sentence-transformers."""
+    try:
+        from brainlayer.embeddings import guard_embedding_model_load
+    except ImportError:  # standalone copy of this script, same rule
+        import os
+
+        if os.environ.get("BRAINLAYER_FORBID_EMBEDDING_MODEL") == "1":
+            raise RuntimeError("BRAINLAYER_FORBID_EMBEDDING_MODEL=1: refusing to load " + MODEL_NAME) from None
+    else:
+        guard_embedding_model_load(MODEL_NAME)
+
     import torch
     from sentence_transformers import SentenceTransformer
 

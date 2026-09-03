@@ -23,6 +23,10 @@ MAX_EMBEDDING_CHARS = 8000
 
 def _get_model() -> "SentenceTransformer":
     """Load mStyleDistance. Multilingual (Hebrew+English)."""
+    from brainlayer.embeddings import guard_embedding_model_load
+
+    guard_embedding_model_load(STYLE_MODEL)
+
     if not HAS_SENTENCE_TRANSFORMERS:
         raise ImportError("sentence-transformers required. Install: pip install sentence-transformers")
     return SentenceTransformer(STYLE_MODEL)

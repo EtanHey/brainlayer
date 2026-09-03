@@ -115,6 +115,7 @@ class TestReembedScript:
         assert "--batch-size" in result.stdout
         assert "--checkpoint-every" in result.stdout
 
+    @pytest.mark.embedding_model
     def test_test_flag_runs_limited_chunks(self, tmp_path):
         """--test flag should process only 100 chunks (or all if fewer)."""
         db_path = _create_test_db(tmp_path)
@@ -146,6 +147,7 @@ class TestReembedScript:
         # At least some values should be non-zero after re-embedding
         assert any(v != 0.0 for v in emb_floats), "Embeddings should be updated from zeros"
 
+    @pytest.mark.embedding_model
     def test_checkpoint_created(self, tmp_path):
         """Script should create a checkpoint file tracking progress."""
         db_path = _create_test_db(tmp_path)
@@ -176,6 +178,7 @@ class TestReembedScript:
         assert data["model"] == "BAAI/bge-m3"
         assert len(data["processed_ids"]) == 5  # all 5 test chunks
 
+    @pytest.mark.embedding_model
     def test_resumable(self, tmp_path):
         """Script should skip already-processed chunks on resume."""
         db_path = _create_test_db(tmp_path)
@@ -214,6 +217,7 @@ class TestReembedScript:
         data = json.loads(checkpoint_path.read_text())
         assert len(data["processed_ids"]) == 5
 
+    @pytest.mark.embedding_model
     def test_binary_vectors_updated(self, tmp_path):
         """Binary vectors should be regenerated from new float embeddings."""
         db_path = _create_test_db(tmp_path)

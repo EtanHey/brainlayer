@@ -215,6 +215,125 @@ def test_validate_tools_accepts_correctly_ordered_description_truncation():
     assert details["truncation_order_valid"] is True
 
 
+def test_truncation_notice_that_names_nobody_is_not_intact():
+    """A notice claiming a truncation must say WHAT it truncated.
+
+    Two empty sets used to satisfy `notice_names == set(truncated)` by both being empty, so a
+    notice could assert that descriptions were shortened and be believed without naming one.
+    """
+    result = {
+        "tools": [
+            {
+                "name": "brain_search",
+                "description": "Search memory",
+                "inputSchema": {"type": "object"},
+            }
+        ],
+        "_meta": {"brainlayer/descriptionsTruncated": {"tools": []}},
+    }
+
+    intact, details = sprint_gate.validate_tools(result)
+
+    assert intact is False
+    assert details["truncation_notice_names_nobody"] is True
+    assert details["truncation_notice_names"] == []
+
+
+def test_truncation_notice_naming_its_tools_is_reported_verbatim():
+    result = {
+        "tools": [
+            {
+                "name": "brain_search",
+                "description": "Search\u2026[truncated]",
+                "inputSchema": {"type": "object"},
+            }
+        ],
+        "_meta": {"brainlayer/descriptionsTruncated": {"tools": ["brain_search"]}},
+    }
+
+    intact, details = sprint_gate.validate_tools(result)
+
+    assert intact is True
+    assert details["truncation_notice_names"] == ["brain_search"]
+    assert details["truncation_notice_names_nobody"] is False
+
+
+def _roundtrip_client(store_result: dict, archive_error: Exception | None = None) -> tuple[SimpleNamespace, list]:
+    calls: list[tuple[str, dict]] = []
+
+    def call(name, arguments=None):
+        calls.append((name, arguments or {}))
+        if name == "brain_archive" and archive_error is not None:
+            raise archive_error
+        if name == "brain_store":
+            return store_result
+        return {}
+
+    client = SimpleNamespace(initialize=lambda: None, call=call, close=lambda: None)
+    client.request = lambda _method: {
+        "tools": [
+            {
+                "name": "brain_search",
+                "description": "Search memory",
+                "annotations": {},
+                "inputSchema": {"properties": {"query": {"description": "Search query"}}},
+            }
+        ]
+    }
+    return client, calls
+
+
+ROUNDTRIP_CONFIG = {
+    "socket_path": "unused",
+    "mcp_timeout_seconds": 20,
+    "thresholds": {"deferred_visibility_wait_seconds": 5},
+}
+
+
+def test_roundtrip_archives_the_probe_chunk_it_planted(monkeypatch):
+    """The gate must not grow the corpus it measures by one chunk per run."""
+    client, calls = _roundtrip_client({"status": "STORED", "chunk_id": "chunk-42"})
+    monkeypatch.setattr(sprint_gate, "MCPClient", lambda _path, _timeout: client)
+    monkeypatch.setattr(sprint_gate, "search_visible", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(sprint_gate.time, "monotonic", lambda: 0.0)
+
+    result = sprint_gate.check_mcp(ROUNDTRIP_CONFIG)
+
+    assert result["status"] == "PASS"
+    assert ("brain_archive", {"chunk_id": "chunk-42", "reason": "sprint-gate probe"}) in calls
+    assert result["details"]["probe_retired"] is True
+    assert result["details"]["probe_chunk_id"] == "chunk-42"
+
+
+def test_roundtrip_fails_when_it_cannot_retire_its_own_probe_chunk(monkeypatch):
+    """A gate that cannot undo its own write does not get to call the run green."""
+    client, _calls = _roundtrip_client(
+        {"status": "STORED", "chunk_id": "chunk-42"}, archive_error=RuntimeError("archive refused")
+    )
+    monkeypatch.setattr(sprint_gate, "MCPClient", lambda _path, _timeout: client)
+    monkeypatch.setattr(sprint_gate, "search_visible", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(sprint_gate.time, "monotonic", lambda: 0.0)
+
+    result = sprint_gate.check_mcp(ROUNDTRIP_CONFIG)
+
+    assert result["status"] == "FAIL"
+    assert result["details"]["probe_retired"] is False
+    assert "archive refused" in result["details"]["probe_retire_error"]
+
+
+def test_roundtrip_reports_a_store_that_returned_no_chunk_id(monkeypatch):
+    client, calls = _roundtrip_client({"status": "STORED"})
+    monkeypatch.setattr(sprint_gate, "MCPClient", lambda _path, _timeout: client)
+    monkeypatch.setattr(sprint_gate, "search_visible", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(sprint_gate.time, "monotonic", lambda: 0.0)
+
+    result = sprint_gate.check_mcp(ROUNDTRIP_CONFIG)
+
+    assert result["status"] == "FAIL"
+    assert result["details"]["probe_retire_error"] == "store returned no chunk_id"
+    assert [name for name, _ in calls] == ["expand_palette", "brain_store"]
+
+
 def test_missing_wal_is_zero(tmp_path: Path):
     assert sprint_gate.wal_size(tmp_path / "gone") == 0
 
@@ -266,6 +385,36 @@ def test_deferred_roundtrip_uses_configured_wait_and_reports_observed(monkeypatc
     assert calls == ["expand_palette", "brain_store"]
     assert waits == [5]
     assert result["details"]["planted_hit_wait_seconds"] == 2.5
+
+
+def test_empty_check_list_is_unmeasured_never_pass(monkeypatch, capsys, tmp_path: Path):
+    """`checks: []` measured nothing, so it cannot report PASS.
+
+    `all([])` is True, so an empty selection rendered a green payload with rc 0 -- the same
+    vacuous-PASS shape #752 legislated out of the ratchet table, reached here through an empty
+    selection instead of an empty measurement.
+    """
+    config = deterministic_live_config()
+    config["checks"] = []
+
+    rc, payload = run_live_config(monkeypatch, capsys, tmp_path, config)
+
+    assert rc == 1
+    assert payload["status"] == sprint_gate.UNMEASURED
+    assert payload["checks"] == []
+    assert "measured nothing" in payload["error"]
+
+
+def test_a_selection_that_runs_one_check_still_passes(monkeypatch, capsys, tmp_path: Path):
+    """The counterpart: UNMEASURED is about measuring nothing, not about measuring little."""
+    config = deterministic_live_config()
+    config["checks"] = ["wal_bound"]
+
+    rc, payload = run_live_config(monkeypatch, capsys, tmp_path, config)
+
+    assert rc == 0
+    assert payload["status"] == "PASS"
+    assert [check["name"] for check in payload["checks"]] == ["wal_bound"]
 
 
 def test_live_gate_rejects_wrong_machine(monkeypatch, capsys):

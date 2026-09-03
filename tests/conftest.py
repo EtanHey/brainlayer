@@ -1,6 +1,7 @@
 """Shared test fixtures for BrainLayer tests."""
 
 import os
+import sqlite3
 import sys
 import uuid
 from pathlib import Path
@@ -149,6 +150,110 @@ def isolate_brainlayer_runtime_paths(monkeypatch, tmp_path, request):
                 if resolved == protected_root or protected_root in resolved.parents:
                     monkeypatch.setattr(module, attribute, isolated_root / resolved.relative_to(protected_root))
                     break
+
+
+# --------------------------------------------------------------------------------------------
+# Suite hygiene: no test loads an embedding model, and no test opens the canonical DB.
+#
+# Both rules exist because both were broken, expensively. The pre-push full-suite fallback spawned
+# `scripts/reembed_bgem3.py --test` -- a 2.5 GB-RSS embedding model holding ~20 fds on the
+# production DB -- which is the measured cause of a 14:22 UI stall on the M4. `paths.py` already
+# guards path RESOLUTION; these guard the two things that actually cost: the model LOAD and the
+# connection OPEN, including the ones that reach them without going through `paths.py` at all.
+#
+# The single escape is an explicit marker. `embedding_model` says a test deliberately loads a real
+# model; `scripts/run_tests.sh` deselects it, so it runs only where a run declares it can afford
+# one (CI, which warms the HF cache on purpose). `integration` and `live` already mean "this test
+# is an opt-in against real state" and keep that meaning here.
+# --------------------------------------------------------------------------------------------
+
+EMBEDDING_MODEL_MARK = "embedding_model"
+EMBEDDING_MODEL_MODULES = ("sentence_transformers", "FlagEmbedding")
+# Set for every unmarked test and inherited by subprocesses, which is the point: a test that SPAWNS
+# a re-embedding script loads a model just as surely as one that imports it, and sys.modules cannot
+# see that happen. Every load site in brainlayer/ and scripts/ checks this before constructing a
+# model, so `--help` and syntax probes on the same scripts stay free.
+FORBID_MODEL_LOAD_ENV = "BRAINLAYER_FORBID_EMBEDDING_MODEL"
+_PROTECTED_BRAINLAYER_ROOTS = (
+    _PROTECTED_TEST_HOME / ".brainlayer",
+    _PROTECTED_TEST_HOME / ".local" / "share" / "brainlayer",
+)
+_HYGIENE_EXEMPT_MARKS = (EMBEDDING_MODEL_MARK, "integration", "live")
+
+
+def _is_protected_runtime_path(candidate: object) -> bool:
+    """Whether *candidate* names a file inside the real user's BrainLayer runtime state."""
+    if isinstance(candidate, int) or candidate is None:
+        return False
+    text = str(candidate)
+    if not text or text.startswith(":") or text.startswith("file::memory:"):
+        return False
+    try:
+        resolved = Path(text).expanduser().resolve(strict=False)
+    except (OSError, ValueError, RuntimeError):
+        return False
+    return any(resolved == root or root in resolved.parents for root in _PROTECTED_BRAINLAYER_ROOTS)
+
+
+@pytest.fixture(autouse=True)
+def forbid_embedding_models_and_canonical_db(monkeypatch, request):
+    """Fail a test that loads an embedding model or opens the canonical BrainLayer DB."""
+    if any(request.node.get_closest_marker(mark) for mark in _HYGIENE_EXEMPT_MARKS):
+        return
+
+    def _refuse_model(*_args, **_kwargs):
+        raise RuntimeError(
+            "suite hygiene: this test loaded a real embedding model. Mark it "
+            f"`@pytest.mark.{EMBEDDING_MODEL_MARK}` if that is deliberate."
+        )
+
+    # The primary guard, because it is the only one that survives a process boundary and the only
+    # one placed where the 2.5 GB is actually spent. Blocking the IMPORT instead would be wrong:
+    # `pipeline/semantic_style.py` calls `find_spec("sentence_transformers")` at module load and
+    # `pipeline/style_embed.py` imports it under a try/except, neither of which loads a model.
+    monkeypatch.setenv(FORBID_MODEL_LOAD_ENV, "1")
+
+    # Second net, for a model class reached without going through a brainlayer load site. Patched
+    # only where the package is ALREADY imported (tests/test_semantic_style.py imports it at
+    # collection time and then mocks the model) -- importing it here to patch it would be the very
+    # cost this fixture exists to avoid.
+    for name in EMBEDDING_MODEL_MODULES:
+        module = sys.modules.get(name)
+        if module is None:
+            continue
+        for attribute in ("SentenceTransformer", "BGEM3FlagModel", "FlagModel"):
+            if hasattr(module, attribute):
+                monkeypatch.setattr(module, attribute, _refuse_model)
+
+    def _guard_open(database: object, opener: str) -> None:
+        if _is_protected_runtime_path(database):
+            raise RuntimeError(
+                f"suite hygiene: this test opened the canonical BrainLayer DB via {opener} "
+                f"({database}). Tests never touch ~/.local/share/brainlayer; mark the test "
+                "`integration` or `live` if it is a deliberate production-DB check."
+            )
+
+    sqlite_connect = sqlite3.connect
+
+    def guarded_sqlite_connect(database, *args, **kwargs):
+        _guard_open(database, "sqlite3.connect")
+        return sqlite_connect(database, *args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", guarded_sqlite_connect)
+
+    # apsw is patched only when it is already imported: forcing the import here would pay for a C
+    # extension in every test that has nothing to do with storage. brainlayer.vector_store imports
+    # it at module scope, so any test that can open the DB through apsw has already loaded it.
+    apsw = sys.modules.get("apsw")
+    if apsw is not None:
+        apsw_connection = apsw.Connection
+
+        class GuardedConnection(apsw_connection):
+            def __init__(self, filename, *args, **kwargs):
+                _guard_open(filename, "apsw.Connection")
+                super().__init__(filename, *args, **kwargs)
+
+        monkeypatch.setattr(apsw, "Connection", GuardedConnection)
 
 
 @pytest.fixture(autouse=True)

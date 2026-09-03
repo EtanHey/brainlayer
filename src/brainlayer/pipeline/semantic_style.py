@@ -164,6 +164,10 @@ class SemanticStyleAnalyzer:
             # but fails here, so re-raise with the same friendly message the old
             # module-level try/except gave.
             try:
+                from brainlayer.embeddings import guard_embedding_model_load
+
+                guard_embedding_model_load(self.model_name)
+
                 from sentence_transformers import SentenceTransformer
             except ImportError as e:
                 raise ImportError("sentence-transformers required. Install: pip install sentence-transformers") from e

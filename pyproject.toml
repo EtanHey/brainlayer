@@ -118,6 +118,7 @@ asyncio_mode = "auto"
 pythonpath = ["src"]
 markers = [
     "engine: pure-library engine tests (excludes CLI, dashboard, BrainBar, launchd, and root orchestration surfaces)",
+    "embedding_model: tests that deliberately load a real embedding model (deselected by scripts/run_tests.sh)",
     "integration: tests that need the real production DB (268K+ chunks)",
     "live: tests that need the live production DB or mutable local hooks state",
     "slow: tests that load ML models or take >30s",

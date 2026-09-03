@@ -337,10 +337,19 @@ def test_changed_only_scope_falls_back_to_full_suite_for_unmapped_source(tmp_pat
 
     assert result.returncode == 0
     assert "falling back to full pytest unit suite" in result.stdout
+    # The escalation names what forced it, so the missing mapping is visible rather than paid for
+    # silently on every push.
+    assert "WARNING: unmapped: src/brainlayer/mcp/search_handler.py" in result.stdout
     assert f"{test_root}/ -v" in pytest_log.read_text()
 
 
-def test_changed_only_scope_falls_back_to_full_suite_for_empty_diff(tmp_path: Path) -> None:
+def test_changed_only_scope_skips_the_unit_suite_for_an_empty_diff(tmp_path: Path) -> None:
+    """An empty changed set must SKIP, never escalate to the full suite.
+
+    The escalation was a fail-open: it ran the most expensive thing this script can do exactly
+    when the evidence said there was nothing to run. On the M4 the full suite spawns
+    `scripts/reembed_bgem3.py --test` -- a 2.5 GB embedding model holding fds on the production DB.
+    """
     test_root = tmp_path / "tests"
     test_root.mkdir()
     (test_root / "test_think_recall_integration.py").write_text("test placeholder\n")
@@ -360,8 +369,9 @@ def test_changed_only_scope_falls_back_to_full_suite_for_empty_diff(tmp_path: Pa
     result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
 
     assert result.returncode == 0
-    assert "changed-only scope found no changed files; falling back to full pytest unit suite" in result.stdout
-    assert f"{test_root}/ -v" in pytest_log.read_text()
+    assert "WARNING: changed-only scope found no changed files; SKIPPING the pytest unit suite." in result.stdout
+    assert "falling back to full pytest unit suite" not in result.stdout
+    assert f"{test_root}/ -v" not in pytest_log.read_text()
 
 
 def test_changed_only_scope_falls_back_to_full_suite_for_nested_hook_source(tmp_path: Path) -> None:
@@ -493,3 +503,17 @@ def test_worker_prepush_excludes_real_db_test_files(tmp_path: Path) -> None:
     logged = pytest_log.read_text()
     assert f"--ignore={test_root / 'test_vector_store.py'}" in logged
     assert f"--ignore={test_root / 'test_engine.py'}" in logged
+
+
+def test_default_unit_mark_expression_deselects_embedding_model_tests() -> None:
+    """Pre-push must never load a real embedding model on Etan's Macs.
+
+    `tests/conftest.py` fails any UNMARKED test that loads one; the marker is the declared escape,
+    and this script is where the declaration has to be honoured. CI passes its own `-m` expression
+    in `.github/workflows/ci.yml` and still runs them, on a runner that warms the HF cache.
+    """
+    text = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert (
+        'UNIT_MARK_EXPR="${BRAINLAYER_PYTEST_MARK_EXPR:-not integration and not live and not embedding_model}"' in text
+    )
