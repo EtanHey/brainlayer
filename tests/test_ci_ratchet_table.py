@@ -553,7 +553,9 @@ def test_a_failed_report_must_still_say_what_failed(tmp_path: Path) -> None:
 
 def test_signature_report_and_unavailable_together_is_a_finding(tmp_path: Path) -> None:
     # Same ambiguity the wheel flags have: a stale report must not hide a job that never ran.
-    selection = ratchet.select_signature(write_report(tmp_path, {"status": "failed", "stage": "x", "detail": "y"}), "no")
+    selection = ratchet.select_signature(
+        write_report(tmp_path, {"status": "failed", "stage": "x", "detail": "y"}), "no"
+    )
     assert selection.report is None
     assert selection.problem is not None and "mutually exclusive" in selection.problem
 
@@ -823,10 +825,22 @@ def test_the_signature_job_publishes_its_report_even_when_the_install_failed() -
     assert "INSTALL_OUTCOME" in verify["run"] and '"failed"' in verify["run"]
 
 
-def test_the_signature_job_fails_on_an_invalid_file() -> None:
+def test_the_signature_job_fails_on_anything_but_a_clean_measurement() -> None:
+    """`invalid > 0` AND `could not measure` both have to fail this job.
+
+    Keying the failure off the count alone let the second case through: an install that worked but
+    a verifier that exited without counts published a `failed` report and left this job green,
+    which reads as a pass. AGENTS.md blocks release on an invalid `*.so`/`*.dylib`; a sweep that
+    never happened proves no less than nothing.
+    """
     fail_step = workflow_steps("signatures")["Fail this job on an invalid signature"]
-    assert "steps.verify.outputs.invalid" in fail_step["if"]
+    assert "steps.verify.outputs.verdict != 'clean'" in fail_step["if"]
     assert "exit 1" in fail_step["run"]
+    # ...and the two cases are distinguishable in the log, not collapsed into one message.
+    assert "Invalid keg signature" in fail_step["run"] and "Signatures unmeasured" in fail_step["run"]
+    verify = workflow_steps("signatures")["Codesign-verify every native extension in the keg"]["run"]
+    assert "verdict=unmeasured" in verify  # the default, so a step that falls over cannot pass
+    assert "verdict=clean" in verify and "verdict=invalid" in verify
 
 
 def test_the_table_job_waits_for_the_signature_job_without_depending_on_it_running() -> None:
@@ -852,10 +866,9 @@ def test_a_gate_that_never_decided_is_a_finding_not_a_silent_na() -> None:
     Rendering `n/a -- not triggered` there would state something this run never established. The
     table job hands the collector a `failed` report instead, which renders RED.
     """
-    hand_off = workflow_steps()["Hand the signature measurement to the collector"]["run"]
-    assert "needs.gate.result" in workflow_steps()["Hand the signature measurement to the collector"].get("env", {}).get(
-        "GATE_RESULT", ""
-    )
+    step = workflow_steps()["Hand the signature measurement to the collector"]
+    hand_off = step["run"]
+    assert "needs.gate.result" in step["env"]["GATE_RESULT"]
     assert '"failed"' in hand_off and "trigger gate" in hand_off
     # ...and a signatures job that ran and published nothing is the same kind of finding.
     assert "published no report" in hand_off
@@ -863,9 +876,17 @@ def test_a_gate_that_never_decided_is_a_finding_not_a_silent_na() -> None:
 
 def test_the_collector_is_handed_exactly_one_signature_flag() -> None:
     collect = workflow_steps()["Collect ratchet rows"]["run"]
-    assert '"${SIGNATURE_ARGS[@]}"' in collect or "${SIGNATURE_ARGS[@]}" in collect
+    assert '"${SIGNATURE_ARGS[@]}"' in collect
     hand_off = workflow_steps()["Hand the signature measurement to the collector"]["run"]
     assert "--signature-report" in hand_off and "--signature-unavailable" in hand_off
+
+
+def test_the_signature_args_are_read_without_bash_4() -> None:
+    # `mapfile` is bash >= 4 and macOS ships bash 3.2, so it would break the signatures job and
+    # anyone reproducing a step locally on a Mac. A `read` loop is equivalent and portable.
+    assert "mapfile" not in workflow_code()
+    collect = workflow_steps()["Collect ratchet rows"]["run"]
+    assert "while IFS= read -r" in collect and 'SIGNATURE_ARGS+=("$signature_arg")' in collect
 
 
 def test_the_gate_never_pipes_a_paginated_stream_into_head() -> None:

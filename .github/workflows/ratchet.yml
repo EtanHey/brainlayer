@@ -131,6 +131,10 @@ jobs:
           RUNNER_LABEL: macos-15/${{ runner.arch }}
         run: |
           set -euo pipefail
+          # One verdict, three values, and only `clean` lets this job go green: `invalid` means
+          # files failed codesign, `unmeasured` means the job ran and produced no counts. Deriving
+          # the pass/fail from the count alone left `unmeasured` looking like a pass.
+          verdict=unmeasured
           invalid=""
           if [[ "$INSTALL_OUTCOME" != "success" ]]; then
             report="$(jq -nc \
@@ -158,6 +162,8 @@ jobs:
                 '{status: "failed", stage: $stage, detail: $detail}')"
               invalid=""
             else
+              verdict=clean
+              [[ "$invalid" -eq 0 ]] || verdict=invalid
               grep '^INVALID ' verify.out > invalid-files.txt || true
               report="$(jq -nc \
                 --argjson valid "$valid" \
@@ -175,17 +181,24 @@ jobs:
             echo 'RATCHET_EOF'
           } >> "$GITHUB_OUTPUT"
           echo "invalid=${invalid}" >> "$GITHUB_OUTPUT"
+          echo "verdict=${verdict}" >> "$GITHUB_OUTPUT"
           echo "Keg install took ${INSTALL_SECONDS:-?} s on ${RUNNER_LABEL}." >> "$GITHUB_STEP_SUMMARY"
 
-      # The ratchet table fails on RED all by itself, but the job that FOUND an invalid signature
-      # staying green would read as a pass at a glance -- and AGENTS.md is explicit that an invalid
-      # `*.so`/`*.dylib` blocks release and deploy.
+      # The ratchet table fails on RED all by itself, but this job staying green would read as a
+      # pass at a glance -- and AGENTS.md is explicit that an invalid `*.so`/`*.dylib` blocks
+      # release and deploy. `unmeasured` fails for the same reason: a job that was asked to measure
+      # and did not is a finding, not a quiet success.
       - name: Fail this job on an invalid signature
-        if: ${{ !cancelled() && steps.verify.outputs.invalid != '' && steps.verify.outputs.invalid != '0' }}
+        if: ${{ !cancelled() && steps.verify.outputs.verdict != 'clean' }}
         env:
+          VERDICT: ${{ steps.verify.outputs.verdict }}
           INVALID: ${{ steps.verify.outputs.invalid }}
         run: |
-          echo "::error title=Invalid keg signature::${INVALID} native extension(s) failed codesign --verify; see the ratchet table."
+          if [[ "$VERDICT" == "invalid" ]]; then
+            echo "::error title=Invalid keg signature::${INVALID} native extension(s) failed codesign --verify; see the ratchet table."
+          else
+            echo "::error title=Signatures unmeasured::the parity job produced no codesign counts (verdict: ${VERDICT:-none}); see the ratchet table."
+          fi
           exit 1
 
   table:
@@ -260,7 +273,13 @@ jobs:
           # One arg per line, read back as an array: the gate's reason is free prose and must never
           # be word-split into several flags. A missing file fails this step, and the guarantee step
           # below then publishes the "measured nothing" table.
-          mapfile -t SIGNATURE_ARGS < signature-args.txt
+          #
+          # A `read` loop, not `mapfile`: `mapfile` is bash >= 4, and macOS ships bash 3.2, so the
+          # signatures job and anyone reproducing this locally on a Mac could not run this block.
+          SIGNATURE_ARGS=()
+          while IFS= read -r signature_arg; do
+            SIGNATURE_ARGS+=("$signature_arg")
+          done < signature-args.txt
           # --wheel-glob, not a shell glob: `$(ls dist/*.whl)` collapses "no wheel" and "three wheels"
           # into an empty --wheel, which the collector would have called `n/a` while the job stayed
           # green -- a false green in the ratchet itself. The collector now fails closed and reports

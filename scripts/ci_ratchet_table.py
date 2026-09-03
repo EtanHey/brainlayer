@@ -212,8 +212,7 @@ def select_signature(report_path: Path | None, unavailable: str | None) -> Signa
     if not report_path.is_file():
         return SignatureSelection(
             problem=(
-                f"`--signature-report {report_path}` is not a file — the macOS parity job ran and "
-                "published no report"
+                f"`--signature-report {report_path}` is not a file — the macOS parity job ran and published no report"
             )
         )
     try:
@@ -242,9 +241,7 @@ def select_signature(report_path: Path | None, unavailable: str | None) -> Signa
         return SignatureSelection(report=SignatureReport(status=SIGNATURE_FAILED, stage=stage, detail=detail))
     valid, invalid = payload.get("valid"), payload.get("invalid")
     # bool is an int in Python; a `true` here would otherwise become a count of 1.
-    honest = [
-        isinstance(count, int) and not isinstance(count, bool) and count >= 0 for count in (valid, invalid)
-    ]
+    honest = [isinstance(count, int) and not isinstance(count, bool) and count >= 0 for count in (valid, invalid)]
     if not all(honest):
         return SignatureSelection(
             problem=(
