@@ -464,6 +464,20 @@ def test_dependabot_prs_do_not_attempt_the_comment() -> None:
     assert "dependabot[bot]" in skip
 
 
+def test_the_workflow_stamps_the_sha_that_provenance_compares_against() -> None:
+    """The provenance row is only meaningful if the job stamps the wheel with THIS checkout's HEAD.
+
+    Nothing else pins that: change the stamp step to write a constant and every row-level test still
+    passes while the live table reports a GREEN it never earned.
+    """
+    stamp_step = workflow_steps()["Stamp build sha and build the wheel"]["run"]
+    assert 'head="$(git rev-parse HEAD)"' in stamp_step
+    assert f"> {ratchet.STAMP_MEMBER.replace('brainlayer/', 'src/brainlayer/')}" in stamp_step
+    assert 'printf \'BUILD_SHA = "%s"\\n\' "$head"' in stamp_step
+    # ...and the collector must read that wheel through the fail-closed glob, not a shell expansion.
+    assert "--wheel-glob 'dist/*.whl'" in workflow_steps()["Collect ratchet rows"]["run"]
+
+
 def test_collect_runs_even_when_an_earlier_step_failed() -> None:
     """A build failure must not leave the previous commit's GREEN table standing on the PR.
 

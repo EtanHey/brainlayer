@@ -136,12 +136,15 @@ def select_wheel(explicit: Path | None, pattern: str | None) -> WheelSelection:
 
 
 def canonical_db_path() -> Path:
+    # The resolver is inside the guard too: an import that succeeds but a call that raises would
+    # crash the whole table over a row that was only ever going to say `n/a` on a runner.
     try:
         from brainlayer.paths import get_db_path
+
+        return Path(get_db_path())
     except Exception:
         # The ratchet job does not install brainlayer; the documented canonical path is the answer.
         return FALLBACK_DB
-    return Path(get_db_path())
 
 
 def _clean_git_env() -> dict[str, str]:
