@@ -12,6 +12,7 @@ process boundary.
 
 from __future__ import annotations
 
+import ast
 import os
 import sqlite3
 import subprocess
@@ -24,6 +25,7 @@ import pytest
 
 from brainlayer import paths as brain_paths
 from brainlayer.embeddings import FORBID_MODEL_LOAD_ENV, guard_embedding_model_load
+from tests.conftest import EMBEDDING_MODEL_MODULES
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REEMBED_SCRIPT = REPO_ROOT / "scripts" / "reembed_bgem3.py"
@@ -97,6 +99,32 @@ def test_opening_the_canonical_db_is_refused(tmp_path: Path) -> None:
     connection.execute("CREATE TABLE t (id INTEGER)")
     connection.close()
     assert scratch.is_file()
+
+
+def test_no_test_module_binds_an_embedding_model_class_directly() -> None:
+    """The guard's contract, made impossible to violate rather than merely documented.
+
+    `tests/conftest.py` patches `SentenceTransformer` **on the module**. A test that did
+    `from sentence_transformers import SentenceTransformer` at import time would bind the real
+    class before any fixture runs, and calling that alias reaches neither the module patch nor
+    `BRAINLAYER_FORBID_EMBEDDING_MODEL` -- that env check lives at BrainLayer's load sites, not
+    inside a third-party constructor (CodeRabbit, #755).
+
+    Wrapping the import machinery to close that would cost every run an import hook for a shape no
+    test uses. So the contract is narrowed and enforced instead: in `tests/`, reach an embedding
+    model through `brainlayer.embeddings`, or through a module attribute -- never a direct alias.
+    """
+    offenders = []
+    for path in sorted((REPO_ROOT / "tests").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] in EMBEDDING_MODEL_MODULES:
+                offenders.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno} -> from {node.module} import ...")
+
+    assert offenders == [], (
+        "these test modules bind an embedding-model class directly, which the suite-hygiene guard "
+        f"cannot intercept: {offenders}"
+    )
 
 
 def test_the_canonical_db_is_refused_through_a_file_uri(tmp_path: Path) -> None:

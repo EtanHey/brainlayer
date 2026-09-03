@@ -214,27 +214,31 @@ def annotation_gaps(tools: list) -> dict:
 
 
 def truncation_report(tools: list, notice: object, gaps: dict) -> dict:
-    """What the truncation rung is judged on: evidenced, named, and correctly ordered."""
+    """What the truncation rung is judged on: evidenced, named or explained, correctly ordered."""
     truncated = [tool.get("name", "unknown") for tool in tools if tool.get("description", "").endswith("…[truncated]")]
     names = sorted(notice.get("tools", [])) if isinstance(notice, dict) else []
+    reason = str(notice.get("reason", "")).strip() if isinstance(notice, dict) else ""
     evidenced = bool(truncated) or isinstance(notice, dict)
     shed_both = len(gaps["missing_annotations"]) == len(tools) and len(gaps["missing_input_schema_prose"]) == len(tools)
     return {
         "truncated_descriptions": truncated,
         "truncation_notice_names": names,
-        # A notice that names nobody is the same false-green shape as a table row with no number:
-        # the contract (#727) is that the notice NAMES each shortened description. An empty `tools`
-        # list next to an empty `truncated` list used to satisfy the equality by both sides being
-        # empty, so a notice could claim a truncation happened and be believed without saying what.
-        "truncation_notice_names_nobody": isinstance(notice, dict) and not names,
+        "truncation_notice_reason": reason,
+        # The contract (#727) is that a notice ACCOUNTS for itself. Naming the shortened
+        # descriptions is one way; the other is BrainBar's documented over-limit shape, where
+        # `forceNotice` emits `tools: []` with a `reason` saying every description is already at
+        # the floor (`BrainBarServer.responseTruncatingDescriptions`). Rejecting an empty `tools`
+        # list outright turned that legitimate live response RED (Macroscope, #755). What is never
+        # acceptable is a notice that names nobody AND explains nothing -- a claim with no content.
+        "truncation_notice_unexplained": isinstance(notice, dict) and not names and not reason,
         "truncation_evidenced": evidenced,
         "truncation_order_valid": not evidenced or shed_both,
     }
 
 
 def truncation_intact(report: dict) -> bool:
-    """The rung passes only when the notice named exactly the descriptions that were shortened."""
-    if report["truncation_notice_names_nobody"]:
+    """The rung passes only when the notice named exactly what it shortened, or explained itself."""
+    if report["truncation_notice_unexplained"]:
         return False
     if report["truncation_notice_names"] != sorted(report["truncated_descriptions"]):
         return False
@@ -251,26 +255,62 @@ def validate_tools(result: dict) -> tuple[bool, dict]:
     return intact, {"tool_count": len(tools), "missing_descriptions": missing, **gaps, **truncation}
 
 
+# A store that answered `DUPLICATE` or `MERGED` succeeded, but it did NOT create a chunk: the id it
+# returns belongs to PRE-EXISTING content -- a real memory somebody wrote. Only these two outcomes
+# mean the chunk on the other end of that id is this run's to retire.
+GATE_CREATED_STORE_STATUSES = {"STORED", "DEFERRED"}
+
+
+def probe_is_gate_created(stored: dict) -> bool:
+    """Whether THIS run created the chunk the store answered with.
+
+    `stored_new` is authoritative wherever BrainBar sends it, which is every non-queued store
+    (`MCPRouter.handleBrainStore`). The queued path does not send it, but a `DEFERRED` store is a
+    write this gate queued and the drain will persist it, so that chunk is ours.
+    """
+    stored_new = stored.get("stored_new")
+    if isinstance(stored_new, bool):
+        return stored_new
+    return stored.get("status") in GATE_CREATED_STORE_STATUSES
+
+
 def retire_probe_chunk(client: MCPClient, stored: dict) -> dict:
-    """Archive the probe chunk this run planted in the REAL database.
+    """Archive the probe chunk this run planted in the REAL database -- and only that chunk.
 
     The roundtrip check has to write, because a store->search roundtrip against the served daemon
     is the thing being measured and the served daemon owns the canonical DB. What it must not do is
     leave a chunk behind on every run: that is the gate quietly growing the corpus it measures.
 
-    Failing to clean up FAILS the check rather than being logged and forgotten -- a gate that
-    cannot undo its own write has no business calling the run green.
+    What it must not do EVEN MORE is archive a chunk it did not create. `brain_store` answers
+    `DUPLICATE`/`MERGED` with the id of an EXISTING chunk, so archiving unconditionally would make
+    the gate silently delete a real user memory every time BrainLayer deduped the probe --
+    "never silently degrade, never auto-delete personal data", broken by a cleanup routine
+    (Macroscope, #755). The question is *did this gate create this chunk*, not *did the store
+    succeed*.
+
+    Failing to clean up a chunk we DID create FAILS the check rather than being logged and
+    forgotten -- a gate that cannot undo its own write has no business calling the run green.
     """
+    if not probe_is_gate_created(stored):
+        # Nothing was planted, so there is nothing to retire. Name the id we declined to touch, so
+        # "retired" here is auditable rather than an unexplained green.
+        return {
+            "probe_retired": True,
+            "probe_chunk_id": None,
+            "probe_retire_error": None,
+            "probe_reused_existing_chunk": stored.get("chunk_id"),
+        }
     chunk_id = stored.get("chunk_id")
     if not chunk_id:
         # No exemption for DEFERRED. BrainBar's queued store DOES return a `chunk_id`
-        # (`queuedBrainStoreOutput`), and the deferred drain persists that chunk -- so calling a
+        # (`queuedBrainStoreOutput`) and the deferred drain persists that chunk, so calling a
         # DEFERRED store "retired" would have been the exact false green this helper exists to
         # prevent: a chunk left in the production corpus, reported as cleaned up (Macroscope, #755).
         return {
             "probe_retired": False,
             "probe_chunk_id": None,
             "probe_retire_error": "the store returned no chunk_id, so the probe chunk cannot be retired",
+            "probe_reused_existing_chunk": None,
         }
     try:
         client.call("brain_archive", {"chunk_id": chunk_id, "reason": "sprint-gate probe"})
@@ -278,8 +318,18 @@ def retire_probe_chunk(client: MCPClient, stored: dict) -> dict:
         # Deliberately broad: this runs from a `finally`, so ANY exception escaping here would
         # REPLACE the failure that sent us there -- the gate would report a cleanup error and lose
         # the search error that is the actual finding. Cleanup reports itself; it never masks.
-        return {"probe_retired": False, "probe_chunk_id": chunk_id, "probe_retire_error": str(error)}
-    return {"probe_retired": True, "probe_chunk_id": chunk_id, "probe_retire_error": None}
+        return {
+            "probe_retired": False,
+            "probe_chunk_id": chunk_id,
+            "probe_retire_error": str(error),
+            "probe_reused_existing_chunk": None,
+        }
+    return {
+        "probe_retired": True,
+        "probe_chunk_id": chunk_id,
+        "probe_retire_error": None,
+        "probe_reused_existing_chunk": None,
+    }
 
 
 def check_mcp(config: dict) -> dict:

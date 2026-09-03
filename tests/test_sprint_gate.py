@@ -215,8 +215,8 @@ def test_validate_tools_accepts_correctly_ordered_description_truncation():
     assert details["truncation_order_valid"] is True
 
 
-def test_truncation_notice_that_names_nobody_is_not_intact():
-    """A notice claiming a truncation must say WHAT it truncated.
+def test_truncation_notice_that_names_nobody_and_explains_nothing_is_not_intact():
+    """A notice must ACCOUNT for itself: name what it shortened, or say why it shortened nothing.
 
     Two empty sets used to satisfy `notice_names == set(truncated)` by both being empty, so a
     notice could assert that descriptions were shortened and be believed without naming one.
@@ -235,8 +235,42 @@ def test_truncation_notice_that_names_nobody_is_not_intact():
     intact, details = sprint_gate.validate_tools(result)
 
     assert intact is False
-    assert details["truncation_notice_names_nobody"] is True
+    assert details["truncation_notice_unexplained"] is True
     assert details["truncation_notice_names"] == []
+
+
+def test_the_over_limit_notice_with_no_shortened_description_is_accepted():
+    """BrainBar's documented over-limit shape is a LIVE response, not a finding.
+
+    `BrainBarServer.responseTruncatingDescriptions(forceNotice: true)` emits the notice with
+    `tools: []` and a `reason` saying every description is already at the floor, and ships the
+    response over-limit with its contract intact. Rejecting an empty `tools` list outright turned
+    that into a false RED against a legitimate response (Macroscope, #755).
+    """
+    result = {
+        "tools": [
+            {
+                "name": "brain_search",
+                "description": "Search memory",
+                "inputSchema": {"type": "object"},
+            }
+        ],
+        "_meta": {
+            "brainlayer/descriptionsTruncated": {
+                "tools": [],
+                "reason": "raw newline tools/list exceeds the client's chunk limit even though every "
+                "description is already at or below the floor",
+                "fullDescriptionsAvailableOver": "Content-Length framing",
+            }
+        },
+    }
+
+    intact, details = sprint_gate.validate_tools(result)
+
+    assert intact is True
+    assert details["truncation_notice_unexplained"] is False
+    assert details["truncation_notice_names"] == []
+    assert "already at or below the floor" in details["truncation_notice_reason"]
 
 
 def test_truncation_notice_naming_its_tools_is_reported_verbatim():
@@ -255,7 +289,7 @@ def test_truncation_notice_naming_its_tools_is_reported_verbatim():
 
     assert intact is True
     assert details["truncation_notice_names"] == ["brain_search"]
-    assert details["truncation_notice_names_nobody"] is False
+    assert details["truncation_notice_unexplained"] is False
 
 
 def _roundtrip_client(store_result: dict, archive_error: Exception | None = None) -> tuple[SimpleNamespace, list]:
@@ -319,6 +353,60 @@ def test_roundtrip_fails_when_it_cannot_retire_its_own_probe_chunk(monkeypatch):
     assert result["status"] == "FAIL"
     assert result["details"]["probe_retired"] is False
     assert "archive refused" in result["details"]["probe_retire_error"]
+
+
+@pytest.mark.parametrize("dedupe_status", ["DUPLICATE", "MERGED"])
+def test_roundtrip_never_archives_a_chunk_the_gate_did_not_create(monkeypatch, dedupe_status):
+    """A deduped probe means the returned chunk is SOMEBODY ELSE'S MEMORY. Never archive it.
+
+    `brain_store` answers DUPLICATE/MERGED with the id of PRE-EXISTING content. Archiving that
+    unconditionally would make the gate silently delete a real user memory on every run where
+    BrainLayer deduped the probe -- "never silently degrade, never auto-delete personal data",
+    broken by the cleanup routine itself.
+    """
+    existing = "chunk-somebody-elses-memory"
+    client, calls = _roundtrip_client({"status": dedupe_status, "stored_new": False, "chunk_id": existing})
+    monkeypatch.setattr(sprint_gate, "MCPClient", lambda _path, _timeout: client)
+    monkeypatch.setattr(sprint_gate, "search_visible", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(sprint_gate.time, "monotonic", lambda: 0.0)
+
+    result = sprint_gate.check_mcp(ROUNDTRIP_CONFIG)
+
+    # The assertion that proves the blocker is closed: brain_archive is never reached at all, and
+    # in particular never with the pre-existing chunk id.
+    assert [name for name, _ in calls] == ["expand_palette", "brain_store"]
+    assert all(arguments.get("chunk_id") != existing for _name, arguments in calls)
+    # The gate created nothing, so there is nothing outstanding -- and it still passes.
+    assert result["status"] == "PASS"
+    assert result["details"]["probe_retired"] is True
+    assert result["details"]["probe_chunk_id"] is None
+    assert result["details"]["probe_reused_existing_chunk"] == existing
+
+
+def test_a_stored_probe_is_still_archived_when_stored_new_is_reported(monkeypatch):
+    """The other direction: a chunk the gate DID create is retired exactly as before."""
+    client, calls = _roundtrip_client({"status": "STORED", "stored_new": True, "chunk_id": "chunk-42"})
+    monkeypatch.setattr(sprint_gate, "MCPClient", lambda _path, _timeout: client)
+    monkeypatch.setattr(sprint_gate, "search_visible", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(sprint_gate.time, "monotonic", lambda: 0.0)
+
+    result = sprint_gate.check_mcp(ROUNDTRIP_CONFIG)
+
+    assert ("brain_archive", {"chunk_id": "chunk-42", "reason": "sprint-gate probe"}) in calls
+    assert result["status"] == "PASS"
+    assert result["details"]["probe_chunk_id"] == "chunk-42"
+
+
+def test_probe_ownership_reads_stored_new_before_falling_back_to_status():
+    """`stored_new` is authoritative where BrainBar sends it; status is the queued-path fallback."""
+    assert sprint_gate.probe_is_gate_created({"status": "STORED", "stored_new": True}) is True
+    assert sprint_gate.probe_is_gate_created({"status": "STORED", "stored_new": False}) is False
+    assert sprint_gate.probe_is_gate_created({"status": "DUPLICATE", "stored_new": False}) is False
+    assert sprint_gate.probe_is_gate_created({"status": "MERGED", "stored_new": False}) is False
+    # The queued path (`queuedBrainStoreOutput`) sends no `stored_new`; a DEFERRED write is ours.
+    assert sprint_gate.probe_is_gate_created({"status": "DEFERRED"}) is True
+    assert sprint_gate.probe_is_gate_created({"status": "STORED"}) is True
+    assert sprint_gate.probe_is_gate_created({"status": "DUPLICATE"}) is False
 
 
 def test_roundtrip_retires_its_probe_chunk_even_when_the_search_raises(monkeypatch):
