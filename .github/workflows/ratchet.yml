@@ -53,12 +53,19 @@ jobs:
       signatures: ${{ steps.decide.outputs.signatures }}
       reason: ${{ steps.decide.outputs.reason }}
     steps:
+      # fetch-depth 0 so the base commit is present for the diff below. `gh api
+      # repos/.../pulls/N/files` was the obvious way to list changed files and it is WRONG here:
+      # that endpoint caps at 3,000 files however you paginate, so a release path sitting past the
+      # cap would silently skip the macOS job on exactly the large PR that needed it. `git diff` has
+      # no such cap.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Decide whether this PR pays for a macOS runner
         id: decide
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
           set -euo pipefail
@@ -70,9 +77,12 @@ jobs:
             decision=true
             reason='opted in with the `ratchet:signatures` label'
           else
-            # A file, not a pipe into `grep`: `gh api --paginate` closing early under `pipefail` is
-            # the SIGPIPE footgun the comment step already learned once.
-            gh api "repos/${REPO}/pulls/${PR}/files" --paginate --jq '.[].filename' > "$changed"
+            # HEAD is the PR's merge ref, so diffing it against the base tip is exactly this PR's
+            # file list. A base commit that is somehow absent fails the step under `set -e`, and the
+            # table then renders signature_valid RED ("the gate did not decide") rather than
+            # guessing -- the same fail-closed rule the rest of this workflow follows.
+            git cat-file -e "${BASE_SHA}^{commit}"
+            git diff --name-only "$BASE_SHA" HEAD > "$changed"
             if grep -Eq "$release_paths" "$changed"; then
               decision=true
               reason="touches release/signing paths: $(grep -E "$release_paths" "$changed" | tr '\n' ' ')"
@@ -114,7 +124,18 @@ jobs:
       HOMEBREW_NO_ENV_HINTS: "1"
       HOMEBREW_NO_INSTALL_CLEANUP: "1"
     steps:
+      # The BASE commit, not the PR head. `scripts/release-*` is one of the paths that TRIGGERS
+      # this job, so running the verifier out of the PR checkout let a PR rewrite the very script
+      # that gates it: print `valid: 1` / `invalid: 0` and the row goes GREEN with codesign never
+      # invoked. A gate the gated change can edit is not a gate.
+      #
+      # Trade-off, stated rather than hidden: a PR that legitimately improves the verifier is
+      # measured by the trusted copy, so its own change is reviewed by humans and by the test suite
+      # rather than by this row. The step summary says so on every run.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted
 
       # `continue-on-error`, because a non-zero `brew install` does NOT mean no keg. Homebrew
       # `ofail`s a relocation failure and exits 1 with the keg installed and `post_install` run --
@@ -178,7 +199,7 @@ jobs:
             # The same script AGENTS.md makes mandatory at release time. A CI-only reimplementation
             # would be a second definition of "valid", free to drift from the release gate's.
             rc=0
-            bash scripts/release-verify-signatures.sh "$keg" > "$out" 2> "$err" || rc=$?
+            bash trusted/scripts/release-verify-signatures.sh "$keg" > "$out" 2> "$err" || rc=$?
             cat "$out"
             cat "$err" >&2
             valid="$(sed -n 's/^valid: \([0-9][0-9]*\)$/\1/p' "$out" | tail -n1)"
@@ -188,13 +209,21 @@ jobs:
               # That is a failure to measure, and it must not become a green row or a bare `n/a`.
               detail="$(awk 'NF { print; exit }' "$err")"
               report="$(jq -nc \
-                --arg stage 'scripts/release-verify-signatures.sh' \
+                --arg stage 'trusted/scripts/release-verify-signatures.sh' \
                 --arg detail "exited ${rc} without reporting counts: ${detail:-no diagnostic on stderr}" \
                 '{status: "failed", stage: $stage, detail: $detail}')"
               invalid=""
             else
-              verdict=clean
-              [[ "$invalid" -eq 0 ]] || verdict=invalid
+              # release-verify-signatures.sh PRINTS `valid: 0` / `invalid: 0` and only THEN exits 1
+              # on an empty sweep, so counts existing is not the same as something having been
+              # verified. Without this the job went green while the collector rendered the row RED
+              # -- two CI statuses contradicting each other about the same measurement.
+              if [[ "$valid" -eq 0 && "$invalid" -eq 0 ]]; then
+                verdict=unmeasured
+              else
+                verdict=clean
+                [[ "$invalid" -eq 0 ]] || verdict=invalid
+              fi
               grep '^INVALID ' "$out" > "${RUNNER_TEMP}/invalid-files.txt" || true
               report="$(jq -nc \
                 --argjson valid "$valid" \
@@ -215,7 +244,10 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "invalid=${invalid}" >> "$GITHUB_OUTPUT"
           echo "verdict=${verdict}" >> "$GITHUB_OUTPUT"
-          echo "Keg install took ${INSTALL_SECONDS:-?} s on ${RUNNER_LABEL} (brew outcome: ${INSTALL_OUTCOME})." >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "Keg install took ${INSTALL_SECONDS:-?} s on ${RUNNER_LABEL} (brew outcome: ${INSTALL_OUTCOME})."
+            echo "The verifier ran from the BASE commit's checkout, so this PR's own copy of \`scripts/release-verify-signatures.sh\` was **not** exercised here."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # The ratchet table fails on RED all by itself, but this job staying green would read as a
       # pass at a glance -- and AGENTS.md is explicit that an invalid `*.so`/`*.dylib` blocks

@@ -199,54 +199,51 @@ class SignatureSelection:
     problem: str | None = None
 
 
-def select_signature(report_path: Path | None, unavailable: str | None) -> SignatureSelection:
-    """Resolve the signature measurement FAIL-CLOSED, on the same rule the wheel follows.
+def read_signature_payload(report_path: Path) -> tuple[dict | None, str | None]:
+    """Load the parity job's report, or say why it cannot be read.
 
-    `--signature-unavailable <reason>` says nobody was asked to measure -- a real capability gap,
-    rendered `n/a` with that reason. `--signature-report <path>` says the macOS parity job RAN and
-    owes this run a measurement; anything that stops it arriving is a **finding**, because a job
-    that ran and produced nothing is not a machine that cannot measure.
+    Every failure here returns a reason rather than raising. A crash would cost the WHOLE table --
+    including the provenance row this job did measure -- over a report the collector was handed.
     """
-    if report_path is not None and unavailable is not None:
-        return SignatureSelection(problem="`--signature-report` and `--signature-unavailable` are mutually exclusive")
-    if report_path is None and unavailable is None:
-        return SignatureSelection(unavailable=SIGNATURE_UNAVAILABLE_DEFAULT)
-    if report_path is None:
-        return SignatureSelection(unavailable=unavailable)
     if not report_path.is_file():
-        return SignatureSelection(
-            problem=(
-                f"`--signature-report {report_path}` is not a file — the macOS parity job ran and published no report"
-            )
+        return None, (
+            f"`--signature-report {report_path}` is not a file — the macOS parity job ran and published no report"
         )
     try:
         payload = json.loads(report_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-        return SignatureSelection(
-            problem=(
-                f"the macOS parity job's report could not be read ({type(error).__name__}) — "
-                "signatures are unverified, not verified"
-            )
+    except (OSError, UnicodeDecodeError, ValueError) as error:
+        # `ValueError`, not just `json.JSONDecodeError` (which is a subclass of it): a count with
+        # more than sys.get_int_max_str_digits() digits raises a bare ValueError out of json.loads,
+        # and that has to render RED like any other malformed report instead of killing the table.
+        return None, (
+            f"the macOS parity job's report could not be read ({type(error).__name__}) — "
+            "signatures are unverified, not verified"
         )
-    if not isinstance(payload, dict) or payload.get("status") not in SIGNATURE_STATUSES:
+    if not isinstance(payload, dict):
+        return None, f"the macOS parity job's report is a JSON {type(payload).__name__}, not an object"
+    return payload, None
+
+
+def signature_failure(payload: dict) -> SignatureSelection:
+    """A report that says the job could not measure. It still owes us WHAT could not."""
+    stage = str(payload.get("stage", "")).strip()
+    detail = str(payload.get("detail", "")).strip()
+    if not stage or not detail:
         return SignatureSelection(
-            problem=(
-                "the macOS parity job's report carries no known `status` "
-                f"(expected one of {', '.join(SIGNATURE_STATUSES)})"
-            )
+            problem="the macOS parity job reported a failure without naming the `stage` and `detail` that failed"
         )
-    if payload["status"] == SIGNATURE_FAILED:
-        stage = str(payload.get("stage", "")).strip()
-        detail = str(payload.get("detail", "")).strip()
-        if not stage or not detail:
-            return SignatureSelection(
-                problem="the macOS parity job reported a failure without naming the `stage` and `detail` that failed"
-            )
-        return SignatureSelection(report=SignatureReport(status=SIGNATURE_FAILED, stage=stage, detail=detail))
-    valid, invalid = payload.get("valid"), payload.get("invalid")
+    return SignatureSelection(report=SignatureReport(status=SIGNATURE_FAILED, stage=stage, detail=detail))
+
+
+def honest_count(value: object) -> bool:
     # bool is an int in Python; a `true` here would otherwise become a count of 1.
-    honest = [isinstance(count, int) and not isinstance(count, bool) and count >= 0 for count in (valid, invalid)]
-    if not all(honest):
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def signature_measurement(payload: dict) -> SignatureSelection:
+    """A report that claims counts. The counts ARE this row's value, so they are checked hard."""
+    valid, invalid = payload.get("valid"), payload.get("invalid")
+    if not (honest_count(valid) and honest_count(invalid)):
         return SignatureSelection(
             problem=(
                 "the macOS parity job reported a measurement without honest `valid`/`invalid` counts "
@@ -254,6 +251,15 @@ def select_signature(report_path: Path | None, unavailable: str | None) -> Signa
             )
         )
     files = payload.get("invalid_files") or []
+    if not isinstance(files, list):
+        # `invalid_files: 1` used to raise TypeError out of the tuple comprehension and abort the
+        # whole table, instead of the fail-closed RED row a malformed hand-off is supposed to give.
+        return SignatureSelection(
+            problem=(
+                f"the macOS parity job's `invalid_files` is a {type(files).__name__}, not a list — "
+                "the report is malformed"
+            )
+        )
     return SignatureSelection(
         report=SignatureReport(
             status=SIGNATURE_MEASURED,
@@ -265,6 +271,38 @@ def select_signature(report_path: Path | None, unavailable: str | None) -> Signa
             invalid_files=tuple(str(name) for name in files if str(name).strip()),
         )
     )
+
+
+def select_signature(report_path: Path | None, unavailable: str | None) -> SignatureSelection:
+    """Resolve the signature measurement FAIL-CLOSED, on the same rule the wheel follows.
+
+    `--signature-unavailable <reason>` says nobody was asked to measure -- a real capability gap,
+    rendered `n/a` with that reason. `--signature-report <path>` says the macOS parity job RAN and
+    owes this run a measurement; anything that stops it arriving is a **finding**, because a job
+    that ran and produced nothing is not a machine that cannot measure.
+
+    The per-shape checks live in the helpers above; this function is only the routing, so that
+    adding a validation rule does not keep pushing one function's branch count up.
+    """
+    if report_path is not None and unavailable is not None:
+        return SignatureSelection(problem="`--signature-report` and `--signature-unavailable` are mutually exclusive")
+    if report_path is None and unavailable is None:
+        return SignatureSelection(unavailable=SIGNATURE_UNAVAILABLE_DEFAULT)
+    if report_path is None:
+        return SignatureSelection(unavailable=unavailable)
+    payload, problem = read_signature_payload(report_path)
+    if problem is not None or payload is None:
+        return SignatureSelection(problem=problem or "the macOS parity job's report could not be read")
+    if payload.get("status") not in SIGNATURE_STATUSES:
+        return SignatureSelection(
+            problem=(
+                "the macOS parity job's report carries no known `status` "
+                f"(expected one of {', '.join(SIGNATURE_STATUSES)})"
+            )
+        )
+    if payload["status"] == SIGNATURE_FAILED:
+        return signature_failure(payload)
+    return signature_measurement(payload)
 
 
 def canonical_db_path() -> Path:
@@ -534,29 +572,41 @@ def row_signature_valid(probe: Probe, _corpus: dict) -> Row:
             SIGNATURE_METHOD_MEASURED,
             SIGNATURE_NOTES,
         )
+    return measured_signature_row(report)
+
+
+def signature_value(report: SignatureReport) -> str:
+    """The counts, where they came from, and whether brew was happy about getting there."""
     valid, invalid = report.valid or 0, report.invalid or 0
     where = " · ".join(part for part in (report.keg, report.runner) if part)
-    measured = f"{valid} valid / {invalid} invalid" + (f" · {where}" if where else "")
+    value = f"{valid} valid / {invalid} invalid" + (f" · {where}" if where else "")
     if report.install_outcome and report.install_outcome != "success":
-        # A clean sweep after Homebrew `ofail`ed relocation is the #37 fix WORKING, so it stays
+        # A clean sweep after Homebrew `ofail`ed relocation is the #37 fix WORKING, so the row stays
         # GREEN -- but silently, it would read as an unremarkable install. Say what happened.
-        measured += (
+        value += (
             f" · `brew install` exited non-zero (outcome: {report.install_outcome}); "
             "the keg installed and the sweep ran after it"
         )
+    return value
+
+
+def measured_signature_row(report: SignatureReport) -> Row:
+    value = signature_value(report)
+    valid, invalid = report.valid or 0, report.invalid or 0
     if valid + invalid == 0:
-        # An empty sweep proves nothing: release-verify-signatures.sh itself treats it as fatal.
+        # An empty sweep proves nothing: release-verify-signatures.sh itself treats it as fatal,
+        # and it prints `valid: 0 / invalid: 0` BEFORE doing so, so counts alone are not evidence.
         return Row(
             "signature_valid",
             RED,
-            f"{measured} — the keg exposed no native extensions to verify, so nothing was proven",
+            f"{value} — the keg exposed no native extensions to verify, so nothing was proven",
             SIGNATURE_METHOD_MEASURED,
             SIGNATURE_NOTES,
         )
     if invalid:
         named = ", ".join(report.invalid_files[:5]) or "see the parity job log"
-        return Row("signature_valid", RED, f"{measured} — {named}", SIGNATURE_METHOD_MEASURED, SIGNATURE_NOTES)
-    return Row("signature_valid", GREEN, measured, SIGNATURE_METHOD_MEASURED, SIGNATURE_NOTES)
+        return Row("signature_valid", RED, f"{value} — {named}", SIGNATURE_METHOD_MEASURED, SIGNATURE_NOTES)
+    return Row("signature_valid", GREEN, value, SIGNATURE_METHOD_MEASURED, SIGNATURE_NOTES)
 
 
 ROW_BUILDERS = (row_provenance, row_mapped_bytes, row_search_latency, row_idle_cpu, row_signature_valid)

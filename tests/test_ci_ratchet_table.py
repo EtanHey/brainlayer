@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import zipfile
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -762,8 +763,6 @@ def test_workflow_never_pipes_a_paginated_stream_into_head() -> None:
     workflow = workflow_code()
     assert "head -n1" not in workflow
     assert '--paginate > "${RUNNER_TEMP}/comments.json"' in workflow
-    # The gate lists changed files the same way, and must not learn the footgun either.
-    assert '''--jq '.[].filename' > "$changed"''' in workflow
 
 
 # --- the macOS signature-parity job -----------------------------------------------------------
@@ -982,8 +981,107 @@ def test_the_signature_args_are_read_without_bash_4() -> None:
     assert "while IFS= read -r" in collect and 'SIGNATURE_ARGS+=("$signature_arg")' in collect
 
 
-def test_the_gate_never_pipes_a_paginated_stream_into_head() -> None:
-    # Same SIGPIPE-under-pipefail footgun as the comment step: `gh api --paginate` lands in a file.
+def test_the_gate_lists_changed_files_without_the_rest_api_file_cap() -> None:
+    """`gh api repos/.../pulls/N/files` caps at 3,000 files no matter how you paginate.
+
+    A release path sitting past that cap made the gate answer `false` -- skipping the macOS job on
+    exactly the large PR that needed it, and reporting a confident "touches no release path" reason
+    for a list it never fully saw. `git diff` has no cap, so the gate diffs locally instead.
+    """
     decide = workflow_steps("gate")["Decide whether this PR pays for a macOS runner"]["run"]
-    assert "--paginate" in decide
+    assert 'git diff --name-only "$BASE_SHA" HEAD' in decide
+    assert "pulls/" not in decide and "--paginate" not in decide
+    # ...which needs the base commit present, so the gate's checkout must not be shallow.
+    checkout = [step for step in workflow_jobs()["gate"]["steps"] if "checkout" in str(step.get("uses", ""))]
+    assert checkout and checkout[0]["with"]["fetch-depth"] == 0
+    # A base commit that is not there fails the step rather than silently diffing against nothing.
+    assert 'git cat-file -e "${BASE_SHA}^{commit}"' in decide
     assert "| head" not in decide
+
+
+def test_the_verifier_runs_from_the_base_commit_not_the_pr_checkout() -> None:
+    """`scripts/release-*` is one of the paths that TRIGGERS this job.
+
+    Running the verifier out of the PR checkout therefore let a PR rewrite the script that gates
+    it: print `valid: 1` / `invalid: 0` and `signature_valid` goes GREEN with codesign never
+    invoked. A gate the gated change can edit is not a gate.
+    """
+    checkout = [step for step in workflow_jobs()["signatures"]["steps"] if "checkout" in str(step.get("uses", ""))]
+    assert checkout, "the signatures job must check out the trusted verifier"
+    assert checkout[0]["with"]["ref"] == "${{ github.event.pull_request.base.sha }}"
+    assert checkout[0]["with"]["path"] == "trusted"
+    verify = workflow_steps("signatures")["Codesign-verify every native extension in the keg"]["run"]
+    assert "bash trusted/scripts/release-verify-signatures.sh" in verify
+    # The PR's own copy must never be the one that produces the number.
+    assert "bash scripts/release-verify-signatures.sh" not in verify
+    # The limitation is stated on every run rather than left for a reader to infer.
+    assert "was **not** exercised here" in verify
+
+
+def test_an_empty_sweep_is_unmeasured_in_the_job_as_well_as_the_table() -> None:
+    """release-verify-signatures.sh PRINTS `valid: 0` / `invalid: 0` and only THEN exits 1.
+
+    So counts existing is not the same as something having been verified. The collector already
+    rendered that RED; the job called it `clean`, and two CI statuses contradicted each other about
+    the same measurement.
+    """
+    verify = workflow_steps("signatures")["Codesign-verify every native extension in the keg"]["run"]
+    assert 'if [[ "$valid" -eq 0 && "$invalid" -eq 0 ]]; then' in verify
+    assert verify.index('if [[ "$valid" -eq 0 && "$invalid" -eq 0 ]]; then') < verify.index("verdict=clean")
+
+
+# --- reports that would rather crash the table than fail closed -------------------------------
+
+
+def test_an_oversized_count_is_a_finding_not_a_crash(tmp_path: Path) -> None:
+    # A count past sys.get_int_max_str_digits() raises a bare ValueError out of json.loads, which
+    # is NOT a JSONDecodeError. Uncaught it took down the whole table, including the provenance row
+    # this job did measure.
+    huge = "9" * (sys.get_int_max_str_digits() + 10)
+    selection = ratchet.select_signature(write_report(tmp_path, f'{{"status": "measured", "valid": {huge}}}'), None)
+    assert selection.report is None
+    assert selection.problem is not None and "could not be read" in selection.problem
+
+
+def test_a_report_that_is_not_an_object_is_a_finding(tmp_path: Path) -> None:
+    selection = ratchet.select_signature(write_report(tmp_path, [1, 2, 3]), None)
+    assert selection.report is None
+    assert selection.problem is not None and "not an object" in selection.problem
+
+
+@pytest.mark.parametrize("files", [1, "cramjam.so", {"a": 1}])
+def test_a_non_list_invalid_files_is_a_finding_not_a_crash(tmp_path: Path, files: object) -> None:
+    # `invalid_files: 1` used to raise TypeError out of the tuple comprehension.
+    payload = {"status": "measured", "valid": 1, "invalid": 1, "invalid_files": files}
+    selection = ratchet.select_signature(write_report(tmp_path, payload), None)
+    assert selection.report is None
+    assert selection.problem is not None and "not a list" in selection.problem
+
+
+def test_no_malformed_report_can_take_the_whole_table_down(tmp_path: Path) -> None:
+    """The table must survive every hand-off shape. A crash loses the rows that DID measure."""
+    payloads: list = [
+        "{not json",
+        "[]",
+        '{"status": "measured", "valid": true, "invalid": 0}',
+        '{"status": "measured", "valid": 1, "invalid": 1, "invalid_files": 7}',
+        '{"status": "failed"}',
+        '{"status": "who knows"}',
+        '{"status": "measured", "valid": -1, "invalid": 0}',
+    ]
+    for index, payload in enumerate(payloads):
+        report = tmp_path / f"report-{index}.json"
+        report.write_text(payload, encoding="utf-8")
+        probe = linux_probe(tmp_path, **{key: value for key, value in _signature_fields(report).items()})
+        table = ratchet.render(ratchet.collect(probe, CORPUS), probe, None, NOW)
+        assert table.startswith(ratchet.MARKER), payload
+        assert "| signature_valid | 🔴 RED |" in table, payload
+
+
+def _signature_fields(report: Path) -> dict:
+    selection = ratchet.select_signature(report, None)
+    return {
+        "signature": selection.report,
+        "signature_unavailable": selection.unavailable,
+        "signature_problem": selection.problem,
+    }
