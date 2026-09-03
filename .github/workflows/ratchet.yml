@@ -1,0 +1,97 @@
+name: Ratchet
+
+# Posts the bench-brain ratchet table as ONE comment per PR and refreshes it in place on every
+# commit. Pure CI: no agent is ever involved. scripts/ci_ratchet_table.py owns the rule that a row
+# prints a measured number or `n/a — <reason>`, never a guess; a RED row fails this job because it
+# is a finding the PR author has to clear.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+# One in-flight run per PR, so two pushes can never race into two comments.
+concurrency:
+  group: ratchet-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  table:
+    name: ratchet table
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # Same stamp publish.yml applies at release time, so the provenance row measures the real
+      # release path on every PR instead of discovering a dropped stamp after a tag.
+      - name: Stamp build sha and build the wheel
+        run: |
+          set -euo pipefail
+          head="$(git rev-parse HEAD)"
+          printf 'BUILD_SHA = "%s"\n' "$head" > src/brainlayer/_build.py
+          pip install build
+          python -m build --wheel
+
+      - name: Collect ratchet rows
+        id: collect
+        run: |
+          set +e
+          python scripts/ci_ratchet_table.py \
+            --wheel "$(ls dist/*.whl)" \
+            --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --out ratchet.md
+          rc=$?
+          set -e
+          if [[ ! -s ratchet.md ]]; then
+            printf '%s\n\n%s\n' '<!-- brainlayer-ratchet-table -->' \
+              'The ratchet collector produced no table (it exited '"$rc"'). No numbers, because none were measured.' > ratchet.md
+            rc=1
+          fi
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the table to the run summary
+        if: always() && steps.collect.outputs.rc != ''
+        run: cat ratchet.md >> "$GITHUB_STEP_SUMMARY"
+
+      # Fork PRs get a read-only GITHUB_TOKEN, so the comment cannot be written. We say so in the
+      # log and the run summary rather than failing or leaving a silent hole; the table itself is
+      # always in the step summary above. Fixing this needs pull_request_target, which would run a
+      # write-token job against fork-authored code — not worth it for a comment.
+      - name: Skip the comment on fork PRs (read-only token)
+        if: always() && steps.collect.outputs.rc != '' && github.event.pull_request.head.repo.fork
+        run: |
+          echo "::notice title=Ratchet table not commented::fork PRs get a read-only token; the table is in the run summary."
+          echo '> Ratchet table not posted as a comment: fork PRs get a read-only `GITHUB_TOKEN`.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post or refresh the one ratchet comment
+        if: always() && steps.collect.outputs.rc != '' && !github.event.pull_request.head.repo.fork
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          marker='<!-- brainlayer-ratchet-table -->'
+          # Oldest bot comment carrying the marker wins, so a duplicate could never be created twice.
+          comment_id="$(gh api "repos/${REPO}/issues/${PR}/comments" --paginate \
+            --jq '.[] | select(.user.login == "github-actions[bot]") | select(.body | startswith("'"$marker"'")) | .id' \
+            | head -n1)"
+          jq -Rs '{body: .}' ratchet.md > body.json
+          if [[ -n "$comment_id" ]]; then
+            gh api -X PATCH "repos/${REPO}/issues/comments/${comment_id}" --input body.json --jq .html_url
+          else
+            gh api -X POST "repos/${REPO}/issues/${PR}/comments" --input body.json --jq .html_url
+          fi
+
+      - name: Fail on a RED row
+        if: steps.collect.outputs.rc != '0'
+        run: |
+          echo "::error title=Ratchet RED::the ratchet table has a RED row; see the PR comment or run summary."
+          exit 1
