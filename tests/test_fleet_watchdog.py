@@ -2,18 +2,24 @@
 
 The watchdog is the reason `launchctl bootout` cannot be trusted during an upgrade: on
 StartInterval 300 it re-bootstraps a booted-out label within five minutes. Only an
-operator `launchctl disable` holds. Both directions are drilled here with a fake
-`launchctl` first on PATH.
+operator `launchctl disable` holds -- and, because `brainlayer.maintenance` pauses with a
+bare bootout and no disable, so does an unexpired pause sentinel. Both signals are drilled
+in both directions with a fake `launchctl` first on PATH; the sentinel is parsed by the real
+`plutil`, not a stub.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import plistlib
 import stat
 import subprocess
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "launchd" / "fleet-watchdog.sh"
@@ -73,8 +79,16 @@ def _run_drill(
     print_disabled_rc: int = 0,
     bootstrap_rc: int = 0,
     home: Path | None = None,
+    sentinel: str | dict[str, object] | None = None,
 ) -> DrillResult:
     home = home or (tmp_path / "home")
+    sentinel_path = home / ".local" / "share" / "brainlayer" / "pause.sentinel"
+    if sentinel is not None:
+        sentinel_path.parent.mkdir(parents=True, exist_ok=True)
+        sentinel_path.write_text(
+            sentinel if isinstance(sentinel, str) else json.dumps(sentinel),
+            encoding="utf-8",
+        )
     launch_dir = home / "Library" / "LaunchAgents"
     launch_dir.mkdir(parents=True, exist_ok=True)
     for label in agent_labels:
@@ -218,7 +232,7 @@ def test_standing_disable_does_not_relog_every_run(tmp_path: Path) -> None:
         home=home,
     )
 
-    assert first.skip_state == "com.brainlayer.watch\n"
+    assert first.skip_state == "disabled by operator: com.brainlayer.watch\n"
     assert first.log.count("skipped com.brainlayer.watch") == 1
     assert second.log.count("skipped com.brainlayer.watch") == 1
     assert second.bootstrapped() == set()
@@ -253,6 +267,220 @@ def test_watchdog_ignores_plists_outside_the_brainlayer_namespace(tmp_path: Path
     result = _run_drill(tmp_path, agent_labels=("com.etanhey.brainlayer-fleet-watchdog", "com.other.thing"))
 
     assert result.bootstrapped() == set()
+
+
+# --- the pause sentinel -------------------------------------------------------------
+# `brainlayer.maintenance` pauses services with a bare `launchctl bootout` and no
+# `launchctl disable` (maintenance.py:_bootout_service), so mid-maintenance a label is
+# absent-and-not-disabled: exactly the state the revival loop reverses. The sentinel is the
+# signal maintenance.py:_resume_services honours, and the watchdog must honour it too.
+
+
+def _sentinel(*labels: str, expires_in: timedelta = timedelta(hours=1)) -> dict[str, object]:
+    now = datetime.now(UTC)
+    return {
+        "labels": list(labels),
+        "created_at": now.isoformat(),
+        "expires_at": (now + expires_in).isoformat(),
+    }
+
+
+def test_label_named_by_an_unexpired_pause_sentinel_is_left_down(tmp_path: Path) -> None:
+    result = _run_drill(
+        tmp_path,
+        agent_labels=("com.brainlayer.enrichment", "com.brainlayer.index"),
+        sentinel=_sentinel("com.brainlayer.enrichment"),
+    )
+
+    assert result.process.returncode == 0, result.process.stderr
+    assert result.bootstrapped() == {"com.brainlayer.index"}
+    assert result.enabled() == {"com.brainlayer.index"}
+    assert "skipped com.brainlayer.enrichment (pause sentinel is active)" in result.log
+    assert "re-bootstrapped com.brainlayer.enrichment" not in result.log
+
+
+def test_label_not_named_by_the_sentinel_is_still_revived(tmp_path: Path) -> None:
+    result = _run_drill(
+        tmp_path,
+        agent_labels=("com.brainlayer.drain",),
+        sentinel=_sentinel("com.brainlayer.enrichment"),
+    )
+
+    assert result.bootstrapped() == {"com.brainlayer.drain"}
+
+
+def test_every_label_in_a_multi_label_sentinel_is_left_down(tmp_path: Path) -> None:
+    result = _run_drill(
+        tmp_path,
+        agent_labels=("com.brainlayer.enrichment", "com.brainlayer.drain", "com.brainlayer.watch"),
+        sentinel=_sentinel("com.brainlayer.enrichment", "com.brainlayer.drain", "com.brainlayer.watch"),
+    )
+
+    assert result.bootstrapped() == set()
+    for label in ("com.brainlayer.enrichment", "com.brainlayer.drain", "com.brainlayer.watch"):
+        assert f"skipped {label} (pause sentinel is active)" in result.log
+
+
+def test_expired_pause_sentinel_no_longer_holds_a_label_down(tmp_path: Path) -> None:
+    result = _run_drill(
+        tmp_path,
+        agent_labels=("com.brainlayer.enrichment",),
+        sentinel=_sentinel("com.brainlayer.enrichment", expires_in=timedelta(hours=-1)),
+    )
+
+    assert result.bootstrapped() == {"com.brainlayer.enrichment"}
+    assert "re-bootstrapped com.brainlayer.enrichment" in result.log
+
+
+def test_sentinel_without_an_expiry_never_goes_stale(tmp_path: Path) -> None:
+    # pause.py: expires_at is None => stale is False => the pause is still active.
+    result = _run_drill(
+        tmp_path,
+        agent_labels=("com.brainlayer.enrichment",),
+        sentinel={"labels": ["com.brainlayer.enrichment"]},
+    )
+
+    assert result.bootstrapped() == set()
+    assert "skipped com.brainlayer.enrichment (pause sentinel is active)" in result.log
+
+
+def test_sentinel_with_an_unparseable_expiry_keeps_holding(tmp_path: Path) -> None:
+    # pause.py returns stale=False for an unreadable expires_at; the pause keeps holding,
+    # which is the safe direction for a reviver.
+    result = _run_drill(
+        tmp_path,
+        agent_labels=("com.brainlayer.enrichment",),
+        sentinel={"labels": ["com.brainlayer.enrichment"], "expires_at": "not-a-timestamp"},
+    )
+
+    assert result.bootstrapped() == set()
+    assert "skipped com.brainlayer.enrichment (pause sentinel is active)" in result.log
+
+
+def test_sentinel_expiry_offsets_and_fractional_seconds_are_understood(tmp_path: Path) -> None:
+    future = (datetime.now(UTC) + timedelta(hours=1)).replace(tzinfo=None)
+    for stamp in (
+        f"{future.isoformat(timespec='microseconds')}+00:00",
+        f"{future.isoformat(timespec='seconds')}Z",
+        future.isoformat(timespec="seconds"),
+    ):
+        result = _run_drill(
+            tmp_path,
+            agent_labels=("com.brainlayer.enrichment",),
+            sentinel={"labels": ["com.brainlayer.enrichment"], "expires_at": stamp},
+            home=tmp_path / f"home-{abs(hash(stamp))}",
+        )
+
+        assert result.bootstrapped() == set(), stamp
+
+
+@pytest.mark.parametrize(
+    "payload",
+    ['{"labels": ["com.brainlayer.enrichment"', "", "not json at all", "[]"],
+    ids=["truncated", "empty", "garbage", "not-an-object"],
+)
+def test_unparseable_sentinel_fails_closed(tmp_path: Path, payload: str) -> None:
+    result = _run_drill(
+        tmp_path,
+        agent_labels=("com.brainlayer.enrichment", "com.brainlayer.index"),
+        sentinel=payload,
+    )
+
+    assert result.process.returncode == 1
+    assert result.bootstrapped() == set()
+    assert result.enabled() == set()
+    assert "refusing to revive anything" in result.log
+
+
+def test_no_sentinel_at_all_revives_normally(tmp_path: Path) -> None:
+    result = _run_drill(tmp_path, agent_labels=("com.brainlayer.enrichment",))
+
+    assert result.process.returncode == 0
+    assert result.bootstrapped() == {"com.brainlayer.enrichment"}
+
+
+def test_operator_disable_still_wins_over_a_sentinel_that_omits_the_label(tmp_path: Path) -> None:
+    result = _run_drill(
+        tmp_path,
+        agent_labels=("com.brainlayer.watch",),
+        disabled_labels=("com.brainlayer.watch",),
+        sentinel=_sentinel("com.brainlayer.enrichment"),
+    )
+
+    assert result.bootstrapped() == set()
+    assert "skipped com.brainlayer.watch (disabled by operator)" in result.log
+
+
+def test_a_standing_pause_logs_its_skip_once(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    first = _run_drill(
+        tmp_path,
+        agent_labels=("com.brainlayer.enrichment",),
+        sentinel=_sentinel("com.brainlayer.enrichment"),
+        home=home,
+    )
+    second = _run_drill(
+        tmp_path,
+        agent_labels=("com.brainlayer.enrichment",),
+        sentinel=_sentinel("com.brainlayer.enrichment"),
+        home=home,
+    )
+
+    assert first.skip_state == "pause sentinel is active: com.brainlayer.enrichment\n"
+    assert first.log.count("skipped com.brainlayer.enrichment") == 1
+    assert second.log.count("skipped com.brainlayer.enrichment") == 1
+
+
+def test_a_label_that_moves_from_paused_to_disabled_is_logged_again(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    _run_drill(
+        tmp_path,
+        agent_labels=("com.brainlayer.enrichment",),
+        sentinel=_sentinel("com.brainlayer.enrichment"),
+        home=home,
+    )
+    disabled = _run_drill(
+        tmp_path,
+        agent_labels=("com.brainlayer.enrichment",),
+        disabled_labels=("com.brainlayer.enrichment",),
+        home=home,
+    )
+
+    assert "skipped com.brainlayer.enrichment (disabled by operator)" in disabled.log
+
+
+def test_sentinel_contract_matches_the_python_reader(tmp_path: Path) -> None:
+    """The script and src/brainlayer/pause.py must agree on path, key names and expiry."""
+    from brainlayer.pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
+
+    assert DEFAULT_PAUSE_SENTINEL_PATH == Path("~/.local/share/brainlayer/pause.sentinel").expanduser()
+    script = SCRIPT_PATH.read_text(encoding="utf-8")
+    assert '"$HOME/.local/share/brainlayer/pause.sentinel"' in script
+
+    payload = _sentinel("com.brainlayer.enrichment")
+    path = tmp_path / "pause.sentinel"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    parsed, active, stale = pause_sentinel_state(path, datetime.now(UTC))
+    assert active and not stale
+    assert pause_applies_to_label(parsed, "com.brainlayer.enrichment")
+    assert not pause_applies_to_label(parsed, "com.brainlayer.index")
+
+    # Same payload, same verdict from the shell script.
+    result = _run_drill(
+        tmp_path,
+        agent_labels=("com.brainlayer.enrichment", "com.brainlayer.index"),
+        sentinel=payload,
+    )
+    assert result.bootstrapped() == {"com.brainlayer.index"}
+
+
+def test_script_header_documents_the_sentinel_and_the_bare_bootout() -> None:
+    header = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "pause.sentinel" in header
+    assert "BARE bootout" in header
+    assert "_resume_services" in header
+    assert "fail CLOSED" in header
 
 
 def test_script_header_states_that_bootout_does_not_hold() -> None:

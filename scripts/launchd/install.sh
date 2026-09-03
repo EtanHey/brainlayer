@@ -829,12 +829,14 @@ resume_fleet_watchdog() {
     local plist_dst="$LAUNCH_DIR/$FLEET_WATCHDOG_PLIST_NAME"
     local domain="gui/$UID/$FLEET_WATCHDOG_LABEL"
 
-    if ! launchctl enable "$domain"; then
-        echo "ERROR: launchctl enable failed for $FLEET_WATCHDOG_LABEL" >&2
-        return 1
-    fi
+    # Existence first: enabling before this check would leave the label enabled but
+    # unbootstrapped, i.e. neither quiesced nor running.
     if [ ! -f "$plist_dst" ]; then
         echo "ERROR: $plist_dst not found; run '$0 fleet-watchdog' first" >&2
+        return 1
+    fi
+    if ! launchctl enable "$domain"; then
+        echo "ERROR: launchctl enable failed for $FLEET_WATCHDOG_LABEL" >&2
         return 1
     fi
     launchctl bootout "$domain" 2>/dev/null || true
