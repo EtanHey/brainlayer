@@ -170,23 +170,37 @@ def test_provenance_says_na_with_a_reason_when_it_cannot_measure(
 def test_git_ignores_an_inherited_GIT_DIR_from_another_repo(tmp_path: Path, monkeypatch) -> None:
     """An inherited GIT_DIR/GIT_WORK_TREE OVERRIDES `-C`, so HEAD would come from the wrong repo — a
     stamp matching it is a false GREEN, one that does not is a false RED. Same guard as
-    tests/test_build_sha.py and src/brainlayer/deploy_drift.py."""
+    tests/test_build_sha.py and src/brainlayer/deploy_drift.py.
+
+    The decoy is built with GIT_* stripped for the same reason the code under test strips it. An
+    earlier draft of this test inherited the pre-push hook's GIT_DIR and committed into the REAL
+    repo — it fell into the exact footgun it exists to catch. The `--git-dir` assertion below is
+    what makes that impossible to repeat silently.
+    """
     other = tmp_path / "other"
     other.mkdir()
-    env = {
-        **os.environ,
-        "GIT_AUTHOR_NAME": "t",
-        "GIT_AUTHOR_EMAIL": "t@e",
-        "GIT_COMMITTER_NAME": "t",
-        "GIT_COMMITTER_EMAIL": "t@e",
-    }
-    for args in (["init", "-q"], ["commit", "-q", "--allow-empty", "-m", "other repo"]):
-        subprocess.run(["git", "-C", str(other), *args], check=True, env=env, capture_output=True)
-    decoy = subprocess.run(
-        ["git", "-C", str(other), "rev-parse", "HEAD"], check=True, capture_output=True, text=True, env=env
-    ).stdout.strip()
+    # Identity via -c, never via GIT_* env: GIT_DIR/GIT_WORK_TREE would redirect these writes.
+    clean_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
 
-    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    def decoy_git(*args: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(other), "-c", "user.name=t", "-c", "user.email=t@e", *args],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=clean_env,
+        ).stdout.strip()
+
+    decoy_git("init", "-q")
+    # Fail loudly if the decoy is not self-contained, rather than writing into whatever repo we are in.
+    git_dir = Path(decoy_git("rev-parse", "--absolute-git-dir")).resolve()
+    assert git_dir.is_relative_to(tmp_path.resolve()), f"decoy git dir escaped the tmp dir: {git_dir}"
+
+    decoy_git("commit", "-q", "--allow-empty", "-m", "decoy repo")
+    decoy = decoy_git("rev-parse", "HEAD")
+    assert re.fullmatch(r"[0-9a-f]{40}", decoy), "decoy repo did not produce a commit"
+
+    monkeypatch.setenv("GIT_DIR", str(git_dir))
     monkeypatch.setenv("GIT_WORK_TREE", str(other))
     head = ratchet.git_head()
     assert head is not None and head != decoy, "provenance read HEAD from the inherited GIT_DIR"
