@@ -414,7 +414,13 @@ def test_changed_only_scope_skips_the_unit_suite_for_a_measured_empty_diff(tmp_p
     env["PYTEST_LOG"] = str(pytest_log)
     env["BUN_LOG"] = str(bun_log)
 
-    result = subprocess.run(["bash", str(repo / "scripts" / "run_tests.sh")], capture_output=True, text=True, env=env)
+    result = subprocess.run(
+        ["bash", str(repo / "scripts" / "run_tests.sh")],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,  # the script's exit code is what this test asserts on
+    )
 
     assert result.returncode == 0, result.stdout
     assert "WARNING: changed-only scope MEASURED an empty change set" in result.stdout
@@ -592,7 +598,13 @@ def test_changed_only_scope_fails_closed_when_git_cannot_name_the_changed_files(
     env["PYTEST_LOG"] = str(pytest_log)
     env["BUN_LOG"] = str(bun_log)
 
-    result = subprocess.run(["bash", str(script)], capture_output=True, text=True, env=env)
+    result = subprocess.run(
+        ["bash", str(script)],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,  # a NON-ZERO exit is the assertion; raising here would hide it
+    )
 
     assert result.returncode != 0, result.stdout
     assert "FAIL: changed-only scope could not be determined" in result.stdout
@@ -619,7 +631,13 @@ def test_changed_only_scope_fails_closed_when_the_env_names_no_paths(tmp_path: P
     env["PYTEST_LOG"] = str(pytest_log)
     env["BUN_LOG"] = str(bun_log)
 
-    result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
+    result = subprocess.run(
+        ["bash", str(SCRIPT_PATH)],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,  # a NON-ZERO exit is the assertion; raising here would hide it
+    )
 
     assert result.returncode != 0, result.stdout
     assert "BRAINLAYER_CHANGED_FILES was set but named no paths" in result.stdout
