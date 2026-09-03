@@ -180,6 +180,24 @@ def test_an_explicit_wheel_that_is_not_there_is_a_finding(tmp_path: Path) -> Non
     assert selection.problem is not None and "produced none" in selection.problem
 
 
+def test_wheel_and_wheel_glob_together_is_a_finding(tmp_path: Path) -> None:
+    # An explicit wheel must not hide a glob that matched zero or many. The CI job only
+    # passes --wheel-glob; both together is an ambiguous promise and stays RED.
+    wheel = make_wheel(tmp_path / "stale", HEAD)
+    selection = ratchet.select_wheel(wheel, str(tmp_path / "empty" / "*.whl"))
+    assert selection.path is None
+    assert selection.problem is not None and "mutually exclusive" in selection.problem
+
+
+def test_main_exits_one_when_both_wheel_flags_are_passed(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(ratchet, "git_tree_dirty", lambda: False)
+    wheel = make_wheel(tmp_path, HEAD)
+    assert ratchet.main(["--wheel", str(wheel), "--wheel-glob", str(tmp_path / "*.whl")]) == 1
+    err = capsys.readouterr().err
+    assert "::error title=Ratchet RED: provenance::" in err
+    assert "mutually exclusive" in err
+
+
 def test_a_glob_matching_one_wheel_resolves_it(tmp_path: Path) -> None:
     wheel = make_wheel(tmp_path / "one", HEAD)
     assert ratchet.select_wheel(None, str(tmp_path / "one" / "*.whl")) == ratchet.WheelSelection(path=wheel)

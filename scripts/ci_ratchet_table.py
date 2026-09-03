@@ -108,6 +108,8 @@ def select_wheel(explicit: Path | None, pattern: str | None) -> WheelSelection:
     runner can measure would otherwise vanish into a principled-looking `n/a` while CI stayed green,
     which is the false green this whole file exists to prevent.
     """
+    if explicit is not None and pattern is not None:
+        return WheelSelection(problem="`--wheel` and `--wheel-glob` are mutually exclusive")
     if explicit is None and pattern is None:
         return WheelSelection()
     if explicit is not None:
