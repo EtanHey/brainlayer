@@ -847,6 +847,20 @@ def test_the_sweep_runs_on_an_installed_keg_whatever_brew_exited_with() -> None:
     assert "--arg install_outcome" in verify
 
 
+def test_a_non_zero_brew_install_does_not_fail_the_parity_job_by_itself() -> None:
+    """Observed: `brew install` exits 1 on a relocation ofail with the keg installed and swept.
+
+    Without `continue-on-error` the job is red on every run for a condition the formula's
+    `post_install` already handles, and a permanently red job is a signal reviewers learn to
+    ignore. What may fail this job is the sweep's verdict, not brew's exit code.
+    """
+    install = workflow_steps("signatures")["Install the published BrainLayer keg from the tap"]
+    assert install["continue-on-error"] is True
+    # The verdict is still able to fail it -- otherwise this would be a fail-open.
+    fail_step = workflow_steps("signatures")["Fail this job on an invalid signature"]
+    assert "steps.verify.outputs.verdict != 'clean'" in fail_step["if"]
+
+
 def test_a_clean_sweep_after_a_brew_ofail_is_green_but_says_so(tmp_path: Path) -> None:
     # GREEN because the signatures ARE valid, and a clean sweep after an aborted relocation is the
     # #37 post_install fix working. Silent, though, it would read as an unremarkable install.

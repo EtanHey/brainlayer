@@ -116,8 +116,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # `continue-on-error`, because a non-zero `brew install` does NOT mean no keg. Homebrew
+      # `ofail`s a relocation failure and exits 1 with the keg installed and `post_install` run --
+      # observed on the very first run of this workflow. Letting that fail the job would paint this
+      # job permanently red on a condition the formula already handles, and a job that is always
+      # red teaches reviewers to ignore it. `steps.install.outcome` is the value BEFORE
+      # continue-on-error, so the verify step below still sees `failure` and says so.
+      #
+      # Nothing is swallowed: whether the keg is acceptable is decided by the codesign sweep, and a
+      # missing keg still lands `verdict=unmeasured`, which fails this job.
       - name: Install the published BrainLayer keg from the tap
         id: install
+        continue-on-error: true
         run: |
           set -euo pipefail
           started=$SECONDS
