@@ -13,19 +13,51 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import shutil
 import stat
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "launchd" / "fleet-watchdog.sh"
 LABEL = "com.etanhey.brainlayer-fleet-watchdog"
 PLIST_PATH = REPO_ROOT / "scripts" / "launchd" / f"{LABEL}.plist"
 INSTALL_SCRIPT = REPO_ROOT / "scripts" / "launchd" / "install.sh"
+
+WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+
+
+def _has_bsd_date() -> bool:
+    """True when `date -j -f` parses a stamp -- BSD date, not GNU."""
+    try:
+        probe = subprocess.run(
+            ["date", "-j", "-f", "%Y-%m-%dT%H:%M:%S", "2026-01-01T00:00:00", "+%s"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return probe.returncode == 0
+
+
+# The script reads the pause sentinel with `plutil` and BSD `date -j`, both macOS-only, so the
+# sentinel drills cannot run on the ubuntu `test` matrix. The condition is the TOOLS, not
+# sys.platform, so the skip branch is itself testable by manipulating PATH. Coverage does not
+# vanish: the launchd (macos-15) CI job runs this file, and
+# test_ci_runs_the_sentinel_drills_on_a_macos_runner -- which never skips -- enforces that.
+SENTINEL_TOOLS_MISSING = shutil.which("plutil") is None or not _has_bsd_date()
+needs_sentinel_tools = pytest.mark.skipif(
+    SENTINEL_TOOLS_MISSING,
+    reason="pause-sentinel drills need macOS `plutil` and BSD `date -j`; covered by the launchd (macos-15) CI job",
+)
 
 FAKE_LAUNCHCTL = """#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_LAUNCHCTL_LOG"
@@ -285,6 +317,7 @@ def _sentinel(*labels: str, expires_in: timedelta = timedelta(hours=1)) -> dict[
     }
 
 
+@needs_sentinel_tools
 def test_label_named_by_an_unexpired_pause_sentinel_is_left_down(tmp_path: Path) -> None:
     result = _run_drill(
         tmp_path,
@@ -299,6 +332,7 @@ def test_label_named_by_an_unexpired_pause_sentinel_is_left_down(tmp_path: Path)
     assert "re-bootstrapped com.brainlayer.enrichment" not in result.log
 
 
+@needs_sentinel_tools
 def test_label_not_named_by_the_sentinel_is_still_revived(tmp_path: Path) -> None:
     result = _run_drill(
         tmp_path,
@@ -309,6 +343,7 @@ def test_label_not_named_by_the_sentinel_is_still_revived(tmp_path: Path) -> Non
     assert result.bootstrapped() == {"com.brainlayer.drain"}
 
 
+@needs_sentinel_tools
 def test_every_label_in_a_multi_label_sentinel_is_left_down(tmp_path: Path) -> None:
     result = _run_drill(
         tmp_path,
@@ -321,6 +356,7 @@ def test_every_label_in_a_multi_label_sentinel_is_left_down(tmp_path: Path) -> N
         assert f"skipped {label} (pause sentinel is active)" in result.log
 
 
+@needs_sentinel_tools
 def test_expired_pause_sentinel_no_longer_holds_a_label_down(tmp_path: Path) -> None:
     result = _run_drill(
         tmp_path,
@@ -332,6 +368,7 @@ def test_expired_pause_sentinel_no_longer_holds_a_label_down(tmp_path: Path) -> 
     assert "re-bootstrapped com.brainlayer.enrichment" in result.log
 
 
+@needs_sentinel_tools
 def test_sentinel_without_an_expiry_never_goes_stale(tmp_path: Path) -> None:
     # pause.py: expires_at is None => stale is False => the pause is still active.
     result = _run_drill(
@@ -344,6 +381,7 @@ def test_sentinel_without_an_expiry_never_goes_stale(tmp_path: Path) -> None:
     assert "skipped com.brainlayer.enrichment (pause sentinel is active)" in result.log
 
 
+@needs_sentinel_tools
 def test_sentinel_with_an_unparseable_expiry_keeps_holding(tmp_path: Path) -> None:
     # pause.py returns stale=False for an unreadable expires_at; the pause keeps holding,
     # which is the safe direction for a reviver.
@@ -357,6 +395,7 @@ def test_sentinel_with_an_unparseable_expiry_keeps_holding(tmp_path: Path) -> No
     assert "skipped com.brainlayer.enrichment (pause sentinel is active)" in result.log
 
 
+@needs_sentinel_tools
 def test_sentinel_expiry_offsets_and_fractional_seconds_are_understood(tmp_path: Path) -> None:
     future = (datetime.now(UTC) + timedelta(hours=1)).replace(tzinfo=None)
     for stamp in (
@@ -374,6 +413,7 @@ def test_sentinel_expiry_offsets_and_fractional_seconds_are_understood(tmp_path:
         assert result.bootstrapped() == set(), stamp
 
 
+@needs_sentinel_tools
 @pytest.mark.parametrize(
     "payload",
     ['{"labels": ["com.brainlayer.enrichment"', "", "not json at all", "[]"],
@@ -392,6 +432,7 @@ def test_unparseable_sentinel_fails_closed(tmp_path: Path, payload: str) -> None
     assert "refusing to revive anything" in result.log
 
 
+@needs_sentinel_tools
 def test_no_sentinel_at_all_revives_normally(tmp_path: Path) -> None:
     result = _run_drill(tmp_path, agent_labels=("com.brainlayer.enrichment",))
 
@@ -399,6 +440,7 @@ def test_no_sentinel_at_all_revives_normally(tmp_path: Path) -> None:
     assert result.bootstrapped() == {"com.brainlayer.enrichment"}
 
 
+@needs_sentinel_tools
 def test_operator_disable_still_wins_over_a_sentinel_that_omits_the_label(tmp_path: Path) -> None:
     result = _run_drill(
         tmp_path,
@@ -411,6 +453,7 @@ def test_operator_disable_still_wins_over_a_sentinel_that_omits_the_label(tmp_pa
     assert "skipped com.brainlayer.watch (disabled by operator)" in result.log
 
 
+@needs_sentinel_tools
 def test_a_standing_pause_logs_its_skip_once(tmp_path: Path) -> None:
     home = tmp_path / "home"
     first = _run_drill(
@@ -431,6 +474,7 @@ def test_a_standing_pause_logs_its_skip_once(tmp_path: Path) -> None:
     assert second.log.count("skipped com.brainlayer.enrichment") == 1
 
 
+@needs_sentinel_tools
 def test_a_label_that_moves_from_paused_to_disabled_is_logged_again(tmp_path: Path) -> None:
     home = tmp_path / "home"
     _run_drill(
@@ -449,6 +493,7 @@ def test_a_label_that_moves_from_paused_to_disabled_is_logged_again(tmp_path: Pa
     assert "skipped com.brainlayer.enrichment (disabled by operator)" in disabled.log
 
 
+@needs_sentinel_tools
 def test_sentinel_contract_matches_the_python_reader(tmp_path: Path) -> None:
     """The script and src/brainlayer/pause.py must agree on path, key names and expiry."""
     from brainlayer.pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
@@ -472,6 +517,62 @@ def test_sentinel_contract_matches_the_python_reader(tmp_path: Path) -> None:
         sentinel=payload,
     )
     assert result.bootstrapped() == {"com.brainlayer.index"}
+
+
+# --- the drills above must not be skipped everywhere -------------------------------
+# A skip that makes CI green while testing nothing is the false-green class this whole PR
+# exists to close, so neither lock below is allowed to skip.
+
+
+def test_sentinel_tools_are_present_on_darwin() -> None:
+    """On macOS the drills must RUN. A silent skip here would hide the sentinel logic."""
+    if sys.platform != "darwin":
+        pytest.skip("Darwin-only assertion; the CI-coverage lock below is the check that never skips")
+
+    assert shutil.which("plutil") is not None, "macOS without plutil: the sentinel drills would silently skip"
+    assert _has_bsd_date(), "macOS without BSD `date -j`: the sentinel drills would silently skip"
+    assert not SENTINEL_TOOLS_MISSING
+
+
+def test_ci_runs_the_sentinel_drills_on_a_macos_runner() -> None:
+    """The ubuntu matrix skips the sentinel drills, so some macOS job must run this file.
+
+    This test runs on every runner and never skips: delete the macOS job and it goes red.
+    """
+    document = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    jobs = document["jobs"]
+
+    macos_jobs = {name: job for name, job in jobs.items() if str(job.get("runs-on", "")).startswith("macos")}
+    assert macos_jobs, "ci.yml has no macOS job, so the pause-sentinel drills run nowhere"
+
+    this_file = "tests/test_fleet_watchdog.py"
+    covering = [
+        name
+        for name, job in macos_jobs.items()
+        for step in job.get("steps", [])
+        if this_file in str(step.get("run", ""))
+    ]
+    assert covering, f"no macOS job in ci.yml runs {this_file}; the sentinel drills would be skipped everywhere"
+
+    job = macos_jobs[covering[0]]
+    # The drills import brainlayer.pause for the cross-checked contract test.
+    assert any(
+        "PYTHONPATH" in str(step.get("env", {})) or "pip install" in str(step.get("run", ""))
+        for step in job.get("steps", [])
+    ), f"{covering[0]} runs the drills but installs nothing to import brainlayer.pause from"
+
+
+def test_ubuntu_matrix_still_collects_this_file() -> None:
+    """The non-sentinel drills are portable and must keep running on the ubuntu matrix."""
+    document = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    steps = document["jobs"]["test"]["steps"]
+
+    assert str(document["jobs"]["test"]["runs-on"]).startswith("ubuntu")
+    unit = next(step for step in steps if step.get("name") == "Unit tests")
+    # `pytest tests/` collects this file; only the sentinel drills opt out, and they do it by
+    # tool probe rather than by being excluded here.
+    assert "tests/" in unit["run"]
+    assert "test_fleet_watchdog" not in unit["run"]
 
 
 def test_script_header_documents_the_sentinel_and_the_bare_bootout() -> None:
