@@ -13,10 +13,21 @@ A blank cell, a zero, a figure copied from yesterday, or a plausible-looking inv
 defect in this script, not a cosmetic issue. Baselines measured elsewhere may appear in the
 **Notes** column ONLY with their machine, method and date attached, and never in the value column.
 
-Rows are labelled by method, because a socket measurement on an installed Mac and an in-process
-measurement on a GitHub runner are different measurements, not better and worse ones. Today only
-``provenance`` has a runner-side method; the other four say so and name what would give them one
-(w13, CI parity). An honest three-row table beats a fake five-row one.
+Rows are labelled by method, because a socket measurement on an installed Mac, a keg installed by
+a hosted macOS runner, and an in-process measurement on a GitHub runner are three different
+measurements, not better and worse ones.
+
+Two rows have a runner-side method. ``provenance`` measures in-process on the ubuntu job.
+``signature_valid`` is measured by the separate macOS parity job in ``ratchet.yml``, which installs
+the published tap keg and runs ``scripts/release-verify-signatures.sh`` against it; that job hands
+its counts here as a JSON report (``--signature-report``).
+
+The remaining three -- mapped bytes, search latency, idle CPU -- are **fixture-bound, not
+runner-bound**. They need the BrainBar daemon, its hybrid helper and the indexed corpus running
+together, which no GitHub-hosted runner of any OS provides. Their ``n/a`` reasons say exactly that,
+because the earlier wording ("runner is Linux/x86_64") read as though a macOS runner would turn them
+green. It would not. A synthetic mini-corpus would measure a *different thing* and would owe the
+table a different method label, never a borrowed one.
 """
 
 from __future__ import annotations
@@ -45,6 +56,16 @@ MARKER = "<!-- brainlayer-ratchet-table -->"
 STAMP_MEMBER = "brainlayer/_build.py"
 STAMP_PATTERN = re.compile(r'^BUILD_SHA = "([0-9a-f]{40})"\s*$')
 FALLBACK_DB = Path("~/.local/share/brainlayer/brainlayer.db").expanduser()
+
+# What the macOS parity job may say about itself. `measured` carries counts this run produced;
+# `failed` carries the stage that broke. There is deliberately no third value: a job that ran and
+# cannot say either of those things is a finding, not a new kind of silence.
+SIGNATURE_MEASURED = "measured"
+SIGNATURE_FAILED = "failed"
+SIGNATURE_STATUSES = (SIGNATURE_MEASURED, SIGNATURE_FAILED)
+SIGNATURE_UNAVAILABLE_DEFAULT = (
+    "no macOS signature-parity report was handed to this run, and this job cannot install a keg itself"
+)
 
 GREEN = "GREEN"
 RED = "RED"
@@ -76,10 +97,23 @@ class Probe:
     # Set when this job MEANT to hand over a wheel and could not. That is a finding to clear, not a
     # capability this machine lacks, so it renders RED and never `n/a`.
     wheel_problem: str | None = None
+    # The macOS parity job's own words, and the same three-way split: a measurement it made, the
+    # reason nobody was asked to make one, or a promise it broke.
+    signature: SignatureReport | None = None
+    signature_unavailable: str | None = None
+    signature_problem: str | None = None
 
     @classmethod
-    def detect(cls, corpus: dict, wheel: Path | None, wheel_glob: str | None) -> Probe:
+    def detect(
+        cls,
+        corpus: dict,
+        wheel: Path | None,
+        wheel_glob: str | None,
+        signature_report: Path | None = None,
+        signature_unavailable: str | None = None,
+    ) -> Probe:
         selected = select_wheel(wheel, wheel_glob)
+        signature = select_signature(signature_report, signature_unavailable)
         return cls(
             os_name=platform.system(),
             architecture=platform.machine(),
@@ -90,6 +124,9 @@ class Probe:
             head_sha=git_head(),
             tree_dirty=git_tree_dirty(),
             wheel_problem=selected.problem,
+            signature=signature.report,
+            signature_unavailable=signature.unavailable,
+            signature_problem=signature.problem,
         )
 
 
@@ -133,6 +170,99 @@ def select_wheel(explicit: Path | None, pattern: str | None) -> WheelSelection:
             problem=(f"`{path.name}` matched `{pattern}` but is not a file — provenance needs exactly one wheel")
         )
     return WheelSelection(path=path)
+
+
+@dataclass(frozen=True)
+class SignatureReport:
+    """What the macOS parity job measured, or the stage at which it could not."""
+
+    status: str
+    valid: int | None = None
+    invalid: int | None = None
+    keg: str = ""
+    runner: str = ""
+    invalid_files: tuple[str, ...] = ()
+    stage: str = ""
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class SignatureSelection:
+    """Which of the three states `signature_valid` is in, resolved once and fail-closed."""
+
+    report: SignatureReport | None = None
+    unavailable: str | None = None
+    problem: str | None = None
+
+
+def select_signature(report_path: Path | None, unavailable: str | None) -> SignatureSelection:
+    """Resolve the signature measurement FAIL-CLOSED, on the same rule the wheel follows.
+
+    `--signature-unavailable <reason>` says nobody was asked to measure -- a real capability gap,
+    rendered `n/a` with that reason. `--signature-report <path>` says the macOS parity job RAN and
+    owes this run a measurement; anything that stops it arriving is a **finding**, because a job
+    that ran and produced nothing is not a machine that cannot measure.
+    """
+    if report_path is not None and unavailable is not None:
+        return SignatureSelection(problem="`--signature-report` and `--signature-unavailable` are mutually exclusive")
+    if report_path is None and unavailable is None:
+        return SignatureSelection(unavailable=SIGNATURE_UNAVAILABLE_DEFAULT)
+    if report_path is None:
+        return SignatureSelection(unavailable=unavailable)
+    if not report_path.is_file():
+        return SignatureSelection(
+            problem=(
+                f"`--signature-report {report_path}` is not a file — the macOS parity job ran and "
+                "published no report"
+            )
+        )
+    try:
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        return SignatureSelection(
+            problem=(
+                f"the macOS parity job's report could not be read ({type(error).__name__}) — "
+                "signatures are unverified, not verified"
+            )
+        )
+    if not isinstance(payload, dict) or payload.get("status") not in SIGNATURE_STATUSES:
+        return SignatureSelection(
+            problem=(
+                "the macOS parity job's report carries no known `status` "
+                f"(expected one of {', '.join(SIGNATURE_STATUSES)})"
+            )
+        )
+    if payload["status"] == SIGNATURE_FAILED:
+        stage = str(payload.get("stage", "")).strip()
+        detail = str(payload.get("detail", "")).strip()
+        if not stage or not detail:
+            return SignatureSelection(
+                problem="the macOS parity job reported a failure without naming the `stage` and `detail` that failed"
+            )
+        return SignatureSelection(report=SignatureReport(status=SIGNATURE_FAILED, stage=stage, detail=detail))
+    valid, invalid = payload.get("valid"), payload.get("invalid")
+    # bool is an int in Python; a `true` here would otherwise become a count of 1.
+    honest = [
+        isinstance(count, int) and not isinstance(count, bool) and count >= 0 for count in (valid, invalid)
+    ]
+    if not all(honest):
+        return SignatureSelection(
+            problem=(
+                "the macOS parity job reported a measurement without honest `valid`/`invalid` counts "
+                f"(got {valid!r}/{invalid!r}) — the counts ARE the value of this row"
+            )
+        )
+    files = payload.get("invalid_files") or []
+    return SignatureSelection(
+        report=SignatureReport(
+            status=SIGNATURE_MEASURED,
+            valid=valid,
+            invalid=invalid,
+            keg=str(payload.get("keg", "")).strip(),
+            runner=str(payload.get("runner", "")).strip(),
+            invalid_files=tuple(str(name) for name in files if str(name).strip()),
+        )
+    )
 
 
 def canonical_db_path() -> Path:
@@ -271,16 +401,30 @@ def row_provenance(probe: Probe, _corpus: dict) -> Row:
     return Row("provenance", GREEN, f"stamped `{stamp[:12]}` == HEAD, tree clean", method, PROVENANCE_NOTES)
 
 
-def installed_mac_requirements(probe: Probe, corpus: dict) -> list[tuple[bool, str]]:
-    """The capabilities every socket-measured row needs before it may print a number."""
+def served_stack_requirements(probe: Probe, corpus: dict) -> list[tuple[bool, str]]:
+    """The capabilities every socket-measured row needs before it may print a number.
+
+    The served stack comes FIRST, and the OS/arch check second, on purpose. Leading with
+    "runner is Linux/x86_64" made these rows read as runner problems -- as though moving the job to
+    a macOS runner would turn them green. It would not, and w13 moved a job to macOS precisely to
+    establish that: these three need the daemon, the helper and the indexed corpus, which no hosted
+    runner has. The OS check is kept because a served stack on Darwin/x86_64 would still be off the
+    gate's target, but it is no longer the headline.
+    """
     target = corpus["machine_target"]
     return [
+        (
+            probe.socket_path.exists(),
+            f"no BrainBar daemon at {probe.socket_path}: this row needs the daemon, its hybrid "
+            "helper and the indexed corpus running together, and no GitHub-hosted runner has them "
+            f"(macOS included) — only a self-hosted {target['os']}/{target['architecture']} runner "
+            "on an installed Mac would",
+        ),
         (
             probe.os_name == target["os"] and probe.architecture == target["architecture"],
             f"runner is {probe.os_name}/{probe.architecture}; the gate's machine target is "
             f"{target['os']}/{target['architecture']}",
         ),
-        (probe.socket_path.exists(), f"no BrainBar socket at {probe.socket_path}"),
     ]
 
 
@@ -291,10 +435,14 @@ def row_mapped_bytes(probe: Probe, corpus: dict) -> Row:
         "is the drain, not a leak. Not measured by this run."
     )
     reason = first_unmet(
-        installed_mac_requirements(probe, corpus)
+        served_stack_requirements(probe, corpus)
         + [
             (probe.db_path.exists(), f"no canonical DB at {probe.db_path}"),
-            (False, "no runner-side collector for mapped bytes yet — w13 (CI parity)"),
+            (
+                False,
+                "no runner-side collector for mapped bytes: a synthetic corpus would measure a "
+                "different thing and would owe the table a different method label",
+            ),
         ]
     )
     return Row("mapped bytes", NA, f"n/a — {reason}", "socket · installed Mac", notes)
@@ -308,14 +456,18 @@ def row_search_latency(probe: Probe, corpus: dict) -> Row:
         "(`tests/fixtures/sprint_gate/corpus.json`). Not measured by this run."
     )
     reason = first_unmet(
-        installed_mac_requirements(probe, corpus)
+        served_stack_requirements(probe, corpus)
         + [
             (probe.db_path.exists(), f"no canonical DB at {probe.db_path}"),
             (
                 probe.hostname == baseline["hostname"],
                 f"host {probe.hostname} is not the calibrated baseline host {baseline['hostname']}",
             ),
-            (False, "no runner-side collector for search latency yet — w13 (CI parity)"),
+            (
+                False,
+                "no runner-side collector for search latency: a synthetic corpus would measure a "
+                "different thing and would owe the table a different method label",
+            ),
         ]
     )
     return Row("search p50/p95", NA, f"n/a — {reason}", "socket · installed Mac", notes)
@@ -330,25 +482,72 @@ def row_idle_cpu(probe: Probe, corpus: dict) -> Row:
         "Not measured by this run."
     )
     reason = first_unmet(
-        installed_mac_requirements(probe, corpus)
-        + [(False, "no runner-side collector for idle CPU yet — w13 (CI parity)")]
+        served_stack_requirements(probe, corpus)
+        + [
+            (
+                False,
+                "no runner-side collector for idle CPU: an idle hosted runner measures a different "
+                "thing and would owe the table a different method label",
+            )
+        ]
     )
     return Row("idle CPU", NA, f"n/a — {reason}", "ps sampling · installed Mac", notes)
 
 
+# Two labels, because they are two measurements. The parity job installs the PUBLISHED tap formula
+# on a clean hosted Mac; Etan's release check verifies the keg on his own machine. Sharing one label
+# would let a runner result stand in for a release-time one.
+SIGNATURE_METHOD_MEASURED = "codesign · brew keg · GitHub macOS runner"
+SIGNATURE_METHOD_NA = "codesign · installed keg"
+
+SIGNATURE_NOTES = (
+    "`scripts/release-verify-signatures.sh <keg>` codesign-verifies every `*.so`/`*.dylib` under "
+    "`libexec/venv`. The macOS parity job installs the **published** tap formula "
+    "(`etanhey/layers/brainlayer`), so this row measures the release path — formula, published "
+    "sdist and Homebrew's relocation — and **not this PR's tree**. Release-time baseline for the "
+    "same keg on a different machine: **442 valid / 0 invalid** — installed Mac (M4 Max), "
+    "`brew --prefix brainlayer` 1.5.11, 2026-09-03."
+)
+
+
 def row_signature_valid(probe: Probe, _corpus: dict) -> Row:
-    notes = (
-        "`scripts/release-verify-signatures.sh <keg-path>` codesign-verifies every installed "
-        "`*.so`/`*.dylib`. It needs an installed keg, which a runner does not have. Not measured by "
-        "this run."
-    )
-    reason = first_unmet(
-        [
-            (probe.os_name == "Darwin", f"runner is {probe.os_name}; codesign verification needs macOS"),
-            (False, "no installed keg here — a keg is codesign-verified at release time — w13 (CI parity)"),
-        ]
-    )
-    return Row("signature_valid", NA, f"n/a — {reason}", "codesign · installed keg", notes)
+    """Report what the macOS parity job measured — this collector never runs codesign itself.
+
+    There is deliberately no OS predicate here any more. The old reason ("runner is Linux; codesign
+    verification needs macOS") described the machine rendering the table, which is not the machine
+    that measures this row. What decides the row now is whether the parity job ran and what it said.
+    """
+    if probe.signature_problem:
+        # A job that ran and owes a measurement is a finding, never a capability gap.
+        return Row("signature_valid", RED, probe.signature_problem, SIGNATURE_METHOD_MEASURED, SIGNATURE_NOTES)
+    report = probe.signature
+    if report is None:
+        reason = probe.signature_unavailable or SIGNATURE_UNAVAILABLE_DEFAULT
+        return Row("signature_valid", NA, f"n/a — {reason}", SIGNATURE_METHOD_NA, SIGNATURE_NOTES)
+    if report.status == SIGNATURE_FAILED:
+        return Row(
+            "signature_valid",
+            RED,
+            f"the macOS parity job could not measure signatures: {report.stage} — {report.detail}",
+            SIGNATURE_METHOD_MEASURED,
+            SIGNATURE_NOTES,
+        )
+    valid, invalid = report.valid or 0, report.invalid or 0
+    where = " · ".join(part for part in (report.keg, report.runner) if part)
+    measured = f"{valid} valid / {invalid} invalid" + (f" · {where}" if where else "")
+    if valid + invalid == 0:
+        # An empty sweep proves nothing: release-verify-signatures.sh itself treats it as fatal.
+        return Row(
+            "signature_valid",
+            RED,
+            f"{measured} — the keg exposed no native extensions to verify, so nothing was proven",
+            SIGNATURE_METHOD_MEASURED,
+            SIGNATURE_NOTES,
+        )
+    if invalid:
+        named = ", ".join(report.invalid_files[:5]) or "see the parity job log"
+        return Row("signature_valid", RED, f"{measured} — {named}", SIGNATURE_METHOD_MEASURED, SIGNATURE_NOTES)
+    return Row("signature_valid", GREEN, measured, SIGNATURE_METHOD_MEASURED, SIGNATURE_NOTES)
 
 
 ROW_BUILDERS = (row_provenance, row_mapped_bytes, row_search_latency, row_idle_cpu, row_signature_valid)
@@ -413,12 +612,24 @@ def main(argv: list[str] | None = None) -> int:
         "--wheel-glob",
         help="Glob that must match exactly one built wheel, e.g. 'dist/*.whl'. Zero or several is RED, never n/a.",
     )
+    parser.add_argument(
+        "--signature-report",
+        type=Path,
+        help=(
+            "JSON written by the macOS signature-parity job. Passing it asserts that job RAN: a "
+            "missing or unreadable report is RED, never n/a."
+        ),
+    )
+    parser.add_argument(
+        "--signature-unavailable",
+        help="Why nobody measured signatures on this run. Renders `n/a — <reason>`.",
+    )
     parser.add_argument("--run-url", help="Link back to the workflow run that produced this table")
     parser.add_argument("--out", type=Path, help="Also write the rendered table here")
     args = parser.parse_args(argv)
 
     corpus = json.loads(CORPUS.read_text(encoding="utf-8"))
-    probe = Probe.detect(corpus, args.wheel, args.wheel_glob)
+    probe = Probe.detect(corpus, args.wheel, args.wheel_glob, args.signature_report, args.signature_unavailable)
     rows = collect(probe, corpus)
     table = render(rows, probe, args.run_url, datetime.now(timezone.utc))
 
