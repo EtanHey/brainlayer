@@ -58,7 +58,53 @@ def _script_env() -> dict[str, str]:
         "BRAINLAYER_PREPUSH_TREE_HASH",
     ):
         env.pop(key, None)
+    # An inherited GIT_DIR/GIT_WORK_TREE overrides the cwd, so a script copied OUTSIDE a repo would
+    # still find one and the detection-failure path would never be reached.
+    for key in [key for key in env if key.startswith("GIT_")]:
+        env.pop(key, None)
     return env
+
+
+def _clean_git_env() -> dict[str, str]:
+    # Same guard as tests/test_build_sha.py: an inherited GIT_DIR/GIT_WORK_TREE OVERRIDES `-C`, so
+    # these fixture repos would answer for the real checkout and the scope paths would never be
+    # exercised as written.
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, env=_clean_git_env())
+
+
+def _repo_with_an_empty_head_commit(tmp_path: Path) -> Path:
+    """A real repo where `git diff HEAD~1...HEAD` succeeds and names nothing.
+
+    This is the ONLY honest "nothing changed": git ran, git answered, and the answer was empty.
+    """
+    repo = tmp_path / "repo"
+    (repo / "scripts").mkdir(parents=True)
+    _git(repo.parent, "init", "-q", "-b", "main", str(repo))
+    _git(repo, "config", "user.email", "fixture@example.com")
+    _git(repo, "config", "user.name", "Fixture User")
+    (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+    _git(repo, "add", "seed.txt")
+    _git(repo, "commit", "-qm", "seed")
+    _git(repo, "commit", "-qm", "empty", "--allow-empty")
+    (repo / "scripts" / "run_tests.sh").write_text(SCRIPT_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+    return repo
+
+
+def _script_outside_a_repo(tmp_path: Path) -> Path:
+    """A copy of the script whose ROOT_DIR is not a git work tree.
+
+    `changed_files()` resolves the changed set from git when `BRAINLAYER_CHANGED_FILES` is unset;
+    running the real script from the repo can never exercise the path where that fails.
+    """
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    copied = scripts_dir / "run_tests.sh"
+    copied.write_text(SCRIPT_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+    return copied
 
 
 def test_run_tests_aggregates_exit_codes_and_keeps_running(tmp_path: Path) -> None:
@@ -337,11 +383,23 @@ def test_changed_only_scope_falls_back_to_full_suite_for_unmapped_source(tmp_pat
 
     assert result.returncode == 0
     assert "falling back to full pytest unit suite" in result.stdout
+    # The escalation names what forced it, so the missing mapping is visible rather than paid for
+    # silently on every push.
+    assert "WARNING: unmapped: src/brainlayer/mcp/search_handler.py" in result.stdout
     assert f"{test_root}/ -v" in pytest_log.read_text()
 
 
-def test_changed_only_scope_falls_back_to_full_suite_for_empty_diff(tmp_path: Path) -> None:
-    test_root = tmp_path / "tests"
+def test_changed_only_scope_skips_the_unit_suite_for_a_measured_empty_diff(tmp_path: Path) -> None:
+    """A MEASURED empty change set skips — and only a measured one.
+
+    The old escalation was a fail-open the expensive way: it ran the most costly thing this script
+    can do exactly when the evidence said there was nothing to run (on the M4 the full suite spawns
+    `scripts/reembed_bgem3.py --test`, a 2.5 GB model holding fds on the production DB). The skip
+    that replaced it is legitimate ONLY here, where git ran, answered, and named nothing — an empty
+    HEAD commit with no origin/main. Detection FAILING takes the fail-closed path instead.
+    """
+    repo = _repo_with_an_empty_head_commit(tmp_path)
+    test_root = repo / "tests"
     test_root.mkdir()
     (test_root / "test_think_recall_integration.py").write_text("test placeholder\n")
 
@@ -353,15 +411,22 @@ def test_changed_only_scope_falls_back_to_full_suite_for_empty_diff(tmp_path: Pa
     env["BRAINLAYER_USE_UV"] = "0"
     env["BRAINLAYER_PREPUSH"] = "1"
     env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
-    env["BRAINLAYER_CHANGED_FILES"] = "\n"
     env["PYTEST_LOG"] = str(pytest_log)
     env["BUN_LOG"] = str(bun_log)
 
-    result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
+    result = subprocess.run(
+        ["bash", str(repo / "scripts" / "run_tests.sh")],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,  # the script's exit code is what this test asserts on
+    )
 
-    assert result.returncode == 0
-    assert "changed-only scope found no changed files; falling back to full pytest unit suite" in result.stdout
-    assert f"{test_root}/ -v" in pytest_log.read_text()
+    assert result.returncode == 0, result.stdout
+    assert "WARNING: changed-only scope MEASURED an empty change set" in result.stdout
+    assert "falling back to full pytest unit suite" not in result.stdout
+    assert "could not be determined" not in result.stdout
+    assert f"{test_root}/ -v" not in pytest_log.read_text()
 
 
 def test_changed_only_scope_falls_back_to_full_suite_for_nested_hook_source(tmp_path: Path) -> None:
@@ -493,3 +558,87 @@ def test_worker_prepush_excludes_real_db_test_files(tmp_path: Path) -> None:
     logged = pytest_log.read_text()
     assert f"--ignore={test_root / 'test_vector_store.py'}" in logged
     assert f"--ignore={test_root / 'test_engine.py'}" in logged
+
+
+def test_default_unit_mark_expression_deselects_embedding_model_tests() -> None:
+    """Pre-push must never load a real embedding model on Etan's Macs.
+
+    `tests/conftest.py` fails any UNMARKED test that loads one; the marker is the declared escape,
+    and this script is where the declaration has to be honoured. CI passes its own `-m` expression
+    in `.github/workflows/ci.yml` and still runs them, on a runner that warms the HF cache.
+    """
+    text = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert (
+        'UNIT_MARK_EXPR="${BRAINLAYER_PYTEST_MARK_EXPR:-not integration and not live and not embedding_model}"' in text
+    )
+
+
+def test_changed_only_scope_fails_closed_when_git_cannot_name_the_changed_files(tmp_path: Path) -> None:
+    """Detection FAILING must not read as "nothing changed".
+
+    `changed_files()` used to swallow a git error into an empty list with rc 0, so a missing
+    origin/main or a broken diff produced the same evidence as a genuinely empty change set — and
+    the skip below then reported green. That is a fail-OPEN on a gate: the previous behaviour was
+    wrong because it was expensive, this one would be wrong because it is silent.
+    """
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    (test_root / "test_think_recall_integration.py").write_text("test placeholder\n")
+
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+    script = _script_outside_a_repo(tmp_path)
+
+    env = _script_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    result = subprocess.run(
+        ["bash", str(script)],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,  # a NON-ZERO exit is the assertion; raising here would hide it
+    )
+
+    assert result.returncode != 0, result.stdout
+    assert "FAIL: changed-only scope could not be determined" in result.stdout
+    assert "no origin/main and no HEAD~1" in result.stdout
+    # And it did NOT quietly widen to the full suite either.
+    assert f"{test_root}/ -v" not in pytest_log.read_text()
+
+
+def test_changed_only_scope_fails_closed_when_the_env_names_no_paths(tmp_path: Path) -> None:
+    """A caller that ASSERTS a scope and names nothing in it has made an error, not a measurement."""
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    (test_root / "test_think_recall_integration.py").write_text("test placeholder\n")
+
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+
+    env = _script_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
+    env["BRAINLAYER_CHANGED_FILES"] = "\n"
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    result = subprocess.run(
+        ["bash", str(SCRIPT_PATH)],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,  # a NON-ZERO exit is the assertion; raising here would hide it
+    )
+
+    assert result.returncode != 0, result.stdout
+    assert "BRAINLAYER_CHANGED_FILES was set but named no paths" in result.stdout
+    assert f"{test_root}/ -v" not in pytest_log.read_text()

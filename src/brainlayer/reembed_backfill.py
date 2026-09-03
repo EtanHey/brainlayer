@@ -155,6 +155,10 @@ def write_chunk_embeddings(store: VectorStore, chunks: list[PendingChunk], embed
 
 def load_embedding_model(model_name: str = DEFAULT_MODEL):
     """Load the sentence-transformers model on MPS when available."""
+    from brainlayer.embeddings import guard_embedding_model_load
+
+    guard_embedding_model_load(model_name)
+
     import torch
     from sentence_transformers import SentenceTransformer
 

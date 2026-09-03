@@ -122,6 +122,9 @@ def test_current_embedding_rows_or_skip_reraises_non_hf_failure(monkeypatch: pyt
         _current_embedding_rows_or_skip()
 
 
+# Loads BAAI/bge-large-en-v1.5 for real. Declared, so it runs where a run can afford it (CI warms
+# the HF cache) and never on a pre-push where a 2.5 GB model is the reason the UI stalls.
+@pytest.mark.embedding_model
 def test_fixture_embeddings_pass_deepchecks_and_cosine_threshold() -> None:
     fixture = load_fixture()
     baseline_rows = baseline_embedding_rows()

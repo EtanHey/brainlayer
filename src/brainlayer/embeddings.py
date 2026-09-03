@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, List, Optional
 
@@ -26,6 +27,20 @@ EMBEDDING_DIM = 1024  # bge-large dimension
 # sentence-transformers handles token-level truncation natively — no char truncation needed.
 MAX_QUERY_CHARS = 2000  # generous cap for query strings only (avoids degenerate inputs)
 BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
+
+# Suite hygiene, enforced where the cost is actually paid. tests/conftest.py sets this for every
+# test that is not marked `embedding_model`, and it is inherited by subprocesses, so a spawned
+# script cannot quietly load a 2.5 GB model that the in-process guards would have refused.
+FORBID_MODEL_LOAD_ENV = "BRAINLAYER_FORBID_EMBEDDING_MODEL"
+
+
+def guard_embedding_model_load(model_name: str) -> None:
+    """Raise when this process has been told it must not load an embedding model."""
+    if os.environ.get(FORBID_MODEL_LOAD_ENV) == "1":
+        raise RuntimeError(
+            f"{FORBID_MODEL_LOAD_ENV}=1: refusing to load `{model_name}`. A test that really needs "
+            "a real embedding model must be marked `@pytest.mark.embedding_model`."
+        )
 
 
 @dataclass
@@ -52,6 +67,8 @@ class EmbeddingModel:
         validation — never pays the ~3.7s torch import cost.
         """
         if self._model is None:
+            guard_embedding_model_load(self.model_name)
+
             from sentence_transformers import SentenceTransformer
 
             device = self.device

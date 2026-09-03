@@ -9,7 +9,7 @@ import sys
 import time
 import tomllib
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import get_type_hints
 
 import pytest
@@ -85,8 +85,107 @@ def _write_fake_ps(fake_bin: Path) -> None:
     fake_ps.chmod(0o755)
 
 
+PACKAGED_LAUNCHD_DESTINATION = PurePosixPath("brainlayer/launchd")
+
+
+def _wheel_force_include() -> dict[str, str]:
+    payload = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    return payload["tool"]["hatch"]["build"]["targets"]["wheel"]["force-include"]
+
+
+def _packaged_launchd_sources() -> dict[str, PurePosixPath]:
+    """Every wheel force-include that lands inside `brainlayer/launchd/`, source -> destination.
+
+    Read from pyproject rather than restated here, so a new force-include cannot leave the fixture
+    describing a keg layout the wheel does not actually ship.
+    """
+    selected: dict[str, PurePosixPath] = {}
+    for source, destination in _wheel_force_include().items():
+        relative = PurePosixPath(destination)
+        if relative == PACKAGED_LAUNCHD_DESTINATION or PACKAGED_LAUNCHD_DESTINATION in relative.parents:
+            selected[source] = relative
+    return selected
+
+
+def _write_fake_codesign(fake_bin: Path, log_path: Path) -> None:
+    """A codesign that always passes and records what it was asked to verify.
+
+    The keg-shaped installer tests must exercise the release-signature gate without depending on
+    a real `codesign` (absent on Linux CI) or on a real keg (absent everywhere but Etan's Macs).
+    """
+    fake_codesign = fake_bin / "codesign"
+    fake_codesign.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                f'printf "%s\\n" "$*" >> "{log_path}"',
+                "exit 0",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_codesign.chmod(0o755)
+
+
+def _write_forbidden_brew(fake_bin: Path) -> None:
+    """A `brew` that fails loudly, because these tests must never consult the ambient one.
+
+    `install.sh:find_brainlayer_keg` falls back to `brew --prefix brainlayer` for a Cellar-shaped
+    SCRIPT_DIR with no `libexec/venv` above it. That fallback is exactly what made
+    `test_launchd_installer_renders_homebrew_opt_symlink_instead_of_cellar_version` pass on a
+    hosted Linux runner (no brew) and fail on an installed Mac (brew + a real keg). A fixture that
+    ships the `libexec/venv` a real keg has never reaches the fallback; this stub makes that a
+    measured fact instead of a hope.
+    """
+    fake_brew = fake_bin / "brew"
+    fake_brew.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'echo "fixture error: install.sh consulted the ambient brew ($*)" >&2',
+                "exit 1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_brew.chmod(0o755)
+
+
+def _populate_fake_keg_native_root(keg_root: Path) -> Path:
+    """Give a fixture keg the `libexec/venv` native-extension root a real keg has.
+
+    `find_brainlayer_keg` finds a keg by walking up for `libexec/venv`, so this is also what makes
+    keg detection independent of whether the host has Homebrew installed.
+    """
+    native_file = keg_root / "libexec" / "venv" / "lib" / "python3.12" / "site-packages" / "_fixture.so"
+    native_file.parent.mkdir(parents=True, exist_ok=True)
+    native_file.write_bytes(b"\x00")
+    return native_file
+
+
 def _copy_packaged_launchd(launchd_dir: Path) -> None:
-    shutil.copytree(REPO_ROOT / "scripts" / "launchd", launchd_dir)
+    """Build the launchd directory the WHEEL ships, not just a copy of `scripts/launchd/`.
+
+    `pyproject.toml` force-includes `release-verify-signatures.sh` (and two more scripts) INTO
+    `brainlayer/launchd/`, and `install.sh` refuses to run in a keg where that script is missing --
+    correctly, because it protects a real release invariant. A fixture that copied only
+    `scripts/launchd/` therefore built a keg layout no real install ever has.
+    """
+    sources = _packaged_launchd_sources()
+    for source in sources:
+        origin = REPO_ROOT / source
+        if origin.is_dir():
+            shutil.copytree(origin, launchd_dir, dirs_exist_ok=True)
+    launchd_dir.mkdir(parents=True, exist_ok=True)
+    for source, relative in sources.items():
+        origin = REPO_ROOT / source
+        if origin.is_dir():
+            continue
+        target = launchd_dir / relative.relative_to(PACKAGED_LAUNCHD_DESTINATION)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(origin, target)
     package_dir = launchd_dir.parent
     for name in ("__init__.py", "config.py", "paths.py", "spotlight.py"):
         shutil.copy2(REPO_ROOT / "src" / "brainlayer" / name, package_dir / name)
@@ -115,8 +214,7 @@ def test_brainlayer_cli_exposes_transport_commands(monkeypatch) -> None:
 
 
 def test_launchd_templates_are_declared_as_package_data() -> None:
-    payload = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    force_include = payload["tool"]["hatch"]["build"]["targets"]["wheel"]["force-include"]
+    force_include = _wheel_force_include()
 
     assert force_include["scripts/launchd"] == "brainlayer/launchd"
 
@@ -2512,10 +2610,14 @@ def test_launchd_installer_renders_homebrew_opt_symlink_instead_of_cellar_versio
     opt_root = fake_homebrew / "opt" / "brainlayer"
     launchd_dir = cellar_root / "libexec" / "lib" / "python3.12" / "site-packages" / "brainlayer" / "launchd"
     _copy_packaged_launchd(launchd_dir)
+    native_file = _populate_fake_keg_native_root(cellar_root)
     opt_root.parent.mkdir(parents=True)
     opt_root.symlink_to(cellar_root)
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
+    codesign_log = tmp_path / "codesign.log"
+    _write_fake_codesign(fake_bin, codesign_log)
+    _write_forbidden_brew(fake_bin)
     launchctl_log = tmp_path / "launchctl.log"
     fake_launchctl = fake_bin / "launchctl"
     fake_launchctl.write_text(
@@ -2560,6 +2662,83 @@ def test_launchd_installer_renders_homebrew_opt_symlink_instead_of_cellar_versio
     assert f"<string>{opt_root}/libexec/bin/python3</string>" in content
     assert f"<string>{opt_root}/libexec/lib/python3.12/site-packages</string>" in content
     assert f"<string>{opt_root}/libexec/lib/python3.12/site-packages/brainlayer/launchd</string>" in content
+    # The release-signature gate ran against the FIXTURE keg, using the fixture codesign -- so this
+    # test measures the same thing on a hosted Linux runner and on an installed Mac.
+    assert codesign_log.read_text(encoding="utf-8").count(str(native_file)) == 1
+    # Not a bare "brew" search: the fixture keg's own path contains `homebrew`.
+    assert "consulted the ambient brew" not in result.stderr
+
+
+def test_packaged_launchd_fixture_ships_every_wheel_force_include(tmp_path: Path) -> None:
+    """The fixture keg must carry what the WHEEL puts in `brainlayer/launchd/`, not less.
+
+    `_copy_packaged_launchd` used to copy only `scripts/launchd/`, so the fixture built a keg with
+    no `release-verify-signatures.sh` -- a layout no real install has, and one `install.sh`
+    correctly refuses to run in.
+    """
+    launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
+    _copy_packaged_launchd(launchd_dir)
+
+    expected = {
+        source: relative.relative_to(PACKAGED_LAUNCHD_DESTINATION).as_posix()
+        for source, relative in _packaged_launchd_sources().items()
+        if not (REPO_ROOT / source).is_dir()
+    }
+    assert expected, "pyproject must force-include at least one file into brainlayer/launchd"
+    assert "scripts/release-verify-signatures.sh" in expected
+    for source, relative_path in expected.items():
+        shipped = launchd_dir / relative_path
+        assert shipped.is_file(), f"fixture keg is missing force-included {relative_path}"
+        # Same mode as the repo copy: `install.sh` EXECUTES release-verify-signatures.sh, so a
+        # fixture that shipped it unreadable-or-unexecutable would be a different keg again.
+        assert shipped.stat().st_mode == (REPO_ROOT / source).stat().st_mode, relative_path
+
+
+def test_launchd_installer_refuses_a_keg_missing_the_release_verify_script(tmp_path: Path) -> None:
+    """The gate `_copy_packaged_launchd` used to trip is a real invariant; keep it tripping.
+
+    A keg (`libexec/venv` above SCRIPT_DIR) with no `release-verify-signatures.sh` must fail
+    closed. Pinning it here is what lets the fixture fix above be a fixture fix rather than a
+    quiet weakening of the check.
+    """
+    cellar_root = tmp_path / "opt" / "homebrew" / "Cellar" / "brainlayer" / "9.9.9"
+    launchd_dir = cellar_root / "libexec" / "lib" / "python3.12" / "site-packages" / "brainlayer" / "launchd"
+    _copy_packaged_launchd(launchd_dir)
+    _populate_fake_keg_native_root(cellar_root)
+    (launchd_dir / "release-verify-signatures.sh").unlink()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_codesign(fake_bin, tmp_path / "codesign.log")
+    _write_forbidden_brew(fake_bin)
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text("\n".join(_fake_launchctl_lines()), encoding="utf-8")
+    fake_launchctl.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("BRAINLAYER_ENRICH_ENABLED=0\n", encoding="utf-8")
+    env_file.chmod(0o600)
+
+    result = subprocess.run(
+        [str(launchd_dir / "install.sh"), "maintenance-nightly"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": sys.executable,
+            "BRAINLAYER_PYTHON": sys.executable,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "FAKE_LAUNCHCTL_LOG": str(tmp_path / "launchctl.log"),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "release-verify-signatures.sh not found beside or above" in result.stderr
+    assert not (home / "Library" / "LaunchAgents").exists()
 
 
 def test_launchd_installer_attempts_remaining_services_after_bootstrap_error(tmp_path: Path) -> None:

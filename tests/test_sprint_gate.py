@@ -215,6 +215,232 @@ def test_validate_tools_accepts_correctly_ordered_description_truncation():
     assert details["truncation_order_valid"] is True
 
 
+def test_truncation_notice_that_names_nobody_and_explains_nothing_is_not_intact():
+    """A notice must ACCOUNT for itself: name what it shortened, or say why it shortened nothing.
+
+    Two empty sets used to satisfy `notice_names == set(truncated)` by both being empty, so a
+    notice could assert that descriptions were shortened and be believed without naming one.
+    """
+    result = {
+        "tools": [
+            {
+                "name": "brain_search",
+                "description": "Search memory",
+                "inputSchema": {"type": "object"},
+            }
+        ],
+        "_meta": {"brainlayer/descriptionsTruncated": {"tools": []}},
+    }
+
+    intact, details = sprint_gate.validate_tools(result)
+
+    assert intact is False
+    assert details["truncation_notice_unexplained"] is True
+    assert details["truncation_notice_names"] == []
+
+
+def test_the_over_limit_notice_with_no_shortened_description_is_accepted():
+    """BrainBar's documented over-limit shape is a LIVE response, not a finding.
+
+    `BrainBarServer.responseTruncatingDescriptions(forceNotice: true)` emits the notice with
+    `tools: []` and a `reason` saying every description is already at the floor, and ships the
+    response over-limit with its contract intact. Rejecting an empty `tools` list outright turned
+    that into a false RED against a legitimate response (Macroscope, #755).
+    """
+    result = {
+        "tools": [
+            {
+                "name": "brain_search",
+                "description": "Search memory",
+                "inputSchema": {"type": "object"},
+            }
+        ],
+        "_meta": {
+            "brainlayer/descriptionsTruncated": {
+                "tools": [],
+                "reason": "raw newline tools/list exceeds the client's chunk limit even though every "
+                "description is already at or below the floor",
+                "fullDescriptionsAvailableOver": "Content-Length framing",
+            }
+        },
+    }
+
+    intact, details = sprint_gate.validate_tools(result)
+
+    assert intact is True
+    assert details["truncation_notice_unexplained"] is False
+    assert details["truncation_notice_names"] == []
+    assert "already at or below the floor" in details["truncation_notice_reason"]
+
+
+def test_truncation_notice_naming_its_tools_is_reported_verbatim():
+    result = {
+        "tools": [
+            {
+                "name": "brain_search",
+                "description": "Search\u2026[truncated]",
+                "inputSchema": {"type": "object"},
+            }
+        ],
+        "_meta": {"brainlayer/descriptionsTruncated": {"tools": ["brain_search"]}},
+    }
+
+    intact, details = sprint_gate.validate_tools(result)
+
+    assert intact is True
+    assert details["truncation_notice_names"] == ["brain_search"]
+    assert details["truncation_notice_unexplained"] is False
+
+
+def _roundtrip_client(store_result: dict, archive_error: Exception | None = None) -> tuple[SimpleNamespace, list]:
+    calls: list[tuple[str, dict]] = []
+
+    def call(name, arguments=None):
+        calls.append((name, arguments or {}))
+        if name == "brain_archive" and archive_error is not None:
+            raise archive_error
+        if name == "brain_store":
+            return store_result
+        return {}
+
+    client = SimpleNamespace(initialize=lambda: None, call=call, close=lambda: None)
+    client.request = lambda _method: {
+        "tools": [
+            {
+                "name": "brain_search",
+                "description": "Search memory",
+                "annotations": {},
+                "inputSchema": {"properties": {"query": {"description": "Search query"}}},
+            }
+        ]
+    }
+    return client, calls
+
+
+ROUNDTRIP_CONFIG = {
+    "socket_path": "unused",
+    "mcp_timeout_seconds": 20,
+    "thresholds": {"deferred_visibility_wait_seconds": 5},
+}
+
+
+def test_roundtrip_archives_the_probe_chunk_it_planted(monkeypatch):
+    """The gate must not grow the corpus it measures by one chunk per run."""
+    client, calls = _roundtrip_client({"status": "STORED", "chunk_id": "chunk-42"})
+    monkeypatch.setattr(sprint_gate, "MCPClient", lambda _path, _timeout: client)
+    monkeypatch.setattr(sprint_gate, "search_visible", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(sprint_gate.time, "monotonic", lambda: 0.0)
+
+    result = sprint_gate.check_mcp(ROUNDTRIP_CONFIG)
+
+    assert result["status"] == "PASS"
+    assert ("brain_archive", {"chunk_id": "chunk-42", "reason": "sprint-gate probe"}) in calls
+    assert result["details"]["probe_retired"] is True
+    assert result["details"]["probe_chunk_id"] == "chunk-42"
+
+
+def test_roundtrip_fails_when_it_cannot_retire_its_own_probe_chunk(monkeypatch):
+    """A gate that cannot undo its own write does not get to call the run green."""
+    client, _calls = _roundtrip_client(
+        {"status": "STORED", "chunk_id": "chunk-42"}, archive_error=RuntimeError("archive refused")
+    )
+    monkeypatch.setattr(sprint_gate, "MCPClient", lambda _path, _timeout: client)
+    monkeypatch.setattr(sprint_gate, "search_visible", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(sprint_gate.time, "monotonic", lambda: 0.0)
+
+    result = sprint_gate.check_mcp(ROUNDTRIP_CONFIG)
+
+    assert result["status"] == "FAIL"
+    assert result["details"]["probe_retired"] is False
+    assert "archive refused" in result["details"]["probe_retire_error"]
+
+
+@pytest.mark.parametrize("dedupe_status", ["DUPLICATE", "MERGED"])
+def test_roundtrip_never_archives_a_chunk_the_gate_did_not_create(monkeypatch, dedupe_status):
+    """A deduped probe means the returned chunk is SOMEBODY ELSE'S MEMORY. Never archive it.
+
+    `brain_store` answers DUPLICATE/MERGED with the id of PRE-EXISTING content. Archiving that
+    unconditionally would make the gate silently delete a real user memory on every run where
+    BrainLayer deduped the probe -- "never silently degrade, never auto-delete personal data",
+    broken by the cleanup routine itself.
+    """
+    existing = "chunk-somebody-elses-memory"
+    client, calls = _roundtrip_client({"status": dedupe_status, "stored_new": False, "chunk_id": existing})
+    monkeypatch.setattr(sprint_gate, "MCPClient", lambda _path, _timeout: client)
+    monkeypatch.setattr(sprint_gate, "search_visible", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(sprint_gate.time, "monotonic", lambda: 0.0)
+
+    result = sprint_gate.check_mcp(ROUNDTRIP_CONFIG)
+
+    # The assertion that proves the blocker is closed: brain_archive is never reached at all, and
+    # in particular never with the pre-existing chunk id.
+    assert [name for name, _ in calls] == ["expand_palette", "brain_store"]
+    assert all(arguments.get("chunk_id") != existing for _name, arguments in calls)
+    # The gate created nothing, so there is nothing outstanding -- and it still passes.
+    assert result["status"] == "PASS"
+    assert result["details"]["probe_retired"] is True
+    assert result["details"]["probe_chunk_id"] is None
+    assert result["details"]["probe_reused_existing_chunk"] == existing
+
+
+def test_a_stored_probe_is_still_archived_when_stored_new_is_reported(monkeypatch):
+    """The other direction: a chunk the gate DID create is retired exactly as before."""
+    client, calls = _roundtrip_client({"status": "STORED", "stored_new": True, "chunk_id": "chunk-42"})
+    monkeypatch.setattr(sprint_gate, "MCPClient", lambda _path, _timeout: client)
+    monkeypatch.setattr(sprint_gate, "search_visible", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(sprint_gate.time, "monotonic", lambda: 0.0)
+
+    result = sprint_gate.check_mcp(ROUNDTRIP_CONFIG)
+
+    assert ("brain_archive", {"chunk_id": "chunk-42", "reason": "sprint-gate probe"}) in calls
+    assert result["status"] == "PASS"
+    assert result["details"]["probe_chunk_id"] == "chunk-42"
+
+
+def test_probe_ownership_reads_stored_new_before_falling_back_to_status():
+    """`stored_new` is authoritative where BrainBar sends it; status is the queued-path fallback."""
+    assert sprint_gate.probe_is_gate_created({"status": "STORED", "stored_new": True}) is True
+    assert sprint_gate.probe_is_gate_created({"status": "STORED", "stored_new": False}) is False
+    assert sprint_gate.probe_is_gate_created({"status": "DUPLICATE", "stored_new": False}) is False
+    assert sprint_gate.probe_is_gate_created({"status": "MERGED", "stored_new": False}) is False
+    # The queued path (`queuedBrainStoreOutput`) sends no `stored_new`; a DEFERRED write is ours.
+    assert sprint_gate.probe_is_gate_created({"status": "DEFERRED"}) is True
+    assert sprint_gate.probe_is_gate_created({"status": "STORED"}) is True
+    assert sprint_gate.probe_is_gate_created({"status": "DUPLICATE"}) is False
+
+
+def test_roundtrip_retires_its_probe_chunk_even_when_the_search_raises(monkeypatch):
+    """A gate run that BLOWS UP still cleans up. Otherwise every failing run grows the corpus."""
+    client, calls = _roundtrip_client({"status": "STORED", "chunk_id": "chunk-42"})
+    monkeypatch.setattr(sprint_gate, "MCPClient", lambda _path, _timeout: client)
+
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("socket died mid-search")
+
+    monkeypatch.setattr(sprint_gate, "search_visible", explode)
+    monkeypatch.setattr(sprint_gate.time, "monotonic", lambda: 0.0)
+
+    with pytest.raises(RuntimeError, match="socket died mid-search"):
+        sprint_gate.check_mcp(ROUNDTRIP_CONFIG)
+
+    assert ("brain_archive", {"chunk_id": "chunk-42", "reason": "sprint-gate probe"}) in calls
+
+
+def test_roundtrip_reports_a_store_that_returned_no_chunk_id(monkeypatch):
+    client, calls = _roundtrip_client({"status": "STORED"})
+    monkeypatch.setattr(sprint_gate, "MCPClient", lambda _path, _timeout: client)
+    monkeypatch.setattr(sprint_gate, "search_visible", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(sprint_gate.time, "monotonic", lambda: 0.0)
+
+    result = sprint_gate.check_mcp(ROUNDTRIP_CONFIG)
+
+    assert result["status"] == "FAIL"
+    assert result["details"]["probe_retire_error"] == (
+        "the store returned no chunk_id, so the probe chunk cannot be retired"
+    )
+    assert [name for name, _ in calls] == ["expand_palette", "brain_store"]
+
+
 def test_missing_wal_is_zero(tmp_path: Path):
     assert sprint_gate.wal_size(tmp_path / "gone") == 0
 
@@ -237,7 +463,9 @@ def test_deferred_roundtrip_uses_configured_wait_and_reports_observed(monkeypatc
         calls.append(name)
         if name == "expand_palette" and expand_error:
             raise expand_error
-        return {"status": "DEFERRED"}
+        # BrainBar's queued store returns a chunk_id (`queuedBrainStoreOutput`), so the fake does
+        # too -- otherwise this test would be measuring a response shape the daemon never sends.
+        return {"status": "DEFERRED", "chunk_id": "chunk-deferred"}
 
     client = SimpleNamespace(
         initialize=lambda: None,
@@ -263,9 +491,40 @@ def test_deferred_roundtrip_uses_configured_wait_and_reports_observed(monkeypatc
     result = sprint_gate.check_mcp(config)
 
     assert result["status"] == "PASS"
-    assert calls == ["expand_palette", "brain_store"]
+    assert calls == ["expand_palette", "brain_store", "brain_archive"]
     assert waits == [5]
     assert result["details"]["planted_hit_wait_seconds"] == 2.5
+    assert result["details"]["probe_chunk_id"] == "chunk-deferred"
+
+
+def test_empty_check_list_is_unmeasured_never_pass(monkeypatch, capsys, tmp_path: Path):
+    """`checks: []` measured nothing, so it cannot report PASS.
+
+    `all([])` is True, so an empty selection rendered a green payload with rc 0 -- the same
+    vacuous-PASS shape #752 legislated out of the ratchet table, reached here through an empty
+    selection instead of an empty measurement.
+    """
+    config = deterministic_live_config()
+    config["checks"] = []
+
+    rc, payload = run_live_config(monkeypatch, capsys, tmp_path, config)
+
+    assert rc == 1
+    assert payload["status"] == sprint_gate.UNMEASURED
+    assert payload["checks"] == []
+    assert "measured nothing" in payload["error"]
+
+
+def test_a_selection_that_runs_one_check_still_passes(monkeypatch, capsys, tmp_path: Path):
+    """The counterpart: UNMEASURED is about measuring nothing, not about measuring little."""
+    config = deterministic_live_config()
+    config["checks"] = ["wal_bound"]
+
+    rc, payload = run_live_config(monkeypatch, capsys, tmp_path, config)
+
+    assert rc == 0
+    assert payload["status"] == "PASS"
+    assert [check["name"] for check in payload["checks"]] == ["wal_bound"]
 
 
 def test_live_gate_rejects_wrong_machine(monkeypatch, capsys):

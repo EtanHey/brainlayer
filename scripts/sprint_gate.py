@@ -203,29 +203,132 @@ def check_search(config: dict) -> dict:
     )
 
 
+def annotation_gaps(tools: list) -> dict:
+    """The two optional rungs the compaction ladder sheds BEFORE it shortens any description."""
+    return {
+        "missing_annotations": [tool.get("name", "unknown") for tool in tools if "annotations" not in tool],
+        "missing_input_schema_prose": [
+            tool.get("name", "unknown") for tool in tools if not contains_key(tool.get("inputSchema"), "description")
+        ],
+    }
+
+
+def truncation_report(tools: list, notice: object, gaps: dict) -> dict:
+    """What the truncation rung is judged on: evidenced, named or explained, correctly ordered."""
+    truncated = [tool.get("name", "unknown") for tool in tools if tool.get("description", "").endswith("…[truncated]")]
+    names = sorted(notice.get("tools", [])) if isinstance(notice, dict) else []
+    reason = str(notice.get("reason", "")).strip() if isinstance(notice, dict) else ""
+    evidenced = bool(truncated) or isinstance(notice, dict)
+    shed_both = len(gaps["missing_annotations"]) == len(tools) and len(gaps["missing_input_schema_prose"]) == len(tools)
+    return {
+        "truncated_descriptions": truncated,
+        "truncation_notice_names": names,
+        "truncation_notice_reason": reason,
+        # The contract (#727) is that a notice ACCOUNTS for itself. Naming the shortened
+        # descriptions is one way; the other is BrainBar's documented over-limit shape, where
+        # `forceNotice` emits `tools: []` with a `reason` saying every description is already at
+        # the floor (`BrainBarServer.responseTruncatingDescriptions`). Rejecting an empty `tools`
+        # list outright turned that legitimate live response RED (Macroscope, #755). What is never
+        # acceptable is a notice that names nobody AND explains nothing -- a claim with no content.
+        "truncation_notice_unexplained": isinstance(notice, dict) and not names and not reason,
+        "truncation_evidenced": evidenced,
+        "truncation_order_valid": not evidenced or shed_both,
+    }
+
+
+def truncation_intact(report: dict) -> bool:
+    """The rung passes only when the notice named exactly what it shortened, or explained itself."""
+    if report["truncation_notice_unexplained"]:
+        return False
+    if report["truncation_notice_names"] != sorted(report["truncated_descriptions"]):
+        return False
+    return report["truncation_order_valid"]
+
+
 def validate_tools(result: dict) -> tuple[bool, dict]:
     tools = result.get("tools", [])
     missing = [tool.get("name", "unknown") for tool in tools if not tool.get("description")]
-    truncated = [tool.get("name", "unknown") for tool in tools if tool.get("description", "").endswith("…[truncated]")]
+    gaps = annotation_gaps(tools)
     notice = result.get("_meta", {}).get("brainlayer/descriptionsTruncated")
-    notice_names = set(notice.get("tools", [])) if isinstance(notice, dict) else set()
-    missing_annotations = [tool.get("name", "unknown") for tool in tools if "annotations" not in tool]
-    missing_input_schema_prose = [
-        tool.get("name", "unknown") for tool in tools if not contains_key(tool.get("inputSchema"), "description")
-    ]
-    truncation_evidenced = bool(truncated) or isinstance(notice, dict)
-    truncation_order_valid = not truncation_evidenced or (
-        len(missing_annotations) == len(tools) and len(missing_input_schema_prose) == len(tools)
-    )
-    intact = bool(tools) and not missing and notice_names == set(truncated) and truncation_order_valid
-    return intact, {
-        "tool_count": len(tools),
-        "missing_descriptions": missing,
-        "truncated_descriptions": truncated,
-        "missing_annotations": missing_annotations,
-        "missing_input_schema_prose": missing_input_schema_prose,
-        "truncation_evidenced": truncation_evidenced,
-        "truncation_order_valid": truncation_order_valid,
+    truncation = truncation_report(tools, notice, gaps)
+    intact = bool(tools) and not missing and truncation_intact(truncation)
+    return intact, {"tool_count": len(tools), "missing_descriptions": missing, **gaps, **truncation}
+
+
+# A store that answered `DUPLICATE` or `MERGED` succeeded, but it did NOT create a chunk: the id it
+# returns belongs to PRE-EXISTING content -- a real memory somebody wrote. Only these two outcomes
+# mean the chunk on the other end of that id is this run's to retire.
+GATE_CREATED_STORE_STATUSES = {"STORED", "DEFERRED"}
+
+
+def probe_is_gate_created(stored: dict) -> bool:
+    """Whether THIS run created the chunk the store answered with.
+
+    `stored_new` is authoritative wherever BrainBar sends it, which is every non-queued store
+    (`MCPRouter.handleBrainStore`). The queued path does not send it, but a `DEFERRED` store is a
+    write this gate queued and the drain will persist it, so that chunk is ours.
+    """
+    stored_new = stored.get("stored_new")
+    if isinstance(stored_new, bool):
+        return stored_new
+    return stored.get("status") in GATE_CREATED_STORE_STATUSES
+
+
+def retire_probe_chunk(client: MCPClient, stored: dict) -> dict:
+    """Archive the probe chunk this run planted in the REAL database -- and only that chunk.
+
+    The roundtrip check has to write, because a store->search roundtrip against the served daemon
+    is the thing being measured and the served daemon owns the canonical DB. What it must not do is
+    leave a chunk behind on every run: that is the gate quietly growing the corpus it measures.
+
+    What it must not do EVEN MORE is archive a chunk it did not create. `brain_store` answers
+    `DUPLICATE`/`MERGED` with the id of an EXISTING chunk, so archiving unconditionally would make
+    the gate silently delete a real user memory every time BrainLayer deduped the probe --
+    "never silently degrade, never auto-delete personal data", broken by a cleanup routine
+    (Macroscope, #755). The question is *did this gate create this chunk*, not *did the store
+    succeed*.
+
+    Failing to clean up a chunk we DID create FAILS the check rather than being logged and
+    forgotten -- a gate that cannot undo its own write has no business calling the run green.
+    """
+    if not probe_is_gate_created(stored):
+        # Nothing was planted, so there is nothing to retire. Name the id we declined to touch, so
+        # "retired" here is auditable rather than an unexplained green.
+        return {
+            "probe_retired": True,
+            "probe_chunk_id": None,
+            "probe_retire_error": None,
+            "probe_reused_existing_chunk": stored.get("chunk_id"),
+        }
+    chunk_id = stored.get("chunk_id")
+    if not chunk_id:
+        # No exemption for DEFERRED. BrainBar's queued store DOES return a `chunk_id`
+        # (`queuedBrainStoreOutput`) and the deferred drain persists that chunk, so calling a
+        # DEFERRED store "retired" would have been the exact false green this helper exists to
+        # prevent: a chunk left in the production corpus, reported as cleaned up (Macroscope, #755).
+        return {
+            "probe_retired": False,
+            "probe_chunk_id": None,
+            "probe_retire_error": "the store returned no chunk_id, so the probe chunk cannot be retired",
+            "probe_reused_existing_chunk": None,
+        }
+    try:
+        client.call("brain_archive", {"chunk_id": chunk_id, "reason": "sprint-gate probe"})
+    except Exception as error:
+        # Deliberately broad: this runs from a `finally`, so ANY exception escaping here would
+        # REPLACE the failure that sent us there -- the gate would report a cleanup error and lose
+        # the search error that is the actual finding. Cleanup reports itself; it never masks.
+        return {
+            "probe_retired": False,
+            "probe_chunk_id": chunk_id,
+            "probe_retire_error": str(error),
+            "probe_reused_existing_chunk": None,
+        }
+    return {
+        "probe_retired": True,
+        "probe_chunk_id": chunk_id,
+        "probe_retire_error": None,
+        "probe_reused_existing_chunk": None,
     }
 
 
@@ -258,9 +361,17 @@ def check_mcp(config: dict) -> dict:
         store_status = stored.get("status")
         wait_budget = config["thresholds"]["deferred_visibility_wait_seconds"] if store_status == "DEFERRED" else 1.25
         wait_started = time.monotonic()
-        hit = search_visible(client, marker, wait_budget)
-        observed_wait = round(time.monotonic() - wait_started, 3)
-        passed = intact and store_status in SUCCESS_STATUSES and hit
+        hit = False
+        try:
+            hit = search_visible(client, marker, wait_budget)
+        finally:
+            # `finally`, not a straight line: a `search_visible` that RAISES would otherwise skip
+            # cleanup entirely and leave the chunk it planted in the production corpus, so every
+            # failing gate run would grow the corpus it measures (Macroscope, #755). The outer
+            # `finally` only closes the socket.
+            observed_wait = round(time.monotonic() - wait_started, 3)
+            cleanup = retire_probe_chunk(client, stored)
+        passed = intact and store_status in SUCCESS_STATUSES and hit and cleanup["probe_retired"]
         return status(
             "mcp_roundtrip",
             passed,
@@ -268,6 +379,7 @@ def check_mcp(config: dict) -> dict:
             store_status=store_status,
             planted_hit=hit,
             planted_hit_wait_seconds=observed_wait,
+            **cleanup,
         )
     finally:
         client.close()
@@ -609,7 +721,36 @@ def refusal_message(provenance: dict) -> str:
     )
 
 
-def main(argv: list[str] | None = None) -> int:
+def replay_provenance() -> dict:
+    """The provenance a replay run reports. A fresh dict per call: callers own their payload."""
+    return {
+        # Replay never touches git: a fixture is not evidence, so its tree metadata is a placeholder.
+        "served_version": "fixture",
+        "served_package_path": None,
+        **PLACEHOLDER_TREE,
+        "served_build_sha": None,
+        "served_pythonpath": None,
+        "served_repo_root": None,
+        "helper_started_at": None,
+        "source_newest_mtime": None,
+        "served_package_newest_mtime": None,
+        "provenance_mode": "replay",
+        "proof_refusals": ["replay"],
+        "served_matches_working_tree": False,
+        "db_path": None,
+        "db_size_bytes": 0,
+        "chunk_count": 0,
+        "provenance_error": None,
+    }
+
+
+# A run that measured nothing is not a pass. `checks: []` used to render PASS with rc 0 because
+# `all([])` is True -- the same false green #752 legislated against in the ratchet table, reached
+# here by an empty selection instead of an empty measurement.
+UNMEASURED = "UNMEASURED"
+
+
+def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
     parser.add_argument("--fixture", type=Path, help="Replay a deterministic RED/GREEN fixture")
@@ -623,114 +764,166 @@ def main(argv: list[str] | None = None) -> int:
             "Replay is always refused."
         ),
     )
-    args = parser.parse_args(argv)
+    return parser.parse_args(argv)
+
+
+def load_config(fixture: Path | None) -> dict:
     config = json.loads(CORPUS.read_text(encoding="utf-8"))
+    if fixture:
+        config = merge(config, json.loads(fixture.read_text(encoding="utf-8")))
+    return config
+
+
+def proof_refusal(args: argparse.Namespace, provenance: dict) -> str | None:
+    """Why this run is not allowed to measure anything, or None."""
+    if not args.require_code_under_test:
+        return None
     if args.fixture:
-        config = merge(config, json.loads(args.fixture.read_text(encoding="utf-8")))
-    machine = {"hostname": socket.gethostname(), "os": platform.system(), "architecture": platform.machine()}
-    provenance = (
-        {
-            # Replay never touches git: a fixture is not evidence, so its tree metadata is a placeholder.
-            "served_version": "fixture",
-            "served_package_path": None,
-            **PLACEHOLDER_TREE,
-            "served_build_sha": None,
-            "served_pythonpath": None,
-            "served_repo_root": None,
-            "helper_started_at": None,
-            "source_newest_mtime": None,
-            "served_package_newest_mtime": None,
-            "provenance_mode": "replay",
-            "proof_refusals": ["replay"],
-            "served_matches_working_tree": False,
-            "db_path": None,
-            "db_size_bytes": 0,
-            "chunk_count": 0,
-            "provenance_error": None,
-        }
-        if args.fixture
-        else collect_live_provenance(config)
-    )
-    proof_eligible = provenance["served_matches_working_tree"]
+        return "replay is never proof-eligible: a fixture is not evidence about any served code"
+    if not provenance["served_matches_working_tree"]:
+        return refusal_message(provenance)
+    return None
 
-    def fail(error: str) -> int:
-        payload = {
-            "mode": "replay" if args.fixture else "live",
-            "fixture": str(args.fixture) if args.fixture else None,
-            "status": "FAIL",
-            "machine": machine,
-            "provenance": provenance,
-            "proof_eligible": proof_eligible,
-            "checks": [],
-            "error": error,
-        }
-        print(json.dumps(payload, indent=None if args.json else 2, sort_keys=True))
-        return 1
 
-    if args.require_code_under_test and args.fixture:
-        return fail("replay is never proof-eligible: a fixture is not evidence about any served code")
-    if args.require_code_under_test and not proof_eligible:
-        return fail(refusal_message(provenance))
-
+def machine_target_refusal(config: dict, machine: dict) -> str | None:
+    """Why this machine may not stand in for the gate's calibrated target, or None."""
     machine_target = config.get("machine_target")
-    if not args.fixture and machine_target is None:
-        return fail("machine target is missing")
-    if not args.fixture and not isinstance(machine_target, dict):
-        return fail("machine target is invalid")
-    if not args.fixture and not {"os", "architecture"}.issubset(machine_target):
-        return fail("machine target is incomplete")
-    if not args.fixture and any(key not in machine or machine[key] != value for key, value in machine_target.items()):
-        return fail("machine target mismatch")
-    selected = config.get("checks", list(CHECKS))
-    latency_baseline = config.get("latency_baseline_ms")
-    if not args.fixture and "search_latency" in selected and latency_baseline is None:
-        return fail("latency baseline is missing")
-    if not args.fixture and latency_baseline is not None and not isinstance(latency_baseline, dict):
-        return fail("latency baseline is invalid")
-    calibrated_hostname = latency_baseline.get("hostname") if isinstance(latency_baseline, dict) else None
-    if not args.fixture and "search_latency" in selected and not calibrated_hostname:
-        return fail("latency baseline is missing its calibrated hostname")
+    if machine_target is None:
+        return "machine target is missing"
+    if not isinstance(machine_target, dict):
+        return "machine target is invalid"
+    if not {"os", "architecture"}.issubset(machine_target):
+        return "machine target is incomplete"
+    if any(key not in machine or machine[key] != value for key, value in machine_target.items()):
+        return "machine target mismatch"
+    return None
+
+
+def latency_baseline_refusal(config: dict, selected: list[str]) -> str | None:
+    """Why the latency row has no baseline to compare against, or None."""
+    baseline = config.get("latency_baseline_ms")
+    if "search_latency" in selected and baseline is None:
+        return "latency baseline is missing"
+    if baseline is not None and not isinstance(baseline, dict):
+        return "latency baseline is invalid"
+    if "search_latency" in selected and not (isinstance(baseline, dict) and baseline.get("hostname")):
+        return "latency baseline is missing its calibrated hostname"
+    return None
+
+
+def calibrated_hostname(config: dict) -> str | None:
+    baseline = config.get("latency_baseline_ms")
+    return baseline.get("hostname") if isinstance(baseline, dict) else None
+
+
+CHECK_RUNNERS = {"search_latency": check_search, "mcp_roundtrip": check_mcp, "resource_budget": check_resource}
+
+
+def uncalibrated_host_skip(name: str, machine: dict, expected_host: str | None) -> dict:
+    return {
+        "name": name,
+        "status": "SKIPPED",
+        "details": {
+            "reason": "uncalibrated host",
+            "running_hostname": machine["hostname"],
+            "calibrated_hostname": expected_host,
+        },
+    }
+
+
+def run_one_check(name: str, config: dict, machine: dict, *, replay: bool) -> dict | None:
+    """One check's result, or None when this name is not run here (`wal_bound` is timed apart)."""
+    if name == "wal_bound":
+        return None
+    expected_host = calibrated_hostname(config)
+    if name == "search_latency" and not replay and machine["hostname"] != expected_host:
+        return uncalibrated_host_skip(name, machine, expected_host)
+    try:
+        return CHECK_RUNNERS[name](config)
+    except Exception as exc:
+        return status(name, False, error=f"{type(exc).__name__}: {exc}")
+
+
+def run_checks(config: dict, selected: list[str], machine: dict, *, replay: bool) -> list[dict]:
+    """Run every selected check, in the order the corpus lists them."""
     wal_monitor = None
     if "wal_bound" in selected and "wal_samples_bytes" not in config:
         wal_monitor = WalMonitor()
         wal_monitor.start()
-    results = []
-    runners = {"search_latency": check_search, "mcp_roundtrip": check_mcp, "resource_budget": check_resource}
-    for name in selected:
-        if name == "wal_bound":
-            continue
-        if name == "search_latency" and not args.fixture and machine["hostname"] != calibrated_hostname:
-            results.append(
-                {
-                    "name": name,
-                    "status": "SKIPPED",
-                    "details": {
-                        "reason": "uncalibrated host",
-                        "running_hostname": machine["hostname"],
-                        "calibrated_hostname": calibrated_hostname,
-                    },
-                }
-            )
-            continue
-        try:
-            results.append(runners[name](config))
-        except Exception as exc:
-            results.append(status(name, False, error=f"{type(exc).__name__}: {exc}"))
+    results = [result for name in selected if (result := run_one_check(name, config, machine, replay=replay))]
     if "wal_bound" in selected:
-        samples = wal_monitor.stop() if wal_monitor else None
-        results.append(check_wal(config, samples))
-    payload = {
+        results.append(check_wal(config, wal_monitor.stop() if wal_monitor else None))
+    return results
+
+
+def gate_status(results: list[dict]) -> str:
+    """PASS, FAIL, or UNMEASURED -- and an empty result list is never PASS.
+
+    Option (b) from w6-REPORT.md still stands for SKIPPED checks: rc stays 0 and release consumers
+    reject skipped checks themselves. A run with NO checks at all is a different animal: it made no
+    claim about anything, so it cannot make a green one.
+    """
+    if not results:
+        return UNMEASURED
+    return "PASS" if all(item["status"] in {"PASS", "SKIPPED"} for item in results) else "FAIL"
+
+
+def gate_refusal(
+    args: argparse.Namespace, config: dict, machine: dict, provenance: dict, selected: list[str]
+) -> str | None:
+    """The first reason this run may not measure anything, or None. Order is the reported order."""
+    if refusal := proof_refusal(args, provenance):
+        return refusal
+    if args.fixture:
+        return None
+    return machine_target_refusal(config, machine) or latency_baseline_refusal(config, selected)
+
+
+def base_payload(args: argparse.Namespace, machine: dict, provenance: dict) -> dict:
+    """Everything a payload reports about the RUN, before it reports any measurement."""
+    return {
         "mode": "replay" if args.fixture else "live",
         "fixture": str(args.fixture) if args.fixture else None,
-        # Option (b): rc stays 0; release consumers must reject skipped checks (w6-REPORT.md).
-        "status": "PASS" if all(item["status"] in {"PASS", "SKIPPED"} for item in results) else "FAIL",
         "machine": machine,
         "provenance": provenance,
-        "proof_eligible": proof_eligible,
+        "proof_eligible": provenance["served_matches_working_tree"],
+    }
+
+
+def refusal_payload(base: dict, error: str) -> dict:
+    return {**base, "status": "FAIL", "checks": [], "error": error}
+
+
+def result_payload(base: dict, results: list[dict]) -> dict:
+    payload = {
+        **base,
+        "status": gate_status(results),
         "checks": results,
         "skipped": [item["name"] for item in results if item["status"] == "SKIPPED"],
     }
-    print(json.dumps(payload, indent=None if args.json else 2, sort_keys=True))
+    if payload["status"] == UNMEASURED:
+        payload["error"] = "no checks were selected, so this run measured nothing and cannot report PASS"
+    return payload
+
+
+def emit(payload: dict, *, as_json: bool) -> None:
+    print(json.dumps(payload, indent=None if as_json else 2, sort_keys=True))
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    config = load_config(args.fixture)
+    machine = {"hostname": socket.gethostname(), "os": platform.system(), "architecture": platform.machine()}
+    provenance = replay_provenance() if args.fixture else collect_live_provenance(config)
+    base = base_payload(args, machine, provenance)
+    selected = config.get("checks", list(CHECKS))
+
+    if refusal := gate_refusal(args, config, machine, provenance, selected):
+        emit(refusal_payload(base, refusal), as_json=args.json)
+        return 1
+
+    payload = result_payload(base, run_checks(config, selected, machine, replay=bool(args.fixture)))
+    emit(payload, as_json=args.json)
     return 0 if payload["status"] == "PASS" else 1
 
 

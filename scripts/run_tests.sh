@@ -5,13 +5,20 @@ set -u -o pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_ROOT="${BRAINLAYER_TEST_ROOT:-$ROOT_DIR/tests}"
 BRAINLAYER_USE_UV="${BRAINLAYER_USE_UV:-1}"
-UNIT_MARK_EXPR="${BRAINLAYER_PYTEST_MARK_EXPR:-not integration and not live}"
+# `not embedding_model` is suite hygiene, not a speed tweak: a marked test loads a real embedding
+# model (2.5 GB RSS for BGE-M3), and this script is what pre-push runs on Etan's Macs. CI passes its
+# own -m expression in .github/workflows/ci.yml and still runs them, on a runner that warms the HF
+# cache on purpose. tests/conftest.py fails any UNMARKED test that loads one.
+UNIT_MARK_EXPR="${BRAINLAYER_PYTEST_MARK_EXPR:-not integration and not live and not embedding_model}"
 BRAINLAYER_PREPUSH="${BRAINLAYER_PREPUSH:-0}"
 BRAINLAYER_PREPUSH_SCOPE="${BRAINLAYER_PREPUSH_SCOPE:-full}"
 exit_status=0
 declare -a targeted_pytest_files=()
+declare -a unmapped_changed_files=()
 changed_source_unmapped=0
 changed_files_seen=0
+# Empty when the changed set was established; otherwise the reason it could not be.
+changed_files_scope_error=""
 
 default_prepush_cache_dir() {
   local git_dir
@@ -95,6 +102,11 @@ prepush_cache_file() {
   printf '%s/%s.full.ok\n' "$BRAINLAYER_PREPUSH_CACHE_DIR" "$tree_hash"
 }
 
+# Returns the changed paths on stdout and a MEANINGFUL exit code: non-zero says "this script could
+# not determine what changed", which is a different thing from "nothing changed" and must never be
+# collapsed into it. The old `2>/dev/null || true` swallowed a git failure into an empty list with
+# rc 0, so a missing origin/main or a broken diff read as "nothing to test -- pass". That is a
+# fail-OPEN on a gate, and silent is worse than expensive.
 changed_files() {
   if [ -n "${BRAINLAYER_CHANGED_FILES:-}" ]; then
     printf '%s\n' "$BRAINLAYER_CHANGED_FILES" | tr ',' '\n' | sed '/^$/d'
@@ -102,9 +114,13 @@ changed_files() {
   fi
   if git rev-parse --verify origin/main >/dev/null 2>&1; then
     git diff --name-only origin/main...HEAD
-  else
-    git diff --name-only HEAD~1...HEAD 2>/dev/null || true
+    return $?
   fi
+  if git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+    git diff --name-only HEAD~1...HEAD
+    return $?
+  fi
+  return 1
 }
 
 is_real_db_test_file() {
@@ -134,9 +150,22 @@ append_unique() {
 
 map_changed_files_to_pytests() {
   targeted_pytest_files=()
+  unmapped_changed_files=()
   changed_source_unmapped=0
   changed_files_seen=0
-  local changed rel test_path module_name mapped
+  changed_files_scope_error=""
+  local changed rel test_path module_name mapped changed_list detect_rc=0
+  # Command substitution, not process substitution: `done < <(changed_files)` throws away the exit
+  # code, which is the whole signal that tells a failed detection from an empty one.
+  changed_list="$(changed_files)" || detect_rc=$?
+  if [ "$detect_rc" -ne 0 ]; then
+    changed_files_scope_error="git could not name the changed files (no origin/main and no HEAD~1, or the diff failed)"
+    return 0
+  fi
+  if [ -n "${BRAINLAYER_CHANGED_FILES:-}" ] && [ -z "$changed_list" ]; then
+    changed_files_scope_error="BRAINLAYER_CHANGED_FILES was set but named no paths"
+    return 0
+  fi
   while IFS= read -r changed; do
     [ -z "$changed" ] && continue
     changed_files_seen=1
@@ -181,6 +210,7 @@ map_changed_files_to_pytests() {
         if [ -f "$test_path" ]; then
           if is_real_db_test_file "$test_path"; then
             changed_source_unmapped=1
+            unmapped_changed_files+=("$changed")
           else
             append_unique "$test_path"
             mapped=1
@@ -207,10 +237,11 @@ map_changed_files_to_pytests() {
       case "$changed" in
         src/brainlayer/*.py|src/brainlayer/**/*.py)
           changed_source_unmapped=1
+          unmapped_changed_files+=("$changed")
           ;;
       esac
     fi
-  done < <(changed_files)
+  done <<< "$changed_list"
 }
 
 run_pytest() {
@@ -244,11 +275,33 @@ if [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ]; then
   map_changed_files_to_pytests
 fi
 
-if [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ "$changed_source_unmapped" -eq 1 ]; then
-  echo "changed-only scope found an unmapped source change; falling back to full pytest unit suite"
-  pytest_unit_cmd=(run_pytest "$TEST_ROOT/" -v --tb=short -m "$UNIT_MARK_EXPR")
+if [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ -n "$changed_files_scope_error" ]; then
+  # Fail CLOSED. The skip below is only legitimate when this script actually established that
+  # nothing changed; a scope it could not determine is not a scope it may call empty.
+  echo "==> pytest unit suite"
+  echo "FAIL: changed-only scope could not be determined: $changed_files_scope_error"
+  echo "FAIL: refusing to call this run green for a scope that was never established."
+  echo
+  exit_status=1
+  pytest_unit_cmd=()
 elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ "$changed_files_seen" -eq 0 ]; then
-  echo "changed-only scope found no changed files; falling back to full pytest unit suite"
+  # A changed-only run that found NOTHING has nothing to test, and escalating that to the full
+  # suite was a fail-open: the most expensive thing this script can do, chosen precisely when the
+  # evidence says there is nothing to do. On the M4 that full suite spawns
+  # scripts/reembed_bgem3.py --test (a 2.5 GB embedding model holding fds on the production DB) --
+  # the verified cause of a 14:22 UI stall. Skip loudly instead; the caller decides what to widen.
+  echo "==> pytest unit suite"
+  echo "WARNING: changed-only scope MEASURED an empty change set; SKIPPING the pytest unit suite."
+  echo "WARNING: nothing was measured here. Set BRAINLAYER_CHANGED_FILES explicitly, or run with"
+  echo "WARNING: BRAINLAYER_PREPUSH_SCOPE=full to ask for the whole suite on purpose."
+  echo
+  pytest_unit_cmd=()
+elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ "$changed_source_unmapped" -eq 1 ]; then
+  # An unmapped SOURCE change is the opposite case: there IS something to test and no targeted way
+  # to test it, so the escalation stays. It just no longer happens quietly -- it names what forced
+  # it, so the fix (add a mapping) is visible instead of paid for on every push.
+  echo "WARNING: changed-only scope found an unmapped source change; falling back to full pytest unit suite"
+  echo "WARNING: unmapped: ${unmapped_changed_files[*]}"
   pytest_unit_cmd=(run_pytest "$TEST_ROOT/" -v --tb=short -m "$UNIT_MARK_EXPR")
 elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ "${#targeted_pytest_files[@]}" -gt 0 ]; then
   pytest_unit_cmd=(run_pytest "${targeted_pytest_files[@]}" -v --tb=short -m "$UNIT_MARK_EXPR")

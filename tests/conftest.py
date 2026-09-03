@@ -1,7 +1,11 @@
 """Shared test fixtures for BrainLayer tests."""
 
+import functools
 import os
+import sqlite3
 import sys
+import urllib.parse
+import urllib.request
 import uuid
 from pathlib import Path
 
@@ -60,7 +64,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 def pytest_configure(config):
-    """Register custom pytest marks."""
+    """Register custom pytest marks, and arm the DB-open guards before anything is collected."""
+    _install_db_open_guards()
     config.addinivalue_line(
         "markers",
         "engine: pure-library engine tests (excludes CLI, dashboard, BrainBar, launchd, and root orchestration surfaces)",
@@ -149,6 +154,181 @@ def isolate_brainlayer_runtime_paths(monkeypatch, tmp_path, request):
                 if resolved == protected_root or protected_root in resolved.parents:
                     monkeypatch.setattr(module, attribute, isolated_root / resolved.relative_to(protected_root))
                     break
+
+
+# --------------------------------------------------------------------------------------------
+# Suite hygiene: no test loads an embedding model, and no test opens the canonical DB.
+#
+# Both rules exist because both were broken, expensively. The pre-push full-suite fallback spawned
+# `scripts/reembed_bgem3.py --test` -- a 2.5 GB-RSS embedding model holding ~20 fds on the
+# production DB -- which is the measured cause of a 14:22 UI stall on the M4. `paths.py` already
+# guards path RESOLUTION; these guard the two things that actually cost: the model LOAD and the
+# connection OPEN, including the ones that reach them without going through `paths.py` at all.
+#
+# Each guard has its OWN escape. `embedding_model` lifts only the model guard -- `run_tests.sh`
+# deselects it, so it runs where a run declares it can afford a model (CI, which warms the HF cache
+# on purpose). `integration`/`live` lift only the DB guard, keeping the meaning they already had.
+# A test that needs both declares both.
+# --------------------------------------------------------------------------------------------
+
+EMBEDDING_MODEL_MARK = "embedding_model"
+EMBEDDING_MODEL_MODULES = ("sentence_transformers", "FlagEmbedding")
+# Set for every unmarked test and inherited by subprocesses, which is the point: a test that SPAWNS
+# a re-embedding script loads a model just as surely as one that imports it, and sys.modules cannot
+# see that happen. Every load site in brainlayer/ and scripts/ checks this before constructing a
+# model, so `--help` and syntax probes on the same scripts stay free.
+FORBID_MODEL_LOAD_ENV = "BRAINLAYER_FORBID_EMBEDDING_MODEL"
+_PROTECTED_BRAINLAYER_ROOTS = (
+    _PROTECTED_TEST_HOME / ".brainlayer",
+    _PROTECTED_TEST_HOME / ".local" / "share" / "brainlayer",
+)
+# TWO switches, deliberately not one. `embedding_model` says "this test loads a real model"; it says
+# nothing about the production DB. Collapsing both into one bit put the hole exactly at
+# *model + canonical DB together*, which is the incident these guards exist to prevent: a test
+# marked only `embedding_model` got the DB guard lifted too, and `scripts/reembed_bgem3.py` opens
+# its `--db` (defaulting to the CANONICAL path, `_get_default_db()`) at main():277 -- BEFORE
+# `load_model()` at :285. A test that genuinely needs both must declare both.
+DB_GUARD_EXEMPT_MARKS = ("integration", "live")
+
+
+def hygiene_exemptions(node) -> tuple[bool, bool]:
+    """`(model guard lifted, DB guard lifted)` for *node*, from its markers."""
+    model_exempt = node.get_closest_marker(EMBEDDING_MODEL_MARK) is not None
+    db_exempt = any(node.get_closest_marker(mark) for mark in DB_GUARD_EXEMPT_MARKS)
+    return model_exempt, db_exempt
+
+
+class _DbGuardState:
+    """The session-level switch the module-scope DB guards read.
+
+    An attribute rather than a module global: the guards are installed once before collection and
+    live for the whole session, so the per-test exemption has to reach them through some shared
+    piece of state -- and rebinding a class attribute says where that state lives without a
+    `global` statement scattered through the fixture (DeepSource, #755).
+    """
+
+    suspended = False
+
+
+def _sqlite_target_path(target: object) -> Path | None:
+    """The filesystem path a sqlite3/apsw target names, or None when it names no local file.
+
+    `file:` URIs are parsed rather than fed to `Path`. BrainLayer's read paths open the DB as
+    `file:{db_path}?mode=ro` almost everywhere (`backup_daily`, `maintenance`, `kg_judge`,
+    `t3_provenance`, …), and `Path("file:///Users/…/brainlayer.db?mode=ro")` resolves to a
+    nonexistent relative path — so a string guard would have missed every real reader in the
+    codebase while looking like it worked (CodeRabbit, #755).
+    """
+    if isinstance(target, int) or target is None:
+        return None
+    text = os.fsdecode(target) if isinstance(target, (bytes, os.PathLike)) else str(target)
+    if not text or text.startswith(":"):
+        return None
+    if text.startswith("file:"):
+        parsed = urllib.parse.urlparse(text)
+        if parsed.netloc not in ("", "localhost"):
+            return None
+        text = urllib.request.url2pathname(parsed.path)
+        if not text or text.startswith(":"):
+            return None
+    try:
+        return Path(text).expanduser().resolve(strict=False)
+    except (OSError, ValueError, RuntimeError):
+        return None
+
+
+def _is_protected_runtime_path(candidate: object) -> bool:
+    """Whether *candidate* names a file inside the real user's BrainLayer runtime state."""
+    resolved = _sqlite_target_path(candidate)
+    if resolved is None:
+        return False
+    return any(resolved == root or root in resolved.parents for root in _PROTECTED_BRAINLAYER_ROOTS)
+
+
+def _refuse_protected_db(target: object, opener: str) -> None:
+    if _DbGuardState.suspended or not _is_protected_runtime_path(target):
+        return
+    raise RuntimeError(
+        f"suite hygiene: this test opened the canonical BrainLayer DB via {opener} ({target}). "
+        "Tests never touch ~/.local/share/brainlayer; mark the test `integration` or `live` if it "
+        "is a deliberate production-DB check."
+    )
+
+
+def _install_db_open_guards() -> None:
+    """Wrap the DB entry points ONCE, from `pytest_configure` — before any test module is imported.
+
+    Before collection, because a module that binds `from sqlite3 import connect` (or
+    `from apsw import Connection`) at import time captures the original callable and would never
+    see a fixture-scoped patch (CodeRabbit, #755). The wrappers read `_DbGuardState.suspended`, so
+    marker-based exemptions still work per test.
+    """
+    if not getattr(sqlite3.connect, "_brainlayer_hygiene_guard", False):
+        sqlite_connect = sqlite3.connect
+
+        @functools.wraps(sqlite_connect)
+        def guarded_sqlite_connect(database, *args, **kwargs):
+            _refuse_protected_db(database, "sqlite3.connect")
+            return sqlite_connect(database, *args, **kwargs)
+
+        guarded_sqlite_connect._brainlayer_hygiene_guard = True
+        sqlite3.connect = guarded_sqlite_connect
+
+    try:
+        import apsw
+    except ImportError:  # apsw is a hard dependency, but a guard must never be the thing that fails
+        return
+    if getattr(apsw.Connection, "_brainlayer_hygiene_guard", False):
+        return
+
+    class GuardedConnection(apsw.Connection):
+        _brainlayer_hygiene_guard = True
+
+        def __init__(self, filename, *args, **kwargs):
+            _refuse_protected_db(filename, "apsw.Connection")
+            super().__init__(filename, *args, **kwargs)
+
+    apsw.Connection = GuardedConnection
+
+
+@pytest.fixture(autouse=True)
+def forbid_embedding_models_and_canonical_db(monkeypatch, request):
+    """Fail a test that loads an embedding model or opens the canonical BrainLayer DB."""
+    model_exempt, db_exempt = hygiene_exemptions(request.node)
+    previous = _DbGuardState.suspended
+    _DbGuardState.suspended = db_exempt
+    try:
+        if not model_exempt:
+            _arm_embedding_model_refusal(monkeypatch)
+        yield
+    finally:
+        _DbGuardState.suspended = previous
+
+
+def _arm_embedding_model_refusal(monkeypatch) -> None:
+    def refuse(*_args, **_kwargs):
+        raise RuntimeError(
+            "suite hygiene: this test loaded a real embedding model. Mark it "
+            f"`@pytest.mark.{EMBEDDING_MODEL_MARK}` if that is deliberate."
+        )
+
+    # The primary guard, because it is the only one that survives a process boundary and the only
+    # one placed where the 2.5 GB is actually spent. Blocking the IMPORT instead would be wrong:
+    # `pipeline/semantic_style.py` calls `find_spec("sentence_transformers")` at module load and
+    # `pipeline/style_embed.py` imports it under a try/except, neither of which loads a model.
+    monkeypatch.setenv(FORBID_MODEL_LOAD_ENV, "1")
+
+    # Second net, for a model class reached without going through a brainlayer load site. Patched
+    # only where the package is ALREADY imported (tests/test_semantic_style.py imports it at
+    # collection time and then mocks the model) -- importing it here to patch it would be the very
+    # cost this fixture exists to avoid.
+    for name in EMBEDDING_MODEL_MODULES:
+        module = sys.modules.get(name)
+        if module is None:
+            continue
+        for attribute in ("SentenceTransformer", "BGEM3FlagModel", "FlagModel"):
+            if hasattr(module, attribute):
+                monkeypatch.setattr(module, attribute, refuse)
 
 
 @pytest.fixture(autouse=True)

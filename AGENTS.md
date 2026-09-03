@@ -81,6 +81,21 @@ Call `expand_palette` or set `BRAINLAYER_MCP_PROFILE=full` for the rest.
 ## Tests
 - Run `pytest` before claiming behavior changed safely.
 - Current suite size: 4,386 Python tests (`pytest tests/ --collect-only -q`) + 890 Swift tests in `brain-bar/Tests/`.
+- **Suite hygiene, enforced not just written down: no test loads an embedding model, and no test
+  opens the canonical DB.** `tests/conftest.py` arms both guards for every unmarked test —
+  `BRAINLAYER_FORBID_EMBEDDING_MODEL=1` (checked at every model-load site, and inherited by
+  subprocesses) and a refusal on `sqlite3.connect`/`apsw.Connection` against
+  `~/.local/share/brainlayer`. The only escape is a declared marker:
+  `@pytest.mark.embedding_model` for a test that really needs a real model (deselected by
+  `scripts/run_tests.sh`, still run in CI, which warms the HF cache on purpose), or
+  `integration`/`live` for a deliberate production-DB check.
+- **The guard's one contract:** in `tests/`, reach an embedding model through
+  `brainlayer.embeddings` or a module attribute — never `from sentence_transformers import X`. A
+  direct alias binds the real class at import time, before any fixture, and reaches neither the
+  module patch nor the env check (which lives at BrainLayer's load sites, not inside a third-party
+  constructor). `test_no_test_module_binds_an_embedding_model_class_directly` fails on that shape.
+- `BRAINLAYER_PREPUSH_SCOPE=changed-only` never escalates to the full suite on an empty change set;
+  it skips loudly and says nothing was measured.
 
 ## Release safety
 - Every Homebrew release must run `scripts/release-verify-signatures.sh <keg-path>` after installation.
