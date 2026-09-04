@@ -58,6 +58,42 @@ _MAX_HEALTH_QUARANTINE_DETAILS = 100
 _OFFSET_PRUNE_RETRY_ENV = "BRAINLAYER_WATCHER_OFFSET_PRUNE_RETRY_S"
 _DEFAULT_OFFSET_PRUNE_RETRY_S = 900.0
 
+MIN_WATCH_POLL_INTERVAL_S = 30.0
+
+
+def enforce_min_poll_interval(poll_interval_s: float) -> float:
+    """Hold `brainlayer watch --poll` to the R3 >=30s floor, loudly.
+
+    The floor was asserted three ways against values that cannot be violated -- the CLI
+    option default and the `--poll` argument in both repo plists -- and against nothing at
+    the one boundary a value actually arrives through. That gap is not theoretical: the
+    installed ~/Library/LaunchAgents/com.brainlayer.watch.plist still passes `--poll 1.0`,
+    so re-enabling the label without re-running scripts/launchd/install.sh watch hands this
+    function the exact configuration R3 exists to remove.
+
+    Clamp rather than exit: `watch` runs under launchd KeepAlive, so refusing a stale plist
+    turns it into a restart loop that ingests nothing -- trading a CPU burn for a total
+    ingestion outage. Clamping keeps the watcher serving at the floor and puts the
+    violation in watch.err.log at WARNING, where the operator can see it and fix the source.
+
+    isfinite before the bounds test, for the same reason as
+    `_watch_offset_prune_retry_interval_s`: `float("nan") < 30.0` is False, so nan would
+    sail past a bare `< MIN` check into `Event.wait(nan)`, and `inf` would park the poll
+    loop forever -- both silent, both worse than the value they replaced.
+    """
+    if math.isfinite(poll_interval_s) and poll_interval_s >= MIN_WATCH_POLL_INTERVAL_S:
+        return poll_interval_s
+    logger.warning(
+        "--poll %r violates the R3 >=%.0fs batching constraint; clamping to %.0fs. "
+        "Something still asks this watcher to poll sub-30s -- most likely a stale "
+        "~/Library/LaunchAgents/com.brainlayer.watch.plist; re-run "
+        "scripts/launchd/install.sh watch to fix it at the source.",
+        poll_interval_s,
+        MIN_WATCH_POLL_INTERVAL_S,
+        MIN_WATCH_POLL_INTERVAL_S,
+    )
+    return MIN_WATCH_POLL_INTERVAL_S
+
 
 def _watch_offset_prune_retry_interval_s() -> float:
     """Seconds to wait before re-attempting a prune that could not complete."""
@@ -1056,7 +1092,11 @@ class JSONLWatcher:
         # satisfies it. (60s was tried to clear the <5% idle-CPU soak gate; it did not --
         # the shipping code measures 6.41% -- so the extra latency bought nothing and the
         # gate is left failing honestly rather than tuned around.)
-        poll_interval_s: float = 30.0,
+        # Not clamped here: the in-process tests drive poll_once through a real loop at
+        # 0.01-0.05s and a 30s floor in the constructor would stall the suite, not the
+        # burn. The floor is enforced at the boundary a deployed value crosses -- the
+        # `watch` command -- by enforce_min_poll_interval() above.
+        poll_interval_s: float = MIN_WATCH_POLL_INTERVAL_S,
         batch_size: int = 10,
         flush_interval_ms: int = 100,
         registry_flush_interval_s: float = 5.0,

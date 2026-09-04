@@ -3388,7 +3388,7 @@ def watch(
 
     from ..parent_death import install_parent_death_watcher
     from ..paths import get_db_path
-    from ..watcher import JSONLWatcher, WatchRoot, default_watch_roots
+    from ..watcher import JSONLWatcher, WatchRoot, default_watch_roots, enforce_min_poll_interval
     from ..watcher_bridge import create_flush_callback
 
     # Without this the root logger has no handler, so logging's lastResort emits only
@@ -3402,6 +3402,16 @@ def watch(
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
         stream=sys.stderr,
     )
+
+    # After basicConfig, so a clamp warning is timestamped in watch.err.log rather than
+    # emitted bare by logging's lastResort handler.
+    requested_poll_interval = poll_interval
+    poll_interval = enforce_min_poll_interval(poll_interval)
+    if poll_interval != requested_poll_interval:
+        rprint(
+            f"[bold red]--poll {requested_poll_interval} violates the R3 >=30s batching constraint; "
+            f"clamping to {poll_interval}s.[/] Re-run [bold]scripts/launchd/install.sh watch[/] to fix the caller."
+        )
 
     install_parent_death_watcher()
     os.environ.setdefault("BRAINLAYER_ARBITRATED", "1")

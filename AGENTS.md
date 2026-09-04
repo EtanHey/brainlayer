@@ -229,7 +229,7 @@ brainlayer enrich
 - 4-layer content filters: entry type whitelist → classify → chunk min-length → system-reminder strip
 - Offset persistence: `~/.local/share/brainlayer/offsets.json` (survives restarts)
 - Rewind detection: file shrink = checkpoint restore → soft-archives reverted chunks
-- Axiom telemetry: startup, flush, error, heartbeat (60s) to `brainlayer-watcher` dataset
+- Axiom telemetry: startup, flush, error, heartbeat (60s threshold, but it is checked once per poll, so at the 30s poll default the real spacing is ~60-95s — measured 91s; do not alert on a 60s cadence) to `brainlayer-watcher` dataset
 - Source: `watcher.py` (tailer + indexer), `watcher_bridge.py` (pipeline integration)
 
 <!-- ARCHITECTURE: chunk lifecycle columns superseded_by/aggregated_into/archived_at; brain_supersede has safety gate for personal data; brain_archive is soft-delete -->

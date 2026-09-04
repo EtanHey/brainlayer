@@ -363,3 +363,115 @@ def test_deployed_poll_interval_is_batched_at_30s_or_more():
         assert "--poll" in args, f"{plist_path.name} does not pass --poll"
         value = float(args[args.index("--poll") + 1])
         assert value >= 30.0, f"{plist_path.name} polls every {value}s"
+
+
+# --- F2: the >=30s constraint, enforced where it can actually be violated -------------
+#
+# The three assertions above check the CLI option default and both repo plists -- values
+# that live in this tree and cannot change behind the code's back. What reaches the poll
+# loop is the `--poll` *argument*, and until this fix nothing checked it:
+# cli/__init__.py took `poll_interval: float`, watcher.py stored it verbatim, and
+# `start()` waited on it. The installed LaunchAgent still passes `--poll 1.0` (installed
+# Sep 1, unchanged by this PR), so the violating input is a real artifact on this machine,
+# not a hypothetical.
+
+
+def test_sub_30s_poll_argument_is_clamped_loudly(caplog):
+    """Every value that would defeat the R3 floor is clamped, and says so."""
+    import logging as logging_module
+
+    from brainlayer.watcher import MIN_WATCH_POLL_INTERVAL_S, enforce_min_poll_interval
+
+    # 1.0 is verbatim what the installed LaunchAgent passes today. 0 and the negatives
+    # mean "never sleep"; nan and inf are the shapes that survive a bare `< 30` bounds
+    # check -- nan compares False against everything, inf parks Event.wait() forever.
+    violations = [1.0, 0.05, 0.0, -5.0, float("nan"), float("inf"), float("-inf")]
+    for requested in violations:
+        caplog.clear()
+        with caplog.at_level(logging_module.WARNING, logger="brainlayer.watcher"):
+            effective = enforce_min_poll_interval(requested)
+        assert effective == MIN_WATCH_POLL_INTERVAL_S, f"--poll {requested!r} produced {effective!r}"
+        assert math.isfinite(effective) and effective >= 30.0
+        assert any(record.levelno >= logging_module.WARNING for record in caplog.records), (
+            f"--poll {requested!r} was clamped silently; a silent clamp is a new false-green"
+        )
+        assert "install.sh" in caplog.text, "the warning must name the fix at the source"
+
+
+def test_conforming_poll_argument_passes_through_unchanged(caplog):
+    """The other direction: a legal value is not touched and does not warn."""
+    import logging as logging_module
+
+    from brainlayer.watcher import enforce_min_poll_interval
+
+    for requested in (30.0, 30.5, 60.0, 900.0):
+        caplog.clear()
+        with caplog.at_level(logging_module.WARNING, logger="brainlayer.watcher"):
+            effective = enforce_min_poll_interval(requested)
+        assert effective == requested, f"legal --poll {requested} was rewritten to {effective}"
+        assert not caplog.records, f"legal --poll {requested} warned: {caplog.text}"
+
+
+def _run_watch_command(tmp_path, monkeypatch, poll_interval: float) -> dict:
+    """Drive the real `watch` command and return the kwargs it handed JSONLWatcher.
+
+    Everything with a side effect outside the tmp tree is stubbed: no DB is opened
+    (arbitrated=True leaves VectorStore unconstructed), no signal handler is installed,
+    and start() returns instead of blocking forever on the poll loop.
+    """
+    import signal as signal_module
+    import types
+
+    import brainlayer.deploy_drift as deploy_drift
+    import brainlayer.parent_death as parent_death
+    import brainlayer.watcher as watcher_module
+    from brainlayer.cli import watch
+
+    monkeypatch.setenv("BRAINLAYER_DB", str(tmp_path / "watch-cli.db"))
+    monkeypatch.setenv("BRAINLAYER_ARBITRATED", "1")
+    monkeypatch.setattr(signal_module, "signal", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(parent_death, "install_parent_death_watcher", lambda *_a, **_kw: None)
+    monkeypatch.setattr(deploy_drift, "record_launch_from_environment", lambda *_a, **_kw: None)
+
+    built: dict = {}
+
+    class _StubWatcher:
+        def __init__(self, **kwargs):
+            built.update(kwargs)
+            self.indexer = types.SimpleNamespace(total_flushed=0)
+
+        def start(self):
+            return None
+
+        def stop(self):
+            return None
+
+    monkeypatch.setattr(watcher_module, "JSONLWatcher", _StubWatcher)
+
+    source = tmp_path / "projects"
+    source.mkdir()
+    watch(source=[source], poll_interval=poll_interval, batch_size=10, flush_interval=500)
+
+    assert built, "watch() never constructed a watcher"
+    return built
+
+
+def test_watch_command_clamps_the_installed_plists_poll_argument(tmp_path, monkeypatch):
+    """The wiring, not just the helper.
+
+    A validator that exists but is never called is the same defect one level down, so this
+    drives the real command with `--poll 1.0` -- the argument in the deployed
+    ~/Library/LaunchAgents/com.brainlayer.watch.plist -- and asserts the value that reaches
+    JSONLWatcher is the floor.
+    """
+    built = _run_watch_command(tmp_path, monkeypatch, 1.0)
+    assert built["poll_interval_s"] == 30.0, (
+        f"watch() handed the poll loop poll_interval_s={built['poll_interval_s']}; "
+        "--poll 1.0 is what the installed LaunchAgent passes and it must not survive the CLI"
+    )
+
+
+def test_watch_command_leaves_a_conforming_poll_argument_alone(tmp_path, monkeypatch):
+    """Same path, legal input: the clamp must not rewrite an operator's deliberate value."""
+    built = _run_watch_command(tmp_path, monkeypatch, 120.0)
+    assert built["poll_interval_s"] == 120.0, f"legal --poll 120 became {built['poll_interval_s']}"
