@@ -58,9 +58,15 @@ jobs:
       # that endpoint caps at 3,000 files however you paginate, so a release path sitting past the
       # cap would silently skip the macOS job on exactly the large PR that needed it. `git diff` has
       # no such cap.
+      # persist-credentials false on all three checkouts. `actions/checkout@v4` writes the job
+      # token into `.git/config` by default, and this workflow's token carries `pull-requests:
+      # write` -- enough to rewrite the ratchet comment itself. Nothing here needs it: every git
+      # call in all three jobs is local (`cat-file`, `diff`, `rev-parse`, `rev-list`, `status`) and
+      # `gh api` authenticates through $GH_TOKEN, not git's config. CodeRabbit found this on #761.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Decide whether this PR pays for a macOS runner
         id: decide
@@ -136,6 +142,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: trusted
+          persist-credentials: false
 
       # `continue-on-error`, because a non-zero `brew install` does NOT mean no keg. Homebrew
       # `ofail`s a relocation failure and exits 1 with the keg installed and `post_install` run --
@@ -281,9 +288,15 @@ jobs:
       # `4632f979` -- and the PR-head sha a reviewer can see is that merge commit's SECOND PARENT.
       # At depth 1 the checkout is the shallow boundary and git reports it as having no parents, so
       # the row could not tell "this is the right commit" from "git cannot say".
+      # ...and `persist-credentials: false` matters MOST here, because this is the one job that
+      # EXECUTES code out of the PR tree: `python -m build --wheel` runs the PR's own build backend.
+      # A persisted token sitting in `.git/config` would be readable by that backend on a
+      # same-repo PR. The same rule the verifier follows -- the gated change must not be handed
+      # the means to edit its gate.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2
+          persist-credentials: false
 
       - uses: actions/setup-python@v5
         with:
@@ -401,6 +414,14 @@ jobs:
           while IFS= read -r commit_arg; do
             COMMIT_ARGS+=("$commit_arg")
           done < "${RUNNER_TEMP}/commit-args.txt"
+          # An empty hand-off is NOT an empty expansion to paper over with `${ARR[@]+...}`. With no
+          # commit flags the collector renders `n/a — not a pull-request run`, which on a PR run is a
+          # FALSE GREEN -- the exact substitution this table forbids. Fail here instead, and let the
+          # guarantee step publish "this run measured nothing".
+          if [[ ${#COMMIT_ARGS[@]} -eq 0 ]]; then
+            echo "::error title=Ratchet::the commit hand-off produced no args; refusing to render a table that would claim this is not a pull request."
+            exit 1
+          fi
           # --wheel-glob, not a shell glob: `$(ls dist/*.whl)` collapses "no wheel" and "three wheels"
           # into an empty --wheel, which the collector would have called `n/a` while the job stayed
           # green -- a false green in the ratchet itself. The collector now fails closed and reports

@@ -965,6 +965,43 @@ def test_nothing_in_the_commit_hand_off_comes_from_the_pr_tree() -> None:
         assert reader not in run
 
 
+@pytest.mark.parametrize("job", ["gate", "signatures", "table"])
+def test_no_checkout_leaves_the_job_token_in_git_config(job: str) -> None:
+    """`actions/checkout@v4` persists the token into `.git/config` unless told not to.
+
+    This workflow's token carries `pull-requests: write` -- enough to rewrite the ratchet comment
+    itself -- and the `table` job EXECUTES code from the PR tree (`python -m build --wheel` runs the
+    PR's own build backend), which could read it on a same-repo PR. Nothing needs the persisted
+    credential: every git call in all three jobs is local and `gh api` uses $GH_TOKEN. CodeRabbit
+    found this on #761; asserting all three stops it coming back one job at a time.
+    """
+    checkouts = [
+        step for step in workflow_jobs()[job]["steps"] if str(step.get("uses", "")).startswith("actions/checkout")
+    ]
+    assert checkouts, f"{job} has no checkout to assert"
+    for step in checkouts:
+        assert step["with"]["persist-credentials"] is False
+
+
+def test_no_job_needs_the_persisted_credential_it_just_gave_up() -> None:
+    """The assertion above is only safe while every git call stays local. A `git fetch`/`push`/
+    `pull`/`clone`/`ls-remote` added later would need the token and fail confusingly."""
+    assert not re.search(r"\bgit (fetch|push|pull|clone|ls-remote)\b", workflow_code())
+
+
+def test_an_empty_commit_hand_off_fails_instead_of_claiming_this_is_not_a_pr() -> None:
+    """With no commit flags the collector renders `n/a — not a pull-request run`. On a PR run that
+    is a false green, so an empty hand-off must kill the step, not expand to nothing quietly.
+
+    (CodeRabbit proposed `COMMIT_ARGS=("${COMMIT_ARGS[@]+...}")` for the `set -u` case. That
+    suppresses the error and makes the false green MORE likely, so the guard goes the other way.)
+    """
+    collect = workflow_steps()["Collect ratchet rows"]["run"]
+    assert "${#COMMIT_ARGS[@]} -eq 0" in collect
+    assert "exit 1" in collect
+    assert "COMMIT_ARGS[@]+" not in collect
+
+
 def test_collect_runs_even_when_an_earlier_step_failed() -> None:
     """A build failure must not leave the previous commit's GREEN table standing on the PR.
 
