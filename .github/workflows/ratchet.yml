@@ -357,7 +357,13 @@ jobs:
       #                    overtaken, so a run that only consulted itself would always agree with
       #                    itself; #753 was nearly reviewed on an all-green belonging to superseded
       #                    `6ea5b395` for exactly that reason.
-      # Nothing here is read from the PR's tree, so the PR cannot edit the check that gates it.
+      # The boundary, stated exactly rather than wider than it holds: on a `pull_request` event
+      # GitHub runs this workflow AND scripts/ci_ratchet_table.py from the PR's merge ref, so the
+      # comparator is the PR's own code and an author could rewrite it to answer GREEN. (Proven, not
+      # assumed: ratchet.yml first landed on main in 0bf01672, yet ten pull_request runs exist on
+      # wt/w14-ci-ratchet-table before the file was on main -- reviewer 79c16541, F2.) What DOES
+      # hold, and is the substantive half: neither input below is read from the PR's tree, so the
+      # row cannot confirm itself from material the PR controls. Diff-reviewable, not tamper-proof.
       - name: Resolve the commit this table must describe
         if: ${{ !cancelled() }}
         env:
@@ -371,17 +377,30 @@ jobs:
           # --porcelain --untracked-files=all` dirty, which is exactly what the provenance row reads.
           args_path="${RUNNER_TEMP}/commit-args.txt"
           live_path="${RUNNER_TEMP}/live-head.txt"
-          # `|| true`, because a failed read must still produce a table: it renders RED saying the
-          # run could not show it is current, which is a finding, not a reason to lose the table.
-          gh api "repos/${REPO}/pulls/${PR}" --jq .head.sha > "$live_path" 2> "${RUNNER_TEMP}/live-head.err" || true
-          live="$(tr -d '[:space:]' < "$live_path")"
+          # Three attempts with a backoff. The fail-closed verdict stays RED -- proving currency is
+          # this row's entire value -- but one transient REST blip should not paint a fine PR red,
+          # and a job that is sometimes red for no reason teaches reviewers to ignore it (the same
+          # argument this workflow already makes about `brew install` ofails). Reviewer 79c16541, F5.
+          live=""
+          for attempt in 1 2 3; do
+            if gh api "repos/${REPO}/pulls/${PR}" --jq .head.sha > "$live_path" 2> "${RUNNER_TEMP}/live-head.err"; then
+              live="$(tr -d '[:space:]' < "$live_path")"
+            fi
+            if [[ -n "$live" ]]; then
+              break
+            fi
+            if [[ "$attempt" -lt 3 ]]; then
+              echo "::notice title=Ratchet::live PR head read attempt ${attempt} failed; retrying"
+              sleep $((attempt * 5))
+            fi
+          done
           printf '%s\n%s\n' --measured-sha "$EVENT_HEAD" > "$args_path"
           if [[ -n "$live" ]]; then
             printf '%s\n%s\n' --pr-head-sha "$live" >> "$args_path"
           else
             detail="$(awk 'NF { print; exit }' "${RUNNER_TEMP}/live-head.err")"
             printf '%s\n%s\n' --pr-head-unresolved \
-              "\`gh api repos/${REPO}/pulls/${PR}\` returned no head sha (${detail:-no diagnostic on stderr})" \
+              "\`gh api repos/${REPO}/pulls/${PR}\` returned no head sha in 3 attempts (${detail:-no diagnostic on stderr})" \
               >> "$args_path"
           fi
           cat "$args_path"

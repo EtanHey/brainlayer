@@ -427,7 +427,7 @@ def _git(*args: str) -> str | None:
 
 def git_head() -> str | None:
     sha = _git("rev-parse", "HEAD")
-    return sha if sha and re.fullmatch(r"[0-9a-f]{40}", sha) else None
+    return sha if sha and SHA_PATTERN.fullmatch(sha) else None
 
 
 def git_head_lineage() -> tuple[str, ...] | None:
@@ -437,8 +437,16 @@ def git_head_lineage() -> tuple[str, ...] | None:
     GitHub's synthetic merge ref, whose sha appears nowhere on the PR: #759's table printed
     `13fa724278bf` while the PR's head was `4632f979`, and that merge commit's parents are
     (base tip, PR head). Matching the run's head sha against this list is what proves the checkout
-    really is the commit the table claims -- and it reads the commit GRAPH, which GitHub builds, so
-    the PR's own tree cannot forge the answer to the check that gates it.
+    really is the commit the table claims, and it reads the commit GRAPH, which GitHub builds rather
+    than the PR.
+
+    The boundary, stated exactly, because an earlier draft of this docstring overclaimed it and a
+    reviewer (79c16541) disproved the wider version: on a `pull_request` event GitHub runs the
+    workflow AND these scripts from the PR's merge ref, so this comparator is the PR's own code and
+    an author could rewrite it to answer GREEN unconditionally. What holds is narrower and is still
+    the substantive half: **no INPUT to this row comes from the PR's tree** -- the event payload,
+    the live REST read and this commit graph are all outside it -- so the row cannot confirm itself
+    from material the PR controls. The comparator is diff-reviewable, not tamper-proof.
 
     Needs `fetch-depth: 2`: at depth 1 the checkout is the shallow boundary and git reports it as
     having no parents at all.
@@ -448,6 +456,21 @@ def git_head_lineage() -> tuple[str, ...] | None:
         return None
     parts = tuple(line.split())
     return parts if parts and all(SHA_PATTERN.fullmatch(part) for part in parts) else None
+
+
+def checkout_stands_for(lineage: tuple[str, ...], measured: str) -> bool:
+    """Is the checkout `measured` itself, or GitHub's merge ref built FOR `measured`?
+
+    Two shapes, checked by position -- not `measured in lineage`, which also accepted `lineage[1]`,
+    the BASE tip, and proves nothing about the PR head (reviewer 79c16541, F4). GitHub builds the
+    merge ref as `Merge <pr head> into <base tip>`, so the PR head is always the SECOND parent:
+    verified on #759 (`13fa7242` -> parents `3126ac1b` base, `4632f979` head) and again in a local
+    shallow-fetch experiment. A one-parent checkout whose PARENT is `measured` is deliberately NOT
+    accepted -- that is a descendant, not a merge ref for it, and it would prove nothing either.
+    """
+    if lineage[0] == measured:
+        return True
+    return len(lineage) > 2 and lineage[2] == measured
 
 
 def git_tree_dirty() -> bool | None:
@@ -529,7 +552,7 @@ def row_commit_provenance(probe: Probe, _corpus: dict) -> Row:
             COMMIT_METHOD,
             COMMIT_NOTES,
         )
-    if measured not in lineage:
+    if not checkout_stands_for(lineage, measured):
         # The event says one commit; the checkout is another. Whatever the rows below measured, they
         # did not measure the commit this table is about to claim.
         return Row(
@@ -819,10 +842,19 @@ def escape_cell(text: str) -> str:
 
 
 def render(rows: list[Row], probe: Probe, run_url: str | None, now: datetime) -> str:
-    # Two shas, labelled, because printing one unlabelled `HEAD` is what made #759's table
-    # unverifiable: the checkout sha is GitHub's merge ref and is on no PR page anywhere.
+    # Every sha labelled for what it IS, because printing one unlabelled `HEAD` is what made
+    # #759's table unverifiable: the checkout sha is GitHub's merge ref and is on no PR page.
+    #
+    # `measured_sha` is the commit this run was TRIGGERED for, which on the superseded path is
+    # precisely NOT the PR head. Labelling it `PR head` put a footer four lines under the row
+    # contradicting it, and on the unresolved path printed a PR head the run had just said it could
+    # not read -- #759's defect re-committed one line lower (reviewer 79c16541, F1).
     checkout = probe.head_sha[:12] if probe.head_sha else "unknown"
-    measured = f"PR head `{probe.measured_sha[:12]}` · " if probe.measured_sha else ""
+    shas = []
+    if probe.measured_sha:
+        shas.append(f"measured `{probe.measured_sha[:12]}`")
+        shas.append(f"PR head `{probe.pr_head_sha[:12]}`" if probe.pr_head_sha else "PR head unread")
+    shas.append(f"checkout `{checkout}`")
     lines = [
         MARKER,
         "### BrainLayer ratchet",
@@ -853,8 +885,8 @@ def render(rows: list[Row], probe: Probe, run_url: str | None, now: datetime) ->
     run = f" · [run]({run_url})" if run_url else ""
     lines += [
         "",
-        f"_Measured on {probe.os_name}/{probe.architecture} · {measured}checkout `{checkout}`"
-        f"{run} · updated {now.strftime('%Y-%m-%d %H:%M:%S')} UTC_",
+        f"_Measured on {probe.os_name}/{probe.architecture} · " + " · ".join(shas) + f"{run} · "
+        f"updated {now.strftime('%Y-%m-%d %H:%M:%S')} UTC_",
         "",
     ]
     return "\n".join(lines)

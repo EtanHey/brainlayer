@@ -333,6 +333,19 @@ def test_commit_provenance_is_red_when_the_checkout_is_not_the_triggering_commit
     assert "does not have checked out" in result.value
 
 
+def test_the_base_tip_is_not_accepted_as_the_commit_this_table_describes(tmp_path: Path) -> None:
+    """`measured in lineage` also accepted `lineage[1]` — the BASE tip — which proves nothing about
+    the PR head (reviewer 79c16541, F4). GitHub always builds `Merge <head> into <base>`, so the PR
+    head is the SECOND parent; position is the proof, not membership."""
+    result = commit_row(tmp_path, measured_sha=MERGE_BASE, pr_head_sha=MERGE_BASE)
+    assert result.status == ratchet.RED
+    assert not ratchet.checkout_stands_for((MERGE_REF, MERGE_BASE, MERGE_HEAD), MERGE_BASE)
+    assert ratchet.checkout_stands_for((MERGE_REF, MERGE_BASE, MERGE_HEAD), MERGE_HEAD)
+    assert ratchet.checkout_stands_for((MERGE_HEAD, MERGE_BASE), MERGE_HEAD)
+    # A one-parent checkout whose PARENT is the measured commit is a descendant, not a merge ref.
+    assert not ratchet.checkout_stands_for((MERGE_REF, MERGE_HEAD), MERGE_HEAD)
+
+
 def test_commit_provenance_is_red_when_git_cannot_say_what_is_checked_out(tmp_path: Path) -> None:
     result = commit_row(tmp_path, head_lineage=None)
     assert result.status == ratchet.RED
@@ -437,14 +450,47 @@ def test_the_commit_row_leads_the_table(tmp_path: Path) -> None:
     assert ratchet.collect(commit_probe(tmp_path), CORPUS)[0].name == "commit provenance"
 
 
-def test_the_footer_labels_the_pr_head_and_the_merge_ref_separately(tmp_path: Path) -> None:
-    """#759 printed one unlabelled sha, and it was the one nobody could look up."""
-    probe = commit_probe(tmp_path)
+def footer_for(tmp_path: Path, **overrides) -> str:
+    probe = commit_probe(tmp_path, **overrides)
     table = ratchet.render(ratchet.collect(probe, CORPUS), probe, None, NOW)
     (footer,) = [line for line in table.splitlines() if line.startswith("_Measured on ")]
+    return footer
+
+
+def test_the_footer_labels_the_pr_head_and_the_merge_ref_separately(tmp_path: Path) -> None:
+    """#759 printed one unlabelled sha, and it was the one nobody could look up."""
+    footer = footer_for(tmp_path)
+    assert f"measured `{MERGE_HEAD[:12]}`" in footer
     assert f"PR head `{MERGE_HEAD[:12]}`" in footer
     assert f"checkout `{MERGE_REF[:12]}`" in footer
     assert "checked-out HEAD" not in footer
+
+
+def test_the_footer_never_labels_a_superseded_sha_as_the_pr_head(tmp_path: Path) -> None:
+    """The one case the row exists for, and the footer used to contradict the row four lines down.
+
+    `measured_sha` is the commit the run was TRIGGERED for. Calling it `PR head` while the row says
+    the PR head is something else is #759's defect re-committed one line lower (reviewer 79c16541).
+    """
+    footer = footer_for(tmp_path, pr_head_sha="9" * 40)
+    assert f"measured `{MERGE_HEAD[:12]}`" in footer
+    assert f"PR head `{'9' * 12}`" in footer
+    assert f"PR head `{MERGE_HEAD[:12]}`" not in footer
+
+
+def test_the_footer_says_unread_when_the_live_head_was_never_read(tmp_path: Path) -> None:
+    """Worse than the mismatch: the run states it could not read the PR head, and the footer
+    printed one anyway."""
+    footer = footer_for(tmp_path, pr_head_sha=None, commit_unresolved="the REST call timed out")
+    assert "PR head unread" in footer
+    assert f"measured `{MERGE_HEAD[:12]}`" in footer
+    assert not re.search(r"PR head `[0-9a-f]{12}`", footer)
+
+
+def test_the_footer_claims_no_commit_on_a_non_pr_run(tmp_path: Path) -> None:
+    footer_line = footer_for(tmp_path, measured_sha=None, pr_head_sha=None)
+    assert "measured `" not in footer_line and "PR head" not in footer_line
+    assert f"checkout `{MERGE_REF[:12]}`" in footer_line
 
 
 def test_main_reds_the_whole_table_when_it_was_measured_on_a_superseded_commit(
@@ -935,7 +981,10 @@ def test_the_workflow_reads_the_live_pr_head_not_only_the_event_payload() -> Non
     assert "gh api" in step["run"] and "/pulls/${PR}" in step["run"] and "--jq .head.sha" in step["run"]
     assert "--measured-sha" in step["run"] and "--pr-head-sha" in step["run"]
     # A read that fails must still publish a table, as a RED finding -- never lose the whole table.
-    assert "|| true" in step["run"] and "--pr-head-unresolved" in step["run"]
+    # The `gh api` call sits inside an `if`, so a non-zero exit does not abort the step under
+    # `set -e`; the loop falls through to `--pr-head-unresolved`.
+    assert 'if gh api "repos/${REPO}/pulls/${PR}"' in step["run"]
+    assert "--pr-head-unresolved" in step["run"]
 
 
 def test_the_collector_is_handed_exactly_one_pr_head_flag() -> None:
@@ -954,15 +1003,45 @@ def test_the_commit_args_reach_the_collector_and_survive_bash_3() -> None:
     assert "while IFS= read -r commit_arg" in collect
 
 
-def test_nothing_in_the_commit_hand_off_comes_from_the_pr_tree() -> None:
-    """Macroscope's #753 HIGH: a verifier the gated PR can edit is not a verifier.
+def test_no_input_to_the_commit_row_is_read_from_the_pr_tree() -> None:
+    """The row's INPUTS stay outside the PR's tree, so it cannot confirm itself from PR material.
 
-    This row's two inputs are the event payload and a REST read. Neither is a file in the checkout,
-    and this asserts the step never starts reading one.
+    Named for what it checks. The old name claimed the PR "cannot edit the check that gates it",
+    which is FALSE and this test never asserted it: on a `pull_request` event GitHub runs the
+    workflow AND `scripts/ci_ratchet_table.py` from the PR's merge ref, so the comparator is the
+    PR's own code (reviewer 79c16541 proved it — `ratchet.yml` first landed on main in `0bf01672`,
+    yet ten `pull_request` runs exist on `wt/w14-ci-ratchet-table` before that). The comparator is
+    diff-reviewable, not tamper-proof, and the wording everywhere now says so.
+
+    What this asserts is the half that holds: the step feeds the row only the event payload and a
+    live REST read, and never starts reading a file out of the checkout.
     """
     run = workflow_steps()["Resolve the commit this table must describe"]["run"]
     for reader in ("cat src/", "cat scripts/", "bash scripts/", "python scripts/", "source "):
         assert reader not in run
+    assert "github.event.pull_request.head.sha" in str(
+        workflow_steps()["Resolve the commit this table must describe"]["env"]
+    )
+    assert "gh api" in run
+
+
+def test_no_comment_claims_the_pr_cannot_edit_its_own_gate() -> None:
+    """The overclaim itself is the regression to lock out — it is the failure class this PR closes:
+    a claim wider than the thing backing it."""
+    for text in (
+        WORKFLOW.read_text(encoding="utf-8"),
+        (ROOT / "scripts" / "ci_ratchet_table.py").read_text(encoding="utf-8"),
+    ):
+        assert "cannot edit the check that gates it" not in text
+        assert "cannot forge the answer to the check that gates it" not in text
+
+
+def test_the_live_head_read_is_retried_before_it_is_called_unresolved() -> None:
+    """Fail-closed stays RED, but one transient REST blip must not paint a fine PR red — a job that
+    is sometimes red for no reason teaches reviewers to ignore it (reviewer 79c16541, F5)."""
+    run = workflow_steps()["Resolve the commit this table must describe"]["run"]
+    assert "for attempt in 1 2 3; do" in run and "sleep" in run
+    assert "3 attempts" in run  # ...and the unresolved reason says how hard it tried
 
 
 @pytest.mark.parametrize("job", ["gate", "signatures", "table"])
