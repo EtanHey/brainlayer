@@ -3474,3 +3474,59 @@ def test_launchd_installer_still_copies_the_hotlane_daemon_outside_a_keg(tmp_pat
     assert copied.is_file()
     rendered = home / "Library" / "LaunchAgents" / "com.brainlayer.hotlane-brainbar.plist"
     assert str(copied) in _program_argument_strings(rendered)
+
+
+def test_launchd_remove_never_unlinks_the_packaged_daemon_out_of_the_keg(tmp_path: Path) -> None:
+    """`install.sh remove` must not delete a file Homebrew owns.
+
+    Keg-pinning changed what `HOTLANE_BRAINBAR_DST` MEANS -- from a copy this installer made to the
+    keg's own shipped file -- while the remove path still ran `rm -f` on it. That would unlink a
+    packaged file and make the next keg-pinned install fail closed on its own missing-daemon guard
+    until someone reinstalled the formula. `remove` only ever unmakes what this installer made.
+    """
+    fixture = _build_keg_with_checkout_decoys(tmp_path)
+    packaged_daemon = fixture["launchd_dir"] / "hotlane_brainbar_daemon.py"
+    assert packaged_daemon.is_file(), "fixture keg must ship the daemon the wheel force-includes"
+
+    install_result = _run_keg_installer(fixture, "hotlane", tmp_path)
+    assert install_result.returncode == 0, install_result.stdout + install_result.stderr
+
+    remove_result = _run_keg_installer(fixture, "remove", tmp_path)
+
+    assert remove_result.returncode == 0, remove_result.stdout + remove_result.stderr
+    assert packaged_daemon.is_file(), "install.sh remove unlinked the keg's own shipped daemon"
+
+    # And the keg must still be installable afterwards -- the failure mode this protects against is
+    # not "a file is missing" but "every later install fails closed until the formula is reinstalled".
+    # Fresh launchctl log: the stub answers "loaded" for any label it has already seen, so reusing it
+    # would make the reinstall trip the unload check on fixture state rather than on real behaviour.
+    (tmp_path / "launchctl.log").unlink(missing_ok=True)
+    reinstall_result = _run_keg_installer(fixture, "hotlane", tmp_path)
+    assert reinstall_result.returncode == 0, reinstall_result.stdout + reinstall_result.stderr
+
+
+def test_launchd_installer_refuses_path_fallback_when_a_keg_has_no_usable_interpreter(
+    tmp_path: Path,
+) -> None:
+    """A detected keg with a missing interpreter must ERROR, not quietly fall back to PATH.
+
+    Falling back re-opens the exact hole this change closes: a keg is present, so PATH's answer --
+    the framework Python, or a checkout `.venv` -- is wrong by definition, and baking it into a
+    plist is what left eight M4 jobs unversioned and unmovable by any release.
+    """
+    for missing, expected in (
+        ("libexec/venv/bin/python", "has no usable python"),
+        ("bin/brainlayer", "has no usable brainlayer CLI"),
+    ):
+        case = tmp_path / missing.replace("/", "_")
+        case.mkdir()
+        fixture = _build_keg_with_checkout_decoys(case)
+        (fixture["cellar_root"] / missing).unlink()
+
+        result = _run_keg_installer(fixture, "hotlane", case)
+
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert expected in result.stderr, result.stderr
+        assert "refusing to fall back to PATH" in result.stderr
+        # Nothing may be rendered from a PATH guess before the refusal.
+        assert not (fixture["home"] / "Library" / "LaunchAgents").exists()
