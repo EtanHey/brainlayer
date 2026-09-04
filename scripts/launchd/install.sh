@@ -66,14 +66,82 @@ stable_brainlayer_path() {
     esac
 }
 
+# Installed kegs run this script from site-packages/brainlayer/launchd, so the keg
+# root is an ancestor of SCRIPT_DIR, never BRAINLAYER_DIR. Source checkouts have no keg.
+find_brainlayer_keg() {
+    local dir="$SCRIPT_DIR"
+    while [ "$dir" != "/" ] && [ -n "$dir" ]; do
+        if [ -d "$dir/libexec/venv" ]; then
+            printf "%s" "$dir"
+            return 0
+        fi
+        dir="$(dirname "$dir")"
+    done
+    case "$SCRIPT_DIR" in
+        */Cellar/brainlayer/*|*/opt/brainlayer/*)
+            if command -v brew >/dev/null 2>&1; then
+                brew --prefix brainlayer
+                return 0
+            fi
+            ;;
+    esac
+    return 1
+}
+
 LAUNCH_DIR="$HOME/Library/LaunchAgents"
 LOG_DIR="$HOME/Library/Logs"
 BRAINLAYER_LOG_DIR="$HOME/.local/share/brainlayer/logs"
 BRAINLAYER_LIB_DIR="$HOME/.local/lib/brainlayer"
 BRAINLAYER_DIR="$(stable_brainlayer_path "$(cd "$SCRIPT_DIR/../.." && pwd)")"
 BRAINLAYER_LAUNCHD_DIR="$(stable_brainlayer_path "${BRAINLAYER_LAUNCHD_DIR:-$SCRIPT_DIR}")"
-BRAINLAYER_BIN="$(stable_brainlayer_path "${BRAINLAYER_BIN:-$(which brainlayer 2>/dev/null || echo "$HOME/.local/bin/brainlayer")}")"
-PYTHON_BIN="$(stable_brainlayer_path "${PYTHON_BIN:-$(command -v python3)}")"
+# Resolved once, before any path default, because "am I inside a keg?" decides whether the
+# rendered plists follow `brew upgrade` or freeze onto whatever a checkout happens to hold.
+# Two forms on purpose: BRAINLAYER_KEG is the keg exactly as found, and the release-signature gate
+# verifies that -- a one-shot check where naming the version is the precise thing to do.
+# BRAINLAYER_KEG_STABLE routes through the `opt/` symlink and is what may reach a plist, because a
+# plist outlives the keg it was rendered against.
+BRAINLAYER_KEG="$(find_brainlayer_keg || true)"
+BRAINLAYER_KEG_STABLE="$(stable_brainlayer_path "$BRAINLAYER_KEG")"
+BRAINLAYER_KEG_PYTHON=""
+BRAINLAYER_KEG_CLI=""
+if [ -n "$BRAINLAYER_KEG_STABLE" ]; then
+    for candidate in "$BRAINLAYER_KEG_STABLE/libexec/venv/bin/python" "$BRAINLAYER_KEG_STABLE/libexec/bin/python3"; do
+        if [ -x "$candidate" ]; then
+            BRAINLAYER_KEG_PYTHON="$candidate"
+            break
+        fi
+    done
+    for candidate in "$BRAINLAYER_KEG_STABLE/bin/brainlayer" "$BRAINLAYER_KEG_STABLE/libexec/venv/bin/brainlayer"; do
+        if [ -x "$candidate" ]; then
+            BRAINLAYER_KEG_CLI="$candidate"
+            break
+        fi
+    done
+    # Fail closed. Falling back to PATH here would re-open the exact hole this change closes: a keg
+    # is present, so PATH's answer (framework python, a checkout .venv) is the wrong one by
+    # definition, and baking it into a plist is what left eight M4 jobs unversioned. An explicit
+    # override is still honoured -- only the silent PATH fallback is refused.
+    if [ -z "${PYTHON_BIN:-}" ] && [ -z "$BRAINLAYER_KEG_PYTHON" ]; then
+        echo "ERROR: keg at $BRAINLAYER_KEG_STABLE has no usable python" >&2
+        echo "  looked for: $BRAINLAYER_KEG_STABLE/libexec/venv/bin/python, $BRAINLAYER_KEG_STABLE/libexec/bin/python3" >&2
+        echo "  refusing to fall back to PATH; reinstall the formula or set PYTHON_BIN explicitly" >&2
+        exit 1
+    fi
+    if [ -z "${BRAINLAYER_BIN:-}" ] && [ -z "$BRAINLAYER_KEG_CLI" ]; then
+        echo "ERROR: keg at $BRAINLAYER_KEG_STABLE has no usable brainlayer CLI" >&2
+        echo "  looked for: $BRAINLAYER_KEG_STABLE/bin/brainlayer, $BRAINLAYER_KEG_STABLE/libexec/venv/bin/brainlayer" >&2
+        echo "  refusing to fall back to PATH; reinstall the formula or set BRAINLAYER_BIN explicitly" >&2
+        exit 1
+    fi
+fi
+# Same reasoning as PYTHON_BIN below: `which brainlayer` answers with whatever the AUTHORING shell's
+# PATH happens to front. On the M4 that is the framework Python's `brainlayer`, and installing from a
+# source checkout fronts `~/Gits/brainlayer/.venv/bin/brainlayer` -- neither of which any release moves.
+BRAINLAYER_BIN="$(stable_brainlayer_path "${BRAINLAYER_BIN:-${BRAINLAYER_KEG_CLI:-$(which brainlayer 2>/dev/null || echo "$HOME/.local/bin/brainlayer")}}")"
+# In a keg, an unset PYTHON_BIN must NOT fall through to `command -v python3`: on a Mac whose PATH
+# puts /Library/Frameworks/Python.framework first, that renders a framework interpreter that never
+# sees the keg's site-packages, and no release can move it. An explicit override still wins.
+PYTHON_BIN="$(stable_brainlayer_path "${PYTHON_BIN:-${BRAINLAYER_KEG_PYTHON:-$(command -v python3)}}")"
 BRAINLAYER_PYTHON="$(stable_brainlayer_path "${BRAINLAYER_PYTHON:-$PYTHON_BIN}")"
 BRAINLAYER_ENV_FILE="${BRAINLAYER_ENV_FILE:-$HOME/.config/brainlayer/brainlayer.env}"
 BRAINLAYER_ENV_RUN="$BRAINLAYER_LIB_DIR/brainlayer-env-run.sh"
@@ -84,7 +152,18 @@ FLEET_WATCHDOG_DST="$BRAINLAYER_LIB_DIR/fleet-watchdog.sh"
 # com.brainlayer.* label would land in its own revival glob and in BrainLayer's maintenance pause.
 FLEET_WATCHDOG_LABEL="com.etanhey.brainlayer-fleet-watchdog"
 FLEET_WATCHDOG_PLIST_NAME="$FLEET_WATCHDOG_LABEL.plist"
-HOTLANE_BRAINBAR_DST="$BRAINLAYER_LIB_DIR/hotlane_brainbar_daemon.py"
+# The hotlane daemon ships INSIDE the keg (pyproject force-includes it into brainlayer/launchd),
+# so in a keg the plist points straight at the packaged file through the stable `opt/` symlink and
+# `brew upgrade` moves it for free. The `~/.local/lib` copy is the source-checkout path only: it is
+# refreshed by `install.sh hotlane`, which `brew install` never runs, and that is exactly what left
+# the M1 executing a Jul-24 daemon while its keg said 1.5.12.
+if [ -n "$BRAINLAYER_KEG_STABLE" ] && [ -f "$BRAINLAYER_LAUNCHD_DIR/hotlane_brainbar_daemon.py" ]; then
+    HOTLANE_BRAINBAR_DST="$BRAINLAYER_LAUNCHD_DIR/hotlane_brainbar_daemon.py"
+    HOTLANE_BRAINBAR_KEG_PINNED=1
+else
+    HOTLANE_BRAINBAR_DST="$BRAINLAYER_LIB_DIR/hotlane_brainbar_daemon.py"
+    HOTLANE_BRAINBAR_KEG_PINNED=0
+fi
 
 if [ -z "$PYTHON_BIN" ]; then
     echo "ERROR: python3 not found in PATH"
@@ -113,28 +192,6 @@ case "$BRAINLAYER_INSTALL_ACTION" in
         ;;
 esac
 
-# Installed kegs run this script from site-packages/brainlayer/launchd, so the keg
-# root is an ancestor of SCRIPT_DIR, never BRAINLAYER_DIR. Source checkouts have no keg.
-find_brainlayer_keg() {
-    local dir="$SCRIPT_DIR"
-    while [ "$dir" != "/" ] && [ -n "$dir" ]; do
-        if [ -d "$dir/libexec/venv" ]; then
-            printf "%s" "$dir"
-            return 0
-        fi
-        dir="$(dirname "$dir")"
-    done
-    case "$SCRIPT_DIR" in
-        */Cellar/brainlayer/*|*/opt/brainlayer/*)
-            if command -v brew >/dev/null 2>&1; then
-                brew --prefix brainlayer
-                return 0
-            fi
-            ;;
-    esac
-    return 1
-}
-
 find_release_verify_script() {
     local candidate
     for candidate in "$SCRIPT_DIR/release-verify-signatures.sh" "$SCRIPT_DIR/../release-verify-signatures.sh"; do
@@ -150,7 +207,7 @@ case "$BRAINLAYER_INSTALL_ACTION" in
     remove|unload)
         ;;
     *)
-        if BRAINLAYER_KEG="$(find_brainlayer_keg)"; then
+        if [ -n "$BRAINLAYER_KEG" ]; then
             if ! BRAINLAYER_RELEASE_VERIFY="$(find_release_verify_script)"; then
                 echo "ERROR: release-verify-signatures.sh not found beside or above $SCRIPT_DIR" >&2
                 exit 1
@@ -444,6 +501,17 @@ unload_plist() {
 
 install_hotlane_brainbar_daemon() {
     local script_src="$SCRIPT_DIR/hotlane_brainbar_daemon.py"
+
+    if [ "$HOTLANE_BRAINBAR_KEG_PINNED" -eq 1 ]; then
+        # No copy: the plist points at the keg's own file, so `brew upgrade` moves the daemon the
+        # same way it moves every other packaged thing. A copy here is what versions can outrun.
+        if [ ! -f "$HOTLANE_BRAINBAR_DST" ]; then
+            echo "ERROR: keg-pinned hotlane daemon missing at $HOTLANE_BRAINBAR_DST" >&2
+            return 1
+        fi
+        echo "Keg-pinned: $HOTLANE_BRAINBAR_DST"
+        return 0
+    fi
 
     if [ ! -f "$script_src" ]; then
         script_src="$SCRIPT_DIR/../hotlane_brainbar_daemon.py"
@@ -1012,7 +1080,12 @@ case "${1:-all}" in
         rm -f "$BRAINLAYER_LIB_DIR/jsonl-backup.sh"
         rm -f "$TIER0_WATCHDOG_DST"
         rm -f "$THROUGHPUT_WATCHDOG_DST"
-        rm -f "$HOTLANE_BRAINBAR_DST"
+        # NOT "$HOTLANE_BRAINBAR_DST": in a keg that variable names the keg's OWN shipped file, and
+        # Homebrew owns it. Removing it would unlink a packaged file and make the next keg-pinned
+        # install fail closed until someone reinstalls the formula. `remove` only ever unmakes what
+        # this installer made, which is the ~/.local/lib copy -- named literally so that a future
+        # change to what HOTLANE_BRAINBAR_DST MEANS cannot silently make this destructive again.
+        rm -f "$BRAINLAYER_LIB_DIR/hotlane_brainbar_daemon.py"
         ;;
     *)
         launchd_install_usage
