@@ -1254,17 +1254,16 @@ class JSONLWatcher:
         if previous is None or current is None or previous != current:
             return False
         tailer = self._tailers.get(filepath)
-        if tailer is None:
-            return False
-        if tailer.offset < current[1]:
-            return False
-        if tailer.has_complete_buffered_line():
-            return False
-        if self._pending_quarantined_offsets.get(filepath):
-            return False
-        if filepath in self._file_ingestion_failures:
-            return False
-        return True
+        _mtime, size = current
+        # One expression, evaluated in order: `tailer is not None` guards the attribute
+        # access that follows it, exactly as the sequential early-returns did.
+        return (
+            tailer is not None
+            and tailer.offset >= size
+            and not tailer.has_complete_buffered_line()
+            and not self._pending_quarantined_offsets.get(filepath)
+            and filepath not in self._file_ingestion_failures
+        )
 
     def _normalize_lines(self, filepath: str, new_lines: list[dict]) -> list[dict]:
         provider = self.provider_for_file(filepath)
@@ -1684,6 +1683,41 @@ class JSONLWatcher:
             except Exception as e:
                 logger.error("Rewind callback failed: %s", e)
 
+    def _maybe_prune_offsets(self, files: list[str]) -> None:
+        """Prune deleted offsets, retrying an incomplete prune without re-scanning every poll.
+
+        An incomplete prune retries when the evidence that blocked it might have changed --
+        a new parent directory among the discovered files can supply the live-parent proof
+        a previously unmounted root was missing -- and otherwise backs off onto a timer.
+
+        Both halves are load-bearing. Without the change-detector a returning volume would
+        wait out the full interval (pinned by
+        test_poll_retries_pruning_after_unavailable_startup_root). Without the timer, a
+        registry holding entries whose roots are gone re-scans the whole filesystem on every
+        poll forever: measured at 10-12s per poll, pruning nothing after the first pass.
+        """
+        if self._offset_prune_complete:
+            return
+        parent_dirs = frozenset(os.path.dirname(filepath) for filepath in files)
+        timer_elapsed = time.monotonic() - self._last_offset_prune_attempt >= self.offset_prune_retry_interval_s
+        if parent_dirs == self._last_prune_parent_dirs and not timer_elapsed:
+            return
+
+        self._last_offset_prune_attempt = time.monotonic()
+        self._last_prune_parent_dirs = parent_dirs
+        pruned = self.registry.prune_missing_files(
+            [root.resolved_path for root in self.watch_roots],
+            files,
+        )
+        if pruned:
+            logger.info("Pruned %d deleted files from the offset registry", pruned)
+        self._offset_prune_complete = self.registry.flush() and self.registry.last_prune_complete
+        if not self._offset_prune_complete:
+            logger.info(
+                "Offset prune incomplete (entries whose roots are not currently mounted); retrying in %.0fs",
+                self.offset_prune_retry_interval_s,
+            )
+
     def poll_once(self) -> int:
         """Run one poll cycle. Returns number of new lines found."""
         total_new = 0
@@ -1704,32 +1738,7 @@ class JSONLWatcher:
                 for filepath, pending in self._pending_quarantined_offsets.items()
                 if filepath in live_files
             }
-            # An incomplete prune retries when the evidence that blocked it might have
-            # changed -- a new parent directory among the discovered files can supply the
-            # live-parent proof a previously unmounted root was missing -- and otherwise
-            # backs off onto a timer. Without the change-detector a returning volume would
-            # wait out the full interval; without the timer a permanently-orphaned registry
-            # re-scans on every poll forever (measured: 10-12s per poll, pruning nothing).
-            parent_dirs = frozenset(os.path.dirname(filepath) for filepath in files)
-            prune_due = not self._offset_prune_complete and (
-                parent_dirs != self._last_prune_parent_dirs
-                or time.monotonic() - self._last_offset_prune_attempt >= self.offset_prune_retry_interval_s
-            )
-            if prune_due:
-                self._last_offset_prune_attempt = time.monotonic()
-                self._last_prune_parent_dirs = parent_dirs
-                pruned = self.registry.prune_missing_files(
-                    [root.resolved_path for root in self.watch_roots],
-                    files,
-                )
-                if pruned:
-                    logger.info("Pruned %d deleted files from the offset registry", pruned)
-                self._offset_prune_complete = self.registry.flush() and self.registry.last_prune_complete
-                if not self._offset_prune_complete:
-                    logger.info(
-                        "Offset prune incomplete (entries whose roots are not currently mounted); retrying in %.0fs",
-                        self.offset_prune_retry_interval_s,
-                    )
+            self._maybe_prune_offsets(files)
 
             for filepath in list(self._tailers):
                 if self._denylisted(filepath):
