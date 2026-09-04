@@ -3235,3 +3235,242 @@ def test_wheel_contains_cli_and_launchd_templates(tmp_path: Path) -> None:
     )
     assert help_result.returncode == 0, help_result.stdout + help_result.stderr
     assert "--backlog-batch" in help_result.stdout
+
+
+def _build_keg_with_checkout_decoys(tmp_path: Path) -> dict[str, Path]:
+    """A keg fixture whose PATH is shaped like the M4's, because that is what broke.
+
+    On the M4 the interactive PATH fronts `/Library/Frameworks/Python.framework/.../bin` and, when
+    installing from the source checkout, `~/Gits/brainlayer/.venv/bin`. `install.sh` defaulted
+    `PYTHON_BIN`/`BRAINLAYER_BIN` to `command -v python3` / `which brainlayer`, so the rendered
+    plists executed the AUTHORING environment -- unversioned, and unmovable by any release. The
+    decoys here are first on PATH on purpose: a renderer that consults PATH will find them and the
+    assertions will say so.
+    """
+    fake_homebrew = tmp_path / "opt" / "homebrew"
+    cellar_root = fake_homebrew / "Cellar" / "brainlayer" / "9.9.9"
+    opt_root = fake_homebrew / "opt" / "brainlayer"
+    launchd_dir = cellar_root / "libexec" / "venv" / "lib" / "python3.12" / "site-packages" / "brainlayer" / "launchd"
+    _copy_packaged_launchd(launchd_dir)
+    _populate_fake_keg_native_root(cellar_root)
+    opt_root.parent.mkdir(parents=True, exist_ok=True)
+    opt_root.symlink_to(cellar_root)
+
+    keg_python = cellar_root / "libexec" / "venv" / "bin" / "python"
+    keg_python.parent.mkdir(parents=True, exist_ok=True)
+    keg_python.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    keg_python.chmod(0o755)
+    keg_cli = cellar_root / "bin" / "brainlayer"
+    keg_cli.parent.mkdir(parents=True, exist_ok=True)
+    keg_cli.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    keg_cli.chmod(0o755)
+
+    checkout_venv_bin = tmp_path / "Gits" / "brainlayer" / ".venv" / "bin"
+    checkout_venv_bin.mkdir(parents=True)
+    for decoy in ("python3", "brainlayer"):
+        target = checkout_venv_bin / decoy
+        target.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        target.chmod(0o755)
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_codesign(fake_bin, tmp_path / "codesign.log")
+    _write_forbidden_brew(fake_bin)
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text("\n".join(_fake_launchctl_lines()), encoding="utf-8")
+    fake_launchctl.chmod(0o755)
+    _write_fake_ps(fake_bin)
+
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = home / ".config" / "brainlayer" / "brainlayer.env"
+    env_file.parent.mkdir(parents=True)
+    _write_full_launchd_env(env_file)
+
+    packaged_daemon = (
+        opt_root
+        / "libexec"
+        / "venv"
+        / "lib"
+        / "python3.12"
+        / "site-packages"
+        / "brainlayer"
+        / "launchd"
+        / "hotlane_brainbar_daemon.py"
+    )
+
+    return {
+        "cellar_root": cellar_root,
+        "keg_python": opt_root / "libexec" / "venv" / "bin" / "python",
+        "packaged_daemon": packaged_daemon,
+        "opt_root": opt_root,
+        "launchd_dir": launchd_dir,
+        "checkout_venv_bin": checkout_venv_bin,
+        "fake_bin": fake_bin,
+        "home": home,
+        "env_file": env_file,
+    }
+
+
+def _run_keg_installer(fixture: dict[str, Path], action: str, tmp_path: Path):
+    """Run the fixture keg's installer with NO interpreter overrides.
+
+    Every other keg-shaped test in this file passes `PYTHON_BIN`/`BRAINLAYER_BIN`/
+    `BRAINLAYER_PYTHON` explicitly, which is precisely why none of them caught this: the defect
+    lives in what `install.sh` picks when those are UNSET, which is how `brew install` runs it.
+    """
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"PYTHON_BIN", "BRAINLAYER_BIN", "BRAINLAYER_PYTHON", "BRAINLAYER_LAUNCHD_DIR"}
+    }
+    env.update(
+        {
+            "PATH": f"{fixture['checkout_venv_bin']}:{fixture['fake_bin']}:{os.environ['PATH']}",
+            "HOME": str(fixture["home"]),
+            "BRAINLAYER_ENV_FILE": str(fixture["env_file"]),
+            "BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS": "1",
+            "BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL": "0",
+            "BRAINLAYER_LAUNCHD_VERIFY_INTERVAL": "0",
+            "FAKE_LAUNCHCTL_LOG": str(tmp_path / "launchctl.log"),
+            # `verify_hotlane_runtime` insists the LIVE pid really is the packaged daemon under a
+            # Python interpreter -- the same "prove the process, not the plist" check this whole
+            # change exists to satisfy. The stub answers with the keg-pinned command line.
+            "FAKE_PS_COMMAND": f"{fixture['keg_python']} {fixture['packaged_daemon']} --interval 1.0",
+        }
+    )
+    return subprocess.run(
+        [str(fixture["launchd_dir"] / "install.sh"), action],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+
+
+def _program_argument_strings(plist_path: Path) -> list[str]:
+    """Only ProgramArguments -- WorkingDirectory pointing at a checkout is deliberately not in scope.
+
+    A `WorkingDirectory` under `~/Gits` is cosmetic: it does not decide which code runs. What the
+    job EXECUTES is `ProgramArguments`, and that is the whole bar here. Said out loud so the next
+    reader does not re-litigate it from a grep that counts both.
+    """
+    plist = plistlib.loads(plist_path.read_bytes())
+    return [str(argument) for argument in plist.get("ProgramArguments", [])]
+
+
+def test_launchd_installer_renders_every_interpreter_from_the_keg_not_the_authoring_shell(
+    tmp_path: Path,
+) -> None:
+    """Every rendered `com.brainlayer.*` job must EXECUTE the keg, through the stable `opt/` symlink.
+
+    The M4 ran eight launchd jobs out of `~/Gits/brainlayer/.venv` and the framework Python because
+    `install.sh` resolved its interpreters from whatever PATH the authoring shell had. No release
+    could move those jobs and no `__build_sha__` described them. This asserts the fix across every
+    renderer at once rather than for hotlane alone, because it was never a hotlane-only defect.
+    """
+    fixture = _build_keg_with_checkout_decoys(tmp_path)
+
+    result = _run_keg_installer(fixture, "all", tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    launch_agents = fixture["home"] / "Library" / "LaunchAgents"
+    rendered = sorted(launch_agents.glob("com.brainlayer.*.plist"))
+    assert len(rendered) >= 10, [path.name for path in rendered]
+
+    forbidden = {
+        "checkout venv": str(fixture["checkout_venv_bin"]),
+        "versioned Cellar keg": f"{fixture['cellar_root']}",
+        "framework python": "/Library/Frameworks/Python.framework",
+    }
+    offenders: list[str] = []
+    for plist_path in rendered:
+        for argument in _program_argument_strings(plist_path):
+            for label, needle in forbidden.items():
+                if needle in argument:
+                    offenders.append(f"{plist_path.name}: {label} in {argument}")
+    assert not offenders, offenders
+
+    # Positive half: at least one renderer of each placeholder family really did resolve to the keg,
+    # so this cannot pass by rendering nothing at all.
+    every_argument = " ".join(argument for plist_path in rendered for argument in _program_argument_strings(plist_path))
+    assert f"{fixture['opt_root']}/libexec/venv/bin/python" in every_argument
+    assert f"{fixture['opt_root']}/bin/brainlayer" in every_argument
+
+
+def test_launchd_installer_pins_hotlane_to_the_keg_copy_with_no_intermediate_copy(
+    tmp_path: Path,
+) -> None:
+    """Hotlane must run the keg's OWN daemon file, so `brew upgrade` moves it like everything else.
+
+    `install.sh hotlane` used to copy the daemon into `~/.local/lib/brainlayer/` and point the plist
+    there. `brew install` never runs that refresh, so the M1 executed a Jul-24 daemon while its keg
+    said 1.5.12 -- a version the plist on disk could not reveal. The copy is the defect; assert it
+    is gone in a keg.
+    """
+    fixture = _build_keg_with_checkout_decoys(tmp_path)
+
+    result = _run_keg_installer(fixture, "hotlane", tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    rendered = fixture["home"] / "Library" / "LaunchAgents" / "com.brainlayer.hotlane-brainbar.plist"
+    arguments = _program_argument_strings(rendered)
+    opt_root = fixture["opt_root"]
+
+    assert f"{opt_root}/libexec/venv/bin/python" in arguments
+    packaged_daemon = (
+        f"{opt_root}/libexec/venv/lib/python3.12/site-packages/brainlayer/launchd/hotlane_brainbar_daemon.py"
+    )
+    assert packaged_daemon in arguments
+    # The `~/.local/lib` copy is what went stale; in a keg it must not be written at all.
+    assert not (fixture["home"] / ".local" / "lib" / "brainlayer" / "hotlane_brainbar_daemon.py").exists()
+
+
+def test_launchd_installer_still_copies_the_hotlane_daemon_outside_a_keg(tmp_path: Path) -> None:
+    """A source checkout has no keg to pin to, so the `~/.local/lib` copy must survive there.
+
+    Keg-pinning is the fix for installed Macs; it must not take the dev path away, because in a
+    checkout the checkout IS the truth.
+    """
+    launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
+    _copy_packaged_launchd(launchd_dir)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text("\n".join(_fake_launchctl_lines()), encoding="utf-8")
+    fake_launchctl.chmod(0o755)
+    _write_fake_ps(fake_bin)
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = home / ".config" / "brainlayer" / "brainlayer.env"
+    env_file.parent.mkdir(parents=True)
+    _write_full_launchd_env(env_file)
+    copied = home / ".local" / "lib" / "brainlayer" / "hotlane_brainbar_daemon.py"
+
+    result = subprocess.run(
+        [str(launchd_dir / "install.sh"), "hotlane"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": sys.executable,
+            "BRAINLAYER_PYTHON": sys.executable,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS": "1",
+            "BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL": "0",
+            "BRAINLAYER_LAUNCHD_VERIFY_INTERVAL": "0",
+            "FAKE_LAUNCHCTL_LOG": str(tmp_path / "launchctl.log"),
+            "FAKE_PS_COMMAND": f"{sys.executable} {copied} --interval 1.0",
+        },
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert copied.is_file()
+    rendered = home / "Library" / "LaunchAgents" / "com.brainlayer.hotlane-brainbar.plist"
+    assert str(copied) in _program_argument_strings(rendered)
