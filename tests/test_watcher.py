@@ -14,6 +14,9 @@ last drained it costs nothing. The gate must never stall a file that is genuinel
 behind, which is what most of these tests pin down.
 """
 
+import math
+import os
+
 from brainlayer.watcher import JSONLWatcher, WatchRoot
 
 
@@ -248,3 +251,115 @@ def test_denylist_is_evaluated_once_per_file_per_poll(tmp_path, monkeypatch):
     assert worst, "expected at least one denylist evaluation"
     path, count = worst[0]
     assert count == 1, f"{path} was denylist-checked {count}x in a single poll; expected 1"
+
+
+def test_same_path_replacement_with_identical_mtime_and_size_is_not_skipped(tmp_path):
+    """A file replaced at the same path must never be skipped, even if stat looks identical.
+
+    The skip gate fingerprinted only (mtime, size). Rotation is detected inside
+    `_ensure_tailer`/`read_new_lines`, which a skip `continue`s past -- so a file swapped
+    at the same path with the same size and the same mtime was skipped on every poll,
+    forever, and its new content was never ingested. Silent: no error, no log, no alarm.
+
+    The pre-existing replacement tests in test_jsonl_watcher.py all change size, so none of
+    them cover this. Same failure shape as the prune bug this PR fixes -- a condition that
+    can never flip -- except this one loses data instead of burning CPU.
+    """
+    watcher = _watcher(tmp_path)
+    src = tmp_path / "projects" / "p"
+    src.mkdir()
+    f = src / "a.jsonl"
+    original = '{"type":"user","message":{"role":"user","content":"AAA"}}\n'
+    f.write_text(original)
+    path = str(f)
+
+    watcher.poll_once()
+    first_inode = f.stat().st_ino
+    stat_before = f.stat()
+
+    # Replace at the same path: new inode, identical size, identical mtime.
+    replacement = '{"type":"user","message":{"role":"user","content":"BBB"}}\n'
+    assert len(replacement) == len(original), "test requires a byte-identical length"
+    swap = src / "swap.tmp"
+    swap.write_text(replacement)
+    os.replace(swap, f)
+    os.utime(f, (stat_before.st_atime, stat_before.st_mtime))
+
+    assert f.stat().st_ino != first_inode, "replacement must produce a new inode"
+    assert f.stat().st_size == stat_before.st_size
+    assert f.stat().st_mtime == stat_before.st_mtime
+
+    watcher._discover_jsonl_files()
+    assert watcher._can_skip_unchanged(path) is False, (
+        "a same-path replacement was skipped: its new content can never be ingested"
+    )
+
+
+def test_tailer_ahead_of_file_is_not_skipped(tmp_path):
+    """Refuse the skip unless the tailer is exactly at EOF.
+
+    `offset >= size` also accepts `offset > size` -- a tailer that believes it read more
+    bytes than the file holds. That is the signature of a truncation/rewind, and skipping
+    there bypasses `check_rewind`, which AGENTS.md documents as the checkpoint-restore path
+    that soft-archives reverted chunks. Only `offset == size` is a safe skip.
+    """
+    watcher = _watcher(tmp_path)
+    src = tmp_path / "projects" / "p"
+    src.mkdir()
+    f = src / "a.jsonl"
+    f.write_text('{"type":"user","message":{"role":"user","content":"hi"}}\n')
+    path = str(f)
+
+    watcher.poll_once()
+    tailer = watcher._tailers.get(path)
+    assert tailer is not None
+
+    watcher._discover_jsonl_files()
+    watcher._observed_file_stats = dict(watcher._current_file_stats)
+    tailer.offset = watcher._current_file_stats[path][1] + 500  # ahead of EOF
+
+    assert watcher._can_skip_unchanged(path) is False, "a tailer ahead of EOF was skipped, bypassing rewind detection"
+
+
+def test_prune_retry_interval_rejects_nan_and_inf(monkeypatch):
+    """nan/inf pass both `ValueError` and `<= 0`, and disable the retry timer forever.
+
+    `monotonic() - attempt >= nan` and `>= inf` are never true, so an incomplete prune
+    would retry only when parent dirs change -- never on the timer.
+    """
+    from brainlayer.watcher import _watch_offset_prune_retry_interval_s
+
+    for raw in ("nan", "inf", "-inf", "NaN", "Infinity"):
+        monkeypatch.setenv("BRAINLAYER_WATCHER_OFFSET_PRUNE_RETRY_S", raw)
+        value = _watch_offset_prune_retry_interval_s()
+        assert math.isfinite(value) and value > 0, f"{raw!r} produced non-finite interval {value}"
+
+
+def test_deployed_poll_interval_is_batched_at_30s_or_more():
+    """The constructor default is not what production runs -- the plists pass --poll.
+
+    Asserting only `JSONLWatcher(...).poll_interval_s` would still pass if a plist said
+    `--poll 1`, which is exactly the configuration this PR exists to remove. Check the
+    surfaces that actually deploy: the CLI option default and both plists.
+    """
+    import inspect
+    import plistlib
+    from pathlib import Path
+
+    from brainlayer.cli import watch
+
+    default = inspect.signature(watch).parameters["poll_interval"].default
+    cli_default = getattr(default, "default", default)
+    assert float(cli_default) >= 30.0, f"CLI --poll default is {cli_default}s"
+
+    repo_root = Path(__file__).resolve().parent.parent
+    plists = [
+        repo_root / "scripts" / "launchd" / "com.brainlayer.watch.plist",
+        repo_root / "launchd" / "com.brainlayer.watch.plist",
+    ]
+    for plist_path in plists:
+        assert plist_path.exists(), f"missing {plist_path}"
+        args = plistlib.loads(plist_path.read_bytes())["ProgramArguments"]
+        assert "--poll" in args, f"{plist_path.name} does not pass --poll"
+        value = float(args[args.index("--poll") + 1])
+        assert value >= 30.0, f"{plist_path.name} polls every {value}s"

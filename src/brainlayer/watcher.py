@@ -72,9 +72,12 @@ def _watch_offset_prune_retry_interval_s() -> float:
             _DEFAULT_OFFSET_PRUNE_RETRY_S,
         )
         return _DEFAULT_OFFSET_PRUNE_RETRY_S
-    if parsed_value <= 0:
+    # isfinite before the sign test: float("nan") and float("inf") survive both
+    # ValueError and `<= 0`, and `monotonic() - attempt >= nan/inf` is never true, which
+    # would silently disable the retry timer for the life of the process.
+    if not math.isfinite(parsed_value) or parsed_value <= 0:
         logger.warning(
-            "%s must be positive; using default %s",
+            "%s must be a positive finite number; using default %s",
             _OFFSET_PRUNE_RETRY_ENV,
             _DEFAULT_OFFSET_PRUNE_RETRY_S,
         )
@@ -1087,10 +1090,14 @@ class JSONLWatcher:
         self.max_record_bytes = _watch_max_record_bytes()
         self._tailers: dict[str, JSONLTailer] = {}
         self._file_providers: dict[str, str] = {}
-        # (mtime, size) per file, so an unchanged file costs nothing on the next poll.
-        # Discovery already stats every file, so this is free to collect.
-        self._current_file_stats: dict[str, tuple[float, int]] = {}
-        self._observed_file_stats: dict[str, tuple[float, int]] = {}
+        # (mtime, size, inode) per file, so an unchanged file costs nothing on the next
+        # poll. Discovery already stats every file, so this is free to collect. The inode is
+        # load-bearing, not decoration: rotation is only detected inside _ensure_tailer /
+        # read_new_lines, which a skip never reaches, so without it a file replaced at the
+        # same path with the same size and mtime would be skipped forever and its content
+        # never ingested.
+        self._current_file_stats: dict[str, tuple[float, int, int]] = {}
+        self._observed_file_stats: dict[str, tuple[float, int, int]] = {}
         # Denylist verdicts memoised for the duration of one poll. is_denylisted() expands
         # globs and can read file content to attribute subagents; a warm sweep of the real
         # corpus costs ~0.8s, and poll_once was evaluating it four times per file. Cleared
@@ -1217,7 +1224,7 @@ class JSONLWatcher:
                             except OSError as e:
                                 logger.debug("Skipping JSONL file during discovery after stat failure: %s: %s", path, e)
                                 continue
-                            self._current_file_stats[path] = (mtime, stat_result.st_size)
+                            self._current_file_stats[path] = (mtime, stat_result.st_size, stat_result.st_ino)
                             discovered.append((mtime, path, root.provider))
             except OSError:
                 continue
@@ -1254,12 +1261,18 @@ class JSONLWatcher:
         if previous is None or current is None or previous != current:
             return False
         tailer = self._tailers.get(filepath)
-        _mtime, size = current
-        # One expression, evaluated in order: `tailer is not None` guards the attribute
-        # access that follows it, exactly as the sequential early-returns did.
+        _mtime, size, inode = current
+        # One expression, evaluated in order: `tailer is not None` guards every attribute
+        # access after it, exactly as the sequential early-returns did.
+        #
+        # `offset == size` and not `>= size`: a tailer AHEAD of EOF believes it read more
+        # bytes than the file holds, which is the signature of a truncation. Skipping there
+        # bypasses check_rewind -- the checkpoint-restore path that soft-archives reverted
+        # chunks. Only a tailer exactly at EOF has provably nothing left to read.
         return (
             tailer is not None
-            and tailer.offset >= size
+            and tailer.offset == size
+            and tailer.observed_inode in (0, inode)
             and not tailer.has_complete_buffered_line()
             and not self._pending_quarantined_offsets.get(filepath)
             and filepath not in self._file_ingestion_failures
