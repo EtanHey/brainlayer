@@ -10,7 +10,7 @@
 		<string>__BRAINLAYER_BIN__</string>
 		<string>watch</string>
 		<string>--poll</string>
-		<string>1.0</string>
+		<string>30</string>
 		<string>--batch-size</string>
 		<string>10</string>
 		<string>--flush-ms</string>

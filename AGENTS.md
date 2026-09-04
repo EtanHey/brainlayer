@@ -247,14 +247,16 @@ brainlayer enrich
 - Handoff detection: prompts with "handoff", "session-handoff" skip auto-search
 - Module: `hooks/dedup_coordination.py`
 
-<!-- PATHS: DB=~/.local/share/brainlayer/brainlayer.db | offsets=~/.local/share/brainlayer/offsets.json | logs=~/.local/share/brainlayer/logs/watch.{log,err} | socket=/tmp/brainlayer.sock | lock=/tmp/brainlayer-enrichment.lock -->
+<!-- PATHS: DB=~/.local/share/brainlayer/brainlayer.db | offsets=~/.local/share/brainlayer/offsets.json | logs=~/Library/Logs/brainlayer/watch.{out,err}.log | socket=/tmp/brainlayer.sock | lock=/tmp/brainlayer-enrichment.lock -->
 ## Data & Locks
 - Backup log: real runs append JSONL to `~/.local/share/brainlayer/logs/backup-daily.log` with
   `backup_log_provenance=real`; pytest sets `BRAINLAYER_BACKUP_LOG_PATH` and
   `BRAINLAYER_BACKUP_LOG_PROVENANCE=pytest` so tests cannot refresh the production heartbeat log.
 - Watcher offsets: `~/.local/share/brainlayer/offsets.json`
 - Prompts cache: `~/.local/share/brainlayer/prompts/`
-- Watcher logs: `~/.local/share/brainlayer/logs/watch.{log,err}`
+- Watcher logs: `~/Library/Logs/brainlayer/watch.{out,err}.log`
+  (moved from `~/.local/share/brainlayer/logs/watch.{log,err}` by `3dca26a2`, 2026-05-18;
+  the old files are frozen at that date and are NOT a health signal)
 - Socket: `/tmp/brainlayer.sock`
 - Enrichment lock: `/tmp/brainlayer-enrichment.lock`
 - Session dedup: `/tmp/brainlayer_session_*.json`

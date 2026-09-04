@@ -3370,7 +3370,9 @@ def watch(
         "-s",
         help="Directory to watch for .jsonl files. Repeat to override default multi-provider roots.",
     ),
-    poll_interval: float = typer.Option(1.0, "--poll", help="Poll interval in seconds"),
+    poll_interval: float = typer.Option(
+        30.0, "--poll", help="Poll interval in seconds (>=30s batching; see R3 constraints)"
+    ),
     batch_size: int = typer.Option(10, "--batch-size", help="Flush after this many lines"),
     flush_interval: int = typer.Option(500, "--flush-ms", help="Flush interval in milliseconds"),
 ) -> None:
@@ -3388,6 +3390,18 @@ def watch(
     from ..paths import get_db_path
     from ..watcher import JSONLWatcher, WatchRoot, default_watch_roots
     from ..watcher_bridge import create_flush_callback
+
+    # Without this the root logger has no handler, so logging's lastResort emits only
+    # WARNING+ and every logger.info in watcher.py -- the 60s liveness heartbeat and the
+    # started/stopped markers -- is discarded. This is the one long-running daemon command
+    # that was missing it, which is why watch.out.log held 1200 startup banners and no
+    # evidence of what happened after any of them. Timestamps are load-bearing here: their
+    # absence is what made a three-month-old restart pattern impossible to reconstruct.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        stream=sys.stderr,
+    )
 
     install_parent_death_watcher()
     os.environ.setdefault("BRAINLAYER_ARBITRATED", "1")

@@ -1,16 +1,21 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
+<!-- NOT AUTHORITATIVE: scripts/launchd/ holds the templated plists that
+     scripts/launchd/install.sh actually installs. This copy is kept for reference only.
+     R3 (2026-09-04): its ProgramArguments pointed at the pip install
+     (/Library/Frameworks/Python.framework/.../bin/brainlayer, 1.5.11), violating the
+     "served from the keg" constraint. Repointed at the Homebrew keg. -->
 <dict>
     <key>Label</key>
     <string>com.brainlayer.watch</string>
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Library/Frameworks/Python.framework/Versions/3.13/bin/brainlayer</string>
+        <string>/opt/homebrew/bin/brainlayer</string>
         <string>watch</string>
         <string>--poll</string>
-        <string>1.0</string>
+        <string>30</string>
         <string>--batch-size</string>
         <string>10</string>
         <string>--flush-ms</string>
