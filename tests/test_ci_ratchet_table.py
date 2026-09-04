@@ -270,6 +270,209 @@ def test_git_invalid_pathname_bytes_are_a_capability_gap_not_a_crash(monkeypatch
     assert ratchet.git_tree_dirty() is None
 
 
+# --- commit provenance: which commit is this table even about? --------------------------------
+#
+# #759 is the receipt. Its ratchet comment ended `checked-out HEAD \`13fa724278bf\``, while the PR's
+# head was `4632f979f164`: `13fa7242` is GitHub's synthetic merge commit (parents
+# `3126ac1b` = base tip and `4632f979` = PR head), a sha that appears on no PR page anywhere. A
+# reviewer could not tell that table from one measured three pushes ago.
+
+MERGE_BASE = "1" * 40
+MERGE_HEAD = "2" * 40
+MERGE_REF = "3" * 40
+
+
+def commit_probe(tmp_path: Path, **overrides) -> ratchet.Probe:
+    """A table job on the merge ref: HEAD is the merge commit, its second parent is the PR head."""
+    ready = {
+        "head_sha": MERGE_REF,
+        "head_lineage": (MERGE_REF, MERGE_BASE, MERGE_HEAD),
+        "measured_sha": MERGE_HEAD,
+        "pr_head_sha": MERGE_HEAD,
+    }
+    return replace(linux_probe(tmp_path), **{**ready, **overrides})
+
+
+def commit_row(tmp_path: Path, **overrides) -> ratchet.Row:
+    return ratchet.row_commit_provenance(commit_probe(tmp_path, **overrides), CORPUS)
+
+
+def test_commit_provenance_names_the_pr_head_the_merge_ref_stands_for(tmp_path: Path) -> None:
+    """The value has to carry the sha a reviewer can see on the PR, not the merge commit's."""
+    result = commit_row(tmp_path)
+    assert result.status == ratchet.GREEN
+    assert MERGE_HEAD[:12] in result.value
+    assert "== PR head" in result.value
+    # ...and the merge ref is still named, labelled as the checkout, so the two are never confused.
+    assert MERGE_REF[:12] in result.value
+
+
+def test_commit_provenance_is_red_when_the_table_describes_a_superseded_commit(tmp_path: Path) -> None:
+    """The #753 shape: an all-green table that belongs to a commit the branch has moved past."""
+    result = commit_row(tmp_path, pr_head_sha="9" * 40)
+    assert result.status == ratchet.RED
+    assert "superseded commit" in result.value
+    assert MERGE_HEAD[:12] in result.value and ("9" * 12) in result.value
+
+
+def test_commit_provenance_is_red_when_the_live_head_could_not_be_read(tmp_path: Path) -> None:
+    """A run asked to prove it is current and unable to has a finding, not a capability gap.
+
+    `n/a` here would be the worst of both: a table that names its commit and quietly declines to say
+    whether that commit is still the one under review.
+    """
+    result = commit_row(tmp_path, pr_head_sha=None, commit_unresolved="the REST call timed out")
+    assert result.status == ratchet.RED
+    assert "the REST call timed out" in result.value
+    assert MERGE_HEAD[:12] in result.value
+
+
+def test_commit_provenance_is_red_when_the_checkout_is_not_the_triggering_commit(tmp_path: Path) -> None:
+    result = commit_row(tmp_path, head_lineage=(MERGE_REF, MERGE_BASE, "8" * 40))
+    assert result.status == ratchet.RED
+    assert "does not have checked out" in result.value
+
+
+def test_commit_provenance_is_red_when_git_cannot_say_what_is_checked_out(tmp_path: Path) -> None:
+    result = commit_row(tmp_path, head_lineage=None)
+    assert result.status == ratchet.RED
+    assert "git could not say" in result.value
+
+
+def test_commit_provenance_accepts_a_direct_head_checkout_too(tmp_path: Path) -> None:
+    """`ref: <head sha>` instead of the merge ref: HEAD *is* the PR head. Still provable."""
+    result = commit_row(tmp_path, head_sha=MERGE_HEAD, head_lineage=(MERGE_HEAD, MERGE_BASE))
+    assert result.status == ratchet.GREEN
+
+
+def test_a_run_that_is_not_a_pull_request_is_a_capability_gap(tmp_path: Path) -> None:
+    result = ratchet.row_commit_provenance(linux_probe(tmp_path), CORPUS)
+    assert result.status == ratchet.NA
+    assert result.value.startswith("n/a — not a pull-request run")
+
+
+@pytest.mark.parametrize(
+    ("measured", "pr_head", "unresolved", "expected"),
+    [
+        (None, "a" * 40, "reason", "mutually exclusive"),
+        (None, None, "reason", "no `--measured-sha`"),
+        ("not-a-sha", "a" * 40, None, "not a 40-hex commit sha"),
+        ("a" * 40, "not-a-sha", None, "not a 40-hex commit sha"),
+        ("a" * 40, None, None, "no PR head to check it against"),
+    ],
+)
+def test_a_broken_commit_hand_off_is_a_finding_not_a_capability_gap(
+    tmp_path: Path, measured: str | None, pr_head: str | None, unresolved: str | None, expected: str
+) -> None:
+    claim = ratchet.select_commit(measured, pr_head, unresolved)
+    assert claim.problem is not None and expected in claim.problem
+    result = ratchet.row_commit_provenance(commit_probe(tmp_path, commit_problem=claim.problem), CORPUS)
+    assert result.status == ratchet.RED
+
+
+def test_a_measured_sha_alone_cannot_pass_as_proof_of_currency(tmp_path: Path) -> None:
+    """Printing a sha is not the feature. Showing it is STILL the PR's head is."""
+    probe = ratchet.Probe.detect(
+        json.loads((ROOT / "tests" / "fixtures" / "sprint_gate" / "corpus.json").read_text(encoding="utf-8")),
+        None,
+        None,
+        measured_sha="a" * 40,
+    )
+    assert ratchet.row_commit_provenance(probe, CORPUS).status == ratchet.RED
+
+
+def test_git_head_lineage_reports_the_merge_parents_in_order(tmp_path: Path, monkeypatch) -> None:
+    """`git rev-list --parents -n 1 HEAD` on a real merge, because the row's whole proof rests on it.
+
+    Mocking the parent list would test the row and leave the git invocation — the part that has to
+    survive a shallow clone and an inherited GIT_DIR — unmeasured.
+    """
+    repo = tmp_path / "merge-repo"
+    repo.mkdir()
+
+    def repo_git(*args: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@e", *args],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=_clean_git_env(),
+        ).stdout.strip()
+
+    repo_git("init", "-q", "-b", "base")
+    repo_git("commit", "-q", "--allow-empty", "-m", "base tip")
+    base = repo_git("rev-parse", "HEAD")
+    repo_git("checkout", "-q", "-b", "pr")
+    repo_git("commit", "-q", "--allow-empty", "-m", "pr head")
+    pr_head = repo_git("rev-parse", "HEAD")
+    repo_git("checkout", "-q", "base")
+    # `--no-ff`, so this is the two-parent commit GitHub's merge ref actually is.
+    repo_git("merge", "-q", "--no-ff", "-m", "Merge pr into base", "pr")
+    merge = repo_git("rev-parse", "HEAD")
+
+    monkeypatch.setattr(ratchet, "ROOT", repo)
+    assert ratchet.git_head_lineage() == (merge, base, pr_head)
+    # ...and that is exactly what the row needs to accept the PR head as measured.
+    probe = commit_probe(
+        tmp_path, head_sha=merge, head_lineage=(merge, base, pr_head), measured_sha=pr_head, pr_head_sha=pr_head
+    )
+    assert ratchet.row_commit_provenance(probe, CORPUS).status == ratchet.GREEN
+
+
+def test_git_head_lineage_is_a_capability_gap_when_git_is_missing(monkeypatch) -> None:
+    monkeypatch.setattr(ratchet.shutil, "which", lambda _name: None)
+    assert ratchet.git_head_lineage() is None
+
+
+def test_the_two_shas_in_the_table_say_which_is_which(tmp_path: Path) -> None:
+    """Two rows now print a sha, and they are deliberately different shas. A reader who cannot tell
+    the merge ref from the PR head is back in #759, just with more numbers."""
+    rows = ratchet.collect(commit_probe(tmp_path), CORPUS)
+    assert "commit provenance" in row(rows, "provenance").notes
+    assert "merge ref on a PR" in row(rows, "provenance").notes
+
+
+def test_the_commit_row_leads_the_table(tmp_path: Path) -> None:
+    """Every other row's value belongs to the commit this one names, so it is read first."""
+    assert ratchet.collect(commit_probe(tmp_path), CORPUS)[0].name == "commit provenance"
+
+
+def test_the_footer_labels_the_pr_head_and_the_merge_ref_separately(tmp_path: Path) -> None:
+    """#759 printed one unlabelled sha, and it was the one nobody could look up."""
+    probe = commit_probe(tmp_path)
+    table = ratchet.render(ratchet.collect(probe, CORPUS), probe, None, NOW)
+    (footer,) = [line for line in table.splitlines() if line.startswith("_Measured on ")]
+    assert f"PR head `{MERGE_HEAD[:12]}`" in footer
+    assert f"checkout `{MERGE_REF[:12]}`" in footer
+    assert "checked-out HEAD" not in footer
+
+
+def test_main_reds_the_whole_table_when_it_was_measured_on_a_superseded_commit(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    """End to end: the flags the workflow passes, the exit code the job reads, the words a reviewer
+    sees. This is the test that fails on `d04cb310`, where no flag, row or sha existed."""
+    monkeypatch.setattr(ratchet, "git_tree_dirty", lambda: False)
+    head = ratchet.git_head()
+    assert head is not None
+    wheel = make_wheel(tmp_path, head)
+    rc = ratchet.main(["--wheel", str(wheel), "--measured-sha", head, "--pr-head-sha", "d" * 40])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "| commit provenance | " in captured.out
+    assert "superseded commit" in captured.out and head[:12] in captured.out
+    assert "::error title=Ratchet RED: commit provenance::" in captured.err
+
+
+def test_main_is_green_on_the_commit_it_was_triggered_for(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(ratchet, "git_tree_dirty", lambda: False)
+    head = ratchet.git_head()
+    assert head is not None
+    wheel = make_wheel(tmp_path, head)
+    assert ratchet.main(["--wheel", str(wheel), "--measured-sha", head, "--pr-head-sha", head]) == 0
+    assert f"measured `{head[:12]}` == PR head" in capsys.readouterr().out
+
+
 # --- fail-closed wheel selection: a promised wheel that never arrived is RED, not n/a ---
 
 
@@ -696,6 +899,72 @@ def test_the_workflow_stamps_the_sha_that_provenance_compares_against() -> None:
     assert "--wheel-glob 'dist/*.whl'" in workflow_steps()["Collect ratchet rows"]["run"]
 
 
+def test_every_push_to_the_pr_re_renders_the_table() -> None:
+    """The table is only ever true of one commit, so every push has to produce a new one.
+
+    Three things carry that, and none of them was asserted together before:
+      * `synchronize` in `types` -- the event GitHub fires on a push to the PR head;
+      * NO `paths`/`paths-ignore` filter -- one would silently skip pushes that touch nothing on the
+        list, leaving the previous commit's table standing on a branch that has moved;
+      * `cancel-in-progress` -- the newest push's run is the one that gets to write.
+    """
+    trigger = workflow_document()[True]["pull_request"]
+    assert "synchronize" in trigger["types"]
+    assert "paths" not in trigger and "paths-ignore" not in trigger
+    assert workflow_document()["concurrency"]["cancel-in-progress"] is True
+
+
+def test_the_table_job_fetches_deep_enough_to_prove_its_checkout() -> None:
+    """At `fetch-depth: 1` the merge ref is the shallow boundary and git reports no parents at all,
+    so `commit provenance` could not tell "this is the right commit" from "git cannot say"."""
+    checkout = [
+        step for step in workflow_jobs()["table"]["steps"] if str(step.get("uses", "")).startswith("actions/checkout")
+    ]
+    assert len(checkout) == 1
+    assert checkout[0]["with"]["fetch-depth"] == 2
+
+
+def test_the_workflow_reads_the_live_pr_head_not_only_the_event_payload() -> None:
+    """The event payload cannot know the run has been overtaken -- it is fixed when the run starts.
+
+    Comparing it against itself would be green forever, which is exactly how #753's table sat there
+    describing superseded `6ea5b395`. The second sha has to come from the API, at collect time.
+    """
+    step = workflow_steps()["Resolve the commit this table must describe"]
+    assert step["env"]["EVENT_HEAD"] == "${{ github.event.pull_request.head.sha }}"
+    assert "gh api" in step["run"] and "/pulls/${PR}" in step["run"] and "--jq .head.sha" in step["run"]
+    assert "--measured-sha" in step["run"] and "--pr-head-sha" in step["run"]
+    # A read that fails must still publish a table, as a RED finding -- never lose the whole table.
+    assert "|| true" in step["run"] and "--pr-head-unresolved" in step["run"]
+
+
+def test_the_collector_is_handed_exactly_one_pr_head_flag() -> None:
+    """`--pr-head-sha` and `--pr-head-unresolved` together is a finding, so the branch must be an
+    either/or, never two appends."""
+    run = workflow_steps()["Resolve the commit this table must describe"]["run"]
+    assert run.count("--pr-head-sha") == 1 and run.count("--pr-head-unresolved") == 1
+    assert "else" in run and "fi" in run
+
+
+def test_the_commit_args_reach_the_collector_and_survive_bash_3() -> None:
+    collect = workflow_steps()["Collect ratchet rows"]["run"]
+    assert '"${COMMIT_ARGS[@]}"' in collect
+    # `mapfile` is bash >= 4 and macOS ships 3.2; the same read loop the signature args use.
+    assert "mapfile" not in workflow_code()
+    assert "while IFS= read -r commit_arg" in collect
+
+
+def test_nothing_in_the_commit_hand_off_comes_from_the_pr_tree() -> None:
+    """Macroscope's #753 HIGH: a verifier the gated PR can edit is not a verifier.
+
+    This row's two inputs are the event payload and a REST read. Neither is a file in the checkout,
+    and this asserts the step never starts reading one.
+    """
+    run = workflow_steps()["Resolve the commit this table must describe"]["run"]
+    for reader in ("cat src/", "cat scripts/", "bash scripts/", "python scripts/", "source "):
+        assert reader not in run
+
+
 def test_collect_runs_even_when_an_earlier_step_failed() -> None:
     """A build failure must not leave the previous commit's GREEN table standing on the PR.
 
@@ -709,6 +978,7 @@ def test_collect_runs_even_when_an_earlier_step_failed() -> None:
 @pytest.mark.parametrize(
     "step",
     [
+        "Resolve the commit this table must describe",
         "Collect ratchet rows",
         "Guarantee this run publishes its own table",
         "Publish the table to the run summary",
@@ -889,6 +1159,9 @@ def test_no_step_leaves_scratch_in_the_checkout() -> None:
         "ratchet.md",
         "signature-report.json",
         "signature-args.txt",
+        "commit-args.txt",
+        "live-head.txt",
+        "live-head.err",
         "comments.json",
         "body.json",
         "changed-files.txt",

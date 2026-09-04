@@ -275,7 +275,15 @@ jobs:
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth 2, so `commit provenance` can PROVE this checkout is the commit the run was
+      # triggered for. On a pull_request event the checkout is GitHub's synthetic merge ref, whose
+      # sha is on no PR page anywhere -- #759's table printed `13fa724278bf` while the PR's head was
+      # `4632f979` -- and the PR-head sha a reviewer can see is that merge commit's SECOND PARENT.
+      # At depth 1 the checkout is the shallow boundary and git reports it as having no parents, so
+      # the row could not tell "this is the right commit" from "git cannot say".
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       - uses: actions/setup-python@v5
         with:
@@ -330,6 +338,41 @@ jobs:
           fi
           cat "$args_path"
 
+      # The sha the table has to be honest about. Two of them, from two sources on purpose:
+      #   $EVENT_HEAD  -- the commit this run was triggered for. Fixed for the life of the run.
+      #   the REST read -- the PR's head RIGHT NOW. The event payload cannot know the run has been
+      #                    overtaken, so a run that only consulted itself would always agree with
+      #                    itself; #753 was nearly reviewed on an all-green belonging to superseded
+      #                    `6ea5b395` for exactly that reason.
+      # Nothing here is read from the PR's tree, so the PR cannot edit the check that gates it.
+      - name: Resolve the commit this table must describe
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # $RUNNER_TEMP, never the checkout: an untracked scratch file makes `git status
+          # --porcelain --untracked-files=all` dirty, which is exactly what the provenance row reads.
+          args_path="${RUNNER_TEMP}/commit-args.txt"
+          live_path="${RUNNER_TEMP}/live-head.txt"
+          # `|| true`, because a failed read must still produce a table: it renders RED saying the
+          # run could not show it is current, which is a finding, not a reason to lose the table.
+          gh api "repos/${REPO}/pulls/${PR}" --jq .head.sha > "$live_path" 2> "${RUNNER_TEMP}/live-head.err" || true
+          live="$(tr -d '[:space:]' < "$live_path")"
+          printf '%s\n%s\n' --measured-sha "$EVENT_HEAD" > "$args_path"
+          if [[ -n "$live" ]]; then
+            printf '%s\n%s\n' --pr-head-sha "$live" >> "$args_path"
+          else
+            detail="$(awk 'NF { print; exit }' "${RUNNER_TEMP}/live-head.err")"
+            printf '%s\n%s\n' --pr-head-unresolved \
+              "\`gh api repos/${REPO}/pulls/${PR}\` returned no head sha (${detail:-no diagnostic on stderr})" \
+              >> "$args_path"
+          fi
+          cat "$args_path"
+
       # `!cancelled()`, never `always()`. Two different failures ride on this one condition:
       #   - it runs when an EARLIER STEP FAILED (a broken build), so this run still publishes a table
       #     instead of leaving the previous commit's GREEN table sitting on the PR -- a run that
@@ -352,6 +395,12 @@ jobs:
           while IFS= read -r signature_arg; do
             SIGNATURE_ARGS+=("$signature_arg")
           done < "${RUNNER_TEMP}/signature-args.txt"
+          # Same one-arg-per-line read for the commit claim: the unresolved reason is free prose and
+          # must never be word-split into several flags.
+          COMMIT_ARGS=()
+          while IFS= read -r commit_arg; do
+            COMMIT_ARGS+=("$commit_arg")
+          done < "${RUNNER_TEMP}/commit-args.txt"
           # --wheel-glob, not a shell glob: `$(ls dist/*.whl)` collapses "no wheel" and "three wheels"
           # into an empty --wheel, which the collector would have called `n/a` while the job stayed
           # green -- a false green in the ratchet itself. The collector now fails closed and reports
@@ -359,6 +408,7 @@ jobs:
           rc=0
           python scripts/ci_ratchet_table.py \
             --wheel-glob 'dist/*.whl' \
+            "${COMMIT_ARGS[@]}" \
             "${SIGNATURE_ARGS[@]}" \
             --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --out "${RUNNER_TEMP}/ratchet.md" || rc=$?

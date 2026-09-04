@@ -17,6 +17,14 @@ Rows are labelled by method, because a socket measurement on an installed Mac, a
 a hosted macOS runner, and an in-process measurement on a GitHub runner are three different
 measurements, not better and worse ones.
 
+``commit provenance`` answers the question a reader asks before reading any other row: **which
+commit is this table about?** On a ``pull_request`` event ``actions/checkout`` checks out GitHub's
+synthetic merge ref, whose sha appears nowhere on the PR -- #759's table printed
+``13fa724278bf`` while that PR's head was ``4632f979``, so nobody reading the comment could tell
+whether it still described the branch. This row names the PR-head commit the checkout represents and
+goes RED when it is no longer the PR's head, because a table measured on a superseded commit must
+announce that rather than sit there looking current.
+
 Two rows have a runner-side method. ``provenance`` measures in-process on the ubuntu job.
 ``signature_valid`` is measured by the separate macOS parity job in ``ratchet.yml``, which installs
 the published tap keg and runs ``scripts/release-verify-signatures.sh`` against it; that job hands
@@ -55,6 +63,7 @@ CORPUS = ROOT / "tests" / "fixtures" / "sprint_gate" / "corpus.json"
 MARKER = "<!-- brainlayer-ratchet-table -->"
 STAMP_MEMBER = "brainlayer/_build.py"
 STAMP_PATTERN = re.compile(r'^BUILD_SHA = "([0-9a-f]{40})"\s*$')
+SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 FALLBACK_DB = Path("~/.local/share/brainlayer/brainlayer.db").expanduser()
 
 # What the macOS parity job may say about itself. `measured` carries counts this run produced;
@@ -65,6 +74,14 @@ SIGNATURE_FAILED = "failed"
 SIGNATURE_STATUSES = (SIGNATURE_MEASURED, SIGNATURE_FAILED)
 SIGNATURE_UNAVAILABLE_DEFAULT = (
     "no macOS signature-parity report was handed to this run, and this job cannot install a keg itself"
+)
+
+# What `commit provenance` may say when nobody handed it a commit to describe. This is the only
+# genuine capability gap the row has: a local `python scripts/ci_ratchet_table.py` is not a PR and
+# has no PR head to be current with. Every other way this row can fail to answer is a finding.
+COMMIT_UNAVAILABLE_DEFAULT = (
+    "not a pull-request run: no `--measured-sha`/`--pr-head-sha` was handed to this collector, "
+    "so there is no PR head for the table to be current with"
 )
 
 GREEN = "GREEN"
@@ -94,6 +111,17 @@ class Probe:
     wheel: Path | None
     head_sha: str | None
     tree_dirty: bool | None
+    # `(HEAD, *parents)` for the checked-out commit. The parents are the point: on a pull_request
+    # event the checkout is GitHub's merge ref, and its PR-head parent is the only sha in play that
+    # a reviewer can also see on the PR.
+    head_lineage: tuple[str, ...] | None = None
+    # Which commit this table describes, and which commit the PR head is now. Same three-way split
+    # as the signature hand-off: a measurement, a real capability gap, or a promise broken.
+    measured_sha: str | None = None
+    pr_head_sha: str | None = None
+    commit_unresolved: str | None = None
+    commit_unavailable: str | None = None
+    commit_problem: str | None = None
     # Set when this job MEANT to hand over a wheel and could not. That is a finding to clear, not a
     # capability this machine lacks, so it renders RED and never `n/a`.
     wheel_problem: str | None = None
@@ -111,9 +139,13 @@ class Probe:
         wheel_glob: str | None,
         signature_report: Path | None = None,
         signature_unavailable: str | None = None,
+        measured_sha: str | None = None,
+        pr_head_sha: str | None = None,
+        pr_head_unresolved: str | None = None,
     ) -> Probe:
         selected = select_wheel(wheel, wheel_glob)
         signature = select_signature(signature_report, signature_unavailable)
+        commit = select_commit(measured_sha, pr_head_sha, pr_head_unresolved)
         return cls(
             os_name=platform.system(),
             architecture=platform.machine(),
@@ -123,11 +155,59 @@ class Probe:
             wheel=selected.path,
             head_sha=git_head(),
             tree_dirty=git_tree_dirty(),
+            head_lineage=git_head_lineage(),
+            measured_sha=commit.measured,
+            pr_head_sha=commit.pr_head,
+            commit_unresolved=commit.unresolved,
+            commit_unavailable=commit.unavailable,
+            commit_problem=commit.problem,
             wheel_problem=selected.problem,
             signature=signature.report,
             signature_unavailable=signature.unavailable,
             signature_problem=signature.problem,
         )
+
+
+@dataclass(frozen=True)
+class CommitClaim:
+    """Which commit this table describes, and which commit the PR's head is right now.
+
+    Two shas, from two sources that cannot be the same source. `measured` is the commit the run was
+    triggered for -- the event payload's `pull_request.head.sha`, fixed for the life of the run.
+    `pr_head` is read live from the REST API at collect time, which is the only way a run can find
+    out that it has been overtaken.
+    """
+
+    measured: str | None = None
+    pr_head: str | None = None
+    # Why the live head could not be read. A run that was ASKED to prove it is current and could not
+    # is a finding, not a machine that cannot measure -- the same rule the signature report follows.
+    unresolved: str | None = None
+    # Not a PR at all: the one honest `n/a` this row has.
+    unavailable: str | None = None
+    problem: str | None = None
+
+
+def select_commit(measured: str | None, pr_head: str | None, unresolved: str | None) -> CommitClaim:
+    """Resolve the commit claim FAIL-CLOSED, on the same rule the wheel and the signature follow."""
+    if pr_head is not None and unresolved is not None:
+        return CommitClaim(problem="`--pr-head-sha` and `--pr-head-unresolved` are mutually exclusive")
+    if measured is None and pr_head is None and unresolved is None:
+        return CommitClaim(unavailable=COMMIT_UNAVAILABLE_DEFAULT)
+    if measured is None:
+        return CommitClaim(problem="a PR head reached this run with no `--measured-sha` for the table to describe")
+    if SHA_PATTERN.fullmatch(measured) is None:
+        return CommitClaim(problem=f"`--measured-sha {measured}` is not a 40-hex commit sha")
+    if pr_head is None and unresolved is None:
+        # Naming the measured commit is not the same as showing it is still the PR's head. Without
+        # the second sha this row would print a sha and prove nothing -- exactly the shape of table
+        # that let #753 be reviewed on a superseded commit.
+        return CommitClaim(problem="`--measured-sha` was handed over with no PR head to check it against")
+    if unresolved is not None:
+        return CommitClaim(measured=measured, unresolved=unresolved.strip() or "no reason given")
+    if SHA_PATTERN.fullmatch(pr_head or "") is None:
+        return CommitClaim(problem=f"`--pr-head-sha {pr_head}` is not a 40-hex commit sha")
+    return CommitClaim(measured=measured, pr_head=pr_head)
 
 
 @dataclass(frozen=True)
@@ -350,6 +430,26 @@ def git_head() -> str | None:
     return sha if sha and re.fullmatch(r"[0-9a-f]{40}", sha) else None
 
 
+def git_head_lineage() -> tuple[str, ...] | None:
+    """`(HEAD, *parents)` for the checked-out commit, or None when git cannot say.
+
+    The parents are why this exists. On a `pull_request` event `actions/checkout` checks out
+    GitHub's synthetic merge ref, whose sha appears nowhere on the PR: #759's table printed
+    `13fa724278bf` while the PR's head was `4632f979`, and that merge commit's parents are
+    (base tip, PR head). Matching the run's head sha against this list is what proves the checkout
+    really is the commit the table claims -- and it reads the commit GRAPH, which GitHub builds, so
+    the PR's own tree cannot forge the answer to the check that gates it.
+
+    Needs `fetch-depth: 2`: at depth 1 the checkout is the shallow boundary and git reports it as
+    having no parents at all.
+    """
+    line = _git("rev-list", "--parents", "-n", "1", "HEAD")
+    if not line:
+        return None
+    parts = tuple(line.split())
+    return parts if parts and all(SHA_PATTERN.fullmatch(part) for part in parts) else None
+
+
 def git_tree_dirty() -> bool | None:
     # `--untracked-files=all` so `status.showUntrackedFiles=no` cannot hide an untracked
     # `_build.py` and turn a dirty stamp into a false GREEN.
@@ -397,10 +497,93 @@ def read_wheel_stamp(wheel: Path) -> WheelStamp:
 # Rows
 # --------------------------------------------------------------------------------------------
 
+COMMIT_METHOD = "commit graph + live PR head · in-process · runner"
+
+COMMIT_NOTES = (
+    "Which commit this whole table is about. On a `pull_request` event the checkout is GitHub's "
+    "synthetic merge ref, whose sha is not on the PR — #759's table printed `13fa724278bf` while "
+    "that PR's head was `4632f979` — so this row names the PR-head parent instead, the sha a "
+    "reviewer can actually see. The comparison sha is read live from "
+    "`repos/{owner}/{repo}/pulls/{n}` when the table is collected, not taken from the event "
+    "payload, because the payload cannot know the run has been overtaken. Residual window, stated "
+    "rather than papered over: a push landing between that read and the comment being posted is "
+    "not caught here — the run for that push refreshes the table."
+)
+
+
+def row_commit_provenance(probe: Probe, _corpus: dict) -> Row:
+    """Name the commit this table describes, and go RED the moment it is not the PR's head."""
+    if probe.commit_problem:
+        return Row("commit provenance", RED, probe.commit_problem, COMMIT_METHOD, COMMIT_NOTES)
+    measured = probe.measured_sha
+    if measured is None:
+        reason = probe.commit_unavailable or COMMIT_UNAVAILABLE_DEFAULT
+        return Row("commit provenance", NA, f"n/a — {reason}", COMMIT_METHOD, COMMIT_NOTES)
+    lineage = probe.head_lineage
+    if lineage is None:
+        return Row(
+            "commit provenance",
+            RED,
+            f"this run was triggered for `{measured[:12]}` and git could not say what is checked out, "
+            "so nothing here shows the table describes that commit",
+            COMMIT_METHOD,
+            COMMIT_NOTES,
+        )
+    if measured not in lineage:
+        # The event says one commit; the checkout is another. Whatever the rows below measured, they
+        # did not measure the commit this table is about to claim.
+        return Row(
+            "commit provenance",
+            RED,
+            f"checkout `{lineage[0][:12]}` is neither `{measured[:12]}` nor a merge of it — this run "
+            "was triggered for a commit it does not have checked out",
+            COMMIT_METHOD,
+            COMMIT_NOTES,
+        )
+    if probe.commit_unresolved:
+        # We know what was measured; we cannot show it is still current. A row that stopped at the
+        # first half would print a sha and prove nothing.
+        return Row(
+            "commit provenance",
+            RED,
+            f"measured `{measured[:12]}`, and this run could not read the PR's current head, so it "
+            f"cannot show the table is still current: {probe.commit_unresolved}",
+            COMMIT_METHOD,
+            COMMIT_NOTES,
+        )
+    pr_head = probe.pr_head_sha
+    if pr_head is None:
+        return Row(
+            "commit provenance",
+            RED,
+            f"measured `{measured[:12]}` with no PR head to check it against",
+            COMMIT_METHOD,
+            COMMIT_NOTES,
+        )
+    if measured != pr_head:
+        return Row(
+            "commit provenance",
+            RED,
+            f"measured `{measured[:12]}` ≠ PR head `{pr_head[:12]}` — **this table describes a "
+            "superseded commit**; every number in it belongs to the older one",
+            COMMIT_METHOD,
+            COMMIT_NOTES,
+        )
+    return Row(
+        "commit provenance",
+        GREEN,
+        f"measured `{measured[:12]}` == PR head · checkout `{lineage[0][:12]}`",
+        COMMIT_METHOD,
+        COMMIT_NOTES,
+    )
+
+
 PROVENANCE_NOTES = (
     "Sha half of #749 keg-mode provenance: a keg built from this wheel can answer "
     "`__build_sha__`. The helper-age and served-process predicates need a running BrainBar "
-    "and are measured only by `scripts/sprint_gate.py` on an installed Mac."
+    "and are measured only by `scripts/sprint_gate.py` on an installed Mac. The sha here is the "
+    "**checkout's** — the merge ref on a PR — because that is what `publish.yml` stamps at release "
+    "time; the PR-head sha this table describes is the one in `commit provenance` above."
 )
 
 
@@ -610,7 +793,16 @@ def measured_signature_row(report: SignatureReport) -> Row:
     return Row("signature_valid", GREEN, value, SIGNATURE_METHOD_MEASURED, SIGNATURE_NOTES)
 
 
-ROW_BUILDERS = (row_provenance, row_mapped_bytes, row_search_latency, row_idle_cpu, row_signature_valid)
+# `row_commit_provenance` leads: every other row's value belongs to the commit it names, so a
+# reader has to see that sha before reading a number measured against it.
+ROW_BUILDERS = (
+    row_commit_provenance,
+    row_provenance,
+    row_mapped_bytes,
+    row_search_latency,
+    row_idle_cpu,
+    row_signature_valid,
+)
 
 
 def collect(probe: Probe, corpus: dict) -> list[Row]:
@@ -627,7 +819,10 @@ def escape_cell(text: str) -> str:
 
 
 def render(rows: list[Row], probe: Probe, run_url: str | None, now: datetime) -> str:
-    head = probe.head_sha[:12] if probe.head_sha else "unknown"
+    # Two shas, labelled, because printing one unlabelled `HEAD` is what made #759's table
+    # unverifiable: the checkout sha is GitHub's merge ref and is on no PR page anywhere.
+    checkout = probe.head_sha[:12] if probe.head_sha else "unknown"
+    measured = f"PR head `{probe.measured_sha[:12]}` · " if probe.measured_sha else ""
     lines = [
         MARKER,
         "### BrainLayer ratchet",
@@ -658,7 +853,7 @@ def render(rows: list[Row], probe: Probe, run_url: str | None, now: datetime) ->
     run = f" · [run]({run_url})" if run_url else ""
     lines += [
         "",
-        f"_Measured on {probe.os_name}/{probe.architecture} · checked-out HEAD `{head}`"
+        f"_Measured on {probe.os_name}/{probe.architecture} · {measured}checkout `{checkout}`"
         f"{run} · updated {now.strftime('%Y-%m-%d %H:%M:%S')} UTC_",
         "",
     ]
@@ -684,12 +879,42 @@ def main(argv: list[str] | None = None) -> int:
         "--signature-unavailable",
         help="Why nobody measured signatures on this run. Renders `n/a — <reason>`.",
     )
+    parser.add_argument(
+        "--measured-sha",
+        help=(
+            "The PR-head commit this run was triggered for (`github.event.pull_request.head.sha`). "
+            "Must be checked out, or be the PR-head parent of the merge ref that is."
+        ),
+    )
+    parser.add_argument(
+        "--pr-head-sha",
+        help=(
+            "The PR's head read LIVE when the table is collected. Passing it asserts this run can "
+            "prove it is current: a mismatch with --measured-sha is RED, never n/a."
+        ),
+    )
+    parser.add_argument(
+        "--pr-head-unresolved",
+        help=(
+            "Why the live PR head could not be read. The run was asked to prove it is current and "
+            "could not, so this renders RED with that reason — it is not a capability gap."
+        ),
+    )
     parser.add_argument("--run-url", help="Link back to the workflow run that produced this table")
     parser.add_argument("--out", type=Path, help="Also write the rendered table here")
     args = parser.parse_args(argv)
 
     corpus = json.loads(CORPUS.read_text(encoding="utf-8"))
-    probe = Probe.detect(corpus, args.wheel, args.wheel_glob, args.signature_report, args.signature_unavailable)
+    probe = Probe.detect(
+        corpus,
+        args.wheel,
+        args.wheel_glob,
+        args.signature_report,
+        args.signature_unavailable,
+        args.measured_sha,
+        args.pr_head_sha,
+        args.pr_head_unresolved,
+    )
     rows = collect(probe, corpus)
     table = render(rows, probe, args.run_url, datetime.now(timezone.utc))
 
