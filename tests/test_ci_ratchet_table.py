@@ -1831,6 +1831,8 @@ def test_a_dotted_key_cannot_alias_a_nested_path() -> None:
     assert ("latency_baseline_ms", "captured_under.x") in paths
     assert ratchet.flatten_baseline({"a": {"b": 1}}) != ratchet.flatten_baseline({"a.b": 1})
     assert ratchet.dotted(("a", "b.c")) == "a.b.c"  # printing is lossy on purpose; comparing is not
+
+
 # --- ratchet (c): the Notes show the margin a row applies, measured or `unmeasured` -------------
 
 
