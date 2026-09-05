@@ -282,6 +282,37 @@ map_changed_files_to_pytests() {
           mapped=1
         fi
         ;;
+      src/brainlayer/index_watchdog.py)
+        # No test_index_watchdog.py exists -- the tests are split unit/boundaryless plus the
+        # CLI's own cap tests -- so the generic module rule below finds nothing and the run
+        # falls open to the full suite.
+        #
+        # ALL THREE must exist to count as mapped, per the rule established for
+        # src/brainlayer/__init__.py above. The three cover different halves and none is
+        # sufficient alone: _unit drives the watchdog on an injected clock and never starts the
+        # CLI; _boundaryless drives the real CLI against stalls that only unwind on interrupt;
+        # test_cli_index_watchdog covers the commit-boundary path the watchdog does not own. A
+        # per-file `mapped=1` would let a renamed suite silently narrow this gate while it still
+        # looked mapped -- partial coverage here is worse than none.
+        watchdog_tests=(
+          "$TEST_ROOT/test_index_watchdog_unit.py"
+          "$TEST_ROOT/test_index_watchdog_boundaryless.py"
+          "$TEST_ROOT/test_cli_index_watchdog.py"
+        )
+        watchdog_complete=1
+        for watchdog_test in "${watchdog_tests[@]}"; do
+          if [ ! -f "$watchdog_test" ]; then
+            watchdog_complete=0
+            break
+          fi
+        done
+        if [ "$watchdog_complete" -eq 1 ]; then
+          for watchdog_test in "${watchdog_tests[@]}"; do
+            append_unique "$watchdog_test"
+          done
+          mapped=1
+        fi
+        ;;
       src/brainlayer/index_new.py)
         for rel in test_source_class.py test_ingest_t3.py test_context_pipeline.py; do
           test_path="$TEST_ROOT/$rel"
@@ -291,7 +322,7 @@ map_changed_files_to_pytests() {
           fi
         done
         ;;
-      tests/*.py|tests/**/*.py)
+      tests/*.py)
         test_path="$TEST_ROOT/${changed#tests/}"
         if [ -f "$test_path" ]; then
           if is_real_db_test_file "$test_path"; then
@@ -321,7 +352,7 @@ map_changed_files_to_pytests() {
     esac
     if [ "$mapped" -eq 0 ]; then
       case "$changed" in
-        src/brainlayer/*.py|src/brainlayer/**/*.py)
+        src/brainlayer/*.py)
           changed_source_unmapped=1
           unmapped_changed_files+=("$changed")
           ;;

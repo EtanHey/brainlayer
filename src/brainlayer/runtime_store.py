@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import apsw
 import sqlite_vec
@@ -20,6 +21,8 @@ from .vector_store import (
     _write_busy_timeout_ms,
 )
 from .writer_telemetry import start_writer_span
+
+logger = logging.getLogger(__name__)
 
 RUNTIME_SCHEMA_CONTRACT_VERSION = 1
 
@@ -402,7 +405,14 @@ class ReadonlyStore(VectorStore):
 class WriterRuntimeStore(VectorStore):
     """Existing-database writer with a bounded, schema-only open path."""
 
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path, *, on_connection: Callable[[apsw.Connection], None] | None = None):
+        """Open the writer.
+
+        ``on_connection`` is handed the connection the moment it exists, BEFORE the schema
+        probe runs any SQL on it. Opening the store is a phase with no cap of its own -- the
+        `brainlayer index` watchdog uses this to attach `sqlite3_interrupt` so a schema probe
+        that runs long can actually be aborted, instead of only alarmed.
+        """
         db_path = Path(db_path)
         if not db_path.exists():
             actual = _fingerprint({"version": RUNTIME_SCHEMA_CONTRACT_VERSION, "missing_database": True})
@@ -421,14 +431,27 @@ class WriterRuntimeStore(VectorStore):
 
         self._acquire_writer_pidfile()
         try:
-            self._init_runtime_db()
+            self._init_runtime_db(on_connection=on_connection)
         except Exception:
             self._release_writer_pidfile()
             raise
 
-    def _init_runtime_db(self) -> None:
+    def _init_runtime_db(self, *, on_connection: Callable[[apsw.Connection], None] | None = None) -> None:
         with _without_connection_maintenance_hooks():
             self.conn = apsw.Connection(str(self.db_path), flags=apsw.SQLITE_OPEN_READWRITE)
+        if on_connection is not None:
+            # Before any SQL below, so the whole probe window is interruptible. A failure here
+            # must not cost us the store -- but it must not be quiet either: the caller loses
+            # its ability to abort this open, which is exactly the fail-open shape the hook
+            # exists to remove. Loud, and the caller's own hook is expected to record it.
+            try:
+                on_connection(self.conn)
+            except Exception as exc:
+                logger.error(
+                    "on_connection hook failed; this open is NOT interruptible: %s: %s",
+                    type(exc).__name__,
+                    exc,
+                )
         try:
             self.conn.setbusytimeout(_write_busy_timeout_ms())
             _load_vector_extension(self.conn)
@@ -487,11 +510,30 @@ class OfflineMigrator(VectorStore):
         super().__init__(path)
 
 
-def open_writer_store(db_path: Path) -> WriterRuntimeStore | VectorStore:
-    """Open the default runtime writer, or the guarded legacy rollback path."""
+def open_writer_store(
+    db_path: Path,
+    *,
+    on_connection: Callable[[apsw.Connection], None] | None = None,
+) -> WriterRuntimeStore | VectorStore:
+    """Open the default runtime writer, or the guarded legacy rollback path.
+
+    ``on_connection`` receives the writer connection as early as the path allows, so a caller
+    holding a deadline can interrupt a long open. The runtime path hands it over before the
+    schema probe; the legacy path can only hand it over once construction returns.
+    """
     mode = os.environ.get("BRAINLAYER_RUNTIME_STORE", "runtime").strip().lower()
     if mode == "runtime":
-        return WriterRuntimeStore(Path(db_path))
+        return WriterRuntimeStore(Path(db_path), on_connection=on_connection)
     if mode == "legacy":
-        return VectorStore(Path(db_path))
+        store = VectorStore(Path(db_path))
+        if on_connection is not None:
+            try:
+                on_connection(store.conn)
+            except Exception as exc:
+                logger.error(
+                    "on_connection hook failed; this open is NOT interruptible: %s: %s",
+                    type(exc).__name__,
+                    exc,
+                )
+        return store
     raise RuntimeStoreModeError("BRAINLAYER_RUNTIME_STORE must be 'runtime' (default) or 'legacy' for rollback")
