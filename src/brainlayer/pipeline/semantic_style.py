@@ -40,12 +40,26 @@ import importlib.util as _importlib_util
 
 HAS_SENTENCE_TRANSFORMERS = _importlib_util.find_spec("sentence_transformers") is not None
 
-try:
-    from sklearn.metrics.pairwise import cosine_similarity
+# Same reasoning for scikit-learn: `from sklearn.metrics.pairwise import ...` costs
+# ~790ms at module load, and pipeline/__init__ puts that on the UserPromptSubmit
+# hook's critical path via correction_detection. Probe, then import at first use
+# inside _assign_topics.
+HAS_SKLEARN = _importlib_util.find_spec("sklearn") is not None
 
-    HAS_SKLEARN = True
-except ImportError:
-    HAS_SKLEARN = False
+# Memoised in a dict rather than a module global so the accessor needs no
+# `global` statement. A concurrent first call may import twice; that is harmless
+# because `from ... import` is idempotent and both callers get the same object.
+_SKLEARN = {"cosine_similarity": None}
+
+
+def _cosine_similarity():
+    """Import sklearn's cosine_similarity on first use and memoise it."""
+    fn = _SKLEARN["cosine_similarity"]
+    if fn is None:
+        from sklearn.metrics.pairwise import cosine_similarity
+
+        fn = _SKLEARN["cosine_similarity"] = cosine_similarity
+    return fn
 
 
 # bge-large for semantic/topic clustering (1024 dims, good multilingual)
@@ -230,7 +244,7 @@ class SemanticStyleAnalyzer:
             best_sim = threshold
 
             for topic, seed_emb in topic_seeds.items():
-                sim = cosine_similarity([emb], [seed_emb])[0][0]
+                sim = _cosine_similarity()([emb], [seed_emb])[0][0]
                 if sim > best_sim:
                     best_sim = sim
                     best_topic = topic
