@@ -1644,8 +1644,38 @@ def test_a_changed_query_list_is_a_baseline_change(tmp_path: Path) -> None:
     assert "`queries`" in result.value
 
 
+def test_a_dotted_key_cannot_alias_a_nested_path(tmp_path: Path) -> None:
+    """Macroscope High on #767: with dotted-string paths, `{"a": {"b": 1}}` and `{"a.b": 1}` flattened
+    to the same key, so a PR could replace a nested value with a colliding dotted key and make the
+    diff empty. Paths are tuples now; the dotted form is only how a change is printed."""
+    nested = {"latency_baseline_ms": {"captured_under": "active_sprint_load"}}
+    aliased = {"latency_baseline_ms": {"captured_under": {"x": 1}, "captured_under.x": 1}}
+    changes = ratchet.baseline_changes(nested, aliased)
+    assert changes, "the alias hid the change"
+    paths = {path for path, _, _ in changes}
+    assert ("latency_baseline_ms", "captured_under") in paths
+    assert ("latency_baseline_ms", "captured_under.x") in paths
+    # ...and through the row: the attested baseline is the nested one, the PR's is the aliased one.
+    corpus = json.loads(json.dumps(CORPUS))
+    corpus["latency_baseline_ms"]["captured_under"] = {"x": 1}
+    corpus["latency_baseline_ms"]["captured_under.x"] = 1
+    assert attestation_row(tmp_path, corpus).status == ratchet.RED
+
+
+def test_a_measured_value_never_licenses_a_path_with_a_dot_inside_a_segment(tmp_path: Path) -> None:
+    """The `measured` map is keyed by dotted strings (the (c) contract), so a segment containing a
+    dot could collide with a genuinely nested measured path. Such a path is treated as unmeasured."""
+    payload = attestation_dict(measured={"thresholds.a.b": 1})
+    corpus = json.loads(json.dumps(CORPUS))
+    corpus["thresholds"]["a.b"] = 1
+    assert attestation_row(tmp_path, corpus, payload).status == ratchet.RED
+    corpus = json.loads(json.dumps(CORPUS))
+    corpus["thresholds"]["a"] = {"b": 1}
+    assert attestation_row(tmp_path, corpus, payload).status == ratchet.GREEN
+
+
 def test_a_boolean_and_a_count_are_different_claims() -> None:
-    assert ratchet.baseline_changes({"a": {"b": 0}}, {"a": {"b": False}}) == [("a.b", 0, False)]
+    assert ratchet.baseline_changes({"a": {"b": 0}}, {"a": {"b": False}}) == [(("a", "b"), 0, False)]
     assert ratchet.baseline_changes({"a": {"b": 1}}, {"a": {"b": 1}}) == []
 
 
@@ -2065,10 +2095,10 @@ def test_baseline_changes_name_every_moved_removed_and_added_path() -> None:
     after["thresholds"]["new_knob"] = 1
     after["queries"] = ["something else"]
     changed = ratchet.baseline_changes(before, after)
-    assert ("latency_baseline_ms.p50", 911.887, 5000.0) in changed
-    assert ("thresholds.cpu_percent", 30, None) in changed
-    assert ("thresholds.new_knob", None, 1) in changed
-    assert [path for path, _, _ in changed if path == "queries"] == ["queries"]
+    assert (("latency_baseline_ms", "p50"), 911.887, 5000.0) in changed
+    assert (("thresholds", "cpu_percent"), 30, None) in changed
+    assert (("thresholds", "new_knob"), None, 1) in changed
+    assert [path for path, _, _ in changed if path == ("queries",)] == [("queries",)]
     assert ratchet.baseline_changes(before, before) == []
 
 
@@ -2228,10 +2258,10 @@ def test_the_workflow_path_the_reader_queries_is_the_writer() -> None:
 def test_a_removed_null_leaf_is_still_a_change() -> None:
     """`.get()` cannot tell a null value from an absent path; membership can (Macroscope, #766)."""
     assert ratchet.baseline_changes({"thresholds": {"cpu_percent": None}}, {"thresholds": {}}) == [
-        ("thresholds.cpu_percent", None, None)
+        (("thresholds", "cpu_percent"), None, None)
     ]
     assert ratchet.baseline_changes({"thresholds": {}}, {"thresholds": {"cpu_percent": None}}) == [
-        ("thresholds.cpu_percent", None, None)
+        (("thresholds", "cpu_percent"), None, None)
     ]
     assert ratchet.baseline_changes({"thresholds": {"cpu_percent": None}}, {"thresholds": {"cpu_percent": None}}) == []
 

@@ -234,20 +234,32 @@ def baseline_digest(view: dict) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def flatten_baseline(value: object, prefix: str = "") -> dict[str, object]:
-    """`{"a": {"b": 1}, "q": [x, y]}` -> `{"a.b": 1, "q": [x, y]}`. Lists stay whole: a query list
-    is one value, and naming index 3 of it would not help a reader."""
+BaselinePath = tuple[str, ...]
+
+
+def flatten_baseline(value: object, prefix: BaselinePath = ()) -> dict[BaselinePath, object]:
+    """`{"a": {"b": 1}, "q": [x, y]}` -> `{("a", "b"): 1, ("q",): [x, y]}`. Lists stay whole: a
+    query list is one value, and naming index 3 of it would not help a reader.
+
+    Tuples, not dotted strings. A key that itself contains a dot (`{"a.b": 1}`) flattened to the
+    same string as the nested `{"a": {"b": 1}}`, so a PR could replace a nested value with a
+    colliding dotted key and make the diff come out empty (Macroscope, #767). A tuple keeps the
+    key boundaries; `dotted()` is only how a path is printed.
+    """
     if isinstance(value, dict):
-        flat: dict[str, object] = {}
+        flat: dict[BaselinePath, object] = {}
         for key, inner in value.items():
-            path = f"{prefix}.{key}" if prefix else str(key)
-            flat.update(flatten_baseline(inner, path))
+            flat.update(flatten_baseline(inner, (*prefix, str(key))))
         return flat
     return {prefix: value}
 
 
-def baseline_changes(reference: dict, candidate: dict) -> list[tuple[str, object, object]]:
-    """Every dotted path whose value differs, as (path, reference value, candidate value).
+def dotted(path: BaselinePath) -> str:
+    return ".".join(path)
+
+
+def baseline_changes(reference: dict, candidate: dict) -> list[tuple[BaselinePath, object, object]]:
+    """Every path whose value differs, as (path, reference value, candidate value).
 
     A missing side is reported as None: a field that vanished from the baseline is as much a change
     as one that moved. `False != 0` here because a boolean and a count are different claims.
@@ -851,8 +863,20 @@ ATTESTATION_NOTES = (
 _UNMEASURED = object()
 
 
-def describe_change(path: str, old: object, new: object) -> str:
-    return f"`{path}` {json.dumps(old)} → {json.dumps(new)}"
+def describe_change(path: BaselinePath, old: object, new: object) -> str:
+    return f"`{dotted(path)}` {json.dumps(old)} → {json.dumps(new)}"
+
+
+def measured_value(attestation: Attestation, path: BaselinePath) -> object:
+    """What the main run measured for `path`, or `_UNMEASURED`.
+
+    The `measured` map is keyed by dotted strings -- that is the contract the margin reader (c)
+    consumes -- so a segment that itself contains a dot could collide with a genuinely nested
+    measured path. Such a path is never matched: it is unmeasured, and a change to it is RED.
+    """
+    if any("." in segment for segment in path):
+        return _UNMEASURED
+    return attestation.measured.get(dotted(path), _UNMEASURED)
 
 
 def attested_row(attestation: Attestation, corpus: dict, base_tip: str | None) -> Row:
@@ -878,7 +902,7 @@ def attested_row(attestation: Attestation, corpus: dict, base_tip: str | None) -
         )
     by_hand = []
     for path, old, new in changes:
-        measured = attestation.measured.get(path, _UNMEASURED)
+        measured = measured_value(attestation, path)
         # Value AND type: `False == 0` in Python, and a measured boolean swapped for a count is a
         # hand edit wearing the measurement's value (Macroscope, #767).
         if measured is _UNMEASURED or measured != new or type(measured) is not type(new):
