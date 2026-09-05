@@ -1463,6 +1463,26 @@ class TestFlushPendingStores:
 # ---------------------------------------------------------------------------
 
 
+def _frozen_monotonic(real_time_module):
+    """The real `time` module with `monotonic()` pinned to one value.
+
+    Everything else (`time.time`, `time.sleep`) delegates, so only the deadline arithmetic in
+    store_handler is affected -- patching the global `time.monotonic` would also freeze asyncio's
+    own clock.
+    """
+    pinned = real_time_module.monotonic()
+
+    class _FrozenClock:
+        def __getattr__(self, name):
+            return getattr(real_time_module, name)
+
+        @staticmethod
+        def monotonic():
+            return pinned
+
+    return _FrozenClock()
+
+
 class TestStoreRetryOnLock:
     """brain_store should queue to JSONL when DB is locked."""
 
@@ -1581,6 +1601,19 @@ class TestStoreRetryOnLock:
         ):
             monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "100")
             monkeypatch.setattr("brainlayer.mcp.store_handler._retry_delay", 0.3)
+            # A FROZEN monotonic clock. With a real one, a pathological stall between the
+            # deadline stamp and the first budget read (store_handler.py:1029-1030) spends the
+            # whole 100ms there, `_remaining_store_busy_budget_ms` raises before `store_memory` is
+            # ever called, and the store defers with attempts == 0 -- passing for the wrong
+            # reason. That is the same not-quite-hermetic timing the sibling test above was fixed
+            # for (#773 round-1 review, low). Frozen, elapsed time cannot shrink the budget: every
+            # read answers 100ms, so machine load is irrelevant and the branch under test is the
+            # delay-vs-remaining one by construction -- int(0.3 * 1000) >= 100.
+            #
+            # 100ms is still the floor, freeze or no freeze: the remaining budget is computed as
+            # `int((deadline - now) * 1000)`, and at a 1ms budget that float lands on 0 even with
+            # a frozen clock. The freeze removes the CLOCK dependence, not the arithmetic.
+            monkeypatch.setattr("brainlayer.mcp.store_handler.time", _frozen_monotonic(time))
             texts, structured = await _store(
                 content="test memory",
                 memory_type="note",
