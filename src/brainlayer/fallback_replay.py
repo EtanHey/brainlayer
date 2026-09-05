@@ -279,6 +279,47 @@ def queue_entry(
     return ReplayResult(path=entry.path, attempted=True, chunk_id=chunk_id, outcome=OUTCOME_DEFERRED)
 
 
+def enqueue_pending_fallbacks(
+    *,
+    gits_root: Path,
+    scope_map: dict[str, str],
+    enqueue_func: Callable[..., Any],
+    replayed_by: str,
+    limit: int,
+) -> dict[str, Any]:
+    """Put up to ``limit`` pending fallback files onto the durable queue.
+
+    The bound is the point. A backlog that grows faster than it drains would be
+    re-enqueued in full on every daemon start, so the sweep takes a fixed batch and
+    reports what it left behind — a partial drain that says so beats a flood.
+
+    Writes go to the queue, never to the DB: the drain stays the single writer, and
+    it is the drain that later marks each file stored.
+    """
+    if limit <= 0:
+        raise ValueError(f"fallback replay limit must be positive, got {limit}")
+
+    inventory = inventory_fallbacks(gits_root.expanduser(), scope_map=scope_map)
+    pending = inventory.pending
+    batch = pending[:limit]
+
+    results = [queue_entry(entry, enqueue_func=enqueue_func, replayed_by=replayed_by) for entry in batch]
+
+    counts: dict[str, int] = {}
+    for result in results:
+        counts[result.outcome] = counts.get(result.outcome, 0) + 1
+
+    return {
+        "pending_before": len(pending),
+        "legacy_count": len(inventory.legacy),
+        "limit": limit,
+        "attempted": len(results),
+        "remaining": max(0, len(pending) - len(results)),
+        "errors": sum(1 for result in results if result.error),
+        "outcome_counts": dict(sorted(counts.items())),
+    }
+
+
 def legacy_entry_from_path(path: Path, *, scope_map: dict[str, str] | None = None) -> FallbackEntry:
     entry = parse_fallback_file(path, scope_map=scope_map or {})
     frontmatter = dict(entry.frontmatter)

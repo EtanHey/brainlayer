@@ -51,6 +51,11 @@ _DEFAULT_MAX_EVENTS_PER_TRANSACTION = 5
 _DEFAULT_BURN_MAX_EVENTS_PER_TRANSACTION = 100
 _DEFAULT_POST_COMMIT_YIELD_MS = 10.0
 _DEFAULT_MAX_ENRICHMENT_FILES_PER_CYCLE = 16
+# How many pending fallback files one daemon start may put on the queue. Bounded so a
+# backlog that outgrows the drain cannot be re-enqueued in full on every restart.
+DEFAULT_FALLBACK_REPLAY_ON_START_LIMIT = 50
+FALLBACK_REPLAY_ON_START_ENV = "BRAINLAYER_FALLBACK_REPLAY_ON_START"
+FALLBACK_REPLAY_ON_START_LIMIT_ENV = "BRAINLAYER_FALLBACK_REPLAY_ON_START_LIMIT"
 _ENRICHMENT_LABEL = "com.brainlayer.enrichment"
 # The post-commit WAL checkpoint is best-effort and must stay non-blocking. A
 # truncating checkpoint can wedge the live writer behind long-lived readers on a
@@ -1744,6 +1749,57 @@ def _write_drain_health(path: Path, *, drain_cycles: int, drained_total: int) ->
     tmp_path.replace(path)
 
 
+def _fallback_replay_on_start_enabled() -> bool:
+    """Default ON. The whole defect was a replay half that never ran by itself."""
+    raw = os.environ.get(FALLBACK_REPLAY_ON_START_ENV)
+    if raw is None:
+        return True
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _fallback_replay_on_start_limit() -> int:
+    raw = os.environ.get(FALLBACK_REPLAY_ON_START_LIMIT_ENV)
+    if raw is None:
+        return DEFAULT_FALLBACK_REPLAY_ON_START_LIMIT
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        logger.warning("Ignoring non-integer %s=%r", FALLBACK_REPLAY_ON_START_LIMIT_ENV, raw)
+        return DEFAULT_FALLBACK_REPLAY_ON_START_LIMIT
+    if value <= 0:
+        logger.warning("Ignoring non-positive %s=%r", FALLBACK_REPLAY_ON_START_LIMIT_ENV, raw)
+        return DEFAULT_FALLBACK_REPLAY_ON_START_LIMIT
+    return value
+
+
+def replay_fallbacks_on_start(*, log_path: Path | None = None) -> dict[str, Any] | None:
+    """Sweep the brain_store fallback queue onto the durable queue, once, at startup.
+
+    Returns the receipt, or None when the sweep is switched off. Enqueue-only: the
+    drain loop that runs next is what commits these and marks the files stored.
+    """
+    if not _fallback_replay_on_start_enabled():
+        return None
+
+    from . import fallback_replay as fallback_replay_module
+    from .queue_io import enqueue_store
+
+    log_path = log_path or _default_log_path()
+    limit = _fallback_replay_on_start_limit()
+    summary = fallback_replay_module.enqueue_pending_fallbacks(
+        gits_root=Path(os.environ.get("BRAINLAYER_FALLBACK_GITS_ROOT") or Path.home() / "Gits"),
+        scope_map=fallback_replay_module.load_scope_map(),
+        enqueue_func=enqueue_store,
+        replayed_by="brainlayer-drain-start",
+        limit=limit,
+    )
+    try:
+        _log(log_path, f"fallback replay on start: {json.dumps(summary, sort_keys=True)}")
+    except OSError:
+        logger.debug("Failed to log fallback replay receipt", exc_info=True)
+    return summary
+
+
 def run_daemon(
     interval: float,
     batch_size: int,
@@ -1752,8 +1808,16 @@ def run_daemon(
     drain_once_fn: Callable[..., int] = drain_once,
     sleep_fn: Callable[[float], None] = time.sleep,
     max_cycles: int | None = None,
+    replay_fallbacks_fn: Callable[[], Any] | None = None,
 ) -> None:
     health_path = health_path or Path(os.environ.get("BRAINLAYER_DRAIN_HEALTH_PATH", str(_default_drain_health_path())))
+    # Once, before the first cycle: whatever the fallback wrote while the DB was
+    # unreachable gets queued, so the replay half no longer waits on a human. A
+    # sweep that fails must never take the drain down with it.
+    try:
+        (replay_fallbacks_fn or replay_fallbacks_on_start)()
+    except Exception:
+        logger.warning("Fallback replay sweep failed at drain start; continuing to drain", exc_info=True)
     drain_cycles = 0
     drained_total = 0
     while True:
