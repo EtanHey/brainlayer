@@ -897,9 +897,11 @@ def margin_notes(probe: Probe, unit: str, keys: dict[str, tuple[str, ...]]) -> t
     for name, key in keys.items():
         try:
             margin = margins.margin_for(list(probe.attestations or ()), key)
-        except margins.AttestationError as error:
+            sentences.append(f"Margin {name}: {margins.describe(margin, unit=unit)}.")
+        except (margins.AttestationError, ValueError) as error:
+            # ValueError is describe()'s refusal of an incomplete measured margin -- unreachable with
+            # today's measured_margin, but this row follows the signature report's never-abort rule.
             return "", f"margin {name}: {error} — this row cannot say what band it applies"
-        sentences.append(f"Margin {name}: {margins.describe(margin, unit=unit)}.")
     return " ".join(sentences), None
 
 
