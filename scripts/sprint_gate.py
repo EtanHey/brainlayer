@@ -432,21 +432,35 @@ def resource_sample_count(thresholds: dict) -> int:
     return math.floor(thresholds["resource_window_seconds"] / thresholds["resource_sample_interval_seconds"]) + 1
 
 
-def check_resource(config: dict) -> dict:
+def resource_samples(config: dict) -> list[dict]:
+    """The replayed samples, or a fresh window of ps samples at the configured interval."""
     samples = config.get("resource_samples")
-    if samples is None:
-        thresholds = config["thresholds"]
-        count = resource_sample_count(thresholds)
-        samples = []
-        for index in range(count):
-            samples.append(ps_sample(config["process_patterns"]))
-            if index + 1 < count:
-                time.sleep(thresholds["resource_sample_interval_seconds"])
+    if samples is not None:
+        return samples
+    thresholds = config["thresholds"]
+    count = resource_sample_count(thresholds)
+    collected = []
+    for index in range(count):
+        collected.append(ps_sample(config["process_patterns"]))
+        if index + 1 < count:
+            time.sleep(thresholds["resource_sample_interval_seconds"])
+    return collected
+
+
+def over_ceiling(cpu: dict[str, float], helper_rss: int, required_missing: list[str], thresholds: dict) -> bool:
+    """The ratified hard budget: any process at or over the CPU ceiling, helper RSS at or over its cap,
+    or a required process missing. Measured directly; never unmeasured."""
+    if any(value >= thresholds["cpu_percent"] for value in cpu.values()):
+        return True
+    return helper_rss >= thresholds["helper_rss_bytes"] or bool(required_missing)
+
+
+def check_resource(config: dict) -> dict:
+    samples = resource_samples(config)
     names = config["process_patterns"]
     cpu = {name: sum(sample[name]["cpu_pct"] for sample in samples) / len(samples) for name in names}
     helper_rss = max(sample["helper"]["rss_bytes"] for sample in samples)
     required_missing = [name for name in config.get("required_processes", []) if not samples[-1][name]["pids"]]
-    thresholds = config["thresholds"]
     described, verdicts = cpu_bands(config, cpu)
     over_band = [name for name, verdict in verdicts.items() if verdict == margins.FAIL]
     details = dict(
@@ -458,14 +472,12 @@ def check_resource(config: dict) -> dict:
         helper_max_rss_bytes=helper_rss,
         required_missing=required_missing,
     )
-    failed = any(value >= thresholds["cpu_percent"] for value in cpu.values()) or bool(over_band)
-    failed = failed or helper_rss >= thresholds["helper_rss_bytes"] or bool(required_missing)
-    if failed:
+    if over_band or over_ceiling(cpu, helper_rss, required_missing, config["thresholds"]):
         return status("resource_budget", False, **details)
     # Same order as check_search (lead review r2): a measured FAIL anywhere wins; only then does a
     # process with no band make the check UNMEASURED -- the ceiling passed, but the check is not
     # fully judged and must say so rather than read as PASS.
-    if any(verdict == margins.UNMEASURED_VERDICT for verdict in verdicts.values()):
+    if margins.UNMEASURED_VERDICT in verdicts.values():
         return unmeasured("resource_budget", **details)
     return status("resource_budget", True, **details)
 
