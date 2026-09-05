@@ -112,6 +112,15 @@ changed_files() {
     printf '%s\n' "$BRAINLAYER_CHANGED_FILES" | tr ',' '\n' | sed '/^$/d'
     return 0
   fi
+  # A TAG push has no branch to diff against: `git push origin v1.5.14` reached this function with
+  # no origin/main relationship worth reading, took the default full scope, and ran all 4,386 tests
+  # on the M4 for a ref whose content is exactly one range. .githooks/pre-push resolves that range
+  # from the pushed ref and hands it over here. The rc is git's, deliberately: a range git cannot
+  # resolve is a scope that was never established, which is not the same thing as an empty one.
+  if [ -n "${BRAINLAYER_CHANGED_FILES_RANGE:-}" ]; then
+    git diff --name-only "$BRAINLAYER_CHANGED_FILES_RANGE"
+    return $?
+  fi
   if git rev-parse --verify origin/main >/dev/null 2>&1; then
     git diff --name-only origin/main...HEAD
     return $?

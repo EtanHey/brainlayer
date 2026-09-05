@@ -15,6 +15,56 @@
 
 set -uo pipefail
 [ ! -f scripts/run_tests.sh ] && { echo "⚠️  no scripts/run_tests.sh — skipping"; exit 0; }
+
+# --- scope a TAG push ---------------------------------------------------------
+# git hands a pre-push hook its refs on STDIN, one line per ref:
+#   <local ref> <local sha> <remote ref> <remote sha>
+# This hook threw that away, so nothing downstream could know a tag was being pushed. A tag has no
+# branch to diff against, so `git push origin v1.5.14` fell through to the DEFAULT scope: the whole
+# 4,386-test suite, on the M4 Etan is working on — exactly what changed-only exists to avoid. A
+# tag's content is one range, previous tag..this tag, so resolve it and say so.
+#
+# Every narrowing here is conservative, and every refusal to narrow is LOUD:
+#   - a branch anywhere in the push wins (it carries changes no tag range covers)
+#   - more than one tag in one push has no single range
+#   - a first tag has no previous tag
+#   - an explicit BRAINLAYER_CHANGED_FILES/_RANGE is the operator's decision, not ours
+# In all four the full suite still runs, and the reason is printed instead of paid for silently.
+tag_count=0
+non_tag_refs=0
+tag_name=""
+if [ ! -t 0 ]; then
+  # `[ ! -t 0 ]` so a hand-run of this hook does not block reading a terminal.
+  while read -r local_ref local_sha _remote_ref _remote_sha; do
+    [ -z "$local_ref" ] && continue
+    case "$local_sha" in
+      # An all-zero LOCAL sha is a DELETION: it ships no content, so there is nothing to test.
+      *[!0]*) ;;
+      *) continue ;;
+    esac
+    case "$local_ref" in
+      refs/tags/*) tag_count=$((tag_count + 1)); tag_name="${local_ref#refs/tags/}" ;;
+      *) non_tag_refs=$((non_tag_refs + 1)) ;;
+    esac
+  done
+fi
+
+if [ "$tag_count" -gt 0 ] && [ "$non_tag_refs" -eq 0 ]; then
+  if [ -n "${BRAINLAYER_CHANGED_FILES:-}" ] || [ -n "${BRAINLAYER_CHANGED_FILES_RANGE:-}" ]; then
+    echo "==> pre-push: tag push with an explicit changed set already set — leaving it alone"
+  elif [ "$tag_count" -ne 1 ]; then
+    echo "WARNING: pre-push: $tag_count tags in one push — no single range to scope from."
+    echo "WARNING: running the FULL suite; push tags one at a time to scope them."
+  elif previous_tag="$(git describe --tags --abbrev=0 "${tag_name}^" 2>/dev/null)" && [ -n "$previous_tag" ]; then
+    echo "==> pre-push: tag $tag_name scoped to $previous_tag..$tag_name (not the full suite)"
+    export BRAINLAYER_PREPUSH_SCOPE=changed-only
+    export BRAINLAYER_CHANGED_FILES_RANGE="$previous_tag..$tag_name"
+  else
+    echo "WARNING: pre-push: tag $tag_name has no previous tag to diff against."
+    echo "WARNING: running the FULL suite. Loud, not narrowed on a guess."
+  fi
+fi
+
 BRAINLAYER_PREPUSH=1 bash scripts/run_tests.sh
 exit_status=$?
 
