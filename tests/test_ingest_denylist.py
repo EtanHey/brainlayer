@@ -240,3 +240,77 @@ def test_explicit_environment_override_can_deny_an_otherwise_allowed_provider(mo
 
     assert is_denylisted(tmp_path / ".codex" / "sessions" / "worker.jsonl")
     assert not is_denylisted(tmp_path / ".gemini" / "sessions" / "worker.jsonl")
+
+
+def test_configured_pattern_match_is_cached_across_polls(monkeypatch, tmp_path):
+    """The glob match is a pure function of (path, patterns, home) -- pay for it once, not every poll.
+
+    Measured on the M4 (2026-09-05) with the deployed 5-pattern BRAINLAYER_INGEST_DENYLIST:
+    one sweep over the 12,125-file corpus costs 0.35s CPU, every 30s poll, forever --
+    60,625 glob expansions and 258,000 recursive `_match_parts` calls whose answers never
+    change while the patterns do not. The per-poll memo added in #759 only stopped the
+    3x-per-poll re-evaluation; the sweep itself still ran on every poll. A changed denylist
+    must still be picked up promptly, which is why the patterns are part of the cache key.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv(
+        BRAINLAYER_INGEST_DENYLIST_ENV,
+        "~/.claude/projects/*/**/subagents/**,~/.cursor/**/agent-transcripts/**",
+    )
+    denylist.clear_pattern_match_cache()
+    path = tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent-1.jsonl"
+
+    calls: list[int] = []
+    real = denylist._match_parts
+
+    def counting(path_parts, pattern_parts):
+        calls.append(1)
+        return real(path_parts, pattern_parts)
+
+    monkeypatch.setattr(denylist, "_match_parts", counting)
+
+    assert is_denylisted(path) is True
+    first = len(calls)
+    assert first > 0, "the first evaluation must actually run the glob match"
+
+    assert is_denylisted(path) is True
+    assert len(calls) == first, "the second evaluation of the same path must not re-run the glob match"
+
+    # A changed denylist is picked up on the very next evaluation -- no restart, no TTL.
+    monkeypatch.setenv(BRAINLAYER_INGEST_DENYLIST_ENV, "~/nowhere/**")
+    assert is_denylisted(path) is False
+    assert len(calls) > first, "new patterns must be evaluated, not served from the old cache entry"
+
+
+def test_directory_is_denylisted_only_when_a_subtree_pattern_covers_all_descendants(monkeypatch, tmp_path):
+    """A directory may be skipped wholesale only if every file under it would be denied.
+
+    On the M4 the deployed denylist ends every pattern in `/**`, and `~/.cursor/projects`
+    alone holds 5,086 directories, 4,315 of them under the 111 `agent-transcripts` dirs the
+    pattern denies. Walking them costs ~1s of kernel time per poll on the efficiency cores
+    to discover files that are then thrown away. A pattern that ends in `**` matches the
+    directory AND everything below it, so the walk can stop there; any other pattern says
+    nothing about descendants and must not prune.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    denylist.clear_pattern_match_cache()
+    transcripts = tmp_path / ".cursor" / "projects" / "repo" / "agent-transcripts"
+    weird_dir = tmp_path / ".codex" / "sessions" / "looks-like-a-file.jsonl"
+
+    monkeypatch.setenv(BRAINLAYER_INGEST_DENYLIST_ENV, "~/.cursor/**/agent-transcripts/**,~/.codex/sessions/*.jsonl")
+    assert denylist.is_directory_denylisted(transcripts) is True
+    assert denylist.is_directory_denylisted(transcripts / "session-1") is True, "descendants are covered too"
+    assert denylist.is_directory_denylisted(tmp_path / ".cursor" / "projects" / "repo") is False, "parent is not"
+    assert denylist.is_directory_denylisted(weird_dir) is False, (
+        "a non-`**` pattern matching a directory's name says nothing about the files inside it"
+    )
+
+
+def test_directory_is_never_denylisted_under_the_default_subagent_policy(monkeypatch, tmp_path):
+    """Without configured patterns, subagent files are judged one by one (attribution), so no
+    directory can be skipped -- ordinary subagents ingest, brain-workers do not, same dir."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv(BRAINLAYER_INGEST_DENYLIST_ENV, raising=False)
+    denylist.clear_pattern_match_cache()
+    subagents = tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents"
+    assert denylist.is_directory_denylisted(subagents) is False
