@@ -744,15 +744,28 @@ class OffsetRegistry:
         """Whether the last prune safely evaluated every tracked root."""
         return self._last_prune_complete
 
-    def has_stale_entries_under(self, parent_dirs: AbstractSet[str], live_files: list[str]) -> bool:
-        """Whether some tracked entry sits directly in one of parent_dirs but is not a live file.
+    def has_stale_entries_under(self, new_dirs: AbstractSet[str], live_files: list[str]) -> bool:
+        """Whether a tracked entry that is not a live file has its parent on the path to one of new_dirs.
 
         That is the one shape a prune could act on that a newly appeared directory can create:
         a returning volume brings its directories back with the deleted files' registry entries
-        still pointing under them. `rpartition`, not pathlib, for the same reason as the caller.
+        still pointing under them. The relation is the one `prune_missing_files` itself uses as
+        live evidence -- `_has_live_parent_evidence` accepts the entry's parent being ANY
+        ancestor of a live file -- so a volume that remounts with live files only in a
+        subdirectory of the stale entry's parent (new dir `r/sub`, stale entry `r/gone.jsonl`)
+        is prunable and must re-trigger too. String prefixes, not pathlib, for the same reason
+        as the caller; new_dirs is small (the directories that appeared since the last poll).
         """
         live = set(live_files)
-        return any(filepath not in live and filepath.rpartition(os.sep)[0] in parent_dirs for filepath in self._data)
+        candidates = tuple(new_dirs)
+        for filepath in self._data:
+            if filepath in live:
+                continue
+            parent = filepath.rpartition(os.sep)[0]
+            prefix = f"{parent}{os.sep}"
+            if any(directory == parent or directory.startswith(prefix) for directory in candidates):
+                return True
+        return False
 
     def prune_missing_files(
         self,
@@ -1880,8 +1893,12 @@ class JSONLWatcher:
             # efficiency cores, more than eight steady polls. The only change that can make a
             # blocked entry prunable is a NEW directory the registry already holds an entry under
             # that is not among the live files (the returning volume). Anything else waits for
-            # the timer. The remembered set moves forward either way, so each new directory is
-            # judged once, not on every poll until the timer fires.
+            # the timer -- and that includes SHRINKAGE of the set, deliberately: when a directory
+            # loses its last live file, nothing under it can be pruned (the prune requires live
+            # evidence in the entry's directory tree, which just disappeared), so a scan now
+            # would find exactly what the next 900 s tick finds. An orphan created that way
+            # waits at most one timer interval. The remembered set moves forward either way, so
+            # each new directory is judged once, not on every poll until the timer fires.
             new_dirs = parent_dirs - self._last_prune_parent_dirs
             self._last_prune_parent_dirs = parent_dirs
             if not new_dirs or not self.registry.has_stale_entries_under(new_dirs, files):

@@ -751,3 +751,73 @@ def test_new_parent_dir_with_no_stale_registry_entries_does_not_retrigger_prune(
     (returned / "live.jsonl").write_text('{"type":"user","message":{"role":"user","content":"hi"}}\n')
     watcher.poll_once()
     assert len(calls) == 2, "a new directory holding a stale registry entry must trigger the prune"
+
+
+def test_prune_retriggers_when_a_returning_volume_has_live_files_only_in_a_subdirectory(tmp_path, monkeypatch):
+    """The stale entry's parent need not itself hold the live file -- an ancestor is enough.
+
+    Round-1 review of #781 (Cursor, medium): `has_stale_entries_under` was direct-parent only,
+    so a volume that remounts with live files only in a subdirectory of the stale entry's
+    parent waited for the 900 s timer. `prune_missing_files` would already have pruned it --
+    `_has_live_parent_evidence` accepts any ancestor of a live file -- so the trigger and the
+    prune disagreed on what counts as evidence. They agree now: a stale entry anywhere under a
+    NEW directory re-triggers the scan.
+    """
+    watcher = _watcher(tmp_path)
+    src = tmp_path / "projects" / "p"
+    src.mkdir()
+    (src / "a.jsonl").write_text('{"type":"user","message":{"role":"user","content":"hi"}}\n')
+
+    calls = []
+
+    def counting_prune(roots, active_files=None):
+        calls.append(1)
+        watcher.registry._last_prune_complete = False
+        return 0
+
+    monkeypatch.setattr(watcher.registry, "prune_missing_files", counting_prune)
+    watcher.poll_once()
+    assert len(calls) == 1
+
+    returned = tmp_path / "projects" / "r"
+    watcher.registry.set(str(returned / "gone.jsonl"), 10, 1)
+    (returned / "sub").mkdir(parents=True)
+    (returned / "sub" / "live.jsonl").write_text('{"type":"user","message":{"role":"user","content":"hi"}}\n')
+    watcher.poll_once()
+    assert len(calls) == 2, "a stale entry under an ancestor of the new directory must trigger the prune"
+
+
+def test_parent_set_shrinkage_waits_for_the_prune_timer(tmp_path, monkeypatch):
+    """Losing the last live file in a directory does not re-trigger the scan. Deliberate.
+
+    Round-1 review of #781 (Cursor, medium) asked for this trade to be explicit: before cut 5
+    any change to the parent-dir set re-ran the registry scan, shrinkage included. Shrinkage
+    can never make an orphan prunable -- `prune_missing_files` requires live evidence in the
+    entry's directory tree, and the directory just lost its last live file -- so the scan
+    would find nothing it could not find at the next 900 s tick. The orphan therefore waits
+    at most one timer interval. That is the trade, and this test pins it.
+    """
+    watcher = _watcher(tmp_path)
+    src = tmp_path / "projects" / "p"
+    src.mkdir()
+    (src / "a.jsonl").write_text('{"type":"user","message":{"role":"user","content":"hi"}}\n')
+    other = tmp_path / "projects" / "q"
+    other.mkdir()
+    doomed = other / "b.jsonl"
+    doomed.write_text('{"type":"user","message":{"role":"user","content":"hi"}}\n')
+
+    calls = []
+
+    def counting_prune(roots, active_files=None):
+        calls.append(1)
+        watcher.registry._last_prune_complete = False
+        return 0
+
+    monkeypatch.setattr(watcher.registry, "prune_missing_files", counting_prune)
+    watcher.poll_once()
+    assert len(calls) == 1
+
+    doomed.unlink()  # the parent-dir set shrinks by one
+    watcher.poll_once()
+    assert len(calls) == 1, "shrinkage must wait for the timer; the scan could prune nothing here"
+
