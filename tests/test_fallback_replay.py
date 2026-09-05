@@ -1560,7 +1560,8 @@ def test_replay_cli_allows_a_noncanonical_db_with_a_matching_gits_root(tmp_path,
     entry = parse_fallback_file(_pending_file(repo, "docs.local/decisions/copy.md"))
 
     class DummyStore:
-        def close(self):
+        @staticmethod
+        def close():
             pass
 
     class DummyInventory:
@@ -1604,7 +1605,8 @@ def test_replay_cli_allows_the_canonical_db_with_the_real_gits_root(tmp_path, mo
     entry = parse_fallback_file(_pending_file(repo, "docs.local/decisions/prod.md"))
 
     class DummyStore:
-        def close(self):
+        @staticmethod
+        def close():
             pass
 
     class DummyInventory:
@@ -1885,7 +1887,8 @@ def test_main_allows_the_production_drain_shape_end_to_end(tmp_path, monkeypatch
     entry = parse_fallback_file(_pending_file(repo, "docs.local/decisions/prod.md"))
 
     class DummyStore:
-        def close(self):
+        @staticmethod
+        def close():
             pass
 
     class DummyInventory:

@@ -95,22 +95,7 @@ def main() -> int:
             result["error"] = "--legacy requires queued replay"
             _emit(result, as_json=args.json, receipt_path=args.receipt)
             return 2
-        legacy_entries = []
-        legacy_replayed = []
-        if args.legacy:
-            for path in inventory.legacy:
-                try:
-                    legacy_entries.append(legacy_entry_from_path(path, scope_map=scope_map))
-                except Exception as exc:
-                    legacy_replayed.append(
-                        ReplayResult(
-                            path=path,
-                            attempted=True,
-                            chunk_id=None,
-                            error=f"legacy parse failed: {exc}",
-                            outcome=OUTCOME_ERROR,
-                        )
-                    )
+        legacy_entries, legacy_replayed = _parse_legacy_entries(inventory.legacy if args.legacy else [], scope_map)
         replay_count = len(pending) + (len(legacy_entries) if args.legacy else 0)
         if replay_count > args.limit:
             result["error"] = f"replay_count {replay_count} exceeds --limit {args.limit}"
@@ -195,6 +180,27 @@ def _names_real_gits_tree(target: Path, real_gits_root: Path) -> bool:
     except OSError:
         # Cannot prove it is outside the real tree => cannot prove it is safe. Fail closed.
         return True
+
+
+def _parse_legacy_entries(paths: list, scope_map: dict) -> tuple[list, list[ReplayResult]]:
+    """Parse legacy fallback files, turning each unparseable one into its own ERROR receipt row
+    rather than losing the whole batch to one bad file."""
+    entries: list = []
+    failures: list[ReplayResult] = []
+    for path in paths:
+        try:
+            entries.append(legacy_entry_from_path(path, scope_map=scope_map))
+        except Exception as exc:
+            failures.append(
+                ReplayResult(
+                    path=path,
+                    attempted=True,
+                    chunk_id=None,
+                    error=f"legacy parse failed: {exc}",
+                    outcome=OUTCOME_ERROR,
+                )
+            )
+    return entries, failures
 
 
 def _replay_via_queue(
