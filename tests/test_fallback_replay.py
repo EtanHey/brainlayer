@@ -9,6 +9,20 @@ import threading
 from pathlib import Path
 
 
+class ClosableStoreStub:
+    """Stand-in for `VectorStore` in CLI tests: records that the caller closed it.
+
+    Not a `pass` body — DeepSource PTC-W0049 flags empty function bodies, and a stub that remembers
+    being closed is a more useful double than one that silently does nothing.
+    """
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
 def _git_env() -> dict[str, str]:
     return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
 
@@ -951,11 +965,6 @@ def test_replay_cli_apply_exits_nonzero_when_any_replay_errors(tmp_path, monkeyp
     path = _pending_file(repo, "docs.local/decisions/failing.md")
     entry = parse_fallback_file(path)
 
-    class DummyStore:
-        @staticmethod
-        def close():
-            pass
-
     monkeypatch.setattr(module, "load_scope_map", lambda _path: {})
 
     class DummyInventory:
@@ -964,7 +973,7 @@ def test_replay_cli_apply_exits_nonzero_when_any_replay_errors(tmp_path, monkeyp
         pending = [entry]
 
     monkeypatch.setattr(module, "inventory_fallbacks", lambda _root, *, scope_map: DummyInventory())
-    monkeypatch.setattr(module, "VectorStore", lambda _db: DummyStore())
+    monkeypatch.setattr(module, "VectorStore", lambda _db: ClosableStoreStub())
     monkeypatch.setattr(module, "store_memory", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("store failed")))
     monkeypatch.setattr(
         sys,
@@ -1236,11 +1245,6 @@ def test_replay_cli_receipt_counts_outcomes_and_persists_to_disk(tmp_path, monke
     outcomes = {stored.path: "stored", duplicate.path: "duplicate"}
     seen: list[str] = []
 
-    class DummyStore:
-        @staticmethod
-        def close():
-            pass
-
     def fake_store(**kwargs):
         outcome = outcomes[Path(kwargs["fallback_source_path"])]
         seen.append(outcome)
@@ -1254,7 +1258,7 @@ def test_replay_cli_receipt_counts_outcomes_and_persists_to_disk(tmp_path, monke
     receipt_path = tmp_path / "receipts" / "replay.json"
     monkeypatch.setattr(module, "load_scope_map", lambda _path: {})
     monkeypatch.setattr(module, "inventory_fallbacks", lambda _root, *, scope_map: DummyInventory())
-    monkeypatch.setattr(module, "VectorStore", lambda _db: DummyStore())
+    monkeypatch.setattr(module, "VectorStore", lambda _db: ClosableStoreStub())
     monkeypatch.setattr(module, "store_memory", fake_store)
     monkeypatch.setattr(
         sys,
@@ -1471,11 +1475,6 @@ def test_replay_cli_exits_nonzero_and_records_unresolved_in_the_receipt(tmp_path
     _git_init(repo)
     entry = parse_fallback_file(_pending_file(repo, "docs.local/decisions/weird.md"))
 
-    class DummyStore:
-        @staticmethod
-        def close():
-            pass
-
     class DummyInventory:
         structured = [entry]
         legacy = []
@@ -1484,7 +1483,7 @@ def test_replay_cli_exits_nonzero_and_records_unresolved_in_the_receipt(tmp_path
     receipt_path = tmp_path / "receipts" / "unresolved.json"
     monkeypatch.setattr(module, "load_scope_map", lambda _path: {})
     monkeypatch.setattr(module, "inventory_fallbacks", lambda _root, *, scope_map: DummyInventory())
-    monkeypatch.setattr(module, "VectorStore", lambda _db: DummyStore())
+    monkeypatch.setattr(module, "VectorStore", lambda _db: ClosableStoreStub())
     monkeypatch.setattr(module, "store_memory", lambda **_kwargs: {"id": "chunk-w", "outcome": "banana"})
     monkeypatch.setattr(
         sys,
