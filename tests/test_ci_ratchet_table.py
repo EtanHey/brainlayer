@@ -1572,3 +1572,18 @@ def test_main_without_attestations_renders_unmeasured_and_stays_green(tmp_path: 
     monkeypatch.setattr(ratchet, "git_tree_dirty", lambda: False)
     assert ratchet.main([]) == 0
     assert "margin unmeasured — 0 of the 5 attested green main runs" in capsys.readouterr().out
+
+
+def test_a_malformed_measured_value_in_the_store_turns_the_margin_rows_red_not_a_crash(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    # Reviewer finding (Macroscope, #765): a bad `measured` value used to surface inside margin_notes
+    # and abort the whole table. Validation at load makes it an attestation problem, rendered RED.
+    monkeypatch.setattr(ratchet, "git_tree_dirty", lambda: False)
+    documents = list(real_history())
+    documents[3]["measured"]["latency_baseline_ms.p50"] = "fast"
+    root = write_attestations(tmp_path / "attestations", tuple(documents))
+    assert ratchet.main(["--attestations", str(root)]) == 1
+    captured = capsys.readouterr()
+    assert "::error title=Ratchet RED: search p50/p95::" in captured.err
+    assert "measured.latency_baseline_ms.p50` is 'fast'" in captured.out
