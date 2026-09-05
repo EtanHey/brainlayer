@@ -370,3 +370,54 @@ def test_margin_for_refuses_duplicate_runs_even_when_handed_an_inline_list() -> 
     with pytest.raises(margins.AttestationError) as error:
         margins.margin_for([one] * 5, margins.LATENCY_P50)
     assert "appears twice" in str(error.value)
+
+
+def test_the_same_run_as_int_and_as_string_is_one_run(tmp_path: Path) -> None:
+    # Lead review r2 (#763): validate_run_id accepts 1000 and "1000"; keyed raw, they were two runs.
+    documents = p50_runs([100.0] * 5)
+    documents[4]["run_id"] = str(documents[0]["run_id"])
+    with pytest.raises(margins.AttestationError) as error:
+        margins.margin_for(documents, margins.LATENCY_P50)
+    assert "1000 appears twice" in str(error.value)
+    root = write_store(tmp_path / "attestations", p50_runs([100.0] * 5))
+    (root / "copy").mkdir()
+    (root / "copy" / margins.ATTESTATION_FILENAME).write_text(
+        json.dumps({**margins.load_attestations(root / "1000" / margins.ATTESTATION_FILENAME)[0], "run_id": "1000"}),
+        encoding="utf-8",
+    )
+    with pytest.raises(margins.AttestationError):
+        margins.load_attestations(root)
+
+
+def test_judge_names_all_three_states_so_no_consumer_can_collapse_unmeasured_into_pass() -> None:
+    # Lead review r2 (#763): `within(...) is False` as a RED test lets None (unmeasured) read as not-RED.
+    # judge() returns a string per state; a consumer has to place UNMEASURED somewhere on purpose.
+    measured = margins.measured_margin([294.0, 282.0, 283.0, 298.0, 281.0])
+    assert margins.judge(measured, 300.0) == margins.PASS
+    assert margins.judge(measured, 400.0) == margins.FAIL
+    assert margins.judge(margins.measured_margin([1.0, 2.0]), 400.0) == margins.UNMEASURED_VERDICT
+    assert {margins.PASS, margins.FAIL, margins.UNMEASURED_VERDICT} == set(margins.VERDICTS)
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), -1.0])
+def test_a_live_value_that_is_not_a_measurement_is_refused_not_judged(bad) -> None:
+    # Lead review r2 (#763, low): nan <= limit is False, so a probe failure read as a regression.
+    measured = margins.measured_margin([294.0, 282.0, 283.0, 298.0, 281.0])
+    with pytest.raises(ValueError):
+        margins.within(measured, bad)
+    with pytest.raises(ValueError):
+        margins.judge(measured, bad)
+
+
+def test_a_walk_error_is_a_refusal_without_relying_on_unix_permissions(tmp_path: Path, monkeypatch) -> None:
+    # Lead review r2 (#763, low): the chmod test skips as root; this pins the onerror path portably.
+    root = write_store(tmp_path / "attestations", p50_runs([100.0] * 5))
+
+    def walk_that_fails(top, onerror=None, **_kwargs):
+        onerror(OSError("simulated dead mount"))
+        return iter(())
+
+    monkeypatch.setattr(margins.os, "walk", walk_that_fails)
+    with pytest.raises(margins.AttestationError) as error:
+        margins.load_attestations(root)
+    assert "could not be scanned (OSError)" in str(error.value)

@@ -54,6 +54,13 @@ MINIMUM_RUNS = 5
 CONFIDENCE = 0.99
 MEASURED = "measured"
 UNMEASURED = "unmeasured"
+# The three things a consumer may say about one live value against one band. Strings, not a
+# bool-or-None: `within(...) is False` as the RED test lets an unmeasured None read as "not RED"
+# (lead review, #763). With judge() a consumer has to place UNMEASURED somewhere on purpose.
+PASS = "PASS"
+FAIL = "FAIL"
+UNMEASURED_VERDICT = "UNMEASURED"
+VERDICTS = (PASS, FAIL, UNMEASURED_VERDICT)
 SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 
 # The attestation document (b) publishes, schema 1. Only the fields this reader depends on are
@@ -180,10 +187,24 @@ def measured_margin(values: list[float], *, minimum_runs: int = MINIMUM_RUNS) ->
 
 
 def within(margin: Margin, value: float) -> bool | None:
-    """True/False against a measured band; None when there is no band to be within."""
+    """True/False against a measured band; None when there is no band to be within.
+
+    The live value is checked too: ``nan <= limit`` is False, which would report a probe failure as a
+    regression. A value that is not a measurement is refused (ValueError), not judged.
+    """
+    if not honest_value(value):
+        raise ValueError(f"live value {value!r} is not a finite non-negative measurement; refusing to judge it")
     if margin.kind != MEASURED or margin.limit is None:
         return None
     return value <= margin.limit
+
+
+def judge(margin: Margin, value: float) -> str:
+    """PASS, FAIL or UNMEASURED -- the fail-closed form of ``within`` for consumers that render verdicts."""
+    verdict = within(margin, value)
+    if verdict is None:
+        return UNMEASURED_VERDICT
+    return PASS if verdict else FAIL
 
 
 def describe(margin: Margin, *, unit: str) -> str:
@@ -242,9 +263,11 @@ def reject_duplicate_runs(attestations: list[dict], sources: list[str] | None = 
     have passed validate_attestation, which is what makes `run_id` a usable key.
     """
     names = sources or [f"document {index}" for index in range(len(attestations))]
-    seen: dict[object, str] = {}
+    seen: dict[str, str] = {}
     for name, attestation in zip(names, attestations, strict=True):
-        run_id = attestation["run_id"]
+        # Keyed on str(run_id): validate_run_id accepts both 1000 and "1000", and a GitHub run id that
+        # arrives as an int from the writer and as a string from a fixture is still one run (lead review).
+        run_id = str(attestation["run_id"]).strip()
         if run_id in seen:
             raise AttestationError(f"attested run {run_id} appears twice: `{seen[run_id]}` and `{name}`")
         seen[run_id] = name
