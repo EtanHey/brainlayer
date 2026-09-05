@@ -642,8 +642,6 @@ def test_queue_entry_serializes_yaml_date_tags_for_jsonl_queue(tmp_path):
     calls = []
 
     def jsonl_enqueue_func(**kwargs):
-        import json
-
         json.dumps(kwargs)
         calls.append(kwargs)
 
@@ -954,7 +952,8 @@ def test_replay_cli_apply_exits_nonzero_when_any_replay_errors(tmp_path, monkeyp
     entry = parse_fallback_file(path)
 
     class DummyStore:
-        def close(self):
+        @staticmethod
+        def close():
             pass
 
     monkeypatch.setattr(module, "load_scope_map", lambda _path: {})
@@ -1238,7 +1237,8 @@ def test_replay_cli_receipt_counts_outcomes_and_persists_to_disk(tmp_path, monke
     seen: list[str] = []
 
     class DummyStore:
-        def close(self):
+        @staticmethod
+        def close():
             pass
 
     def fake_store(**kwargs):
@@ -1472,7 +1472,8 @@ def test_replay_cli_exits_nonzero_and_records_unresolved_in_the_receipt(tmp_path
     entry = parse_fallback_file(_pending_file(repo, "docs.local/decisions/weird.md"))
 
     class DummyStore:
-        def close(self):
+        @staticmethod
+        def close():
             pass
 
     class DummyInventory:
