@@ -1083,31 +1083,43 @@ def attestation_payload(
     }
 
 
-def attest_refusal(args: argparse.Namespace, probe: Probe, rows: list[Row], corpus: dict) -> str | None:
-    """Why this run may NOT publish an attestation. None means it may.
-
-    Every rule here mirrors one in `read_attestation`: an attestation this writer publishes and
-    that reader rejects would leave main's baseline unusable for every PR (Macroscope, #766).
-    """
+def attest_flags_problem(args: argparse.Namespace) -> str | None:
+    """The four attest flags are one claim; a partial or dishonest set is refused before anything runs."""
     flags = (args.attest_out, args.main_sha, args.run_id, args.run_attempt)
-    if all(flag is None for flag in flags):
-        return None
     if any(flag is None for flag in flags):
         return "`--attest-out`, `--main-sha`, `--run-id` and `--run-attempt` go together; an attestation names its run"
     if not (honest_run_number(args.run_id) and honest_run_number(args.run_attempt)):
         return f"`--run-id {args.run_id}` / `--run-attempt {args.run_attempt}` are not positive integers; no reader would accept them"
+    if SHA_PATTERN.fullmatch(args.main_sha) is None:
+        return f"`--main-sha {args.main_sha}` is not a 40-hex commit sha"
+    return None
+
+
+def attest_checkout_problem(main_sha: str, probe: Probe, rows: list[Row], corpus: dict) -> str | None:
+    """Whether THIS checkout may stand behind an attestation for `main_sha`."""
+    if probe.head_sha != main_sha:
+        # The attestation says "main at this sha saw this baseline". If the checkout is not that
+        # sha, the claim is about a commit this run does not have.
+        return f"`--main-sha {main_sha[:12]}` is not the checkout (`{probe.head_sha[:12] if probe.head_sha else 'unknown'}`)"
     missing = [field for field in BASELINE_FIELDS if field not in corpus]
     if missing:
         return f"the checkout's baseline lacks {', '.join(f'`{field}`' for field in missing)}; an attestation must cover every baseline field"
-    if SHA_PATTERN.fullmatch(args.main_sha) is None:
-        return f"`--main-sha {args.main_sha}` is not a 40-hex commit sha"
-    if probe.head_sha != args.main_sha:
-        # The attestation says "main at this sha saw this baseline". If the checkout is not that
-        # sha, the claim is about a commit this run does not have.
-        return f"`--main-sha {args.main_sha[:12]}` is not the checkout (`{probe.head_sha[:12] if probe.head_sha else 'unknown'}`)"
     if any(row.status == RED for row in rows):
         return "a run with a RED row does not attest; the finding comes first"
     return None
+
+
+def attest_refusal(args: argparse.Namespace, probe: Probe, rows: list[Row], corpus: dict) -> str | None:
+    """Why this run may NOT publish an attestation. None means it may.
+
+    Every rule here mirrors one in `read_attestation`: an attestation this writer publishes and
+    that reader rejects would leave main's baseline unusable for every PR (Macroscope, #766). The
+    checks live in the two helpers above so that adding a rule does not keep pushing one
+    function's branch count up -- the same split `select_signature` made.
+    """
+    if all(flag is None for flag in (args.attest_out, args.main_sha, args.run_id, args.run_attempt)):
+        return None
+    return attest_flags_problem(args) or attest_checkout_problem(args.main_sha, probe, rows, corpus)
 
 
 def main(argv: list[str] | None = None) -> int:
