@@ -703,3 +703,51 @@ def test_discovery_walks_non_default_patterns_with_scandir_and_prunes_them_too(t
     assert found == [str(transcript)], "only files under an agent-transcripts directory match the pattern"
     assert str(root / "denied-repo") not in opened, "the denylisted repo subtree must be pruned, not walked"
     assert watcher.provider_for_file(str(transcript)) == "cursor-agent-transcripts"
+
+
+def test_new_parent_dir_with_no_stale_registry_entries_does_not_retrigger_prune(tmp_path, monkeypatch):
+    """A brand-new directory holding only live files is not evidence that anything can be pruned.
+
+    The re-trigger existed for a returning volume: entries the registry could not evaluate
+    because their root was unmounted become prunable once a live file appears beside them.
+    But it fired on ANY change to the set of parent directories -- and on a live machine a
+    new session directory appears every few minutes. Each firing is the full registry scan
+    (15,619 entries; 1.4-2s on a performance core, 5.6-8s on the efficiency cores the
+    LaunchAgent runs on) and it can never complete, because 8,744 entries are orphans. In the
+    600s soak of the otherwise-fixed watcher it fired inside the first two minutes and cost
+    more than eight steady polls. The trigger now asks the only question that matters: does
+    the registry hold an entry under one of the NEW directories that is not among the live
+    files? If not, the timer is the retry.
+    """
+    watcher = _watcher(tmp_path)
+    src = tmp_path / "projects" / "p"
+    src.mkdir()
+    (src / "a.jsonl").write_text('{"type":"user","message":{"role":"user","content":"hi"}}\n')
+
+    calls = []
+
+    def counting_prune(roots, active_files=None):
+        calls.append(1)
+        watcher.registry._last_prune_complete = False  # orphans present: never completes
+        return 0
+
+    monkeypatch.setattr(watcher.registry, "prune_missing_files", counting_prune)
+
+    watcher.poll_once()
+    assert len(calls) == 1, "first poll should attempt the prune"
+
+    # A new session directory with a new live transcript -- the everyday case.
+    new_dir = tmp_path / "projects" / "q"
+    new_dir.mkdir()
+    (new_dir / "b.jsonl").write_text('{"type":"user","message":{"role":"user","content":"hi"}}\n')
+    watcher.poll_once()
+    assert len(calls) == 1, "a new directory with only live files must not re-run the registry scan"
+
+    # A new directory the registry already has a now-missing entry under -- the returning-volume
+    # case the re-trigger exists for -- still fires immediately, without waiting for the timer.
+    returned = tmp_path / "projects" / "r"
+    watcher.registry.set(str(returned / "gone.jsonl"), 10, 1)
+    returned.mkdir()
+    (returned / "live.jsonl").write_text('{"type":"user","message":{"role":"user","content":"hi"}}\n')
+    watcher.poll_once()
+    assert len(calls) == 2, "a new directory holding a stale registry entry must trigger the prune"

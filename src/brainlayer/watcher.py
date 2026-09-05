@@ -744,6 +744,16 @@ class OffsetRegistry:
         """Whether the last prune safely evaluated every tracked root."""
         return self._last_prune_complete
 
+    def has_stale_entries_under(self, parent_dirs: AbstractSet[str], live_files: list[str]) -> bool:
+        """Whether some tracked entry sits directly in one of parent_dirs but is not a live file.
+
+        That is the one shape a prune could act on that a newly appeared directory can create:
+        a returning volume brings its directories back with the deleted files' registry entries
+        still pointing under them. `rpartition`, not pathlib, for the same reason as the caller.
+        """
+        live = set(live_files)
+        return any(filepath not in live and filepath.rpartition(os.sep)[0] in parent_dirs for filepath in self._data)
+
     def prune_missing_files(
         self,
         active_roots: list[Path],
@@ -1863,8 +1873,19 @@ class JSONLWatcher:
         # lint here would have cost 22ms per poll in the loop this PR just optimised.
         parent_dirs = frozenset(filepath.rpartition(os.sep)[0] for filepath in files)
         timer_elapsed = time.monotonic() - self._last_offset_prune_attempt >= self.offset_prune_retry_interval_s
-        if parent_dirs == self._last_prune_parent_dirs and not timer_elapsed:
-            return
+        if not timer_elapsed and self._last_prune_parent_dirs is not None:
+            # A changed parent-dir set used to re-trigger the scan on its own. On a live machine
+            # that is every new session directory -- another agent opening a worktree fired it
+            # inside the first two minutes of the 600s soak, at 7.4 CPU-seconds on the
+            # efficiency cores, more than eight steady polls. The only change that can make a
+            # blocked entry prunable is a NEW directory the registry already holds an entry under
+            # that is not among the live files (the returning volume). Anything else waits for
+            # the timer. The remembered set moves forward either way, so each new directory is
+            # judged once, not on every poll until the timer fires.
+            new_dirs = parent_dirs - self._last_prune_parent_dirs
+            self._last_prune_parent_dirs = parent_dirs
+            if not new_dirs or not self.registry.has_stale_entries_under(new_dirs, files):
+                return
 
         self._last_offset_prune_attempt = time.monotonic()
         self._last_prune_parent_dirs = parent_dirs
