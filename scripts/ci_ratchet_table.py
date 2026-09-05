@@ -25,6 +25,15 @@ whether it still described the branch. This row names the PR-head commit the che
 goes RED when it is no longer the PR's head, because a table measured on a superseded commit must
 announce that rather than sit there looking current.
 
+The **baseline** every comparison reads -- the ``queries``, ``latency_baseline_ms`` and ``thresholds``
+fields of ``tests/fixtures/sprint_gate/corpus.json`` -- gets a store outside the PR tree here: on every
+push to ``main``, ``ratchet-attest.yml`` runs this collector with ``--attest-out`` and publishes what
+that main commit's baseline IS, plus every value the run measured, as the ``ratchet-attestation``
+artifact (``attestation_payload`` below; ``read_attestation`` is its reader). A ``pull_request`` run
+holds ``contents: read`` and cannot upload into another run's artifacts, which is what makes the
+artifact a reference a PR cannot edit. The row that compares a PR's baseline against it is the
+next slice; this one is the writer and the schema.
+
 Two rows have a runner-side method. ``provenance`` measures in-process on the ubuntu job.
 ``signature_valid`` is measured by the separate macOS parity job in ``ratchet.yml``, which installs
 the published tap keg and runs ``scripts/release-verify-signatures.sh`` against it; that job hands
@@ -42,6 +51,7 @@ from __future__ import annotations
 
 import argparse
 import glob as glob_module
+import hashlib
 import json
 import os
 import platform
@@ -56,7 +66,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-CORPUS = ROOT / "tests" / "fixtures" / "sprint_gate" / "corpus.json"
+CORPUS_RELATIVE = Path("tests") / "fixtures" / "sprint_gate" / "corpus.json"
+CORPUS = ROOT / CORPUS_RELATIVE
+
+# The fields of corpus.json that ARE the baseline: what a gate compares a measurement against. The
+# rest of the file (socket path, process patterns, machine target, timeouts) is configuration that
+# ordinary review covers; freezing it behind a measurement nobody can make would be a lock with no
+# key. `queries` is in, because the queries define what the latency baseline measured.
+BASELINE_FIELDS = ("queries", "latency_baseline_ms", "thresholds")
+
+# Where an attested baseline lives, and the only writer of it: a `push`/`workflow_dispatch` run of
+# this workflow on `main`. ratchet.yml reads the artifact back through the Actions API.
+ATTEST_WORKFLOW = ".github/workflows/ratchet-attest.yml"
+ATTESTATION_ARTIFACT = "ratchet-attestation"
+ATTESTATION_SCHEMA = 1
 
 # The sticky-comment anchor. .github/workflows/ratchet.yml greps for this exact string to decide
 # update-vs-create, so one PR can only ever carry one of these comments; tests pin them together.
@@ -166,6 +189,142 @@ class Probe:
             signature_unavailable=signature.unavailable,
             signature_problem=signature.problem,
         )
+
+
+# --------------------------------------------------------------------------------------------
+# Baseline attestation
+# --------------------------------------------------------------------------------------------
+
+
+def baseline_view(corpus: dict) -> dict:
+    """The baseline fields of corpus.json, and nothing else -- see BASELINE_FIELDS."""
+    return {field: corpus[field] for field in BASELINE_FIELDS if field in corpus}
+
+
+def baseline_digest(view: dict) -> str:
+    # Canonical JSON, so a reformat of the fixture is not a baseline change; the field diff below
+    # is what names a real one.
+    canonical = json.dumps(view, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+BaselinePath = tuple[str, ...]
+
+
+def flatten_baseline(value: object, prefix: BaselinePath = ()) -> dict[BaselinePath, object]:
+    """`{"a": {"b": 1}, "q": [x, y]}` -> `{("a", "b"): 1, ("q",): [x, y]}`. Lists stay whole: a
+    query list is one value, and naming index 3 of it would not help a reader.
+
+    Tuples, not dotted strings. A key that itself contains a dot (`{"a.b": 1}`) flattened to the
+    same string as the nested `{"a": {"b": 1}}`, so a PR could replace a nested value with a
+    colliding dotted key and make the diff come out empty (Macroscope, #767). A tuple keeps the
+    key boundaries; `dotted()` is only how a path is printed.
+    """
+    if isinstance(value, dict):
+        flat: dict[BaselinePath, object] = {}
+        for key, inner in value.items():
+            flat.update(flatten_baseline(inner, (*prefix, str(key))))
+        return flat
+    return {prefix: value}
+
+
+def dotted(path: BaselinePath) -> str:
+    return ".".join(path)
+
+
+def baseline_changes(reference: dict, candidate: dict) -> list[tuple[BaselinePath, object, object]]:
+    """Every path whose value differs, as (path, reference value, candidate value).
+
+    A missing side is reported as None: a field that vanished from the baseline is as much a change
+    as one that moved. `False != 0` here because a boolean and a count are different claims.
+    """
+    before, after = flatten_baseline(reference), flatten_baseline(candidate)
+    changed = []
+    for path in sorted(set(before) | set(after)):
+        if path not in before or path not in after:
+            # Membership, not `.get()`: a leaf whose value IS null and a leaf that is gone both
+            # `.get()` to None, and the second is a change (Macroscope, #766).
+            changed.append((path, before.get(path), after.get(path)))
+            continue
+        old, new = before[path], after[path]
+        if old != new or type(old) is not type(new):
+            changed.append((path, old, new))
+    return changed
+
+
+@dataclass(frozen=True)
+class Attestation:
+    """What a main run published about the baseline: the values it saw, and the ones it measured."""
+
+    run_id: int
+    run_attempt: int
+    main_sha: str
+    measured_at: str
+    baseline: dict
+    digest: str
+    # Dotted baseline path -> the value that run MEASURED for it. This is the legitimate path for a
+    # baseline to move: a PR may set a field to exactly what main measured, and nothing else. Empty
+    # today, and honestly so: no runner-side collector measures any baseline field yet, so today no
+    # PR can move one -- the key to this lock is a collector, not a hand.
+    measured: dict[str, object]
+
+
+def honest_run_number(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def read_attestation(path: Path) -> tuple[Attestation | None, str | None]:
+    """Load a main run's attestation, or say why it cannot be trusted.
+
+    Every failure returns a reason rather than raising, on the same rule as the signature report:
+    a crash would cost the whole table over one file the collector was handed. Every check here is
+    a check on the ARTIFACT's shape; whether the run that published it was really a main run is
+    settled in ratchet.yml against the Actions API, before this file is ever handed over.
+    """
+    if not path.is_file():
+        return None, f"`--attestation {path}` is not a file — the main attestation was promised and not delivered"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        return None, f"the main attestation could not be read ({type(error).__name__}) — the baseline is unattested"
+    if not isinstance(payload, dict):
+        return None, f"the main attestation is a JSON {type(payload).__name__}, not an object"
+    if payload.get("schema") != ATTESTATION_SCHEMA:
+        return (
+            None,
+            f"the main attestation carries schema {payload.get('schema')!r}; this collector reads {ATTESTATION_SCHEMA}",
+        )
+    run_id, attempt = payload.get("run_id"), payload.get("run_attempt")
+    if not (honest_run_number(run_id) and honest_run_number(attempt)):
+        return None, f"the main attestation names no honest run (run_id {run_id!r}, attempt {attempt!r})"
+    main_sha = payload.get("main_sha")
+    if not isinstance(main_sha, str) or SHA_PATTERN.fullmatch(main_sha) is None:
+        return None, f"the main attestation's `main_sha` {main_sha!r} is not a 40-hex commit sha"
+    baseline, digest, measured = payload.get("baseline"), payload.get("baseline_sha256"), payload.get("measured")
+    if not isinstance(baseline, dict) or set(baseline) != set(BASELINE_FIELDS):
+        # Exactly the baseline fields: a configuration key inside is not a baseline, and a MISSING
+        # field is a reference that does not cover what it claims to (Macroscope, #766).
+        return None, "the main attestation's `baseline` is not an object of exactly the baseline fields"
+    if digest != baseline_digest(baseline):
+        # The digest is what the GREEN message quotes, so it has to be the digest OF this baseline.
+        return (
+            None,
+            "the main attestation's `baseline_sha256` does not match its own `baseline` — the artifact is inconsistent",
+        )
+    if not isinstance(measured, dict):
+        return None, f"the main attestation's `measured` is a {type(measured).__name__}, not an object"
+    return (
+        Attestation(
+            run_id=run_id,
+            run_attempt=attempt,
+            main_sha=main_sha,
+            measured_at=str(payload.get("measured_at", "")).strip(),
+            baseline=baseline,
+            digest=digest,
+            measured={str(key): value for key, value in measured.items()},
+        ),
+        None,
+    )
 
 
 @dataclass(frozen=True)
@@ -892,6 +1051,89 @@ def render(rows: list[Row], probe: Probe, run_url: str | None, now: datetime) ->
     return "\n".join(lines)
 
 
+# --------------------------------------------------------------------------------------------
+# Writing an attestation (main runs only)
+# --------------------------------------------------------------------------------------------
+
+
+def row_measurement(row: Row, probe: Probe) -> dict | None:
+    """The numeric payload behind a row, for the run history a margin can be derived from.
+
+    Only a row that measured counts carries one; a status string is not a measurement. Today that
+    is `signature_valid`, and only when the macOS parity job ran.
+    """
+    if row.name == "signature_valid" and probe.signature is not None and probe.signature.status == SIGNATURE_MEASURED:
+        return {"valid": probe.signature.valid, "invalid": probe.signature.invalid}
+    return None
+
+
+def attestation_payload(
+    rows: list[Row], probe: Probe, corpus: dict, main_sha: str, run_id: int, run_attempt: int, now: datetime
+) -> dict:
+    view = baseline_view(corpus)
+    return {
+        "schema": ATTESTATION_SCHEMA,
+        "run_id": run_id,
+        "run_attempt": run_attempt,
+        "main_sha": main_sha,
+        "measured_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "workflow": ATTEST_WORKFLOW,
+        "baseline": view,
+        "baseline_sha256": baseline_digest(view),
+        # Dotted baseline path -> value this run measured. Empty until a runner-side collector
+        # exists for a baseline field; a PR may only move a field to a value listed here.
+        "measured": {},
+        "rows": {
+            row.name: {
+                "status": row.status,
+                "value": row.value,
+                "method": row.method,
+                "measurement": row_measurement(row, probe),
+            }
+            for row in rows
+        },
+    }
+
+
+def attest_flags_problem(args: argparse.Namespace) -> str | None:
+    """The four attest flags are one claim; a partial or dishonest set is refused before anything runs."""
+    flags = (args.attest_out, args.main_sha, args.run_id, args.run_attempt)
+    if any(flag is None for flag in flags):
+        return "`--attest-out`, `--main-sha`, `--run-id` and `--run-attempt` go together; an attestation names its run"
+    if not (honest_run_number(args.run_id) and honest_run_number(args.run_attempt)):
+        return f"`--run-id {args.run_id}` / `--run-attempt {args.run_attempt}` are not positive integers; no reader would accept them"
+    if SHA_PATTERN.fullmatch(args.main_sha) is None:
+        return f"`--main-sha {args.main_sha}` is not a 40-hex commit sha"
+    return None
+
+
+def attest_checkout_problem(main_sha: str, probe: Probe, rows: list[Row], corpus: dict) -> str | None:
+    """Whether THIS checkout may stand behind an attestation for `main_sha`."""
+    if probe.head_sha != main_sha:
+        # The attestation says "main at this sha saw this baseline". If the checkout is not that
+        # sha, the claim is about a commit this run does not have.
+        return f"`--main-sha {main_sha[:12]}` is not the checkout (`{probe.head_sha[:12] if probe.head_sha else 'unknown'}`)"
+    missing = [field for field in BASELINE_FIELDS if field not in corpus]
+    if missing:
+        return f"the checkout's baseline lacks {', '.join(f'`{field}`' for field in missing)}; an attestation must cover every baseline field"
+    if any(row.status == RED for row in rows):
+        return "a run with a RED row does not attest; the finding comes first"
+    return None
+
+
+def attest_refusal(args: argparse.Namespace, probe: Probe, rows: list[Row], corpus: dict) -> str | None:
+    """Why this run may NOT publish an attestation. None means it may.
+
+    Every rule here mirrors one in `read_attestation`: an attestation this writer publishes and
+    that reader rejects would leave main's baseline unusable for every PR (Macroscope, #766). The
+    checks live in the two helpers above so that adding a rule does not keep pushing one
+    function's branch count up -- the same split `select_signature` made.
+    """
+    if all(flag is None for flag in (args.attest_out, args.main_sha, args.run_id, args.run_attempt)):
+        return None
+    return attest_flags_problem(args) or attest_checkout_problem(args.main_sha, probe, rows, corpus)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--wheel", type=Path, help="Wheel built from the checked-out tree (provenance row)")
@@ -934,6 +1176,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--run-url", help="Link back to the workflow run that produced this table")
     parser.add_argument("--out", type=Path, help="Also write the rendered table here")
+    attest = parser.add_argument_group(
+        "attesting (main runs only)",
+        "Write this run's view of the baseline as an attestation. All four flags go together, the "
+        "checkout must BE --main-sha, and a run with a RED row writes nothing.",
+    )
+    attest.add_argument("--attest-out", type=Path, help="Where to write attestation.json")
+    attest.add_argument("--main-sha", help="The main commit this run was triggered for (`github.sha` on a push)")
+    attest.add_argument("--run-id", type=int, help="`github.run_id`")
+    attest.add_argument("--run-attempt", type=int, help="`github.run_attempt`")
     args = parser.parse_args(argv)
 
     corpus = json.loads(CORPUS.read_text(encoding="utf-8"))
@@ -948,7 +1199,8 @@ def main(argv: list[str] | None = None) -> int:
         args.pr_head_unresolved,
     )
     rows = collect(probe, corpus)
-    table = render(rows, probe, args.run_url, datetime.now(timezone.utc))
+    now = datetime.now(timezone.utc)
+    table = render(rows, probe, args.run_url, now)
 
     if args.out:
         args.out.write_text(table, encoding="utf-8")
@@ -956,6 +1208,13 @@ def main(argv: list[str] | None = None) -> int:
     for row in rows:
         if row.status == RED:
             print(f"::error title=Ratchet RED: {row.name}::{row.value}", file=sys.stderr)
+    refusal = attest_refusal(args, probe, rows, corpus)
+    if refusal is not None:
+        print(f"::error title=Ratchet attestation not written::{refusal}", file=sys.stderr)
+        return 1
+    if args.attest_out is not None:
+        payload = attestation_payload(rows, probe, corpus, args.main_sha, args.run_id, args.run_attempt, now)
+        args.attest_out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     # n/a never fails the build; RED always does -- a row nobody has to clear is decoration.
     return 1 if any(row.status == RED for row in rows) else 0
 
