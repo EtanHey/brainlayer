@@ -16,7 +16,11 @@ behind, which is what most of these tests pin down.
 
 import math
 import os
+import sqlite3
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
+import brainlayer.watcher as watcher_module
 from brainlayer.watcher import JSONLWatcher, WatchRoot
 
 
@@ -233,7 +237,6 @@ def test_denylist_is_evaluated_once_per_file_per_poll(tmp_path, monkeypatch):
         (src / name).write_text('{"type":"user","message":{"role":"user","content":"hi"}}\n')
 
     calls = []
-    import brainlayer.watcher as watcher_module
 
     real = watcher_module.is_denylisted
 
@@ -344,7 +347,6 @@ def test_deployed_poll_interval_is_batched_at_30s_or_more():
     """
     import inspect
     import plistlib
-    from pathlib import Path
 
     from brainlayer.cli import watch
 
@@ -424,7 +426,6 @@ def _run_watch_command(tmp_path, monkeypatch, poll_interval: float) -> dict:
 
     import brainlayer.deploy_drift as deploy_drift
     import brainlayer.parent_death as parent_death
-    import brainlayer.watcher as watcher_module
     from brainlayer.cli import watch
 
     monkeypatch.setenv("BRAINLAYER_DB", str(tmp_path / "watch-cli.db"))
@@ -475,3 +476,388 @@ def test_watch_command_leaves_a_conforming_poll_argument_alone(tmp_path, monkeyp
     """Same path, legal input: the clamp must not rewrite an operator's deliberate value."""
     built = _run_watch_command(tmp_path, monkeypatch, 120.0)
     assert built["poll_interval_s"] == 120.0, f"legal --poll 120 became {built['poll_interval_s']}"
+
+
+# ── Per-poll costs that scale with the corpus, not with new bytes (2026-09-05) ──────────
+#
+# Measured on the M4 with the real corpus (12,125 files on disk, 4,994 tracked, 16 GB DB),
+# running as the LaunchAgent does -- `ProcessType=Background`, which macOS schedules onto the
+# four efficiency cores. One steady-state poll_once cost 4.4-5.2 CPU-seconds there (1.0-1.2s
+# on a performance core), of which: discovery walk ~1.6s, denylist glob matching ~1.8s, the
+# health probe's COUNT over every realtime_watcher row ~1.3s. The pipeline itself (classify,
+# chunk, scrub, insert) cost 0.9s across the whole 10-minute soak. The tests below pin the
+# shape of the three fixes; the soak in the PR body is the proof they were enough.
+
+
+def _iso(epoch: int, offset_hours: int = 0) -> str:
+    """created_at as the watcher writes it, optionally in a non-UTC offset."""
+    tz = timezone(timedelta(hours=offset_hours))
+    stamp = datetime.fromtimestamp(epoch, tz).isoformat(timespec="milliseconds")  # ...T09:01:00.000-05:00
+    return stamp.replace("+00:00", "Z")
+
+
+def _probe_watcher(tmp_path, db_path):
+    return _watcher(tmp_path, db_path=db_path)
+
+
+def test_db_realtime_insert_probe_walks_indexed_ranges_not_the_source_index(tmp_path):
+    """The health probe must be bounded by the window, not by the size of the table.
+
+    `COUNT(*) ... WHERE source = 'realtime_watcher' AND COALESCE(ingested_at, strftime(created_at)) >= ?`
+    can only use idx_chunks_source: it visits every one of the 451,000 realtime rows on the
+    real DB (0.33s, every poll) to count the ~50 written in the last minute. Splitting the
+    COALESCE into its two branches lets each use a range index -- ingested_at for current
+    rows, created_at for the legacy NULL-ingested_at rows -- and the same window then costs
+    3ms. The `+column` markers stop the planner from falling back to the source index.
+    Semantics are unchanged: the counted set is identical to the COALESCE form, including a
+    legacy row whose created_at carries a non-UTC offset.
+    """
+    db_path = tmp_path / "brainlayer.db"
+    window = 1_700_000_000
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE chunks (id INTEGER PRIMARY KEY, source TEXT, ingested_at INTEGER, created_at TEXT)")
+        conn.execute("CREATE INDEX idx_chunks_source ON chunks(source)")
+        conn.execute("CREATE INDEX idx_chunks_ingested_at ON chunks(ingested_at)")
+        conn.execute("CREATE INDEX idx_chunks_created ON chunks(created_at)")  # the name vector_store.py creates
+        conn.executemany(
+            "INSERT INTO chunks (source, ingested_at, created_at) VALUES (?, ?, ?)",
+            [
+                ("realtime_watcher", window + 5, _iso(0)),  # counted: ingested in window, created_at irrelevant
+                ("realtime_watcher", window - 5, _iso(window + 999)),  # not counted: ingested before the window
+                ("realtime_watcher", None, _iso(window + 60)),  # counted: legacy row created in the window
+                ("realtime_watcher", None, _iso(window + 60, offset_hours=-5)),  # counted: same instant, -05:00
+                ("realtime_watcher", None, _iso(window - 60)),  # not counted: legacy row before the window
+                ("import", window + 5, _iso(window + 5)),  # not counted: other source
+                ("import", None, _iso(window + 5)),  # not counted: other source, legacy
+            ],
+        )
+        conn.commit()
+
+    watcher = _probe_watcher(tmp_path, db_path)
+    watcher._health_window_started_epoch = window
+    with sqlite3.connect(db_path) as conn:
+        # The invariant is query-level: the split probe counts exactly what the original
+        # COALESCE statement counted, on the same rows, for the same window.
+        coalesce_count = conn.execute(
+            """
+            SELECT COUNT(*) FROM chunks
+            WHERE source = 'realtime_watcher'
+              AND COALESCE(ingested_at, CAST(strftime('%s', created_at) AS INTEGER)) >= ?
+            """,
+            (window,),
+        ).fetchone()[0]
+    assert coalesce_count == 3, "fixture sanity: the COALESCE form counts the three rows in the window"
+    assert watcher._db_realtime_inserts_since_window_start() == coalesce_count
+
+    with sqlite3.connect(db_path) as conn:
+        statements = watcher_module.realtime_insert_probe_statements(window)
+        assert len(statements) == 2, "one indexed statement per COALESCE branch"
+        for sql, params in statements:
+            plan = " ".join(str(row[3]) for row in conn.execute("EXPLAIN QUERY PLAN " + sql, params))
+            assert "idx_chunks_source" not in plan, f"probe still walks the source index: {plan}"
+            assert "idx_chunks_ingested_at" in plan or "idx_chunks_created" in plan, f"probe is unindexed: {plan}"
+
+
+def test_db_realtime_insert_probe_trusts_liveness_evidence_without_scanning_chunks(tmp_path):
+    """When the drain has written liveness rows for this window, the chunks table is not touched.
+
+    The liveness count already won whenever it was non-zero; the chunk scan was paid first
+    and then thrown away. Here there is no chunks table at all, so a probe that still
+    scanned it would come back None (db_probe_failed) instead of the liveness count.
+    """
+    db_path = tmp_path / "brainlayer.db"
+    window = 1_700_000_000
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "CREATE TABLE watcher_liveness_events (id INTEGER PRIMARY KEY AUTOINCREMENT, chunk_id TEXT, ingested_at INTEGER)"
+        )
+        conn.executemany(
+            "INSERT INTO watcher_liveness_events (chunk_id, ingested_at) VALUES (?, ?)",
+            [("a", window + 1), ("b", window + 2), ("c", window - 1)],
+        )
+        conn.commit()
+
+    watcher = _probe_watcher(tmp_path, db_path)
+    watcher._health_window_started_epoch = window
+    assert watcher._db_realtime_inserts_since_window_start() == 2
+
+
+def test_discovery_matches_glob_semantics_without_a_pathlib_glob_per_root(tmp_path, monkeypatch):
+    """Discovery must find exactly what `base.glob('**/*.jsonl')` + `is_file()` found, cheaper.
+
+    The pathlib walk cost ~2.4 million pathlib calls per poll over the real corpus (three
+    syscalls and several Path objects per file). An os.scandir walk keeps the semantics --
+    directory symlinks are not followed, file symlinks are, dotfiles match, the suffix match
+    is case-sensitive, the recorded stat is the target's -- at one stat per file.
+    """
+    root = tmp_path / "projects"
+    (root / "p1" / "s1" / "subagents").mkdir(parents=True)
+    (root / "p2").mkdir()
+    for rel in ("p1/a.jsonl", "p1/s1/b.jsonl", "p1/s1/subagents/agent-1.jsonl", "p2/c.jsonl", "p2/.hidden.jsonl"):
+        (root / rel).write_text('{"id":"x"}\n')
+    (root / "p2" / "notes.txt").write_text("not a transcript\n")
+    (root / "p2" / "UPPER.JSONL").write_text('{"id":"upper"}\n')
+    (root / "p2" / "link-to-p1").symlink_to(root / "p1", target_is_directory=True)
+    (root / "p2" / "link-file.jsonl").symlink_to(root / "p1" / "a.jsonl")
+    (root / "p2" / "dangling.jsonl").symlink_to(root / "missing.jsonl")
+    (root / "stray.jsonl").write_text('{"id":"top-level, not under a project dir"}\n')
+
+    expected = sorted(
+        str(f) for base in root.iterdir() if base.is_dir() for f in base.glob("**/*.jsonl") if f.is_file()
+    )
+    assert str(root / "p2" / "link-file.jsonl") in expected and str(root / "p2" / ".hidden.jsonl") in expected
+    assert not any("link-to-p1" in path for path in expected)
+
+    def no_glob(self, pattern, *args, **kwargs):
+        raise AssertionError(f"discovery must not fall back to pathlib glob for {pattern!r}")
+
+    monkeypatch.setattr(Path, "glob", no_glob)
+    watcher = _watcher(tmp_path)
+    found = watcher._discover_jsonl_files()
+
+    assert sorted(found) == expected
+    for path in found:
+        st = os.stat(path)  # follows symlinks, exactly as Path.stat() did
+        assert watcher._current_file_stats[path] == (st.st_mtime, st.st_size, st.st_ino)
+        assert watcher._file_providers[path] == "claude"
+    mtimes = [watcher._current_file_stats[path][0] for path in found]
+    assert mtimes == sorted(mtimes, reverse=True), "newest files first, as before"
+
+
+def test_discovery_does_not_descend_into_denylisted_subtrees(tmp_path, monkeypatch):
+    """A directory every file of which is denylisted is not opened at all.
+
+    Real numbers behind this: the deployed `~/.cursor/**/agent-transcripts/**` pattern denies
+    4,302 files spread over 4,315 directories; discovery still scandir'd every one of them
+    on every poll (and, for that root, through pathlib's two-`**` glob), then asked the
+    denylist about each file. Skipping the subtree at the `agent-transcripts` directory is
+    the difference between ~5,100 and ~470 directory reads per poll.
+    """
+    root = tmp_path / "cursor-projects"
+    kept = root / "repo" / "notes"
+    denied = root / "repo" / "agent-transcripts" / "session-1"
+    kept.mkdir(parents=True)
+    denied.mkdir(parents=True)
+    (kept / "keep.jsonl").write_text('{"id":"keep"}\n')
+    (denied / "agent.jsonl").write_text('{"id":"denied"}\n')
+    monkeypatch.setenv("BRAINLAYER_INGEST_DENYLIST", f"{root}/**/agent-transcripts/**")
+    import brainlayer.ingest_denylist as denylist_module
+
+    denylist_module.clear_pattern_match_cache()
+
+    opened: list[str] = []
+    real_scandir = os.scandir
+
+    def recording_scandir(path="."):
+        opened.append(str(path))
+        return real_scandir(path)
+
+    monkeypatch.setattr(watcher_module.os, "scandir", recording_scandir)
+
+    watcher = JSONLWatcher(
+        watch_roots=[WatchRoot("cursor-agent-transcripts", root, "**/*.jsonl")],
+        registry_path=tmp_path / "offsets.json",
+        on_flush=lambda items: None,
+        health_path=tmp_path / "health.json",
+    )
+    found = watcher._discover_jsonl_files()
+
+    assert found == [str(kept / "keep.jsonl")]
+    assert str(root / "repo" / "agent-transcripts") not in opened, "the denylisted subtree was still walked"
+    assert str(denied) not in opened
+    assert str(kept) in opened
+
+
+def test_discovery_walks_non_default_patterns_with_scandir_and_prunes_them_too(tmp_path, monkeypatch):
+    """The cursor root's `**/agent-transcripts/**/*.jsonl` pattern gets the same walk and the same pruning.
+
+    pathlib's glob was the fallback for any non-default pattern, and that fallback cannot
+    skip a subtree. The scandir walk matches file paths against the pattern with the same
+    `**`-aware part matcher the denylist uses, so every root is walked once, cheaply, and a
+    denylisted subtree is skipped regardless of the root's own pattern.
+    """
+    root = tmp_path / "cursor-projects"
+    transcript = root / "repo" / "agent-transcripts" / "session-1" / "session-1.jsonl"
+    stray = root / "repo" / "other" / "stray.jsonl"
+    denied = root / "denied-repo" / "agent-transcripts" / "session-2" / "session-2.jsonl"
+    for path in (transcript, stray, denied):
+        path.parent.mkdir(parents=True)
+        path.write_text('{"id":"x"}\n')
+    monkeypatch.setenv("BRAINLAYER_INGEST_DENYLIST", f"{root}/denied-repo/**")
+    import brainlayer.ingest_denylist as denylist_module
+
+    denylist_module.clear_pattern_match_cache()
+
+    def no_glob(self, pattern, *args, **kwargs):
+        raise AssertionError(f"discovery must not fall back to pathlib glob for {pattern!r}")
+
+    monkeypatch.setattr(Path, "glob", no_glob)
+    opened: list[str] = []
+    real_scandir = os.scandir
+
+    def recording_scandir(path="."):
+        opened.append(str(path))
+        return real_scandir(path)
+
+    monkeypatch.setattr(watcher_module.os, "scandir", recording_scandir)
+
+    watcher = JSONLWatcher(
+        watch_roots=[WatchRoot("cursor-agent-transcripts", root, "**/agent-transcripts/**/*.jsonl")],
+        registry_path=tmp_path / "offsets.json",
+        on_flush=lambda items: None,
+        health_path=tmp_path / "health.json",
+    )
+    found = watcher._discover_jsonl_files()
+
+    assert found == [str(transcript)], "only files under an agent-transcripts directory match the pattern"
+    assert str(root / "denied-repo") not in opened, "the denylisted repo subtree must be pruned, not walked"
+    assert watcher.provider_for_file(str(transcript)) == "cursor-agent-transcripts"
+
+
+def test_new_parent_dir_with_no_stale_registry_entries_does_not_retrigger_prune(tmp_path, monkeypatch):
+    """A brand-new directory holding only live files is not evidence that anything can be pruned.
+
+    The re-trigger existed for a returning volume: entries the registry could not evaluate
+    because their root was unmounted become prunable once a live file appears beside them.
+    But it fired on ANY change to the set of parent directories -- and on a live machine a
+    new session directory appears every few minutes. Each firing is the full registry scan
+    (15,619 entries; 1.4-2s on a performance core, 5.6-8s on the efficiency cores the
+    LaunchAgent runs on) and it can never complete, because 8,744 entries are orphans. In the
+    600s soak of the otherwise-fixed watcher it fired inside the first two minutes and cost
+    more than eight steady polls. The trigger now asks the only question that matters: does
+    the registry hold an entry under one of the NEW directories that is not among the live
+    files? If not, the timer is the retry.
+    """
+    watcher = _watcher(tmp_path)
+    src = tmp_path / "projects" / "p"
+    src.mkdir()
+    (src / "a.jsonl").write_text('{"type":"user","message":{"role":"user","content":"hi"}}\n')
+
+    calls = []
+
+    def counting_prune(roots, active_files=None):
+        calls.append(1)
+        watcher.registry._last_prune_complete = False  # orphans present: never completes
+        return 0
+
+    monkeypatch.setattr(watcher.registry, "prune_missing_files", counting_prune)
+
+    watcher.poll_once()
+    assert len(calls) == 1, "first poll should attempt the prune"
+
+    # A new session directory with a new live transcript -- the everyday case.
+    new_dir = tmp_path / "projects" / "q"
+    new_dir.mkdir()
+    (new_dir / "b.jsonl").write_text('{"type":"user","message":{"role":"user","content":"hi"}}\n')
+    watcher.poll_once()
+    assert len(calls) == 1, "a new directory with only live files must not re-run the registry scan"
+
+    # A new directory the registry already has a now-missing entry under -- the returning-volume
+    # case the re-trigger exists for -- still fires immediately, without waiting for the timer.
+    returned = tmp_path / "projects" / "r"
+    watcher.registry.set(str(returned / "gone.jsonl"), 10, 1)
+    returned.mkdir()
+    (returned / "live.jsonl").write_text('{"type":"user","message":{"role":"user","content":"hi"}}\n')
+    watcher.poll_once()
+    assert len(calls) == 2, "a new directory holding a stale registry entry must trigger the prune"
+
+
+def test_prune_retriggers_when_a_returning_volume_has_live_files_only_in_a_subdirectory(tmp_path, monkeypatch):
+    """The stale entry's parent need not itself hold the live file -- an ancestor is enough.
+
+    Round-1 review of #781 (Cursor, medium): `has_stale_entries_under` was direct-parent only,
+    so a volume that remounts with live files only in a subdirectory of the stale entry's
+    parent waited for the 900 s timer. `prune_missing_files` would already have pruned it --
+    `_has_live_parent_evidence` accepts any ancestor of a live file -- so the trigger and the
+    prune disagreed on what counts as evidence. They agree now: a stale entry anywhere under a
+    NEW directory re-triggers the scan.
+    """
+    watcher = _watcher(tmp_path)
+    src = tmp_path / "projects" / "p"
+    src.mkdir()
+    (src / "a.jsonl").write_text('{"type":"user","message":{"role":"user","content":"hi"}}\n')
+
+    calls = []
+
+    def counting_prune(roots, active_files=None):
+        calls.append(1)
+        watcher.registry._last_prune_complete = False
+        return 0
+
+    monkeypatch.setattr(watcher.registry, "prune_missing_files", counting_prune)
+    watcher.poll_once()
+    assert len(calls) == 1
+
+    returned = tmp_path / "projects" / "r"
+    watcher.registry.set(str(returned / "gone.jsonl"), 10, 1)
+    (returned / "sub").mkdir(parents=True)
+    (returned / "sub" / "live.jsonl").write_text('{"type":"user","message":{"role":"user","content":"hi"}}\n')
+    watcher.poll_once()
+    assert len(calls) == 2, "a stale entry under an ancestor of the new directory must trigger the prune"
+
+
+def test_parent_set_shrinkage_waits_for_the_prune_timer(tmp_path, monkeypatch):
+    """Losing the last live file in a directory does not re-trigger the scan. Deliberate.
+
+    Round-1 review of #781 (Cursor, medium) asked for this trade to be explicit: before cut 5
+    any change to the parent-dir set re-ran the registry scan, shrinkage included. Shrinkage
+    can never make an orphan prunable -- `prune_missing_files` requires live evidence in the
+    entry's directory tree, and the directory just lost its last live file -- so the scan
+    would find nothing it could not find at the next 900 s tick. The orphan therefore waits
+    at most one timer interval. That is the trade, and this test pins it.
+    """
+    watcher = _watcher(tmp_path)
+    src = tmp_path / "projects" / "p"
+    src.mkdir()
+    (src / "a.jsonl").write_text('{"type":"user","message":{"role":"user","content":"hi"}}\n')
+    other = tmp_path / "projects" / "q"
+    other.mkdir()
+    doomed = other / "b.jsonl"
+    doomed.write_text('{"type":"user","message":{"role":"user","content":"hi"}}\n')
+
+    calls = []
+
+    def counting_prune(roots, active_files=None):
+        calls.append(1)
+        watcher.registry._last_prune_complete = False
+        return 0
+
+    monkeypatch.setattr(watcher.registry, "prune_missing_files", counting_prune)
+    watcher.poll_once()
+    assert len(calls) == 1
+
+    doomed.unlink()  # the parent-dir set shrinks by one
+    watcher.poll_once()
+    assert len(calls) == 1, "shrinkage must wait for the timer; the scan could prune nothing here"
+
+
+def test_discovery_does_not_enter_a_directory_symlink_even_for_a_literal_pattern_segment(tmp_path):
+    """Pins the one stated narrowing vs pathlib.glob.
+
+    Round-1 review of #781 (Cursor, low): pathlib.glob would step into a directory symlink whose
+    name matched a literal segment (`agent-transcripts`); the scandir walk never follows
+    directory symlinks, so transcripts reachable only through such a symlink are not
+    discovered. Default `**/*.jsonl` roots are unaffected (pathlib skipped symlink recursion
+    for `**` too). Real files under a real `agent-transcripts` directory are still found.
+    """
+    root = tmp_path / "cursor-projects"
+    real = root / "repo-a" / "agent-transcripts" / "s1"
+    real.mkdir(parents=True)
+    (real / "s1.jsonl").write_text('{"id":"real"}\n')
+    elsewhere = tmp_path / "outside" / "transcripts" / "s2"
+    elsewhere.mkdir(parents=True)
+    (elsewhere / "s2.jsonl").write_text('{"id":"via-symlink"}\n')
+    (root / "repo-b").mkdir()
+    (root / "repo-b" / "agent-transcripts").symlink_to(elsewhere.parent, target_is_directory=True)
+
+    pattern = "**/agent-transcripts/**/*.jsonl"
+    assert any("s2.jsonl" in str(f) for f in root.glob(pattern)), "pathlib.glob does enter the symlink"
+
+    watcher = JSONLWatcher(
+        watch_roots=[WatchRoot("cursor-agent-transcripts", root, pattern)],
+        registry_path=tmp_path / "offsets.json",
+        on_flush=lambda items: None,
+        health_path=tmp_path / "health.json",
+    )
+    found = watcher._discover_jsonl_files()
+    assert found == [str(real / "s1.jsonl")], "the scandir walk does not follow the directory symlink -- by design"

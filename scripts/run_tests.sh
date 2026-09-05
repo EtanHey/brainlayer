@@ -112,6 +112,15 @@ changed_files() {
     printf '%s\n' "$BRAINLAYER_CHANGED_FILES" | tr ',' '\n' | sed '/^$/d'
     return 0
   fi
+  # A TAG push has no branch to diff against: `git push origin v1.5.14` reached this function with
+  # no origin/main relationship worth reading, took the default full scope, and ran all 4,386 tests
+  # on the M4 for a ref whose content is exactly one range. .githooks/pre-push resolves that range
+  # from the pushed ref and hands it over here. The rc is git's, deliberately: a range git cannot
+  # resolve is a scope that was never established, which is not the same thing as an empty one.
+  if [ -n "${BRAINLAYER_CHANGED_FILES_RANGE:-}" ]; then
+    git diff --name-only "$BRAINLAYER_CHANGED_FILES_RANGE"
+    return $?
+  fi
   if git rev-parse --verify origin/main >/dev/null 2>&1; then
     git diff --name-only origin/main...HEAD
     return $?
@@ -308,6 +317,14 @@ if [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ -n "$changed_files_scop
   echo
   exit_status=1
   pytest_unit_cmd=()
+elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ "$changed_files_seen" -eq 0 ] && [ -n "${BRAINLAYER_PREPUSH_TAG:-}" ]; then
+  # A RELEASE TAG is the one caller for whom the skip below is fail-open. Before tag scoping existed
+  # a tag push ran the whole suite; a bump whose range maps nothing must not end up gating nothing
+  # at all. So for a tag -- and only for a tag -- an empty measured scope escalates instead.
+  echo "==> pytest unit suite"
+  echo "WARNING: release tag $BRAINLAYER_PREPUSH_TAG scoped to an EMPTY change set."
+  echo "WARNING: a release gate does not skip; running the FULL pytest unit suite."
+  pytest_unit_cmd=(run_pytest "$TEST_ROOT/" -v --tb=short -m "$UNIT_MARK_EXPR")
 elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ "$changed_files_seen" -eq 0 ]; then
   # A changed-only run that found NOTHING has nothing to test, and escalating that to the full
   # suite was a fail-open: the most expensive thing this script can do, chosen precisely when the
@@ -329,6 +346,13 @@ elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ "$changed_source_unma
   pytest_unit_cmd=(run_pytest "$TEST_ROOT/" -v --tb=short -m "$UNIT_MARK_EXPR")
 elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ "${#targeted_pytest_files[@]}" -gt 0 ]; then
   pytest_unit_cmd=(run_pytest "${targeted_pytest_files[@]}" -v --tb=short -m "$UNIT_MARK_EXPR")
+elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ -n "${BRAINLAYER_PREPUSH_TAG:-}" ]; then
+  # Same release-gate rule as the empty-scope case above: a docs/changelog-only bump maps no pytest
+  # target, and for a tag "nothing mapped" may not become "nothing gated".
+  echo "==> pytest unit suite"
+  echo "WARNING: release tag $BRAINLAYER_PREPUSH_TAG mapped no pytest targets in its range."
+  echo "WARNING: a release gate does not skip; running the FULL pytest unit suite."
+  pytest_unit_cmd=(run_pytest "$TEST_ROOT/" -v --tb=short -m "$UNIT_MARK_EXPR")
 elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ]; then
   echo "==> pytest unit suite"
   echo "SKIP: changed-only scope found no mapped pytest targets"

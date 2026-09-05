@@ -25,6 +25,7 @@ import stat
 import tempfile
 import threading
 import time
+from collections.abc import Iterator
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -42,7 +43,8 @@ except ImportError:  # pragma: no cover - unavailable on POSIX
     msvcrt = None  # type: ignore[assignment]
 
 from .alarm import BrainLayerAlarm, raise_alarm
-from .ingest_denylist import is_denylisted
+from .ingest_denylist import _match_parts as match_glob_parts
+from .ingest_denylist import is_denylisted, is_directory_denylisted
 
 logger = logging.getLogger(__name__)
 
@@ -163,11 +165,126 @@ def _watch_max_record_bytes() -> int:
     return parsed_value
 
 
+_RECURSIVE_JSONL_GLOB = "**/*.jsonl"
+
+
+class _JSONLPatternMatcher:
+    """Decides whether one DirEntry under `base` is a file that matches `glob_pattern`.
+
+    The default `**/*.jsonl` short-circuits on the suffix and never builds a parts tuple; any
+    other pattern is matched on the path relative to base with the denylist's `**`-aware part
+    matcher. A regular file is required either way (DirEntry.is_file follows symlinks, as
+    pathlib's did).
+    """
+
+    def __init__(self, base: str, glob_pattern: str) -> None:
+        self.default_pattern = glob_pattern == _RECURSIVE_JSONL_GLOB
+        self.pattern_parts = tuple(part for part in glob_pattern.split("/") if part)
+        self.suffix_only = bool(self.pattern_parts) and self.pattern_parts[-1] == "*.jsonl"
+        self.relative_start = len(base.rstrip(os.sep)) + 1
+
+    def __call__(self, entry: os.DirEntry) -> bool:
+        if self.suffix_only and not entry.name.endswith(".jsonl"):
+            return False
+        if not entry.is_file():
+            return False
+        if self.default_pattern:
+            return True
+        return match_glob_parts(tuple(entry.path[self.relative_start :].split(os.sep)), self.pattern_parts)
+
+
+def _iter_jsonl_files(
+    base: Path,
+    glob_pattern: str,
+    skip_dir: Callable[[str], bool] | None = None,
+) -> Iterator[tuple[str, Callable[[], os.stat_result]]]:
+    """Yield (path, stat) for every regular file under base that matches glob_pattern.
+
+    An os.scandir walk in place of pathlib.glob, for every root. Semantics kept from the
+    glob: directory symlinks are not descended (pathlib's recurse_symlinks default), file
+    symlinks count if their target is a regular file, dotfiles match, matching is
+    case-sensitive, and the stat handed back follows the symlink. Files are matched against
+    the pattern relative to base with the same `**`-aware part matcher the denylist uses, so
+    cursor's `**/agent-transcripts/**/*.jsonl` root takes the same path as the default
+    `**/*.jsonl` -- which short-circuits on the suffix and never builds a parts tuple. One
+    narrowing, on purpose: pathlib would step into a directory symlink whose name matched
+    a literal pattern segment; this walk never follows directory symlinks at all.
+
+    `skip_dir(path)` is asked before descending into any directory (including base) and a
+    True answer prunes the whole subtree. The watcher passes the denylist's subtree verdict:
+    the deployed `~/.cursor/**/agent-transcripts/**` covers 4,315 of the 5,086 directories
+    under ~/.cursor/projects, and the walk was reading every one of them on every poll --
+    about 1s of kernel time per poll on the efficiency cores -- to discover 4,302 files that
+    the per-file denylist then discarded. Measured with the pruning, the same roots read
+    ~470 directories.
+
+    The stat is returned as a callable so the caller can apply the per-file denylist first
+    and skip the stat entirely for a file it will not track.
+    """
+    base_str = str(base)
+    matches = _JSONLPatternMatcher(base_str, glob_pattern)
+    # No early `return` before the first yield: a generator that can also "return None" reads
+    # as a possible non-sequence to static analysis at the unpacking call site.
+    pending = [] if skip_dir is not None and skip_dir(base_str) else [base_str]
+    while pending:
+        directory = pending.pop()
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            if skip_dir is None or not skip_dir(entry.path):
+                                pending.append(entry.path)
+                        elif matches(entry):
+                            yield entry.path, entry.stat
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+
+
+# The health probe counts realtime_watcher rows written since the current health window
+# opened. The original single statement,
+#     COUNT(*) WHERE source = 'realtime_watcher'
+#              AND COALESCE(ingested_at, CAST(strftime('%s', created_at) AS INTEGER)) >= ?
+# could only be served by idx_chunks_source, so it visited every realtime_watcher row in the
+# table (451,000 on the real DB, 0.33s CPU) on every poll to count the ~50 written in the last
+# minute. The two statements below are the two branches of that COALESCE, each on the range
+# index that fits it; the `+column` markers keep the planner off the source index. The
+# created_at text floor is a day earlier than the window so a legacy timestamp written with a
+# non-UTC offset still lands inside the index range; the strftime term then applies the
+# exact original comparison to those few rows.
+_REALTIME_INSERTS_SINCE_SQL = """
+    SELECT COUNT(*) FROM chunks
+    WHERE +source = 'realtime_watcher'
+      AND ingested_at >= ?
+"""
+_REALTIME_LEGACY_CREATED_SINCE_SQL = """
+    SELECT COUNT(*) FROM chunks
+    WHERE +source = 'realtime_watcher'
+      AND +ingested_at IS NULL
+      AND created_at >= ?
+      AND CAST(strftime('%s', created_at) AS INTEGER) >= ?
+"""
+_CREATED_AT_FLOOR_SLACK_S = 24 * 60 * 60
+
+
+def realtime_insert_probe_statements(window_start: int) -> list[tuple[str, tuple[Any, ...]]]:
+    """The (sql, params) pairs whose counts sum to realtime_watcher rows since window_start."""
+    created_at_floor = datetime.fromtimestamp(window_start - _CREATED_AT_FLOOR_SLACK_S, timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%S"
+    )
+    return [
+        (_REALTIME_INSERTS_SINCE_SQL, (window_start,)),
+        (_REALTIME_LEGACY_CREATED_SINCE_SQL, (created_at_floor, window_start)),
+    ]
+
+
 @dataclass(frozen=True)
 class WatchRoot:
     provider: str
     path: Path | str
-    glob_pattern: str = "**/*.jsonl"
+    glob_pattern: str = _RECURSIVE_JSONL_GLOB
 
     @property
     def resolved_path(self) -> Path:
@@ -646,6 +763,29 @@ class OffsetRegistry:
         """Whether the last prune safely evaluated every tracked root."""
         return self._last_prune_complete
 
+    def has_stale_entries_under(self, new_dirs: AbstractSet[str], live_files: list[str]) -> bool:
+        """Whether a tracked entry that is not a live file has its parent on the path to one of new_dirs.
+
+        That is the one shape a prune could act on that a newly appeared directory can create:
+        a returning volume brings its directories back with the deleted files' registry entries
+        still pointing under them. The relation is the one `prune_missing_files` itself uses as
+        live evidence -- `_has_live_parent_evidence` accepts the entry's parent being ANY
+        ancestor of a live file -- so a volume that remounts with live files only in a
+        subdirectory of the stale entry's parent (new dir `r/sub`, stale entry `r/gone.jsonl`)
+        is prunable and must re-trigger too. String prefixes, not pathlib, for the same reason
+        as the caller; new_dirs is small (the directories that appeared since the last poll).
+        """
+        live = set(live_files)
+        candidates = tuple(new_dirs)
+        for filepath in self._data:
+            if filepath in live:
+                continue
+            parent = filepath.rpartition(os.sep)[0]
+            prefix = f"{parent}{os.sep}"
+            if any(directory == parent or directory.startswith(prefix) for directory in candidates):
+                return True
+        return False
+
     def prune_missing_files(
         self,
         active_roots: list[Path],
@@ -731,6 +871,15 @@ class JSONLTailer:
         self.last_error: OSError | json.JSONDecodeError | UnicodeDecodeError | OversizedJSONLRecordError | None = None
         self.failed_record: bytes | None = None
         self.observed_inode = self.get_inode()
+
+    def restore_snapshot(self, snapshot: tuple[int, bytes]) -> None:
+        """Put the tailer back to a (offset, buffer) pair captured before a failed read.
+
+        The watcher used to reach in and unpack straight onto `offset` and `_buffer`; owning
+        the two assignments here keeps the buffer private and gives static analysis a typed
+        parameter instead of a `tuple | None` it cannot narrow (DeepSource on #781).
+        """
+        self.offset, self._buffer = snapshot
 
     def check_rewind(self) -> bool:
         """Check if file has shrunk (checkpoint restore). Returns True if rewound."""
@@ -1143,6 +1292,7 @@ class JSONLWatcher:
         # corpus costs ~0.8s, and poll_once was evaluating it four times per file. Cleared
         # every poll so a changed BRAINLAYER_INGEST_DENYLIST is still picked up promptly.
         self._denylist_memo: dict[str, bool] = {}
+        self._denylist_dir_memo: dict[str, bool] = {}
         self._file_ingestion_failures: dict[str, dict[str, Any]] = {}
         self._quarantined_record_count_total = 0
         self._quarantined_records: list[dict[str, Any]] = []
@@ -1243,6 +1393,7 @@ class JSONLWatcher:
         self._file_providers = {}
         self._current_file_stats = {}
         self._denylist_memo = {}
+        self._denylist_dir_memo = {}
         for root in self.watch_roots:
             root_path = root.resolved_path
             if not root_path.exists():
@@ -1252,20 +1403,17 @@ class JSONLWatcher:
                 if root.provider == "claude" and root.glob_pattern == "**/*.jsonl":
                     bases = [path for path in root_path.iterdir() if path.is_dir()]
                 for base in bases:
-                    files = base.glob(root.glob_pattern)
-                    for f in files:
-                        if f.is_file():
-                            path = str(f)
-                            if self._denylisted(path):
-                                continue
-                            try:
-                                stat_result = f.stat()
-                                mtime = stat_result.st_mtime
-                            except OSError as e:
-                                logger.debug("Skipping JSONL file during discovery after stat failure: %s: %s", path, e)
-                                continue
-                            self._current_file_stats[path] = (mtime, stat_result.st_size, stat_result.st_ino)
-                            discovered.append((mtime, path, root.provider))
+                    for path, stat_file in _iter_jsonl_files(base, root.glob_pattern, skip_dir=self._denylisted_dir):
+                        if self._denylisted(path):
+                            continue
+                        try:
+                            stat_result = stat_file()
+                            mtime = stat_result.st_mtime
+                        except OSError as e:
+                            logger.debug("Skipping JSONL file during discovery after stat failure: %s: %s", path, e)
+                            continue
+                        self._current_file_stats[path] = (mtime, stat_result.st_size, stat_result.st_ino)
+                        discovered.append((mtime, path, root.provider))
             except OSError:
                 continue
         discovered.sort(key=lambda item: item[0], reverse=True)
@@ -1279,6 +1427,14 @@ class JSONLWatcher:
         if cached is None:
             cached = is_denylisted(filepath)
             self._denylist_memo[filepath] = cached
+        return cached
+
+    def _denylisted_dir(self, dirpath: str) -> bool:
+        """Memoised is_directory_denylisted() for one poll cycle; prunes discovery subtrees."""
+        cached = self._denylist_dir_memo.get(dirpath)
+        if cached is None:
+            cached = is_directory_denylisted(dirpath)
+            self._denylist_dir_memo[dirpath] = cached
         return cached
 
     def _can_skip_unchanged(self, filepath: str) -> bool:
@@ -1525,16 +1681,11 @@ class JSONLWatcher:
             conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=1)
             try:
                 window_started = int(self._health_window_started_epoch)
-                row = conn.execute(
-                    """
-                    SELECT COUNT(*) FROM chunks
-                    WHERE source = 'realtime_watcher'
-                      AND COALESCE(ingested_at, CAST(strftime('%s', created_at) AS INTEGER)) >= ?
-                    """,
-                    (window_started,),
-                ).fetchone()
-                chunk_count = int(row[0]) if row else 0
-                liveness_count = 0
+                # Liveness first. The drain writes one row per watcher chunk it persists,
+                # the table is indexed on ingested_at, and whenever it holds rows for this
+                # window they are the answer. The chunk count used to be computed before
+                # this check and then discarded whenever liveness won -- 0.33s of every
+                # poll on the real DB, spent on a number nobody read.
                 if conn.execute(
                     """
                     SELECT 1 FROM sqlite_master
@@ -1550,7 +1701,13 @@ class JSONLWatcher:
                         (window_started,),
                     ).fetchone()
                     liveness_count = int(liveness_row[0]) if liveness_row else 0
-                return liveness_count if liveness_count > 0 else chunk_count
+                    if liveness_count > 0:
+                        return liveness_count
+                chunk_count = 0
+                for sql, params in realtime_insert_probe_statements(window_started):
+                    row = conn.execute(sql, params).fetchone()
+                    chunk_count += int(row[0]) if row else 0
+                return chunk_count
             finally:
                 conn.close()
         except sqlite3.Error:
@@ -1757,8 +1914,23 @@ class JSONLWatcher:
         # lint here would have cost 22ms per poll in the loop this PR just optimised.
         parent_dirs = frozenset(filepath.rpartition(os.sep)[0] for filepath in files)
         timer_elapsed = time.monotonic() - self._last_offset_prune_attempt >= self.offset_prune_retry_interval_s
-        if parent_dirs == self._last_prune_parent_dirs and not timer_elapsed:
-            return
+        if not timer_elapsed and self._last_prune_parent_dirs is not None:
+            # A changed parent-dir set used to re-trigger the scan on its own. On a live machine
+            # that is every new session directory -- another agent opening a worktree fired it
+            # inside the first two minutes of the 600s soak, at 7.4 CPU-seconds on the
+            # efficiency cores, more than eight steady polls. The only change that can make a
+            # blocked entry prunable is a NEW directory the registry already holds an entry under
+            # that is not among the live files (the returning volume). Anything else waits for
+            # the timer -- and that includes SHRINKAGE of the set, deliberately: when a directory
+            # loses its last live file, nothing under it can be pruned (the prune requires live
+            # evidence in the entry's directory tree, which just disappeared), so a scan now
+            # would find exactly what the next 900 s tick finds. An orphan created that way
+            # waits at most one timer interval. The remembered set moves forward either way, so
+            # each new directory is judged once, not on every poll until the timer fires.
+            new_dirs = parent_dirs - self._last_prune_parent_dirs
+            self._last_prune_parent_dirs = parent_dirs
+            if not new_dirs or not self.registry.has_stale_entries_under(new_dirs, files):
+                return
 
         self._last_offset_prune_attempt = time.monotonic()
         self._last_prune_parent_dirs = parent_dirs
@@ -1903,7 +2075,7 @@ class JSONLWatcher:
                     read_accepted = True
                 except Exception as error:
                     if tailer is not None and tailer_snapshot is not None and not read_accepted:
-                        tailer.offset, tailer._buffer = tailer_snapshot
+                        tailer.restore_snapshot(tailer_snapshot)
                         tailer.last_error = error
                         tailer.failed_record = None
                     logger.exception("Poll file error: %s", filepath)

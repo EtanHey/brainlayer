@@ -152,6 +152,22 @@ brainlayer enrich
 - Lint/format: `ruff check src/ tests/ && ruff format src/ tests/`
 - Pre-push: `.githooks/pre-push` runs `scripts/run_tests.sh` with `BRAINLAYER_PREPUSH=1`; full
   runs are deduped by git tree hash in `.git/brainlayer-prepush-cache`.
+- A **tag** push has no branch to diff against, so the hook reads the pushed refs off its stdin and
+  scopes the run to `<previous release tag>..<tag>` via `BRAINLAYER_CHANGED_FILES_RANGE`, naming the
+  tag in `BRAINLAYER_PREPUSH_TAG`. The predecessor must be a **full release**: resolved with
+  `--match 'v*' --exclude '*-*'`, so neither a non-release tag (`nightly`, `archive/*`) nor a
+  pre-release (`v1.2.3-rc1`) can start the range short and leave real commits unmapped.
+  Over-scoping from the last full release is safe; under-scoping a gate is not.
+- **An explicit scope picks the MODE; the range is the DATA.** Under
+  `BRAINLAYER_PREPUSH_SCOPE=changed-only` — the normal worker path below — a tag push still gets its
+  range. Only a non-`changed-only` explicit scope (`full`, or anything else) stops the hook
+  entirely. The hook otherwise refuses to narrow — printing the reason in the push output — when a
+  branch rides along, when `BRAINLAYER_CHANGED_FILES`/`_RANGE` is already set, when more than one
+  tag is pushed at once, or when the tag has no full-release predecessor. None of those are silent.
+- **A release gate never skips.** When `BRAINLAYER_PREPUSH_TAG` is set and the range is empty or
+  maps no pytest target, `scripts/run_tests.sh` runs the **full** suite and says why, instead of
+  taking the measured-empty / no-mapped-target skip. That skip stays correct for every other
+  caller; for a tag it would mean a release gating nothing at all.
 - Scoped worker pushes: use `BRAINLAYER_PREPUSH_SCOPE=changed-only git push` to map changed files
   to focused pytest targets while keeping the lightweight registration, isolated, bun, and shell
   gates.
@@ -230,6 +246,21 @@ brainlayer enrich
 - Offset persistence: `~/.local/share/brainlayer/offsets.json` (survives restarts)
 - Rewind detection: file shrink = checkpoint restore → soft-archives reverted chunks
 - Axiom telemetry: startup, flush, error, heartbeat (60s threshold, but it is checked once per poll, so at the 30s poll default the real spacing is ~60-95s — measured 91s; do not alert on a 60s cadence) to `brainlayer-watcher` dataset
+- **Liveness: read `watcher-health.json`, not a log stream.** It is the canonical surface, it is
+  JSON, and both `poll_count` and `updated_at` advance on every poll — which is what a sampler
+  needs. Its path is **database-relative** (`watcher-health.json` beside the resolved DB), so with
+  `BRAINLAYER_DB` set it is NOT under `~/.local/share/brainlayer` —
+  `~/.local/share/brainlayer/watcher-health.json` is only the canonical-DB default. The startup
+  banner prints the path it actually used; `BRAINLAYER_WATCHER_HEALTH_PATH` overrides it outright.
+- **The two streams are split on purpose, and neither is the liveness surface.** `stdout`
+  (`watch.out.log`) carries the one-shot startup banner and rewind notices — rich markup, for a
+  human. `stderr` (`watch.err.log`) carries timestamped logging, including the `Watcher alive: …`
+  heartbeat: `brainlayer watch` calls `logging.basicConfig(stream=sys.stderr)` (#759). The poll
+  clamp appears in **both** — `enforce_min_poll_interval()` logs it at WARNING to stderr and the
+  command also `rprint`s it to stdout. So **grepping `watch.out.log` for "Watcher alive" returns
+  nothing** — that is the split, not a dead watcher. The heartbeat is deliberately NOT duplicated
+  onto stdout: one signal, one writer.
+  `tests/test_jsonl_watcher.py::TestWatcherLivenessSurface` pins all three halves.
 - Source: `watcher.py` (tailer + indexer), `watcher_bridge.py` (pipeline integration)
 
 <!-- ARCHITECTURE: chunk lifecycle columns superseded_by/aggregated_into/archived_at; brain_supersede has safety gate for personal data; brain_archive is soft-delete -->

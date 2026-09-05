@@ -10,12 +10,25 @@ import subprocess
 import tomllib
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "brainlayer-version-check.sh"
 
 
-def _clean_git_env() -> dict[str, str]:
-    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+# Every subprocess in this file goes through this one env. Two prefixes have to go:
+# GIT_* because an inherited GIT_DIR/GIT_WORK_TREE OVERRIDES `-C`, so the fixture repos would
+# answer for the real checkout; and BRAINLAYER_VERSION_CHECK_* because those are the script's own
+# knobs and a release operator really does export them. With the lag reason inherited, the script
+# allowed the lag and returned 0, so the two "fails without a reason" tests below went RED for an
+# unrelated change. Scrub the whole prefix, not just the one variable that bit us: REPO_ROOT,
+# TAP_ROOT and GIT_TAG would steer these fixtures elsewhere exactly the same way. A test that
+# WANTS a knob passes it explicitly through `extra_env` / `git_tag`, which override this base.
+_SCRUBBED_ENV_PREFIXES = ("GIT_", "BRAINLAYER_VERSION_CHECK_")
+
+
+def _script_env() -> dict[str, str]:
+    return {key: value for key, value in os.environ.items() if not key.startswith(_SCRUBBED_ENV_PREFIXES)}
 
 
 def _copy_version_fixture(tmp_path: Path) -> tuple[Path, Path, str]:
@@ -59,7 +72,7 @@ def _run(
     extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = {
-        **_clean_git_env(),
+        **_script_env(),
         "BRAINLAYER_VERSION_CHECK_REPO_ROOT": str(fixture_root),
         "BRAINLAYER_VERSION_CHECK_TAP_ROOT": str(tap_root),
         **(extra_env or {}),
@@ -81,7 +94,7 @@ def _repo_git_env() -> dict[str, str]:
     git_dir = subprocess.check_output(
         ["git", "-C", str(REPO_ROOT), "rev-parse", "--git-dir"],
         text=True,
-        env=_clean_git_env(),
+        env=_script_env(),
     ).strip()
     git_dir_path = Path(git_dir)
     if not git_dir_path.is_absolute():
@@ -96,7 +109,7 @@ def _repo_git_env() -> dict[str, str]:
 
 
 def _init_git_repo(path: Path, tag: str) -> None:
-    env = _clean_git_env()
+    env = _script_env()
     subprocess.run(["git", "-C", str(path), "init"], check=True, capture_output=True, text=True, env=env)
     subprocess.run(["git", "-C", str(path), "add", "."], check=True, capture_output=True, text=True, env=env)
     subprocess.run(
@@ -311,9 +324,46 @@ def test_version_check_scrubs_all_git_local_env_vars_declared_by_git() -> None:
     git_local_vars = subprocess.check_output(
         ["git", "rev-parse", "--local-env-vars"],
         text=True,
-        env=_clean_git_env(),
+        env=_script_env(),
     ).splitlines()
     script = SCRIPT.read_text(encoding="utf-8")
 
     missing = [name for name in git_local_vars if name not in script]
     assert missing == []
+
+
+def test_version_check_ignores_an_inherited_cask_lag_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A release operator exports the lag reason; pytest must not inherit it.
+
+    `BRAINLAYER_VERSION_CHECK_CASK_LAG_REASON` is a real operator export -- they need it for the
+    release check. With the subprocess env inherited, pre-push -> pytest -> the script saw that
+    reason, allowed the lag, returned 0, and this file's two "fails without a reason" tests went
+    RED for a change that had nothing to do with them.
+    """
+    monkeypatch.setenv("BRAINLAYER_VERSION_CHECK_CASK_LAG_REASON", "operator's own release reason")
+    fixture_root, tap_root, package_version = _copy_version_fixture(tmp_path)
+    _write_cask_version(tap_root, "1.5.9")
+
+    result = _run(fixture_root, tap_root, git_tag=f"v{package_version}")
+
+    assert result.returncode == 1
+    assert f"Casks/brainbar.rb version is '1.5.9', expected '{package_version}'" in result.stderr
+    assert "WARN" not in result.stdout
+
+
+def test_script_env_scrubs_every_version_check_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The scrub is by prefix, not by one named variable.
+
+    Every knob the script reads is `BRAINLAYER_VERSION_CHECK_*`, and any of them exported in an
+    operator's shell would steer these fixtures somewhere else. Scrubbing only the lag reason
+    would leave REPO_ROOT/TAP_ROOT/GIT_TAG as the next non-hermetic-env failure.
+    """
+    monkeypatch.setenv("BRAINLAYER_VERSION_CHECK_CASK_LAG_REASON", "x")
+    monkeypatch.setenv("BRAINLAYER_VERSION_CHECK_REPO_ROOT", "/nonexistent")
+    monkeypatch.setenv("BRAINLAYER_VERSION_CHECK_TAP_ROOT", "/nonexistent")
+    monkeypatch.setenv("BRAINLAYER_VERSION_CHECK_GIT_TAG", "v0.0.0")
+    monkeypatch.setenv("GIT_DIR", "/nonexistent/.git")
+
+    leaked = [name for name in _script_env() if name.startswith(("GIT_", "BRAINLAYER_VERSION_CHECK_"))]
+
+    assert leaked == []
