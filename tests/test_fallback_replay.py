@@ -1505,3 +1505,268 @@ def test_replay_cli_exits_nonzero_and_records_unresolved_in_the_receipt(tmp_path
     assert receipt["outcome_counts"] == {"unresolved": 1}
     assert receipt["replayed"][0]["outcome"] == "unresolved"
     assert "banana" in receipt["replayed"][0]["error"]
+
+
+def test_replay_cli_refuses_to_mark_real_files_against_a_noncanonical_db(tmp_path, monkeypatch, capsys):
+    """A test run against a DB copy must not permanently mark the production fallback files.
+
+    The marker write is not DB-scoped: `replay_entry` stores, then writes `chunk_id` into the file
+    under `--gits-root`, whatever `--db` pointed at. So `--db <copy> --direct-db-write` with the
+    default gits-root marks 122 real files as replayed with ids that exist only in a throwaway DB —
+    `is_pending_entry` then reports 0 pending and the memories are hidden with no trace.
+    """
+    script = Path(__file__).resolve().parents[1] / "scripts" / "replay_brain_store_fallbacks.py"
+    spec = importlib.util.spec_from_file_location("replay_brain_store_fallbacks_db_guard_test", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    monkeypatch.setattr(
+        module,
+        "VectorStore",
+        lambda _db: (_ for _ in ()).throw(AssertionError("opened a DB despite the guard")),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "replay_brain_store_fallbacks.py",
+            "--apply",
+            "--direct-db-write",
+            "--db",
+            str(tmp_path / "copy.db"),
+        ],
+    )
+
+    assert module.main() == 2
+    assert "would mark the real fallback files" in capsys.readouterr().out
+
+
+def test_replay_cli_allows_a_noncanonical_db_with_a_matching_gits_root(tmp_path, monkeypatch):
+    """The safe shape: a copy of the DB *and* a copy of the files. This is what a live-check does."""
+    script = Path(__file__).resolve().parents[1] / "scripts" / "replay_brain_store_fallbacks.py"
+    spec = importlib.util.spec_from_file_location("replay_brain_store_fallbacks_db_guard_ok_test", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    from brainlayer.fallback_replay import parse_fallback_file
+
+    repo = tmp_path / "gits-copy" / "systems"
+    _git_init(repo)
+    entry = parse_fallback_file(_pending_file(repo, "docs.local/decisions/copy.md"))
+
+    class DummyStore:
+        def close(self):
+            pass
+
+    class DummyInventory:
+        structured = [entry]
+        legacy = []
+        pending = [entry]
+
+    monkeypatch.setattr(module, "load_scope_map", lambda _path: {})
+    monkeypatch.setattr(module, "inventory_fallbacks", lambda _root, *, scope_map: DummyInventory())
+    monkeypatch.setattr(module, "VectorStore", lambda _db: DummyStore())
+    monkeypatch.setattr(module, "store_memory", lambda **_kwargs: {"id": "chunk-copy", "outcome": "stored"})
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "replay_brain_store_fallbacks.py",
+            "--apply",
+            "--direct-db-write",
+            "--db",
+            str(tmp_path / "copy.db"),
+            "--gits-root",
+            str(tmp_path / "gits-copy"),
+        ],
+    )
+
+    assert module.main() == 0
+
+
+def test_replay_cli_allows_the_canonical_db_with_the_real_gits_root(tmp_path, monkeypatch):
+    """The production drain: canonical DB, real files. The guard must not stand in its way."""
+    script = Path(__file__).resolve().parents[1] / "scripts" / "replay_brain_store_fallbacks.py"
+    spec = importlib.util.spec_from_file_location("replay_brain_store_fallbacks_db_guard_prod_test", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    from brainlayer.fallback_replay import parse_fallback_file
+
+    repo = tmp_path / "gits" / "systems"
+    _git_init(repo)
+    entry = parse_fallback_file(_pending_file(repo, "docs.local/decisions/prod.md"))
+
+    class DummyStore:
+        def close(self):
+            pass
+
+    class DummyInventory:
+        structured = [entry]
+        legacy = []
+        pending = [entry]
+
+    monkeypatch.setattr(module, "load_scope_map", lambda _path: {})
+    monkeypatch.setattr(module, "inventory_fallbacks", lambda _root, *, scope_map: DummyInventory())
+    monkeypatch.setattr(module, "VectorStore", lambda _db: DummyStore())
+    monkeypatch.setattr(module, "store_memory", lambda **_kwargs: {"id": "chunk-prod", "outcome": "stored"})
+    monkeypatch.setattr(module, "DEFAULT_DB_PATH", tmp_path / "canonical.db")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "replay_brain_store_fallbacks.py",
+            "--apply",
+            "--direct-db-write",
+            "--db",
+            str(tmp_path / "canonical.db"),
+            "--gits-root",
+            str(tmp_path / "gits"),
+        ],
+    )
+
+    assert module.main() == 0
+
+
+def test_replay_cli_queued_replay_is_guarded_the_same_way(tmp_path, monkeypatch, capsys):
+    """The queued path writes `queued_chunk_id` into the same real files, so it needs the same guard."""
+    script = Path(__file__).resolve().parents[1] / "scripts" / "replay_brain_store_fallbacks.py"
+    spec = importlib.util.spec_from_file_location("replay_brain_store_fallbacks_db_guard_queue_test", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    monkeypatch.setattr(
+        module,
+        "enqueue_store",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("enqueued despite the guard")),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["replay_brain_store_fallbacks.py", "--apply", "--db", str(tmp_path / "copy.db")],
+    )
+
+    assert module.main() == 2
+    assert "would mark the real fallback files" in capsys.readouterr().out
+
+
+def test_guard_refuses_a_subtree_of_the_real_gits_tree(tmp_path, monkeypatch):
+    """Round-1 review, #780 @183 (HIGH). Measured fail-open on the unfixed guard:
+
+        exact   ~/Gits            -> REFUSED
+        subtree ~/Gits/brainlayer -> ALLOWED
+
+    `--gits-root ~/Gits/<repo>` with a copy DB still inventories and marks the production
+    `docs.local` files under that repo — the same silent hide the whole PR exists to stop. Exact
+    equality is not fail-closed.
+    """
+    module = _guard_module("replay_guard_subtree_test")
+    fake_home = tmp_path / "home"
+    (fake_home / "Gits" / "brainlayer").mkdir(parents=True)
+    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: fake_home))
+
+    hazard = module.marker_target_hazard(tmp_path / "copy.db", fake_home / "Gits" / "brainlayer")
+
+    assert hazard is not None
+    assert "would mark the real fallback files" in hazard
+
+
+def test_guard_refuses_a_deeper_subtree_of_the_real_gits_tree(tmp_path, monkeypatch):
+    module = _guard_module("replay_guard_deep_subtree_test")
+    fake_home = tmp_path / "home"
+    deep = fake_home / "Gits" / "brainlayer" / ".worktrees" / "wt"
+    deep.mkdir(parents=True)
+    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: fake_home))
+
+    assert module.marker_target_hazard(tmp_path / "copy.db", deep) is not None
+
+
+def test_guard_refuses_when_brainlayer_db_env_points_at_a_copy(tmp_path, monkeypatch):
+    """Round-1 review, #780 @185 (MEDIUM). Measured on the unfixed guard:
+
+        BRAINLAYER_DB=/tmp/copy.db  ->  DEFAULT_DB_PATH       = /tmp/copy.db   (allowlisted!)
+                                        get_canonical_db_path = ~/.local/share/brainlayer/brainlayer.db
+
+    `paths.DEFAULT_DB_PATH` is `resolve_db_path()` evaluated at import, so a `BRAINLAYER_DB` copy
+    BECAME the allowlisted "canonical" and reopened the trap through the env instead of `--db`.
+    """
+    module = _guard_module("replay_guard_env_db_test")
+    fake_home = tmp_path / "home"
+    (fake_home / "Gits").mkdir(parents=True)
+    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: fake_home))
+    # The env-selected copy, exactly as DEFAULT_DB_PATH would have resolved it.
+    monkeypatch.setattr(module, "DEFAULT_DB_PATH", tmp_path / "copy.db")
+
+    hazard = module.marker_target_hazard(tmp_path / "copy.db", fake_home / "Gits")
+
+    assert hazard is not None, "an env-selected copy must not be treated as canonical"
+
+
+def test_guard_allows_the_real_canonical_db_with_the_real_gits_tree(tmp_path, monkeypatch):
+    """Round-1 review, #780 @1362 (HIGH): the real-gits branch was never exercised.
+
+    The old allow-test passed a tmp gits-root, so the guard returned None before the DB was ever
+    consulted, and the `DEFAULT_DB_PATH` monkeypatch was dead. A regression that always refused on
+    the real tree — blocking the production drain outright — still got `main() == 0`.
+    """
+    module = _guard_module("replay_guard_prod_allow_test")
+    fake_home = tmp_path / "home"
+    real_gits = fake_home / "Gits"
+    real_gits.mkdir(parents=True)
+    canonical = fake_home / ".local" / "share" / "brainlayer" / "brainlayer.db"
+    canonical.parent.mkdir(parents=True)
+    canonical.touch()
+    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: fake_home))
+    # Patch the real dependency, so this exercises the whole canonical_db_target -> paths chain
+    # rather than a convenience shim.
+    monkeypatch.setattr(module, "get_canonical_db_path", lambda: canonical)
+
+    # This is the branch the old test never reached: real tree AND canonical DB.
+    assert module.marker_target_hazard(canonical, real_gits) is None
+
+
+def test_guard_allows_a_copy_db_with_a_copy_of_the_files(tmp_path, monkeypatch):
+    """The live-check shape stays allowed — that is the procedure this guard exists to protect."""
+    module = _guard_module("replay_guard_livecheck_allow_test")
+    fake_home = tmp_path / "home"
+    (fake_home / "Gits").mkdir(parents=True)
+    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: fake_home))
+
+    assert module.marker_target_hazard(tmp_path / "copy.db", tmp_path / "gits-copy") is None
+
+
+def test_guard_is_hermetic_and_runs_before_any_inventory(tmp_path, monkeypatch, capsys):
+    """Round-1 review, #780 @1305 (MEDIUM).
+
+    `main()` called `load_scope_map` + `inventory_fallbacks` on the real default tree BEFORE the
+    guard, so the refuse tests walked Etan's home and read his real scopes. The guard now runs
+    first, and these fakes prove nothing touches the tree on the refusal path.
+    """
+    module = _guard_module("replay_guard_hermetic_test")
+    fake_home = tmp_path / "home"
+    (fake_home / "Gits").mkdir(parents=True)
+    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: fake_home))
+    monkeypatch.setattr(
+        module,
+        "inventory_fallbacks",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("inventoried before the guard refused")),
+    )
+    monkeypatch.setattr(
+        module,
+        "load_scope_map",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("read scopes before the guard refused")),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["replay_brain_store_fallbacks.py", "--apply", "--direct-db-write", "--db", str(tmp_path / "copy.db")],
+    )
+
+    assert module.main() == 2
+    assert "would mark the real fallback files" in capsys.readouterr().out

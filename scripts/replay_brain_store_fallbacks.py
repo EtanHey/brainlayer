@@ -23,7 +23,7 @@ from brainlayer.fallback_replay import (
     queue_legacy_entry,
     replay_entry,
 )
-from brainlayer.paths import DEFAULT_DB_PATH
+from brainlayer.paths import DEFAULT_DB_PATH, get_canonical_db_path
 from brainlayer.queue_io import enqueue_store
 from brainlayer.store import store_memory
 from brainlayer.vector_store import VectorStore
@@ -71,6 +71,11 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    # Before load_scope_map/inventory_fallbacks: a refusal must not walk the real tree or read real
+    # scopes on its way to saying no.
+    if _refuse_marker_hazard(args):
+        return 2
+
     scope_map = load_scope_map(args.scopes)
     inventory = inventory_fallbacks(args.gits_root, scope_map=scope_map)
     pending = inventory.pending
@@ -111,42 +116,10 @@ def main() -> int:
             _emit(result, as_json=args.json, receipt_path=args.receipt)
             return 2
         if not args.direct_db_write:
-            queue_dir = _queue_dir_for_target_db(args.db, args.queue_dir)
-
-            def enqueue_for_target(**kwargs):
-                if queue_dir is not None:
-                    kwargs["queue_dir"] = queue_dir
-                return enqueue_store(**kwargs)
-
-            replayed = [
-                queue_entry(
-                    entry,
-                    enqueue_func=enqueue_for_target,
-                    replayed_by="brainlayer-replay-fallbacks",
-                )
-                for entry in pending
-            ]
-            legacy_replayed.extend(
-                queue_legacy_entry(
-                    entry,
-                    enqueue_func=enqueue_for_target,
-                    replayed_by="brainlayer-replay-fallbacks",
-                )
-                for entry in legacy_entries
-            )
+            replayed, extra_legacy = _replay_via_queue(args, pending, legacy_entries)
+            legacy_replayed.extend(extra_legacy)
         else:
-            store = VectorStore(args.db)
-            try:
-                replayed = [
-                    replay_entry(
-                        entry,
-                        store_func=lambda **kwargs: store_memory(store=store, embed_fn=None, **kwargs),
-                        replayed_by="brainlayer-replay-fallbacks",
-                    )
-                    for entry in pending
-                ]
-            finally:
-                store.close()
+            replayed = _replay_direct_to_db(args, pending)
             legacy_replayed = []
         result["replayed"] = [_receipt_row(item) for item in replayed]
         result["legacy_replayed"] = [_receipt_row(item) for item in legacy_replayed]
@@ -158,6 +131,125 @@ def main() -> int:
 
     _emit(result, as_json=args.json, receipt_path=args.receipt)
     return 0
+
+
+def marker_target_hazard(db_path: Path, gits_root: Path) -> str | None:
+    """Refuse to mark the REAL fallback files while writing to a DB that is not the canonical one.
+
+    The marker write is not DB-scoped, and nothing in `fallback_replay.py` reads a DB path at all:
+    a replay stores, then writes `chunk_id` into the file under `--gits-root`, whatever `--db`
+    pointed at. So `--db <copy> --direct-db-write` with the real gits-root permanently stamps every
+    pending file with an id that exists only in a throwaway DB, `is_pending_entry` then answers
+    "not pending", and the memories are hidden with nothing left to say they were never stored.
+
+    That is a trap laid across the ratified procedure itself (2026-08-02: live-check against a COPY
+    before merging anything that touches stored data), so it fails CLOSED. A live-check copies the
+    DB *and* the files; the production drain uses the canonical DB *and* the real files. Both are
+    allowed. Only the mismatch that hides data is refused.
+    """
+    real_gits_root = (Path.home() / "Gits").expanduser()
+    target = gits_root.expanduser()
+    # is_relative_to, not ==. `--gits-root ~/Gits/<repo>` is still the real tree: it inventories and
+    # marks the production docs.local files under that repo, which is the same silent hide. Exact
+    # equality let every subtree through, and a guard whose whole job is fail-closed cannot have a
+    # shape that fails open. Resolved on both sides so a symlinked or `..`-laden path cannot dodge it.
+    try:
+        real_resolved = real_gits_root.resolve()
+        target_resolved = target.resolve()
+    except OSError:
+        # Cannot resolve => cannot prove it is safe. Fail closed.
+        return _marker_refusal(db_path, canonical_db_target(), real_gits_root)
+    if target_resolved != real_resolved and not target_resolved.is_relative_to(real_resolved):
+        return None
+    canonical = canonical_db_target()
+    if db_path.expanduser().resolve() == canonical.resolve():
+        return None
+    return _marker_refusal(db_path, canonical, real_gits_root)
+
+
+def _replay_via_queue(
+    args: argparse.Namespace, pending: list, legacy_entries: list
+) -> tuple[list[ReplayResult], list[ReplayResult]]:
+    """The default path: enqueue, and let the drain stay the single writer."""
+    queue_dir = _queue_dir_for_target_db(args.db, args.queue_dir)
+
+    def enqueue_for_target(**kwargs):
+        if queue_dir is not None:
+            kwargs["queue_dir"] = queue_dir
+        return enqueue_store(**kwargs)
+
+    replayed = [
+        queue_entry(entry, enqueue_func=enqueue_for_target, replayed_by="brainlayer-replay-fallbacks")
+        for entry in pending
+    ]
+    legacy_replayed = [
+        queue_legacy_entry(entry, enqueue_func=enqueue_for_target, replayed_by="brainlayer-replay-fallbacks")
+        for entry in legacy_entries
+    ]
+    return replayed, legacy_replayed
+
+
+def _replay_direct_to_db(args: argparse.Namespace, pending: list) -> list[ReplayResult]:
+    """`--direct-db-write`: bypass the queue. Guarded by marker_target_hazard before we get here."""
+    store = VectorStore(args.db)
+    try:
+        return [
+            replay_entry(
+                entry,
+                store_func=lambda **kwargs: store_memory(store=store, embed_fn=None, **kwargs),
+                replayed_by="brainlayer-replay-fallbacks",
+            )
+            for entry in pending
+        ]
+    finally:
+        store.close()
+
+
+def _refuse_marker_hazard(args: argparse.Namespace) -> bool:
+    """Emit the refusal receipt and say whether main() must stop. Kept out of main() so the
+    pre-existing `C901 main is too complex` metric does not get worse for adding a safety gate."""
+    if not args.apply:
+        return False
+    marker_hazard = marker_target_hazard(args.db, args.gits_root)
+    if marker_hazard is None:
+        return False
+    _emit(
+        {
+            "structured_count": None,
+            "pending_count": None,
+            "legacy_count": None,
+            "pending": [],
+            "legacy": [],
+            "replayed": [],
+            "legacy_replayed": [],
+            "error": marker_hazard,
+        },
+        as_json=args.json,
+        receipt_path=args.receipt,
+    )
+    return True
+
+
+def canonical_db_target() -> Path:
+    """The canonical DB on disk — never `BRAINLAYER_DB`.
+
+    `paths.DEFAULT_DB_PATH` is `resolve_db_path()` evaluated at import, so it becomes whatever
+    `BRAINLAYER_DB` says. Allowlisting that means `BRAINLAYER_DB=<copy>` re-opens this exact trap
+    through the env instead of through `--db`. Measured: with `BRAINLAYER_DB=/tmp/copy.db`,
+    `DEFAULT_DB_PATH` is `/tmp/copy.db` while `get_canonical_db_path()` stays the real path. The
+    allowlist has to be the second one.
+    """
+    return get_canonical_db_path().expanduser()
+
+
+def _marker_refusal(db_path: Path, canonical: Path, real_gits_root: Path) -> str:
+    return (
+        f"refusing to replay: --db `{db_path}` is not the canonical DB (`{canonical}`), but "
+        f"--gits-root is the real tree `{real_gits_root}` (or a subtree of it), so this run would "
+        "mark the real fallback files as replayed with chunk ids that exist only in that DB — "
+        "hiding those memories with no trace. Copy the fallback files too and pass "
+        "--gits-root <copy>, or use the canonical DB."
+    )
 
 
 def _receipt_row(item: ReplayResult) -> dict[str, object]:
@@ -194,6 +286,11 @@ def _emit(result: dict[str, object], *, as_json: bool, receipt_path: Path | None
     if as_json:
         print(rendered)
         return
+    # Text mode used to drop `error` entirely: a refusal and a clean run printed the same three
+    # count lines, and only the exit code told them apart. An unreadable refusal is a silent one.
+    error = result.get("error")
+    if error:
+        print(f"ERROR: {error}")
     print(f"structured fallback files: {result['structured_count']}")
     print(f"pending structured files: {result['pending_count']}")
     print(f"legacy fallback files: {result['legacy_count']}")
