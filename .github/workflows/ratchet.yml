@@ -436,16 +436,19 @@ jobs:
           run_id=""
           run_sha=""
           # The API filters by branch; the event filter is in jq because the endpoint takes one
-          # `event` value and two (push, workflow_dispatch) are legitimate writers.
+          # `event` value and two (push, workflow_dispatch) are legitimate writers. `--paginate`,
+          # and the pages land in a file that `jq -s` slurps: a single page could fill with newer
+          # failed or cancelled runs, hide an older success, and turn an ESTABLISHED attestation
+          # into a false bootstrap -- the one fall-back this row must never take (Macroscope, #767).
           for attempt in 1 2 3; do
-            if gh api "repos/${REPO}/actions/workflows/ratchet-attest.yml/runs?branch=main&exclude_pull_requests=true&per_page=30" > "$runs_path" 2> "$err_path"; then
-              selected="$(jq -r '[.workflow_runs[] | select((.event == "push" or .event == "workflow_dispatch") and .conclusion == "success")] | .[0] | if . == null then "" else "\(.id) \(.head_sha)" end' "$runs_path")"
+            if gh api --paginate "repos/${REPO}/actions/workflows/ratchet-attest.yml/runs?branch=main&exclude_pull_requests=true&per_page=100" > "$runs_path" 2> "$err_path"; then
+              selected="$(jq -rs '[.[].workflow_runs[] | select((.event == "push" or .event == "workflow_dispatch") and .conclusion == "success")] | .[0] | if . == null then "" else "\(.id) \(.head_sha)" end' "$runs_path")"
               if [[ -n "$selected" ]]; then
                 run_id="${selected%% *}"
                 run_sha="${selected##* }"
                 state=fetched
               else
-                total="$(jq -r '.total_count' "$runs_path")"
+                total="$(jq -rs '[.[].workflow_runs[]] | length' "$runs_path")"
                 state=bootstrap
                 reason="ratchet-attest.yml has ${total} run(s) on main and no successful push/dispatch run yet"
               fi

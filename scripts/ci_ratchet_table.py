@@ -255,7 +255,12 @@ def baseline_changes(reference: dict, candidate: dict) -> list[tuple[str, object
     before, after = flatten_baseline(reference), flatten_baseline(candidate)
     changed = []
     for path in sorted(set(before) | set(after)):
-        old, new = before.get(path), after.get(path)
+        if path not in before or path not in after:
+            # Membership, not `.get()`: a leaf whose value IS null and a leaf that is gone both
+            # `.get()` to None, and the second is a change (Macroscope, #766).
+            changed.append((path, before.get(path), after.get(path)))
+            continue
+        old, new = before[path], after[path]
         if old != new or type(old) is not type(new):
             changed.append((path, old, new))
     return changed
@@ -320,8 +325,10 @@ def read_attestation(path: Path) -> tuple[Attestation | None, str | None]:
     if not isinstance(main_sha, str) or SHA_PATTERN.fullmatch(main_sha) is None:
         return None, f"the main attestation's `main_sha` {main_sha!r} is not a 40-hex commit sha"
     baseline, digest, measured = payload.get("baseline"), payload.get("baseline_sha256"), payload.get("measured")
-    if not isinstance(baseline, dict) or set(baseline) - set(BASELINE_FIELDS):
-        return None, "the main attestation's `baseline` is not an object of baseline fields"
+    if not isinstance(baseline, dict) or set(baseline) != set(BASELINE_FIELDS):
+        # Exactly the baseline fields: a configuration key inside is not a baseline, and a MISSING
+        # field is a reference that does not cover what it claims to (Macroscope, #766).
+        return None, "the main attestation's `baseline` is not an object of exactly the baseline fields"
     if digest != baseline_digest(baseline):
         # The digest is what the GREEN message quotes, so it has to be the digest OF this baseline.
         return (
@@ -869,7 +876,13 @@ def attested_row(attestation: Attestation, corpus: dict, base_tip: str | None) -
             ATTESTATION_METHOD,
             ATTESTATION_NOTES,
         )
-    by_hand = [(path, old, new) for path, old, new in changes if attestation.measured.get(path, _UNMEASURED) != new]
+    by_hand = []
+    for path, old, new in changes:
+        measured = attestation.measured.get(path, _UNMEASURED)
+        # Value AND type: `False == 0` in Python, and a measured boolean swapped for a count is a
+        # hand edit wearing the measurement's value (Macroscope, #767).
+        if measured is _UNMEASURED or measured != new or type(measured) is not type(new):
+            by_hand.append((path, old, new))
     if by_hand:
         listed = "; ".join(describe_change(*change) for change in by_hand[:6])
         more = f" (+{len(by_hand) - 6} more)" if len(by_hand) > 6 else ""
@@ -1300,13 +1313,22 @@ def attestation_payload(
     }
 
 
-def attest_refusal(args: argparse.Namespace, probe: Probe, rows: list[Row]) -> str | None:
-    """Why this run may NOT publish an attestation. None means it may."""
+def attest_refusal(args: argparse.Namespace, probe: Probe, rows: list[Row], corpus: dict) -> str | None:
+    """Why this run may NOT publish an attestation. None means it may.
+
+    Every rule here mirrors one in `read_attestation`: an attestation this writer publishes and
+    that reader rejects would leave main's baseline unusable for every PR (Macroscope, #766).
+    """
     flags = (args.attest_out, args.main_sha, args.run_id, args.run_attempt)
     if all(flag is None for flag in flags):
         return None
     if any(flag is None for flag in flags):
         return "`--attest-out`, `--main-sha`, `--run-id` and `--run-attempt` go together; an attestation names its run"
+    if not (honest_run_number(args.run_id) and honest_run_number(args.run_attempt)):
+        return f"`--run-id {args.run_id}` / `--run-attempt {args.run_attempt}` are not positive integers; no reader would accept them"
+    missing = [field for field in BASELINE_FIELDS if field not in corpus]
+    if missing:
+        return f"the checkout's baseline lacks {', '.join(f'`{field}`' for field in missing)}; an attestation must cover every baseline field"
     if SHA_PATTERN.fullmatch(args.main_sha) is None:
         return f"`--main-sha {args.main_sha}` is not a 40-hex commit sha"
     if probe.head_sha != args.main_sha:
@@ -1415,7 +1437,7 @@ def main(argv: list[str] | None = None) -> int:
     for row in rows:
         if row.status == RED:
             print(f"::error title=Ratchet RED: {row.name}::{row.value}", file=sys.stderr)
-    refusal = attest_refusal(args, probe, rows)
+    refusal = attest_refusal(args, probe, rows, corpus)
     if refusal is not None:
         print(f"::error title=Ratchet attestation not written::{refusal}", file=sys.stderr)
         return 1

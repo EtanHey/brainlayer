@@ -1649,6 +1649,14 @@ def test_a_boolean_and_a_count_are_different_claims() -> None:
     assert ratchet.baseline_changes({"a": {"b": 1}}, {"a": {"b": 1}}) == []
 
 
+def test_a_measured_boolean_does_not_license_a_count(tmp_path: Path) -> None:
+    """`False == 0` in Python; a field moved to `0` beside a measured `False` is still a hand edit
+    (Macroscope, #767)."""
+    payload = attestation_dict(measured={"thresholds.cpu_percent": False})
+    assert attestation_row(tmp_path, hand_edited(**{"thresholds.cpu_percent": 0}), payload).status == ratchet.RED
+    assert attestation_row(tmp_path, hand_edited(**{"thresholds.cpu_percent": False}), payload).status == ratchet.GREEN
+
+
 def test_a_measured_null_is_not_the_same_as_unmeasured(tmp_path: Path) -> None:
     payload = attestation_dict(measured={"thresholds.cpu_percent": None})
     corpus = hand_edited(**{"thresholds.cpu_percent": None})
@@ -2112,8 +2120,20 @@ def test_bootstrap_is_only_the_state_with_no_successful_main_run() -> None:
 def test_the_attestation_read_is_retried_before_it_is_called_unresolved() -> None:
     run = workflow_steps()["Fetch the baseline attestation from main"]["run"]
     assert run.count("for attempt in 1 2 3") == 2
-    assert 'if gh api "repos/${REPO}/actions/workflows/ratchet-attest.yml/runs' in run
+    assert 'if gh api --paginate "repos/${REPO}/actions/workflows/ratchet-attest.yml/runs' in run
     assert 'if gh run download "$run_id"' in run
+
+
+def test_bootstrap_is_declared_over_every_page_of_runs_not_the_first() -> None:
+    """One page of 30 newer failed or cancelled runs would hide an older success and turn an
+    established attestation into a false bootstrap -- the fall-back this row must never take
+    (Macroscope, #767). The listing is paginated, landed in a file, and slurped whole."""
+    run = workflow_steps()["Fetch the baseline attestation from main"]["run"]
+    listing = run.split("gh run download", 1)[0]
+    assert "gh api --paginate" in listing and "per_page=100" in listing
+    assert "jq -rs '[.[].workflow_runs[] | select(" in listing
+    assert "jq -rs '[.[].workflow_runs[]] | length'" in listing
+    assert ".total_count" not in listing  # a per-page field, wrong once pages are slurped
 
 
 def test_the_attestation_args_reach_the_collector_and_survive_bash_3() -> None:
@@ -2203,3 +2223,44 @@ def test_the_workflow_path_the_reader_queries_is_the_writer() -> None:
     """One constant, three places: the collector's notes, the reader's API path, the file on disk."""
     assert ATTEST_WORKFLOW.name == Path(ratchet.ATTEST_WORKFLOW).name
     assert Path(ratchet.ATTEST_WORKFLOW).name in workflow_steps()["Fetch the baseline attestation from main"]["run"]
+
+
+def test_a_removed_null_leaf_is_still_a_change() -> None:
+    """`.get()` cannot tell a null value from an absent path; membership can (Macroscope, #766)."""
+    assert ratchet.baseline_changes({"thresholds": {"cpu_percent": None}}, {"thresholds": {}}) == [
+        ("thresholds.cpu_percent", None, None)
+    ]
+    assert ratchet.baseline_changes({"thresholds": {}}, {"thresholds": {"cpu_percent": None}}) == [
+        ("thresholds.cpu_percent", None, None)
+    ]
+    assert ratchet.baseline_changes({"thresholds": {"cpu_percent": None}}, {"thresholds": {"cpu_percent": None}}) == []
+
+
+def test_the_reader_refuses_an_attestation_that_does_not_cover_every_baseline_field(tmp_path: Path) -> None:
+    partial = {"queries": CORPUS["queries"], "thresholds": CORPUS["thresholds"]}
+    payload = attestation_dict(baseline=partial, baseline_sha256=ratchet.baseline_digest(partial))
+    attestation, problem = ratchet.read_attestation(write_attestation(tmp_path, payload))
+    assert attestation is None and "exactly the baseline fields" in problem
+
+
+@pytest.mark.parametrize("flag, value", [("--run-id", "0"), ("--run-id", "-4"), ("--run-attempt", "0")])
+def test_the_writer_refuses_run_numbers_the_reader_would_reject(
+    tmp_path: Path, capsys, monkeypatch, flag, value
+) -> None:
+    pin_main_checkout(monkeypatch)
+    (tmp_path / "out").mkdir()
+    assert ratchet.main(attest_argv(tmp_path, make_wheel(tmp_path, HEAD), **{flag: value})) == 1
+    assert not (tmp_path / "out" / "attestation.json").exists()
+    assert "not positive integers" in capsys.readouterr().err
+
+
+def test_the_writer_refuses_a_checkout_whose_baseline_lacks_a_field(tmp_path: Path, capsys, monkeypatch) -> None:
+    pin_main_checkout(monkeypatch)
+    (tmp_path / "out").mkdir()
+    partial = {key: value for key, value in CORPUS.items() if key != "queries"}
+    corpus = tmp_path / "corpus.json"
+    corpus.write_text(json.dumps(partial), encoding="utf-8")
+    monkeypatch.setattr(ratchet, "CORPUS", corpus)
+    assert ratchet.main(attest_argv(tmp_path, make_wheel(tmp_path, HEAD))) == 1
+    assert not (tmp_path / "out" / "attestation.json").exists()
+    assert "lacks `queries`" in capsys.readouterr().err
