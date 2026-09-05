@@ -7,16 +7,20 @@ Covers:
 - JSONLWatcher: file discovery, poll cycle, end-to-end integration
 """
 
+import ast
 import json
 import os
 import sqlite3
 import stat
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
+import brainlayer.cli
+import brainlayer.watcher
 from brainlayer.alarm import BrainLayerAlarm
 from brainlayer.watcher import (
     BatchIndexer,
@@ -2656,3 +2660,87 @@ class TestJSONLWatcher:
         payload = json.loads(health_path.read_text())
         assert payload["active_jsonl_entries_per_minute"] == 0
         assert payload["alerting"] is False
+
+
+# ── Liveness surface ─────────────────────────────────────────────────────────
+#
+# The heartbeat rides the logger, and #759 pointed that logger at STDERR. The startup banner
+# rides rich's stdout. A sampler that grepped watch.out.log for "Watcher alive" therefore read an
+# empty throughput column and concluded the watcher was dead. The split is deliberate -- the
+# heartbeat is timestamped operational logging, the banner is a one-shot human greeting -- so the
+# fix is not to duplicate the heartbeat onto stdout (two writers of one signal, and the noisier
+# one unparseable). It is to say which surface is CANONICAL for liveness: the health file.
+# These two tests pin that choice so the next reader does not have to re-derive it from a grep.
+
+
+class TestWatcherLivenessSurface:
+    def test_health_file_is_the_liveness_surface_and_advances_every_poll(self, tmp_path):
+        """poll_count and updated_at both move on each poll -- that is what makes it liveness.
+
+        A snapshot that merely EXISTS proves the watcher started once. Liveness needs a value
+        that changes, which is what a sampler should read instead of grepping a log stream.
+        """
+        project = tmp_path / "projects" / "test-project"
+        project.mkdir(parents=True)
+        (project / "session.jsonl").write_text('{"id":"1"}\n')
+        health_path = tmp_path / "watcher-health.json"
+
+        watcher = JSONLWatcher(
+            watch_dir=tmp_path / "projects",
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda items: {},
+            batch_size=1,
+            health_path=health_path,
+        )
+
+        watcher.poll_once()
+        first = json.loads(health_path.read_text())
+        watcher.poll_once()
+        second = json.loads(health_path.read_text())
+
+        assert first["poll_count"] == 1
+        assert second["poll_count"] == 2
+        assert second["updated_at"] >= first["updated_at"]
+        assert datetime.fromisoformat(second["updated_at"]).tzinfo is not None
+
+    def test_the_heartbeat_rides_the_logger_and_the_watch_command_logs_to_stderr(self):
+        """The split, asserted rather than described.
+
+        Behavioural coverage would need a 60-second daemon run (`heartbeat_interval_s` is 60 and
+        `last_heartbeat` starts at now), so this reads the two call sites out of the AST instead:
+        the heartbeat is a `logger.info` and never a `print`, and the `watch` command's
+        `logging.basicConfig` names `sys.stderr` explicitly rather than inheriting a default.
+
+        Caveat worth knowing: this asserts on `cli/__init__.py` from the WATCHER's suite, so a
+        changed-only push that touches only the CLI will not run it. The mapping for that path is
+        a separate concern from this liveness contract.
+        """
+        watcher_tree = ast.parse(Path(brainlayer.watcher.__file__).read_text(encoding="utf-8"))
+
+        heartbeat_calls = [
+            node
+            for node in ast.walk(watcher_tree)
+            if isinstance(node, ast.Call)
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+            and node.args[0].value.startswith("Watcher alive")
+        ]
+        assert len(heartbeat_calls) == 1, "expected exactly one heartbeat emit site"
+        heartbeat_func = heartbeat_calls[0].func
+        assert isinstance(heartbeat_func, ast.Attribute)
+        assert (heartbeat_func.value.id, heartbeat_func.attr) == ("logger", "info")
+
+        cli_tree = ast.parse(Path(brainlayer.cli.__file__).read_text(encoding="utf-8"))
+        watch_fn = next(
+            node for node in ast.walk(cli_tree) if isinstance(node, ast.FunctionDef) and node.name == "watch"
+        )
+        basic_configs = [
+            node
+            for node in ast.walk(watch_fn)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "basicConfig"
+        ]
+        assert len(basic_configs) == 1, "expected the watch command to configure logging once"
+        streams = [kw.value for kw in basic_configs[0].keywords if kw.arg == "stream"]
+        assert len(streams) == 1, "the watcher's log stream must be explicit, not inherited"
+        assert (streams[0].value.id, streams[0].attr) == ("sys", "stderr")
