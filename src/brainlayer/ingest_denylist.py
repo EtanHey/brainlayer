@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fnmatch
+import functools
 import hashlib
 import json
 import os
@@ -36,11 +37,27 @@ def _configured_patterns() -> tuple[str, ...]:
     override = os.environ.get(BRAINLAYER_INGEST_DENYLIST_ENV)
     if override is None:
         return DEFAULT_INGEST_DENYLIST
-    return tuple(pattern.strip() for pattern in override.split(",") if pattern.strip())
+    return _split_patterns(override)
 
 
-def _inferred_homes(path: Path) -> tuple[Path, ...]:
-    homes: list[Path] = [Path.home()]
+@functools.lru_cache(maxsize=16)
+def _split_patterns(raw: str) -> tuple[str, ...]:
+    return tuple(pattern.strip() for pattern in raw.split(",") if pattern.strip())
+
+
+@functools.lru_cache(maxsize=16)
+def _subtree_patterns(patterns: tuple[str, ...]) -> tuple[str, ...]:
+    """The patterns that, when they match a directory, also match every path below it."""
+    return tuple(pattern for pattern in patterns if pattern.rstrip("/").rsplit("/", 1)[-1] == "**")
+
+
+def _inferred_homes(path: Path, home: Path | None = None) -> tuple[Path, ...]:
+    """Homes a `~/` pattern expands against: the process home plus any home implied by the path.
+
+    `home` is explicit so a memoised caller can key its cache on the exact value it matched
+    with; left None it reads the live Path.home().
+    """
+    homes: list[Path] = [home if home is not None else Path.home()]
     for provider_dir in (".claude", ".codex", ".cursor", ".gemini"):
         if provider_dir not in path.parts:
             continue
@@ -181,14 +198,61 @@ def _claude_subagent_attribution(path: Path) -> str | None:
     return attribution
 
 
-def is_denylisted(path: str | Path, *, unknown_subagent_is_denylisted: bool = True) -> bool:
-    """Return True when a source path is under an ingest-denylisted transcript root."""
-    candidate = Path(os.path.abspath(os.path.expanduser(str(path))))
-    homes = _inferred_homes(candidate)
-    for pattern in _configured_patterns():
+@functools.lru_cache(maxsize=65536)
+def _matches_configured_pattern(path: str, patterns: tuple[str, ...], home: str) -> bool:
+    """Glob-match one absolute path against the configured denylist, memoised.
+
+    The verdict is a pure function of the path, the pattern tuple, and the home the
+    patterns expand against -- so it is cached on exactly those three. The watcher asks
+    this for every file on every poll: with the deployed 5-pattern denylist that was
+    60,625 glob expansions and ~258,000 recursive `_match_parts` calls per poll over the
+    12,125-file corpus (0.35s CPU on a performance core, ~1.8s on the efficiency cores
+    launchd schedules the watcher onto), all producing the same answers as the poll
+    before. A changed BRAINLAYER_INGEST_DENYLIST is still picked up on the very next call,
+    because the patterns are part of the key. `home` is in the key for the same reason, and it
+    is the home the match is computed with -- not a live Path.home() read that merely happens
+    to agree with it (round-1 review of #781: a key that does not drive the computation is a
+    latent flip between a cached verdict and the expansion it was cached under).
+    """
+    candidate = Path(path)
+    homes = _inferred_homes(candidate, Path(home))
+    for pattern in patterns:
         for expanded_pattern in _expand_globs(pattern, homes):
             if _match_parts(candidate.parts, expanded_pattern.parts):
                 return True
+    return False
+
+
+def clear_pattern_match_cache() -> None:
+    """Drop memoised glob verdicts (tests; a process that rewrites its own environment)."""
+    _matches_configured_pattern.cache_clear()
+
+
+def is_directory_denylisted(path: str | Path) -> bool:
+    """Return True when every file that could exist under this directory is denylisted.
+
+    Only a configured pattern ending in `**` can say that: it matches the directory itself
+    and, because the trailing `**` absorbs any suffix, everything beneath it. A pattern with
+    any other tail (`.../*.jsonl`) matching a directory's name says nothing about the files
+    inside, and the default subagent policy judges files one at a time by their attribution,
+    so both answer False here. The watcher uses this to skip whole subtrees during discovery:
+    on the M4 the deployed `~/.cursor/**/agent-transcripts/**` covers 4,315 of the 5,086
+    directories under `~/.cursor/projects`, all of which were being read on every poll to
+    find files that were then discarded.
+    """
+    patterns = _subtree_patterns(_configured_patterns())
+    if not patterns:
+        return False
+    candidate = Path(os.path.abspath(os.path.expanduser(str(path))))
+    return _matches_configured_pattern(str(candidate), patterns, str(Path.home()))
+
+
+def is_denylisted(path: str | Path, *, unknown_subagent_is_denylisted: bool = True) -> bool:
+    """Return True when a source path is under an ingest-denylisted transcript root."""
+    candidate = Path(os.path.abspath(os.path.expanduser(str(path))))
+    patterns = _configured_patterns()
+    if patterns and _matches_configured_pattern(str(candidate), patterns, str(Path.home())):
+        return True
     if BRAINLAYER_INGEST_DENYLIST_ENV not in os.environ and _is_claude_subagent(candidate):
         if memory_reader_attribution(candidate) is not None:
             return True
