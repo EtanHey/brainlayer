@@ -353,3 +353,20 @@ def test_inline_documents_are_deduplicated_by_the_same_rule_as_the_store() -> No
         margins.reject_duplicate_runs(runs, ["doc 0", "doc 1", "doc 2", "doc 3", "doc 4", "doc 5"])
     assert "1000 appears twice" in str(error.value) and "doc 5" in str(error.value)
     assert margins.reject_duplicate_runs(p50_runs([100.0] * 5)) is None
+
+
+def test_an_invalid_short_list_is_refused_not_reported_unmeasured() -> None:
+    # CodeRabbit (#763): with fewer than five values the unmeasured return used to come BEFORE
+    # validation, so [nan, 1.0] read as "not enough runs" instead of "bad input".
+    with pytest.raises(margins.AttestationError):
+        margins.measured_margin([float("nan"), 1.0])
+
+
+def test_margin_for_refuses_duplicate_runs_even_when_handed_an_inline_list() -> None:
+    # CodeRabbit (#763): margin_for took caller-supplied documents straight to series(); five copies of
+    # one run gave a zero-width measured band. Callers that load through the store already dedup, but
+    # the public entry point applies the rule itself.
+    one = attestation(0, **{"latency_baseline_ms.p50": 100.0})
+    with pytest.raises(margins.AttestationError) as error:
+        margins.margin_for([one] * 5, margins.LATENCY_P50)
+    assert "appears twice" in str(error.value)

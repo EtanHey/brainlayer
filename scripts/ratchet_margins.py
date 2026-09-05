@@ -156,14 +156,15 @@ def measured_margin(values: list[float], *, minimum_runs: int = MINIMUM_RUNS) ->
     """
     if minimum_runs < MINIMUM_RUNS:
         raise ValueError(f"minimum_runs={minimum_runs} is below {MINIMUM_RUNS}, the fewest runs the t-table covers")
+    for value in values:
+        # Public entry point, same rule as the store path: `inf` here would form limit=inf and pass
+        # everything (Cursor, #763). Checked BEFORE the count, so a bad short list is "bad input", not
+        # "not enough runs" (CodeRabbit). A caller that bypassed `series` gets the refusal, never a band.
+        if not honest_value(value):
+            raise AttestationError(f"cannot form a band from {value!r}: not a finite non-negative number")
     n = len(values)
     if n < minimum_runs:
         return Margin(kind=UNMEASURED, n=n, minimum=minimum_runs)
-    for value in values:
-        # Public entry point, same rule as the store path: `inf` here would form limit=inf and pass
-        # everything (Cursor, #763). A caller that bypassed `series` gets the refusal, not a fail-open band.
-        if not honest_value(value):
-            raise AttestationError(f"cannot form a band from {value!r}: not a finite non-negative number")
     try:
         mean = math.fsum(value / n for value in values)  # scaled first: a plain sum can overflow
         stdev = statistics.stdev(values)  # sample (n-1): the population is the runs we did NOT see
@@ -359,4 +360,5 @@ def margin_for(attestations: list[dict] | None, key: tuple[str, ...]) -> Margin:
     """The band at ``key``; with no store handed over at all, ``unmeasured`` with zero runs."""
     if attestations is None:
         return Margin(kind=UNMEASURED, n=0)
+    reject_duplicate_runs(attestations)  # the store loader already did; an inline list may not have (CodeRabbit)
     return measured_margin(series(attestations, key))
