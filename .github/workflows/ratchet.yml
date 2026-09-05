@@ -26,6 +26,10 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  # `actions: read` is what lets the table job list ratchet-attest.yml's runs on main and download
+  # the `ratchet-attestation` artifact. Read only: a PR run must be able to SEE main's attestation
+  # and must never be able to write one -- that asymmetry is the whole `baseline attestation` row.
+  actions: read
 
 # One in-flight run per PR. This plus `!cancelled()` on every writer means a superseded run stops
 # before it starts writing, so it cannot PATCH its table over a newer run's. Residual, stated rather
@@ -405,6 +409,117 @@ jobs:
           fi
           cat "$args_path"
 
+      # What the baseline is compared AGAINST. Read from the Actions API -- the latest successful
+      # push/dispatch run of ratchet-attest.yml on main and ITS artifact -- and never from this
+      # checkout, because this checkout is the PR's and the PR is the thing under test. Four
+      # outcomes, none of them silent:
+      #   attested    -> the artifact, bound to the run the API named (run id AND main sha match);
+      #   bootstrap   -> the API shows no successful attest run on main at all (the workflow is new,
+      #                  or has never succeeded): the collector compares against the base tip by git
+      #                  and SAYS it is bootstrapping;
+      #   unresolved  -> a run exists and its artifact could not be fetched or does not match: RED.
+      # Bootstrap is deliberately narrow: once a success exists on main, an expired artifact is
+      # `unresolved`, never a fall-back, because a writer that has run and published nothing is a
+      # finding and a fall-back would be the false green this whole table forbids.
+      - name: Fetch the baseline attestation from main
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          args_path="${RUNNER_TEMP}/attestation-args.txt"
+          runs_path="${RUNNER_TEMP}/attest-runs.json"
+          err_path="${RUNNER_TEMP}/attest.err"
+          state=unresolved
+          reason="the attest run listing was never read"
+          run_id=""
+          run_sha=""
+          # The API filters by branch; the event filter is in jq because the endpoint takes one
+          # `event` value and two (push, workflow_dispatch) are legitimate writers. `--paginate`,
+          # and the pages land in a file that `jq -s` slurps: a single page could fill with newer
+          # failed or cancelled runs, hide an older success, and turn an ESTABLISHED attestation
+          # into a false bootstrap -- the one fall-back this row must never take (Macroscope, #767).
+          for attempt in 1 2 3; do
+            if gh api --paginate "repos/${REPO}/actions/workflows/ratchet-attest.yml/runs?branch=main&exclude_pull_requests=true&per_page=100" > "$runs_path" 2> "$err_path"; then
+              # Both listing reads are guarded, the same way the artifact reads below are: a 200
+              # whose body is not JSON made `jq` exit non-zero, and under `set -e` that killed the
+              # step before any hand-off was written (Cursor, #767 round 2). Garbage is one failed
+              # attempt, never a reason to fall back to the base commit.
+              selected=""
+              total=""
+              # `-s` on an EMPTY body slurps to `[]`, which would read as "0 runs, bootstrap" -- the
+              # one fall-back garbage must never reach. An empty 200 is unreadable, not a listing.
+              if [[ ! -s "$runs_path" ]] || ! selected="$(jq -rs '[.[].workflow_runs[] | select((.event == "push" or .event == "workflow_dispatch") and .conclusion == "success")] | .[0] | if . == null then "" else "\(.id) \(.head_sha)" end' "$runs_path" 2> "$err_path")" \
+                 || ! total="$(jq -rs '[.[].workflow_runs[]] | length' "$runs_path" 2> "$err_path")"; then
+                detail="$(awk 'NF { print; exit }' "$err_path")"
+                reason="the ratchet-attest.yml run listing could not be read as JSON in ${attempt} attempt(s): ${detail:-empty response body}"
+              elif [[ -n "$selected" ]]; then
+                run_id="${selected%% *}"
+                run_sha="${selected##* }"
+                state=fetched
+                break
+              else
+                state=bootstrap
+                reason="ratchet-attest.yml has ${total} run(s) on main and no successful push/dispatch run yet"
+                break
+              fi
+            elif grep -q 'HTTP 404' "$err_path"; then
+              # Not registered on main at all: the PR that adds the workflow, and only that PR.
+              state=bootstrap
+              reason="ratchet-attest.yml is not a registered workflow on main yet (HTTP 404)"
+              break
+            else
+              reason="\`gh api\` could not list ratchet-attest.yml runs in ${attempt} attempt(s): $(awk 'NF { print; exit }' "$err_path")"
+            fi
+            if [[ "$attempt" -lt 3 ]]; then
+              sleep $((attempt * 5))
+            fi
+          done
+          if [[ "$state" == fetched ]]; then
+            state=unresolved
+            for attempt in 1 2 3; do
+              rm -rf "${RUNNER_TEMP}/attestation"
+              if gh run download "$run_id" -R "$REPO" -n ratchet-attestation -D "${RUNNER_TEMP}/attestation" 2> "$err_path"; then
+                if [[ ! -f "${RUNNER_TEMP}/attestation/attestation.json" ]]; then
+                  reason="run ${run_id} published a ratchet-attestation artifact with no attestation file in it"
+                  break
+                fi
+                # Bind the artifact to the run the API named. The API is GitHub's record of which
+                # main commit ran; the artifact is what that run wrote; they have to agree. The
+                # reads are guarded: an unparseable artifact makes `jq` exit non-zero, and under
+                # `set -e` an unguarded read killed this step BEFORE the hand-off was written, so
+                # the row never rendered its promised RED-with-reason and Collect died on a missing
+                # args file instead (Cursor, #767 round 1). Now it is one more `unresolved`.
+                got_run=""
+                got_sha=""
+                if ! got_run="$(jq -r '.run_id' "${RUNNER_TEMP}/attestation/attestation.json" 2> "$err_path")" \
+                   || ! got_sha="$(jq -r '.main_sha' "${RUNNER_TEMP}/attestation/attestation.json" 2> "$err_path")"; then
+                  reason="the artifact of run ${run_id} (main ${run_sha}) could not be read as JSON: $(awk 'NF { print; exit }' "$err_path")"
+                  break
+                fi
+                if [[ "$got_run" == "$run_id" && "$got_sha" == "$run_sha" ]]; then
+                  state=attested
+                  reason="run ${run_id} on main ${run_sha}"
+                else
+                  reason="the artifact of run ${run_id} (main ${run_sha}) names run ${got_run} / main ${got_sha} — it is not that run's attestation"
+                fi
+                break
+              fi
+              reason="run ${run_id} (main ${run_sha}) has no downloadable ratchet-attestation artifact after ${attempt} attempt(s): $(awk 'NF { print; exit }' "$err_path"); an expired artifact is refreshed by a workflow_dispatch of ratchet-attest.yml on main"
+              if [[ "$attempt" -lt 3 ]]; then
+                sleep $((attempt * 5))
+              fi
+            done
+          fi
+          case "$state" in
+            attested) printf '%s\n%s\n' --attestation "${RUNNER_TEMP}/attestation/attestation.json" > "$args_path" ;;
+            bootstrap) printf '%s\n%s\n' --attestation-bootstrap "$reason" > "$args_path" ;;
+            *) printf '%s\n%s\n' --attestation-unresolved "$reason" > "$args_path" ;;
+          esac
+          echo "::notice title=Baseline attestation::${state} — ${reason}"
+          cat "$args_path"
+
       # `!cancelled()`, never `always()`. Two different failures ride on this one condition:
       #   - it runs when an EARLIER STEP FAILED (a broken build), so this run still publishes a table
       #     instead of leaving the previous commit's GREEN table sitting on the PR -- a run that
@@ -441,6 +556,16 @@ jobs:
             echo "::error title=Ratchet::the commit hand-off produced no args; refusing to render a table that would claim this is not a pull request."
             exit 1
           fi
+          # The attestation hand-off, on the same rule: with no flags the collector renders
+          # `n/a — not a pull-request run` for the baseline row, which on a PR is a false green.
+          ATTESTATION_ARGS=()
+          while IFS= read -r attestation_arg; do
+            ATTESTATION_ARGS+=("$attestation_arg")
+          done < "${RUNNER_TEMP}/attestation-args.txt"
+          if [[ ${#ATTESTATION_ARGS[@]} -eq 0 ]]; then
+            echo "::error title=Ratchet::the attestation hand-off produced no args; refusing to render a table that would claim the baseline was never checked."
+            exit 1
+          fi
           # --wheel-glob, not a shell glob: `$(ls dist/*.whl)` collapses "no wheel" and "three wheels"
           # into an empty --wheel, which the collector would have called `n/a` while the job stayed
           # green -- a false green in the ratchet itself. The collector now fails closed and reports
@@ -449,6 +574,7 @@ jobs:
           python scripts/ci_ratchet_table.py \
             --wheel-glob 'dist/*.whl' \
             "${COMMIT_ARGS[@]}" \
+            "${ATTESTATION_ARGS[@]}" \
             "${SIGNATURE_ARGS[@]}" \
             --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --out "${RUNNER_TEMP}/ratchet.md" || rc=$?

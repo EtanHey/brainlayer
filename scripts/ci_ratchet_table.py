@@ -25,14 +25,18 @@ whether it still described the branch. This row names the PR-head commit the che
 goes RED when it is no longer the PR's head, because a table measured on a superseded commit must
 announce that rather than sit there looking current.
 
-The **baseline** every comparison reads -- the ``queries``, ``latency_baseline_ms`` and ``thresholds``
-fields of ``tests/fixtures/sprint_gate/corpus.json`` -- gets a store outside the PR tree here: on every
-push to ``main``, ``ratchet-attest.yml`` runs this collector with ``--attest-out`` and publishes what
-that main commit's baseline IS, plus every value the run measured, as the ``ratchet-attestation``
-artifact (``attestation_payload`` below; ``read_attestation`` is its reader). A ``pull_request`` run
-holds ``contents: read`` and cannot upload into another run's artifacts, which is what makes the
-artifact a reference a PR cannot edit. The row that compares a PR's baseline against it is the
-next slice; this one is the writer and the schema.
+``baseline attestation`` answers the question that comes right after: **what is this table measuring
+against, and who says so?** The baseline fields of ``tests/fixtures/sprint_gate/corpus.json`` --
+``queries``, ``latency_baseline_ms``, ``thresholds`` -- are what every comparison in this file and in
+``scripts/sprint_gate.py`` reads as the reference. Until this row existed, a PR could edit those numbers
+and the gate compared against the edited copy. Now the reference is the ``ratchet-attestation``
+artifact that a ``push``/``workflow_dispatch`` run of ``ratchet-attest.yml`` on ``main`` publishes,
+read back through the Actions API and never from the PR tree: a baseline that differs from it is RED
+-- "changed by hand; no CI attestation for these values" -- unless every changed field equals a value
+that main run actually **measured**. Same boundary as ``commit provenance``, stated exactly: the
+attestation's INPUTS are outside the PR tree (a PR run cannot upload an artifact to a main run), but
+the comparator is this file, which the PR checks out and could rewrite. Diff-reviewable, not
+tamper-proof.
 
 Two rows have a runner-side method. ``provenance`` measures in-process on the ubuntu job.
 ``signature_valid`` is measured by the separate macOS parity job in ``ratchet.yml``, which installs
@@ -111,6 +115,13 @@ COMMIT_UNAVAILABLE_DEFAULT = (
     "so there is no PR head for the table to be current with"
 )
 
+# What `baseline attestation` may say when nobody handed it an attestation. Like the commit row, a
+# local `python scripts/ci_ratchet_table.py` is not a PR and has read nothing from the Actions API.
+ATTESTATION_UNAVAILABLE_DEFAULT = (
+    "not a pull-request run: no `--attestation` was handed to this collector, so there is no main "
+    "attestation for the baseline to be checked against"
+)
+
 GREEN = "GREEN"
 RED = "RED"
 NA = "n/a"
@@ -157,6 +168,13 @@ class Probe:
     signature: SignatureReport | None = None
     signature_unavailable: str | None = None
     signature_problem: str | None = None
+    # What main says the baseline is, and the same split again: the attestation a main run
+    # published, the reason there is none yet (bootstrap: the writer has never run on main), the
+    # reason nobody asked (not a PR), or a promise broken (asked, and could not be read).
+    attestation: Attestation | None = None
+    attestation_bootstrap: str | None = None
+    attestation_unavailable: str | None = None
+    attestation_problem: str | None = None
     # Ratchet (c): the attested green main runs every measured margin is derived from, read from
     # the `ratchet-attestation` artifacts of `ratchet-attest.yml` runs on main. None when nobody
     # handed this run a store (margins render `unmeasured` with 0 runs); `attestations_problem` when
@@ -175,12 +193,16 @@ class Probe:
         measured_sha: str | None = None,
         pr_head_sha: str | None = None,
         pr_head_unresolved: str | None = None,
+        attestation: Path | None = None,
+        attestation_bootstrap: str | None = None,
+        attestation_unresolved: str | None = None,
         attestations: Path | None = None,
     ) -> Probe:
         selected = select_wheel(wheel, wheel_glob)
         signature = select_signature(signature_report, signature_unavailable)
         commit = select_commit(measured_sha, pr_head_sha, pr_head_unresolved)
-        attested = select_attestations(attestations)
+        attested = select_attestation(attestation, attestation_bootstrap, attestation_unresolved)
+        store = select_attestations(attestations)
         return cls(
             os_name=platform.system(),
             architecture=platform.machine(),
@@ -200,8 +222,12 @@ class Probe:
             signature=signature.report,
             signature_unavailable=signature.unavailable,
             signature_problem=signature.problem,
-            attestations=attested.attestations,
-            attestations_problem=attested.problem,
+            attestation=attested.attestation,
+            attestation_bootstrap=attested.bootstrap,
+            attestation_unavailable=attested.unavailable,
+            attestation_problem=attested.problem,
+            attestations=store.attestations,
+            attestations_problem=store.problem,
         )
 
 
@@ -283,6 +309,16 @@ class Attestation:
     measured: dict[str, object]
 
 
+@dataclass(frozen=True)
+class AttestationSelection:
+    """Which of the four states `baseline attestation` is in, resolved once and fail-closed."""
+
+    attestation: Attestation | None = None
+    bootstrap: str | None = None
+    unavailable: str | None = None
+    problem: str | None = None
+
+
 def honest_run_number(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
@@ -341,20 +377,50 @@ def read_attestation(path: Path) -> tuple[Attestation | None, str | None]:
     )
 
 
+def select_attestation(path: Path | None, bootstrap: str | None, unresolved: str | None) -> AttestationSelection:
+    """Resolve the attestation FAIL-CLOSED, on the same rule the other hand-offs follow.
+
+    `--attestation <path>` says a main run published one and ratchet.yml fetched it; anything
+    wrong with it is a finding. `--attestation-bootstrap <reason>` says the Actions API shows NO
+    successful attest run on main yet -- the writer has never run there -- which is the one state
+    that is neither a measurement nor a finding, and the row then falls back to the base commit.
+    `--attestation-unresolved <reason>` says the run was asked to fetch one and could not: RED.
+    """
+    handed = [flag for flag in (path, bootstrap, unresolved) if flag is not None]
+    if len(handed) > 1:
+        return AttestationSelection(
+            problem="`--attestation`, `--attestation-bootstrap` and `--attestation-unresolved` are mutually exclusive"
+        )
+    if not handed:
+        return AttestationSelection(unavailable=ATTESTATION_UNAVAILABLE_DEFAULT)
+    if unresolved is not None:
+        return AttestationSelection(
+            problem=unresolved.strip() or "the main attestation could not be fetched (no reason given)"
+        )
+    if bootstrap is not None:
+        return AttestationSelection(bootstrap=bootstrap.strip() or "no attest run has completed on main yet")
+    attestation, problem = read_attestation(path)  # type: ignore[arg-type]
+    if problem is not None or attestation is None:
+        return AttestationSelection(problem=problem or "the main attestation could not be read")
+    return AttestationSelection(attestation=attestation)
+
+
 @dataclass(frozen=True)
-class AttestationSelection:
+class AttestationStoreSelection:
+    """Ratchet (c): the store of attested main runs a margin is derived from, or why it could not be read."""
+
     attestations: tuple[dict, ...] | None = None
     problem: str | None = None
 
 
-def select_attestations(root: Path | None) -> AttestationSelection:
+def select_attestations(root: Path | None) -> AttestationStoreSelection:
     """Read the attested main runs FAIL-CLOSED: a store handed over and unreadable is a finding."""
     if root is None:
-        return AttestationSelection()
+        return AttestationStoreSelection()
     try:
-        return AttestationSelection(attestations=tuple(margins.load_attestations(root)))
+        return AttestationStoreSelection(attestations=tuple(margins.load_attestations(root)))
     except margins.AttestationError as error:
-        return AttestationSelection(problem=f"{error} — every measured margin in this table depends on it")
+        return AttestationStoreSelection(problem=f"{error} — every measured margin in this table depends on it")
 
 
 @dataclass(frozen=True)
@@ -662,6 +728,31 @@ def checkout_stands_for(lineage: tuple[str, ...], measured: str) -> bool:
     return len(lineage) > 2 and lineage[2] == measured
 
 
+def git_baseline_at(sha: str) -> tuple[dict | None, str | None]:
+    """The baseline fields as committed at `sha`, or why git cannot say.
+
+    Bootstrap only: before the first attest run on main there is nothing published to compare
+    against, and the base tip's committed fixture is the next-best reference -- a commit object
+    the PR did not write. `git show <sha>:<path>` reads the blob out of the object store, so it
+    needs the parent commits that `fetch-depth: 2` brings along.
+    """
+    raw = _git("show", f"{sha}:{CORPUS_RELATIVE.as_posix()}")
+    if raw is None:
+        return None, f"git could not show `{CORPUS_RELATIVE.as_posix()}` at base `{sha[:12]}`"
+    try:
+        corpus = json.loads(raw)
+    except ValueError as error:
+        return None, f"the baseline at base `{sha[:12]}` is not JSON ({type(error).__name__})"
+    if not isinstance(corpus, dict):
+        return None, f"the baseline at base `{sha[:12]}` is a JSON {type(corpus).__name__}, not an object"
+    missing = [field for field in BASELINE_FIELDS if field not in corpus]
+    if missing:
+        # The same shape the writer refuses to attest and the reader refuses to read: a base whose
+        # fixture lacks a field is not a reference either (Cursor, #767 round 2).
+        return None, f"the baseline at base `{sha[:12]}` lacks {', '.join(f'`{field}`' for field in missing)}"
+    return baseline_view(corpus), None
+
+
 def git_tree_dirty() -> bool | None:
     # `--untracked-files=all` so `status.showUntrackedFiles=no` cannot hide an untracked
     # `_build.py` and turn a dirty stamp into a false GREEN.
@@ -788,6 +879,209 @@ def row_commit_provenance(probe: Probe, _corpus: dict) -> Row:
         COMMIT_METHOD,
         COMMIT_NOTES,
     )
+
+
+ATTESTATION_METHOD = "main attestation artifact via Actions API · in-process · runner"
+ATTESTATION_METHOD_BOOTSTRAP = "base commit via git (bootstrap) · in-process · runner"
+
+ATTESTATION_NOTES = (
+    "What every comparison is measured AGAINST, and who says so. The baseline fields of "
+    "`tests/fixtures/sprint_gate/corpus.json` (`queries`, `latency_baseline_ms`, `thresholds`) are "
+    "compared to the `ratchet-attestation` artifact of the latest successful `push` or (no-input) "
+    "`workflow_dispatch` run of `ratchet-attest.yml` on `main`, fetched through the Actions API — "
+    "a PR run cannot write to "
+    "another run's artifacts. A field that differs is RED unless that main run **measured** the "
+    "new value; today no runner-side collector measures any baseline field, so today the baseline "
+    "cannot move by PR at all, and this row says so instead of a hand edit passing. Boundary: the "
+    "comparator is this PR's checkout of `ci_ratchet_table.py`, diff-reviewable, not tamper-proof."
+)
+
+
+# A sentinel so a measured `null` and "not measured" cannot be confused inside attested_row.
+_UNMEASURED = object()
+
+
+def describe_change(path: BaselinePath, old: object, new: object) -> str:
+    return f"`{dotted(path)}` {json.dumps(old)} → {json.dumps(new)}"
+
+
+def measured_value(attestation: Attestation, path: BaselinePath) -> object:
+    """What the main run measured for `path`, or `_UNMEASURED`.
+
+    The `measured` map is keyed by dotted strings -- that is the contract the margin reader (c)
+    consumes -- so a segment that itself contains a dot could collide with a genuinely nested
+    measured path. Such a path is never matched: it is unmeasured, and a change to it is RED.
+    """
+    if any("." in segment for segment in path):
+        return _UNMEASURED
+    return attestation.measured.get(dotted(path), _UNMEASURED)
+
+
+def attested_row(attestation: Attestation, corpus: dict, base_tip: str | None) -> Row:
+    """Judge the PR's baseline field by field against what the main run saw and measured."""
+    where = f"run {attestation.run_id} · main `{attestation.main_sha[:12]}`"
+    if attestation.measured_at:
+        where += f" · {attestation.measured_at}"
+    view = baseline_view(corpus)
+    changes = baseline_changes(attestation.baseline, view)
+    stale = ""
+    if base_tip is not None and base_tip != attestation.main_sha:
+        # The attestation is not for this checkout's base. No direction is asserted -- a sha
+        # inequality is not an ordering, and a stale PR run could otherwise claim main "moved" to
+        # an OLDER commit (Macroscope, #767). What matters is that the base's own committed
+        # baseline is checked too: against the artifact alone, a PR that reverts a field to the
+        # attested-but-superseded value would read as "no change" (Macroscope, #767).
+        stale = (
+            f" · the attestation is for main `{attestation.main_sha[:12]}`, not this checkout's base `{base_tip[:12]}`"
+        )
+        reference, problem = git_baseline_at(base_tip)
+        if problem is not None or reference is None:
+            return Row(
+                "baseline attestation",
+                RED,
+                f"the attestation ({where}) predates base `{base_tip[:12]}` and {problem or 'the base baseline could not be read'}",
+                ATTESTATION_METHOD,
+                ATTESTATION_NOTES,
+            )
+        against_base = baseline_changes(reference, view)
+        by_hand = [(path, old, new) for path, old, new in against_base if not licensed(attestation, path, new)]
+        if by_hand:
+            listed = "; ".join(describe_change(*change) for change in by_hand[:6])
+            return Row(
+                "baseline attestation",
+                RED,
+                f"**baseline changed by hand; no CI attestation for these values** — differs from base "
+                f"`{base_tip[:12]}`: {listed}; the attestation ({where}) predates that base and measured none of them",
+                ATTESTATION_METHOD,
+                ATTESTATION_NOTES,
+            )
+        # The PR carries exactly what main has committed at the base (or values main measured).
+        # The stale artifact is not re-applied on top of that: main's committed baseline is the
+        # newer truth, and its own attest run will refresh the artifact.
+        if against_base:
+            listed = "; ".join(describe_change(*change) for change in against_base[:6])
+            return Row(
+                "baseline attestation",
+                GREEN,
+                f"baseline moved to values measured by main ({where}) relative to base `{base_tip[:12]}`: {listed}{stale}",
+                ATTESTATION_METHOD,
+                ATTESTATION_NOTES,
+            )
+        return Row(
+            "baseline attestation",
+            GREEN,
+            f"baseline `{baseline_digest(reference)[:12]}` unchanged from base `{base_tip[:12]}` by git{stale}",
+            ATTESTATION_METHOD,
+            ATTESTATION_NOTES,
+        )
+    if not changes:
+        return Row(
+            "baseline attestation",
+            GREEN,
+            f"baseline `{attestation.digest[:12]}` matches the main attestation ({where}){stale}",
+            ATTESTATION_METHOD,
+            ATTESTATION_NOTES,
+        )
+    by_hand = [(path, old, new) for path, old, new in changes if not licensed(attestation, path, new)]
+    if by_hand:
+        listed = "; ".join(describe_change(*change) for change in by_hand[:6])
+        more = f" (+{len(by_hand) - 6} more)" if len(by_hand) > 6 else ""
+        return Row(
+            "baseline attestation",
+            RED,
+            f"**baseline changed by hand; no CI attestation for these values** — {listed}{more}; "
+            f"the latest main attestation ({where}) measured none of them{stale}",
+            ATTESTATION_METHOD,
+            ATTESTATION_NOTES,
+        )
+    listed = "; ".join(describe_change(*change) for change in changes[:6])
+    return Row(
+        "baseline attestation",
+        GREEN,
+        f"baseline moved to values measured by main ({where}): {listed}{stale}",
+        ATTESTATION_METHOD,
+        ATTESTATION_NOTES,
+    )
+
+
+def licensed(attestation: Attestation, path: BaselinePath, new: object) -> bool:
+    """Did the main run measure exactly this value for this path? Value AND type: `False == 0` in
+    Python, and a measured boolean swapped for a count is a hand edit wearing the measurement's
+    value (Macroscope, #767)."""
+    measured = measured_value(attestation, path)
+    return measured is not _UNMEASURED and measured == new and type(measured) is type(new)
+
+
+def bootstrap_row(reason: str, corpus: dict, lineage: tuple[str, ...] | None) -> Row:
+    """No attest run has ever completed on main. The base tip's committed baseline stands in.
+
+    GREEN here means exactly one thing was measured: that this PR does not move the baseline.
+    Once one attest run exists this branch is never taken again -- an expired or missing artifact
+    after that is `--attestation-unresolved`, a finding, because a writer that has run before and
+    published nothing is not a bootstrap.
+    """
+    base_tip = base_tip_of(lineage)
+    if base_tip is None:
+        return Row(
+            "baseline attestation",
+            RED,
+            f"bootstrap ({reason}), and this checkout is not a merge ref so git cannot name the base "
+            "commit; nothing here shows whether the baseline was changed",
+            ATTESTATION_METHOD_BOOTSTRAP,
+            ATTESTATION_NOTES,
+        )
+    reference, problem = git_baseline_at(base_tip)
+    if problem is not None or reference is None:
+        return Row(
+            "baseline attestation",
+            RED,
+            f"bootstrap ({reason}), and {problem or 'the base baseline could not be read'}",
+            ATTESTATION_METHOD_BOOTSTRAP,
+            ATTESTATION_NOTES,
+        )
+    changes = baseline_changes(reference, baseline_view(corpus))
+    if changes:
+        listed = "; ".join(describe_change(*change) for change in changes[:6])
+        return Row(
+            "baseline attestation",
+            RED,
+            f"**baseline changed by hand; no CI attestation for these values** — {listed}; "
+            f"bootstrap ({reason}), compared against base `{base_tip[:12]}` by git",
+            ATTESTATION_METHOD_BOOTSTRAP,
+            ATTESTATION_NOTES,
+        )
+    return Row(
+        "baseline attestation",
+        GREEN,
+        f"bootstrap: {reason}; baseline `{baseline_digest(reference)[:12]}` unchanged from base "
+        f"`{base_tip[:12]}` by git — attestation begins with the first main run of `{ATTEST_WORKFLOW}`",
+        ATTESTATION_METHOD_BOOTSTRAP,
+        ATTESTATION_NOTES,
+    )
+
+
+def row_baseline_attestation(probe: Probe, corpus: dict) -> Row:
+    """Say what the baseline is being checked against, and go RED the moment it was hand-edited."""
+    if probe.attestation_problem:
+        return Row("baseline attestation", RED, probe.attestation_problem, ATTESTATION_METHOD, ATTESTATION_NOTES)
+    if probe.attestation_bootstrap:
+        return bootstrap_row(probe.attestation_bootstrap, corpus, probe.head_lineage)
+    if probe.attestation is None:
+        reason = probe.attestation_unavailable or ATTESTATION_UNAVAILABLE_DEFAULT
+        return Row("baseline attestation", NA, f"n/a — {reason}", ATTESTATION_METHOD, ATTESTATION_NOTES)
+    return attested_row(probe.attestation, corpus, base_tip_of(probe.head_lineage))
+
+
+def base_tip_of(lineage: tuple[str, ...] | None) -> str | None:
+    """The base branch's tip, which on a `pull_request` merge ref is the FIRST parent.
+
+    Only a merge ref has one. A direct checkout's first parent is the PR head's own parent -- a
+    commit on the PR's branch, not main's tip -- and comparing against it would let a baseline
+    edit two commits back pass as "unchanged". Same positional rule as `checkout_stands_for`.
+    """
+    if lineage is None or len(lineage) < 3:
+        return None
+    return lineage[1]
 
 
 PROVENANCE_NOTES = (
@@ -1052,9 +1346,11 @@ def measured_signature_row(report: SignatureReport) -> Row:
 
 
 # `row_commit_provenance` leads: every other row's value belongs to the commit it names, so a
-# reader has to see that sha before reading a number measured against it.
+# reader has to see that sha before reading a number measured against it. `baseline attestation`
+# is second for the same reason: it names what the numbers are measured AGAINST.
 ROW_BUILDERS = (
     row_commit_provenance,
+    row_baseline_attestation,
     row_provenance,
     row_mapped_bytes,
     row_search_latency,
@@ -1251,6 +1547,26 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--attestation",
+        type=Path,
+        help=(
+            "The `ratchet-attestation` artifact of the latest successful main run of ratchet-attest.yml, "
+            "fetched by the workflow through the Actions API. Passing it asserts one exists: a missing or "
+            "malformed file is RED, never n/a."
+        ),
+    )
+    parser.add_argument(
+        "--attestation-bootstrap",
+        help=(
+            "Why there is no attestation yet: the Actions API shows no successful attest run on main. "
+            "The row then compares against the base commit's committed baseline, by git."
+        ),
+    )
+    parser.add_argument(
+        "--attestation-unresolved",
+        help="Why the main attestation could not be fetched. Renders RED with that reason — it is not a capability gap.",
+    )
+    parser.add_argument(
         "--attestations",
         type=Path,
         help=(
@@ -1282,6 +1598,9 @@ def main(argv: list[str] | None = None) -> int:
         args.measured_sha,
         args.pr_head_sha,
         args.pr_head_unresolved,
+        args.attestation,
+        args.attestation_bootstrap,
+        args.attestation_unresolved,
         args.attestations,
     )
     rows = collect(probe, corpus)
