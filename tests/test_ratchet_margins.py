@@ -192,6 +192,7 @@ def test_a_value_that_is_not_a_finite_non_negative_number_is_refused_not_coerced
     [
         ("[]", "not an object"),
         ('{"schema": 2, "run_id": 1}', "schema 2, not 1"),
+        ('{"schema": true, "run_id": 1}', "schema True, not 1"),
         ('{"schema": 1}', "no usable `run_id`"),
         ('{"schema": 1, "run_id": []}', "no usable `run_id`"),
         ('{"schema": 1, "run_id": true}', "no usable `run_id`"),

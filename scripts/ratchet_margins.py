@@ -278,7 +278,8 @@ def validate_attestation(payload: object, source: str) -> dict:
     """Refuse anything that is not a schema-1 attestation of a 40-hex main sha with a `measured` map."""
     if not isinstance(payload, dict):
         raise AttestationError(f"attestation `{source}` is a JSON {type(payload).__name__}, not an object")
-    if payload.get("schema") != ATTESTATION_SCHEMA:
+    # `True == 1` in Python; a boolean schema is not schema 1 (Macroscope, #763).
+    if isinstance(payload.get("schema"), bool) or payload.get("schema") != ATTESTATION_SCHEMA:
         raise AttestationError(f"attestation `{source}` has schema {payload.get('schema')!r}, not {ATTESTATION_SCHEMA}")
     run_id = payload.get("run_id")
     # An int or a non-empty string, checked HERE because load_attestations uses it as a dict key next:
