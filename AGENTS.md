@@ -230,6 +230,21 @@ brainlayer enrich
 - Offset persistence: `~/.local/share/brainlayer/offsets.json` (survives restarts)
 - Rewind detection: file shrink = checkpoint restore → soft-archives reverted chunks
 - Axiom telemetry: startup, flush, error, heartbeat (60s threshold, but it is checked once per poll, so at the 30s poll default the real spacing is ~60-95s — measured 91s; do not alert on a 60s cadence) to `brainlayer-watcher` dataset
+- **Liveness: read `watcher-health.json`, not a log stream.** It is the canonical surface, it is
+  JSON, and both `poll_count` and `updated_at` advance on every poll — which is what a sampler
+  needs. Its path is **database-relative** (`watcher-health.json` beside the resolved DB), so with
+  `BRAINLAYER_DB` set it is NOT under `~/.local/share/brainlayer` —
+  `~/.local/share/brainlayer/watcher-health.json` is only the canonical-DB default. The startup
+  banner prints the path it actually used; `BRAINLAYER_WATCHER_HEALTH_PATH` overrides it outright.
+- **The two streams are split on purpose, and neither is the liveness surface.** `stdout`
+  (`watch.out.log`) carries the one-shot startup banner and rewind notices — rich markup, for a
+  human. `stderr` (`watch.err.log`) carries timestamped logging, including the `Watcher alive: …`
+  heartbeat: `brainlayer watch` calls `logging.basicConfig(stream=sys.stderr)` (#759). The poll
+  clamp appears in **both** — `enforce_min_poll_interval()` logs it at WARNING to stderr and the
+  command also `rprint`s it to stdout. So **grepping `watch.out.log` for "Watcher alive" returns
+  nothing** — that is the split, not a dead watcher. The heartbeat is deliberately NOT duplicated
+  onto stdout: one signal, one writer.
+  `tests/test_jsonl_watcher.py::TestWatcherLivenessSurface` pins all three halves.
 - Source: `watcher.py` (tailer + indexer), `watcher_bridge.py` (pipeline integration)
 
 <!-- ARCHITECTURE: chunk lifecycle columns superseded_by/aggregated_into/archived_at; brain_supersede has safety gate for personal data; brain_archive is soft-delete -->
