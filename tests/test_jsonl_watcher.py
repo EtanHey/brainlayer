@@ -19,8 +19,6 @@ from pathlib import Path
 
 import pytest
 
-import brainlayer.cli
-import brainlayer.watcher
 from brainlayer.alarm import BrainLayerAlarm
 from brainlayer.watcher import (
     BatchIndexer,
@@ -2744,7 +2742,12 @@ class TestWatcherLivenessSurface:
     @staticmethod
     def test_the_heartbeat_has_exactly_one_emit_site_and_it_is_the_logger():
         """One signal, one writer -- and that writer is the logger, never stdout."""
-        heartbeat_calls = _calls_whose_first_arg_starts_with(_parsed(brainlayer.watcher), "Watcher alive")
+        # Imported here, not at module scope: this file already reaches the module this way in
+        # three other tests, and a top-level `import brainlayer.watcher` turns all three into
+        # PYL-W0404 reimports (DeepSource, blocking, on lines 85/363/521).
+        from brainlayer import watcher as watcher_module
+
+        heartbeat_calls = _calls_whose_first_arg_starts_with(_parsed(watcher_module), "Watcher alive")
 
         assert len(heartbeat_calls) == 1, "the heartbeat must have exactly one emit site"
         emitter = heartbeat_calls[0].func
@@ -2754,10 +2757,10 @@ class TestWatcherLivenessSurface:
     @staticmethod
     def test_the_watch_command_sends_its_log_stream_to_stderr_explicitly():
         """`stream=sys.stderr` is the whole reason the heartbeat is not in watch.out.log."""
+        from brainlayer import cli as cli_module
+
         watch_fns = [
-            node
-            for node in ast.walk(_parsed(brainlayer.cli))
-            if isinstance(node, ast.FunctionDef) and node.name == "watch"
+            node for node in ast.walk(_parsed(cli_module)) if isinstance(node, ast.FunctionDef) and node.name == "watch"
         ]
         assert len(watch_fns) == 1, "expected exactly one `watch` command function"
 
