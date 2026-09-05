@@ -1559,11 +1559,6 @@ def test_replay_cli_allows_a_noncanonical_db_with_a_matching_gits_root(tmp_path,
     _git_init(repo)
     entry = parse_fallback_file(_pending_file(repo, "docs.local/decisions/copy.md"))
 
-    class DummyStore:
-        @staticmethod
-        def close():
-            pass
-
     class DummyInventory:
         structured = [entry]
         legacy = []
@@ -1571,7 +1566,7 @@ def test_replay_cli_allows_a_noncanonical_db_with_a_matching_gits_root(tmp_path,
 
     monkeypatch.setattr(module, "load_scope_map", lambda _path: {})
     monkeypatch.setattr(module, "inventory_fallbacks", lambda _root, *, scope_map: DummyInventory())
-    monkeypatch.setattr(module, "VectorStore", lambda _db: DummyStore())
+    monkeypatch.setattr(module, "VectorStore", lambda _db: ClosableStoreStub())
     monkeypatch.setattr(module, "store_memory", lambda **_kwargs: {"id": "chunk-copy", "outcome": "stored"})
     monkeypatch.setattr(
         sys,
@@ -1604,11 +1599,6 @@ def test_replay_cli_allows_the_canonical_db_with_the_real_gits_root(tmp_path, mo
     _git_init(repo)
     entry = parse_fallback_file(_pending_file(repo, "docs.local/decisions/prod.md"))
 
-    class DummyStore:
-        @staticmethod
-        def close():
-            pass
-
     class DummyInventory:
         structured = [entry]
         legacy = []
@@ -1616,7 +1606,7 @@ def test_replay_cli_allows_the_canonical_db_with_the_real_gits_root(tmp_path, mo
 
     monkeypatch.setattr(module, "load_scope_map", lambda _path: {})
     monkeypatch.setattr(module, "inventory_fallbacks", lambda _root, *, scope_map: DummyInventory())
-    monkeypatch.setattr(module, "VectorStore", lambda _db: DummyStore())
+    monkeypatch.setattr(module, "VectorStore", lambda _db: ClosableStoreStub())
     monkeypatch.setattr(module, "store_memory", lambda **_kwargs: {"id": "chunk-prod", "outcome": "stored"})
     monkeypatch.setattr(module, "DEFAULT_DB_PATH", tmp_path / "canonical.db")
     monkeypatch.setattr(
@@ -1886,11 +1876,6 @@ def test_main_allows_the_production_drain_shape_end_to_end(tmp_path, monkeypatch
     canonical.write_text("db", encoding="utf-8")
     entry = parse_fallback_file(_pending_file(repo, "docs.local/decisions/prod.md"))
 
-    class DummyStore:
-        @staticmethod
-        def close():
-            pass
-
     class DummyInventory:
         structured = [entry]
         legacy = []
@@ -1900,7 +1885,7 @@ def test_main_allows_the_production_drain_shape_end_to_end(tmp_path, monkeypatch
     monkeypatch.setattr(module, "get_canonical_db_path", lambda: canonical)
     monkeypatch.setattr(module, "load_scope_map", lambda _path: {})
     monkeypatch.setattr(module, "inventory_fallbacks", lambda _root, *, scope_map: DummyInventory())
-    monkeypatch.setattr(module, "VectorStore", lambda _db: DummyStore())
+    monkeypatch.setattr(module, "VectorStore", lambda _db: ClosableStoreStub())
     monkeypatch.setattr(module, "store_memory", lambda **_kwargs: {"id": "chunk-prod", "outcome": "stored"})
     monkeypatch.setattr(
         sys,
