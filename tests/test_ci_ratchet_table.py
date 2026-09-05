@@ -1284,12 +1284,18 @@ def test_no_step_leaves_scratch_in_the_checkout() -> None:
         "verify.out",
         "verify.err",
         "invalid-files.txt",
+        "attestation-args.txt",
+        "attest-runs.json",
+        "attest.err",
+        "attestation.json",
     )
     code = workflow_code()
     for name in scratch:
         # Trailing boundary, or `verify.out` matches inside `steps.verify.outputs.report`.
         for match in re.finditer(re.escape(name) + r"(?![A-Za-z0-9_])", code):
-            prefix = code[max(0, match.start() - 18) : match.start()]
+            # 40 characters back, not 18: the attestation is downloaded into a SUBDIRECTORY of
+            # $RUNNER_TEMP (`${RUNNER_TEMP}/attestation/attestation.json`), which is still scratch.
+            prefix = code[max(0, match.start() - 40) : match.start()]
             assert "RUNNER_TEMP}/" in prefix, f"`{name}` is used without a $RUNNER_TEMP prefix"
 
 
@@ -1519,9 +1525,325 @@ def write_attestation(tmp_path: Path, payload) -> Path:
     return path
 
 
+def _attestation_fields(path: Path | None, bootstrap: str | None = None, unresolved: str | None = None) -> dict:
+    selection = ratchet.select_attestation(path, bootstrap, unresolved)
+    return {
+        "attestation": selection.attestation,
+        "attestation_bootstrap": selection.bootstrap,
+        "attestation_unavailable": selection.unavailable,
+        "attestation_problem": selection.problem,
+    }
+
+
+def attested_probe(tmp_path: Path, payload=None, **overrides) -> ratchet.Probe:
+    """A table job on the merge ref, handed the latest main attestation."""
+    path = write_attestation(tmp_path, attestation_dict() if payload is None else payload)
+    return commit_probe(tmp_path, **{**_attestation_fields(path), **overrides})
+
+
+def hand_edited(corpus: dict = CORPUS, **fields) -> dict:
+    """corpus.json with `latency_baseline_ms.p50` (or whatever `fields` names) moved by hand."""
+    edited = json.loads(json.dumps(corpus))
+    for dotted, value in (fields or {"latency_baseline_ms.p50": 5000.0}).items():
+        *parents, leaf = dotted.split(".")
+        target = edited
+        for key in parents:
+            target = target[key]
+        if value is _REMOVED:
+            del target[leaf]
+        else:
+            target[leaf] = value
+    return edited
+
+
+_REMOVED = object()
+
+
+def attestation_row(tmp_path: Path, corpus: dict = CORPUS, payload=None, **overrides) -> ratchet.Row:
+    return ratchet.row_baseline_attestation(attested_probe(tmp_path, payload, **overrides), corpus)
+
+
+def test_a_hand_edited_baseline_is_red_with_no_ci_attestation(tmp_path: Path) -> None:
+    """The bolt itself. On `3ee7c279` the same edit rendered no row at all, so the PR went green
+    with the gate comparing against the number the PR had just written."""
+    result = attestation_row(tmp_path, hand_edited())
+    assert result.status == ratchet.RED
+    assert "baseline changed by hand; no CI attestation for these values" in result.value
+    assert "`latency_baseline_ms.p50` 911.887 → 5000.0" in result.value
+    assert str(MAIN_RUN) in result.value and MERGE_BASE[:12] in result.value
+    # ...and a RED row fails the collector, so the job goes red with it.
+    assert any(item.status == ratchet.RED for item in ratchet.collect(attested_probe(tmp_path), hand_edited()))
+
+
+def test_a_baseline_moved_to_what_main_measured_is_green(tmp_path: Path) -> None:
+    """The key to the lock: a main run measured a value, and the PR sets the field to exactly it."""
+    payload = attestation_dict(measured={"latency_baseline_ms.p50": 5000.0})
+    result = attestation_row(tmp_path, hand_edited(), payload)
+    assert result.status == ratchet.GREEN
+    assert "moved to values measured by main" in result.value
+    assert "`latency_baseline_ms.p50` 911.887 → 5000.0" in result.value
+    assert str(MAIN_RUN) in result.value
+
+
+def test_a_value_main_measured_differently_is_still_a_hand_edit(tmp_path: Path) -> None:
+    payload = attestation_dict(measured={"latency_baseline_ms.p50": 4999.0})
+    result = attestation_row(tmp_path, hand_edited(), payload)
+    assert result.status == ratchet.RED
+    assert "changed by hand" in result.value
+
+
+def test_a_second_hand_edit_beside_a_measured_one_is_still_red(tmp_path: Path) -> None:
+    payload = attestation_dict(measured={"latency_baseline_ms.p50": 5000.0})
+    corpus = hand_edited(**{"latency_baseline_ms.p50": 5000.0, "thresholds.cpu_percent": 90})
+    result = attestation_row(tmp_path, corpus, payload)
+    assert result.status == ratchet.RED
+    assert "`thresholds.cpu_percent` 30 → 90" in result.value
+    assert "p50" not in result.value.split("—")[1].split(";")[0] or "cpu_percent" in result.value
+
+
+def test_an_unchanged_baseline_matches_the_main_attestation(tmp_path: Path) -> None:
+    result = attestation_row(tmp_path)
+    assert result.status == ratchet.GREEN
+    assert "matches the main attestation" in result.value
+    assert ratchet.baseline_digest(ratchet.baseline_view(CORPUS))[:12] in result.value
+    assert (
+        f"run {MAIN_RUN}" in result.value and MERGE_BASE[:12] in result.value and "2026-09-05T12:00:00Z" in result.value
+    )
+    assert result.method == ratchet.ATTESTATION_METHOD
+
+
+def test_a_reformatted_baseline_is_not_a_change(tmp_path: Path) -> None:
+    """Key order and whitespace are not values. The digest is over canonical JSON."""
+    shuffled = {key: CORPUS[key] for key in reversed(list(CORPUS))}
+    shuffled["thresholds"] = {key: CORPUS["thresholds"][key] for key in reversed(list(CORPUS["thresholds"]))}
+    assert attestation_row(tmp_path, shuffled).status == ratchet.GREEN
+    assert ratchet.baseline_digest(ratchet.baseline_view(shuffled)) == ratchet.baseline_digest(
+        ratchet.baseline_view(CORPUS)
+    )
+
+
+def test_configuration_fields_are_not_the_baseline(tmp_path: Path) -> None:
+    """socket path, process patterns, machine target: ordinary review covers those. Freezing them
+    behind a measurement nobody can make would be a lock with no key."""
+    corpus = hand_edited(**{"socket_path": "/tmp/elsewhere.sock", "mcp_timeout_seconds": 99})
+    assert attestation_row(tmp_path, corpus).status == ratchet.GREEN
+    assert set(ratchet.baseline_view(CORPUS)) == set(ratchet.BASELINE_FIELDS)
+
+
+def test_a_removed_baseline_field_is_a_change(tmp_path: Path) -> None:
+    result = attestation_row(tmp_path, hand_edited(**{"thresholds.cpu_percent": _REMOVED}))
+    assert result.status == ratchet.RED
+    assert "`thresholds.cpu_percent` 30 → null" in result.value
+
+
+def test_a_changed_query_list_is_a_baseline_change(tmp_path: Path) -> None:
+    """The queries define what the latency baseline measured; swapping them moves the goalposts."""
+    corpus = hand_edited(queries=["something else"])
+    result = attestation_row(tmp_path, corpus)
+    assert result.status == ratchet.RED
+    assert "`queries`" in result.value
+
+
 def test_a_boolean_and_a_count_are_different_claims() -> None:
     assert ratchet.baseline_changes({"a": {"b": 0}}, {"a": {"b": False}}) == [("a.b", 0, False)]
     assert ratchet.baseline_changes({"a": {"b": 1}}, {"a": {"b": 1}}) == []
+
+
+def test_a_measured_null_is_not_the_same_as_unmeasured(tmp_path: Path) -> None:
+    payload = attestation_dict(measured={"thresholds.cpu_percent": None})
+    corpus = hand_edited(**{"thresholds.cpu_percent": None})
+    assert attestation_row(tmp_path, corpus, payload).status == ratchet.GREEN
+    assert attestation_row(tmp_path, corpus, attestation_dict()).status == ratchet.RED
+
+
+def test_the_row_says_when_main_has_moved_past_the_attestation(tmp_path: Path) -> None:
+    """Not a verdict -- an attest run for the newest main sha may still be in flight -- but a reader
+    deciding whether a RED is a hand edit or a legitimate main change needs to see it."""
+    stale = attestation_dict(main_sha="4" * 40)
+    green = attestation_row(tmp_path, CORPUS, stale)
+    assert green.status == ratchet.GREEN and "main has moved to `" + MERGE_BASE[:12] in green.value
+    red = attestation_row(tmp_path, hand_edited(), stale)
+    assert red.status == ratchet.RED and "main has moved" in red.value
+    current = attestation_row(tmp_path)
+    assert "main has moved" not in current.value
+
+
+def test_no_attestation_argument_at_all_is_a_capability_gap(tmp_path: Path) -> None:
+    result = ratchet.row_baseline_attestation(commit_probe(tmp_path), CORPUS)
+    assert result.status == ratchet.NA
+    assert result.value.startswith("n/a — not a pull-request run")
+
+
+def test_an_unresolved_attestation_is_a_finding_not_a_capability_gap(tmp_path: Path) -> None:
+    probe = commit_probe(tmp_path, **_attestation_fields(None, unresolved="the artifact of run 5 expired"))
+    result = ratchet.row_baseline_attestation(probe, CORPUS)
+    assert result.status == ratchet.RED
+    assert "the artifact of run 5 expired" in result.value
+
+
+def test_a_promised_attestation_that_is_missing_is_a_finding(tmp_path: Path) -> None:
+    probe = commit_probe(tmp_path, **_attestation_fields(tmp_path / "nowhere.json"))
+    result = ratchet.row_baseline_attestation(probe, CORPUS)
+    assert result.status == ratchet.RED and "not a file" in result.value
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "{not json",
+        "[]",
+        {"schema": 2},
+        {"run_id": True},
+        {"run_id": 0},
+        {"run_attempt": "1"},
+        {"main_sha": "abc"},
+        {"baseline": {"latency_baseline_ms": {}, "socket_path": "/x"}},
+        {"baseline_sha256": "0" * 64},
+        {"measured": []},
+        {"baseline": "not an object"},
+    ],
+    ids=[
+        "unparseable",
+        "not-an-object",
+        "wrong-schema",
+        "run-id-bool",
+        "run-id-zero",
+        "attempt-string",
+        "short-sha",
+        "config-in-baseline",
+        "digest-mismatch",
+        "measured-list",
+        "baseline-string",
+    ],
+)
+def test_a_malformed_attestation_is_a_finding_not_a_crash(tmp_path: Path, payload) -> None:
+    """Every shape that is not an attestation renders RED -- never a crash that costs the table,
+    and never a GREEN that a mangled artifact happened to satisfy. (Overrides are applied here,
+    not at import, so this file still imports against a collector that has no attestation at all.)"""
+    probe = attested_probe(tmp_path, attestation_dict(**payload) if isinstance(payload, dict) else payload)
+    result = ratchet.row_baseline_attestation(probe, CORPUS)
+    assert result.status == ratchet.RED
+    assert result.value.strip()
+    assert all(item.value for item in ratchet.collect(probe, CORPUS))
+
+
+def test_two_attestation_flags_together_is_a_finding(tmp_path: Path) -> None:
+    path = write_attestation(tmp_path, attestation_dict())
+    assert ratchet.select_attestation(path, "bootstrap", None).problem is not None
+    assert ratchet.select_attestation(None, "bootstrap", "unresolved").problem is not None
+    assert ratchet.select_attestation(path, None, "unresolved").problem is not None
+
+
+def test_an_empty_reason_still_reads_as_one(tmp_path: Path) -> None:
+    assert ratchet.select_attestation(None, None, "  ").problem
+    assert ratchet.select_attestation(None, "  ", None).bootstrap
+
+
+def test_the_attestation_row_is_second_after_the_commit_row(tmp_path: Path) -> None:
+    """Which commit, then what it is measured against, then the numbers."""
+    names = [item.name for item in ratchet.collect(linux_probe(tmp_path), CORPUS)]
+    assert names[:2] == ["commit provenance", "baseline attestation"]
+
+
+def test_the_notes_state_the_boundary_and_the_missing_key(tmp_path: Path) -> None:
+    notes = attestation_row(tmp_path).notes
+    assert "diff-reviewable, not tamper-proof" in notes
+    assert "cannot write to another run's artifacts" in notes
+    assert "no runner-side collector measures any baseline field" in notes
+
+
+# --- bootstrap: before the first attest run on main, the base tip stands in --------------------
+
+
+def merge_ref_repo(tmp_path: Path, monkeypatch, pr_corpus: dict | None = None) -> tuple[Path, tuple[str, str, str]]:
+    """A repo shaped like GitHub's merge ref: base tip with the fixture, PR head that may edit it,
+    and a two-parent merge of the two checked out. Returns (repo, (merge, base, pr_head))."""
+    repo = tmp_path / "merge-repo"
+    fixture = repo / ratchet.CORPUS_RELATIVE
+    fixture.parent.mkdir(parents=True)
+
+    def repo_git(*args: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@e", *args],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=_clean_git_env(),
+        ).stdout.strip()
+
+    repo_git("init", "-q", "-b", "base")
+    fixture.write_text(json.dumps(CORPUS, indent=1), encoding="utf-8")
+    repo_git("add", "-A")
+    repo_git("commit", "-q", "-m", "base tip")
+    base = repo_git("rev-parse", "HEAD")
+    repo_git("checkout", "-q", "-b", "pr")
+    fixture.write_text(json.dumps(pr_corpus if pr_corpus is not None else CORPUS, indent=2), encoding="utf-8")
+    repo_git("add", "-A")
+    repo_git("commit", "-q", "--allow-empty", "-m", "pr head")
+    pr_head = repo_git("rev-parse", "HEAD")
+    repo_git("checkout", "-q", "base")
+    repo_git("merge", "-q", "--no-ff", "-m", "Merge pr into base", "pr")
+    merge = repo_git("rev-parse", "HEAD")
+    monkeypatch.setattr(ratchet, "ROOT", repo)
+    return repo, (merge, base, pr_head)
+
+
+def bootstrap_probe(tmp_path: Path, lineage: tuple[str, ...]) -> ratchet.Probe:
+    fields = _attestation_fields(
+        None, bootstrap="ratchet-attest.yml is not a registered workflow on main yet (HTTP 404)"
+    )
+    return commit_probe(
+        tmp_path, head_sha=lineage[0], head_lineage=lineage, measured_sha=lineage[-1], pr_head_sha=lineage[-1], **fields
+    )
+
+
+def test_bootstrap_reads_the_base_tips_baseline_out_of_git(tmp_path: Path, monkeypatch) -> None:
+    """Real git, real merge ref: the reformatted-but-unchanged fixture on the PR side is GREEN."""
+    _, lineage = merge_ref_repo(tmp_path, monkeypatch)
+    result = ratchet.row_baseline_attestation(bootstrap_probe(tmp_path, lineage), CORPUS)
+    assert result.status == ratchet.GREEN
+    assert "bootstrap" in result.value and "HTTP 404" in result.value
+    assert f"unchanged from base `{lineage[1][:12]}`" in result.value
+    assert result.method == ratchet.ATTESTATION_METHOD_BOOTSTRAP
+
+
+def test_bootstrap_still_catches_a_hand_edit(tmp_path: Path, monkeypatch) -> None:
+    """The very first PR -- the one adding the writer -- must not be the one PR that could edit
+    the baseline unseen."""
+    edited = hand_edited()
+    _, lineage = merge_ref_repo(tmp_path, monkeypatch, edited)
+    result = ratchet.row_baseline_attestation(bootstrap_probe(tmp_path, lineage), edited)
+    assert result.status == ratchet.RED
+    assert "baseline changed by hand; no CI attestation for these values" in result.value
+    assert "`latency_baseline_ms.p50` 911.887 → 5000.0" in result.value
+    assert f"base `{lineage[1][:12]}` by git" in result.value
+
+
+def test_bootstrap_refuses_a_checkout_that_is_not_a_merge_ref(tmp_path: Path, monkeypatch) -> None:
+    """A direct checkout's first parent is a commit on the PR's own branch, not main's tip.
+    Comparing against it would let an edit two commits back pass as "unchanged"."""
+    _, (merge, base, pr_head) = merge_ref_repo(tmp_path, monkeypatch)
+    probe = bootstrap_probe(tmp_path, (pr_head, base))
+    result = ratchet.row_baseline_attestation(probe, CORPUS)
+    assert result.status == ratchet.RED
+    assert "not a merge ref" in result.value
+    assert ratchet.base_tip_of((pr_head, base)) is None
+    assert ratchet.base_tip_of((merge, base, pr_head)) == base
+    assert ratchet.base_tip_of(None) is None
+
+
+def test_bootstrap_is_red_when_git_cannot_show_the_base_baseline(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(ratchet, "ROOT", tmp_path / "not-a-repo")
+    result = ratchet.row_baseline_attestation(bootstrap_probe(tmp_path, (MERGE_REF, MERGE_BASE, MERGE_HEAD)), CORPUS)
+    assert result.status == ratchet.RED
+    assert "git could not show" in result.value
+
+
+def test_git_baseline_at_reports_unparseable_and_non_object_fixtures(tmp_path: Path, monkeypatch) -> None:
+    for content in ("{not json", "[1, 2]"):
+        monkeypatch.setattr(ratchet, "_git", lambda *args, content=content: content)
+        view, problem = ratchet.git_baseline_at(MERGE_BASE)
+        assert view is None and problem and MERGE_BASE[:12] in problem
 
 
 # --- writing an attestation: main runs only ----------------------------------------------------
@@ -1629,6 +1951,185 @@ def test_a_pr_run_never_attests(tmp_path: Path, capsys, monkeypatch) -> None:
     assert not list(tmp_path.glob("**/attestation.json"))
 
 
+def test_the_gate_no_longer_compares_against_a_number_the_pr_wrote(tmp_path: Path, capsys, monkeypatch) -> None:
+    """Definition of done for ratchet (b), end to end through the CLI.
+
+    On `3ee7c279` this test fails at the first `main(...)`: the collector had no way to be handed
+    an attestation, so the same hand-edited fixture rendered an all-green table whose Notes column
+    quoted the number the PR had just written. Here it is RED, and the job fails with it.
+    """
+    pin_main_checkout(monkeypatch)
+    edited = tmp_path / "corpus.json"
+    edited.write_text(json.dumps(hand_edited()), encoding="utf-8")
+    monkeypatch.setattr(ratchet, "CORPUS", edited)
+    attestation = write_attestation(tmp_path, attestation_dict(main_sha="5" * 40))
+    argv = ["--wheel", str(make_wheel(tmp_path, HEAD)), "--measured-sha", HEAD, "--pr-head-sha", HEAD]
+    rc = ratchet.main(argv + ["--attestation", str(attestation)])
+    out, err = capsys.readouterr()
+    assert rc == 1
+    assert "baseline changed by hand; no CI attestation for these values" in out
+    assert "::error title=Ratchet RED: baseline attestation::" in err
+    # ...and the legitimate path, through the same CLI: main measured the value the PR moved to.
+    measured = write_attestation(
+        tmp_path, attestation_dict(main_sha="5" * 40, measured={"latency_baseline_ms.p50": 5000.0})
+    )
+    assert ratchet.main(argv + ["--attestation", str(measured)]) == 0
+    assert "moved to values measured by main" in capsys.readouterr().out
+
+
+def test_main_reads_an_attestation_end_to_end(tmp_path: Path, capsys, monkeypatch) -> None:
+    pin_main_checkout(monkeypatch)
+    path = write_attestation(tmp_path, attestation_dict(main_sha="5" * 40))
+    argv = ["--wheel", str(make_wheel(tmp_path, HEAD)), "--measured-sha", HEAD, "--pr-head-sha", HEAD]
+    assert ratchet.main(argv + ["--attestation", str(path)]) == 0
+    assert "matches the main attestation" in capsys.readouterr().out
+    assert ratchet.main(argv + ["--attestation-unresolved", "artifact expired"]) == 1
+    assert "artifact expired" in capsys.readouterr().err
+
+
+# --- the reader, on its own: slice 1's contract, kept ------------------------------------------
+
+
+def test_the_reader_round_trips_what_the_writer_publishes(tmp_path: Path) -> None:
+    attestation, problem = ratchet.read_attestation(write_attestation(tmp_path, attestation_dict()))
+    assert problem is None and attestation is not None
+    assert attestation.run_id == MAIN_RUN and attestation.main_sha == MERGE_BASE
+    assert attestation.baseline == ratchet.baseline_view(CORPUS)
+    assert attestation.digest == ratchet.baseline_digest(ratchet.baseline_view(CORPUS))
+    assert attestation.measured == {}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "{not json",
+        "[]",
+        {"schema": 2},
+        {"run_id": True},
+        {"run_id": 0},
+        {"run_attempt": "1"},
+        {"main_sha": "abc"},
+        {"baseline": {"latency_baseline_ms": {}, "socket_path": "/x"}},
+        {"baseline_sha256": "0" * 64},
+        {"measured": []},
+        {"baseline": "not an object"},
+    ],
+    ids=[
+        "unparseable",
+        "not-an-object",
+        "wrong-schema",
+        "run-id-bool",
+        "run-id-zero",
+        "attempt-string",
+        "short-sha",
+        "config-in-baseline",
+        "digest-mismatch",
+        "measured-list",
+        "baseline-string",
+    ],
+)
+def test_the_reader_refuses_every_shape_that_is_not_an_attestation(tmp_path: Path, payload) -> None:
+    """A reason, never a crash and never a pass: the consumer row (next slice) renders these RED."""
+    path = write_attestation(tmp_path, attestation_dict(**payload) if isinstance(payload, dict) else payload)
+    attestation, problem = ratchet.read_attestation(path)
+    assert attestation is None and problem and problem.strip()
+
+
+def test_a_promised_attestation_that_is_missing_has_a_reason(tmp_path: Path) -> None:
+    attestation, problem = ratchet.read_attestation(tmp_path / "nowhere.json")
+    assert attestation is None and "not a file" in problem
+
+
+def test_a_reformatted_baseline_has_the_same_digest() -> None:
+    """Key order and whitespace are not values. The digest is over canonical JSON."""
+    shuffled = {key: CORPUS[key] for key in reversed(list(CORPUS))}
+    shuffled["thresholds"] = {key: CORPUS["thresholds"][key] for key in reversed(list(CORPUS["thresholds"]))}
+    assert ratchet.baseline_digest(ratchet.baseline_view(shuffled)) == ratchet.baseline_digest(
+        ratchet.baseline_view(CORPUS)
+    )
+
+
+def test_baseline_changes_name_every_moved_removed_and_added_path() -> None:
+    before = ratchet.baseline_view(CORPUS)
+    after = json.loads(json.dumps(before))
+    after["latency_baseline_ms"]["p50"] = 5000.0
+    del after["thresholds"]["cpu_percent"]
+    after["thresholds"]["new_knob"] = 1
+    after["queries"] = ["something else"]
+    changed = ratchet.baseline_changes(before, after)
+    assert ("latency_baseline_ms.p50", 911.887, 5000.0) in changed
+    assert ("thresholds.cpu_percent", 30, None) in changed
+    assert ("thresholds.new_knob", None, 1) in changed
+    assert [path for path, _, _ in changed if path == "queries"] == ["queries"]
+    assert ratchet.baseline_changes(before, before) == []
+
+
+# --- ratchet.yml: the read side ---------------------------------------------------------------
+
+
+def test_the_table_job_may_read_main_runs_and_never_write_them() -> None:
+    permissions = workflow_document()["permissions"]
+    assert permissions["actions"] == "read"
+    assert permissions["contents"] == "read"
+    assert "write" not in {permissions["actions"], permissions["contents"]}
+
+
+def test_the_attestation_is_fetched_from_the_api_and_bound_to_its_run() -> None:
+    """The reference has to come from a main run's artifact, and the artifact has to be THAT
+    run's: the API names a run id and a main sha, and the file has to say the same two things."""
+    step = workflow_steps()["Fetch the baseline attestation from main"]
+    run = step["run"]
+    assert step["if"] == "${{ !cancelled() }}"
+    assert "actions/workflows/ratchet-attest.yml/runs?branch=main" in run
+    assert 'select((.event == "push" or .event == "workflow_dispatch") and .conclusion == "success")' in run
+    assert "gh run download" in run and "-n ratchet-attestation" in run
+    assert '"$got_run" == "$run_id" && "$got_sha" == "$run_sha"' in run
+    # No input from the checkout: the only files it reads are under $RUNNER_TEMP.
+    for reader in ("cat src/", "cat scripts/", "bash scripts/", "python scripts/", "source ", "tests/fixtures"):
+        assert reader not in run
+
+
+def test_the_collector_is_handed_exactly_one_attestation_flag() -> None:
+    run = workflow_steps()["Fetch the baseline attestation from main"]["run"]
+    assert run.count("--attestation ") == 1
+    assert run.count("--attestation-bootstrap") == 1
+    assert run.count("--attestation-unresolved") == 1
+    assert 'case "$state" in' in run
+
+
+def test_bootstrap_is_only_the_state_with_no_successful_main_run() -> None:
+    """Once one success exists, an expired artifact is unresolved (RED), never a fall-back."""
+    run = workflow_steps()["Fetch the baseline attestation from main"]["run"]
+    assert "state=bootstrap" in run
+    assert "HTTP 404" in run and "no successful push/dispatch run yet" in run
+    # The download loop starts from `unresolved` and only an exact match promotes it.
+    download = run.split("gh run download", 1)[1]
+    assert "state=bootstrap" not in download
+    assert "state=attested" in download
+    assert "an expired artifact is refreshed by a workflow_dispatch" in run
+
+
+def test_the_attestation_read_is_retried_before_it_is_called_unresolved() -> None:
+    run = workflow_steps()["Fetch the baseline attestation from main"]["run"]
+    assert run.count("for attempt in 1 2 3") == 2
+    assert 'if gh api "repos/${REPO}/actions/workflows/ratchet-attest.yml/runs' in run
+    assert 'if gh run download "$run_id"' in run
+
+
+def test_the_attestation_args_reach_the_collector_and_survive_bash_3() -> None:
+    collect = workflow_steps()["Collect ratchet rows"]["run"]
+    assert '"${ATTESTATION_ARGS[@]}"' in collect
+    assert "while IFS= read -r attestation_arg" in collect
+    assert "mapfile" not in workflow_code()
+
+
+def test_an_empty_attestation_hand_off_fails_instead_of_claiming_the_baseline_was_never_checked() -> None:
+    collect = workflow_steps()["Collect ratchet rows"]["run"]
+    assert "${#ATTESTATION_ARGS[@]} -eq 0" in collect
+    assert "baseline was never checked" in collect
+    assert "${ATTESTATION_ARGS[@]+" not in collect
+
+
 # --- ratchet-attest.yml: the only writer ------------------------------------------------------
 
 
@@ -1698,82 +2199,7 @@ def test_the_writer_never_persists_its_token_nor_writes_scratch_into_the_checkou
             assert target.startswith("/"), f"attest :: {name} writes `{target}` into the checkout"
 
 
-def test_the_reader_round_trips_what_the_writer_publishes(tmp_path: Path) -> None:
-    attestation, problem = ratchet.read_attestation(write_attestation(tmp_path, attestation_dict()))
-    assert problem is None and attestation is not None
-    assert attestation.run_id == MAIN_RUN and attestation.main_sha == MERGE_BASE
-    assert attestation.baseline == ratchet.baseline_view(CORPUS)
-    assert attestation.digest == ratchet.baseline_digest(ratchet.baseline_view(CORPUS))
-    assert attestation.measured == {}
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        "{not json",
-        "[]",
-        {"schema": 2},
-        {"run_id": True},
-        {"run_id": 0},
-        {"run_attempt": "1"},
-        {"main_sha": "abc"},
-        {"baseline": {"latency_baseline_ms": {}, "socket_path": "/x"}},
-        {"baseline_sha256": "0" * 64},
-        {"measured": []},
-        {"baseline": "not an object"},
-    ],
-    ids=[
-        "unparseable",
-        "not-an-object",
-        "wrong-schema",
-        "run-id-bool",
-        "run-id-zero",
-        "attempt-string",
-        "short-sha",
-        "config-in-baseline",
-        "digest-mismatch",
-        "measured-list",
-        "baseline-string",
-    ],
-)
-def test_the_reader_refuses_every_shape_that_is_not_an_attestation(tmp_path: Path, payload) -> None:
-    """A reason, never a crash and never a pass: the consumer row (next slice) renders these RED."""
-    path = write_attestation(tmp_path, attestation_dict(**payload) if isinstance(payload, dict) else payload)
-    attestation, problem = ratchet.read_attestation(path)
-    assert attestation is None and problem and problem.strip()
-
-
-def test_a_promised_attestation_that_is_missing_has_a_reason(tmp_path: Path) -> None:
-    attestation, problem = ratchet.read_attestation(tmp_path / "nowhere.json")
-    assert attestation is None and "not a file" in problem
-
-
-def test_a_reformatted_baseline_has_the_same_digest() -> None:
-    """Key order and whitespace are not values. The digest is over canonical JSON."""
-    shuffled = {key: CORPUS[key] for key in reversed(list(CORPUS))}
-    shuffled["thresholds"] = {key: CORPUS["thresholds"][key] for key in reversed(list(CORPUS["thresholds"]))}
-    assert ratchet.baseline_digest(ratchet.baseline_view(shuffled)) == ratchet.baseline_digest(
-        ratchet.baseline_view(CORPUS)
-    )
-
-
-def test_configuration_fields_are_not_the_baseline() -> None:
-    """socket path, process patterns, machine target: ordinary review covers those. Freezing them
-    behind a measurement nobody can make would be a lock with no key."""
-    assert set(ratchet.baseline_view(CORPUS)) == set(ratchet.BASELINE_FIELDS)
-    assert "socket_path" not in ratchet.baseline_view(CORPUS)
-
-
-def test_baseline_changes_name_every_moved_removed_and_added_path() -> None:
-    before = ratchet.baseline_view(CORPUS)
-    after = json.loads(json.dumps(before))
-    after["latency_baseline_ms"]["p50"] = 5000.0
-    del after["thresholds"]["cpu_percent"]
-    after["thresholds"]["new_knob"] = 1
-    after["queries"] = ["something else"]
-    changed = ratchet.baseline_changes(before, after)
-    assert ("latency_baseline_ms.p50", 911.887, 5000.0) in changed
-    assert ("thresholds.cpu_percent", 30, None) in changed
-    assert ("thresholds.new_knob", None, 1) in changed
-    assert [path for path, _, _ in changed if path == "queries"] == ["queries"]
-    assert ratchet.baseline_changes(before, before) == []
+def test_the_workflow_path_the_reader_queries_is_the_writer() -> None:
+    """One constant, three places: the collector's notes, the reader's API path, the file on disk."""
+    assert ATTEST_WORKFLOW.name == Path(ratchet.ATTEST_WORKFLOW).name
+    assert Path(ratchet.ATTEST_WORKFLOW).name in workflow_steps()["Fetch the baseline attestation from main"]["run"]
