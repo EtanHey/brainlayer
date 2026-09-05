@@ -1199,7 +1199,12 @@ def correction_notice(category):
 # against regression -- an entity or result-count change that grows output can no
 # longer grow it without limit -- not a saving on today's traffic.
 MAX_INJECTION_CHARS = 600
-_CAP_NOTE_RESERVE = 56
+_CAP_NOTE = "[+{dropped} more in BrainLayer -- use brain_search for the rest]"
+# The note's own length plus the newline that joins it, derived rather than
+# written down: a hand-set reserve was one char short and let a full budget push
+# the total to 602. Sized for a 4-digit count, far past the 5 lines this hook
+# can produce.
+_CAP_NOTE_RESERVE = len(_CAP_NOTE.format(dropped=9999)) + 1
 
 
 def cap_injection(lines, max_chars=MAX_INJECTION_CHARS):
@@ -1224,7 +1229,7 @@ def cap_injection(lines, max_chars=MAX_INJECTION_CHARS):
         used += 1 + len(line)
 
     dropped = len(lines) - len(kept)
-    kept.append(f"[+{dropped} more in BrainLayer -- use brain_search for the rest]")
+    kept.append(_CAP_NOTE.format(dropped=dropped))
     return kept
 
 

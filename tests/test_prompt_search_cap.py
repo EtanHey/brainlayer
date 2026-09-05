@@ -68,6 +68,18 @@ class TestInjectionCap:
         assert capped[0] == lines[0]
         assert capped[-1].startswith("[+1 more in BrainLayer")
 
+    def test_a_budget_filled_to_the_byte_still_respects_the_cap(self, hook):
+        """Regression: a hand-set note reserve was one char short and let this reach 602."""
+        lines = ["x" * 44] + ["y" * 49] * 30
+        capped = hook.cap_injection(lines)
+        assert len("\n".join(capped)) <= hook.MAX_INJECTION_CHARS
+
+    @pytest.mark.parametrize("n_lines", [2, 3, 7, 15, 40, 120])
+    def test_cap_holds_across_line_counts(self, hook, n_lines):
+        lines = [f"- [2026-09-01] line {i} " + "z" * 70 for i in range(n_lines)]
+        capped = hook.cap_injection(lines)
+        assert len("\n".join(capped)) <= hook.MAX_INJECTION_CHARS
+
     def test_cap_is_configurable_per_call(self, hook):
         lines = ["aaaa", "bbbb", "cccc", "dddd"]
         capped = hook.cap_injection(lines, max_chars=70)
