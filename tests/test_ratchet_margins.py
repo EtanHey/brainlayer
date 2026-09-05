@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from pathlib import Path
 
 import pytest
@@ -86,11 +87,28 @@ def test_the_band_widens_for_small_n_and_tightens_as_runs_accumulate() -> None:
     assert thirty.k == pytest.approx(2.462 * math.sqrt(1 + 1 / 30), abs=0.005)
 
 
-def test_beyond_the_table_the_quantile_never_drops_below_the_normal_one() -> None:
-    # Past df=29 the table is exhausted; the normal quantile (2.326) is the limit the t-quantile
-    # approaches from above, so using it there is never tighter than the truth.
-    huge = margins.measured_margin([100.0 + (i % 7) for i in range(200)])
-    assert huge.k == pytest.approx(2.326 * math.sqrt(1 + 1 / 200), abs=0.005)
+@pytest.mark.parametrize(
+    ("df", "scipy_t"), [(30, 2.4573), (31, 2.4528), (40, 2.4233), (60, 2.3901), (100, 2.3642), (199, 2.3452)]
+)
+def test_beyond_the_table_the_quantile_is_the_finite_df_t_not_the_normal(df: int, scipy_t: float) -> None:
+    # Reviewer finding (Macroscope, #763): falling back to Z_99 = 2.326 past df=29 is TIGHTER than every
+    # finite-df t-quantile, so a 31-run series would have been judged against a band about 5% narrower
+    # than the stated 99%. Values are scipy 1.17.0 `t.ppf(0.99, df)`, rounded to 4 places.
+    assert margins.t_quantile(df) == pytest.approx(scipy_t, abs=2e-4)
+    assert margins.t_quantile(df) > margins.Z_99_ONE_SIDED
+
+
+def test_the_quantile_is_monotone_across_the_table_boundary() -> None:
+    values = [margins.t_quantile(df) for df in range(4, 400)]
+    assert values == sorted(values, reverse=True)
+    assert values[-1] > margins.Z_99_ONE_SIDED
+
+
+def test_describe_refuses_a_measured_margin_that_lost_its_numbers() -> None:
+    # An assert used to guard this; under `python -O` it would have printed "limit None ms".
+    broken = margins.Margin(kind=margins.MEASURED, n=5)
+    with pytest.raises(ValueError):
+        margins.describe(broken, unit="ms")
 
 
 def test_zero_variance_is_a_zero_band_not_a_crash() -> None:
@@ -229,3 +247,45 @@ def test_one_bad_file_in_the_directory_fails_the_whole_read(tmp_path: Path) -> N
     (root / "9999" / margins.ATTESTATION_FILENAME).write_text("{", encoding="utf-8")
     with pytest.raises(margins.AttestationError):
         margins.load_attestations(root)
+
+
+def test_the_same_run_twice_is_a_malformed_store_not_two_observations(tmp_path: Path) -> None:
+    # Reviewer finding (Macroscope, #764): copying one attestation.json five times would have made one
+    # run look like five and given a zero-width band.
+    root = write_store(tmp_path / "attestations", p50_runs([100.0] * 5))
+    (root / "copy").mkdir()
+    (root / "copy" / margins.ATTESTATION_FILENAME).write_text(
+        (root / "1000" / margins.ATTESTATION_FILENAME).read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    with pytest.raises(margins.AttestationError) as error:
+        margins.load_attestations(root)
+    assert "1000 appears twice" in str(error.value)
+
+
+def test_a_malformed_measured_value_is_refused_at_load_not_at_read(tmp_path: Path) -> None:
+    # Reviewer finding (Macroscope, #765): a bad value that first surfaced inside a row builder aborted
+    # the whole collector. Validating at load means a loaded store can always be read.
+    documents = p50_runs([100.0] * 5)
+    documents[2]["measured"]["latency_baseline_ms.p95"] = "fast"
+    root = write_store(tmp_path / "attestations", documents)
+    with pytest.raises(margins.AttestationError) as error:
+        margins.load_attestations(root)
+    assert "run 1002" in str(error.value) and "measured.latency_baseline_ms.p95" in str(error.value)
+    documents[2]["measured"]["latency_baseline_ms.p95"] = None  # null = not measured this run: allowed
+    loaded = margins.load_attestations(write_store(tmp_path / "again", documents))
+    assert margins.series(loaded, margins.LATENCY_P95) == []
+
+
+def test_a_root_that_cannot_be_scanned_is_a_refusal_not_a_traceback(tmp_path: Path) -> None:
+    # Reviewer finding (Macroscope, #764): PermissionError escaped as a traceback past the gate's
+    # structured refusal.
+    if os.geteuid() == 0:
+        pytest.skip("root ignores directory permissions")
+    root = write_store(tmp_path / "attestations", p50_runs([100.0] * 5))
+    root.chmod(0o000)
+    try:
+        with pytest.raises(margins.AttestationError) as error:
+            margins.load_attestations(root)
+    finally:
+        root.chmod(0o755)
+    assert "could not be scanned (PermissionError)" in str(error.value)

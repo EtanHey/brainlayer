@@ -31,15 +31,19 @@ The rule here
   main p50 values it widened the limit to ×3.5 instead of ×2.06, because the outlier in that series
   is LOW (98 ms), and idle CPU can legitimately be 0.0, where a log has nothing to say.
 
-The t-quantiles are a fixed table (df 4–29, one-sided 99%), checked against scipy 1.17.0, with the
-normal quantile past the table -- which is the value the t-quantile approaches from above, so the
-band is never tighter than the truth there.
+The t-quantiles are a fixed table (df 4–29, one-sided 99%) and, past it, the Cornish–Fisher expansion
+of the Student-t quantile around the normal one. Both checked against scipy 1.17.0 ``t.ppf(0.99, df)``:
+the table to three decimals, the expansion to within 1e-5 for every df ≥ 30. An earlier draft fell
+back to the plain normal quantile past the table; a reviewer (Macroscope, #763) pointed out that is
+SMALLER than every finite-df t-quantile, so a 31-run series would have been judged against a band
+about 5% tighter than the stated 99% -- the false-RED direction. The expansion is why that is gone.
 """
 
 from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import statistics
 from dataclasses import dataclass
@@ -70,7 +74,8 @@ def idle_cpu_key(process: str) -> tuple[str, ...]:
     return ("measured", f"idle_cpu_pct.{process}")
 
 
-# One-sided 99% Student-t quantiles by degrees of freedom (n - 1), df 4..29. Past the table, Z_99.
+# One-sided 99% Student-t quantiles by degrees of freedom (n - 1), df 4..29. Past the table, the
+# Cornish-Fisher expansion below (never the bare normal quantile: that is tighter than every t).
 T_99_ONE_SIDED = {
     4: 3.747,
     5: 3.365,
@@ -99,7 +104,7 @@ T_99_ONE_SIDED = {
     28: 2.467,
     29: 2.462,
 }
-Z_99_ONE_SIDED = 2.326
+Z_99_ONE_SIDED = 2.326347874  # full precision: the expansion below is sensitive to the third decimal
 
 
 class AttestationError(ValueError):
@@ -128,7 +133,17 @@ class Margin:
 def t_quantile(df: int) -> float:
     if df < min(T_99_ONE_SIDED):
         raise ValueError(f"df={df} is below the {MINIMUM_RUNS}-run minimum this table starts at")
-    return T_99_ONE_SIDED.get(df, Z_99_ONE_SIDED)
+    if df in T_99_ONE_SIDED:
+        return T_99_ONE_SIDED[df]
+    # Cornish-Fisher expansion of the Student-t quantile in powers of 1/df (Abramowitz & Stegun 26.7.5).
+    # |error| <= 1e-5 against scipy for df >= 30, and it approaches Z_99 from ABOVE, as t does.
+    z = Z_99_ONE_SIDED
+    return (
+        z
+        + (z**3 + z) / (4 * df)
+        + (5 * z**5 + 16 * z**3 + 3 * z) / (96 * df**2)
+        + (3 * z**7 + 19 * z**5 + 17 * z**3 - 15 * z) / (384 * df**3)
+    )
 
 
 def measured_margin(values: list[float], *, minimum_runs: int = MINIMUM_RUNS) -> Margin:
@@ -156,7 +171,9 @@ def describe(margin: Margin, *, unit: str) -> str:
             f"margin unmeasured — {margin.n} of the {margin.minimum} attested green main runs it needs; "
             "no verdict is rendered from fewer"
         )
-    assert margin.mean is not None and margin.stdev is not None and margin.k is not None and margin.limit is not None
+    if margin.mean is None or margin.stdev is None or margin.k is None or margin.limit is None:
+        # Not an assert: under `python -O` an assert vanishes and this would print "None ms" as a limit.
+        raise ValueError("a measured margin must carry mean, stdev, k and limit")
     percent = int(round(margin.confidence * 100))
     return (
         f"limit {margin.limit:.1f} {unit} = mean {margin.mean:.1f} {unit} + k {margin.k:.2f} × σ "
@@ -178,13 +195,44 @@ def load_attestations(root: Path) -> list[dict]:
     that is not there. An existing directory with none in it is the bootstrap state -- main has not
     attested yet -- and reads as zero runs, which every margin then reports as ``unmeasured``.
     """
-    if root.is_file():
-        paths = [root]
-    elif root.is_dir():
-        paths = sorted(root.rglob(ATTESTATION_FILENAME))
-    else:
-        raise AttestationError(f"attestations root `{root}` is neither a file nor a directory")
-    return [load_attestation(path) for path in paths]
+    try:
+        if root.is_file():
+            paths = [root]
+        elif root.is_dir():
+            paths = find_attestations(root)
+        else:
+            raise AttestationError(f"attestations root `{root}` is neither a file nor a directory")
+    except OSError as error:
+        # A root that exists but cannot be scanned (permissions, a dead mount) is the same finding as a
+        # missing one, and must not escape as a traceback past the callers' fail-closed handling.
+        raise AttestationError(f"attestations root `{root}` could not be scanned ({type(error).__name__})") from error
+    attestations = [load_attestation(path) for path in paths]
+    seen: dict[object, Path] = {}
+    for path, attestation in zip(paths, attestations, strict=True):
+        run_id = attestation["run_id"]
+        if run_id in seen:
+            # The same run twice is not two observations: it would narrow the band (or repeat an
+            # outlier) with evidence that was only ever collected once. The store is malformed.
+            raise AttestationError(f"attested run {run_id} appears twice: `{seen[run_id]}` and `{path}`")
+        seen[run_id] = path
+    return attestations
+
+
+def find_attestations(root: Path) -> list[Path]:
+    """Every `attestation.json` under ``root``, or an OSError for a directory that cannot be scanned.
+
+    Not ``Path.rglob``: it swallows PermissionError while walking and returns what it could see, which
+    here would read as "main has attested zero runs" -- a silent degrade wearing the bootstrap state's
+    clothes. ``os.walk`` with ``onerror`` re-raising makes an unreadable directory a finding instead.
+    """
+
+    def fail(error: OSError) -> None:
+        raise error
+
+    found: list[Path] = []
+    for dirpath, _dirs, files in os.walk(root, onerror=fail):
+        found.extend(Path(dirpath) / name for name in files if name == ATTESTATION_FILENAME)
+    return sorted(found)
 
 
 def load_attestation(path: Path) -> dict:
@@ -209,6 +257,14 @@ def validate_attestation(payload: object, source: str) -> dict:
         raise AttestationError(f"attestation `{source}` has no `measured_at`")
     if not isinstance(payload.get("measured"), dict):
         raise AttestationError(f"attestation `{source}` has no `measured` object")
+    for key, value in payload["measured"].items():
+        # Checked at load, not at read: a row builder that formats notes cannot be the place a
+        # malformed value first surfaces (Macroscope, #765). `null` means "not measured this run".
+        if value is not None and not honest_value(value):
+            raise AttestationError(
+                f"attestation `{source}` (run {payload['run_id']}): `measured.{key}` is {value!r}, "
+                "not a finite non-negative number or null"
+            )
     return payload
 
 
@@ -234,6 +290,8 @@ def series(attestations: list[dict], key: tuple[str, ...]) -> list[float]:
         if value is None:
             continue
         if not honest_value(value):
+            # Unreachable for a store that came through validate_attestation; kept for inline lists
+            # handed over by callers that did not, so a bad value is never silently coerced.
             raise AttestationError(
                 f"attested run {attestation['run_id']}: `{'.'.join(key)}` is {value!r}, "
                 "not a finite non-negative number"
