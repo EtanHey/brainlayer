@@ -307,6 +307,50 @@ def test_local_repo_evidence_ignores_parent_git_hook_env(
     assert "vendor import" in packet_text
 
 
+def _drops_inherited_git_env(text: str) -> bool:
+    """True only when the file DROPS GIT_*-prefixed vars — the polarity IS the contract.
+
+    `if key.startswith("GIT_")` is a keep-ONLY filter: it names the same prefix and does the
+    exact opposite, handing the fixture repos the parent checkout's GIT_DIR. So a substring test
+    for the prefix alone is a fail-open, which is what relaxing this guard for the prefix-tuple
+    spelling first introduced (#772 round-1 review, medium). Both accepted spellings therefore
+    carry `if not`, and the tuple spelling additionally has to lead with "GIT_" — a tuple that
+    dropped it would scrub something else entirely under a name that reads right.
+    """
+    return 'if not key.startswith("GIT_")' in text or (
+        "if not key.startswith(_SCRUBBED_ENV_PREFIXES)" in text and '_SCRUBBED_ENV_PREFIXES = ("GIT_"' in text
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ('{k: v for k, v in os.environ.items() if not key.startswith("GIT_")}', True),
+        # Inverted: names the prefix, KEEPS it. The whole reason a substring check is not enough.
+        ('{k: v for k, v in os.environ.items() if key.startswith("GIT_")}', False),
+        (
+            '_SCRUBBED_ENV_PREFIXES = ("GIT_", "BRAINLAYER_VERSION_CHECK_")\n'
+            "x = {k: v for k, v in e if not key.startswith(_SCRUBBED_ENV_PREFIXES)}",
+            True,
+        ),
+        (
+            '_SCRUBBED_ENV_PREFIXES = ("GIT_", "BRAINLAYER_VERSION_CHECK_")\n'
+            "x = {k: v for k, v in e if key.startswith(_SCRUBBED_ENV_PREFIXES)}",
+            False,
+        ),
+        # A tuple that no longer leads with GIT_ scrubs something else under a right-looking name.
+        (
+            '_SCRUBBED_ENV_PREFIXES = ("BRAINLAYER_VERSION_CHECK_",)\n'
+            "x = {k: v for k, v in e if not key.startswith(_SCRUBBED_ENV_PREFIXES)}",
+            False,
+        ),
+        ('subprocess.run(["git", "log"])  # no scrub at all', False),
+    ],
+)
+def test_git_env_scrub_predicate_requires_the_dropping_polarity(source: str, expected: bool) -> None:
+    assert _drops_inherited_git_env(source) is expected
+
+
 def test_git_shellout_tests_scrub_inherited_git_env():
     test_root = Path(__file__).parent
     git_shellout_files = {
@@ -326,15 +370,12 @@ def test_git_shellout_tests_scrub_inherited_git_env():
         "test_version_consistency.py",
     }
     for name, text in git_shellout_files.items():
-        # The contract is "GIT_* is scrubbed", not "one exact line of code". A file that must ALSO
-        # scrub its own knobs names the prefixes in a tuple instead of inlining one literal --
-        # test_version_consistency.py scrubs BRAINLAYER_VERSION_CHECK_* the same way, because a
-        # release operator really does export the cask-lag reason. Accept that spelling, but only
-        # when the tuple demonstrably leads with "GIT_", so the guard keeps its teeth.
-        scrubs_git_prefix = 'startswith("GIT_")' in text or (
-            "startswith(_SCRUBBED_ENV_PREFIXES)" in text and '_SCRUBBED_ENV_PREFIXES = ("GIT_"' in text
-        )
-        assert scrubs_git_prefix, name
+        # The contract is "GIT_* is DROPPED", not "one exact line of code": a file that must also
+        # scrub its own knobs names the prefixes in a tuple rather than inlining one literal
+        # (test_version_consistency.py scrubs BRAINLAYER_VERSION_CHECK_* the same way, because a
+        # release operator really does export the cask-lag reason). Both spellings keep `if not`,
+        # so an inverted keep-only filter still fails here -- see the parametrized test above.
+        assert _drops_inherited_git_env(text), name
         assert any(f"env={helper}()" in text for helper in ("_clean_git_env", "_clean_test_git_env", "_script_env")), (
             name
         )
