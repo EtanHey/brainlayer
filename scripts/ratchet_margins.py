@@ -249,8 +249,17 @@ def validate_attestation(payload: object, source: str) -> dict:
         raise AttestationError(f"attestation `{source}` is a JSON {type(payload).__name__}, not an object")
     if payload.get("schema") != ATTESTATION_SCHEMA:
         raise AttestationError(f"attestation `{source}` has schema {payload.get('schema')!r}, not {ATTESTATION_SCHEMA}")
-    if "run_id" not in payload:
-        raise AttestationError(f"attestation `{source}` names no `run_id`")
+    run_id = payload.get("run_id")
+    # An int or a non-empty string, checked HERE because load_attestations uses it as a dict key next:
+    # `"run_id": []` used to surface as a TypeError out of the dedup instead of a refusal (Macroscope, #764).
+    if (
+        isinstance(run_id, bool)
+        or not isinstance(run_id, (int, str))
+        or (isinstance(run_id, str) and not run_id.strip())
+    ):
+        raise AttestationError(
+            f"attestation `{source}` has no usable `run_id` (got {run_id!r}; need an int or a non-empty string)"
+        )
     if not isinstance(payload.get("main_sha"), str) or SHA_PATTERN.fullmatch(payload["main_sha"]) is None:
         raise AttestationError(f"attestation `{source}` has no 40-hex `main_sha`")
     if not isinstance(payload.get("measured_at"), str) or not payload["measured_at"].strip():
