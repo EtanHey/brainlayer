@@ -143,7 +143,8 @@ def test_corpus_freezes_the_ten_verbatim_queries():
     assert CORPUS.is_file(), "frozen corpus is missing"
     corpus = json.loads(CORPUS.read_text(encoding="utf-8"))
     assert corpus["queries"] == QUERIES
-    assert corpus["thresholds"]["latency_regression_fraction"] == 0.10
+    # Ratchet (c): the flat 10% is gone. Latency limits are measured bands from attested green main runs.
+    assert "latency_regression_fraction" not in corpus["thresholds"]
     assert corpus["thresholds"]["resource_window_seconds"] == 60
     assert corpus["thresholds"]["cpu_percent"] == 30
     assert corpus["thresholds"]["helper_rss_bytes"] == 2 * 1024**3
@@ -628,7 +629,10 @@ def test_live_gate_runs_latency_on_calibrated_host(monkeypatch, capsys, tmp_path
     returncode, payload = run_live_config(monkeypatch, capsys, tmp_path, config, hostname)
     assert returncode == 0
     assert payload["skipped"] == []
-    assert payload["checks"][0]["status"] == "PASS"
+    # It RAN (not skipped) and reported its samples; with no attested main runs handed over there
+    # is no band to judge them against, so the verdict is UNMEASURED, not a PASS nobody measured.
+    assert payload["checks"][0]["status"] == "UNMEASURED"
+    assert payload["checks"][0]["details"]["measured_ms"] == {"p50": 100, "p95": 100}
 
 
 def test_mismatch_is_not_proof_without_requirement(monkeypatch, capsys, tmp_path: Path):
@@ -880,7 +884,9 @@ def test_keg_built_from_this_sha_is_proof_eligible(monkeypatch, capsys, tmp_path
     assert payload["provenance"]["provenance_mode"] == "keg"
     assert payload["provenance"]["served_build_sha"] == "abc123"
     assert payload["provenance"]["served_pythonpath"] is None
-    assert [check["status"] for check in payload["checks"]] == ["PASS"] * 4
+    # search_latency ran and is UNMEASURED: proof-eligibility is about the served code, not about
+    # whether a latency band exists yet, and no attested main runs were handed to this run.
+    assert [check["status"] for check in payload["checks"]] == ["UNMEASURED", "PASS", "PASS", "PASS"]
 
 
 def fake_ps(helper_count: int, calls: list[str] | None = None):
@@ -1210,3 +1216,198 @@ def test_json_failure_is_machine_readable_without_traceback(tmp_path: Path):
     assert result.returncode == 1
     assert payload["checks"][0]["status"] == "FAIL"
     assert "Traceback" not in result.stderr
+
+
+# --- ratchet (c): margins are measured from attested green main runs, never a flat fraction ------------
+
+# Sprint-gate `search_latency` values recorded on green main, 2026-09-01..02, socket-measured on
+# MacBook-Pro.local: resign-1.5.10.log, w12b-REPORT.md (×2), w12c-REPORT.md, w8-REPORT.md (×2),
+# a5-bench-m4-2026-09-02.log. Real numbers; the point of the tests below is what they do to the gate.
+GREEN_MAIN_P50_MS = [185.0, 210.0, 214.6, 98.382, 291.416, 293.901, 281.4]
+GREEN_MAIN_P95_MS = [1920.0, 1924.0, 1895.1, 1808.074, 2242.013, 1946.418, 2084.9]
+
+
+def attestation(index: int, **measured) -> dict:
+    return {
+        "schema": 1,
+        "run_id": 1000 + index,
+        "run_attempt": 1,
+        "main_sha": f"{index:040x}",
+        "measured_at": f"2026-09-0{1 + index % 5}T12:00:00Z",
+        "workflow": ".github/workflows/ratchet-attest.yml",
+        "measured": measured,
+    }
+
+
+def real_history() -> list[dict]:
+    return [
+        attestation(index, **{"latency_baseline_ms.p50": p50, "latency_baseline_ms.p95": p95})
+        for index, (p50, p95) in enumerate(zip(GREEN_MAIN_P50_MS, GREEN_MAIN_P95_MS, strict=True))
+    ]
+
+
+def replay(tmp_path: Path, capsys, fixture: dict) -> tuple[int, dict]:
+    path = tmp_path / "fixture.json"
+    path.write_text(json.dumps(fixture), encoding="utf-8")
+    returncode = sprint_gate.main(["--json", "--fixture", str(path)])
+    return returncode, json.loads(capsys.readouterr().out)
+
+
+def latency_fixture(samples_ms: list[float], attestations: list[dict], baseline: dict | None = None) -> dict:
+    return {
+        "checks": ["search_latency"],
+        "latency_baseline_ms": baseline or {"p50": 225.0, "p95": 1974.4},
+        "latency_samples_ms": samples_ms,
+        "attestations": attestations,
+    }
+
+
+def test_a_value_inside_measured_variance_is_no_longer_red(tmp_path: Path, capsys):
+    """FAILS on 3ee7c279. There, 294 ms against a 225 ms baseline × 1.10 = 247.5 ms was RED -- and
+    294 ms is a value green main actually produced (w8-REPORT.md, 2026-09-02). Against the band the
+    seven attested runs measure (limit 463.7 ms), it is what it was: normal."""
+    returncode, payload = replay(tmp_path, capsys, latency_fixture([294.0] * 10, real_history()))
+    assert returncode == 0 and payload["status"] == "PASS"
+    check = payload["checks"][0]
+    assert check["status"] == "PASS"
+    assert check["details"]["limits_ms"]["p50"] == pytest.approx(463.7, abs=0.2)
+    assert check["details"]["attested_runs"] == {"p50": 7, "p95": 7}
+    assert "n=7 attested green main runs" in check["details"]["margins"]["p50"]
+    assert "limit 463.7 ms" in check["details"]["margins"]["p50"]
+
+
+def test_a_two_fold_regression_no_longer_hides_behind_a_stale_baseline(tmp_path: Path, capsys):
+    """FAILS on 3ee7c279. There, 950 ms against the corpus's 911.887 ms × 1.10 = 1003 ms was GREEN,
+    while every green main run on record sits between 98 and 294 ms. The measured band says RED."""
+    corpus = json.loads(CORPUS.read_text(encoding="utf-8"))
+    assert corpus["latency_baseline_ms"]["p50"] == pytest.approx(911.887)
+    fixture = latency_fixture([950.0] * 10, real_history(), baseline=corpus["latency_baseline_ms"])
+    returncode, payload = replay(tmp_path, capsys, fixture)
+    assert returncode == 1 and payload["status"] == "FAIL"
+    check = payload["checks"][0]
+    assert check["status"] == "FAIL"
+    assert check["details"]["limits_ms"]["p50"] < 950.0 < corpus["latency_baseline_ms"]["p50"] * 1.10
+
+
+def test_fewer_than_five_attested_runs_is_unmeasured_never_a_verdict(tmp_path: Path, capsys):
+    returncode, payload = replay(tmp_path, capsys, latency_fixture([950.0] * 10, real_history()[:4]))
+    assert returncode == 0
+    assert payload["status"] == "PASS"  # nothing FAILED; and the payload says what it could not judge
+    assert payload["unmeasured"] == ["search_latency"]
+    check = payload["checks"][0]
+    assert check["status"] == "UNMEASURED"
+    assert check["details"]["measured_ms"]["p50"] == 950.0  # the value is real and is reported
+    assert "limits_ms" not in check["details"]  # the verdict is not, and no number stands in for it
+    assert check["details"]["attested_runs"] == {"p50": 4, "p95": 4}
+    assert "4 of the 5 attested green main runs" in check["details"]["margins"]["p50"]
+
+
+def test_the_band_needs_five_runs_for_each_percentile_separately(tmp_path: Path, capsys):
+    history = real_history()
+    for document in history[3:]:
+        del document["measured"]["latency_baseline_ms.p95"]
+    returncode, payload = replay(tmp_path, capsys, latency_fixture([100.0] * 10, history))
+    check = payload["checks"][0]
+    assert check["status"] == "UNMEASURED"
+    assert check["details"]["attested_runs"] == {"p50": 7, "p95": 3}
+
+
+def test_a_malformed_inline_attestation_refuses_the_replay(tmp_path: Path, capsys):
+    history = real_history()
+    history[2]["main_sha"] = "not-a-sha"
+    returncode, payload = replay(tmp_path, capsys, latency_fixture([100.0] * 10, history))
+    assert returncode == 1 and payload["checks"] == []
+    assert "fixture attestation 2" in payload["error"] and "40-hex" in payload["error"]
+
+
+def test_inline_attestations_are_replay_only(monkeypatch, capsys, tmp_path: Path):
+    config = deterministic_live_config()
+    config["attestations"] = real_history()
+    hostname = config["latency_baseline_ms"]["hostname"]
+    returncode, payload = run_live_config(monkeypatch, capsys, tmp_path, config, hostname)
+    assert returncode == 1 and payload["checks"] == []
+    assert payload["error"].startswith("inline `attestations` are replay-only")
+
+
+def write_attestations(root: Path, documents: list[dict]) -> Path:
+    for document in documents:
+        run_dir = root / str(document["run_id"])
+        run_dir.mkdir(parents=True)
+        (run_dir / "attestation.json").write_text(json.dumps(document), encoding="utf-8")
+    return root
+
+
+def test_live_gate_reads_attested_runs_from_the_path_it_is_handed(monkeypatch, capsys, tmp_path: Path):
+    root = write_attestations(tmp_path / "attestations", real_history())
+    config = deterministic_live_config()  # one 100 ms sample, inside the 463.7 ms band
+    hostname = config["latency_baseline_ms"]["hostname"]
+    returncode, payload = run_live_config(
+        monkeypatch, capsys, tmp_path, config, hostname, extra_args=["--attestations", str(root)]
+    )
+    assert returncode == 0 and payload["status"] == "PASS" and payload["unmeasured"] == []
+    check = payload["checks"][0]
+    assert check["name"] == "search_latency" and check["status"] == "PASS"
+    assert check["details"]["attested_runs"] == {"p50": 7, "p95": 7}
+
+
+def test_live_gate_without_attestations_renders_latency_unmeasured(monkeypatch, capsys, tmp_path: Path):
+    config = deterministic_live_config()
+    hostname = config["latency_baseline_ms"]["hostname"]
+    returncode, payload = run_live_config(monkeypatch, capsys, tmp_path, config, hostname)
+    assert returncode == 0 and payload["unmeasured"] == ["search_latency"]
+    check = payload["checks"][0]
+    assert check["status"] == "UNMEASURED"
+    assert "0 of the 5 attested green main runs" in check["details"]["margins"]["p50"]
+
+
+def test_live_gate_refuses_an_attestation_path_it_cannot_read(monkeypatch, capsys, tmp_path: Path):
+    config = deterministic_live_config()
+    hostname = config["latency_baseline_ms"]["hostname"]
+    returncode, payload = run_live_config(
+        monkeypatch, capsys, tmp_path, config, hostname, extra_args=["--attestations", str(tmp_path / "absent")]
+    )
+    assert returncode == 1 and payload["checks"] == []
+    assert "absent" in payload["error"] and "neither a file nor a directory" in payload["error"]
+
+
+def resource_fixture(daemon_cpu_pct: float, attestations: list[dict]) -> dict:
+    idle = {"cpu_pct": 0, "rss_bytes": 0, "pids": []}
+    return {
+        "checks": ["resource_budget"],
+        "resource_samples": [
+            {
+                "daemon": {"cpu_pct": daemon_cpu_pct, "rss_bytes": 1, "pids": [1]},
+                "helper": idle,
+                "watcher": idle,
+                "drain": idle,
+            }
+        ],
+        "attestations": attestations,
+    }
+
+
+def test_idle_cpu_goes_red_beyond_the_measured_band_even_under_the_ceiling(tmp_path: Path, capsys):
+    """R3's worked example. Five attested green main runs at 4.0-5.0% idle give a band with limit
+    ~6.2%. A run at 20% is far under the ratified 30% ceiling and was PASS on 3ee7c279; it is a
+    four-fold drift from what green main does, and the ratchet says so."""
+    history = [attestation(i, **{"idle_cpu_pct.daemon": value}) for i, value in enumerate([4.0, 4.5, 5.0, 4.8, 4.2])]
+    returncode, payload = replay(tmp_path, capsys, resource_fixture(20.0, history))
+    assert returncode == 1
+    check = payload["checks"][0]
+    assert check["status"] == "FAIL"
+    assert check["details"]["cpu_over_measured_band"] == ["daemon"]
+    assert check["details"]["cpu_margins"]["daemon"].startswith("limit 6.2 % = mean 4.5 %")
+    # ...and the same band lets a run that green main would recognise through.
+    returncode, payload = replay(tmp_path, capsys, resource_fixture(5.5, history))
+    assert returncode == 0 and payload["checks"][0]["status"] == "PASS"
+
+
+def test_idle_cpu_ceiling_alone_decides_while_its_band_is_unmeasured(tmp_path: Path, capsys):
+    # The 30% ceiling is ratified and does not become unmeasured; the band's absence is stated per process.
+    returncode, payload = replay(tmp_path, capsys, resource_fixture(20.0, []))
+    check = payload["checks"][0]
+    assert returncode == 0 and check["status"] == "PASS"
+    assert check["details"]["cpu_over_measured_band"] == []
+    assert check["details"]["cpu_margins"]["daemon"].startswith("margin unmeasured — 0 of the 5")
+    returncode, payload = replay(tmp_path, capsys, resource_fixture(31.0, []))
+    assert returncode == 1 and payload["checks"][0]["status"] == "FAIL"

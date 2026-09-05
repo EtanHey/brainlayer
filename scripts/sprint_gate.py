@@ -60,6 +60,9 @@ sys.path.insert(0, str(SRC))
 from brainlayer import __version__
 from brainlayer.paths import get_db_path
 
+sys.path.insert(0, str(ROOT))
+from scripts import ratchet_margins as margins  # noqa: E402  (ROOT must be on sys.path first, as SRC is above)
+
 CORPUS = ROOT / "tests" / "fixtures" / "sprint_gate" / "corpus.json"
 SUCCESS_STATUSES = {"STORED", "DUPLICATE", "MERGED", "DEFERRED"}
 CHECKS = ("search_latency", "mcp_roundtrip", "resource_budget", "wal_bound")
@@ -180,6 +183,12 @@ def status(name: str, passed: bool, **details) -> dict:
     return {"name": name, "status": "PASS" if passed else "FAIL", "details": details}
 
 
+def unmeasured(name: str, **details) -> dict:
+    """A check whose VALUES are real and whose VERDICT is not: its margin has fewer than five attested
+    green main runs behind it (ratchet (c)). Rendered as such, never as PASS, never as a flat fallback."""
+    return {"name": name, "status": UNMEASURED, "details": details}
+
+
 def check_search(config: dict) -> dict:
     samples = config.get("latency_samples_ms")
     if samples is None:
@@ -194,13 +203,25 @@ def check_search(config: dict) -> dict:
         finally:
             client.close()
     baseline = config["latency_baseline_ms"]
-    regression = config["thresholds"]["latency_regression_fraction"]
     measured = {"p50": percentile(samples, 0.50), "p95": percentile(samples, 0.95)}
-    limits = {key: baseline[key] * (1 + regression) for key in measured}
-    passed = all(measured[key] <= limits[key] for key in measured)
-    return status(
-        "search_latency", passed, samples_ms=samples, measured_ms=measured, baseline_ms=baseline, limits_ms=limits
+    # The limit is the measured band of attested green main runs, not `baseline × 1.10`. The seven
+    # green-main p50 values on record (2026-09-01..02) span 98-294 ms: a flat 10% around their mean
+    # would have been RED on three of them, while the corpus baseline it multiplied (911.887 ms,
+    # captured under active sprint load) let a two-fold regression through GREEN. Both defects, one
+    # constant; `scripts/ratchet_margins.py` says how the band is derived and why.
+    bands = {key: margins.margin_for(config.get("attestations"), path) for key, path in margins.LATENCY_KEYS.items()}
+    details = dict(
+        samples_ms=samples,
+        measured_ms=measured,
+        baseline_ms=baseline,
+        margins={key: margins.describe(band, unit="ms") for key, band in bands.items()},
+        attested_runs={key: band.n for key, band in bands.items()},
     )
+    verdicts = {key: margins.within(bands[key], measured[key]) for key in measured}
+    if any(verdict is None for verdict in verdicts.values()):
+        return unmeasured("search_latency", **details)
+    limits = {key: bands[key].limit for key in measured}
+    return status("search_latency", all(verdicts.values()), limits_ms=limits, **details)
 
 
 def annotation_gaps(tools: list) -> dict:
@@ -422,13 +443,23 @@ def check_resource(config: dict) -> dict:
     helper_rss = max(sample["helper"]["rss_bytes"] for sample in samples)
     required_missing = [name for name in config.get("required_processes", []) if not samples[-1][name]["pids"]]
     thresholds = config["thresholds"]
-    passed = all(value < thresholds["cpu_percent"] for value in cpu.values())
+    # Two different gates on one number, both applied. `cpu_percent` is the ratified CEILING and
+    # stays a hard budget. The measured band is the RATCHET: RED when this run's idle CPU is outside
+    # what attested green main runs produced, even when it is still under the ceiling -- R3's soak
+    # (4.88% then 6.41% on near-identical code) is exactly the drift a ceiling of 30 cannot see.
+    # With fewer than five attested runs the band is unmeasured and the ceiling alone decides; the
+    # payload says so per process rather than printing a limit nobody measured.
+    bands = {name: margins.margin_for(config.get("attestations"), margins.idle_cpu_key(name)) for name in names}
+    over_band = [name for name in names if margins.within(bands[name], cpu[name]) is False]
+    passed = all(value < thresholds["cpu_percent"] for value in cpu.values()) and not over_band
     passed = passed and helper_rss < thresholds["helper_rss_bytes"] and not required_missing
     return status(
         "resource_budget",
         passed,
         sample_count=len(samples),
         average_cpu_pct=cpu,
+        cpu_margins={name: margins.describe(bands[name], unit="%") for name in names},
+        cpu_over_measured_band=over_band,
         helper_max_rss_bytes=helper_rss,
         required_missing=required_missing,
     )
@@ -755,6 +786,16 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
     parser.add_argument("--fixture", type=Path, help="Replay a deterministic RED/GREEN fixture")
     parser.add_argument(
+        "--attestations",
+        type=Path,
+        help=(
+            "Directory of `attestation.json` files downloaded from successful `ratchet-attest.yml` runs on main "
+            "(one per run), or one such file. Every measured margin comes from these; without them, margins "
+            "render `unmeasured`. A path that cannot be read refuses the run (rc=1). Live runs only: a fixture "
+            "carries its attestations inline, and replay is never proof."
+        ),
+    )
+    parser.add_argument(
         "--require-code-under-test",
         action="store_true",
         help=(
@@ -811,6 +852,41 @@ def latency_baseline_refusal(config: dict, selected: list[str]) -> str | None:
     return None
 
 
+def attestation_refusal(args: argparse.Namespace, config: dict) -> str | None:
+    """Load the attested main runs every margin is measured from, or say why this run may not proceed.
+
+    A live run reads them ONLY from `--attestations`. Inline `attestations` in a live config would be
+    a margin the working tree can hand-edit -- the hand-editable baseline all over again -- so it is
+    refused. A fixture carries them inline because replay is not evidence about anything anyway.
+    """
+    inline = config.get("attestations")
+    if args.fixture:
+        if inline is None:
+            return None
+        if not isinstance(inline, list):
+            return "fixture `attestations` is not a list"
+        try:
+            config["attestations"] = [
+                margins.validate_attestation(document, f"fixture attestation {index}")
+                for index, document in enumerate(inline)
+            ]
+        except margins.AttestationError as error:
+            return str(error)
+        return None
+    if inline is not None:
+        return (
+            "inline `attestations` are replay-only: a live run reads attested main runs from `--attestations`, "
+            "never from its own config"
+        )
+    if args.attestations is None:
+        return None
+    try:
+        config["attestations"] = margins.load_attestations(args.attestations)
+    except margins.AttestationError as error:
+        return str(error)
+    return None
+
+
 def calibrated_hostname(config: dict) -> str | None:
     baseline = config.get("latency_baseline_ms")
     return baseline.get("hostname") if isinstance(baseline, dict) else None
@@ -860,12 +936,15 @@ def gate_status(results: list[dict]) -> str:
     """PASS, FAIL, or UNMEASURED -- and an empty result list is never PASS.
 
     Option (b) from w6-REPORT.md still stands for SKIPPED checks: rc stays 0 and release consumers
-    reject skipped checks themselves. A run with NO checks at all is a different animal: it made no
-    claim about anything, so it cannot make a green one.
+    reject skipped checks themselves. An UNMEASURED check (ratchet (c): real values, no band to judge
+    them against yet) follows the same rule, and for the same reason -- the first five attested main
+    runs have to be able to complete for a band to exist at all, and the payload names every check
+    it could not judge. A run with NO checks at all is a different animal: it made no claim about
+    anything, so it cannot make a green one.
     """
     if not results:
         return UNMEASURED
-    return "PASS" if all(item["status"] in {"PASS", "SKIPPED"} for item in results) else "FAIL"
+    return "PASS" if all(item["status"] in {"PASS", "SKIPPED", UNMEASURED} for item in results) else "FAIL"
 
 
 def gate_refusal(
@@ -875,8 +954,12 @@ def gate_refusal(
     if refusal := proof_refusal(args, provenance):
         return refusal
     if args.fixture:
-        return None
-    return machine_target_refusal(config, machine) or latency_baseline_refusal(config, selected)
+        return attestation_refusal(args, config)
+    return (
+        machine_target_refusal(config, machine)
+        or latency_baseline_refusal(config, selected)
+        or attestation_refusal(args, config)
+    )
 
 
 def base_payload(args: argparse.Namespace, machine: dict, provenance: dict) -> dict:
@@ -900,6 +983,7 @@ def result_payload(base: dict, results: list[dict]) -> dict:
         "status": gate_status(results),
         "checks": results,
         "skipped": [item["name"] for item in results if item["status"] == "SKIPPED"],
+        "unmeasured": [item["name"] for item in results if item["status"] == UNMEASURED],
     }
     if payload["status"] == UNMEASURED:
         payload["error"] = "no checks were selected, so this run measured nothing and cannot report PASS"
