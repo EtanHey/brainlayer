@@ -42,24 +42,28 @@ def _hook_scripts_with_shebangs() -> list[Path]:
 
 
 class TestShebangs:
-    def test_hooks_dir_is_not_empty(self):
+    @staticmethod
+    def test_hooks_dir_is_not_empty():
         assert _hook_scripts_with_shebangs(), f"no shebang-bearing hooks under {HOOKS_DIR}"
 
+    @staticmethod
     @pytest.mark.parametrize("script", _hook_scripts_with_shebangs(), ids=lambda p: p.name)
-    def test_hook_shebang_is_not_bare_python3(self, script: Path):
+    def test_hook_shebang_is_not_bare_python3(script: Path):
         shebang = shebang_of(script)
         assert not is_bare_python3(shebang), (
             f"{script.name} has a PATH-resolved shebang ({shebang!r}). "
             "PATH decides which brainlayer library the hook imports; pin the keg python."
         )
 
+    @staticmethod
     @pytest.mark.parametrize("script", _hook_scripts_with_shebangs(), ids=lambda p: p.name)
-    def test_hook_shebang_names_the_keg_python(self, script: Path):
+    def test_hook_shebang_names_the_keg_python(script: Path):
         assert shebang_of(script) == f"#!{DEFAULT_KEG_PYTHON}", (
             f"{script.name} must invoke the keg python, not {shebang_of(script)!r}"
         )
 
-    def test_every_shebang_bearing_hook_is_declared(self):
+    @staticmethod
+    def test_every_shebang_bearing_hook_is_declared():
         """The shipped constant is what the settings.json linter matches on."""
         on_disk = {p.name for p in _hook_scripts_with_shebangs()}
         assert on_disk <= BRAINLAYER_HOOK_SCRIPTS, (
@@ -83,7 +87,8 @@ class TestIsBarePython3:
             "#!/Library/Frameworks/Python.framework/Versions/3.13/bin/python3",
         ],
     )
-    def test_path_or_system_interpreters_are_bare(self, value):
+    @staticmethod
+    def test_path_or_system_interpreters_are_bare(value):
         assert is_bare_python3(value) is True
 
     @pytest.mark.parametrize(
@@ -94,33 +99,39 @@ class TestIsBarePython3:
             "/opt/homebrew/Cellar/brainlayer/1.5.15/libexec/venv/bin/python",
         ],
     )
-    def test_keg_interpreters_are_pinned(self, value):
+    @staticmethod
+    def test_keg_interpreters_are_pinned(value):
         assert is_bare_python3(value) is False
 
-    def test_none_is_not_bare(self):
+    @staticmethod
+    def test_none_is_not_bare():
         assert is_bare_python3(None) is False
 
 
 class TestResolveHookPython:
-    def test_env_override_wins(self, tmp_path):
+    @staticmethod
+    def test_env_override_wins(tmp_path):
         override = tmp_path / "python"
         override.write_text("#!/bin/sh\n")
         override.chmod(0o755)
         assert resolve_hook_python(env={HOOK_PYTHON_ENV: str(override)}) == str(override)
 
-    def test_env_override_must_exist(self, tmp_path):
+    @staticmethod
+    def test_env_override_must_exist(tmp_path):
         with pytest.raises(HookPythonUnresolved) as excinfo:
             resolve_hook_python(env={HOOK_PYTHON_ENV: str(tmp_path / "nope")}, candidates=())
         assert HOOK_PYTHON_ENV in str(excinfo.value)
 
-    def test_first_existing_candidate_wins(self, tmp_path):
+    @staticmethod
+    def test_first_existing_candidate_wins(tmp_path):
         missing = tmp_path / "missing" / "python"
         present = tmp_path / "present"
         present.write_text("#!/bin/sh\n")
         present.chmod(0o755)
         assert resolve_hook_python(env={}, candidates=(str(missing), str(present))) == str(present)
 
-    def test_never_falls_back_to_path(self):
+    @staticmethod
+    def test_never_falls_back_to_path():
         """A silent `python3` fallback is the bug, not the remedy."""
         with pytest.raises(HookPythonUnresolved) as excinfo:
             resolve_hook_python(env={}, candidates=("/nonexistent/keg/bin/python",))
@@ -128,13 +139,15 @@ class TestResolveHookPython:
         assert "/nonexistent/keg/bin/python" in message, "the error must name what it looked for"
         assert HOOK_PYTHON_ENV in message, "the error must name the explicit escape hatch"
 
-    def test_default_candidate_is_the_opt_symlink(self):
+    @staticmethod
+    def test_default_candidate_is_the_opt_symlink():
         """`opt/` outlives the Cellar version a command was rendered against."""
         assert DEFAULT_KEG_PYTHON == "/opt/homebrew/opt/brainlayer/libexec/venv/bin/python"
 
 
 class TestRenderHookCommand:
-    def test_renders_pinned_interpreter_and_script(self, tmp_path):
+    @staticmethod
+    def test_renders_pinned_interpreter_and_script(tmp_path):
         # Shaped like a real keg: `is_bare_python3` clears a path only because of the
         # `libexec/venv` segment, so a fixture without it would be flagged correctly.
         python = tmp_path / "libexec" / "venv" / "bin" / "python"
@@ -160,23 +173,27 @@ def _settings(command: str) -> dict:
 
 
 class TestFindUnpinnedHookCommands:
-    def test_flags_bare_python3_on_a_brainlayer_hook(self):
+    @staticmethod
+    def test_flags_bare_python3_on_a_brainlayer_hook():
         settings = _settings("python3 /Users/x/.claude/hooks/brainlayer-prompt-search.py")
         findings = find_unpinned_hook_commands(settings)
         assert len(findings) == 1
         assert findings[0].script == "brainlayer-prompt-search.py"
         assert findings[0].event == "UserPromptSubmit"
 
-    def test_accepts_a_pinned_command(self):
+    @staticmethod
+    def test_accepts_a_pinned_command():
         settings = _settings(f"{DEFAULT_KEG_PYTHON} /Users/x/.claude/hooks/brainlayer-prompt-search.py")
         assert find_unpinned_hook_commands(settings) == []
 
-    def test_ignores_hooks_this_repo_does_not_own(self):
+    @staticmethod
+    def test_ignores_hooks_this_repo_does_not_own():
         """Etan's other hooks are not ours to repin."""
         settings = _settings("python3 /Users/x/.claude/hooks/tdd-guard.py")
         assert find_unpinned_hook_commands(settings) == []
 
-    def test_sees_through_a_wrapper_command(self):
+    @staticmethod
+    def test_sees_through_a_wrapper_command():
         """The Stop hook runs through skill-creator's stop-telemetry shim."""
         settings = {
             "hooks": {
@@ -200,34 +217,40 @@ class TestFindUnpinnedHookCommands:
         assert len(findings) == 1
         assert findings[0].script == "brainbar-stop-index.py"
 
-    def test_env_python3_is_flagged_too(self):
+    @staticmethod
+    def test_env_python3_is_flagged_too():
         settings = _settings("/usr/bin/env python3 /Users/x/.claude/hooks/session-cleanup.py")
         assert len(find_unpinned_hook_commands(settings)) == 1
 
-    def test_empty_settings_is_clean(self):
+    @staticmethod
+    def test_empty_settings_is_clean():
         assert find_unpinned_hook_commands({}) == []
 
 
 class TestCli:
     """`python -m brainlayer.hook_python <settings.json>` — a hand-runnable lint."""
 
-    def test_exits_one_on_an_unpinned_hook(self, tmp_path, capsys):
+    @staticmethod
+    def test_exits_one_on_an_unpinned_hook(tmp_path, capsys):
         path = tmp_path / "settings.json"
         path.write_text(json.dumps(_settings("python3 /x/hooks/brainlayer-prompt-search.py")))
         assert main([str(path)]) == 1
         assert "brainlayer-prompt-search.py" in capsys.readouterr().out
 
-    def test_exits_zero_when_pinned(self, tmp_path, capsys):
+    @staticmethod
+    def test_exits_zero_when_pinned(tmp_path, capsys):
         path = tmp_path / "settings.json"
         path.write_text(json.dumps(_settings(f"{DEFAULT_KEG_PYTHON} /x/hooks/brainlayer-prompt-search.py")))
         assert main([str(path)]) == 0
         assert "OK" in capsys.readouterr().out
 
-    def test_exits_two_on_an_unreadable_file(self, tmp_path, capsys):
+    @staticmethod
+    def test_exits_two_on_an_unreadable_file(tmp_path, capsys):
         assert main([str(tmp_path / "absent.json")]) == 2
         assert "cannot read" in capsys.readouterr().out
 
-    def test_exits_two_on_invalid_json(self, tmp_path, capsys):
+    @staticmethod
+    def test_exits_two_on_invalid_json(tmp_path, capsys):
         path = tmp_path / "settings.json"
         path.write_text("{not json")
         assert main([str(path)]) == 2
@@ -244,7 +267,8 @@ SETTINGS_PATH_ENV = "BRAINLAYER_CLAUDE_SETTINGS"
 class TestLiveSettings:
     """The deployment half. Skipped where there is no settings.json to check."""
 
-    def test_installed_brainlayer_hooks_are_pinned(self):
+    @staticmethod
+    def test_installed_brainlayer_hooks_are_pinned():
         override = os.environ.get(SETTINGS_PATH_ENV)
         settings_path = Path(os.path.expanduser(override or "~/.claude/settings.json"))
         if not settings_path.exists():
