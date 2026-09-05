@@ -197,10 +197,34 @@ brainlayer enrich
   — its transcript stays out of the index BY CLASS, which is its entire point. A *brainlayer
   worker* is a cmux pane of a brainlayerGolem and ingests normally. Never substitute a visible pane
   when ingest-exclusion is the goal; to "paste" to a subagent, paste to the lead, who relays.
-- ⚠️ **Known code drift, do not read this file as describing shipped behaviour:**
-  `ingest_denylist.py:14` is `("~/.claude/projects/**/wf_*/**",)`, which excludes **every** workflow
-  path and silently discards legitimate workflow-agent memory. The rule above is the ruling; the code
-  is the defect. Code fix owned by the brainlayer lane.
+- **Code drift CLOSED.** `DEFAULT_INGEST_DENYLIST` is now `()` — the `wf_*` blanket is gone, and
+  exclusion is decided by class from each transcript's own `attributionAgent`
+  (`MEMORY_READER_ATTRIBUTIONS = {brain-worker, session-miner, weave}`). Ordinary workflow agents
+  ingest. Landed by `5c0dfc52` and follow-ups. **Path shape is not fully gone:**
+  `memory_reader_attribution` still walks the path components under `subagents/` and returns a role
+  when one of them literally names a memory reader, before it reads the JSONL. That is a narrow
+  exact-segment match, never task text — but do not read "by class" as "path is never consulted".
+- ⚠️ **`session-miner` and `weave` are not detectable today, and the code cannot invent them.** A census
+  of 2,793 real `agent-*.meta.json` sidecars under `~/.claude/projects` (2026-09-05) found
+  `brain-worker` 60 times and `session-miner`/`weave` **zero** times: every workflow agent is written as
+  the generic `workflow-subagent` (2,288) or `general-purpose` (8), and no transcript field carries the
+  workflow agent's own role. Both names stay in `MEMORY_READER_ATTRIBUTIONS` so the ruling holds the
+  moment a harness ever labels them; until then only `brain-worker` actually fires. Matching on task
+  text is not a substitute and is forbidden — a lead session *discussing* session-miner is ordinary memory.
+- ⚠️ **`BRAINLAYER_INGEST_DENYLIST` REPLACES the class rule; it does not add to it.**
+  `is_denylisted` skips the whole attribution branch whenever the variable is present at all
+  (`BRAINLAYER_INGEST_DENYLIST_ENV not in os.environ and ...`). So *any* override — even a
+  project-scoped one naming a single repo — turns OFF brain-worker/session-miner/weave exclusion,
+  and those transcripts start ingesting. **Verified by execution 2026-09-05:** with the deployed
+  `matchmat`-shaped override set, a `brain-worker` transcript returns `is_denylisted == False`.
+  A quiet `setup` therefore means "no over-exclusion", never "the class rule is intact".
+- **`brainlayer setup` reads the env FILE it resolved, not just the process environment.** The
+  blanket lived in `~/.config/brainlayer/brainlayer.env`, which is not in a fresh shell's environ,
+  so a check against `os.environ` alone would have stayed silent on the very defect it exists to
+  catch. `env_file_denylist_patterns()` parses the resolved file (including `--env-file`), and
+  `setup` reports each source separately: that the override replaces the class rule, and then any
+  pattern broader than it. Deployment-scoped patterns naming one project or repo are not reported as
+  overreach. Etan rules on that env file; agents do not edit it.
 - Go-forward secret scrubbing runs in `src/brainlayer/pipeline/secret_scrub.py` from `src/brainlayer/watcher_bridge.py` before chunk persistence. Provider-prefixed and labeled high-entropy secrets are redacted; unlabeled high-entropy tokens are recorded in quarantine metadata.
 - MCP search uses a fixed-size readonly WAL `VectorStore` pool in `src/brainlayer/mcp/_shared.py`. `BRAINLAYER_READ_POOL_SIZE` defaults to 8, or 4 on detected Apple M1; M1 machines can keep the lower override explicitly. Checkout beyond the fixed pool blocks up to `BRAINLAYER_READ_BUSY_TIMEOUT_MS`, and startup rejects `pool_size * BRAINLAYER_READ_CACHE_KB` above about 768MB.
 

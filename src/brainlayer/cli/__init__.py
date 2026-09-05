@@ -504,6 +504,52 @@ def init(
         raise typer.Exit(1) from exc
 
 
+def _report_ingest_denylist_overrides(resolved_env_file: Path) -> None:
+    """Say, loudly, what an ingest denylist override is doing -- from the FILE, not just environ.
+
+    The blanket this exists to catch lives in the env file launchd loads, which is not in a fresh
+    shell's environment, so auditing os.environ alone would stay silent on the actual defect.
+    """
+    from ..ingest_denylist import (
+        BRAINLAYER_INGEST_DENYLIST_ENV,
+        MEMORY_READER_ATTRIBUTIONS,
+        env_denylist_overreach,
+        env_file_denylist_patterns,
+        split_denylist_patterns,
+    )
+
+    override_sources: list[tuple[str, tuple[str, ...]]] = []
+    file_patterns = env_file_denylist_patterns(resolved_env_file)
+    if file_patterns is not None:
+        override_sources.append((str(resolved_env_file), file_patterns))
+    process_override = os.environ.get(BRAINLAYER_INGEST_DENYLIST_ENV)
+    if process_override is not None:
+        process_patterns = split_denylist_patterns(process_override)
+        # config.load_brainlayer_env() copies the default env file into os.environ at import time,
+        # so the process value is usually just an echo of the file. Report it only when it differs
+        # and is therefore a second, independent source the operator has to reconcile.
+        if process_patterns != (file_patterns or ()):
+            override_sources.append(("process environment", process_patterns))
+
+    readers = ", ".join(sorted(MEMORY_READER_ATTRIBUTIONS))
+    for source, patterns in override_sources:
+        # Quiet-on-overreach is NOT a clean bill of health: any override at all takes the place of
+        # the attribution class rule, so memory-reading workers stop being excluded by class.
+        rprint(
+            f"[yellow]{BRAINLAYER_INGEST_DENYLIST_ENV} is set in {source} and REPLACES the ingest"
+            f" class rule[/] — while it is set, {readers} transcripts are no longer excluded by"
+            " their attribution, only by these patterns."
+        )
+        overreaching = env_denylist_overreach(patterns=patterns)
+        if not overreaching:
+            continue
+        rprint(f"[yellow]  {len(overreaching)} pattern(s) also exclude transcripts the class rule keeps:[/]")
+        for finding in overreaching:
+            rprint(f"[yellow]    overreaching pattern:[/] {finding.pattern}")
+            rprint(f"      also excludes: {finding.kept_example}")
+        rprint("  Narrow or drop those patterns to stop discarding ordinary subagent and workflow-agent memory.")
+
+
 @app.command()
 def setup(
     launchd: bool = typer.Option(False, "--launchd/--no-launchd", help="Install launchd agents after writing config."),
@@ -542,6 +588,13 @@ def setup(
     import subprocess
 
     from ..config import get_user_env_path
+    from ..ingest_denylist import (
+        BRAINLAYER_INGEST_DENYLIST_ENV,
+        MEMORY_READER_ATTRIBUTIONS,
+        env_denylist_overreach,
+        env_file_denylist_patterns,
+        split_denylist_patterns,
+    )
     from ..setup import (
         McpMigrationReport,
         ensure_brainlayer_env,
@@ -581,6 +634,7 @@ def setup(
         rprint(f"[yellow]Skipped MCP config migration:[/] {skipped_path} ({reason})")
     if tool_count is not None:
         rprint(f"[green]MCP transport verified:[/] {tool_count} tools")
+    _report_ingest_denylist_overrides(resolved_env_file)
 
 
 @app.command()
