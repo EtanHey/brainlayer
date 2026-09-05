@@ -55,6 +55,72 @@ _MAX_HEALTH_FAILURE_DETAILS = 100
 _MAX_HEALTH_QUARANTINE_DETAILS = 100
 
 
+_OFFSET_PRUNE_RETRY_ENV = "BRAINLAYER_WATCHER_OFFSET_PRUNE_RETRY_S"
+_DEFAULT_OFFSET_PRUNE_RETRY_S = 900.0
+
+MIN_WATCH_POLL_INTERVAL_S = 30.0
+
+
+def enforce_min_poll_interval(poll_interval_s: float) -> float:
+    """Hold `brainlayer watch --poll` to the R3 >=30s floor, loudly.
+
+    The floor was asserted three ways against values that cannot be violated -- the CLI
+    option default and the `--poll` argument in both repo plists -- and against nothing at
+    the one boundary a value actually arrives through. That gap is not theoretical: the
+    installed ~/Library/LaunchAgents/com.brainlayer.watch.plist still passes `--poll 1.0`,
+    so re-enabling the label without re-running scripts/launchd/install.sh watch hands this
+    function the exact configuration R3 exists to remove.
+
+    Clamp rather than exit: `watch` runs under launchd KeepAlive, so refusing a stale plist
+    turns it into a restart loop that ingests nothing -- trading a CPU burn for a total
+    ingestion outage. Clamping keeps the watcher serving at the floor and puts the
+    violation in watch.err.log at WARNING, where the operator can see it and fix the source.
+
+    isfinite before the bounds test, for the same reason as
+    `_watch_offset_prune_retry_interval_s`: `float("nan") < 30.0` is False, so nan would
+    sail past a bare `< MIN` check into `Event.wait(nan)`, and `inf` would park the poll
+    loop forever -- both silent, both worse than the value they replaced.
+    """
+    if math.isfinite(poll_interval_s) and poll_interval_s >= MIN_WATCH_POLL_INTERVAL_S:
+        return poll_interval_s
+    logger.warning(
+        "--poll %r violates the R3 >=%.0fs batching constraint; clamping to %.0fs. "
+        "Something still asks this watcher to poll sub-30s -- most likely a stale "
+        "~/Library/LaunchAgents/com.brainlayer.watch.plist; re-run "
+        "scripts/launchd/install.sh watch to fix it at the source.",
+        poll_interval_s,
+        MIN_WATCH_POLL_INTERVAL_S,
+        MIN_WATCH_POLL_INTERVAL_S,
+    )
+    return MIN_WATCH_POLL_INTERVAL_S
+
+
+def _watch_offset_prune_retry_interval_s() -> float:
+    """Seconds to wait before re-attempting a prune that could not complete."""
+    raw_value = os.environ.get(_OFFSET_PRUNE_RETRY_ENV, str(_DEFAULT_OFFSET_PRUNE_RETRY_S))
+    try:
+        parsed_value = float(raw_value)
+    except ValueError:
+        logger.warning(
+            "Invalid %s=%r; using default %s",
+            _OFFSET_PRUNE_RETRY_ENV,
+            raw_value,
+            _DEFAULT_OFFSET_PRUNE_RETRY_S,
+        )
+        return _DEFAULT_OFFSET_PRUNE_RETRY_S
+    # isfinite before the sign test: float("nan") and float("inf") survive both
+    # ValueError and `<= 0`, and `monotonic() - attempt >= nan/inf` is never true, which
+    # would silently disable the retry timer for the life of the process.
+    if not math.isfinite(parsed_value) or parsed_value <= 0:
+        logger.warning(
+            "%s must be a positive finite number; using default %s",
+            _OFFSET_PRUNE_RETRY_ENV,
+            _DEFAULT_OFFSET_PRUNE_RETRY_S,
+        )
+        return _DEFAULT_OFFSET_PRUNE_RETRY_S
+    return parsed_value
+
+
 def _watch_read_window_bytes() -> int:
     """Load the per-file, per-poll read window from the legacy environment name."""
     raw_value = os.environ.get(_WATCH_MAX_FILE_BYTES_ENV, str(_DEFAULT_WATCH_MAX_FILE_BYTES))
@@ -1020,7 +1086,17 @@ class JSONLWatcher:
         on_tick: Callable[[], None] | None = None,
         watch_roots: list[WatchRoot] | None = None,
         db_path: str | Path | None = None,
-        poll_interval_s: float = 1.0,
+        # >=30s batching, per the R3 constraint: a discovery pass over the real corpus
+        # measures ~1s and a steady-state poll ~2.4s, so the old 1.0s default meant the
+        # loop never slept. 30s is the constraint's floor and the lowest-latency value that
+        # satisfies it. (60s was tried to clear the <5% idle-CPU soak gate; it did not --
+        # the shipping code measures 6.41% -- so the extra latency bought nothing and the
+        # gate is left failing honestly rather than tuned around.)
+        # Not clamped here: the in-process tests drive poll_once through a real loop at
+        # 0.01-0.05s and a 30s floor in the constructor would stall the suite, not the
+        # burn. The floor is enforced at the boundary a deployed value crosses -- the
+        # `watch` command -- by enforce_min_poll_interval() above.
+        poll_interval_s: float = MIN_WATCH_POLL_INTERVAL_S,
         batch_size: int = 10,
         flush_interval_ms: int = 100,
         registry_flush_interval_s: float = 5.0,
@@ -1054,6 +1130,19 @@ class JSONLWatcher:
         self.max_record_bytes = _watch_max_record_bytes()
         self._tailers: dict[str, JSONLTailer] = {}
         self._file_providers: dict[str, str] = {}
+        # (mtime, size, inode) per file, so an unchanged file costs nothing on the next
+        # poll. Discovery already stats every file, so this is free to collect. The inode is
+        # load-bearing, not decoration: rotation is only detected inside _ensure_tailer /
+        # read_new_lines, which a skip never reaches, so without it a file replaced at the
+        # same path with the same size and mtime would be skipped forever and its content
+        # never ingested.
+        self._current_file_stats: dict[str, tuple[float, int, int]] = {}
+        self._observed_file_stats: dict[str, tuple[float, int, int]] = {}
+        # Denylist verdicts memoised for the duration of one poll. is_denylisted() expands
+        # globs and can read file content to attribute subagents; a warm sweep of the real
+        # corpus costs ~0.8s, and poll_once was evaluating it four times per file. Cleared
+        # every poll so a changed BRAINLAYER_INGEST_DENYLIST is still picked up promptly.
+        self._denylist_memo: dict[str, bool] = {}
         self._file_ingestion_failures: dict[str, dict[str, Any]] = {}
         self._quarantined_record_count_total = 0
         self._quarantined_records: list[dict[str, Any]] = []
@@ -1070,6 +1159,14 @@ class JSONLWatcher:
         self.poll_count = 0
         self.last_poll_made_progress = False
         self._offset_prune_complete = False
+        # An incomplete prune must back off rather than re-scan the registry every poll.
+        # `last_prune_complete` is permanently False whenever the registry holds entries
+        # whose parent directory is gone (8,744 of 21,529 on this machine), so gating only
+        # on that flag meant a 10-12s full-filesystem scan on every poll, forever, pruning
+        # nothing. Retrying on a timer keeps the volume-returns-later behaviour at ~0 cost.
+        self.offset_prune_retry_interval_s = _watch_offset_prune_retry_interval_s()
+        self._last_offset_prune_attempt = float("-inf")
+        self._last_prune_parent_dirs: frozenset[str] | None = None
 
     def _advance_confirmed_offsets(self, confirmations: dict[str, tuple[int, int, int]]) -> None:
         for filepath, (offset, source_inode, source_generation) in confirmations.items():
@@ -1126,7 +1223,7 @@ class JSONLWatcher:
             self._pending_quarantined_offsets.pop(filepath, None)
 
     def provider_for_file(self, filepath: str) -> str:
-        if is_denylisted(filepath):
+        if self._denylisted(filepath):
             return "unknown"
 
         provider = self._file_providers.get(filepath)
@@ -1144,6 +1241,8 @@ class JSONLWatcher:
         """Find all .jsonl files under each watched project, including nested session artifacts."""
         discovered: list[tuple[float, str, str]] = []
         self._file_providers = {}
+        self._current_file_stats = {}
+        self._denylist_memo = {}
         for root in self.watch_roots:
             root_path = root.resolved_path
             if not root_path.exists():
@@ -1157,13 +1256,15 @@ class JSONLWatcher:
                     for f in files:
                         if f.is_file():
                             path = str(f)
-                            if is_denylisted(path):
+                            if self._denylisted(path):
                                 continue
                             try:
-                                mtime = f.stat().st_mtime
+                                stat_result = f.stat()
+                                mtime = stat_result.st_mtime
                             except OSError as e:
                                 logger.debug("Skipping JSONL file during discovery after stat failure: %s: %s", path, e)
                                 continue
+                            self._current_file_stats[path] = (mtime, stat_result.st_size, stat_result.st_ino)
                             discovered.append((mtime, path, root.provider))
             except OSError:
                 continue
@@ -1171,6 +1272,51 @@ class JSONLWatcher:
         files = [path for _mtime, path, provider in discovered]
         self._file_providers = {path: provider for _mtime, path, provider in discovered}
         return files
+
+    def _denylisted(self, filepath: str) -> bool:
+        """Memoised is_denylisted() for one poll cycle. See _denylist_memo."""
+        cached = self._denylist_memo.get(filepath)
+        if cached is None:
+            cached = is_denylisted(filepath)
+            self._denylist_memo[filepath] = cached
+        return cached
+
+    def _can_skip_unchanged(self, filepath: str) -> bool:
+        """Return whether this poll may skip a file whose bytes cannot have moved.
+
+        Discovery already stats every file, so comparing (mtime, size) against the poll
+        that last drained the file is free. Without this, every poll opened and read all
+        ~12,700 tracked files; with it, an idle corpus costs only the discovery walk.
+
+        The gate is deliberately conservative -- it refuses to skip whenever the file
+        might still owe us bytes, because a false skip stalls a session silently:
+          * no tailer yet, so the file has never been read at all;
+          * the tailer is behind the file's size (a read capped by max_lines_per_file or
+            max_read_bytes_per_file leaves the stat unchanged but the tailer short);
+          * a complete line is still buffered from the previous read;
+          * quarantined offsets or a recorded ingestion failure are still pending.
+        """
+        previous = self._observed_file_stats.get(filepath)
+        current = self._current_file_stats.get(filepath)
+        if previous is None or current is None or previous != current:
+            return False
+        tailer = self._tailers.get(filepath)
+        _mtime, size, inode = current
+        # One expression, evaluated in order: `tailer is not None` guards every attribute
+        # access after it, exactly as the sequential early-returns did.
+        #
+        # `offset == size` and not `>= size`: a tailer AHEAD of EOF believes it read more
+        # bytes than the file holds, which is the signature of a truncation. Skipping there
+        # bypasses check_rewind -- the checkpoint-restore path that soft-archives reverted
+        # chunks. Only a tailer exactly at EOF has provably nothing left to read.
+        return (
+            tailer is not None
+            and tailer.offset == size
+            and tailer.observed_inode in (0, inode)
+            and not tailer.has_complete_buffered_line()
+            and not self._pending_quarantined_offsets.get(filepath)
+            and filepath not in self._file_ingestion_failures
+        )
 
     def _normalize_lines(self, filepath: str, new_lines: list[dict]) -> list[dict]:
         provider = self.provider_for_file(filepath)
@@ -1357,10 +1503,16 @@ class JSONLWatcher:
     def _max_offset_lag_bytes(self, files: list[str]) -> int:
         max_lag = 0
         for filepath in files:
-            try:
-                size = os.path.getsize(filepath)
-            except OSError:
-                continue
+            # Discovery stat'd every one of these moments ago; re-statting the whole corpus
+            # here would double the syscall cost of every poll for no new information.
+            cached = self._current_file_stats.get(filepath)
+            if cached is not None:
+                size = cached[1]
+            else:
+                try:
+                    size = os.path.getsize(filepath)
+                except OSError:
+                    continue
             tailer = self._tailers.get(filepath)
             offset = tailer.offset if tailer else self.registry.get(filepath)[0]
             max_lag = max(max_lag, max(size - offset, 0))
@@ -1584,6 +1736,45 @@ class JSONLWatcher:
             except Exception as e:
                 logger.error("Rewind callback failed: %s", e)
 
+    def _maybe_prune_offsets(self, files: list[str]) -> None:
+        """Prune deleted offsets, retrying an incomplete prune without re-scanning every poll.
+
+        An incomplete prune retries when the evidence that blocked it might have changed --
+        a new parent directory among the discovered files can supply the live-parent proof
+        a previously unmounted root was missing -- and otherwise backs off onto a timer.
+
+        Both halves are load-bearing. Without the change-detector a returning volume would
+        wait out the full interval (pinned by
+        test_poll_retries_pruning_after_unavailable_startup_root). Without the timer, a
+        registry holding entries whose roots are gone re-scans the whole filesystem on every
+        poll forever: measured at 10-12s per poll, pruning nothing after the first pass.
+        """
+        if self._offset_prune_complete:
+            return
+        # str.rpartition, not os.path.dirname or Path.parent: this runs over every
+        # discovered file on every poll. Measured on 12,000 paths -- rpartition 0.8ms,
+        # os.path.dirname 2.4ms, Path(p).parent 24.9ms. Complying with the pathlib
+        # lint here would have cost 22ms per poll in the loop this PR just optimised.
+        parent_dirs = frozenset(filepath.rpartition(os.sep)[0] for filepath in files)
+        timer_elapsed = time.monotonic() - self._last_offset_prune_attempt >= self.offset_prune_retry_interval_s
+        if parent_dirs == self._last_prune_parent_dirs and not timer_elapsed:
+            return
+
+        self._last_offset_prune_attempt = time.monotonic()
+        self._last_prune_parent_dirs = parent_dirs
+        pruned = self.registry.prune_missing_files(
+            [root.resolved_path for root in self.watch_roots],
+            files,
+        )
+        if pruned:
+            logger.info("Pruned %d deleted files from the offset registry", pruned)
+        self._offset_prune_complete = self.registry.flush() and self.registry.last_prune_complete
+        if not self._offset_prune_complete:
+            logger.info(
+                "Offset prune incomplete (entries whose roots are not currently mounted); retrying in %.0fs",
+                self.offset_prune_retry_interval_s,
+            )
+
     def poll_once(self) -> int:
         """Run one poll cycle. Returns number of new lines found."""
         total_new = 0
@@ -1593,7 +1784,7 @@ class JSONLWatcher:
 
         try:
             files = self._discover_jsonl_files()
-            live_files = {filepath for filepath in files if not is_denylisted(filepath)}
+            live_files = {filepath for filepath in files if not self._denylisted(filepath)}
             self._file_ingestion_failures = {
                 filepath: failure
                 for filepath, failure in self._file_ingestion_failures.items()
@@ -1604,28 +1795,23 @@ class JSONLWatcher:
                 for filepath, pending in self._pending_quarantined_offsets.items()
                 if filepath in live_files
             }
-            if not self._offset_prune_complete:
-                pruned = self.registry.prune_missing_files(
-                    [root.resolved_path for root in self.watch_roots],
-                    files,
-                )
-                if pruned:
-                    logger.info("Pruned %d deleted files from the offset registry", pruned)
-                self._offset_prune_complete = self.registry.flush() and self.registry.last_prune_complete
+            self._maybe_prune_offsets(files)
 
             for filepath in list(self._tailers):
-                if is_denylisted(filepath):
+                if self._denylisted(filepath):
                     self._tailers.pop(filepath, None)
                     self._file_providers.pop(filepath, None)
                     self._pending_quarantined_offsets.pop(filepath, None)
                     self.registry.remove(filepath)
 
             for filepath in files:
-                if is_denylisted(filepath):
+                if self._denylisted(filepath):
                     self._tailers.pop(filepath, None)
                     self._file_providers.pop(filepath, None)
                     self._pending_quarantined_offsets.pop(filepath, None)
                     self.registry.remove(filepath)
+                    continue
+                if self._can_skip_unchanged(filepath):
                     continue
                 tailer: JSONLTailer | None = None
                 tailer_snapshot: tuple[int, bytes] | None = None
@@ -1736,6 +1922,11 @@ class JSONLWatcher:
             if now - self._last_registry_flush >= self.registry_flush_interval_s:
                 self.registry.flush()
                 self._last_registry_flush = now
+
+            # Remember what we saw this pass so the next poll can skip files whose bytes
+            # cannot have moved. Safe to record unconditionally: _can_skip_unchanged still
+            # refuses when the tailer is behind the recorded size.
+            self._observed_file_stats = dict(self._current_file_stats)
 
             self._write_health_snapshot(files)
 
