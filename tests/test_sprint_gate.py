@@ -1297,20 +1297,47 @@ def test_fewer_than_five_attested_runs_is_unmeasured_never_a_verdict(tmp_path: P
     check = payload["checks"][0]
     assert check["status"] == "UNMEASURED"
     assert check["details"]["measured_ms"]["p50"] == 950.0  # the value is real and is reported
-    assert "limits_ms" not in check["details"]  # the verdict is not, and no number stands in for it
+    assert check["details"]["limits_ms"] == {"p50": None, "p95": None}  # no number stands in for the missing band
+    assert check["details"]["verdicts"] == {"p50": None, "p95": None}
     assert check["details"]["attested_runs"] == {"p50": 4, "p95": 4}
     assert "4 of the 5 attested green main runs" in check["details"]["margins"]["p50"]
 
 
-def test_the_band_needs_five_runs_for_each_percentile_separately(tmp_path: Path, capsys):
+def history_with_short_p95() -> list[dict]:
     history = real_history()
     for document in history[3:]:
         del document["measured"]["latency_baseline_ms.p95"]
-    returncode, payload = replay(tmp_path, capsys, latency_fixture([100.0] * 10, history))
+    return history
+
+
+def test_the_band_needs_five_runs_for_each_percentile_separately(tmp_path: Path, capsys):
+    returncode, payload = replay(tmp_path, capsys, latency_fixture([100.0] * 10, history_with_short_p95()))
     assert returncode == 0  # unmeasured is not a failure; it is the absence of a verdict, stated
     check = payload["checks"][0]
     assert check["status"] == "UNMEASURED"
     assert check["details"]["attested_runs"] == {"p50": 7, "p95": 3}
+
+
+def test_a_measured_fail_on_one_percentile_is_never_masked_by_an_unmeasured_sibling(tmp_path: Path, capsys):
+    """Lead review r1 (#764, high): `any(None) -> UNMEASURED` ran before `any(False) -> FAIL`, so p50 at
+    950 ms against a 7-run band (limit 463.7) came out UNMEASURED, rc 0, when p95 had only 3 runs.
+    That is the fail-open class this bolt exists to kill. Order is: any False -> FAIL; else any None
+    -> UNMEASURED; else PASS."""
+    returncode, payload = replay(tmp_path, capsys, latency_fixture([950.0] * 10, history_with_short_p95()))
+    assert returncode == 1 and payload["status"] == "FAIL"
+    check = payload["checks"][0]
+    assert check["status"] == "FAIL"
+    assert check["details"]["limits_ms"] == {"p50": pytest.approx(463.7, abs=0.2), "p95": None}
+    assert check["details"]["verdicts"] == {"p50": False, "p95": None}
+
+
+def test_duplicate_inline_attestations_refuse_the_replay(tmp_path: Path, capsys):
+    # Lead review r1 (#764): the live store refused a duplicate run_id; a fixture did not, so a RED/GREEN
+    # proof could be fabricated by repeating one row five times. Same rule on both paths now.
+    history = real_history()[:5] + [real_history()[0]]
+    returncode, payload = replay(tmp_path, capsys, latency_fixture([100.0] * 10, history))
+    assert returncode == 1 and payload["checks"] == []
+    assert "1000 appears twice" in payload["error"]
 
 
 def test_a_malformed_inline_attestation_refuses_the_replay(tmp_path: Path, capsys):
