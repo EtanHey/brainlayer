@@ -213,6 +213,27 @@ def replay_entry(
     return ReplayResult(path=entry.path, attempted=True, chunk_id=chunk_id, outcome=outcome, error=outcome_error)
 
 
+def _is_already_queued_locked(latest: FallbackEntry) -> bool:
+    """Marker says queued, the row is still pending, and the queue file is still there.
+
+    One definition, because two callers need it: `queue_entry` short-circuits on it, and the
+    startup sweep must not spend its bound on files that would only hit that short-circuit.
+    """
+    chunk_id = _fallback_chunk_id(latest)
+    queued = str(latest.frontmatter.get("queued_chunk_id") or "").strip()
+    queued_path = _queued_queue_path(latest)
+    return queued == chunk_id and is_pending_entry(latest) and (queued_path is None or queued_path.exists())
+
+
+def is_already_queued(entry: FallbackEntry) -> bool:
+    """Advisory read of `_is_already_queued_locked` for batch selection.
+
+    Advisory on purpose: `queue_entry` re-checks under the file lock, so a race here costs a wasted
+    slot, never a double enqueue.
+    """
+    return _is_already_queued_locked(_latest_entry(entry))
+
+
 def queue_entry(
     entry: FallbackEntry,
     *,
@@ -223,10 +244,8 @@ def queue_entry(
     with _fallback_marker_file_lock(entry.path):
         latest = _latest_entry(entry)
         chunk_id = _fallback_chunk_id(latest)
-        queued = str(latest.frontmatter.get("queued_chunk_id") or "").strip()
-        queued_path = _queued_queue_path(latest)
         pending = is_pending_entry(latest)
-        if queued == chunk_id and pending and (queued_path is None or queued_path.exists()):
+        if _is_already_queued_locked(latest):
             # Already on the queue from an earlier run; the drain still owes us the commit.
             return ReplayResult(path=entry.path, attempted=True, chunk_id=chunk_id, outcome=OUTCOME_DEFERRED)
 
@@ -301,20 +320,32 @@ def enqueue_pending_fallbacks(
 
     inventory = inventory_fallbacks(gits_root.expanduser(), scope_map=scope_map)
     pending = inventory.pending
-    batch = pending[:limit]
+    # A file stays in `inventory.pending` until the DRAIN marks its chunk_id, so a file already on
+    # the queue is still pending. Spending the bound on those would let a head of already-queued
+    # files starve the unqueued tail across a KeepAlive restart loop, forever.
+    awaiting = [entry for entry in pending if not is_already_queued(entry)]
+    batch = awaiting[:limit]
 
     results = [queue_entry(entry, enqueue_func=enqueue_func, replayed_by=replayed_by) for entry in batch]
 
     counts: dict[str, int] = {}
     for result in results:
         counts[result.outcome] = counts.get(result.outcome, 0) + 1
+    queued = sum(1 for result in results if result.outcome == OUTCOME_DEFERRED and not result.error)
 
     return {
         "pending_before": len(pending),
+        # Pending, but the drain already owes the commit: not this sweep's work.
+        "already_queued": len(pending) - len(awaiting),
+        "awaiting_queue": len(awaiting),
         "legacy_count": len(inventory.legacy),
         "limit": limit,
         "attempted": len(results),
-        "remaining": max(0, len(pending) - len(results)),
+        "queued": queued,
+        # Files that still need a queue slot after this sweep. Counts the ones the bound did not
+        # reach AND the ones that errored -- an errored file is still owed and will be back next
+        # start, so reporting it as progress would be the same lie this lane exists to remove.
+        "remaining": max(0, len(awaiting) - queued),
         "errors": sum(1 for result in results if result.error),
         "outcome_counts": dict(sorted(counts.items())),
     }

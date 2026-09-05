@@ -191,20 +191,6 @@ def test_run_daemon_keeps_draining_when_the_fallback_sweep_raises(tmp_path):
     assert drained == ["drain", "drain"]
 
 
-def test_fallback_sweep_on_start_is_opt_out_by_env(monkeypatch, tmp_path):
-    from brainlayer import drain
-
-    monkeypatch.setenv("BRAINLAYER_FALLBACK_REPLAY_ON_START", "0")
-    monkeypatch.setattr(
-        drain,
-        "enqueue_pending_fallbacks_for_start",
-        lambda **_kwargs: pytest.fail("swept while disabled"),
-        raising=False,
-    )
-
-    assert drain.replay_fallbacks_on_start(log_path=tmp_path / "drain.log") is None
-
-
 def test_fallback_sweep_on_start_defaults_to_enabled_and_logs_its_receipt(monkeypatch, tmp_path):
     from brainlayer import drain, fallback_replay
 
@@ -237,3 +223,168 @@ def test_fallback_sweep_bound_is_configurable_and_ignores_junk(monkeypatch):
 
     monkeypatch.setenv("BRAINLAYER_FALLBACK_REPLAY_ON_START_LIMIT", "-4")
     assert drain._fallback_replay_on_start_limit() == drain.DEFAULT_FALLBACK_REPLAY_ON_START_LIMIT
+
+
+def _queue_file(tmp_path: Path, name: str) -> Path:
+    target = tmp_path / "queue" / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("{}\n", encoding="utf-8")
+    return target
+
+
+def test_opt_out_blocks_the_symbol_production_actually_calls(monkeypatch, tmp_path):
+    """Round-1 review, #777 @198-205 (HIGH).
+
+    The old version patched `drain.enqueue_pending_fallbacks_for_start` with `raising=False` — a name
+    that exists nowhere in `src/`. It created a dead attribute nothing reads, so removing the early
+    return would have left this test green while the sweep hit the real filesystem. Patch the symbol
+    `replay_fallbacks_on_start` really imports.
+    """
+    from brainlayer import drain, fallback_replay
+
+    monkeypatch.setenv("BRAINLAYER_FALLBACK_REPLAY_ON_START", "0")
+    calls = []
+    monkeypatch.setattr(
+        fallback_replay,
+        "enqueue_pending_fallbacks",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    assert drain.replay_fallbacks_on_start(log_path=tmp_path / "drain.log") is None
+    assert calls == []
+
+
+def test_the_opt_out_test_would_catch_a_broken_early_return(monkeypatch, tmp_path):
+    """The mutation the test above must fail on: an enabled check that ignores the env."""
+    from brainlayer import drain, fallback_replay
+
+    monkeypatch.setenv("BRAINLAYER_FALLBACK_REPLAY_ON_START", "0")
+    monkeypatch.setattr(drain, "_fallback_replay_on_start_enabled", lambda: True)
+    calls = []
+    monkeypatch.setattr(fallback_replay, "enqueue_pending_fallbacks", lambda **kwargs: calls.append(kwargs) or {})
+
+    drain.replay_fallbacks_on_start(log_path=tmp_path / "drain.log")
+
+    # With the early return defeated, the production symbol IS reached — which is exactly what the
+    # previous assertion proves does not happen while the opt-out holds.
+    assert len(calls) == 1
+
+
+def test_the_bound_is_spent_on_files_that_still_need_queueing(tmp_path):
+    """Round-1 review, #777 @294-307 (MEDIUM).
+
+    `inventory.pending` keeps a file until the DRAIN marks `chunk_id`, so a file already on the queue
+    is still pending. `pending[:limit]` therefore spent the whole bound on head files that
+    `queue_entry` only no-ops on, and the unqueued tail was never selected — on a KeepAlive restart
+    loop, the same head could starve the tail forever.
+    """
+    from brainlayer.fallback_replay import enqueue_pending_fallbacks, parse_fallback_file, queue_entry
+
+    repo = _repo(tmp_path / "gits", "systems")
+    for index in range(4):
+        _pending(repo, f"head-{index}.md")
+    for index in range(3):
+        _pending(repo, f"tail-{index}.md")
+
+    # Put the four `head-*` files on the queue first; they stay `pending` until the drain marks them.
+    for index in range(4):
+        path = repo / "docs.local" / "decisions" / f"head-{index}.md"
+        queue_entry(
+            parse_fallback_file(path),
+            enqueue_func=lambda _i=index, **_kwargs: _queue_file(tmp_path, f"head-{_i}.jsonl"),
+            replayed_by="test",
+        )
+
+    queued = []
+    summary = enqueue_pending_fallbacks(
+        gits_root=tmp_path / "gits",
+        scope_map={},
+        enqueue_func=lambda **kwargs: queued.append(kwargs) or _queue_file(tmp_path, f"new-{len(queued)}.jsonl"),
+        replayed_by="test",
+        limit=3,
+    )
+
+    # The bound went to the tail, not to four no-ops on the head.
+    assert len(queued) == 3
+    assert sorted(Path(call["fallback_source_path"]).name for call in queued) == [
+        "tail-0.md",
+        "tail-1.md",
+        "tail-2.md",
+    ]
+    assert summary["pending_before"] == 7
+    assert summary["already_queued"] == 4
+    assert summary["awaiting_queue"] == 3
+    assert summary["queued"] == 3
+    assert summary["remaining"] == 0
+
+
+def test_remaining_counts_a_failed_file_as_still_owed(tmp_path):
+    """Round-1 review, #777 @123-151 (LOW).
+
+    Two pending, one enqueue failure: `remaining` used to be `pending - attempted` = 0, while one
+    file was still pending and would reappear on the next start. A receipt that reports 0 owed while
+    owing 1 is the same class of lie this whole lane exists to remove.
+    """
+    from brainlayer.fallback_replay import enqueue_pending_fallbacks
+
+    repo = _repo(tmp_path / "gits", "systems")
+    _pending(repo, "aaa-boom.md")
+    _pending(repo, "zzz-fine.md")
+
+    def enqueue(**kwargs):
+        if "aaa-boom" in str(kwargs["fallback_source_path"]):
+            raise RuntimeError("queue write failed")
+        return _queue_file(tmp_path, "ok.jsonl")
+
+    summary = enqueue_pending_fallbacks(
+        gits_root=tmp_path / "gits",
+        scope_map={},
+        enqueue_func=enqueue,
+        replayed_by="test",
+        limit=10,
+    )
+
+    assert summary["pending_before"] == 2
+    assert summary["attempted"] == 2
+    assert summary["queued"] == 1
+    assert summary["errors"] == 1
+    assert summary["remaining"] == 1
+
+
+def test_remaining_reports_the_tail_the_bound_did_not_reach(tmp_path):
+    from brainlayer.fallback_replay import enqueue_pending_fallbacks
+
+    repo = _repo(tmp_path / "gits", "systems")
+    for index in range(5):
+        _pending(repo, f"file-{index}.md")
+    queued = []
+
+    summary = enqueue_pending_fallbacks(
+        gits_root=tmp_path / "gits",
+        scope_map={},
+        enqueue_func=lambda **kwargs: queued.append(kwargs) or _queue_file(tmp_path, f"q-{len(queued)}.jsonl"),
+        replayed_by="test",
+        limit=2,
+    )
+
+    assert summary["awaiting_queue"] == 5
+    assert summary["attempted"] == 2
+    assert summary["queued"] == 2
+    assert summary["remaining"] == 3
+
+
+def test_is_already_queued_is_the_predicate_queue_entry_short_circuits_on(tmp_path):
+    """One definition, so batch selection and the short-circuit cannot drift apart."""
+    from brainlayer.fallback_replay import is_already_queued, parse_fallback_file, queue_entry
+
+    repo = _repo(tmp_path / "gits", "systems")
+    path = _pending(repo, "one.md")
+    assert is_already_queued(parse_fallback_file(path)) is False
+
+    queue_file = _queue_file(tmp_path, "one.jsonl")
+    queue_entry(parse_fallback_file(path), enqueue_func=lambda **_kwargs: queue_file, replayed_by="test")
+    assert is_already_queued(parse_fallback_file(path)) is True
+
+    # A queue file that vanished means it is NOT queued any more — it needs a slot again.
+    queue_file.unlink()
+    assert is_already_queued(parse_fallback_file(path)) is False
