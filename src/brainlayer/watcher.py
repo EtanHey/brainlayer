@@ -872,6 +872,15 @@ class JSONLTailer:
         self.failed_record: bytes | None = None
         self.observed_inode = self.get_inode()
 
+    def restore_snapshot(self, snapshot: tuple[int, bytes]) -> None:
+        """Put the tailer back to a (offset, buffer) pair captured before a failed read.
+
+        The watcher used to reach in and unpack straight onto `offset` and `_buffer`; owning
+        the two assignments here keeps the buffer private and gives static analysis a typed
+        parameter instead of a `tuple | None` it cannot narrow (DeepSource on #781).
+        """
+        self.offset, self._buffer = snapshot
+
     def check_rewind(self) -> bool:
         """Check if file has shrunk (checkpoint restore). Returns True if rewound."""
         try:
@@ -2066,11 +2075,7 @@ class JSONLWatcher:
                     read_accepted = True
                 except Exception as error:
                     if tailer is not None and tailer_snapshot is not None and not read_accepted:
-                        # Indexed, not unpacked: the snapshot is `tuple | None` at its
-                        # definition and static analysis does not narrow it on the guard above
-                        # (DeepSource PYL-E0633 on #781). Same two assignments, same order.
-                        tailer.offset = tailer_snapshot[0]
-                        tailer._buffer = tailer_snapshot[1]
+                        tailer.restore_snapshot(tailer_snapshot)
                         tailer.last_error = error
                         tailer.failed_record = None
                     logger.exception("Poll file error: %s", filepath)
