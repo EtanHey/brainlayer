@@ -168,6 +168,31 @@ def _watch_max_record_bytes() -> int:
 _RECURSIVE_JSONL_GLOB = "**/*.jsonl"
 
 
+class _JSONLPatternMatcher:
+    """Decides whether one DirEntry under `base` is a file that matches `glob_pattern`.
+
+    The default `**/*.jsonl` short-circuits on the suffix and never builds a parts tuple; any
+    other pattern is matched on the path relative to base with the denylist's `**`-aware part
+    matcher. A regular file is required either way (DirEntry.is_file follows symlinks, as
+    pathlib's did).
+    """
+
+    def __init__(self, base: str, glob_pattern: str) -> None:
+        self.default_pattern = glob_pattern == _RECURSIVE_JSONL_GLOB
+        self.pattern_parts = tuple(part for part in glob_pattern.split("/") if part)
+        self.suffix_only = bool(self.pattern_parts) and self.pattern_parts[-1] == "*.jsonl"
+        self.relative_start = len(base.rstrip(os.sep)) + 1
+
+    def __call__(self, entry: os.DirEntry) -> bool:
+        if self.suffix_only and not entry.name.endswith(".jsonl"):
+            return False
+        if not entry.is_file():
+            return False
+        if self.default_pattern:
+            return True
+        return match_glob_parts(tuple(entry.path[self.relative_start :].split(os.sep)), self.pattern_parts)
+
+
 def _iter_jsonl_files(
     base: Path,
     glob_pattern: str,
@@ -197,13 +222,10 @@ def _iter_jsonl_files(
     and skip the stat entirely for a file it will not track.
     """
     base_str = str(base)
-    if skip_dir is not None and skip_dir(base_str):
-        return
-    default_pattern = glob_pattern == _RECURSIVE_JSONL_GLOB
-    pattern_parts = tuple(part for part in glob_pattern.split("/") if part)
-    suffix_only = bool(pattern_parts) and pattern_parts[-1] == "*.jsonl"
-    relative_start = len(base_str.rstrip(os.sep)) + 1
-    pending = [base_str]
+    matches = _JSONLPatternMatcher(base_str, glob_pattern)
+    # No early `return` before the first yield: a generator that can also "return None" reads
+    # as a possible non-sequence to static analysis at the unpacking call site.
+    pending = [] if skip_dir is not None and skip_dir(base_str) else [base_str]
     while pending:
         directory = pending.pop()
         try:
@@ -213,11 +235,8 @@ def _iter_jsonl_files(
                         if entry.is_dir(follow_symlinks=False):
                             if skip_dir is None or not skip_dir(entry.path):
                                 pending.append(entry.path)
-                        elif (not suffix_only or entry.name.endswith(".jsonl")) and entry.is_file():
-                            if default_pattern or match_glob_parts(
-                                tuple(entry.path[relative_start:].split(os.sep)), pattern_parts
-                            ):
-                                yield entry.path, entry.stat
+                        elif matches(entry):
+                            yield entry.path, entry.stat
                     except OSError:
                         continue
         except OSError:

@@ -237,7 +237,6 @@ def test_denylist_is_evaluated_once_per_file_per_poll(tmp_path, monkeypatch):
         (src / name).write_text('{"type":"user","message":{"role":"user","content":"hi"}}\n')
 
     calls = []
-    import brainlayer.watcher as watcher_module
 
     real = watcher_module.is_denylisted
 
@@ -348,7 +347,6 @@ def test_deployed_poll_interval_is_batched_at_30s_or_more():
     """
     import inspect
     import plistlib
-    from pathlib import Path
 
     from brainlayer.cli import watch
 
@@ -428,7 +426,6 @@ def _run_watch_command(tmp_path, monkeypatch, poll_interval: float) -> dict:
 
     import brainlayer.deploy_drift as deploy_drift
     import brainlayer.parent_death as parent_death
-    import brainlayer.watcher as watcher_module
     from brainlayer.cli import watch
 
     monkeypatch.setenv("BRAINLAYER_DB", str(tmp_path / "watch-cli.db"))
@@ -651,9 +648,9 @@ def test_discovery_does_not_descend_into_denylisted_subtrees(tmp_path, monkeypat
     opened: list[str] = []
     real_scandir = os.scandir
 
-    def recording_scandir(path=".", *args, **kwargs):
+    def recording_scandir(path="."):
         opened.append(str(path))
-        return real_scandir(path, *args, **kwargs)
+        return real_scandir(path)
 
     monkeypatch.setattr(watcher_module.os, "scandir", recording_scandir)
 
@@ -698,9 +695,9 @@ def test_discovery_walks_non_default_patterns_with_scandir_and_prunes_them_too(t
     opened: list[str] = []
     real_scandir = os.scandir
 
-    def recording_scandir(path=".", *args, **kwargs):
+    def recording_scandir(path="."):
         opened.append(str(path))
-        return real_scandir(path, *args, **kwargs)
+        return real_scandir(path)
 
     monkeypatch.setattr(watcher_module.os, "scandir", recording_scandir)
 
