@@ -3571,6 +3571,52 @@ def watch_backfill(
     rprint(f"processed_entries={processed} cycles={cycles} registry={registry_path}")
 
 
+def _exit_on_index_deadline(
+    cause: BaseException,
+    *,
+    watchdog: object | None,
+    max_runtime_s: float,
+    start_monotonic: float,
+    committed_chunks: int,
+    files_completed: int,
+    current_file: Path | None,
+) -> typer.Exit:
+    """Emit the cap alarm once and return the Exit the caller should raise.
+
+    The watchdog alarms the moment the deadline passes, so the run is on the record even
+    while a stuck phase is still unwinding. When it already did, this adds the final
+    committed counts as a plain line instead of a second alarm -- one cap, one alarm.
+    """
+    import time
+
+    from ..alarm import build_alarm, emit_alarm
+
+    if watchdog is not None and getattr(watchdog, "alarm_emitted", False):
+        rprint(
+            "[bold red]INDEX_RUNTIME_EXCEEDED[/] final: "
+            f"phase={watchdog.phase} committed_chunks={committed_chunks} "
+            f"files_completed={files_completed} cause={type(cause).__name__}"
+        )
+        return typer.Exit(1)
+
+    context: dict[str, object] = {
+        "max_runtime_s": max_runtime_s,
+        "elapsed_s": round(max(0.0, time.monotonic() - start_monotonic), 3),
+        "committed_chunks": committed_chunks,
+        "files_completed": files_completed,
+        "source_file": str(current_file) if current_file else None,
+    }
+    if watchdog is not None:
+        context["phase"] = watchdog.phase
+    alarm = build_alarm(
+        "INDEX_RUNTIME_EXCEEDED",
+        "brainlayer index exceeded its maximum runtime and stopped at a transaction boundary",
+        context,
+    )
+    emit_alarm(alarm)
+    return typer.Exit(alarm.exit_code)
+
+
 @app.command("index-fast", hidden=True)
 def index_fast(
     source: Path = typer.Argument(
@@ -3580,8 +3626,10 @@ def index_fast(
     force: bool = typer.Option(False, "--force", "-f", help="Re-index all files (ignore cache)"),
 ) -> None:
     """Index using new fast sqlite-vec backend."""
+    watchdog = None
     try:
         import time
+        from contextlib import ExitStack
 
         from rich.progress import (
             BarColumn,
@@ -3595,6 +3643,7 @@ def index_fast(
         )
 
         from ..index_new import index_chunks_to_sqlite
+        from ..index_watchdog import IndexWatchdog
         from ..paths import get_db_path
         from ..pipeline.chunk import chunk_content
         from ..pipeline.classify import classify_content
@@ -3605,6 +3654,11 @@ def index_fast(
         if not source.exists():
             rprint(f"[bold red]Error:[/] Source directory not found: {source}")
             raise typer.Exit(1)
+
+        start_time = time.time()
+        start_monotonic = time.monotonic()
+        max_runtime_s = _index_max_runtime_s()
+        deadline_monotonic = start_monotonic + max_runtime_s
 
         # Find JSONL files
         if project:
@@ -3627,28 +3681,43 @@ def index_fast(
         total_chunks = 0
         files_completed = 0
         current_file: Path | None = None
-        start_time = time.time()
-        start_monotonic = time.monotonic()
-        max_runtime_s = _index_max_runtime_s()
-        deadline_monotonic = start_monotonic + max_runtime_s
 
-        with (
-            open_writer_store(get_db_path()) as runtime_store,
-            Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                MofNCompleteColumn(),
-                TaskProgressColumn(),
-                TimeElapsedColumn(),
-                TimeRemainingColumn(),
-                console=console,
-            ) as progress,
-        ):
+        # The watchdog is armed before the store opens: opening it can run migrations,
+        # which is itself a phase with no transaction boundary.
+        with ExitStack() as stack:
+            watchdog = stack.enter_context(
+                IndexWatchdog(
+                    max_runtime_s=max_runtime_s,
+                    counters=lambda: {
+                        "committed_chunks": total_chunks,
+                        "files_completed": files_completed,
+                        "source_file": str(current_file) if current_file else None,
+                    },
+                    phase="open_store",
+                )
+            )
+            runtime_store = stack.enter_context(open_writer_store(get_db_path()))
+            # sqlite3_interrupt is the only lever that reaches the inner statements FTS5 and
+            # vec0 drive; apsw documents calling it from another thread as safe.
+            watchdog.set_interrupt(getattr(getattr(runtime_store, "conn", None), "interrupt", None))
+            progress = stack.enter_context(
+                Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(),
+                    MofNCompleteColumn(),
+                    TaskProgressColumn(),
+                    TimeElapsedColumn(),
+                    TimeRemainingColumn(),
+                    console=console,
+                )
+            )
             task = progress.add_task("Processing files...", total=len(jsonl_files))
 
             for i, jsonl_file in enumerate(jsonl_files):
                 current_file = jsonl_file
+                watchdog.set_phase(f"parse:{jsonl_file.name}")
+                watchdog.raise_if_expired()
                 if time.monotonic() >= deadline_monotonic:
                     raise IndexDeadlineExceeded(processed_count=0)
                 raw_proj = jsonl_file.parent.name if jsonl_file.parent != source else None
@@ -3669,6 +3738,7 @@ def index_fast(
                     def progress_callback(embedded_count, total_embed):
                         pass  # Could update sub-progress here
 
+                    watchdog.set_phase(f"embed_and_upsert:{jsonl_file.name}")
                     indexed = index_chunks_to_sqlite(
                         all_chunks,
                         source_file=str(jsonl_file),
@@ -3678,7 +3748,9 @@ def index_fast(
                         store=runtime_store,
                     )
                     total_chunks += indexed
+                    watchdog.raise_if_expired(processed_count=0)
                 files_completed = i + 1
+                watchdog.note_progress()
                 if time.monotonic() >= deadline_monotonic:
                     raise IndexDeadlineExceeded(processed_count=0)
 
@@ -3717,25 +3789,31 @@ def index_fast(
             rprint(f"[dim]Supabase stats sync skipped: {e}[/]")
 
     except IndexDeadlineExceeded as exc:
-        from ..alarm import build_alarm, emit_alarm
-
-        committed_chunks = total_chunks + exc.processed_count
-        alarm = build_alarm(
-            "INDEX_RUNTIME_EXCEEDED",
-            "brainlayer index exceeded its maximum runtime and stopped at a transaction boundary",
-            {
-                "max_runtime_s": max_runtime_s,
-                "elapsed_s": round(max(0.0, time.monotonic() - start_monotonic), 3),
-                "committed_chunks": committed_chunks,
-                "files_completed": files_completed,
-                "source_file": str(current_file) if current_file else None,
-            },
-        )
-        emit_alarm(alarm)
-        raise typer.Exit(alarm.exit_code) from exc
+        raise _exit_on_index_deadline(
+            exc,
+            watchdog=watchdog,
+            max_runtime_s=max_runtime_s,
+            start_monotonic=start_monotonic,
+            committed_chunks=total_chunks + exc.processed_count,
+            files_completed=files_completed,
+            current_file=current_file,
+        ) from exc
     except typer.Exit:
         raise
     except Exception as e:
+        # An expired watchdog means this exception IS the cap landing -- most often the
+        # apsw.InterruptError it raised inside a long sqlite3_step. Report it as the cap,
+        # not as an opaque error.
+        if watchdog is not None and watchdog.expired:
+            raise _exit_on_index_deadline(
+                e,
+                watchdog=watchdog,
+                max_runtime_s=max_runtime_s,
+                start_monotonic=start_monotonic,
+                committed_chunks=total_chunks,
+                files_completed=files_completed,
+                current_file=current_file,
+            ) from e
         rprint(f"[bold red]Error:[/] {e}")
         raise typer.Exit(1)
 
