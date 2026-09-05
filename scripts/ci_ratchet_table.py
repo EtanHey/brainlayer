@@ -725,17 +725,23 @@ def row_mapped_bytes(probe: Probe, corpus: dict) -> Row:
     return Row("mapped bytes", NA, f"n/a — {reason}", "socket · installed Mac", notes)
 
 
-def margin_notes(probe: Probe, unit: str, keys: dict[str, tuple[str, ...]]) -> str:
+def margin_notes(probe: Probe, unit: str, keys: dict[str, tuple[str, ...]]) -> tuple[str, str | None]:
     """The margin each sub-row applies, spelled out, so a reader sees WHY a value would be RED.
 
     Ratchet (c): a round number hides its reasoning; a measured band exposes it -- mean, spread,
     multiplier, and how many attested green main runs stand behind it. Fewer than five says
-    `unmeasured` and prints no limit at all.
+    `unmeasured` and prints no limit at all. Returns ``(notes, problem)``: a band that cannot be
+    formed from valid attestations (a non-finite limit) is a problem for the row to render RED, not
+    an exception for the collector to die on.
     """
-    return " ".join(
-        f"Margin {name}: {margins.describe(margins.margin_for(list(probe.attestations or ()), key), unit=unit)}."
-        for name, key in keys.items()
-    )
+    sentences = []
+    for name, key in keys.items():
+        try:
+            margin = margins.margin_for(list(probe.attestations or ()), key)
+        except margins.AttestationError as error:
+            return "", f"margin {name}: {error} — this row cannot say what band it applies"
+        sentences.append(f"Margin {name}: {margins.describe(margin, unit=unit)}.")
+    return " ".join(sentences), None
 
 
 def row_search_latency(probe: Probe, corpus: dict) -> Row:
@@ -743,8 +749,11 @@ def row_search_latency(probe: Probe, corpus: dict) -> Row:
     if probe.attestations_problem:
         return Row("search p50/p95", RED, probe.attestations_problem, method, SEARCH_LATENCY_NOTES)
     baseline = corpus["latency_baseline_ms"]
+    bands, problem = margin_notes(probe, "ms", margins.LATENCY_KEYS)
+    if problem:
+        return Row("search p50/p95", RED, problem, method, SEARCH_LATENCY_NOTES)
     notes = (
-        f"{margin_notes(probe, 'ms', margins.LATENCY_KEYS)} Calibrated on {baseline['hostname']} at "
+        f"{bands} Calibrated on {baseline['hostname']} at "
         f"{baseline['captured_at']} under {baseline['captured_under']} "
         "(`tests/fixtures/sprint_gate/corpus.json`). Not measured by this run."
     )
@@ -786,7 +795,9 @@ def row_idle_cpu(probe: Probe, corpus: dict) -> Row:
         return Row("idle CPU", RED, probe.attestations_problem, method, budget)
     # The ceiling cannot see drift under it: R3's soak measured 4.88% then 6.41% on near-identical
     # code, both far under 30. The ratchet band is what would have, and it is stated per process.
-    bands = margin_notes(probe, "%", {name: margins.idle_cpu_key(name) for name in IDLE_CPU_PROCESSES})
+    bands, problem = margin_notes(probe, "%", {name: margins.idle_cpu_key(name) for name in IDLE_CPU_PROCESSES})
+    if problem:
+        return Row("idle CPU", RED, problem, method, budget)
     notes = (
         f"{budget} {bands} Needs the BrainBar daemon, helper and watcher actually running. Not measured by this run."
     )
