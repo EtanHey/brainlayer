@@ -85,6 +85,10 @@ ATTEST_WORKFLOW = ".github/workflows/ratchet-attest.yml"
 ATTESTATION_ARTIFACT = "ratchet-attestation"
 ATTESTATION_SCHEMA = 1
 
+# `python scripts/ci_ratchet_table.py` puts scripts/, not ROOT, on sys.path; the margins module is a sibling.
+sys.path.insert(0, str(ROOT))
+from scripts import ratchet_margins as margins  # noqa: E402
+
 # The sticky-comment anchor. .github/workflows/ratchet.yml greps for this exact string to decide
 # update-vs-create, so one PR can only ever carry one of these comments; tests pin them together.
 MARKER = "<!-- brainlayer-ratchet-table -->"
@@ -171,6 +175,12 @@ class Probe:
     attestation_bootstrap: str | None = None
     attestation_unavailable: str | None = None
     attestation_problem: str | None = None
+    # Ratchet (c): the attested green main runs every measured margin is derived from, read from
+    # the `ratchet-attestation` artifacts of `ratchet-attest.yml` runs on main. None when nobody
+    # handed this run a store (margins render `unmeasured` with 0 runs); `attestations_problem` when
+    # a store WAS handed over and could not be read -- a finding, on the signature report's rule.
+    attestations: tuple[dict, ...] | None = None
+    attestations_problem: str | None = None
 
     @classmethod
     def detect(
@@ -186,11 +196,13 @@ class Probe:
         attestation: Path | None = None,
         attestation_bootstrap: str | None = None,
         attestation_unresolved: str | None = None,
+        attestations: Path | None = None,
     ) -> Probe:
         selected = select_wheel(wheel, wheel_glob)
         signature = select_signature(signature_report, signature_unavailable)
         commit = select_commit(measured_sha, pr_head_sha, pr_head_unresolved)
         attested = select_attestation(attestation, attestation_bootstrap, attestation_unresolved)
+        store = select_attestations(attestations)
         return cls(
             os_name=platform.system(),
             architecture=platform.machine(),
@@ -214,6 +226,8 @@ class Probe:
             attestation_bootstrap=attested.bootstrap,
             attestation_unavailable=attested.unavailable,
             attestation_problem=attested.problem,
+            attestations=store.attestations,
+            attestations_problem=store.problem,
         )
 
 
@@ -389,6 +403,24 @@ def select_attestation(path: Path | None, bootstrap: str | None, unresolved: str
     if problem is not None or attestation is None:
         return AttestationSelection(problem=problem or "the main attestation could not be read")
     return AttestationSelection(attestation=attestation)
+
+
+@dataclass(frozen=True)
+class AttestationStoreSelection:
+    """Ratchet (c): the store of attested main runs a margin is derived from, or why it could not be read."""
+
+    attestations: tuple[dict, ...] | None = None
+    problem: str | None = None
+
+
+def select_attestations(root: Path | None) -> AttestationStoreSelection:
+    """Read the attested main runs FAIL-CLOSED: a store handed over and unreadable is a finding."""
+    if root is None:
+        return AttestationStoreSelection()
+    try:
+        return AttestationStoreSelection(attestations=tuple(margins.load_attestations(root)))
+    except margins.AttestationError as error:
+        return AttestationStoreSelection(problem=f"{error} — every measured margin in this table depends on it")
 
 
 @dataclass(frozen=True)
@@ -1146,11 +1178,39 @@ def row_mapped_bytes(probe: Probe, corpus: dict) -> Row:
     return Row("mapped bytes", NA, f"n/a — {reason}", "socket · installed Mac", notes)
 
 
+def margin_notes(probe: Probe, unit: str, keys: dict[str, tuple[str, ...]]) -> tuple[str, str | None]:
+    """The margin each sub-row applies, spelled out, so a reader sees WHY a value would be RED.
+
+    Ratchet (c): a round number hides its reasoning; a measured band exposes it -- mean, spread,
+    multiplier, and how many attested green main runs stand behind it. Fewer than five says
+    `unmeasured` and prints no limit at all. Returns ``(notes, problem)``: a band that cannot be
+    formed from valid attestations (a non-finite limit) is a problem for the row to render RED, not
+    an exception for the collector to die on.
+    """
+    sentences = []
+    for name, key in keys.items():
+        try:
+            margin = margins.margin_for(list(probe.attestations or ()), key)
+            sentences.append(f"Margin {name}: {margins.describe(margin, unit=unit)}.")
+        except ValueError as error:
+            # Catches both: margins.AttestationError (a refused band) IS a ValueError, and a bare
+            # ValueError is describe()'s refusal of an incomplete measured margin -- unreachable with
+            # today's measured_margin, but this row follows the signature report's never-abort rule.
+            return "", f"margin {name}: {error} — this row cannot say what band it applies"
+    return " ".join(sentences), None
+
+
 def row_search_latency(probe: Probe, corpus: dict) -> Row:
+    method = "socket · installed Mac"
+    if probe.attestations_problem:
+        return Row("search p50/p95", RED, probe.attestations_problem, method, SEARCH_LATENCY_NOTES)
     baseline = corpus["latency_baseline_ms"]
+    bands, problem = margin_notes(probe, "ms", margins.LATENCY_KEYS)
+    if problem:
+        return Row("search p50/p95", RED, problem, method, SEARCH_LATENCY_NOTES)
     notes = (
-        f"Baseline p50 {baseline['p50']} ms / p95 {baseline['p95']} ms, captured "
-        f"{baseline['captured_at']} on {baseline['hostname']} under {baseline['captured_under']} "
+        f"{bands} Calibrated on {baseline['hostname']} at "
+        f"{baseline['captured_at']} under {baseline['captured_under']} "
         "(`tests/fixtures/sprint_gate/corpus.json`). Not measured by this run."
     )
     reason = first_unmet(
@@ -1168,16 +1228,34 @@ def row_search_latency(probe: Probe, corpus: dict) -> Row:
             ),
         ]
     )
-    return Row("search p50/p95", NA, f"n/a — {reason}", "socket · installed Mac", notes)
+    return Row("search p50/p95", NA, f"n/a — {reason}", method, notes)
+
+
+SEARCH_LATENCY_NOTES = (
+    "Limits are measured bands from attested green main runs (`scripts/ratchet_margins.py`), never a "
+    "flat fraction of a captured baseline. Not measured by this run."
+)
+
+IDLE_CPU_PROCESSES = ("daemon", "helper", "watcher")
 
 
 def row_idle_cpu(probe: Probe, corpus: dict) -> Row:
+    method = "ps sampling · installed Mac"
     thresholds = corpus["thresholds"]
+    budget = (
+        f"Ceiling: average CPU < {thresholds['cpu_percent']}% over a "
+        f"{thresholds['resource_window_seconds']} s window (`resource_budget` in `scripts/sprint_gate.py`), "
+        "ratified and kept as a hard budget."
+    )
+    if probe.attestations_problem:
+        return Row("idle CPU", RED, probe.attestations_problem, method, budget)
+    # The ceiling cannot see drift under it: R3's soak measured 4.88% then 6.41% on near-identical
+    # code, both far under 30. The ratchet band is what would have, and it is stated per process.
+    bands, problem = margin_notes(probe, "%", {name: margins.idle_cpu_key(name) for name in IDLE_CPU_PROCESSES})
+    if problem:
+        return Row("idle CPU", RED, problem, method, budget)
     notes = (
-        f"Budget: average CPU < {thresholds['cpu_percent']}% over a "
-        f"{thresholds['resource_window_seconds']} s window (`resource_budget` in "
-        "`scripts/sprint_gate.py`). Needs the BrainBar daemon, helper and watcher actually running. "
-        "Not measured by this run."
+        f"{budget} {bands} Needs the BrainBar daemon, helper and watcher actually running. Not measured by this run."
     )
     reason = first_unmet(
         served_stack_requirements(probe, corpus)
@@ -1189,7 +1267,7 @@ def row_idle_cpu(probe: Probe, corpus: dict) -> Row:
             )
         ]
     )
-    return Row("idle CPU", NA, f"n/a — {reason}", "ps sampling · installed Mac", notes)
+    return Row("idle CPU", NA, f"n/a — {reason}", method, notes)
 
 
 # Two labels, because they are two measurements. The parity job installs the PUBLISHED tap formula
@@ -1488,6 +1566,15 @@ def main(argv: list[str] | None = None) -> int:
         "--attestation-unresolved",
         help="Why the main attestation could not be fetched. Renders RED with that reason — it is not a capability gap.",
     )
+    parser.add_argument(
+        "--attestations",
+        type=Path,
+        help=(
+            "Directory of `attestation.json` files from successful `ratchet-attest.yml` runs on main (one per "
+            "run), or one such file. The measured margins in Notes come from these; without them they render "
+            "`unmeasured`. A path that cannot be read turns the margin rows RED, never n/a."
+        ),
+    )
     parser.add_argument("--run-url", help="Link back to the workflow run that produced this table")
     parser.add_argument("--out", type=Path, help="Also write the rendered table here")
     attest = parser.add_argument_group(
@@ -1514,6 +1601,7 @@ def main(argv: list[str] | None = None) -> int:
         args.attestation,
         args.attestation_bootstrap,
         args.attestation_unresolved,
+        args.attestations,
     )
     rows = collect(probe, corpus)
     now = datetime.now(timezone.utc)
