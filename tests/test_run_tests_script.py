@@ -1461,3 +1461,101 @@ def test_cli_root_mapping_is_fail_closed_when_a_named_suite_is_missing(tmp_path:
     assert "falling back to full pytest unit suite" in result.stdout
     assert "unmapped: src/brainlayer/cli/__init__.py" in result.stdout
     assert f"{test_root}/ -v" in pytest_log.read_text()
+
+
+def test_changed_only_scope_maps_the_index_watchdog_to_its_tests(tmp_path: Path) -> None:
+    """`index_watchdog.py` has no `test_index_watchdog.py`, so the generic rule misses it.
+
+    Its tests are split (`_unit` / `_boundaryless`) plus the CLI's own cap tests. Without an
+    explicit entry the generic `src/brainlayer/*.py` -> `tests/test_<module>.py` rule finds
+    nothing and the run falls open to the full 4,553-test suite.
+    """
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    expected = (
+        "test_index_watchdog_unit.py",
+        "test_index_watchdog_boundaryless.py",
+        "test_cli_index_watchdog.py",
+    )
+    for name in expected:
+        (test_root / name).write_text("test placeholder\n")
+
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+
+    env = _script_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
+    env["BRAINLAYER_CHANGED_FILES"] = "src/brainlayer/index_watchdog.py"
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env, check=False)
+
+    assert result.returncode == 0
+    logged = pytest_log.read_text()
+    for name in expected:
+        assert str(test_root / name) in logged
+    assert "falling back to full pytest unit suite" not in result.stdout
+    assert f"{test_root}/ -v" not in logged
+
+
+def test_index_watchdog_mapping_is_fail_closed_when_a_named_suite_is_missing(tmp_path: Path) -> None:
+    """A missing sibling must escalate, not silently narrow the gate -- the #762 rule."""
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    # test_cli_index_watchdog.py deliberately absent.
+    (test_root / "test_index_watchdog_unit.py").write_text("test placeholder\n")
+    (test_root / "test_index_watchdog_boundaryless.py").write_text("test placeholder\n")
+
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+
+    env = _script_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
+    env["BRAINLAYER_CHANGED_FILES"] = "src/brainlayer/index_watchdog.py"
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env, check=False)
+
+    assert result.returncode == 0
+    assert "falling back to full pytest unit suite" in result.stdout
+    assert "unmapped: src/brainlayer/index_watchdog.py" in result.stdout
+
+
+def test_a_mapped_watchdog_change_still_falls_back_when_another_source_is_unmapped(
+    tmp_path: Path,
+) -> None:
+    """The new entry must not weaken the fail-open guard for genuinely unmapped sources."""
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    for name in (
+        "test_index_watchdog_unit.py",
+        "test_index_watchdog_boundaryless.py",
+        "test_cli_index_watchdog.py",
+    ):
+        (test_root / name).write_text("test placeholder\n")
+
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+
+    env = _script_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
+    env["BRAINLAYER_CHANGED_FILES"] = "src/brainlayer/index_watchdog.py,src/brainlayer/no_such_module.py"
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env, check=False)
+
+    assert result.returncode == 0
+    assert "falling back to full pytest unit suite" in result.stdout
+    assert "src/brainlayer/no_such_module.py" in result.stdout
