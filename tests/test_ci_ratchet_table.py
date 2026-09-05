@@ -2969,6 +2969,4 @@ def test_the_ratchet_suite_scrubs_the_fallback_root_env():
     `BRAINLAYER_FALLBACK_GITS_ROOT` bypasses conftest's HOME remapping — so exit-0 `main()`
     assertions could become host-dependent, or walk production docs.local during the suite.
     """
-    import os
-
     assert "BRAINLAYER_FALLBACK_GITS_ROOT" not in os.environ
