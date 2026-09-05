@@ -1520,7 +1520,7 @@ def write_attestation(tmp_path: Path, payload) -> Path:
 
 
 def test_a_boolean_and_a_count_are_different_claims() -> None:
-    assert ratchet.baseline_changes({"a": {"b": 0}}, {"a": {"b": False}}) == [("a.b", 0, False)]
+    assert ratchet.baseline_changes({"a": {"b": 0}}, {"a": {"b": False}}) == [(("a", "b"), 0, False)]
     assert ratchet.baseline_changes({"a": {"b": 1}}, {"a": {"b": 1}}) == []
 
 
@@ -1772,20 +1772,20 @@ def test_baseline_changes_name_every_moved_removed_and_added_path() -> None:
     after["thresholds"]["new_knob"] = 1
     after["queries"] = ["something else"]
     changed = ratchet.baseline_changes(before, after)
-    assert ("latency_baseline_ms.p50", 911.887, 5000.0) in changed
-    assert ("thresholds.cpu_percent", 30, None) in changed
-    assert ("thresholds.new_knob", None, 1) in changed
-    assert [path for path, _, _ in changed if path == "queries"] == ["queries"]
+    assert (("latency_baseline_ms", "p50"), 911.887, 5000.0) in changed
+    assert (("thresholds", "cpu_percent"), 30, None) in changed
+    assert (("thresholds", "new_knob"), None, 1) in changed
+    assert [path for path, _, _ in changed if path == ("queries",)] == [("queries",)]
     assert ratchet.baseline_changes(before, before) == []
 
 
 def test_a_removed_null_leaf_is_still_a_change() -> None:
     """`.get()` cannot tell a null value from an absent path; membership can (Macroscope, #766)."""
     assert ratchet.baseline_changes({"thresholds": {"cpu_percent": None}}, {"thresholds": {}}) == [
-        ("thresholds.cpu_percent", None, None)
+        (("thresholds", "cpu_percent"), None, None)
     ]
     assert ratchet.baseline_changes({"thresholds": {}}, {"thresholds": {"cpu_percent": None}}) == [
-        ("thresholds.cpu_percent", None, None)
+        (("thresholds", "cpu_percent"), None, None)
     ]
     assert ratchet.baseline_changes({"thresholds": {"cpu_percent": None}}, {"thresholds": {"cpu_percent": None}}) == []
 
@@ -1818,3 +1818,16 @@ def test_the_writer_refuses_a_checkout_whose_baseline_lacks_a_field(tmp_path: Pa
     assert ratchet.main(attest_argv(tmp_path, make_wheel(tmp_path, HEAD))) == 1
     assert not (tmp_path / "out" / "attestation.json").exists()
     assert "lacks `queries`" in capsys.readouterr().err
+
+
+def test_a_dotted_key_cannot_alias_a_nested_path() -> None:
+    """Macroscope High on #767: with dotted-string paths `{"a": {"b": 1}}` and `{"a.b": 1}` flattened
+    to the same key, so a colliding dotted key could make a real change vanish from the diff. Paths
+    are tuples; the dotted form is only how a change is printed."""
+    nested = {"latency_baseline_ms": {"captured_under": "active_sprint_load"}}
+    aliased = {"latency_baseline_ms": {"captured_under": {"x": 1}, "captured_under.x": 1}}
+    paths = {path for path, _, _ in ratchet.baseline_changes(nested, aliased)}
+    assert ("latency_baseline_ms", "captured_under") in paths
+    assert ("latency_baseline_ms", "captured_under.x") in paths
+    assert ratchet.flatten_baseline({"a": {"b": 1}}) != ratchet.flatten_baseline({"a.b": 1})
+    assert ratchet.dotted(("a", "b.c")) == "a.b.c"  # printing is lossy on purpose; comparing is not

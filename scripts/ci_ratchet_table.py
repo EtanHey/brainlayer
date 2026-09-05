@@ -208,20 +208,32 @@ def baseline_digest(view: dict) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def flatten_baseline(value: object, prefix: str = "") -> dict[str, object]:
-    """`{"a": {"b": 1}, "q": [x, y]}` -> `{"a.b": 1, "q": [x, y]}`. Lists stay whole: a query list
-    is one value, and naming index 3 of it would not help a reader."""
+BaselinePath = tuple[str, ...]
+
+
+def flatten_baseline(value: object, prefix: BaselinePath = ()) -> dict[BaselinePath, object]:
+    """`{"a": {"b": 1}, "q": [x, y]}` -> `{("a", "b"): 1, ("q",): [x, y]}`. Lists stay whole: a
+    query list is one value, and naming index 3 of it would not help a reader.
+
+    Tuples, not dotted strings. A key that itself contains a dot (`{"a.b": 1}`) flattened to the
+    same string as the nested `{"a": {"b": 1}}`, so a PR could replace a nested value with a
+    colliding dotted key and make the diff come out empty (Macroscope, #767). A tuple keeps the
+    key boundaries; `dotted()` is only how a path is printed.
+    """
     if isinstance(value, dict):
-        flat: dict[str, object] = {}
+        flat: dict[BaselinePath, object] = {}
         for key, inner in value.items():
-            path = f"{prefix}.{key}" if prefix else str(key)
-            flat.update(flatten_baseline(inner, path))
+            flat.update(flatten_baseline(inner, (*prefix, str(key))))
         return flat
     return {prefix: value}
 
 
-def baseline_changes(reference: dict, candidate: dict) -> list[tuple[str, object, object]]:
-    """Every dotted path whose value differs, as (path, reference value, candidate value).
+def dotted(path: BaselinePath) -> str:
+    return ".".join(path)
+
+
+def baseline_changes(reference: dict, candidate: dict) -> list[tuple[BaselinePath, object, object]]:
+    """Every path whose value differs, as (path, reference value, candidate value).
 
     A missing side is reported as None: a field that vanished from the baseline is as much a change
     as one that moved. `False != 0` here because a boolean and a count are different claims.
