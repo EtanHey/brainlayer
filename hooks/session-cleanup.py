@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/opt/homebrew/opt/brainlayer/libexec/venv/bin/python
 """BrainLayer SessionStart cleanup hook — runs on every new Claude Code session.
 
 Performs two maintenance tasks:

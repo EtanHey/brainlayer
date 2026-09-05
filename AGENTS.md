@@ -342,6 +342,40 @@ brainlayer enrich
 - Handoff detection: prompts with "handoff", "session-handoff" skip auto-search
 - Module: `hooks/dedup_coordination.py`
 
+## Hook Interpreter (pinned, never PATH)
+- Every BrainLayer hook runs under the **keg python**,
+  `/opt/homebrew/opt/brainlayer/libexec/venv/bin/python` — named in the `settings.json` command AND
+  in the script's shebang. `BRAINLAYER_HOOK_PYTHON` is the only override, and it must exist.
+- **Why:** bare `python3` on the M4 fronts the framework python, whose
+  `site-packages/_brainlayer.pth` injects `~/Gits/brainlayer/src` — a live checkout any agent can
+  move with one `git checkout`. When it held a 09-02 snapshot, hooks executed weeks-old library
+  code under a 1.5.15 CLI, silently: no import error, no version mismatch, no log line.
+- `src/brainlayer/hook_python.py` resolves it and refuses a silent PATH fallback (same fail-closed
+  stance as `scripts/launchd/install.sh`). Lint a settings file by hand with
+  `python -m brainlayer.hook_python ~/.claude/settings.json`;
+  `tests/test_hook_python.py` fails on any bare `python3`/`env python3` shebang or command.
+- **The gate is affirmative, not a blacklist: anything it cannot vouch for is REPORTED.** An empty
+  interpreter token, the Stop shim's `--` with the pin dropped, `uv run`, a cwd-relative path — all
+  are findings, each carrying the reason. A lint that answers "fine" to a command shape it does not
+  understand is not a gate, and this one guards every future BrainLayer hook.
+- **Three separate questions, deliberately not one.** `is_bare_python3` = does PATH decide.
+  `is_system_python` = is this a site-wide interpreter, i.e. one whose `site-packages` is where a
+  global `.pth` lives (`/usr/bin`, `/usr/local/bin`, `/opt/homebrew/bin`, any `Python.framework`) —
+  naming the framework python absolutely closes the PATH hazard and leaves the `.pth` hazard open,
+  so it is still not an acceptable pin. `is_pinned_interpreter` = the gate both feed.
+- **`BRAINLAYER_HOOK_PYTHON` is refused, loudly, three ways:** relative, site-wide, or set-but-missing.
+  A set-but-missing override never falls through to the keg — setting it is a deliberate choice, and
+  silently substituting a different interpreter for a typo'd one is the same failure the pin exists
+  to prevent. An absolute venv python outside a keg IS accepted, and the linter accepts it too; the
+  contract is "explicitly named", not "Homebrew-shaped".
+- **The shebangs name the ARM Homebrew prefix, so they are machine-specific on purpose.** The four
+  hooks that matter are invoked as `<python> <script>` from `settings.json`, which overrides the
+  shebang entirely; the shebang only decides what happens when a script is run directly (today only
+  `hooks/post-commit.py`, which nothing in this repo installs as a git hook). On an Intel prefix
+  that shebang fails loudly with "bad interpreter" — which is the intended failure, not a silent
+  run against the wrong library. Rendering per-machine is `render_hook_command()`'s job; there is no
+  hook installer yet to call it.
+
 <!-- PATHS: DB=~/.local/share/brainlayer/brainlayer.db | offsets=~/.local/share/brainlayer/offsets.json | logs=~/Library/Logs/brainlayer/watch.{out,err}.log | socket=/tmp/brainlayer.sock | lock=/tmp/brainlayer-enrichment.lock -->
 ## Data & Locks
 - Backup log: real runs append JSONL to `~/.local/share/brainlayer/logs/backup-daily.log` with

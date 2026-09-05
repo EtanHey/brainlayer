@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/opt/homebrew/opt/brainlayer/libexec/venv/bin/python
 """PostCompact hook — records chapter boundary in BrainLayer.
 
 When Claude Code compacts context, this hook captures the compact_summary
