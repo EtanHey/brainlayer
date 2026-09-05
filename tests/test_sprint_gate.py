@@ -1307,6 +1307,7 @@ def test_the_band_needs_five_runs_for_each_percentile_separately(tmp_path: Path,
     for document in history[3:]:
         del document["measured"]["latency_baseline_ms.p95"]
     returncode, payload = replay(tmp_path, capsys, latency_fixture([100.0] * 10, history))
+    assert returncode == 0  # unmeasured is not a failure; it is the absence of a verdict, stated
     check = payload["checks"][0]
     assert check["status"] == "UNMEASURED"
     assert check["details"]["attested_runs"] == {"p50": 7, "p95": 3}
