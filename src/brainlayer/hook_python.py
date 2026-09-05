@@ -111,9 +111,15 @@ def is_bare_python3(value: str | None) -> bool:
     return bool(_BARE_NAME.match(os.path.basename(head)))
 
 
-def shebang_of(path) -> str | None:
-    """Return the file's shebang line (stripped), or None when it has none."""
-    with open(path, "rb") as handle:
+def shebang_of(path: str | os.PathLike[str]) -> str | None:
+    """Return the file's shebang line (stripped), or None when it has none.
+
+    `path` names a hook script this repo ships — it is never user input, and this reads
+    the first line only. DeepSource's "external variable used in file path" audit fires on
+    any non-literal `open()`, which is a false positive here; suppressed rather than
+    contorted, because a caller that could not pass a path would make the helper useless.
+    """
+    with open(path, "rb") as handle:  # skipcq: PTC-W6004 - repo-local hook scripts, not user input
         first = handle.readline()
     if not first.startswith(b"#!"):
         return None
