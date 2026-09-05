@@ -885,29 +885,67 @@ def attested_row(attestation: Attestation, corpus: dict, base_tip: str | None) -
     where = f"run {attestation.run_id} · main `{attestation.main_sha[:12]}`"
     if attestation.measured_at:
         where += f" · {attestation.measured_at}"
-    moved = ""
+    view = baseline_view(corpus)
+    changes = baseline_changes(attestation.baseline, view)
+    stale = ""
     if base_tip is not None and base_tip != attestation.main_sha:
-        # Not a verdict: an attest run for the newest main sha may still be in flight. But a reader
-        # deciding whether a RED below is a hand edit or a legitimate main change needs this.
-        moved = (
-            f" · main has moved to `{base_tip[:12]}` since; if main moved the baseline, its attest run refreshes this"
+        # The attestation is not for this checkout's base. No direction is asserted -- a sha
+        # inequality is not an ordering, and a stale PR run could otherwise claim main "moved" to
+        # an OLDER commit (Macroscope, #767). What matters is that the base's own committed
+        # baseline is checked too: against the artifact alone, a PR that reverts a field to the
+        # attested-but-superseded value would read as "no change" (Macroscope, #767).
+        stale = (
+            f" · the attestation is for main `{attestation.main_sha[:12]}`, not this checkout's base `{base_tip[:12]}`"
         )
-    changes = baseline_changes(attestation.baseline, baseline_view(corpus))
+        reference, problem = git_baseline_at(base_tip)
+        if problem is not None or reference is None:
+            return Row(
+                "baseline attestation",
+                RED,
+                f"the attestation ({where}) predates base `{base_tip[:12]}` and {problem or 'the base baseline could not be read'}",
+                ATTESTATION_METHOD,
+                ATTESTATION_NOTES,
+            )
+        against_base = baseline_changes(reference, view)
+        by_hand = [(path, old, new) for path, old, new in against_base if not licensed(attestation, path, new)]
+        if by_hand:
+            listed = "; ".join(describe_change(*change) for change in by_hand[:6])
+            return Row(
+                "baseline attestation",
+                RED,
+                f"**baseline changed by hand; no CI attestation for these values** — differs from base "
+                f"`{base_tip[:12]}`: {listed}; the attestation ({where}) predates that base and measured none of them",
+                ATTESTATION_METHOD,
+                ATTESTATION_NOTES,
+            )
+        # The PR carries exactly what main has committed at the base (or values main measured).
+        # The stale artifact is not re-applied on top of that: main's committed baseline is the
+        # newer truth, and its own attest run will refresh the artifact.
+        if against_base:
+            listed = "; ".join(describe_change(*change) for change in against_base[:6])
+            return Row(
+                "baseline attestation",
+                GREEN,
+                f"baseline moved to values measured by main ({where}) relative to base `{base_tip[:12]}`: {listed}{stale}",
+                ATTESTATION_METHOD,
+                ATTESTATION_NOTES,
+            )
+        return Row(
+            "baseline attestation",
+            GREEN,
+            f"baseline `{baseline_digest(reference)[:12]}` unchanged from base `{base_tip[:12]}` by git{stale}",
+            ATTESTATION_METHOD,
+            ATTESTATION_NOTES,
+        )
     if not changes:
         return Row(
             "baseline attestation",
             GREEN,
-            f"baseline `{attestation.digest[:12]}` matches the main attestation ({where}){moved}",
+            f"baseline `{attestation.digest[:12]}` matches the main attestation ({where}){stale}",
             ATTESTATION_METHOD,
             ATTESTATION_NOTES,
         )
-    by_hand = []
-    for path, old, new in changes:
-        measured = measured_value(attestation, path)
-        # Value AND type: `False == 0` in Python, and a measured boolean swapped for a count is a
-        # hand edit wearing the measurement's value (Macroscope, #767).
-        if measured is _UNMEASURED or measured != new or type(measured) is not type(new):
-            by_hand.append((path, old, new))
+    by_hand = [(path, old, new) for path, old, new in changes if not licensed(attestation, path, new)]
     if by_hand:
         listed = "; ".join(describe_change(*change) for change in by_hand[:6])
         more = f" (+{len(by_hand) - 6} more)" if len(by_hand) > 6 else ""
@@ -915,7 +953,7 @@ def attested_row(attestation: Attestation, corpus: dict, base_tip: str | None) -
             "baseline attestation",
             RED,
             f"**baseline changed by hand; no CI attestation for these values** — {listed}{more}; "
-            f"the latest main attestation ({where}) measured none of them{moved}",
+            f"the latest main attestation ({where}) measured none of them{stale}",
             ATTESTATION_METHOD,
             ATTESTATION_NOTES,
         )
@@ -923,10 +961,18 @@ def attested_row(attestation: Attestation, corpus: dict, base_tip: str | None) -
     return Row(
         "baseline attestation",
         GREEN,
-        f"baseline moved to values measured by main ({where}): {listed}{moved}",
+        f"baseline moved to values measured by main ({where}): {listed}{stale}",
         ATTESTATION_METHOD,
         ATTESTATION_NOTES,
     )
+
+
+def licensed(attestation: Attestation, path: BaselinePath, new: object) -> bool:
+    """Did the main run measure exactly this value for this path? Value AND type: `False == 0` in
+    Python, and a measured boolean swapped for a count is a hand edit wearing the measurement's
+    value (Macroscope, #767)."""
+    measured = measured_value(attestation, path)
+    return measured is not _UNMEASURED and measured == new and type(measured) is type(new)
 
 
 def bootstrap_row(reason: str, corpus: dict, lineage: tuple[str, ...] | None) -> Row:

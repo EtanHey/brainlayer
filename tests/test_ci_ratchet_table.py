@@ -1694,16 +1694,41 @@ def test_a_measured_null_is_not_the_same_as_unmeasured(tmp_path: Path) -> None:
     assert attestation_row(tmp_path, corpus, attestation_dict()).status == ratchet.RED
 
 
-def test_the_row_says_when_main_has_moved_past_the_attestation(tmp_path: Path) -> None:
-    """Not a verdict -- an attest run for the newest main sha may still be in flight -- but a reader
-    deciding whether a RED is a hand edit or a legitimate main change needs to see it."""
+def test_an_attestation_older_than_the_base_is_named_without_a_direction(tmp_path: Path, monkeypatch) -> None:
+    """A sha inequality is not an ordering: a stale PR run could otherwise claim main "moved" to an
+    OLDER commit (Macroscope, #767). The row names both shas and asserts nothing about which is newer."""
+    monkeypatch.setattr(ratchet, "git_baseline_at", lambda sha: (ratchet.baseline_view(CORPUS), None))
     stale = attestation_dict(main_sha="4" * 40)
     green = attestation_row(tmp_path, CORPUS, stale)
-    assert green.status == ratchet.GREEN and "main has moved to `" + MERGE_BASE[:12] in green.value
-    red = attestation_row(tmp_path, hand_edited(), stale)
-    assert red.status == ratchet.RED and "main has moved" in red.value
-    current = attestation_row(tmp_path)
-    assert "main has moved" not in current.value
+    assert green.status == ratchet.GREEN
+    assert "attestation is for main `" + "4" * 12 in green.value and "base `" + MERGE_BASE[:12] in green.value
+    assert "moved" not in green.value
+    assert "moved" not in attestation_row(tmp_path).value
+
+
+def test_a_pr_cannot_revert_a_field_to_a_stale_attested_value(tmp_path: Path, monkeypatch) -> None:
+    """Macroscope, #767: main's baseline advanced past the attestation (its attest run has not
+    landed yet), and a PR on that newer base reverts a field to the OLD attested value. Against the
+    stale artifact alone that is "no change"; against the base commit it is a hand edit. When the
+    attestation predates the base, the base's committed baseline is checked too."""
+    advanced = hand_edited(**{"thresholds.cpu_percent": 25})  # what main has at the base tip now
+    monkeypatch.setattr(ratchet, "git_baseline_at", lambda sha: (ratchet.baseline_view(advanced), None))
+    stale = attestation_dict(main_sha="4" * 40)  # attests cpu_percent 30
+    reverted = attestation_row(tmp_path, CORPUS, stale)  # the PR carries cpu_percent 30 again
+    assert reverted.status == ratchet.RED
+    assert "`thresholds.cpu_percent` 25 → 30" in reverted.value
+    assert "base `" + MERGE_BASE[:12] in reverted.value and "predates" in reverted.value
+    # A PR that keeps the base's baseline is fine even while the attest run is still in flight.
+    assert attestation_row(tmp_path, advanced, stale).status == ratchet.GREEN
+    # ...and a value main measured is still the key, base or no base.
+    measured = attestation_dict(main_sha="4" * 40, measured={"thresholds.cpu_percent": 30})
+    assert attestation_row(tmp_path, CORPUS, measured).status == ratchet.GREEN
+
+
+def test_a_stale_attestation_with_an_unreadable_base_is_a_finding(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(ratchet, "git_baseline_at", lambda sha: (None, "git could not show the fixture"))
+    result = attestation_row(tmp_path, CORPUS, attestation_dict(main_sha="4" * 40))
+    assert result.status == ratchet.RED and "git could not show the fixture" in result.value
 
 
 def test_no_attestation_argument_at_all_is_a_capability_gap(tmp_path: Path) -> None:
@@ -2169,8 +2194,14 @@ def run_fetch_step(
         "GH_TOKEN": "stub",
         "STUB_DIR": str(stub_dir),
     }
+    # check=False on purpose: the exit code is one of the things under test.
     result = subprocess.run(
-        ["bash", "-c", workflow_steps()[FETCH_STEP]["run"]], capture_output=True, text=True, env=env, timeout=60
+        ["bash", "-c", workflow_steps()[FETCH_STEP]["run"]],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+        check=False,
     )
     args_path = runner_temp / "attestation-args.txt"
     args = args_path.read_text(encoding="utf-8").splitlines() if args_path.is_file() else []
@@ -2253,6 +2284,7 @@ def run_collect_step(tmp_path: Path, attestation_args: str | None) -> tuple[int,
         env=env,
         timeout=60,
         cwd=tmp_path,
+        check=False,  # the non-zero exit IS the assertion
     )
     return result.returncode, result.stdout + result.stderr
 
