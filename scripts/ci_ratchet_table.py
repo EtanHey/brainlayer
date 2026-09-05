@@ -898,7 +898,8 @@ def margin_notes(probe: Probe, unit: str, keys: dict[str, tuple[str, ...]]) -> t
         try:
             margin = margins.margin_for(list(probe.attestations or ()), key)
             sentences.append(f"Margin {name}: {margins.describe(margin, unit=unit)}.")
-        except (margins.AttestationError, ValueError) as error:
+        except ValueError as error:
+            # Catches both: margins.AttestationError (a refused band) IS a ValueError, and a bare
             # ValueError is describe()'s refusal of an incomplete measured margin -- unreachable with
             # today's measured_margin, but this row follows the signature report's never-abort rule.
             return "", f"margin {name}: {error} — this row cannot say what band it applies"
