@@ -521,7 +521,7 @@ def test_db_realtime_insert_probe_walks_indexed_ranges_not_the_source_index(tmp_
         conn.execute("CREATE TABLE chunks (id INTEGER PRIMARY KEY, source TEXT, ingested_at INTEGER, created_at TEXT)")
         conn.execute("CREATE INDEX idx_chunks_source ON chunks(source)")
         conn.execute("CREATE INDEX idx_chunks_ingested_at ON chunks(ingested_at)")
-        conn.execute("CREATE INDEX idx_chunks_created_at ON chunks(created_at)")
+        conn.execute("CREATE INDEX idx_chunks_created ON chunks(created_at)")  # the name vector_store.py creates
         conn.executemany(
             "INSERT INTO chunks (source, ingested_at, created_at) VALUES (?, ?, ?)",
             [
@@ -538,7 +538,19 @@ def test_db_realtime_insert_probe_walks_indexed_ranges_not_the_source_index(tmp_
 
     watcher = _probe_watcher(tmp_path, db_path)
     watcher._health_window_started_epoch = window
-    assert watcher._db_realtime_inserts_since_window_start() == 3
+    with sqlite3.connect(db_path) as conn:
+        # The invariant is query-level: the split probe counts exactly what the original
+        # COALESCE statement counted, on the same rows, for the same window.
+        coalesce_count = conn.execute(
+            """
+            SELECT COUNT(*) FROM chunks
+            WHERE source = 'realtime_watcher'
+              AND COALESCE(ingested_at, CAST(strftime('%s', created_at) AS INTEGER)) >= ?
+            """,
+            (window,),
+        ).fetchone()[0]
+    assert coalesce_count == 3, "fixture sanity: the COALESCE form counts the three rows in the window"
+    assert watcher._db_realtime_inserts_since_window_start() == coalesce_count
 
     with sqlite3.connect(db_path) as conn:
         statements = watcher_module.realtime_insert_probe_statements(window)
@@ -546,7 +558,7 @@ def test_db_realtime_insert_probe_walks_indexed_ranges_not_the_source_index(tmp_
         for sql, params in statements:
             plan = " ".join(str(row[3]) for row in conn.execute("EXPLAIN QUERY PLAN " + sql, params))
             assert "idx_chunks_source" not in plan, f"probe still walks the source index: {plan}"
-            assert "idx_chunks_ingested_at" in plan or "idx_chunks_created_at" in plan, f"probe is unindexed: {plan}"
+            assert "idx_chunks_ingested_at" in plan or "idx_chunks_created" in plan, f"probe is unindexed: {plan}"
 
 
 def test_db_realtime_insert_probe_trusts_liveness_evidence_without_scanning_chunks(tmp_path):
