@@ -833,3 +833,34 @@ def test_parent_set_shrinkage_waits_for_the_prune_timer(tmp_path, monkeypatch):
     watcher.poll_once()
     assert len(calls) == 1, "shrinkage must wait for the timer; the scan could prune nothing here"
 
+
+def test_discovery_does_not_enter_a_directory_symlink_even_for_a_literal_pattern_segment(tmp_path):
+    """Pins the one stated narrowing vs pathlib.glob.
+
+    Round-1 review of #781 (Cursor, low): pathlib.glob would step into a directory symlink whose
+    name matched a literal segment (`agent-transcripts`); the scandir walk never follows
+    directory symlinks, so transcripts reachable only through such a symlink are not
+    discovered. Default `**/*.jsonl` roots are unaffected (pathlib skipped symlink recursion
+    for `**` too). Real files under a real `agent-transcripts` directory are still found.
+    """
+    root = tmp_path / "cursor-projects"
+    real = root / "repo-a" / "agent-transcripts" / "s1"
+    real.mkdir(parents=True)
+    (real / "s1.jsonl").write_text('{"id":"real"}\n')
+    elsewhere = tmp_path / "outside" / "transcripts" / "s2"
+    elsewhere.mkdir(parents=True)
+    (elsewhere / "s2.jsonl").write_text('{"id":"via-symlink"}\n')
+    (root / "repo-b").mkdir()
+    (root / "repo-b" / "agent-transcripts").symlink_to(elsewhere.parent, target_is_directory=True)
+
+    pattern = "**/agent-transcripts/**/*.jsonl"
+    assert any("s2.jsonl" in str(f) for f in root.glob(pattern)), "pathlib.glob does enter the symlink"
+
+    watcher = JSONLWatcher(
+        watch_roots=[WatchRoot("cursor-agent-transcripts", root, pattern)],
+        registry_path=tmp_path / "offsets.json",
+        on_flush=lambda items: None,
+        health_path=tmp_path / "health.json",
+    )
+    found = watcher._discover_jsonl_files()
+    assert found == [str(real / "s1.jsonl")], "the scandir walk does not follow the directory symlink -- by design"
