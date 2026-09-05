@@ -2066,7 +2066,11 @@ class JSONLWatcher:
                     read_accepted = True
                 except Exception as error:
                     if tailer is not None and tailer_snapshot is not None and not read_accepted:
-                        tailer.offset, tailer._buffer = tailer_snapshot
+                        # Indexed, not unpacked: the snapshot is `tuple | None` at its
+                        # definition and static analysis does not narrow it on the guard above
+                        # (DeepSource PYL-E0633 on #781). Same two assignments, same order.
+                        tailer.offset = tailer_snapshot[0]
+                        tailer._buffer = tailer_snapshot[1]
                         tailer.last_error = error
                         tailer.failed_record = None
                     logger.exception("Poll file error: %s", filepath)
