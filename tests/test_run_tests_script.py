@@ -642,3 +642,39 @@ def test_changed_only_scope_fails_closed_when_the_env_names_no_paths(tmp_path: P
     assert result.returncode != 0, result.stdout
     assert "BRAINLAYER_CHANGED_FILES was set but named no paths" in result.stdout
     assert f"{test_root}/ -v" not in pytest_log.read_text()
+
+
+def test_changed_only_scope_maps_package_init_to_version_consistency_tests(
+    tmp_path: Path,
+) -> None:
+    """A release bump touches src/brainlayer/__init__.py and nothing else in src/.
+
+    There is no tests/test___init__.py, so the generic src/brainlayer/*.py rule found no
+    target and the run escalated to the whole 4,386-test suite -- on every release, for a
+    one-line version string. The version bump's real gate is the metadata consistency
+    suite, so name it.
+    """
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    (test_root / "test_version_consistency.py").write_text("test placeholder\n")
+    (test_root / "test_think_recall_integration.py").write_text("test placeholder\n")
+
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+
+    env = _script_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
+    env["BRAINLAYER_CHANGED_FILES"] = "src/brainlayer/__init__.py"
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
+
+    assert result.returncode == 0
+    logged = pytest_log.read_text()
+    assert str(test_root / "test_version_consistency.py") in logged
+    assert "falling back to full pytest unit suite" not in result.stdout
+    assert f"{test_root}/ -v" not in logged

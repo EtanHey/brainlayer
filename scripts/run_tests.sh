@@ -196,6 +196,17 @@ map_changed_files_to_pytests() {
           fi
         done
         ;;
+      src/brainlayer/__init__.py)
+        # A release bump touches this file and nothing else in src/. The generic
+        # src/brainlayer/*.py rule below looks for tests/test___init__.py, finds nothing, and
+        # escalates the whole 4,386-test suite for a one-line version string. The bump's real
+        # gate is the release-metadata consistency suite; name it.
+        test_path="$TEST_ROOT/test_version_consistency.py"
+        if [ -f "$test_path" ]; then
+          append_unique "$test_path"
+          mapped=1
+        fi
+        ;;
       src/brainlayer/index_new.py)
         for rel in test_source_class.py test_ingest_t3.py test_context_pipeline.py; do
           test_path="$TEST_ROOT/$rel"
