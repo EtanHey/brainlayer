@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -148,23 +149,52 @@ def marker_target_hazard(db_path: Path, gits_root: Path) -> str | None:
     allowed. Only the mismatch that hides data is refused.
     """
     real_gits_root = (Path.home() / "Gits").expanduser()
-    target = gits_root.expanduser()
-    # is_relative_to, not ==. `--gits-root ~/Gits/<repo>` is still the real tree: it inventories and
-    # marks the production docs.local files under that repo, which is the same silent hide. Exact
-    # equality let every subtree through, and a guard whose whole job is fail-closed cannot have a
-    # shape that fails open. Resolved on both sides so a symlinked or `..`-laden path cannot dodge it.
-    try:
-        real_resolved = real_gits_root.resolve()
-        target_resolved = target.resolve()
-    except OSError:
-        # Cannot resolve => cannot prove it is safe. Fail closed.
-        return _marker_refusal(db_path, canonical_db_target(), real_gits_root)
-    if target_resolved != real_resolved and not target_resolved.is_relative_to(real_resolved):
+    if not _names_real_gits_tree(gits_root.expanduser(), real_gits_root):
         return None
     canonical = canonical_db_target()
-    if db_path.expanduser().resolve() == canonical.resolve():
+    if _same_file(db_path.expanduser(), canonical):
         return None
     return _marker_refusal(db_path, canonical, real_gits_root)
+
+
+def _same_file(left: Path, right: Path) -> bool:
+    """Do these two paths name the same file ON THIS FILESYSTEM?
+
+    Inode, not string. macOS is case-insensitive by default and is the fleet's primary host, so
+    `~/.local/share/brainlayer/brainlayer.db` and `.../Brainlayer.db` are the same file while their
+    `resolve()` strings differ -- which made the allowlist refuse a valid production drain.
+
+    `os.path.normcase` does NOT help here: it is a no-op on darwin. Only the inode knows.
+    """
+    try:
+        return os.path.samefile(left, right)
+    except OSError:
+        # One of them does not exist, so they cannot be the same file. Compare resolved strings for
+        # the case where both are missing and merely spelled differently.
+        return os.path.realpath(left) == os.path.realpath(right)
+
+
+def _names_real_gits_tree(target: Path, real_gits_root: Path) -> bool:
+    """Is `target` the real ~/Gits, or inside it? Inode-wise, so casing cannot dodge the guard.
+
+    `resolve()` + `is_relative_to` is a string comparison: on APFS `~/gits` is `samefile` True with
+    `~/Gits` yet compares unequal, so `--gits-root ~/gits` (or `~/gits/<repo>`) walked straight past
+    the guard and marked production fallbacks with throwaway ids. ubuntu CI is case-sensitive and
+    would never have surfaced it.
+
+    A subtree's leaf may not exist yet, so the nearest EXISTING ancestor is what gets compared -- a
+    case alias shows up at whatever level is real.
+    """
+    try:
+        if _same_file(target, real_gits_root):
+            return True
+        for ancestor in [target, *target.parents]:
+            if ancestor.exists() and _same_file(ancestor, real_gits_root):
+                return True
+        return target.resolve().is_relative_to(real_gits_root.resolve())
+    except OSError:
+        # Cannot prove it is outside the real tree => cannot prove it is safe. Fail closed.
+        return True
 
 
 def _replay_via_queue(

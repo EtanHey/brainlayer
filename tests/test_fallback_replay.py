@@ -8,6 +8,8 @@ import sys
 import threading
 from pathlib import Path
 
+import pytest
+
 
 class ClosableStoreStub:
     """Stand-in for `VectorStore` in CLI tests: records that the caller closed it.
@@ -1770,3 +1772,145 @@ def test_guard_is_hermetic_and_runs_before_any_inventory(tmp_path, monkeypatch, 
 
     assert module.main() == 2
     assert "would mark the real fallback files" in capsys.readouterr().out
+
+
+def _case_insensitive_fs(tmp_path: Path) -> bool:
+    probe = tmp_path / "CaseProbe"
+    probe.mkdir(exist_ok=True)
+    try:
+        return os.path.samefile(probe, tmp_path / "caseprobe")
+    except OSError:
+        return False
+
+
+def test_guard_refuses_a_differently_cased_path_to_the_real_tree(tmp_path, monkeypatch):
+    """Round-2 review, #780 @162 (HIGH). Measured on this APFS volume BEFORE the fix:
+
+        os.path.samefile(~/Gits, ~/gits)  -> True
+        Path.resolve() equal?            -> False   (~/Gits vs ~/gits)
+        guard on ~/Gits                  -> REFUSED
+        guard on ~/gits                  -> ALLOWED     <- the hole
+        guard on ~/gits/brainlayer       -> ALLOWED     <- and its subtree
+
+    `resolve()` + `is_relative_to` are string comparisons. macOS is case-insensitive by default and
+    is the fleet's primary host; ubuntu CI is case-sensitive and would never have caught this.
+
+    Note `os.path.normcase` is a NO-OP on darwin, so realpath+normcase does not close this — only an
+    inode comparison does.
+    """
+    if not _case_insensitive_fs(tmp_path):
+        pytest.skip("case-sensitive filesystem: the alias cannot exist here (this is ubuntu CI)")
+
+    module = _guard_module("replay_guard_case_alias_test")
+    fake_home = tmp_path / "home"
+    (fake_home / "Gits" / "brainlayer").mkdir(parents=True)
+    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: fake_home))
+
+    for alias in (fake_home / "gits", fake_home / "GITS", fake_home / "gits" / "brainlayer"):
+        assert module.marker_target_hazard(tmp_path / "copy.db", alias) is not None, f"{alias} failed open"
+
+
+def test_guard_refuses_a_symlink_that_points_into_the_real_tree(tmp_path, monkeypatch):
+    """The same class, portable to case-sensitive CI: a different string, the same inode."""
+    module = _guard_module("replay_guard_symlink_test")
+    fake_home = tmp_path / "home"
+    (fake_home / "Gits").mkdir(parents=True)
+    link = tmp_path / "elsewhere"
+    link.symlink_to(fake_home / "Gits", target_is_directory=True)
+    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: fake_home))
+
+    assert module.marker_target_hazard(tmp_path / "copy.db", link) is not None
+
+
+def test_guard_allows_a_differently_cased_canonical_db(tmp_path, monkeypatch):
+    """Round-2 review, #780 @165 (MEDIUM). Measured before the fix:
+
+        samefile(brainlayer.db, Brainlayer.db) -> True
+        allowlisted?                           -> NO, so the guard refused a VALID production drain
+
+    Fail-closed is the safe direction, but it blocks the one shape this PR promises keeps working.
+    """
+    if not _case_insensitive_fs(tmp_path):
+        pytest.skip("case-sensitive filesystem: the alias cannot exist here (this is ubuntu CI)")
+
+    module = _guard_module("replay_guard_db_case_test")
+    fake_home = tmp_path / "home"
+    real_gits = fake_home / "Gits"
+    real_gits.mkdir(parents=True)
+    canonical = fake_home / ".local" / "share" / "brainlayer" / "brainlayer.db"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text("db", encoding="utf-8")
+    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: fake_home))
+    monkeypatch.setattr(module, "get_canonical_db_path", lambda: canonical)
+
+    cased = canonical.parent / "Brainlayer.db"
+    assert os.path.samefile(canonical, cased)
+    assert module.marker_target_hazard(cased, real_gits) is None, "same-inode DB must stay allowlisted"
+
+
+def test_guard_allows_a_symlinked_canonical_db(tmp_path, monkeypatch):
+    """Portable half of the same finding."""
+    module = _guard_module("replay_guard_db_symlink_test")
+    fake_home = tmp_path / "home"
+    real_gits = fake_home / "Gits"
+    real_gits.mkdir(parents=True)
+    canonical = fake_home / ".local" / "share" / "brainlayer" / "brainlayer.db"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text("db", encoding="utf-8")
+    link = tmp_path / "linked.db"
+    link.symlink_to(canonical)
+    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: fake_home))
+    monkeypatch.setattr(module, "get_canonical_db_path", lambda: canonical)
+
+    assert module.marker_target_hazard(link, real_gits) is None
+
+
+def test_main_allows_the_production_drain_shape_end_to_end(tmp_path, monkeypatch):
+    """Round-2 review, #780 @1474 (MEDIUM).
+
+    Every allow-test so far called `marker_target_hazard` directly. Nothing drove real-tree plus
+    canonical-DB through `main()`, so a regression in the wiring — not the predicate — would not have
+    been caught, and that is precisely the invocation the post-merge drain uses.
+    """
+    module = _guard_module("replay_guard_main_prod_test")
+    from brainlayer.fallback_replay import parse_fallback_file
+
+    fake_home = tmp_path / "home"
+    real_gits = fake_home / "Gits"
+    repo = real_gits / "systems"
+    _git_init(repo)
+    canonical = fake_home / ".local" / "share" / "brainlayer" / "brainlayer.db"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text("db", encoding="utf-8")
+    entry = parse_fallback_file(_pending_file(repo, "docs.local/decisions/prod.md"))
+
+    class DummyStore:
+        def close(self):
+            pass
+
+    class DummyInventory:
+        structured = [entry]
+        legacy = []
+        pending = [entry]
+
+    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: fake_home))
+    monkeypatch.setattr(module, "get_canonical_db_path", lambda: canonical)
+    monkeypatch.setattr(module, "load_scope_map", lambda _path: {})
+    monkeypatch.setattr(module, "inventory_fallbacks", lambda _root, *, scope_map: DummyInventory())
+    monkeypatch.setattr(module, "VectorStore", lambda _db: DummyStore())
+    monkeypatch.setattr(module, "store_memory", lambda **_kwargs: {"id": "chunk-prod", "outcome": "stored"})
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "replay_brain_store_fallbacks.py",
+            "--apply",
+            "--direct-db-write",
+            "--db",
+            str(canonical),
+            "--gits-root",
+            str(real_gits),
+        ],
+    )
+
+    assert module.main() == 0, "the guard must never block the real production drain"
