@@ -314,3 +314,24 @@ def test_directory_is_never_denylisted_under_the_default_subagent_policy(monkeyp
     denylist.clear_pattern_match_cache()
     subagents = tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents"
     assert denylist.is_directory_denylisted(subagents) is False
+
+
+def test_cached_pattern_match_expands_against_the_home_in_its_key(monkeypatch, tmp_path):
+    """The `home` in the cache key must be the home the match is computed with.
+
+    Round-1 review of #781 (Cursor, medium): `_matches_configured_pattern` keyed on `home` but
+    matched through `_inferred_homes`, which read the live `Path.home()`. Callers passed
+    `str(Path.home())`, so the two agreed -- but a key that does not drive the computation is a
+    latent flip: a verdict computed under one home expansion could be served for another.
+    Here the live HOME is `home_a` and the call names `home_b`; the `~/` pattern must expand
+    against `home_b`, the one in the key.
+    """
+    home_a = tmp_path / "home-a"
+    home_b = tmp_path / "home-b"
+    monkeypatch.setenv("HOME", str(home_a))
+    denylist.clear_pattern_match_cache()
+    patterns = ("~/denied/**",)
+    path = str(home_b / "denied" / "x.jsonl")
+
+    assert denylist._matches_configured_pattern(path, patterns, str(home_b)) is True
+    assert denylist._matches_configured_pattern(path, patterns, str(home_a)) is False

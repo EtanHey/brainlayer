@@ -51,8 +51,13 @@ def _subtree_patterns(patterns: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(pattern for pattern in patterns if pattern.rstrip("/").rsplit("/", 1)[-1] == "**")
 
 
-def _inferred_homes(path: Path) -> tuple[Path, ...]:
-    homes: list[Path] = [Path.home()]
+def _inferred_homes(path: Path, home: Path | None = None) -> tuple[Path, ...]:
+    """Homes a `~/` pattern expands against: the process home plus any home implied by the path.
+
+    `home` is explicit so a memoised caller can key its cache on the exact value it matched
+    with; left None it reads the live Path.home().
+    """
+    homes: list[Path] = [home if home is not None else Path.home()]
     for provider_dir in (".claude", ".codex", ".cursor", ".gemini"):
         if provider_dir not in path.parts:
             continue
@@ -204,11 +209,13 @@ def _matches_configured_pattern(path: str, patterns: tuple[str, ...], home: str)
     12,125-file corpus (0.35s CPU on a performance core, ~1.8s on the efficiency cores
     launchd schedules the watcher onto), all producing the same answers as the poll
     before. A changed BRAINLAYER_INGEST_DENYLIST is still picked up on the very next call,
-    because the patterns are part of the key. `home` is in the key for the same reason:
-    `_inferred_homes` reads Path.home(), which the test-suite re-points per test.
+    because the patterns are part of the key. `home` is in the key for the same reason, and it
+    is the home the match is computed with -- not a live Path.home() read that merely happens
+    to agree with it (round-1 review of #781: a key that does not drive the computation is a
+    latent flip between a cached verdict and the expansion it was cached under).
     """
     candidate = Path(path)
-    homes = _inferred_homes(candidate)
+    homes = _inferred_homes(candidate, Path(home))
     for pattern in patterns:
         for expanded_pattern in _expand_globs(pattern, homes):
             if _match_parts(candidate.parts, expanded_pattern.parts):
