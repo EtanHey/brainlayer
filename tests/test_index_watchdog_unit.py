@@ -20,6 +20,9 @@ def _watchdog(clock, **kwargs):
     kwargs.setdefault("started_at", clock.now)
     kwargs.setdefault("max_runtime_s", 10.0)
     kwargs.setdefault("monotonic", clock)
+    # Unit tests drive BOTH clocks from the same fake so timings are deterministic. The split
+    # between them is what `test_the_poll_thread_never_reads_the_callers_clock` pins.
+    kwargs.setdefault("wall_monotonic", clock)
     kwargs.setdefault("emit", lambda alarm: True)
     return IndexWatchdog(**kwargs)
 
@@ -249,3 +252,38 @@ def test_a_raising_emit_leaves_no_record_but_still_does_not_repeat():
     assert calls["n"] == 1, "a failing emit must not be retried every poll"
     assert watchdog.alarm_emitted is False, "the CLI still owes a fallback alarm"
     assert watchdog.expired is True
+
+
+def test_the_poll_thread_never_reads_the_callers_clock():
+    """The side thread must not touch the caller's clock.
+
+    Several CLI tests monkeypatch the global `time.monotonic` with a constant or an
+    exhausting iterator. A poll thread reading that would mis-fire and consume values the main
+    thread expects — a CI flake, not a production clock bug, but a real one. The caller's clock
+    is read exactly once, by `start()`, on the calling thread.
+    """
+    caller_reads = {"n": 0}
+
+    def caller_clock():
+        caller_reads["n"] += 1
+        return 1000.0
+
+    watchdog = IndexWatchdog(
+        started_at=1000.0,
+        max_runtime_s=3600.0,
+        monotonic=caller_clock,
+        emit=lambda alarm: True,
+        poll_interval_s=0.01,
+        heartbeat_interval_s=0.01,
+        heartbeat_sink=lambda _line: None,
+    )
+    with watchdog:
+        reads_after_start = caller_reads["n"]
+        deadline = _mono() + 1.0
+        while _mono() < deadline:
+            pass  # let the poll thread spin through many iterations
+
+    assert reads_after_start <= 1, "start() must read the caller clock at most once"
+    assert caller_reads["n"] == reads_after_start, (
+        f"the poll thread read the caller's clock {caller_reads['n'] - reads_after_start} times"
+    )

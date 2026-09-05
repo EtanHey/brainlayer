@@ -3571,6 +3571,50 @@ def watch_backfill(
     rprint(f"processed_entries={processed} cycles={cycles} registry={registry_path}")
 
 
+def _looks_like_watchdog_interrupt(exc: BaseException) -> bool:
+    """Is this exception the interrupt the watchdog asked for, rather than a real failure?
+
+    apsw raises `InterruptError` out of the statement `sqlite3_interrupt` aborted. Matched by
+    name so this module needs no apsw import and still recognises a wrapped equivalent.
+    """
+    return type(exc).__name__ in {"InterruptError", "IndexDeadlineExceeded"}
+
+
+def _discover_jsonl_files(entries, watchdog) -> list[Path]:
+    """Materialise a discovery walk while staying answerable to the cap.
+
+    `list(source.rglob(...))` is one opaque call: a walk that stalls on a slow mount returns
+    nothing to check against the deadline until it finishes. Consuming the generator lets the
+    cap be checked as the walk proceeds, and keeps `phase=discover` current in the heartbeat.
+    """
+    found: list[Path] = []
+    for index, entry in enumerate(entries):
+        # Every 64 entries: often enough to bound a stalled walk, cheap enough not to add a
+        # clock read per file on a 12,000-file tree.
+        if index % 64 == 0:
+            watchdog.raise_if_expired()
+        found.append(entry)
+    watchdog.note_progress()
+    return found
+
+
+def _attach_interrupt(watchdog):
+    """Hand the writer connection's interrupt to the watchdog, loudly if it cannot be had."""
+
+    def hook(conn) -> None:
+        try:
+            interrupt = getattr(conn, "interrupt", None)
+            if not callable(interrupt):
+                watchdog.note_uninterruptible(f"connection {type(conn).__name__} exposes no interrupt()")
+                return
+            watchdog.set_interrupt(interrupt)
+        except Exception as exc:
+            # Never let attaching the lever break the open -- but never lose the fact either.
+            watchdog.note_uninterruptible(f"{type(exc).__name__}: {exc}")
+
+    return hook
+
+
 def _exit_on_index_deadline(
     cause: BaseException,
     *,
@@ -3580,6 +3624,7 @@ def _exit_on_index_deadline(
     committed_chunks: int,
     files_completed: int,
     current_file: Path | None,
+    unwind_error: str | None = None,
 ) -> typer.Exit:
     """Emit the cap alarm once and return the Exit the caller should raise.
 
@@ -3594,6 +3639,7 @@ def _exit_on_index_deadline(
             "[bold red]INDEX_RUNTIME_EXCEEDED[/] final: "
             f"phase={watchdog.phase} committed_chunks={committed_chunks} "
             f"files_completed={files_completed} cause={type(cause).__name__}"
+            + (f" unwind_error={unwind_error}" if unwind_error else "")
         )
         return typer.Exit(1)
 
@@ -3604,6 +3650,8 @@ def _exit_on_index_deadline(
         "files_completed": files_completed,
         "source_file": str(current_file) if current_file else None,
     }
+    if unwind_error is not None:
+        alarm_context["unwind_error"] = unwind_error
     if watchdog is not None:
         alarm_context["phase"] = watchdog.phase
     alarm = build_alarm(
@@ -3646,35 +3694,17 @@ def index_fast(
         deadline_monotonic = start_monotonic + max_runtime_s
 
         # Find JSONL files
-        if project:
-            project_dir = source / project
-            if not project_dir.exists():
-                rprint(f"[bold red]Error:[/] Project directory not found: {project_dir}")
-                raise typer.Exit(1)
-            jsonl_files = list(project_dir.glob("*.jsonl"))
-            if not jsonl_files:
-                rprint(f"[bold red]Error:[/] No JSONL files found in project: {project_dir}")
-                raise typer.Exit(1)
-        else:
-            jsonl_files = list(source.rglob("*.jsonl"))
-            if not jsonl_files:
-                rprint(f"[bold red]Error:[/] No JSONL files found in: {source}")
-                raise typer.Exit(1)
-
-        rprint(f"[bold blue]זיכרון[/] - Fast Indexing: [bold]{len(jsonl_files)}[/] files")
-
         total_chunks = 0
         files_completed = 0
         current_file: Path | None = None
 
-        # The watchdog is armed before the store opens: opening it can run migrations,
-        # which is itself a phase with no transaction boundary.
+        # Armed BEFORE discovery, not after: a hung directory walk is a silent phase like any
+        # other, and charging it against the cap without watching it only fixed the arithmetic.
         with ExitStack() as stack:
             watchdog = stack.enter_context(
                 IndexWatchdog(
-                    # The CLI's clock and the CLI's start, so there is ONE deadline: time
-                    # already spent on file discovery is charged against the cap, and arming
-                    # the watchdog late does not hand the run a second budget.
+                    # The CLI's clock and the CLI's start, so there is ONE deadline shared with
+                    # the CLI rather than a fresh budget granted at arming time.
                     started_at=start_monotonic,
                     max_runtime_s=max_runtime_s,
                     monotonic=time.monotonic,
@@ -3683,18 +3713,34 @@ def index_fast(
                         "files_completed": files_completed,
                         "source_file": str(current_file) if current_file else None,
                     },
-                    phase="open_store",
+                    phase="discover",
                 )
             )
+
+            if project:
+                project_dir = source / project
+                if not project_dir.exists():
+                    rprint(f"[bold red]Error:[/] Project directory not found: {project_dir}")
+                    raise typer.Exit(1)
+                jsonl_files = _discover_jsonl_files(project_dir.glob("*.jsonl"), watchdog)
+                if not jsonl_files:
+                    rprint(f"[bold red]Error:[/] No JSONL files found in project: {project_dir}")
+                    raise typer.Exit(1)
+            else:
+                jsonl_files = _discover_jsonl_files(source.rglob("*.jsonl"), watchdog)
+                if not jsonl_files:
+                    rprint(f"[bold red]Error:[/] No JSONL files found in: {source}")
+                    raise typer.Exit(1)
+
+            rprint(f"[bold blue]זיכרון[/] - Fast Indexing: [bold]{len(jsonl_files)}[/] files")
+
+            watchdog.set_phase("open_store")
             # sqlite3_interrupt is the only lever that reaches the inner statements FTS5 and
             # vec0 drive; apsw documents calling it from another thread as safe. The hook hands
             # it over BEFORE the schema probe runs, so open_store -- which has no cap of its
             # own and is the likeliest phase behind the M1's 12h run -- is abortable too.
             runtime_store = stack.enter_context(
-                open_writer_store(
-                    get_db_path(),
-                    on_connection=lambda conn: watchdog.set_interrupt(getattr(conn, "interrupt", None)),
-                )
+                open_writer_store(get_db_path(), on_connection=_attach_interrupt(watchdog))
             )
             progress = stack.enter_context(
                 Progress(
@@ -3793,10 +3839,15 @@ def index_fast(
     except typer.Exit:
         raise
     except Exception as e:
-        # An expired watchdog means this exception IS the cap landing -- most often the
-        # apsw.InterruptError it raised inside a long sqlite3_step. Report it as the cap,
-        # not as an opaque error.
+        # An expired watchdog means the cap is part of the story -- but NOT that this
+        # exception is the cap. An interrupt we asked for is; a schema mismatch, an I/O error
+        # or an OOM during the unwind is a real failure that happens to land late, and
+        # relabelling it INDEX_RUNTIME_EXCEEDED would throw away the only actionable cause.
+        # So: report the cap alarm AND keep the original error's type, message and exit path.
         if watchdog is not None and watchdog.expired:
+            unwind_error = f"{type(e).__name__}: {e}"
+            if not _looks_like_watchdog_interrupt(e):
+                rprint(f"[bold red]Error after the cap:[/] {unwind_error}")
             raise _exit_on_index_deadline(
                 e,
                 watchdog=watchdog,
@@ -3805,6 +3856,7 @@ def index_fast(
                 committed_chunks=total_chunks,
                 files_completed=files_completed,
                 current_file=current_file,
+                unwind_error=unwind_error,
             ) from e
         rprint(f"[bold red]Error:[/] {e}")
         raise typer.Exit(1)

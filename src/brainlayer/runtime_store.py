@@ -441,11 +441,17 @@ class WriterRuntimeStore(VectorStore):
             self.conn = apsw.Connection(str(self.db_path), flags=apsw.SQLITE_OPEN_READWRITE)
         if on_connection is not None:
             # Before any SQL below, so the whole probe window is interruptible. A failure here
-            # must not cost us the store: the caller only loses its ability to abort.
+            # must not cost us the store -- but it must not be quiet either: the caller loses
+            # its ability to abort this open, which is exactly the fail-open shape the hook
+            # exists to remove. Loud, and the caller's own hook is expected to record it.
             try:
                 on_connection(self.conn)
             except Exception as exc:
-                logger.debug("on_connection hook failed: %s", exc)
+                logger.error(
+                    "on_connection hook failed; this open is NOT interruptible: %s: %s",
+                    type(exc).__name__,
+                    exc,
+                )
         try:
             self.conn.setbusytimeout(_write_busy_timeout_ms())
             _load_vector_extension(self.conn)
@@ -524,6 +530,10 @@ def open_writer_store(
             try:
                 on_connection(store.conn)
             except Exception as exc:
-                logger.debug("on_connection hook failed: %s", exc)
+                logger.error(
+                    "on_connection hook failed; this open is NOT interruptible: %s: %s",
+                    type(exc).__name__,
+                    exc,
+                )
         return store
     raise RuntimeStoreModeError("BRAINLAYER_RUNTIME_STORE must be 'runtime' (default) or 'legacy' for rollback")

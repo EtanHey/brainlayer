@@ -100,13 +100,21 @@ class IndexWatchdog:
         emit: Callable[[Any], bool] | None = None,
         counters: Callable[[], dict[str, Any]] | None = None,
         monotonic: Callable[[], float] = _wall_monotonic,
+        wall_monotonic: Callable[[], float] = _wall_monotonic,
         heartbeat_interval_s: float | None = None,
         poll_interval_s: float = _DEFAULT_POLL_INTERVAL_S,
         heartbeat_sink: Callable[[str], None] | None = None,
         phase: str = "starting",
     ) -> None:
         self._max_runtime_s = float(max_runtime_s)
+        # Two clocks on purpose. `_monotonic` is the CALLER's, read only from the main thread,
+        # so the watchdog shares exactly one deadline with the CLI. `_wall` is this module's
+        # import-time binding of the real clock and is the only clock the side thread reads:
+        # several CLI tests monkeypatch the global time.monotonic with frozen values or
+        # exhausting iterators, and a poll thread reading those would both mis-fire and steal
+        # values from the main thread's sequence.
         self._monotonic = monotonic
+        self._wall = wall_monotonic
         self._emit = emit
         self._counters = counters
         self._heartbeat_interval_s = (
@@ -122,8 +130,12 @@ class IndexWatchdog:
         # Arming the watchdog late must not hand the run a fresh budget: whatever ran before
         # (file discovery) is already charged against it.
         self._started_at = float(started_at)
-        self._last_progress = self._started_at
         self._deadline = self._started_at + self._max_runtime_s
+        # Wall-domain mirrors, used by the thread. Fixed at start().
+        self._wall_started_at = self._wall()
+        self._wall_deadline = self._wall_started_at + self._max_runtime_s
+        self._last_progress = self._wall_started_at
+        self._uninterruptible: str | None = None
 
         self._expired = threading.Event()
         self._alarm_attempted = threading.Event()
@@ -147,11 +159,11 @@ class IndexWatchdog:
     def set_phase(self, phase: str) -> None:
         with self._lock:
             self._phase = phase
-            self._last_progress = self._monotonic()
+            self._last_progress = self._wall()
 
     def note_progress(self) -> None:
         with self._lock:
-            self._last_progress = self._monotonic()
+            self._last_progress = self._wall()
 
     # ── state the main thread reads ─────────────────────────────────────
 
@@ -174,20 +186,38 @@ class IndexWatchdog:
             return self._phase
 
     def elapsed_s(self) -> float:
-        return max(0.0, self._monotonic() - self._started_at)
+        """Wall seconds since the run started -- safe to call from either thread."""
+        return max(0.0, self._wall() - self._wall_started_at)
+
+    def remaining_s(self) -> float:
+        """Wall seconds of budget left. Negative once the cap has passed."""
+        return self._wall_deadline - self._wall()
+
+    def note_uninterruptible(self, reason: str) -> None:
+        """Record that this run has no working interrupt lever.
+
+        Abortability degrading silently is the same fail-open shape this module exists to
+        remove, so it is stated in every heartbeat and in the cap alarm.
+        """
+        with self._lock:
+            self._uninterruptible = reason
+        logger.error("Index watchdog has no interrupt lever: %s", reason)
 
     def context(self, extra: dict[str, Any] | None = None) -> dict[str, Any]:
         """Cap-alarm context: always carries the phase and the age of the last progress."""
         with self._lock:
             phase = self._phase
             last_progress = self._last_progress
-        now = self._monotonic()
+            uninterruptible = self._uninterruptible
+        now = self._wall()
         context: dict[str, Any] = {
             "max_runtime_s": self._max_runtime_s,
-            "elapsed_s": round(max(0.0, now - self._started_at), 3),
+            "elapsed_s": round(max(0.0, now - self._wall_started_at), 3),
             "phase": phase,
             "last_progress_age_s": round(max(0.0, now - last_progress), 3),
         }
+        if uninterruptible is not None:
+            context["uninterruptible"] = uninterruptible
         if extra:
             context.update(extra)
         return context
@@ -200,14 +230,23 @@ class IndexWatchdog:
         means the main thread stops on its own rather than waiting a poll interval for the
         watchdog thread to notice.
         """
-        if self._expired.is_set() or self._monotonic() >= self._deadline:
-            raise IndexDeadlineExceeded(processed_count)
+        if not self._expired.is_set() and self._monotonic() < self._deadline:
+            return
+        # Route through the same path the thread uses, so a main-thread trip also alarms and
+        # pulls the interrupt instead of leaving the two halves disagreeing about the cap.
+        self._on_deadline()
+        raise IndexDeadlineExceeded(processed_count)
 
     # ── lifecycle ───────────────────────────────────────────────────────
 
     def start(self) -> "IndexWatchdog":
         if self._thread is not None:
             return self
+        # One read of the caller's clock, from the calling (main) thread, to carry whatever
+        # budget is already spent into the wall domain the thread polls.
+        remaining = self._deadline - self._monotonic()
+        self._wall_started_at = self._wall() - (self._max_runtime_s - remaining)
+        self._wall_deadline = self._wall() + remaining
         self._thread = threading.Thread(target=self._run, name="brainlayer-index-watchdog", daemon=True)
         self._thread.start()
         return self
@@ -228,10 +267,10 @@ class IndexWatchdog:
     # ── the thread ──────────────────────────────────────────────────────
 
     def _run(self) -> None:
-        next_heartbeat = self._started_at + self._heartbeat_interval_s
+        next_heartbeat = self._wall_started_at + self._heartbeat_interval_s
         while not self._stop.wait(self._poll_interval_s):
-            now = self._monotonic()
-            if now >= self._deadline:
+            now = self._wall()
+            if now >= self._wall_deadline:
                 self._on_deadline()
             # Heartbeat regardless of expiry. A wedge that cannot be aborted -- a model load,
             # or open_store before its connection exists -- would otherwise emit one alarm and

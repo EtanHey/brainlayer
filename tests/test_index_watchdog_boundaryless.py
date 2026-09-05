@@ -17,6 +17,7 @@ Fakes only -- no embedding model, no canonical DB.
 """
 
 import threading
+import time
 from pathlib import Path
 from time import monotonic as _mono
 from types import SimpleNamespace
@@ -24,7 +25,12 @@ from types import SimpleNamespace
 import pytest
 from typer.testing import CliRunner
 
-from brainlayer import index_watchdog
+# Imported at module scope BEFORE any patching, on purpose. `index_new` binds
+# `open_writer_store` at ITS import time; if that import first happens inside a test that has
+# already monkeypatched `brainlayer.runtime_store.open_writer_store`, index_new captures the
+# fake permanently -- monkeypatch restores runtime_store, not index_new -- and every later
+# test in the session gets the fake. That is what broke test_context_pipeline.
+from brainlayer import index_new, index_watchdog
 from brainlayer.alarm import BrainLayerAlarm
 from brainlayer.cli import app
 
@@ -66,6 +72,11 @@ class _StallingRuntimeStore:
         self.interrupt_calls += 1
         self._interrupted.set()
 
+    def wait_for_interrupt(self) -> bool:
+        """Block until the watchdog interrupts, WITHOUT raising -- for callers that want to
+        raise a failure of their own once the cap has already passed."""
+        return self._interrupted.wait(self.ceiling_s)
+
     def stall(self) -> int:
         started = _mono()
         interrupted = self._interrupted.wait(self.ceiling_s)
@@ -83,6 +94,12 @@ class _StallingRuntimeStore:
         return False
 
 
+def _patch_open_writer_store(monkeypatch, fake) -> None:
+    """Patch every binding of `open_writer_store`, and only via monkeypatch so all are undone."""
+    monkeypatch.setattr("brainlayer.runtime_store.open_writer_store", fake)
+    monkeypatch.setattr(index_new, "open_writer_store", fake)
+
+
 def _install(monkeypatch, store, alarms):
     monkeypatch.setenv("BRAINLAYER_INDEX_MAX_RUNTIME_S", str(CAP_S))
 
@@ -92,7 +109,7 @@ def _install(monkeypatch, store, alarms):
             on_connection(store.conn)
         return store
 
-    monkeypatch.setattr("brainlayer.runtime_store.open_writer_store", fake_open)
+    _patch_open_writer_store(monkeypatch, fake_open)
     monkeypatch.setattr("brainlayer.alarm.emit_alarm", lambda alarm: alarms.append(alarm) or True)
 
     def fake_index(_chunks, **_kwargs):
@@ -213,10 +230,7 @@ def test_a_stalling_open_store_is_alarmed_and_interrupted(tmp_path, monkeypatch)
     alarms: list[BrainLayerAlarm] = []
     monkeypatch.setenv("BRAINLAYER_INDEX_MAX_RUNTIME_S", str(CAP_S))
     monkeypatch.setattr("brainlayer.alarm.emit_alarm", lambda alarm: alarms.append(alarm) or True)
-    monkeypatch.setattr(
-        "brainlayer.runtime_store.open_writer_store",
-        lambda _path, on_connection=None: store.open(on_connection),
-    )
+    _patch_open_writer_store(monkeypatch, lambda _path, on_connection=None: store.open(on_connection))
     monkeypatch.setattr("brainlayer.index_new.index_chunks_to_sqlite", lambda *_a, **_k: 0)
 
     started = _mono()
@@ -231,13 +245,8 @@ def test_a_stalling_open_store_is_alarmed_and_interrupted(tmp_path, monkeypatch)
     assert alarm.context["phase"] == "open_store", alarm.context
 
 
-def test_discovery_time_is_charged_against_the_one_deadline(tmp_path, monkeypatch):
-    """The watchdog must adopt the CLI's deadline, not start a fresh budget when it arms.
-
-    A watchdog that computed `own_now + max_runtime_s` would grant a second full budget to
-    everything after discovery -- so a slow rglob plus a stalled open_store could burn
-    2 x max_runtime_s. This pins one deadline on one clock.
-    """
+def test_a_slow_discovery_shares_the_one_deadline(tmp_path, monkeypatch):
+    """The watchdog must adopt the CLI's deadline, not start a fresh budget when it arms."""
     source = _prepare_index_source(tmp_path, monkeypatch)
     monkeypatch.setenv("BRAINLAYER_INDEX_MAX_RUNTIME_S", "7")
 
@@ -261,20 +270,113 @@ def test_discovery_time_is_charged_against_the_one_deadline(tmp_path, monkeypatc
         return instance
 
     monkeypatch.setattr("brainlayer.index_watchdog.IndexWatchdog", capture)
-    monkeypatch.setattr(
-        "brainlayer.runtime_store.open_writer_store",
-        lambda _path, on_connection=None: _StallingRuntimeStore(ceiling_s=0.01),
-    )
+    _patch_open_writer_store(monkeypatch, lambda _path, on_connection=None: _StallingRuntimeStore(ceiling_s=0.01))
     monkeypatch.setattr("brainlayer.index_new.index_chunks_to_sqlite", lambda *_a, **_k: 0)
     monkeypatch.setattr("brainlayer.alarm.emit_alarm", lambda _alarm: True)
 
     CliRunner().invoke(app, ["index", str(source)])
 
     assert len(built) == 1
-    watchdog = built[0]
-    # start 1000.0 + cap 7.0 -- NOT the 1005.0 instant at which the watchdog armed.
-    assert watchdog.deadline_monotonic == 1007.0
-    assert watchdog.elapsed_s() == pytest.approx(5.0), "discovery must count against the cap"
+    # start 1000.0 + cap 7.0 -- NOT the instant at which the watchdog armed.
+    assert built[0].deadline_monotonic == 1007.0
+
+
+def test_a_discovery_that_outruns_the_cap_is_stopped_and_named(tmp_path, monkeypatch):
+    """A walk that burns the whole budget must stop the run, naming `discover`."""
+    source = _prepare_index_source(tmp_path, monkeypatch)
+    monkeypatch.setenv("BRAINLAYER_INDEX_MAX_RUNTIME_S", "7")
+    alarms: list[BrainLayerAlarm] = []
+
+    clock = {"now": 1000.0}
+    monkeypatch.setattr("brainlayer.cli.time.monotonic", lambda: clock["now"])
+
+    real_rglob = Path.rglob
+
+    def stalled_rglob(self, pattern):
+        clock["now"] += 9.0  # past the 7s cap
+        return real_rglob(self, pattern)
+
+    monkeypatch.setattr(Path, "rglob", stalled_rglob)
+    _patch_open_writer_store(monkeypatch, lambda _path, on_connection=None: _StallingRuntimeStore(ceiling_s=0.01))
+    monkeypatch.setattr("brainlayer.index_new.index_chunks_to_sqlite", lambda *_a, **_k: 0)
+    monkeypatch.setattr("brainlayer.alarm.emit_alarm", lambda alarm: alarms.append(alarm) or True)
+
+    result = CliRunner().invoke(app, ["index", str(source)])
+
+    assert result.exit_code != 0
+    alarm = next(a for a in alarms if a.code == "INDEX_RUNTIME_EXCEEDED")
+    assert alarm.context["phase"] == "discover", alarm.context
+
+
+def test_a_stuck_discovery_alarms_and_heartbeats_while_still_walking(tmp_path, monkeypatch):
+    """`rglob` is one opaque call -- a stuck walk must not be silent until it returns.
+
+    Real time here, not a fake clock: the point is that the watchdog THREAD reports while the
+    main thread is still blocked inside the directory walk.
+    """
+    source = _prepare_index_source(tmp_path, monkeypatch)
+    monkeypatch.setenv("BRAINLAYER_INDEX_MAX_RUNTIME_S", str(CAP_S))
+    monkeypatch.setenv("BRAINLAYER_INDEX_HEARTBEAT_S", "0.3")
+    alarms: list[BrainLayerAlarm] = []
+    monkeypatch.setattr("brainlayer.alarm.emit_alarm", lambda alarm: alarms.append(alarm) or True)
+
+    real_rglob = Path.rglob
+    seen: dict[str, object] = {}
+
+    def stuck_rglob(self, pattern):
+        found = list(real_rglob(self, pattern))
+
+        def walk():
+            # Blocks well past the cap, exactly like a walk on a wedged mount.
+            time.sleep(CAP_S + 2.0)
+            seen["alarms_during_walk"] = len(alarms)
+            yield from found
+
+        return walk()
+
+    monkeypatch.setattr(Path, "rglob", stuck_rglob)
+    _patch_open_writer_store(monkeypatch, lambda _path, on_connection=None: _StallingRuntimeStore(ceiling_s=0.01))
+    monkeypatch.setattr("brainlayer.index_new.index_chunks_to_sqlite", lambda *_a, **_k: 0)
+
+    result = CliRunner().invoke(app, ["index", str(source)])
+
+    assert seen.get("alarms_during_walk"), "the run was silent while discovery was stuck"
+    alarm = next(a for a in alarms if a.code == "INDEX_RUNTIME_EXCEEDED")
+    assert alarm.context["phase"] == "discover", alarm.context
+    heartbeats = [ln for ln in result.stderr.splitlines() if ln.startswith("BRAINLAYER_INDEX_HEARTBEAT")]
+    assert any("phase=discover" in ln for ln in heartbeats), f"no discover heartbeat: {heartbeats}"
+    assert result.exit_code != 0
+
+
+def test_an_unrelated_failure_after_the_cap_keeps_its_own_identity(tmp_path, monkeypatch):
+    """A real failure landing after the deadline must not be relabelled as the cap.
+
+    Cap exit stays fail-closed; diagnosis must not fail open -- the operator still needs the
+    schema mismatch / I/O error / OOM that actually broke the run.
+    """
+    source = _prepare_index_source(tmp_path, monkeypatch)
+    store = _StallingRuntimeStore()
+    alarms: list[BrainLayerAlarm] = []
+    _install(monkeypatch, store, alarms)
+
+    def fail_after_the_cap(_chunks, **_kwargs):
+        assert store.wait_for_interrupt(), "the watchdog never expired, so this proves nothing"
+        raise RuntimeError("runtime database schema fingerprint mismatch")
+
+    monkeypatch.setattr("brainlayer.index_new.index_chunks_to_sqlite", fail_after_the_cap)
+
+    result = CliRunner().invoke(app, ["index", str(source)])
+
+    assert result.exit_code != 0
+    combined = result.stdout + result.stderr
+    assert "runtime database schema fingerprint mismatch" in combined, (
+        f"the original failure was rewritten as the cap: {combined!r}"
+    )
+    # The cap alarm still fires (it fired at the deadline, before this failure existed) AND
+    # the original error keeps its type and message in what the operator actually sees.
+    assert any(a.code == "INDEX_RUNTIME_EXCEEDED" for a in alarms), "the cap went unreported"
+    assert "RuntimeError" in combined, combined
+    assert "unwind_error=RuntimeError" in combined, combined
 
 
 def test_a_failed_watchdog_alarm_still_leaves_a_record(tmp_path, monkeypatch):
@@ -293,9 +395,8 @@ def test_a_failed_watchdog_alarm_still_leaves_a_record(tmp_path, monkeypatch):
 
     monkeypatch.setenv("BRAINLAYER_INDEX_MAX_RUNTIME_S", str(CAP_S))
     monkeypatch.setattr("brainlayer.alarm.emit_alarm", flaky_emit)
-    monkeypatch.setattr(
-        "brainlayer.runtime_store.open_writer_store",
-        lambda _path, on_connection=None: (on_connection and on_connection(store.conn), store)[1],
+    _patch_open_writer_store(
+        monkeypatch, lambda _path, on_connection=None: (on_connection and on_connection(store.conn), store)[1]
     )
     monkeypatch.setattr("brainlayer.index_new.index_chunks_to_sqlite", lambda *_a, **_k: store.stall())
 
