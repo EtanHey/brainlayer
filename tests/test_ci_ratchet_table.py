@@ -2686,3 +2686,117 @@ def test_a_describe_failure_is_a_row_problem_not_a_collector_abort(tmp_path: Pat
     rows = ratchet.collect(linux_probe(tmp_path, attestations=real_history()), CORPUS)
     result = row(rows, "search p50/p95")
     assert result.status == ratchet.RED and "simulated incomplete margin" in result.value
+
+
+# --------------------------------------------------------------------------------------------
+# fallback replay debt (c)
+# --------------------------------------------------------------------------------------------
+
+
+def _fallback_root(tmp_path: Path, *, pending: int = 0, replayed: int = 0) -> Path:
+    """A `~/Gits`-shaped tree whose `docs.local/decisions` files carry brain_store intent."""
+    root = tmp_path / "gits"
+    repo = root / "cmuxlayer"
+    decisions = repo / "docs.local" / "decisions"
+    decisions.mkdir(parents=True, exist_ok=True)
+    subprocess.run(("git", "init", "-q"), cwd=repo, env=_clean_git_env(), check=True)
+    for index in range(pending):
+        (decisions / f"pending-{index}.md").write_text(
+            "---\nintended_brain_store: true\nimportance: 8\nchunk_id:\n---\nnot replayed yet\n",
+            encoding="utf-8",
+        )
+    for index in range(replayed):
+        (decisions / f"done-{index}.md").write_text(
+            f"---\nintended_brain_store: true\nimportance: 8\nchunk_id: chunk-{index}\n---\nalready stored\n",
+            encoding="utf-8",
+        )
+    return root
+
+
+def test_fallback_debt_row_is_red_while_memories_are_pending(tmp_path):
+    root = _fallback_root(tmp_path, pending=122, replayed=223)
+    probe = mac_probe(tmp_path, fallback_gits_root=root)
+
+    row = ratchet.row_fallback_debt(probe, CORPUS)
+
+    assert row.name == "fallback replay debt"
+    assert row.status == ratchet.RED
+    assert "122" in row.value
+
+
+def test_fallback_debt_row_is_green_at_zero(tmp_path):
+    root = _fallback_root(tmp_path, pending=0, replayed=5)
+    probe = mac_probe(tmp_path, fallback_gits_root=root)
+
+    row = ratchet.row_fallback_debt(probe, CORPUS)
+
+    assert row.status == ratchet.GREEN
+    assert "0 pending" in row.value
+
+
+def test_fallback_debt_row_counts_unparseable_files_as_debt(tmp_path):
+    root = _fallback_root(tmp_path, pending=0, replayed=1)
+    (root / "cmuxlayer" / "docs.local" / "brain-store-fallback").mkdir(parents=True)
+    (root / "cmuxlayer" / "docs.local" / "brain-store-fallback" / "legacy.md").write_text(
+        "no frontmatter at all\n", encoding="utf-8"
+    )
+
+    row = ratchet.row_fallback_debt(mac_probe(tmp_path, fallback_gits_root=root), CORPUS)
+
+    assert row.status == ratchet.RED
+    assert "legacy" in row.value
+
+
+def test_fallback_debt_row_is_na_when_the_machine_has_no_fallback_root(tmp_path):
+    probe = linux_probe(tmp_path, fallback_gits_root=tmp_path / "no-such-gits")
+
+    row = ratchet.row_fallback_debt(probe, CORPUS)
+
+    assert row.status == ratchet.NA
+    assert "docs.local" in row.value
+    assert "gitignored" in row.value
+
+
+def test_fallback_debt_row_is_red_when_the_inventory_cannot_be_read(tmp_path, monkeypatch):
+    root = _fallback_root(tmp_path, pending=1)
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("scopes.yaml is malformed")
+
+    monkeypatch.setattr(ratchet, "fallback_inventory", boom)
+    row = ratchet.row_fallback_debt(mac_probe(tmp_path, fallback_gits_root=root), CORPUS)
+
+    assert row.status == ratchet.RED
+    assert "scopes.yaml is malformed" in row.value
+
+
+def test_fallback_debt_row_is_in_the_table(tmp_path):
+    root = _fallback_root(tmp_path, pending=3)
+    probe = mac_probe(tmp_path, fallback_gits_root=root)
+
+    rendered = ratchet.render(ratchet.collect(probe, CORPUS), probe, None, NOW)
+
+    assert "fallback replay debt" in rendered
+    assert "3 pending" in rendered
+    assert "🔴 RED" in rendered
+
+
+def test_fallback_debt_red_makes_the_collector_exit_nonzero(tmp_path, monkeypatch, capsys):
+    root = _fallback_root(tmp_path, pending=2)
+    monkeypatch.setenv(ratchet.FALLBACK_GITS_ROOT_ENV, str(root))
+    monkeypatch.setattr(ratchet, "canonical_db_path", lambda: tmp_path / "absent.db")
+
+    exit_code = ratchet.main(["--wheel", str(make_wheel(tmp_path / "wheel", HEAD))])
+
+    assert exit_code == 1
+    out = capsys.readouterr()
+    assert "fallback replay debt" in out.out
+    assert "Ratchet RED: fallback replay debt" in out.err
+
+
+def test_fallback_gits_root_env_overrides_the_default(tmp_path, monkeypatch):
+    monkeypatch.setenv(ratchet.FALLBACK_GITS_ROOT_ENV, str(tmp_path / "elsewhere"))
+    assert ratchet.default_fallback_gits_root() == tmp_path / "elsewhere"
+
+    monkeypatch.delenv(ratchet.FALLBACK_GITS_ROOT_ENV, raising=False)
+    assert ratchet.default_fallback_gits_root() == Path.home() / "Gits"

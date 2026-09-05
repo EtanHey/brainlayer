@@ -43,6 +43,15 @@ Two rows have a runner-side method. ``provenance`` measures in-process on the ub
 the published tap keg and runs ``scripts/release-verify-signatures.sh`` against it; that job hands
 its counts here as a JSON report (``--signature-report``).
 
+``fallback replay debt`` answers a question no other row asks: **how many memories were written to
+disk and never made it into the DB?** When `brain_store` cannot reach BrainLayer, the fallback writes
+the memory to ``<repo>/docs.local/decisions`` with ``intended_brain_store: true`` and an empty
+``chunk_id``. That write half worked for months while the replay half only ran when a human typed
+``scripts/replay_brain_store_fallbacks.py`` -- 122 memories from 2026-06-28 and 2026-07-18 sat there,
+invisible to ``brain_search``, while agents told Etan "it'll replay". Any count above zero is RED, on
+purpose: this is the row that stops that sitting for months again. On a hosted runner it is ``n/a``
+and says why -- ``docs.local/`` is gitignored, so CI has no copy of the queue to count.
+
 The remaining three -- mapped bytes, search latency, idle CPU -- are **fixture-bound, not
 runner-bound**. They need the BrainBar daemon, its hybrid helper and the indexed corpus running
 together, which no GitHub-hosted runner of any OS provides. Their ``n/a`` reasons say exactly that,
@@ -122,6 +131,22 @@ ATTESTATION_UNAVAILABLE_DEFAULT = (
     "attestation for the baseline to be checked against"
 )
 
+# Where the brain_store fallback queue lives, and the row's one real capability gap: `docs.local/`
+# is gitignored (.gitignore:53), so a hosted runner's checkout contains none of it.
+FALLBACK_GITS_ROOT_ENV = "BRAINLAYER_FALLBACK_GITS_ROOT"
+FALLBACK_NA_REASON = (
+    "no fallback queue on this machine: the pending memories live in "
+    "`~/Gits/*/docs.local/decisions`, and `docs.local/` is gitignored, so a runner checkout "
+    "has no copy of them to count"
+)
+FALLBACK_NOTES = (
+    "`intended_brain_store: true` with no `chunk_id` means a memory reached disk and never reached "
+    "the DB, so it answers no `brain_search`. Budget: **0**. Any pending or unparseable file is a "
+    "finding, never a band -- 122 of these sat from 2026-06-28 to 2026-09-05 because nothing "
+    "counted them where a reader would look. Measured by walking the tree, so it is only ever "
+    "measured on a machine that HAS the tree."
+)
+
 GREEN = "GREEN"
 RED = "RED"
 NA = "n/a"
@@ -175,6 +200,9 @@ class Probe:
     attestation_bootstrap: str | None = None
     attestation_unavailable: str | None = None
     attestation_problem: str | None = None
+    # Where to look for the brain_store fallback queue. A field, not a call to Path.home() inside
+    # the row, so a test can point it anywhere and CI can point it at a machine that has one.
+    fallback_gits_root: Path | None = None
     # Ratchet (c): the attested green main runs every measured margin is derived from, read from
     # the `ratchet-attestation` artifacts of `ratchet-attest.yml` runs on main. None when nobody
     # handed this run a store (margins render `unmeasured` with 0 runs); `attestations_problem` when
@@ -197,6 +225,7 @@ class Probe:
         attestation_bootstrap: str | None = None,
         attestation_unresolved: str | None = None,
         attestations: Path | None = None,
+        fallback_gits_root: Path | None = None,
     ) -> Probe:
         selected = select_wheel(wheel, wheel_glob)
         signature = select_signature(signature_report, signature_unavailable)
@@ -228,6 +257,7 @@ class Probe:
             attestation_problem=attested.problem,
             attestations=store.attestations,
             attestations_problem=store.problem,
+            fallback_gits_root=fallback_gits_root or default_fallback_gits_root(),
         )
 
 
@@ -1345,6 +1375,55 @@ def measured_signature_row(report: SignatureReport) -> Row:
     return Row("signature_valid", GREEN, value, SIGNATURE_METHOD_MEASURED, SIGNATURE_NOTES)
 
 
+def default_fallback_gits_root() -> Path:
+    configured = os.environ.get(FALLBACK_GITS_ROOT_ENV)
+    return Path(configured).expanduser() if configured else Path.home() / "Gits"
+
+
+def fallback_inventory(root: Path):
+    """Count the fallback queue, importing BrainLayer lazily.
+
+    Lazily because this collector runs on a bare runner with only the repo checked out: a
+    module-level import would make every other row depend on the package being installed.
+    """
+    sys.path.insert(0, str(ROOT / "src"))
+    from brainlayer.fallback_replay import inventory_fallbacks, load_scope_map
+
+    return inventory_fallbacks(root, scope_map=load_scope_map()).summary(sample_limit=3)
+
+
+def row_fallback_debt(probe: Probe, _corpus: dict) -> Row:
+    """Pending fallback memories. Zero is the only GREEN.
+
+    Three-way, on the same rule as every other row: a count this machine measured, `n/a` naming the
+    capability it lacks, or RED for a promise broken. An inventory that raises is RED, never `n/a` --
+    "I could not read the queue" is a finding, and reading it as a capability gap is how a debt
+    disappears from a dashboard for two months.
+    """
+    method = "docs.local walk · machine with the fallback queue"
+    root = probe.fallback_gits_root or default_fallback_gits_root()
+    if not root.exists():
+        return Row("fallback replay debt", NA, f"n/a — {FALLBACK_NA_REASON}", method, FALLBACK_NOTES)
+    try:
+        summary = fallback_inventory(root)
+    except Exception as exc:
+        return Row(
+            "fallback replay debt",
+            RED,
+            f"could not count the fallback queue under `{root}`: {type(exc).__name__}: {exc}",
+            method,
+            FALLBACK_NOTES,
+        )
+    pending, legacy = summary["pending_count"], summary["legacy_count"]
+    value = f"{pending} pending, {legacy} legacy · {summary['structured_count']} structured files under `{root}`"
+    if pending == 0 and legacy == 0:
+        return Row("fallback replay debt", GREEN, value, method, FALLBACK_NOTES)
+    samples = [*summary["pending_sample"], *summary["legacy_sample"]]
+    if samples:
+        value += " · oldest: " + ", ".join(f"`{Path(sample).name}`" for sample in samples[:3])
+    return Row("fallback replay debt", RED, value, method, FALLBACK_NOTES)
+
+
 # `row_commit_provenance` leads: every other row's value belongs to the commit it names, so a
 # reader has to see that sha before reading a number measured against it. `baseline attestation`
 # is second for the same reason: it names what the numbers are measured AGAINST.
@@ -1352,6 +1431,7 @@ ROW_BUILDERS = (
     row_commit_provenance,
     row_baseline_attestation,
     row_provenance,
+    row_fallback_debt,
     row_mapped_bytes,
     row_search_latency,
     row_idle_cpu,
@@ -1575,6 +1655,15 @@ def main(argv: list[str] | None = None) -> int:
             "`unmeasured`. A path that cannot be read turns the margin rows RED, never n/a."
         ),
     )
+    parser.add_argument(
+        "--fallback-gits-root",
+        type=Path,
+        help=(
+            "Root holding the repos whose `docs.local/decisions` carry the brain_store fallback "
+            f"queue (default: ${FALLBACK_GITS_ROOT_ENV}, else ~/Gits). A root that does not exist "
+            "renders the row `n/a`, never green."
+        ),
+    )
     parser.add_argument("--run-url", help="Link back to the workflow run that produced this table")
     parser.add_argument("--out", type=Path, help="Also write the rendered table here")
     attest = parser.add_argument_group(
@@ -1602,6 +1691,7 @@ def main(argv: list[str] | None = None) -> int:
         args.attestation_bootstrap,
         args.attestation_unresolved,
         args.attestations,
+        args.fallback_gits_root,
     )
     rows = collect(probe, corpus)
     now = datetime.now(timezone.utc)
