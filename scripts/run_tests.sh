@@ -342,6 +342,15 @@ map_changed_files_to_pytests() {
           mapped=1
         fi
         ;;
+      scripts/release_tag_contains.py)
+        # The release gate needs a mapping of its own: no generic scripts/*.py rule exists, and an
+        # unmapped gate script is the same fail-open the gate itself exists to close.
+        test_path="$TEST_ROOT/test_release_tag_contains.py"
+        if [ -f "$test_path" ]; then
+          append_unique "$test_path"
+          mapped=1
+        fi
+        ;;
       scripts/run_tests.sh|.githooks/pre-push)
         test_path="$TEST_ROOT/test_run_tests_script.py"
         if [ -f "$test_path" ]; then
@@ -352,7 +361,11 @@ map_changed_files_to_pytests() {
     esac
     if [ "$mapped" -eq 0 ]; then
       case "$changed" in
-        src/brainlayer/*.py)
+        # The release gate joins src/ here, not the other scripts: a deleted or renamed
+        # test_release_tag_contains.py must escalate, never narrow to nothing. Mapping it to
+        # zero targets and still printing "test gate passed" is the same unchecked-claim
+        # fail-open the gate exists to close, one level up.
+        src/brainlayer/*.py|scripts/release_tag_contains.py)
           changed_source_unmapped=1
           unmapped_changed_files+=("$changed")
           ;;

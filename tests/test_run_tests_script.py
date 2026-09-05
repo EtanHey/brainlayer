@@ -437,6 +437,73 @@ def test_changed_only_scope_maps_changed_source_to_targeted_tests(tmp_path: Path
     assert f"{test_root}/ -v" not in logged
 
 
+def test_changed_only_scope_maps_the_release_tag_gate_to_its_own_test(tmp_path: Path) -> None:
+    """No generic scripts/*.py rule exists, so the release gate needs a named mapping."""
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    (test_root / "test_release_tag_contains.py").write_text("test placeholder\n")
+
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+
+    env = _script_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
+    env["BRAINLAYER_CHANGED_FILES"] = "scripts/release_tag_contains.py"
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    result = subprocess.run(  # noqa: S603 - returncode is asserted below
+        ["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env, check=False
+    )
+
+    assert result.returncode == 0
+    logged = pytest_log.read_text()
+    assert str(test_root / "test_release_tag_contains.py") in logged
+    assert f"{test_root}/ -v" not in logged
+
+
+def test_changed_only_scope_escalates_when_the_release_gate_test_is_missing(tmp_path: Path) -> None:
+    """A missing test for the release gate must escalate, not silently map to nothing.
+
+    The mapping above exists because "an unmapped gate script is the same fail-open the gate
+    itself exists to close". Without this, that comment was only half true: if
+    test_release_tag_contains.py is deleted or renamed, the `[ -f ]` guard leaves mapped=0 and
+    the escalation fallback -- which only ever looked at src/brainlayer/*.py -- lets the gate
+    script change ride to green having run NOTHING that tests it. That is the same fail-open
+    reintroduced one level up, in the one mapping whose whole subject is release claims that
+    were never checked.
+    """
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    # test_release_tag_contains.py deliberately absent
+    (test_root / "test_think_recall_integration.py").write_text("test placeholder\n")
+
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+
+    env = _script_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
+    env["BRAINLAYER_CHANGED_FILES"] = "scripts/release_tag_contains.py"
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    result = subprocess.run(  # noqa: S603 - returncode is asserted below
+        ["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env, check=False
+    )
+
+    assert result.returncode == 0
+    assert "falling back to full pytest unit suite" in result.stdout
+    assert "WARNING: unmapped: scripts/release_tag_contains.py" in result.stdout
+    logged = pytest_log.read_text()
+    assert f"{test_root}/ -v" in logged
+
+
 def test_changed_only_scope_maps_watcher_source_to_jsonl_watcher_tests(tmp_path: Path) -> None:
     test_root = tmp_path / "tests"
     test_root.mkdir()
