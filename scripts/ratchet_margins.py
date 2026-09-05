@@ -159,6 +159,11 @@ def measured_margin(values: list[float], *, minimum_runs: int = MINIMUM_RUNS) ->
     n = len(values)
     if n < minimum_runs:
         return Margin(kind=UNMEASURED, n=n, minimum=minimum_runs)
+    for value in values:
+        # Public entry point, same rule as the store path: `inf` here would form limit=inf and pass
+        # everything (Cursor, #763). A caller that bypassed `series` gets the refusal, not a fail-open band.
+        if not honest_value(value):
+            raise AttestationError(f"cannot form a band from {value!r}: not a finite non-negative number")
     try:
         mean = math.fsum(value / n for value in values)  # scaled first: a plain sum can overflow
         stdev = statistics.stdev(values)  # sample (n-1): the population is the runs we did NOT see
@@ -223,15 +228,25 @@ def load_attestations(root: Path) -> list[dict]:
         # missing one, and must not escape as a traceback past the callers' fail-closed handling.
         raise AttestationError(f"attestations root `{root}` could not be scanned ({type(error).__name__})") from error
     attestations = [load_attestation(path) for path in paths]
-    seen: dict[object, Path] = {}
-    for path, attestation in zip(paths, attestations, strict=True):
+    reject_duplicate_runs(attestations, [str(path) for path in paths])
+    return attestations
+
+
+def reject_duplicate_runs(attestations: list[dict], sources: list[str] | None = None) -> None:
+    """The same run twice is not two observations -- one rule for the store path AND inline fixtures.
+
+    A duplicate would narrow the band (or repeat an outlier) with evidence that was only collected
+    once. Fixture replay used to skip this check (Cursor, #764), so a RED/GREEN proof could be
+    fabricated with duplicate rows; now both callers go through here. Every document must already
+    have passed validate_attestation, which is what makes `run_id` a usable key.
+    """
+    names = sources or [f"document {index}" for index in range(len(attestations))]
+    seen: dict[object, str] = {}
+    for name, attestation in zip(names, attestations, strict=True):
         run_id = attestation["run_id"]
         if run_id in seen:
-            # The same run twice is not two observations: it would narrow the band (or repeat an
-            # outlier) with evidence that was only ever collected once. The store is malformed.
-            raise AttestationError(f"attested run {run_id} appears twice: `{seen[run_id]}` and `{path}`")
-        seen[run_id] = path
-    return attestations
+            raise AttestationError(f"attested run {run_id} appears twice: `{seen[run_id]}` and `{name}`")
+        seen[run_id] = name
 
 
 def find_attestations(root: Path) -> list[Path]:

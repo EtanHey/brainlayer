@@ -320,3 +320,35 @@ def test_an_integer_past_float_range_is_refused_as_a_value_not_a_traceback() -> 
     runs = p50_runs([200.0] * 5) + [attestation(9, **{"latency_baseline_ms.p50": 10**400})]
     with pytest.raises(margins.AttestationError):
         margins.series(runs, margins.LATENCY_P50)
+
+
+@pytest.mark.parametrize("bad", [float("inf"), float("nan"), -1.0])
+def test_measured_margin_refuses_a_value_it_would_not_accept_from_a_store(bad) -> None:
+    # Cursor round 1 (#763): measured_margin is public; handed `inf` directly it used to form limit=inf,
+    # which within() answers True for every value. The store path already refused such values via
+    # honest_value; the public entry point applies the same rule.
+    with pytest.raises(margins.AttestationError):
+        margins.measured_margin([100.0, 101.0, 99.0, 100.0, bad])
+
+
+def test_idle_cpu_key_carries_a_real_band_end_to_end() -> None:
+    # Cursor round 1 (#763, low): the idle-CPU key was only ever checked as an empty series.
+    # R3's soak numbers: five green runs at 4.0-5.0% give limit ~6.2%; 6.41% (the failed soak) is outside.
+    runs = [attestation(i, **{"idle_cpu_pct.daemon": value}) for i, value in enumerate([4.0, 4.5, 5.0, 4.8, 4.2])]
+    assert margins.series(runs, margins.idle_cpu_key("daemon")) == [4.0, 4.5, 5.0, 4.8, 4.2]
+    margin = margins.margin_for(runs, margins.idle_cpu_key("daemon"))
+    assert margin.kind == margins.MEASURED and margin.n == 5
+    assert margin.limit == pytest.approx(6.19, abs=0.01)
+    assert margins.within(margin, 4.88) is True
+    assert margins.within(margin, 6.41) is False
+    assert margins.margin_for(runs, margins.idle_cpu_key("helper")).kind == margins.UNMEASURED
+
+
+def test_inline_documents_are_deduplicated_by_the_same_rule_as_the_store() -> None:
+    # Cursor round 1 (#764): the fixture path validated each document but never applied the duplicate
+    # run_id refusal the store path applies; the rule now lives in one function both paths call.
+    runs = p50_runs([100.0] * 5) + [attestation(0, **{"latency_baseline_ms.p50": 100.0})]
+    with pytest.raises(margins.AttestationError) as error:
+        margins.reject_duplicate_runs(runs, ["doc 0", "doc 1", "doc 2", "doc 3", "doc 4", "doc 5"])
+    assert "1000 appears twice" in str(error.value) and "doc 5" in str(error.value)
+    assert margins.reject_duplicate_runs(p50_runs([100.0] * 5)) is None
