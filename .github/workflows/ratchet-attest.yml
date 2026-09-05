@@ -1,0 +1,99 @@
+name: Ratchet attest
+
+# The ONLY writer of the baseline attestation. Runs on every push to `main` (and on a no-input
+# `workflow_dispatch`, so an expired artifact can be refreshed without a commit), runs the same
+# collector ratchet.yml runs on a PR, and publishes what this main commit's baseline IS -- the
+# `queries` / `latency_baseline_ms` / `thresholds` fields of tests/fixtures/sprint_gate/corpus.json --
+# plus every value the run measured, as the `ratchet-attestation` artifact.
+#
+# Why an artifact of a main run is the reference and a file in the tree is not: a pull_request run
+# holds `contents: read` and cannot upload into another run's artifacts, so a PR that edits the
+# baseline cannot also edit what ratchet.yml compares it against. That is the whole bolt. The
+# boundary, stated rather than overclaimed: the comparator (scripts/ci_ratchet_table.py) still runs
+# from the PR's checkout on a PR, so it is diff-reviewable, not tamper-proof.
+#
+# No inputs on the dispatch, on purpose. A dispatch that accepted numbers would be a hand edit with
+# a run id attached.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run per main commit, and NEVER cancel-in-progress: a cancelled attest run is a main sha with
+# no attestation, and the readers (ratchet.yml today, the margin history next) want every one.
+concurrency:
+  group: ratchet-attest-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  attest:
+    name: attest the baseline on main
+    runs-on: ubuntu-latest
+    # A dispatch off a non-main ref must not publish: ratchet.yml filters runs by `branch=main` on
+    # the API side too, but a writer that never produces the wrong thing is simpler to reason about.
+    if: ${{ github.ref == 'refs/heads/main' }}
+    steps:
+      # persist-credentials false, same as every checkout in ratchet.yml: nothing here needs the
+      # job token in `.git/config`, and `python -m build` executes the tree's own build backend.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # Identical to ratchet.yml's stamp step, so `provenance` measures the same thing on main that
+      # it measures on a PR. The only write into the checkout, and only because both paths are
+      # gitignored.
+      - name: Stamp build sha and build the wheel
+        run: |
+          set -euo pipefail
+          head="$(git rev-parse HEAD)"
+          printf 'BUILD_SHA = "%s"\n' "$head" > src/brainlayer/_build.py
+          pip install build
+          python -m build --wheel
+
+      # The collector refuses to write when `--main-sha` is not the checkout or when any row is RED,
+      # and exits 1 either way, so this step failing is the ONLY way a main sha ends up unattested --
+      # loudly, on the run page, never as a quietly missing artifact.
+      - name: Collect ratchet rows and write the attestation
+        env:
+          MAIN_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          python scripts/ci_ratchet_table.py \
+            --wheel-glob 'dist/*.whl' \
+            --signature-unavailable 'main attestation runs do not pay for a macOS runner; signatures are measured on PRs that touch release paths' \
+            --attest-out "${RUNNER_TEMP}/attestation.json" \
+            --main-sha "$MAIN_SHA" \
+            --run-id "$RUN_ID" \
+            --run-attempt "$RUN_ATTEMPT" \
+            --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --out "${RUNNER_TEMP}/ratchet.md"
+          cat "${RUNNER_TEMP}/ratchet.md" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo
+            echo '```json'
+            cat "${RUNNER_TEMP}/attestation.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # 90 days is GitHub's ceiling. Stated here because it is the one way the reference goes
+      # missing without anyone editing anything: a main that sees no push for 90 days loses its
+      # attestation, and every PR after that reads RED "unresolved" until a `workflow_dispatch`
+      # refreshes it. That RED is correct -- the reference really is gone -- and the fix is one click.
+      - name: Publish the attestation
+        uses: actions/upload-artifact@v4
+        with:
+          name: ratchet-attestation
+          path: ${{ runner.temp }}/attestation.json
+          if-no-files-found: error
+          retention-days: 90
