@@ -169,14 +169,24 @@ not a copy here. Two contracts an agent must know:
   an ancestor of it, so everything importing through the `.pth` ran 09-02 library code: **#782 was
   merged but not live.** The same root-is-live-code path is what let a checkout's `install.sh` point
   every LaunchAgent at the wrong version on 09-05.
-- **The keg pin covers the Claude Code hooks; it does not cover everything.** Measured 2026-09-06:
-  the hooks that actually `import brainlayer` (`brainlayer-prompt-search.py`,
-  `hooks/brainbar-stop-index.py`) are pinned in `~/.claude/settings.json` to
-  `/opt/homebrew/opt/brainlayer/libexec/venv/bin/python`, which does **not** see the `.pth` and
-  resolves to the keg (`/opt/homebrew/Cellar/brainlayer/1.5.15/…`). But that pin is machine config,
-  not a repo change, and nothing pins the rest: any script, `python3 -c`, or unpinned hook that runs
-  under the default `python3` still imports the root's working tree. **The root rule is load-bearing,
-  not merely defence in depth.**
+- **#790 pinned the hooks, so for HOOKS this rule is now defence in depth.** Every `hooks/*.py`
+  shebang names `/opt/homebrew/opt/brainlayer/libexec/venv/bin/python` (the `opt/` symlink, so a
+  rendered command outlives the keg it was rendered against), `src/brainlayer/hook_python.py`
+  resolves that interpreter and **refuses a silent PATH fallback**, and
+  `python -m brainlayer.hook_python ~/.claude/settings.json` lints a settings file for bare
+  `python3`. That venv does not see the `.pth` — it resolves to the keg. A hook can no longer be
+  re-aimed by a `git checkout` at the root.
+- **For everything else the rule is still primary — #790 did not remove the `.pth`.** Verified
+  2026-09-06 after #790 merged: the file is still there and bare `python3 -c "import brainlayer"`
+  still resolves to `<root>/src/brainlayer/__init__.py`. Any script, `python3 -c`, editable install,
+  or non-BrainLayer hook running under the default interpreter still reads the root's working tree.
+  The pin closed the worst consumer, not the mechanism.
+- ⚠️ **Merged is not deployed, and this is the live example.** `~/.claude/hooks/*.py` are real files,
+  **not** symlinks into this repo, so #790's shebang change does not reach them by merging: measured
+  2026-09-06, the deployed `brainlayer-prompt-search.py`, `brainlayer-session-start.py` and
+  `session-cleanup.py` still begin `#!/usr/bin/env python3`. They are safe today only because
+  `~/.claude/settings.json` names the keg interpreter ahead of the script path. Run the
+  `hook_python` lint against the real settings file before believing the pin is live on a machine.
 
 <!-- COMMANDS: `python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"` | test: `pytest` | lint: `ruff check src/ tests/ && ruff format src/ tests/` | run: `brainlayer index && brainlayer setup` -->
 ## Workflow (HOW)
