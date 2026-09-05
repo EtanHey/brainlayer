@@ -53,6 +53,11 @@ def linux_probe(tmp_path: Path, **overrides) -> ratchet.Probe:
         wheel=make_wheel(tmp_path, HEAD),
         head_sha=HEAD,
         tree_dirty=False,
+        # Pinned, never inherited. conftest.py:127 re-points HOME per test so the default already
+        # resolves inside tmp -- but that lives in an unrelated autouse fixture and is skipped for
+        # `integration`/`live` tests (conftest.py:117), and a row that walks Etan's real ~/Gits
+        # would make these assertions depend on his machine's debt. State it here instead.
+        fallback_gits_root=tmp_path / "no-such-gits",
     )
     return replace(base, **overrides)
 
@@ -2686,3 +2691,282 @@ def test_a_describe_failure_is_a_row_problem_not_a_collector_abort(tmp_path: Pat
     rows = ratchet.collect(linux_probe(tmp_path, attestations=real_history()), CORPUS)
     result = row(rows, "search p50/p95")
     assert result.status == ratchet.RED and "simulated incomplete margin" in result.value
+
+
+# --------------------------------------------------------------------------------------------
+# fallback replay debt (c)
+# --------------------------------------------------------------------------------------------
+
+
+def _fallback_root(tmp_path: Path, *, pending: int = 0, replayed: int = 0) -> Path:
+    """A `~/Gits`-shaped tree whose `docs.local/decisions` files carry brain_store intent."""
+    root = tmp_path / "gits"
+    repo = root / "cmuxlayer"
+    decisions = repo / "docs.local" / "decisions"
+    decisions.mkdir(parents=True, exist_ok=True)
+    subprocess.run(("git", "init", "-q"), cwd=repo, env=_clean_git_env(), check=True)
+    for index in range(pending):
+        (decisions / f"pending-{index}.md").write_text(
+            "---\nintended_brain_store: true\nimportance: 8\nchunk_id:\n---\nnot replayed yet\n",
+            encoding="utf-8",
+        )
+    for index in range(replayed):
+        (decisions / f"done-{index}.md").write_text(
+            f"---\nintended_brain_store: true\nimportance: 8\nchunk_id: chunk-{index}\n---\nalready stored\n",
+            encoding="utf-8",
+        )
+    return root
+
+
+def test_fallback_debt_row_is_red_while_memories_are_pending(tmp_path):
+    root = _fallback_root(tmp_path, pending=122, replayed=223)
+    probe = mac_probe(tmp_path, fallback_gits_root=root)
+
+    row = ratchet.row_fallback_debt(probe, CORPUS)
+
+    assert row.name == "fallback replay debt"
+    assert row.status == ratchet.RED
+    assert "122" in row.value
+
+
+def test_fallback_debt_row_is_green_at_zero(tmp_path):
+    root = _fallback_root(tmp_path, pending=0, replayed=5)
+    probe = mac_probe(tmp_path, fallback_gits_root=root)
+
+    row = ratchet.row_fallback_debt(probe, CORPUS)
+
+    assert row.status == ratchet.GREEN
+    assert "0 pending" in row.value
+
+
+def test_fallback_debt_row_counts_unparseable_files_as_debt(tmp_path):
+    root = _fallback_root(tmp_path, pending=0, replayed=1)
+    (root / "cmuxlayer" / "docs.local" / "brain-store-fallback").mkdir(parents=True)
+    (root / "cmuxlayer" / "docs.local" / "brain-store-fallback" / "legacy.md").write_text(
+        "no frontmatter at all\n", encoding="utf-8"
+    )
+
+    row = ratchet.row_fallback_debt(mac_probe(tmp_path, fallback_gits_root=root), CORPUS)
+
+    assert row.status == ratchet.RED
+    assert "legacy" in row.value
+
+
+def test_fallback_debt_row_is_na_when_the_machine_has_no_fallback_root(tmp_path):
+    probe = linux_probe(tmp_path, fallback_gits_root=tmp_path / "no-such-gits")
+
+    row = ratchet.row_fallback_debt(probe, CORPUS)
+
+    assert row.status == ratchet.NA
+    assert "docs.local" in row.value
+    assert "gitignored" in row.value
+
+
+def test_fallback_debt_row_is_red_when_the_inventory_cannot_be_read(tmp_path, monkeypatch):
+    root = _fallback_root(tmp_path, pending=1)
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("scopes.yaml is malformed")
+
+    monkeypatch.setattr(ratchet, "fallback_inventory", boom)
+    row = ratchet.row_fallback_debt(mac_probe(tmp_path, fallback_gits_root=root), CORPUS)
+
+    assert row.status == ratchet.RED
+    assert "scopes.yaml is malformed" in row.value
+
+
+def test_fallback_debt_row_is_in_the_table(tmp_path):
+    root = _fallback_root(tmp_path, pending=3)
+    probe = mac_probe(tmp_path, fallback_gits_root=root)
+
+    rendered = ratchet.render(ratchet.collect(probe, CORPUS), probe, None, NOW)
+
+    assert "fallback replay debt" in rendered
+    assert "3 pending" in rendered
+    assert "🔴 RED" in rendered
+
+
+def test_fallback_debt_red_makes_the_collector_exit_nonzero(tmp_path, monkeypatch, capsys):
+    root = _fallback_root(tmp_path, pending=2)
+    monkeypatch.setenv(ratchet.FALLBACK_GITS_ROOT_ENV, str(root))
+    monkeypatch.setattr(ratchet, "canonical_db_path", lambda: tmp_path / "absent.db")
+
+    exit_code = ratchet.main(["--wheel", str(make_wheel(tmp_path / "wheel", HEAD))])
+
+    assert exit_code == 1
+    out = capsys.readouterr()
+    assert "fallback replay debt" in out.out
+    assert "Ratchet RED: fallback replay debt" in out.err
+
+
+def test_fallback_gits_root_env_overrides_the_default(tmp_path, monkeypatch):
+    monkeypatch.setenv(ratchet.FALLBACK_GITS_ROOT_ENV, str(tmp_path / "elsewhere"))
+    assert ratchet.default_fallback_gits_root() == tmp_path / "elsewhere"
+
+    monkeypatch.delenv(ratchet.FALLBACK_GITS_ROOT_ENV, raising=False)
+    assert ratchet.default_fallback_gits_root() == Path.home() / "Gits"
+
+
+def test_the_suite_default_root_is_never_the_real_gits_tree(tmp_path):
+    """Round-1 review, #779 @1404 (HIGH) — partly refuted, hardened anyway.
+
+    The claim was that every `collect()`/`main()` walks the real `~/Gits`. It does not under pytest:
+    `tests/conftest.py:127` re-points `HOME` per test, so `default_fallback_gits_root()` resolves
+    inside tmp and the row is `n/a`. But that guarantee lives in an unrelated autouse fixture and is
+    skipped entirely for `integration`/`live`-marked tests (`conftest.py:117` returns early), so the
+    probe helpers now pin the field explicitly rather than inheriting it.
+    """
+    real = Path.home() / "Gits"
+    for name in ("linux", "mac"):
+        (tmp_path / name).mkdir()
+
+    for probe in (linux_probe(tmp_path / "linux"), mac_probe(tmp_path / "mac")):
+        root = probe.fallback_gits_root
+        assert root is not None, "probe helpers must pin the root, not inherit the machine's"
+        assert not root.exists()
+        assert root != real
+        assert ratchet.row_fallback_debt(probe, CORPUS).status == ratchet.NA
+
+
+def test_cli_fallback_gits_root_expands_a_tilde(tmp_path, monkeypatch):
+    """Round-1 review, #779 @1660 (MEDIUM).
+
+    `type=Path` left `~/Gits` a literal `~` directory, `root.exists()` was false, and the row
+    answered `n/a` — a capability gap that is really a mistyped flag. That is precisely the
+    fail-open this row's own rule forbids.
+    """
+    root = _fallback_root(tmp_path, pending=2)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert root.exists()
+
+    # Assert the ROW, not the exit code: other rows can be RED for their own reasons, so an exit
+    # code says nothing about whether the tilde resolved.
+    probe = mac_probe(tmp_path, fallback_gits_root=Path("~/gits"))
+    row = ratchet.row_fallback_debt(probe, CORPUS)
+
+    assert row.status == ratchet.RED
+    assert "2 pending" in row.value
+
+
+def test_cli_fallback_gits_root_flag_is_wired_to_the_row(tmp_path, monkeypatch, capsys):
+    """Round-1 review, #779 @2797 (LOW): the flag itself had no coverage."""
+    _fallback_root(tmp_path, pending=4)
+    monkeypatch.setattr(ratchet, "canonical_db_path", lambda: tmp_path / "absent.db")
+
+    exit_code = ratchet.main(
+        [
+            "--wheel",
+            str(make_wheel(tmp_path / "wheel", HEAD)),
+            "--fallback-gits-root",
+            str(tmp_path / "gits"),
+        ]
+    )
+
+    # One readouterr() call: a second returns empty and would make either assertion vacuous.
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "4 pending" in captured.out
+    assert "Ratchet RED: fallback replay debt" in captured.err
+
+
+def test_fallback_debt_row_does_not_claim_the_samples_are_the_oldest(tmp_path):
+    """Round-1 review, #779 @1423 (LOW).
+
+    `inventory_fallbacks` walks repos sorted by name and files sorted by name, so the samples are
+    path-ordered, not age-ordered. Labelling them `oldest:` claimed a measurement nobody made —
+    which is the one thing this file forbids.
+    """
+    root = _fallback_root(tmp_path, pending=3)
+
+    row = ratchet.row_fallback_debt(mac_probe(tmp_path, fallback_gits_root=root), CORPUS)
+
+    assert "oldest" not in row.value.lower()
+    assert "first 3 by path" in row.value
+
+
+def test_an_explicitly_configured_missing_root_is_red_not_na(tmp_path):
+    """Round-2 review, #779 @1408 (HIGH).
+
+    `Probe.detect` always materialized a concrete path, so the row could no longer tell "nobody has
+    this queue" from "the operator asked us to measure HERE and the path is missing". The second is a
+    broken hand-off, and this file already treats a handed path that cannot be read as RED for
+    `signature_valid` and `baseline attestation`. Letting it wear `n/a` clothes exits the collector 0
+    on a mistyped flag — the same fail-open as the tilde bug, one level up.
+    """
+    probe = mac_probe(
+        tmp_path,
+        fallback_gits_root=tmp_path / "operator-said-here",
+        fallback_root_source=ratchet.FALLBACK_ROOT_FLAG,
+    )
+
+    row = ratchet.row_fallback_debt(probe, CORPUS)
+
+    assert row.status == ratchet.RED
+    assert "configured root does not exist" in row.value
+    assert "operator-said-here" in row.value
+    assert "gitignored" not in row.value, "the capability reason is only for the unset default"
+
+
+def test_an_explicitly_configured_missing_root_from_the_env_is_also_red(tmp_path):
+    probe = mac_probe(
+        tmp_path,
+        fallback_gits_root=tmp_path / "env-said-here",
+        fallback_root_source=ratchet.FALLBACK_ROOT_ENV,
+    )
+
+    row = ratchet.row_fallback_debt(probe, CORPUS)
+
+    assert row.status == ratchet.RED
+    assert "configured root does not exist" in row.value
+
+
+def test_the_unset_default_missing_is_still_a_real_capability_gap(tmp_path):
+    """ubuntu CI has no ~/Gits and nobody claimed otherwise: that is a genuine n/a, not a finding."""
+    probe = linux_probe(
+        tmp_path, fallback_gits_root=tmp_path / "nope", fallback_root_source=ratchet.FALLBACK_ROOT_DEFAULT
+    )
+
+    row = ratchet.row_fallback_debt(probe, CORPUS)
+
+    assert row.status == ratchet.NA
+    assert "gitignored" in row.value
+
+
+def test_a_configured_missing_root_fails_the_collector(tmp_path, monkeypatch, capsys):
+    """RED must cost exit 1, or the hand-off can break silently in CI."""
+    monkeypatch.setenv(ratchet.FALLBACK_GITS_ROOT_ENV, str(tmp_path / "typo-Gits"))
+    monkeypatch.setattr(ratchet, "canonical_db_path", lambda: tmp_path / "absent.db")
+
+    exit_code = ratchet.main(["--wheel", str(make_wheel(tmp_path / "wheel", HEAD))])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "configured root does not exist" in captured.out
+    assert "Ratchet RED: fallback replay debt" in captured.err
+
+
+def test_probe_detect_records_where_the_root_came_from(tmp_path, monkeypatch):
+    """flag beats env beats default — and the row needs to know which, not just the path."""
+    monkeypatch.delenv(ratchet.FALLBACK_GITS_ROOT_ENV, raising=False)
+
+    unset = ratchet.Probe.detect(CORPUS, None, None)
+    assert unset.fallback_root_source == ratchet.FALLBACK_ROOT_DEFAULT
+
+    monkeypatch.setenv(ratchet.FALLBACK_GITS_ROOT_ENV, str(tmp_path / "from-env"))
+    from_env = ratchet.Probe.detect(CORPUS, None, None)
+    assert from_env.fallback_root_source == ratchet.FALLBACK_ROOT_ENV
+    assert from_env.fallback_gits_root == tmp_path / "from-env"
+
+    from_flag = ratchet.Probe.detect(CORPUS, None, None, fallback_gits_root=tmp_path / "from-flag")
+    assert from_flag.fallback_root_source == ratchet.FALLBACK_ROOT_FLAG
+    assert from_flag.fallback_gits_root == tmp_path / "from-flag"
+
+
+def test_the_ratchet_suite_scrubs_the_fallback_root_env():
+    """Round-2 review, #779 @1379 (MEDIUM).
+
+    `main()`/`Probe.detect` resolve through the environment, and an ABSOLUTE
+    `BRAINLAYER_FALLBACK_GITS_ROOT` bypasses conftest's HOME remapping — so exit-0 `main()`
+    assertions could become host-dependent, or walk production docs.local during the suite.
+    """
+    assert "BRAINLAYER_FALLBACK_GITS_ROOT" not in os.environ

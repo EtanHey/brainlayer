@@ -112,6 +112,22 @@ def isolate_backup_daily_log(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def isolate_fallback_gits_root(monkeypatch, request):
+    """Keep the brain_store fallback queue's root out of the developer's real `~/Gits`.
+
+    `BRAINLAYER_FALLBACK_GITS_ROOT` is an ABSOLUTE path, so unlike everything resolved from
+    `Path.home()` it walks straight past the HOME remapping below. With it exported, a test that
+    reaches the ratchet's debt row or the drain's startup sweep would inventory -- and `queue_entry`
+    could write markers into -- production `docs.local` files, and exit-0 `main()` assertions would
+    become host-dependent. Scrubbed for every unmarked test; `integration`/`live` keep whatever the
+    operator set, same boundary as the fixture below.
+    """
+    if request.node.get_closest_marker("integration") or request.node.get_closest_marker("live"):
+        return
+    monkeypatch.delenv("BRAINLAYER_FALLBACK_GITS_ROOT", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def isolate_brainlayer_runtime_paths(monkeypatch, tmp_path, request):
     """Keep unit-test runtime resolvers out of production BrainLayer paths."""
     if request.node.get_closest_marker("integration") or request.node.get_closest_marker("live"):
