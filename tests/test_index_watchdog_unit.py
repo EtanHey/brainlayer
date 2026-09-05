@@ -1,5 +1,7 @@
 """Unit coverage for `IndexWatchdog` on an injected clock -- no threads, no sleeping."""
 
+from time import monotonic as _mono
+
 import pytest
 
 from brainlayer.index_watchdog import HEARTBEAT_PREFIX, IndexWatchdog, _heartbeat_interval_s_env
@@ -15,6 +17,7 @@ class _Clock:
 
 
 def _watchdog(clock, **kwargs):
+    kwargs.setdefault("started_at", clock.now)
     kwargs.setdefault("max_runtime_s", 10.0)
     kwargs.setdefault("monotonic", clock)
     kwargs.setdefault("emit", lambda alarm: True)
@@ -172,9 +175,77 @@ def test_heartbeat_interval_env_override(monkeypatch):
 
 
 def test_stop_joins_the_thread_and_is_idempotent():
-    watchdog = IndexWatchdog(max_runtime_s=3600.0, emit=lambda alarm: True, poll_interval_s=0.01)
+    watchdog = IndexWatchdog(started_at=_mono(), max_runtime_s=3600.0, emit=lambda alarm: True, poll_interval_s=0.01)
     with watchdog as armed:
         assert armed._thread is not None
         assert armed._thread.is_alive()
     assert watchdog._thread is None
     watchdog.stop()  # second stop must not raise
+
+
+def test_heartbeats_continue_after_the_deadline():
+    """A wedge that cannot be aborted must keep reporting, not alarm once and go quiet.
+
+    Going quiet after the alarm is the second half of the original failure: 12h of silent
+    log. A model load or an open_store with no connection yet cannot be interrupted, so the
+    heartbeat is the only signal left.
+    """
+    clock = _Clock()
+    lines: list[str] = []
+    alarms = []
+    watchdog = _watchdog(
+        clock,
+        max_runtime_s=0.0,  # already expired
+        emit=lambda alarm: alarms.append(alarm) or True,
+        heartbeat_interval_s=0.02,
+        poll_interval_s=0.01,
+        heartbeat_sink=lines.append,
+    )
+    watchdog.set_phase("open_store")
+
+    with watchdog:
+        deadline = _mono() + 5.0
+        while len(lines) < 3 and _mono() < deadline:
+            clock.now += 0.05  # the watchdog reads the caller's clock
+
+    assert watchdog.expired is True
+    assert len(alarms) == 1, "the alarm must not repeat"
+    assert len(lines) >= 3, f"heartbeats stopped after the deadline: {lines}"
+    assert all("phase=open_store" in line for line in lines)
+
+
+def test_the_cap_alarm_never_repeats_when_emit_reports_no_telemetry():
+    """`emit_alarm` returns the Axiom result, not whether a record was written.
+
+    Found live, not by a mock: a 6s-cap run against the real DB printed the same
+    INDEX_RUNTIME_EXCEEDED 13 times, because a falsy return was read as "did not land" and
+    every poll re-alarmed. stderr and logging are emit_alarm's guaranteed paths.
+    """
+    clock = _Clock()
+    alarms = []
+    watchdog = _watchdog(clock, emit=lambda alarm: alarms.append(alarm) and False)
+
+    clock.now += 20.0
+    for _ in range(8):
+        watchdog._on_deadline()
+
+    assert len(alarms) == 1, f"the cap alarm repeated {len(alarms)} times"
+    assert watchdog.alarm_emitted is True, "a falsy telemetry result must still count as a record"
+
+
+def test_a_raising_emit_leaves_no_record_but_still_does_not_repeat():
+    clock = _Clock()
+    calls = {"n": 0}
+
+    def boom(_alarm):
+        calls["n"] += 1
+        raise RuntimeError("sink down")
+
+    watchdog = _watchdog(clock, emit=boom)
+    clock.now += 20.0
+    for _ in range(8):
+        watchdog._on_deadline()
+
+    assert calls["n"] == 1, "a failing emit must not be retried every poll"
+    assert watchdog.alarm_emitted is False, "the CLI still owes a fallback alarm"
+    assert watchdog.expired is True

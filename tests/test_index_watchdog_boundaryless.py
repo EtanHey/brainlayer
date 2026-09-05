@@ -17,12 +17,14 @@ Fakes only -- no embedding model, no canonical DB.
 """
 
 import threading
+from pathlib import Path
 from time import monotonic as _mono
 from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
 
+from brainlayer import index_watchdog
 from brainlayer.alarm import BrainLayerAlarm
 from brainlayer.cli import app
 
@@ -83,7 +85,14 @@ class _StallingRuntimeStore:
 
 def _install(monkeypatch, store, alarms):
     monkeypatch.setenv("BRAINLAYER_INDEX_MAX_RUNTIME_S", str(CAP_S))
-    monkeypatch.setattr("brainlayer.runtime_store.open_writer_store", lambda _path: store)
+
+    def fake_open(_path, on_connection=None):
+        # Faithful to the real path: the writer hands its connection over before the probe.
+        if on_connection is not None:
+            on_connection(store.conn)
+        return store
+
+    monkeypatch.setattr("brainlayer.runtime_store.open_writer_store", fake_open)
     monkeypatch.setattr("brainlayer.alarm.emit_alarm", lambda alarm: alarms.append(alarm) or True)
 
     def fake_index(_chunks, **_kwargs):
@@ -180,3 +189,118 @@ def test_a_long_phase_heartbeats_instead_of_going_silent(tmp_path, monkeypatch):
     assert "phase=embed_and_upsert:session.jsonl" in heartbeats[-1]
     assert "last_progress_age_s=" in heartbeats[-1]
     assert alarms == []
+
+
+class _StallingOpenStore(_StallingRuntimeStore):
+    """A writer store whose *open* stalls, after handing its connection over.
+
+    This is the phase the M1 evidence points at -- schema validation inside
+    `open_writer_store`, which has no cap of its own. `WriterRuntimeStore._init_runtime_db`
+    creates the connection before it runs any probe SQL, so the `on_connection` hook can hand
+    the interrupt lever over while the probe is still running.
+    """
+
+    def open(self, on_connection):
+        if on_connection is not None:
+            on_connection(self.conn)
+        self.stall()
+        return self
+
+
+def test_a_stalling_open_store_is_alarmed_and_interrupted(tmp_path, monkeypatch):
+    source = _prepare_index_source(tmp_path, monkeypatch)
+    store = _StallingOpenStore()
+    alarms: list[BrainLayerAlarm] = []
+    monkeypatch.setenv("BRAINLAYER_INDEX_MAX_RUNTIME_S", str(CAP_S))
+    monkeypatch.setattr("brainlayer.alarm.emit_alarm", lambda alarm: alarms.append(alarm) or True)
+    monkeypatch.setattr(
+        "brainlayer.runtime_store.open_writer_store",
+        lambda _path, on_connection=None: store.open(on_connection),
+    )
+    monkeypatch.setattr("brainlayer.index_new.index_chunks_to_sqlite", lambda *_a, **_k: 0)
+
+    started = _mono()
+    result = CliRunner().invoke(app, ["index", str(source)])
+    wall_s = _mono() - started
+
+    assert store.interrupt_calls >= 1, "open_store was never interruptible"
+    assert store.stalled_s is not None and store.stalled_s < store.ceiling_s
+    assert wall_s < CAP_S + 10.0, f"open_store ran {wall_s:.1f}s against a {CAP_S}s cap"
+    assert result.exit_code != 0
+    alarm = next(a for a in alarms if a.code == "INDEX_RUNTIME_EXCEEDED")
+    assert alarm.context["phase"] == "open_store", alarm.context
+
+
+def test_discovery_time_is_charged_against_the_one_deadline(tmp_path, monkeypatch):
+    """The watchdog must adopt the CLI's deadline, not start a fresh budget when it arms.
+
+    A watchdog that computed `own_now + max_runtime_s` would grant a second full budget to
+    everything after discovery -- so a slow rglob plus a stalled open_store could burn
+    2 x max_runtime_s. This pins one deadline on one clock.
+    """
+    source = _prepare_index_source(tmp_path, monkeypatch)
+    monkeypatch.setenv("BRAINLAYER_INDEX_MAX_RUNTIME_S", "7")
+
+    clock = {"now": 1000.0}
+    monkeypatch.setattr("brainlayer.cli.time.monotonic", lambda: clock["now"])
+
+    real_rglob = Path.rglob
+
+    def slow_rglob(self, pattern):
+        clock["now"] += 5.0  # discovery burns 5 of the 7s budget
+        return real_rglob(self, pattern)
+
+    monkeypatch.setattr(Path, "rglob", slow_rglob)
+
+    built: list[object] = []
+    real_watchdog = index_watchdog.IndexWatchdog
+
+    def capture(**kwargs):
+        instance = real_watchdog(**kwargs)
+        built.append(instance)
+        return instance
+
+    monkeypatch.setattr("brainlayer.index_watchdog.IndexWatchdog", capture)
+    monkeypatch.setattr(
+        "brainlayer.runtime_store.open_writer_store",
+        lambda _path, on_connection=None: _StallingRuntimeStore(ceiling_s=0.01),
+    )
+    monkeypatch.setattr("brainlayer.index_new.index_chunks_to_sqlite", lambda *_a, **_k: 0)
+    monkeypatch.setattr("brainlayer.alarm.emit_alarm", lambda _alarm: True)
+
+    CliRunner().invoke(app, ["index", str(source)])
+
+    assert len(built) == 1
+    watchdog = built[0]
+    # start 1000.0 + cap 7.0 -- NOT the 1005.0 instant at which the watchdog armed.
+    assert watchdog.deadline_monotonic == 1007.0
+    assert watchdog.elapsed_s() == pytest.approx(5.0), "discovery must count against the cap"
+
+
+def test_a_failed_watchdog_alarm_still_leaves_a_record(tmp_path, monkeypatch):
+    """`alarm_emitted` must mean the alarm landed, or the run exits 1 with no record."""
+    source = _prepare_index_source(tmp_path, monkeypatch)
+    store = _StallingRuntimeStore()
+    recorded: list[BrainLayerAlarm] = []
+    calls = {"n": 0}
+
+    def flaky_emit(alarm):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("telemetry sink down")
+        recorded.append(alarm)
+        return True
+
+    monkeypatch.setenv("BRAINLAYER_INDEX_MAX_RUNTIME_S", str(CAP_S))
+    monkeypatch.setattr("brainlayer.alarm.emit_alarm", flaky_emit)
+    monkeypatch.setattr(
+        "brainlayer.runtime_store.open_writer_store",
+        lambda _path, on_connection=None: (on_connection and on_connection(store.conn), store)[1],
+    )
+    monkeypatch.setattr("brainlayer.index_new.index_chunks_to_sqlite", lambda *_a, **_k: store.stall())
+
+    result = CliRunner().invoke(app, ["index", str(source)])
+
+    assert result.exit_code != 0
+    assert calls["n"] >= 2, "the CLI never retried after the watchdog's alarm failed"
+    assert [a.code for a in recorded] == ["INDEX_RUNTIME_EXCEEDED"]

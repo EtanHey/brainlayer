@@ -3587,8 +3587,6 @@ def _exit_on_index_deadline(
     while a stuck phase is still unwinding. When it already did, this adds the final
     committed counts as a plain line instead of a second alarm -- one cap, one alarm.
     """
-    import time
-
     from ..alarm import build_alarm, emit_alarm
 
     if watchdog is not None and getattr(watchdog, "alarm_emitted", False):
@@ -3599,7 +3597,7 @@ def _exit_on_index_deadline(
         )
         return typer.Exit(1)
 
-    context: dict[str, object] = {
+    alarm_context: dict[str, object] = {
         "max_runtime_s": max_runtime_s,
         "elapsed_s": round(max(0.0, time.monotonic() - start_monotonic), 3),
         "committed_chunks": committed_chunks,
@@ -3607,11 +3605,11 @@ def _exit_on_index_deadline(
         "source_file": str(current_file) if current_file else None,
     }
     if watchdog is not None:
-        context["phase"] = watchdog.phase
+        alarm_context["phase"] = watchdog.phase
     alarm = build_alarm(
         "INDEX_RUNTIME_EXCEEDED",
         "brainlayer index exceeded its maximum runtime and stopped at a transaction boundary",
-        context,
+        alarm_context,
     )
     emit_alarm(alarm)
     return typer.Exit(alarm.exit_code)
@@ -3628,23 +3626,10 @@ def index_fast(
     """Index using new fast sqlite-vec backend."""
     watchdog = None
     try:
-        import time
         from contextlib import ExitStack
-
-        from rich.progress import (
-            BarColumn,
-            MofNCompleteColumn,
-            Progress,
-            SpinnerColumn,
-            TaskProgressColumn,
-            TextColumn,
-            TimeElapsedColumn,
-            TimeRemainingColumn,
-        )
 
         from ..index_new import index_chunks_to_sqlite
         from ..index_watchdog import IndexWatchdog
-        from ..paths import get_db_path
         from ..pipeline.chunk import chunk_content
         from ..pipeline.classify import classify_content
         from ..pipeline.extract import parse_jsonl
@@ -3687,7 +3672,12 @@ def index_fast(
         with ExitStack() as stack:
             watchdog = stack.enter_context(
                 IndexWatchdog(
+                    # The CLI's clock and the CLI's start, so there is ONE deadline: time
+                    # already spent on file discovery is charged against the cap, and arming
+                    # the watchdog late does not hand the run a second budget.
+                    started_at=start_monotonic,
                     max_runtime_s=max_runtime_s,
+                    monotonic=time.monotonic,
                     counters=lambda: {
                         "committed_chunks": total_chunks,
                         "files_completed": files_completed,
@@ -3696,10 +3686,16 @@ def index_fast(
                     phase="open_store",
                 )
             )
-            runtime_store = stack.enter_context(open_writer_store(get_db_path()))
             # sqlite3_interrupt is the only lever that reaches the inner statements FTS5 and
-            # vec0 drive; apsw documents calling it from another thread as safe.
-            watchdog.set_interrupt(getattr(getattr(runtime_store, "conn", None), "interrupt", None))
+            # vec0 drive; apsw documents calling it from another thread as safe. The hook hands
+            # it over BEFORE the schema probe runs, so open_store -- which has no cap of its
+            # own and is the likeliest phase behind the M1's 12h run -- is abortable too.
+            runtime_store = stack.enter_context(
+                open_writer_store(
+                    get_db_path(),
+                    on_connection=lambda conn: watchdog.set_interrupt(getattr(conn, "interrupt", None)),
+                )
+            )
             progress = stack.enter_context(
                 Progress(
                     SpinnerColumn(),
@@ -3718,16 +3714,13 @@ def index_fast(
                 current_file = jsonl_file
                 watchdog.set_phase(f"parse:{jsonl_file.name}")
                 watchdog.raise_if_expired()
-                if time.monotonic() >= deadline_monotonic:
-                    raise IndexDeadlineExceeded(processed_count=0)
                 raw_proj = jsonl_file.parent.name if jsonl_file.parent != source else None
                 proj_name = _normalize_project_name(raw_proj) if raw_proj else None
 
                 # Parse, classify, and chunk each entry
                 all_chunks = []
                 for entry in parse_jsonl(jsonl_file):
-                    if time.monotonic() >= deadline_monotonic:
-                        raise IndexDeadlineExceeded(processed_count=0)
+                    watchdog.raise_if_expired()
                     classified = classify_content(entry)
                     if classified is not None:  # Skip noise entries
                         chunks = chunk_content(classified)
@@ -3751,8 +3744,7 @@ def index_fast(
                     watchdog.raise_if_expired(processed_count=0)
                 files_completed = i + 1
                 watchdog.note_progress()
-                if time.monotonic() >= deadline_monotonic:
-                    raise IndexDeadlineExceeded(processed_count=0)
+                watchdog.raise_if_expired()
 
                 # Update progress
                 elapsed = time.time() - start_time

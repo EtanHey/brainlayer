@@ -94,6 +94,7 @@ class IndexWatchdog:
     def __init__(
         self,
         *,
+        started_at: float,
         max_runtime_s: float,
         interrupt: Callable[[], None] | None = None,
         emit: Callable[[Any], bool] | None = None,
@@ -117,11 +118,15 @@ class IndexWatchdog:
         self._lock = threading.Lock()
         self._interrupt = interrupt
         self._phase = phase
-        self._last_progress = self._monotonic()
-        self._started_at = self._last_progress
+        # The caller's clock and the caller's start, so there is exactly ONE deadline.
+        # Arming the watchdog late must not hand the run a fresh budget: whatever ran before
+        # (file discovery) is already charged against it.
+        self._started_at = float(started_at)
+        self._last_progress = self._started_at
         self._deadline = self._started_at + self._max_runtime_s
 
         self._expired = threading.Event()
+        self._alarm_attempted = threading.Event()
         self._alarm_emitted = threading.Event()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -159,6 +164,11 @@ class IndexWatchdog:
         return self._alarm_emitted.is_set()
 
     @property
+    def deadline_monotonic(self) -> float:
+        """The one deadline, on the caller's clock -- identical to the CLI's."""
+        return self._deadline
+
+    @property
     def phase(self) -> str:
         with self._lock:
             return self._phase
@@ -183,7 +193,14 @@ class IndexWatchdog:
         return context
 
     def raise_if_expired(self, processed_count: int = 0) -> None:
-        if self._expired.is_set():
+        """Raise if the cap has passed -- by the watchdog's flag or by the clock itself.
+
+        Checking the clock too makes this a strict superset of an inline
+        ``time.monotonic() >= deadline`` check, so callers need only one of the two. It also
+        means the main thread stops on its own rather than waiting a poll interval for the
+        watchdog thread to notice.
+        """
+        if self._expired.is_set() or self._monotonic() >= self._deadline:
             raise IndexDeadlineExceeded(processed_count)
 
     # ── lifecycle ───────────────────────────────────────────────────────
@@ -216,22 +233,36 @@ class IndexWatchdog:
             now = self._monotonic()
             if now >= self._deadline:
                 self._on_deadline()
-                # Keep polling: a bounded interrupt retry still has attempts left, and the
-                # heartbeat must keep reporting while the main thread unwinds.
-            elif now >= next_heartbeat:
+            # Heartbeat regardless of expiry. A wedge that cannot be aborted -- a model load,
+            # or open_store before its connection exists -- would otherwise emit one alarm and
+            # then go silent again, which is the second half of the 12h-silent-log failure.
+            if now >= next_heartbeat:
                 self._heartbeat()
                 next_heartbeat = now + self._heartbeat_interval_s
 
     def _on_deadline(self) -> None:
         # The alarm goes first, before the interrupt: if interrupting wedges or the stall
         # ignores it, the run is still on the record as over its cap.
-        if not self._alarm_emitted.is_set():
-            self._alarm_emitted.set()
-            self._emit_cap_alarm()
+        #
+        # Two flags, because "we tried" and "it landed" are different questions. `attempted`
+        # is set unconditionally so this can never re-alarm on a later poll -- a live run
+        # printed the same alarm 13 times when only the landed-flag gated it. `emitted` gates
+        # whether the CLI still owes a fallback alarm: only a raising emit leaves no record,
+        # since emit_alarm's falsy return means Axiom telemetry was unavailable, while its
+        # stderr and logging paths are documented as guaranteed.
+        if not self._alarm_attempted.is_set():
+            self._alarm_attempted.set()
+            if self._emit_cap_alarm():
+                self._alarm_emitted.set()
         self._expired.set()
         self._pull_interrupt()
 
-    def _emit_cap_alarm(self) -> None:
+    def _emit_cap_alarm(self) -> bool:
+        """Emit the cap alarm; return whether it left a record.
+
+        A falsy return from ``emit_alarm`` reports unavailable telemetry, not a missing
+        record, so only an exception counts as "no record".
+        """
         from .alarm import build_alarm, emit_alarm
 
         extra: dict[str, Any] = {"stopped_by": "watchdog"}
@@ -250,6 +281,8 @@ class IndexWatchdog:
             emit(alarm)
         except Exception as exc:  # never let the watchdog thread die on its own alarm
             logger.debug("Index watchdog alarm emit failed: %s", exc)
+            return False
+        return True
 
     def _pull_interrupt(self) -> None:
         with self._lock:

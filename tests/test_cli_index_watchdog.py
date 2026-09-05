@@ -61,7 +61,10 @@ def test_index_deadline_exits_nonzero_with_loud_alarm(tmp_path, monkeypatch):
 
     monkeypatch.setattr("brainlayer.index_new.index_chunks_to_sqlite", fake_index)
     monkeypatch.setattr("brainlayer.alarm.emit_alarm", fake_emit_alarm)
-    monkeypatch.setattr("brainlayer.runtime_store.open_writer_store", lambda _path: runtime_store)
+    monkeypatch.setattr(
+        "brainlayer.runtime_store.open_writer_store",
+        lambda _path, on_connection=None: runtime_store,
+    )
 
     result = CliRunner().invoke(app, ["index", str(source)])
 
@@ -97,7 +100,10 @@ def test_fast_index_under_deadline_completes_without_alarm(tmp_path, monkeypatch
 
     monkeypatch.setattr("brainlayer.index_new.index_chunks_to_sqlite", fake_index)
     monkeypatch.setattr("brainlayer.alarm.emit_alarm", lambda alarm: alarms.append(alarm) or True)
-    monkeypatch.setattr("brainlayer.runtime_store.open_writer_store", lambda _path: runtime_store)
+    monkeypatch.setattr(
+        "brainlayer.runtime_store.open_writer_store",
+        lambda _path, on_connection=None: runtime_store,
+    )
 
     result = CliRunner().invoke(app, ["index", str(source)])
 
@@ -118,7 +124,10 @@ def test_index_deadline_trips_after_file_that_produces_no_writes(tmp_path, monke
 
     monkeypatch.setattr("brainlayer.index_new.index_chunks_to_sqlite", lambda *_args, **_kwargs: 0)
     monkeypatch.setattr("brainlayer.alarm.emit_alarm", lambda alarm: alarms.append(alarm) or True)
-    monkeypatch.setattr("brainlayer.runtime_store.open_writer_store", lambda _path: runtime_store)
+    monkeypatch.setattr(
+        "brainlayer.runtime_store.open_writer_store",
+        lambda _path, on_connection=None: runtime_store,
+    )
 
     result = CliRunner().invoke(app, ["index", str(source)])
 
@@ -143,7 +152,10 @@ def test_index_deadline_stops_before_parsing_next_entry(tmp_path, monkeypatch):
 
     monkeypatch.setattr("brainlayer.index_new.index_chunks_to_sqlite", fake_index)
     monkeypatch.setattr("brainlayer.alarm.emit_alarm", lambda _alarm: True)
-    monkeypatch.setattr("brainlayer.runtime_store.open_writer_store", lambda _path: runtime_store)
+    monkeypatch.setattr(
+        "brainlayer.runtime_store.open_writer_store",
+        lambda _path, on_connection=None: runtime_store,
+    )
 
     result = CliRunner().invoke(app, ["index", str(source)])
 
@@ -232,7 +244,7 @@ def test_index_reuses_one_runtime_store_across_source_files(tmp_path, monkeypatc
     opened: list[_FakeRuntimeStore] = []
     seen_stores: list[object] = []
 
-    def fake_open(_path):
+    def fake_open(_path, on_connection=None):
         store = _FakeRuntimeStore()
         opened.append(store)
         return store
