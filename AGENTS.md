@@ -153,14 +153,21 @@ brainlayer enrich
 - Pre-push: `.githooks/pre-push` runs `scripts/run_tests.sh` with `BRAINLAYER_PREPUSH=1`; full
   runs are deduped by git tree hash in `.git/brainlayer-prepush-cache`.
 - A **tag** push has no branch to diff against, so the hook reads the pushed refs off its stdin and
-  scopes the run to `<previous release tag>..<tag>` via `BRAINLAYER_CHANGED_FILES_RANGE`. The
-  predecessor is resolved with `--match 'v*'`: an intervening non-release tag would start the range
-  short and leave real commits unmapped. It refuses to narrow — and prints the reason in the push
-  output — in five cases: a branch rides along; `BRAINLAYER_PREPUSH_SCOPE` was set explicitly
-  (**explicit beats default, in both directions** — an explicit `full` is never narrowed, and an
-  explicit `changed-only` is not handed a range either); `BRAINLAYER_CHANGED_FILES`/`_RANGE` is
-  already set; more than one tag is pushed at once; the tag has no previous `v*` predecessor. In
-  all five the scope is left exactly as the caller set it, and none of them are silent.
+  scopes the run to `<previous release tag>..<tag>` via `BRAINLAYER_CHANGED_FILES_RANGE`, naming the
+  tag in `BRAINLAYER_PREPUSH_TAG`. The predecessor must be a **full release**: resolved with
+  `--match 'v*' --exclude '*-*'`, so neither a non-release tag (`nightly`, `archive/*`) nor a
+  pre-release (`v1.2.3-rc1`) can start the range short and leave real commits unmapped.
+  Over-scoping from the last full release is safe; under-scoping a gate is not.
+- **An explicit scope picks the MODE; the range is the DATA.** Under
+  `BRAINLAYER_PREPUSH_SCOPE=changed-only` — the normal worker path below — a tag push still gets its
+  range. Only a non-`changed-only` explicit scope (`full`, or anything else) stops the hook
+  entirely. The hook otherwise refuses to narrow — printing the reason in the push output — when a
+  branch rides along, when `BRAINLAYER_CHANGED_FILES`/`_RANGE` is already set, when more than one
+  tag is pushed at once, or when the tag has no full-release predecessor. None of those are silent.
+- **A release gate never skips.** When `BRAINLAYER_PREPUSH_TAG` is set and the range is empty or
+  maps no pytest target, `scripts/run_tests.sh` runs the **full** suite and says why, instead of
+  taking the measured-empty / no-mapped-target skip. That skip stays correct for every other
+  caller; for a tag it would mean a release gating nothing at all.
 - Scoped worker pushes: use `BRAINLAYER_PREPUSH_SCOPE=changed-only git push` to map changed files
   to focused pytest targets while keeping the lightweight registration, isolated, bun, and shell
   gates.

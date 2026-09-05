@@ -57,27 +57,40 @@ if [ "$tag_count" -gt 0 ]; then
     # but the loudness guarantee above was false for it.
     echo "WARNING: pre-push: a branch is in this push alongside $tag_count tag(s)."
     echo "WARNING: it carries changes no tag range covers; leaving the scope as the caller set it."
-  elif [ -n "${BRAINLAYER_PREPUSH_SCOPE:-}" ]; then
+  elif [ -n "${BRAINLAYER_PREPUSH_SCOPE:-}" ] && [ "${BRAINLAYER_PREPUSH_SCOPE}" != "changed-only" ]; then
     # `BRAINLAYER_PREPUSH_SCOPE=full git push origin vX` is a deliberate full-suite tag push, and
-    # narrowing it would defeat the operator on the very gate this scoping hardens. Explicit beats
-    # default, in BOTH directions: an explicit changed-only is not second-guessed with a range
-    # either. Absent means default (`full` in run_tests.sh), which is what this block may narrow.
+    # narrowing it would defeat the operator on the very gate this scoping hardens.
+    #
+    # An explicit scope picks the MODE; the range is the DATA. So only a NON-changed-only scope
+    # stops here: under `BRAINLAYER_PREPUSH_SCOPE=changed-only` -- the normal worker path in
+    # AGENTS.md -- the range must still attach, or a tag-only push falls back to
+    # `origin/main...HEAD`, which at a release tip matching origin/main is EMPTY, and the
+    # measured-empty path then skips the unit suite entirely. Blocking the range there was
+    # fail-open against the old full-suite tag behaviour.
     echo "==> pre-push: BRAINLAYER_PREPUSH_SCOPE=$BRAINLAYER_PREPUSH_SCOPE was set explicitly — leaving it alone"
   elif [ -n "${BRAINLAYER_CHANGED_FILES:-}" ] || [ -n "${BRAINLAYER_CHANGED_FILES_RANGE:-}" ]; then
     echo "==> pre-push: tag push with an explicit changed set already set — leaving it alone"
   elif [ "$tag_count" -ne 1 ]; then
     echo "WARNING: pre-push: $tag_count tags in one push — no single range to scope from."
     echo "WARNING: running the FULL suite; push tags one at a time to scope them."
-  # --match 'v*' is load-bearing: bare `describe --tags` answers with the nearest reachable tag of
-  # ANY name, so one intervening nightly/rc/checkpoint on the release line would start the range
-  # there and never map the commits between it and the real previous release. This repo already
-  # carries non-v* tags (`pre-rename`, `archive/*`). Under-scoping a gate is fail-open; a release
-  # tag is the only predecessor whose range means "what this release ships".
-  elif previous_tag="$(git describe --tags --abbrev=0 --match 'v*' "${tag_name}^" 2>/dev/null)" &&
+  # Both filters are load-bearing, and the policy is: the predecessor must be a FULL RELEASE.
+  #   --match 'v*'      bare `describe --tags` answers with the nearest reachable tag of ANY name,
+  #                     so one intervening nightly/checkpoint would start the range there and never
+  #                     map the commits before it. This repo already carries non-v* tags
+  #                     (`pre-rename`, `archive/*`).
+  #   --exclude '*-*'   `v*` still matches a PRE-RELEASE like v1.2.3-rc1 -- the same under-scope one
+  #                     name up. Measured on git 2.54.0: `--match 'v*'` alone answers `v1.1.0-rc1`
+  #                     for `v1.1.0^`; with the exclude it answers `v1.0.0`.
+  # Over-scoping from the last full release is safe; starting at an rc is not. Pushing a
+  # pre-release tag itself is fine -- it scopes from the last full release, a superset of what it
+  # ships. Under-scoping a gate is fail-open, and this hook never trades that for speed.
+  elif previous_tag="$(git describe --tags --abbrev=0 --match 'v*' --exclude '*-*' "${tag_name}^" 2>/dev/null)" &&
     [ -n "$previous_tag" ]; then
     echo "==> pre-push: tag $tag_name scoped to $previous_tag..$tag_name (not the full suite)"
     export BRAINLAYER_PREPUSH_SCOPE=changed-only
     export BRAINLAYER_CHANGED_FILES_RANGE="$previous_tag..$tag_name"
+    # Names the tag for run_tests.sh: a release gate may not SKIP when its range maps nothing.
+    export BRAINLAYER_PREPUSH_TAG="$tag_name"
   else
     echo "WARNING: pre-push: tag $tag_name has no previous release tag (v*) to diff against."
     echo "WARNING: running the FULL suite. Loud, not narrowed on a guess."

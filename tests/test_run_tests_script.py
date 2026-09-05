@@ -157,6 +157,7 @@ def _install_pre_push_hook(repo: Path, tmp_path: Path) -> Path:
                 '  echo "SCOPE=${BRAINLAYER_PREPUSH_SCOPE:-<unset>}"',
                 '  echo "RANGE=${BRAINLAYER_CHANGED_FILES_RANGE:-<unset>}"',
                 '  echo "FILES=${BRAINLAYER_CHANGED_FILES:-<unset>}"',
+                '  echo "TAG=${BRAINLAYER_PREPUSH_TAG:-<unset>}"',
                 '} >> "$HOOK_ENV_LOG"',
                 "exit 0",
                 "",
@@ -172,6 +173,62 @@ def _install_pre_push_hook(repo: Path, tmp_path: Path) -> Path:
 def _repo_with_the_pre_push_hook(tmp_path: Path) -> tuple[Path, Path]:
     repo = _repo_with_two_tags(tmp_path)
     return repo, _install_pre_push_hook(repo, tmp_path)
+
+
+def _repo_with_a_pre_release_tag_between_releases(tmp_path: Path) -> tuple[Path, Path]:
+    """v1.0.0 -> v1.1.0-rc1 -> v1.1.0: the predecessor `--match 'v*'` alone would wrongly pick."""
+    repo = _tagged_release_line(tmp_path, middle_tag="v1.1.0-rc1")
+    return repo, _install_pre_push_hook(repo, tmp_path)
+
+
+def _repo_with_annotated_tags(tmp_path: Path) -> tuple[Path, Path]:
+    """Both releases as tag OBJECTS, the way `git tag -a` writes a real release."""
+    repo = _tagged_release_line(tmp_path, annotated=True)
+    return repo, _install_pre_push_hook(repo, tmp_path)
+
+
+def _tagged_release_line(tmp_path: Path, *, middle_tag: str = "nightly", annotated: bool = False) -> Path:
+    """seed(v1.0.0) -> watcher change(middle_tag) -> index change(v1.1.0), scripts/ populated."""
+    repo = tmp_path / "repo"
+    (repo / "scripts").mkdir(parents=True)
+    _git(repo.parent, "init", "-q", "-b", "main", str(repo))
+    _git(repo, "config", "user.email", "fixture@example.com")
+    _git(repo, "config", "user.name", "Fixture User")
+
+    def _tag(name: str) -> None:
+        if annotated:
+            _git(
+                repo,
+                "-c",
+                "user.email=fixture@example.com",
+                "-c",
+                "user.name=Fixture User",
+                "tag",
+                "-a",
+                name,
+                "-m",
+                name,
+            )
+        else:
+            _git(repo, "tag", name)
+
+    (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+    _git(repo, "add", "seed.txt")
+    _git(repo, "commit", "-qm", "seed")
+    _tag("v1.0.0")
+    watcher = repo / "src" / "brainlayer" / "watcher.py"
+    watcher.parent.mkdir(parents=True)
+    watcher.write_text("# fixture\n", encoding="utf-8")
+    _git(repo, "add", "src/brainlayer/watcher.py")
+    _git(repo, "commit", "-qm", "watcher change")
+    _git(repo, "tag", middle_tag)
+    index_new = repo / "src" / "brainlayer" / "index_new.py"
+    index_new.write_text("# fixture\n", encoding="utf-8")
+    _git(repo, "add", "src/brainlayer/index_new.py")
+    _git(repo, "commit", "-qm", "index change")
+    _tag("v1.1.0")
+    (repo / "scripts" / "run_tests.sh").write_text(SCRIPT_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+    return repo
 
 
 def _repo_with_a_non_release_tag_between_releases(tmp_path: Path) -> tuple[Path, Path]:
@@ -1147,11 +1204,20 @@ def test_pre_push_hook_never_narrows_an_explicitly_requested_scope(tmp_path: Pat
     handed = env_log.read_text()
     assert "SCOPE=full" in handed
     assert "RANGE=<unset>" in handed
+    assert "TAG=<unset>" in handed
     assert "set explicitly" in result.stdout
 
 
-def test_pre_push_hook_leaves_an_explicit_changed_only_scope_alone_too(tmp_path: Path) -> None:
-    """Explicit beats default in BOTH directions; the hook does not second-guess either value."""
+def test_pre_push_hook_attaches_the_range_under_an_explicit_changed_only_scope(tmp_path: Path) -> None:
+    """An explicit scope picks the MODE. The range is the DATA, and a tag still needs it.
+
+    My round-1 fix over-corrected: any explicit BRAINLAYER_PREPUSH_SCOPE blocked the range, and
+    AGENTS.md documents `BRAINLAYER_PREPUSH_SCOPE=changed-only git push` as the normal worker path.
+    Under that env a tag-only push got no range and fell back to `origin/main...HEAD` -- which at a
+    release tip matching origin/main is EMPTY, so the MEASURED-empty path skipped the unit suite
+    entirely. Fail-open against both the old full-suite tag behaviour and this PR's own contract,
+    and the previous version of this test locked it in (#775 round-2 review, high).
+    """
     repo, env_log = _repo_with_the_pre_push_hook(tmp_path)
     sha = _rev_parse(repo, "v1.1.0")
 
@@ -1165,7 +1231,8 @@ def test_pre_push_hook_leaves_an_explicit_changed_only_scope_alone_too(tmp_path:
     assert result.returncode == 0, result.stdout + result.stderr
     handed = env_log.read_text()
     assert "SCOPE=changed-only" in handed
-    assert "RANGE=<unset>" in handed
+    assert "RANGE=v1.0.0..v1.1.0" in handed
+    assert "TAG=v1.1.0" in handed
 
 
 def test_pre_push_hook_refuses_loudly_when_several_tags_ride_one_push(tmp_path: Path) -> None:
@@ -1186,3 +1253,127 @@ def test_pre_push_hook_refuses_loudly_when_several_tags_ride_one_push(tmp_path: 
     assert "SCOPE=<unset>" in handed
     assert "RANGE=<unset>" in handed
     assert "2 tags in one push" in result.stdout
+
+
+def test_pre_push_hook_leaves_an_unrecognised_explicit_scope_alone(tmp_path: Path) -> None:
+    """Only `changed-only` accepts a range. Anything else explicit is the caller's, untouched."""
+    repo, env_log = _repo_with_the_pre_push_hook(tmp_path)
+    sha = _rev_parse(repo, "v1.1.0")
+
+    result = _run_hook(
+        repo,
+        env_log,
+        f"refs/tags/v1.1.0 {sha} refs/tags/v1.1.0 {'0' * 40}\n",
+        extra_env={"BRAINLAYER_PREPUSH_SCOPE": "belt-and-braces"},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    handed = env_log.read_text()
+    assert "SCOPE=belt-and-braces" in handed
+    assert "RANGE=<unset>" in handed
+
+
+def test_pre_push_hook_skips_a_pre_release_predecessor_tag(tmp_path: Path) -> None:
+    """`--match 'v*'` alone still matches v1.1.0-rc1, which is the same under-scope one name up.
+
+    Measured on git 2.54.0: `describe --tags --abbrev=0 --match 'v*' v1.1.0^` answers `v1.1.0-rc1`;
+    adding `--exclude '*-*'` answers `v1.0.0`. Over-scoping from the last full release is safe;
+    starting at an rc is not (#775 round-2 review, low).
+    """
+    repo, env_log = _repo_with_a_pre_release_tag_between_releases(tmp_path)
+    sha = _rev_parse(repo, "v1.1.0")
+
+    result = _run_hook(repo, env_log, f"refs/tags/v1.1.0 {sha} refs/tags/v1.1.0 {'0' * 40}\n")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    handed = env_log.read_text()
+    assert "RANGE=v1.0.0..v1.1.0" in handed
+    assert "rc1" not in handed
+
+
+def test_pre_push_hook_scopes_an_annotated_tag(tmp_path: Path) -> None:
+    """Release tags are usually annotated (`git tag -a`), which is a tag OBJECT, not a ref alias."""
+    repo, env_log = _repo_with_annotated_tags(tmp_path)
+    sha = _rev_parse(repo, "v1.1.0")
+
+    result = _run_hook(repo, env_log, f"refs/tags/v1.1.0 {sha} refs/tags/v1.1.0 {'0' * 40}\n")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    handed = env_log.read_text()
+    assert "SCOPE=changed-only" in handed
+    assert "RANGE=v1.0.0..v1.1.0" in handed
+
+
+def test_changed_only_scope_escalates_an_empty_tag_range_instead_of_skipping(tmp_path: Path) -> None:
+    """A RELEASE tag is the one place the full suite is right: it must never skip silently.
+
+    The sibling test above proves a measured-empty range SKIPS loudly for an ordinary caller, which
+    is the ratified behaviour. For a tag it is fail-open: before this PR a tag push ran the full
+    suite, and a bump whose range maps nothing would now gate nothing at all (#775 round-2 review,
+    medium). BRAINLAYER_PREPUSH_TAG is how the hook says "this scope came from a release tag".
+    """
+    repo = _repo_with_two_tags(tmp_path)
+    _git(repo, "tag", "v1.1.1", "v1.1.0")
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    (test_root / "test_jsonl_watcher.py").write_text("test placeholder\n")
+
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+
+    env = _script_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
+    env["BRAINLAYER_CHANGED_FILES_RANGE"] = "v1.1.0..v1.1.1"
+    env["BRAINLAYER_PREPUSH_TAG"] = "v1.1.1"
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    result = subprocess.run(  # noqa: S603 - returncode is asserted below
+        ["bash", str(repo / "scripts" / "run_tests.sh")], capture_output=True, text=True, env=env, check=False
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert "SKIPPING the pytest unit suite" not in result.stdout
+    assert "release tag v1.1.1" in result.stdout
+    assert f"{test_root}/ -v" in pytest_log.read_text()
+
+
+def test_changed_only_scope_escalates_a_tag_range_that_maps_nothing(tmp_path: Path) -> None:
+    """A docs-only or changelog-only bump maps no pytest target. For a tag, that means FULL."""
+    repo = _repo_with_two_tags(tmp_path)
+    # Tag the post-v1.1.0 src commit, so the range under test holds ONLY the changelog. Without
+    # this the range also carries src/brainlayer/index_new.py and escalates via the existing
+    # unmapped-source path -- green for a different reason than the one being asserted.
+    _git(repo, "tag", "v1.1.5")
+    (repo / "CHANGELOG.md").write_text("# 1.2.0\n", encoding="utf-8")
+    _git(repo, "add", "CHANGELOG.md")
+    _git(repo, "commit", "-qm", "changelog only")
+    _git(repo, "tag", "v1.2.0")
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    (test_root / "test_jsonl_watcher.py").write_text("test placeholder\n")
+
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+
+    env = _script_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
+    env["BRAINLAYER_CHANGED_FILES_RANGE"] = "v1.1.5..v1.2.0"
+    env["BRAINLAYER_PREPUSH_TAG"] = "v1.2.0"
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    result = subprocess.run(  # noqa: S603 - returncode is asserted below
+        ["bash", str(repo / "scripts" / "run_tests.sh")], capture_output=True, text=True, env=env, check=False
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert "SKIP: changed-only scope found no mapped pytest targets" not in result.stdout
+    assert "release tag v1.2.0" in result.stdout
+    assert f"{test_root}/ -v" in pytest_log.read_text()
