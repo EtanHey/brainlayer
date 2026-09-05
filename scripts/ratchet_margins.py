@@ -275,38 +275,47 @@ def load_attestation(path: Path) -> dict:
 
 
 def validate_attestation(payload: object, source: str) -> dict:
-    """Refuse anything that is not a schema-1 attestation of a 40-hex main sha with a `measured` map."""
+    """Refuse anything that is not a schema-1 attestation of a 40-hex main sha with a `measured` map.
+
+    Split per field so each rule reads on its own (DeepSource PY-R1000 flagged the one-function form at
+    cyclomatic 16); the order is the order a reader checks a document by hand.
+    """
     if not isinstance(payload, dict):
         raise AttestationError(f"attestation `{source}` is a JSON {type(payload).__name__}, not an object")
     # `True == 1` in Python; a boolean schema is not schema 1 (Macroscope, #763).
     if isinstance(payload.get("schema"), bool) or payload.get("schema") != ATTESTATION_SCHEMA:
         raise AttestationError(f"attestation `{source}` has schema {payload.get('schema')!r}, not {ATTESTATION_SCHEMA}")
-    run_id = payload.get("run_id")
-    # An int or a non-empty string, checked HERE because load_attestations uses it as a dict key next:
-    # `"run_id": []` used to surface as a TypeError out of the dedup instead of a refusal (Macroscope, #764).
-    if (
-        isinstance(run_id, bool)
-        or not isinstance(run_id, (int, str))
-        or (isinstance(run_id, str) and not run_id.strip())
-    ):
-        raise AttestationError(
-            f"attestation `{source}` has no usable `run_id` (got {run_id!r}; need an int or a non-empty string)"
-        )
+    validate_run_id(payload.get("run_id"), source)
     if not isinstance(payload.get("main_sha"), str) or SHA_PATTERN.fullmatch(payload["main_sha"]) is None:
         raise AttestationError(f"attestation `{source}` has no 40-hex `main_sha`")
     if not isinstance(payload.get("measured_at"), str) or not payload["measured_at"].strip():
         raise AttestationError(f"attestation `{source}` has no `measured_at`")
-    if not isinstance(payload.get("measured"), dict):
+    validate_measured(payload.get("measured"), source, payload["run_id"])
+    return payload
+
+
+def validate_run_id(run_id: object, source: str) -> None:
+    # An int or a non-empty string, checked HERE because load_attestations uses it as a dict key next:
+    # `"run_id": []` used to surface as a TypeError out of the dedup instead of a refusal (Macroscope, #764).
+    usable = isinstance(run_id, int) and not isinstance(run_id, bool)
+    usable = usable or (isinstance(run_id, str) and bool(run_id.strip()))
+    if not usable:
+        raise AttestationError(
+            f"attestation `{source}` has no usable `run_id` (got {run_id!r}; need an int or a non-empty string)"
+        )
+
+
+def validate_measured(measured: object, source: str, run_id: object) -> None:
+    if not isinstance(measured, dict):
         raise AttestationError(f"attestation `{source}` has no `measured` object")
-    for key, value in payload["measured"].items():
+    for key, value in measured.items():
         # Checked at load, not at read: a row builder that formats notes cannot be the place a
         # malformed value first surfaces (Macroscope, #765). `null` means "not measured this run".
         if value is not None and not honest_value(value):
             raise AttestationError(
-                f"attestation `{source}` (run {payload['run_id']}): `measured.{key}` is {value!r}, "
+                f"attestation `{source}` (run {run_id}): `measured.{key}` is {value!r}, "
                 "not a finite non-negative number or null"
             )
-    return payload
 
 
 def honest_value(value: object) -> bool:
