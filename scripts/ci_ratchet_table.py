@@ -1401,7 +1401,10 @@ def row_fallback_debt(probe: Probe, _corpus: dict) -> Row:
     disappears from a dashboard for two months.
     """
     method = "docs.local walk · machine with the fallback queue"
-    root = probe.fallback_gits_root or default_fallback_gits_root()
+    # expanduser here, not only in the env default: `--fallback-gits-root ~/Gits` arrives as a
+    # literal `~` directory under `type=Path`, `exists()` is then false, and the row answers `n/a` --
+    # a mistyped flag wearing a capability gap's clothes, which is the fail-open this row forbids.
+    root = (probe.fallback_gits_root or default_fallback_gits_root()).expanduser()
     if not root.exists():
         return Row("fallback replay debt", NA, f"n/a — {FALLBACK_NA_REASON}", method, FALLBACK_NOTES)
     try:
@@ -1420,7 +1423,10 @@ def row_fallback_debt(probe: Probe, _corpus: dict) -> Row:
         return Row("fallback replay debt", GREEN, value, method, FALLBACK_NOTES)
     samples = [*summary["pending_sample"], *summary["legacy_sample"]]
     if samples:
-        value += " · oldest: " + ", ".join(f"`{Path(sample).name}`" for sample in samples[:3])
+        # NOT "oldest": inventory_fallbacks walks repos and files sorted by NAME, so these are
+        # path-ordered. Calling them oldest would claim an ordering nobody measured.
+        shown = samples[:3]
+        value += f" · first {len(shown)} by path: " + ", ".join(f"`{Path(sample).name}`" for sample in shown)
     return Row("fallback replay debt", RED, value, method, FALLBACK_NOTES)
 
 

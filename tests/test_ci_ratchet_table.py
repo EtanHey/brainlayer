@@ -53,6 +53,11 @@ def linux_probe(tmp_path: Path, **overrides) -> ratchet.Probe:
         wheel=make_wheel(tmp_path, HEAD),
         head_sha=HEAD,
         tree_dirty=False,
+        # Pinned, never inherited. conftest.py:127 re-points HOME per test so the default already
+        # resolves inside tmp -- but that lives in an unrelated autouse fixture and is skipped for
+        # `integration`/`live` tests (conftest.py:117), and a row that walks Etan's real ~/Gits
+        # would make these assertions depend on his machine's debt. State it here instead.
+        fallback_gits_root=tmp_path / "no-such-gits",
     )
     return replace(base, **overrides)
 
@@ -2800,3 +2805,80 @@ def test_fallback_gits_root_env_overrides_the_default(tmp_path, monkeypatch):
 
     monkeypatch.delenv(ratchet.FALLBACK_GITS_ROOT_ENV, raising=False)
     assert ratchet.default_fallback_gits_root() == Path.home() / "Gits"
+
+
+def test_the_suite_default_root_is_never_the_real_gits_tree(tmp_path):
+    """Round-1 review, #779 @1404 (HIGH) — partly refuted, hardened anyway.
+
+    The claim was that every `collect()`/`main()` walks the real `~/Gits`. It does not under pytest:
+    `tests/conftest.py:127` re-points `HOME` per test, so `default_fallback_gits_root()` resolves
+    inside tmp and the row is `n/a`. But that guarantee lives in an unrelated autouse fixture and is
+    skipped entirely for `integration`/`live`-marked tests (`conftest.py:117` returns early), so the
+    probe helpers now pin the field explicitly rather than inheriting it.
+    """
+    real = Path.home() / "Gits"
+    for name in ("linux", "mac"):
+        (tmp_path / name).mkdir()
+
+    for probe in (linux_probe(tmp_path / "linux"), mac_probe(tmp_path / "mac")):
+        root = probe.fallback_gits_root
+        assert root is not None, "probe helpers must pin the root, not inherit the machine's"
+        assert not root.exists()
+        assert root != real
+        assert ratchet.row_fallback_debt(probe, CORPUS).status == ratchet.NA
+
+
+def test_cli_fallback_gits_root_expands_a_tilde(tmp_path, monkeypatch):
+    """Round-1 review, #779 @1660 (MEDIUM).
+
+    `type=Path` left `~/Gits` a literal `~` directory, `root.exists()` was false, and the row
+    answered `n/a` — a capability gap that is really a mistyped flag. That is precisely the
+    fail-open this row's own rule forbids.
+    """
+    root = _fallback_root(tmp_path, pending=2)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert root.exists()
+
+    # Assert the ROW, not the exit code: other rows can be RED for their own reasons, so an exit
+    # code says nothing about whether the tilde resolved.
+    probe = mac_probe(tmp_path, fallback_gits_root=Path("~/gits"))
+    row = ratchet.row_fallback_debt(probe, CORPUS)
+
+    assert row.status == ratchet.RED
+    assert "2 pending" in row.value
+
+
+def test_cli_fallback_gits_root_flag_is_wired_to_the_row(tmp_path, monkeypatch, capsys):
+    """Round-1 review, #779 @2797 (LOW): the flag itself had no coverage."""
+    _fallback_root(tmp_path, pending=4)
+    monkeypatch.setattr(ratchet, "canonical_db_path", lambda: tmp_path / "absent.db")
+
+    exit_code = ratchet.main(
+        [
+            "--wheel",
+            str(make_wheel(tmp_path / "wheel", HEAD)),
+            "--fallback-gits-root",
+            str(tmp_path / "gits"),
+        ]
+    )
+
+    # One readouterr() call: a second returns empty and would make either assertion vacuous.
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "4 pending" in captured.out
+    assert "Ratchet RED: fallback replay debt" in captured.err
+
+
+def test_fallback_debt_row_does_not_claim_the_samples_are_the_oldest(tmp_path):
+    """Round-1 review, #779 @1423 (LOW).
+
+    `inventory_fallbacks` walks repos sorted by name and files sorted by name, so the samples are
+    path-ordered, not age-ordered. Labelling them `oldest:` claimed a measurement nobody made —
+    which is the one thing this file forbids.
+    """
+    root = _fallback_root(tmp_path, pending=3)
+
+    row = ratchet.row_fallback_debt(mac_probe(tmp_path, fallback_gits_root=root), CORPUS)
+
+    assert "oldest" not in row.value.lower()
+    assert "first 3 by path" in row.value
