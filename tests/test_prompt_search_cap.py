@@ -40,6 +40,9 @@ def run_probe(code):
         text=True,
         cwd=REPO_ROOT,
         env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(REPO_ROOT / "src")},
+        # Explicit: the assert below reports the child's stderr, which is a far
+        # more useful failure than CalledProcessError's bare exit code.
+        check=False,
     )
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout.strip().splitlines()[-1])
