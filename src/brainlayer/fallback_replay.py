@@ -93,10 +93,14 @@ def inventory_fallbacks(gits_root: Path, *, scope_map: dict[str, str]) -> Fallba
     if not gits_root.exists():
         return FallbackInventory(structured=structured, legacy=legacy)
 
+    # One cache for this walk only: see _git_root. Not module state, so nothing survives to hand a
+    # stale repo root to a later walk or to another test.
+    git_root_cache: dict[Path, Path] = {}
+
     for repo in sorted(path for path in gits_root.iterdir() if path.is_dir()):
         for path in sorted((repo / "docs.local" / "decisions").glob("*.md")):
             try:
-                entry = parse_fallback_file(path, scope_map=scope_map)
+                entry = parse_fallback_file(path, scope_map=scope_map, git_root_cache=git_root_cache)
             except Exception:
                 legacy.append(path)
                 continue
@@ -107,7 +111,7 @@ def inventory_fallbacks(gits_root: Path, *, scope_map: dict[str, str]) -> Fallba
         if fallback_dir.exists():
             for path in sorted(path for path in fallback_dir.rglob("*.md") if path.is_file()):
                 try:
-                    entry = legacy_entry_from_path(path, scope_map=scope_map)
+                    entry = legacy_entry_from_path(path, scope_map=scope_map, git_root_cache=git_root_cache)
                 except Exception:
                     legacy.append(path)
                     continue
@@ -118,10 +122,15 @@ def inventory_fallbacks(gits_root: Path, *, scope_map: dict[str, str]) -> Fallba
     return FallbackInventory(structured=structured, legacy=legacy)
 
 
-def parse_fallback_file(path: Path, *, scope_map: dict[str, str] | None = None) -> FallbackEntry:
+def parse_fallback_file(
+    path: Path,
+    *,
+    scope_map: dict[str, str] | None = None,
+    git_root_cache: dict[Path, Path] | None = None,
+) -> FallbackEntry:
     text = path.read_text(encoding="utf-8")
     frontmatter, body = _split_frontmatter(text)
-    origin_repo_path = _git_root(path)
+    origin_repo_path = _git_root(path, cache=git_root_cache)
     project = _resolve_project(
         path, frontmatter=frontmatter, origin_repo_path=origin_repo_path, scope_map=scope_map or {}
     )
@@ -213,6 +222,27 @@ def replay_entry(
     return ReplayResult(path=entry.path, attempted=True, chunk_id=chunk_id, outcome=outcome, error=outcome_error)
 
 
+def _is_already_queued_locked(latest: FallbackEntry) -> bool:
+    """Marker says queued, the row is still pending, and the queue file is still there.
+
+    One definition, because two callers need it: `queue_entry` short-circuits on it, and the
+    startup sweep must not spend its bound on files that would only hit that short-circuit.
+    """
+    chunk_id = _fallback_chunk_id(latest)
+    queued = str(latest.frontmatter.get("queued_chunk_id") or "").strip()
+    queued_path = _queued_queue_path(latest)
+    return queued == chunk_id and is_pending_entry(latest) and (queued_path is None or queued_path.exists())
+
+
+def is_already_queued(entry: FallbackEntry) -> bool:
+    """Advisory read of `_is_already_queued_locked` for batch selection.
+
+    Advisory on purpose: `queue_entry` re-checks under the file lock, so a race here costs a wasted
+    slot, never a double enqueue.
+    """
+    return _is_already_queued_locked(_latest_entry(entry))
+
+
 def queue_entry(
     entry: FallbackEntry,
     *,
@@ -223,10 +253,8 @@ def queue_entry(
     with _fallback_marker_file_lock(entry.path):
         latest = _latest_entry(entry)
         chunk_id = _fallback_chunk_id(latest)
-        queued = str(latest.frontmatter.get("queued_chunk_id") or "").strip()
-        queued_path = _queued_queue_path(latest)
         pending = is_pending_entry(latest)
-        if queued == chunk_id and pending and (queued_path is None or queued_path.exists()):
+        if _is_already_queued_locked(latest):
             # Already on the queue from an earlier run; the drain still owes us the commit.
             return ReplayResult(path=entry.path, attempted=True, chunk_id=chunk_id, outcome=OUTCOME_DEFERRED)
 
@@ -279,8 +307,70 @@ def queue_entry(
     return ReplayResult(path=entry.path, attempted=True, chunk_id=chunk_id, outcome=OUTCOME_DEFERRED)
 
 
-def legacy_entry_from_path(path: Path, *, scope_map: dict[str, str] | None = None) -> FallbackEntry:
-    entry = parse_fallback_file(path, scope_map=scope_map or {})
+def enqueue_pending_fallbacks(
+    *,
+    gits_root: Path,
+    scope_map: dict[str, str],
+    enqueue_func: Callable[..., Any],
+    replayed_by: str,
+    limit: int,
+) -> dict[str, Any]:
+    """Put up to ``limit`` pending fallback files onto the durable queue.
+
+    The bound is the point. A backlog that grows faster than it drains would be
+    re-enqueued in full on every daemon start, so the sweep takes a fixed batch and
+    reports what it left behind — a partial drain that says so beats a flood.
+
+    Writes go to the queue, never to the DB: the drain stays the single writer, and
+    it is the drain that later marks each file stored.
+    """
+    if limit <= 0:
+        raise ValueError(f"fallback replay limit must be positive, got {limit}")
+
+    inventory = inventory_fallbacks(gits_root.expanduser(), scope_map=scope_map)
+    pending = inventory.pending
+    # A file stays in `inventory.pending` until the DRAIN marks its chunk_id, so a file already on
+    # the queue is still pending. Spending the bound on those would let a head of already-queued
+    # files starve the unqueued tail across a KeepAlive restart loop, forever.
+    awaiting = [entry for entry in pending if not is_already_queued(entry)]
+    batch = awaiting[:limit]
+
+    results = [queue_entry(entry, enqueue_func=enqueue_func, replayed_by=replayed_by) for entry in batch]
+
+    counts: dict[str, int] = {}
+    for result in results:
+        counts[result.outcome] = counts.get(result.outcome, 0) + 1
+    queued = sum(1 for result in results if result.outcome == OUTCOME_DEFERRED and not result.error)
+    # A batch entry that turned SKIPPED under the lock -- stored, or no longer pending, between the
+    # inventory and `queue_entry` -- is resolved, not owed. Counting it as remaining would overstate
+    # the backlog the next start actually selects.
+    skipped = sum(1 for result in results if result.outcome == OUTCOME_SKIPPED and not result.error)
+
+    return {
+        "pending_before": len(pending),
+        # Pending, but the drain already owes the commit: not this sweep's work.
+        "already_queued": len(pending) - len(awaiting),
+        "awaiting_queue": len(awaiting),
+        "legacy_count": len(inventory.legacy),
+        "limit": limit,
+        "attempted": len(results),
+        "queued": queued,
+        # Files that still need a queue slot after this sweep. Counts the ones the bound did not
+        # reach AND the ones that errored -- an errored file is still owed and will be back next
+        # start, so reporting it as progress would be the same lie this lane exists to remove.
+        "remaining": max(0, len(awaiting) - queued - skipped),
+        "errors": sum(1 for result in results if result.error),
+        "outcome_counts": dict(sorted(counts.items())),
+    }
+
+
+def legacy_entry_from_path(
+    path: Path,
+    *,
+    scope_map: dict[str, str] | None = None,
+    git_root_cache: dict[Path, Path] | None = None,
+) -> FallbackEntry:
+    entry = parse_fallback_file(path, scope_map=scope_map or {}, git_root_cache=git_root_cache)
     frontmatter = dict(entry.frontmatter)
     frontmatter.setdefault("intended_brain_store", True)
     frontmatter["legacy_brain_store_fallback"] = True
@@ -536,7 +626,24 @@ def _raw_frontmatter_scalar(frontmatter_text: str, key: str) -> str | None:
     return None
 
 
-def _git_root(path: Path) -> Path:
+def _git_root(path: Path, *, cache: dict[Path, Path] | None = None) -> Path:
+    """Resolve the repo root for `path`, memoized per DIRECTORY within one walk.
+
+    Every fallback file in a repo lives in the same `docs.local/decisions`, so resolving per file
+    shelled out to `git rev-parse` once per file: 412 subprocesses and ~2.6 s on the real tree, on
+    every KeepAlive restart, before the first drain cycle could run. The cache is owned by the caller
+    and lives only as long as one walk, so a stale root can never outlive it.
+    """
+    key = path.parent
+    if cache is not None and key in cache:
+        return cache[key]
+    resolved = _git_root_uncached(path)
+    if cache is not None:
+        cache[key] = resolved
+    return resolved
+
+
+def _git_root_uncached(path: Path) -> Path:
     try:
         output = subprocess.check_output(
             ["git", "-C", str(path.parent), "rev-parse", "--show-toplevel"],

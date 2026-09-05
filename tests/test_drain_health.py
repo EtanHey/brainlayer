@@ -18,6 +18,10 @@ def test_run_daemon_writes_progress_heartbeat(tmp_path):
         drain_once_fn=lambda **_kwargs: next(drained_values),
         sleep_fn=lambda _seconds: None,
         max_cycles=2,
+        # Explicit no-op, not inherited hermeticity. The default seam runs the real filesystem sweep,
+        # and `BRAINLAYER_FALLBACK_GITS_ROOT` is an ABSOLUTE path that bypasses conftest's HOME
+        # remapping -- with it set, this heartbeat test could write production fallback markers.
+        replay_fallbacks_fn=lambda: None,
     )
 
     payload = json.loads(health_path.read_text(encoding="utf-8"))
