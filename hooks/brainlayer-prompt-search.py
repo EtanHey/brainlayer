@@ -32,16 +32,27 @@ from brainlayer.phonetic import looks_hebrew, phonetic_key, phonetic_tokens
 # brainlayer.pipeline/__init__, and with it vector_store -> numpy/sqlite_vec and
 # requests -- ~105ms this hook pays on every prompt Claude Code submits. Loaded
 # lazily below, after the skip gates, so a skipped prompt pays none of it.
-_DETECT_CORRECTION = None
+#
+# State lives in a dict rather than module globals for two reasons: the
+# memoisation then needs no `global` statement, and the import's own cost stays
+# measurable so it can be kept out of the DEADLINE_MS search budget.
+_LAZY = {"detect_correction": None, "import_ms": 0.0}
+
+
+def lazy_import_ms():
+    """Wall time this process has spent inside deferred imports."""
+    return _LAZY["import_ms"]
 
 
 def detect_correction(prompt):
-    global _DETECT_CORRECTION
-    if _DETECT_CORRECTION is None:
+    impl = _LAZY["detect_correction"]
+    if impl is None:
+        started = time.monotonic()
         from brainlayer.pipeline.correction_detection import detect_correction as _impl
 
-        _DETECT_CORRECTION = _impl
-    return _DETECT_CORRECTION(prompt)
+        impl = _LAZY["detect_correction"] = _impl
+        _LAZY["import_ms"] += (time.monotonic() - started) * 1000
+    return impl(prompt)
 
 
 DEADLINE_MS = 450
@@ -135,20 +146,47 @@ OUTPUT_FILE_ONLY_RE = re.compile(
 # report ping, a pane-to-pane message, a slash-command envelope. Measured over
 # 4,759 paired fires in a 30-day transcript window these are 12.0% of fires and
 # 10.0% of injected chars, and none of them is a prompt memory can answer.
-RELAY_PREFIXES = (
-    "[report]",
-    "<command-name",
-    "<local-command",
-    "<system-reminder",
+#
+# A prefix alone is NOT enough to call something a relay -- a prompt may open by
+# quoting one of these tokens while asking about it. Each shape therefore has to
+# carry the structure that makes it a real envelope: a closing tag, an attribute,
+# or the path the ping points at.
+RELAY_CLOSING_TAGS = (
+    ("<command-name", "</command-name>"),
+    ("<local-command", "</local-command"),
+    ("<system-reminder", "</system-reminder>"),
 )
-CROSS_SESSION_MARKERS = (
-    "<cross-session-message",
-    "another claude session sent a message:",
-)
+# `[report] changed — read /Users/.../report.md` -- the ping is only a ping if it
+# names the file it wants read.
+REPORT_RELAY_RE = re.compile(r"^\[report\]\s+\S+.*?[/\\]\S", re.DOTALL)
+CROSS_SESSION_TAG = "<cross-session-message"
+CROSS_SESSION_PREAMBLE = "another claude session sent a message:"
+# The real cmux shape carries a `from=` attribute naming the sending socket.
+CROSS_SESSION_ATTR_RE = re.compile(r"<cross-session-message\s[^>]*\bfrom=", re.DOTALL)
 # How far into the payload a cross-session envelope may start. The real shape is
 # a one-line preamble then the tag, so a short window keeps a human prompt that
 # merely quotes the tag from being skipped.
 CROSS_SESSION_WINDOW = 200
+
+
+def is_relay_envelope(prompt: str) -> bool:
+    """Return True only for a relay that carries its envelope structure."""
+    normalized = prompt.strip().lower()
+
+    for prefix, closing in RELAY_CLOSING_TAGS:
+        if normalized.startswith(prefix):
+            return closing in normalized
+
+    if normalized.startswith("[report]"):
+        return bool(REPORT_RELAY_RE.match(prompt.strip()))
+
+    head = normalized[:CROSS_SESSION_WINDOW]
+    if CROSS_SESSION_PREAMBLE in head:
+        return CROSS_SESSION_TAG in normalized
+    if CROSS_SESSION_TAG in head:
+        return bool(CROSS_SESSION_ATTR_RE.search(normalized))
+
+    return False
 
 
 def is_operational_noise_prompt(prompt: str) -> bool:
@@ -164,11 +202,7 @@ def is_operational_noise_prompt(prompt: str) -> bool:
     if starts_like_envelope and any(marker in normalized for marker in OPERATIONAL_NOISE_MARKERS):
         return True
 
-    if normalized.startswith(RELAY_PREFIXES):
-        return True
-
-    head = normalized[:CROSS_SESSION_WINDOW]
-    if any(marker in head for marker in CROSS_SESSION_MARKERS):
+    if is_relay_envelope(prompt):
         return True
 
     if MONITOR_TICK_RE.fullmatch(normalized):
@@ -565,6 +599,19 @@ def truncate(text, max_chars=80):
     if sentence_matches:
         return candidate[: sentence_matches[-1].end()] + "..."
     return candidate.rsplit(" ", 1)[0] + "..."
+
+
+def search_elapsed_ms(start):
+    """Elapsed ms measured against the DEADLINE_MS search budget.
+
+    Deferred-import time is subtracted out. It is startup cost, not search cost,
+    and before this hook deferred those imports the same milliseconds were spent
+    at module load, where `start` -- captured inside main() -- never saw them.
+    Charging them to the deadline would let one slow first import silently
+    suppress entity detection and FTS, which is the one thing the deadline must
+    not do.
+    """
+    return elapsed_ms(start) - lazy_import_ms()
 
 
 def elapsed_ms(start):
@@ -1210,14 +1257,18 @@ _CAP_NOTE_RESERVE = len(_CAP_NOTE.format(dropped=9999)) + 1
 def cap_injection(lines, max_chars=MAX_INJECTION_CHARS):
     """Hold injected output to max_chars, cutting only at line boundaries.
 
+    Returns `(kept, dropped)` -- the lines to print, and how many original lines
+    were cut. Callers need `dropped` because a result the agent never saw must
+    not be registered as injected.
+
     Dropped lines are replaced by a one-line pointer, so the agent still knows
     more is there. The first line is always kept: a cap must never turn a search
     that found something into an injection of nothing.
     """
     if not lines:
-        return list(lines)
+        return list(lines), 0
     if len("\n".join(lines)) <= max_chars:
-        return list(lines)
+        return list(lines), 0
 
     budget = max_chars - _CAP_NOTE_RESERVE
     kept = [lines[0]]
@@ -1230,7 +1281,7 @@ def cap_injection(lines, max_chars=MAX_INJECTION_CHARS):
 
     dropped = len(lines) - len(kept)
     kept.append(_CAP_NOTE.format(dropped=dropped))
-    return kept
+    return kept, dropped
 
 
 def inject_search_results(lines, rows, deep, label="auto"):
@@ -1261,6 +1312,7 @@ def main():
     new_briefs = []
     entities_detected = 0
     fallback_rows = []
+    result_line_start = 0
 
     def finalize_and_exit(*, mode=None):
         final_mode = mode or telemetry_mode
@@ -1306,15 +1358,6 @@ def main():
     prompt_lower = prompt.lower()
     correction_category = detect_correction(prompt)
 
-    # Short prompt with no content words: nothing to search on. A detected
-    # correction still gets its notice -- short prompts are where corrections live
-    # ("Nope.", "No, it's fine.") and only 5 of 231 such fires in the 30-day
-    # window carried one, so keeping them costs almost nothing.
-    if is_low_signal_short_prompt(prompt, classification, extract_keywords(prompt)):
-        if correction_category:
-            print(correction_notice(correction_category))
-        finalize_and_exit(mode="skip")
-
     # Handoff detection: skip auto-search to avoid duplicate injection
     # (SessionStart already injected handoff context)
     try:
@@ -1358,6 +1401,18 @@ def main():
         classification = classify_prompt(prompt, detected_entities=detected_entities)
         record_prompt_classification(session_id=session_id, prompt=prompt, classification=classification)
 
+    # Short prompt with no content words: nothing to search on. This gate sits
+    # AFTER entity detection on purpose -- `classify_prompt` cannot return
+    # entity_lookup until entities are known, so running it earlier made the
+    # entity_lookup exemption dead code and skipped a one-word entity question
+    # like "Etan?". A detected correction still gets its notice: short prompts
+    # are where corrections live ("Nope.", "No, it's fine.").
+    if is_low_signal_short_prompt(prompt, classification, extract_keywords(prompt)):
+        conn.close()
+        if correction_category:
+            print(correction_notice(correction_category))
+        finalize_and_exit(mode="skip")
+
     deep = is_deep_mode(prompt_lower)
     if classification == "entity_lookup":
         telemetry_mode = "entity"
@@ -1395,10 +1450,13 @@ def main():
     if correction_category:
         lines.append(correction_notice(correction_category))
     try:
-        if classification == "entity_lookup" and elapsed_ms(start) < DEADLINE_MS:
+        if classification == "entity_lookup" and search_elapsed_ms(start) < DEADLINE_MS:
             detected_entities = inject_entity_context(lines, prompt, conn)
             entities_detected = len(detected_entities)
-        elif classification in {"knowledge_question", "follow_up", "hebrew_query"} and elapsed_ms(start) < DEADLINE_MS:
+        elif (
+            classification in {"knowledge_question", "follow_up", "hebrew_query"}
+            and search_elapsed_ms(start) < DEADLINE_MS
+        ):
             if detected_entities and classification == "knowledge_question":
                 inject_entity_context(lines, prompt, conn)
 
@@ -1443,6 +1501,8 @@ def main():
                 }
                 for chunk_id, content, importance, project, tags, created_at in filtered_rows
             ]
+            # inject_search_results adds one header line, then one line per row.
+            result_line_start = len(lines) + 1
             new_chunk_ids, new_briefs = inject_search_results(lines, filtered_rows, deep, label=label)
     except sqlite3.Error:
         lines.append(degraded_notice("DB error"))
@@ -1464,7 +1524,18 @@ def main():
             lines.append(fallback)
 
     if lines:
-        print("\n".join(cap_injection(lines)))
+        capped, dropped = cap_injection(lines)
+        if dropped and new_chunk_ids:
+            # A result the cap withheld was never shown to the agent, so it must
+            # not land in the dedup file -- doing so would suppress that chunk
+            # from every later prompt in the session, losing it silently. The
+            # cap only truncates a suffix, so kept content lines keep their
+            # index and the survivors are the leading slice.
+            content_kept = len(capped) - 1
+            survived = max(0, content_kept - result_line_start)
+            new_chunk_ids = new_chunk_ids[:survived]
+            new_briefs = new_briefs[:survived]
+        print("\n".join(capped))
 
     # Register newly injected chunks in coordination file
     if session_id and new_chunk_ids:

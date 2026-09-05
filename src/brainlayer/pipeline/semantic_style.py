@@ -46,17 +46,20 @@ HAS_SENTENCE_TRANSFORMERS = _importlib_util.find_spec("sentence_transformers") i
 # inside _assign_topics.
 HAS_SKLEARN = _importlib_util.find_spec("sklearn") is not None
 
-_COSINE_SIMILARITY = None
+# Memoised in a dict rather than a module global so the accessor needs no
+# `global` statement. A concurrent first call may import twice; that is harmless
+# because `from ... import` is idempotent and both callers get the same object.
+_SKLEARN = {"cosine_similarity": None}
 
 
 def _cosine_similarity():
-    """Import sklearn's cosine_similarity on first use and memoize it."""
-    global _COSINE_SIMILARITY
-    if _COSINE_SIMILARITY is None:
+    """Import sklearn's cosine_similarity on first use and memoise it."""
+    fn = _SKLEARN["cosine_similarity"]
+    if fn is None:
         from sklearn.metrics.pairwise import cosine_similarity
 
-        _COSINE_SIMILARITY = cosine_similarity
-    return _COSINE_SIMILARITY
+        fn = _SKLEARN["cosine_similarity"] = cosine_similarity
+    return fn
 
 
 # bge-large for semantic/topic clustering (1024 dims, good multilingual)
