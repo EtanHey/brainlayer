@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -1119,3 +1120,160 @@ def test_replay_cli_apply_queue_legacy_marks_legacy_files(tmp_path, monkeypatch)
     assert module.main() == 0
     assert calls[0]["source"] == "fallback-replay"
     assert "legacy_brain_store_fallback: true" in path.read_text(encoding="utf-8")
+
+
+def test_replay_entry_carries_the_store_outcome_into_the_receipt(tmp_path):
+    from brainlayer.fallback_replay import parse_fallback_file, replay_entry
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    entry = parse_fallback_file(_pending_file(repo, "docs.local/decisions/merged.md"))
+
+    result = replay_entry(
+        entry,
+        store_func=lambda **_kwargs: {"id": "chunk-merged", "outcome": "merged"},
+        replayed_by="test",
+    )
+
+    assert result.chunk_id == "chunk-merged"
+    assert result.outcome == "merged"
+
+
+def test_replay_entry_defaults_missing_store_outcome_to_stored(tmp_path):
+    from brainlayer.fallback_replay import parse_fallback_file, replay_entry
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    entry = parse_fallback_file(_pending_file(repo, "docs.local/decisions/no-outcome.md"))
+
+    result = replay_entry(
+        entry,
+        store_func=lambda **_kwargs: {"id": "chunk-plain"},
+        replayed_by="test",
+    )
+
+    assert result.outcome == "stored"
+
+
+def test_replay_entry_reports_rejected_when_store_returns_no_chunk_id(tmp_path):
+    from brainlayer.fallback_replay import parse_fallback_file, replay_entry
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    entry = parse_fallback_file(_pending_file(repo, "docs.local/decisions/rejected.md"))
+
+    result = replay_entry(entry, store_func=lambda **_kwargs: {}, replayed_by="test")
+
+    assert result.chunk_id is None
+    assert result.outcome == "rejected"
+
+
+def test_replay_entry_reports_error_outcome_when_store_raises(tmp_path):
+    from brainlayer.fallback_replay import parse_fallback_file, replay_entry
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    entry = parse_fallback_file(_pending_file(repo, "docs.local/decisions/boom.md"))
+
+    result = replay_entry(
+        entry,
+        store_func=lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+        replayed_by="test",
+    )
+
+    assert result.outcome == "error"
+
+
+def test_queue_entry_reports_deferred_because_the_drain_commits_later(tmp_path):
+    from brainlayer.fallback_replay import parse_fallback_file, queue_entry
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    entry = parse_fallback_file(_pending_file(repo, "docs.local/decisions/queued.md"))
+    queue_file = tmp_path / "queue" / "pending.jsonl"
+    queue_file.parent.mkdir(parents=True)
+    queue_file.write_text("{}\n", encoding="utf-8")
+
+    result = queue_entry(entry, enqueue_func=lambda **_kwargs: queue_file, replayed_by="test")
+
+    assert result.chunk_id
+    assert result.outcome == "deferred"
+
+
+def test_queue_entry_reports_skipped_for_an_already_replayed_file(tmp_path):
+    from brainlayer.fallback_replay import parse_fallback_file, queue_entry, replay_entry
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    path = _pending_file(repo, "docs.local/decisions/already.md")
+    replay_entry(
+        parse_fallback_file(path),
+        store_func=lambda **_kwargs: {"id": "chunk-done", "outcome": "stored"},
+        replayed_by="test",
+    )
+
+    result = queue_entry(
+        parse_fallback_file(path),
+        enqueue_func=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("re-enqueued a stored file")),
+        replayed_by="test",
+    )
+
+    assert result.outcome == "skipped"
+
+
+def test_replay_cli_receipt_counts_outcomes_and_persists_to_disk(tmp_path, monkeypatch):
+    script = Path(__file__).resolve().parents[1] / "scripts" / "replay_brain_store_fallbacks.py"
+    spec = importlib.util.spec_from_file_location("replay_brain_store_fallbacks_receipt_test", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    from brainlayer.fallback_replay import parse_fallback_file
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    stored = parse_fallback_file(_pending_file(repo, "docs.local/decisions/one.md"))
+    duplicate = parse_fallback_file(_pending_file(repo, "docs.local/decisions/two.md"))
+    outcomes = {stored.path: "stored", duplicate.path: "duplicate"}
+    seen: list[str] = []
+
+    class DummyStore:
+        def close(self):
+            pass
+
+    def fake_store(**kwargs):
+        outcome = outcomes[Path(kwargs["fallback_source_path"])]
+        seen.append(outcome)
+        return {"id": f"chunk-{outcome}", "outcome": outcome}
+
+    class DummyInventory:
+        structured = [stored, duplicate]
+        legacy = []
+        pending = [stored, duplicate]
+
+    receipt_path = tmp_path / "receipts" / "replay.json"
+    monkeypatch.setattr(module, "load_scope_map", lambda _path: {})
+    monkeypatch.setattr(module, "inventory_fallbacks", lambda _root, *, scope_map: DummyInventory())
+    monkeypatch.setattr(module, "VectorStore", lambda _db: DummyStore())
+    monkeypatch.setattr(module, "store_memory", fake_store)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "replay_brain_store_fallbacks.py",
+            "--apply",
+            "--direct-db-write",
+            "--gits-root",
+            str(tmp_path),
+            "--receipt",
+            str(receipt_path),
+        ],
+    )
+
+    assert module.main() == 0
+    assert sorted(seen) == ["duplicate", "stored"]
+
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["outcome_counts"] == {"duplicate": 1, "stored": 1}
+    assert {item["outcome"] for item in receipt["replayed"]} == {"stored", "duplicate"}
+    assert {item["chunk_id"] for item in receipt["replayed"]} == {"chunk-stored", "chunk-duplicate"}
