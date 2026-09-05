@@ -14,6 +14,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from brainlayer.fallback_replay import (
+    OUTCOME_ERROR,
     ReplayResult,
     inventory_fallbacks,
     legacy_entry_from_path,
@@ -62,6 +63,12 @@ def main() -> int:
         help="Maximum structured pending and legacy fallback files to replay.",
     )
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of text.")
+    parser.add_argument(
+        "--receipt",
+        type=Path,
+        default=None,
+        help="Write the JSON receipt (per-file outcome + chunk id) to this path as well as stdout.",
+    )
     args = parser.parse_args()
 
     scope_map = load_scope_map(args.scopes)
@@ -80,7 +87,7 @@ def main() -> int:
     if args.apply:
         if args.legacy and args.direct_db_write:
             result["error"] = "--legacy requires queued replay"
-            _emit(result, as_json=args.json)
+            _emit(result, as_json=args.json, receipt_path=args.receipt)
             return 2
         legacy_entries = []
         legacy_replayed = []
@@ -95,12 +102,13 @@ def main() -> int:
                             attempted=True,
                             chunk_id=None,
                             error=f"legacy parse failed: {exc}",
+                            outcome=OUTCOME_ERROR,
                         )
                     )
         replay_count = len(pending) + (len(legacy_entries) if args.legacy else 0)
         if replay_count > args.limit:
             result["error"] = f"replay_count {replay_count} exceeds --limit {args.limit}"
-            _emit(result, as_json=args.json)
+            _emit(result, as_json=args.json, receipt_path=args.receipt)
             return 2
         if not args.direct_db_write:
             queue_dir = _queue_dir_for_target_db(args.db, args.queue_dir)
@@ -140,19 +148,32 @@ def main() -> int:
             finally:
                 store.close()
             legacy_replayed = []
-        result["replayed"] = [
-            {"path": str(item.path), "chunk_id": item.chunk_id, "error": item.error} for item in replayed
-        ]
-        result["legacy_replayed"] = [
-            {"path": str(item.path), "chunk_id": item.chunk_id, "error": item.error} for item in legacy_replayed
-        ]
+        result["replayed"] = [_receipt_row(item) for item in replayed]
+        result["legacy_replayed"] = [_receipt_row(item) for item in legacy_replayed]
+        result["outcome_counts"] = _outcome_counts([*replayed, *legacy_replayed])
         if any(item.error for item in [*replayed, *legacy_replayed]):
             result["error"] = "one or more fallback replays failed"
-            _emit(result, as_json=args.json)
+            _emit(result, as_json=args.json, receipt_path=args.receipt)
             return 1
 
-    _emit(result, as_json=args.json)
+    _emit(result, as_json=args.json, receipt_path=args.receipt)
     return 0
+
+
+def _receipt_row(item: ReplayResult) -> dict[str, object]:
+    return {
+        "path": str(item.path),
+        "outcome": item.outcome,
+        "chunk_id": item.chunk_id,
+        "error": item.error,
+    }
+
+
+def _outcome_counts(items: list[ReplayResult]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        counts[item.outcome] = counts.get(item.outcome, 0) + 1
+    return dict(sorted(counts.items()))
 
 
 def _queue_dir_for_target_db(db_path: Path, queue_dir: Path | None) -> Path | None:
@@ -164,9 +185,14 @@ def _queue_dir_for_target_db(db_path: Path, queue_dir: Path | None) -> Path | No
     return resolved_db.parent / "queue"
 
 
-def _emit(result: dict[str, object], *, as_json: bool) -> None:
+def _emit(result: dict[str, object], *, as_json: bool, receipt_path: Path | None = None) -> None:
+    rendered = json.dumps(result, indent=2, sort_keys=True)
+    if receipt_path is not None:
+        target = receipt_path.expanduser()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(rendered + "\n", encoding="utf-8")
     if as_json:
-        print(json.dumps(result, indent=2, sort_keys=True))
+        print(rendered)
         return
     print(f"structured fallback files: {result['structured_count']}")
     print(f"pending structured files: {result['pending_count']}")
@@ -174,9 +200,18 @@ def _emit(result: dict[str, object], *, as_json: bool) -> None:
     for path in result["pending"]:
         print(f"PENDING {path}")
     for item in result["replayed"]:
-        print(f"REPLAYED {item['path']} -> {item.get('chunk_id') or item.get('error')}")
+        print(f"REPLAYED {item['path']} -> {_render_outcome(item)}")
     for item in result.get("legacy_replayed", []):
-        print(f"REPLAYED_LEGACY {item['path']} -> {item.get('chunk_id') or item.get('error')}")
+        print(f"REPLAYED_LEGACY {item['path']} -> {_render_outcome(item)}")
+    counts = result.get("outcome_counts")
+    if counts:
+        print("outcomes: " + ", ".join(f"{name}={count}" for name, count in counts.items()))
+
+
+def _render_outcome(item: dict[str, object]) -> str:
+    outcome = str(item.get("outcome") or "unknown").upper()
+    detail = item.get("chunk_id") or item.get("error") or "-"
+    return f"{outcome} {detail}"
 
 
 if __name__ == "__main__":

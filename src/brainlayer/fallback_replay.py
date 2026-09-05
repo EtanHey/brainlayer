@@ -29,12 +29,32 @@ class FallbackEntry:
     project: str
 
 
+# The brain_store outcome vocabulary (AGENTS.md #725), plus the two states only a
+# replay can be in: SKIPPED for a file that was already stored, and ERROR for a
+# store that raised. STORED/DUPLICATE/MERGED/DEFERRED are all success — a receipt
+# that collapses them into "replayed" cannot tell a fresh insert from a no-op.
+OUTCOME_STORED = "stored"
+OUTCOME_DUPLICATE = "duplicate"
+OUTCOME_MERGED = "merged"
+OUTCOME_DEFERRED = "deferred"
+OUTCOME_REJECTED = "rejected"
+OUTCOME_ERROR = "error"
+OUTCOME_SKIPPED = "skipped"
+# A store that came back with a chunk id but described the write in a word outside
+# {stored, duplicate, merged}. `stored` is the strongest claim in the vocabulary and this row has
+# not earned it, so it gets its own value and an error naming what the store actually said.
+OUTCOME_UNRESOLVED = "unresolved"
+
+
 @dataclass(frozen=True)
 class ReplayResult:
     path: Path
     attempted: bool
     chunk_id: str | None
     error: str | None = None
+    # What the write actually did. Defaults to SKIPPED so a result built without
+    # one never claims a write that did not happen.
+    outcome: str = OUTCOME_SKIPPED
 
 
 @dataclass(frozen=True)
@@ -158,8 +178,9 @@ def replay_entry(
                 attempted=True,
                 chunk_id=None,
                 error=f"store failed: {exc}; write_replay_attempt failed: {write_exc}",
+                outcome=OUTCOME_ERROR,
             )
-        return ReplayResult(path=entry.path, attempted=True, chunk_id=None, error=str(exc))
+        return ReplayResult(path=entry.path, attempted=True, chunk_id=None, error=str(exc), outcome=OUTCOME_ERROR)
 
     chunk_id = _extract_chunk_id(result)
     if not chunk_id:
@@ -168,7 +189,15 @@ def replay_entry(
             _write_replay_attempt(entry, chunk_id=None)
         except Exception as exc:
             error = f"{error}; write_replay_attempt failed: {exc}"
-        return ReplayResult(path=entry.path, attempted=True, chunk_id=None, error=error)
+        # A store that answered `error` described its own failure; `rejected` is a different state in
+        # #725 and putting the wrong word in the receipt is the thing this PR exists to stop. A store
+        # that returned nothing at all still has no word for itself, so that stays `rejected`.
+        said = _raw_store_outcome(result)
+        outcome = OUTCOME_ERROR if said == OUTCOME_ERROR else OUTCOME_REJECTED
+        return ReplayResult(path=entry.path, attempted=True, chunk_id=None, error=error, outcome=outcome)
+
+    outcome = _store_outcome(result)
+    outcome_error = _unresolved_outcome_error(result) if outcome == OUTCOME_UNRESOLVED else None
 
     try:
         _write_replay_attempt(entry, chunk_id=chunk_id, trust_chunk_id=True)
@@ -178,9 +207,10 @@ def replay_entry(
             attempted=True,
             chunk_id=chunk_id,
             error=f"stored chunk_id={chunk_id} but failed to update fallback frontmatter: {exc}",
+            outcome=outcome,
         )
 
-    return ReplayResult(path=entry.path, attempted=True, chunk_id=chunk_id)
+    return ReplayResult(path=entry.path, attempted=True, chunk_id=chunk_id, outcome=outcome, error=outcome_error)
 
 
 def queue_entry(
@@ -197,13 +227,14 @@ def queue_entry(
         queued_path = _queued_queue_path(latest)
         pending = is_pending_entry(latest)
         if queued == chunk_id and pending and (queued_path is None or queued_path.exists()):
-            return ReplayResult(path=entry.path, attempted=True, chunk_id=chunk_id)
+            # Already on the queue from an earlier run; the drain still owes us the commit.
+            return ReplayResult(path=entry.path, attempted=True, chunk_id=chunk_id, outcome=OUTCOME_DEFERRED)
 
         stored = _stored_chunk_id(latest.frontmatter)
         if stored and not pending and _fallback_chunk_matches(latest, stored):
-            return ReplayResult(path=entry.path, attempted=True, chunk_id=stored)
+            return ReplayResult(path=entry.path, attempted=True, chunk_id=stored, outcome=OUTCOME_SKIPPED)
         if not pending:
-            return ReplayResult(path=entry.path, attempted=False, chunk_id=None)
+            return ReplayResult(path=entry.path, attempted=False, chunk_id=None, outcome=OUTCOME_SKIPPED)
 
         try:
             queue_path = enqueue_func(
@@ -229,8 +260,9 @@ def queue_entry(
                     attempted=True,
                     chunk_id=None,
                     error=f"queue failed: {exc}; write_replay_attempt failed: {write_exc}",
+                    outcome=OUTCOME_ERROR,
                 )
-            return ReplayResult(path=entry.path, attempted=True, chunk_id=None, error=str(exc))
+            return ReplayResult(path=entry.path, attempted=True, chunk_id=None, error=str(exc), outcome=OUTCOME_ERROR)
 
         try:
             _write_queue_attempt_locked(latest, chunk_id=chunk_id, queue_path=queue_path)
@@ -240,9 +272,11 @@ def queue_entry(
                 attempted=True,
                 chunk_id=chunk_id,
                 error=f"queued chunk_id={chunk_id} but failed to update fallback frontmatter: {exc}",
+                outcome=OUTCOME_DEFERRED,
             )
 
-    return ReplayResult(path=entry.path, attempted=True, chunk_id=chunk_id)
+    # The row is durably queued; the drain turns it into stored/duplicate/merged later.
+    return ReplayResult(path=entry.path, attempted=True, chunk_id=chunk_id, outcome=OUTCOME_DEFERRED)
 
 
 def legacy_entry_from_path(path: Path, *, scope_map: dict[str, str] | None = None) -> FallbackEntry:
@@ -564,6 +598,47 @@ def _resolve_project(
         matches.sort(key=lambda item: item[0], reverse=True)
         return matches[0][1]
     return origin_repo_path.name
+
+
+# The three words that describe a write that actually resolved. `mcp/store_handler.py:603-606`
+# draws the same line: `_store_receipt` "handles resolved writes only".
+_RESOLVED_STORE_OUTCOMES = frozenset({OUTCOME_STORED, OUTCOME_DUPLICATE, OUTCOME_MERGED})
+
+
+def _raw_store_outcome(result: Any) -> str | None:
+    raw = result.get("outcome") if isinstance(result, dict) else getattr(result, "outcome", None)
+    return None if raw is None else str(raw).strip().lower()
+
+
+def _store_outcome(result: Any) -> str:
+    """The write store_memory reports.
+
+    ABSENT is the one case that defaults, and it defaults to ``stored`` exactly as
+    ``mcp/store_handler.py:1126`` does -- a store predating the field still committed a write.
+
+    A value that is PRESENT and not a resolved write is never remapped to ``stored``. The MCP path
+    raises on those (``store_handler.py:601-606``); raising here would abandon the rest of a 122-file
+    batch for one odd row, so the row gets ``unresolved`` and carries the raw word in its error.
+    Either way the claim is not upgraded, which is the whole point of a receipt.
+    """
+    raw = result.get("outcome") if isinstance(result, dict) else getattr(result, "outcome", None)
+    if raw is None:
+        return OUTCOME_STORED
+    # A blank or whitespace value is PRESENT. `mcp/store_handler.py` takes it through
+    # `result.get("outcome", "stored")` unchanged and `_store_receipt` then rejects it, so treating
+    # it as `stored` here is fail-open on the strongest claim -- the same defect one layer down.
+    text = str(raw).strip().lower()
+    if text in _RESOLVED_STORE_OUTCOMES:
+        return text
+    return OUTCOME_UNRESOLVED
+
+
+def _unresolved_outcome_error(result: Any) -> str:
+    raw = result.get("outcome") if isinstance(result, dict) else getattr(result, "outcome", None)
+    return (
+        f"store returned a chunk_id but described the write as {raw!r}, which is not one of "
+        f"{sorted(_RESOLVED_STORE_OUTCOMES)}; recorded as {OUTCOME_UNRESOLVED} rather than assumed stored"
+    )
 
 
 def _extract_chunk_id(result: Any) -> str | None:
