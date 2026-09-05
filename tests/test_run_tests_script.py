@@ -5,6 +5,8 @@ import stat
 import subprocess
 from pathlib import Path
 
+import pytest
+
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "run_tests.sh"
 HOOK_PATH = Path(__file__).resolve().parent.parent / ".githooks" / "pre-push"
 
@@ -49,16 +51,17 @@ def _make_stub_bin(tmp_path: Path, *, pytest_exit: int, bun_exit: int | None) ->
     return pytest_log, bun_log
 
 
+# By PREFIX, not by name: the enumerated list went stale the moment #775 added
+# BRAINLAYER_PREPUSH_TAG downstream, and a `git push origin vX` -- which is exactly when the hook
+# exports it -- then failed its own gate, because three tests below measured the ambient tag branch
+# instead of the branch they built. Anything in these two families is the AMBIENT push's business;
+# a test that wants one sets it explicitly after this call.
+_SCRUBBED_ENV_PREFIXES = ("BRAINLAYER_CHANGED_FILES", "BRAINLAYER_PREPUSH")
+
+
 def _script_env() -> dict[str, str]:
     env = os.environ.copy()
-    for key in (
-        "BRAINLAYER_CHANGED_FILES",
-        "BRAINLAYER_CHANGED_FILES_RANGE",
-        "BRAINLAYER_PREPUSH",
-        "BRAINLAYER_PREPUSH_CACHE_DIR",
-        "BRAINLAYER_PREPUSH_SCOPE",
-        "BRAINLAYER_PREPUSH_TREE_HASH",
-    ):
+    for key in [key for key in env if key.startswith(_SCRUBBED_ENV_PREFIXES)]:
         env.pop(key, None)
     # An inherited GIT_DIR/GIT_WORK_TREE overrides the cwd, so a script copied OUTSIDE a repo would
     # still find one and the detection-failure path would never be reached.
@@ -1206,6 +1209,41 @@ def test_pre_push_hook_never_narrows_an_explicitly_requested_scope(tmp_path: Pat
     assert "RANGE=<unset>" in handed
     assert "TAG=<unset>" in handed
     assert "set explicitly" in result.stdout
+
+
+def test_script_env_scrubs_an_ambient_prepush_tag_so_a_tag_push_can_pass_its_own_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The release gate must be able to measure ITSELF.
+
+    `git push origin v1.5.15` runs this suite through a hook that exports
+    BRAINLAYER_PREPUSH_TAG. Three tests below shell out to a scratch run_tests.sh and, before this
+    guard, inherited that variable -- so they measured the AMBIENT tag branch instead of the branch
+    they built, and every one of them failed. A tag push could therefore never pass the gate it
+    exists to run. `_script_env()` already scrubbed the CHANGED_FILES/SCOPE siblings; TAG was the
+    one that got added downstream (#775) without being added here. The scrub is by PREFIX now, so
+    the next sibling cannot reintroduce this: a test that WANTS one sets it explicitly.
+    """
+    monkeypatch.setenv("BRAINLAYER_PREPUSH_TAG", "v9.9.9")
+    monkeypatch.setenv("BRAINLAYER_PREPUSH_SCOPE", "full")
+    monkeypatch.setenv("BRAINLAYER_PREPUSH_CACHE_DIR", str(tmp_path / "ambient-cache"))
+    monkeypatch.setenv("BRAINLAYER_CHANGED_FILES", "src/brainlayer/watcher.py")
+    monkeypatch.setenv("BRAINLAYER_CHANGED_FILES_RANGE", "v0.0.1..v0.0.2")
+
+    leaked = sorted(key for key in _script_env() if key.startswith(("BRAINLAYER_PREPUSH", "BRAINLAYER_CHANGED_FILES")))
+    assert leaked == []
+
+    # And the three that actually broke still pass with the tag set in THIS process's env.
+    test_changed_only_scope_skips_the_unit_suite_for_a_measured_empty_diff(_fresh(tmp_path, "empty-diff"))
+    test_changed_only_scope_measures_an_empty_tag_range_instead_of_escalating(_fresh(tmp_path, "tag-range"))
+    test_pre_push_hook_never_narrows_an_explicitly_requested_scope(_fresh(tmp_path, "explicit-scope"))
+
+
+def _fresh(tmp_path: Path, name: str) -> Path:
+    """Each repo helper builds `tmp_path / "repo"`, so re-using one tmp_path would collide."""
+    fresh = tmp_path / name
+    fresh.mkdir()
+    return fresh
 
 
 def test_pre_push_hook_attaches_the_range_under_an_explicit_changed_only_scope(tmp_path: Path) -> None:
