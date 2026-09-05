@@ -325,9 +325,19 @@ def test_git_shellout_tests_scrub_inherited_git_env():
         "test_run_tests_script.py",
         "test_version_consistency.py",
     }
-    for text in git_shellout_files.values():
-        assert 'if not key.startswith("GIT_")' in text
-        assert "env=_clean_git_env()" in text or "env=_clean_test_git_env()" in text
+    for name, text in git_shellout_files.items():
+        # The contract is "GIT_* is scrubbed", not "one exact line of code". A file that must ALSO
+        # scrub its own knobs names the prefixes in a tuple instead of inlining one literal --
+        # test_version_consistency.py scrubs BRAINLAYER_VERSION_CHECK_* the same way, because a
+        # release operator really does export the cask-lag reason. Accept that spelling, but only
+        # when the tuple demonstrably leads with "GIT_", so the guard keeps its teeth.
+        scrubs_git_prefix = 'startswith("GIT_")' in text or (
+            "startswith(_SCRUBBED_ENV_PREFIXES)" in text and '_SCRUBBED_ENV_PREFIXES = ("GIT_"' in text
+        )
+        assert scrubs_git_prefix, name
+        assert any(f"env={helper}()" in text for helper in ("_clean_git_env", "_clean_test_git_env", "_script_env")), (
+            name
+        )
 
 
 def test_working_branch_history_has_no_fixture_git_identity():
