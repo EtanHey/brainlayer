@@ -1831,3 +1831,153 @@ def test_a_dotted_key_cannot_alias_a_nested_path() -> None:
     assert ("latency_baseline_ms", "captured_under.x") in paths
     assert ratchet.flatten_baseline({"a": {"b": 1}}) != ratchet.flatten_baseline({"a.b": 1})
     assert ratchet.dotted(("a", "b.c")) == "a.b.c"  # printing is lossy on purpose; comparing is not
+
+
+# --- ratchet (c): the Notes show the margin a row applies, measured or `unmeasured` -------------
+
+
+GREEN_MAIN_P50_MS = [185.0, 210.0, 214.6, 98.382, 291.416, 293.901, 281.4]
+GREEN_MAIN_P95_MS = [1920.0, 1924.0, 1895.1, 1808.074, 2242.013, 1946.418, 2084.9]
+
+
+def attestation(index: int, **measured) -> dict:
+    return {
+        "schema": 1,
+        "run_id": 1000 + index,
+        "run_attempt": 1,
+        "main_sha": f"{index:040x}",
+        "measured_at": f"2026-09-0{1 + index % 5}T12:00:00Z",
+        "workflow": ".github/workflows/ratchet-attest.yml",
+        "measured": measured,
+    }
+
+
+def real_history() -> tuple[dict, ...]:
+    return tuple(
+        attestation(
+            index,
+            **{"latency_baseline_ms.p50": p50, "latency_baseline_ms.p95": p95, "idle_cpu_pct.daemon": 4.0 + index / 10},
+        )
+        for index, (p50, p95) in enumerate(zip(GREEN_MAIN_P50_MS, GREEN_MAIN_P95_MS, strict=True))
+    )
+
+
+def write_attestations(root: Path, documents: tuple[dict, ...]) -> Path:
+    for document in documents:
+        run_dir = root / str(document["run_id"])
+        run_dir.mkdir(parents=True)
+        (run_dir / "attestation.json").write_text(json.dumps(document), encoding="utf-8")
+    return root
+
+
+def test_search_latency_notes_say_the_margin_is_unmeasured_when_no_store_was_handed_over(tmp_path: Path) -> None:
+    result = row(ratchet.collect(linux_probe(tmp_path), CORPUS), "search p50/p95")
+    assert result.status == ratchet.NA
+    assert "Margin p50: margin unmeasured — 0 of the 5 attested green main runs" in result.notes
+    assert "Margin p95: margin unmeasured — 0 of the 5 attested green main runs" in result.notes
+    # The flat 10% is gone from the table as well as the gate: no limit is printed that nobody measured.
+    assert "limit" not in result.notes and "10%" not in result.notes
+    assert str(CORPUS["latency_baseline_ms"]["p50"]) not in result.notes
+
+
+def test_search_latency_notes_show_the_measured_band_and_every_input_to_it(tmp_path: Path) -> None:
+    probe = linux_probe(tmp_path, attestations=real_history())
+    notes = row(ratchet.collect(probe, CORPUS), "search p50/p95").notes
+    assert "Margin p50: limit 463.7 ms = mean 225.0 ms + k 3.36 × σ 71.1 ms (n=7 attested green main runs" in notes
+    assert "Margin p95: limit 2457.5 ms" in notes
+    assert "one-sided 99% prediction limit" in notes
+    assert "Not measured by this run." in notes  # the band is a limit, not a value this runner produced
+
+
+def test_idle_cpu_notes_keep_the_ceiling_and_add_the_band_per_process(tmp_path: Path) -> None:
+    probe = linux_probe(tmp_path, attestations=real_history())
+    notes = row(ratchet.collect(probe, CORPUS), "idle CPU").notes
+    assert notes.startswith("Ceiling: average CPU < 30% over a 60 s window")
+    assert "Margin daemon: limit" in notes and "n=7 attested green main runs" in notes
+    assert "Margin helper: margin unmeasured — 0 of the 5" in notes
+    assert "Margin watcher: margin unmeasured — 0 of the 5" in notes
+
+
+def test_an_unreadable_store_turns_the_margin_rows_red_not_na(tmp_path: Path) -> None:
+    probe = linux_probe(tmp_path, attestations_problem="attestations root `/x` is neither a file nor a directory")
+    rows = ratchet.collect(probe, CORPUS)
+    for name in ("search p50/p95", "idle CPU"):
+        result = row(rows, name)
+        assert result.status == ratchet.RED
+        assert result.value.startswith("attestations root `/x`")
+    # Rows that apply no margin are untouched by it.
+    assert row(rows, "mapped bytes").status == ratchet.NA
+
+
+def test_main_reads_attested_runs_from_the_directory_it_is_handed(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(ratchet, "git_tree_dirty", lambda: False)
+    root = write_attestations(tmp_path / "attestations", real_history())
+    assert ratchet.main(["--attestations", str(root)]) == 0
+    out = capsys.readouterr().out
+    assert "Margin p50: limit 463.7 ms" in out
+
+
+def test_main_exits_one_when_the_attestation_path_cannot_be_read(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(ratchet, "git_tree_dirty", lambda: False)
+    assert ratchet.main(["--attestations", str(tmp_path / "absent")]) == 1
+    err = capsys.readouterr().err
+    assert "::error title=Ratchet RED: search p50/p95::" in err
+    assert "::error title=Ratchet RED: idle CPU::" in err
+
+
+def test_main_without_attestations_renders_unmeasured_and_stays_green(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(ratchet, "git_tree_dirty", lambda: False)
+    assert ratchet.main([]) == 0
+    assert "margin unmeasured — 0 of the 5 attested green main runs" in capsys.readouterr().out
+
+
+def test_a_malformed_measured_value_in_the_store_turns_the_margin_rows_red_not_a_crash(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    # Reviewer finding (Macroscope, #765): a bad `measured` value used to surface inside margin_notes
+    # and abort the whole table. Validation at load makes it an attestation problem, rendered RED.
+    monkeypatch.setattr(ratchet, "git_tree_dirty", lambda: False)
+    documents = list(real_history())
+    documents[3]["measured"]["latency_baseline_ms.p50"] = "fast"
+    root = write_attestations(tmp_path / "attestations", tuple(documents))
+    assert ratchet.main(["--attestations", str(root)]) == 1
+    captured = capsys.readouterr()
+    # A load failure is an attestation problem for BOTH margin rows, not just the one whose key broke.
+    assert "::error title=Ratchet RED: search p50/p95::" in captured.err
+    assert "::error title=Ratchet RED: idle CPU::" in captured.err
+    assert "measured.latency_baseline_ms.p50` is 'fast'" in captured.out
+
+
+def test_a_band_that_cannot_be_formed_turns_its_row_red_not_the_collector_dead(tmp_path: Path) -> None:
+    # Five individually valid values whose spread overflows the limit: the module refuses the band, and
+    # the row says so instead of the collector raising out of margin_notes (Macroscope round 2, #763).
+    documents = list(real_history())[:5]
+    for document, value in zip(documents, [1e308, 1e308, 1e308, 1e308, 1e307], strict=True):
+        document["measured"]["latency_baseline_ms.p50"] = value
+    probe = linux_probe(tmp_path, attestations=tuple(documents))
+    rows = ratchet.collect(probe, CORPUS)
+    result = row(rows, "search p50/p95")
+    assert result.status == ratchet.RED
+    assert result.value.startswith("margin p50:") and "non-finite" in result.value
+    assert row(rows, "idle CPU").status == ratchet.NA  # its own keys are fine; only the broken row is RED
+
+
+def test_main_accepts_a_single_attestation_file_as_the_store(tmp_path: Path, capsys, monkeypatch) -> None:
+    # Lead review r2 (#765, low): file-or-directory is advertised; only the directory shape was pinned.
+    monkeypatch.setattr(ratchet, "git_tree_dirty", lambda: False)
+    root = write_attestations(tmp_path / "attestations", real_history()[:1])
+    single = root / "1000" / "attestation.json"
+    assert ratchet.main(["--attestations", str(single)]) == 0
+    assert "margin unmeasured — 1 of the 5 attested green main runs" in capsys.readouterr().out
+
+
+def test_a_describe_failure_is_a_row_problem_not_a_collector_abort(tmp_path: Path, monkeypatch) -> None:
+    # Lead review r2 (#765, low): describe() sat outside the try; unreachable today, but the
+    # signature-report path's never-abort rule applies to this row too.
+    def broken_describe(margin, *, unit):
+        raise ValueError("simulated incomplete margin")
+
+    monkeypatch.setattr(ratchet.margins, "describe", broken_describe)
+    rows = ratchet.collect(linux_probe(tmp_path, attestations=real_history()), CORPUS)
+    result = row(rows, "search p50/p95")
+    assert result.status == ratchet.RED and "simulated incomplete margin" in result.value
