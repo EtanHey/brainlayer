@@ -2670,15 +2670,53 @@ class TestJSONLWatcher:
 # heartbeat is timestamped operational logging, the banner is a one-shot human greeting -- so the
 # fix is not to duplicate the heartbeat onto stdout (two writers of one signal, and the noisier
 # one unparseable). It is to say which surface is CANONICAL for liveness: the health file.
-# These two tests pin that choice so the next reader does not have to re-derive it from a grep.
+# These tests pin that choice so the next reader does not have to re-derive it from a grep.
+#
+# Two of them read the AST rather than running the daemon: behavioural coverage would need a
+# 60-second run (`heartbeat_interval_s` is 60 and `last_heartbeat` starts at now).
+#
+# Caveat worth knowing: the basicConfig pin asserts on `cli/__init__.py` from the WATCHER's suite,
+# so a changed-only push that touches only the CLI will not run it. That mapping is a separate
+# concern from this liveness contract.
+
+
+def _leading_string_literal(node: ast.expr) -> str:
+    """The literal text a call argument STARTS with, plain string or f-string.
+
+    An f-string is an `ast.JoinedStr`, not a `Constant`, so a Constant-only filter would miss a
+    second heartbeat writer spelled `rprint(f"Watcher alive: {n}")` -- and the "one signal, one
+    writer" contract would only be half enforced (#776 round-1 review, low).
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr) and node.values:
+        first = node.values[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            return first.value
+    return ""
+
+
+def _calls_whose_first_arg_starts_with(tree: ast.AST, prefix: str) -> list[ast.Call]:
+    return [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and node.args and _leading_string_literal(node.args[0]).startswith(prefix)
+    ]
+
+
+def _parsed(module) -> ast.Module:
+    return ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
 
 
 class TestWatcherLivenessSurface:
-    def test_health_file_is_the_liveness_surface_and_advances_every_poll(self, tmp_path):
+    @staticmethod
+    def test_health_file_is_the_liveness_surface_and_advances_every_poll(tmp_path):
         """poll_count and updated_at both move on each poll -- that is what makes it liveness.
 
         A snapshot that merely EXISTS proves the watcher started once. Liveness needs a value
-        that changes, which is what a sampler should read instead of grepping a log stream.
+        that changes, which is what a sampler should read instead of grepping a log stream. Both
+        comparisons are strict: `>=` on the timestamp would pass on an unchanged one, leaving a
+        sampler that reads only updated_at unpinned (#776 round-1 review, low).
         """
         project = tmp_path / "projects" / "test-project"
         project.mkdir(parents=True)
@@ -2700,47 +2738,36 @@ class TestWatcherLivenessSurface:
 
         assert first["poll_count"] == 1
         assert second["poll_count"] == 2
-        assert second["updated_at"] >= first["updated_at"]
+        assert datetime.fromisoformat(second["updated_at"]) > datetime.fromisoformat(first["updated_at"])
         assert datetime.fromisoformat(second["updated_at"]).tzinfo is not None
 
-    def test_the_heartbeat_rides_the_logger_and_the_watch_command_logs_to_stderr(self):
-        """The split, asserted rather than described.
+    @staticmethod
+    def test_the_heartbeat_has_exactly_one_emit_site_and_it_is_the_logger():
+        """One signal, one writer -- and that writer is the logger, never stdout."""
+        heartbeat_calls = _calls_whose_first_arg_starts_with(_parsed(brainlayer.watcher), "Watcher alive")
 
-        Behavioural coverage would need a 60-second daemon run (`heartbeat_interval_s` is 60 and
-        `last_heartbeat` starts at now), so this reads the two call sites out of the AST instead:
-        the heartbeat is a `logger.info` and never a `print`, and the `watch` command's
-        `logging.basicConfig` names `sys.stderr` explicitly rather than inheriting a default.
+        assert len(heartbeat_calls) == 1, "the heartbeat must have exactly one emit site"
+        emitter = heartbeat_calls[0].func
+        assert isinstance(emitter, ast.Attribute), "the heartbeat must go through a logger, not a bare call"
+        assert (emitter.value.id, emitter.attr) == ("logger", "info")
 
-        Caveat worth knowing: this asserts on `cli/__init__.py` from the WATCHER's suite, so a
-        changed-only push that touches only the CLI will not run it. The mapping for that path is
-        a separate concern from this liveness contract.
-        """
-        watcher_tree = ast.parse(Path(brainlayer.watcher.__file__).read_text(encoding="utf-8"))
-
-        heartbeat_calls = [
+    @staticmethod
+    def test_the_watch_command_sends_its_log_stream_to_stderr_explicitly():
+        """`stream=sys.stderr` is the whole reason the heartbeat is not in watch.out.log."""
+        watch_fns = [
             node
-            for node in ast.walk(watcher_tree)
-            if isinstance(node, ast.Call)
-            and node.args
-            and isinstance(node.args[0], ast.Constant)
-            and isinstance(node.args[0].value, str)
-            and node.args[0].value.startswith("Watcher alive")
+            for node in ast.walk(_parsed(brainlayer.cli))
+            if isinstance(node, ast.FunctionDef) and node.name == "watch"
         ]
-        assert len(heartbeat_calls) == 1, "expected exactly one heartbeat emit site"
-        heartbeat_func = heartbeat_calls[0].func
-        assert isinstance(heartbeat_func, ast.Attribute)
-        assert (heartbeat_func.value.id, heartbeat_func.attr) == ("logger", "info")
+        assert len(watch_fns) == 1, "expected exactly one `watch` command function"
 
-        cli_tree = ast.parse(Path(brainlayer.cli.__file__).read_text(encoding="utf-8"))
-        watch_fn = next(
-            node for node in ast.walk(cli_tree) if isinstance(node, ast.FunctionDef) and node.name == "watch"
-        )
         basic_configs = [
             node
-            for node in ast.walk(watch_fn)
+            for node in ast.walk(watch_fns[0])
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "basicConfig"
         ]
         assert len(basic_configs) == 1, "expected the watch command to configure logging once"
+
         streams = [kw.value for kw in basic_configs[0].keywords if kw.arg == "stream"]
         assert len(streams) == 1, "the watcher's log stream must be explicit, not inherited"
         assert (streams[0].value.id, streams[0].attr) == ("sys", "stderr")
