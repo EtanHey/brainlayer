@@ -39,7 +39,17 @@ def run_probe(code):
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
-        env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(REPO_ROOT / "src")},
+        env={
+            "PATH": "/usr/bin:/bin",
+            "PYTHONPATH": str(REPO_ROOT / "src"),
+            # conftest arms this for every unmarked test and relies on subprocesses
+            # inheriting it -- "a test that SPAWNS a re-embedding script loads a model
+            # just as surely as one that imports it". An explicit env dict drops it, so
+            # it is re-armed here by hand. It also strengthens these two probes: a model
+            # loaded at hook-import time now trips the repo guard as well as the
+            # assertion below.
+            "BRAINLAYER_FORBID_EMBEDDING_MODEL": "1",
+        },
         # Explicit: the assert below reports the child's stderr, which is a far
         # more useful failure than CalledProcessError's bare exit code.
         check=False,
