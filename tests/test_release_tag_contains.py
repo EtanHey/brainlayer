@@ -16,10 +16,22 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "release_tag_contains.py"
 
 
+def _clean_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """`.githooks/pre-push` runs this suite with GIT_DIR/GIT_INDEX_FILE exported.
+
+    Those win over `cwd`, so an unscrubbed fixture commits into the REAL repo instead of its
+    temp one — measured: every fixture died on `git commit` under the hook while passing bare.
+    """
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    env.update(extra or {})
+    return env
+
+
 def _git(repo: Path, *args: str) -> str:
     return subprocess.run(
         ["git", *args],
         cwd=repo,
+        env=_clean_env(),
         capture_output=True,
         text=True,
         check=True,
@@ -27,9 +39,28 @@ def _git(repo: Path, *args: str) -> str:
 
 
 def _commit(repo: Path, message: str) -> str:
+    """Identity rides on `-c`, never `git config`.
+
+    A `git config user.email` write goes to the COMMON config — shared by every worktree — so if
+    the scrub above ever regresses, this fixture must still leave no trace in the real repo.
+    Measured the hard way: an unscrubbed run wrote `user.name = Gate Test` and `core.bare = true`
+    into ~/Gits/brainlayer/.git/config and committed `feat: one` onto the branch being pushed.
+    """
     (repo / "file.txt").write_text(message)
     _git(repo, "add", "file.txt")
-    _git(repo, "commit", "-q", "-m", message)
+    _git(
+        repo,
+        "-c",
+        "user.email=gate@example.com",
+        "-c",
+        "user.name=Gate Test",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-q",
+        "-m",
+        message,
+    )
     return _git(repo, "rev-parse", "HEAD")
 
 
@@ -39,9 +70,9 @@ def repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "main")
-    _git(repo, "config", "user.email", "gate@example.com")
-    _git(repo, "config", "user.name", "Gate Test")
-    _git(repo, "config", "commit.gpgsign", "false")
+    # Fail LOUD before the first commit if anything still points at another repository.
+    git_dir = Path(_git(repo, "rev-parse", "--absolute-git-dir")).resolve()
+    assert tmp_path.resolve() in git_dir.parents, f"fixture escaped its tmp repo: {git_dir}"
 
     shas = {}
     shas["c1"] = _commit(repo, "feat: one")
@@ -63,7 +94,7 @@ def _run(repo: Path, *args: str, env: dict[str, str] | None = None):
     return subprocess.run(
         ["python3", str(SCRIPT), *args],
         cwd=repo,
-        env={**os.environ, **(env or {})},
+        env=_clean_env(env),
         capture_output=True,
         text=True,
         check=False,
@@ -113,6 +144,22 @@ def test_commit_absent_from_this_repo_is_not_in_rather_than_a_crash(repo: Path) 
     assert result.returncode == 1
     assert "NOT IN" in result.stdout
     assert "not in this repo" in result.stdout
+
+
+def test_an_inherited_git_dir_cannot_redirect_the_gate(repo: Path, tmp_path: Path) -> None:
+    """Run from a hook or `git rebase --exec`, GIT_DIR would answer for the WRONG repository.
+
+    `other` has no v1.1.0, so an unscrubbed run exits 2 on "no such tag" — a release gate that
+    silently graded a different repo is exactly the unfalsifiable claim this script closes.
+    """
+    other = tmp_path / "other"
+    other.mkdir()
+    _git(other, "init", "-q", "-b", "main")
+
+    result = _run(repo, "v1.1.0", _shas(repo)["c3"], env={"GIT_DIR": str(other / ".git")})
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "| IN |" in result.stdout
 
 
 def test_unknown_tag_is_a_usage_error_not_a_pass(repo: Path) -> None:

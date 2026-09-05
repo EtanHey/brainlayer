@@ -43,16 +43,26 @@ PR_CLAIM = re.compile(r"^(?:#(\d+)|(\d{1,6}))$")
 NOT_IN_REPO = "(commit not in this repo -- fetch it before claiming it)"
 
 
-def _run(args: list[str], cwd: str) -> subprocess.CompletedProcess[str]:
+def _scrubbed_git_env() -> dict[str, str]:
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
+def _run(args: list[str], cwd: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     """A missing executable is a FAILED check, never a traceback that reads as a crash."""
     try:
-        return subprocess.run(args, cwd=cwd, capture_output=True, text=True, check=False)
+        return subprocess.run(args, cwd=cwd, capture_output=True, text=True, check=False, env=env)
     except OSError as error:
         return subprocess.CompletedProcess(args, 127, "", f"{args[0]}: {error.strerror}")
 
 
 def _git(args: list[str], cwd: str) -> subprocess.CompletedProcess[str]:
-    return _run(["git", *args], cwd)
+    """Always answer for ``cwd``, never for an inherited repo.
+
+    Git exports ``GIT_DIR``/``GIT_INDEX_FILE`` into hooks and into ``git rebase --exec``, and they
+    win over the working directory. A release gate that silently answered for the WRONG repository
+    would be the same class of unfalsifiable claim this script exists to close, so scrub them.
+    """
+    return _run(["git", *args], cwd, env=_scrubbed_git_env())
 
 
 def _escape(cell: str) -> str:
