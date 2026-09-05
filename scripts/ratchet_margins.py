@@ -46,6 +46,7 @@ import math
 import os
 import re
 import statistics
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -147,14 +148,29 @@ def t_quantile(df: int) -> float:
 
 
 def measured_margin(values: list[float], *, minimum_runs: int = MINIMUM_RUNS) -> Margin:
-    """The band for one row, from the values it took on attested green main runs."""
+    """The band for one row, from the values it took on attested green main runs.
+
+    Raises ``AttestationError`` when the values are individually finite but the band is not: a limit
+    of ``inf`` would make ``within`` say True for every future value and silently switch that row's
+    gate off (Macroscope, #763). Fail closed instead.
+    """
+    if minimum_runs < MINIMUM_RUNS:
+        raise ValueError(f"minimum_runs={minimum_runs} is below {MINIMUM_RUNS}, the fewest runs the t-table covers")
     n = len(values)
     if n < minimum_runs:
         return Margin(kind=UNMEASURED, n=n, minimum=minimum_runs)
-    mean = statistics.fmean(values)
-    stdev = statistics.stdev(values)  # sample (n-1): the population is the runs we did NOT see
-    k = t_quantile(n - 1) * math.sqrt(1 + 1 / n)
-    return Margin(kind=MEASURED, n=n, minimum=minimum_runs, mean=mean, stdev=stdev, k=k, limit=mean + k * stdev)
+    try:
+        mean = math.fsum(value / n for value in values)  # scaled first: a plain sum can overflow
+        stdev = statistics.stdev(values)  # sample (n-1): the population is the runs we did NOT see
+        k = t_quantile(n - 1) * math.sqrt(1 + 1 / n)
+        limit = mean + k * stdev
+    except OverflowError as error:
+        raise AttestationError("attested values are too large to form a band") from error
+    if not math.isfinite(limit):
+        raise AttestationError(
+            f"attested values give a non-finite prediction limit ({limit}), so no band can be applied"
+        )
+    return Margin(kind=MEASURED, n=n, minimum=minimum_runs, mean=mean, stdev=stdev, k=k, limit=limit)
 
 
 def within(margin: Margin, value: float) -> bool | None:
@@ -278,8 +294,13 @@ def validate_attestation(payload: object, source: str) -> dict:
 
 
 def honest_value(value: object) -> bool:
-    # bool is an int in Python; `true` would otherwise be a measurement of 1.
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
+    # bool is an int in Python; `true` would otherwise be a measurement of 1. Integers are compared
+    # directly: math.isfinite(int) converts first and raises OverflowError past float range (Macroscope).
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return 0 <= value <= sys.float_info.max
+    return isinstance(value, float) and math.isfinite(value) and value >= 0
 
 
 def lookup(document: dict, key: tuple[str, ...]) -> object | None:

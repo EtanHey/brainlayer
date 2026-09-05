@@ -292,3 +292,31 @@ def test_a_root_that_cannot_be_scanned_is_a_refusal_not_a_traceback(tmp_path: Pa
     finally:
         root.chmod(0o755)
     assert "could not be scanned (PermissionError)" in str(error.value)
+
+
+def test_a_non_finite_band_is_refused_not_applied() -> None:
+    # Reviewer finding (Macroscope, #763): limit=inf would make within() True for every value and
+    # switch the row's gate off silently. Five finite values whose spread overflows the limit:
+    with pytest.raises(margins.AttestationError) as error:
+        margins.measured_margin([1e308, 1e308, 1e308, 1e308, 1e307])
+    assert "non-finite prediction limit" in str(error.value) or "too large" in str(error.value)
+
+
+def test_five_values_at_float_max_have_a_representable_mean() -> None:
+    import sys
+
+    margin = margins.measured_margin([sys.float_info.max] * 5)
+    assert margin.mean == sys.float_info.max and margin.stdev == 0.0 and margin.limit == sys.float_info.max
+
+
+def test_a_minimum_below_the_table_is_refused_up_front() -> None:
+    with pytest.raises(ValueError):
+        margins.measured_margin([1.0], minimum_runs=1)
+
+
+def test_an_integer_past_float_range_is_refused_as_a_value_not_a_traceback() -> None:
+    assert margins.honest_value(10**400) is False
+    assert margins.honest_value(10**18) is True
+    runs = p50_runs([200.0] * 5) + [attestation(9, **{"latency_baseline_ms.p50": 10**400})]
+    with pytest.raises(margins.AttestationError):
+        margins.series(runs, margins.LATENCY_P50)
