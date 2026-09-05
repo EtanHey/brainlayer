@@ -7,6 +7,7 @@ import functools
 import hashlib
 import json
 import os
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -286,8 +287,74 @@ _CLASS_KEPT_PROBES: tuple[tuple[str, ...], ...] = (
 )
 
 
-def env_denylist_overreach() -> tuple[EnvDenylistOverreach, ...]:
+def split_denylist_patterns(raw: str) -> tuple[str, ...]:
+    """Public split for a raw BRAINLAYER_INGEST_DENYLIST value (comma- or newline-separated)."""
+    return _split_patterns(raw)
+
+
+def env_file_denylist_patterns(env_file: str | Path) -> tuple[str, ...] | None:
+    """Read BRAINLAYER_INGEST_DENYLIST out of a resolved env file.
+
+    `brainlayer setup` writes this file and launchd is pointed at it, so it -- not the process
+    environment of whatever shell ran setup -- is where a deployment blanket actually lives.
+    Returns None when the key is absent, which is a different thing from an empty override.
+
+    This deliberately does not reuse `config._parse_env_value`: importing `config` runs
+    `load_brainlayer_env()` at import time, and that parser resolves `$(op read ...)` values.
+    Neither belongs in a read-only audit of a denylist line, so the quoting is matched with shlex
+    and a command-substitution value is refused rather than executed.
+    """
+    path = Path(os.path.abspath(os.path.expanduser(str(env_file))))
+    try:
+        raw_text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    value: str | None = None
+    for raw_line in raw_text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        if stripped.startswith("export "):
+            stripped = stripped[len("export ") :].lstrip()
+        key, _, candidate = stripped.partition("=")
+        if key.strip() != BRAINLAYER_INGEST_DENYLIST_ENV:
+            continue
+        candidate = candidate.strip()
+        if "$(" in candidate or "`" in candidate:
+            continue
+        try:
+            parsed = shlex.split(candidate, comments=False, posix=True)
+        except ValueError:
+            continue
+        value = parsed[0] if parsed else ""
+    if value is None:
+        return None
+    return _split_patterns(value)
+
+
+def _probe_roots(expanded_pattern: Path) -> tuple[Path, ...]:
+    """Home, plus any provider root the pattern itself is anchored at.
+
+    A blanket does not have to live under $HOME -- an absolute
+    /var/.../.claude/projects/**/subagents/** overrides ingest just as wholesale -- so probes are
+    rebuilt at the pattern's own anchor as well. Mirrors _inferred_homes, which does this for paths.
+    """
+    roots: list[Path] = [Path.home()]
+    parts = expanded_pattern.parts
+    for provider_dir in (".claude", ".codex", ".cursor", ".gemini"):
+        if provider_dir not in parts:
+            continue
+        provider_index = parts.index(provider_dir)
+        if provider_index > 0:
+            roots.append(Path(*parts[:provider_index]))
+    return tuple(dict.fromkeys(roots))
+
+
+def env_denylist_overreach(patterns: tuple[str, ...] | None = None) -> tuple[EnvDenylistOverreach, ...]:
     """Return the configured patterns that exclude transcript classes the class rule keeps.
+
+    Pass `patterns` to audit a source other than the process environment -- notably the env file
+    `brainlayer setup` just resolved, which is where a deployment blanket actually lives.
 
     The class rule excludes only memory-reading workers (see MEMORY_READER_ATTRIBUTIONS),
     read from each transcript's own attribution. A pattern that also swallows an ordinary
@@ -296,11 +363,17 @@ def env_denylist_overreach() -> tuple[EnvDenylistOverreach, ...]:
     """
     findings: list[EnvDenylistOverreach] = []
     home = Path.home()
-    probes = tuple(Path(os.path.abspath(str(home.joinpath(*parts)))) for parts in _CLASS_KEPT_PROBES)
-    for pattern in _configured_patterns():
+    for pattern in _configured_patterns() if patterns is None else patterns:
+        matched: str | None = None
         for expanded_pattern in _expand_globs(pattern, (home,)):
-            match = next((probe for probe in probes if _match_parts(probe.parts, expanded_pattern.parts)), None)
-            if match is not None:
-                findings.append(EnvDenylistOverreach(pattern=pattern, kept_example=str(match)))
+            for root in _probe_roots(expanded_pattern):
+                probes = (Path(os.path.abspath(str(root.joinpath(*parts)))) for parts in _CLASS_KEPT_PROBES)
+                match = next((probe for probe in probes if _match_parts(probe.parts, expanded_pattern.parts)), None)
+                if match is not None:
+                    matched = str(match)
+                    break
+            if matched is not None:
                 break
+        if matched is not None:
+            findings.append(EnvDenylistOverreach(pattern=pattern, kept_example=matched))
     return tuple(findings)
