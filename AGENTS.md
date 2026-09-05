@@ -144,15 +144,27 @@ not a copy here. Two contracts an agent must know:
 - **`~/Gits/brainlayer` is a real checkout kept at `origin/main`**, and ~22 worktrees hang off it.
   It was repaired on 2026-09-06 (`core.bare` true→false, HEAD `5bd8d818`→`da325b8d`) after its
   working tree sat frozen at the 09-02 snapshot for days. It is not self-stabilising.
-- **The root's `src/` is on the interpreter path of every bare `python3` on this machine.**
-  `/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/site-packages/_brainlayer.pth`
-  contains exactly `/Users/etanheyman/Gits/brainlayer/src`, so `python3 -c "import brainlayer"`
+- **The root's `src/` is on the interpreter path of the `python3` that Claude Code hooks resolve
+  to** — Framework 3.13, first on PATH (`/usr/local/bin/python3` is a symlink to that same binary).
+  Its `/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/site-packages/_brainlayer.pth`
+  contains exactly `/Users/etanheyman/Gits/brainlayer/src`, so a bare `python3 -c "import brainlayer"`
   resolves to `<root>/src/brainlayer/__init__.py` — a live working tree, not an installed package.
-  **Checking out a branch, or leaving a dirty tree, at the ROOT therefore changes what those
-  processes import** — for every session, in every lane, immediately.
+  **Checking out a branch, or leaving a dirty tree, at the ROOT therefore changes what that
+  interpreter imports** — for every session, in every lane, immediately.
+- **It is not every `python3`, and testing with the wrong one proves nothing.**
+  `/opt/homebrew/bin/python3` (3.14), Framework 3.10, and `/usr/bin/python3` (3.9) do not see the
+  `.pth` at all and fail `import brainlayer` outright. The exposure is real and load-bearing for the
+  default interpreter only — which is the one that matters, because it is the one the hooks get.
 - **Law: never `git checkout` / `git switch` a branch at the root, and never edit files there.**
-  Work only in your own worktree, cut from `origin/main`:
-  `git worktree add .worktrees/<name> -b wt/<name> origin/main`.
+  Work only in your own worktree, cut from `origin/main`. Give `git worktree add` an **absolute**
+  target: it resolves a relative path against your cwd, so a seat that is already inside a worktree
+  — which, under this rule, is every seat — would turn `.worktrees/<name>` into a nested checkout at
+  `.worktrees/<current>/.worktrees/<name>`. The absolute form is copy-paste safe from anywhere, and
+  is also what the machine's worktree-location guard accepts:
+
+  ```bash
+  git worktree add ~/Gits/brainlayer/.worktrees/<name> -b wt/<name> origin/main
+  ```
 - **The evidence.** While the root sat at `5bd8d818` (2026-09-04), #782's commit `123da9b4` was not
   an ancestor of it, so everything importing through the `.pth` ran 09-02 library code: **#782 was
   merged but not live.** The same root-is-live-code path is what let a checkout's `install.sh` point
@@ -162,8 +174,9 @@ not a copy here. Two contracts an agent must know:
   `hooks/brainbar-stop-index.py`) are pinned in `~/.claude/settings.json` to
   `/opt/homebrew/opt/brainlayer/libexec/venv/bin/python`, which does **not** see the `.pth` and
   resolves to the keg (`/opt/homebrew/Cellar/brainlayer/1.5.15/…`). But that pin is machine config,
-  not a repo change, and nothing pins the rest: any script, `python3 -c`, or unpinned hook still
-  imports the root's working tree. **The root rule is load-bearing, not merely defence in depth.**
+  not a repo change, and nothing pins the rest: any script, `python3 -c`, or unpinned hook that runs
+  under the default `python3` still imports the root's working tree. **The root rule is load-bearing,
+  not merely defence in depth.**
 
 <!-- COMMANDS: `python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"` | test: `pytest` | lint: `ruff check src/ tests/ && ruff format src/ tests/` | run: `brainlayer index && brainlayer setup` -->
 ## Workflow (HOW)
