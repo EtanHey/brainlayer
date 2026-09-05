@@ -101,6 +101,11 @@ Call `expand_palette` or set `BRAINLAYER_MCP_PROFILE=full` for the rest.
 - Every Homebrew release must run `scripts/release-verify-signatures.sh <keg-path>` after installation.
 - Any invalid `*.so` or `*.dylib` blocks release/deploy; never restart services until the gate passes.
 - A `Casks/brainbar.rb` version lower than the package version is allowed only when `BRAINLAYER_VERSION_CHECK_CASK_LAG_REASON="no BrainBar release for <ver>"` is set for `scripts/brainlayer-version-check.sh`; a cask ahead of the package still fails hard.
+- Every release receipt must include the table from `scripts/release_tag_contains.py <tag> <PRs/SHAs>`,
+  and **a deploy brief may only name a fix that passed that gate** — `v1.5.15` was tagged 22 minutes
+  before #778 merged, and a whole M1 deploy was cut for a fix the release did not contain.
+- `--assert-module <importable>` checks the same claim from the other end, against the INSTALLED keg's
+  python; a `ModuleNotFoundError` there blocks the deploy exactly as an invalid signature does.
 
 ## PR Workflow
 - Request `@codex review`.

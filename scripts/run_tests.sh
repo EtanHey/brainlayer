@@ -342,6 +342,15 @@ map_changed_files_to_pytests() {
           mapped=1
         fi
         ;;
+      scripts/release_tag_contains.py)
+        # The release gate needs a mapping of its own: no generic scripts/*.py rule exists, and an
+        # unmapped gate script is the same fail-open the gate itself exists to close.
+        test_path="$TEST_ROOT/test_release_tag_contains.py"
+        if [ -f "$test_path" ]; then
+          append_unique "$test_path"
+          mapped=1
+        fi
+        ;;
       scripts/run_tests.sh|.githooks/pre-push)
         test_path="$TEST_ROOT/test_run_tests_script.py"
         if [ -f "$test_path" ]; then
