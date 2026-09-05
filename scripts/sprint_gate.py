@@ -217,13 +217,13 @@ def check_search(config: dict) -> dict:
         margins={key: margins.describe(band, unit="ms") for key, band in bands.items()},
         attested_runs={key: band.n for key, band in bands.items()},
     )
-    verdicts = {key: margins.within(bands[key], measured[key]) for key in measured}
+    verdicts = {key: margins.judge(bands[key], measured[key]) for key in measured}
     limits = {key: bands[key].limit for key in measured}  # None where the band is unmeasured
     # Fail-closed ORDER (lead review, #764): a measured FAIL on one percentile is a finding whatever
     # the sibling's state; only when nothing failed does a missing band make the check UNMEASURED.
-    if any(verdict is False for verdict in verdicts.values()):
+    if margins.FAIL in verdicts.values():
         return status("search_latency", False, limits_ms=limits, verdicts=verdicts, **details)
-    if any(verdict is None for verdict in verdicts.values()):
+    if margins.UNMEASURED_VERDICT in verdicts.values():
         return unmeasured("search_latency", limits_ms=limits, verdicts=verdicts, **details)
     return status("search_latency", True, limits_ms=limits, verdicts=verdicts, **details)
 
@@ -447,23 +447,31 @@ def check_resource(config: dict) -> dict:
     helper_rss = max(sample["helper"]["rss_bytes"] for sample in samples)
     required_missing = [name for name in config.get("required_processes", []) if not samples[-1][name]["pids"]]
     thresholds = config["thresholds"]
-    described, over_band = cpu_bands(config, cpu)
-    passed = all(value < thresholds["cpu_percent"] for value in cpu.values()) and not over_band
-    passed = passed and helper_rss < thresholds["helper_rss_bytes"] and not required_missing
-    return status(
-        "resource_budget",
-        passed,
+    described, verdicts = cpu_bands(config, cpu)
+    over_band = [name for name, verdict in verdicts.items() if verdict == margins.FAIL]
+    details = dict(
         sample_count=len(samples),
         average_cpu_pct=cpu,
         cpu_margins=described,
+        cpu_verdicts=verdicts,
         cpu_over_measured_band=over_band,
         helper_max_rss_bytes=helper_rss,
         required_missing=required_missing,
     )
+    failed = any(value >= thresholds["cpu_percent"] for value in cpu.values()) or bool(over_band)
+    failed = failed or helper_rss >= thresholds["helper_rss_bytes"] or bool(required_missing)
+    if failed:
+        return status("resource_budget", False, **details)
+    # Same order as check_search (lead review r2): a measured FAIL anywhere wins; only then does a
+    # process with no band make the check UNMEASURED -- the ceiling passed, but the check is not
+    # fully judged and must say so rather than read as PASS.
+    if any(verdict == margins.UNMEASURED_VERDICT for verdict in verdicts.values()):
+        return unmeasured("resource_budget", **details)
+    return status("resource_budget", True, **details)
 
 
-def cpu_bands(config: dict, cpu: dict[str, float]) -> tuple[dict[str, str], list[str]]:
-    """The measured idle-CPU band per process: its description, and which processes sit outside it.
+def cpu_bands(config: dict, cpu: dict[str, float]) -> tuple[dict[str, str], dict[str, str]]:
+    """The measured idle-CPU band per process: its description, and its PASS/FAIL/UNMEASURED verdict.
 
     Two different gates on one number, both applied by check_resource. `cpu_percent` is the ratified
     CEILING and stays a hard budget. The band is the RATCHET: RED when this run's idle CPU is outside
@@ -474,8 +482,8 @@ def cpu_bands(config: dict, cpu: dict[str, float]) -> tuple[dict[str, str], list
     """
     bands = {name: margins.margin_for(config.get("attestations"), margins.idle_cpu_key(name)) for name in cpu}
     described = {name: margins.describe(band, unit="%") for name, band in bands.items()}
-    over_band = [name for name, band in bands.items() if margins.within(band, cpu[name]) is False]
-    return described, over_band
+    verdicts = {name: margins.judge(band, cpu[name]) for name, band in bands.items()}
+    return described, verdicts
 
 
 def check_wal(config: dict, samples: list[int] | None = None) -> dict:

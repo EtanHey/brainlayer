@@ -550,7 +550,9 @@ def test_live_gate_skips_latency_on_uncalibrated_host(monkeypatch, capsys, tmp_p
             "calibrated_hostname": "MacBook-Pro.local",
         },
     }
-    assert {check["status"] for check in payload["checks"][1:]} == {"PASS"}
+    # Without attestations the idle-CPU band is unmeasured, so resource_budget says so (lead review r2).
+    assert [check["status"] for check in payload["checks"][1:]] == ["PASS", "UNMEASURED", "PASS"]
+    assert payload["unmeasured"] == ["resource_budget"]
 
 
 def test_live_gate_rejects_missing_baseline_hostname(monkeypatch, capsys, tmp_path: Path):
@@ -886,7 +888,7 @@ def test_keg_built_from_this_sha_is_proof_eligible(monkeypatch, capsys, tmp_path
     assert payload["provenance"]["served_pythonpath"] is None
     # search_latency ran and is UNMEASURED: proof-eligibility is about the served code, not about
     # whether a latency band exists yet, and no attested main runs were handed to this run.
-    assert [check["status"] for check in payload["checks"]] == ["UNMEASURED", "PASS", "PASS", "PASS"]
+    assert [check["status"] for check in payload["checks"]] == ["UNMEASURED", "PASS", "UNMEASURED", "PASS"]
 
 
 def fake_ps(helper_count: int, calls: list[str] | None = None):
@@ -1298,7 +1300,7 @@ def test_fewer_than_five_attested_runs_is_unmeasured_never_a_verdict(tmp_path: P
     assert check["status"] == "UNMEASURED"
     assert check["details"]["measured_ms"]["p50"] == 950.0  # the value is real and is reported
     assert check["details"]["limits_ms"] == {"p50": None, "p95": None}  # no number stands in for the missing band
-    assert check["details"]["verdicts"] == {"p50": None, "p95": None}
+    assert check["details"]["verdicts"] == {"p50": "UNMEASURED", "p95": "UNMEASURED"}
     assert check["details"]["attested_runs"] == {"p50": 4, "p95": 4}
     assert "4 of the 5 attested green main runs" in check["details"]["margins"]["p50"]
 
@@ -1328,7 +1330,7 @@ def test_a_measured_fail_on_one_percentile_is_never_masked_by_an_unmeasured_sibl
     check = payload["checks"][0]
     assert check["status"] == "FAIL"
     assert check["details"]["limits_ms"] == {"p50": pytest.approx(463.7, abs=0.2), "p95": None}
-    assert check["details"]["verdicts"] == {"p50": False, "p95": None}
+    assert check["details"]["verdicts"] == {"p50": "FAIL", "p95": "UNMEASURED"}
 
 
 def test_duplicate_inline_attestations_refuse_the_replay(tmp_path: Path, capsys):
@@ -1372,7 +1374,8 @@ def test_live_gate_reads_attested_runs_from_the_path_it_is_handed(monkeypatch, c
     returncode, payload = run_live_config(
         monkeypatch, capsys, tmp_path, config, hostname, extra_args=["--attestations", str(root)]
     )
-    assert returncode == 0 and payload["status"] == "PASS" and payload["unmeasured"] == []
+    assert returncode == 0 and payload["status"] == "PASS"
+    assert payload["unmeasured"] == ["resource_budget"]  # the store here carries latency keys only
     check = payload["checks"][0]
     assert check["name"] == "search_latency" and check["status"] == "PASS"
     assert check["details"]["attested_runs"] == {"p50": 7, "p95": 7}
@@ -1382,7 +1385,7 @@ def test_live_gate_without_attestations_renders_latency_unmeasured(monkeypatch, 
     config = deterministic_live_config()
     hostname = config["latency_baseline_ms"]["hostname"]
     returncode, payload = run_live_config(monkeypatch, capsys, tmp_path, config, hostname)
-    assert returncode == 0 and payload["unmeasured"] == ["search_latency"]
+    assert returncode == 0 and payload["unmeasured"] == ["search_latency", "resource_budget"]
     check = payload["checks"][0]
     assert check["status"] == "UNMEASURED"
     assert "0 of the 5 attested green main runs" in check["details"]["margins"]["p50"]
@@ -1414,11 +1417,21 @@ def resource_fixture(daemon_cpu_pct: float, attestations: list[dict]) -> dict:
     }
 
 
+def cpu_history(daemon_values: list[float], others: bool = True) -> list[dict]:
+    documents = []
+    for index, value in enumerate(daemon_values):
+        measured = {"idle_cpu_pct.daemon": value}
+        if others:
+            measured.update({f"idle_cpu_pct.{name}": 0.5 + index / 10 for name in ("helper", "watcher", "drain")})
+        documents.append(attestation(index, **measured))
+    return documents
+
+
 def test_idle_cpu_goes_red_beyond_the_measured_band_even_under_the_ceiling(tmp_path: Path, capsys):
     """R3's worked example. Five attested green main runs at 4.0-5.0% idle give a band with limit
     ~6.2%. A run at 20% is far under the ratified 30% ceiling and was PASS on 3ee7c279; it is a
     four-fold drift from what green main does, and the ratchet says so."""
-    history = [attestation(i, **{"idle_cpu_pct.daemon": value}) for i, value in enumerate([4.0, 4.5, 5.0, 4.8, 4.2])]
+    history = cpu_history([4.0, 4.5, 5.0, 4.8, 4.2])
     returncode, payload = replay(tmp_path, capsys, resource_fixture(20.0, history))
     assert returncode == 1
     check = payload["checks"][0]
@@ -1430,12 +1443,27 @@ def test_idle_cpu_goes_red_beyond_the_measured_band_even_under_the_ceiling(tmp_p
     assert returncode == 0 and payload["checks"][0]["status"] == "PASS"
 
 
-def test_idle_cpu_ceiling_alone_decides_while_its_band_is_unmeasured(tmp_path: Path, capsys):
-    # The 30% ceiling is ratified and does not become unmeasured; the band's absence is stated per process.
+def test_idle_cpu_absence_of_a_band_is_unmeasured_not_pass(tmp_path: Path, capsys):
+    """Lead review r2 (#764): the ceiling is ratified and still decides FAIL, but a check whose band is
+    unmeasured is not fully judged and must say so -- the same rule search_latency follows."""
     returncode, payload = replay(tmp_path, capsys, resource_fixture(20.0, []))
     check = payload["checks"][0]
-    assert returncode == 0 and check["status"] == "PASS"
-    assert check["details"]["cpu_over_measured_band"] == []
+    assert returncode == 0 and check["status"] == "UNMEASURED"
+    assert payload["unmeasured"] == ["resource_budget"]
+    assert check["details"]["cpu_verdicts"] == {name: "UNMEASURED" for name in ("daemon", "helper", "watcher", "drain")}
     assert check["details"]["cpu_margins"]["daemon"].startswith("margin unmeasured — 0 of the 5")
+    # A ceiling breach is a measured FAIL and wins over the unmeasured band.
     returncode, payload = replay(tmp_path, capsys, resource_fixture(31.0, []))
     assert returncode == 1 and payload["checks"][0]["status"] == "FAIL"
+
+
+def test_idle_cpu_fail_on_one_process_is_never_masked_by_an_unmeasured_sibling(tmp_path: Path, capsys):
+    # Lead review r2 (#764, low): same order as latency -- any FAIL first, then any UNMEASURED, then PASS.
+    returncode, payload = replay(
+        tmp_path, capsys, resource_fixture(20.0, cpu_history([4.0, 4.5, 5.0, 4.8, 4.2], others=False))
+    )
+    check = payload["checks"][0]
+    assert returncode == 1 and check["status"] == "FAIL"
+    assert check["details"]["cpu_verdicts"]["daemon"] == "FAIL"
+    assert check["details"]["cpu_verdicts"]["helper"] == "UNMEASURED"
+    assert check["details"]["cpu_over_measured_band"] == ["daemon"]
