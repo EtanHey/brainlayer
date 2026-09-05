@@ -1811,18 +1811,23 @@ def run_daemon(
     replay_fallbacks_fn: Callable[[], Any] | None = None,
 ) -> None:
     health_path = health_path or Path(os.environ.get("BRAINLAYER_DRAIN_HEALTH_PATH", str(_default_drain_health_path())))
-    # Once, before the first cycle: whatever the fallback wrote while the DB was
-    # unreachable gets queued, so the replay half no longer waits on a human. A
-    # sweep that fails must never take the drain down with it.
-    try:
-        (replay_fallbacks_fn or replay_fallbacks_on_start)()
-    except Exception:
-        logger.warning("Fallback replay sweep failed at drain start; continuing to drain", exc_info=True)
     drain_cycles = 0
     drained_total = 0
+    swept = False
     while True:
         if max_cycles is not None and drain_cycles >= max_cycles:
             return
+        # INSIDE the loop guard, not before it. Run ahead of the bound, `max_cycles=0` stopped being
+        # a no-op: it enqueued up to the replay limit, moved fallback markers and appended durable
+        # queue work, then returned without draining any of it. `max_cycles` gates every side effect.
+        # Still once, and still before the first drain cycle -- that part is the feature.
+        if not swept:
+            swept = True
+            # A sweep that fails must never take the drain down with it.
+            try:
+                (replay_fallbacks_fn or replay_fallbacks_on_start)()
+            except Exception:
+                logger.warning("Fallback replay sweep failed at drain start; continuing to drain", exc_info=True)
         drained_total += int(drain_once_fn(batch_size=batch_size) or 0)
         drain_cycles += 1
         try:

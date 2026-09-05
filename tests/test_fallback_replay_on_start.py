@@ -388,3 +388,150 @@ def test_is_already_queued_is_the_predicate_queue_entry_short_circuits_on(tmp_pa
     # A queue file that vanished means it is NOT queued any more — it needs a slot again.
     queue_file.unlink()
     assert is_already_queued(parse_fallback_file(path)) is False
+
+
+def test_max_cycles_zero_is_a_true_no_op(tmp_path):
+    """Round-2 review, #777 @1818 (MEDIUM).
+
+    The sweep ran BEFORE the cycle bound was checked, so `run_daemon(max_cycles=0)` still enqueued up
+    to the replay limit, mutated fallback markers, appended durable queue work — and then returned
+    without draining any of it. `max_cycles` is supposed to gate every daemon side effect.
+    """
+    from brainlayer.drain import run_daemon
+
+    calls = []
+
+    run_daemon(
+        interval=0,
+        batch_size=10,
+        health_path=tmp_path / "drain-health.json",
+        drain_once_fn=lambda **_kwargs: calls.append("drain") or 0,
+        sleep_fn=lambda _seconds: None,
+        max_cycles=0,
+        replay_fallbacks_fn=lambda: calls.append("fallback-sweep"),
+    )
+
+    assert calls == []
+
+
+def test_the_sweep_still_runs_once_before_the_first_real_cycle(tmp_path):
+    """The bound gates it, but a non-zero run must still sweep first — that is the whole feature."""
+    from brainlayer.drain import run_daemon
+
+    calls = []
+
+    run_daemon(
+        interval=0,
+        batch_size=10,
+        health_path=tmp_path / "drain-health.json",
+        drain_once_fn=lambda **_kwargs: calls.append("drain") or 0,
+        sleep_fn=lambda _seconds: None,
+        max_cycles=2,
+        replay_fallbacks_fn=lambda: calls.append("fallback-sweep"),
+    )
+
+    assert calls[0] == "fallback-sweep"
+    assert calls.count("fallback-sweep") == 1
+    assert calls.count("drain") == 2
+
+
+def test_remaining_does_not_count_a_skipped_batch_entry_as_owed(tmp_path):
+    """Round-2 review, #777 @343 (LOW).
+
+    `queued` counted only clean DEFERRED, so an entry that turned SKIPPED under the lock — stored, or
+    no longer pending, between inventory and `queue_entry` — inflated `remaining`. Race-only today,
+    but the receipt would overstate the backlog the next start will actually select.
+    """
+    from brainlayer import fallback_replay as fr
+
+    repo = _repo(tmp_path / "gits", "systems")
+    _pending(repo, "a.md")
+    _pending(repo, "b.md")
+
+    real_queue_entry = fr.queue_entry
+    seen = {"n": 0}
+
+    def flaky_queue_entry(entry, **kwargs):
+        seen["n"] += 1
+        if seen["n"] == 1:
+            # Simulate the race: the drain marked this one between inventory and the lock.
+            return fr.ReplayResult(path=entry.path, attempted=False, chunk_id=None, outcome=fr.OUTCOME_SKIPPED)
+        return real_queue_entry(entry, **kwargs)
+
+    fr.queue_entry = flaky_queue_entry
+    try:
+        summary = fr.enqueue_pending_fallbacks(
+            gits_root=tmp_path / "gits",
+            scope_map={},
+            enqueue_func=lambda **_kwargs: _queue_file(tmp_path, "ok.jsonl"),
+            replayed_by="test",
+            limit=10,
+        )
+    finally:
+        fr.queue_entry = real_queue_entry
+
+    assert summary["awaiting_queue"] == 2
+    assert summary["queued"] == 1
+    assert summary["outcome_counts"] == {"deferred": 1, "skipped": 1}
+    # One deferred + one already-resolved skip means nothing is still owed.
+    assert summary["remaining"] == 0
+
+
+def test_the_inventory_walk_resolves_each_repo_root_once(tmp_path):
+    """Round-2 review, #777 @316 (MEDIUM).
+
+    The bound capped enqueues but not discovery: every daemon start re-walked and re-parsed the whole
+    tree, and `_git_root` shelled out to `git rev-parse` PER FILE. Measured on the real tree that was
+    412 subprocesses and ~2.6 s before the first drain cycle, on every KeepAlive restart — the same
+    class of idle burn as #759. Every file in one repo shares one `decisions/` directory, so the
+    resolution is cached per directory for the duration of a walk.
+    """
+    from brainlayer import fallback_replay as fr
+
+    root = tmp_path / "gits"
+    repo = _repo(root, "systems")
+    for index in range(6):
+        _pending(repo, f"f-{index}.md")
+
+    calls = {"n": 0}
+    real = fr.subprocess.check_output
+
+    def counting(*args, **kwargs):
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    fr.subprocess.check_output = counting
+    try:
+        inventory = fr.inventory_fallbacks(root, scope_map={})
+    finally:
+        fr.subprocess.check_output = real
+
+    assert len(inventory.structured) == 6
+    # One resolution for the single decisions/ directory, not one per file.
+    assert calls["n"] == 1
+
+
+def test_the_git_root_cache_does_not_leak_between_walks(tmp_path):
+    """A cache that outlived a walk would hand a stale repo root to the next one."""
+    from brainlayer import fallback_replay as fr
+
+    root = tmp_path / "gits"
+    repo = _repo(root, "systems")
+    _pending(repo, "one.md")
+
+    first = fr.inventory_fallbacks(root, scope_map={})
+    second = fr.inventory_fallbacks(root, scope_map={})
+
+    assert first.structured[0].origin_repo_path == second.structured[0].origin_repo_path
+    assert first.structured[0].origin_repo_path == repo.resolve()
+
+
+def test_the_suite_cannot_inherit_a_real_fallback_root_from_the_environment():
+    """Round-2 review, #777 @1811 (LOW) — the systemic half.
+
+    `BRAINLAYER_FALLBACK_GITS_ROOT` is absolute, so it bypasses conftest's HOME remapping entirely.
+    With it exported, any test reaching the startup sweep could `queue_entry`-write markers into
+    production `docs.local` files while using an isolated queue. `tests/conftest.py` now scrubs it
+    for every unmarked test.
+    """
+    assert "BRAINLAYER_FALLBACK_GITS_ROOT" not in os.environ
