@@ -475,11 +475,21 @@ jobs:
                   break
                 fi
                 # Bind the artifact to the run the API named. The API is GitHub's record of which
-                # main commit ran; the artifact is what that run wrote; they have to agree.
-                got_run="$(jq -r '.run_id' "${RUNNER_TEMP}/attestation/attestation.json")"
-                got_sha="$(jq -r '.main_sha' "${RUNNER_TEMP}/attestation/attestation.json")"
+                # main commit ran; the artifact is what that run wrote; they have to agree. The
+                # reads are guarded: an unparseable artifact makes `jq` exit non-zero, and under
+                # `set -e` an unguarded read killed this step BEFORE the hand-off was written, so
+                # the row never rendered its promised RED-with-reason and Collect died on a missing
+                # args file instead (Cursor, #767 round 1). Now it is one more `unresolved`.
+                got_run=""
+                got_sha=""
+                if ! got_run="$(jq -r '.run_id' "${RUNNER_TEMP}/attestation/attestation.json" 2> "$err_path")" \
+                   || ! got_sha="$(jq -r '.main_sha' "${RUNNER_TEMP}/attestation/attestation.json" 2> "$err_path")"; then
+                  reason="the artifact of run ${run_id} (main ${run_sha}) could not be read as JSON: $(awk 'NF { print; exit }' "$err_path")"
+                  break
+                fi
                 if [[ "$got_run" == "$run_id" && "$got_sha" == "$run_sha" ]]; then
                   state=attested
+                  reason="run ${run_id} on main ${run_sha}"
                 else
                   reason="the artifact of run ${run_id} (main ${run_sha}) names run ${got_run} / main ${got_sha} — it is not that run's attestation"
                 fi
@@ -496,7 +506,7 @@ jobs:
             bootstrap) printf '%s\n%s\n' --attestation-bootstrap "$reason" > "$args_path" ;;
             *) printf '%s\n%s\n' --attestation-unresolved "$reason" > "$args_path" ;;
           esac
-          echo "::notice title=Baseline attestation::${state} — ${reason:-run ${run_id} on main ${run_sha}}"
+          echo "::notice title=Baseline attestation::${state} — ${reason}"
           cat "$args_path"
 
       # `!cancelled()`, never `always()`. Two different failures ride on this one condition:

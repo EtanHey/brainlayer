@@ -850,8 +850,9 @@ ATTESTATION_METHOD_BOOTSTRAP = "base commit via git (bootstrap) · in-process ·
 ATTESTATION_NOTES = (
     "What every comparison is measured AGAINST, and who says so. The baseline fields of "
     "`tests/fixtures/sprint_gate/corpus.json` (`queries`, `latency_baseline_ms`, `thresholds`) are "
-    "compared to the `ratchet-attestation` artifact of the latest successful `push` run of "
-    "`ratchet-attest.yml` on `main`, fetched through the Actions API — a PR run cannot write to "
+    "compared to the `ratchet-attestation` artifact of the latest successful `push` or (no-input) "
+    "`workflow_dispatch` run of `ratchet-attest.yml` on `main`, fetched through the Actions API — "
+    "a PR run cannot write to "
     "another run's artifacts. A field that differs is RED unless that main run **measured** the "
     "new value; today no runner-side collector measures any baseline field, so today the baseline "
     "cannot move by PR at all, and this row says so instead of a hand edit passing. Boundary: the "

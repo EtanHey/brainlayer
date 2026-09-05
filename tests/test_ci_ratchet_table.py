@@ -2102,6 +2102,172 @@ def test_baseline_changes_name_every_moved_removed_and_added_path() -> None:
     assert ratchet.baseline_changes(before, before) == []
 
 
+# --- ratchet.yml: the fetch step, EXECUTED against a stubbed `gh` ------------------------------
+#
+# String-presence assertions on the YAML pin what the step says; these pin what it does. The real
+# `run:` block is executed under the machine's bash (3.2 on macOS, the version the workflow's own
+# comments care about) with a `gh` stub on PATH that serves fixture API pages and artifacts, a
+# `sleep` stub so the retry loops cost nothing, and the real `jq` -- Cursor, #767 round 1.
+
+FETCH_STEP = "Fetch the baseline attestation from main"
+RUN_SHA = "5" * 40
+
+
+def api_run(run_id: int, conclusion: str, event: str = "push", sha: str = RUN_SHA) -> dict:
+    return {"id": run_id, "event": event, "conclusion": conclusion, "head_sha": sha, "head_branch": "main"}
+
+
+def gh_stub(bin_dir: Path, stub_dir: Path) -> None:
+    """`gh api --paginate …` prints the fixture pages (concatenated objects, the way --paginate
+    does); `gh run download … -D <dir>` copies the fixture artifact there. Files in `stub_dir`
+    switch the failure modes on."""
+    bin_dir.mkdir()
+    (bin_dir / "gh").write_text(
+        "#!/bin/bash\n"
+        'case "$1 $2" in\n'
+        '  "api --paginate")\n'
+        '    if [ -f "$STUB_DIR/api.404" ]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi\n'
+        '    cat "$STUB_DIR/pages.json";;\n'
+        '  "run download")\n'
+        '    if [ -f "$STUB_DIR/download.fail" ]; then echo "no valid artifacts found to download" >&2; exit 1; fi\n'
+        '    dir=""; while [ $# -gt 0 ]; do if [ "$1" = "-D" ]; then dir="$2"; fi; shift; done\n'
+        '    mkdir -p "$dir"\n'
+        '    if [ -f "$STUB_DIR/artifact.json" ]; then cp "$STUB_DIR/artifact.json" "$dir/attestation.json"; fi;;\n'
+        '  *) echo "gh stub: unexpected $*" >&2; exit 99;;\n'
+        "esac\n",
+        encoding="utf-8",
+    )
+    (bin_dir / "sleep").write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+    for name in ("gh", "sleep"):
+        (bin_dir / name).chmod(0o755)
+
+
+def run_fetch_step(
+    tmp_path: Path, pages: list[list[dict]] | None, artifact: str | None, **modes
+) -> tuple[int, list[str], str]:
+    """Execute the real step. Returns (rc, hand-off args, combined output)."""
+    stub_dir, bin_dir, runner_temp = tmp_path / "stub", tmp_path / "bin", tmp_path / "rt"
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    stub_dir.mkdir()
+    runner_temp.mkdir()
+    gh_stub(bin_dir, stub_dir)
+    if pages is not None:
+        total = sum(len(page) for page in pages)
+        (stub_dir / "pages.json").write_text(
+            "".join(json.dumps({"total_count": total, "workflow_runs": page}) for page in pages), encoding="utf-8"
+        )
+    if artifact is not None:
+        (stub_dir / "artifact.json").write_text(artifact, encoding="utf-8")
+    for mode, on in modes.items():
+        if on:
+            (stub_dir / mode).write_text("", encoding="utf-8")
+    env = {
+        **_clean_git_env(),
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "RUNNER_TEMP": str(runner_temp),
+        "REPO": "EtanHey/brainlayer",
+        "GH_TOKEN": "stub",
+        "STUB_DIR": str(stub_dir),
+    }
+    result = subprocess.run(
+        ["bash", "-c", workflow_steps()[FETCH_STEP]["run"]], capture_output=True, text=True, env=env, timeout=60
+    )
+    args_path = runner_temp / "attestation-args.txt"
+    args = args_path.read_text(encoding="utf-8").splitlines() if args_path.is_file() else []
+    return result.returncode, args, result.stdout + result.stderr
+
+
+def good_artifact(run_id: int = 300, sha: str = RUN_SHA) -> str:
+    return json.dumps(attestation_dict(run_id=run_id, main_sha=sha))
+
+
+NEWEST_SUCCESS_ON_PAGE_TWO = [
+    [api_run(302, "failure"), api_run(301, "cancelled"), api_run(299, "success", event="pull_request")],
+    [api_run(300, "success"), api_run(200, "success", sha="6" * 40)],
+]
+
+
+def test_the_fetch_step_takes_the_newest_success_across_every_page(tmp_path: Path) -> None:
+    rc, args, out = run_fetch_step(tmp_path, NEWEST_SUCCESS_ON_PAGE_TWO, good_artifact())
+    assert rc == 0, out
+    assert args == ["--attestation", str(tmp_path / "rt" / "attestation" / "attestation.json")]
+    assert "::notice title=Baseline attestation::attested — run 300 on main " + RUN_SHA in out
+    assert "never read" not in out  # the notice names the run, not a stale initial reason
+
+
+def test_the_fetch_step_binds_the_artifact_to_the_run_the_api_named(tmp_path: Path) -> None:
+    rc, args, out = run_fetch_step(tmp_path, NEWEST_SUCCESS_ON_PAGE_TWO, good_artifact(run_id=999))
+    assert rc == 0, out
+    assert args[0] == "--attestation-unresolved" and "not that run's attestation" in args[1]
+    assert "run 999" in args[1] and "run 300" in args[1]
+    rc, args, _ = run_fetch_step(tmp_path / "sha", NEWEST_SUCCESS_ON_PAGE_TWO, good_artifact(sha="7" * 40))
+    assert args[0] == "--attestation-unresolved" and "7" * 40 in args[1]
+
+
+def test_a_corrupt_artifact_is_handed_over_as_unresolved_not_a_dead_step(tmp_path: Path) -> None:
+    """The lead's must-answer. `jq` on `{not json` exits non-zero; under `set -e` an unprotected read
+    killed the step before the hand-off was written, so the row never rendered its promised
+    RED-with-reason and Collect died on a missing args file instead."""
+    for corrupt in ("{not json", "", "[]", '{"run_id": "x"}'):
+        rc, args, out = run_fetch_step(tmp_path / str(len(corrupt)), NEWEST_SUCCESS_ON_PAGE_TWO, corrupt)
+        assert rc == 0, out
+        assert args and args[0] == "--attestation-unresolved", (corrupt, args, out)
+        assert "run 300" in args[1]
+    assert "not that run's attestation" in args[1] or "could not be read" in args[1]
+
+
+def test_an_artifact_with_no_attestation_file_is_unresolved(tmp_path: Path) -> None:
+    rc, args, _ = run_fetch_step(tmp_path, NEWEST_SUCCESS_ON_PAGE_TWO, None)
+    assert rc == 0 and args[0] == "--attestation-unresolved" and "no attestation file" in args[1]
+
+
+def test_an_expired_artifact_is_unresolved_and_says_how_to_refresh(tmp_path: Path) -> None:
+    rc, args, out = run_fetch_step(tmp_path, NEWEST_SUCCESS_ON_PAGE_TWO, good_artifact(), **{"download.fail": True})
+    assert rc == 0, out
+    assert args[0] == "--attestation-unresolved" and "workflow_dispatch" in args[1] and "3 attempt(s)" in args[1]
+
+
+def test_no_registered_workflow_is_bootstrap(tmp_path: Path) -> None:
+    rc, args, _ = run_fetch_step(tmp_path, None, None, **{"api.404": True})
+    assert rc == 0 and args[0] == "--attestation-bootstrap" and "HTTP 404" in args[1]
+
+
+def test_runs_that_never_succeeded_are_bootstrap_with_the_count(tmp_path: Path) -> None:
+    pages = [[api_run(302, "failure"), api_run(301, "cancelled")], [api_run(299, "success", event="pull_request")]]
+    rc, args, _ = run_fetch_step(tmp_path, pages, None)
+    assert rc == 0 and args[0] == "--attestation-bootstrap" and "3 run(s) on main and no successful" in args[1]
+
+
+def run_collect_step(tmp_path: Path, attestation_args: str | None) -> tuple[int, str]:
+    runner_temp = tmp_path / "rt"
+    runner_temp.mkdir(parents=True)
+    (runner_temp / "commit-args.txt").write_text(f"--measured-sha\n{HEAD}\n--pr-head-sha\n{HEAD}\n", encoding="utf-8")
+    (runner_temp / "signature-args.txt").write_text("--signature-unavailable\nstub\n", encoding="utf-8")
+    if attestation_args is not None:
+        (runner_temp / "attestation-args.txt").write_text(attestation_args, encoding="utf-8")
+    env = {**_clean_git_env(), "RUNNER_TEMP": str(runner_temp), "GITHUB_OUTPUT": str(runner_temp / "out.txt")}
+    result = subprocess.run(
+        ["bash", "-c", workflow_steps()["Collect ratchet rows"]["run"]],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+        cwd=tmp_path,
+    )
+    return result.returncode, result.stdout + result.stderr
+
+
+def test_collect_fails_before_rendering_when_the_attestation_hand_off_is_missing_or_empty(tmp_path: Path) -> None:
+    """A missing file must fail loudly; an empty one must refuse with the named reason. Neither may
+    reach the collector, which with no attestation flags would render `n/a — not a pull-request
+    run`: a false green on a PR."""
+    rc, out = run_collect_step(tmp_path / "missing", None)
+    assert rc != 0 and "attestation-args.txt" in out
+    rc, out = run_collect_step(tmp_path / "empty", "")
+    assert rc != 0 and "baseline was never checked" in out
+    assert not (tmp_path / "empty" / "rt" / "ratchet.md").exists()
+
+
 # --- ratchet.yml: the read side ---------------------------------------------------------------
 
 
