@@ -199,13 +199,21 @@ map_changed_files_to_pytests() {
       src/brainlayer/__init__.py)
         # A release bump touches this file and nothing else in src/. The generic
         # src/brainlayer/*.py rule below looks for tests/test___init__.py, finds nothing, and
-        # escalates the whole 4,386-test suite for a one-line version string. The bump's real
-        # gate is the release-metadata consistency suite; name it.
-        test_path="$TEST_ROOT/test_version_consistency.py"
-        if [ -f "$test_path" ]; then
-          append_unique "$test_path"
-          mapped=1
-        fi
+        # escalates the whole 4,386-test suite for a one-line version string.
+        #
+        # This file has exactly two behaviours, and BOTH are named here so the mapping is not a
+        # fail-open. test_version_consistency.py reads __version__ with `ast` and never imports
+        # the package, so on its own it would pass while `import brainlayer` was broken --
+        # e.g. a botched `from ._build import BUILD_SHA` fallback. test_build_sha.py runs
+        # `import brainlayer` in a subprocess and asserts __build_sha__ both stamped and unstamped,
+        # which is the import path the other suite cannot see.
+        for rel in test_version_consistency.py test_build_sha.py; do
+          test_path="$TEST_ROOT/$rel"
+          if [ -f "$test_path" ]; then
+            append_unique "$test_path"
+            mapped=1
+          fi
+        done
         ;;
       src/brainlayer/index_new.py)
         for rel in test_source_class.py test_ingest_t3.py test_context_pipeline.py; do
