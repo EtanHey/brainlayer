@@ -443,14 +443,7 @@ def check_resource(config: dict) -> dict:
     helper_rss = max(sample["helper"]["rss_bytes"] for sample in samples)
     required_missing = [name for name in config.get("required_processes", []) if not samples[-1][name]["pids"]]
     thresholds = config["thresholds"]
-    # Two different gates on one number, both applied. `cpu_percent` is the ratified CEILING and
-    # stays a hard budget. The measured band is the RATCHET: RED when this run's idle CPU is outside
-    # what attested green main runs produced, even when it is still under the ceiling -- R3's soak
-    # (4.88% then 6.41% on near-identical code) is exactly the drift a ceiling of 30 cannot see.
-    # With fewer than five attested runs the band is unmeasured and the ceiling alone decides; the
-    # payload says so per process rather than printing a limit nobody measured.
-    bands = {name: margins.margin_for(config.get("attestations"), margins.idle_cpu_key(name)) for name in names}
-    over_band = [name for name in names if margins.within(bands[name], cpu[name]) is False]
+    described, over_band = cpu_bands(config, cpu)
     passed = all(value < thresholds["cpu_percent"] for value in cpu.values()) and not over_band
     passed = passed and helper_rss < thresholds["helper_rss_bytes"] and not required_missing
     return status(
@@ -458,11 +451,27 @@ def check_resource(config: dict) -> dict:
         passed,
         sample_count=len(samples),
         average_cpu_pct=cpu,
-        cpu_margins={name: margins.describe(bands[name], unit="%") for name in names},
+        cpu_margins=described,
         cpu_over_measured_band=over_band,
         helper_max_rss_bytes=helper_rss,
         required_missing=required_missing,
     )
+
+
+def cpu_bands(config: dict, cpu: dict[str, float]) -> tuple[dict[str, str], list[str]]:
+    """The measured idle-CPU band per process: its description, and which processes sit outside it.
+
+    Two different gates on one number, both applied by check_resource. `cpu_percent` is the ratified
+    CEILING and stays a hard budget. The band is the RATCHET: RED when this run's idle CPU is outside
+    what attested green main runs produced, even when still under the ceiling -- R3's soak (4.88%
+    then 6.41% on near-identical code) is exactly the drift a ceiling of 30 cannot see. With fewer
+    than five attested runs the band is unmeasured and the ceiling alone decides; the description
+    says so per process rather than printing a limit nobody measured.
+    """
+    bands = {name: margins.margin_for(config.get("attestations"), margins.idle_cpu_key(name)) for name in cpu}
+    described = {name: margins.describe(band, unit="%") for name, band in bands.items()}
+    over_band = [name for name, band in bands.items() if margins.within(band, cpu[name]) is False]
+    return described, over_band
 
 
 def check_wal(config: dict, samples: list[int] | None = None) -> dict:
