@@ -139,6 +139,32 @@ not a copy here. Two contracts an agent must know:
 - Textual TUI (`dashboard/`) and Next.js dashboard
 - Source data: JSONL in `~/.claude/projects/`
 
+## Checkouts and worktrees — never work at the repo root
+
+- **`~/Gits/brainlayer` is a real checkout kept at `origin/main`**, and ~22 worktrees hang off it.
+  It was repaired on 2026-09-06 (`core.bare` true→false, HEAD `5bd8d818`→`da325b8d`) after its
+  working tree sat frozen at the 09-02 snapshot for days. It is not self-stabilising.
+- **The root's `src/` is on the interpreter path of every bare `python3` on this machine.**
+  `/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/site-packages/_brainlayer.pth`
+  contains exactly `/Users/etanheyman/Gits/brainlayer/src`, so `python3 -c "import brainlayer"`
+  resolves to `<root>/src/brainlayer/__init__.py` — a live working tree, not an installed package.
+  **Checking out a branch, or leaving a dirty tree, at the ROOT therefore changes what those
+  processes import** — for every session, in every lane, immediately.
+- **Law: never `git checkout` / `git switch` a branch at the root, and never edit files there.**
+  Work only in your own worktree, cut from `origin/main`:
+  `git worktree add .worktrees/<name> -b wt/<name> origin/main`.
+- **The evidence.** While the root sat at `5bd8d818` (2026-09-04), #782's commit `123da9b4` was not
+  an ancestor of it, so everything importing through the `.pth` ran 09-02 library code: **#782 was
+  merged but not live.** The same root-is-live-code path is what let a checkout's `install.sh` point
+  every LaunchAgent at the wrong version on 09-05.
+- **The keg pin covers the Claude Code hooks; it does not cover everything.** Measured 2026-09-06:
+  the hooks that actually `import brainlayer` (`brainlayer-prompt-search.py`,
+  `hooks/brainbar-stop-index.py`) are pinned in `~/.claude/settings.json` to
+  `/opt/homebrew/opt/brainlayer/libexec/venv/bin/python`, which does **not** see the `.pth` and
+  resolves to the keg (`/opt/homebrew/Cellar/brainlayer/1.5.15/…`). But that pin is machine config,
+  not a repo change, and nothing pins the rest: any script, `python3 -c`, or unpinned hook still
+  imports the root's working tree. **The root rule is load-bearing, not merely defence in depth.**
+
 <!-- COMMANDS: `python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"` | test: `pytest` | lint: `ruff check src/ tests/ && ruff format src/ tests/` | run: `brainlayer index && brainlayer setup` -->
 ## Workflow (HOW)
 ```bash
@@ -177,7 +203,8 @@ brainlayer enrich
 ## Pipeline Overview
 - Extract -> Classify -> Chunk -> Embed -> Index
 - Post-processing: Enrichment, Brain Graph, Obsidian export
-- Storage: `~/.local/share/brainlayer/brainlayer.db` (canonical path, ~8GB)
+- Storage: `~/.local/share/brainlayer/brainlayer.db` (canonical path; measured 2026-09-06 at
+  16.5 GB / 817,238 chunks — it grows, so re-measure rather than quoting this figure back)
 - DB path resolved by `paths.py:get_db_path()` — env var override or canonical path
 - All scripts and CLI use `paths.py` for DB path resolution
 - Concurrency: retry on `SQLITE_BUSY`; each worker uses its own connection
