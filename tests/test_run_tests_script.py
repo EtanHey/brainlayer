@@ -685,3 +685,73 @@ def test_changed_only_scope_maps_package_init_to_version_consistency_tests(
     assert str(test_root / "test_build_sha.py") in logged
     assert "falling back to full pytest unit suite" not in result.stdout
     assert f"{test_root}/ -v" not in logged
+
+
+def test_changed_only_scope_escalates_when_the_build_sha_sibling_is_missing(
+    tmp_path: Path,
+) -> None:
+    """A missing sibling must escalate, not silently narrow the gate.
+
+    The __init__.py mapping names two suites because the file has two behaviours. If
+    test_build_sha.py is deleted or renamed, mapping to test_version_consistency.py alone
+    would go green while `import brainlayer` was broken -- that AST-only suite never imports
+    the package. That is the same fail-open, reintroduced through a missing sibling instead
+    of an incomplete case list, so a partial mapping must not count as mapped.
+    """
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    (test_root / "test_version_consistency.py").write_text("test placeholder\n")
+    # test_build_sha.py deliberately absent
+    (test_root / "test_think_recall_integration.py").write_text("test placeholder\n")
+
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+
+    env = _script_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
+    env["BRAINLAYER_CHANGED_FILES"] = "src/brainlayer/__init__.py"
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    result = subprocess.run(  # noqa: S603 - returncode is asserted below
+        ["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env, check=False
+    )
+
+    assert result.returncode == 0
+    assert "falling back to full pytest unit suite" in result.stdout
+    assert "WARNING: unmapped: src/brainlayer/__init__.py" in result.stdout
+    logged = pytest_log.read_text()
+    assert f"{test_root}/ -v" in logged
+
+
+def test_changed_only_scope_escalates_when_both_init_suites_are_missing(
+    tmp_path: Path,
+) -> None:
+    """Neither suite present is the same fail-open, and must escalate too."""
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    (test_root / "test_think_recall_integration.py").write_text("test placeholder\n")
+
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+
+    env = _script_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
+    env["BRAINLAYER_CHANGED_FILES"] = "src/brainlayer/__init__.py"
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    result = subprocess.run(  # noqa: S603 - returncode is asserted below
+        ["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env, check=False
+    )
+
+    assert result.returncode == 0
+    assert "falling back to full pytest unit suite" in result.stdout
+    logged = pytest_log.read_text()
+    assert f"{test_root}/ -v" in logged

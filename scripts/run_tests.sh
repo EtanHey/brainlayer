@@ -155,6 +155,7 @@ map_changed_files_to_pytests() {
   changed_files_seen=0
   changed_files_scope_error=""
   local changed rel test_path module_name mapped changed_list detect_rc=0
+  local init_version_test init_build_sha_test
   # Command substitution, not process substitution: `done < <(changed_files)` throws away the exit
   # code, which is the whole signal that tells a failed detection from an empty one.
   changed_list="$(changed_files)" || detect_rc=$?
@@ -207,13 +208,17 @@ map_changed_files_to_pytests() {
         # e.g. a botched `from ._build import BUILD_SHA` fallback. test_build_sha.py runs
         # `import brainlayer` in a subprocess and asserts __build_sha__ both stamped and unstamped,
         # which is the import path the other suite cannot see.
-        for rel in test_version_consistency.py test_build_sha.py; do
-          test_path="$TEST_ROOT/$rel"
-          if [ -f "$test_path" ]; then
-            append_unique "$test_path"
-            mapped=1
-          fi
-        done
+        # BOTH must exist to count as mapped. A per-file `mapped=1` would let a deleted or
+        # renamed test_build_sha.py silently narrow this back to the AST-only suite -- the same
+        # fail-open, arriving through a missing sibling instead of an incomplete case list.
+        # Partial coverage here is worse than none: it looks mapped and gates nothing.
+        init_version_test="$TEST_ROOT/test_version_consistency.py"
+        init_build_sha_test="$TEST_ROOT/test_build_sha.py"
+        if [ -f "$init_version_test" ] && [ -f "$init_build_sha_test" ]; then
+          append_unique "$init_version_test"
+          append_unique "$init_build_sha_test"
+          mapped=1
+        fi
         ;;
       src/brainlayer/index_new.py)
         for rel in test_source_class.py test_ingest_t3.py test_context_pipeline.py; do
