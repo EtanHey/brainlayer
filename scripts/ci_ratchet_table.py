@@ -134,6 +134,13 @@ ATTESTATION_UNAVAILABLE_DEFAULT = (
 # Where the brain_store fallback queue lives, and the row's one real capability gap: `docs.local/`
 # is gitignored (.gitignore:53), so a hosted runner's checkout contains none of it.
 FALLBACK_GITS_ROOT_ENV = "BRAINLAYER_FALLBACK_GITS_ROOT"
+# Where the root came from. The row needs this, not just the path: "nobody has this queue" and
+# "the operator asked us to measure HERE and it is missing" are a capability gap and a finding, and
+# this file already treats a handed-over path that cannot be read as RED everywhere else.
+FALLBACK_ROOT_FLAG = "flag"
+FALLBACK_ROOT_ENV = "env"
+FALLBACK_ROOT_DEFAULT = "default"
+
 FALLBACK_NA_REASON = (
     "no fallback queue on this machine: the pending memories live in "
     "`~/Gits/*/docs.local/decisions`, and `docs.local/` is gitignored, so a runner checkout "
@@ -203,6 +210,8 @@ class Probe:
     # Where to look for the brain_store fallback queue. A field, not a call to Path.home() inside
     # the row, so a test can point it anywhere and CI can point it at a machine that has one.
     fallback_gits_root: Path | None = None
+    # Defaults to `default`, so a Probe built by hand never claims somebody configured a root.
+    fallback_root_source: str = FALLBACK_ROOT_DEFAULT
     # Ratchet (c): the attested green main runs every measured margin is derived from, read from
     # the `ratchet-attestation` artifacts of `ratchet-attest.yml` runs on main. None when nobody
     # handed this run a store (margins render `unmeasured` with 0 runs); `attestations_problem` when
@@ -232,6 +241,7 @@ class Probe:
         commit = select_commit(measured_sha, pr_head_sha, pr_head_unresolved)
         attested = select_attestation(attestation, attestation_bootstrap, attestation_unresolved)
         store = select_attestations(attestations)
+        resolved_fallback_root, fallback_root_source = resolve_fallback_gits_root(fallback_gits_root)
         return cls(
             os_name=platform.system(),
             architecture=platform.machine(),
@@ -257,7 +267,8 @@ class Probe:
             attestation_problem=attested.problem,
             attestations=store.attestations,
             attestations_problem=store.problem,
-            fallback_gits_root=fallback_gits_root or default_fallback_gits_root(),
+            fallback_gits_root=resolved_fallback_root,
+            fallback_root_source=fallback_root_source,
         )
 
 
@@ -1375,9 +1386,18 @@ def measured_signature_row(report: SignatureReport) -> Row:
     return Row("signature_valid", GREEN, value, SIGNATURE_METHOD_MEASURED, SIGNATURE_NOTES)
 
 
-def default_fallback_gits_root() -> Path:
+def resolve_fallback_gits_root(explicit: Path | None) -> tuple[Path, str]:
+    """The root to measure, and who asked for it. Flag beats env beats the unset default."""
+    if explicit is not None:
+        return explicit.expanduser(), FALLBACK_ROOT_FLAG
     configured = os.environ.get(FALLBACK_GITS_ROOT_ENV)
-    return Path(configured).expanduser() if configured else Path.home() / "Gits"
+    if configured:
+        return Path(configured).expanduser(), FALLBACK_ROOT_ENV
+    return (Path.home() / "Gits").expanduser(), FALLBACK_ROOT_DEFAULT
+
+
+def default_fallback_gits_root() -> Path:
+    return resolve_fallback_gits_root(None)[0]
 
 
 def fallback_inventory(root: Path):
@@ -1406,6 +1426,23 @@ def row_fallback_debt(probe: Probe, _corpus: dict) -> Row:
     # a mistyped flag wearing a capability gap's clothes, which is the fail-open this row forbids.
     root = (probe.fallback_gits_root or default_fallback_gits_root()).expanduser()
     if not root.exists():
+        if probe.fallback_root_source != FALLBACK_ROOT_DEFAULT:
+            # Somebody handed this collector a path. A hand-off that cannot be read is a finding
+            # here exactly as it is for `signature_valid` and `baseline attestation` -- letting a
+            # mistyped flag wear `n/a` clothes exits the collector 0 on a broken measurement.
+            source = (
+                "--fallback-gits-root"
+                if probe.fallback_root_source == FALLBACK_ROOT_FLAG
+                else (f"${FALLBACK_GITS_ROOT_ENV}")
+            )
+            return Row(
+                "fallback replay debt",
+                RED,
+                f"configured root does not exist: {source} names `{root}`, which is not there, "
+                "so this run measured nothing rather than measuring zero",
+                method,
+                FALLBACK_NOTES,
+            )
         return Row("fallback replay debt", NA, f"n/a — {FALLBACK_NA_REASON}", method, FALLBACK_NOTES)
     try:
         summary = fallback_inventory(root)

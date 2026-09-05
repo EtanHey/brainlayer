@@ -2882,3 +2882,93 @@ def test_fallback_debt_row_does_not_claim_the_samples_are_the_oldest(tmp_path):
 
     assert "oldest" not in row.value.lower()
     assert "first 3 by path" in row.value
+
+
+def test_an_explicitly_configured_missing_root_is_red_not_na(tmp_path):
+    """Round-2 review, #779 @1408 (HIGH).
+
+    `Probe.detect` always materialized a concrete path, so the row could no longer tell "nobody has
+    this queue" from "the operator asked us to measure HERE and the path is missing". The second is a
+    broken hand-off, and this file already treats a handed path that cannot be read as RED for
+    `signature_valid` and `baseline attestation`. Letting it wear `n/a` clothes exits the collector 0
+    on a mistyped flag — the same fail-open as the tilde bug, one level up.
+    """
+    probe = mac_probe(
+        tmp_path,
+        fallback_gits_root=tmp_path / "operator-said-here",
+        fallback_root_source=ratchet.FALLBACK_ROOT_FLAG,
+    )
+
+    row = ratchet.row_fallback_debt(probe, CORPUS)
+
+    assert row.status == ratchet.RED
+    assert "configured root does not exist" in row.value
+    assert "operator-said-here" in row.value
+    assert "gitignored" not in row.value, "the capability reason is only for the unset default"
+
+
+def test_an_explicitly_configured_missing_root_from_the_env_is_also_red(tmp_path):
+    probe = mac_probe(
+        tmp_path,
+        fallback_gits_root=tmp_path / "env-said-here",
+        fallback_root_source=ratchet.FALLBACK_ROOT_ENV,
+    )
+
+    row = ratchet.row_fallback_debt(probe, CORPUS)
+
+    assert row.status == ratchet.RED
+    assert "configured root does not exist" in row.value
+
+
+def test_the_unset_default_missing_is_still_a_real_capability_gap(tmp_path):
+    """ubuntu CI has no ~/Gits and nobody claimed otherwise: that is a genuine n/a, not a finding."""
+    probe = linux_probe(
+        tmp_path, fallback_gits_root=tmp_path / "nope", fallback_root_source=ratchet.FALLBACK_ROOT_DEFAULT
+    )
+
+    row = ratchet.row_fallback_debt(probe, CORPUS)
+
+    assert row.status == ratchet.NA
+    assert "gitignored" in row.value
+
+
+def test_a_configured_missing_root_fails_the_collector(tmp_path, monkeypatch, capsys):
+    """RED must cost exit 1, or the hand-off can break silently in CI."""
+    monkeypatch.setenv(ratchet.FALLBACK_GITS_ROOT_ENV, str(tmp_path / "typo-Gits"))
+    monkeypatch.setattr(ratchet, "canonical_db_path", lambda: tmp_path / "absent.db")
+
+    exit_code = ratchet.main(["--wheel", str(make_wheel(tmp_path / "wheel", HEAD))])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "configured root does not exist" in captured.out
+    assert "Ratchet RED: fallback replay debt" in captured.err
+
+
+def test_probe_detect_records_where_the_root_came_from(tmp_path, monkeypatch):
+    """flag beats env beats default — and the row needs to know which, not just the path."""
+    monkeypatch.delenv(ratchet.FALLBACK_GITS_ROOT_ENV, raising=False)
+
+    unset = ratchet.Probe.detect(CORPUS, None, None)
+    assert unset.fallback_root_source == ratchet.FALLBACK_ROOT_DEFAULT
+
+    monkeypatch.setenv(ratchet.FALLBACK_GITS_ROOT_ENV, str(tmp_path / "from-env"))
+    from_env = ratchet.Probe.detect(CORPUS, None, None)
+    assert from_env.fallback_root_source == ratchet.FALLBACK_ROOT_ENV
+    assert from_env.fallback_gits_root == tmp_path / "from-env"
+
+    from_flag = ratchet.Probe.detect(CORPUS, None, None, fallback_gits_root=tmp_path / "from-flag")
+    assert from_flag.fallback_root_source == ratchet.FALLBACK_ROOT_FLAG
+    assert from_flag.fallback_gits_root == tmp_path / "from-flag"
+
+
+def test_the_ratchet_suite_scrubs_the_fallback_root_env():
+    """Round-2 review, #779 @1379 (MEDIUM).
+
+    `main()`/`Probe.detect` resolve through the environment, and an ABSOLUTE
+    `BRAINLAYER_FALLBACK_GITS_ROOT` bypasses conftest's HOME remapping — so exit-0 `main()`
+    assertions could become host-dependent, or walk production docs.local during the suite.
+    """
+    import os
+
+    assert "BRAINLAYER_FALLBACK_GITS_ROOT" not in os.environ
