@@ -189,7 +189,12 @@ def replay_entry(
             _write_replay_attempt(entry, chunk_id=None)
         except Exception as exc:
             error = f"{error}; write_replay_attempt failed: {exc}"
-        return ReplayResult(path=entry.path, attempted=True, chunk_id=None, error=error, outcome=OUTCOME_REJECTED)
+        # A store that answered `error` described its own failure; `rejected` is a different state in
+        # #725 and putting the wrong word in the receipt is the thing this PR exists to stop. A store
+        # that returned nothing at all still has no word for itself, so that stays `rejected`.
+        said = _raw_store_outcome(result)
+        outcome = OUTCOME_ERROR if said == OUTCOME_ERROR else OUTCOME_REJECTED
+        return ReplayResult(path=entry.path, attempted=True, chunk_id=None, error=error, outcome=outcome)
 
     outcome = _store_outcome(result)
     outcome_error = _unresolved_outcome_error(result) if outcome == OUTCOME_UNRESOLVED else None
@@ -600,6 +605,11 @@ def _resolve_project(
 _RESOLVED_STORE_OUTCOMES = frozenset({OUTCOME_STORED, OUTCOME_DUPLICATE, OUTCOME_MERGED})
 
 
+def _raw_store_outcome(result: Any) -> str | None:
+    raw = result.get("outcome") if isinstance(result, dict) else getattr(result, "outcome", None)
+    return None if raw is None else str(raw).strip().lower()
+
+
 def _store_outcome(result: Any) -> str:
     """The write store_memory reports.
 
@@ -614,9 +624,10 @@ def _store_outcome(result: Any) -> str:
     raw = result.get("outcome") if isinstance(result, dict) else getattr(result, "outcome", None)
     if raw is None:
         return OUTCOME_STORED
+    # A blank or whitespace value is PRESENT. `mcp/store_handler.py` takes it through
+    # `result.get("outcome", "stored")` unchanged and `_store_receipt` then rejects it, so treating
+    # it as `stored` here is fail-open on the strongest claim -- the same defect one layer down.
     text = str(raw).strip().lower()
-    if not text:
-        return OUTCOME_STORED
     if text in _RESOLVED_STORE_OUTCOMES:
         return text
     return OUTCOME_UNRESOLVED

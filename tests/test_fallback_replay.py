@@ -1389,3 +1389,119 @@ def test_queue_entry_requeues_and_stays_deferred_when_the_queue_file_vanished(tm
 
     assert len(requeued) == 1
     assert second.outcome == OUTCOME_DEFERRED
+
+
+def _guard_module(name: str):
+    """Load scripts/replay_brain_store_fallbacks.py under a unique module name.
+
+    One loader for every CLI test in this file; each caller passes its own name so the modules do not
+    share state through sys.modules.
+    """
+    script = Path(__file__).resolve().parents[1] / "scripts" / "replay_brain_store_fallbacks.py"
+    spec = importlib.util.spec_from_file_location(name, script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_blank_outcome_is_present_and_therefore_not_stored(tmp_path):
+    """Round-2 review, #774 @618-619.
+
+    `""` and `"   "` are PRESENT values. The round-1 invariant is that only an ABSENT key defaults to
+    `stored`; `mcp/store_handler.py` would take a blank through `result.get("outcome", "stored")` and
+    then have `_store_receipt` reject it. Upgrading blank to `stored` was fail-open on the strongest
+    claim in the vocabulary — the exact defect round 1 was supposed to close.
+    """
+    from brainlayer.fallback_replay import OUTCOME_UNRESOLVED, parse_fallback_file, replay_entry
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+
+    for index, blank in enumerate(("", "   ", "\t\n")):
+        entry = parse_fallback_file(_pending_file(repo, f"docs.local/decisions/blank-{index}.md"))
+        result = replay_entry(
+            entry,
+            store_func=lambda _b=blank, **_kwargs: {"id": f"chunk-{_b!r}", "outcome": _b},
+            replayed_by="test",
+        )
+        assert result.outcome == OUTCOME_UNRESOLVED, f"blank {blank!r} must not read as stored"
+        assert result.error
+
+
+def test_missing_chunk_id_with_an_error_outcome_is_error_not_rejected(tmp_path):
+    """Round-2 review, #774 @186-192.
+
+    A store that answers `{"outcome": "error"}` with no id described its own failure. Filing that as
+    `rejected` puts the wrong word in the receipt — the two are different states in #725.
+    """
+    from brainlayer.fallback_replay import OUTCOME_ERROR, OUTCOME_REJECTED, parse_fallback_file, replay_entry
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+
+    errored = replay_entry(
+        parse_fallback_file(_pending_file(repo, "docs.local/decisions/said-error.md")),
+        store_func=lambda **_kwargs: {"outcome": "error", "reason": "db closed"},
+        replayed_by="test",
+    )
+    assert errored.outcome == OUTCOME_ERROR
+
+    # A store that returns nothing at all still has no word for itself: that stays `rejected`.
+    silent = replay_entry(
+        parse_fallback_file(_pending_file(repo, "docs.local/decisions/said-nothing.md")),
+        store_func=lambda **_kwargs: {},
+        replayed_by="test",
+    )
+    assert silent.outcome == OUTCOME_REJECTED
+
+
+def test_replay_cli_exits_nonzero_and_records_unresolved_in_the_receipt(tmp_path, monkeypatch):
+    """Round-2 review, #774 @1280-1295.
+
+    Unresolved was unit-tested but nothing pinned the CLI contract. A regression that cleared the
+    error on an unresolved row would keep exit 0 while still printing a soft label — a green run over
+    a write nobody can vouch for.
+    """
+    module = _guard_module("replay_unresolved_receipt_test")
+    from brainlayer.fallback_replay import parse_fallback_file
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    entry = parse_fallback_file(_pending_file(repo, "docs.local/decisions/weird.md"))
+
+    class DummyStore:
+        def close(self):
+            pass
+
+    class DummyInventory:
+        structured = [entry]
+        legacy = []
+        pending = [entry]
+
+    receipt_path = tmp_path / "receipts" / "unresolved.json"
+    monkeypatch.setattr(module, "load_scope_map", lambda _path: {})
+    monkeypatch.setattr(module, "inventory_fallbacks", lambda _root, *, scope_map: DummyInventory())
+    monkeypatch.setattr(module, "VectorStore", lambda _db: DummyStore())
+    monkeypatch.setattr(module, "store_memory", lambda **_kwargs: {"id": "chunk-w", "outcome": "banana"})
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "replay_brain_store_fallbacks.py",
+            "--apply",
+            "--direct-db-write",
+            "--gits-root",
+            str(tmp_path),
+            "--receipt",
+            str(receipt_path),
+        ],
+    )
+
+    assert module.main() == 1
+
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["outcome_counts"] == {"unresolved": 1}
+    assert receipt["replayed"][0]["outcome"] == "unresolved"
+    assert "banana" in receipt["replayed"][0]["error"]
