@@ -218,10 +218,14 @@ def check_search(config: dict) -> dict:
         attested_runs={key: band.n for key, band in bands.items()},
     )
     verdicts = {key: margins.within(bands[key], measured[key]) for key in measured}
+    limits = {key: bands[key].limit for key in measured}  # None where the band is unmeasured
+    # Fail-closed ORDER (lead review, #764): a measured FAIL on one percentile is a finding whatever
+    # the sibling's state; only when nothing failed does a missing band make the check UNMEASURED.
+    if any(verdict is False for verdict in verdicts.values()):
+        return status("search_latency", False, limits_ms=limits, verdicts=verdicts, **details)
     if any(verdict is None for verdict in verdicts.values()):
-        return unmeasured("search_latency", **details)
-    limits = {key: bands[key].limit for key in measured}
-    return status("search_latency", all(verdicts.values()), limits_ms=limits, **details)
+        return unmeasured("search_latency", limits_ms=limits, verdicts=verdicts, **details)
+    return status("search_latency", True, limits_ms=limits, verdicts=verdicts, **details)
 
 
 def annotation_gaps(tools: list) -> dict:
@@ -875,10 +879,12 @@ def attestation_refusal(args: argparse.Namespace, config: dict) -> str | None:
         if not isinstance(inline, list):
             return "fixture `attestations` is not a list"
         try:
-            config["attestations"] = [
-                margins.validate_attestation(document, f"fixture attestation {index}")
-                for index, document in enumerate(inline)
+            names = [f"fixture attestation {index}" for index in range(len(inline))]
+            documents = [
+                margins.validate_attestation(document, name) for document, name in zip(inline, names, strict=True)
             ]
+            margins.reject_duplicate_runs(documents, names)  # same rule as the live store (lead review, #764)
+            config["attestations"] = documents
         except margins.AttestationError as error:
             return str(error)
         return None
