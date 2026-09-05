@@ -1909,6 +1909,18 @@ def test_git_baseline_at_reports_unparseable_and_non_object_fixtures(tmp_path: P
         assert view is None and problem and MERGE_BASE[:12] in problem
 
 
+def test_a_base_fixture_missing_a_baseline_field_is_not_a_reference(tmp_path: Path, monkeypatch) -> None:
+    """Cursor, #767 round 2: the writer refuses to attest a checkout whose baseline lacks a field,
+    and the reader refuses such an artifact; the git-read base must hold to the same shape, or a
+    base tip missing `queries` plus a PR that also omits it would bootstrap GREEN."""
+    partial = {key: value for key, value in CORPUS.items() if key != "queries"}
+    monkeypatch.setattr(ratchet, "_git", lambda *args: json.dumps(partial))
+    view, problem = ratchet.git_baseline_at(MERGE_BASE)
+    assert view is None and problem and "lacks `queries`" in problem
+    probe = bootstrap_probe(tmp_path, (MERGE_REF, MERGE_BASE, MERGE_HEAD))
+    assert ratchet.row_baseline_attestation(probe, partial).status == ratchet.RED
+
+
 # --- writing an attestation: main runs only ----------------------------------------------------
 
 
@@ -2168,15 +2180,18 @@ def gh_stub(bin_dir: Path, stub_dir: Path) -> None:
 
 
 def run_fetch_step(
-    tmp_path: Path, pages: list[list[dict]] | None, artifact: str | None, **modes
+    tmp_path: Path, pages: list[list[dict]] | str | None, artifact: str | None, **modes
 ) -> tuple[int, list[str], str]:
-    """Execute the real step. Returns (rc, hand-off args, combined output)."""
+    """Execute the real step. Returns (rc, hand-off args, combined output). `pages` as a str is
+    served verbatim as the listing body -- for the garbage-with-HTTP-200 cases."""
     stub_dir, bin_dir, runner_temp = tmp_path / "stub", tmp_path / "bin", tmp_path / "rt"
     tmp_path.mkdir(parents=True, exist_ok=True)
     stub_dir.mkdir()
     runner_temp.mkdir()
     gh_stub(bin_dir, stub_dir)
-    if pages is not None:
+    if isinstance(pages, str):
+        (stub_dir / "pages.json").write_text(pages, encoding="utf-8")
+    elif pages is not None:
         total = sum(len(page) for page in pages)
         (stub_dir / "pages.json").write_text(
             "".join(json.dumps({"total_count": total, "workflow_runs": page}) for page in pages), encoding="utf-8"
@@ -2245,6 +2260,22 @@ def test_a_corrupt_artifact_is_handed_over_as_unresolved_not_a_dead_step(tmp_pat
         assert args and args[0] == "--attestation-unresolved", (corrupt, args, out)
         assert "run 300" in args[1]
     assert "not that run's attestation" in args[1] or "could not be read" in args[1]
+
+
+@pytest.mark.parametrize(
+    "listing",
+    ["{not json", "<html><body>502</body></html>", '{"total_count": 3, "workflow_runs": [{"id": 30', ""],
+    ids=["not-json", "html", "truncated-page", "empty"],
+)
+def test_a_corrupt_run_listing_is_handed_over_as_unresolved_not_a_dead_step(tmp_path: Path, listing: str) -> None:
+    """Cursor, #767 round 2: the same class as the artifact read, one layer up. A 200 from `gh api`
+    whose body is not JSON made the listing `jq` exit non-zero, and under `set -e` the step died
+    before any hand-off was written. Now it is one failed attempt; three of them are `unresolved`."""
+    rc, args, out = run_fetch_step(tmp_path, listing, None)
+    assert rc == 0, out
+    assert args and args[0] == "--attestation-unresolved", (listing, args, out)
+    assert "could not be read as JSON" in args[1] and "3 attempt(s)" in args[1]
+    assert "bootstrap" not in out  # garbage is never a reason to fall back to the base commit
 
 
 def test_an_artifact_with_no_attestation_file_is_unresolved(tmp_path: Path) -> None:

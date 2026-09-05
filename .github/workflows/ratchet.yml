@@ -442,25 +442,36 @@ jobs:
           # into a false bootstrap -- the one fall-back this row must never take (Macroscope, #767).
           for attempt in 1 2 3; do
             if gh api --paginate "repos/${REPO}/actions/workflows/ratchet-attest.yml/runs?branch=main&exclude_pull_requests=true&per_page=100" > "$runs_path" 2> "$err_path"; then
-              selected="$(jq -rs '[.[].workflow_runs[] | select((.event == "push" or .event == "workflow_dispatch") and .conclusion == "success")] | .[0] | if . == null then "" else "\(.id) \(.head_sha)" end' "$runs_path")"
-              if [[ -n "$selected" ]]; then
+              # Both listing reads are guarded, the same way the artifact reads below are: a 200
+              # whose body is not JSON made `jq` exit non-zero, and under `set -e` that killed the
+              # step before any hand-off was written (Cursor, #767 round 2). Garbage is one failed
+              # attempt, never a reason to fall back to the base commit.
+              selected=""
+              total=""
+              # `-s` on an EMPTY body slurps to `[]`, which would read as "0 runs, bootstrap" -- the
+              # one fall-back garbage must never reach. An empty 200 is unreadable, not a listing.
+              if [[ ! -s "$runs_path" ]] || ! selected="$(jq -rs '[.[].workflow_runs[] | select((.event == "push" or .event == "workflow_dispatch") and .conclusion == "success")] | .[0] | if . == null then "" else "\(.id) \(.head_sha)" end' "$runs_path" 2> "$err_path")" \
+                 || ! total="$(jq -rs '[.[].workflow_runs[]] | length' "$runs_path" 2> "$err_path")"; then
+                detail="$(awk 'NF { print; exit }' "$err_path")"
+                reason="the ratchet-attest.yml run listing could not be read as JSON in ${attempt} attempt(s): ${detail:-empty response body}"
+              elif [[ -n "$selected" ]]; then
                 run_id="${selected%% *}"
                 run_sha="${selected##* }"
                 state=fetched
+                break
               else
-                total="$(jq -rs '[.[].workflow_runs[]] | length' "$runs_path")"
                 state=bootstrap
                 reason="ratchet-attest.yml has ${total} run(s) on main and no successful push/dispatch run yet"
+                break
               fi
-              break
-            fi
-            if grep -q 'HTTP 404' "$err_path"; then
+            elif grep -q 'HTTP 404' "$err_path"; then
               # Not registered on main at all: the PR that adds the workflow, and only that PR.
               state=bootstrap
               reason="ratchet-attest.yml is not a registered workflow on main yet (HTTP 404)"
               break
+            else
+              reason="\`gh api\` could not list ratchet-attest.yml runs in ${attempt} attempt(s): $(awk 'NF { print; exit }' "$err_path")"
             fi
-            reason="\`gh api\` could not list ratchet-attest.yml runs in ${attempt} attempt(s): $(awk 'NF { print; exit }' "$err_path")"
             if [[ "$attempt" -lt 3 ]]; then
               sleep $((attempt * 5))
             fi

@@ -713,6 +713,11 @@ def git_baseline_at(sha: str) -> tuple[dict | None, str | None]:
         return None, f"the baseline at base `{sha[:12]}` is not JSON ({type(error).__name__})"
     if not isinstance(corpus, dict):
         return None, f"the baseline at base `{sha[:12]}` is a JSON {type(corpus).__name__}, not an object"
+    missing = [field for field in BASELINE_FIELDS if field not in corpus]
+    if missing:
+        # The same shape the writer refuses to attest and the reader refuses to read: a base whose
+        # fixture lacks a field is not a reference either (Cursor, #767 round 2).
+        return None, f"the baseline at base `{sha[:12]}` lacks {', '.join(f'`{field}`' for field in missing)}"
     return baseline_view(corpus), None
 
 
