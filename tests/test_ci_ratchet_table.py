@@ -1585,7 +1585,9 @@ def test_a_malformed_measured_value_in_the_store_turns_the_margin_rows_red_not_a
     root = write_attestations(tmp_path / "attestations", tuple(documents))
     assert ratchet.main(["--attestations", str(root)]) == 1
     captured = capsys.readouterr()
+    # A load failure is an attestation problem for BOTH margin rows, not just the one whose key broke.
     assert "::error title=Ratchet RED: search p50/p95::" in captured.err
+    assert "::error title=Ratchet RED: idle CPU::" in captured.err
     assert "measured.latency_baseline_ms.p50` is 'fast'" in captured.out
 
 
@@ -1601,3 +1603,24 @@ def test_a_band_that_cannot_be_formed_turns_its_row_red_not_the_collector_dead(t
     assert result.status == ratchet.RED
     assert result.value.startswith("margin p50:") and "non-finite" in result.value
     assert row(rows, "idle CPU").status == ratchet.NA  # its own keys are fine; only the broken row is RED
+
+
+def test_main_accepts_a_single_attestation_file_as_the_store(tmp_path: Path, capsys, monkeypatch) -> None:
+    # Lead review r2 (#765, low): file-or-directory is advertised; only the directory shape was pinned.
+    monkeypatch.setattr(ratchet, "git_tree_dirty", lambda: False)
+    root = write_attestations(tmp_path / "attestations", real_history()[:1])
+    single = root / "1000" / "attestation.json"
+    assert ratchet.main(["--attestations", str(single)]) == 0
+    assert "margin unmeasured — 1 of the 5 attested green main runs" in capsys.readouterr().out
+
+
+def test_a_describe_failure_is_a_row_problem_not_a_collector_abort(tmp_path: Path, monkeypatch) -> None:
+    # Lead review r2 (#765, low): describe() sat outside the try; unreachable today, but the
+    # signature-report path's never-abort rule applies to this row too.
+    def broken_describe(margin, *, unit):
+        raise ValueError("simulated incomplete margin")
+
+    monkeypatch.setattr(ratchet.margins, "describe", broken_describe)
+    rows = ratchet.collect(linux_probe(tmp_path, attestations=real_history()), CORPUS)
+    result = row(rows, "search p50/p95")
+    assert result.status == ratchet.RED and "simulated incomplete margin" in result.value
