@@ -16,7 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "release_tag_contains.py"
 
 
-def _clean_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+def _clean_git_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     """`.githooks/pre-push` runs this suite with GIT_DIR/GIT_INDEX_FILE exported.
 
     Those win over `cwd`, so an unscrubbed fixture commits into the REAL repo instead of its
@@ -31,7 +31,7 @@ def _git(repo: Path, *args: str) -> str:
     return subprocess.run(
         ["git", *args],
         cwd=repo,
-        env=_clean_env(),
+        env=_clean_git_env(),
         capture_output=True,
         text=True,
         check=True,
@@ -94,7 +94,7 @@ def _run(repo: Path, *args: str, env: dict[str, str] | None = None):
     return subprocess.run(
         ["python3", str(SCRIPT), *args],
         cwd=repo,
-        env=_clean_env(env),
+        env=_clean_git_env(env),
         capture_output=True,
         text=True,
         check=False,
