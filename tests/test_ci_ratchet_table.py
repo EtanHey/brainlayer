@@ -1777,3 +1777,44 @@ def test_baseline_changes_name_every_moved_removed_and_added_path() -> None:
     assert ("thresholds.new_knob", None, 1) in changed
     assert [path for path, _, _ in changed if path == "queries"] == ["queries"]
     assert ratchet.baseline_changes(before, before) == []
+
+
+def test_a_removed_null_leaf_is_still_a_change() -> None:
+    """`.get()` cannot tell a null value from an absent path; membership can (Macroscope, #766)."""
+    assert ratchet.baseline_changes({"thresholds": {"cpu_percent": None}}, {"thresholds": {}}) == [
+        ("thresholds.cpu_percent", None, None)
+    ]
+    assert ratchet.baseline_changes({"thresholds": {}}, {"thresholds": {"cpu_percent": None}}) == [
+        ("thresholds.cpu_percent", None, None)
+    ]
+    assert ratchet.baseline_changes({"thresholds": {"cpu_percent": None}}, {"thresholds": {"cpu_percent": None}}) == []
+
+
+def test_the_reader_refuses_an_attestation_that_does_not_cover_every_baseline_field(tmp_path: Path) -> None:
+    partial = {"queries": CORPUS["queries"], "thresholds": CORPUS["thresholds"]}
+    payload = attestation_dict(baseline=partial, baseline_sha256=ratchet.baseline_digest(partial))
+    attestation, problem = ratchet.read_attestation(write_attestation(tmp_path, payload))
+    assert attestation is None and "exactly the baseline fields" in problem
+
+
+@pytest.mark.parametrize("flag, value", [("--run-id", "0"), ("--run-id", "-4"), ("--run-attempt", "0")])
+def test_the_writer_refuses_run_numbers_the_reader_would_reject(
+    tmp_path: Path, capsys, monkeypatch, flag, value
+) -> None:
+    pin_main_checkout(monkeypatch)
+    (tmp_path / "out").mkdir()
+    assert ratchet.main(attest_argv(tmp_path, make_wheel(tmp_path, HEAD), **{flag: value})) == 1
+    assert not (tmp_path / "out" / "attestation.json").exists()
+    assert "not positive integers" in capsys.readouterr().err
+
+
+def test_the_writer_refuses_a_checkout_whose_baseline_lacks_a_field(tmp_path: Path, capsys, monkeypatch) -> None:
+    pin_main_checkout(monkeypatch)
+    (tmp_path / "out").mkdir()
+    partial = {key: value for key, value in CORPUS.items() if key != "queries"}
+    corpus = tmp_path / "corpus.json"
+    corpus.write_text(json.dumps(partial), encoding="utf-8")
+    monkeypatch.setattr(ratchet, "CORPUS", corpus)
+    assert ratchet.main(attest_argv(tmp_path, make_wheel(tmp_path, HEAD))) == 1
+    assert not (tmp_path / "out" / "attestation.json").exists()
+    assert "lacks `queries`" in capsys.readouterr().err
