@@ -1277,3 +1277,115 @@ def test_replay_cli_receipt_counts_outcomes_and_persists_to_disk(tmp_path, monke
     assert receipt["outcome_counts"] == {"duplicate": 1, "stored": 1}
     assert {item["outcome"] for item in receipt["replayed"]} == {"stored", "duplicate"}
     assert {item["chunk_id"] for item in receipt["replayed"]} == {"chunk-stored", "chunk-duplicate"}
+
+
+def test_replay_entry_never_upgrades_an_unrecognized_outcome_to_stored(tmp_path):
+    """`stored` is the strongest claim in the vocabulary; a store we did not understand has not earned it.
+
+    Round-1 review, #774 @605. `mcp/store_handler.py:1126` defaults only when the key is ABSENT,
+    and `_store_receipt` then *raises* on a present-unknown value (store_handler.py:601-606).
+    Remapping a present value to `stored` was strictly weaker than both.
+    """
+    from brainlayer.fallback_replay import OUTCOME_UNRESOLVED, parse_fallback_file, replay_entry
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    entry = parse_fallback_file(_pending_file(repo, "docs.local/decisions/garbage.md"))
+
+    result = replay_entry(
+        entry,
+        store_func=lambda **_kwargs: {"id": "chunk-x", "outcome": "banana"},
+        replayed_by="test",
+    )
+
+    assert result.outcome == OUTCOME_UNRESOLVED
+    assert result.chunk_id == "chunk-x"
+    # Traceable, and an error so the script exits non-zero rather than reporting a clean run.
+    assert "banana" in (result.error or "")
+
+
+def test_replay_entry_does_not_call_a_deferred_store_result_stored(tmp_path):
+    """`store_memory` never answers `deferred`; if it did, that is a finding, not a fresh insert."""
+    from brainlayer.fallback_replay import OUTCOME_UNRESOLVED, parse_fallback_file, replay_entry
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    entry = parse_fallback_file(_pending_file(repo, "docs.local/decisions/deferred.md"))
+
+    result = replay_entry(
+        entry,
+        store_func=lambda **_kwargs: {"id": "chunk-d", "outcome": "deferred"},
+        replayed_by="test",
+    )
+
+    assert result.outcome == OUTCOME_UNRESOLVED
+    assert "deferred" in (result.error or "")
+
+
+def test_replay_entry_still_defaults_an_absent_outcome_to_stored(tmp_path):
+    """Absent is the ONE case that defaults — this is the store_handler parity that must not regress."""
+    from brainlayer.fallback_replay import OUTCOME_STORED, parse_fallback_file, replay_entry
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    entry = parse_fallback_file(_pending_file(repo, "docs.local/decisions/absent.md"))
+
+    result = replay_entry(entry, store_func=lambda **_kwargs: {"id": "chunk-a"}, replayed_by="test")
+
+    assert result.outcome == OUTCOME_STORED
+    assert result.error is None
+
+
+def test_queue_entry_reports_deferred_for_a_file_already_on_the_queue(tmp_path):
+    """The early-return at queue_entry: already queued, still pending, queue file present.
+
+    Round-1 review, #774 @221. A regression labelling this `skipped` would report the queue debt as
+    already handled while the drain still owes the commit.
+    """
+    from brainlayer.fallback_replay import OUTCOME_DEFERRED, parse_fallback_file, queue_entry
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    path = _pending_file(repo, "docs.local/decisions/already-queued.md")
+    queue_file = tmp_path / "queue" / "pending.jsonl"
+    queue_file.parent.mkdir(parents=True)
+    queue_file.write_text("{}\n", encoding="utf-8")
+
+    first = queue_entry(parse_fallback_file(path), enqueue_func=lambda **_kwargs: queue_file, replayed_by="test")
+    assert first.outcome == OUTCOME_DEFERRED
+
+    # Second pass over the same file: the marker says queued, the queue file is still there, and the
+    # drain has not marked it stored. It must NOT re-enqueue, and it must NOT read as skipped.
+    second = queue_entry(
+        parse_fallback_file(path),
+        enqueue_func=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("re-enqueued a queued file")),
+        replayed_by="test",
+    )
+
+    assert second.outcome == OUTCOME_DEFERRED
+    assert second.chunk_id == first.chunk_id
+
+
+def test_queue_entry_requeues_and_stays_deferred_when_the_queue_file_vanished(tmp_path):
+    """Same early-return, negative side: a lost queue file means the memory is NOT queued any more."""
+    from brainlayer.fallback_replay import OUTCOME_DEFERRED, parse_fallback_file, queue_entry
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    path = _pending_file(repo, "docs.local/decisions/lost-queue.md")
+    queue_file = tmp_path / "queue" / "gone.jsonl"
+    queue_file.parent.mkdir(parents=True)
+    queue_file.write_text("{}\n", encoding="utf-8")
+
+    queue_entry(parse_fallback_file(path), enqueue_func=lambda **_kwargs: queue_file, replayed_by="test")
+    queue_file.unlink()
+
+    requeued = []
+    second = queue_entry(
+        parse_fallback_file(path),
+        enqueue_func=lambda **kwargs: requeued.append(kwargs) or queue_file,
+        replayed_by="test",
+    )
+
+    assert len(requeued) == 1
+    assert second.outcome == OUTCOME_DEFERRED

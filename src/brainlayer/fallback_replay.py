@@ -40,6 +40,10 @@ OUTCOME_DEFERRED = "deferred"
 OUTCOME_REJECTED = "rejected"
 OUTCOME_ERROR = "error"
 OUTCOME_SKIPPED = "skipped"
+# A store that came back with a chunk id but described the write in a word outside
+# {stored, duplicate, merged}. `stored` is the strongest claim in the vocabulary and this row has
+# not earned it, so it gets its own value and an error naming what the store actually said.
+OUTCOME_UNRESOLVED = "unresolved"
 
 
 @dataclass(frozen=True)
@@ -188,6 +192,7 @@ def replay_entry(
         return ReplayResult(path=entry.path, attempted=True, chunk_id=None, error=error, outcome=OUTCOME_REJECTED)
 
     outcome = _store_outcome(result)
+    outcome_error = _unresolved_outcome_error(result) if outcome == OUTCOME_UNRESOLVED else None
 
     try:
         _write_replay_attempt(entry, chunk_id=chunk_id, trust_chunk_id=True)
@@ -200,7 +205,7 @@ def replay_entry(
             outcome=outcome,
         )
 
-    return ReplayResult(path=entry.path, attempted=True, chunk_id=chunk_id, outcome=outcome)
+    return ReplayResult(path=entry.path, attempted=True, chunk_id=chunk_id, outcome=outcome, error=outcome_error)
 
 
 def queue_entry(
@@ -590,19 +595,39 @@ def _resolve_project(
     return origin_repo_path.name
 
 
-_STORE_OUTCOMES = frozenset({OUTCOME_STORED, OUTCOME_DUPLICATE, OUTCOME_MERGED})
+# The three words that describe a write that actually resolved. `mcp/store_handler.py:603-606`
+# draws the same line: `_store_receipt` "handles resolved writes only".
+_RESOLVED_STORE_OUTCOMES = frozenset({OUTCOME_STORED, OUTCOME_DUPLICATE, OUTCOME_MERGED})
 
 
 def _store_outcome(result: Any) -> str:
-    """The write store_memory reports, defaulting the way the MCP layer does.
+    """The write store_memory reports.
 
-    A store that answers with a chunk_id but no outcome predates the field; the MCP
-    store handler reads that as ``stored``, so a replay receipt must not invent a
-    different word for the same result.
+    ABSENT is the one case that defaults, and it defaults to ``stored`` exactly as
+    ``mcp/store_handler.py:1126`` does -- a store predating the field still committed a write.
+
+    A value that is PRESENT and not a resolved write is never remapped to ``stored``. The MCP path
+    raises on those (``store_handler.py:601-606``); raising here would abandon the rest of a 122-file
+    batch for one odd row, so the row gets ``unresolved`` and carries the raw word in its error.
+    Either way the claim is not upgraded, which is the whole point of a receipt.
     """
     raw = result.get("outcome") if isinstance(result, dict) else getattr(result, "outcome", None)
-    text = str(raw or "").strip().lower()
-    return text if text in _STORE_OUTCOMES else OUTCOME_STORED
+    if raw is None:
+        return OUTCOME_STORED
+    text = str(raw).strip().lower()
+    if not text:
+        return OUTCOME_STORED
+    if text in _RESOLVED_STORE_OUTCOMES:
+        return text
+    return OUTCOME_UNRESOLVED
+
+
+def _unresolved_outcome_error(result: Any) -> str:
+    raw = result.get("outcome") if isinstance(result, dict) else getattr(result, "outcome", None)
+    return (
+        f"store returned a chunk_id but described the write as {raw!r}, which is not one of "
+        f"{sorted(_RESOLVED_STORE_OUTCOMES)}; recorded as {OUTCOME_UNRESOLVED} rather than assumed stored"
+    )
 
 
 def _extract_chunk_id(result: Any) -> str | None:
