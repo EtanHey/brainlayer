@@ -745,10 +745,11 @@ final class StatsCollectorTests: XCTestCase {
 
         collector.refresh(force: true)
 
-        // The probe is parked inside `sample()` and only this test can release it, so
-        // reaching the next line at all IS the property under test: a probe sampled on
-        // the main actor could not have handed control back here. No wall-clock margin
-        // is involved, which is why a cold runner cannot flake it.
+        // The property is proven by the PAIR of assertions below, not by reaching this
+        // line: the probe entered `sample()`, AND it is still parked there while the test
+        // runs on. A probe sampled on the main actor could only get here after `sample()`
+        // had returned, which the second assertion rejects. No wall-clock margin is
+        // involved in either one, which is why a cold runner cannot flake them.
         XCTAssertTrue(
             probe.waitForFirstSample(timeout: .now() + 10),
             "The dashboard refresh must reach the watcher probe."
