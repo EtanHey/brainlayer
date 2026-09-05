@@ -140,6 +140,27 @@ class TestResolveHookPython:
         assert HOOK_PYTHON_ENV in message, "the error must name the explicit escape hatch"
 
     @staticmethod
+    @pytest.mark.parametrize("relative", ["python3", "python", "./venv/bin/python", "bin/python"])
+    def test_a_relative_override_is_refused(relative, monkeypatch, tmp_path):
+        """`BRAINLAYER_HOOK_PYTHON=python3` would hand the choice straight back to PATH.
+
+        `os.path.exists("python3")` is true whenever the cwd happens to contain one, so an
+        existence check alone would return it, `render_hook_command` would emit
+        `python3 <script>`, and the hook process would resolve it through PATH — the exact
+        bug this module exists to close, arriving through the escape hatch.
+        """
+        (tmp_path / "python3").write_text("#!/bin/sh\n")
+        (tmp_path / "python").write_text("#!/bin/sh\n")
+        (tmp_path / "bin").mkdir()
+        (tmp_path / "bin" / "python").write_text("#!/bin/sh\n")
+        (tmp_path / "venv" / "bin").mkdir(parents=True)
+        (tmp_path / "venv" / "bin" / "python").write_text("#!/bin/sh\n")
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(HookPythonUnresolved) as excinfo:
+            resolve_hook_python(env={HOOK_PYTHON_ENV: relative}, candidates=())
+        assert "absolute" in str(excinfo.value)
+
+    @staticmethod
     def test_default_candidate_is_the_opt_symlink():
         """`opt/` outlives the Cellar version a command was rendered against."""
         assert DEFAULT_KEG_PYTHON == "/opt/homebrew/opt/brainlayer/libexec/venv/bin/python"
@@ -216,6 +237,31 @@ class TestFindUnpinnedHookCommands:
         findings = find_unpinned_hook_commands(settings)
         assert len(findings) == 1
         assert findings[0].script == "brainbar-stop-index.py"
+
+    @staticmethod
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "python3 -u /Users/x/.claude/hooks/brainlayer-prompt-search.py",
+            "python3 -X utf8 -u /Users/x/.claude/hooks/brainlayer-prompt-search.py",
+            "/usr/bin/env python3 -u /Users/x/.claude/hooks/brainlayer-prompt-search.py",
+        ],
+    )
+    def test_interpreter_options_do_not_hide_a_path_resolved_python(command):
+        """`python3 -u script.py` is still PATH-resolved.
+
+        Reading only the token immediately before the script would record `-u` as the
+        interpreter, `is_bare_python3("-u")` is False, and the lint would call a
+        PATH-resolved hook pinned. Option tokens are skipped instead.
+        """
+        findings = find_unpinned_hook_commands(_settings(command))
+        assert len(findings) == 1, f"{command!r} must be flagged"
+        assert findings[0].script == "brainlayer-prompt-search.py"
+
+    @staticmethod
+    def test_options_after_a_pinned_interpreter_stay_clean():
+        settings = _settings(f"{DEFAULT_KEG_PYTHON} -u /Users/x/.claude/hooks/brainlayer-prompt-search.py")
+        assert find_unpinned_hook_commands(settings) == []
 
     @staticmethod
     def test_env_python3_is_flagged_too():

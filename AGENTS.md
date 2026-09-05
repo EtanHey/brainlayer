@@ -314,6 +314,13 @@ brainlayer enrich
   stance as `scripts/launchd/install.sh`). Lint a settings file by hand with
   `python -m brainlayer.hook_python ~/.claude/settings.json`;
   `tests/test_hook_python.py` fails on any bare `python3`/`env python3` shebang or command.
+- **The shebangs name the ARM Homebrew prefix, so they are machine-specific on purpose.** The four
+  hooks that matter are invoked as `<python> <script>` from `settings.json`, which overrides the
+  shebang entirely; the shebang only decides what happens when a script is run directly (today only
+  `hooks/post-commit.py`, which nothing in this repo installs as a git hook). On an Intel prefix
+  that shebang fails loudly with "bad interpreter" — which is the intended failure, not a silent
+  run against the wrong library. Rendering per-machine is `render_hook_command()`'s job; there is no
+  hook installer yet to call it.
 
 <!-- PATHS: DB=~/.local/share/brainlayer/brainlayer.db | offsets=~/.local/share/brainlayer/offsets.json | logs=~/Library/Logs/brainlayer/watch.{out,err}.log | socket=/tmp/brainlayer.sock | lock=/tmp/brainlayer-enrichment.lock -->
 ## Data & Locks

@@ -136,6 +136,17 @@ def resolve_hook_python(
     looked_at: list[str] = []
     override = (env.get(HOOK_PYTHON_ENV) or "").strip()
     if override:
+        # A relative override is refused outright, not resolved. `os.path.exists("python3")`
+        # is true whenever the cwd happens to hold one, so an existence check alone would
+        # accept `BRAINLAYER_HOOK_PYTHON=python3`, `render_hook_command` would emit
+        # `python3 <script>`, and the hook process would resolve it through PATH — this
+        # module's whole bug, arriving through its own escape hatch.
+        if not os.path.isabs(override):
+            raise HookPythonUnresolved(
+                f"{HOOK_PYTHON_ENV}={override!r} is not an absolute path. A relative "
+                "interpreter is resolved by PATH or the working directory at hook time, "
+                "which is exactly what this pin exists to prevent. Give the full path."
+            )
         if os.path.exists(override):
             return override
         looked_at.append(f"{override} (from {HOOK_PYTHON_ENV})")
@@ -198,12 +209,29 @@ def _brainlayer_script_in(command: str) -> tuple[str, str] | None:
     except ValueError:
         tokens = command.split()
     for index, token in enumerate(tokens):
-        if os.path.basename(token) in BRAINLAYER_HOOK_SCRIPTS:
-            interpreter = tokens[index - 1] if index else ""
-            # `/usr/bin/env python3 script.py` puts `env` two tokens back.
-            if index >= 2 and os.path.basename(tokens[index - 2]) == "env":
-                interpreter = f"{tokens[index - 2]} {tokens[index - 1]}"
-            return os.path.basename(token), interpreter
+        if os.path.basename(token) not in BRAINLAYER_HOOK_SCRIPTS:
+            continue
+        # Find the interpreter by what it LOOKS like, walking back from the script — not by
+        # position. `python3 -u script.py` would make the adjacent token `-u`, and
+        # `is_bare_python3("-u")` is False, so the lint would call a PATH-resolved hook
+        # pinned. Skipping tokens that start with `-` is not enough either: `-X utf8` is an
+        # option WITH an argument, and `utf8` does not start with `-`.
+        interpreter = ""
+        cursor = index - 1
+        while cursor >= 0:
+            candidate = tokens[cursor]
+            if os.path.basename(candidate).startswith("python"):
+                interpreter = candidate
+                # `/usr/bin/env python3 …` — env's whole job is to ask PATH, so keep both.
+                if cursor >= 1 and os.path.basename(tokens[cursor - 1]) == "env":
+                    interpreter = f"{tokens[cursor - 1]} {candidate}"
+                break
+            cursor -= 1
+        if not interpreter and index:
+            # No python-shaped token: fall back to the adjacent one so an unrecognised
+            # runner is still reported rather than silently passing as pinned.
+            interpreter = tokens[index - 1]
+        return os.path.basename(token), interpreter
     return None
 
 
