@@ -1942,3 +1942,17 @@ def test_a_malformed_measured_value_in_the_store_turns_the_margin_rows_red_not_a
     captured = capsys.readouterr()
     assert "::error title=Ratchet RED: search p50/p95::" in captured.err
     assert "measured.latency_baseline_ms.p50` is 'fast'" in captured.out
+
+
+def test_a_band_that_cannot_be_formed_turns_its_row_red_not_the_collector_dead(tmp_path: Path) -> None:
+    # Five individually valid values whose spread overflows the limit: the module refuses the band, and
+    # the row says so instead of the collector raising out of margin_notes (Macroscope round 2, #763).
+    documents = list(real_history())[:5]
+    for document, value in zip(documents, [1e308, 1e308, 1e308, 1e308, 1e307], strict=True):
+        document["measured"]["latency_baseline_ms.p50"] = value
+    probe = linux_probe(tmp_path, attestations=tuple(documents))
+    rows = ratchet.collect(probe, CORPUS)
+    result = row(rows, "search p50/p95")
+    assert result.status == ratchet.RED
+    assert result.value.startswith("margin p50:") and "non-finite" in result.value
+    assert row(rows, "idle CPU").status == ratchet.NA  # its own keys are fine; only the broken row is RED
