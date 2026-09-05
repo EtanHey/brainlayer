@@ -90,14 +90,6 @@ def _is_claude_subagent(path: Path) -> bool:
     return ".claude" in parts and "projects" in parts and "subagents" in parts
 
 
-def _has_memory_reader_path_signature(path: Path) -> bool:
-    if "subagents" not in path.parts:
-        return False
-    subagents_index = path.parts.index("subagents")
-    markers = {part.casefold().replace("_", "-") for part in path.parts[subagents_index + 1 :]}
-    return bool(markers & MEMORY_READER_ATTRIBUTIONS)
-
-
 def memory_reader_attribution(path: str | Path) -> str | None:
     """Return an exact memory-reader role from path/JSONL attribution, never task text."""
     candidate = Path(os.path.abspath(os.path.expanduser(str(path))))
@@ -260,3 +252,55 @@ def is_denylisted(path: str | Path, *, unknown_subagent_is_denylisted: bool = Tr
         normalized = str(attribution or "").strip().casefold().replace("_", "-")
         return (attribution is None and unknown_subagent_is_denylisted) or normalized in MEMORY_READER_ATTRIBUTIONS
     return False
+
+
+@dataclass(frozen=True)
+class EnvDenylistOverreach:
+    """An explicit env pattern that excludes a path the class rule would keep."""
+
+    pattern: str
+    kept_example: str
+
+
+# Neutral probes standing for the transcript classes the class rule KEEPS: a plain
+# provider session, an ordinary Claude subagent, an ordinary workflow agent, and the
+# other CLI coding agents. The project token is deliberately generic so a
+# deployment-scoped pattern (one naming a single project or repo) is not mistaken
+# for class overreach.
+_CLASS_KEPT_PROBES: tuple[tuple[str, ...], ...] = (
+    (".claude", "projects", "probe-project", "probe-session.jsonl"),
+    (".claude", "projects", "probe-project", "probe-session", "subagents", "agent-aprobe.jsonl"),
+    (
+        ".claude",
+        "projects",
+        "probe-project",
+        "probe-session",
+        "subagents",
+        "workflows",
+        "wf_probe",
+        "agent-aprobe.jsonl",
+    ),
+    (".cursor", "projects", "probe-project", "agent-transcripts", "probe-session", "agent-aprobe.jsonl"),
+    (".codex", "sessions", "probe-session.jsonl"),
+    (".gemini", "sessions", "probe-session.jsonl"),
+)
+
+
+def env_denylist_overreach() -> tuple[EnvDenylistOverreach, ...]:
+    """Return the configured patterns that exclude transcript classes the class rule keeps.
+
+    The class rule excludes only memory-reading workers (see MEMORY_READER_ATTRIBUTIONS),
+    read from each transcript's own attribution. A pattern that also swallows an ordinary
+    subagent, an ordinary workflow agent, or a plain provider session is broader than that
+    rule, and callers must say so rather than degrade silently.
+    """
+    findings: list[EnvDenylistOverreach] = []
+    home = Path.home()
+    probes = tuple(Path(os.path.abspath(str(home.joinpath(*parts)))) for parts in _CLASS_KEPT_PROBES)
+    for pattern in _configured_patterns():
+        for expanded_pattern in _expand_globs(pattern, (home,)):
+            match = next((probe for probe in probes if _match_parts(probe.parts, expanded_pattern.parts)), None)
+            if match is not None:
+                findings.append(EnvDenylistOverreach(pattern=pattern, kept_example=str(match)))
+                break
+    return tuple(findings)

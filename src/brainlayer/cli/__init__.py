@@ -542,6 +542,7 @@ def setup(
     import subprocess
 
     from ..config import get_user_env_path
+    from ..ingest_denylist import BRAINLAYER_INGEST_DENYLIST_ENV, env_denylist_overreach
     from ..setup import (
         McpMigrationReport,
         ensure_brainlayer_env,
@@ -581,6 +582,20 @@ def setup(
         rprint(f"[yellow]Skipped MCP config migration:[/] {skipped_path} ({reason})")
     if tool_count is not None:
         rprint(f"[green]MCP transport verified:[/] {tool_count} tools")
+    overreaching = env_denylist_overreach()
+    if overreaching:
+        rprint(
+            f"[yellow]{BRAINLAYER_INGEST_DENYLIST_ENV} is broader than the ingest class rule[/] "
+            f"({len(overreaching)} pattern(s) exclude transcripts the class rule keeps):"
+        )
+        for finding in overreaching:
+            rprint(f"[yellow]  overreaching pattern:[/] {finding.pattern}")
+            rprint(f"    also excludes: {finding.kept_example}")
+        rprint(
+            "  The class rule excludes only memory-reading workers (brain-worker, session-miner, weave),"
+            " read from each transcript's own attribution. Narrow or drop these patterns to stop"
+            " discarding ordinary subagent and workflow-agent memory."
+        )
 
 
 @app.command()
