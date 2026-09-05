@@ -26,10 +26,12 @@ set -uo pipefail
 #
 # Every narrowing here is conservative, and every refusal to narrow is LOUD:
 #   - a branch anywhere in the push wins (it carries changes no tag range covers)
+#   - an explicit BRAINLAYER_PREPUSH_SCOPE is the operator's decision — explicit beats default
+#   - an explicit BRAINLAYER_CHANGED_FILES/_RANGE, likewise
 #   - more than one tag in one push has no single range
-#   - a first tag has no previous tag
-#   - an explicit BRAINLAYER_CHANGED_FILES/_RANGE is the operator's decision, not ours
-# In all four the full suite still runs, and the reason is printed instead of paid for silently.
+#   - a tag with no previous RELEASE tag has no range at all
+# In all five the scope is left exactly as the caller set it, and the reason is printed instead of
+# paid for silently.
 tag_count=0
 non_tag_refs=0
 tag_name=""
@@ -49,18 +51,35 @@ if [ ! -t 0 ]; then
   done
 fi
 
-if [ "$tag_count" -gt 0 ] && [ "$non_tag_refs" -eq 0 ]; then
-  if [ -n "${BRAINLAYER_CHANGED_FILES:-}" ] || [ -n "${BRAINLAYER_CHANGED_FILES_RANGE:-}" ]; then
+if [ "$tag_count" -gt 0 ]; then
+  if [ "$non_tag_refs" -gt 0 ]; then
+    # This case used to skip the whole block, so it refused to narrow WITHOUT saying why -- safe,
+    # but the loudness guarantee above was false for it.
+    echo "WARNING: pre-push: a branch is in this push alongside $tag_count tag(s)."
+    echo "WARNING: it carries changes no tag range covers; leaving the scope as the caller set it."
+  elif [ -n "${BRAINLAYER_PREPUSH_SCOPE:-}" ]; then
+    # `BRAINLAYER_PREPUSH_SCOPE=full git push origin vX` is a deliberate full-suite tag push, and
+    # narrowing it would defeat the operator on the very gate this scoping hardens. Explicit beats
+    # default, in BOTH directions: an explicit changed-only is not second-guessed with a range
+    # either. Absent means default (`full` in run_tests.sh), which is what this block may narrow.
+    echo "==> pre-push: BRAINLAYER_PREPUSH_SCOPE=$BRAINLAYER_PREPUSH_SCOPE was set explicitly — leaving it alone"
+  elif [ -n "${BRAINLAYER_CHANGED_FILES:-}" ] || [ -n "${BRAINLAYER_CHANGED_FILES_RANGE:-}" ]; then
     echo "==> pre-push: tag push with an explicit changed set already set — leaving it alone"
   elif [ "$tag_count" -ne 1 ]; then
     echo "WARNING: pre-push: $tag_count tags in one push — no single range to scope from."
     echo "WARNING: running the FULL suite; push tags one at a time to scope them."
-  elif previous_tag="$(git describe --tags --abbrev=0 "${tag_name}^" 2>/dev/null)" && [ -n "$previous_tag" ]; then
+  # --match 'v*' is load-bearing: bare `describe --tags` answers with the nearest reachable tag of
+  # ANY name, so one intervening nightly/rc/checkpoint on the release line would start the range
+  # there and never map the commits between it and the real previous release. This repo already
+  # carries non-v* tags (`pre-rename`, `archive/*`). Under-scoping a gate is fail-open; a release
+  # tag is the only predecessor whose range means "what this release ships".
+  elif previous_tag="$(git describe --tags --abbrev=0 --match 'v*' "${tag_name}^" 2>/dev/null)" &&
+    [ -n "$previous_tag" ]; then
     echo "==> pre-push: tag $tag_name scoped to $previous_tag..$tag_name (not the full suite)"
     export BRAINLAYER_PREPUSH_SCOPE=changed-only
     export BRAINLAYER_CHANGED_FILES_RANGE="$previous_tag..$tag_name"
   else
-    echo "WARNING: pre-push: tag $tag_name has no previous tag to diff against."
+    echo "WARNING: pre-push: tag $tag_name has no previous release tag (v*) to diff against."
     echo "WARNING: running the FULL suite. Loud, not narrowed on a guess."
   fi
 fi

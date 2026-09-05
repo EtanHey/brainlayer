@@ -153,10 +153,14 @@ brainlayer enrich
 - Pre-push: `.githooks/pre-push` runs `scripts/run_tests.sh` with `BRAINLAYER_PREPUSH=1`; full
   runs are deduped by git tree hash in `.git/brainlayer-prepush-cache`.
 - A **tag** push has no branch to diff against, so the hook reads the pushed refs off its stdin and
-  scopes the run to `<previous tag>..<tag>` via `BRAINLAYER_CHANGED_FILES_RANGE`. It refuses to
-  narrow — and says why, in the push output — when a branch rides along, when more than one tag is
-  pushed at once, when the tag has no predecessor, or when `BRAINLAYER_CHANGED_FILES`/`_RANGE` is
-  already set. Those four still run the full suite; none of them do it silently.
+  scopes the run to `<previous release tag>..<tag>` via `BRAINLAYER_CHANGED_FILES_RANGE`. The
+  predecessor is resolved with `--match 'v*'`: an intervening non-release tag would start the range
+  short and leave real commits unmapped. It refuses to narrow — and prints the reason in the push
+  output — in five cases: a branch rides along; `BRAINLAYER_PREPUSH_SCOPE` was set explicitly
+  (**explicit beats default, in both directions** — an explicit `full` is never narrowed, and an
+  explicit `changed-only` is not handed a range either); `BRAINLAYER_CHANGED_FILES`/`_RANGE` is
+  already set; more than one tag is pushed at once; the tag has no previous `v*` predecessor. In
+  all five the scope is left exactly as the caller set it, and none of them are silent.
 - Scoped worker pushes: use `BRAINLAYER_PREPUSH_SCOPE=changed-only git push` to map changed files
   to focused pytest targets while keeping the lightweight registration, isolated, bun, and shell
   gates.

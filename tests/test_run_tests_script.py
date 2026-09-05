@@ -145,9 +145,8 @@ def _repo_with_two_tags(tmp_path: Path) -> Path:
     return repo
 
 
-def _repo_with_the_pre_push_hook(tmp_path: Path) -> tuple[Path, Path]:
+def _install_pre_push_hook(repo: Path, tmp_path: Path) -> Path:
     """The real hook over a run_tests.sh stub that records the scope env it was handed."""
-    repo = _repo_with_two_tags(tmp_path)
     env_log = tmp_path / "hook-env.log"
     _write_executable(
         repo / "scripts" / "run_tests.sh",
@@ -167,7 +166,42 @@ def _repo_with_the_pre_push_hook(tmp_path: Path) -> tuple[Path, Path]:
     hook = repo / ".githooks" / "pre-push"
     hook.parent.mkdir(parents=True)
     hook.write_text(HOOK_PATH.read_text(encoding="utf-8"), encoding="utf-8")
-    return repo, env_log
+    return env_log
+
+
+def _repo_with_the_pre_push_hook(tmp_path: Path) -> tuple[Path, Path]:
+    repo = _repo_with_two_tags(tmp_path)
+    return repo, _install_pre_push_hook(repo, tmp_path)
+
+
+def _repo_with_a_non_release_tag_between_releases(tmp_path: Path) -> tuple[Path, Path]:
+    """v1.0.0 -> `nightly` -> v1.1.0, so the nearest ANY-name tag is not the previous release.
+
+    `git describe --tags --abbrev=0 <tag>^` answers with the nearest reachable tag of any name, so
+    an intervening nightly/rc/checkpoint on the release line silently starts the range there and
+    the commits between the real previous v* and that tag are never mapped. Fail-open, on a gate.
+    """
+    repo = tmp_path / "repo"
+    (repo / "scripts").mkdir(parents=True)
+    _git(repo.parent, "init", "-q", "-b", "main", str(repo))
+    _git(repo, "config", "user.email", "fixture@example.com")
+    _git(repo, "config", "user.name", "Fixture User")
+    (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+    _git(repo, "add", "seed.txt")
+    _git(repo, "commit", "-qm", "seed")
+    _git(repo, "tag", "v1.0.0")
+    watcher = repo / "src" / "brainlayer" / "watcher.py"
+    watcher.parent.mkdir(parents=True)
+    watcher.write_text("# fixture\n", encoding="utf-8")
+    _git(repo, "add", "src/brainlayer/watcher.py")
+    _git(repo, "commit", "-qm", "watcher change")
+    _git(repo, "tag", "nightly")
+    index_new = repo / "src" / "brainlayer" / "index_new.py"
+    index_new.write_text("# fixture\n", encoding="utf-8")
+    _git(repo, "add", "src/brainlayer/index_new.py")
+    _git(repo, "commit", "-qm", "index change")
+    _git(repo, "tag", "v1.1.0")
+    return repo, _install_pre_push_hook(repo, tmp_path)
 
 
 def _run_hook(
@@ -1002,7 +1036,7 @@ def test_pre_push_hook_escalates_loudly_when_a_tag_has_no_previous_tag(tmp_path:
     handed = env_log.read_text()
     assert "SCOPE=<unset>" in handed
     assert "RANGE=<unset>" in handed
-    assert "no previous tag" in result.stdout
+    assert "no previous release tag" in result.stdout
 
 
 def test_pre_push_hook_leaves_a_branch_push_alone(tmp_path: Path) -> None:
@@ -1034,6 +1068,9 @@ def test_pre_push_hook_leaves_a_mixed_branch_and_tag_push_alone(tmp_path: Path) 
     handed = env_log.read_text()
     assert "SCOPE=<unset>" in handed
     assert "RANGE=<unset>" in handed
+    # Refusing to narrow is only half the contract; saying WHY is the other half, and this case
+    # skipped the messaging block entirely (#775 round-1 review, medium).
+    assert "a branch is in this push" in result.stdout
 
 
 def test_pre_push_hook_ignores_a_tag_deletion(tmp_path: Path) -> None:
@@ -1068,3 +1105,84 @@ def test_pre_push_hook_respects_an_explicit_changed_set_on_a_tag_push(tmp_path: 
     handed = env_log.read_text()
     assert "FILES=tests/test_jsonl_watcher.py" in handed
     assert "RANGE=<unset>" in handed
+
+
+def test_pre_push_hook_skips_a_non_release_predecessor_tag(tmp_path: Path) -> None:
+    """The predecessor must be a RELEASE tag, or the gate under-scopes itself.
+
+    `git describe --tags --abbrev=0` returns the nearest reachable tag of ANY name. With a
+    `nightly` between v1.0.0 and v1.1.0 the range would start at `nightly`, and the commits
+    between v1.0.0 and it would never be mapped -- a fail-open on a pre-push regression gate.
+    This repo already carries non-v* tags (`pre-rename`, `archive/*`), so the footgun is real.
+    """
+    repo, env_log = _repo_with_a_non_release_tag_between_releases(tmp_path)
+    sha = _rev_parse(repo, "v1.1.0")
+
+    result = _run_hook(repo, env_log, f"refs/tags/v1.1.0 {sha} refs/tags/v1.1.0 {'0' * 40}\n")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    handed = env_log.read_text()
+    assert "RANGE=v1.0.0..v1.1.0" in handed
+    assert "nightly" not in handed
+
+
+def test_pre_push_hook_never_narrows_an_explicitly_requested_scope(tmp_path: Path) -> None:
+    """`BRAINLAYER_PREPUSH_SCOPE=full git push origin vX` asked for the whole suite. Explicit wins.
+
+    The operator escape only looked at BRAINLAYER_CHANGED_FILES/_RANGE, so an explicit `full` was
+    overwritten with `changed-only` plus a range -- defeating an intentional full-suite tag push on
+    the very gate this change hardens (#775 round-1 review, high).
+    """
+    repo, env_log = _repo_with_the_pre_push_hook(tmp_path)
+    sha = _rev_parse(repo, "v1.1.0")
+
+    result = _run_hook(
+        repo,
+        env_log,
+        f"refs/tags/v1.1.0 {sha} refs/tags/v1.1.0 {'0' * 40}\n",
+        extra_env={"BRAINLAYER_PREPUSH_SCOPE": "full"},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    handed = env_log.read_text()
+    assert "SCOPE=full" in handed
+    assert "RANGE=<unset>" in handed
+    assert "set explicitly" in result.stdout
+
+
+def test_pre_push_hook_leaves_an_explicit_changed_only_scope_alone_too(tmp_path: Path) -> None:
+    """Explicit beats default in BOTH directions; the hook does not second-guess either value."""
+    repo, env_log = _repo_with_the_pre_push_hook(tmp_path)
+    sha = _rev_parse(repo, "v1.1.0")
+
+    result = _run_hook(
+        repo,
+        env_log,
+        f"refs/tags/v1.1.0 {sha} refs/tags/v1.1.0 {'0' * 40}\n",
+        extra_env={"BRAINLAYER_PREPUSH_SCOPE": "changed-only"},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    handed = env_log.read_text()
+    assert "SCOPE=changed-only" in handed
+    assert "RANGE=<unset>" in handed
+
+
+def test_pre_push_hook_refuses_loudly_when_several_tags_ride_one_push(tmp_path: Path) -> None:
+    """Two tags have no single range. The PR claims this path is loud; assert that it is."""
+    repo, env_log = _repo_with_the_pre_push_hook(tmp_path)
+    first = _rev_parse(repo, "v1.0.0")
+    second = _rev_parse(repo, "v1.1.0")
+
+    result = _run_hook(
+        repo,
+        env_log,
+        f"refs/tags/v1.0.0 {first} refs/tags/v1.0.0 {'0' * 40}\n"
+        f"refs/tags/v1.1.0 {second} refs/tags/v1.1.0 {'0' * 40}\n",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    handed = env_log.read_text()
+    assert "SCOPE=<unset>" in handed
+    assert "RANGE=<unset>" in handed
+    assert "2 tags in one push" in result.stdout
