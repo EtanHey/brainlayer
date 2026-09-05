@@ -27,6 +27,8 @@ from brainlayer.hook_python import (
     HookPythonUnresolved,
     find_unpinned_hook_commands,
     is_bare_python3,
+    is_pinned_interpreter,
+    is_system_python,
     main,
     render_hook_command,
     resolve_hook_python,
@@ -50,7 +52,7 @@ class TestShebangs:
     @pytest.mark.parametrize("script", _hook_scripts_with_shebangs(), ids=lambda p: p.name)
     def test_hook_shebang_is_not_bare_python3(script: Path):
         shebang = shebang_of(script)
-        assert not is_bare_python3(shebang), (
+        assert is_pinned_interpreter(shebang), (
             f"{script.name} has a PATH-resolved shebang ({shebang!r}). "
             "PATH decides which brainlayer library the hook imports; pin the keg python."
         )
@@ -73,6 +75,8 @@ class TestShebangs:
 
 
 class TestIsBarePython3:
+    """`is_bare_python3` answers exactly one question: does PATH decide?"""
+
     @pytest.mark.parametrize(
         "value",
         [
@@ -82,13 +86,10 @@ class TestIsBarePython3:
             "#!/usr/bin/env python3",
             "#!/usr/bin/env python",
             "/usr/bin/env python3",
-            "#!/usr/bin/python3",
-            "#!/usr/local/bin/python3",
-            "#!/Library/Frameworks/Python.framework/Versions/3.13/bin/python3",
         ],
     )
     @staticmethod
-    def test_path_or_system_interpreters_are_bare(value):
+    def test_path_resolved_interpreters_are_bare(value):
         assert is_bare_python3(value) is True
 
     @pytest.mark.parametrize(
@@ -97,15 +98,100 @@ class TestIsBarePython3:
             DEFAULT_KEG_PYTHON,
             f"#!{DEFAULT_KEG_PYTHON}",
             "/opt/homebrew/Cellar/brainlayer/1.5.15/libexec/venv/bin/python",
+            # An absolute path is named, whatever it names. Whether it is a GOOD choice is
+            # `is_system_python`'s question, not this one — conflating the two is what made
+            # the escape hatch and the linter disagree (review round 1, medium).
+            "/usr/bin/python3",
+            "/Library/Frameworks/Python.framework/Versions/3.13/bin/python3",
+            "/tmp/myvenv/bin/python",
         ],
     )
     @staticmethod
-    def test_keg_interpreters_are_pinned(value):
+    def test_absolute_interpreters_are_not_path_resolved(value):
         assert is_bare_python3(value) is False
 
     @staticmethod
     def test_none_is_not_bare():
         assert is_bare_python3(None) is False
+
+    @pytest.mark.parametrize("value", ["./bin/python", "bin/python3", "../venv/bin/python"])
+    @staticmethod
+    def test_cwd_relative_interpreters_are_not_path_resolved(value):
+        """Both are wrong for a hook, but they are wrong differently.
+
+        A directory component — absolute or relative — means something other than PATH
+        resolves it. `is_pinned_interpreter` rejects these anyway (not absolute); keeping
+        them out of `is_bare_python3` is what lets `_why_unpinned` say "resolved against
+        the cwd" instead of the false "resolved by PATH".
+        """
+        assert is_bare_python3(value) is False
+        assert is_pinned_interpreter(value) is False
+
+
+class TestIsSystemPython:
+    """Site-wide interpreters are the ones that carry a global `.pth` — this bug's origin."""
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "/usr/bin/python3",
+            "/usr/local/bin/python3",
+            "/opt/homebrew/bin/python3",
+            "/Library/Frameworks/Python.framework/Versions/3.13/bin/python3",
+            "#!/Library/Frameworks/Python.framework/Versions/3.13/bin/python3",
+            "/System/Library/Frameworks/Python.framework/Versions/2.7/bin/python",
+        ],
+    )
+    @staticmethod
+    def test_site_wide_interpreters_are_system(value):
+        assert is_system_python(value) is True
+
+    @pytest.mark.parametrize(
+        "value",
+        [DEFAULT_KEG_PYTHON, "/tmp/myvenv/bin/python", "/Users/x/Gits/brainlayer/.venv/bin/python"],
+    )
+    @staticmethod
+    def test_venv_and_keg_interpreters_are_not_system(value):
+        assert is_system_python(value) is False
+
+
+class TestIsPinnedInterpreter:
+    """The affirmative gate the lint uses. Anything it does not recognise is NOT pinned."""
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            DEFAULT_KEG_PYTHON,
+            "/usr/local/opt/brainlayer/libexec/venv/bin/python",
+            # An operator's deliberate absolute venv python. `resolve_hook_python` accepts
+            # this as an override, so the linter must accept it too, or the escape hatch and
+            # the gate contradict each other (review round 1, medium).
+            "/tmp/myvenv/bin/python",
+            "/Users/x/Gits/brainlayer/.venv/bin/python3.13",
+        ],
+    )
+    @staticmethod
+    def test_absolute_non_system_pythons_are_pinned(value):
+        assert is_pinned_interpreter(value) is True
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "",  # no interpreter token at all — the script was the whole command
+            "   ",
+            None,
+            "--",  # the Stop shim's separator, with no python after it
+            "run",  # `uv run <script>`
+            "python3",
+            "/usr/bin/env python3",
+            "/usr/bin/python3",  # named, but site-wide: carries the .pth that caused this
+            "/Library/Frameworks/Python.framework/Versions/3.13/bin/python3",
+            "./relative/python",
+        ],
+    )
+    @staticmethod
+    def test_everything_else_is_not_pinned(value):
+        assert is_pinned_interpreter(value) is False
 
 
 class TestResolveHookPython:
@@ -121,6 +207,53 @@ class TestResolveHookPython:
         with pytest.raises(HookPythonUnresolved) as excinfo:
             resolve_hook_python(env={HOOK_PYTHON_ENV: str(tmp_path / "nope")}, candidates=())
         assert HOOK_PYTHON_ENV in str(excinfo.value)
+
+    @staticmethod
+    def test_a_missing_override_raises_even_when_a_keg_is_available(tmp_path):
+        """A set-but-missing override must RAISE, not quietly fall through to the keg.
+
+        Setting `BRAINLAYER_HOOK_PYTHON` is a deliberate operator choice. Ignoring a typo in
+        it and silently using a different interpreter is the same fail-open this module
+        refuses everywhere else — and the previous `test_env_override_must_exist` could not
+        catch it, because it passed `candidates=()` so there was nothing to fall through to.
+        """
+        keg = tmp_path / "libexec" / "venv" / "bin" / "python"
+        keg.parent.mkdir(parents=True)
+        keg.write_text("#!/bin/sh\n")
+        with pytest.raises(HookPythonUnresolved) as excinfo:
+            resolve_hook_python(
+                env={HOOK_PYTHON_ENV: str(tmp_path / "typo" / "python")},
+                candidates=(str(keg),),
+            )
+        message = str(excinfo.value)
+        assert HOOK_PYTHON_ENV in message
+        assert str(keg) not in message, "it must not report the keg it declined to substitute"
+
+    @staticmethod
+    def test_a_system_python_override_is_refused(tmp_path):
+        """Pointing the escape hatch at a site-wide python re-arms the `.pth` that caused this.
+
+        It is also what keeps the hatch and the linter agreeing: `find_unpinned_hook_commands`
+        would flag a command rendered from it, so accepting it here would let an operator
+        create a configuration this module's own gate rejects.
+        """
+        fake_framework = tmp_path / "Library" / "Frameworks" / "Python.framework"
+        target = fake_framework / "Versions" / "3.13" / "bin" / "python3"
+        target.parent.mkdir(parents=True)
+        target.write_text("#!/bin/sh\n")
+        with pytest.raises(HookPythonUnresolved) as excinfo:
+            resolve_hook_python(env={HOOK_PYTHON_ENV: str(target)}, candidates=())
+        assert "site-wide" in str(excinfo.value)
+
+    @staticmethod
+    def test_an_absolute_venv_override_outside_a_keg_is_accepted(tmp_path):
+        """The hatch is not "must be Homebrew-shaped" — it is "must be explicitly named"."""
+        target = tmp_path / "myvenv" / "bin" / "python"
+        target.parent.mkdir(parents=True)
+        target.write_text("#!/bin/sh\n")
+        resolved = resolve_hook_python(env={HOOK_PYTHON_ENV: str(target)}, candidates=())
+        assert resolved == str(target)
+        assert is_pinned_interpreter(resolved), "the linter must accept what the hatch returns"
 
     @staticmethod
     def test_first_existing_candidate_wins(tmp_path):
@@ -271,6 +404,52 @@ class TestFindUnpinnedHookCommands:
     @staticmethod
     def test_empty_settings_is_clean():
         assert find_unpinned_hook_commands({}) == []
+
+    @pytest.mark.parametrize(
+        ("command", "why"),
+        [
+            (
+                "/Users/x/.claude/hooks/brainlayer-prompt-search.py",
+                "script alone: no interpreter token, so PATH resolves the shebang instead",
+            ),
+            (
+                "/Users/x/hooks-lab/stop-telemetry.mjs brainbar-stop-index -- "
+                "/Users/x/Gits/brainlayer/hooks/brainbar-stop-index.py",
+                "the Stop shim with the pin dropped: the token before the script is `--`",
+            ),
+            (
+                "uv run /Users/x/.claude/hooks/brainlayer-prompt-search.py",
+                "an unrecognised runner: the token before the script is `run`",
+            ),
+            (
+                "/usr/bin/python3 /Users/x/.claude/hooks/brainlayer-prompt-search.py",
+                "named but site-wide — this is the interpreter carrying the .pth",
+            ),
+        ],
+    )
+    @staticmethod
+    def test_a_shape_the_lint_cannot_recognise_is_reported_not_passed(command, why):
+        """Fail CLOSED. A gate that answers "fine" to a shape it does not understand is not a gate.
+
+        Each of these returned zero findings before review round 1. The Stop case is the worst:
+        `_brainlayer_script_in` handles that wrapper specially, so the one command shape this
+        module goes out of its way to parse could drop its pin and still lint clean.
+        """
+        findings = find_unpinned_hook_commands(_settings(command))
+        assert len(findings) == 1, f"must be flagged ({why})"
+        assert findings[0].reason, "a finding must say WHY, or it is not actionable"
+
+    @staticmethod
+    def test_the_reason_distinguishes_the_failure_modes():
+        reasons = {
+            find_unpinned_hook_commands(_settings(cmd))[0].reason
+            for cmd in (
+                "python3 /Users/x/.claude/hooks/brainlayer-prompt-search.py",
+                "/Users/x/.claude/hooks/brainlayer-prompt-search.py",
+                "/usr/bin/python3 /Users/x/.claude/hooks/brainlayer-prompt-search.py",
+            )
+        }
+        assert len(reasons) == 3, f"each failure mode needs its own reason, got {reasons}"
 
 
 class TestCli:

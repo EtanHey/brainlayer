@@ -32,6 +32,8 @@ __all__ = [
     "UnpinnedHookCommand",
     "find_unpinned_hook_commands",
     "is_bare_python3",
+    "is_pinned_interpreter",
+    "is_system_python",
     "main",
     "render_hook_command",
     "resolve_hook_python",
@@ -67,9 +69,28 @@ BRAINLAYER_HOOK_SCRIPTS = frozenset(
     }
 )
 
-# `python`, `python3`, `python3.13`, with or without a directory — anything whose
-# answer depends on PATH or on a system/framework install rather than on the keg.
+# `python`, `python3`, `python3.13` — a name PATH has to resolve.
 _BARE_NAME = re.compile(r"^python(\d+(\.\d+)*)?$")
+
+# The same shape, used to confirm an ABSOLUTE path actually points at a python.
+_PYTHON_NAME = _BARE_NAME
+
+#: `bin` directories shared by everything on the machine, so a `.pth` dropped in their
+#: `site-packages` reaches every caller. `/opt/homebrew/bin/python3` is Homebrew's own
+#: python, not a brainlayer keg — the keg lives under `libexec/venv`.
+_SYSTEM_BIN_DIRS = frozenset(
+    {
+        "/bin",
+        "/sbin",
+        "/usr/bin",
+        "/usr/sbin",
+        "/usr/local/bin",
+        "/usr/local/sbin",
+        "/opt/homebrew/bin",
+        "/opt/homebrew/sbin",
+        "/home/linuxbrew/.linuxbrew/bin",
+    }
+)
 
 
 class HookPythonUnresolved(RuntimeError):
@@ -78,37 +99,89 @@ class HookPythonUnresolved(RuntimeError):
 
 @dataclass(frozen=True)
 class UnpinnedHookCommand:
-    """A configured hook command whose interpreter is decided by PATH."""
+    """A configured hook command that does not name an interpreter we can vouch for."""
 
     event: str
     script: str
     command: str
     interpreter: str
+    reason: str = ""
+
+
+def _tokens(value: str | None) -> list[str]:
+    """Normalise a raw token, a shebang line, or an `env python3` pair into tokens."""
+    if value is None:
+        return []
+    token = value.strip()
+    if token.startswith("#!"):
+        token = token[2:].strip()
+    return token.split()
 
 
 def is_bare_python3(value: str | None) -> bool:
-    """True when `value` names an interpreter PATH or the system decides.
+    """True when PATH decides which interpreter runs.
 
-    Accepts a raw token, a full shebang line, or an `/usr/bin/env python3` form.
-    A path under a brainlayer keg (`libexec/venv`) is pinned and returns False.
+    Exactly one question, and only this one: a bare name (`python3`, `python3.13`) or an
+    `/usr/bin/env python3` form. **An absolute path is never bare** — it names something,
+    whatever it names. Whether the thing it names is a *good* choice is `is_system_python`'s
+    question. Conflating the two is what made the escape hatch and the linter disagree:
+    `resolve_hook_python` accepted an operator's `/tmp/myvenv/bin/python` while this
+    function called the resulting command unpinned.
     """
-    if value is None:
-        return False
-    token = value.strip()
-    if not token:
-        return False
-    if token.startswith("#!"):
-        token = token[2:].strip()
-    parts = token.split()
+    parts = _tokens(value)
     if not parts:
         return False
     head = parts[0]
     if os.path.basename(head) == "env":
         # `/usr/bin/env python3` — env's whole job is to ask PATH.
         return len(parts) > 1 and bool(_BARE_NAME.match(os.path.basename(parts[1])))
-    if "libexec/venv" in head:
+    if os.sep in head:
+        # Any directory component means something other than PATH resolves it: absolute, or
+        # relative to the cwd. Both are wrong for a hook, but they are wrong differently, and
+        # `_why_unpinned` has to be able to say which.
         return False
-    return bool(_BARE_NAME.match(os.path.basename(head)))
+    return bool(_BARE_NAME.match(head))
+
+
+def is_system_python(value: str | None) -> bool:
+    """True for a site-wide interpreter — the class that carries global `.pth` files.
+
+    This is not a style preference. `/Library/Frameworks/Python.framework/.../python3` is
+    precisely the interpreter whose `site-packages/_brainlayer.pth` injected a live checkout
+    onto every hook's import path. Naming it absolutely closes the PATH hazard and leaves
+    the `.pth` hazard wide open, so a named site-wide python is still not an acceptable pin.
+    A venv or keg python (`libexec/venv`, `.venv`, any per-project prefix) is not site-wide.
+    """
+    parts = _tokens(value)
+    if not parts:
+        return False
+    head = parts[-1] if os.path.basename(parts[0]) == "env" else parts[0]
+    if not os.path.isabs(head):
+        return False
+    directory = os.path.dirname(head)
+    if any(segment in head for segment in ("/libexec/venv/", "/.venv/")):
+        return False
+    if "/Python.framework/" in head:
+        return True
+    return directory in _SYSTEM_BIN_DIRS
+
+
+def is_pinned_interpreter(value: str | None) -> bool:
+    """The affirmative gate: does this command name an interpreter we can vouch for?
+
+    Fail CLOSED. Everything unrecognised — an empty token, `--`, `run`, a relative path, a
+    non-python word — answers False. A gate that says "fine" to a command shape it does not
+    understand is not a gate, and this one guards every future BrainLayer hook.
+    """
+    parts = _tokens(value)
+    if not parts:
+        return False
+    head = parts[0]
+    if not os.path.isabs(head):
+        return False
+    if is_bare_python3(value) or is_system_python(value):
+        return False
+    return bool(_PYTHON_NAME.match(os.path.basename(head)))
 
 
 def shebang_of(path: str | os.PathLike[str]) -> str | None:
@@ -153,9 +226,26 @@ def resolve_hook_python(
                 "interpreter is resolved by PATH or the working directory at hook time, "
                 "which is exactly what this pin exists to prevent. Give the full path."
             )
-        if os.path.exists(override):
-            return override
-        looked_at.append(f"{override} (from {HOOK_PYTHON_ENV})")
+        if is_system_python(override):
+            raise HookPythonUnresolved(
+                f"{HOOK_PYTHON_ENV}={override!r} is a site-wide python. Naming it absolutely "
+                "closes the PATH hazard and leaves the other one open: a site-wide "
+                "interpreter's site-packages is where a global .pth lives, and a "
+                "_brainlayer.pth there is what put a live checkout on every hook's import "
+                "path. It is also the configuration this module's own settings lint rejects. "
+                "Point this at a keg or venv python."
+            )
+        # Set-but-missing RAISES; it does not fall through to the keg candidates. Setting
+        # this variable is a deliberate operator choice, and quietly substituting a
+        # different interpreter for a typo'd one is the same silent-substitution failure
+        # this module refuses everywhere else.
+        if not os.path.exists(override):
+            raise HookPythonUnresolved(
+                f"{HOOK_PYTHON_ENV}={override!r} does not exist. Refusing to silently "
+                "substitute another interpreter for an override that was set on purpose — "
+                f"fix the path or unset {HOOK_PYTHON_ENV} to use the keg."
+            )
+        return override
 
     for candidate in candidates:
         if os.path.exists(candidate):
@@ -252,9 +342,42 @@ def find_unpinned_hook_commands(settings: Mapping) -> list[UnpinnedHookCommand]:
         if found is None:
             continue
         script, interpreter = found
-        if is_bare_python3(interpreter):
-            findings.append(UnpinnedHookCommand(event=event, script=script, command=command, interpreter=interpreter))
+        # Affirmative gate, not a blacklist. Anything this module cannot vouch for is
+        # REPORTED — an empty token, `--`, `run`, a relative path, a site-wide python. A
+        # lint that answers "fine" to a shape it does not understand is not a gate, and the
+        # blacklist form let the Stop shim drop its pin and still read clean.
+        if not is_pinned_interpreter(interpreter):
+            findings.append(
+                UnpinnedHookCommand(
+                    event=event,
+                    script=script,
+                    command=command,
+                    interpreter=interpreter,
+                    reason=_why_unpinned(interpreter),
+                )
+            )
     return findings
+
+
+def _why_unpinned(interpreter: str) -> str:
+    """Say which failure it is, so the finding is actionable rather than a bare verdict."""
+    if not interpreter.strip():
+        return "no interpreter in the command — the script runs under its shebang, which PATH may resolve"
+    if is_bare_python3(interpreter):
+        return f"{interpreter!r} is resolved by PATH"
+    if is_system_python(interpreter):
+        return (
+            f"{interpreter!r} is a site-wide python — its site-packages is where a global "
+            ".pth lives, which is how a stale checkout reached the hooks"
+        )
+    if not _PYTHON_NAME.match(os.path.basename(interpreter)):
+        return (
+            f"{interpreter!r} is not a recognisable python interpreter — refusing to assume "
+            "a command shape this lint does not understand is pinned"
+        )
+    if not os.path.isabs(interpreter):
+        return f"{interpreter!r} is a relative path, resolved against the cwd at hook time"
+    return f"{interpreter!r} is not an interpreter this lint can vouch for"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -289,7 +412,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     print(f"UNPINNED BrainLayer hooks in {args.settings}:")
     for finding in findings:
-        print(f"  {finding.event}: {finding.script} runs under {finding.interpreter!r}")
+        print(f"  {finding.event}: {finding.script} — {finding.reason}")
         print(f"    {finding.command}")
     try:
         print(f"  pin them to: {resolve_hook_python()}")

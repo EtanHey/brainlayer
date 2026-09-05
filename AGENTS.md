@@ -314,6 +314,20 @@ brainlayer enrich
   stance as `scripts/launchd/install.sh`). Lint a settings file by hand with
   `python -m brainlayer.hook_python ~/.claude/settings.json`;
   `tests/test_hook_python.py` fails on any bare `python3`/`env python3` shebang or command.
+- **The gate is affirmative, not a blacklist: anything it cannot vouch for is REPORTED.** An empty
+  interpreter token, the Stop shim's `--` with the pin dropped, `uv run`, a cwd-relative path — all
+  are findings, each carrying the reason. A lint that answers "fine" to a command shape it does not
+  understand is not a gate, and this one guards every future BrainLayer hook.
+- **Three separate questions, deliberately not one.** `is_bare_python3` = does PATH decide.
+  `is_system_python` = is this a site-wide interpreter, i.e. one whose `site-packages` is where a
+  global `.pth` lives (`/usr/bin`, `/usr/local/bin`, `/opt/homebrew/bin`, any `Python.framework`) —
+  naming the framework python absolutely closes the PATH hazard and leaves the `.pth` hazard open,
+  so it is still not an acceptable pin. `is_pinned_interpreter` = the gate both feed.
+- **`BRAINLAYER_HOOK_PYTHON` is refused, loudly, three ways:** relative, site-wide, or set-but-missing.
+  A set-but-missing override never falls through to the keg — setting it is a deliberate choice, and
+  silently substituting a different interpreter for a typo'd one is the same failure the pin exists
+  to prevent. An absolute venv python outside a keg IS accepted, and the linter accepts it too; the
+  contract is "explicitly named", not "Homebrew-shaped".
 - **The shebangs name the ARM Homebrew prefix, so they are machine-specific on purpose.** The four
   hooks that matter are invoked as `<python> <script>` from `settings.json`, which overrides the
   shebang entirely; the shebang only decides what happens when a script is run directly (today only
