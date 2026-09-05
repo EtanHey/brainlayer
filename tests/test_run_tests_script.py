@@ -1377,3 +1377,87 @@ def test_changed_only_scope_escalates_a_tag_range_that_maps_nothing(tmp_path: Pa
     assert "SKIP: changed-only scope found no mapped pytest targets" not in result.stdout
     assert "release tag v1.2.0" in result.stdout
     assert f"{test_root}/ -v" in pytest_log.read_text()
+
+
+CLI_ROOT_SUITES = (
+    "test_agent_profiles.py",
+    "test_cli_direct_sqlite.py",
+    "test_cli_enrich.py",
+    "test_cli_index_watchdog.py",
+    "test_cli_launchd_mode_a.py",
+    "test_cli_provenance.py",
+    "test_cli_version.py",
+    "test_cli_writer_telemetry.py",
+    "test_doctor.py",
+    "test_git_learning.py",
+    "test_ingest_t3.py",
+    "test_installable_build.py",
+    "test_launchd_hygiene.py",
+    "test_reembed_backfill.py",
+    "test_retire_python_mcp.py",
+    "test_runtime_store.py",
+    "test_sandbox_db.py",
+    "test_status_truthfulness.py",
+    "test_watch_backfill_cli.py",
+    "test_watch_logging.py",
+)
+
+
+def _cli_root_env(tmp_path: Path, test_root: Path) -> tuple[dict[str, str], Path]:
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+    env = _script_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
+    env["BRAINLAYER_CHANGED_FILES"] = "src/brainlayer/cli/__init__.py"
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+    return env, pytest_log
+
+
+def _run_cli_root_script(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(  # noqa: S603 - returncode is asserted by every caller
+        ["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env, check=False
+    )
+
+
+def test_changed_only_scope_maps_cli_root_to_every_typer_app_driver(tmp_path: Path) -> None:
+    """Every suite importing the Typer app must be named, or this mapping is a fail-open."""
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    for rel in CLI_ROOT_SUITES:
+        (test_root / rel).write_text("test placeholder\n")
+    (test_root / "test_think_recall_integration.py").write_text("test placeholder\n")
+
+    env, pytest_log = _cli_root_env(tmp_path, test_root)
+
+    result = _run_cli_root_script(env)
+
+    assert result.returncode == 0, result.stdout
+    logged = pytest_log.read_text()
+    for rel in CLI_ROOT_SUITES:
+        assert str(test_root / rel) in logged
+    assert "falling back to full pytest unit suite" not in result.stdout
+    assert f"{test_root}/ -v" not in logged
+
+
+def test_cli_root_mapping_is_fail_closed_when_a_named_suite_is_missing(tmp_path: Path) -> None:
+    """A missing sibling escalates rather than silently narrowing the gate -- the #762 rule."""
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    for rel in CLI_ROOT_SUITES:
+        if rel == "test_watch_backfill_cli.py":
+            continue
+        (test_root / rel).write_text("test placeholder\n")
+    (test_root / "test_think_recall_integration.py").write_text("test placeholder\n")
+
+    env, pytest_log = _cli_root_env(tmp_path, test_root)
+
+    result = _run_cli_root_script(env)
+
+    assert result.returncode == 0, result.stdout
+    assert "falling back to full pytest unit suite" in result.stdout
+    assert "unmapped: src/brainlayer/cli/__init__.py" in result.stdout
+    assert f"{test_root}/ -v" in pytest_log.read_text()

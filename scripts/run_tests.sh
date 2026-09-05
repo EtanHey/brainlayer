@@ -229,6 +229,59 @@ map_changed_files_to_pytests() {
           mapped=1
         fi
         ;;
+      src/brainlayer/cli/__init__.py)
+        # The Typer app root. The generic src/brainlayer/*.py rule below derives
+        # tests/test___init__.py from the basename, finds nothing, and escalates the whole unit
+        # suite for any CLI edit -- so no CLI change on this repo can be pushed scoped.
+        #
+        # The named set is DERIVABLE, not hand-picked, so an omission cannot hide here:
+        # it is every tests/ file that imports the Typer app. Re-derive with
+        #   grep -rl "from brainlayer.cli import app" tests/
+        # The first cut of this case WAS hand-picked and shipped a fail-open -- it named 8
+        # drivers and missed 12, test_watch_backfill_cli.py among them. It also named
+        # test_setup_mcp_migration.py, which exercises brainlayer.setup directly and never
+        # touches the app, so it gated nothing for this path. Both are corrected here.
+        #
+        # ALL of them must exist to count as mapped, per the rule established for
+        # src/brainlayer/__init__.py above: a per-file `mapped=1` would let a deleted or renamed
+        # suite silently narrow this gate while it still looked mapped. Partial coverage here is
+        # worse than none. A missing sibling escalates to the full suite, which is the safe side.
+        cli_root_tests=(
+          "$TEST_ROOT/test_agent_profiles.py"
+          "$TEST_ROOT/test_cli_direct_sqlite.py"
+          "$TEST_ROOT/test_cli_enrich.py"
+          "$TEST_ROOT/test_cli_index_watchdog.py"
+          "$TEST_ROOT/test_cli_launchd_mode_a.py"
+          "$TEST_ROOT/test_cli_provenance.py"
+          "$TEST_ROOT/test_cli_version.py"
+          "$TEST_ROOT/test_cli_writer_telemetry.py"
+          "$TEST_ROOT/test_doctor.py"
+          "$TEST_ROOT/test_git_learning.py"
+          "$TEST_ROOT/test_ingest_t3.py"
+          "$TEST_ROOT/test_installable_build.py"
+          "$TEST_ROOT/test_launchd_hygiene.py"
+          "$TEST_ROOT/test_reembed_backfill.py"
+          "$TEST_ROOT/test_retire_python_mcp.py"
+          "$TEST_ROOT/test_runtime_store.py"
+          "$TEST_ROOT/test_sandbox_db.py"
+          "$TEST_ROOT/test_status_truthfulness.py"
+          "$TEST_ROOT/test_watch_backfill_cli.py"
+          "$TEST_ROOT/test_watch_logging.py"
+        )
+        cli_root_complete=1
+        for cli_root_test in "${cli_root_tests[@]}"; do
+          if [ ! -f "$cli_root_test" ]; then
+            cli_root_complete=0
+            break
+          fi
+        done
+        if [ "$cli_root_complete" -eq 1 ]; then
+          for cli_root_test in "${cli_root_tests[@]}"; do
+            append_unique "$cli_root_test"
+          done
+          mapped=1
+        fi
+        ;;
       src/brainlayer/index_new.py)
         for rel in test_source_class.py test_ingest_t3.py test_context_pipeline.py; do
           test_path="$TEST_ROOT/$rel"
