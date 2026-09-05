@@ -27,7 +27,22 @@ from pathlib import Path
 from brainlayer import paths
 from brainlayer.classify import classify_prompt
 from brainlayer.phonetic import looks_hebrew, phonetic_key, phonetic_tokens
-from brainlayer.pipeline.correction_detection import detect_correction
+
+# NOT imported at module scope: brainlayer.pipeline.correction_detection pulls
+# brainlayer.pipeline/__init__, and with it vector_store -> numpy/sqlite_vec and
+# requests -- ~105ms this hook pays on every prompt Claude Code submits. Loaded
+# lazily below, after the skip gates, so a skipped prompt pays none of it.
+_DETECT_CORRECTION = None
+
+
+def detect_correction(prompt):
+    global _DETECT_CORRECTION
+    if _DETECT_CORRECTION is None:
+        from brainlayer.pipeline.correction_detection import detect_correction as _impl
+
+        _DETECT_CORRECTION = _impl
+    return _DETECT_CORRECTION(prompt)
+
 
 DEADLINE_MS = 450
 RRF_K = 60
@@ -116,6 +131,25 @@ OUTPUT_FILE_ONLY_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Machine relays that arrive on UserPromptSubmit but are not questions: a worker
+# report ping, a pane-to-pane message, a slash-command envelope. Measured over
+# 4,759 paired fires in a 30-day transcript window these are 12.0% of fires and
+# 10.0% of injected chars, and none of them is a prompt memory can answer.
+RELAY_PREFIXES = (
+    "[report]",
+    "<command-name",
+    "<local-command",
+    "<system-reminder",
+)
+CROSS_SESSION_MARKERS = (
+    "<cross-session-message",
+    "another claude session sent a message:",
+)
+# How far into the payload a cross-session envelope may start. The real shape is
+# a one-line preamble then the tag, so a short window keeps a human prompt that
+# merely quotes the tag from being skipped.
+CROSS_SESSION_WINDOW = 200
+
 
 def is_operational_noise_prompt(prompt: str) -> bool:
     """Return True for hook payloads that are operational envelopes, not user prompts."""
@@ -130,6 +164,13 @@ def is_operational_noise_prompt(prompt: str) -> bool:
     if starts_like_envelope and any(marker in normalized for marker in OPERATIONAL_NOISE_MARKERS):
         return True
 
+    if normalized.startswith(RELAY_PREFIXES):
+        return True
+
+    head = normalized[:CROSS_SESSION_WINDOW]
+    if any(marker in head for marker in CROSS_SESSION_MARKERS):
+        return True
+
     if MONITOR_TICK_RE.fullmatch(normalized):
         return True
 
@@ -137,6 +178,29 @@ def is_operational_noise_prompt(prompt: str) -> bool:
         return True
 
     return False
+
+
+# A short prompt with almost no content words is conversational ("Nope.", "you
+# closable?", "you forgot the -E") or a bare path handoff ("Read and follow
+# /Users/..."). Neither is answerable from memory: over the same 30-day window
+# these are 4.9% of fires and 4.8% of injected chars, and the entity rows they
+# do produce match filesystem-path tokens (`etanheyman`, `gits`) rather than
+# anything the prompt is about.
+SHORT_PROMPT_MAX_WORDS = 12
+SHORT_PROMPT_MAX_KEYWORDS = 1
+# Routes that search short prompts on purpose and must not be swept up: follow_up
+# rewrites the query from session context, entity_lookup and hebrew_query are
+# already narrow.
+SHORT_PROMPT_EXEMPT_ROUTES = frozenset({"follow_up", "entity_lookup", "hebrew_query"})
+
+
+def is_low_signal_short_prompt(prompt: str, classification: str, keywords) -> bool:
+    """Return True for a short prompt carrying too little to search on."""
+    if classification in SHORT_PROMPT_EXEMPT_ROUTES:
+        return False
+    if len(prompt.split()) >= SHORT_PROMPT_MAX_WORDS:
+        return False
+    return len(keywords) <= SHORT_PROMPT_MAX_KEYWORDS
 
 
 def get_session_context(conn, session_id: str, limit: int = 3) -> list[str]:
@@ -1123,6 +1187,47 @@ def inject_entity_context(lines, prompt, conn):
     return entities
 
 
+def correction_notice(category):
+    return (
+        f"[Correction detected: {category}] "
+        f"Store this correction with brain_store(tags=['correction', 'correction:{category}', 'auto-detected'])."
+    )
+
+
+# Ceiling on what one prompt may inject. The observed 30-day distribution already
+# sits under this (p99 635, max 857 chars over 5,360 fires), so this is a bound
+# against regression -- an entity or result-count change that grows output can no
+# longer grow it without limit -- not a saving on today's traffic.
+MAX_INJECTION_CHARS = 600
+_CAP_NOTE_RESERVE = 56
+
+
+def cap_injection(lines, max_chars=MAX_INJECTION_CHARS):
+    """Hold injected output to max_chars, cutting only at line boundaries.
+
+    Dropped lines are replaced by a one-line pointer, so the agent still knows
+    more is there. The first line is always kept: a cap must never turn a search
+    that found something into an injection of nothing.
+    """
+    if not lines:
+        return list(lines)
+    if len("\n".join(lines)) <= max_chars:
+        return list(lines)
+
+    budget = max_chars - _CAP_NOTE_RESERVE
+    kept = [lines[0]]
+    used = len(lines[0])
+    for line in lines[1:]:
+        if used + 1 + len(line) > budget:
+            break
+        kept.append(line)
+        used += 1 + len(line)
+
+    dropped = len(lines) - len(kept)
+    kept.append(f"[+{dropped} more in BrainLayer -- use brain_search for the rest]")
+    return kept
+
+
 def inject_search_results(lines, rows, deep, label="auto"):
     chunk_ids = []
     briefs = []
@@ -1195,6 +1300,15 @@ def main():
 
     prompt_lower = prompt.lower()
     correction_category = detect_correction(prompt)
+
+    # Short prompt with no content words: nothing to search on. A detected
+    # correction still gets its notice -- short prompts are where corrections live
+    # ("Nope.", "No, it's fine.") and only 5 of 231 such fires in the 30-day
+    # window carried one, so keeping them costs almost nothing.
+    if is_low_signal_short_prompt(prompt, classification, extract_keywords(prompt)):
+        if correction_category:
+            print(correction_notice(correction_category))
+        finalize_and_exit(mode="skip")
 
     # Handoff detection: skip auto-search to avoid duplicate injection
     # (SessionStart already injected handoff context)
@@ -1274,10 +1388,7 @@ def main():
 
     lines = []
     if correction_category:
-        lines.append(
-            f"[Correction detected: {correction_category}] "
-            f"Store this correction with brain_store(tags=['correction', 'correction:{correction_category}', 'auto-detected'])."
-        )
+        lines.append(correction_notice(correction_category))
     try:
         if classification == "entity_lookup" and elapsed_ms(start) < DEADLINE_MS:
             detected_entities = inject_entity_context(lines, prompt, conn)
@@ -1348,7 +1459,7 @@ def main():
             lines.append(fallback)
 
     if lines:
-        print("\n".join(lines))
+        print("\n".join(cap_injection(lines)))
 
     # Register newly injected chunks in coordination file
     if session_id and new_chunk_ids:
