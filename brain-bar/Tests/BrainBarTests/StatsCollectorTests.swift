@@ -197,6 +197,56 @@ private final class SequencedBlockingWatcherProbe: WatcherProcessProbing, @unche
     }
 }
 
+/// Parks its first `sample()` inside the probe until the test releases it, so
+/// "the refresh did not wait for the watcher probe" is proven by an EVENT
+/// (the probe is still blocked while the test runs on) rather than by a
+/// wall-clock threshold that a cold CI runner can miss. The wait is bounded so
+/// a regression that samples on the main actor fails the assertions instead of
+/// hanging the suite.
+private final class GatedWatcherProbe: WatcherProcessProbing, @unchecked Sendable {
+    private let lock = NSLock()
+    private let firstSampleStarted = DispatchSemaphore(value: 0)
+    private let releaseFirstSampleSemaphore = DispatchSemaphore(value: 0)
+    private let maxBlock: DispatchTimeInterval
+    private var calls = 0
+    private var completedSamples = 0
+
+    init(maxBlock: DispatchTimeInterval = .seconds(15)) {
+        self.maxBlock = maxBlock
+    }
+
+    var hasCompletedASample: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return completedSamples > 0
+    }
+
+    func sample() -> WatcherProcessProbeResult {
+        lock.lock()
+        let call = calls
+        calls += 1
+        lock.unlock()
+
+        if call == 0 {
+            firstSampleStarted.signal()
+            _ = releaseFirstSampleSemaphore.wait(timeout: .now() + maxBlock)
+        }
+
+        lock.lock()
+        completedSamples += 1
+        lock.unlock()
+        return .running(pid: 4242)
+    }
+
+    func waitForFirstSample(timeout: DispatchTime) -> Bool {
+        firstSampleStarted.wait(timeout: timeout) == .success
+    }
+
+    func releaseFirstSample() {
+        releaseFirstSampleSemaphore.signal()
+    }
+}
+
 private final class OlderFullRefreshProbe: WatcherProcessProbing, @unchecked Sendable {
     private let lock = NSLock()
     private let firstSampleStarted = DispatchSemaphore(value: 0)
@@ -276,15 +326,6 @@ private final class PendingNewerStandaloneProbe: WatcherProcessProbing, @uncheck
 @MainActor
 final class StatsCollectorTests: XCTestCase {
     private struct WindowFetchFailure: Error {}
-
-    private struct BlockingWatcherProbe: WatcherProcessProbing {
-        let delay: TimeInterval
-
-        func sample() -> WatcherProcessProbeResult {
-            Thread.sleep(forTimeInterval: delay)
-            return .running(pid: 4242)
-        }
-    }
 
     private var tempDBPath: String!
 
@@ -690,23 +731,40 @@ final class StatsCollectorTests: XCTestCase {
     }
 
     func testWatcherProbeDoesNotBlockMainActorRefresh() async throws {
+        let probe = GatedWatcherProbe()
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
-            watcherProcessProbe: BlockingWatcherProbe(delay: 0.6),
+            watcherProcessProbe: probe,
             databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
         )
-        defer { collector.stop() }
+        defer {
+            probe.releaseFirstSample()
+            collector.stop()
+        }
 
-        let startedAt = Date()
         collector.refresh(force: true)
-        let elapsed = Date().timeIntervalSince(startedAt)
 
-        XCTAssertLessThan(elapsed, 0.3, "Watcher sampling must leave the main actor before it can block dashboard refresh.")
+        // The probe is parked inside `sample()` and only this test can release it, so
+        // reaching the next line at all IS the property under test: a probe sampled on
+        // the main actor could not have handed control back here. No wall-clock margin
+        // is involved, which is why a cold runner cannot flake it.
+        XCTAssertTrue(
+            probe.waitForFirstSample(timeout: .now() + 10),
+            "The dashboard refresh must reach the watcher probe."
+        )
+        XCTAssertFalse(
+            probe.hasCompletedASample,
+            "Watcher sampling must leave the main actor before it can block dashboard refresh; the refresh returned only after the probe finished."
+        )
         XCTAssertTrue(collector.isRefreshing)
 
-        let deadline = Date().addingTimeInterval(3)
-        while collector.isRefreshing && Date() < deadline {
+        probe.releaseFirstSample()
+
+        // Generous LIVENESS wait for the released probe to publish, not a threshold on how
+        // fast it must publish: a slow runner should make this test slower, never red.
+        let deadline = Date().addingTimeInterval(30)
+        while collector.stats.watcherProcessProbeResult != .running(pid: 4242) && Date() < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
         XCTAssertEqual(collector.stats.watcherProcessProbeResult, .running(pid: 4242))
