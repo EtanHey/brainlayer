@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/opt/homebrew/opt/brainlayer/libexec/venv/bin/python
 """Auto-store git commits into BrainLayer.
 
 Install: brainlayer hooks install

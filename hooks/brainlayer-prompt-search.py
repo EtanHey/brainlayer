@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/opt/homebrew/opt/brainlayer/libexec/venv/bin/python
 """
 BrainLayer UserPromptSubmit Hook — auto-searches memories relevant to the user's prompt.
 

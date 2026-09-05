@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/opt/homebrew/opt/brainlayer/libexec/venv/bin/python
 """UserPromptSubmit hook — captures user prompt for pairing with assistant response.
 
 Reads prompt from stdin (Claude Code hook payload), stores in a lightweight

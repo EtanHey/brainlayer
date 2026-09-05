@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/opt/homebrew/opt/brainlayer/libexec/venv/bin/python
 """Stop hook — pairs assistant response with pending prompt and indexes to BrainLayer.
 
 Reads last_assistant_message from stdin payload, retrieves pending prompt

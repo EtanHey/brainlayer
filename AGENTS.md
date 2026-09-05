@@ -302,6 +302,19 @@ brainlayer enrich
 - Handoff detection: prompts with "handoff", "session-handoff" skip auto-search
 - Module: `hooks/dedup_coordination.py`
 
+## Hook Interpreter (pinned, never PATH)
+- Every BrainLayer hook runs under the **keg python**,
+  `/opt/homebrew/opt/brainlayer/libexec/venv/bin/python` — named in the `settings.json` command AND
+  in the script's shebang. `BRAINLAYER_HOOK_PYTHON` is the only override, and it must exist.
+- **Why:** bare `python3` on the M4 fronts the framework python, whose
+  `site-packages/_brainlayer.pth` injects `~/Gits/brainlayer/src` — a live checkout any agent can
+  move with one `git checkout`. When it held a 09-02 snapshot, hooks executed weeks-old library
+  code under a 1.5.15 CLI, silently: no import error, no version mismatch, no log line.
+- `src/brainlayer/hook_python.py` resolves it and refuses a silent PATH fallback (same fail-closed
+  stance as `scripts/launchd/install.sh`). Lint a settings file by hand with
+  `python -m brainlayer.hook_python ~/.claude/settings.json`;
+  `tests/test_hook_python.py` fails on any bare `python3`/`env python3` shebang or command.
+
 <!-- PATHS: DB=~/.local/share/brainlayer/brainlayer.db | offsets=~/.local/share/brainlayer/offsets.json | logs=~/Library/Logs/brainlayer/watch.{out,err}.log | socket=/tmp/brainlayer.sock | lock=/tmp/brainlayer-enrichment.lock -->
 ## Data & Locks
 - Backup log: real runs append JSONL to `~/.local/share/brainlayer/logs/backup-daily.log` with
