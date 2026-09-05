@@ -3588,10 +3588,10 @@ def _discover_jsonl_files(entries, watchdog) -> list[Path]:
     cap be checked as the walk proceeds, and keeps `phase=discover` current in the heartbeat.
     """
     found: list[Path] = []
-    for index, entry in enumerate(entries):
+    for position, entry in enumerate(entries):
         # Every 64 entries: often enough to bound a stalled walk, cheap enough not to add a
         # clock read per file on a 12,000-file tree.
-        if index % 64 == 0:
+        if position % 64 == 0:
             watchdog.raise_if_expired()
         found.append(entry)
     watchdog.note_progress()

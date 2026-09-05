@@ -1,6 +1,7 @@
 """Unit coverage for `IndexWatchdog` on an injected clock -- no threads, no sleeping."""
 
 from time import monotonic as _mono
+from time import sleep
 
 import pytest
 
@@ -279,9 +280,10 @@ def test_the_poll_thread_never_reads_the_callers_clock():
     )
     with watchdog:
         reads_after_start = caller_reads["n"]
+        # Let the poll thread spin through many iterations without a busy-wait.
         deadline = _mono() + 1.0
         while _mono() < deadline:
-            pass  # let the poll thread spin through many iterations
+            sleep(0.01)
 
     assert reads_after_start <= 1, "start() must read the caller clock at most once"
     assert caller_reads["n"] == reads_after_start, (

@@ -100,6 +100,13 @@ def _patch_open_writer_store(monkeypatch, fake) -> None:
     monkeypatch.setattr(index_new, "open_writer_store", fake)
 
 
+def _cap_alarm(alarms: list[BrainLayerAlarm]) -> BrainLayerAlarm:
+    """The single INDEX_RUNTIME_EXCEEDED alarm, or a readable failure instead of StopIteration."""
+    matches = [alarm for alarm in alarms if alarm.code == "INDEX_RUNTIME_EXCEEDED"]
+    assert len(matches) == 1, f"expected exactly one cap alarm, got {[a.code for a in alarms]}"
+    return matches[0]
+
+
 def _install(monkeypatch, store, alarms):
     monkeypatch.setenv("BRAINLAYER_INDEX_MAX_RUNTIME_S", str(CAP_S))
 
@@ -147,9 +154,7 @@ def test_boundaryless_stall_alarms_with_its_phase_name(tmp_path, monkeypatch):
     result = CliRunner().invoke(app, ["index", str(source)])
 
     assert result.exit_code != 0
-    codes = [alarm.code for alarm in alarms]
-    assert codes.count("INDEX_RUNTIME_EXCEEDED") == 1, f"expected exactly one cap alarm, got {codes}"
-    alarm = next(a for a in alarms if a.code == "INDEX_RUNTIME_EXCEEDED")
+    alarm = _cap_alarm(alarms)
     # A 12h silent log is only impossible if the alarm says WHICH phase was silent.
     assert alarm.context.get("phase"), f"cap alarm carries no phase: {alarm.context}"
     assert alarm.context["max_runtime_s"] == pytest.approx(CAP_S)
@@ -241,7 +246,7 @@ def test_a_stalling_open_store_is_alarmed_and_interrupted(tmp_path, monkeypatch)
     assert store.stalled_s is not None and store.stalled_s < store.ceiling_s
     assert wall_s < CAP_S + 10.0, f"open_store ran {wall_s:.1f}s against a {CAP_S}s cap"
     assert result.exit_code != 0
-    alarm = next(a for a in alarms if a.code == "INDEX_RUNTIME_EXCEEDED")
+    alarm = _cap_alarm(alarms)
     assert alarm.context["phase"] == "open_store", alarm.context
 
 
@@ -304,7 +309,7 @@ def test_a_discovery_that_outruns_the_cap_is_stopped_and_named(tmp_path, monkeyp
     result = CliRunner().invoke(app, ["index", str(source)])
 
     assert result.exit_code != 0
-    alarm = next(a for a in alarms if a.code == "INDEX_RUNTIME_EXCEEDED")
+    alarm = _cap_alarm(alarms)
     assert alarm.context["phase"] == "discover", alarm.context
 
 
@@ -341,7 +346,7 @@ def test_a_stuck_discovery_alarms_and_heartbeats_while_still_walking(tmp_path, m
     result = CliRunner().invoke(app, ["index", str(source)])
 
     assert seen.get("alarms_during_walk"), "the run was silent while discovery was stuck"
-    alarm = next(a for a in alarms if a.code == "INDEX_RUNTIME_EXCEEDED")
+    alarm = _cap_alarm(alarms)
     assert alarm.context["phase"] == "discover", alarm.context
     heartbeats = [ln for ln in result.stderr.splitlines() if ln.startswith("BRAINLAYER_INDEX_HEARTBEAT")]
     assert any("phase=discover" in ln for ln in heartbeats), f"no discover heartbeat: {heartbeats}"

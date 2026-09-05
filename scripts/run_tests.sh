@@ -322,7 +322,7 @@ map_changed_files_to_pytests() {
           fi
         done
         ;;
-      tests/*.py|tests/**/*.py)
+      tests/*.py)
         test_path="$TEST_ROOT/${changed#tests/}"
         if [ -f "$test_path" ]; then
           if is_real_db_test_file "$test_path"; then
@@ -352,7 +352,7 @@ map_changed_files_to_pytests() {
     esac
     if [ "$mapped" -eq 0 ]; then
       case "$changed" in
-        src/brainlayer/*.py|src/brainlayer/**/*.py)
+        src/brainlayer/*.py)
           changed_source_unmapped=1
           unmapped_changed_files+=("$changed")
           ;;
