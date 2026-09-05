@@ -1524,6 +1524,14 @@ class TestStoreRetryOnLock:
             patch("brainlayer.store.store_memory", side_effect=flaky_store_memory),
             patch("brainlayer.queue_io.get_queue_dir", return_value=queue_dir),
         ):
+            # _retry_delay alone does not make this test hermetic: `_store` also sets a
+            # WALL-CLOCK deadline of now + BRAINLAYER_STORE_BUSY_BUDGET_MS (400ms by default).
+            # On a loaded runner that budget expired after attempt 1 and the handler deferred
+            # instead of retrying -- `assert 1 == 3` on ubuntu/py3.13, #762 attempt 1, with
+            # "brain_store BusyError exceeded 400ms busy budget after attempt 1/4; deferring"
+            # in the log. This test is about the RETRY LOOP, so take the clock out of it: a
+            # 60s budget cannot expire across three mocked attempts on any runner.
+            monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "60000")
             monkeypatch.setattr("brainlayer.mcp.store_handler._retry_delay", 0.001)
             texts, structured = await _store(
                 content="test memory",
@@ -1542,6 +1550,49 @@ class TestStoreRetryOnLock:
         }
         assert any("manual-landed" in item.text for item in texts)
         assert not list(queue_dir.glob("mcp-*.jsonl"))
+
+    @pytest.mark.asyncio
+    async def test_store_busy_budget_governs_and_is_injectable(self, tmp_path, monkeypatch):
+        """The wall-clock budget -- not the retry count -- decides when brain_store defers.
+
+        The sibling retry test could patch `_retry_delay` but had no control over the
+        deadline, so a slow runner silently turned "retry three times" into "defer after
+        one". Pin the budget below the retry delay and the deferral becomes the asserted
+        behaviour instead of the flake: attempt 1 raises, the remaining budget cannot
+        cover the next backoff, the handler queues. With the 400ms default and this same
+        delay it would retry instead -- which is exactly why the knob has to be reachable
+        from a test.
+        """
+        from brainlayer.mcp.store_handler import _store
+
+        queue_dir = tmp_path / "queue"
+        attempts = 0
+
+        def always_busy_store_memory(**kwargs):
+            nonlocal attempts
+            attempts += 1
+            raise apsw.BusyError("database is locked")
+
+        with (
+            patch("brainlayer.mcp.store_handler._get_vector_store", return_value=MagicMock()),
+            patch("brainlayer.mcp.store_handler._normalize_project_name", return_value="test"),
+            patch("brainlayer.store.store_memory", side_effect=always_busy_store_memory),
+            patch("brainlayer.queue_io.get_queue_dir", return_value=queue_dir),
+        ):
+            monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "100")
+            monkeypatch.setattr("brainlayer.mcp.store_handler._retry_delay", 0.3)
+            texts, structured = await _store(
+                content="test memory",
+                memory_type="note",
+                project="test",
+            )
+
+        assert attempts == 1
+        assert structured["queued"] is True
+        assert structured["status"] == "DEFERRED"
+        assert structured["deferred"]["reason"] == "DB_BUSY"
+        assert any("queued" in item.text.lower() for item in texts)
+        assert len(list(queue_dir.glob("mcp-*.jsonl"))) == 1
 
     @pytest.mark.asyncio
     async def test_arbitrated_store_validates_before_queueing(self, tmp_path, monkeypatch):
