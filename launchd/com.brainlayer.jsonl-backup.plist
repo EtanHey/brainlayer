@@ -4,6 +4,10 @@
 <dict>
 	<key>Label</key>
 	<string>com.brainlayer.jsonl-backup</string>
+	<key>AssociatedBundleIdentifiers</key>
+	<array>
+		<string>com.brainlayer.brainbar</string>
+	</array>
 	<key>ProgramArguments</key>
 	<array>
 		<string>/usr/bin/env</string>

@@ -735,3 +735,73 @@ def test_launchd_installer_refuses_to_load_when_disabled_state_is_unreadable(tmp
     ) in result.stderr
     assert "SKIP:" not in result.stdout
     assert launchctl_log.read_text(encoding="utf-8").splitlines() == [f"print-disabled gui/{os.getuid()}"]
+
+
+# --- AssociatedBundleIdentifiers ---------------------------------------------
+# Without this key macOS attributes every agent to its anonymous ProgramArguments[0]
+# (`brainlayer-env-run.sh`, `/bin/sh`) and posts one "App Background Activity" notice
+# per agent at login -- ~20 of them per Mac. `man launchd.plist`: "This optional key
+# indicates which bundles are associated with this job in the System Settings Login
+# Items UI. If an app installs a legacy plist the plist should include this key with a
+# value of the app's bundle identifier."
+BRAINBAR_BUNDLE_ID = "com.brainlayer.brainbar"
+
+
+def _committed_launchagent_paths() -> list[Path]:
+    """Every LaunchAgent plist this repo ships, discovered rather than enumerated.
+
+    Discovery is the point: a template added later inherits the assertion instead of
+    silently reintroducing the login-notice spam.
+    """
+    paths = [
+        *(REPO_ROOT / "scripts/launchd").glob("*.plist"),
+        *(REPO_ROOT / "launchd").glob("*.plist"),
+        *(REPO_ROOT / "brain-bar/bundle").glob("com.brainlayer.*.plist"),
+    ]
+    return sorted(paths)
+
+
+def _assert_associated_with_brainbar(path, plist: dict) -> None:
+    associated = plist.get("AssociatedBundleIdentifiers")
+    assert associated is not None, (
+        f"{path}: LaunchAgent has no AssociatedBundleIdentifiers, so macOS attributes it to "
+        f"{plist.get('ProgramArguments', ['?'])[0]!r} and posts a per-script login notice"
+    )
+    if isinstance(associated, str):
+        associated = [associated]
+    assert isinstance(associated, list), f"{path}: AssociatedBundleIdentifiers must be a string or array"
+    assert BRAINBAR_BUNDLE_ID in associated, (
+        f"{path}: AssociatedBundleIdentifiers={associated!r} omits {BRAINBAR_BUNDLE_ID}"
+    )
+
+
+def test_committed_launchagents_are_associated_with_the_brainbar_bundle():
+    paths = _committed_launchagent_paths()
+    assert paths, "no committed LaunchAgent plists found -- the glob went stale"
+    for path in paths:
+        _assert_associated_with_brainbar(path, plistlib.loads(path.read_bytes()))
+
+
+def test_brainbar_bundle_identifier_matches_the_id_the_agents_claim():
+    """The association is only honored while the named app actually carries that id."""
+    info = plistlib.loads((REPO_ROOT / "brain-bar/bundle/Info.plist").read_bytes())
+    assert info["CFBundleIdentifier"] == BRAINBAR_BUNDLE_ID
+
+
+@pytest.mark.live
+def test_installed_launchagents_are_associated_with_the_brainbar_bundle():
+    """Lint the plists actually on this machine, not just the templates.
+
+    Marked `live` because it reads mutable local machine state: it passes only after
+    `scripts/launchd/install.sh` has re-rendered the installed copies. Scoped to the
+    labels this repo ships templates for -- a hand-installed agent (e.g.
+    com.brainlayer.gemini-loopback) has no template to carry the key and is not this
+    test's to police.
+    """
+    repo_labels = {plistlib.loads(path.read_bytes())["Label"] for path in _committed_launchagent_paths()}
+    installed_dir = Path("~/Library/LaunchAgents").expanduser()
+    installed = sorted(path for path in installed_dir.glob("*.plist") if path.stem in repo_labels)
+    if not installed:
+        pytest.skip(f"no repo-owned BrainLayer LaunchAgents installed under {installed_dir}")
+    for path in installed:
+        _assert_associated_with_brainbar(path, plistlib.loads(path.read_bytes()))

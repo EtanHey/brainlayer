@@ -9,6 +9,10 @@
 <dict>
     <key>Label</key>
     <string>com.brainlayer.watch</string>
+    <key>AssociatedBundleIdentifiers</key>
+    <array>
+    	<string>com.brainlayer.brainbar</string>
+    </array>
 
     <key>ProgramArguments</key>
     <array>

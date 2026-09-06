@@ -4,6 +4,10 @@
 <dict>
 	<key>Label</key>
 	<string>com.etanhey.brainlayer-fleet-watchdog</string>
+	<key>AssociatedBundleIdentifiers</key>
+	<array>
+		<string>com.brainlayer.brainbar</string>
+	</array>
 	<key>ProgramArguments</key>
 	<array>
 		<string>/bin/sh</string>
