@@ -186,7 +186,15 @@ reset_alert_cooldown() {
 }
 
 seconds_since_previous_run=$(seconds_since_own_previous_run)
-record_own_run || :
+# Fail CLOSED: withholding is only safe while we can actually advance our own mark. If
+# the run state cannot be written, the recorded epoch freezes, every later gap looks like
+# a sleep, and the watchdog would withhold staleness alerts forever -- silently, which is
+# the one thing a tier-0 guard must never do.
+if record_own_run; then
+    own_run_recorded=1
+else
+    own_run_recorded=0
+fi
 
 target="$TIER0_DOMAIN/$TIER0_LABEL"
 failure_reason=
@@ -246,7 +254,8 @@ fi
 # health-check on an awake machine still alerts, one cycle later. Only staleness is a
 # function of elapsed time; label_unloaded, state_missing, state_mtime_future and
 # state_slow_check are not, and are never withheld.
-if [ "$failure_key" = state_stale ] && [ -n "$seconds_since_previous_run" ] \
+if [ "$failure_key" = state_stale ] && [ "$own_run_recorded" -eq 1 ] \
+    && [ -n "$seconds_since_previous_run" ] \
     && [ "$seconds_since_previous_run" -ge "$TIER0_MISSED_RUN_GRACE_SECONDS" ]; then
     log_tier0_event "state_stale_withheld_after_missed_runs gap=${seconds_since_previous_run}s $failure_reason" || :
     # Kickstart anyway: on wake this refreshes the state file now instead of waiting out

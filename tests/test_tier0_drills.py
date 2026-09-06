@@ -51,6 +51,7 @@ def _run_drill(
     last_alert_reason: str = "",
     repeat_alert_seconds: int = 1_800,
     last_run_epoch: int | None = None,
+    run_state_unwritable: bool = False,
     alert_timeout_seconds: int = 3,
     state_contents: str = "{}\n",
 ) -> DrillResult:
@@ -62,6 +63,10 @@ def _run_drill(
     tier0_log_path = tmp_path / "logs" / "tier0-watchdog.log"
     alert_state_path = tmp_path / "tier0-watchdog-alert-state"
     run_state_path = tmp_path / "tier0-watchdog-last-run"
+    if run_state_unwritable:
+        # A directory in its place: mkdir -p succeeds, the redirect that writes the epoch
+        # cannot. Nothing else about the drill changes.
+        run_state_path.mkdir()
     health_plist_path.write_text("fixture\n", encoding="utf-8")
 
     if last_alert_epoch is not None:
@@ -168,7 +173,7 @@ def _run_drill(
     events = events_path.read_text(encoding="utf-8").splitlines() if events_path.exists() else []
     tier0_log = tier0_log_path.read_text(encoding="utf-8") if tier0_log_path.exists() else ""
     alert_state = alert_state_path.read_text(encoding="utf-8") if alert_state_path.exists() else ""
-    run_state = run_state_path.read_text(encoding="utf-8") if run_state_path.exists() else ""
+    run_state = run_state_path.read_text(encoding="utf-8") if run_state_path.is_file() else ""
     return DrillResult(
         process=process,
         events=events,
@@ -445,3 +450,23 @@ def test_watchdog_records_its_own_run_epoch_on_every_path(tmp_path: Path) -> Non
         case_dir.mkdir()
         result = _run_drill(case_dir, **kwargs)
         assert result.run_state == f"{NOW_EPOCH}\n", kwargs
+
+
+def test_unwritable_run_state_fails_closed_and_still_alerts(tmp_path: Path) -> None:
+    """Withholding is only safe while the watchdog can advance its own mark.
+
+    If the run state cannot be written the recorded epoch freezes, every later gap looks
+    like a sleep, and the watchdog would go silent forever. A tier-0 guard must fail
+    closed instead.
+    """
+    result = _run_drill(
+        tmp_path,
+        label_loaded=True,
+        state_mtime=NOW_EPOCH - SLEPT_SECONDS,
+        last_run_epoch=None,
+        run_state_unwritable=True,
+    )
+
+    assert result.process.returncode == 1, result.process.stdout + result.process.stderr
+    _assert_alert_contract(result)
+    assert "state_stale_withheld_after_missed_runs" not in result.tier0_log
