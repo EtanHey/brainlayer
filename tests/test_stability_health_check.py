@@ -1371,3 +1371,85 @@ def test_drain_launchagent_is_long_lived_keepalive_daemon():
     assert "--once" not in plist["ProgramArguments"]
     assert "WatchPaths" not in plist
     assert "QueueDirectories" not in plist
+
+
+def _empty_canary(_socket_path: Path, _query: str, _timeout_seconds: float) -> dict:
+    """The socket answered -- proof the daemon is alive -- with zero rows."""
+    return {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "content": [{"type": "text", "text": "Found 0 results for 'agentopology'"}],
+            "isError": False,
+        },
+    }
+
+
+def test_empty_canary_is_reported_but_never_kickstarts_a_live_brainbar_daemon(tmp_path):
+    """Measured on the M1, 2026-09-06: heal_failures reached 97 for this exact key.
+
+    Restarting a daemon that is answering cannot put content into an index, so the
+    remedy provably never fixed the symptom -- it only churned the daemon.
+    """
+    db_path = tmp_path / "brainlayer.db"
+    state_path = tmp_path / "health-state.json"
+    _make_db(db_path, total=3, vector_rows=3)
+    commands: list[list[str]] = []
+
+    config = HealthCheckConfig(db_path=db_path, state_path=state_path, heal=True)
+    ps_output = (
+        "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 128 --enrich-limit 25\n"
+    )
+
+    # Far more cycles than the consecutive-failure threshold the failed-canary path needs.
+    for minute in range(25, 55, 5):
+        result = run_health_check(
+            config,
+            ps_output_fn=lambda: ps_output,
+            socket_request_fn=_empty_canary,
+            command_runner=lambda args: commands.append(args),
+            now_fn=lambda: datetime(2026, 6, 19, 4, minute, tzinfo=UTC),
+        )
+        assert result.ok is False
+        assert "brain_search_canary_empty" in [issue.code for issue in result.issues]
+
+    assert not any(
+        "com.brainlayer.brainbar-daemon" in " ".join(command)
+        for command in commands
+        if command[:3] == ["launchctl", "kickstart", "-k"]
+    ), commands
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+    assert "com.brainlayer.brainbar-daemon:brain_search_canary_empty" not in saved["heal_failures"]
+
+
+def test_unanswered_canary_still_kickstarts_the_daemon(tmp_path):
+    """The socket failing to answer IS evidence about the daemon; that path is unchanged."""
+    db_path = tmp_path / "brainlayer.db"
+    state_path = tmp_path / "health-state.json"
+    _make_db(db_path, total=3, vector_rows=3)
+    commands: list[list[str]] = []
+
+    def failed_canary(_socket_path: Path, _query: str, _timeout_seconds: float) -> dict:
+        return {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "content": [{"type": "text", "text": "Error: Database not available"}],
+                "isError": True,
+            },
+        }
+
+    config = HealthCheckConfig(db_path=db_path, state_path=state_path, heal=True)
+    ps_output = (
+        "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 128 --enrich-limit 25\n"
+    )
+    for minute in (25, 30):
+        run_health_check(
+            config,
+            ps_output_fn=lambda: ps_output,
+            socket_request_fn=failed_canary,
+            command_runner=lambda args: commands.append(args),
+            now_fn=lambda: datetime(2026, 6, 19, 4, minute, tzinfo=UTC),
+        )
+
+    assert any("com.brainlayer.brainbar-daemon" in " ".join(command) for command in commands)
