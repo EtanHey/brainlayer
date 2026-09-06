@@ -28,9 +28,11 @@ TIER0_STATE_PATH=${TIER0_STATE_PATH:-$HOME/.local/share/brainlayer/health-check-
 TIER0_HEALTH_PLIST_PATH=${TIER0_HEALTH_PLIST_PATH:-$HOME/Library/LaunchAgents/com.brainlayer.health-check.plist}
 TIER0_LOG_PATH=${TIER0_LOG_PATH:-$HOME/.local/share/brainlayer/logs/tier0-watchdog.log}
 TIER0_ALERT_STATE_PATH=${TIER0_ALERT_STATE_PATH:-$HOME/.local/share/brainlayer/tier0-watchdog-alert-state}
+TIER0_RUN_STATE_PATH=${TIER0_RUN_STATE_PATH:-$HOME/.local/share/brainlayer/tier0-watchdog-last-run}
 TIER0_NOTIFY_ENDPOINT=${TIER0_NOTIFY_ENDPOINT:-http://localhost:3847/notify}
 TIER0_STALE_SECONDS=${TIER0_STALE_SECONDS:-900}
 TIER0_REPEAT_ALERT_SECONDS=${TIER0_REPEAT_ALERT_SECONDS:-1800}
+TIER0_MISSED_RUN_GRACE_SECONDS=${TIER0_MISSED_RUN_GRACE_SECONDS:-600}
 TIER0_ALERT_TIMEOUT_SECONDS=${TIER0_ALERT_TIMEOUT_SECONDS:-3}
 TIER0_NOTIFY_TIMEOUT_SECONDS=${TIER0_NOTIFY_TIMEOUT_SECONDS:-3}
 
@@ -58,6 +60,7 @@ require_epoch() {
 
 require_positive_integer TIER0_STALE_SECONDS "$TIER0_STALE_SECONDS"
 require_positive_integer TIER0_REPEAT_ALERT_SECONDS "$TIER0_REPEAT_ALERT_SECONDS"
+require_positive_integer TIER0_MISSED_RUN_GRACE_SECONDS "$TIER0_MISSED_RUN_GRACE_SECONDS"
 require_positive_integer TIER0_ALERT_TIMEOUT_SECONDS "$TIER0_ALERT_TIMEOUT_SECONDS"
 require_positive_integer TIER0_NOTIFY_TIMEOUT_SECONDS "$TIER0_NOTIFY_TIMEOUT_SECONDS"
 
@@ -67,6 +70,31 @@ else
     now_epoch=$($TIER0_DATE +%s 2>/dev/null) || now_epoch=
 fi
 require_epoch TIER0_NOW_EPOCH "$now_epoch"
+
+log_tier0_event() {
+    event=$1
+    log_dir=$($TIER0_DIRNAME "$TIER0_LOG_PATH" 2>/dev/null) || return 1
+    "$TIER0_MKDIR" -p "$log_dir" 2>/dev/null || return 1
+    printf 'epoch=%s label=%s reason=%s\n' "$now_epoch" "$TIER0_LABEL" "$event" >> "$TIER0_LOG_PATH"
+}
+
+# Seconds since this watchdog's own previous run, or "" when there is no usable record.
+seconds_since_own_previous_run() {
+    [ -f "$TIER0_RUN_STATE_PATH" ] || return 0
+    previous_run_epoch=
+    read -r previous_run_epoch < "$TIER0_RUN_STATE_PATH" || return 0
+    case "$previous_run_epoch" in
+        ''|*[!0-9]*) return 0 ;;
+    esac
+    [ "$previous_run_epoch" -le "$now_epoch" ] || return 0
+    printf '%s' "$((now_epoch - previous_run_epoch))"
+}
+
+record_own_run() {
+    run_state_dir=$($TIER0_DIRNAME "$TIER0_RUN_STATE_PATH" 2>/dev/null) || return 1
+    "$TIER0_MKDIR" -p "$run_state_dir" 2>/dev/null || return 1
+    printf '%s\n' "$now_epoch" > "$TIER0_RUN_STATE_PATH"
+}
 
 wait_for_alerts() {
     remaining=$TIER0_ALERT_TIMEOUT_SECONDS
@@ -157,6 +185,17 @@ reset_alert_cooldown() {
     fi
 }
 
+seconds_since_previous_run=$(seconds_since_own_previous_run)
+# Fail CLOSED: withholding is only safe while we can actually advance our own mark. If
+# the run state cannot be written, the recorded epoch freezes, every later gap looks like
+# a sleep, and the watchdog would withhold staleness alerts forever -- silently, which is
+# the one thing a tier-0 guard must never do.
+if record_own_run; then
+    own_run_recorded=1
+else
+    own_run_recorded=0
+fi
+
 target="$TIER0_DOMAIN/$TIER0_LABEL"
 failure_reason=
 failure_key=
@@ -203,6 +242,26 @@ fi
 
 if [ -z "$failure_reason" ]; then
     reset_alert_cooldown
+    exit 0
+fi
+
+# The system may have been asleep. launchd runs no StartInterval job while it sleeps, so
+# neither this watchdog nor the health-check it guards gets its turn -- yet state_stale
+# measures WALL-CLOCK age and cannot tell a sleeping Mac from a dead job. Our own previous
+# run dates the outage: if we too were skipped for longer than a couple of intervals, the
+# health-check has not had its chance yet, so withhold the staleness verdict for one cycle
+# and let the next run judge a machine that was actually awake. A genuinely dead
+# health-check on an awake machine still alerts, one cycle later. Only staleness is a
+# function of elapsed time; label_unloaded, state_missing, state_mtime_future and
+# state_slow_check are not, and are never withheld.
+if [ "$failure_key" = state_stale ] && [ "$own_run_recorded" -eq 1 ] \
+    && [ -n "$seconds_since_previous_run" ] \
+    && [ "$seconds_since_previous_run" -ge "$TIER0_MISSED_RUN_GRACE_SECONDS" ]; then
+    log_tier0_event "state_stale_withheld_after_missed_runs gap=${seconds_since_previous_run}s $failure_reason" || :
+    # Kickstart anyway: on wake this refreshes the state file now instead of waiting out
+    # the health-check's own interval, so the next run judges fresh state. The alert
+    # cooldown is deliberately left untouched -- a real incident keeps its place.
+    "$TIER0_LAUNCHCTL" kickstart -k "$target" >/dev/null 2>&1 || :
     exit 0
 fi
 

@@ -15,6 +15,7 @@ PLIST_PATH = REPO_ROOT / "scripts" / "launchd" / "com.brainlayer.tier0-watchdog.
 
 NOW_EPOCH = 10_000
 STALE_SECONDS = 1_200
+MISSED_RUN_GRACE_SECONDS = 600
 DOMAIN = "gui/501"
 LABEL = "com.example.brainlayer-health-check"
 NOTIFY_ENDPOINT = "http://localhost:3847/notify"
@@ -26,6 +27,7 @@ class DrillResult:
     events: list[str]
     tier0_log: str
     alert_state: str
+    run_state: str = ""
 
 
 def _write_executable(path: Path, contents: str) -> None:
@@ -48,6 +50,8 @@ def _run_drill(
     last_alert_epoch: int | None = None,
     last_alert_reason: str = "",
     repeat_alert_seconds: int = 1_800,
+    last_run_epoch: int | None = None,
+    run_state_unwritable: bool = False,
     alert_timeout_seconds: int = 3,
     state_contents: str = "{}\n",
 ) -> DrillResult:
@@ -58,6 +62,11 @@ def _run_drill(
     health_plist_path = tmp_path / "com.example.brainlayer-health-check.plist"
     tier0_log_path = tmp_path / "logs" / "tier0-watchdog.log"
     alert_state_path = tmp_path / "tier0-watchdog-alert-state"
+    run_state_path = tmp_path / "tier0-watchdog-last-run"
+    if run_state_unwritable:
+        # A directory in its place: mkdir -p succeeds, the redirect that writes the epoch
+        # cannot. Nothing else about the drill changes.
+        run_state_path.mkdir()
     health_plist_path.write_text("fixture\n", encoding="utf-8")
 
     if last_alert_epoch is not None:
@@ -65,6 +74,9 @@ def _run_drill(
             f"{last_alert_epoch}\t{last_alert_reason}\n",
             encoding="utf-8",
         )
+
+    if last_run_epoch is not None:
+        run_state_path.write_text(f"{last_run_epoch}\n", encoding="utf-8")
 
     if state_mtime is not None:
         state_path.write_text(state_contents, encoding="utf-8")
@@ -141,6 +153,8 @@ def _run_drill(
         "TIER0_NOTIFY_ENDPOINT": NOTIFY_ENDPOINT,
         "TIER0_NOTIFY_TIMEOUT_SECONDS": "1",
         "TIER0_REPEAT_ALERT_SECONDS": str(repeat_alert_seconds),
+        "TIER0_RUN_STATE_PATH": str(run_state_path),
+        "TIER0_MISSED_RUN_GRACE_SECONDS": str(MISSED_RUN_GRACE_SECONDS),
         "TIER0_NOW_EPOCH": str(NOW_EPOCH),
         "TIER0_OSASCRIPT": str(fake_bin / "osascript"),
         "TIER0_SLEEP": str(fake_bin / "wait-sleep") if use_fake_wait_sleep else "/bin/sleep",
@@ -159,7 +173,14 @@ def _run_drill(
     events = events_path.read_text(encoding="utf-8").splitlines() if events_path.exists() else []
     tier0_log = tier0_log_path.read_text(encoding="utf-8") if tier0_log_path.exists() else ""
     alert_state = alert_state_path.read_text(encoding="utf-8") if alert_state_path.exists() else ""
-    return DrillResult(process=process, events=events, tier0_log=tier0_log, alert_state=alert_state)
+    run_state = run_state_path.read_text(encoding="utf-8") if run_state_path.is_file() else ""
+    return DrillResult(
+        process=process,
+        events=events,
+        tier0_log=tier0_log,
+        alert_state=alert_state,
+        run_state=run_state,
+    )
 
 
 def _assert_alert_contract(result: DrillResult) -> None:
@@ -329,3 +350,123 @@ def test_tier0_launchagent_uses_bin_sh_without_python_wrapper() -> None:
     args = " ".join(plist["ProgramArguments"])
     assert "ENV_RUN" not in args
     assert "PYTHON" not in args.upper()
+
+
+# --- sleep-blind staleness ----------------------------------------------------
+# Measured on the M1 Pro, 2026-09-06: 13 notifications in one night, every one
+# reason=state_stale, every age (2045-3635s) equal to the sleep span that preceded
+# it. launchd runs no StartInterval job while the system sleeps, so neither this
+# watchdog nor the health-check it guards gets its turn -- but state_stale measures
+# wall-clock age and cannot tell a sleeping Mac from a dead job. The watchdog's own
+# previous run dates the outage.
+SLEPT_SECONDS = 2_364  # the first measured incident: alert 00:38:52, age=2364s
+
+
+def test_stale_state_alert_is_withheld_when_the_watchdog_itself_missed_runs(tmp_path: Path) -> None:
+    result = _run_drill(
+        tmp_path,
+        label_loaded=True,
+        state_mtime=NOW_EPOCH - SLEPT_SECONDS,
+        last_run_epoch=NOW_EPOCH - SLEPT_SECONDS,
+    )
+
+    assert result.process.returncode == 0, result.process.stdout + result.process.stderr
+    assert not any(event.startswith("osascript:") for event in result.events)
+    assert not any(event.startswith("curl:") for event in result.events)
+    assert f"state_stale_withheld_after_missed_runs gap={SLEPT_SECONDS}s" in result.tier0_log
+    # Recovery still runs: on wake this refreshes the state file now rather than
+    # waiting out the health-check's own interval.
+    assert any(event == f"launchctl:kickstart -k {DOMAIN}/{LABEL}" for event in result.events)
+
+
+def test_withheld_stale_alert_leaves_a_real_incident_cooldown_untouched(tmp_path: Path) -> None:
+    result = _run_drill(
+        tmp_path,
+        label_loaded=True,
+        state_mtime=NOW_EPOCH - SLEPT_SECONDS,
+        last_run_epoch=NOW_EPOCH - SLEPT_SECONDS,
+        last_alert_epoch=NOW_EPOCH - 300,
+        last_alert_reason="state_stale",
+    )
+
+    assert result.process.returncode == 0
+    assert result.alert_state == f"{NOW_EPOCH - 300}\tstate_stale\n"
+
+
+def test_stale_state_still_alerts_when_the_watchdog_ran_on_schedule(tmp_path: Path) -> None:
+    """A genuinely dead health-check on an awake machine must still alert."""
+    result = _run_drill(
+        tmp_path,
+        label_loaded=True,
+        state_mtime=NOW_EPOCH - STALE_SECONDS - 1,
+        last_run_epoch=NOW_EPOCH - 300,
+    )
+
+    assert result.process.returncode == 1, result.process.stdout + result.process.stderr
+    _assert_alert_contract(result)
+    assert f"state_stale age={STALE_SECONDS + 1}s threshold={STALE_SECONDS}s" in result.tier0_log
+
+
+def test_first_ever_run_with_no_recorded_history_still_alerts_on_stale_state(tmp_path: Path) -> None:
+    result = _run_drill(
+        tmp_path,
+        label_loaded=True,
+        state_mtime=NOW_EPOCH - STALE_SECONDS - 1,
+        last_run_epoch=None,
+    )
+
+    assert result.process.returncode == 1, result.process.stdout + result.process.stderr
+    _assert_alert_contract(result)
+
+
+def test_missed_runs_never_withhold_a_failure_that_is_not_a_function_of_elapsed_time(
+    tmp_path: Path,
+) -> None:
+    """label_unloaded is true whether the Mac slept or not, so sleep must not mask it."""
+    result = _run_drill(
+        tmp_path,
+        label_loaded=False,
+        state_mtime=NOW_EPOCH - SLEPT_SECONDS,
+        last_run_epoch=NOW_EPOCH - SLEPT_SECONDS,
+    )
+
+    assert result.process.returncode == 1, result.process.stdout + result.process.stderr
+    _assert_alert_contract(result)
+    assert "label_unloaded" in result.tier0_log
+
+
+def test_watchdog_records_its_own_run_epoch_on_every_path(tmp_path: Path) -> None:
+    cases = (
+        {"label_loaded": True, "state_mtime": NOW_EPOCH - 60},  # healthy, exits 0
+        {"label_loaded": False, "state_mtime": NOW_EPOCH - 60},  # incident, exits 1
+        {  # withheld after sleep, exits 0
+            "label_loaded": True,
+            "state_mtime": NOW_EPOCH - SLEPT_SECONDS,
+            "last_run_epoch": NOW_EPOCH - SLEPT_SECONDS,
+        },
+    )
+    for index, kwargs in enumerate(cases):
+        case_dir = tmp_path / f"case{index}"
+        case_dir.mkdir()
+        result = _run_drill(case_dir, **kwargs)
+        assert result.run_state == f"{NOW_EPOCH}\n", kwargs
+
+
+def test_unwritable_run_state_fails_closed_and_still_alerts(tmp_path: Path) -> None:
+    """Withholding is only safe while the watchdog can advance its own mark.
+
+    If the run state cannot be written the recorded epoch freezes, every later gap looks
+    like a sleep, and the watchdog would go silent forever. A tier-0 guard must fail
+    closed instead.
+    """
+    result = _run_drill(
+        tmp_path,
+        label_loaded=True,
+        state_mtime=NOW_EPOCH - SLEPT_SECONDS,
+        last_run_epoch=None,
+        run_state_unwritable=True,
+    )
+
+    assert result.process.returncode == 1, result.process.stdout + result.process.stderr
+    _assert_alert_contract(result)
+    assert "state_stale_withheld_after_missed_runs" not in result.tier0_log
