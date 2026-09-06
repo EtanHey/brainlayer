@@ -1055,10 +1055,17 @@ def run_health_check(
                 "critical",
                 f"BrainBar brain_search canary returned no usable results: {text[:240]}",
             )
-            heal_issue_labels[code] = (
-                config.brainbar_daemon_label,
-                _plist_for_label(config, config.brainbar_daemon_label),
-            )
+            # Only a canary that did not COME BACK is evidence about the daemon. An empty
+            # result set means the socket answered -- which proves the daemon is alive and
+            # serving -- and that the index simply holds nothing for this query. Restarting
+            # a healthy daemon cannot add content to an index: on the M1 that remedy ran 97
+            # consecutive times without once changing the answer. Report the gap, never heal
+            # the daemon for it.
+            if not canary_success:
+                heal_issue_labels[code] = (
+                    config.brainbar_daemon_label,
+                    _plist_for_label(config, config.brainbar_daemon_label),
+                )
     except Exception as exc:
         result.canary_ok = False
         add_issue("brain_search_canary_failed", "critical", f"BrainBar brain_search canary failed: {exc}")
