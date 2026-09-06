@@ -296,7 +296,22 @@ def _emit_heal_event(event: dict[str, Any]) -> None:
         pass
 
 
+# A desktop notification is a side effect on a REAL person's screen, so it is guarded the same
+# way a 2.5 GB model load is: an env check at the site, because that is the only guard that
+# survives a process boundary. tests/conftest.py arms it for every test. Without it, running
+# tests/test_stability_health_check.py fired real macOS popups built from fixture data -- fake
+# pids and pytest tmp db_paths -- into the developer's Notification Center, indistinguishable
+# from a production alert.
+FORBID_DESKTOP_NOTIFICATION_ENV = "BRAINLAYER_FORBID_DESKTOP_NOTIFICATION"
+
+
+def desktop_notifications_forbidden() -> bool:
+    return os.environ.get(FORBID_DESKTOP_NOTIFICATION_ENV) == "1"
+
+
 def _push_notification(title: str, message: str) -> None:
+    if desktop_notifications_forbidden():
+        return
     try:
         subprocess.run(
             [
