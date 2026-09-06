@@ -6,6 +6,7 @@ import json
 import os
 import plistlib
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -1373,7 +1374,7 @@ def test_drain_launchagent_is_long_lived_keepalive_daemon():
     assert "QueueDirectories" not in plist
 
 
-def _ps_output_stub(output: str):
+def _ps_output_stub(output: str) -> Callable[[], str]:
     """A named factory instead of a lambda: no trivial closure, and each call binds its own
     value, so a loop variable can never leak into it."""
 
@@ -1383,7 +1384,7 @@ def _ps_output_stub(output: str):
     return _ps_output
 
 
-def _clock_at(minute: int):
+def _clock_at(minute: int) -> Callable[[], datetime]:
     def _now() -> datetime:
         return datetime(2026, 6, 19, 4, minute, tzinfo=UTC)
 
