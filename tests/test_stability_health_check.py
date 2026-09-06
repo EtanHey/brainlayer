@@ -1373,6 +1373,23 @@ def test_drain_launchagent_is_long_lived_keepalive_daemon():
     assert "QueueDirectories" not in plist
 
 
+def _ps_output_stub(output: str):
+    """A named factory instead of a lambda: no trivial closure, and each call binds its own
+    value, so a loop variable can never leak into it."""
+
+    def _ps_output() -> str:
+        return output
+
+    return _ps_output
+
+
+def _clock_at(minute: int):
+    def _now() -> datetime:
+        return datetime(2026, 6, 19, 4, minute, tzinfo=UTC)
+
+    return _now
+
+
 def _empty_canary(_socket_path: Path, _query: str, _timeout_seconds: float) -> dict:
     """The socket answered -- proof the daemon is alive -- with zero rows."""
     return {
@@ -1405,10 +1422,10 @@ def test_empty_canary_is_reported_but_never_kickstarts_a_live_brainbar_daemon(tm
     for minute in range(25, 55, 5):
         result = run_health_check(
             config,
-            ps_output_fn=lambda output=ps_output: output,
+            ps_output_fn=_ps_output_stub(ps_output),
             socket_request_fn=_empty_canary,
             command_runner=commands.append,
-            now_fn=lambda at=minute: datetime(2026, 6, 19, 4, at, tzinfo=UTC),
+            now_fn=_clock_at(minute),
         )
         assert result.ok is False
         assert "brain_search_canary_empty" in [issue.code for issue in result.issues]
@@ -1446,10 +1463,10 @@ def test_unanswered_canary_still_kickstarts_the_daemon(tmp_path):
     for minute in (25, 30):
         run_health_check(
             config,
-            ps_output_fn=lambda output=ps_output: output,
+            ps_output_fn=_ps_output_stub(ps_output),
             socket_request_fn=failed_canary,
             command_runner=commands.append,
-            now_fn=lambda at=minute: datetime(2026, 6, 19, 4, at, tzinfo=UTC),
+            now_fn=_clock_at(minute),
         )
 
     assert any("com.brainlayer.brainbar-daemon" in " ".join(command) for command in commands)
