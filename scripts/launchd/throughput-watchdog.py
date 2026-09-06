@@ -533,6 +533,10 @@ def _best_effort_alert(config: Config, result: WatchdogResult) -> None:
             "Watcher has registry-tracked JSONL bytes pending but realtime_watcher chunks are flat; "
             "automatic recovery is starting."
         )
+    # Same guard as brainlayer.health_check: a desktop popup and an alert POST are side effects on
+    # a real person's screen and a real channel, so a test must never be able to reach either.
+    if os.environ.get("BRAINLAYER_FORBID_DESKTOP_NOTIFICATION") == "1":
+        return
     try:
         subprocess.run(
             [

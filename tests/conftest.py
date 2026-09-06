@@ -194,6 +194,10 @@ EMBEDDING_MODEL_MODULES = ("sentence_transformers", "FlagEmbedding")
 # see that happen. Every load site in brainlayer/ and scripts/ checks this before constructing a
 # model, so `--help` and syntax probes on the same scripts stay free.
 FORBID_MODEL_LOAD_ENV = "BRAINLAYER_FORBID_EMBEDDING_MODEL"
+# Armed for EVERY test with no exemption marker, because unlike a model load or a DB open there is
+# no legitimate reason for a test to put a popup on the developer's screen. Checked at each
+# notification site rather than by patching, so it survives the CLI subprocesses the suite spawns.
+FORBID_DESKTOP_NOTIFICATION_ENV = "BRAINLAYER_FORBID_DESKTOP_NOTIFICATION"
 _PROTECTED_BRAINLAYER_ROOTS = (
     _PROTECTED_TEST_HOME / ".brainlayer",
     _PROTECTED_TEST_HOME / ".local" / "share" / "brainlayer",
@@ -314,6 +318,8 @@ def forbid_embedding_models_and_canonical_db(monkeypatch, request):
     previous = _DbGuardState.suspended
     _DbGuardState.suspended = db_exempt
     try:
+        # No marker lifts this one: a test has no business notifying a human.
+        monkeypatch.setenv(FORBID_DESKTOP_NOTIFICATION_ENV, "1")
         if not model_exempt:
             _arm_embedding_model_refusal(monkeypatch)
         yield
