@@ -2599,8 +2599,8 @@ def detect_latency(probe: ratchet.Probe, corpus: dict = CORPUS) -> ratchet.Searc
 
 def mock_search(monkeypatch, text: str, hybrid: bool = True) -> list[dict]:
     monkeypatch.setattr(ratchet, "brainbar_bundle_identity", lambda _path: ("1.5.9", "c" * 40))
-    response = {"content": [{"type": "text", "text": text}]}
-    response["structuredContent"] = {"search_mode": "hybrid" if hybrid else "fallback"}
+    mode = "hybrid" if hybrid else "fallback"
+    response = {"content": [{"type": "text", "text": text}], "structuredContent": {"search_mode": mode}}
     calls = []
     c = SimpleNamespace(initialize=lambda: None, call=lambda _, a: calls.append(a) or response, close=lambda: None)
     monkeypatch.setattr(sprint_gate, "MCPClient", lambda *_args: c)
