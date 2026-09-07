@@ -1764,6 +1764,71 @@ No results found.
         XCTAssertTrue(text.contains("Types: assistant_text, user_message"))
     }
 
+    func testBrainRecallMakesStatsFallbackExplicitWithoutChangingWorkingModes() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-recall-fallback-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+
+        try db.insertChunk(
+            id: "recall-context-target",
+            content: "Context result must keep its dedicated response",
+            sessionId: "recall-session",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+        db.recordInjectionEvent(
+            sessionID: "recall-session",
+            query: "injection response must stay unchanged",
+            chunkIDs: ["recall-context-target"],
+            tokenCount: 12,
+            timestamp: "2026-09-07T12:00:00.000Z"
+        )
+
+        let router = MCPRouter(profile: "full")
+        router.setDatabase(db)
+        let fallbackNoticeFragment = "is not implemented by the served BrainBar handler; returned stats instead."
+        func recall(_ arguments: [String: Any]) throws -> String {
+            try toolText(router.handle(toolCall(id: 140, name: "brain_recall", arguments: arguments)))
+        }
+
+        for mode in ["summary", "sessions", "operations", "plan"] {
+            let text = try recall(["mode": mode])
+            XCTAssertTrue(text.contains("BrainLayer Stats"), "\(mode): \(text)")
+            XCTAssertTrue(text.contains("brain_recall mode \"\(mode)\" \(fallbackNoticeFragment)"), text)
+        }
+
+        let rejected = router.handle(toolCall(id: 141, name: "brain_recall", arguments: ["mode": "bogus"]))
+        let rejectedResult = try XCTUnwrap(rejected["result"] as? [String: Any])
+        let rejectedContent = try XCTUnwrap(rejectedResult["content"] as? [[String: Any]])
+        let rejectedText = try XCTUnwrap(rejectedContent.first?["text"] as? String)
+        XCTAssertEqual(rejectedResult["isError"] as? Bool, true)
+        XCTAssertTrue(rejectedText.contains("Schema validation error: mode must be one of"))
+
+        for arguments in [
+            ["mode": "context"],
+            ["mode": "context", "session_id": ""],
+        ] {
+            let text = try recall(arguments)
+            XCTAssertTrue(text.contains("BrainLayer Stats"), text)
+            XCTAssertTrue(text.contains("brain_recall mode \"context\" requires session_id; returned stats instead."), text)
+        }
+
+        let explicitStats = try recall(["mode": "stats"])
+        let defaultStats = try recall([:])
+        XCTAssertEqual(defaultStats, explicitStats)
+        XCTAssertFalse(explicitStats.contains(fallbackNoticeFragment), explicitStats)
+
+        let injections = try recall(["mode": "injections", "session_id": "recall-session"])
+        XCTAssertTrue(injections.contains("injection response must stay unchanged"), injections)
+        XCTAssertFalse(injections.contains(fallbackNoticeFragment), injections)
+
+        let context = try recall(["mode": "context", "session_id": "recall-session"])
+        XCTAssertTrue(context.contains("Context result must keep its dedicated response"), context)
+        XCTAssertFalse(context.contains(fallbackNoticeFragment), context)
+    }
+
     func testBrainRecallInjectionsReturnsRecentEvents() throws {
         let tempDB = NSTemporaryDirectory() + "brainbar-injections-\(UUID().uuidString).db"
         defer { try? FileManager.default.removeItem(atPath: tempDB) }
