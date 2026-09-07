@@ -653,7 +653,7 @@ def test_the_machine_target_reason_survives_for_an_off_target_mac(tmp_path: Path
     ("name", "expected"),
     [
         ("mapped bytes", "no runner-side collector for mapped bytes"),
-        ("search p50/p95", "no runner-side collector for search latency"),
+        ("search p50/p95", "no search latency collector result for this run"),
         ("idle CPU", "no runner-side collector for idle CPU"),
     ],
 )
@@ -661,7 +661,7 @@ def test_socket_rows_fall_through_to_the_missing_collector_on_a_ready_mac(
     tmp_path: Path, name: str, expected: str
 ) -> None:
     # Everything the row needs is present, so the reason must be the honest one: nobody wrote the
-    # collector yet. A row that blamed the machine here would be hiding w13's whole point.
+    # collector result. A row that blamed the machine here would be hiding w13's whole point.
     result = row(ratchet.collect(mac_probe(tmp_path), CORPUS), name)
     assert result.status == ratchet.NA
     assert expected in result.value
@@ -1817,7 +1817,8 @@ def test_the_notes_state_the_boundary_and_the_missing_key(tmp_path: Path) -> Non
     notes = attestation_row(tmp_path).notes
     assert "diff-reviewable, not tamper-proof" in notes
     assert "cannot write to another run's artifacts" in notes
-    assert "no runner-side collector measures any baseline field" in notes
+    assert "calibrated socket collector can license p50/p95" in notes
+    assert "every absent measured path stays locked" in notes
 
 
 # --- bootstrap: before the first attest run on main, the base tip stands in --------------------
@@ -1961,7 +1962,7 @@ def test_a_main_run_writes_an_attestation_the_pr_side_reads_back(tmp_path: Path,
     assert written["workflow"] == ratchet.ATTEST_WORKFLOW
     assert written["baseline"] == ratchet.baseline_view(CORPUS)
     assert written["baseline_sha256"] == ratchet.baseline_digest(ratchet.baseline_view(CORPUS))
-    assert written["measured"] == {}  # no runner-side collector measures a baseline field yet
+    assert written["measured"] == {}  # this hosted-runner-shaped probe collected no live socket values
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", written["measured_at"])
     assert set(written["rows"]) == {item.name for item in ratchet.collect(linux_probe(tmp_path), CORPUS)}
     assert written["rows"]["provenance"]["status"] == ratchet.GREEN
@@ -2570,6 +2571,130 @@ def real_history() -> tuple[dict, ...]:
         )
         for index, (p50, p95) in enumerate(zip(GREEN_MAIN_P50_MS, GREEN_MAIN_P95_MS, strict=True))
     )
+
+
+def search_latency_measurement(**overrides) -> ratchet.SearchLatencyMeasurement:
+    base = {
+        "p50_ms": 300.0,
+        "p95_ms": 2000.0,
+        "socket_path": str(CORPUS["socket_path"]),
+        "binary_path": str(ratchet.BRAINBAR_DAEMON_BINARY),
+        "app_version": "1.5.9",
+        "git_commit": "c" * 40,
+        "hostname": CORPUS["latency_baseline_ms"]["hostname"],
+        "os_name": CORPUS["machine_target"]["os"],
+        "architecture": CORPUS["machine_target"]["architecture"],
+        "measured_at": "2026-09-07T12:00:00Z",
+        "sample_count": len(CORPUS["queries"]),
+    }
+    return ratchet.SearchLatencyMeasurement(**{**base, **overrides})
+
+
+def test_a_slow_controlled_search_measurement_renders_red(tmp_path: Path) -> None:
+    """The row must be capable of failing; otherwise the collector is dashboard decoration."""
+    probe = mac_probe(
+        tmp_path,
+        attestations=real_history(),
+        search_latency=search_latency_measurement(
+            p50_ms=5000.0,
+            p95_ms=5000.0,
+            socket_path=str(tmp_path / "brainbar.sock"),
+        ),
+    )
+
+    result = ratchet.row_search_latency(probe, CORPUS)
+
+    assert result.status == ratchet.RED
+    assert "p50 5000.000 ms" in result.value
+    assert "p95 5000.000 ms" in result.value
+    assert "exceeds" in result.value
+
+
+def test_a_fast_search_measurement_renders_green_against_the_attested_band(tmp_path: Path) -> None:
+    probe = mac_probe(
+        tmp_path,
+        attestations=real_history(),
+        search_latency=search_latency_measurement(socket_path=str(tmp_path / "brainbar.sock")),
+    )
+
+    result = ratchet.row_search_latency(probe, CORPUS)
+
+    assert result.status == ratchet.GREEN
+    assert result.value == "p50 300.000 ms / p95 2000.000 ms"
+    assert "app 1.5.9" in result.notes and "GitCommit `cccccccccccc`" in result.notes
+
+
+def test_search_latency_stays_na_when_this_run_has_no_collector_result(tmp_path: Path) -> None:
+    result = ratchet.row_search_latency(mac_probe(tmp_path, attestations=real_history()), CORPUS)
+
+    assert result.status == ratchet.NA
+    assert result.value.startswith("n/a — no search latency collector result for this run")
+
+
+def test_search_latency_rejects_mismatched_served_provenance(tmp_path: Path) -> None:
+    probe = mac_probe(
+        tmp_path,
+        attestations=real_history(),
+        search_latency=search_latency_measurement(
+            socket_path=str(tmp_path / "brainbar.sock"),
+            binary_path="/tmp/not-the-served-brainbar",
+        ),
+    )
+
+    result = ratchet.row_search_latency(probe, CORPUS)
+
+    assert result.status == ratchet.RED
+    assert "provenance mismatch: served binary" in result.value
+    payload = ratchet.attestation_payload([result], probe, CORPUS, HEAD, 42, 1, NOW)
+    assert payload["measured"] == {}
+
+
+def test_an_unmeasured_band_keeps_the_real_sample_for_future_attestations(tmp_path: Path) -> None:
+    measurement = search_latency_measurement(socket_path=str(tmp_path / "brainbar.sock"))
+    probe = mac_probe(tmp_path, attestations=real_history()[:4], search_latency=measurement)
+    rows = ratchet.collect(probe, CORPUS)
+
+    assert row(rows, "search p50/p95").status == ratchet.NA
+    payload = ratchet.attestation_payload(rows, probe, CORPUS, HEAD, 42, 1, NOW)
+    assert payload["measured"] == {
+        "latency_baseline_ms.p50": 300.0,
+        "latency_baseline_ms.p95": 2000.0,
+    }
+    search_row = payload["rows"]["search p50/p95"]
+    assert search_row["measurement"]["sample_count"] == len(CORPUS["queries"])
+    assert search_row["measurement"]["provenance"]["socket_path"] == str(tmp_path / "brainbar.sock")
+
+
+def test_collector_is_not_attempted_before_the_machine_capabilities_pass(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(ratchet, "collect_search_latency", lambda *_args: pytest.fail("collector ran"))
+
+    selection = ratchet.detect_search_latency(
+        CORPUS,
+        "Linux",
+        "x86_64",
+        "hosted-runner",
+        tmp_path / "absent.sock",
+        tmp_path / "absent.db",
+    )
+
+    assert selection == ratchet.SearchLatencySelection()
+
+
+def test_a_stale_socket_with_no_owner_is_an_honest_capability_gap(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        ratchet,
+        "collect_search_latency",
+        lambda *_args: (_ for _ in ()).throw(ratchet.NoSocketOwner("no process owns the socket")),
+    )
+    probe = mac_probe(tmp_path)
+    selection = ratchet.detect_search_latency(
+        CORPUS, probe.os_name, probe.architecture, probe.hostname, probe.socket_path, probe.db_path
+    )
+
+    result = ratchet.row_search_latency(replace(probe, search_latency_unavailable=selection.unavailable), CORPUS)
+
+    assert result.status == ratchet.NA
+    assert "no process owns the socket" in result.value
 
 
 def write_attestations(root: Path, documents: tuple[dict, ...]) -> Path:
