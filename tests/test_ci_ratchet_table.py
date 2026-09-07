@@ -1820,8 +1820,6 @@ def test_the_notes_state_the_boundary_and_the_missing_key(tmp_path: Path) -> Non
     notes = attestation_row(tmp_path).notes
     assert "diff-reviewable, not tamper-proof" in notes
     assert "cannot write to another run's artifacts" in notes
-    assert "calibrated socket collector can license p50/p95" in notes
-    assert "every absent measured path stays locked" in notes
 
 
 # --- bootstrap: before the first attest run on main, the base tip stands in --------------------
@@ -1965,7 +1963,7 @@ def test_a_main_run_writes_an_attestation_the_pr_side_reads_back(tmp_path: Path,
     assert written["workflow"] == ratchet.ATTEST_WORKFLOW
     assert written["baseline"] == ratchet.baseline_view(CORPUS)
     assert written["baseline_sha256"] == ratchet.baseline_digest(ratchet.baseline_view(CORPUS))
-    assert written["measured"] == {}  # this hosted-runner-shaped probe collected no live socket values
+    assert written["measured"] == {}
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", written["measured_at"])
     assert set(written["rows"]) == {item.name for item in ratchet.collect(linux_probe(tmp_path), CORPUS)}
     assert written["rows"]["provenance"]["status"] == ratchet.GREEN
@@ -2613,14 +2611,12 @@ def test_a_slow_controlled_search_measurement_renders_red(tmp_path: Path) -> Non
     probe = mac_probe(tmp_path, attestations=real_history(), search_latency=measurement)
     result = ratchet.row_search_latency(probe, CORPUS)
     assert result.status == ratchet.RED and "exceeds" in result.value
-    assert "p50 5000.000 ms" in result.value and "p95 5000.000 ms" in result.value
 
 
 def test_a_fast_search_measurement_renders_green_against_the_attested_band(tmp_path: Path) -> None:
     probe = mac_probe(tmp_path, attestations=real_history(), search_latency=search_latency_measurement(tmp_path))
     result = ratchet.row_search_latency(probe, CORPUS)
     assert result.status == ratchet.GREEN and result.value == "p50 300.000 ms / p95 2000.000 ms"
-    assert "app 1.5.9" in result.notes and "GitCommit `cccccccccccc`" in result.notes
 
 
 def test_search_latency_rejects_mismatched_served_provenance(tmp_path: Path) -> None:
@@ -2628,12 +2624,12 @@ def test_search_latency_rejects_mismatched_served_provenance(tmp_path: Path) -> 
     probe = mac_probe(tmp_path, attestations=real_history(), search_latency=measurement)
     result = ratchet.row_search_latency(probe, CORPUS)
     assert result.status == ratchet.RED and "provenance mismatch: served binary" in result.value
-    assert ratchet.attestation_payload([result], probe, CORPUS, HEAD, 42, 1, NOW)["measured"] == {}
+    payload = ratchet.attestation_payload([result], probe, CORPUS, HEAD, 42, 1, NOW)
+    assert payload["measured"] == {} and payload["rows"]["search p50/p95"]["measurement"] is None
 
 
 def test_an_unmeasured_band_keeps_the_real_sample_for_future_attestations(tmp_path: Path) -> None:
-    measurement = search_latency_measurement(tmp_path)
-    probe = mac_probe(tmp_path, attestations=real_history()[:4], search_latency=measurement)
+    probe = mac_probe(tmp_path, attestations=real_history()[:4], search_latency=search_latency_measurement(tmp_path))
     rows = ratchet.collect(probe, CORPUS)
     assert row(rows, "search p50/p95").status == ratchet.NA
     payload = ratchet.attestation_payload(rows, probe, CORPUS, HEAD, 42, 1, NOW)

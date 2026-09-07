@@ -1765,7 +1765,7 @@ def render(rows: list[Row], probe: Probe, run_url: str | None, now: datetime) ->
 # --------------------------------------------------------------------------------------------
 
 
-def row_measurement(row: Row, probe: Probe) -> dict | None:
+def row_measurement(row: Row, probe: Probe, corpus: dict) -> dict | None:
     """The numeric payload behind a row, for the run history a margin can be derived from.
 
     Only a row that measured counts carries one; a status string is not a measurement. Today that
@@ -1774,6 +1774,8 @@ def row_measurement(row: Row, probe: Probe) -> dict | None:
     if row.name == "signature_valid" and probe.signature is not None and probe.signature.status == SIGNATURE_MEASURED:
         return {"valid": probe.signature.valid, "invalid": probe.signature.invalid}
     if row.name == "search p50/p95" and probe.search_latency is not None:
+        if search_latency_measurement_problem(probe.search_latency, probe, corpus):
+            return None
         return {
             "p50": probe.search_latency.p50_ms,
             "p95": probe.search_latency.p95_ms,
@@ -1805,8 +1807,6 @@ def attestation_payload(
         "workflow": ATTEST_WORKFLOW,
         "baseline": view,
         "baseline_sha256": baseline_digest(view),
-        # Dotted baseline path -> value this run measured. Search latency is included even while
-        # its margin is still unmeasured, so five honest main runs can create the first band.
         "measured": (
             {
                 "latency_baseline_ms.p50": probe.search_latency.p50_ms,
@@ -1821,7 +1821,7 @@ def attestation_payload(
                 "status": row.status,
                 "value": row.value,
                 "method": row.method,
-                "measurement": row_measurement(row, probe),
+                "measurement": row_measurement(row, probe, corpus),
             }
             for row in rows
         },
