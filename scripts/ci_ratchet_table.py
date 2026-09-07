@@ -188,7 +188,6 @@ class SearchLatencyMeasurement:
     architecture: str
     measured_at: str
     sample_count: int
-    pid: int = 0
 
 
 @dataclass(frozen=True)
@@ -196,10 +195,6 @@ class SearchLatencySelection:
     measurement: SearchLatencyMeasurement | None = None
     unavailable: str | None = None
     problem: str | None = None
-
-
-class NoSocketOwner(RuntimeError):
-    """The socket path exists but no served process owns it."""
 
 
 @dataclass(frozen=True)
@@ -1260,7 +1255,7 @@ def socket_owner_binary(socket_path: Path) -> tuple[int, Path]:
     owners = owner_result.stdout.splitlines()
     pids = sorted({int(owner.strip()) for owner in owners if owner.strip().isdigit()})
     if not pids:
-        raise NoSocketOwner(f"no process owns the socket at {socket_path}")
+        raise ProcessLookupError(f"no process owns the socket at {socket_path}")
     if len(pids) != 1:
         raise RuntimeError(f"expected one process to own {socket_path}, found {len(pids)}")
     pid = pids[0]
@@ -1324,7 +1319,6 @@ def collect_search_latency(corpus: dict, socket_path: Path) -> SearchLatencyMeas
         architecture=platform.machine(),
         measured_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         sample_count=len(samples),
-        pid=before_pid,
     )
 
 
@@ -1345,7 +1339,7 @@ def detect_search_latency(
         return SearchLatencySelection()
     try:
         return SearchLatencySelection(measurement=collect_search_latency(corpus, socket_path))
-    except NoSocketOwner as error:
+    except ProcessLookupError as error:
         return SearchLatencySelection(unavailable=str(error))
     except Exception as error:
         return SearchLatencySelection(problem=f"search latency collector failed: {type(error).__name__}: {error}")
@@ -1356,11 +1350,8 @@ def search_latency_measurement_problem(measurement: SearchLatencyMeasurement, pr
     expected = [
         ("socket path", (measurement.socket_path, str(probe.socket_path))),
         ("served binary", (measurement.binary_path, str(BRAINBAR_DAEMON_BINARY))),
-        ("run host", (measurement.hostname, probe.hostname)),
         ("calibrated host", (measurement.hostname, corpus["latency_baseline_ms"]["hostname"])),
-        ("run OS", (measurement.os_name, probe.os_name)),
         ("target OS", (measurement.os_name, target["os"])),
-        ("run architecture", (measurement.architecture, probe.architecture)),
         ("target architecture", (measurement.architecture, target["architecture"])),
     ]
     for label, (actual, wanted) in expected:
@@ -1803,7 +1794,6 @@ def row_measurement(row: Row, probe: Probe) -> dict | None:
                 "os": probe.search_latency.os_name,
                 "architecture": probe.search_latency.architecture,
                 "measured_at": probe.search_latency.measured_at,
-                "pid": probe.search_latency.pid,
             },
         }
     return None

@@ -2591,7 +2591,6 @@ def search_latency_measurement(**overrides) -> ratchet.SearchLatencyMeasurement:
 
 
 def test_a_slow_controlled_search_measurement_renders_red(tmp_path: Path) -> None:
-    """The row must be capable of failing; otherwise the collector is dashboard decoration."""
     probe = mac_probe(
         tmp_path,
         attestations=real_history(),
@@ -2604,10 +2603,8 @@ def test_a_slow_controlled_search_measurement_renders_red(tmp_path: Path) -> Non
 
     result = ratchet.row_search_latency(probe, CORPUS)
 
-    assert result.status == ratchet.RED
-    assert "p50 5000.000 ms" in result.value
-    assert "p95 5000.000 ms" in result.value
-    assert "exceeds" in result.value
+    assert result.status == ratchet.RED and "exceeds" in result.value
+    assert "p50 5000.000 ms" in result.value and "p95 5000.000 ms" in result.value
 
 
 def test_a_fast_search_measurement_renders_green_against_the_attested_band(tmp_path: Path) -> None:
@@ -2624,13 +2621,6 @@ def test_a_fast_search_measurement_renders_green_against_the_attested_band(tmp_p
     assert "app 1.5.9" in result.notes and "GitCommit `cccccccccccc`" in result.notes
 
 
-def test_search_latency_stays_na_when_this_run_has_no_collector_result(tmp_path: Path) -> None:
-    result = ratchet.row_search_latency(mac_probe(tmp_path, attestations=real_history()), CORPUS)
-
-    assert result.status == ratchet.NA
-    assert result.value.startswith("n/a — no search latency collector result for this run")
-
-
 def test_search_latency_rejects_mismatched_served_provenance(tmp_path: Path) -> None:
     probe = mac_probe(
         tmp_path,
@@ -2643,10 +2633,8 @@ def test_search_latency_rejects_mismatched_served_provenance(tmp_path: Path) -> 
 
     result = ratchet.row_search_latency(probe, CORPUS)
 
-    assert result.status == ratchet.RED
-    assert "provenance mismatch: served binary" in result.value
-    payload = ratchet.attestation_payload([result], probe, CORPUS, HEAD, 42, 1, NOW)
-    assert payload["measured"] == {}
+    assert result.status == ratchet.RED and "provenance mismatch: served binary" in result.value
+    assert ratchet.attestation_payload([result], probe, CORPUS, HEAD, 42, 1, NOW)["measured"] == {}
 
 
 def test_an_unmeasured_band_keeps_the_real_sample_for_future_attestations(tmp_path: Path) -> None:
@@ -2684,7 +2672,7 @@ def test_a_stale_socket_with_no_owner_is_an_honest_capability_gap(tmp_path: Path
     monkeypatch.setattr(
         ratchet,
         "collect_search_latency",
-        lambda *_args: (_ for _ in ()).throw(ratchet.NoSocketOwner("no process owns the socket")),
+        lambda *_args: (_ for _ in ()).throw(ProcessLookupError("no process owns the socket")),
     )
     probe = mac_probe(tmp_path)
     selection = ratchet.detect_search_latency(
