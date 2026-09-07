@@ -1812,7 +1812,7 @@ No results found.
         ] {
             let text = try recall(arguments)
             XCTAssertTrue(text.contains("BrainLayer Stats"), text)
-            XCTAssertTrue(text.contains("brain_recall mode \"context\" \(fallbackNoticeFragment)"), text)
+            XCTAssertTrue(text.contains("brain_recall mode \"context\" requires session_id; returned stats instead."), text)
         }
 
         let explicitStats = try recall(["mode": "stats"])

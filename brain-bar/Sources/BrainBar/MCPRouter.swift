@@ -1182,7 +1182,9 @@ final class MCPRouter: @unchecked Sendable {
         guard mode != "stats" else {
             return ToolOutput(text: statsText)
         }
-        let notice = "brain_recall mode \"\(mode)\" is not implemented by the served BrainBar handler; returned stats instead."
+        let notice = mode == "context"
+            ? "brain_recall mode \"context\" requires session_id; returned stats instead."
+            : "brain_recall mode \"\(mode)\" is not implemented by the served BrainBar handler; returned stats instead."
         return ToolOutput(text: statsText + "\n\n" + notice)
     }
 
