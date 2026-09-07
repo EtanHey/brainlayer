@@ -1252,6 +1252,8 @@ def socket_owner_binary(socket_path: Path) -> tuple[int, Path]:
         text=True,
         timeout=10,
     )
+    if owner_result.returncode:
+        raise RuntimeError(f"lsof failed for {socket_path}: {owner_result.stderr.strip() or owner_result.returncode}")
     owners = owner_result.stdout.splitlines()
     pids = sorted({int(owner.strip()) for owner in owners if owner.strip().isdigit()})
     if not pids:
@@ -1290,7 +1292,7 @@ def brainbar_bundle_identity(binary: Path) -> tuple[str, str]:
 
 def collect_search_latency(corpus: dict, socket_path: Path) -> SearchLatencyMeasurement:
     """Time the corpus queries over the served MCP socket, without opening the DB directly."""
-    from scripts.sprint_gate import MCPClient, percentile
+    from scripts.sprint_gate import MCPClient, percentile, search_result_rows, tool_text
 
     before_pid, binary = socket_owner_binary(socket_path)
     version, commit = brainbar_bundle_identity(binary)
@@ -1300,8 +1302,11 @@ def collect_search_latency(corpus: dict, socket_path: Path) -> SearchLatencyMeas
         samples = []
         for query in corpus["queries"]:
             started = time.perf_counter()
-            client.call("brain_search", {"query": query, "num_results": 1})
-            samples.append(round((time.perf_counter() - started) * 1000, 3))
+            result = client.call("brain_search", {"query": query, "num_results": 1})
+            elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
+            if not search_result_rows(tool_text(result)):
+                raise ProcessLookupError("brain_search returned no results for a configured query")
+            samples.append(elapsed_ms)
     finally:
         client.close()
     after_pid, after_binary = socket_owner_binary(socket_path)

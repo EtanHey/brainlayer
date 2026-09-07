@@ -11,11 +11,13 @@ import zipfile
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
 
 from scripts import ci_ratchet_table as ratchet
+from scripts import sprint_gate
 
 
 def _clean_git_env() -> dict[str, str]:
@@ -2573,18 +2575,18 @@ def real_history() -> tuple[dict, ...]:
     )
 
 
-def search_latency_measurement(**overrides) -> ratchet.SearchLatencyMeasurement:
+def search_latency_measurement(tmp_path: Path, **overrides) -> ratchet.SearchLatencyMeasurement:
     base = {
         "p50_ms": 300.0,
         "p95_ms": 2000.0,
-        "socket_path": str(CORPUS["socket_path"]),
+        "socket_path": str(tmp_path / "brainbar.sock"),
         "binary_path": str(ratchet.BRAINBAR_DAEMON_BINARY),
         "app_version": "1.5.9",
         "git_commit": "c" * 40,
         "hostname": CORPUS["latency_baseline_ms"]["hostname"],
         "os_name": CORPUS["machine_target"]["os"],
         "architecture": CORPUS["machine_target"]["architecture"],
-        "measured_at": "2026-09-07T12:00:00Z",
+        "measured_at": NOW.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "sample_count": len(CORPUS["queries"]),
     }
     return ratchet.SearchLatencyMeasurement(**{**base, **overrides})
@@ -2594,15 +2596,9 @@ def test_a_slow_controlled_search_measurement_renders_red(tmp_path: Path) -> Non
     probe = mac_probe(
         tmp_path,
         attestations=real_history(),
-        search_latency=search_latency_measurement(
-            p50_ms=5000.0,
-            p95_ms=5000.0,
-            socket_path=str(tmp_path / "brainbar.sock"),
-        ),
+        search_latency=search_latency_measurement(tmp_path, p50_ms=5000.0, p95_ms=5000.0),
     )
-
     result = ratchet.row_search_latency(probe, CORPUS)
-
     assert result.status == ratchet.RED and "exceeds" in result.value
     assert "p50 5000.000 ms" in result.value and "p95 5000.000 ms" in result.value
 
@@ -2611,13 +2607,10 @@ def test_a_fast_search_measurement_renders_green_against_the_attested_band(tmp_p
     probe = mac_probe(
         tmp_path,
         attestations=real_history(),
-        search_latency=search_latency_measurement(socket_path=str(tmp_path / "brainbar.sock")),
+        search_latency=search_latency_measurement(tmp_path),
     )
-
     result = ratchet.row_search_latency(probe, CORPUS)
-
-    assert result.status == ratchet.GREEN
-    assert result.value == "p50 300.000 ms / p95 2000.000 ms"
+    assert result.status == ratchet.GREEN and result.value == "p50 300.000 ms / p95 2000.000 ms"
     assert "app 1.5.9" in result.notes and "GitCommit `cccccccccccc`" in result.notes
 
 
@@ -2625,23 +2618,17 @@ def test_search_latency_rejects_mismatched_served_provenance(tmp_path: Path) -> 
     probe = mac_probe(
         tmp_path,
         attestations=real_history(),
-        search_latency=search_latency_measurement(
-            socket_path=str(tmp_path / "brainbar.sock"),
-            binary_path="/tmp/not-the-served-brainbar",
-        ),
+        search_latency=search_latency_measurement(tmp_path, binary_path="/tmp/not-the-served-brainbar"),
     )
-
     result = ratchet.row_search_latency(probe, CORPUS)
-
     assert result.status == ratchet.RED and "provenance mismatch: served binary" in result.value
     assert ratchet.attestation_payload([result], probe, CORPUS, HEAD, 42, 1, NOW)["measured"] == {}
 
 
 def test_an_unmeasured_band_keeps_the_real_sample_for_future_attestations(tmp_path: Path) -> None:
-    measurement = search_latency_measurement(socket_path=str(tmp_path / "brainbar.sock"))
+    measurement = search_latency_measurement(tmp_path)
     probe = mac_probe(tmp_path, attestations=real_history()[:4], search_latency=measurement)
     rows = ratchet.collect(probe, CORPUS)
-
     assert row(rows, "search p50/p95").status == ratchet.NA
     payload = ratchet.attestation_payload(rows, probe, CORPUS, HEAD, 42, 1, NOW)
     assert payload["measured"] == {
@@ -2655,16 +2642,10 @@ def test_an_unmeasured_band_keeps_the_real_sample_for_future_attestations(tmp_pa
 
 def test_collector_is_not_attempted_before_the_machine_capabilities_pass(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(ratchet, "collect_search_latency", lambda *_args: pytest.fail("collector ran"))
-
+    probe = linux_probe(tmp_path)
     selection = ratchet.detect_search_latency(
-        CORPUS,
-        "Linux",
-        "x86_64",
-        "hosted-runner",
-        tmp_path / "absent.sock",
-        tmp_path / "absent.db",
+        CORPUS, probe.os_name, probe.architecture, probe.hostname, probe.socket_path, probe.db_path
     )
-
     assert selection == ratchet.SearchLatencySelection()
 
 
@@ -2678,11 +2659,27 @@ def test_a_stale_socket_with_no_owner_is_an_honest_capability_gap(tmp_path: Path
     selection = ratchet.detect_search_latency(
         CORPUS, probe.os_name, probe.architecture, probe.hostname, probe.socket_path, probe.db_path
     )
-
     result = ratchet.row_search_latency(replace(probe, search_latency_unavailable=selection.unavailable), CORPUS)
+    assert result.status == ratchet.NA and "no process owns the socket" in result.value
 
-    assert result.status == ratchet.NA
-    assert "no process owns the socket" in result.value
+
+def test_lsof_failure_is_a_collector_error_not_an_absent_owner(monkeypatch) -> None:
+    monkeypatch.setattr(ratchet.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        ratchet.subprocess, "run", lambda *_args, **_kwargs: subprocess.CompletedProcess([], 2, "", "denied")
+    )
+    with pytest.raises(RuntimeError, match="lsof failed"):
+        ratchet.socket_owner_binary(Path("/tmp/brainbar.sock"))
+
+
+def test_collector_refuses_a_search_response_with_no_results(monkeypatch) -> None:
+    monkeypatch.setattr(ratchet, "socket_owner_binary", lambda _path: (1, ratchet.BRAINBAR_DAEMON_BINARY))
+    monkeypatch.setattr(ratchet, "brainbar_bundle_identity", lambda _path: ("1.5.9", "c" * 40))
+    response = {"content": [{"type": "text", "text": '## Search results for "q" - 0 of 0 shown'}]}
+    client = SimpleNamespace(initialize=lambda: None, call=lambda *_args: response, close=lambda: None)
+    monkeypatch.setattr(sprint_gate, "MCPClient", lambda *_args: client)
+    with pytest.raises(ProcessLookupError, match="returned no results"):
+        ratchet.collect_search_latency({**CORPUS, "queries": ["q"]}, Path("/tmp/brainbar.sock"))
 
 
 def write_attestations(root: Path, documents: tuple[dict, ...]) -> Path:
