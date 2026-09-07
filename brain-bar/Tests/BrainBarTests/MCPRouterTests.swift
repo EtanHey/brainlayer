@@ -1793,11 +1793,18 @@ No results found.
             try toolText(router.handle(toolCall(id: 140, name: "brain_recall", arguments: arguments)))
         }
 
-        for mode in ["summary", "sessions", "operations", "plan", "unrecognized-mode"] {
+        for mode in ["summary", "sessions", "operations", "plan"] {
             let text = try recall(["mode": mode])
             XCTAssertTrue(text.contains("BrainLayer Stats"), "\(mode): \(text)")
             XCTAssertTrue(text.contains("brain_recall mode \"\(mode)\" \(fallbackNoticeFragment)"), text)
         }
+
+        let rejected = router.handle(toolCall(id: 141, name: "brain_recall", arguments: ["mode": "bogus"]))
+        let rejectedResult = try XCTUnwrap(rejected["result"] as? [String: Any])
+        let rejectedContent = try XCTUnwrap(rejectedResult["content"] as? [[String: Any]])
+        let rejectedText = try XCTUnwrap(rejectedContent.first?["text"] as? String)
+        XCTAssertEqual(rejectedResult["isError"] as? Bool, true)
+        XCTAssertTrue(rejectedText.contains("Schema validation error: mode must be one of"))
 
         for arguments in [
             ["mode": "context"],

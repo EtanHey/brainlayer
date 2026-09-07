@@ -1565,18 +1565,11 @@ final class MCPRouter: @unchecked Sendable {
     private static func validate(arguments: [String: Any], for toolName: String) throws {
         guard
             let tool = toolDefinitions.first(where: { ($0["name"] as? String) == toolName }),
-            var schema = tool["inputSchema"] as? [String: Any]
+            let schema = tool["inputSchema"] as? [String: Any]
         else {
             return
         }
 
-        if toolName == "brain_recall",
-           var properties = schema["properties"] as? [String: Any],
-           var mode = properties["mode"] as? [String: Any] {
-            mode.removeValue(forKey: "enum")
-            properties["mode"] = mode
-            schema["properties"] = properties
-        }
         try validate(value: arguments, against: schema, fieldPath: "arguments")
     }
 
