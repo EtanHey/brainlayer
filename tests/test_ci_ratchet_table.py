@@ -12,6 +12,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 import yaml
@@ -2592,34 +2593,37 @@ def search_latency_measurement(tmp_path: Path, **overrides) -> ratchet.SearchLat
     return ratchet.SearchLatencyMeasurement(**{**base, **overrides})
 
 
-def test_a_slow_controlled_search_measurement_renders_red(tmp_path: Path) -> None:
-    probe = mac_probe(
-        tmp_path,
-        attestations=real_history(),
-        search_latency=search_latency_measurement(tmp_path, p50_ms=5000.0, p95_ms=5000.0),
+def detect_latency(probe: ratchet.Probe, corpus: dict = CORPUS) -> ratchet.SearchLatencySelection:
+    return ratchet.detect_search_latency(
+        corpus, probe.os_name, probe.architecture, probe.hostname, probe.socket_path, probe.db_path
     )
+
+
+def mock_search(monkeypatch, text: str) -> None:
+    monkeypatch.setattr(ratchet, "brainbar_bundle_identity", lambda _path: ("1.5.9", "c" * 40))
+    response = {"content": [{"type": "text", "text": text}]}
+    client = SimpleNamespace(initialize=lambda: None, call=lambda *_args: response, close=lambda: None)
+    monkeypatch.setattr(sprint_gate, "MCPClient", lambda *_args: client)
+
+
+def test_a_slow_controlled_search_measurement_renders_red(tmp_path: Path) -> None:
+    measurement = search_latency_measurement(tmp_path, p50_ms=5000.0, p95_ms=5000.0)
+    probe = mac_probe(tmp_path, attestations=real_history(), search_latency=measurement)
     result = ratchet.row_search_latency(probe, CORPUS)
     assert result.status == ratchet.RED and "exceeds" in result.value
     assert "p50 5000.000 ms" in result.value and "p95 5000.000 ms" in result.value
 
 
 def test_a_fast_search_measurement_renders_green_against_the_attested_band(tmp_path: Path) -> None:
-    probe = mac_probe(
-        tmp_path,
-        attestations=real_history(),
-        search_latency=search_latency_measurement(tmp_path),
-    )
+    probe = mac_probe(tmp_path, attestations=real_history(), search_latency=search_latency_measurement(tmp_path))
     result = ratchet.row_search_latency(probe, CORPUS)
     assert result.status == ratchet.GREEN and result.value == "p50 300.000 ms / p95 2000.000 ms"
     assert "app 1.5.9" in result.notes and "GitCommit `cccccccccccc`" in result.notes
 
 
 def test_search_latency_rejects_mismatched_served_provenance(tmp_path: Path) -> None:
-    probe = mac_probe(
-        tmp_path,
-        attestations=real_history(),
-        search_latency=search_latency_measurement(tmp_path, binary_path="/tmp/not-the-served-brainbar"),
-    )
+    measurement = search_latency_measurement(tmp_path, binary_path="/tmp/not-the-served-brainbar")
+    probe = mac_probe(tmp_path, attestations=real_history(), search_latency=measurement)
     result = ratchet.row_search_latency(probe, CORPUS)
     assert result.status == ratchet.RED and "provenance mismatch: served binary" in result.value
     assert ratchet.attestation_payload([result], probe, CORPUS, HEAD, 42, 1, NOW)["measured"] == {}
@@ -2643,28 +2647,27 @@ def test_an_unmeasured_band_keeps_the_real_sample_for_future_attestations(tmp_pa
 def test_collector_is_not_attempted_before_the_machine_capabilities_pass(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(ratchet, "collect_search_latency", lambda *_args: pytest.fail("collector ran"))
     probe = linux_probe(tmp_path)
-    selection = ratchet.detect_search_latency(
-        CORPUS, probe.os_name, probe.architecture, probe.hostname, probe.socket_path, probe.db_path
-    )
-    assert selection == ratchet.SearchLatencySelection()
+    assert detect_latency(probe) == ratchet.SearchLatencySelection()
 
 
 def test_a_stale_socket_with_no_owner_is_an_honest_capability_gap(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(ratchet.shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(ratchet.subprocess, "run", lambda *_args, **_kwargs: subprocess.CompletedProcess([], 1, "", ""))
     probe = mac_probe(tmp_path)
-    selection = ratchet.detect_search_latency(
-        CORPUS, probe.os_name, probe.architecture, probe.hostname, probe.socket_path, probe.db_path
-    )
+    selection = detect_latency(probe)
     result = ratchet.row_search_latency(replace(probe, search_latency_unavailable=selection.unavailable), CORPUS)
     assert result.status == ratchet.NA and "no process owns the socket" in result.value
 
 
-def test_post_sweep_owner_loss_stays_red_after_the_socket_is_unlinked(tmp_path: Path) -> None:
-    probe = mac_probe(tmp_path, search_latency_problem="search latency collector failed: BrainBar owner disappeared")
+def test_post_sweep_owner_loss_becomes_a_collector_problem(tmp_path: Path, monkeypatch) -> None:
+    owners = Mock(side_effect=[(1, ratchet.BRAINBAR_DAEMON_BINARY), ProcessLookupError("owner disappeared")])
+    monkeypatch.setattr(ratchet, "socket_owner_binary", owners)
+    mock_search(monkeypatch, '## Search results for "q" - 1 of 1 shown\n### 1. hit')
+    probe = mac_probe(tmp_path)
+    selection = detect_latency(probe, {**CORPUS, "queries": ["q"]})
     probe.socket_path.unlink()
-    result = ratchet.row_search_latency(probe, CORPUS)
-    assert result.status == ratchet.RED and "BrainBar owner disappeared" in result.value
+    result = ratchet.row_search_latency(replace(probe, search_latency_problem=selection.problem), CORPUS)
+    assert result.status == ratchet.RED and "ProcessLookupError: owner disappeared" in result.value
 
 
 def test_lsof_failure_is_a_collector_error_not_an_absent_owner(monkeypatch) -> None:
@@ -2676,14 +2679,12 @@ def test_lsof_failure_is_a_collector_error_not_an_absent_owner(monkeypatch) -> N
         ratchet.socket_owner_binary(Path("/tmp/brainbar.sock"))
 
 
-def test_collector_refuses_a_search_response_with_no_results(monkeypatch) -> None:
+def test_empty_search_response_becomes_a_collector_problem(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(ratchet, "socket_owner_binary", lambda _path: (1, ratchet.BRAINBAR_DAEMON_BINARY))
-    monkeypatch.setattr(ratchet, "brainbar_bundle_identity", lambda _path: ("1.5.9", "c" * 40))
-    response = {"content": [{"type": "text", "text": '## Search results for "q" - 0 of 0 shown'}]}
-    client = SimpleNamespace(initialize=lambda: None, call=lambda *_args: response, close=lambda: None)
-    monkeypatch.setattr(sprint_gate, "MCPClient", lambda *_args: client)
-    with pytest.raises(ProcessLookupError, match="returned no results"):
-        ratchet.collect_search_latency({**CORPUS, "queries": ["q"]}, Path("/tmp/brainbar.sock"))
+    mock_search(monkeypatch, '## Search results for "q" - 0 of 0 shown')
+    probe = mac_probe(tmp_path)
+    selection = detect_latency(probe, {**CORPUS, "queries": ["q"]})
+    assert selection.problem and "brain_search returned no results" in selection.problem
 
 
 def write_attestations(root: Path, documents: tuple[dict, ...]) -> Path:

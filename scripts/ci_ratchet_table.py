@@ -175,8 +175,6 @@ class Row:
 
 @dataclass(frozen=True)
 class SearchLatencyMeasurement:
-    """One socket search sweep, bound to the served BrainBar identity it timed."""
-
     p50_ms: float
     p95_ms: float
     socket_path: str
@@ -195,6 +193,9 @@ class SearchLatencySelection:
     measurement: SearchLatencyMeasurement | None = None
     unavailable: str | None = None
     problem: str | None = None
+
+
+class SearchLatencyUnavailable(RuntimeError): ...
 
 
 @dataclass(frozen=True)
@@ -1240,7 +1241,6 @@ def served_stack_requirements(probe: Probe, corpus: dict) -> list[tuple[bool, st
 
 
 def socket_owner_binary(socket_path: Path) -> tuple[int, Path]:
-    """Resolve the one process that owns a Unix socket and its executed binary."""
     lsof = shutil.which("lsof")
     ps = shutil.which("ps")
     if lsof is None or ps is None:
@@ -1292,10 +1292,12 @@ def brainbar_bundle_identity(binary: Path) -> tuple[str, str]:
 
 
 def collect_search_latency(corpus: dict, socket_path: Path) -> SearchLatencyMeasurement:
-    """Time the corpus queries over the served MCP socket, without opening the DB directly."""
     from scripts.sprint_gate import MCPClient, percentile, search_result_rows, tool_text
 
-    before_pid, binary = socket_owner_binary(socket_path)
+    try:
+        before_pid, binary = socket_owner_binary(socket_path)
+    except ProcessLookupError as error:
+        raise SearchLatencyUnavailable(str(error)) from error
     version, commit = brainbar_bundle_identity(binary)
     client = MCPClient(str(socket_path), corpus["mcp_timeout_seconds"])
     try:
@@ -1306,7 +1308,7 @@ def collect_search_latency(corpus: dict, socket_path: Path) -> SearchLatencyMeas
             result = client.call("brain_search", {"query": query, "num_results": 1})
             elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
             if not search_result_rows(tool_text(result)):
-                raise ProcessLookupError("brain_search returned no results for a configured query")
+                raise RuntimeError("brain_search returned no results for a configured query")
             samples.append(elapsed_ms)
     finally:
         client.close()
@@ -1331,7 +1333,6 @@ def collect_search_latency(corpus: dict, socket_path: Path) -> SearchLatencyMeas
 def detect_search_latency(
     corpus: dict, os_name: str, architecture: str, hostname: str, socket_path: Path, db_path: Path
 ) -> SearchLatencySelection:
-    """Collect only where the existing socket method is genuinely available."""
     target = corpus["machine_target"]
     baseline = corpus["latency_baseline_ms"]
     capable = (
@@ -1345,7 +1346,7 @@ def detect_search_latency(
         return SearchLatencySelection()
     try:
         return SearchLatencySelection(measurement=collect_search_latency(corpus, socket_path))
-    except ProcessLookupError as error:
+    except SearchLatencyUnavailable as error:
         return SearchLatencySelection(unavailable=str(error))
     except Exception as error:
         return SearchLatencySelection(problem=f"search latency collector failed: {type(error).__name__}: {error}")
