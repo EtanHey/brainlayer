@@ -2650,11 +2650,8 @@ def test_collector_is_not_attempted_before_the_machine_capabilities_pass(tmp_pat
 
 
 def test_a_stale_socket_with_no_owner_is_an_honest_capability_gap(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(
-        ratchet,
-        "collect_search_latency",
-        lambda *_args: (_ for _ in ()).throw(ProcessLookupError("no process owns the socket")),
-    )
+    monkeypatch.setattr(ratchet.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(ratchet.subprocess, "run", lambda *_args, **_kwargs: subprocess.CompletedProcess([], 1, "", ""))
     probe = mac_probe(tmp_path)
     selection = ratchet.detect_search_latency(
         CORPUS, probe.os_name, probe.architecture, probe.hostname, probe.socket_path, probe.db_path

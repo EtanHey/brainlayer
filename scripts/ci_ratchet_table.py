@@ -1252,7 +1252,8 @@ def socket_owner_binary(socket_path: Path) -> tuple[int, Path]:
         text=True,
         timeout=10,
     )
-    if owner_result.returncode:
+    no_match = owner_result.returncode == 1 and not owner_result.stdout.strip() and not owner_result.stderr.strip()
+    if owner_result.returncode and not no_match:
         raise RuntimeError(f"lsof failed for {socket_path}: {owner_result.stderr.strip() or owner_result.returncode}")
     owners = owner_result.stdout.splitlines()
     pids = sorted({int(owner.strip()) for owner in owners if owner.strip().isdigit()})
