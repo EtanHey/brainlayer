@@ -2667,8 +2667,7 @@ def test_post_sweep_owner_loss_stays_red_after_the_socket_is_unlinked(tmp_path: 
     probe = mac_probe(tmp_path, search_latency_problem="search latency collector failed: BrainBar owner disappeared")
     probe.socket_path.unlink()
     result = ratchet.row_search_latency(probe, CORPUS)
-    assert result.status == ratchet.RED
-    assert "BrainBar owner disappeared" in result.value
+    assert result.status == ratchet.RED and "BrainBar owner disappeared" in result.value
 
 
 def test_lsof_failure_is_a_collector_error_not_an_absent_owner(monkeypatch) -> None:
