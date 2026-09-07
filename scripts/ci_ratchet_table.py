@@ -1412,6 +1412,8 @@ def margin_notes(probe: Probe, unit: str, keys: dict[str, tuple[str, ...]]) -> t
     formed from valid attestations (a non-finite limit) is a problem for the row to render RED, not
     an exception for the collector to die on.
     """
+    if probe.attestations_problem:
+        return "", probe.attestations_problem
     sentences = []
     for name, key in keys.items():
         try:
@@ -1425,10 +1427,23 @@ def margin_notes(probe: Probe, unit: str, keys: dict[str, tuple[str, ...]]) -> t
     return " ".join(sentences), None
 
 
+def search_latency_verdict(measurement: SearchLatencyMeasurement, attestations: tuple[dict, ...]) -> tuple[str, str]:
+    measured = {"p50": measurement.p50_ms, "p95": measurement.p95_ms}
+    applied = {name: margins.margin_for(list(attestations), key) for name, key in margins.LATENCY_KEYS.items()}
+    verdicts = {name: margins.judge(applied[name], value) for name, value in measured.items()}
+    value = f"p50 {measurement.p50_ms:.3f} ms / p95 {measurement.p95_ms:.3f} ms"
+    failed = [name for name, verdict in verdicts.items() if verdict == margins.FAIL]
+    if failed:
+        limits = ", ".join(f"{name} {applied[name].limit:.1f} ms" for name in failed)
+        return RED, f"{value} · exceeds {limits}"
+    unmeasured = [name for name, verdict in verdicts.items() if verdict == margins.UNMEASURED_VERDICT]
+    if unmeasured:
+        return NA, f"n/a — measured this run, but margin {'/'.join(unmeasured)} is unmeasured"
+    return GREEN, value
+
+
 def row_search_latency(probe: Probe, corpus: dict) -> Row:
     method = "socket · installed Mac"
-    if probe.attestations_problem:
-        return Row("search p50/p95", RED, probe.attestations_problem, method, SEARCH_LATENCY_NOTES)
     baseline = corpus["latency_baseline_ms"]
     bands, problem = margin_notes(probe, "ms", margins.LATENCY_KEYS)
     if problem:
@@ -1447,7 +1462,7 @@ def row_search_latency(probe: Probe, corpus: dict) -> Row:
                 f"host {probe.hostname} is not the calibrated baseline host {baseline['hostname']}",
             ),
             (
-                probe.search_latency is not None or probe.search_latency_problem is not None,
+                any((probe.search_latency, probe.search_latency_problem)),
                 probe.search_latency_unavailable
                 or "no search latency collector result for this run: a synthetic corpus would measure a "
                 "different thing and would owe the table a different method label",
@@ -1459,43 +1474,17 @@ def row_search_latency(probe: Probe, corpus: dict) -> Row:
     if probe.search_latency_problem:
         return Row("search p50/p95", RED, probe.search_latency_problem, method, notes)
     measurement = probe.search_latency
-    if measurement is None:
-        return Row(
-            "search p50/p95",
-            NA,
-            "n/a — no search latency collector result for this run: a synthetic corpus would measure a "
-            "different thing and would owe the table a different method label",
-            method,
-            notes,
-        )
+    assert measurement is not None
     if provenance_problem := search_latency_measurement_problem(measurement, probe, corpus):
         return Row("search p50/p95", RED, provenance_problem, method, notes)
 
-    measured = {"p50": measurement.p50_ms, "p95": measurement.p95_ms}
-    applied = {
-        name: margins.margin_for(list(probe.attestations or ()), key) for name, key in margins.LATENCY_KEYS.items()
-    }
-    verdicts = {name: margins.judge(applied[name], value) for name, value in measured.items()}
-    value = f"p50 {measurement.p50_ms:.3f} ms / p95 {measurement.p95_ms:.3f} ms"
+    status, value = search_latency_verdict(measurement, probe.attestations or ())
     provenance = (
         f"Measured {measurement.sample_count} socket queries at {measurement.measured_at} against "
         f"`{measurement.binary_path}` · app {measurement.app_version} · GitCommit `{measurement.git_commit[:12]}`."
     )
     notes = notes.replace("Not measured by this run.", provenance)
-    failed = [name for name, verdict in verdicts.items() if verdict == margins.FAIL]
-    if failed:
-        limits = ", ".join(f"{name} {applied[name].limit:.1f} ms" for name in failed)
-        return Row("search p50/p95", RED, f"{value} · exceeds {limits}", method, notes)
-    unmeasured = [name for name, verdict in verdicts.items() if verdict == margins.UNMEASURED_VERDICT]
-    if unmeasured:
-        return Row(
-            "search p50/p95",
-            NA,
-            f"n/a — measured this run, but margin {'/'.join(unmeasured)} is unmeasured",
-            method,
-            notes,
-        )
-    return Row("search p50/p95", GREEN, value, method, notes)
+    return Row("search p50/p95", status, value, method, notes)
 
 
 SEARCH_LATENCY_NOTES = (
