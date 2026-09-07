@@ -1239,8 +1239,7 @@ def served_stack_requirements(probe: Probe, corpus: dict) -> list[tuple[bool, st
 
 
 def socket_owner_binary(socket_path: Path) -> tuple[int, Path]:
-    lsof = shutil.which("lsof")
-    ps = shutil.which("ps")
+    lsof, ps = shutil.which("lsof"), shutil.which("ps")
     if lsof is None or ps is None:
         raise RuntimeError("lsof and ps are required to bind a socket measurement to its served binary")
     owner_result = subprocess.run(
@@ -1253,8 +1252,7 @@ def socket_owner_binary(socket_path: Path) -> tuple[int, Path]:
     no_match = owner_result.returncode == 1 and not owner_result.stdout.strip() and not owner_result.stderr.strip()
     if owner_result.returncode and not no_match:
         raise RuntimeError(f"lsof failed for {socket_path}: {owner_result.stderr.strip() or owner_result.returncode}")
-    owners = owner_result.stdout.splitlines()
-    pids = sorted({int(owner.strip()) for owner in owners if owner.strip().isdigit()})
+    pids = sorted({int(pid) for owner in owner_result.stdout.splitlines() if (pid := owner.strip()).isdigit()})
     if not pids:
         raise ProcessLookupError(f"no process owns the socket at {socket_path}")
     if len(pids) != 1:
@@ -1267,8 +1265,7 @@ def socket_owner_binary(socket_path: Path) -> tuple[int, Path]:
         text=True,
         timeout=10,
     ).stdout.strip()
-    arguments = shlex.split(command)
-    if not arguments:
+    if not (arguments := shlex.split(command)):
         raise RuntimeError(f"ps returned no command for socket owner PID {pid}")
     return pid, Path(arguments[0]).resolve()
 
@@ -1280,8 +1277,7 @@ def brainbar_bundle_identity(binary: Path) -> tuple[str, str]:
             info = plistlib.load(handle)
     except (OSError, plistlib.InvalidFileException) as error:
         raise RuntimeError(f"could not read served BrainBar Info.plist ({type(error).__name__})") from error
-    version = info.get("CFBundleShortVersionString")
-    commit = info.get("GitCommit")
+    version, commit = info.get("CFBundleShortVersionString"), info.get("GitCommit")
     if not isinstance(version, str) or not version.strip():
         raise RuntimeError("served BrainBar Info.plist has no app version")
     if not isinstance(commit, str) or SHA_PATTERN.fullmatch(commit) is None:
@@ -1306,6 +1302,8 @@ def collect_search_latency(corpus: dict, socket_path: Path) -> SearchLatencyMeas
             started = time.perf_counter()
             result = client.call("brain_search", {"query": uncached_query, "num_results": 1})
             elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
+            if result.get("structuredContent", {}).get("search_mode") != "hybrid":
+                raise RuntimeError("brain_search response was not served by the hybrid helper")
             if not search_result_rows(tool_text(result)):
                 raise RuntimeError("brain_search returned no results for a configured query")
             samples.append(elapsed_ms)
@@ -1332,16 +1330,14 @@ def collect_search_latency(corpus: dict, socket_path: Path) -> SearchLatencyMeas
 def detect_search_latency(
     corpus: dict, os_name: str, architecture: str, hostname: str, socket_path: Path, db_path: Path
 ) -> SearchLatencySelection:
-    target = corpus["machine_target"]
-    baseline = corpus["latency_baseline_ms"]
-    capable = (
+    target, baseline = corpus["machine_target"], corpus["latency_baseline_ms"]
+    if not (
         socket_path.exists()
         and os_name == target["os"]
         and architecture == target["architecture"]
         and db_path.exists()
         and hostname == baseline["hostname"]
-    )
-    if not capable:
+    ):
         return SearchLatencySelection()
     try:
         return SearchLatencySelection(measurement=collect_search_latency(corpus, socket_path))

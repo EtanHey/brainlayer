@@ -2597,9 +2597,10 @@ def detect_latency(probe: ratchet.Probe, corpus: dict = CORPUS) -> ratchet.Searc
     )
 
 
-def mock_search(monkeypatch, text: str) -> list[dict]:
+def mock_search(monkeypatch, text: str, hybrid: bool = True) -> list[dict]:
     monkeypatch.setattr(ratchet, "brainbar_bundle_identity", lambda _path: ("1.5.9", "c" * 40))
     response = {"content": [{"type": "text", "text": text}]}
+    response["structuredContent"] = {"search_mode": "hybrid" if hybrid else "fallback"}
     calls = []
     c = SimpleNamespace(initialize=lambda: None, call=lambda _, a: calls.append(a) or response, close=lambda: None)
     monkeypatch.setattr(sprint_gate, "MCPClient", lambda *_args: c)
@@ -2678,12 +2679,14 @@ def test_lsof_failure_is_a_collector_error_not_an_absent_owner(monkeypatch) -> N
         ratchet.socket_owner_binary(Path("/tmp/brainbar.sock"))
 
 
-def test_empty_search_response_becomes_a_collector_problem(tmp_path: Path, monkeypatch) -> None:
+def test_fallback_and_empty_search_responses_become_collector_problems(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(ratchet, "socket_owner_binary", lambda _path: (1, ratchet.BRAINBAR_DAEMON_BINARY))
+    mock_search(monkeypatch, '## Search results for "q" - 1 of 1 shown\n### 1. local hit', hybrid=False)
+    fallback = detect_latency(mac_probe(tmp_path), {**CORPUS, "queries": ["q"]})
+    assert fallback.problem and "hybrid helper" in fallback.problem
     mock_search(monkeypatch, '## Search results for "q" - 0 of 0 shown')
-    probe = mac_probe(tmp_path)
-    selection = detect_latency(probe, {**CORPUS, "queries": ["q"]})
-    assert selection.problem and "brain_search returned no results" in selection.problem
+    empty = detect_latency(mac_probe(tmp_path), {**CORPUS, "queries": ["q"]})
+    assert empty.problem and "brain_search returned no results" in empty.problem
 
 
 def write_attestations(root: Path, documents: tuple[dict, ...]) -> Path:
