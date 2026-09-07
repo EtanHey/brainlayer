@@ -2599,11 +2599,13 @@ def detect_latency(probe: ratchet.Probe, corpus: dict = CORPUS) -> ratchet.Searc
     )
 
 
-def mock_search(monkeypatch, text: str) -> None:
+def mock_search(monkeypatch, text: str) -> list[dict]:
     monkeypatch.setattr(ratchet, "brainbar_bundle_identity", lambda _path: ("1.5.9", "c" * 40))
     response = {"content": [{"type": "text", "text": text}]}
-    client = SimpleNamespace(initialize=lambda: None, call=lambda *_args: response, close=lambda: None)
-    monkeypatch.setattr(sprint_gate, "MCPClient", lambda *_args: client)
+    calls = []
+    c = SimpleNamespace(initialize=lambda: None, call=lambda _, a: calls.append(a) or response, close=lambda: None)
+    monkeypatch.setattr(sprint_gate, "MCPClient", lambda *_args: c)
+    return calls
 
 
 def test_a_slow_controlled_search_measurement_renders_red(tmp_path: Path) -> None:
@@ -2662,9 +2664,10 @@ def test_a_stale_socket_with_no_owner_is_an_honest_capability_gap(tmp_path: Path
 def test_post_sweep_owner_loss_becomes_a_collector_problem(tmp_path: Path, monkeypatch) -> None:
     owners = Mock(side_effect=[(1, ratchet.BRAINBAR_DAEMON_BINARY), ProcessLookupError("owner disappeared")])
     monkeypatch.setattr(ratchet, "socket_owner_binary", owners)
-    mock_search(monkeypatch, '## Search results for "q" - 1 of 1 shown\n### 1. hit')
+    calls = mock_search(monkeypatch, '## Search results for "q" - 1 of 1 shown\n### 1. hit')
     probe = mac_probe(tmp_path)
-    selection = detect_latency(probe, {**CORPUS, "queries": ["q"]})
+    selection = detect_latency(probe, {**CORPUS, "queries": ["q", "q"]})
+    assert [call["query"].strip() for call in calls] == ["q", "q"] and calls[0]["query"] != calls[1]["query"]
     probe.socket_path.unlink()
     result = ratchet.row_search_latency(replace(probe, search_latency_problem=selection.problem), CORPUS)
     assert result.status == ratchet.RED and "ProcessLookupError: owner disappeared" in result.value

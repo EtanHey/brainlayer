@@ -385,9 +385,7 @@ class Attestation:
     baseline: dict
     digest: str
     # Dotted baseline path -> the value that run MEASURED for it. This is the legitimate path for a
-    # baseline to move: a PR may set a field to exactly what main measured, and nothing else. The
-    # calibrated socket collector can populate the two latency paths; every absent path remains
-    # locked because absence is not a measurement.
+    # A PR may move a baseline only to the exact value main measured; absent paths stay locked.
     measured: dict[str, object]
 
 
@@ -1304,8 +1302,9 @@ def collect_search_latency(corpus: dict, socket_path: Path) -> SearchLatencyMeas
         client.initialize()
         samples = []
         for query in corpus["queries"]:
+            uncached_query = query + "".join(" \t"[int(bit)] for bit in f"{time.time_ns():064b}")
             started = time.perf_counter()
-            result = client.call("brain_search", {"query": query, "num_results": 1})
+            result = client.call("brain_search", {"query": uncached_query, "num_results": 1})
             elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
             if not search_result_rows(tool_text(result)):
                 raise RuntimeError("brain_search returned no results for a configured query")
@@ -1369,9 +1368,7 @@ def search_latency_measurement_problem(measurement: SearchLatencyMeasurement, pr
     if SHA_PATTERN.fullmatch(measurement.git_commit) is None:
         return "search latency provenance has no 40-hex BrainBar GitCommit"
     if measurement.sample_count != len(corpus["queries"]):
-        return (
-            f"search latency sample count {measurement.sample_count} != the {len(corpus['queries'])} configured queries"
-        )
+        return f"search latency sample count {measurement.sample_count} != {len(corpus['queries'])} configured queries"
     if not margins.honest_value(measurement.p50_ms) or not margins.honest_value(measurement.p95_ms):
         return "search latency p50/p95 are not finite non-negative measurements"
     if measurement.p50_ms > measurement.p95_ms:
