@@ -1453,6 +1453,8 @@ def row_search_latency(probe: Probe, corpus: dict) -> Row:
         f"{baseline['captured_at']} under {baseline['captured_under']} "
         "(`tests/fixtures/sprint_gate/corpus.json`). Not measured by this run."
     )
+    if probe.search_latency_problem:
+        return Row("search p50/p95", RED, probe.search_latency_problem, method, notes)
     reason = first_unmet(
         served_stack_requirements(probe, corpus)
         + [
@@ -1471,8 +1473,6 @@ def row_search_latency(probe: Probe, corpus: dict) -> Row:
     )
     if reason:
         return Row("search p50/p95", NA, f"n/a — {reason}", method, notes)
-    if probe.search_latency_problem:
-        return Row("search p50/p95", RED, probe.search_latency_problem, method, notes)
     measurement = probe.search_latency
     assert measurement is not None
     if provenance_problem := search_latency_measurement_problem(measurement, probe, corpus):
