@@ -284,6 +284,39 @@ class TestQueueStore:
         assert drained == 1
         assert row == ("operational", "cursor-gather", "cli-agent", 0, 1)
 
+    @pytest.mark.parametrize("dead_value", ["AGENT-INFERENCE", "RAW-ETAN-DIRECT", "AGENT-PARAPHRASE"])
+    def test_drain_refuses_dead_provenance_taxonomy_on_watcher_path(self, tmp_path, monkeypatch, caplog, dead_value):
+        from brainlayer.vector_store import VectorStore
+
+        db_path = tmp_path / "watcher-dead-provenance.db"
+        queue_dir = tmp_path / "queue"
+        VectorStore(db_path).close()
+        monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+        event = {
+            "kind": "watcher_chunk",
+            "chunk_id": "rt-watcher-dead-provenance",
+            "content": "queued watcher event must reject a dead provenance taxonomy value",
+            "metadata": {"session_id": "watcher-dead-provenance"},
+            "source_file": str(tmp_path / "session.jsonl"),
+            "provenance_class": dead_value,
+            "source_class": "cli-agent",
+        }
+        queue_dir.mkdir()
+        (queue_dir / "watcher-dead-provenance.jsonl").write_text(json.dumps(event) + "\n")
+
+        with caplog.at_level("WARNING", logger="brainlayer.drain"):
+            drained = drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=tmp_path / "drain.log")
+
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT provenance_class, source_class FROM chunks WHERE id = ?",
+                (event["chunk_id"],),
+            ).fetchone()
+
+        assert drained == 1
+        assert row == (None, "cli-agent")
+        assert f"refused invalid provenance_class={dead_value!r}" in caplog.text
+
     def test_drain_classifies_legacy_watcher_event_without_routing_fields(self, tmp_path, monkeypatch):
         """Legacy watcher queue files without explicit routing fields still use classifier fallback."""
         from brainlayer.vector_store import VectorStore

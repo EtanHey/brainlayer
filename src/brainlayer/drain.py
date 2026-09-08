@@ -894,8 +894,16 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
         values["source_last_queued_at"] = float(event["queued_at"])
     if event.get("content_class"):
         values["content_class"] = event.get("content_class")
-    if event.get("provenance_class"):
-        values["provenance_class"] = event.get("provenance_class")
+    raw_provenance_class = event.get("provenance_class")
+    provenance_class = normalize_provenance_class(raw_provenance_class)
+    if raw_provenance_class is not None and provenance_class is None:
+        logger.warning(
+            "Watcher drain refused invalid provenance_class=%r for chunk_id=%s",
+            raw_provenance_class,
+            chunk_id,
+        )
+    if provenance_class is not None:
+        values["provenance_class"] = provenance_class
     source_class = normalize_source_class(event.get("source_class"))
     if source_class is not None and "source_class" in _columns(conn, "chunks"):
         values["source_class"] = source_class
