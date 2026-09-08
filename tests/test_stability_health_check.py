@@ -21,6 +21,7 @@ from brainlayer.health_check import HealthCheckConfig, run_health_check
 from brainlayer.vector_store import VectorStore
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+ENRICHMENT_EVENT = '{"kind":"enrichment_update"}\n'
 
 
 @pytest.fixture(autouse=True)
@@ -1376,85 +1377,74 @@ def _run_queue_backlog_health(config, command_runner):
     )
 
 
+def _capture_queue_notifications(monkeypatch) -> list[tuple[str, str]]:
+    notifications: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        health_check, "_push_notification", lambda title, message: notifications.append((title, message))
+    )
+    return notifications
+
+
 def test_pause_aware_heal_decision_blocks_only_an_entirely_paused_enrichment_queue(tmp_path):
     queue_dir = tmp_path / "queue"
     queue_dir.mkdir()
-    (queue_dir / "enrichment-one.jsonl").write_text("{}\n", encoding="utf-8")
+    queue_file = queue_dir / "enrichment-one.jsonl"
+    queue_file.write_text(ENRICHMENT_EVENT, encoding="utf-8")
     pause_payload = {
         "paused_at": "2026-08-04T13:50:36Z",
         "labels": ["com.brainlayer.enrichment"],
     }
 
-    reason = health_check._paused_enrichment_queue_explanation(
-        queue_dir,
-        1,
-        pause_payload=pause_payload,
-        pause_active=True,
-        enrichment_label="com.brainlayer.enrichment",
-    )
+    def explanation():
+        return health_check._paused_enrichment_queue_explanation(
+            queue_dir, 1, pause_payload=pause_payload, pause_active=True
+        )
+
+    reason = explanation()
     assert reason == "enrichment lane paused since 2026-08-04; drain restart would be a no-op"
 
-    issue_labels: dict[str, tuple[str, Path]] = {}
-    health_check._schedule_heal_if_actionable(
-        issue_labels,
-        issue_code="queue_backed_up",
-        label="com.brainlayer.drain",
-        plist_path=tmp_path / "drain.plist",
-        blocking_reason=reason,
-    )
-    assert issue_labels == {}
+    queue_file.write_text('{"kind":"store_memory"}\n', encoding="utf-8")
+    assert explanation() is None
 
-    (queue_dir / "watcher-two.jsonl").write_text("{}\n", encoding="utf-8")
-    reason = health_check._paused_enrichment_queue_explanation(
-        queue_dir,
-        2,
-        pause_payload=pause_payload,
-        pause_active=True,
-        enrichment_label="com.brainlayer.enrichment",
+    queue_file.write_text(ENRICHMENT_EVENT, encoding="utf-8")
+    pause_payload["labels"] = ["custom.enrichment"]
+    assert explanation() is None
+
+    summary = health_check._queue_heal_summary(
+        config=HealthCheckConfig(),
+        result=health_check.HealthCheckResult(checked_at="now", ok=False),
+        blocking_reason="superseded by lock_holder_wedge",
+        previous_failures={"com.brainlayer.drain:queue_backed_up": 85},
+        heal_failures={},
+        heal_tripped=set(),
+        backlog_issue_active=True,
     )
-    assert reason is None
+    assert summary == "heal=skipped heal_failures=85 reason=superseded by lock_holder_wedge"
 
 
 def test_paused_enrichment_backlog_reports_skipped_heal_and_prior_failure_count(tmp_path, monkeypatch):
     config, state_path, queue_dir, pause_path = _queue_backlog_config(tmp_path, heal=True)
-    (queue_dir / "enrichment-paused.jsonl").write_text("{}\n", encoding="utf-8")
+    (queue_dir / "enrichment-paused.jsonl").write_text(ENRICHMENT_EVENT, encoding="utf-8")
     pause_path.write_text(
-        json.dumps(
-            {
-                "paused_at": "2026-08-04T13:50:36Z",
-                "labels": ["com.brainlayer.enrichment"],
-                "reason": "source class preservation needs a safe replay",
-            }
-        ),
+        json.dumps({"paused_at": "2026-08-04T13:50:36Z", "labels": ["com.brainlayer.enrichment"]}),
         encoding="utf-8",
     )
     state_path.write_text(
-        json.dumps(
-            {
-                "drain_drained_total": 10,
-                "heal_failures": {"com.brainlayer.drain:queue_backed_up": 85},
-            }
-        ),
+        json.dumps({"drain_drained_total": 10, "heal_failures": {"com.brainlayer.drain:queue_backed_up": 85}}),
         encoding="utf-8",
     )
     config.drain_health_path.write_text(json.dumps({"drained_total": 10}), encoding="utf-8")
     commands: list[list[str]] = []
-    notifications: list[tuple[str, str]] = []
-    monkeypatch.setattr(
-        health_check, "_push_notification", lambda title, message: notifications.append((title, message))
-    )
+    notifications = _capture_queue_notifications(monkeypatch)
 
     result = _run_queue_backlog_health(config, _loaded_launchd_runner(commands))
 
     queue_issue = next(issue for issue in result.issues if issue.code == "queue_backed_up")
-    assert "heal=skipped" in queue_issue.message
-    assert "heal_failures=85" in queue_issue.message
-    assert "enrichment lane paused since 2026-08-04" in queue_issue.message
-    assert "drain restart would be a no-op" in queue_issue.message
     queue_page = next(message for title, message in notifications if title == "BrainLayer queue backlog")
-    assert "heal=skipped" in queue_page
-    assert "heal_failures=85" in queue_page
-    assert "enrichment lane paused since 2026-08-04" in queue_page
+    for message in (queue_issue.message, queue_page):
+        assert "heal=skipped" in message and "heal_failures=85" in message
+        assert "enrichment lane paused since 2026-08-04" in message
+        assert "drain restart would be a no-op" in message
     assert not any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands)
     saved = json.loads(state_path.read_text(encoding="utf-8"))
     assert "com.brainlayer.drain:queue_backed_up" not in saved["heal_failures"]
@@ -1464,10 +1454,7 @@ def test_unpaused_backlog_still_attempts_drain_heal_and_reports_outcome(tmp_path
     config, _state_path, queue_dir, _pause_path = _queue_backlog_config(tmp_path, heal=True)
     (queue_dir / "watcher-live.jsonl").write_text("{}\n", encoding="utf-8")
     commands: list[list[str]] = []
-    notifications: list[tuple[str, str]] = []
-    monkeypatch.setattr(
-        health_check, "_push_notification", lambda title, message: notifications.append((title, message))
-    )
+    notifications = _capture_queue_notifications(monkeypatch)
 
     result = _run_queue_backlog_health(config, _loaded_launchd_runner(commands))
 
@@ -1488,15 +1475,12 @@ def test_unpaused_backlog_still_attempts_drain_heal_and_reports_outcome(tmp_path
 
 def test_unchanged_pause_explained_backlog_pages_again_only_after_change_or_pause_lift(tmp_path, monkeypatch):
     config, _state_path, queue_dir, pause_path = _queue_backlog_config(tmp_path, heal=False)
-    (queue_dir / "enrichment-one.jsonl").write_text("{}\n", encoding="utf-8")
+    (queue_dir / "enrichment-one.jsonl").write_text(ENRICHMENT_EVENT, encoding="utf-8")
     pause_path.write_text(
         json.dumps({"paused_at": "2026-08-04T13:50:36Z", "labels": ["com.brainlayer.enrichment"]}),
         encoding="utf-8",
     )
-    notifications: list[tuple[str, str]] = []
-    monkeypatch.setattr(
-        health_check, "_push_notification", lambda title, message: notifications.append((title, message))
-    )
+    notifications = _capture_queue_notifications(monkeypatch)
 
     def run():
         return _run_queue_backlog_health(config, lambda _command: SimpleNamespace(returncode=0, stdout="", stderr=""))
@@ -1505,7 +1489,7 @@ def test_unchanged_pause_explained_backlog_pages_again_only_after_change_or_paus
     run()
     assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 1
 
-    (queue_dir / "enrichment-two.jsonl").write_text("{}\n", encoding="utf-8")
+    (queue_dir / "enrichment-two.jsonl").write_text(ENRICHMENT_EVENT, encoding="utf-8")
     run()
     assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 2
 
@@ -1517,10 +1501,7 @@ def test_unchanged_pause_explained_backlog_pages_again_only_after_change_or_paus
 def test_unchanged_unexplained_backlog_pages_every_check(tmp_path, monkeypatch):
     config, _state_path, queue_dir, _pause_path = _queue_backlog_config(tmp_path, heal=False)
     (queue_dir / "watcher-stuck.jsonl").write_text("{}\n", encoding="utf-8")
-    notifications: list[tuple[str, str]] = []
-    monkeypatch.setattr(
-        health_check, "_push_notification", lambda title, message: notifications.append((title, message))
-    )
+    notifications = _capture_queue_notifications(monkeypatch)
 
     for _ in range(2):
         _run_queue_backlog_health(config, lambda _command: SimpleNamespace(returncode=0, stdout="", stderr=""))
@@ -1528,14 +1509,12 @@ def test_unchanged_unexplained_backlog_pages_every_check(tmp_path, monkeypatch):
     assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 2
 
 
-def test_old_queue_pages_even_below_auto_heal_count(tmp_path, monkeypatch):
-    config, _state_path, queue_dir, _pause_path = _queue_backlog_config(tmp_path, heal=True)
+def test_old_paused_queue_pages_as_not_attempted_below_auto_heal_count(tmp_path, monkeypatch):
+    config, _state_path, queue_dir, pause_path = _queue_backlog_config(tmp_path, heal=True)
     config = replace(config, queue_auto_heal_count=25, queue_page_oldest_seconds=0)
-    (queue_dir / "watcher-old.jsonl").write_text("{}\n", encoding="utf-8")
-    notifications: list[tuple[str, str]] = []
-    monkeypatch.setattr(
-        health_check, "_push_notification", lambda title, message: notifications.append((title, message))
-    )
+    (queue_dir / "enrichment-old.jsonl").write_text(ENRICHMENT_EVENT, encoding="utf-8")
+    pause_path.write_text('{"labels":["com.brainlayer.enrichment"]}', encoding="utf-8")
+    notifications = _capture_queue_notifications(monkeypatch)
 
     _run_queue_backlog_health(config, lambda _command: SimpleNamespace(returncode=0, stdout="", stderr=""))
 

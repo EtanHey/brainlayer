@@ -883,47 +883,56 @@ def _paused_enrichment_queue_explanation(
     *,
     pause_payload: dict[str, Any],
     pause_active: bool,
-    enrichment_label: str,
 ) -> str | None:
     """Explain a queue that the active pause makes completely undrainable.
 
-    The drain classifies `enrichment-*` files as the enrichment lane. Require the
-    second scan to match the measured count so a racing or unreadable file cannot
-    make a mixed backlog look safely paused.
+    Match the drain's payload predicate, not its filename-based priority lane.
+    Require the second scan to match the measured count so a racing or unreadable
+    file cannot make a mixed backlog look safely paused.
     """
-    if expected_count <= 0 or not pause_active or not pause_applies_to_label(pause_payload, enrichment_label):
+    if expected_count <= 0 or not pause_active or not pause_applies_to_label(pause_payload, DEFAULT_ENRICHMENT_LABEL):
         return None
     try:
         paths = [path for path in queue_dir.expanduser().glob("*.jsonl") if path.is_file()]
     except OSError:
         return None
-    if len(paths) != expected_count or any(not path.name.startswith("enrichment-") for path in paths):
+    if len(paths) != expected_count or not all(_queue_file_is_paused_enrichment(path) for path in paths):
         return None
     paused_at = pause_payload.get("paused_at")
     since = str(paused_at)[:10] if isinstance(paused_at, str) and len(paused_at) >= 10 else "an unknown date"
     return f"enrichment lane paused since {since}; drain restart would be a no-op"
 
 
+def _queue_file_is_paused_enrichment(path: Path) -> bool:
+    """Return true only when every drain-visible event is an enrichment update."""
+    try:
+        events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    except (OSError, json.JSONDecodeError):
+        return False
+    return bool(events) and all(
+        isinstance(event, dict) and event.get("kind") == "enrichment_update" for event in events
+    )
+
+
 def _queue_heal_summary(
     *,
     config: HealthCheckConfig,
     result: HealthCheckResult,
-    pause_explanation: str | None,
+    blocking_reason: str | None,
     previous_failures: dict[str, int],
     heal_failures: dict[str, int],
     heal_tripped: set[str],
     backlog_issue_active: bool,
 ) -> str:
     key = _heal_key(config.drain_label, "queue_backed_up")
-    if pause_explanation is not None:
-        return f"heal=skipped heal_failures={previous_failures.get(key, 0)} reason={pause_explanation}"
-
     failure_count = heal_failures.get(key, 0)
     if not backlog_issue_active:
         return (
             f"heal=not_attempted heal_failures={failure_count} "
             f"outcome=below auto-heal count {config.queue_auto_heal_count}"
         )
+    if blocking_reason is not None:
+        return f"heal=skipped heal_failures={previous_failures.get(key, 0)} reason={blocking_reason}"
     if not config.heal:
         return f"heal=not_attempted heal_failures={failure_count} outcome=healing disabled"
 
@@ -968,6 +977,7 @@ def _report_queue_backlog(
     queue_bytes: int,
     queue_should_page: bool,
     pause_explanation: str | None,
+    heal_blocking_reason: str | None,
     previous_failures: dict[str, int],
     heal_failures: dict[str, int],
     heal_tripped: set[str],
@@ -978,7 +988,7 @@ def _report_queue_backlog(
     heal_summary = _queue_heal_summary(
         config=config,
         result=result,
-        pause_explanation=pause_explanation,
+        blocking_reason=heal_blocking_reason,
         previous_failures=previous_failures,
         heal_failures=heal_failures,
         heal_tripped=heal_tripped,
@@ -1258,8 +1268,8 @@ def run_health_check(
         queue_count,
         pause_payload=pause_payload,
         pause_active=pause_active,
-        enrichment_label=config.enrichment_label,
     )
+    queue_heal_blocking_reason = queue_pause_explanation
     queue_should_page = queue_count > 0 and (
         queue_count >= config.queue_page_count
         or queue_bytes >= config.queue_page_bytes
@@ -1401,6 +1411,8 @@ def run_health_check(
         heal_issue_details["lock_holder_wedge"] = holder_details
         for victim_issue_code in ("drain_no_progress", "queue_backed_up"):
             heal_issue_labels.pop(victim_issue_code, None)
+        if queue_backed_up:
+            queue_heal_blocking_reason = "superseded by lock_holder_wedge"
         if config.heal:
             _emit_heal_event(
                 {
@@ -1417,6 +1429,8 @@ def run_health_check(
                 )
 
     if pause_active:
+        if queue_backed_up and pause_applies_to_label(pause_payload, config.drain_label):
+            queue_heal_blocking_reason = queue_heal_blocking_reason or "drain lane paused"
         heal_issue_labels = {
             issue_code: label_and_path
             for issue_code, label_and_path in heal_issue_labels.items()
@@ -1440,6 +1454,7 @@ def run_health_check(
         queue_bytes=queue_bytes,
         queue_should_page=queue_should_page,
         pause_explanation=queue_pause_explanation,
+        heal_blocking_reason=queue_heal_blocking_reason,
         previous_failures=previous_heal_failures,
         heal_failures=heal_failures,
         heal_tripped=heal_tripped,
