@@ -370,6 +370,13 @@ map_changed_files_to_pytests() {
           mapped=1
         fi
         ;;
+      scripts/kg_rebuild.py)
+        test_path="$TEST_ROOT/test_kg_rebuild.py"
+        if [ -f "$test_path" ]; then
+          append_unique "$test_path"
+          mapped=1
+        fi
+        ;;
       scripts/run_tests.sh|.githooks/pre-push)
         test_path="$TEST_ROOT/test_run_tests_script.py"
         if [ -f "$test_path" ]; then
@@ -384,7 +391,7 @@ map_changed_files_to_pytests() {
         # test_release_tag_contains.py must escalate, never narrow to nothing. Mapping it to
         # zero targets and still printing "test gate passed" is the same unchecked-claim
         # fail-open the gate exists to close, one level up.
-        src/brainlayer/*.py|scripts/release_tag_contains.py)
+        src/brainlayer/*.py|scripts/kg_rebuild.py|scripts/release_tag_contains.py)
           changed_source_unmapped=1
           unmapped_changed_files+=("$changed")
           ;;

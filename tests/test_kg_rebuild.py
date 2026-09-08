@@ -333,6 +333,28 @@ def test_groq_rebuild_entity_payload_preserves_source_subtype():
     assert entity.start == 6
 
 
+def test_tier2_groq_ner_propagates_model_unavailable(monkeypatch):
+    from brainlayer.pipeline.groq import GroqModelUnavailableError
+    from scripts import kg_rebuild
+
+    class Cursor:
+        def execute(self, _query, _params):
+            return [("chunk-1", "x" * 60)]
+
+    class Store:
+        def _read_cursor(self):
+            return Cursor()
+
+    def unavailable(_prompt):
+        raise GroqModelUnavailableError("configured Groq model is unavailable")
+
+    monkeypatch.setattr(kg_rebuild, "call_groq_ner", unavailable)
+    monkeypatch.setattr(kg_rebuild.RateLimiter, "wait_if_needed", lambda self: None)
+
+    with pytest.raises(GroqModelUnavailableError, match="configured Groq model"):
+        kg_rebuild.tier2_groq_ner(Store(), limit=1, chunks_per_call=1)
+
+
 def test_kg_rebuild_module_import_does_not_require_python_dotenv(monkeypatch):
     import builtins
     import importlib
