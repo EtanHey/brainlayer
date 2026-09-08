@@ -47,7 +47,7 @@ def test_wire_uses_names_only_but_restores_real_provenance(monkeypatch):
         assert "project-uuid" not in request.data.decode()
         return envelope()
 
-    monkeypatch.setattr("urllib.request.urlopen", post)
+    monkeypatch.setattr("brainlayer.pipeline.relation_inference._open_local", post)
     result = json.loads(local_caller("http://127.0.0.1:8183", MODEL)(PROMPT))["chunks"][0]
     assert result["chunk_id"] == "long-source-uuid"
     assert result["relations"][0]["source_id"] == "project-uuid"
@@ -59,7 +59,7 @@ def test_wire_uses_names_only_but_restores_real_provenance(monkeypatch):
     [({"finish": "length"}, RuntimeError), ({"model": "wrong"}, RuntimeError), ({"source": "invented"}, ValueError)],
 )
 def test_incomplete_wrong_model_or_invented_alias_fails_closed(monkeypatch, kwargs, error):
-    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: envelope(**kwargs))
+    monkeypatch.setattr("brainlayer.pipeline.relation_inference._open_local", lambda *a, **k: envelope(**kwargs))
     with pytest.raises(error):
         local_caller("http://127.0.0.1:8183", MODEL)(PROMPT)
 
@@ -71,7 +71,7 @@ def test_invalid_output_gets_one_model_correction_never_a_synthetic_empty(monkey
         calls.append(json.loads(request.data))
         return envelope(source="invented") if len(calls) == 1 else envelope()
 
-    monkeypatch.setattr("urllib.request.urlopen", post)
+    monkeypatch.setattr("brainlayer.pipeline.relation_inference._open_local", post)
     result = local_caller("http://127.0.0.1:8183", MODEL)(PROMPT)
     assert json.loads(result)["chunks"][0]["relations"]
     assert len(calls) == 2
@@ -79,7 +79,9 @@ def test_invalid_output_gets_one_model_correction_never_a_synthetic_empty(monkey
 
 
 def test_raw_trace_keeps_rejected_proposals_before_correction(monkeypatch):
-    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: envelope(source="invented"))
+    monkeypatch.setattr(
+        "brainlayer.pipeline.relation_inference._open_local", lambda *a, **k: envelope(source="invented")
+    )
     events = []
     with pytest.raises(ValueError):
         local_caller("http://127.0.0.1:8183", MODEL, on_response=events.append)(PROMPT)
@@ -109,14 +111,14 @@ def test_shared_or_remote_endpoints_refused_before_io(endpoint):
 
 def test_conversation_filter_is_connection_local_and_preserves_source_rows():
     conn = sqlite3.connect(":memory:")
-    conn.execute("CREATE TABLE chunks (id TEXT, source TEXT, content_type TEXT)")
+    conn.execute("CREATE TABLE chunks (id TEXT, source TEXT, content_type TEXT, source_class TEXT)")
     rows = [
-        ("chat", "claude_code", "user_message"),
-        ("video", "digest", "user_message"),
-        ("code", "codex_cli", "ai_code"),
-        ("reply", "codex_cli", "assistant_text"),
+        ("chat", "claude_code", "user_message", "cli-agent"),
+        ("video", "digest", "user_message", None),
+        ("code", "codex_cli", "ai_code", "cli-agent"),
+        ("reply", "codex_cli", "assistant_text", "cli-agent"),
     ]
-    conn.executemany("INSERT INTO chunks VALUES (?, ?, ?)", rows)
+    conn.executemany("INSERT INTO chunks VALUES (?, ?, ?, ?)", rows)
     restrict_to_conversations(conn)
     assert conn.execute("SELECT id FROM chunks ORDER BY id").fetchall() == [("chat",), ("reply",)]
     assert conn.execute("SELECT * FROM main.chunks").fetchall() == rows
@@ -124,13 +126,13 @@ def test_conversation_filter_is_connection_local_and_preserves_source_rows():
 
 
 def test_unambiguous_casefold_name_resolves_without_fuzzy_matching(monkeypatch):
-    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: envelope(source="atlas"))
+    monkeypatch.setattr("brainlayer.pipeline.relation_inference._open_local", lambda *a, **k: envelope(source="atlas"))
     result = json.loads(local_caller("http://127.0.0.1:8183", MODEL)(PROMPT))
     assert result["chunks"][0]["relations"][0]["source_id"] == "project-uuid"
 
 
 def test_duplicate_normalized_names_abstain_instead_of_selecting_an_id(monkeypatch):
-    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: envelope())
+    monkeypatch.setattr("brainlayer.pipeline.relation_inference._open_local", lambda *a, **k: envelope())
     chunk = json.loads(PROMPT.split("INPUT: ")[1])[0]
     chunk["entities"].append(dict(id="other", name="atlas", type="project"))
     with pytest.raises(ValueError, match="ambiguous"):
@@ -138,7 +140,7 @@ def test_duplicate_normalized_names_abstain_instead_of_selecting_an_id(monkeypat
 
 
 def test_name_resolution_does_not_bypass_original_evidence_validation(monkeypatch):
-    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: envelope())
+    monkeypatch.setattr("brainlayer.pipeline.relation_inference._open_local", lambda *a, **k: envelope())
     with pytest.raises(ValueError, match="exact evidence"):
         local_caller("http://127.0.0.1:8183", MODEL)(PROMPT.replace("Atlas uses SQLite.", "Atlas does not use SQLite."))
 
@@ -149,7 +151,7 @@ def test_input_delimiter_inside_source_is_preserved(monkeypatch):
         assert source == "INPUT: Atlas uses SQLite."
         return envelope()
 
-    monkeypatch.setattr("urllib.request.urlopen", post)
+    monkeypatch.setattr("brainlayer.pipeline.relation_inference._open_local", post)
     result = local_caller("http://127.0.0.1:8183", MODEL)(
         PROMPT.replace("Atlas uses SQLite.", "INPUT: Atlas uses SQLite.")
     )
@@ -158,6 +160,88 @@ def test_input_delimiter_inside_source_is_preserved(monkeypatch):
 
 @pytest.mark.parametrize("body", [b"{", b'{"choices": []}', b'{"choices": null}'])
 def test_bad_http_envelope_is_not_a_semantic_rejection(monkeypatch, body):
-    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: io.BytesIO(body))
+    monkeypatch.setattr("brainlayer.pipeline.relation_inference._open_local", lambda *a, **k: io.BytesIO(body))
     with pytest.raises(RuntimeError, match="HTTP envelope"):
         local_caller("http://127.0.0.1:8183", MODEL)(PROMPT)
+
+
+@pytest.fixture
+def local_http_server(monkeypatch):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+
+    monkeypatch.setattr("urllib.request._opener", None)
+    servers = []
+
+    def start(reply):
+        requests = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.do_POST()
+
+            def do_POST(self):
+                requests.append(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+                status, headers, body = reply()
+                self.send_response(status)
+                for key, value in headers.items():
+                    self.send_header(key, value)
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+        thread.start()
+        servers.append((server, thread))
+        return f"http://127.0.0.1:{server.server_port}", requests
+
+    yield start
+    for server, thread in servers:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_local_source_body_never_reaches_environment_proxy(monkeypatch, local_http_server):
+    proxy, leaked = local_http_server(lambda: (502, {}, b"proxy must not receive source"))
+    endpoint, received = local_http_server(lambda: (200, {}, envelope().getvalue()))
+    monkeypatch.setenv("http_proxy", proxy)
+    monkeypatch.setattr("urllib.request.proxy_bypass", lambda host: False)
+    result = local_caller(endpoint, MODEL)(PROMPT)
+    assert json.loads(result)["chunks"][0]["relations"]
+    assert len(received) == 1
+    assert leaked == []
+
+
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
+def test_local_source_body_never_follows_redirect(status, local_http_server):
+    sink, leaked = local_http_server(lambda: (200, {}, envelope().getvalue()))
+    endpoint, received = local_http_server(lambda: (status, {"Location": sink}, b""))
+    with pytest.raises(RuntimeError, match="Redirect"):
+        local_caller(endpoint, MODEL)(PROMPT)
+    assert len(received) == 1
+    assert leaked == []
+
+
+@pytest.mark.parametrize("conversations", [False, True])
+def test_hidden_classes_never_feed_default_graph(conversations):
+    from brainlayer.pipeline.relation_inference import restrict_sources
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE chunks (id TEXT, source TEXT, content_type TEXT, source_class TEXT)")
+    rows = [
+        ("chat", "claude_code", "user_message", "cli-agent"),
+        ("brain", "realtime_watcher", "assistant_text", "brain-worker"),
+        ("desktop", "claude_code", "user_message", "desktop"),
+        ("subagent", "claude_code", "assistant_text", "subagent"),
+        ("manual", "mcp", "user_message", None),
+    ]
+    conn.executemany("INSERT INTO chunks VALUES (?,?,?,?)", rows)
+    restrict_sources(conn, conversations=conversations)
+    expected = [("chat",), ("subagent",)] if conversations else [("chat",), ("manual",), ("subagent",)]
+    assert conn.execute("SELECT id FROM chunks ORDER BY id").fetchall() == expected
+    assert conn.execute("SELECT * FROM main.chunks").fetchall() == rows
+    conn.close()

@@ -23,6 +23,9 @@ python -m brainlayer.pipeline.relation_inference \
 
 Both endpoint and model are required. The client rejects a different served model,
 truncated output, unknown IDs, unsupported relations and incomplete responses. An
+owned loopback request bypasses environment proxies and refuses every redirect.
+Desktop and brain-worker source classes are excluded in every mode; there is no
+desktop opt-in while default KG reads cannot preserve their hidden visibility. An
 invalid extraction gets one explicit model correction request; failure stays loud
 and retryable. Empty output is never synthesized as a fallback. The model returns entity names and quotes only, with no IDs. Unambiguous canonical
 names resolve deterministically against the supplied existing entities. Unknown or
