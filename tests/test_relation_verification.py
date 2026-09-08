@@ -215,6 +215,21 @@ def test_invalid_date_shape_is_rejected_before_transport(source, relation, date,
         verify_relation(source, relation, refs, forbidden)
 
 
+@pytest.mark.parametrize("origin", [1, "", " \t"])
+@pytest.mark.parametrize("position", ["primary", "reference"])
+def test_malformed_origin_is_rejected_before_transport(source, relation, origin, position):
+    def forbidden(messages):
+        pytest.fail("malformed origin reached model")
+
+    refs = []
+    if position == "primary":
+        source["origin"] = origin
+    else:
+        refs = [reference(origin=origin)]
+    with pytest.raises(ValueError, match="eligible complete bounded evidence"):
+        verify_relation(source, relation, refs, forbidden)
+
+
 @pytest.mark.parametrize("stage", ["caller", "on_response"])
 @pytest.mark.parametrize("target", ["relation", "references"])
 def test_callback_mutation_cannot_change_reviewed_inputs(source, relation, stage, target):

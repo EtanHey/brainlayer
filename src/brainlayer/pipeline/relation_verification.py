@@ -85,6 +85,7 @@ def _check_window(window):
         or len(window.content) > 6000
         or source_class is None
         or source_class in MEMORY_READER_ATTRIBUTIONS | {"desktop"}
+        or (window.origin is not None and (not isinstance(window.origin, str) or not window.origin.strip()))
         or not isinstance(window.chunk_id, str)
         or not window.chunk_id
         or (window.created_at is not None and not isinstance(window.created_at, str))

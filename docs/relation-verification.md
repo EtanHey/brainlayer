@@ -38,6 +38,8 @@ summarized origins; different session IDs alone do not establish independence.
 Quotes copied from any primary-source span, same-origin records and unknown
 origins cannot corroborate. This conservative copy check can also withhold
 independent accounts that happen to use identical wording.
+Short or common reviewer quotes amplify this loss. During qualification, inspect
+this filter before attributing low independent-support counts to retrieval.
 No search hits is UNKNOWN. The model must review every retrieved record in order,
 but this does not prove retrieval recall or absence of unreturned contradictions.
 Corroboration requires known independent support and no unresolved supplied
