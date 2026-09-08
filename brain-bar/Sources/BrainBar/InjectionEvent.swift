@@ -80,6 +80,7 @@ struct InjectionChunk: Equatable, Sendable, Identifiable {
     let tags: [String]
     let contentType: String
     let claudeConversationID: String
+    let storingAgent: String
 
     var displayText: String {
         let preferred = summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -104,7 +105,8 @@ struct InjectionChunk: Equatable, Sendable, Identifiable {
         sourceFile: String,
         tags: [String],
         contentType: String,
-        claudeConversationID: String = ""
+        claudeConversationID: String = "",
+        storingAgent: String = ""
     ) {
         self.id = id
         self.content = content
@@ -114,6 +116,7 @@ struct InjectionChunk: Equatable, Sendable, Identifiable {
         self.tags = tags
         self.contentType = contentType
         self.claudeConversationID = claudeConversationID
+        self.storingAgent = storingAgent
     }
 
     init(row: [String: Any]) {
@@ -124,7 +127,22 @@ struct InjectionChunk: Equatable, Sendable, Identifiable {
         sourceFile = row["source_file"] as? String ?? ""
         contentType = row["content_type"] as? String ?? ""
         claudeConversationID = row["claude_conversation_id"] as? String ?? ""
+        storingAgent = row["storing_agent"] as? String ?? ""
         tags = InjectionChunk.decodeTags(row["tags"])
+    }
+
+    func withStoringAgent(_ agent: String) -> InjectionChunk {
+        InjectionChunk(
+            id: id,
+            content: content,
+            summary: summary,
+            source: source,
+            sourceFile: sourceFile,
+            tags: tags,
+            contentType: contentType,
+            claudeConversationID: claudeConversationID,
+            storingAgent: agent
+        )
     }
 
     static func elide(_ text: String, limit: Int) -> String {
@@ -354,6 +372,30 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
 
     var expandedRowTriggeredByText: String? {
         Self.normalizedForDedupe(query) == Self.normalizedForDedupe(displayTitle) ? nil : triggeredByText
+    }
+
+    var recipientIdentityText: String {
+        var parts: [String] = []
+        if !sessionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append("Session \(sessionName)")
+        }
+        if !agentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append("Agent \(agentName)")
+        }
+        if !projectName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append("Project \(projectName)")
+        }
+        if parts.isEmpty {
+            let trimmed = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { return "Session unavailable" }
+            return trimmed.count > 12 ? "Session …\(trimmed.suffix(6))" : "Session \(trimmed)"
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    var storingAgentText: String {
+        let agent = primaryChunk?.storingAgent.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return agent.isEmpty ? "Agent unavailable" : "Agent \(agent)"
     }
 
     var modalTitle: String {

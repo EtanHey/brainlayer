@@ -158,6 +158,7 @@ struct InjectionFeedView: View {
                 ChunkConversationOverlay(
                     conversation: conversation,
                     title: conversationSelection.title,
+                    recipient: conversationSelection.recipient,
                     onClose: { conversationSelection.close() }
                 )
             } else if loadingConversationChunkID != nil {
@@ -491,20 +492,30 @@ struct InjectionFeedView: View {
                             .lineLimit(2)
                     }
 
-                    WrappingPillLayout(spacing: 8, lineSpacing: 6) {
-                        Text("Timestamp \(event.timestamp)")
-                        Text("Source \(event.primaryKind.label)")
-                        if !event.claudeProjectPath.isEmpty {
-                            Text("Project \(event.claudeProjectPath)")
+                    Text("Received by \(event.recipientIdentityText)")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Text("Stored by \(event.storingAgentText)")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+
+                    DisclosureGroup("Event details") {
+                        WrappingPillLayout(spacing: 8, lineSpacing: 6) {
+                            Text("Timestamp \(event.timestamp)")
+                            Text("Source \(event.primaryKind.label)")
+                            if !event.claudeProjectPath.isEmpty {
+                                Text("Project \(event.claudeProjectPath)")
+                            }
+                            Text("Session \(event.sessionID)")
+                            Text("Event ID \(event.id)")
+                            if !event.claudeConversationID.isEmpty {
+                                Text("Conversation \(event.claudeConversationID)")
+                            }
+                            Text("Mode \(event.mode)")
+                            Text("\(event.uniqueChunkIDs.count) results")
+                            Text("\(event.tokenCount) tok")
                         }
-                        Text("Session \(event.sessionID)")
-                        Text("Event ID \(event.id)")
-                        if !event.claudeConversationID.isEmpty {
-                            Text("Conversation \(event.claudeConversationID)")
-                        }
-                        Text("Mode \(event.mode)")
-                        Text("\(event.uniqueChunkIDs.count) results")
-                        Text("\(event.tokenCount) tok")
+                        .padding(.top, 5)
                     }
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
@@ -528,7 +539,11 @@ struct InjectionFeedView: View {
                 // truncates ("Opening" is longer than "Open").
                 Button {
                     if let firstChunk = event.uniqueChunkIDs.first {
-                        openConversation(chunkID: firstChunk, title: event.openingModalTitle(forChunkID: firstChunk))
+                        openConversation(
+                            chunkID: firstChunk,
+                            title: event.openingModalTitle(forChunkID: firstChunk),
+                            event: event
+                        )
                     }
                 } label: {
                     Text(loadingConversationChunkID == event.uniqueChunkIDs.first ? "Opening" : "Open thread")
@@ -602,43 +617,49 @@ struct InjectionFeedView: View {
                     timestamp: event.timestamp,
                     chunk: resultChunk
                 )
-                Button {
-                    openConversation(
-                        chunkID: chunkID,
-                        title: resultChunk?.kind.modalTitle ?? event.modalTitle
-                    )
-                } label: {
-                    HStack(alignment: .top, spacing: 8) {
-                        Circle()
-                            .fill(color(for: resultChunk?.kind ?? .other))
-                            .frame(width: 8, height: 8)
-                            .padding(.top, 4)
-                        VStack(alignment: .leading, spacing: 5) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Button {
+                        openConversation(
+                            chunkID: chunkID,
+                            title: resultChunk?.kind.modalTitle ?? event.modalTitle,
+                            event: event
+                        )
+                    } label: {
+                        HStack(alignment: .top, spacing: 8) {
+                            Circle()
+                                .fill(color(for: resultChunk?.kind ?? .other))
+                                .frame(width: 8, height: 8)
+                                .padding(.top, 4)
                             Text(chunkListTitle(chunkID: chunkID, event: event))
                                 .font(.system(size: 11, weight: .medium))
                                 .lineLimit(2)
-                            WrappingPillLayout(spacing: 6, lineSpacing: 5) {
-                                ForEach(
-                                    provenance.expandedMetadataLabels(
-                                        isSelected: chunkID == selectedResultChunkID
-                                    ),
-                                    id: \.self
-                                ) { label in
-                                    Text(label)
-                                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(2)
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            Spacer()
+                            Text("Open thread")
+                                .font(.system(size: 10, weight: .semibold))
                         }
-                        Spacer()
-                        Text("Open thread")
-                            .font(.system(size: 10, weight: .semibold))
                     }
+                    .buttonStyle(.plain)
+                    .disabled(loadingConversationChunkID != nil)
+
+                    DisclosureGroup("Memory details") {
+                        WrappingPillLayout(spacing: 6, lineSpacing: 5) {
+                            ForEach(
+                                provenance.expandedMetadataLabels(
+                                    isSelected: chunkID == selectedResultChunkID
+                                ),
+                                id: \.self
+                            ) { label in
+                                Text(label)
+                                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+                        }
+                        .padding(.top, 4)
+                    }
+                    .font(.system(size: 9, weight: .semibold))
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .buttonStyle(.plain)
-                .disabled(loadingConversationChunkID != nil)
             }
         }
         .padding(12)
@@ -957,19 +978,19 @@ struct InjectionFeedView: View {
 
     private func chunkListTitle(chunkID: String, event: InjectionEvent) -> String {
         guard let chunk = chunk(for: chunkID, event: event), !chunk.displayText.isEmpty else {
-            return chunkID
+            return "Memory preview unavailable"
         }
         return "\(chunk.kind.glyph) \(chunk.displayText)"
     }
 
     private func hitHelpText(chunkID: String, chunk: InjectionChunk?) -> String {
         guard let chunk else {
-            return "Retrieved chunk \(chunkID)"
+            return "Retrieved memory"
         }
-        return "\(chunk.kind.label) · \(chunk.id) · \(chunk.displayText)"
+        return "\(chunk.kind.label) · \(chunk.displayText)"
     }
 
-    private func openConversation(chunkID: String, title: String) {
+    private func openConversation(chunkID: String, title: String, event: InjectionEvent) {
         guard loadingConversationChunkID == nil else { return }
         guard let store else {
             publishActionReceipt(.disconnectedThread)
@@ -980,7 +1001,11 @@ struct InjectionFeedView: View {
             do {
                 let conversation = try await store.expandedConversationAsync(chunkID: chunkID)
                 guard loadingConversationChunkID == chunkID else { return }
-                conversationSelection.open(conversation, title: title)
+                conversationSelection.open(
+                    conversation,
+                    title: title,
+                    recipient: InjectionThreadRecipient(event: event)
+                )
                 loadingConversationChunkID = nil
                 publishActionReceipt(.threadOpenResult(errorDescription: nil))
             } catch {
@@ -1039,15 +1064,22 @@ struct InjectionConversationSelection: Equatable {
 
     var conversation: BrainDatabase.ExpandedConversation?
     var title = defaultTitle
+    var recipient: InjectionThreadRecipient?
 
-    mutating func open(_ conversation: BrainDatabase.ExpandedConversation, title: String) {
+    mutating func open(
+        _ conversation: BrainDatabase.ExpandedConversation,
+        title: String,
+        recipient: InjectionThreadRecipient? = nil
+    ) {
         self.conversation = conversation
         self.title = title
+        self.recipient = recipient
     }
 
     mutating func close() {
         conversation = nil
         title = Self.defaultTitle
+        recipient = nil
     }
 }
 
