@@ -771,6 +771,9 @@ final class BrainDatabase: @unchecked Sendable {
         let createdAt: String
         let summary: String
         let isTarget: Bool
+        let sourceFile: String
+        let sourceEndOffset: Int64?
+        let tags: [String]
 
         var id: String { chunkID }
 
@@ -782,7 +785,10 @@ final class BrainDatabase: @unchecked Sendable {
             importance: Double,
             createdAt: String,
             summary: String,
-            isTarget: Bool
+            isTarget: Bool,
+            sourceFile: String = "",
+            sourceEndOffset: Int64? = nil,
+            tags: [String] = []
         ) {
             self.chunkID = chunkID
             self.content = content
@@ -792,14 +798,39 @@ final class BrainDatabase: @unchecked Sendable {
             self.createdAt = createdAt
             self.summary = summary
             self.isTarget = isTarget
+            self.sourceFile = sourceFile
+            self.sourceEndOffset = sourceEndOffset
+            self.tags = tags
         }
+    }
+
+    enum ConversationOrigin: Sendable, Equatable {
+        case sourceJSONL
+        case indexedExcerpt
     }
 
     struct ExpandedConversation: Sendable, Equatable, Identifiable {
         let target: ConversationChunk
         let entries: [ConversationChunk]
+        let sourceFile: String
+        let storingAgent: String
+        let origin: ConversationOrigin
 
         var id: String { target.chunkID }
+
+        init(
+            target: ConversationChunk,
+            entries: [ConversationChunk],
+            sourceFile: String = "",
+            storingAgent: String = "",
+            origin: ConversationOrigin = .indexedExcerpt
+        ) {
+            self.target = target
+            self.entries = entries
+            self.sourceFile = sourceFile
+            self.storingAgent = storingAgent
+            self.origin = origin
+        }
     }
 
     private var db: OpaquePointer?
@@ -5155,10 +5186,16 @@ final class BrainDatabase: @unchecked Sendable {
         let contentLimit = Int32(Self.maximumConversationContentCharacters)
         let chunkColumns = try tableColumns(name: "chunks", on: db)
         let senderSelect = chunkColumns.contains("sender") ? "sender" : "NULL AS sender"
+        let sourceFileSelect = chunkColumns.contains("source_file")
+            ? "source_file"
+            : "'' AS source_file"
+        let sourceEndOffsetSelect = chunkColumns.contains("source_end_offset")
+            ? "source_end_offset"
+            : "NULL AS source_end_offset"
         let targetContentSelect = includeFullTargetContent ? "content" : "substr(content, 1, ?)"
 
         // Get the target chunk with its session_id and rowid
-        let targetSQL = "SELECT rowid, id, \(targetContentSelect), conversation_id, project, content_type, \(senderSelect), importance, created_at, summary, tags FROM chunks WHERE id = ?"
+        let targetSQL = "SELECT rowid, id, \(targetContentSelect), conversation_id, project, content_type, \(senderSelect), importance, created_at, summary, tags, \(sourceFileSelect), \(sourceEndOffsetSelect) FROM chunks WHERE id = ?"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, targetSQL, -1, &stmt, nil) == SQLITE_OK else {
             throw DBError.prepare(sqlite3_errcode(db))
@@ -5184,7 +5221,11 @@ final class BrainDatabase: @unchecked Sendable {
             "importance": sqlite3_column_double(stmt, 7),
             "created_at": columnText(stmt, 8) as Any,
             "summary": columnText(stmt, 9) as Any,
-            "tags": columnText(stmt, 10) as Any
+            "tags": columnText(stmt, 10) as Any,
+            "source_file": columnText(stmt, 11) as Any,
+            "source_end_offset": sqlite3_column_type(stmt, 12) == SQLITE_NULL
+                ? NSNull()
+                : sqlite3_column_int64(stmt, 12)
         ]
 
         // Get surrounding chunks from same session using two separate queries
@@ -5261,7 +5302,10 @@ final class BrainDatabase: @unchecked Sendable {
             importance: targetPayload["importance"] as? Double ?? 0,
             createdAt: targetPayload["created_at"] as? String ?? "",
             summary: targetPayload["summary"] as? String ?? "",
-            isTarget: true
+            isTarget: true,
+            sourceFile: targetPayload["source_file"] as? String ?? "",
+            sourceEndOffset: targetPayload["source_end_offset"] as? Int64,
+            tags: Self.conversationTags(targetPayload["tags"])
         )
 
         let beforeContext = ((payload["before_context"] as? [[String: Any]]) ?? []).map { item in
@@ -5289,7 +5333,28 @@ final class BrainDatabase: @unchecked Sendable {
             )
         }
 
-        return ExpandedConversation(target: target, entries: beforeContext + [target] + afterContext)
+        #if BRAINBAR_UI
+        if let sourceConversation = SourceConversationReader.reconstruct(target: target) {
+            return sourceConversation
+        }
+        #endif
+
+        return ExpandedConversation(
+            target: target,
+            entries: beforeContext + [target] + afterContext,
+            sourceFile: target.sourceFile,
+            origin: .indexedExcerpt
+        )
+    }
+
+    private static func conversationTags(_ value: Any?) -> [String] {
+        if let tags = value as? [String] { return tags }
+        guard let text = value as? String,
+              let data = text.data(using: .utf8),
+              let tags = try? JSONDecoder().decode([String].self, from: data) else {
+            return []
+        }
+        return tags
     }
 
     // MARK: - brain_entity: insert + lookup entities
@@ -6544,7 +6609,22 @@ final class BrainDatabase: @unchecked Sendable {
                 "selection_reason": columnText(stmt, 10) as Any
             ]
             if let event = try? InjectionEvent(row: row) {
-                let details = (try? injectionChunkDetails(ids: event.chunkIDs)) ?? []
+                var details = (try? injectionChunkDetails(ids: event.chunkIDs)) ?? []
+                if details.contains(where: {
+                    $0.storingAgent.isEmpty && !$0.claudeConversationID.isEmpty
+                }) {
+                    if liveIdentities == nil {
+                        liveIdentities = injectionRecipientIdentities()
+                    }
+                    details = details.map { chunk in
+                        guard chunk.storingAgent.isEmpty,
+                              let sourceAgent = liveIdentities?[chunk.claudeConversationID]?.agentName,
+                              !sourceAgent.isEmpty else {
+                            return chunk
+                        }
+                        return chunk.withStoringAgent(sourceAgent)
+                    }
+                }
                 let resumableID = Self.resumableClaudeConversationID(event: event, chunks: details)
                 guard let scopedEvent = injectionFeedScopedEvent(event, chunks: details) else {
                     continue
@@ -6777,7 +6857,16 @@ final class BrainDatabase: @unchecked Sendable {
                    CASE
                        WHEN json_valid(metadata) THEN COALESCE(json_extract(metadata, '$.claude_conversation_id'), '')
                        ELSE ''
-                   END AS claude_conversation_id
+                   END AS claude_conversation_id,
+                   CASE
+                       WHEN json_valid(metadata) THEN COALESCE(
+                           json_extract(metadata, '$.attributionAgent'),
+                           json_extract(metadata, '$.attribution_agent'),
+                           json_extract(metadata, '$.agent_name'),
+                           ''
+                       )
+                       ELSE ''
+                   END AS storing_agent
             FROM chunks
             WHERE id IN (\(placeholders))
         """
@@ -6802,6 +6891,7 @@ final class BrainDatabase: @unchecked Sendable {
                 "tags": columnText(stmt, 5) as Any,
                 "content_type": columnText(stmt, 6) as Any,
                 "claude_conversation_id": columnText(stmt, 7) as Any,
+                "storing_agent": columnText(stmt, 8) as Any,
             ]
             let detail = InjectionChunk(row: row)
             detailsByID[detail.id] = detail
