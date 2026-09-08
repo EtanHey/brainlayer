@@ -316,26 +316,30 @@ struct InjectionFeedView: View {
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    HStack(alignment: .top, spacing: 8) {
                         let leadEvent = burst.events.first
                         Text(leadEvent?.primaryKind.glyph ?? "📄")
                             .font(.system(size: 16, weight: .bold, design: .rounded))
                             .foregroundStyle(.blue)
-                        Text(burst.queryTitle)
-                            .font(.system(size: 18, weight: .semibold, design: .rounded))
-                            .lineLimit(2)
-                    }
-                    if burst.selectedResultSummary.caseInsensitiveCompare(burst.queryTitle) != .orderedSame {
-                        Text("Selected result · \(burst.selectedResultSummary)")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(burst.collapsedHeadline)
+                                .font(.system(size: 18, weight: .semibold, design: .rounded))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.85)
+                            Text(burst.collapsedContext)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(.secondary)
+                                .lineLimit(2)
+                            Text(burst.collapsedTrigger)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        .layoutPriority(1)
+                        .accessibilityIdentifier("\(Self.burstAtAGlanceAccessibilityID).\(burst.id)")
                     }
                     WrappingPillLayout(spacing: 8, lineSpacing: 8) {
                         chip(text: burst.sourceLabel, tint: .blue)
-                        if burst.projectLabel != "Project unavailable" {
-                            chip(text: burst.projectLabel, tint: .neutral)
-                        }
                         chip(text: burst.timestampLabel, tint: .neutral)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1057,6 +1061,7 @@ extension InjectionFeedView {
     nonisolated static let filterTypeAccessibilityID = "brainbar.injections.filter.type"
     nonisolated static let groupingDisclosureAccessibilityID = "brainbar.injections.grouping"
     nonisolated static let burstActionAccessibilityID = "brainbar.injections.burst.action"
+    nonisolated static let burstAtAGlanceAccessibilityID = "brainbar.injections.burst.at-a-glance"
     nonisolated static let surfaceStateAccessibilityID = "brainbar.injections.state"
     nonisolated static let actionReceiptAccessibilityID = "brainbar.injections.action.receipt"
 
