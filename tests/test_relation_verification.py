@@ -55,8 +55,10 @@ def caller(source, refs, primary="supports", verdict="supports", mutate=None):
     return lambda messages: json.dumps(response)
 
 
-def test_corroborated_is_source_assertion_not_current_graph_permission(source, relation):
-    refs = [reference()]
+@pytest.mark.parametrize("source_class", ["cli-agent", "subagent", "fleet-coordination"])
+def test_corroborated_is_source_assertion_not_current_graph_permission(source, relation, source_class):
+    source["source_class"] = source_class
+    refs = [reference(source_class=source_class)]
     result = verify_relation(source, relation, refs, caller(source, refs))
     assert result["status"] == "CORROBORATED_SOURCE_ASSERTION"
     assert result["current_truth"] == "UNVERIFIED"
@@ -141,6 +143,18 @@ def test_raw_evidence_is_retained_before_bad_verdict_rejects(source, relation, m
     with pytest.raises(ValueError):
         verify_relation(source, relation, refs, caller(source, refs, mutate=mutate), on_response=trace.append)
     assert len(trace) == 1 and trace[0]["raw"]
+    evidence = trace[0]["evidence"]
+    assert evidence["primary"]["chunk_id"] == source["chunk_id"]
+    assert evidence["primary"]["content"] == source["content"]
+    assert evidence["references"] == [vars(r) for r in refs]
+
+
+def test_policy_outcome_cannot_replace_the_original_proposal_quote(source, relation):
+    policy_quote = "Atlas agents MUST search SQLite before answering."
+    source["content"] += " " + policy_quote
+    response = caller(source, [], primary="mandatory_policy", mutate=lambda r: r["primary"].update(quote=policy_quote))
+    with pytest.raises(ValueError, match="original quote"):
+        verify_relation(source, relation, [], response)
 
 
 def test_hidden_reference_and_invalid_structural_quote_never_reach_model(source, relation):
@@ -154,7 +168,9 @@ def test_hidden_reference_and_invalid_structural_quote_never_reach_model(source,
         verify_relation(source, relation, [], forbidden)
 
 
-@pytest.mark.parametrize("source_class", ["desktop", "brain-worker", "session-miner", "weave"])
+@pytest.mark.parametrize(
+    "source_class", ["desktop", "brain-worker", "session-miner", "weave", None, "", "unknown", "codex-session"]
+)
 @pytest.mark.parametrize("position", ["primary", "reference"])
 def test_excluded_evidence_classes_never_reach_model(source, relation, source_class, position):
     def forbidden(messages):

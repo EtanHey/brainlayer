@@ -9,6 +9,7 @@ import json
 from dataclasses import asdict, dataclass
 from datetime import datetime
 
+from brainlayer.agent_provenance import normalize_source_class
 from brainlayer.ingest_denylist import MEMORY_READER_ATTRIBUTIONS
 
 from .relation_backfill import _validated
@@ -38,7 +39,7 @@ Return JSON with exactly primary and references. Each verdict has exactly verdic
 and quote. primary verdict: supports|mandatory_policy|negated|planned|question|
 co_mention|wrong_relation|unclear. references verdict: supports|contradicts|ended|
 repeats|unrelated|unclear. Copy exact contiguous quotes from the corresponding
-source. For primary supports, quote MUST equal the original proposal quote;
+source. For primary supports or mandatory_policy, quote MUST equal the original proposal quote;
 do not silently repair it. Empty quote is allowed only for unrelated or unclear.
 Shape: {"primary":{"verdict":"unclear","quote":""},"references":[]}.
 """
@@ -77,11 +78,13 @@ def _date(value):
 
 
 def _check_window(window):
+    source_class = normalize_source_class(window.source_class)
     if (
         not isinstance(window.content, str)
         or not window.content.strip()
         or len(window.content) > 6000
-        or window.source_class in MEMORY_READER_ATTRIBUTIONS | {"desktop"}
+        or source_class is None
+        or source_class in MEMORY_READER_ATTRIBUTIONS | {"desktop"}
         or not isinstance(window.chunk_id, str)
         or not window.chunk_id
     ):
@@ -137,7 +140,13 @@ def verify_relation(source, relation, references, caller, *, on_response):
     inputs = dict(source=source, relation=relation, references=[asdict(r) for r in references])
     fingerprint = _digest(dict(version=VERSION, prompt=REVIEW_PROMPT, inputs=inputs))
     raw = caller([dict(role="system", content=REVIEW_PROMPT), dict(role="user", content=json.dumps(payload))])
-    trace = dict(version=VERSION, input_sha256=fingerprint, source_id=primary.chunk_id, raw=raw)
+    trace = dict(
+        version=VERSION,
+        input_sha256=fingerprint,
+        source_id=primary.chunk_id,
+        evidence=dict(primary=asdict(primary), references=[asdict(r) for r in references]),
+        raw=raw,
+    )
     on_response(trace)  # Before parsing or verdict correction can hide a proposal.
     try:
         review = json.loads(raw)
@@ -150,7 +159,7 @@ def verify_relation(source, relation, references, caller, *, on_response):
         raise ValueError("Every retrieved reference must be reviewed exactly once in order")
     first = _judgment(review["primary"], primary.content, PRIMARY_VERDICTS)
     verdicts = [_judgment(j, r.content, REFERENCE_VERDICTS) for j, r in zip(judgments, references)]
-    if first == "supports" and review["primary"]["quote"] != relation["quote"]:
+    if first in {"supports", "mandatory_policy"} and review["primary"]["quote"] != relation["quote"]:
         raise ValueError("Reviewer must assess the original quote without repairing it")
     result = dict(
         version=VERSION,
