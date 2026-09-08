@@ -1,6 +1,7 @@
 import XCTest
 import AppKit
 import SwiftUI
+import Vision
 @testable import BrainBar
 
 final class InjectionPresentationTests: XCTestCase {
@@ -17,6 +18,93 @@ final class InjectionPresentationTests: XCTestCase {
 
     func testBurstChunkCounterUsesMeaningfulLabel() {
         XCTAssertEqual(InjectionFeedView.burstChunkCounterLabel, "memories surfaced into context")
+    }
+
+    func testCollapsedBurstLeadsWithWhatSessionWhyAndCost() throws {
+        let now = isoDate("2026-09-08T10:00:00Z")
+        let event = makeEvent(
+            id: 42,
+            sessionID: "session-operator-truth-1234567890",
+            timestamp: "2026-09-08T09:58:00Z",
+            query: "why is watcher flow marked stalled",
+            chunkIDs: ["chunk-watcher-contract"],
+            tokenCount: 144,
+            chunks: [
+                makeChunk(
+                    id: "chunk-watcher-contract",
+                    content: "Watcher flow uses process and recent distinct-ingest evidence."
+                )
+            ]
+        )
+        let burst = try XCTUnwrap(
+            InjectionPresentation.snapshot(events: [event], filterText: "", now: now).bursts.first
+        )
+
+        XCTAssertEqual(
+            burst.collapsedHeadline,
+            "Watcher flow uses process and recent distinct-ingest evidence."
+        )
+        XCTAssertEqual(
+            burst.collapsedContext,
+            "Session …567890 · Chosen for “why is watcher flow marked stalled” · 144 tok"
+        )
+        XCTAssertFalse(burst.collapsedContext.contains(event.sessionID))
+    }
+
+    @MainActor
+    func testRenderedCollapsedAndExpandedBurstKeepsHierarchyAndDisclosure() throws {
+        let now = isoDate("2026-09-08T10:00:00Z")
+        let sourceFile = "/Users/example/project/.claude/projects/-Users-example-project/session.jsonl"
+        let chunk = InjectionChunk(
+            id: "chunk-watcher-contract",
+            content: "Watcher flow uses process and recent distinct-ingest evidence.",
+            summary: "Watcher truth contract",
+            source: "claude_code",
+            sourceFile: sourceFile,
+            tags: ["brainbar", "truth"],
+            contentType: "memory",
+            claudeConversationID: "conversation-example"
+        )
+        let event = makeEvent(
+            id: 42,
+            sessionID: "session-operator-truth-1234567890",
+            timestamp: "2026-09-08T09:58:00Z",
+            query: "why is watcher flow marked stalled",
+            chunkIDs: [chunk.id],
+            tokenCount: 144,
+            chunks: [chunk],
+            claudeConversationID: "conversation-example"
+        )
+        let burstID = try XCTUnwrap(
+            InjectionPresentation.snapshot(events: [event], filterText: "", now: now).bursts.first?.id
+        )
+        let collapsed = try renderedInjectionText(
+            InjectionFeedView(fixture: InjectionFeedFixture(events: [event], now: now)),
+            name: "l3-injections-collapsed.png"
+        )
+        let expanded = try renderedInjectionText(
+            InjectionFeedView(
+                fixture: InjectionFeedFixture(events: [event], now: now, expandedBurstIDs: [burstID])
+            ),
+            name: "l3-injections-expanded.png"
+        )
+
+        let firstLine = try XCTUnwrap(
+            collapsed.first { $0.localizedCaseInsensitiveContains("Watcher truth contract") }
+        ).replacingOccurrences(of: "…", with: "...")
+        assertTermsAppearInOrder(
+            ["Watcher truth contract", "Session ...567890", "Chosen for", "why is watcher flow marked stalled", "144 tok"],
+            in: firstLine
+        )
+        XCTAssertFalse(collapsed.joined(separator: "\n").contains("chunk-watcher-contract"))
+        XCTAssertFalse(collapsed.joined(separator: "\n").contains("/Users/example/project"))
+        XCTAssertFalse(collapsed.joined(separator: "\n").contains("Tags brainbar, truth"))
+
+        let expandedText = expanded.joined(separator: "\n")
+        XCTAssertTrue(expandedText.contains("session-operator-truth-1234567890"))
+        XCTAssertTrue(expandedText.contains("chunk-watcher-contract"))
+        XCTAssertTrue(expandedText.contains("/Users/example/project"))
+        XCTAssertTrue(expandedText.contains("Tags brainbar, truth"))
     }
 
     func testExpandedEventFieldsSuppressDuplicateKindAndTrigger() {
@@ -567,6 +655,72 @@ final class InjectionPresentationTests: XCTestCase {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try png.write(to: url)
         XCTAssertGreaterThan(png.count, 1_000)
+    }
+
+    @MainActor
+    private func renderedInjectionText<V: View>(_ view: V, name: String) throws -> [String] {
+        let size = NSSize(width: 1_180, height: 1_000)
+        let host = NSHostingView(
+            rootView: view
+                .environment(\.colorScheme, .dark)
+                .frame(width: size.width, height: size.height)
+        )
+        host.frame = NSRect(origin: .zero, size: size)
+        host.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+        host.layoutSubtreeIfNeeded()
+
+        guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
+            XCTFail("Expected an AppKit bitmap for \(name)")
+            return []
+        }
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        guard let cgImage = bitmap.cgImage else {
+            XCTFail("Expected a CGImage for \(name)")
+            return []
+        }
+
+        if let renderDirectory = ProcessInfo.processInfo.environment["BRAINBAR_RENDER_DIR"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !renderDirectory.isEmpty,
+           let png = bitmap.representation(using: .png, properties: [:]) {
+            let outputDirectory = URL(fileURLWithPath: renderDirectory, isDirectory: true)
+            try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
+            try png.write(to: outputDirectory.appendingPathComponent(name))
+        }
+
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = false
+        try VNImageRequestHandler(cgImage: cgImage).perform([request])
+        return (request.results ?? [])
+            .sorted {
+                if abs($0.boundingBox.midY - $1.boundingBox.midY) < 0.005 {
+                    return $0.boundingBox.minX < $1.boundingBox.minX
+                }
+                return $0.boundingBox.midY > $1.boundingBox.midY
+            }
+            .compactMap { $0.topCandidates(1).first?.string }
+    }
+
+    private func assertTermsAppearInOrder(
+        _ terms: [String],
+        in text: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        var searchStart = text.startIndex
+        for term in terms {
+            guard let range = text.range(
+                of: term,
+                options: [.caseInsensitive],
+                range: searchStart..<text.endIndex
+            ) else {
+                XCTFail("Expected rendered line to contain \(term) after prior terms; got: \(text)", file: file, line: line)
+                return
+            }
+            searchStart = range.upperBound
+        }
     }
 
     private func brainBarSourceFile(_ relativePath: String, testFilePath: StaticString = #filePath) throws -> String {

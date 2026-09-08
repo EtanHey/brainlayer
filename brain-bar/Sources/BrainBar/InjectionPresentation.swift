@@ -248,6 +248,18 @@ struct InjectionPresentation {
         var selectedResultSummary: String {
             selectedResultChunk?.displayText ?? "Result unavailable"
         }
+        var collapsedHeadline: String {
+            selectedResultSummary
+        }
+        var collapsedContext: String {
+            "\(compactSessionLabel) · Chosen for “\(queryTitle)” · \(tokenCount) tok"
+        }
+        private var compactSessionLabel: String {
+            let trimmed = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return "Session unavailable" }
+            guard trimmed.count > 12 else { return "Session \(trimmed)" }
+            return "Session …\(trimmed.suffix(6))"
+        }
         private static func mergeResultProvenance(from events: [InjectionEvent]) -> [ResultProvenance] {
             var resultIndexByChunkID: [String: Int] = [:]
             var results: [ResultProvenance] = []
