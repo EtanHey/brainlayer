@@ -184,10 +184,33 @@ def _discover_jsonl_candidates(source_roots: list[Path | BackupSourceRoot]) -> l
     return candidates
 
 
-def _state_matches(entry: Any, candidate: JsonlCandidate) -> bool:
+def _state_matches(
+    entry: Any,
+    candidate: JsonlCandidate,
+    surviving_archives: set[str] | None = None,
+) -> bool:
+    """A file is covered only while a SURVIVING archive object holds its exact bytes.
+
+    ``surviving_archives`` is the set of archive object names still present in the
+    backup folder. When it is supplied (the upload path) an entry must name one of
+    them and its recorded content hash must still match the file on disk. Entries
+    written before archive provenance was recorded name no archive, so they cannot
+    prove survival and are deliberately treated as uncovered -- re-bundling costs a
+    night of upload, trusting them can cost the only remaining copy.
+    """
     if not isinstance(entry, dict):
         return False
-    return entry.get("mtime") == candidate.mtime and entry.get("size") == candidate.size
+    if entry.get("mtime") != candidate.mtime or entry.get("size") != candidate.size:
+        return False
+    if surviving_archives is None:
+        return True
+    archive = entry.get("archive")
+    if not isinstance(archive, str) or archive not in surviving_archives:
+        return False
+    recorded_hash = entry.get("sha256")
+    if not isinstance(recorded_hash, str) or not recorded_hash:
+        return False
+    return recorded_hash == _sha256_file(candidate.path)
 
 
 def _backup_unit_key(candidate: JsonlCandidate) -> tuple[int, str]:
@@ -204,6 +227,7 @@ def _select_backup_candidates(
     state: dict[str, Any],
     now: float,
     active_skip_seconds: int,
+    surviving_archives: set[str] | None = None,
 ) -> tuple[list[JsonlCandidate], list[JsonlCandidate], int]:
     grouped: dict[tuple[int, str], list[JsonlCandidate]] = {}
     for candidate in candidates:
@@ -217,11 +241,46 @@ def _select_backup_candidates(
         if any(now - candidate.mtime < active_skip_seconds for candidate in backup_unit):
             active.extend(backup_unit)
             continue
-        if all(_state_matches(state_files.get(candidate.path.as_posix()), candidate) for candidate in backup_unit):
+        if all(
+            _state_matches(state_files.get(candidate.path.as_posix()), candidate, surviving_archives)
+            for candidate in backup_unit
+        ):
             covered += len(backup_unit)
             continue
         changed.extend(backup_unit)
     return changed, active, covered
+
+
+def _list_surviving_archive_names(service: Any, folder_parts: list[str]) -> set[str]:
+    """Names of archive objects still present in the backup folder.
+
+    This is the ground truth for coverage: an object that has been pruned -- by our
+    own retention policy or out of band -- can no longer prove that a file survives.
+    """
+    folder_id = backup_daily.ensure_drive_folder_chain(service, folder_parts)
+    names: set[str] = set()
+    page_token = None
+    while True:
+        response = (
+            service.files()
+            .list(
+                q=f"'{folder_id}' in parents and trashed = false",
+                spaces="drive",
+                fields="nextPageToken,files(id,name)",
+                pageSize=1000,
+                pageToken=page_token,
+                supportsAllDrives=True,
+            )
+            .execute()
+        )
+        for item in response.get("files", []):
+            name = item.get("name")
+            if isinstance(name, str):
+                names.add(name)
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            break
+    return names
 
 
 def _archive_name(candidate: JsonlCandidate) -> str:
@@ -336,10 +395,24 @@ def verify_jsonl_bundle(archive_path: Path, *, expected_file_count: int) -> dict
     return result
 
 
-def _update_state_for_uploaded(state: dict[str, Any], candidates: list[JsonlCandidate]) -> dict[str, Any]:
+def _update_state_for_uploaded(
+    state: dict[str, Any],
+    candidates: list[JsonlCandidate],
+    archive_name: str | None = None,
+) -> dict[str, Any]:
+    """Record which archive object carries each file, and the bytes it carried.
+
+    Without this provenance a later prune cannot know it is removing the last
+    surviving copy of a file, which is exactly how a covered file becomes
+    unrecoverable while state still reports it as backed up.
+    """
     files = dict(state.get("files") or {})
     for candidate in candidates:
-        files[candidate.path.as_posix()] = {"mtime": candidate.mtime, "size": candidate.size}
+        entry: dict[str, Any] = {"mtime": candidate.mtime, "size": candidate.size}
+        if archive_name:
+            entry["archive"] = archive_name
+            entry["sha256"] = _sha256_file(candidate.path)
+        files[candidate.path.as_posix()] = entry
     return {"files": files, "updated_at": dt.datetime.now(dt.UTC).isoformat()}
 
 
@@ -390,11 +463,25 @@ def run_backup(
     state_path = Path(state_path).expanduser()
     state = _load_state(state_path)
     candidates = _discover_jsonl_candidates(roots)
+    credentials = None
+    service = None
+    surviving_archives: set[str] | None = None
+    if upload:
+        credentials = backup_daily.get_drive_credentials()
+        service = backup_daily.build_drive_service()
+        # Only consult the backup folder when some entry actually claims archive-backed
+        # coverage. A state with nothing to verify needs no listing, and legacy entries
+        # that name no archive stay uncovered either way.
+        if any(isinstance(entry, dict) and entry.get("archive") for entry in (state.get("files") or {}).values()):
+            surviving_archives = _list_surviving_archive_names(service, folder_parts)
+        else:
+            surviving_archives = set()
     changed, active, covered = _select_backup_candidates(
         candidates,
         state=state,
         now=now,
         active_skip_seconds=active_skip_seconds,
+        surviving_archives=surviving_archives,
     )
 
     if not changed:
@@ -429,8 +516,6 @@ def run_backup(
     }
 
     if upload:
-        credentials = backup_daily.get_drive_credentials()
-        service = backup_daily.build_drive_service()
         folder_id = backup_daily.ensure_drive_folder_chain(service, folder_parts)
         uploaded = backup_daily.upload_file_to_drive_raw(archive_path, folder_id, credentials)
         file_id = uploaded.get("id")
@@ -446,7 +531,7 @@ def run_backup(
 
     result.update(verify_jsonl_bundle(archive_path, expected_file_count=len(changed)))
     if result["verified"] and upload:
-        _atomic_write_json(state_path, _update_state_for_uploaded(state, changed))
+        _atomic_write_json(state_path, _update_state_for_uploaded(state, changed, archive_path.name))
         try:
             deleted = backup_daily.prune_drive_backups(
                 service,
