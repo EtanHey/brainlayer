@@ -448,7 +448,13 @@ def test_changed_only_scope_maps_changed_source_to_targeted_tests(tmp_path: Path
 def test_changed_only_scope_maps_groq_pipeline_files_to_both_owners(tmp_path: Path, changed_source: str) -> None:
     test_root = tmp_path / "tests"
     test_root.mkdir()
-    expected = ("test_groq_backend.py", "test_kg_rebuild.py")
+    expected = (
+        "test_groq_backend.py",
+        "test_kg_rebuild.py",
+        "test_enrichment_reliability.py",
+        "test_recent_enrichment.py",
+        "test_mlx_health_recovery.py",
+    )
     for name in expected:
         (test_root / name).write_text("test placeholder\n")
 
@@ -481,7 +487,6 @@ def test_groq_pipeline_mapping_is_fail_closed_when_a_named_suite_is_missing(
     test_root = tmp_path / "tests"
     test_root.mkdir()
     (test_root / "test_groq_backend.py").write_text("test placeholder\n")
-    # test_kg_rebuild.py deliberately absent.
 
     pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
     env = _script_env()

@@ -192,6 +192,9 @@ map_changed_files_to_pytests() {
         groq_pipeline_tests=(
           "$TEST_ROOT/test_groq_backend.py"
           "$TEST_ROOT/test_kg_rebuild.py"
+          "$TEST_ROOT/test_enrichment_reliability.py"
+          "$TEST_ROOT/test_recent_enrichment.py"
+          "$TEST_ROOT/test_mlx_health_recovery.py"
         )
         groq_pipeline_complete=1
         for groq_pipeline_test in "${groq_pipeline_tests[@]}"; do
