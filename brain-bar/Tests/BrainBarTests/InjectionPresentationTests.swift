@@ -263,23 +263,39 @@ final class InjectionPresentationTests: XCTestCase {
         )
         let renderedText = rendered.joined(separator: " ")
 
-        assertTermsAppearInOrder(
-            [
-                "Full conversation",
-                "Session Injections rebuild",
-                "Agent brainlayerCodex-recipient",
-                "Project brainlayer",
-                "Stored by Agent brainlayerClaude-source",
-                "You",
-                "First turn from Etan",
-                "Agent brainlayerClaude-source",
-                "Decision",
-                "Ship it",
-                "Pixel proof",
-                "You",
-                "Final turn from Etan"
-            ],
-            in: renderedText
+        for requiredTerm in [
+            "Full conversation",
+            "Source JSONL",
+            "3 turns",
+            "Session Injections rebuild",
+            "Agent brainlayerCodex-recipient",
+            "Project brainlayer",
+            "Stored by Agent brainlayerClaude-source",
+            "Thread",
+            "Rendered",
+            "Raw text",
+            "You",
+            "First turn from Etan",
+            "Agent brainlayerClaude-source",
+            "Injected memory",
+            "Decision",
+            "Ship it",
+            "Pixel proof",
+            "Final turn from Etan",
+            "Technical details",
+        ] {
+            XCTAssertNotNil(
+                renderedText.range(of: requiredTerm, options: [.caseInsensitive]),
+                "Expected rendered pixels to contain \(requiredTerm); got: \(renderedText)"
+            )
+        }
+        assertTermsAppearInOrder(["Source JSONL", "First turn from Etan"], in: renderedText)
+        assertTermsAppearInOrder(["You", "First turn from Etan"], in: renderedText)
+        assertTermsAppearInOrder(["Decision", "Ship it", "Pixel proof"], in: renderedText)
+        XCTAssertGreaterThanOrEqual(
+            renderedText.components(separatedBy: "Agent brainlayerClaude-source").count - 1,
+            2,
+            "Expected both the storing-agent label and the agent-turn label; got: \(renderedText)"
         )
         XCTAssertFalse(renderedText.contains("**Ship it**"))
         XCTAssertFalse(renderedText.contains("- [x]"))
