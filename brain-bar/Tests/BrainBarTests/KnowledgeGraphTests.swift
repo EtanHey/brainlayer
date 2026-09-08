@@ -157,6 +157,27 @@ final class KGDatabaseTests: XCTestCase {
         XCTAssertTrue(exists, "kg_entity_chunks table must exist")
     }
 
+    func testEntityCacheExcludesArchivedEntities() throws {
+        guard let handle = db.dbHandle else {
+            return XCTFail("Expected database handle")
+        }
+        XCTAssertEqual(
+            sqlite3_exec(handle, "ALTER TABLE kg_entities ADD COLUMN status TEXT DEFAULT 'active'", nil, nil, nil),
+            SQLITE_OK
+        )
+        try db.insertEntity(id: "person-active", type: "person", name: "Andrew Kelley")
+        try db.insertEntity(id: "person-archived", type: "person", name: "But Ben")
+        XCTAssertEqual(
+            sqlite3_exec(handle, "UPDATE kg_entities SET status = 'archived' WHERE id = 'person-archived'", nil, nil, nil),
+            SQLITE_OK
+        )
+
+        let cache = EntityCache()
+        cache.load(from: handle)
+
+        XCTAssertEqual(cache.detectEntities(in: "Andrew Kelley and But Ben").map(\.name), ["Andrew Kelley"])
+    }
+
     // MARK: - fetchKGEntities
 
     func testFetchKGEntitiesReturnsInsertedEntities() throws {

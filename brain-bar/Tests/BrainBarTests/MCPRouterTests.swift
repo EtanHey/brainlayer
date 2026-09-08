@@ -1280,6 +1280,7 @@ No results found.
         defer { try? FileManager.default.removeItem(atPath: tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
+        try db.insertEntity(id: "project-brainlayer", type: "project", name: "BrainLayer")
 
         let router = MCPRouter(profile: "full")
         router.setDatabase(db)
@@ -1301,9 +1302,9 @@ No results found.
         let scoped = try db.search(query: "BrainLayer architecture", limit: 10, project: "gen16-router-scope")
         XCTAssertFalse(scoped.isEmpty, "Digested chunk should be findable under the project passed to brain_digest")
 
-        // And the extracted entity should now resolve via the KG lookup.
+        // A known canonical entity should be reused and linked by the digest.
         let entity = try db.lookupEntity(query: "BrainLayer")
-        XCTAssertNotNil(entity, "Digest-extracted entity should resolve via brain_entity lookup")
+        XCTAssertEqual(entity?["entity_id"] as? String, "project-brainlayer")
     }
 
     func testBrainDigestStoresTheFullInputContent() throws {
