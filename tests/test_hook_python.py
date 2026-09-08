@@ -506,3 +506,40 @@ class TestLiveSettings:
         assert findings == [], "BrainLayer hooks still resolve their interpreter through PATH: " + "; ".join(
             f"{f.event}: {f.command}" for f in findings
         )
+
+
+def test_launchd_plist_templates_pin_their_interpreter():
+    """launchd templates must not let PATH choose the interpreter.
+
+    #790 pinned the hooks. The nightly backup template was missed and still shipped
+    `/usr/bin/env python3`, which fronts the framework python whose `_brainlayer.pth`
+    injects `~/Gits/brainlayer/src` -- so a `git checkout` at the repo root would have
+    silently re-aimed the job that PREVENTS data loss at a working tree.
+
+    Found by the PR #815 pair review. Applying the same affirmative gate the hooks use:
+    anything this cannot vouch for is a finding, not a pass.
+    """
+    import plistlib
+    from pathlib import Path
+
+    from brainlayer.hook_python import is_pinned_interpreter
+
+    repo_root = Path(__file__).resolve().parents[1]
+    plists = sorted((repo_root / "launchd").glob("*.plist"))
+    assert plists, "expected launchd templates to exist"
+
+    unpinned: list[str] = []
+    for path in plists:
+        args = plistlib.loads(path.read_bytes()).get("ProgramArguments") or []
+        if not args:
+            continue
+        interpreter = args[0]
+        # A wrapper script is not an interpreter claim; only judge direct python invocations.
+        if "python" not in interpreter and not interpreter.endswith("/env"):
+            continue
+        if interpreter.endswith("/env"):
+            interpreter = f"{interpreter} {args[1] if len(args) > 1 else ''}".strip()
+        if not is_pinned_interpreter(interpreter):
+            unpinned.append(f"{path.name}: {interpreter}")
+
+    assert not unpinned, "launchd templates must name a pinned interpreter, not PATH: " + "; ".join(unpinned)

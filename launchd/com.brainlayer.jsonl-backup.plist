@@ -10,8 +10,11 @@
 	</array>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/usr/bin/env</string>
-		<string>python3</string>
+		<!-- Pinned to the keg interpreter, never PATH. Bare `python3` fronts the framework
+		     python, whose _brainlayer.pth injects ~/Gits/brainlayer/src - so a `git checkout`
+		     at the root would silently re-aim the nightly backup at a working tree. Same
+		     reasoning as #790 for hooks; the `opt/` symlink outlives any single keg. -->
+		<string>/opt/homebrew/opt/brainlayer/libexec/venv/bin/python</string>
 		<string>-m</string>
 		<string>brainlayer.jsonl_backup</string>
 	</array>
