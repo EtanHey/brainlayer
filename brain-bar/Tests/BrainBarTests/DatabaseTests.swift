@@ -1994,7 +1994,7 @@ final class DatabaseTests: XCTestCase {
     // MARK: - brain_digest (rule-based entity extraction)
 
     func testDigestKeepsUnknownRegexMatchesAsReviewableCandidates() throws {
-        let content = "Both Julius met So Kimi. But Ben said Oh God. Moving On was a section heading."
+        let content = "Both Julius met Both Julius and So Kimi. But Ben said Oh God. Moving On was a section heading."
         let result = try db.digest(content: content)
         let entities = result["entities"] as? [String] ?? []
         let candidates = try XCTUnwrap(result["entity_candidates"] as? [[String: Any]])
@@ -2125,15 +2125,19 @@ final class DatabaseTests: XCTestCase {
                 VALUES ('JavaScript', 'technology-js-one', 'name');
                 INSERT INTO kg_entity_aliases (alias, entity_id, alias_type)
                 VALUES ('JavaScript', 'technology-js-two', 'name');
+                INSERT INTO kg_entity_aliases (alias, entity_id, alias_type, valid_to)
+                VALUES ('CoffeeScript', 'technology-js-one', 'name', '2000-01-01T00:00:00Z');
+                INSERT INTO kg_entity_aliases (alias, entity_id, alias_type, valid_from)
+                VALUES ('FutureScript', 'technology-js-one', 'name', '2999-01-01T00:00:00Z');
             """
         )
 
-        let result = try db.digest(content: "JavaScript powers this runtime.")
+        let result = try db.digest(content: "JavaScript, CoffeeScript, and FutureScript power runtimes.")
         let entities = result["entities"] as? [String] ?? []
         let candidates = try XCTUnwrap(result["entity_candidates"] as? [[String: Any]])
 
         XCTAssertTrue(entities.isEmpty)
-        XCTAssertEqual(candidates.compactMap { $0["surface"] as? String }, ["JavaScript"])
+        XCTAssertEqual(candidates.compactMap { $0["surface"] as? String }, ["JavaScript", "CoffeeScript", "FutureScript"])
         XCTAssertEqual(try sqliteCount(path: tempDBPath, table: "kg_entity_chunks"), 0)
     }
 

@@ -4818,29 +4818,19 @@ final class BrainDatabase: @unchecked Sendable {
         }
     }
 
-    private static func storeMetadataJSON(
-        queueID: String?,
-        additionalMetadata: [String: Any] = [:]
-    ) throws -> String {
+    private static func storeMetadataJSON(queueID: String?, additionalMetadata: [String: Any] = [:]) throws -> String {
         var payload = additionalMetadata
         if let queueID = normalizedQueueID(queueID) {
             // Queue provenance is server-owned and cannot be shadowed by caller metadata.
             payload["brainbar_queue_id"] = queueID
         }
-        guard JSONSerialization.isValidJSONObject(payload) else {
-            throw DBError.invalidMetadata("metadata must be a JSON object")
-        }
+        guard JSONSerialization.isValidJSONObject(payload) else { throw DBError.invalidMetadata("metadata must be a JSON object") }
         do {
             let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
-            guard let text = String(data: data, encoding: .utf8) else {
-                throw DBError.invalidMetadata("metadata did not encode as UTF-8")
-            }
+            guard let text = String(data: data, encoding: .utf8) else { throw DBError.invalidMetadata("metadata did not encode as UTF-8") }
             return text
-        } catch let error as DBError {
-            throw error
-        } catch {
-            throw DBError.invalidMetadata(error.localizedDescription)
-        }
+        } catch let error as DBError { throw error }
+        catch { throw DBError.invalidMetadata(error.localizedDescription) }
     }
 
     private static func normalizedQueueID(_ queueID: String?) -> String? {
@@ -6924,12 +6914,12 @@ final class BrainDatabase: @unchecked Sendable {
         let surface: String
         let range: NSRange
         let extractor: String
+        var normalizedName: String { surface.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ").lowercased() }
 
         func candidatePayload(chunkID: String, storedContentOffsetUTF16: Int) -> [String: Any] {
-            let normalized = surface.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ").lowercased()
             return [
                 "surface": surface,
-                "normalized_name": normalized,
+                "normalized_name": normalizedName,
                 // NSRegularExpression ranges are UTF-16 code-unit offsets. Keep
                 // the unit in each key because Python consumers use code points.
                 "start_utf16": range.location + storedContentOffsetUTF16,
@@ -6944,10 +6934,7 @@ final class BrainDatabase: @unchecked Sendable {
         }
     }
 
-    private struct DigestEntityResolution {
-        let id: String
-        let canonicalName: String
-    }
+    private struct DigestEntityResolution { let id: String; let canonicalName: String }
 
     /// Resolve one unambiguous active canonical entity; regex mentions cannot create KG rows.
     private func entityIDForDigestEntity(name: String) throws -> DigestEntityResolution? {
@@ -6956,6 +6943,7 @@ final class BrainDatabase: @unchecked Sendable {
         let activeClause = try tableColumns(name: "kg_entities", on: db).contains("status")
             ? "AND COALESCE(e.status, 'active') = 'active'"
             : ""
+        let normalizedName = name.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
         let existingSQL = """
             SELECT DISTINCT e.id, e.name
             FROM kg_entities e
@@ -6967,6 +6955,8 @@ final class BrainDatabase: @unchecked Sendable {
             JOIN kg_entities e ON e.id = a.entity_id
             WHERE lower(trim(a.alias)) = lower(trim(?))
               \(activeClause)
+              AND (a.valid_from IS NULL OR julianday(a.valid_from) <= julianday('now'))
+              AND (a.valid_to IS NULL OR julianday(a.valid_to) >= julianday('now'))
             ORDER BY 1
         """
         var existingStmt: OpaquePointer?
@@ -6974,24 +6964,26 @@ final class BrainDatabase: @unchecked Sendable {
             throw DBError.prepare(sqlite3_errcode(db))
         }
         defer { sqlite3_finalize(existingStmt) }
-        bindText(name, to: existingStmt, index: 1)
-        bindText(name, to: existingStmt, index: 2)
+        bindText(normalizedName, to: existingStmt, index: 1)
+        bindText(normalizedName, to: existingStmt, index: 2)
 
         var matches: [DigestEntityResolution] = []
-        while sqlite3_step(existingStmt) == SQLITE_ROW {
-            guard let id = columnText(existingStmt, 0),
-                  let canonicalName = columnText(existingStmt, 1) else { continue }
-            matches.append(DigestEntityResolution(id: id, canonicalName: canonicalName))
-            if matches.count > 1 {
-                return nil
+        var stepRC = sqlite3_step(existingStmt)
+        while stepRC == SQLITE_ROW {
+            if let id = columnText(existingStmt, 0), let canonicalName = columnText(existingStmt, 1) {
+                matches.append(DigestEntityResolution(id: id, canonicalName: canonicalName))
+                if matches.count > 1 { return nil }
             }
+            stepRC = sqlite3_step(existingStmt)
         }
+        guard stepRC == SQLITE_DONE else { throw DBError.step(stepRC) }
         return matches.first
     }
 
     private static func digestEntityMentions(in content: String) throws -> [DigestEntityMention] {
         let nsContent = content as NSString
         var mentions: [DigestEntityMention] = []
+        var seenNames = Set<String>()
 
         let patterns = [
             ("capitalized_multiword", "\\b([A-Z][a-z]+(?:\\s+[A-Z][a-z]+){1,2})\\b"),
@@ -7003,7 +6995,9 @@ final class BrainDatabase: @unchecked Sendable {
                 let surface = nsContent.substring(with: match.range)
                 let skipPrefixes = ["The", "This", "That", "These", "Those", "Here", "There", "When", "What", "Which", "Where", "How"]
                 guard !skipPrefixes.contains(where: { surface.hasPrefix($0 + " ") }) else { continue }
-                mentions.append(DigestEntityMention(surface: surface, range: match.range, extractor: extractor))
+                let mention = DigestEntityMention(surface: surface, range: match.range, extractor: extractor)
+                guard seenNames.insert(mention.normalizedName).inserted else { continue }
+                mentions.append(mention)
             }
         }
 
