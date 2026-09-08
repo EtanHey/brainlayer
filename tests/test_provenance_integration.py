@@ -818,7 +818,7 @@ def test_queue_and_drain_preserve_provenance_class(tmp_path, con):
                 "chunk_id": "chunk-1",
                 "enrichment": {"summary": "summary"},
                 "entities": [{"name": "controlLayer"}],
-                "provenance_class": "AGENT-INFERENCE",
+                "provenance_class": "codex-session",
             }
         ],
         queue_dir=tmp_path,
@@ -828,8 +828,8 @@ def test_queue_and_drain_preserve_provenance_class(tmp_path, con):
     _apply_enrichment(con, event)
 
     row = con.execute("SELECT provenance_class FROM chunks WHERE id = 'chunk-1'").fetchone()
-    assert event["provenance_class"] == "AGENT-INFERENCE"
-    assert row["provenance_class"] == "AGENT-INFERENCE"
+    assert event["provenance_class"] == "codex-session"
+    assert row["provenance_class"] == "codex-session"
     queued = con.execute("SELECT entity, chunk_id, reason FROM provenance_resolve_queue").fetchone()
     assert dict(queued) == {"entity": "controlLayer", "chunk_id": "chunk-1", "reason": "enrichment"}
 
