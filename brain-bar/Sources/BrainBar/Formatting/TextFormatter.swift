@@ -122,6 +122,10 @@ enum TextFormatter {
             "│ Chunks: \(result.chunks)  Entities: \(result.entities)  Relations: \(result.relations)"
         ]
 
+        if result.candidates > 0 {
+            lines.append("│ Candidates pending review: \(result.candidates)")
+        }
+
         if !result.actionItems.isEmpty {
             lines.append("├─ Action items (\(result.actionItems.count))")
             for item in result.actionItems.prefix(5) {

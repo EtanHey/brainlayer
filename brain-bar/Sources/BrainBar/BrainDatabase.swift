@@ -1462,14 +1462,18 @@ final class BrainDatabase: @unchecked Sendable {
         refreshStatistics: Bool = true,
         retries: Int = 3,
         busyTimeoutMillis: Int32? = nil,
-        verifyContentIntegrity: Bool = false
+        verifyContentIntegrity: Bool = false,
+        metadata: [String: Any] = [:]
     ) throws -> StoredChunk {
         guard let db else { throw DBError.notOpen }
         let chunkID = chunkID ?? Self.makeChunkID()
         let createdAt = createdAt ?? Self.timestamp()
         let contentHash = Self.bodySHA256(content)
         let tagsJSON = (try? encodeJSON(tags)) ?? "[]"
-        let metadataJSON = Self.storeMetadataJSON(queueID: queueID)
+        let metadataJSON = try Self.storeMetadataJSON(
+            queueID: queueID,
+            additionalMetadata: metadata
+        )
         let sql = """
             INSERT INTO chunks (id, content, metadata, source_file, project, tags, importance, source, content_type, value_type, char_count, created_at, preview_text, conversation_id, position, content_hash, chunk_origin, ingested_at, seen_count, last_seen_at, content_class, brick_id, source_uri, status)
             VALUES (?, ?, ?, 'brainbar-store', ?, ?, ?, ?, 'user_message', 'high', ?, ?, ?, ?, ?, ?, 'user_explicit', ?, 1, ?, 'knowledge', ?, 'brainbar-store', 'active')
@@ -1657,7 +1661,7 @@ final class BrainDatabase: @unchecked Sendable {
             return Self.isRetryableQueueErrorCode(rc)
         case .exec(let rc, _):
             return Self.isRetryableQueueErrorCode(rc)
-        case .notOpen, .open, .noResult, .invalidPragma,
+        case .notOpen, .open, .noResult, .invalidPragma, .invalidMetadata,
              .contentIntegrityCheckFailed, .contentIntegrityMismatch:
             return false
         }
@@ -4814,14 +4818,19 @@ final class BrainDatabase: @unchecked Sendable {
         }
     }
 
-    private static func storeMetadataJSON(queueID: String?) -> String {
-        guard let queueID = normalizedQueueID(queueID) else { return "{}" }
-        let payload = ["brainbar_queue_id": queueID]
-        guard let data = try? JSONEncoder().encode(payload),
-              let text = String(data: data, encoding: .utf8) else {
-            return "{}"
+    private static func storeMetadataJSON(queueID: String?, additionalMetadata: [String: Any] = [:]) throws -> String {
+        var payload = additionalMetadata
+        if let queueID = normalizedQueueID(queueID) {
+            // Queue provenance is server-owned and cannot be shadowed by caller metadata.
+            payload["brainbar_queue_id"] = queueID
         }
-        return text
+        guard JSONSerialization.isValidJSONObject(payload) else { throw DBError.invalidMetadata("metadata must be a JSON object") }
+        do {
+            let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+            guard let text = String(data: data, encoding: .utf8) else { throw DBError.invalidMetadata("metadata did not encode as UTF-8") }
+            return text
+        } catch let error as DBError { throw error }
+        catch { throw DBError.invalidMetadata(error.localizedDescription) }
     }
 
     private static func normalizedQueueID(_ queueID: String?) -> String? {
@@ -6901,94 +6910,120 @@ final class BrainDatabase: @unchecked Sendable {
 
     // MARK: - brain_digest: rule-based entity extraction
 
-    /// Build a deterministic, KG-resolvable entity ID from an entity name.
-    /// Format mirrors the existing `<type>-<slug>` convention so repeated digests
-    /// upsert the same entity (via INSERT OR REPLACE) instead of duplicating.
-    static func digestEntityID(name: String) -> String {
-        let slug = name
-            .lowercased()
-            .map { $0.isLetter || $0.isNumber ? $0 : "-" }
-            .reduce(into: "") { acc, ch in
-                if ch == "-" && acc.hasSuffix("-") { return }
-                acc.append(ch)
-            }
-        let trimmed = slug.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        return "digest-entity-\(trimmed.isEmpty ? "unknown" : trimmed)"
+    private struct DigestEntityMention {
+        let surface: String
+        let range: NSRange
+        let extractor: String
+        var normalizedName: String { surface.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ").lowercased() }
+
+        func candidatePayload(chunkID: String, storedContentOffsetUTF16: Int) -> [String: Any] {
+            return [
+                "surface": surface,
+                "normalized_name": normalizedName,
+                // NSRegularExpression ranges are UTF-16 code-unit offsets. Keep
+                // the unit in each key because Python consumers use code points.
+                "start_utf16": range.location + storedContentOffsetUTF16,
+                "length_utf16": range.length,
+                "span_basis": "stored_chunk_content",
+                "extractor": extractor,
+                "extractor_version": "brainbar-digest-regex-v2",
+                "source": "digest",
+                "source_chunk_id": chunkID,
+                "status": "pending_review",
+            ]
+        }
     }
 
-    private func entityIDForDigestEntity(name: String) throws -> String? {
+    private struct DigestEntityResolution { let id: String; let canonicalName: String }
+
+    /// Resolve one unambiguous active canonical entity; regex mentions cannot create KG rows.
+    private func entityIDForDigestEntity(name: String) throws -> DigestEntityResolution? {
         guard let db else { throw DBError.notOpen }
 
+        let entityColumns = try tableColumns(name: "kg_entities", on: db)
+        let activeClause = entityColumns.contains("status")
+            ? "AND COALESCE(e.status, 'active') = 'active'"
+            : ""
+        let legacyDigestClause = entityColumns.contains("user_verified")
+            ? "AND NOT (e.id LIKE 'digest-entity-%' AND e.entity_type = 'concept' AND COALESCE(e.user_verified, 0) = 0)"
+            : "AND NOT (e.id LIKE 'digest-entity-%' AND e.entity_type = 'concept')"
+        let normalizedName = name.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
         let existingSQL = """
-            SELECT id
-            FROM kg_entities
-            WHERE name = ?
-            ORDER BY CASE entity_type
-                WHEN 'person' THEN 0
-                WHEN 'project' THEN 1
-                WHEN 'company' THEN 2
-                WHEN 'tool' THEN 3
-                WHEN 'concept' THEN 4
-                ELSE 5
-            END, id
-            LIMIT 1
+            SELECT DISTINCT e.id, e.name
+            FROM kg_entities e
+            WHERE lower(trim(e.name)) = lower(trim(?))
+              \(activeClause)
+              \(legacyDigestClause)
+            UNION
+            SELECT DISTINCT e.id, e.name
+            FROM kg_entity_aliases a
+            JOIN kg_entities e ON e.id = a.entity_id
+            WHERE lower(trim(a.alias)) = lower(trim(?))
+              \(activeClause)
+              \(legacyDigestClause)
+              AND (a.valid_from IS NULL OR julianday(a.valid_from) <= julianday('now'))
+              AND (a.valid_to IS NULL OR julianday(a.valid_to) >= julianday('now'))
+            ORDER BY 1
         """
         var existingStmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, existingSQL, -1, &existingStmt, nil) == SQLITE_OK else {
             throw DBError.prepare(sqlite3_errcode(db))
         }
-        bindText(name, to: existingStmt, index: 1)
-        if sqlite3_step(existingStmt) == SQLITE_ROW {
-            let existingID = columnText(existingStmt, 0)
-            sqlite3_finalize(existingStmt)
-            return existingID
-        }
-        sqlite3_finalize(existingStmt)
+        defer { sqlite3_finalize(existingStmt) }
+        bindText(normalizedName, to: existingStmt, index: 1)
+        bindText(normalizedName, to: existingStmt, index: 2)
 
-        let entityID = Self.digestEntityID(name: name)
-        let insertSQL = "INSERT OR IGNORE INTO kg_entities (id, entity_type, name, metadata) VALUES (?, 'concept', ?, '{}')"
-        try runWriteStatement(on: db, sql: insertSQL, retries: 3) { stmt in
-            bindText(entityID, to: stmt, index: 1)
-            bindText(name, to: stmt, index: 2)
+        var matches: [DigestEntityResolution] = []
+        var stepRC = sqlite3_step(existingStmt)
+        while stepRC == SQLITE_ROW {
+            if let id = columnText(existingStmt, 0), let canonicalName = columnText(existingStmt, 1) {
+                matches.append(DigestEntityResolution(id: id, canonicalName: canonicalName))
+                if matches.count > 1 { return nil }
+            }
+            stepRC = sqlite3_step(existingStmt)
+        }
+        guard stepRC == SQLITE_DONE else { throw DBError.step(stepRC) }
+        return matches.first
+    }
+
+    private static func digestEntityMentions(in content: String) throws -> [DigestEntityMention] {
+        let nsContent = content as NSString
+        var mentions: [DigestEntityMention] = []
+        var seenNames = Set<String>()
+
+        let patterns = [
+            ("capitalized_multiword", "\\b([A-Z][a-z]+(?:\\s+[A-Z][a-z]+){1,2})\\b"),
+            ("pascal_case", "\\b([A-Z][a-z]+[A-Z][a-zA-Z]+)\\b"),
+        ]
+        for (extractor, pattern) in patterns {
+            let regex = try NSRegularExpression(pattern: pattern)
+            for match in regex.matches(in: content, range: NSRange(location: 0, length: nsContent.length)) {
+                let surface = nsContent.substring(with: match.range)
+                let skipPrefixes = ["The", "This", "That", "These", "Those", "Here", "There", "When", "What", "Which", "Where", "How"]
+                guard !skipPrefixes.contains(where: { surface.hasPrefix($0 + " ") }) else { continue }
+                let mention = DigestEntityMention(surface: surface, range: match.range, extractor: extractor)
+                guard seenNames.insert(mention.normalizedName).inserted else { continue }
+                mentions.append(mention)
+            }
         }
 
-        var insertedStmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, existingSQL, -1, &insertedStmt, nil) == SQLITE_OK else {
-            throw DBError.prepare(sqlite3_errcode(db))
+        return mentions.sorted {
+            if $0.range.location != $1.range.location { return $0.range.location < $1.range.location }
+            if $0.range.length != $1.range.length { return $0.range.length > $1.range.length }
+            return $0.surface < $1.surface
         }
-        defer { sqlite3_finalize(insertedStmt) }
-        bindText(name, to: insertedStmt, index: 1)
-        guard sqlite3_step(insertedStmt) == SQLITE_ROW else { return nil }
-        return columnText(insertedStmt, 0)
     }
 
     func digest(content: String, project: String? = nil, title: String? = nil) throws -> [String: Any] {
         guard db != nil else { throw DBError.notOpen }
 
         // Rule-based entity extraction
+        let mentions = try Self.digestEntityMentions(in: content)
         var entities: [String] = []
+        var entityCandidates: [[String: Any]] = []
         var urls: [String] = []
         var codeIds: [String] = []
-
-        // Extract capitalized multi-word names (2-3 words, each capitalized)
-        let namePattern = try NSRegularExpression(pattern: "\\b([A-Z][a-z]+(?:\\s+[A-Z][a-z]+){1,2})\\b")
         let nsContent = content as NSString
-        let nameMatches = namePattern.matches(in: content, range: NSRange(location: 0, length: nsContent.length))
-        for match in nameMatches {
-            let name = nsContent.substring(with: match.range)
-            // Filter common non-entity phrases
-            let skip = ["The", "This", "That", "These", "Those", "Here", "There", "When", "What", "Which", "Where", "How"]
-            if !skip.contains(where: { name.hasPrefix($0 + " ") }) {
-                entities.append(name)
-            }
-        }
-
-        // Extract PascalCase identifiers (code names like BrainLayer, MCPRouter)
-        let pascalPattern = try NSRegularExpression(pattern: "\\b([A-Z][a-z]+[A-Z][a-zA-Z]+)\\b")
-        let pascalMatches = pascalPattern.matches(in: content, range: NSRange(location: 0, length: nsContent.length))
-        for match in pascalMatches {
-            entities.append(nsContent.substring(with: match.range))
-        }
 
         // Extract URLs
         let urlPattern = try NSRegularExpression(pattern: "https?://[^\\s,)]+")
@@ -7004,26 +7039,43 @@ final class BrainDatabase: @unchecked Sendable {
             codeIds.append(nsContent.substring(with: match.range))
         }
 
-        // Deduplicate
-        entities = Array(Set(entities))
+        // Deduplicate non-entity extraction products.
         urls = Array(Set(urls))
         codeIds = Array(Set(codeIds))
-
-        // Store the digest as a chunk
-        let digestSummary = "Digest: \(entities.count) entities, \(urls.count) URLs, \(codeIds.count) code refs"
         let titledContent: String = {
             if let title, !title.isEmpty { return "\(title)\n\n\(content)" }
             return content
         }()
+        let storedContentOffsetUTF16 = (titledContent as NSString).length - nsContent.length
+        let digestChunkID = Self.makeChunkID()
 
         do {
+            var resolutionsByID: [String: DigestEntityResolution] = [:]
+            var orderedEntityIDs: [String] = []
+            for mention in mentions {
+                if let resolution = try entityIDForDigestEntity(name: mention.surface) {
+                    if resolutionsByID[resolution.id] == nil {
+                        resolutionsByID[resolution.id] = resolution
+                        orderedEntityIDs.append(resolution.id)
+                    }
+                } else {
+                    entityCandidates.append(mention.candidatePayload(chunkID: digestChunkID, storedContentOffsetUTF16: storedContentOffsetUTF16))
+                }
+            }
+            entities = orderedEntityIDs.compactMap { resolutionsByID[$0]?.canonicalName }
+            let digestSummary = "Digest: \(entities.count) entities, \(entityCandidates.count) entity candidates, \(urls.count) URLs, \(codeIds.count) code refs"
+            let candidateMetadata: [String: Any] = entityCandidates.isEmpty
+                ? [:]
+                : ["digest_entity_candidates": entityCandidates]
             let stored = try store(
                 content: titledContent,
                 tags: ["digest"] + entities.prefix(5).map { $0 },
                 importance: 5,
                 source: "digest",
                 project: project,
-                verifyContentIntegrity: true
+                chunkID: digestChunkID,
+                verifyContentIntegrity: true,
+                metadata: candidateMetadata
             )
             guard let integrity = stored.contentIntegrity else {
                 throw DBError.contentIntegrityCheckFailed("verification receipt was not produced")
@@ -7033,9 +7085,8 @@ final class BrainDatabase: @unchecked Sendable {
             // immediately resolvable via brain_entity (lookupEntity), and link
             // each to the digested chunk so brain_entity surfaces its memories.
             var entitiesPersisted = 0
-            for name in entities {
+            for entityID in orderedEntityIDs {
                 do {
-                    guard let entityID = try entityIDForDigestEntity(name: name) else { continue }
                     try linkEntityChunk(entityId: entityID, chunkId: stored.chunkID, relevance: 1.0)
                     entitiesPersisted += 1
                 } catch {
@@ -7046,6 +7097,7 @@ final class BrainDatabase: @unchecked Sendable {
             return [
                 "mode": "digest",
                 "entities": entities,
+                "entity_candidates": entityCandidates,
                 "entities_created": entitiesPersisted,
                 "urls": urls,
                 "code_identifiers": codeIds,
@@ -7063,13 +7115,14 @@ final class BrainDatabase: @unchecked Sendable {
             return [
                 "mode": "digest",
                 "entities": entities,
+                "entity_candidates": entityCandidates,
                 "entities_created": 0,
                 "urls": urls,
                 "code_identifiers": codeIds,
                 "chunks_created": 0,
                 "relations_created": 0,
                 "error": "Storage failed: \(error.localizedDescription)",
-                "summary": "\(digestSummary) (storage failed)"
+                "summary": "Digest: \(entities.count) entities, \(entityCandidates.count) entity candidates, \(urls.count) URLs, \(codeIds.count) code refs (storage failed)"
             ]
         }
     }
@@ -7090,6 +7143,7 @@ final class BrainDatabase: @unchecked Sendable {
         case exec(Int32, String)
         case noResult
         case invalidPragma(String)
+        case invalidMetadata(String)
         case contentIntegrityCheckFailed(String)
         case contentIntegrityMismatch(StoredContentIntegrity)
 
@@ -7102,6 +7156,7 @@ final class BrainDatabase: @unchecked Sendable {
             case .exec(let rc, let message): return "SQLite exec failed: \(rc) (\(message))"
             case .noResult: return "No result"
             case .invalidPragma(let name): return "PRAGMA '\(name)' not in allowlist"
+            case .invalidMetadata(let reason): return "Invalid chunk metadata: \(reason)"
             case .contentIntegrityCheckFailed(let reason):
                 return "Stored content integrity check failed: \(reason)"
             case .contentIntegrityMismatch(let integrity):
