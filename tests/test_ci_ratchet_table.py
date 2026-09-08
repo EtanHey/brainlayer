@@ -11,11 +11,14 @@ import zipfile
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 import yaml
 
 from scripts import ci_ratchet_table as ratchet
+from scripts import sprint_gate
 
 
 def _clean_git_env() -> dict[str, str]:
@@ -653,7 +656,7 @@ def test_the_machine_target_reason_survives_for_an_off_target_mac(tmp_path: Path
     ("name", "expected"),
     [
         ("mapped bytes", "no runner-side collector for mapped bytes"),
-        ("search p50/p95", "no runner-side collector for search latency"),
+        ("search p50/p95", "no search latency collector result for this run"),
         ("idle CPU", "no runner-side collector for idle CPU"),
     ],
 )
@@ -661,7 +664,7 @@ def test_socket_rows_fall_through_to_the_missing_collector_on_a_ready_mac(
     tmp_path: Path, name: str, expected: str
 ) -> None:
     # Everything the row needs is present, so the reason must be the honest one: nobody wrote the
-    # collector yet. A row that blamed the machine here would be hiding w13's whole point.
+    # collector result. A row that blamed the machine here would be hiding w13's whole point.
     result = row(ratchet.collect(mac_probe(tmp_path), CORPUS), name)
     assert result.status == ratchet.NA
     assert expected in result.value
@@ -1817,7 +1820,6 @@ def test_the_notes_state_the_boundary_and_the_missing_key(tmp_path: Path) -> Non
     notes = attestation_row(tmp_path).notes
     assert "diff-reviewable, not tamper-proof" in notes
     assert "cannot write to another run's artifacts" in notes
-    assert "no runner-side collector measures any baseline field" in notes
 
 
 # --- bootstrap: before the first attest run on main, the base tip stands in --------------------
@@ -1961,7 +1963,7 @@ def test_a_main_run_writes_an_attestation_the_pr_side_reads_back(tmp_path: Path,
     assert written["workflow"] == ratchet.ATTEST_WORKFLOW
     assert written["baseline"] == ratchet.baseline_view(CORPUS)
     assert written["baseline_sha256"] == ratchet.baseline_digest(ratchet.baseline_view(CORPUS))
-    assert written["measured"] == {}  # no runner-side collector measures a baseline field yet
+    assert written["measured"] == {}
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", written["measured_at"])
     assert set(written["rows"]) == {item.name for item in ratchet.collect(linux_probe(tmp_path), CORPUS)}
     assert written["rows"]["provenance"]["status"] == ratchet.GREEN
@@ -2570,6 +2572,121 @@ def real_history() -> tuple[dict, ...]:
         )
         for index, (p50, p95) in enumerate(zip(GREEN_MAIN_P50_MS, GREEN_MAIN_P95_MS, strict=True))
     )
+
+
+def search_latency_measurement(tmp_path: Path, **overrides) -> ratchet.SearchLatencyMeasurement:
+    base = {
+        "p50_ms": 300.0,
+        "p95_ms": 2000.0,
+        "socket_path": str(tmp_path / "brainbar.sock"),
+        "binary_path": str(ratchet.BRAINBAR_DAEMON_BINARY),
+        "app_version": "1.5.9",
+        "git_commit": "c" * 40,
+        "hostname": CORPUS["latency_baseline_ms"]["hostname"],
+        "os_name": CORPUS["machine_target"]["os"],
+        "architecture": CORPUS["machine_target"]["architecture"],
+        "measured_at": NOW.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "sample_count": len(CORPUS["queries"]),
+    }
+    return ratchet.SearchLatencyMeasurement(**{**base, **overrides})
+
+
+def detect_latency(probe: ratchet.Probe, corpus: dict = CORPUS) -> ratchet.SearchLatencySelection:
+    return ratchet.detect_search_latency(
+        corpus, probe.os_name, probe.architecture, probe.hostname, probe.socket_path, probe.db_path
+    )
+
+
+def mock_search(monkeypatch, text: str, hybrid: bool = True) -> list[dict]:
+    monkeypatch.setattr(ratchet, "brainbar_bundle_identity", lambda _path: ("1.5.9", "c" * 40))
+    mode = "hybrid" if hybrid else "fallback"
+    response = {"content": [{"type": "text", "text": text}], "structuredContent": {"search_mode": mode}}
+    calls = []
+    c = SimpleNamespace(initialize=lambda: None, call=lambda _, a: calls.append(a) or response, close=lambda: None)
+    monkeypatch.setattr(sprint_gate, "MCPClient", lambda *_args: c)
+    return calls
+
+
+def test_a_slow_controlled_search_measurement_renders_red(tmp_path: Path) -> None:
+    measurement = search_latency_measurement(tmp_path, p50_ms=5000.0, p95_ms=5000.0)
+    probe = mac_probe(tmp_path, attestations=real_history(), search_latency=measurement)
+    result = ratchet.row_search_latency(probe, CORPUS)
+    assert result.status == ratchet.RED and "exceeds" in result.value
+
+
+def test_a_fast_search_measurement_renders_green_against_the_attested_band(tmp_path: Path) -> None:
+    probe = mac_probe(tmp_path, attestations=real_history(), search_latency=search_latency_measurement(tmp_path))
+    result = ratchet.row_search_latency(probe, CORPUS)
+    assert result.status == ratchet.GREEN and result.value == "p50 300.000 ms / p95 2000.000 ms"
+
+
+def test_search_latency_rejects_mismatched_served_provenance(tmp_path: Path) -> None:
+    measurement = search_latency_measurement(tmp_path, binary_path="/tmp/not-the-served-brainbar")
+    probe = mac_probe(tmp_path, attestations=real_history(), search_latency=measurement)
+    result = ratchet.row_search_latency(probe, CORPUS)
+    assert result.status == ratchet.RED and "provenance mismatch: served binary" in result.value
+    payload = ratchet.attestation_payload([result], probe, CORPUS, HEAD, 42, 1, NOW)
+    assert payload["measured"] == {} and payload["rows"]["search p50/p95"]["measurement"] is None
+
+
+def test_an_unmeasured_band_keeps_the_real_sample_for_future_attestations(tmp_path: Path) -> None:
+    probe = mac_probe(tmp_path, attestations=real_history()[:4], search_latency=search_latency_measurement(tmp_path))
+    rows = ratchet.collect(probe, CORPUS)
+    assert row(rows, "search p50/p95").status == ratchet.NA
+    payload = ratchet.attestation_payload(rows, probe, CORPUS, HEAD, 42, 1, NOW)
+    assert payload["measured"] == {
+        "latency_baseline_ms.p50": 300.0,
+        "latency_baseline_ms.p95": 2000.0,
+    }
+    search_row = payload["rows"]["search p50/p95"]
+    assert search_row["measurement"]["sample_count"] == len(CORPUS["queries"])
+    assert search_row["measurement"]["provenance"]["socket_path"] == str(tmp_path / "brainbar.sock")
+
+
+def test_collector_is_not_attempted_before_the_machine_capabilities_pass(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(ratchet, "collect_search_latency", lambda *_args: pytest.fail("collector ran"))
+    probe = linux_probe(tmp_path)
+    assert detect_latency(probe) == ratchet.SearchLatencySelection()
+
+
+def test_a_stale_socket_with_no_owner_is_an_honest_capability_gap(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(ratchet.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(ratchet.subprocess, "run", lambda *_args, **_kwargs: subprocess.CompletedProcess([], 1, "", ""))
+    probe = mac_probe(tmp_path)
+    selection = detect_latency(probe)
+    result = ratchet.row_search_latency(replace(probe, search_latency_unavailable=selection.unavailable), CORPUS)
+    assert result.status == ratchet.NA and "no process owns the socket" in result.value
+
+
+def test_post_sweep_owner_loss_becomes_a_collector_problem(tmp_path: Path, monkeypatch) -> None:
+    owners = Mock(side_effect=[(1, ratchet.BRAINBAR_DAEMON_BINARY), ProcessLookupError("owner disappeared")])
+    monkeypatch.setattr(ratchet, "socket_owner_binary", owners)
+    calls = mock_search(monkeypatch, '## Search results for "q" - 1 of 1 shown\n### 1. hit')
+    probe = mac_probe(tmp_path)
+    selection = detect_latency(probe, {**CORPUS, "queries": ["q", "q"]})
+    assert [call["query"].strip() for call in calls] == ["q", "q"] and calls[0]["query"] != calls[1]["query"]
+    probe.socket_path.unlink()
+    result = ratchet.row_search_latency(replace(probe, search_latency_problem=selection.problem), CORPUS)
+    assert result.status == ratchet.RED and "ProcessLookupError: owner disappeared" in result.value
+
+
+def test_lsof_failure_is_a_collector_error_not_an_absent_owner(monkeypatch) -> None:
+    monkeypatch.setattr(ratchet.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        ratchet.subprocess, "run", lambda *_args, **_kwargs: subprocess.CompletedProcess([], 2, "", "denied")
+    )
+    with pytest.raises(RuntimeError, match="lsof failed"):
+        ratchet.socket_owner_binary(Path("/tmp/brainbar.sock"))
+
+
+def test_fallback_and_empty_search_responses_become_collector_problems(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(ratchet, "socket_owner_binary", lambda _path: (1, ratchet.BRAINBAR_DAEMON_BINARY))
+    mock_search(monkeypatch, '## Search results for "q" - 1 of 1 shown\n### 1. local hit', hybrid=False)
+    fallback = detect_latency(mac_probe(tmp_path), {**CORPUS, "queries": ["q"]})
+    assert fallback.problem and "hybrid helper" in fallback.problem
+    mock_search(monkeypatch, '## Search results for "q" - 0 of 0 shown')
+    empty = detect_latency(mac_probe(tmp_path), {**CORPUS, "queries": ["q"]})
+    assert empty.problem and "brain_search returned no results" in empty.problem
 
 
 def write_attestations(root: Path, documents: tuple[dict, ...]) -> Path:

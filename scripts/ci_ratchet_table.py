@@ -68,11 +68,14 @@ import hashlib
 import json
 import os
 import platform
+import plistlib
 import re
+import shlex
 import shutil
 import socket as socket_module
 import subprocess
 import sys
+import time
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -105,6 +108,7 @@ STAMP_MEMBER = "brainlayer/_build.py"
 STAMP_PATTERN = re.compile(r'^BUILD_SHA = "([0-9a-f]{40})"\s*$')
 SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 FALLBACK_DB = Path("~/.local/share/brainlayer/brainlayer.db").expanduser()
+BRAINBAR_DAEMON_BINARY = Path("/Applications/BrainBar.app/Contents/MacOS/BrainBarDaemon")
 
 # What the macOS parity job may say about itself. `measured` carries counts this run produced;
 # `failed` carries the stage that broke. There is deliberately no third value: a job that ran and
@@ -170,6 +174,31 @@ class Row:
 
 
 @dataclass(frozen=True)
+class SearchLatencyMeasurement:
+    p50_ms: float
+    p95_ms: float
+    socket_path: str
+    binary_path: str
+    app_version: str
+    git_commit: str
+    hostname: str
+    os_name: str
+    architecture: str
+    measured_at: str
+    sample_count: int
+
+
+@dataclass(frozen=True)
+class SearchLatencySelection:
+    measurement: SearchLatencyMeasurement | None = None
+    unavailable: str | None = None
+    problem: str | None = None
+
+
+class SearchLatencyUnavailable(RuntimeError): ...
+
+
+@dataclass(frozen=True)
 class Probe:
     """Everything a row is allowed to know about the machine it is running on."""
 
@@ -218,6 +247,9 @@ class Probe:
     # a store WAS handed over and could not be read -- a finding, on the signature report's rule.
     attestations: tuple[dict, ...] | None = None
     attestations_problem: str | None = None
+    search_latency: SearchLatencyMeasurement | None = None
+    search_latency_unavailable: str | None = None
+    search_latency_problem: str | None = None
 
     @classmethod
     def detect(
@@ -242,12 +274,18 @@ class Probe:
         attested = select_attestation(attestation, attestation_bootstrap, attestation_unresolved)
         store = select_attestations(attestations)
         resolved_fallback_root, fallback_root_source = resolve_fallback_gits_root(fallback_gits_root)
+        os_name = platform.system()
+        architecture = platform.machine()
+        hostname = socket_module.gethostname()
+        socket_path = Path(corpus["socket_path"])
+        db_path = canonical_db_path()
+        latency = detect_search_latency(corpus, os_name, architecture, hostname, socket_path, db_path)
         return cls(
-            os_name=platform.system(),
-            architecture=platform.machine(),
-            hostname=socket_module.gethostname(),
-            socket_path=Path(corpus["socket_path"]),
-            db_path=canonical_db_path(),
+            os_name=os_name,
+            architecture=architecture,
+            hostname=hostname,
+            socket_path=socket_path,
+            db_path=db_path,
             wheel=selected.path,
             head_sha=git_head(),
             tree_dirty=git_tree_dirty(),
@@ -267,6 +305,9 @@ class Probe:
             attestation_problem=attested.problem,
             attestations=store.attestations,
             attestations_problem=store.problem,
+            search_latency=latency.measurement,
+            search_latency_unavailable=latency.unavailable,
+            search_latency_problem=latency.problem,
             fallback_gits_root=resolved_fallback_root,
             fallback_root_source=fallback_root_source,
         )
@@ -344,9 +385,7 @@ class Attestation:
     baseline: dict
     digest: str
     # Dotted baseline path -> the value that run MEASURED for it. This is the legitimate path for a
-    # baseline to move: a PR may set a field to exactly what main measured, and nothing else. Empty
-    # today, and honestly so: no runner-side collector measures any baseline field yet, so today no
-    # PR can move one -- the key to this lock is a collector, not a hand.
+    # A PR may move a baseline only to the exact value main measured; absent paths stay locked.
     measured: dict[str, object]
 
 
@@ -932,8 +971,8 @@ ATTESTATION_NOTES = (
     "`workflow_dispatch` run of `ratchet-attest.yml` on `main`, fetched through the Actions API — "
     "a PR run cannot write to "
     "another run's artifacts. A field that differs is RED unless that main run **measured** the "
-    "new value; today no runner-side collector measures any baseline field, so today the baseline "
-    "cannot move by PR at all, and this row says so instead of a hand edit passing. Boundary: the "
+    "new value. The calibrated socket collector can license p50/p95; every absent measured path "
+    "stays locked, so missing collection never passes as permission for a hand edit. Boundary: the "
     "comparator is this PR's checkout of `ci_ratchet_table.py`, diff-reviewable, not tamper-proof."
 )
 
@@ -1199,6 +1238,146 @@ def served_stack_requirements(probe: Probe, corpus: dict) -> list[tuple[bool, st
     ]
 
 
+def socket_owner_binary(socket_path: Path) -> tuple[int, Path]:
+    lsof, ps = shutil.which("lsof"), shutil.which("ps")
+    if lsof is None or ps is None:
+        raise RuntimeError("lsof and ps are required to bind a socket measurement to its served binary")
+    owner_result = subprocess.run(
+        [lsof, "-n", "-t", "--", str(socket_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    no_match = owner_result.returncode == 1 and not owner_result.stdout.strip() and not owner_result.stderr.strip()
+    if owner_result.returncode and not no_match:
+        raise RuntimeError(f"lsof failed for {socket_path}: {owner_result.stderr.strip() or owner_result.returncode}")
+    pids = sorted({int(pid) for owner in owner_result.stdout.splitlines() if (pid := owner.strip()).isdigit()})
+    if not pids:
+        raise ProcessLookupError(f"no process owns the socket at {socket_path}")
+    if len(pids) != 1:
+        raise RuntimeError(f"expected one process to own {socket_path}, found {len(pids)}")
+    pid = pids[0]
+    command = subprocess.run(
+        [ps, "-ww", "-p", str(pid), "-o", "command="],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    ).stdout.strip()
+    if not (arguments := shlex.split(command)):
+        raise RuntimeError(f"ps returned no command for socket owner PID {pid}")
+    return pid, Path(arguments[0]).resolve()
+
+
+def brainbar_bundle_identity(binary: Path) -> tuple[str, str]:
+    info_plist = binary.parent.parent / "Info.plist"
+    try:
+        with info_plist.open("rb") as handle:
+            info = plistlib.load(handle)
+    except (OSError, plistlib.InvalidFileException) as error:
+        raise RuntimeError(f"could not read served BrainBar Info.plist ({type(error).__name__})") from error
+    version, commit = info.get("CFBundleShortVersionString"), info.get("GitCommit")
+    if not isinstance(version, str) or not version.strip():
+        raise RuntimeError("served BrainBar Info.plist has no app version")
+    if not isinstance(commit, str) or SHA_PATTERN.fullmatch(commit) is None:
+        raise RuntimeError("served BrainBar Info.plist has no 40-hex GitCommit")
+    return version.strip(), commit
+
+
+def collect_search_latency(corpus: dict, socket_path: Path) -> SearchLatencyMeasurement:
+    from scripts.sprint_gate import MCPClient, percentile, search_result_rows, tool_text
+
+    try:
+        before_pid, binary = socket_owner_binary(socket_path)
+    except ProcessLookupError as error:
+        raise SearchLatencyUnavailable(str(error)) from error
+    version, commit = brainbar_bundle_identity(binary)
+    client = MCPClient(str(socket_path), corpus["mcp_timeout_seconds"])
+    try:
+        client.initialize()
+        samples = []
+        for query in corpus["queries"]:
+            uncached_query = query + "".join(" \t"[int(bit)] for bit in f"{time.time_ns():064b}")
+            started = time.perf_counter()
+            result = client.call("brain_search", {"query": uncached_query, "num_results": 1})
+            elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
+            if result.get("structuredContent", {}).get("search_mode") != "hybrid":
+                raise RuntimeError("brain_search response was not served by the hybrid helper")
+            if not search_result_rows(tool_text(result)):
+                raise RuntimeError("brain_search returned no results for a configured query")
+            samples.append(elapsed_ms)
+    finally:
+        client.close()
+    after_pid, after_binary = socket_owner_binary(socket_path)
+    if (after_pid, after_binary) != (before_pid, binary):
+        raise RuntimeError("BrainBar socket owner changed during the search latency sweep")
+    return SearchLatencyMeasurement(
+        p50_ms=percentile(samples, 0.50),
+        p95_ms=percentile(samples, 0.95),
+        socket_path=str(socket_path),
+        binary_path=str(binary),
+        app_version=version,
+        git_commit=commit,
+        hostname=socket_module.gethostname(),
+        os_name=platform.system(),
+        architecture=platform.machine(),
+        measured_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        sample_count=len(samples),
+    )
+
+
+def detect_search_latency(
+    corpus: dict, os_name: str, architecture: str, hostname: str, socket_path: Path, db_path: Path
+) -> SearchLatencySelection:
+    target, baseline = corpus["machine_target"], corpus["latency_baseline_ms"]
+    if not (
+        socket_path.exists()
+        and os_name == target["os"]
+        and architecture == target["architecture"]
+        and db_path.exists()
+        and hostname == baseline["hostname"]
+    ):
+        return SearchLatencySelection()
+    try:
+        return SearchLatencySelection(measurement=collect_search_latency(corpus, socket_path))
+    except SearchLatencyUnavailable as error:
+        return SearchLatencySelection(unavailable=str(error))
+    except Exception as error:
+        return SearchLatencySelection(problem=f"search latency collector failed: {type(error).__name__}: {error}")
+
+
+def search_latency_measurement_problem(measurement: SearchLatencyMeasurement, probe: Probe, corpus: dict) -> str | None:
+    target = corpus["machine_target"]
+    expected = [
+        ("socket path", (measurement.socket_path, str(probe.socket_path))),
+        ("served binary", (measurement.binary_path, str(BRAINBAR_DAEMON_BINARY))),
+        ("calibrated host", (measurement.hostname, corpus["latency_baseline_ms"]["hostname"])),
+        ("target OS", (measurement.os_name, target["os"])),
+        ("target architecture", (measurement.architecture, target["architecture"])),
+    ]
+    for label, (actual, wanted) in expected:
+        if actual != wanted:
+            return f"search latency provenance mismatch: {label} {actual!r} != {wanted!r}"
+    if not measurement.app_version.strip():
+        return "search latency provenance has no BrainBar app version"
+    if SHA_PATTERN.fullmatch(measurement.git_commit) is None:
+        return "search latency provenance has no 40-hex BrainBar GitCommit"
+    if measurement.sample_count != len(corpus["queries"]):
+        return f"search latency sample count {measurement.sample_count} != {len(corpus['queries'])} configured queries"
+    if not margins.honest_value(measurement.p50_ms) or not margins.honest_value(measurement.p95_ms):
+        return "search latency p50/p95 are not finite non-negative measurements"
+    if measurement.p50_ms > measurement.p95_ms:
+        return "search latency p50 exceeds p95"
+    try:
+        measured_at = datetime.fromisoformat(measurement.measured_at.replace("Z", "+00:00"))
+    except ValueError:
+        return "search latency provenance timestamp is not ISO-8601"
+    if measured_at.tzinfo is None:
+        return "search latency provenance timestamp has no timezone"
+    return None
+
+
 def row_mapped_bytes(probe: Probe, corpus: dict) -> Row:
     notes = (
         "Baseline **26.2 GB** — installed Mac, socket, 2026-09-03, after R2 drained 15,070 → 0. "
@@ -1228,6 +1407,8 @@ def margin_notes(probe: Probe, unit: str, keys: dict[str, tuple[str, ...]]) -> t
     formed from valid attestations (a non-finite limit) is a problem for the row to render RED, not
     an exception for the collector to die on.
     """
+    if probe.attestations_problem:
+        return "", probe.attestations_problem
     sentences = []
     for name, key in keys.items():
         try:
@@ -1241,10 +1422,23 @@ def margin_notes(probe: Probe, unit: str, keys: dict[str, tuple[str, ...]]) -> t
     return " ".join(sentences), None
 
 
+def search_latency_verdict(measurement: SearchLatencyMeasurement, attestations: tuple[dict, ...]) -> tuple[str, str]:
+    measured = {"p50": measurement.p50_ms, "p95": measurement.p95_ms}
+    applied = {name: margins.margin_for(list(attestations), key) for name, key in margins.LATENCY_KEYS.items()}
+    verdicts = {name: margins.judge(applied[name], value) for name, value in measured.items()}
+    value = f"p50 {measurement.p50_ms:.3f} ms / p95 {measurement.p95_ms:.3f} ms"
+    failed = [name for name, verdict in verdicts.items() if verdict == margins.FAIL]
+    if failed:
+        limits = ", ".join(f"{name} {applied[name].limit:.1f} ms" for name in failed)
+        return RED, f"{value} · exceeds {limits}"
+    unmeasured = [name for name, verdict in verdicts.items() if verdict == margins.UNMEASURED_VERDICT]
+    if unmeasured:
+        return NA, f"n/a — measured this run, but margin {'/'.join(unmeasured)} is unmeasured"
+    return GREEN, value
+
+
 def row_search_latency(probe: Probe, corpus: dict) -> Row:
     method = "socket · installed Mac"
-    if probe.attestations_problem:
-        return Row("search p50/p95", RED, probe.attestations_problem, method, SEARCH_LATENCY_NOTES)
     baseline = corpus["latency_baseline_ms"]
     bands, problem = margin_notes(probe, "ms", margins.LATENCY_KEYS)
     if problem:
@@ -1254,6 +1448,8 @@ def row_search_latency(probe: Probe, corpus: dict) -> Row:
         f"{baseline['captured_at']} under {baseline['captured_under']} "
         "(`tests/fixtures/sprint_gate/corpus.json`). Not measured by this run."
     )
+    if probe.search_latency_problem:
+        return Row("search p50/p95", RED, probe.search_latency_problem, method, notes)
     reason = first_unmet(
         served_stack_requirements(probe, corpus)
         + [
@@ -1263,13 +1459,27 @@ def row_search_latency(probe: Probe, corpus: dict) -> Row:
                 f"host {probe.hostname} is not the calibrated baseline host {baseline['hostname']}",
             ),
             (
-                False,
-                "no runner-side collector for search latency: a synthetic corpus would measure a "
+                any((probe.search_latency, probe.search_latency_problem)),
+                probe.search_latency_unavailable
+                or "no search latency collector result for this run: a synthetic corpus would measure a "
                 "different thing and would owe the table a different method label",
             ),
         ]
     )
-    return Row("search p50/p95", NA, f"n/a — {reason}", method, notes)
+    if reason:
+        return Row("search p50/p95", NA, f"n/a — {reason}", method, notes)
+    measurement = probe.search_latency
+    assert measurement is not None
+    if provenance_problem := search_latency_measurement_problem(measurement, probe, corpus):
+        return Row("search p50/p95", RED, provenance_problem, method, notes)
+
+    status, value = search_latency_verdict(measurement, probe.attestations or ())
+    provenance = (
+        f"Measured {measurement.sample_count} socket queries at {measurement.measured_at} against "
+        f"`{measurement.binary_path}` · app {measurement.app_version} · GitCommit `{measurement.git_commit[:12]}`."
+    )
+    notes = notes.replace("Not measured by this run.", provenance)
+    return Row("search p50/p95", status, value, method, notes)
 
 
 SEARCH_LATENCY_NOTES = (
@@ -1551,7 +1761,7 @@ def render(rows: list[Row], probe: Probe, run_url: str | None, now: datetime) ->
 # --------------------------------------------------------------------------------------------
 
 
-def row_measurement(row: Row, probe: Probe) -> dict | None:
+def row_measurement(row: Row, probe: Probe, corpus: dict) -> dict | None:
     """The numeric payload behind a row, for the run history a margin can be derived from.
 
     Only a row that measured counts carries one; a status string is not a measurement. Today that
@@ -1559,6 +1769,24 @@ def row_measurement(row: Row, probe: Probe) -> dict | None:
     """
     if row.name == "signature_valid" and probe.signature is not None and probe.signature.status == SIGNATURE_MEASURED:
         return {"valid": probe.signature.valid, "invalid": probe.signature.invalid}
+    if row.name == "search p50/p95" and probe.search_latency is not None:
+        if search_latency_measurement_problem(probe.search_latency, probe, corpus):
+            return None
+        return {
+            "p50": probe.search_latency.p50_ms,
+            "p95": probe.search_latency.p95_ms,
+            "sample_count": probe.search_latency.sample_count,
+            "provenance": {
+                "socket_path": probe.search_latency.socket_path,
+                "binary_path": probe.search_latency.binary_path,
+                "app_version": probe.search_latency.app_version,
+                "git_commit": probe.search_latency.git_commit,
+                "hostname": probe.search_latency.hostname,
+                "os": probe.search_latency.os_name,
+                "architecture": probe.search_latency.architecture,
+                "measured_at": probe.search_latency.measured_at,
+            },
+        }
     return None
 
 
@@ -1575,15 +1803,21 @@ def attestation_payload(
         "workflow": ATTEST_WORKFLOW,
         "baseline": view,
         "baseline_sha256": baseline_digest(view),
-        # Dotted baseline path -> value this run measured. Empty until a runner-side collector
-        # exists for a baseline field; a PR may only move a field to a value listed here.
-        "measured": {},
+        "measured": (
+            {
+                "latency_baseline_ms.p50": probe.search_latency.p50_ms,
+                "latency_baseline_ms.p95": probe.search_latency.p95_ms,
+            }
+            if probe.search_latency is not None
+            and search_latency_measurement_problem(probe.search_latency, probe, corpus) is None
+            else {}
+        ),
         "rows": {
             row.name: {
                 "status": row.status,
                 "value": row.value,
                 "method": row.method,
-                "measurement": row_measurement(row, probe),
+                "measurement": row_measurement(row, probe, corpus),
             }
             for row in rows
         },
