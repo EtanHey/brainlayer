@@ -1171,16 +1171,21 @@ final class MCPRouter: @unchecked Sendable {
         }
         if mode == "context" {
             let sessionId = args["session_id"] as? String ?? ""
-            if sessionId.isEmpty {
-                let stats = try db.recallStats()
-                return ToolOutput(text: TextFormatter.formatStats(StatsResult(payload: stats)))
+            if !sessionId.isEmpty {
+                let results = try db.recallSession(sessionId: sessionId, limit: 20)
+                let typedResults = results.map(SearchResult.init(payload:))
+                return ToolOutput(text: TextFormatter.formatRecalledContext(query: "session:\(sessionId)", results: typedResults))
             }
-            let results = try db.recallSession(sessionId: sessionId, limit: 20)
-            let typedResults = results.map(SearchResult.init(payload:))
-            return ToolOutput(text: TextFormatter.formatRecalledContext(query: "session:\(sessionId)", results: typedResults))
         }
         let stats = try db.recallStats()
-        return ToolOutput(text: TextFormatter.formatStats(StatsResult(payload: stats)))
+        let statsText = TextFormatter.formatStats(StatsResult(payload: stats))
+        guard mode != "stats" else {
+            return ToolOutput(text: statsText)
+        }
+        let notice = mode == "context"
+            ? "brain_recall mode \"context\" requires session_id; returned stats instead."
+            : "brain_recall mode \"\(mode)\" is not implemented by the served BrainBar handler; returned stats instead."
+        return ToolOutput(text: statsText + "\n\n" + notice)
     }
 
     private func handleBrainEntity(_ args: [String: Any]) throws -> ToolOutput {
