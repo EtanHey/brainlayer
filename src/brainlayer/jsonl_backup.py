@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
-import io
 import json
 import os
 import shutil
@@ -362,6 +361,27 @@ def _upload_forever_files(
     return uploaded
 
 
+class _HashingReader:
+    """File wrapper that digests exactly the bytes handed to tarfile.
+
+    tarfile pulls through ``read``, so the digest is of the archived content itself --
+    not of a separate read that could see different bytes -- at O(buffer) memory rather
+    than O(file). The largest real source JSONL is ~375MB, so that distinction matters.
+    """
+
+    def __init__(self, handle: Any) -> None:
+        self._handle = handle
+        self._digest = hashlib.sha256()
+
+    def read(self, size: int = -1) -> bytes:
+        chunk = self._handle.read(size)
+        self._digest.update(chunk)
+        return chunk
+
+    def hexdigest(self) -> str:
+        return self._digest.hexdigest()
+
+
 def create_jsonl_bundle_with_digests(
     candidates: list[JsonlCandidate], staging_dir: Path, *, date_stamp: str
 ) -> tuple[Path, dict[str, str]]:
@@ -378,14 +398,16 @@ def create_jsonl_bundle_with_digests(
     try:
         with tarfile.open(temp_path, "w:gz") as tar:
             for candidate in candidates:
-                # Hash and archive the SAME bytes. Re-reading the source afterwards could
-                # record a digest for content the archive does not contain -- a file that
-                # changed while keeping its mtime and size would then read as covered.
-                payload = candidate.path.read_bytes()
-                digests[candidate.path.as_posix()] = hashlib.sha256(payload).hexdigest()
+                # Hash and archive the SAME bytes, without holding the file in memory.
+                # Re-reading the source afterwards could record a digest for content the
+                # archive does not contain -- a file that changed while keeping its mtime
+                # and size would then read as covered. Sources reach ~375MB, so the digest
+                # is taken from the very stream tarfile consumes rather than from a copy.
                 info = tar.gettarinfo(str(candidate.path), arcname=_archive_name(candidate))
-                info.size = len(payload)
-                tar.addfile(info, io.BytesIO(payload))
+                with candidate.path.open("rb") as handle:
+                    reader = _HashingReader(handle)
+                    tar.addfile(info, reader)
+                digests[candidate.path.as_posix()] = reader.hexdigest()
         os.replace(temp_path, archive_path)
     finally:
         temp_path.unlink(missing_ok=True)
