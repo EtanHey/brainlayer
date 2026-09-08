@@ -102,6 +102,33 @@ final class InjectionPresentationTests: XCTestCase {
         XCTAssertEqual(identity?.projectName, "brainlayer")
     }
 
+    func testRecipientIdentityFindsEnclosingRepositoryForNestedWorkingDirectory() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let sessionsDirectory = directory.appendingPathComponent("sessions", isDirectory: true)
+        let repository = directory.appendingPathComponent("brainlayer-repo", isDirectory: true)
+        let nestedWorkingDirectory = repository.appendingPathComponent("src/brainlayer", isDirectory: true)
+        try FileManager.default.createDirectory(at: sessionsDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: repository.appendingPathComponent(".git", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(at: nestedWorkingDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let payload: [String: Any] = [
+            "sessionId": "nested-session",
+            "name": "Nested repair",
+            "agent": "brainlayerClaude",
+            "cwd": nestedWorkingDirectory.path
+        ]
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        try data.write(to: sessionsDirectory.appendingPathComponent("67890.json"))
+
+        let identities = InjectionRecipientIdentity.resolveAll(sessionsDirectory: sessionsDirectory)
+
+        XCTAssertEqual(identities["nested-session"]?.projectName, "brainlayer-repo")
+    }
+
     @MainActor
     func testRenderedCollapsedAndExpandedBurstKeepsHierarchyAndDisclosure() throws {
         let now = isoDate("2026-09-08T10:00:00Z")

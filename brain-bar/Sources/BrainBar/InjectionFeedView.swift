@@ -336,7 +336,7 @@ struct InjectionFeedView: View {
                                 .lineLimit(1)
                         }
                         .layoutPriority(1)
-                        .accessibilityIdentifier(Self.burstAtAGlanceAccessibilityID)
+                        .accessibilityIdentifier("\(Self.burstAtAGlanceAccessibilityID).\(burst.id)")
                     }
                     WrappingPillLayout(spacing: 8, lineSpacing: 8) {
                         chip(text: burst.sourceLabel, tint: .blue)

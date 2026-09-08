@@ -1332,18 +1332,27 @@ final class DatabaseTests: XCTestCase {
     }
 
     func testListInjectionEventsPreservesRecipientIdentityAndSelectionReasonWhenRecorded() throws {
+        try db.insertChunk(
+            id: "recorded-identity-chunk",
+            content: "Recorded recipient metadata should survive feed scoping.",
+            sessionId: "recorded-recipient",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 6
+        )
         db.exec("ALTER TABLE injection_events ADD COLUMN session_name TEXT")
         db.exec("ALTER TABLE injection_events ADD COLUMN agent_name TEXT")
         db.exec("ALTER TABLE injection_events ADD COLUMN project_name TEXT")
+        db.exec("ALTER TABLE injection_events ADD COLUMN project TEXT")
         db.exec("ALTER TABLE injection_events ADD COLUMN selection_reason TEXT")
         db.exec("""
             INSERT INTO injection_events (
                 session_id, timestamp, query, chunk_ids, token_count,
-                session_name, agent_name, project_name, selection_reason
+                session_name, agent_name, project_name, project, selection_reason
             ) VALUES (
                 'recorded-recipient', '2026-09-08T09:00:00.000Z',
-                'why was this memory selected', '[]', 41,
-                'Release proof', 'brainlayerClaude', 'brainlayer',
+                'why was this memory selected', '["recorded-identity-chunk"]', 41,
+                'Release proof', 'brainlayerClaude', '', 'brainlayer',
                 'Keyword and recency match'
             )
         """)

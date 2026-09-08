@@ -11,31 +11,40 @@ struct InjectionRecipientIdentity: Equatable, Sendable {
             .appendingPathComponent(".claude/sessions", isDirectory: true)
     ) -> InjectionRecipientIdentity? {
         let normalizedSessionID = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalizedSessionID.isEmpty,
-              let files = try? FileManager.default.contentsOfDirectory(
+        guard !normalizedSessionID.isEmpty else { return nil }
+        return resolveAll(sessionsDirectory: sessionsDirectory)[normalizedSessionID]
+    }
+
+    static func resolveAll(
+        sessionsDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/sessions", isDirectory: true)
+    ) -> [String: InjectionRecipientIdentity] {
+        guard let files = try? FileManager.default.contentsOfDirectory(
                   at: sessionsDirectory,
                   includingPropertiesForKeys: [.isRegularFileKey],
                   options: [.skipsHiddenFiles]
               ) else {
-            return nil
+            return [:]
         }
 
+        var identities: [String: InjectionRecipientIdentity] = [:]
         for file in files where file.pathExtension == "json" {
             guard let values = try? file.resourceValues(forKeys: [.isRegularFileKey]),
                   values.isRegularFile == true,
                   let data = try? Data(contentsOf: file),
                   let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  (payload["sessionId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-                    == normalizedSessionID else {
+                  let sessionID = payload["sessionId"] as? String else {
                 continue
             }
-            return InjectionRecipientIdentity(
+            let normalizedSessionID = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalizedSessionID.isEmpty else { continue }
+            identities[normalizedSessionID] = InjectionRecipientIdentity(
                 sessionName: normalized(payload["name"]),
                 agentName: normalized(payload["agent"]),
                 projectName: projectName(from: normalized(payload["cwd"]))
             )
         }
-        return nil
+        return identities
     }
 
     private static func normalized(_ value: Any?) -> String {
@@ -44,11 +53,21 @@ struct InjectionRecipientIdentity: Equatable, Sendable {
 
     private static func projectName(from path: String) -> String {
         guard !path.isEmpty else { return "" }
-        let components = URL(fileURLWithPath: path).standardizedFileURL.pathComponents
+        let standardizedURL = URL(fileURLWithPath: path).standardizedFileURL
+        let components = standardizedURL.pathComponents
         if let worktreesIndex = components.firstIndex(of: ".worktrees"), worktreesIndex > 0 {
             return components[worktreesIndex - 1]
         }
-        return components.last ?? ""
+        var candidate = standardizedURL
+        while candidate.path != "/" {
+            if FileManager.default.fileExists(
+                atPath: candidate.appendingPathComponent(".git", isDirectory: false).path
+            ) {
+                return candidate.lastPathComponent
+            }
+            candidate.deleteLastPathComponent()
+        }
+        return standardizedURL.lastPathComponent
     }
 }
 

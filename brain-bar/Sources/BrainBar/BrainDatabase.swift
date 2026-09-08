@@ -807,6 +807,8 @@ final class BrainDatabase: @unchecked Sendable {
     private let openConfiguration: OpenConfiguration
     private let transactionLock = NSRecursiveLock()
     private var explicitTransactionIsOpen = false
+    private var injectionRecipientIdentityCache: [String: InjectionRecipientIdentity] = [:]
+    private var injectionRecipientIdentityCacheLoadedAt = Date.distantPast
     var failNextStoreAfterInsertForTesting = false
     var failNextStoreWithBusyForTesting = false
     private static let pendingStoreFileLock = NSLock()
@@ -6487,9 +6489,16 @@ final class BrainDatabase: @unchecked Sendable {
         let modeSelect = columns.contains("mode") ? "mode" : "'normal'"
         let sessionNameSelect = columns.contains("session_name") ? "session_name" : "''"
         let agentNameSelect = columns.contains("agent_name") ? "agent_name" : "''"
-        let projectNameSelect = columns.contains("project_name")
-            ? "project_name"
-            : (columns.contains("project") ? "project" : "''")
+        let projectNameSelect: String
+        if columns.contains("project_name"), columns.contains("project") {
+            projectNameSelect = "COALESCE(NULLIF(project_name, ''), project)"
+        } else if columns.contains("project_name") {
+            projectNameSelect = "project_name"
+        } else if columns.contains("project") {
+            projectNameSelect = "project"
+        } else {
+            projectNameSelect = "''"
+        }
         let selectionReasonSelect = columns.contains("selection_reason") ? "selection_reason" : "''"
         var sql = """
         SELECT id, session_id, timestamp, query, chunk_ids, token_count,
@@ -6518,8 +6527,7 @@ final class BrainDatabase: @unchecked Sendable {
         sqlite3_bind_int(stmt, idx, Int32(limit))
 
         var events: [InjectionEvent] = []
-        var liveIdentityBySession: [String: InjectionRecipientIdentity] = [:]
-        var identityMisses = Set<String>()
+        var liveIdentities: [String: InjectionRecipientIdentity]?
         var projectBySession: [String: String] = [:]
         while sqlite3_step(stmt) == SQLITE_ROW {
             let row: [String: Any] = [
@@ -6549,16 +6557,11 @@ final class BrainDatabase: @unchecked Sendable {
                 ].allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
                 if hasPersistedIdentity {
                     liveIdentity = nil
-                } else if let cached = liveIdentityBySession[scopedEvent.sessionID] {
-                    liveIdentity = cached
-                } else if identityMisses.contains(scopedEvent.sessionID) {
-                    liveIdentity = nil
-                } else if let resolved = InjectionRecipientIdentity.resolve(sessionID: scopedEvent.sessionID) {
-                    liveIdentityBySession[scopedEvent.sessionID] = resolved
-                    liveIdentity = resolved
                 } else {
-                    identityMisses.insert(scopedEvent.sessionID)
-                    liveIdentity = nil
+                    if liveIdentities == nil {
+                        liveIdentities = injectionRecipientIdentities()
+                    }
+                    liveIdentity = liveIdentities?[scopedEvent.sessionID]
                 }
                 var projectName = firstNonEmpty(scopedEvent.projectName, liveIdentity?.projectName)
                 if projectName.isEmpty {
@@ -6608,6 +6611,16 @@ final class BrainDatabase: @unchecked Sendable {
         bindText(sessionID, to: stmt, index: 1)
         guard sqlite3_step(stmt) == SQLITE_ROW else { return "" }
         return columnText(stmt, 0) ?? ""
+    }
+
+    private func injectionRecipientIdentities(now: Date = Date()) -> [String: InjectionRecipientIdentity] {
+        if now.timeIntervalSince(injectionRecipientIdentityCacheLoadedAt) < 5 {
+            return injectionRecipientIdentityCache
+        }
+        let identities = InjectionRecipientIdentity.resolveAll()
+        injectionRecipientIdentityCache = identities
+        injectionRecipientIdentityCacheLoadedAt = now
+        return identities
     }
 
     private func firstNonEmpty(_ values: String?...) -> String {
@@ -6720,6 +6733,10 @@ final class BrainDatabase: @unchecked Sendable {
             chunkIDs: scopedChunkIDs,
             tokenCount: event.tokenCount,
             mode: event.mode,
+            sessionName: event.sessionName,
+            agentName: event.agentName,
+            projectName: event.projectName,
+            selectionReason: event.selectionReason,
             chunks: liveChunks,
             claudeConversationID: event.claudeConversationID
         )
