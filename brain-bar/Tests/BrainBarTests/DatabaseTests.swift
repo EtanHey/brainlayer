@@ -1331,6 +1331,31 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(events.first?.tokenCount, 77)
     }
 
+    func testListInjectionEventsPreservesRecipientIdentityAndSelectionReasonWhenRecorded() throws {
+        db.exec("ALTER TABLE injection_events ADD COLUMN session_name TEXT")
+        db.exec("ALTER TABLE injection_events ADD COLUMN agent_name TEXT")
+        db.exec("ALTER TABLE injection_events ADD COLUMN project_name TEXT")
+        db.exec("ALTER TABLE injection_events ADD COLUMN selection_reason TEXT")
+        db.exec("""
+            INSERT INTO injection_events (
+                session_id, timestamp, query, chunk_ids, token_count,
+                session_name, agent_name, project_name, selection_reason
+            ) VALUES (
+                'recorded-recipient', '2026-09-08T09:00:00.000Z',
+                'why was this memory selected', '[]', 41,
+                'Release proof', 'brainlayerClaude', 'brainlayer',
+                'Keyword and recency match'
+            )
+        """)
+
+        let event = try XCTUnwrap(db.listInjectionEvents(limit: 1).first)
+
+        XCTAssertEqual(event.sessionName, "Release proof")
+        XCTAssertEqual(event.agentName, "brainlayerClaude")
+        XCTAssertEqual(event.projectName, "brainlayer")
+        XCTAssertEqual(event.selectionReason, "Keyword and recency match")
+    }
+
     func testListInjectionEventsLoadsChunkDisplayMetadata() throws {
         try db.insertChunk(
             id: "chunk-human",

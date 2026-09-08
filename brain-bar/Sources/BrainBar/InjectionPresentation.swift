@@ -252,7 +252,34 @@ struct InjectionPresentation {
             selectedResultSummary
         }
         var collapsedContext: String {
-            "\(compactSessionLabel) · Chosen for “\(queryTitle)” · \(tokenCount) tok"
+            "To \(recipientIdentityLabel) · \(selectionReasonLabel) · \(tokenCount) tok"
+        }
+        var collapsedTrigger: String {
+            "Trigger: \(queryTitle)"
+        }
+        private var recipientIdentityLabel: String {
+            var parts: [String] = []
+            if let sessionName = firstNonEmpty(\.sessionName) {
+                parts.append("Session \(sessionName)")
+            }
+            if let agentName = firstNonEmpty(\.agentName) {
+                parts.append("Agent \(agentName)")
+            }
+            if let projectName = firstNonEmpty(\.projectName) {
+                parts.append("Project \(projectName)")
+            }
+            return parts.isEmpty ? compactSessionLabel : parts.joined(separator: " · ")
+        }
+        private var selectionReasonLabel: String {
+            guard let reason = firstNonEmpty(\.selectionReason) else {
+                return "Reason unavailable"
+            }
+            return "Reason \(InjectionChunk.elide(reason, limit: 96))"
+        }
+        private func firstNonEmpty(_ keyPath: KeyPath<InjectionEvent, String>) -> String? {
+            events.lazy
+                .map { $0[keyPath: keyPath].trimmingCharacters(in: .whitespacesAndNewlines) }
+                .first { !$0.isEmpty }
         }
         private var compactSessionLabel: String {
             let trimmed = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)

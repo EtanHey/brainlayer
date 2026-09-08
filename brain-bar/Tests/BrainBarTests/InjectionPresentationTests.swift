@@ -29,6 +29,10 @@ final class InjectionPresentationTests: XCTestCase {
             query: "why is watcher flow marked stalled",
             chunkIDs: ["chunk-watcher-contract"],
             tokenCount: 144,
+            sessionName: "Watcher repair",
+            agentName: "brainlayerClaude",
+            projectName: "brainlayer",
+            selectionReason: "Keyword and recency match",
             chunks: [
                 makeChunk(
                     id: "chunk-watcher-contract",
@@ -46,9 +50,56 @@ final class InjectionPresentationTests: XCTestCase {
         )
         XCTAssertEqual(
             burst.collapsedContext,
-            "Session …567890 · Chosen for “why is watcher flow marked stalled” · 144 tok"
+            "To Session Watcher repair · Agent brainlayerClaude · Project brainlayer · Reason Keyword and recency match · 144 tok"
         )
         XCTAssertFalse(burst.collapsedContext.contains(event.sessionID))
+        XCTAssertEqual(burst.collapsedTrigger, "Trigger: why is watcher flow marked stalled")
+    }
+
+    func testCollapsedBurstUsesHonestIdentityAndReasonFallbacks() throws {
+        let event = makeEvent(
+            id: 43,
+            sessionID: "session-operator-truth-1234567890",
+            timestamp: "2026-09-08T09:58:00Z",
+            query: "why is watcher flow marked stalled",
+            chunkIDs: ["chunk-watcher-contract"],
+            tokenCount: 144,
+            chunks: [makeChunk(id: "chunk-watcher-contract", content: "Watcher contract")]
+        )
+        let burst = try XCTUnwrap(
+            InjectionPresentation.snapshot(
+                events: [event],
+                filterText: "",
+                now: isoDate("2026-09-08T10:00:00Z")
+            ).bursts.first
+        )
+
+        XCTAssertEqual(burst.collapsedContext, "To Session …567890 · Reason unavailable · 144 tok")
+        XCTAssertEqual(burst.collapsedTrigger, "Trigger: why is watcher flow marked stalled")
+    }
+
+    func testRecipientIdentityReadsClaudeSessionRegistryWithoutUserSpecificPaths() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let payload: [String: Any] = [
+            "sessionId": "session-operator-truth-1234567890",
+            "name": "brainbar-ux-14",
+            "agent": "brainlayerClaude",
+            "cwd": "/workspace/brainlayer/.worktrees/l3-injections-ux"
+        ]
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        try data.write(to: directory.appendingPathComponent("12345.json"))
+
+        let identity = InjectionRecipientIdentity.resolve(
+            sessionID: "session-operator-truth-1234567890",
+            sessionsDirectory: directory
+        )
+
+        XCTAssertEqual(identity?.sessionName, "brainbar-ux-14")
+        XCTAssertEqual(identity?.agentName, "brainlayerClaude")
+        XCTAssertEqual(identity?.projectName, "brainlayer")
     }
 
     @MainActor
@@ -72,6 +123,10 @@ final class InjectionPresentationTests: XCTestCase {
             query: "why is watcher flow marked stalled",
             chunkIDs: [chunk.id],
             tokenCount: 144,
+            sessionName: "Watcher repair",
+            agentName: "brainlayerClaude",
+            projectName: "brainlayer",
+            selectionReason: "Keyword and recency match",
             chunks: [chunk],
             claudeConversationID: "conversation-example"
         )
@@ -89,12 +144,19 @@ final class InjectionPresentationTests: XCTestCase {
             name: "l3-injections-expanded.png"
         )
 
-        let firstLine = try XCTUnwrap(
-            collapsed.first { $0.localizedCaseInsensitiveContains("Watcher truth contract") }
-        ).replacingOccurrences(of: "…", with: "...")
+        let collapsedText = collapsed.joined(separator: " ")
         assertTermsAppearInOrder(
-            ["Watcher truth contract", "Session ...567890", "Chosen for", "why is watcher flow marked stalled", "144 tok"],
-            in: firstLine
+            [
+                "Watcher truth contract",
+                "Session Watcher repair",
+                "Agent brainlayerClaude",
+                "Project brainlayer",
+                "Reason Keyword and recency match",
+                "144 tok",
+                "Trigger",
+                "why is watcher flow marked stalled"
+            ],
+            in: collapsedText
         )
         XCTAssertFalse(collapsed.joined(separator: "\n").contains("chunk-watcher-contract"))
         XCTAssertFalse(collapsed.joined(separator: "\n").contains("/Users/example/project"))
@@ -592,6 +654,10 @@ final class InjectionPresentationTests: XCTestCase {
         query: String,
         chunkIDs: [String],
         tokenCount: Int,
+        sessionName: String = "",
+        agentName: String = "",
+        projectName: String = "",
+        selectionReason: String = "",
         chunks: [InjectionChunk] = [],
         claudeConversationID: String = ""
     ) -> InjectionEvent {
@@ -602,6 +668,10 @@ final class InjectionPresentationTests: XCTestCase {
             query: query,
             chunkIDs: chunkIDs,
             tokenCount: tokenCount,
+            sessionName: sessionName,
+            agentName: agentName,
+            projectName: projectName,
+            selectionReason: selectionReason,
             chunks: chunks,
             claudeConversationID: claudeConversationID
         )

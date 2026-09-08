@@ -316,22 +316,27 @@ struct InjectionFeedView: View {
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    HStack(alignment: .top, spacing: 8) {
                         let leadEvent = burst.events.first
                         Text(leadEvent?.primaryKind.glyph ?? "📄")
                             .font(.system(size: 16, weight: .bold, design: .rounded))
                             .foregroundStyle(.blue)
-                        (
+                        VStack(alignment: .leading, spacing: 3) {
                             Text(burst.collapsedHeadline)
                                 .font(.system(size: 18, weight: .semibold, design: .rounded))
-                            + Text("  \(burst.collapsedContext)")
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.85)
+                            Text(burst.collapsedContext)
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundColor(.secondary)
-                        )
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.85)
-                            .layoutPriority(1)
-                            .accessibilityIdentifier(Self.burstAtAGlanceAccessibilityID)
+                                .lineLimit(2)
+                            Text(burst.collapsedTrigger)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        .layoutPriority(1)
+                        .accessibilityIdentifier(Self.burstAtAGlanceAccessibilityID)
                     }
                     WrappingPillLayout(spacing: 8, lineSpacing: 8) {
                         chip(text: burst.sourceLabel, tint: .blue)

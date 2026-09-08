@@ -6483,9 +6483,23 @@ final class BrainDatabase: @unchecked Sendable {
 
     func listInjectionEvents(sessionID: String? = nil, limit: Int = 20) throws -> [InjectionEvent] {
         guard let db else { throw DBError.notOpen }
-        let hasModeColumn = try tableColumns(name: "injection_events", on: db).contains("mode")
-        let modeSelect = hasModeColumn ? "mode" : "'normal'"
-        var sql = "SELECT id, session_id, timestamp, query, chunk_ids, token_count, \(modeSelect) AS mode FROM injection_events"
+        let columns = try tableColumns(name: "injection_events", on: db)
+        let modeSelect = columns.contains("mode") ? "mode" : "'normal'"
+        let sessionNameSelect = columns.contains("session_name") ? "session_name" : "''"
+        let agentNameSelect = columns.contains("agent_name") ? "agent_name" : "''"
+        let projectNameSelect = columns.contains("project_name")
+            ? "project_name"
+            : (columns.contains("project") ? "project" : "''")
+        let selectionReasonSelect = columns.contains("selection_reason") ? "selection_reason" : "''"
+        var sql = """
+        SELECT id, session_id, timestamp, query, chunk_ids, token_count,
+               \(modeSelect) AS mode,
+               \(sessionNameSelect) AS session_name,
+               \(agentNameSelect) AS agent_name,
+               \(projectNameSelect) AS project_name,
+               \(selectionReasonSelect) AS selection_reason
+        FROM injection_events
+        """
         var conditions: [String] = []
         if sessionID != nil { conditions.append("session_id = ?") }
         conditions.append(Self.liveInjectionEventSQLPredicate(eventTable: "injection_events"))
@@ -6504,6 +6518,9 @@ final class BrainDatabase: @unchecked Sendable {
         sqlite3_bind_int(stmt, idx, Int32(limit))
 
         var events: [InjectionEvent] = []
+        var liveIdentityBySession: [String: InjectionRecipientIdentity] = [:]
+        var identityMisses = Set<String>()
+        var projectBySession: [String: String] = [:]
         while sqlite3_step(stmt) == SQLITE_ROW {
             let row: [String: Any] = [
                 "id": Int64(sqlite3_column_int64(stmt, 0)),
@@ -6512,13 +6529,45 @@ final class BrainDatabase: @unchecked Sendable {
                 "query": columnText(stmt, 3) as Any,
                 "chunk_ids": columnText(stmt, 4) as Any,
                 "token_count": Int(sqlite3_column_int(stmt, 5)),
-                "mode": columnText(stmt, 6) as Any
+                "mode": columnText(stmt, 6) as Any,
+                "session_name": columnText(stmt, 7) as Any,
+                "agent_name": columnText(stmt, 8) as Any,
+                "project_name": columnText(stmt, 9) as Any,
+                "selection_reason": columnText(stmt, 10) as Any
             ]
             if let event = try? InjectionEvent(row: row) {
                 let details = (try? injectionChunkDetails(ids: event.chunkIDs)) ?? []
                 let resumableID = Self.resumableClaudeConversationID(event: event, chunks: details)
                 guard let scopedEvent = injectionFeedScopedEvent(event, chunks: details) else {
                     continue
+                }
+                let liveIdentity: InjectionRecipientIdentity?
+                let hasPersistedIdentity = [
+                    scopedEvent.sessionName,
+                    scopedEvent.agentName,
+                    scopedEvent.projectName
+                ].allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                if hasPersistedIdentity {
+                    liveIdentity = nil
+                } else if let cached = liveIdentityBySession[scopedEvent.sessionID] {
+                    liveIdentity = cached
+                } else if identityMisses.contains(scopedEvent.sessionID) {
+                    liveIdentity = nil
+                } else if let resolved = InjectionRecipientIdentity.resolve(sessionID: scopedEvent.sessionID) {
+                    liveIdentityBySession[scopedEvent.sessionID] = resolved
+                    liveIdentity = resolved
+                } else {
+                    identityMisses.insert(scopedEvent.sessionID)
+                    liveIdentity = nil
+                }
+                var projectName = firstNonEmpty(scopedEvent.projectName, liveIdentity?.projectName)
+                if projectName.isEmpty {
+                    if let cached = projectBySession[scopedEvent.sessionID] {
+                        projectName = cached
+                    } else {
+                        projectName = (try? injectionRecipientProjectName(sessionID: scopedEvent.sessionID)) ?? ""
+                        projectBySession[scopedEvent.sessionID] = projectName
+                    }
                 }
                 events.append(
                     InjectionEvent(
@@ -6529,6 +6578,10 @@ final class BrainDatabase: @unchecked Sendable {
                         chunkIDs: scopedEvent.chunkIDs,
                         tokenCount: scopedEvent.tokenCount,
                         mode: scopedEvent.mode,
+                        sessionName: firstNonEmpty(scopedEvent.sessionName, liveIdentity?.sessionName),
+                        agentName: firstNonEmpty(scopedEvent.agentName, liveIdentity?.agentName),
+                        projectName: projectName,
+                        selectionReason: scopedEvent.selectionReason,
                         chunks: scopedEvent.chunks,
                         claudeConversationID: resumableID
                     )
@@ -6536,6 +6589,31 @@ final class BrainDatabase: @unchecked Sendable {
             }
         }
         return events
+    }
+
+    private func injectionRecipientProjectName(sessionID: String) throws -> String {
+        guard let db else { throw DBError.notOpen }
+        let sql = """
+        SELECT project
+        FROM chunks
+        WHERE conversation_id = ? AND project IS NOT NULL AND project != ''
+        ORDER BY created_at DESC
+        LIMIT 1
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw DBError.prepare(sqlite3_errcode(db))
+        }
+        defer { sqlite3_finalize(stmt) }
+        bindText(sessionID, to: stmt, index: 1)
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return "" }
+        return columnText(stmt, 0) ?? ""
+    }
+
+    private func firstNonEmpty(_ values: String?...) -> String {
+        values.lazy
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty } ?? ""
     }
 
     private static func resumableClaudeConversationID(event: InjectionEvent, chunks: [InjectionChunk]) -> String {

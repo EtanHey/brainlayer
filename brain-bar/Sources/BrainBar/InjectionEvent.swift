@@ -1,5 +1,57 @@
 import Foundation
 
+struct InjectionRecipientIdentity: Equatable, Sendable {
+    let sessionName: String
+    let agentName: String
+    let projectName: String
+
+    static func resolve(
+        sessionID: String,
+        sessionsDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/sessions", isDirectory: true)
+    ) -> InjectionRecipientIdentity? {
+        let normalizedSessionID = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedSessionID.isEmpty,
+              let files = try? FileManager.default.contentsOfDirectory(
+                  at: sessionsDirectory,
+                  includingPropertiesForKeys: [.isRegularFileKey],
+                  options: [.skipsHiddenFiles]
+              ) else {
+            return nil
+        }
+
+        for file in files where file.pathExtension == "json" {
+            guard let values = try? file.resourceValues(forKeys: [.isRegularFileKey]),
+                  values.isRegularFile == true,
+                  let data = try? Data(contentsOf: file),
+                  let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  (payload["sessionId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    == normalizedSessionID else {
+                continue
+            }
+            return InjectionRecipientIdentity(
+                sessionName: normalized(payload["name"]),
+                agentName: normalized(payload["agent"]),
+                projectName: projectName(from: normalized(payload["cwd"]))
+            )
+        }
+        return nil
+    }
+
+    private static func normalized(_ value: Any?) -> String {
+        (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    private static func projectName(from path: String) -> String {
+        guard !path.isEmpty else { return "" }
+        let components = URL(fileURLWithPath: path).standardizedFileURL.pathComponents
+        if let worktreesIndex = components.firstIndex(of: ".worktrees"), worktreesIndex > 0 {
+            return components[worktreesIndex - 1]
+        }
+        return components.last ?? ""
+    }
+}
+
 struct InjectionChunk: Equatable, Sendable, Identifiable {
     let id: String
     let content: String
@@ -226,6 +278,10 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
     let chunkIDs: [String]
     let tokenCount: Int
     let mode: String
+    let sessionName: String
+    let agentName: String
+    let projectName: String
+    let selectionReason: String
     let chunks: [InjectionChunk]
     let claudeConversationID: String
 
@@ -322,6 +378,10 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
         chunkIDs: [String],
         tokenCount: Int,
         mode: String = "normal",
+        sessionName: String = "",
+        agentName: String = "",
+        projectName: String = "",
+        selectionReason: String = "",
         chunks: [InjectionChunk] = [],
         claudeConversationID: String = ""
     ) {
@@ -332,6 +392,10 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
         self.chunkIDs = chunkIDs
         self.tokenCount = tokenCount
         self.mode = mode
+        self.sessionName = sessionName
+        self.agentName = agentName
+        self.projectName = projectName
+        self.selectionReason = selectionReason
         self.chunks = chunks
         self.claudeConversationID = claudeConversationID
     }
@@ -349,6 +413,10 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
         query = row["query"] as? String ?? ""
         tokenCount = row["token_count"] as? Int ?? 0
         mode = row["mode"] as? String ?? "normal"
+        sessionName = row["session_name"] as? String ?? ""
+        agentName = row["agent_name"] as? String ?? ""
+        projectName = row["project_name"] as? String ?? ""
+        selectionReason = row["selection_reason"] as? String ?? ""
         claudeConversationID = row["claude_conversation_id"] as? String ?? ""
 
         if let rawChunkIDs = row["chunk_ids"] as? [String] {
