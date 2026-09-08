@@ -57,6 +57,12 @@ from ..tag_normalization import (
 )
 from ..vector_store import VectorStore
 from .entity_extraction import normalize_entity_type
+from .groq import (
+    DEFAULT_GROQ_MODEL,
+    GroqModelUnavailableError,
+    raise_for_groq_response,
+    validate_groq_model,
+)
 
 # Thread-local storage for per-thread VectorStore connections.
 # APSW connections are not safe for concurrent use from multiple threads.
@@ -120,7 +126,7 @@ ENRICHMENT_PROMPT_VERSION = os.environ.get("BRAINLAYER_ENRICHMENT_PROMPT_VERSION
 # Groq cloud API (for NON-PRIVATE content only — sanitization enforced in _enrich_one)
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_URL = os.environ.get("BRAINLAYER_GROQ_URL", "https://api.groq.com/openai/v1/chat/completions")
-GROQ_MODEL = os.environ.get("BRAINLAYER_GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_MODEL = os.environ.get("BRAINLAYER_GROQ_MODEL", DEFAULT_GROQ_MODEL)
 # Rate limiting: Groq free tier allows ~30 req/min. 2s delay = ~30/min max.
 GROQ_RATE_LIMIT_DELAY = float(os.environ.get("BRAINLAYER_GROQ_RATE_DELAY", "2.0"))
 _groq_last_call: float = 0.0  # monotonic timestamp of last Groq API call
@@ -694,7 +700,7 @@ def call_groq(prompt: str, timeout: int = 60) -> Optional[str]:
             },
             timeout=timeout,
         )
-        resp.raise_for_status()
+        raise_for_groq_response(resp, GROQ_MODEL)
         data = resp.json()
         duration_ms = int(time.time() * 1000) - start_ms
 
@@ -711,6 +717,8 @@ def call_groq(prompt: str, timeout: int = 60) -> Optional[str]:
         if choices:
             return choices[0].get("message", {}).get("content", "")
         return None
+    except GroqModelUnavailableError:
+        raise
     except Exception as e:
         print(f"  Groq error: {e}", file=sys.stderr)
         return None
@@ -1166,6 +1174,10 @@ def enrich_batch(
                     else:
                         failed += 1
                         consecutive_failures += 1
+                except GroqModelUnavailableError:
+                    for pending in futures:
+                        pending.cancel()
+                    raise
                 except Exception as e:
                     # DB lock errors are transient contention, not backend failures.
                     # Don't count them toward circuit breaker.
@@ -1290,6 +1302,7 @@ def run_enrichment(
                     "GROQ_API_KEY not set. Get one from https://console.groq.com/keys\n"
                     "Or use: op read 'op://development/GROQ_API_KEY/password'"
                 )
+            validate_groq_model(GROQ_API_KEY, GROQ_MODEL, GROQ_URL)
             print(f"Backend: Groq ({GROQ_MODEL}) [cloud — sanitization enforced]")
         elif active_backend == "mlx":
             try:

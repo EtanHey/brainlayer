@@ -115,6 +115,28 @@ class TestGroqNERCaller:
         assert len(entities) == 2
         assert len(relations) == 1
 
+    def test_groq_ner_raises_named_error_when_model_is_unavailable(self):
+        """The KG caller must not hide a dead model behind an Optional result."""
+        from unittest.mock import MagicMock, patch
+
+        import pytest
+
+        from brainlayer.pipeline.groq import GroqModelUnavailableError
+        from brainlayer.pipeline.kg_extraction_groq import call_groq_ner
+
+        mock_response = MagicMock(status_code=404)
+        mock_response.json.return_value = {"error": {"code": "model_not_found", "message": "model does not exist"}}
+
+        with (
+            patch.dict(
+                "os.environ",
+                {"GROQ_API_KEY": "gsk_test123", "BRAINLAYER_GROQ_MODEL": "retired/model"},
+            ),
+            patch("requests.post", return_value=mock_response),
+            pytest.raises(GroqModelUnavailableError, match=r"retired/model.*unavailable"),
+        ):
+            call_groq_ner("test prompt")
+
     def test_multi_chunk_ner_prompt(self):
         """Multi-chunk NER prompt should include all chunk contents."""
         from brainlayer.pipeline.kg_extraction_groq import build_multi_chunk_ner_prompt

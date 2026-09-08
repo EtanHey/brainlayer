@@ -1,0 +1,48 @@
+"""Shared Groq model selection and availability checks."""
+
+from typing import Any
+
+import requests
+
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
+
+
+class GroqModelUnavailableError(RuntimeError):
+    """The configured Groq model cannot serve requests."""
+
+
+class GroqServiceUnavailableError(RuntimeError):
+    """Groq's catalog could not be queried, so model status is unknown."""
+
+
+def _models_url(completions_url: str) -> str:
+    prefix, separator, _ = completions_url.rstrip("/").rpartition("/chat/completions")
+    if separator:
+        return f"{prefix}/models"
+    return "https://api.groq.com/openai/v1/models"
+
+
+def raise_for_groq_response(response: Any, model: str) -> None:
+    """Raise a model-specific error for 404s, otherwise use requests semantics."""
+    if response.status_code == 404:
+        raise GroqModelUnavailableError(f"Groq model {model!r} is unavailable (HTTP 404 model_not_found)")
+    response.raise_for_status()
+
+
+def validate_groq_model(api_key: str, model: str, completions_url: str, timeout: int = 5) -> None:
+    """Refuse startup when the configured model is absent from Groq's catalog."""
+    try:
+        response = requests.get(
+            _models_url(completions_url),
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=timeout,
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise GroqServiceUnavailableError(
+            f"Groq model {model!r} could not be checked because the Groq service is unavailable "
+            "or rejected the /models request"
+        ) from exc
+    model_ids = {item.get("id") for item in response.json().get("data", [])}
+    if model not in model_ids:
+        raise GroqModelUnavailableError(f"Groq model {model!r} is unavailable: not listed by the /models endpoint")

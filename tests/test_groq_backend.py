@@ -8,8 +8,10 @@ import os
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from brainlayer.pipeline import enrichment
+from brainlayer.pipeline.groq import GroqModelUnavailableError, GroqServiceUnavailableError, validate_groq_model
 
 # ── call_groq unit tests ──────────────────────────────────────────────
 
@@ -46,6 +48,19 @@ class TestCallGroq:
             result = enrichment.call_groq("test prompt")
         assert result is None
 
+    def test_call_groq_raises_named_error_when_model_is_unavailable(self):
+        """A dead configured model must stop the run instead of entering retries."""
+        mock_response = MagicMock(status_code=404)
+        mock_response.json.return_value = {"error": {"code": "model_not_found", "message": "model does not exist"}}
+
+        with (
+            patch("requests.post", return_value=mock_response),
+            patch.object(enrichment, "GROQ_API_KEY", "gsk_test123"),
+            patch.object(enrichment, "GROQ_MODEL", "retired/model"),
+            pytest.raises(GroqModelUnavailableError, match=r"retired/model.*unavailable"),
+        ):
+            enrichment.call_groq("test prompt")
+
     def test_call_groq_requires_api_key(self):
         """call_groq returns None when GROQ_API_KEY is not set."""
         with patch.object(enrichment, "GROQ_API_KEY", ""):
@@ -73,7 +88,7 @@ class TestCallGroq:
         assert "Bearer gsk_test123" in headers.get("Authorization", "")
 
     def test_call_groq_uses_correct_model(self):
-        """Groq API call uses llama-3.3-70b-versatile model."""
+        """Groq API call uses the confirmed live default model."""
         mock_response = MagicMock()
         mock_response.json.return_value = {
             "choices": [{"message": {"content": "{}"}}],
@@ -89,7 +104,7 @@ class TestCallGroq:
 
         call_args = mock_post.call_args
         json_body = call_args[1].get("json") if call_args[1] else call_args.kwargs.get("json")
-        assert json_body["model"] == "llama-3.3-70b-versatile"
+        assert json_body["model"] == "openai/gpt-oss-120b"
 
     def test_call_groq_logs_usage(self):
         """Groq API call logs token usage to Supabase."""
@@ -138,6 +153,40 @@ class TestGroqBackendSelection:
         with patch.dict(os.environ, {"BRAINLAYER_ENRICH_BACKEND": "groq"}):
             backend = enrichment._detect_default_backend()
         assert backend == "groq"
+
+    def test_run_enrichment_refuses_unavailable_groq_model_before_queue_work(self):
+        """Startup validates the model catalog before touching queued chunks."""
+        store = MagicMock()
+        unavailable = GroqModelUnavailableError("Groq model 'retired/model' is unavailable")
+
+        with (
+            patch.object(enrichment, "VectorStore", return_value=store),
+            patch.object(enrichment, "ENRICH_BACKEND", "groq"),
+            patch.object(enrichment, "GROQ_API_KEY", "gsk_test123"),
+            patch.object(enrichment, "validate_groq_model", side_effect=unavailable) as mock_validate,
+            patch.object(enrichment, "mark_unenrichable") as mock_mark,
+            pytest.raises(GroqModelUnavailableError, match=r"retired/model.*unavailable"),
+        ):
+            enrichment.run_enrichment()
+
+        mock_validate.assert_called_once()
+        mock_mark.assert_not_called()
+        store.close.assert_called_once()
+
+    def test_model_validation_distinguishes_unreachable_service(self):
+        """A timeout must not be reported as proof that the model is dead."""
+        with (
+            patch("requests.get", side_effect=requests.Timeout("timed out")),
+            pytest.raises(
+                GroqServiceUnavailableError,
+                match=r"retired/model.*could not be checked.*service is unavailable",
+            ),
+        ):
+            validate_groq_model(
+                "gsk_test123",
+                "retired/model",
+                "https://api.groq.com/openai/v1/chat/completions",
+            )
 
 
 # ── Privacy enforcement ────────────────────────────────────────────────
@@ -203,7 +252,7 @@ class TestGroqConfig:
         "attr,expected",
         [
             ("GROQ_URL", "groq.com"),
-            ("GROQ_MODEL", "llama-3.3-70b-versatile"),
+            ("GROQ_MODEL", "openai/gpt-oss-120b"),
         ],
     )
     def test_groq_config_defaults(self, attr, expected):
