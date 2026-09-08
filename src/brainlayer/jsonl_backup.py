@@ -217,7 +217,14 @@ def _state_matches(
     recorded_hash = entry.get("sha256")
     if not isinstance(recorded_hash, str) or not recorded_hash:
         return False
-    return recorded_hash == _sha256_file(candidate.path)
+    try:
+        return recorded_hash == _sha256_file(candidate.path)
+    except OSError:
+        # The source vanished between discovery and hashing. It cannot prove coverage, and it
+        # must not abort the run: this job is what PREVENTS data loss, so a single unreadable
+        # file taking the whole nightly backup down is the wrong failure. _drop_vanished keeps
+        # it out of the bundle too, so returning False here cannot strand it in `changed`.
+        return False
 
 
 def _backup_unit_key(candidate: JsonlCandidate) -> tuple[int, str]:
@@ -235,7 +242,7 @@ def _select_backup_candidates(
     now: float,
     active_skip_seconds: int,
     surviving_archives: dict[str, str | None] | None = None,
-) -> tuple[list[JsonlCandidate], list[JsonlCandidate], int]:
+) -> tuple[list[JsonlCandidate], list[JsonlCandidate], int, int]:
     grouped: dict[tuple[int, str], list[JsonlCandidate]] = {}
     for candidate in candidates:
         grouped.setdefault(_backup_unit_key(candidate), []).append(candidate)
@@ -243,6 +250,7 @@ def _select_backup_candidates(
     changed: list[JsonlCandidate] = []
     active: list[JsonlCandidate] = []
     covered = 0
+    vanished = 0
     state_files = state.get("files", {})
     for backup_unit in grouped.values():
         if any(now - candidate.mtime < active_skip_seconds for candidate in backup_unit):
@@ -254,8 +262,10 @@ def _select_backup_candidates(
         ):
             covered += len(backup_unit)
             continue
-        changed.extend(backup_unit)
-    return changed, active, covered
+        readable = [c for c in backup_unit if c.path.exists()]
+        vanished += len(backup_unit) - len(readable)
+        changed.extend(readable)
+    return changed, active, covered, vanished
 
 
 def _list_surviving_archives(service: Any, folder_parts: list[str]) -> dict[str, str | None]:
@@ -534,7 +544,7 @@ def run_backup(
             surviving_archives = _list_surviving_archives(service, folder_parts)
         else:
             surviving_archives = {}
-    changed, active, covered = _select_backup_candidates(
+    changed, active, covered, vanished = _select_backup_candidates(
         candidates,
         state=state,
         now=now,
@@ -550,6 +560,7 @@ def run_backup(
             "already_covered_files": covered,
             "discovered_file_count": len(candidates),
             "skipped_active_count": len(active),
+            "vanished_source_count": vanished,
             "message": f"no-op, {covered} files already covered",
         }
         _append_json_log(log_path, result)
@@ -567,6 +578,7 @@ def run_backup(
         "bundled_file_count": len(changed),
         "skipped_active_count": len(active),
         "already_covered_files": covered,
+        "vanished_source_count": vanished,
         "source_file_count": len(candidates),
         "retention_deleted": [],
         "forever_uploaded_file_count": 0,

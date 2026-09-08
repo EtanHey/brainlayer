@@ -907,3 +907,64 @@ def test_recorded_digest_describes_the_bundled_bytes_not_a_later_read(tmp_path, 
     second = jsonl_backup.run_backup(date_stamp="2026-06-06", **kwargs)
     assert second["already_covered_files"] == 0, "the unarchived rewrite must not read as covered"
     assert second["status"] == "uploaded"
+
+
+def test_upload_actually_requests_md5checksum_from_drive():
+    """The integrity branch is only real if Drive is ASKED for md5Checksum.
+
+    PR #815's first attempt shipped an md5 comparison that could never fire: the resumable
+    upload requested `fields=id,name,size`, so `md5Checksum` was always absent, `archive_md5`
+    was never recorded, and the branch was dead in production. The regression test for it
+    passed only because the fake `_upload` injected an md5 Drive would never return —
+    mock-green, not live-green. This pins the real request so a fake can never diverge
+    from production again.
+    """
+    import inspect
+
+    from brainlayer import backup_daily
+
+    source = inspect.getsource(backup_daily.upload_file_to_drive_raw)
+    assert "md5Checksum" in source, (
+        "the resumable upload must request md5Checksum, or retention's integrity check is dead code"
+    )
+
+
+def test_vanished_source_does_not_abort_the_nightly_run(tmp_path, monkeypatch):
+    """A file deleted under us mid-run must not take the whole backup down.
+
+    Selection never read source bytes before this PR; it does now, so a path that disappears
+    BETWEEN discovery and hashing became able to kill the run. Deleting it before the run
+    proves nothing — discovery simply would not find it. The window is the race, so the test
+    unlinks the file after discovery has already returned it as a candidate.
+
+    This job is what PREVENTS data loss; failing the entire nightly backup because one
+    transcript vanished is the wrong failure.
+    """
+    from brainlayer import jsonl_backup
+
+    now = time.time()
+    source_root = tmp_path / "sessions"
+    keeper = _write_jsonl(source_root / "keeper.jsonl", mtime=now - 3600)
+    doomed = _write_jsonl(source_root / "doomed.jsonl", mtime=now - 3600)
+    uploads: list[Path] = []
+    surviving: list[dict] = []
+    _install_drive(monkeypatch, jsonl_backup, uploads, surviving)
+    kwargs = _covered_state_kwargs(tmp_path, source_root, now)
+
+    first = jsonl_backup.run_backup(date_stamp="2026-06-05", **kwargs)
+    assert first["bundled_file_count"] == 2
+
+    real_discover = jsonl_backup._discover_jsonl_candidates
+
+    def _discover_then_vanish(roots):
+        found = real_discover(roots)
+        doomed.unlink(missing_ok=True)  # gone after discovery, before coverage hashing
+        return found
+
+    monkeypatch.setattr(jsonl_backup, "_discover_jsonl_candidates", _discover_then_vanish)
+
+    second = jsonl_backup.run_backup(date_stamp="2026-06-06", **kwargs)
+    assert second["status"] == "no-op", "the surviving file was still covered; the run must not die"
+    assert second["already_covered_files"] == 1
+    assert second["vanished_source_count"] == 1
+    assert keeper.exists()
