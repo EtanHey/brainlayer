@@ -5,7 +5,7 @@ import sqlite3
 
 import pytest
 
-from brainlayer.pipeline.relation_backfill import backfill
+from brainlayer.pipeline.relation_backfill import _distinct_mentions, backfill, windows
 
 
 @pytest.fixture
@@ -37,7 +37,13 @@ def response(relations=None):
                     "relations": relations
                     if relations is not None
                     else [
-                        {"source_id": "p", "target_id": "t", "type": "uses", "quote": "Atlas uses SQLite for storage."}
+                        {
+                            "source_id": "p",
+                            "target_id": "t",
+                            "type": "uses",
+                            "temporal_status": "current",
+                            "quote": "Atlas uses SQLite for storage.",
+                        }
                     ],
                 }
             ]
@@ -171,3 +177,45 @@ def test_entity_name_substring_is_not_a_mention(db):
     db.execute("UPDATE chunks SET content='Anna uses SQLite.'")
     db.commit()
     assert backfill(db, lambda _: pytest.fail("Ann is not mentioned"), limit=1)["chunks_processed"] == 0
+
+
+@pytest.mark.parametrize("source,target", [("Claude", "Claude Code"), ("Claude Code", "Claude")])
+def test_nested_names_require_independent_mentions(source, target):
+    assert not _distinct_mentions(source, target, "Claude Code uses Claude Code.")
+    assert _distinct_mentions(source, target, "Claude uses Claude Code.")
+
+
+def test_windows_cover_pair_that_straddles_original_overlap():
+    chunk = dict(
+        chunk_id="c",
+        content="x" * 5399 + " Atlas " + "x" * 700 + " SQLite " + "x" * 1000,
+        entities=[dict(id="p", name="Atlas", type="project"), dict(id="t", name="SQLite", type="technology")],
+    )
+    assert any("Atlas" in w["content"] and "SQLite" in w["content"] for w in windows(chunk, 6000))
+
+
+def test_historical_fact_is_inserted_as_noncurrent(db):
+    quote = "Atlas used SQLite for storage until 2024."
+    db.execute("UPDATE chunks SET content=?", (quote,))
+    db.commit()
+    rel = json.loads(response())["chunks"][0]["relations"][0]
+    rel["temporal_status"] = "historical"
+    rel["quote"] = quote
+    assert backfill(db, lambda _: response([rel]), limit=1)["relations_added"] == 1
+    assert db.execute("SELECT expired_at FROM kg_relations").fetchone()[0] is not None
+
+
+def test_uncovered_source_is_not_marked_complete(db):
+    db.execute("UPDATE chunks SET content=?", ("Atlas " + "x" * 7000 + " SQLite",))
+    db.commit()
+    with pytest.raises(ValueError, match="No endpoint pair"):
+        backfill(db, lambda _: pytest.fail("no covered pair"), limit=1)
+    assert db.execute("SELECT count(*) FROM kg_relation_backfill").fetchone()[0] == 0
+
+
+def test_explicit_rejection_handler_records_failed_source_without_completion(db):
+    rejected = []
+    stats = backfill(db, lambda _: "invalid", limit=1, on_rejection=lambda cid, error: rejected.append(cid))
+    assert stats["chunks_rejected"] == 1 and stats["chunks_processed"] == 0
+    assert rejected == ["c1"]
+    assert db.execute("SELECT count(*) FROM kg_relation_backfill").fetchone()[0] == 0
