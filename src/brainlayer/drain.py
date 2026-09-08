@@ -19,7 +19,7 @@ import apsw
 import sqlite_vec
 
 from ._helpers import _is_sqlite_busy_error, serialize_f32
-from .agent_provenance import normalize_source_class
+from .agent_provenance import normalize_provenance_class, normalize_source_class
 from .chunk_origin import detect_chunk_origin
 from .chunk_write import canonical_content_hash, insert_canonical_chunk
 from .content_class import classify_content_class
@@ -894,8 +894,16 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
         values["source_last_queued_at"] = float(event["queued_at"])
     if event.get("content_class"):
         values["content_class"] = event.get("content_class")
-    if event.get("provenance_class"):
-        values["provenance_class"] = event.get("provenance_class")
+    raw_provenance_class = event.get("provenance_class")
+    provenance_class = normalize_provenance_class(raw_provenance_class)
+    if raw_provenance_class is not None and provenance_class is None:
+        logger.warning(
+            "Watcher drain refused invalid provenance_class=%r for chunk_id=%s",
+            raw_provenance_class,
+            chunk_id,
+        )
+    if provenance_class is not None:
+        values["provenance_class"] = provenance_class
     source_class = normalize_source_class(event.get("source_class"))
     if source_class is not None and "source_class" in _columns(conn, "chunks"):
         values["source_class"] = source_class
@@ -1048,8 +1056,15 @@ def _apply_enrichment(conn: apsw.Connection, event: dict[str, Any]) -> None:
         updates["raw_entities_json"] = json.dumps(event["entities"])
     if "content_hash" in cols and event.get("content_hash"):
         updates["content_hash"] = event["content_hash"]
-    provenance_class = str(event.get("provenance_class") or "").strip()
-    if "provenance_class" in cols and provenance_class:
+    raw_provenance_class = event.get("provenance_class")
+    provenance_class = normalize_provenance_class(raw_provenance_class)
+    if raw_provenance_class is not None and provenance_class is None:
+        logger.warning(
+            "Enrichment drain refused invalid provenance_class=%r for chunk_id=%s",
+            raw_provenance_class,
+            chunk_id,
+        )
+    if "provenance_class" in cols and provenance_class is not None:
         updates["provenance_class"] = provenance_class
     enrichment_model = str(event.get("enrichment_model") or "").strip()
     if "enrichment_model" in cols and enrichment_model:
@@ -1077,7 +1092,7 @@ def _apply_enrichment(conn: apsw.Connection, event: dict[str, Any]) -> None:
     if updates:
         assignments = ", ".join(f"{col} = ?" for col in updates)
         conn.execute(f"UPDATE chunks SET {assignments} WHERE id = ?", [*updates.values(), chunk_id])
-    _run_enrichment_provenance_hooks(conn, event, chunk_id=chunk_id, provenance_class=provenance_class)
+    _run_enrichment_provenance_hooks(conn, event, chunk_id=chunk_id, provenance_class=provenance_class or "")
 
 
 def _apply_event(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
@@ -1352,7 +1367,10 @@ def _is_verified_redundant_enrichment(
     ):
         return False
 
-    provenance_class = str(payload.get("provenance_class") or "").strip()
+    raw_provenance_class = payload.get("provenance_class")
+    provenance_class = normalize_provenance_class(raw_provenance_class)
+    if raw_provenance_class is not None and provenance_class is None:
+        return False
     if provenance_class and "provenance_class" in state:
         current_provenance_class = str(state.get("provenance_class") or "").strip()
         if current_provenance_class != provenance_class:
