@@ -1379,7 +1379,8 @@ final class DatabaseTests: XCTestCase {
             UPDATE chunks
             SET summary = 'Human readable chunk summary',
                 source = 'mcp',
-                source_file = 'precompact:abc123'
+                source_file = 'precompact:abc123',
+                metadata = '{"attributionAgent":"brainlayerClaude-source"}'
             WHERE id = 'chunk-human'
         """)
         try db.recordInjectionEvent(
@@ -1395,6 +1396,8 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(event.displayTitle, "Human readable chunk summary")
         XCTAssertEqual(event.triggeredByText, "Triggered by: source prompt should be only the trigger")
         XCTAssertEqual(event.chunks.first?.sourceFile, "precompact:abc123")
+        XCTAssertEqual(event.chunks.first?.storingAgent, "brainlayerClaude-source")
+        XCTAssertEqual(event.storingAgentText, "Agent brainlayerClaude-source")
         XCTAssertEqual(event.primaryKind.label, "Checkpoint")
     }
 
