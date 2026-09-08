@@ -1857,6 +1857,89 @@ def _create_burn_drain_db(path):
     conn.close()
 
 
+def _create_provenance_drain_db(path, *, provenance_class="direct-session", source_class="cli-agent"):
+    conn = apsw.Connection(str(path))
+    conn.execute(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT,
+            summary TEXT,
+            content_hash TEXT,
+            provenance_class TEXT,
+            source_class TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO chunks (id, content, content_hash, provenance_class, source_class)
+        VALUES ('provenance-target', 'queued provenance boundary', 'provenance-hash', ?, ?)
+        """,
+        (provenance_class, source_class),
+    )
+    conn.close()
+
+
+@pytest.mark.parametrize("dead_value", ["AGENT-INFERENCE", "RAW-ETAN-DIRECT", "AGENT-PARAPHRASE"])
+def test_drain_refuses_dead_provenance_taxonomy_without_touching_source_class(tmp_path, caplog, dead_value):
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "drain.log"
+    _create_provenance_drain_db(db_path)
+    enqueue_enrichment_updates(
+        [
+            {
+                "chunk_id": "provenance-target",
+                "content_hash": "provenance-hash",
+                "enrichment": {"summary": "safe summary"},
+                "provenance_class": dead_value,
+            }
+        ],
+        queue_dir=queue_dir,
+    )
+
+    with caplog.at_level("WARNING", logger="brainlayer.drain"):
+        assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=log_path) == 1
+
+    conn = apsw.Connection(str(db_path))
+    try:
+        row = conn.execute(
+            "SELECT summary, provenance_class, source_class FROM chunks WHERE id = 'provenance-target'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row == ("safe summary", "direct-session", "cli-agent")
+    assert f"refused invalid provenance_class={dead_value!r}" in caplog.text
+
+
+@pytest.mark.parametrize("event_value", ["codex-session", None])
+def test_drain_preserves_valid_or_absent_provenance_class(tmp_path, event_value):
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "drain.log"
+    _create_provenance_drain_db(db_path)
+    event = {
+        "chunk_id": "provenance-target",
+        "content_hash": "provenance-hash",
+        "enrichment": {"summary": "safe summary"},
+    }
+    if event_value is not None:
+        event["provenance_class"] = event_value
+    enqueue_enrichment_updates([event], queue_dir=queue_dir)
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=log_path) == 1
+
+    conn = apsw.Connection(str(db_path))
+    try:
+        row = conn.execute(
+            "SELECT provenance_class, source_class FROM chunks WHERE id = 'provenance-target'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row == (event_value or "direct-session", "cli-agent")
+
+
 def test_burn_drain_skips_verified_stale_enrichment_and_applies_real_update(tmp_path):
     from brainlayer.drain import burn_drain_once
 
@@ -2063,7 +2146,7 @@ def test_burn_drain_duplicate_enrichment_event_is_idempotent(tmp_path):
         "chunk_id": "needs-update",
         "content_hash": "h2",
         "enrichment": {"summary": "idempotent summary"},
-        "provenance_class": "RAW-ETAN-DIRECT",
+        "provenance_class": "direct-session",
         "enrichment_model": "gemini-2.5-flash-lite",
         "enrichment_backend": "gemini-flex",
     }
@@ -2094,7 +2177,7 @@ def test_burn_drain_duplicate_enrichment_event_is_idempotent(tmp_path):
     finally:
         conn.close()
     assert count == 1
-    assert rows == [("idempotent summary", "success", "RAW-ETAN-DIRECT", "gemini-2.5-flash-lite", "gemini-flex")]
+    assert rows == [("idempotent summary", "success", "direct-session", "gemini-2.5-flash-lite", "gemini-flex")]
 
 
 def test_burn_drain_applies_same_hash_event_when_provenance_state_missing(tmp_path):
@@ -2134,7 +2217,7 @@ def test_burn_drain_applies_same_hash_event_when_provenance_state_missing(tmp_pa
                 "content_hash": "h1",
                 "enrichment": {"summary": "redundant summary"},
                 "entities": [{"name": "controlLayer"}],
-                "provenance_class": "RAW-ETAN-DIRECT",
+                "provenance_class": "direct-session",
             }
         ],
         queue_dir=queue_dir,
@@ -2155,7 +2238,7 @@ def test_burn_drain_applies_same_hash_event_when_provenance_state_missing(tmp_pa
     finally:
         conn.close()
     assert row[0] == "redundant summary"
-    assert row[1] == "RAW-ETAN-DIRECT"
+    assert row[1] == "direct-session"
     assert json.loads(row[2]) == [{"name": "controlLayer"}]
     assert queued_entity == ("controlLayer", "already-done", "enrichment")
 
@@ -2198,7 +2281,7 @@ def test_burn_drain_redundant_enrichment_preserves_provenance_enqueue(tmp_path):
             "2026-05-30T00:00:00Z",
             "success",
             "h1",
-            "RAW-ETAN-DIRECT",
+            "direct-session",
             json.dumps(entities),
         ),
     )
@@ -2210,7 +2293,7 @@ def test_burn_drain_redundant_enrichment_preserves_provenance_enqueue(tmp_path):
                 "content_hash": "h1",
                 "enrichment": {"summary": "redundant summary"},
                 "entities": entities,
-                "provenance_class": "RAW-ETAN-DIRECT",
+                "provenance_class": "direct-session",
             }
         ],
         queue_dir=queue_dir,

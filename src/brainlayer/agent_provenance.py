@@ -22,6 +22,34 @@ SearchPolicy = Literal["KEEP", "ISOLATE", "OUT"]
 EffectiveVisibility = Literal["default", "operational", "cold"]
 SourceClass = Literal["cli-agent", "desktop", "subagent", "brain-worker", "fleet-coordination"]
 SOURCE_CLASSES = frozenset({"cli-agent", "desktop", "subagent", "brain-worker", "fleet-coordination"})
+ProvenanceClass = Literal[
+    "codex-session",
+    "cursor-gather",
+    "direct-session",
+    "fleet-subagent",
+    "gemini-session",
+    "product-subagent",
+    "recon-agent",
+    "t3-app-session",
+    "t3-thread",
+    "unknown",
+    "workflow-agent",
+]
+PROVENANCE_CLASSES = frozenset(
+    {
+        "codex-session",
+        "cursor-gather",
+        "direct-session",
+        "fleet-subagent",
+        "gemini-session",
+        "product-subagent",
+        "recon-agent",
+        T3_APP_SESSION,
+        "t3-thread",
+        "unknown",
+        "workflow-agent",
+    }
+)
 
 RECON_BRAIN_WORKER_RE = re.compile(r"\bbrain[-_ ]?worker\b", re.IGNORECASE)
 RECON_WEAVE_RE = re.compile(r"(?<!\w)/weave\b|\bweave[-_ ]+(?:worker|agent|recon)\b", re.IGNORECASE)
@@ -236,6 +264,12 @@ def normalize_source_class(value: object) -> SourceClass | None:
     """Accept only an exact member of the five-value taxonomy."""
     normalized = str(value or "").strip()
     return cast(SourceClass, normalized) if normalized in SOURCE_CLASSES else None
+
+
+def normalize_provenance_class(value: object) -> ProvenanceClass | None:
+    """Accept only an exact member of the current session-origin taxonomy."""
+    normalized = str(value or "").strip()
+    return cast(ProvenanceClass, normalized) if normalized in PROVENANCE_CLASSES else None
 
 
 def resolve_source_class(
