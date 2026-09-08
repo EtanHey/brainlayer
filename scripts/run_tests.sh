@@ -188,6 +188,25 @@ map_changed_files_to_pytests() {
           mapped=1
         fi
         ;;
+      src/brainlayer/pipeline/enrichment.py|src/brainlayer/pipeline/groq.py|src/brainlayer/pipeline/kg_extraction_groq.py)
+        groq_pipeline_tests=(
+          "$TEST_ROOT/test_groq_backend.py"
+          "$TEST_ROOT/test_kg_rebuild.py"
+        )
+        groq_pipeline_complete=1
+        for groq_pipeline_test in "${groq_pipeline_tests[@]}"; do
+          if [ ! -f "$groq_pipeline_test" ]; then
+            groq_pipeline_complete=0
+            break
+          fi
+        done
+        if [ "$groq_pipeline_complete" -eq 1 ]; then
+          for groq_pipeline_test in "${groq_pipeline_tests[@]}"; do
+            append_unique "$groq_pipeline_test"
+          done
+          mapped=1
+        fi
+        ;;
       src/brainlayer/mcp/store_handler.py|src/brainlayer/queue_io.py|src/brainlayer/drain.py|src/brainlayer/store.py)
         for rel in test_store_handler.py test_write_queue.py test_brainstore.py; do
           test_path="$TEST_ROOT/$rel"
