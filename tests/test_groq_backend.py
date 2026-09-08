@@ -220,6 +220,25 @@ class TestGroqBackendSelection:
                 "https://api.groq.com/openai/v1/chat/completions",
             )
 
+    @pytest.mark.parametrize("catalog", [ValueError("bad json"), [], {"data": [None]}])
+    def test_model_validation_reports_malformed_catalog_as_service_failure(self, catalog):
+        """A 2xx response with an unusable catalog does not prove model retirement."""
+        response = MagicMock()
+        if isinstance(catalog, Exception):
+            response.json.side_effect = catalog
+        else:
+            response.json.return_value = catalog
+
+        with (
+            patch("requests.get", return_value=response),
+            pytest.raises(GroqServiceUnavailableError, match=r"could not be checked.*service is unavailable"),
+        ):
+            validate_groq_model(
+                "gsk_test123",
+                "live/model",
+                "https://api.groq.com/openai/v1/chat/completions",
+            )
+
 
 # ── Privacy enforcement ────────────────────────────────────────────────
 

@@ -42,11 +42,14 @@ def validate_groq_model(api_key: str, model: str, completions_url: str, timeout:
             timeout=timeout,
         )
         response.raise_for_status()
-    except requests.RequestException as exc:
+        catalog = response.json()
+        if not isinstance(catalog, dict) or not isinstance(catalog.get("data"), list):
+            raise TypeError("Groq /models response is not an object with a data list")
+        model_ids = {item["id"] for item in catalog["data"] if isinstance(item["id"], str)}
+    except (requests.RequestException, KeyError, TypeError, ValueError) as exc:
         raise GroqServiceUnavailableError(
             f"Groq model {model!r} could not be checked because the Groq service is unavailable "
             "or rejected the /models request"
         ) from exc
-    model_ids = {item.get("id") for item in response.json().get("data", [])}
     if model not in model_ids:
         raise GroqModelUnavailableError(f"Groq model {model!r} is unavailable: not listed by the /models endpoint")
