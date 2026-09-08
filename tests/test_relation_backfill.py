@@ -219,3 +219,39 @@ def test_explicit_rejection_handler_records_failed_source_without_completion(db)
     assert stats["chunks_rejected"] == 1 and stats["chunks_processed"] == 0
     assert rejected == ["c1"]
     assert db.execute("SELECT count(*) FROM kg_relation_backfill").fetchone()[0] == 0
+
+
+def test_conflicting_temporal_states_never_depend_on_response_order(db):
+    rel = json.loads(response())["chunks"][0]["relations"][0]
+    with pytest.raises(ValueError, match="Conflicting temporal"):
+        backfill(db, lambda _: response([rel | {"temporal_status": "historical"}, rel]), limit=1)
+    assert db.execute("SELECT count(*) FROM kg_relations").fetchone()[0] == 0
+    assert db.execute("SELECT count(*) FROM kg_relation_backfill").fetchone()[0] == 0
+
+
+def test_pagination_advances_past_rejected_sources_without_rescanning(db):
+    db.execute("INSERT INTO chunks SELECT 'c2',content,'2025-01-01',NULL,NULL,NULL FROM chunks")
+    db.execute("INSERT INTO kg_entity_chunks SELECT entity_id,'c2' FROM kg_entity_chunks")
+    db.commit()
+    stats = backfill(db, lambda _: "invalid", limit=1, on_rejection=lambda *a: None)
+    assert stats["next_chunk_id"] == "c1"
+
+    def next_source(prompt):
+        assert json.loads(prompt.split("INPUT: ")[1])[0]["chunk_id"] == "c2"
+        return response().replace('"c1"', '"c2"')
+
+    stats = backfill(db, next_source, limit=1, after_chunk_id=stats["next_chunk_id"])
+    assert stats["relations_added"] == 1 and stats["next_chunk_id"] == "c2"
+    assert db.execute("SELECT chunk_id FROM kg_relation_backfill").fetchall() == [("c2",)]
+
+
+def test_repeated_single_entity_mentions_still_cover_distinct_pair():
+    chunk = dict(
+        chunk_id="c",
+        content="Atlas " * 10000 + "uses SQLite.",
+        entities=[
+            dict(id="p", name="Atlas", type="project"),
+            dict(id="t", name="SQLite", type="technology"),
+        ],
+    )
+    assert any("Atlas uses SQLite." in w["content"] for w in windows(chunk, 6000))
