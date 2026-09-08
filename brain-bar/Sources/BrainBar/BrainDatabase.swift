@@ -6940,21 +6940,27 @@ final class BrainDatabase: @unchecked Sendable {
     private func entityIDForDigestEntity(name: String) throws -> DigestEntityResolution? {
         guard let db else { throw DBError.notOpen }
 
-        let activeClause = try tableColumns(name: "kg_entities", on: db).contains("status")
+        let entityColumns = try tableColumns(name: "kg_entities", on: db)
+        let activeClause = entityColumns.contains("status")
             ? "AND COALESCE(e.status, 'active') = 'active'"
             : ""
+        let legacyDigestClause = entityColumns.contains("user_verified")
+            ? "AND NOT (e.id LIKE 'digest-entity-%' AND e.entity_type = 'concept' AND COALESCE(e.user_verified, 0) = 0)"
+            : "AND NOT (e.id LIKE 'digest-entity-%' AND e.entity_type = 'concept')"
         let normalizedName = name.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
         let existingSQL = """
             SELECT DISTINCT e.id, e.name
             FROM kg_entities e
             WHERE lower(trim(e.name)) = lower(trim(?))
               \(activeClause)
+              \(legacyDigestClause)
             UNION
             SELECT DISTINCT e.id, e.name
             FROM kg_entity_aliases a
             JOIN kg_entities e ON e.id = a.entity_id
             WHERE lower(trim(a.alias)) = lower(trim(?))
               \(activeClause)
+              \(legacyDigestClause)
               AND (a.valid_from IS NULL OR julianday(a.valid_from) <= julianday('now'))
               AND (a.valid_to IS NULL OR julianday(a.valid_to) >= julianday('now'))
             ORDER BY 1

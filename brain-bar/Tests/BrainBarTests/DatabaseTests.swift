@@ -1995,6 +1995,7 @@ final class DatabaseTests: XCTestCase {
 
     func testDigestKeepsUnknownRegexMatchesAsReviewableCandidates() throws {
         let content = "Both Julius met Both Julius and So Kimi. But Ben said Oh God. Moving On was a section heading."
+        try db.insertEntity(id: "digest-entity-both-julius", type: "concept", name: "Both Julius")
         let result = try db.digest(content: content)
         let entities = result["entities"] as? [String] ?? []
         let candidates = try XCTUnwrap(result["entity_candidates"] as? [[String: Any]])
@@ -2003,7 +2004,7 @@ final class DatabaseTests: XCTestCase {
             Set(candidates.compactMap { $0["surface"] as? String }),
             Set(["Both Julius", "So Kimi", "But Ben", "Oh God", "Moving On"])
         )
-        XCTAssertEqual(try sqliteCount(path: tempDBPath, table: "kg_entities"), 0)
+        XCTAssertEqual(try sqliteCount(path: tempDBPath, table: "kg_entities"), 1)
         let chunkID = try XCTUnwrap(result["chunk_id"] as? String)
         let persisted = try XCTUnwrap(storedMetadata(chunkID)["digest_entity_candidates"] as? [[String: Any]])
         XCTAssertEqual(persisted.count, 5)
@@ -2077,10 +2078,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func testDigestReusesActiveCanonicalPersonAndLanguageAliasInMixedText() throws {
-        try sqliteExecWrite(
-            path: tempDBPath,
-            sql: "ALTER TABLE kg_entities ADD COLUMN status TEXT DEFAULT 'active'"
-        )
+        try sqliteExecWrite(path: tempDBPath, sql: "ALTER TABLE kg_entities ADD COLUMN status TEXT DEFAULT 'active'")
         try db.insertEntity(id: "person-andrew-kelley", type: "person", name: "Andrew Kelley")
         try db.insertEntity(id: "technology-ecmascript", type: "technology", name: "ECMAScript")
         try db.insertEntity(id: "person-but-ben", type: "person", name: "But Ben")
@@ -2103,15 +2101,9 @@ final class DatabaseTests: XCTestCase {
         let chunkID = try XCTUnwrap(result["chunk_id"] as? String)
         let persisted = try XCTUnwrap(storedMetadata(chunkID)["digest_entity_candidates"] as? [[String: Any]])
         let candidate = try XCTUnwrap(persisted.first)
-        let storedContent = try XCTUnwrap(
-            sqliteScalarString(path: tempDBPath, sql: "SELECT content FROM chunks WHERE id = '\(chunkID)'")
-        )
+        let storedContent = try XCTUnwrap(sqliteScalarString(path: tempDBPath, sql: "SELECT content FROM chunks WHERE id = '\(chunkID)'"))
         let span = NSRange(location: try XCTUnwrap(candidate["start_utf16"] as? Int), length: try XCTUnwrap(candidate["length_utf16"] as? Int))
-        XCTAssertEqual(
-            (storedContent as NSString).substring(with: span),
-            "But Ben",
-            "Persisted offsets are UTF-16 code units even after a non-BMP emoji"
-        )
+        XCTAssertEqual((storedContent as NSString).substring(with: span), "But Ben", "Offsets are UTF-16 code units after an emoji")
         XCTAssertEqual(candidate["span_basis"] as? String, "stored_chunk_content")
     }
 
@@ -2121,14 +2113,10 @@ final class DatabaseTests: XCTestCase {
         try sqliteExecWrite(
             path: tempDBPath,
             sql: """
-                INSERT INTO kg_entity_aliases (alias, entity_id, alias_type)
-                VALUES ('JavaScript', 'technology-js-one', 'name');
-                INSERT INTO kg_entity_aliases (alias, entity_id, alias_type)
-                VALUES ('JavaScript', 'technology-js-two', 'name');
-                INSERT INTO kg_entity_aliases (alias, entity_id, alias_type, valid_to)
-                VALUES ('CoffeeScript', 'technology-js-one', 'name', '2000-01-01T00:00:00Z');
-                INSERT INTO kg_entity_aliases (alias, entity_id, alias_type, valid_from)
-                VALUES ('FutureScript', 'technology-js-one', 'name', '2999-01-01T00:00:00Z');
+                INSERT INTO kg_entity_aliases (alias, entity_id, alias_type) VALUES ('JavaScript', 'technology-js-one', 'name');
+                INSERT INTO kg_entity_aliases (alias, entity_id, alias_type) VALUES ('JavaScript', 'technology-js-two', 'name');
+                INSERT INTO kg_entity_aliases (alias, entity_id, alias_type, valid_to) VALUES ('CoffeeScript', 'technology-js-one', 'name', '2000-01-01T00:00:00Z');
+                INSERT INTO kg_entity_aliases (alias, entity_id, alias_type, valid_from) VALUES ('FutureScript', 'technology-js-one', 'name', '2999-01-01T00:00:00Z');
             """
         )
 

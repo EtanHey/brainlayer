@@ -167,6 +167,7 @@ final class KGDatabaseTests: XCTestCase {
         )
         try db.insertEntity(id: "person-active", type: "person", name: "Andrew Kelley")
         try db.insertEntity(id: "person-archived", type: "person", name: "But Ben")
+        try db.insertEntity(id: "digest-entity-both-julius", type: "concept", name: "Both Julius")
         XCTAssertEqual(
             sqlite3_exec(handle, "UPDATE kg_entities SET status = 'archived' WHERE id = 'person-archived'", nil, nil, nil),
             SQLITE_OK

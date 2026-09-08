@@ -25,9 +25,12 @@ final class EntityCache: @unchecked Sendable {
     /// stop participating in MCP query entity detection after the next refresh.
     func load(from db: OpaquePointer?) {
         guard let db else { return }
-        let sql = Self.tableHasStatusColumn(db)
-            ? "SELECT id, name FROM kg_entities WHERE COALESCE(status, 'active') = 'active'"
-            : "SELECT id, name FROM kg_entities"
+        let columns = Self.tableColumns(db)
+        var filters = columns.contains("status") ? ["COALESCE(status, 'active') = 'active'"] : []
+        filters.append(columns.contains("user_verified")
+            ? "NOT (id LIKE 'digest-entity-%' AND entity_type = 'concept' AND COALESCE(user_verified, 0) = 0)"
+            : "NOT (id LIKE 'digest-entity-%' AND entity_type = 'concept')")
+        let sql = "SELECT id, name FROM kg_entities WHERE " + filters.joined(separator: " AND ")
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK
         else { return }
@@ -56,15 +59,16 @@ final class EntityCache: @unchecked Sendable {
         NSLog("[BrainBar] EntityCache loaded: %d entities", newMap.count)
     }
 
-    private static func tableHasStatusColumn(_ db: OpaquePointer) -> Bool {
+    private static func tableColumns(_ db: OpaquePointer) -> Set<String> {
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, "PRAGMA table_info(kg_entities)", -1, &stmt, nil) == SQLITE_OK else { return false }
+        guard sqlite3_prepare_v2(db, "PRAGMA table_info(kg_entities)", -1, &stmt, nil) == SQLITE_OK else { return [] }
         defer { sqlite3_finalize(stmt) }
+        var columns = Set<String>()
         while sqlite3_step(stmt) == SQLITE_ROW {
             guard let namePtr = sqlite3_column_text(stmt, 1) else { continue }
-            if String(cString: namePtr) == "status" { return true }
+            columns.insert(String(cString: namePtr))
         }
-        return false
+        return columns
     }
 
     /// Start a 60-second periodic refresh timer.
