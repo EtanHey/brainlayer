@@ -1471,7 +1471,12 @@ def test_unpaused_backlog_still_attempts_drain_heal_and_reports_outcome(tmp_path
 
     result = _run_queue_backlog_health(config, _loaded_launchd_runner(commands))
 
-    assert ["launchctl", "kickstart", "-k", "gui/501/com.brainlayer.drain"] in commands
+    assert [
+        "launchctl",
+        "kickstart",
+        "-k",
+        f"gui/{os.getuid()}/com.brainlayer.drain",
+    ] in commands
     queue_issue = next(issue for issue in result.issues if issue.code == "queue_backed_up")
     assert "heal=attempted" in queue_issue.message
     assert "action=kickstart:com.brainlayer.drain" in queue_issue.message
