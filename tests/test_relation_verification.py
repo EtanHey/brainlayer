@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 
 import pytest
 
@@ -96,6 +97,18 @@ def test_identical_quote_from_other_session_is_not_independent_support(source, r
     assert verify_relation(source, relation, refs, response)["status"] == "UNKNOWN"
 
 
+def test_another_copied_span_from_primary_is_not_independent_support(source, relation):
+    copied = "Atlas requires SQLite for storage."
+    source["content"] += " " + copied
+    refs = [reference(content="Forwarded excerpt: " + copied)]
+
+    def quotes(response):
+        response["primary"]["quote"] = relation["quote"]
+        response["references"][0]["quote"] = copied
+
+    assert verify_relation(source, relation, refs, caller(source, refs, mutate=quotes))["status"] == "UNKNOWN"
+
+
 def test_policy_is_preserved_without_retyping_a_service_or_making_an_id(source, relation):
     source["content"] = "Atlas agents MUST search SQLite before answering."
     relation["quote"] = source["content"]
@@ -120,6 +133,8 @@ def test_source_rejection_cannot_be_overridden_by_external_support(source, relat
         ("contradicts", "2025-12-31T00:00:00+00:00", "UNKNOWN"),
         ("ended", "2026-01-02T00:00:00+00:00", "HISTORICAL_ONLY"),
         ("ended", None, "UNKNOWN"),
+        ("supports", "2026-01-02T00:00:00", "UNKNOWN"),
+        ("contradicts", "2026-01-02T00:00:00", "UNKNOWN"),
     ],
 )
 def test_chronology_distinguishes_correction_expiry_and_prior_denial(source, relation, verdict, date, status):
@@ -181,6 +196,21 @@ def test_excluded_evidence_classes_never_reach_model(source, relation, source_cl
         source["source_class"] = source_class
     else:
         refs = [reference(source_class=source_class)]
+    with pytest.raises(ValueError, match="eligible complete bounded evidence"):
+        verify_relation(source, relation, refs, forbidden)
+
+
+@pytest.mark.parametrize("date", [datetime(2026, 1, 1), b"2026-01-01T00:00:00Z", 1767225600])
+@pytest.mark.parametrize("position", ["primary", "reference"])
+def test_invalid_date_shape_is_rejected_before_transport(source, relation, date, position):
+    def forbidden(messages):
+        pytest.fail("invalid timestamp reached model")
+
+    refs = []
+    if position == "primary":
+        source["created_at"] = date
+    else:
+        refs = [reference(created_at=date)]
     with pytest.raises(ValueError, match="eligible complete bounded evidence"):
         verify_relation(source, relation, refs, forbidden)
 

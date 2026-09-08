@@ -73,7 +73,7 @@ def _date(value):
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
         return parsed if parsed.utcoffset() is not None else None
-    except (AttributeError, ValueError):
+    except (AttributeError, TypeError, ValueError):
         return None
 
 
@@ -87,6 +87,7 @@ def _check_window(window):
         or source_class in MEMORY_READER_ATTRIBUTIONS | {"desktop"}
         or not isinstance(window.chunk_id, str)
         or not window.chunk_id
+        or (window.created_at is not None and not isinstance(window.created_at, str))
     ):
         raise ValueError("Review requires eligible complete bounded evidence windows")
 
@@ -204,7 +205,7 @@ def verify_relation(source, relation, references, caller, *, on_response):
             and ref.origin != primary.origin
             and ref.chunk_id != primary.chunk_id
             and ref.content != primary.content
-            and judgment["quote"] != relation["quote"]
+            and judgment["quote"] not in primary.content
         ):
             supports.append(ref.chunk_id)
     result["independent_supports"] = supports

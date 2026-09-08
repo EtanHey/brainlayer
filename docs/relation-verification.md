@@ -35,7 +35,9 @@ missing dates remain unresolved. Observation timestamps are not effective dates.
 
 The caller must resolve underlying evidence origins, including forwarded or
 summarized origins; different session IDs alone do not establish independence.
-Identical quotes, same-origin records and unknown origins cannot corroborate.
+Quotes copied from any primary-source span, same-origin records and unknown
+origins cannot corroborate. This conservative copy check can also withhold
+independent accounts that happen to use identical wording.
 No search hits is UNKNOWN. The model must review every retrieved record in order,
 but this does not prove retrieval recall or absence of unreturned contradictions.
 Corroboration requires known independent support and no unresolved supplied
