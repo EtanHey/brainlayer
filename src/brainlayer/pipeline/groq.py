@@ -23,8 +23,12 @@ def _models_url(completions_url: str) -> str:
 
 
 def raise_for_groq_response(response: Any, model: str) -> None:
-    """Raise a model-specific error for 404s, otherwise use requests semantics."""
-    if response.status_code == 404:
+    """Raise a model-specific error only when Groq identifies model_not_found."""
+    try:
+        error = response.json().get("error", {})
+    except (AttributeError, TypeError, ValueError):
+        error = {}
+    if response.status_code == 404 and isinstance(error, dict) and error.get("code") == "model_not_found":
         raise GroqModelUnavailableError(f"Groq model {model!r} is unavailable (HTTP 404 model_not_found)")
     response.raise_for_status()
 

@@ -1164,7 +1164,9 @@ def enrich_batch(
         # Parallel: pass db_path so each thread gets its own VectorStore connection.
         # APSW connections are not safe for concurrent use from multiple threads.
         db_path = store.db_path
-        with ThreadPoolExecutor(max_workers=parallel) as pool:
+        pool = ThreadPoolExecutor(max_workers=parallel)
+        fatal_model_error = False
+        try:
             futures = {pool.submit(_enrich_one, db_path, chunk, with_context, backend): chunk for chunk in chunks}
             for future in as_completed(futures):
                 try:
@@ -1175,6 +1177,7 @@ def enrich_batch(
                         failed += 1
                         consecutive_failures += 1
                 except GroqModelUnavailableError:
+                    fatal_model_error = True
                     for pending in futures:
                         pending.cancel()
                     raise
@@ -1210,6 +1213,8 @@ def enrich_batch(
                     rate = done / (now - batch_start) if now > batch_start else 0
                     print(f"  HEARTBEAT [{done}/{len(chunks)}] ok={success} fail={failed} rate={rate:.1f}/s")
                     last_heartbeat = now
+        finally:
+            pool.shutdown(wait=not fatal_model_error, cancel_futures=fatal_model_error)
     else:
         # Sequential: one chunk at a time (original behavior)
         for chunk in chunks:
