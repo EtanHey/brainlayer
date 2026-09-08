@@ -45,7 +45,11 @@ def validate_groq_model(api_key: str, model: str, completions_url: str, timeout:
         catalog = response.json()
         if not isinstance(catalog, dict) or not isinstance(catalog.get("data"), list):
             raise TypeError("Groq /models response is not an object with a data list")
-        model_ids = {item["id"] for item in catalog["data"] if isinstance(item["id"], str)}
+        model_ids = set()
+        for item in catalog["data"]:
+            if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+                raise TypeError("Groq /models response contains an entry without a string id")
+            model_ids.add(item["id"])
     except (requests.RequestException, KeyError, TypeError, ValueError) as exc:
         raise GroqServiceUnavailableError(
             f"Groq model {model!r} could not be checked because the Groq service is unavailable "

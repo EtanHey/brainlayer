@@ -220,7 +220,10 @@ class TestGroqBackendSelection:
                 "https://api.groq.com/openai/v1/chat/completions",
             )
 
-    @pytest.mark.parametrize("catalog", [ValueError("bad json"), [], {"data": [None]}])
+    @pytest.mark.parametrize(
+        "catalog",
+        [ValueError("bad json"), [], {"data": [None]}, {"data": [{"id": None}]}],
+    )
     def test_model_validation_reports_malformed_catalog_as_service_failure(self, catalog):
         """A 2xx response with an unusable catalog does not prove model retirement."""
         response = MagicMock()
