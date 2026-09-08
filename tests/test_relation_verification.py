@@ -169,6 +169,32 @@ def test_excluded_evidence_classes_never_reach_model(source, relation, source_cl
         verify_relation(source, relation, refs, forbidden)
 
 
+@pytest.mark.parametrize("stage", ["caller", "on_response"])
+@pytest.mark.parametrize("target", ["relation", "references"])
+def test_callback_mutation_cannot_change_reviewed_inputs(source, relation, stage, target):
+    refs = [reference()]
+    response = caller(source, refs)
+    expected = verify_relation(source, relation, refs, response)
+
+    def mutate():
+        if target == "relation":
+            relation["source_id"] = "unreviewed-id"
+        else:
+            refs[0] = reference(chunk_id="unreviewed-id", origin="unreviewed-origin")
+
+    def transport(messages):
+        if stage == "caller":
+            mutate()
+        return response(messages)
+
+    def record(event):
+        if stage == "on_response":
+            mutate()
+
+    result = verify_relation(source, relation, refs, transport, on_response=record)
+    assert result == expected
+
+
 def test_model_receives_names_and_source_data_separate_from_instructions(source, relation):
     refs = [reference()]
 

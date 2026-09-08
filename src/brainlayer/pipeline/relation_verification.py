@@ -107,6 +107,8 @@ def verify_relation(source, relation, references, caller, *, on_response):
     on_response callback must durably record its argument before returning; if it
     raises, no judgment is processed. Transport errors propagate without fallback.
     """
+    relation = dict(relation)
+    references = tuple(references)
     primary = EvidenceWindow(
         source["chunk_id"],
         source["content"],
