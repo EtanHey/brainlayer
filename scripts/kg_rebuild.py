@@ -36,6 +36,7 @@ from brainlayer.pipeline.entity_extraction import (
     extract_entities_from_tags,
     extract_seed_entities,
 )
+from brainlayer.pipeline.groq import GroqModelUnavailableError
 from brainlayer.pipeline.kg_extraction import process_extraction_result
 from brainlayer.pipeline.kg_extraction_groq import (
     RateLimiter,
@@ -276,6 +277,8 @@ def tier2_groq_ner(
 
             stats["chunks_processed"] += len(chunks)
 
+        except GroqModelUnavailableError:
+            raise
         except Exception:
             logger.exception("Error in Groq NER batch")
             stats["errors"] += 1

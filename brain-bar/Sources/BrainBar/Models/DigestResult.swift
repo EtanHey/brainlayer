@@ -9,6 +9,7 @@ struct DigestResult: Equatable {
     let chunks: Int
     let entities: Int
     let relations: Int
+    let candidates: Int
     let actionItems: [String]
 
     init(
@@ -20,6 +21,7 @@ struct DigestResult: Equatable {
         chunks: Int,
         entities: Int,
         relations: Int,
+        candidates: Int = 0,
         actionItems: [String]
     ) {
         self.mode = mode
@@ -30,6 +32,7 @@ struct DigestResult: Equatable {
         self.chunks = chunks
         self.entities = entities
         self.relations = relations
+        self.candidates = candidates
         self.actionItems = actionItems
     }
 
@@ -44,6 +47,9 @@ struct DigestResult: Equatable {
         chunks = payload["chunks_created"] as? Int ?? stats["chunks_created"] as? Int ?? payload["chunks"] as? Int ?? 0
         entities = payload["entities_created"] as? Int ?? stats["entities_found"] as? Int ?? payload["entities"] as? Int ?? 0
         relations = payload["relations_created"] as? Int ?? stats["relations_created"] as? Int ?? payload["relations"] as? Int ?? 0
+        candidates = (payload["entity_candidates"] as? [Any])?.count
+            ?? payload["entity_candidates_count"] as? Int
+            ?? 0
 
         let extracted = payload["extracted"] as? [String: Any] ?? [:]
         let rawItems = (payload["action_items"] as? [Any]) ?? (extracted["action_items"] as? [Any]) ?? []

@@ -328,4 +328,19 @@ final class TextFormatterParityTests: XCTestCase {
             """
         )
     }
+
+    func testDigestFormatterSurfacesReviewCandidateCount() {
+        let digest = DigestResult(payload: [
+            "mode": "digest",
+            "chunks_created": 1,
+            "entities_created": 2,
+            "entity_candidates": [
+                ["surface": "Both Julius"],
+                ["surface": "But Ben"],
+            ],
+            "relations_created": 0,
+        ])
+
+        XCTAssertTrue(TextFormatter.formatDigestResult(digest).contains("Candidates pending review: 2"))
+    }
 }

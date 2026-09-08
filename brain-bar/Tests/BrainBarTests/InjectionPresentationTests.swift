@@ -141,7 +141,8 @@ final class InjectionPresentationTests: XCTestCase {
             sourceFile: sourceFile,
             tags: ["brainbar", "truth"],
             contentType: "memory",
-            claudeConversationID: "conversation-example"
+            claudeConversationID: "conversation-example",
+            storingAgent: "brainlayerClaude-source"
         )
         let event = makeEvent(
             id: 42,
@@ -190,10 +191,116 @@ final class InjectionPresentationTests: XCTestCase {
         XCTAssertFalse(collapsed.joined(separator: "\n").contains("Tags brainbar, truth"))
 
         let expandedText = expanded.joined(separator: "\n")
-        XCTAssertTrue(expandedText.contains("session-operator-truth-1234567890"))
-        XCTAssertTrue(expandedText.contains("chunk-watcher-contract"))
-        XCTAssertTrue(expandedText.contains("/Users/example/project"))
-        XCTAssertTrue(expandedText.contains("Tags brainbar, truth"))
+        XCTAssertTrue(expandedText.contains("Received by"))
+        XCTAssertTrue(expandedText.contains("Session Watcher repair"))
+        XCTAssertTrue(expandedText.contains("Agent brainlayerClaude"))
+        XCTAssertTrue(expandedText.contains("Project brainlayer"))
+        XCTAssertTrue(expandedText.contains("Stored by"))
+        XCTAssertTrue(expandedText.contains("Agent brainlayerClaude-source"))
+        XCTAssertTrue(expandedText.contains("Event details"))
+        XCTAssertTrue(expandedText.contains("Memory details"))
+        XCTAssertFalse(expandedText.contains("session-operator-truth-1234567890"))
+        XCTAssertFalse(expandedText.contains("chunk-watcher-contract"))
+        XCTAssertFalse(expandedText.contains("/Users/example/project"))
+        XCTAssertFalse(expandedText.contains("Tags brainbar, truth"))
+    }
+
+    @MainActor
+    func testRenderedThreadReconstructsTurnsIdentityAndMarkdownFromPixels() throws {
+        let userOpening = BrainDatabase.ConversationChunk(
+            chunkID: "source.jsonl:1",
+            content: "First turn from Etan",
+            contentType: "user_message",
+            sender: "user",
+            importance: 8,
+            createdAt: "2026-09-08T09:00:00Z",
+            summary: "",
+            isTarget: false
+        )
+        let agentDecision = BrainDatabase.ConversationChunk(
+            chunkID: "source.jsonl:2",
+            content: "## Decision\n**Ship it**\n- [x] Pixel proof",
+            contentType: "assistant_text",
+            sender: "assistant",
+            importance: 9,
+            createdAt: "2026-09-08T09:01:00Z",
+            summary: "",
+            isTarget: true,
+            sourceFile: "/workspace/source.jsonl",
+            tags: ["decision"]
+        )
+        let userClosing = BrainDatabase.ConversationChunk(
+            chunkID: "source.jsonl:3",
+            content: "Final turn from Etan",
+            contentType: "user_message",
+            sender: "user",
+            importance: 8,
+            createdAt: "2026-09-08T09:02:00Z",
+            summary: "",
+            isTarget: false
+        )
+        let conversation = BrainDatabase.ExpandedConversation(
+            target: agentDecision,
+            entries: [userOpening, agentDecision, userClosing],
+            sourceFile: "/workspace/source.jsonl",
+            storingAgent: "brainlayerClaude-source",
+            origin: .sourceJSONL
+        )
+        let recipient = InjectionThreadRecipient(
+            sessionName: "Injections rebuild",
+            agentName: "brainlayerCodex-recipient",
+            projectName: "brainlayer",
+            sessionID: "recipient-session-id"
+        )
+
+        let rendered = try renderedInjectionText(
+            ChunkConversationSheet(
+                conversation: conversation,
+                title: "Stored Memory",
+                recipient: recipient
+            ),
+            name: "lb-injections-full-thread.png"
+        )
+        let renderedText = rendered.joined(separator: " ")
+
+        for requiredTerm in [
+            "Full conversation",
+            "Source JSONL",
+            "3 turns",
+            "Session Injections rebuild",
+            "Agent brainlayerCodex-recipient",
+            "Project brainlayer",
+            "Stored by Agent brainlayerClaude-source",
+            "Thread",
+            "Rendered",
+            "Raw text",
+            "You",
+            "First turn from Etan",
+            "Agent brainlayerClaude-source",
+            "Injected memory",
+            "Decision",
+            "Ship it",
+            "Pixel proof",
+            "Final turn from Etan",
+            "Technical details",
+        ] {
+            XCTAssertNotNil(
+                renderedText.range(of: requiredTerm, options: [.caseInsensitive]),
+                "Expected rendered pixels to contain \(requiredTerm); got: \(renderedText)"
+            )
+        }
+        assertTermsAppearInOrder(["Source JSONL", "First turn from Etan"], in: renderedText)
+        assertTermsAppearInOrder(["You", "First turn from Etan"], in: renderedText)
+        assertTermsAppearInOrder(["Decision", "Ship it", "Pixel proof"], in: renderedText)
+        XCTAssertGreaterThanOrEqual(
+            renderedText.components(separatedBy: "Agent brainlayerClaude-source").count - 1,
+            2,
+            "Expected both the storing-agent label and the agent-turn label; got: \(renderedText)"
+        )
+        XCTAssertFalse(renderedText.contains("**Ship it**"))
+        XCTAssertFalse(renderedText.contains("- [x]"))
+        XCTAssertFalse(renderedText.contains("/workspace/source.jsonl"))
+        XCTAssertFalse(renderedText.contains("source.jsonl:2"))
     }
 
     func testExpandedEventFieldsSuppressDuplicateKindAndTrigger() {

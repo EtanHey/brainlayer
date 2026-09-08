@@ -13,6 +13,7 @@ import time
 from typing import Any, Optional
 
 from .entity_extraction import normalize_entity_type
+from .groq import DEFAULT_GROQ_MODEL, GroqModelUnavailableError, raise_for_groq_response
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +177,7 @@ def call_groq_ner(prompt: str, timeout: int = 60, max_retries: int = 5) -> Optio
         "BRAINLAYER_GROQ_URL",
         "https://api.groq.com/openai/v1/chat/completions",
     )
-    model = os.environ.get("BRAINLAYER_GROQ_MODEL", "llama-3.3-70b-versatile")
+    model = os.environ.get("BRAINLAYER_GROQ_MODEL", DEFAULT_GROQ_MODEL)
 
     for attempt in range(max_retries):
         try:
@@ -204,13 +205,15 @@ def call_groq_ner(prompt: str, timeout: int = 60, max_retries: int = 5) -> Optio
                 time.sleep(wait)
                 continue
 
-            resp.raise_for_status()
+            raise_for_groq_response(resp, model)
             data = resp.json()
             choices = data.get("choices", [])
             if choices:
                 return choices[0].get("message", {}).get("content", "")
             return None
 
+        except GroqModelUnavailableError:
+            raise
         except requests.exceptions.HTTPError as e:
             if "429" in str(e):
                 wait = min(30 * (2**attempt), 120) + random.uniform(1, 5)

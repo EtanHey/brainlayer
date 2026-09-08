@@ -188,6 +188,28 @@ map_changed_files_to_pytests() {
           mapped=1
         fi
         ;;
+      src/brainlayer/pipeline/enrichment.py|src/brainlayer/pipeline/groq.py|src/brainlayer/pipeline/kg_extraction_groq.py)
+        groq_pipeline_tests=(
+          "$TEST_ROOT/test_groq_backend.py"
+          "$TEST_ROOT/test_kg_rebuild.py"
+          "$TEST_ROOT/test_enrichment_reliability.py"
+          "$TEST_ROOT/test_recent_enrichment.py"
+          "$TEST_ROOT/test_mlx_health_recovery.py"
+        )
+        groq_pipeline_complete=1
+        for groq_pipeline_test in "${groq_pipeline_tests[@]}"; do
+          if [ ! -f "$groq_pipeline_test" ]; then
+            groq_pipeline_complete=0
+            break
+          fi
+        done
+        if [ "$groq_pipeline_complete" -eq 1 ]; then
+          for groq_pipeline_test in "${groq_pipeline_tests[@]}"; do
+            append_unique "$groq_pipeline_test"
+          done
+          mapped=1
+        fi
+        ;;
       src/brainlayer/mcp/store_handler.py|src/brainlayer/queue_io.py|src/brainlayer/drain.py|src/brainlayer/store.py)
         for rel in test_store_handler.py test_write_queue.py test_brainstore.py; do
           test_path="$TEST_ROOT/$rel"
@@ -351,6 +373,13 @@ map_changed_files_to_pytests() {
           mapped=1
         fi
         ;;
+      scripts/kg_rebuild.py)
+        test_path="$TEST_ROOT/test_kg_rebuild.py"
+        if [ -f "$test_path" ]; then
+          append_unique "$test_path"
+          mapped=1
+        fi
+        ;;
       scripts/run_tests.sh|.githooks/pre-push)
         test_path="$TEST_ROOT/test_run_tests_script.py"
         if [ -f "$test_path" ]; then
@@ -365,7 +394,7 @@ map_changed_files_to_pytests() {
         # test_release_tag_contains.py must escalate, never narrow to nothing. Mapping it to
         # zero targets and still printing "test gate passed" is the same unchecked-claim
         # fail-open the gate exists to close, one level up.
-        src/brainlayer/*.py|scripts/release_tag_contains.py)
+        src/brainlayer/*.py|scripts/kg_rebuild.py|scripts/release_tag_contains.py)
           changed_source_unmapped=1
           unmapped_changed_files+=("$changed")
           ;;
