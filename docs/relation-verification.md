@@ -9,12 +9,17 @@ asks a separate model call to assess the original quote in its source and every
 supplied reference. The caller supplies bounded eligible windows and a durable
 raw-response callback. A recording, transport or parse error stops review;
 there is no synthetic empty result or correction that hides the first response.
+Desktop evidence and all memory-reader classes from the shared ingestion
+constant are excluded from both primary and reference windows before inference.
 
 `depends_on` means a software/runtime requirement: necessary code, a service or
 an artifact. An adopted mandatory policy is a real `governed_by` relationship.
 When the graph lacks its policy target, `GOVERNED_BY_UNBOUND` preserves the policy
 quote without creating an ID or changing the proposed service endpoint. The
 legacy source and relation types remain unchanged.
+In v1, `mandatory_policy` returns before reference chronology is assessed: a
+contradicted or expired policy can still be UNBOUND. This status confirms neither
+policy validity nor current applicability, and remains unauthorized for writes.
 
 Outcomes distinguish a corroborated source assertion, rejection, unresolved
 evidence, policy awaiting binding, and a relationship that subsequently ended.

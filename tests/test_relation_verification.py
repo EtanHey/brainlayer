@@ -154,6 +154,21 @@ def test_hidden_reference_and_invalid_structural_quote_never_reach_model(source,
         verify_relation(source, relation, [], forbidden)
 
 
+@pytest.mark.parametrize("source_class", ["desktop", "brain-worker", "session-miner", "weave"])
+@pytest.mark.parametrize("position", ["primary", "reference"])
+def test_excluded_evidence_classes_never_reach_model(source, relation, source_class, position):
+    def forbidden(messages):
+        pytest.fail("excluded evidence reached model")
+
+    refs = []
+    if position == "primary":
+        source["source_class"] = source_class
+    else:
+        refs = [reference(source_class=source_class)]
+    with pytest.raises(ValueError, match="eligible complete bounded evidence"):
+        verify_relation(source, relation, refs, forbidden)
+
+
 def test_model_receives_names_and_source_data_separate_from_instructions(source, relation):
     refs = [reference()]
 

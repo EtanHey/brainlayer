@@ -9,6 +9,8 @@ import json
 from dataclasses import asdict, dataclass
 from datetime import datetime
 
+from brainlayer.ingest_denylist import MEMORY_READER_ATTRIBUTIONS
+
 from .relation_backfill import _validated
 
 VERSION = "relation-review-v1"
@@ -79,7 +81,7 @@ def _check_window(window):
         not isinstance(window.content, str)
         or not window.content.strip()
         or len(window.content) > 6000
-        or window.source_class in {"desktop", "brain-worker"}
+        or window.source_class in MEMORY_READER_ATTRIBUTIONS | {"desktop"}
         or not isinstance(window.chunk_id, str)
         or not window.chunk_id
     ):
@@ -114,7 +116,7 @@ def verify_relation(source, relation, references, caller, *, on_response):
     )
     _check_window(primary)
     if len(references) > 16 or len({r.chunk_id for r in references}) != len(references):
-        raise ValueError("Supply at most16 distinct reference windows")
+        raise ValueError("Supply at most 16 distinct reference windows")
     for ref in references:
         _check_window(ref)
     _validated(json.dumps({"chunks": [{"chunk_id": source["chunk_id"], "relations": [relation]}]}), [source])
