@@ -109,6 +109,26 @@ def test_shared_or_remote_endpoints_refused_before_io(endpoint):
         local_caller(endpoint, MODEL)
 
 
+@pytest.mark.parametrize("userinfo", [":fake-secret@", "@", "user:fake-secret@"])
+def test_cli_refuses_userinfo_before_database_or_output(monkeypatch, capsys, tmp_path, userinfo):
+    from brainlayer.pipeline.relation_inference import main
+
+    endpoint = f"http://{userinfo}127.0.0.1:8183"
+    monkeypatch.setattr(
+        "sys.argv",
+        ["relation_inference", "--db", str(tmp_path / "absent.db"), "--model", MODEL, "--endpoint", endpoint],
+    )
+    monkeypatch.setattr("sqlite3.connect", lambda *a, **k: pytest.fail("credential endpoint reached DB"))
+    monkeypatch.setattr(
+        "brainlayer.pipeline.relation_inference._open_local",
+        lambda *a, **k: pytest.fail("credential endpoint reached I/O"),
+    )
+    with pytest.raises(ValueError) as error:
+        main()
+    output = capsys.readouterr()
+    assert "fake-secret" not in str(error.value) + output.out + output.err
+
+
 def test_conversation_filter_is_connection_local_and_preserves_source_rows():
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE chunks (id TEXT, source TEXT, content_type TEXT, source_class TEXT)")

@@ -79,7 +79,8 @@ def local_caller(endpoint, model, *, on_response=None):
         or url.path not in {"", "/"}
         or "?" in endpoint
         or "#" in endpoint
-        or url.username
+        or url.username is not None
+        or url.password is not None
         or not model.strip()
     ):
         raise ValueError("Use an explicit model and an owned loopback MLX port (never 8080/8081/8178)")
