@@ -115,6 +115,28 @@ class TestGroqNERCaller:
         assert len(entities) == 2
         assert len(relations) == 1
 
+    def test_groq_ner_raises_named_error_when_model_is_unavailable(self):
+        """The KG caller must not hide a dead model behind an Optional result."""
+        from unittest.mock import MagicMock, patch
+
+        import pytest
+
+        from brainlayer.pipeline.groq import GroqModelUnavailableError
+        from brainlayer.pipeline.kg_extraction_groq import call_groq_ner
+
+        mock_response = MagicMock(status_code=404)
+        mock_response.json.return_value = {"error": {"code": "model_not_found", "message": "model does not exist"}}
+
+        with (
+            patch.dict(
+                "os.environ",
+                {"GROQ_API_KEY": "gsk_test123", "BRAINLAYER_GROQ_MODEL": "retired/model"},
+            ),
+            patch("requests.post", return_value=mock_response),
+            pytest.raises(GroqModelUnavailableError, match=r"retired/model.*unavailable"),
+        ):
+            call_groq_ner("test prompt")
+
     def test_multi_chunk_ner_prompt(self):
         """Multi-chunk NER prompt should include all chunk contents."""
         from brainlayer.pipeline.kg_extraction_groq import build_multi_chunk_ner_prompt
@@ -309,6 +331,28 @@ def test_groq_rebuild_entity_payload_preserves_source_subtype():
     assert entity.entity_type == "source"
     assert entity.entity_subtype == "channel"
     assert entity.start == 6
+
+
+def test_tier2_groq_ner_propagates_model_unavailable(monkeypatch):
+    from brainlayer.pipeline.groq import GroqModelUnavailableError
+    from scripts import kg_rebuild
+
+    class Cursor:
+        def execute(self, _query, _params):
+            return [("chunk-1", "x" * 60)]
+
+    class Store:
+        def _read_cursor(self):
+            return Cursor()
+
+    def unavailable(_prompt):
+        raise GroqModelUnavailableError("configured Groq model is unavailable")
+
+    monkeypatch.setattr(kg_rebuild, "call_groq_ner", unavailable)
+    monkeypatch.setattr(kg_rebuild.RateLimiter, "wait_if_needed", lambda self: None)
+
+    with pytest.raises(GroqModelUnavailableError, match="configured Groq model"):
+        kg_rebuild.tier2_groq_ner(Store(), limit=1, chunks_per_call=1)
 
 
 def test_kg_rebuild_module_import_does_not_require_python_dotenv(monkeypatch):
