@@ -142,6 +142,8 @@ def verify_relation(source, relation, references, caller, *, on_response):
     inputs = dict(source=source, relation=relation, references=[asdict(r) for r in references])
     fingerprint = _digest(dict(version=VERSION, prompt=REVIEW_PROMPT, inputs=inputs))
     raw = caller([dict(role="system", content=REVIEW_PROMPT), dict(role="user", content=json.dumps(payload))])
+    if isinstance(raw, bytearray):
+        raw = bytes(raw)
     trace = dict(
         version=VERSION,
         input_sha256=fingerprint,
@@ -151,8 +153,9 @@ def verify_relation(source, relation, references, caller, *, on_response):
     )
     on_response(trace)  # Before parsing or verdict correction can hide a proposal.
     try:
-        review = json.loads(raw)
-    except (TypeError, json.JSONDecodeError) as exc:
+        response_text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        review = json.loads(response_text)
+    except (TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise ValueError("Malformed semantic review; source remains unresolved") from exc
     if not isinstance(review, dict) or set(review) != {"primary", "references"}:
         raise ValueError("Review omitted or invented fields")
@@ -166,7 +169,7 @@ def verify_relation(source, relation, references, caller, *, on_response):
     result = dict(
         version=VERSION,
         input_sha256=fingerprint,
-        raw_sha256=_digest(raw),
+        raw_sha256=_digest(response_text),
         source_id=primary.chunk_id,
         proposed_relation=dict(relation),
         review=review,

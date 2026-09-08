@@ -11,6 +11,8 @@ raw-response callback. A recording, transport or parse error stops review;
 there is no synthetic empty result or correction that hides the first response.
 The callback receives the primary and ordered reference windows, including
 their source IDs, origins, timestamps and original text, even for invalid output.
+Transport responses may be text or UTF-8 bytes. The callback retains original
+bytes (freezing bytearrays) before decoding; parsing and hashing use the same text.
 Missing or unrecognized source classes fail before inference. Ordinary CLI,
 subagent and fleet-coordination evidence remains eligible.
 Desktop evidence and all memory-reader classes from the shared ingestion

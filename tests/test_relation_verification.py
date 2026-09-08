@@ -91,6 +91,26 @@ def test_recording_failure_prevents_interpreting_model_output(source, relation):
         verify_relation(source, relation, [], lambda messages: "not JSON", on_response=failed_record)
 
 
+@pytest.mark.parametrize("encode", [bytes, bytearray])
+def test_utf8_response_preserves_raw_bytes_and_matches_text_review(source, relation, encode):
+    refs = [reference()]
+    transport = caller(source, refs)
+    expected = verify_relation(source, relation, refs, transport)
+    raw = encode(transport([]).encode("utf-8"))
+    trace = []
+    result = verify_relation(source, relation, refs, lambda messages: raw, on_response=trace.append)
+    assert result == expected
+    assert trace[0]["raw"] == raw
+    assert isinstance(trace[0]["raw"], bytes)
+
+
+def test_invalid_utf8_response_is_retained_before_rejection(source, relation):
+    trace = []
+    with pytest.raises(ValueError, match="Malformed semantic review"):
+        verify_relation(source, relation, [], lambda messages: b"\xff", on_response=trace.append)
+    assert trace[0]["raw"] == b"\xff"
+
+
 def test_identical_quote_from_other_session_is_not_independent_support(source, relation):
     refs = [reference(content="Forwarded assertion: " + source["content"])]
     response = caller(source, refs, mutate=lambda r: r["references"][0].update(quote=source["content"]))
