@@ -877,6 +877,140 @@ def _queue_stats(queue_dir: Path, now: datetime) -> tuple[int, int, float | None
     return count, total_bytes, oldest
 
 
+def _paused_enrichment_queue_explanation(
+    queue_dir: Path,
+    expected_count: int,
+    *,
+    pause_payload: dict[str, Any],
+    pause_active: bool,
+    enrichment_label: str,
+) -> str | None:
+    """Explain a queue that the active pause makes completely undrainable.
+
+    The drain classifies `enrichment-*` files as the enrichment lane. Require the
+    second scan to match the measured count so a racing or unreadable file cannot
+    make a mixed backlog look safely paused.
+    """
+    if expected_count <= 0 or not pause_active or not pause_applies_to_label(pause_payload, enrichment_label):
+        return None
+    try:
+        paths = [path for path in queue_dir.expanduser().glob("*.jsonl") if path.is_file()]
+    except OSError:
+        return None
+    if len(paths) != expected_count or any(not path.name.startswith("enrichment-") for path in paths):
+        return None
+    paused_at = pause_payload.get("paused_at")
+    since = str(paused_at)[:10] if isinstance(paused_at, str) and len(paused_at) >= 10 else "an unknown date"
+    return f"enrichment lane paused since {since}; drain restart would be a no-op"
+
+
+def _queue_heal_summary(
+    *,
+    config: HealthCheckConfig,
+    result: HealthCheckResult,
+    pause_explanation: str | None,
+    previous_failures: dict[str, int],
+    heal_failures: dict[str, int],
+    heal_tripped: set[str],
+    backlog_issue_active: bool,
+) -> str:
+    key = _heal_key(config.drain_label, "queue_backed_up")
+    if pause_explanation is not None:
+        return f"heal=skipped heal_failures={previous_failures.get(key, 0)} reason={pause_explanation}"
+
+    failure_count = heal_failures.get(key, 0)
+    if not backlog_issue_active:
+        return (
+            f"heal=not_attempted heal_failures={failure_count} "
+            f"outcome=below auto-heal count {config.queue_auto_heal_count}"
+        )
+    if not config.heal:
+        return f"heal=not_attempted heal_failures={failure_count} outcome=healing disabled"
+
+    kickstart = f"kickstart:{config.drain_label}"
+    if kickstart in result.actions:
+        return f"heal=attempted action={kickstart} heal_failures={failure_count} outcome=command issued"
+
+    backoff_prefix = f"heal_backoff:{config.drain_label}:queue_backed_up:"
+    if any(action.startswith(backoff_prefix) for action in result.actions):
+        return f"heal=skipped heal_failures={failure_count} outcome=process uninterruptible; backoff active"
+
+    escalation = f"heal_escalation:{config.drain_label}:queue_backed_up"
+    if escalation in result.actions:
+        return f"heal=failing heal_failures={failure_count} outcome=circuit breaker escalated"
+    if key in heal_tripped:
+        return f"heal=failing heal_failures={failure_count} outcome=circuit breaker already escalated"
+
+    return (
+        f"heal=pending heal_failures={failure_count} "
+        f"outcome=waiting for threshold {max(1, config.heal_min_consecutive_failures)}"
+    )
+
+
+def _schedule_heal_if_actionable(
+    issue_labels: dict[str, tuple[str, Path]],
+    *,
+    issue_code: str,
+    label: str,
+    plist_path: Path,
+    blocking_reason: str | None,
+) -> None:
+    if blocking_reason is None:
+        issue_labels[issue_code] = (label, plist_path)
+
+
+def _report_queue_backlog(
+    *,
+    config: HealthCheckConfig,
+    result: HealthCheckResult,
+    state: dict[str, Any],
+    queue_count: int,
+    queue_bytes: int,
+    queue_should_page: bool,
+    pause_explanation: str | None,
+    previous_failures: dict[str, int],
+    heal_failures: dict[str, int],
+    heal_tripped: set[str],
+) -> dict[str, Any] | None:
+    backlog_issue_active = queue_count >= config.queue_auto_heal_count
+    if not backlog_issue_active and not queue_should_page:
+        return None
+    heal_summary = _queue_heal_summary(
+        config=config,
+        result=result,
+        pause_explanation=pause_explanation,
+        previous_failures=previous_failures,
+        heal_failures=heal_failures,
+        heal_tripped=heal_tripped,
+        backlog_issue_active=backlog_issue_active,
+    )
+    if backlog_issue_active:
+        for index, issue in enumerate(result.issues):
+            if issue.code == "queue_backed_up":
+                result.issues[index] = replace(issue, message=f"{issue.message}; {heal_summary}")
+                break
+    if not queue_should_page:
+        return None
+    signature = {
+        "queue_count": queue_count,
+        "queue_bytes": queue_bytes,
+        "pause_explanation": pause_explanation,
+    }
+    if pause_explanation is None or state.get("queue_backlog_notice") != signature:
+        _push_notification(
+            "BrainLayer queue backlog",
+            f"queue_count={queue_count} queue_bytes={queue_bytes} {heal_summary}",
+        )
+    return signature
+
+
+def _record_queue_notice(state_payload: dict[str, Any], signature: dict[str, Any] | None) -> None:
+    if signature is None:
+        state_payload.pop("queue_backlog_notice", None)
+    else:
+        state_payload["queue_backlog_notice"] = signature
+
+
 def _pending_stores_count(path: Path) -> int:
     try:
         with path.expanduser().open(encoding="utf-8") as pending_stores:
@@ -1119,6 +1253,18 @@ def run_health_check(
                 result.actions.append("resume_failed:stale-pause-sentinel")
 
     queue_count, queue_bytes, queue_oldest_age = _queue_stats(config.queue_dir, now)
+    queue_pause_explanation = _paused_enrichment_queue_explanation(
+        config.queue_dir,
+        queue_count,
+        pause_payload=pause_payload,
+        pause_active=pause_active,
+        enrichment_label=config.enrichment_label,
+    )
+    queue_should_page = queue_count > 0 and (
+        queue_count >= config.queue_page_count
+        or queue_bytes >= config.queue_page_bytes
+        or (queue_oldest_age is not None and queue_oldest_age >= config.queue_page_oldest_seconds)
+    )
     try:
         pending_stores_count = _pending_stores_count(config.pending_stores_path)
     except OSError as exc:
@@ -1128,20 +1274,21 @@ def run_health_check(
             "critical",
             f"could not count pending stores: {exc}",
         )
-    if queue_count >= config.queue_auto_heal_count:
+    queue_backed_up = queue_count >= config.queue_auto_heal_count
+    if queue_backed_up:
         severity = "critical" if queue_count >= config.queue_page_count else "warning"
         add_issue(
             "queue_backed_up",
             severity,
             f"durable queue backlog count={queue_count} bytes={queue_bytes} oldest_age={queue_oldest_age}",
         )
-        heal_issue_labels["queue_backed_up"] = (config.drain_label, _plist_for_label(config, config.drain_label))
-    if queue_count > 0 and (
-        queue_count >= config.queue_page_count
-        or queue_bytes >= config.queue_page_bytes
-        or (queue_oldest_age is not None and queue_oldest_age >= config.queue_page_oldest_seconds)
-    ):
-        _push_notification("BrainLayer queue backlog", f"queue_count={queue_count} queue_bytes={queue_bytes}")
+        _schedule_heal_if_actionable(
+            heal_issue_labels,
+            issue_code="queue_backed_up",
+            label=config.drain_label,
+            plist_path=_plist_for_label(config, config.drain_label),
+            blocking_reason=queue_pause_explanation,
+        )
     if slow_result := deadline_reached("queue_stats"):
         return slow_result
 
@@ -1228,7 +1375,13 @@ def run_health_check(
             "critical",
             f"drain drained_total flat at {drain_total} while queue_count={queue_count}",
         )
-        heal_issue_labels["drain_no_progress"] = (config.drain_label, config.drain_plist_path)
+        _schedule_heal_if_actionable(
+            heal_issue_labels,
+            issue_code="drain_no_progress",
+            label=config.drain_label,
+            plist_path=config.drain_plist_path,
+            blocking_reason=queue_pause_explanation,
+        )
         drain_starved = True
 
     lock_holder_held_ticks = _same_lock_holder_ticks(state, lock_holder, drain_starved=drain_starved)
@@ -1279,9 +1432,22 @@ def run_health_check(
         config=config,
         command_runner=command_runner,
     )
+    queue_notice_signature = _report_queue_backlog(
+        config=config,
+        result=result,
+        state=state,
+        queue_count=queue_count,
+        queue_bytes=queue_bytes,
+        queue_should_page=queue_should_page,
+        pause_explanation=queue_pause_explanation,
+        previous_failures=previous_heal_failures,
+        heal_failures=heal_failures,
+        heal_tripped=heal_tripped,
+    )
     state_payload: dict[str, Any] = dict(state)
     state_payload["heal_failures"] = heal_failures
     state_payload["heal_tripped"] = sorted(heal_tripped) if result.issues else []
+    _record_queue_notice(state_payload, queue_notice_signature)
     state_payload["ts"] = now.isoformat()
     if result.missing_vectors is not None:
         state_payload["missing_vectors"] = result.missing_vectors
