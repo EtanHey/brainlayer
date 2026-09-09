@@ -646,13 +646,17 @@ def _icloud_inventory_is_verified(
     if candidates and not referenced_by_sources:
         return False
 
-    def invalid_archive(archive_name: str, reason: str) -> bool:
+    def invalid_archive(archive_name: str, reason: str, *, quarantine: bool = False) -> bool:
         unavailable_sources = sorted(referenced_by_sources[archive_name] - candidates_by_path.keys())
         if unavailable_sources:
             raise RuntimeError(
                 "iCloud coverage cannot be repaired because its archive is invalid and a source is unavailable: "
                 f"archive={archive_name} reason={reason} sources={unavailable_sources!r}"
             )
+        if quarantine:
+            destination = directory / archive_name
+            _quarantine_unverified_icloud_item(destination)
+            _quarantine_unverified_icloud_item(directory / f".{archive_name}.icloud")
         return False
 
     deadline = time.monotonic() + timeout_seconds
@@ -687,10 +691,18 @@ def _icloud_inventory_is_verified(
                 uploaded = item_state.get("is_uploaded") is True and item_state.get("is_uploading") is False
                 materialized = item_state.get("downloading_status") == "current" and destination.is_file()
                 if item_state.get("uploading_error"):
-                    return invalid_archive(archive_name, f"upload error: {item_state['uploading_error']}")
+                    return invalid_archive(
+                        archive_name,
+                        f"upload error: {item_state['uploading_error']}",
+                        quarantine=True,
+                    )
                 if item_state.get("is_ubiquitous") is True and uploaded and materialized:
                     if destination.stat().st_size != expected_size or _sha256_file(destination) != expected_sha256:
-                        return invalid_archive(archive_name, "materialized bytes do not match the receipt")
+                        return invalid_archive(
+                            archive_name,
+                            "materialized bytes do not match the receipt",
+                            quarantine=True,
+                        )
                     break
                 if time.monotonic() >= deadline:
                     return invalid_archive(archive_name, "materialization timed out")

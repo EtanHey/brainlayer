@@ -842,6 +842,52 @@ def test_icloud_inventory_does_not_swallow_wall_clock_timeout(tmp_path, monkeypa
         jsonl_backup._icloud_inventory_is_verified(state, [candidate], icloud_dir)
 
 
+def test_icloud_inventory_quarantines_known_bad_materialized_archive(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    source = _write_jsonl(tmp_path / "source.jsonl", mtime=time.time() - 3600)
+    candidate = jsonl_backup.JsonlCandidate(
+        path=source,
+        root=tmp_path,
+        root_index=0,
+        mtime=source.stat().st_mtime,
+        size=source.stat().st_size,
+    )
+    icloud_dir = tmp_path / "CloudDocs"
+    icloud_dir.mkdir()
+    archive_name = "archive.tar.gz"
+    archive = icloud_dir / archive_name
+    archive.write_bytes(b"corrupt archive")
+    state = {
+        "files": {
+            source.as_posix(): {
+                "mtime": candidate.mtime,
+                "size": candidate.size,
+                "icloud_archive": archive_name,
+            }
+        },
+        "icloud_directory": str(icloud_dir),
+        "icloud_verified": True,
+        "icloud_archives": {
+            archive_name: {
+                "bytes": len(b"expected archive"),
+                "sha256": hashlib.sha256(b"expected archive").hexdigest(),
+            }
+        },
+    }
+    monkeypatch.setattr(
+        jsonl_backup,
+        "_icloud_item_state",
+        lambda *args, **kwargs: _icloud_state(uploaded=True, status="current"),
+    )
+
+    assert not jsonl_backup._icloud_inventory_is_verified(state, [candidate], icloud_dir)
+    assert not archive.exists()
+    quarantined = list(icloud_dir.glob("*.unverified"))
+    assert len(quarantined) == 1
+    assert quarantined[0].read_bytes() == b"corrupt archive"
+
+
 def test_drive_only_change_invalidates_that_sources_icloud_receipt(tmp_path):
     from brainlayer import jsonl_backup
 
@@ -1574,8 +1620,9 @@ def test_jsonl_backup_launchd_plist_and_docstring_install_note_are_committed():
     assert ".local/share/brainlayer/logs/jsonl-backup.log" in plist
     assert "jsonl-backup" in install
     assert "install_jsonl_backup_script" in install
-    assert "__BRAINLAYER_DIR_VALUE__" in wrapper
-    assert "PYTHONPATH" in wrapper
+    assert "__BRAINLAYER_DIR_VALUE__" not in wrapper
+    assert '"${BRAINLAYER_PYTHON:?' in wrapper
+    assert "unset PYTHONPATH" in wrapper
     assert "PYTHONPATH" not in plist
     assert "__HOME__/.local/lib/brainlayer/jsonl-backup.sh" in script_plist
     assert "<key>SoftResourceLimits</key>" in plist
