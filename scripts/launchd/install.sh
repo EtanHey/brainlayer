@@ -656,6 +656,13 @@ install_plist() {
         verify_gemini_env_file || return 1
     fi
 
+    # XML-escape the interpreter path, then escape sed replacement metacharacters.
+    # `&` is legal in a filename but means "the matched placeholder" to sed.
+    local brainlayer_python_xml
+    local brainlayer_python_sed
+    brainlayer_python_xml="$(printf '%s' "$BRAINLAYER_PYTHON" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')" || return 1
+    brainlayer_python_sed="$(printf '%s' "$brainlayer_python_xml" | sed -e 's/[\\&|]/\\&/g')" || return 1
+
     # Replace placeholders
     sed \
         -e "s|__HOME__|$HOME|g" \
@@ -663,7 +670,7 @@ install_plist() {
         -e "s|__BRAINLAYER_DIR__|$BRAINLAYER_DIR|g" \
         -e "s|__BRAINLAYER_LAUNCHD_DIR__|$BRAINLAYER_LAUNCHD_DIR|g" \
         -e "s|__PYTHON_BIN__|$PYTHON_BIN|g" \
-        -e "s|__BRAINLAYER_PYTHON__|$BRAINLAYER_PYTHON|g" \
+        -e "s|__BRAINLAYER_PYTHON__|$brainlayer_python_sed|g" \
         -e "s|__REPO_ROOT__|$BRAINLAYER_DIR|g" \
         -e "s|__BRAINLAYER_ENV_FILE__|$BRAINLAYER_ENV_FILE|g" \
         -e "s|__BRAINLAYER_ENV_RUN__|$BRAINLAYER_ENV_RUN|g" \

@@ -1417,6 +1417,57 @@ def test_icloud_inventory_still_validates_archives_for_vanished_sources(tmp_path
     assert hash_deadlines[0] is not None
 
 
+def test_icloud_inventory_preserves_later_valid_receipts_after_one_archive_fails(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    icloud_dir = tmp_path / "CloudDocs"
+    icloud_dir.mkdir()
+    source_root = tmp_path / "sessions"
+    first = _write_jsonl(source_root / "first.jsonl", mtime=1.0)
+    second = _write_jsonl(source_root / "second.jsonl", mtime=1.0)
+    candidates = jsonl_backup._discover_jsonl_candidates([source_root])
+    good_archive = icloud_dir / "z-good.tar.gz"
+    good_archive.write_bytes(b"verified archive")
+    state = {
+        "files": {
+            first.as_posix(): {
+                "mtime": first.stat().st_mtime,
+                "size": first.stat().st_size,
+                "icloud_archive": "a-missing.tar.gz",
+            },
+            second.as_posix(): {
+                "mtime": second.stat().st_mtime,
+                "size": second.stat().st_size,
+                "icloud_archive": good_archive.name,
+            },
+        },
+        "icloud_directory": str(icloud_dir),
+        "icloud_verified": True,
+        "icloud_archives": {
+            "a-missing.tar.gz": {"bytes": 1, "sha256": "0" * 64},
+            good_archive.name: {
+                "bytes": good_archive.stat().st_size,
+                "sha256": hashlib.sha256(good_archive.read_bytes()).hexdigest(),
+            },
+        },
+    }
+    validated_sources: set[str] = set()
+    monkeypatch.setattr(
+        jsonl_backup,
+        "_icloud_item_state",
+        lambda *args, **kwargs: _icloud_state(uploaded=True, status="current"),
+    )
+
+    assert not jsonl_backup._icloud_inventory_is_verified(
+        state,
+        candidates,
+        icloud_dir,
+        timeout_seconds=1,
+        validated_sources=validated_sources,
+    )
+    assert validated_sources == {second.as_posix()}
+
+
 def test_icloud_inventory_ignores_vanished_legacy_entry_without_icloud_receipt(tmp_path):
     from brainlayer import jsonl_backup
 

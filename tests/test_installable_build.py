@@ -1623,7 +1623,7 @@ def test_launchd_installer_renders_brainlayer_python_override(tmp_path: Path) ->
     env_file = tmp_path / "brainlayer.env"
     env_file.write_text("BRAINLAYER_ENRICH_ENABLED=0\n", encoding="utf-8")
     env_file.chmod(0o600)
-    brainlayer_python = tmp_path / "tool" / "bin" / "python"
+    brainlayer_python = tmp_path / "tool&operator" / "bin" / "python"
     brainlayer_python.parent.mkdir(parents=True)
     brainlayer_python.write_text("#!/bin/sh\n", encoding="utf-8")
     brainlayer_python.chmod(0o755)
@@ -1647,7 +1647,7 @@ def test_launchd_installer_renders_brainlayer_python_override(tmp_path: Path) ->
 
     assert result.returncode == 0, result.stdout + result.stderr
     rendered = home / "Library" / "LaunchAgents" / "com.brainlayer.backup-daily.plist"
-    assert f"<string>{brainlayer_python}</string>" in rendered.read_text(encoding="utf-8")
+    assert plistlib.loads(rendered.read_bytes())["EnvironmentVariables"]["BRAINLAYER_PYTHON"] == str(brainlayer_python)
     assert "__BRAINLAYER_PYTHON__" not in rendered.read_text(encoding="utf-8")
 
 

@@ -692,7 +692,9 @@ def _icloud_inventory_is_verified(
         try:
             receipt = receipts.get(archive_name)
             if not isinstance(receipt, dict):
-                return invalid_archive(archive_name, "missing exact-byte receipt")
+                invalid_archive(archive_name, "missing exact-byte receipt")
+                complete = False
+                continue
             expected_size = receipt.get("bytes")
             expected_sha256 = receipt.get("sha256")
             if (
@@ -701,13 +703,18 @@ def _icloud_inventory_is_verified(
                 or not isinstance(expected_sha256, str)
                 or len(expected_sha256) != 64
             ):
-                return invalid_archive(archive_name, "malformed exact-byte receipt")
+                invalid_archive(archive_name, "malformed exact-byte receipt")
+                complete = False
+                continue
 
             destination = directory / archive_name
             placeholder = directory / f".{archive_name}.icloud"
             if not destination.exists() and not placeholder.exists():
-                return invalid_archive(archive_name, "archive and placeholder are missing")
+                invalid_archive(archive_name, "archive and placeholder are missing")
+                complete = False
+                continue
 
+            archive_valid = True
             while True:
                 remaining = max(deadline - time.monotonic(), 0.001)
                 status_path = placeholder if not destination.exists() and placeholder.exists() else destination
@@ -719,33 +726,42 @@ def _icloud_inventory_is_verified(
                 uploaded = item_state.get("is_uploaded") is True and item_state.get("is_uploading") is False
                 materialized = item_state.get("downloading_status") == "current" and destination.is_file()
                 if item_state.get("uploading_error"):
-                    return invalid_archive(
+                    invalid_archive(
                         archive_name,
                         f"upload error: {item_state['uploading_error']}",
                         quarantine=True,
                     )
+                    archive_valid = False
+                    break
                 if item_state.get("is_ubiquitous") is True and uploaded and materialized:
                     if (
                         destination.stat().st_size != expected_size
                         or _sha256_file(destination, deadline=deadline) != expected_sha256
                     ):
-                        return invalid_archive(
+                        invalid_archive(
                             archive_name,
                             "materialized bytes do not match the receipt",
                             quarantine=True,
                         )
-                    if validated_sources is not None:
+                        archive_valid = False
+                    elif validated_sources is not None:
                         validated_sources.update(referenced_by_sources[archive_name])
                     break
                 if time.monotonic() >= deadline:
-                    return invalid_archive(archive_name, "materialization timed out")
+                    invalid_archive(archive_name, "materialization timed out")
+                    archive_valid = False
+                    break
                 time.sleep(min(poll_interval_seconds, remaining))
+            if not archive_valid:
+                complete = False
         except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
             if isinstance(exc, backup_daily.BackupTimeoutError):
                 raise
             if isinstance(exc, RuntimeError) and str(exc).startswith("iCloud coverage cannot be repaired"):
                 raise
-            return invalid_archive(archive_name, str(exc))
+            invalid_archive(archive_name, str(exc))
+            complete = False
+            continue
     referenced_sources = set().union(*referenced_by_sources.values()) if referenced_by_sources else set()
     return complete and candidates_by_path.keys() <= referenced_sources
 
