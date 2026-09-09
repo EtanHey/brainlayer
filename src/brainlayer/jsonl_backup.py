@@ -704,6 +704,7 @@ def _icloud_inventory_is_verified(
     deadline = deadline if deadline is not None else time.monotonic() + timeout_seconds
     for archive_name in sorted(referenced_by_sources):
         try:
+            _check_icloud_deadline(deadline, f"validating iCloud inventory archive {archive_name}")
             receipt = receipts.get(archive_name)
             if not isinstance(receipt, dict):
                 invalid_archive(archive_name, "missing exact-byte receipt")
@@ -730,6 +731,7 @@ def _icloud_inventory_is_verified(
 
             archive_valid = True
             while True:
+                _check_icloud_deadline(deadline, f"probing iCloud inventory archive {archive_name}")
                 remaining = max(deadline - time.monotonic(), 0.001)
                 status_path = placeholder if not destination.exists() and placeholder.exists() else destination
                 item_state = _icloud_item_state(
@@ -762,14 +764,22 @@ def _icloud_inventory_is_verified(
                         validated_sources.update(referenced_by_sources[archive_name])
                     break
                 if time.monotonic() >= deadline:
-                    invalid_archive(archive_name, "materialization timed out")
-                    archive_valid = False
-                    break
+                    raise ICloudDeadlineExceeded(
+                        f"iCloud operation deadline exceeded while materializing inventory archive {archive_name}"
+                    )
                 time.sleep(min(poll_interval_seconds, remaining))
             if not archive_valid:
                 complete = False
         except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
-            if isinstance(exc, backup_daily.BackupTimeoutError):
+            if isinstance(
+                exc,
+                (
+                    backup_daily.BackupTimeoutError,
+                    ICloudDeadlineExceeded,
+                    ICloudProbeError,
+                    subprocess.TimeoutExpired,
+                ),
+            ):
                 raise
             if isinstance(exc, RuntimeError) and str(exc).startswith("iCloud coverage cannot be repaired"):
                 raise

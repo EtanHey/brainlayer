@@ -1533,6 +1533,51 @@ def test_icloud_inventory_preserves_later_valid_receipts_after_one_archive_fails
     assert validated_sources == {second.as_posix()}
 
 
+def test_icloud_inventory_stops_when_receipt_hash_exhausts_shared_deadline(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    source_root = tmp_path / "sessions"
+    source = _write_jsonl(source_root / "covered.jsonl", mtime=1.0)
+    candidates = jsonl_backup._discover_jsonl_candidates([source_root])
+    icloud_dir = tmp_path / "CloudDocs"
+    icloud_dir.mkdir()
+    archive = icloud_dir / "covered.tar.gz"
+    archive.write_bytes(b"verified archive")
+    state = {
+        "files": {
+            source.as_posix(): {
+                "mtime": source.stat().st_mtime,
+                "size": source.stat().st_size,
+                "icloud_archive": archive.name,
+            }
+        },
+        "icloud_directory": str(icloud_dir),
+        "icloud_verified": True,
+        "icloud_archives": {
+            archive.name: {
+                "bytes": archive.stat().st_size,
+                "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+            }
+        },
+    }
+    clock = [0.0]
+
+    def exhaust_during_probe(*args, **kwargs):  # noqa: ARG001
+        clock[0] = 2.0
+        return _icloud_state(uploaded=True, status="current")
+
+    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(jsonl_backup, "_icloud_item_state", exhaust_during_probe)
+
+    with pytest.raises(jsonl_backup.ICloudDeadlineExceeded):
+        jsonl_backup._icloud_inventory_is_verified(
+            state,
+            candidates,
+            icloud_dir,
+            timeout_seconds=1,
+        )
+
+
 def test_icloud_inventory_ignores_vanished_legacy_entry_without_icloud_receipt(tmp_path):
     from brainlayer import jsonl_backup
 
