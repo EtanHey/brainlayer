@@ -332,9 +332,13 @@ def _forever_enabled() -> bool:
     return os.environ.get("BRAINLAYER_JSONL_FOREVER", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+class ICloudDeadlineExceeded(RuntimeError):
+    """The local iCloud operation budget expired without disproving an object."""
+
+
 def _check_icloud_deadline(deadline: float | None, phase: str) -> None:
     if deadline is not None and time.monotonic() >= deadline:
-        raise RuntimeError(f"iCloud operation deadline exceeded during {phase}")
+        raise ICloudDeadlineExceeded(f"iCloud operation deadline exceeded during {phase}")
 
 
 def _sha256_file(path: Path, *, deadline: float | None = None) -> str:
@@ -541,10 +545,10 @@ def copy_archive_to_icloud(
         except Exception as exc:
             # This path was not proven usable. Preserve it under a unique hidden
             # name, then let the normal fresh-copy path repair the logical address.
+            if isinstance(exc, (backup_daily.BackupTimeoutError, ICloudDeadlineExceeded)):
+                raise
             _quarantine_unverified_icloud_item(destination)
             _quarantine_unverified_icloud_item(placeholder)
-            if isinstance(exc, backup_daily.BackupTimeoutError):
-                raise
             if time.monotonic() >= deadline:
                 raise
 
@@ -620,6 +624,7 @@ def _icloud_inventory_is_verified(
     *,
     timeout_seconds: float = DEFAULT_ICLOUD_TIMEOUT_SECONDS,
     poll_interval_seconds: float = 2.0,
+    validated_sources: set[str] | None = None,
 ) -> bool:
     """Revalidate every iCloud object that current source-state entries rely on.
 
@@ -629,7 +634,7 @@ def _icloud_inventory_is_verified(
     Legacy marker-only state therefore bootstraps once instead of being trusted.
     """
     directory = Path(icloud_dir).expanduser()
-    if state.get("icloud_verified") is not True or state.get("icloud_directory") != str(directory):
+    if state.get("icloud_directory") != str(directory):
         return False
 
     files = state.get("files")
@@ -641,6 +646,7 @@ def _icloud_inventory_is_verified(
 
     candidates_by_path = {candidate.path.as_posix(): candidate for candidate in candidates}
     referenced_by_sources: dict[str, set[str]] = {}
+    complete = True
     for source_path, entry in files.items():
         candidate = candidates_by_path.get(source_path)
         if not isinstance(entry, dict):
@@ -655,7 +661,8 @@ def _icloud_inventory_is_verified(
                 # entries after their local source disappears. Such an entry never
                 # claimed iCloud coverage, so it is outside this inventory.
                 continue
-            return False
+            complete = False
+            continue
         referenced_by_sources.setdefault(archive_name, set()).add(source_path)
 
     if candidates and not referenced_by_sources:
@@ -712,12 +719,17 @@ def _icloud_inventory_is_verified(
                         quarantine=True,
                     )
                 if item_state.get("is_ubiquitous") is True and uploaded and materialized:
-                    if destination.stat().st_size != expected_size or _sha256_file(destination) != expected_sha256:
+                    if (
+                        destination.stat().st_size != expected_size
+                        or _sha256_file(destination, deadline=deadline) != expected_sha256
+                    ):
                         return invalid_archive(
                             archive_name,
                             "materialized bytes do not match the receipt",
                             quarantine=True,
                         )
+                    if validated_sources is not None:
+                        validated_sources.update(referenced_by_sources[archive_name])
                     break
                 if time.monotonic() >= deadline:
                     return invalid_archive(archive_name, "materialization timed out")
@@ -728,7 +740,8 @@ def _icloud_inventory_is_verified(
             if isinstance(exc, RuntimeError) and str(exc).startswith("iCloud coverage cannot be repaired"):
                 raise
             return invalid_archive(archive_name, str(exc))
-    return True
+    referenced_sources = set().union(*referenced_by_sources.values()) if referenced_by_sources else set()
+    return complete and candidates_by_path.keys() <= referenced_sources
 
 
 def _upload_forever_files(
@@ -998,9 +1011,10 @@ def _update_state_for_uploaded(
     if retained_archives:
         updated["icloud_archives"] = retained_archives
 
-    if icloud_dir is not None and not clear_icloud_verification:
+    if icloud_dir is not None:
         updated["icloud_directory"] = str(Path(icloud_dir).expanduser())
-        updated["icloud_verified"] = True
+        if not clear_icloud_verification:
+            updated["icloud_verified"] = True
     elif not clear_icloud_verification and state.get("icloud_verified") is True:
         existing_directory = state.get("icloud_directory")
         if isinstance(existing_directory, str) and existing_directory:
@@ -1077,11 +1091,24 @@ def run_backup(
     selection_state = state
     icloud_bootstrap_pending = False
     if upload and icloud_dir is not None:
-        icloud_covered = _icloud_inventory_is_verified(state, candidates, icloud_dir)
+        validated_icloud_sources: set[str] = set()
+        icloud_covered = _icloud_inventory_is_verified(
+            state,
+            candidates,
+            icloud_dir,
+            validated_sources=validated_icloud_sources,
+        )
         if not icloud_covered:
             # Legacy state proves only Drive coverage. The first iCloud-enabled run
             # must seed iCloud with every source rather than falsely returning no-op.
-            selection_state = {"files": {}}
+            state_files = state.get("files") or {}
+            selection_state = {
+                "files": {
+                    source_path: entry
+                    for source_path, entry in state_files.items()
+                    if source_path in validated_icloud_sources
+                }
+            }
             icloud_bootstrap_pending = True
     credentials = None
     service = None

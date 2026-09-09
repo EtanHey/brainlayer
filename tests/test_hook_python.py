@@ -251,6 +251,7 @@ class TestResolveHookPython:
         target = tmp_path / "myvenv" / "bin" / "python"
         target.parent.mkdir(parents=True)
         target.write_text("#!/bin/sh\n")
+        target.chmod(0o755)
         resolved = resolve_hook_python(env={HOOK_PYTHON_ENV: str(target)}, candidates=())
         assert resolved == str(target)
         assert is_pinned_interpreter(resolved), "the linter must accept what the hatch returns"
@@ -297,6 +298,15 @@ class TestResolveHookPython:
     def test_default_candidate_is_the_opt_symlink():
         """`opt/` outlives the Cellar version a command was rendered against."""
         assert DEFAULT_KEG_PYTHON == "/opt/homebrew/opt/brainlayer/libexec/venv/bin/python"
+
+    @staticmethod
+    def test_non_python_executable_override_is_refused(tmp_path):
+        target = tmp_path / "bin" / "bash"
+        target.parent.mkdir()
+        target.write_text("#!/bin/sh\n")
+        target.chmod(0o755)
+        with pytest.raises(HookPythonUnresolved, match="executable Python"):
+            resolve_hook_python(env={HOOK_PYTHON_ENV: str(target)}, candidates=())
 
 
 class TestRenderHookCommand:
@@ -519,7 +529,7 @@ class TestLiveSettings:
         )
 
 
-def test_launchd_plist_templates_pin_their_interpreter():
+def test_launchd_plist_templates_pin_their_interpreter(tmp_path):
     """Render machine-specific placeholders, then apply the existing pin gate."""
     import plistlib
 
@@ -527,11 +537,15 @@ def test_launchd_plist_templates_pin_their_interpreter():
 
     plists = sorted((REPO_ROOT / "launchd").glob("*.plist"))
     assert plists, "expected launchd templates to exist"
+    python = tmp_path / "intel" / "opt" / "brainlayer" / "libexec" / "venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("#!/bin/sh\n")
+    python.chmod(0o755)
 
     unpinned: list[str] = []
     for path in plists:
         template = path.read_text(encoding="utf-8")
-        rendered = render_launchd_plist(template, python="/usr/local/opt/brainlayer/libexec/venv/bin/python")
+        rendered = render_launchd_plist(template, python=str(python))
         args = plistlib.loads(rendered.encode()).get("ProgramArguments") or []
         if not args:
             continue
@@ -553,7 +567,20 @@ def test_launchd_plist_render_uses_available_intel_keg(monkeypatch):
     template = "<string>__BRAINLAYER_PYTHON__</string>"
     intel = "/usr/local/opt/brainlayer/libexec/venv/bin/python"
     monkeypatch.setattr(hook_python.os.path, "exists", lambda path: path == intel)
+    monkeypatch.setattr(hook_python.os.path, "isfile", lambda path: path == intel)
+    monkeypatch.setattr(hook_python.os, "access", lambda path, mode: path == intel and mode == hook_python.os.X_OK)
 
     rendered = hook_python.render_launchd_plist(template, env={})
 
     assert rendered == f"<string>{intel}</string>"
+
+
+def test_launchd_plist_render_rejects_non_executable_interpreter(tmp_path):
+    from brainlayer.hook_python import HookPythonUnresolved, render_launchd_plist
+
+    python = tmp_path / "venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("#!/bin/sh\n")
+
+    with pytest.raises(HookPythonUnresolved):
+        render_launchd_plist("<string>__BRAINLAYER_PYTHON__</string>", python=str(python))

@@ -139,7 +139,7 @@ fi
 # source checkout fronts `~/Gits/brainlayer/.venv/bin/brainlayer` -- neither of which any release moves.
 BRAINLAYER_BIN="$(stable_brainlayer_path "${BRAINLAYER_BIN:-${BRAINLAYER_KEG_CLI:-$(which brainlayer 2>/dev/null || echo "$HOME/.local/bin/brainlayer")}}")"
 # Capture only caller intent before PYTHON_BIN receives its legacy PATH fallback.
-BRAINLAYER_PYTHON_REQUESTED="${BRAINLAYER_PYTHON:-${PYTHON_BIN:-}}"
+BRAINLAYER_PYTHON_REQUESTED="${BRAINLAYER_PYTHON:-}"
 # In a keg, an unset PYTHON_BIN must NOT fall through to `command -v python3`: on a Mac whose PATH
 # puts /Library/Frameworks/Python.framework first, that renders a framework interpreter that never
 # sees the keg's site-packages, and no release can move it. An explicit override still wins.
@@ -152,7 +152,7 @@ PYTHON_BIN="$(stable_brainlayer_path "${PYTHON_BIN:-${BRAINLAYER_KEG_PYTHON:-$(c
 BRAINLAYER_PYTHON="$(stable_brainlayer_path "${BRAINLAYER_PYTHON:-$PYTHON_BIN}")"
 
 resolve_jsonl_backup_python() {
-    if [ -n "$BRAINLAYER_KEG_PYTHON" ] && [ -z "$BRAINLAYER_PYTHON_REQUESTED" ]; then
+    if [ -n "$BRAINLAYER_KEG_PYTHON" ] && [ -z "$BRAINLAYER_PYTHON_REQUESTED" ] && [ -z "${BRAINLAYER_HOOK_PYTHON:-}" ]; then
         BRAINLAYER_PYTHON="$(stable_brainlayer_path "$BRAINLAYER_KEG_PYTHON")"
         return 0
     fi

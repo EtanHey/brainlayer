@@ -823,6 +823,37 @@ def test_existing_icloud_probe_cannot_restart_timeout_for_repair(tmp_path, monke
     assert calls == 1
 
 
+def test_existing_verified_object_is_not_quarantined_when_local_deadline_expires(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    archive = tmp_path / "archive.tar.gz"
+    archive.write_bytes(gzip.compress(b"same tar payload", mtime=1))
+    icloud_dir = tmp_path / "CloudDocs"
+    icloud_dir.mkdir()
+    logical_sha256 = jsonl_backup._sha256_gzip_payload(archive)
+    destination = icloud_dir / f"archive-{logical_sha256}.tar.gz"
+    destination.write_bytes(archive.read_bytes())
+    original_hash = jsonl_backup._sha256_gzip_payload
+
+    def expire_on_existing(path, **kwargs):
+        if Path(path) == destination:
+            raise jsonl_backup.ICloudDeadlineExceeded("deadline")
+        return original_hash(path, **kwargs)
+
+    monkeypatch.setattr(
+        jsonl_backup,
+        "_icloud_item_state",
+        lambda *args, **kwargs: _icloud_state(uploaded=True, status="current"),
+    )
+    monkeypatch.setattr(jsonl_backup, "_sha256_gzip_payload", expire_on_existing)
+
+    with pytest.raises(jsonl_backup.ICloudDeadlineExceeded):
+        jsonl_backup.copy_archive_to_icloud(archive, icloud_dir, timeout_seconds=1)
+
+    assert destination.is_file()
+    assert list(icloud_dir.glob("*.unverified")) == []
+
+
 def test_icloud_deadline_starts_before_first_archive_scan(tmp_path, monkeypatch):
     from brainlayer import jsonl_backup
 
@@ -1169,9 +1200,19 @@ def test_icloud_inventory_still_validates_archives_for_vanished_sources(tmp_path
             }
         },
     }
+    hash_deadlines: list[float | None] = []
+    original_hash = jsonl_backup._sha256_file
+
+    def hash_with_deadline(path, *, deadline=None):
+        hash_deadlines.append(deadline)
+        return original_hash(path, deadline=deadline)
+
+    monkeypatch.setattr(jsonl_backup, "_sha256_file", hash_with_deadline)
 
     assert jsonl_backup._icloud_inventory_is_verified(state, [], icloud_dir, timeout_seconds=1)
     assert probes == [archive]
+    assert len(hash_deadlines) == 1
+    assert hash_deadlines[0] is not None
 
 
 def test_icloud_inventory_ignores_vanished_legacy_entry_without_icloud_receipt(tmp_path):
@@ -1405,8 +1446,43 @@ def test_icloud_bootstrap_with_active_source_does_not_mark_complete(tmp_path, mo
     assert result["bundled_file_count"] == 1
     assert result["skipped_active_count"] == 1
     state = json.loads(state_path.read_text())
-    assert "icloud_directory" not in state
+    assert state["icloud_directory"] == str(icloud_dir)
     assert "icloud_verified" not in state
+    candidates = jsonl_backup._discover_jsonl_candidates([source_root])
+    validated_sources: set[str] = set()
+    monkeypatch.setattr(
+        jsonl_backup,
+        "_icloud_item_state",
+        lambda *args, **kwargs: _icloud_state(uploaded=True, status="current"),
+    )
+
+    assert not jsonl_backup._icloud_inventory_is_verified(
+        state,
+        candidates,
+        icloud_dir,
+        validated_sources=validated_sources,
+    )
+    assert validated_sources == {inactive.as_posix()}
+
+    first_archive = state["files"][inactive.as_posix()]["icloud_archive"]
+    monkeypatch.setattr(jsonl_backup, "_list_surviving_archives", lambda *args, **kwargs: {"drive-id": None})
+    second = jsonl_backup.run_backup(
+        source_roots=[source_root],
+        state_path=state_path,
+        staging_dir=tmp_path / "staging",
+        log_path=tmp_path / "jsonl-backup.log",
+        queue_dir=tmp_path / "queue",
+        icloud_dir=icloud_dir,
+        date_stamp="2026-09-10",
+        now=now + 3600,
+        upload=True,
+    )
+
+    assert second["bundled_file_count"] == 1
+    completed_state = json.loads(state_path.read_text())
+    assert completed_state["files"][inactive.as_posix()]["icloud_archive"] == first_archive
+    assert completed_state["files"][active.as_posix()]["icloud_archive"] != first_archive
+    assert completed_state["icloud_verified"] is True
 
 
 def test_invalid_icloud_inventory_with_only_active_sources_defers_instead_of_verifying(tmp_path, monkeypatch):

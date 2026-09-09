@@ -247,6 +247,8 @@ def resolve_hook_python(
                 "substitute another interpreter for an override that was set on purpose — "
                 f"fix the path or unset {HOOK_PYTHON_ENV} to use the keg."
             )
+        if not is_pinned_interpreter(override) or not os.path.isfile(override) or not os.access(override, os.X_OK):
+            raise HookPythonUnresolved(f"{HOOK_PYTHON_ENV}={override!r} is not an executable Python interpreter")
         return override
 
     for candidate in candidates:
@@ -287,7 +289,7 @@ def render_launchd_plist(
     affirmative pin gate can vouch for it.
     """
     interpreter = python or resolve_hook_python(env=env)
-    if not is_pinned_interpreter(interpreter):
+    if not is_pinned_interpreter(interpreter) or not os.path.isfile(interpreter) or not os.access(interpreter, os.X_OK):
         raise HookPythonUnresolved(f"launchd interpreter is not explicitly pinned: {interpreter!r}")
     return template.replace("__BRAINLAYER_PYTHON__", escape(interpreter))
 
