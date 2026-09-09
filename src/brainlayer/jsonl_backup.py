@@ -336,6 +336,10 @@ class ICloudDeadlineExceeded(RuntimeError):
     """The local iCloud operation budget expired without disproving an object."""
 
 
+class ICloudProbeError(RuntimeError):
+    """Foundation state could not be read, so the object was not disproved."""
+
+
 def _check_icloud_deadline(deadline: float | None, phase: str) -> None:
     if deadline is not None and time.monotonic() >= deadline:
         raise ICloudDeadlineExceeded(f"iCloud operation deadline exceeded during {phase}")
@@ -452,13 +456,15 @@ def _icloud_item_state(
         )
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or "").strip() or str(exc)
-        raise RuntimeError(f"iCloud status probe failed for {path}: {detail}") from exc
+        raise ICloudProbeError(f"iCloud status probe failed for {path}: {detail}") from exc
+    except OSError as exc:
+        raise ICloudProbeError(f"iCloud status probe could not run for {path}: {exc}") from exc
     try:
         state = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"iCloud status returned invalid JSON: {completed.stdout!r}") from exc
+        raise ICloudProbeError(f"iCloud status returned invalid JSON: {completed.stdout!r}") from exc
     if not isinstance(state, dict):
-        raise RuntimeError(f"iCloud status returned a non-object: {state!r}")
+        raise ICloudProbeError(f"iCloud status returned a non-object: {state!r}")
     state["downloading_status"] = _normalized_icloud_download_status(state.get("downloading_status"))
     return state
 
@@ -547,7 +553,12 @@ def copy_archive_to_icloud(
             # name, then let the normal fresh-copy path repair the logical address.
             if isinstance(
                 exc,
-                (backup_daily.BackupTimeoutError, ICloudDeadlineExceeded, subprocess.TimeoutExpired),
+                (
+                    backup_daily.BackupTimeoutError,
+                    ICloudDeadlineExceeded,
+                    ICloudProbeError,
+                    subprocess.TimeoutExpired,
+                ),
             ):
                 raise
             _quarantine_unverified_icloud_item(destination)

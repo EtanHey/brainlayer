@@ -786,7 +786,17 @@ def test_icloud_status_reports_stderr_when_osascript_fails(tmp_path, monkeypatch
     error = subprocess.CalledProcessError(1, ["osascript"], stderr="Foundation failed")
     monkeypatch.setattr(jsonl_backup.subprocess, "run", lambda *args, **kwargs: (_ for _ in ()).throw(error))
 
-    with pytest.raises(RuntimeError, match="Foundation failed"):
+    with pytest.raises(jsonl_backup.ICloudProbeError, match="Foundation failed"):
+        jsonl_backup._icloud_item_state(tmp_path / "archive.tar.gz", timeout_seconds=0.5)
+
+
+def test_icloud_status_marks_malformed_json_as_inconclusive_probe_failure(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    completed = subprocess.CompletedProcess(["osascript"], 0, stdout="{truncated", stderr="")
+    monkeypatch.setattr(jsonl_backup.subprocess, "run", lambda *args, **kwargs: completed)
+
+    with pytest.raises(jsonl_backup.ICloudProbeError, match="invalid JSON"):
         jsonl_backup._icloud_item_state(tmp_path / "archive.tar.gz", timeout_seconds=0.5)
 
 
@@ -1041,6 +1051,31 @@ def test_existing_verified_object_is_not_quarantined_when_status_probe_times_out
     )
 
     with pytest.raises(subprocess.TimeoutExpired):
+        jsonl_backup.copy_archive_to_icloud(archive, icloud_dir, timeout_seconds=1)
+
+    assert destination.is_file()
+    assert list(icloud_dir.glob("*.unverified")) == []
+
+
+@pytest.mark.parametrize("message", ["Foundation transport failed", "iCloud status returned invalid JSON"])
+def test_existing_verified_object_is_not_quarantined_when_status_probe_is_inconclusive(tmp_path, monkeypatch, message):
+    from brainlayer import jsonl_backup
+
+    archive = tmp_path / "archive.tar.gz"
+    archive.write_bytes(gzip.compress(b"same tar payload", mtime=1))
+    icloud_dir = tmp_path / "CloudDocs"
+    icloud_dir.mkdir()
+    logical_sha256 = jsonl_backup._sha256_gzip_payload(archive)
+    destination = icloud_dir / f"claude-jsonl-{logical_sha256}.tar.gz"
+    destination.write_bytes(archive.read_bytes())
+    error = jsonl_backup.ICloudProbeError(message)
+    monkeypatch.setattr(
+        jsonl_backup,
+        "_icloud_item_state",
+        lambda *args, **kwargs: (_ for _ in ()).throw(error),
+    )
+
+    with pytest.raises(jsonl_backup.ICloudProbeError, match=message):
         jsonl_backup.copy_archive_to_icloud(archive, icloud_dir, timeout_seconds=1)
 
     assert destination.is_file()
