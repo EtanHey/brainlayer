@@ -994,6 +994,28 @@ def run_backup(
         surviving_archives=surviving_archives,
     )
 
+    if not changed and icloud_bootstrap_pending and active:
+        error = (
+            "iCloud coverage is not verified; repair deferred because "
+            f"{len(active)} discovered source(s) are still active"
+        )
+        result = {
+            "attempted_at": attempted_at,
+            "status": "deferred",
+            "uploaded": False,
+            "verified": False,
+            "already_covered_files": covered,
+            "discovered_file_count": len(candidates),
+            "skipped_active_count": len(active),
+            "vanished_source_count": vanished,
+            "icloud_repair_deferred": True,
+            "error": error,
+            "message": error,
+        }
+        _append_json_log(log_path, result)
+        _enqueue_run_summary(result, queue_dir=queue_dir)
+        return result
+
     if not changed:
         result: dict[str, Any] = {
             "attempted_at": attempted_at,

@@ -973,6 +973,46 @@ def test_icloud_bootstrap_with_active_source_does_not_mark_complete(tmp_path, mo
     assert "icloud_verified" not in state
 
 
+def test_invalid_icloud_inventory_with_only_active_sources_defers_instead_of_verifying(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    now = time.time()
+    source_root = tmp_path / "sessions"
+    source = _write_jsonl(source_root / "active.jsonl", mtime=now - 60)
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "files": {
+                    source.as_posix(): {
+                        "mtime": source.stat().st_mtime,
+                        "size": source.stat().st_size,
+                    }
+                }
+            }
+        )
+    )
+
+    result = jsonl_backup.run_backup(
+        source_roots=[source_root],
+        state_path=state_path,
+        staging_dir=tmp_path / "staging",
+        log_path=tmp_path / "jsonl-backup.log",
+        queue_dir=tmp_path / "queue",
+        icloud_dir=tmp_path / "CloudDocs" / "Archives" / "brainlayer-jsonl-backups",
+        date_stamp="2026-09-09",
+        now=now,
+        upload=True,
+    )
+
+    assert result["status"] == "deferred"
+    assert result["verified"] is False
+    assert result["uploaded"] is False
+    assert result["skipped_active_count"] == 1
+    assert "iCloud coverage" in result["error"]
+    assert json.loads(state_path.read_text())["files"][source.as_posix()]["size"] == source.stat().st_size
+
+
 def test_drive_only_state_update_preserves_prior_icloud_coverage():
     from brainlayer import jsonl_backup
 
