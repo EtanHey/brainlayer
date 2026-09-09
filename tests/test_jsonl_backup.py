@@ -208,6 +208,22 @@ def test_icloud_destination_is_strictly_opt_in(monkeypatch):
     assert jsonl_backup._configured_icloud_dir() == Path("/CloudDocs/Archives/brainlayer-jsonl-backups")
 
 
+def test_logical_gzip_hash_does_not_swallow_wall_clock_timeout(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    archive = tmp_path / "archive.tar.gz"
+    archive.write_bytes(b"bytes")
+    monkeypatch.setattr(
+        jsonl_backup.gzip,
+        "open",
+        lambda *args, **kwargs: (_ for _ in ()).throw(jsonl_backup.backup_daily.BackupTimeoutError("deadline")),
+    )
+    monkeypatch.setattr(jsonl_backup, "_sha256_file", lambda path: "fallback")
+
+    with pytest.raises(jsonl_backup.backup_daily.BackupTimeoutError, match="deadline"):
+        jsonl_backup._sha256_gzip_payload(archive)
+
+
 def test_icloud_copy_rehydrates_placeholder_before_hashing(tmp_path, monkeypatch):
     from brainlayer import jsonl_backup
 
@@ -787,6 +803,43 @@ def test_icloud_inventory_rehydrates_placeholder_and_checks_exact_receipt(tmp_pa
 
     assert jsonl_backup._icloud_inventory_is_verified(state, [candidate], icloud_dir, timeout_seconds=1)
     assert calls == [placeholder]
+
+
+def test_icloud_inventory_does_not_swallow_wall_clock_timeout(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    source = _write_jsonl(tmp_path / "source.jsonl", mtime=time.time() - 3600)
+    candidate = jsonl_backup.JsonlCandidate(
+        path=source,
+        root=tmp_path,
+        root_index=0,
+        mtime=source.stat().st_mtime,
+        size=source.stat().st_size,
+    )
+    icloud_dir = tmp_path / "CloudDocs"
+    icloud_dir.mkdir()
+    archive_name = "archive.tar.gz"
+    (icloud_dir / archive_name).write_bytes(b"archive")
+    state = {
+        "files": {
+            source.as_posix(): {
+                "mtime": candidate.mtime,
+                "size": candidate.size,
+                "icloud_archive": archive_name,
+            }
+        },
+        "icloud_directory": str(icloud_dir),
+        "icloud_verified": True,
+        "icloud_archives": {archive_name: {"bytes": 7, "sha256": "0" * 64}},
+    }
+    monkeypatch.setattr(
+        jsonl_backup,
+        "_icloud_item_state",
+        lambda *args, **kwargs: (_ for _ in ()).throw(jsonl_backup.backup_daily.BackupTimeoutError("deadline")),
+    )
+
+    with pytest.raises(jsonl_backup.backup_daily.BackupTimeoutError, match="deadline"):
+        jsonl_backup._icloud_inventory_is_verified(state, [candidate], icloud_dir)
 
 
 def test_drive_only_change_invalidates_that_sources_icloud_receipt(tmp_path):

@@ -351,6 +351,8 @@ def _sha256_gzip_payload(path: Path) -> str:
         with gzip.open(path, "rb") as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
+    except backup_daily.BackupTimeoutError:
+        raise
     except (gzip.BadGzipFile, EOFError, OSError):
         return _sha256_file(path)
     return digest.hexdigest()
@@ -694,6 +696,8 @@ def _icloud_inventory_is_verified(
                     return invalid_archive(archive_name, "materialization timed out")
                 time.sleep(min(poll_interval_seconds, remaining))
         except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+            if isinstance(exc, backup_daily.BackupTimeoutError):
+                raise
             if isinstance(exc, RuntimeError) and str(exc).startswith("iCloud coverage cannot be repaired"):
                 raise
             return invalid_archive(archive_name, str(exc))
