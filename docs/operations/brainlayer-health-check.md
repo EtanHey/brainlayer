@@ -14,6 +14,18 @@ brainlayer health-check --json --heal
 - No running hotlane command line is disabling the embedding backlog with `--backlog-batch 0`.
 - Active chunks missing semantic vectors are decreasing across ticks. One unchanged tick is tolerated; the second unchanged tick alarms.
 - BrainBar's served MCP socket can answer a `brain_search` canary with at least one result.
+- The JSONL backup attempt log has a fresh terminal receipt. A verified upload and a
+  verified `no-op` are healthy but remain distinct in `jsonl_backup.state`; failed,
+  malformed, missing, or older-than-36-hour receipts are critical issues.
+
+The backup process appends a timezone-aware `attempted_at` to every normal result and
+to caught terminal failures. The independent five-minute health check reads that
+receipt, so a backup process that never starts cannot make its own absence look
+healthy. The threshold can be changed with
+`BRAINLAYER_JSONL_BACKUP_MAX_AGE_SECONDS`; the monitored log follows
+`BRAINLAYER_JSONL_BACKUP_LOG_PATH` when set. Legacy receipts without
+`attempted_at` are interpreted at the launchd schedule of 05:00 in the producer
+machine's local timezone; this fallback disappears after the next stamped run.
 
 The missing-vector count is exact, but it computes the ID difference through the
 covering `chunks` and `chunk_vectors_rowids` indexes before reading chunk payloads.

@@ -526,6 +526,7 @@ def run_backup(
 ) -> dict[str, Any]:
     date_stamp = date_stamp or _today()
     now = time.time() if now is None else now
+    attempted_at = dt.datetime.fromtimestamp(now, dt.UTC).isoformat()
     roots = source_roots or DEFAULT_SOURCE_ROOTS
     state_path = Path(state_path).expanduser()
     state = _load_state(state_path)
@@ -554,6 +555,7 @@ def run_backup(
 
     if not changed:
         result: dict[str, Any] = {
+            "attempted_at": attempted_at,
             "status": "no-op",
             "uploaded": False,
             "verified": True,
@@ -570,6 +572,7 @@ def run_backup(
     archive_path, bundle_digests = create_jsonl_bundle_with_digests(changed, staging_dir, date_stamp=date_stamp)
     archive_size = archive_path.stat().st_size
     result = {
+        "attempted_at": attempted_at,
         "status": "uploaded" if upload else "created",
         "archive": str(archive_path),
         "bytes": archive_size,
@@ -645,8 +648,17 @@ def _raise_backup_timeout(signum, frame) -> None:  # noqa: ARG001
     raise backup_daily.BackupTimeoutError("jsonl backup exceeded configured wall-clock timeout")
 
 
+def _append_terminal_failure(log_path: Path, result: dict[str, Any]) -> None:
+    """Persist terminal failures without hiding the original failure if logging also breaks."""
+    try:
+        _append_json_log(log_path, result)
+    except Exception as exc:
+        result["attempt_log_error"] = str(exc)
+
+
 def main() -> int:
     timeout_seconds = _configured_backup_timeout_seconds()
+    log_path = Path(os.environ.get("BRAINLAYER_JSONL_BACKUP_LOG_PATH", str(DEFAULT_LOG_PATH)))
     previous_alarm_handler = None
     if timeout_seconds is not None:
         previous_alarm_handler = signal.getsignal(signal.SIGALRM)
@@ -656,28 +668,32 @@ def main() -> int:
         result = run_backup(
             staging_dir=Path(os.environ.get("BRAINLAYER_JSONL_BACKUP_STAGING_DIR", str(DEFAULT_STAGING_DIR))),
             state_path=Path(os.environ.get("BRAINLAYER_JSONL_BACKUP_STATE_PATH", str(DEFAULT_STATE_PATH))),
-            log_path=Path(os.environ.get("BRAINLAYER_JSONL_BACKUP_LOG_PATH", str(DEFAULT_LOG_PATH))),
+            log_path=log_path,
             folder_parts=os.environ.get("BRAINLAYER_JSONL_BACKUP_DRIVE_FOLDER", "/".join(DEFAULT_FOLDER_PARTS)).split(
                 "/"
             ),
         )
     except backup_daily.BackupTimeoutError:
         result = {
+            "attempted_at": dt.datetime.now(dt.UTC).isoformat(),
             "status": "failed",
             "uploaded": False,
             "verified": False,
             "error": f"timed out after {timeout_seconds}s",
         }
+        _append_terminal_failure(log_path, result)
         print(json.dumps(result, sort_keys=True), flush=True)
         return 124
     except Exception as exc:
         result = {
+            "attempted_at": dt.datetime.now(dt.UTC).isoformat(),
             "status": "failed",
             "uploaded": False,
             "verified": False,
             "error": str(exc),
             "traceback": traceback.format_exc(),
         }
+        _append_terminal_failure(log_path, result)
         print(json.dumps(result, sort_keys=True), flush=True)
         return 1
     finally:
