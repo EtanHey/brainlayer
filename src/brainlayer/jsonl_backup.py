@@ -396,7 +396,7 @@ class _HashingReader:
 
 def create_jsonl_bundle_with_digests(
     candidates: list[JsonlCandidate], staging_dir: Path, *, date_stamp: str
-) -> tuple[Path, dict[str, str]]:
+) -> tuple[Path, dict[str, str], dict[str, int]]:
     if not candidates:
         raise ValueError("create_jsonl_bundle requires at least one candidate")
     staging_dir = Path(staging_dir).expanduser()
@@ -407,6 +407,7 @@ def create_jsonl_bundle_with_digests(
     ) as tmp:
         temp_path = Path(tmp.name)
     digests: dict[str, str] = {}
+    sizes: dict[str, int] = {}
     try:
         with tarfile.open(temp_path, "w:gz") as tar:
             for candidate in candidates:
@@ -424,15 +425,16 @@ def create_jsonl_bundle_with_digests(
                     reader = _HashingReader(handle)
                     tar.addfile(info, reader)
                 digests[candidate.path.as_posix()] = reader.hexdigest()
+                sizes[candidate.path.as_posix()] = info.size
         os.replace(temp_path, archive_path)
     finally:
         temp_path.unlink(missing_ok=True)
-    return archive_path, digests
+    return archive_path, digests, sizes
 
 
 def create_jsonl_bundle(candidates: list[JsonlCandidate], staging_dir: Path, *, date_stamp: str) -> Path:
     """Backwards-compatible wrapper returning only the archive path."""
-    archive_path, _ = create_jsonl_bundle_with_digests(candidates, staging_dir, date_stamp=date_stamp)
+    archive_path, _, _ = create_jsonl_bundle_with_digests(candidates, staging_dir, date_stamp=date_stamp)
     return archive_path
 
 
@@ -460,6 +462,7 @@ def verify_jsonl_bundle(
     expected_file_count: int | None = None,
     expected_candidates: list[JsonlCandidate] | None = None,
     expected_digests: dict[str, str] | None = None,
+    expected_sizes: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Verify a bundle; production callers should supply expected_candidates for content proof."""
     if expected_candidates is not None:
@@ -508,11 +511,9 @@ def verify_jsonl_bundle(
                         result["verification_error"] = f"archive member is not a regular file: {member.name}"
                         return result
                     candidate = expected_by_name[member.name]
-                    # Discovery metadata is a lower bound: JSONL sources may append before
-                    # tar reads them. A smaller member is provably truncated; a larger one
-                    # is valid only if the byte comparison below matches the current source.
-                    if member.size < candidate.size:
-                        result["verification_error"] = f"archive member is shorter than candidate: {member.name}"
+                    expected_size = (expected_sizes or {}).get(candidate.path.as_posix(), candidate.size)
+                    if member.size != expected_size:
+                        result["verification_error"] = f"archive member size differs from bundle: {member.name}"
                         return result
                     extracted = archive.extractfile(member)
                     if extracted is None:
@@ -676,7 +677,9 @@ def run_backup(
         _enqueue_run_summary(result, queue_dir=queue_dir)
         return result
 
-    archive_path, bundle_digests = create_jsonl_bundle_with_digests(changed, staging_dir, date_stamp=date_stamp)
+    archive_path, bundle_digests, bundle_sizes = create_jsonl_bundle_with_digests(
+        changed, staging_dir, date_stamp=date_stamp
+    )
     archive_size = archive_path.stat().st_size
     result = {
         "attempted_at": attempted_at,
@@ -695,7 +698,14 @@ def run_backup(
         "forever_files": [],
     }
 
-    result.update(verify_jsonl_bundle(archive_path, expected_candidates=changed, expected_digests=bundle_digests))
+    result.update(
+        verify_jsonl_bundle(
+            archive_path,
+            expected_candidates=changed,
+            expected_digests=bundle_digests,
+            expected_sizes=bundle_sizes,
+        )
+    )
     if result["verified"] and upload:
         if service is None:
             credentials = backup_daily.get_drive_credentials()

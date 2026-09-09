@@ -96,9 +96,16 @@ def test_jsonl_bundle_accepts_source_growth_after_discovery_before_bundling(tmp_
 
     with source.open("ab") as handle:
         handle.write(b'{"second":true}\n')
-    archive = jsonl_backup.create_jsonl_bundle(candidates, tmp_path / "staging", date_stamp="2026-09-09")
+    archive, digests, sizes = jsonl_backup.create_jsonl_bundle_with_digests(
+        candidates, tmp_path / "staging", date_stamp="2026-09-09"
+    )
 
-    verification = jsonl_backup.verify_jsonl_bundle(archive, expected_candidates=candidates)
+    verification = jsonl_backup.verify_jsonl_bundle(
+        archive,
+        expected_candidates=candidates,
+        expected_digests=digests,
+        expected_sizes=sizes,
+    )
 
     assert verification["verified"] is True
     assert verification["content_verified_file_count"] == 1
@@ -113,7 +120,7 @@ def test_jsonl_bundle_uses_bundle_digest_when_source_vanishes_before_verificatio
     source.parent.mkdir(parents=True)
     source.write_bytes(b'{"archived":true}\n')
     candidates = jsonl_backup._discover_jsonl_candidates([source_root])
-    archive, digests = jsonl_backup.create_jsonl_bundle_with_digests(
+    archive, digests, sizes = jsonl_backup.create_jsonl_bundle_with_digests(
         candidates, tmp_path / "staging", date_stamp="2026-09-09"
     )
     source.unlink()
@@ -122,6 +129,7 @@ def test_jsonl_bundle_uses_bundle_digest_when_source_vanishes_before_verificatio
         archive,
         expected_candidates=candidates,
         expected_digests=digests,
+        expected_sizes=sizes,
     )
 
     assert verification["verified"] is True
@@ -138,7 +146,7 @@ def test_jsonl_bundle_rejects_digest_mismatch_when_source_vanishes(tmp_path):
     original = b'{"archived":true}\n'
     source.write_bytes(original)
     candidates = jsonl_backup._discover_jsonl_candidates([source_root])
-    _, digests = jsonl_backup.create_jsonl_bundle_with_digests(
+    _, digests, sizes = jsonl_backup.create_jsonl_bundle_with_digests(
         candidates, tmp_path / "staging", date_stamp="2026-09-09"
     )
     source.unlink()
@@ -153,6 +161,7 @@ def test_jsonl_bundle_rejects_digest_mismatch_when_source_vanishes(tmp_path):
         archive,
         expected_candidates=candidates,
         expected_digests=digests,
+        expected_sizes=sizes,
     )
 
     assert verification["verified"] is False
@@ -221,7 +230,32 @@ def test_jsonl_bundle_verification_rejects_member_shorter_than_discovered_candid
     verification = jsonl_backup.verify_jsonl_bundle(archive, expected_candidates=candidates)
 
     assert verification["verified"] is False
-    assert verification["verification_error"] == "archive member is shorter than candidate: source-0/session.jsonl"
+    assert verification["verification_error"] == "archive member size differs from bundle: source-0/session.jsonl"
+
+
+def test_jsonl_bundle_rejects_member_shorter_than_bundle_time_size(tmp_path):
+    from brainlayer import jsonl_backup
+
+    source_root = tmp_path / "sessions"
+    source = source_root / "session.jsonl"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"abc")
+    candidates = jsonl_backup._discover_jsonl_candidates([source_root])
+    source.write_bytes(b"abcdef")
+    archive = tmp_path / "truncated-after-growth.tar.gz"
+    member = tarfile.TarInfo("source-0/session.jsonl")
+    member.size = 4
+    with tarfile.open(archive, "w:gz") as bundle:
+        bundle.addfile(member, io.BytesIO(b"abcd"))
+
+    verification = jsonl_backup.verify_jsonl_bundle(
+        archive,
+        expected_candidates=candidates,
+        expected_sizes={source.as_posix(): 6},
+    )
+
+    assert verification["verified"] is False
+    assert verification["verification_error"] == "archive member size differs from bundle: source-0/session.jsonl"
 
 
 def test_jsonl_bundle_verification_does_not_swallow_backup_timeout(tmp_path, monkeypatch):
