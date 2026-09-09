@@ -349,10 +349,12 @@ def copy_archive_to_icloud(
     archive_path = Path(archive_path).expanduser()
     icloud_dir = Path(icloud_dir).expanduser()
     icloud_dir.mkdir(parents=True, exist_ok=True)
-    destination = icloud_dir / archive_path.name
-    temp_path = icloud_dir / f".{archive_path.name}.{os.getpid()}.partial"
     expected_size = archive_path.stat().st_size
     expected_sha256 = _sha256_file(archive_path)
+    suffix = "".join(archive_path.suffixes)
+    stem = archive_path.name[: -len(suffix)] if suffix else archive_path.name
+    destination = icloud_dir / f"{stem}-{expected_sha256}{suffix}"
+    temp_path = icloud_dir / f".{destination.name}.{os.getpid()}.partial"
     try:
         with archive_path.open("rb") as source, temp_path.open("xb") as destination_handle:
             shutil.copyfileobj(source, destination_handle)
@@ -367,43 +369,48 @@ def copy_archive_to_icloud(
     def remaining_seconds() -> float:
         return max(deadline - time.monotonic(), 0.001)
 
-    state = _icloud_item_state(destination, request_download=True, timeout_seconds=remaining_seconds())
-    while True:
-        uploading_error = state.get("uploading_error")
-        if uploading_error:
-            raise RuntimeError(f"iCloud upload failed for {destination}: {uploading_error}")
-        uploaded = state.get("is_uploaded") is True and state.get("is_uploading") is False
-        materialized = state.get("downloading_status") == "current" and destination.is_file()
-        if state.get("is_ubiquitous") is True and uploaded and materialized:
-            actual_size = destination.stat().st_size
-            actual_sha256 = _sha256_file(destination)
-            if actual_size != expected_size or actual_sha256 != expected_sha256:
-                destination.unlink(missing_ok=True)
+    verified = False
+    try:
+        state = _icloud_item_state(destination, request_download=True, timeout_seconds=remaining_seconds())
+        while True:
+            uploading_error = state.get("uploading_error")
+            if uploading_error:
+                raise RuntimeError(f"iCloud upload failed for {destination}: {uploading_error}")
+            uploaded = state.get("is_uploaded") is True and state.get("is_uploading") is False
+            materialized = state.get("downloading_status") == "current" and destination.is_file()
+            if state.get("is_ubiquitous") is True and uploaded and materialized:
+                actual_size = destination.stat().st_size
+                actual_sha256 = _sha256_file(destination)
+                if actual_size != expected_size or actual_sha256 != expected_sha256:
+                    raise RuntimeError(
+                        "iCloud copy content mismatch: "
+                        f"expected size={expected_size} sha256={expected_sha256}, "
+                        f"actual size={actual_size} sha256={actual_sha256}"
+                    )
+                verified = True
+                return {
+                    "path": str(destination),
+                    "uploaded": True,
+                    "materialization": "MATERIALIZED",
+                    "bytes": actual_size,
+                    "sha256": actual_sha256,
+                    "downloading_status": state["downloading_status"],
+                }
+            if time.monotonic() >= deadline:
+                placeholder = destination.with_name(f".{destination.name}.icloud")
+                materialization = "PLACEHOLDER" if placeholder.exists() or not destination.exists() else "PENDING"
                 raise RuntimeError(
-                    "iCloud copy content mismatch: "
-                    f"expected size={expected_size} sha256={expected_sha256}, "
-                    f"actual size={actual_size} sha256={actual_sha256}"
+                    f"iCloud copy was not uploaded and materialized within {timeout_seconds}s: "
+                    f"path={destination} materialization={materialization} state={state!r}"
                 )
-            return {
-                "path": str(destination),
-                "uploaded": True,
-                "materialization": "MATERIALIZED",
-                "bytes": actual_size,
-                "sha256": actual_sha256,
-                "downloading_status": state["downloading_status"],
-            }
-        if time.monotonic() >= deadline:
+            time.sleep(poll_interval_seconds)
             placeholder = destination.with_name(f".{destination.name}.icloud")
-            materialization = "PLACEHOLDER" if placeholder.exists() or not destination.exists() else "PENDING"
+            status_path = placeholder if not destination.exists() and placeholder.exists() else destination
+            state = _icloud_item_state(status_path, request_download=True, timeout_seconds=remaining_seconds())
+    finally:
+        if not verified:
             destination.unlink(missing_ok=True)
-            raise RuntimeError(
-                f"iCloud copy was not uploaded and materialized within {timeout_seconds}s: "
-                f"path={destination} materialization={materialization} state={state!r}"
-            )
-        time.sleep(poll_interval_seconds)
-        placeholder = destination.with_name(f".{destination.name}.icloud")
-        status_path = placeholder if not destination.exists() and placeholder.exists() else destination
-        state = _icloud_item_state(status_path, request_download=True, timeout_seconds=remaining_seconds())
+            destination.with_name(f".{destination.name}.icloud").unlink(missing_ok=True)
 
 
 def _upload_forever_files(
