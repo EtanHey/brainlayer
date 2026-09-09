@@ -634,10 +634,10 @@ def _icloud_inventory_is_verified(
         archive_name = entry.get("icloud_archive")
         if not isinstance(archive_name, str) or not archive_name or Path(archive_name).name != archive_name:
             if candidate is None:
-                raise RuntimeError(
-                    "iCloud coverage cannot be repaired because a recorded source is unavailable: "
-                    f"source={source_path} archive_receipt={archive_name!r}"
-                )
+                # State predating the optional iCloud leg can retain Drive-only
+                # entries after their local source disappears. Such an entry never
+                # claimed iCloud coverage, so it is outside this inventory.
+                continue
             return False
         referenced_by_sources.setdefault(archive_name, set()).add(source_path)
 

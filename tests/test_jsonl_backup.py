@@ -722,6 +722,27 @@ def test_icloud_inventory_still_validates_archives_for_vanished_sources(tmp_path
     assert probes == [archive]
 
 
+def test_icloud_inventory_ignores_vanished_legacy_entry_without_icloud_receipt(tmp_path):
+    from brainlayer import jsonl_backup
+
+    icloud_dir = tmp_path / "CloudDocs"
+    state = {
+        "files": {
+            (tmp_path / "vanished.jsonl").as_posix(): {
+                "mtime": 1.0,
+                "size": 10,
+                "archive": "drive-only.tar.gz",
+                "archive_id": "drive-id",
+            }
+        },
+        "icloud_directory": str(icloud_dir),
+        "icloud_verified": True,
+        "icloud_archives": {},
+    }
+
+    assert jsonl_backup._icloud_inventory_is_verified(state, [], icloud_dir)
+
+
 def test_icloud_inventory_rehydrates_placeholder_and_checks_exact_receipt(tmp_path, monkeypatch):
     from brainlayer import jsonl_backup
 
