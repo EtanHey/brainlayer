@@ -247,7 +247,8 @@ def test_icloud_timeout_quarantines_unverified_placeholder(tmp_path, monkeypatch
         jsonl_backup.copy_archive_to_icloud(archive, icloud_dir, timeout_seconds=1, poll_interval_seconds=0)
     quarantined = list(icloud_dir.iterdir())
     assert len(quarantined) == 1
-    assert quarantined[0].name.endswith(".icloud.unverified")
+    assert ".icloud." in quarantined[0].name
+    assert quarantined[0].name.endswith(".unverified")
 
 
 def test_icloud_upload_error_quarantines_unverified_destination(tmp_path, monkeypatch):
@@ -264,6 +265,20 @@ def test_icloud_upload_error_quarantines_unverified_destination(tmp_path, monkey
     quarantined = list(icloud_dir.iterdir())
     assert len(quarantined) == 1
     assert quarantined[0].name.endswith(".unverified")
+
+
+def test_repeated_icloud_failures_preserve_every_quarantined_copy(tmp_path):
+    from brainlayer import jsonl_backup
+
+    destination = tmp_path / "archive.tar.gz"
+    destination.write_bytes(b"first failed copy")
+    jsonl_backup._quarantine_unverified_icloud_item(destination)
+    destination.write_bytes(b"second failed copy")
+    jsonl_backup._quarantine_unverified_icloud_item(destination)
+
+    quarantined = list(tmp_path.glob("*.unverified"))
+    assert len(quarantined) == 2
+    assert {path.read_bytes() for path in quarantined} == {b"first failed copy", b"second failed copy"}
 
 
 def test_same_day_incremental_icloud_bundles_do_not_overwrite(tmp_path, monkeypatch):

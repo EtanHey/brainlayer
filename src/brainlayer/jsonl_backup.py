@@ -25,6 +25,7 @@ import tarfile
 import tempfile
 import time
 import traceback
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -404,7 +405,7 @@ def _quarantine_unverified_icloud_item(path: Path) -> None:
     if not path.exists():
         return
     hidden_name = path.name if path.name.startswith(".") else f".{path.name}"
-    os.replace(path, path.with_name(f"{hidden_name}.unverified"))
+    os.replace(path, path.with_name(f"{hidden_name}.{uuid.uuid4().hex}.unverified"))
 
 
 def _icloud_item_state(
