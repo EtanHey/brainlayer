@@ -72,6 +72,14 @@ BrainLayer resolves the database path in this order (see `src/brainlayer/paths.p
 }
 ```
 
+## Natural-state transcript backup contract
+
+Each `claude-jsonl-YYYY-MM-DD.tar.gz` bundle stores every selected transcript as a regular raw file
+under `source-{root-index}/<source-relative-path>` outside the BrainLayer database, and verification
+must stream-compare every tar member byte-for-byte with the source before the bundle counts as a
+natural-state copy; an exact match or a strict prefix of a source that only grew after bundling is
+valid, while any divergence within the archived bytes fails the entire bundle before upload.
+
 ## Backups (Manual)
 
 Before any bulk operation, back up the database:

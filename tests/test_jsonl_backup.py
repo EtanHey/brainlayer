@@ -1,9 +1,11 @@
 import gzip
 import hashlib
+import io
 import json
 import os
 import subprocess
 import tarfile
+import threading
 import time
 from pathlib import Path
 
@@ -100,6 +102,353 @@ def test_jsonl_retention_invariant_is_a_ci_guard_not_only_a_behavior_fixture():
         assert expected_error in inspect_jsonl_retention_invariant(unsafe)
 
 
+def test_jsonl_bundle_round_trips_fixture_byte_identical(tmp_path):
+    from brainlayer import jsonl_backup
+
+    source_root = tmp_path / "sessions"
+    source = source_root / "nested" / "session.jsonl"
+    original = '{"type":"user","message":"raw\\r\\ntext שלום"}\r\n'.encode()
+    source.parent.mkdir(parents=True)
+    source.write_bytes(original)
+    candidates = jsonl_backup._discover_jsonl_candidates([source_root])
+
+    archive = jsonl_backup.create_jsonl_bundle(candidates, tmp_path / "staging", date_stamp="2026-09-09")
+
+    with tarfile.open(archive, "r:gz") as bundle:
+        extracted = bundle.extractfile("source-0/nested/session.jsonl")
+        assert extracted is not None
+        assert extracted.read() == original
+
+    verification = jsonl_backup.verify_jsonl_bundle(archive, expected_candidates=candidates)
+    assert verification["verified"] is True
+    assert verification["content_verified_file_count"] == 1
+
+
+def test_jsonl_bundle_accepts_source_growth_after_discovery_before_bundling(tmp_path):
+    from brainlayer import jsonl_backup
+
+    source_root = tmp_path / "sessions"
+    source = source_root / "session.jsonl"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b'{"first":true}\n')
+    candidates = jsonl_backup._discover_jsonl_candidates([source_root])
+
+    with source.open("ab") as handle:
+        handle.write(b'{"second":true}\n')
+    archive, digests, sizes = jsonl_backup.create_jsonl_bundle_with_digests(
+        candidates, tmp_path / "staging", date_stamp="2026-09-09"
+    )
+
+    verification = jsonl_backup.verify_jsonl_bundle(
+        archive,
+        expected_candidates=candidates,
+        expected_digests=digests,
+        expected_sizes=sizes,
+    )
+
+    assert verification["verified"] is True
+    assert verification["content_verified_file_count"] == 1
+    assert verification["append_snapshot_file_count"] == 0
+
+
+def test_jsonl_bundle_uses_bundle_digest_when_source_vanishes_before_verification(tmp_path):
+    from brainlayer import jsonl_backup
+
+    source_root = tmp_path / "sessions"
+    source = source_root / "session.jsonl"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b'{"archived":true}\n')
+    candidates = jsonl_backup._discover_jsonl_candidates([source_root])
+    archive, digests, sizes = jsonl_backup.create_jsonl_bundle_with_digests(
+        candidates, tmp_path / "staging", date_stamp="2026-09-09"
+    )
+    source.unlink()
+
+    verification = jsonl_backup.verify_jsonl_bundle(
+        archive,
+        expected_candidates=candidates,
+        expected_digests=digests,
+        expected_sizes=sizes,
+    )
+
+    assert verification["verified"] is True
+    assert verification["content_verified_file_count"] == 1
+    assert verification["vanished_after_bundle_file_count"] == 1
+
+
+def test_jsonl_bundle_rejects_digest_mismatch_when_source_vanishes(tmp_path):
+    from brainlayer import jsonl_backup
+
+    source_root = tmp_path / "sessions"
+    source = source_root / "session.jsonl"
+    source.parent.mkdir(parents=True)
+    original = b'{"archived":true}\n'
+    source.write_bytes(original)
+    candidates = jsonl_backup._discover_jsonl_candidates([source_root])
+    _, digests, sizes = jsonl_backup.create_jsonl_bundle_with_digests(
+        candidates, tmp_path / "staging", date_stamp="2026-09-09"
+    )
+    source.unlink()
+    archive = tmp_path / "changed.tar.gz"
+    changed = b'{"archived":null}\n'
+    member = tarfile.TarInfo("source-0/session.jsonl")
+    member.size = len(changed)
+    with tarfile.open(archive, "w:gz") as bundle:
+        bundle.addfile(member, io.BytesIO(changed))
+
+    verification = jsonl_backup.verify_jsonl_bundle(
+        archive,
+        expected_candidates=candidates,
+        expected_digests=digests,
+        expected_sizes=sizes,
+    )
+
+    assert verification["verified"] is False
+    assert verification["verification_error"] == "archive member differs from source bytes: source-0/session.jsonl"
+
+
+def test_jsonl_bundle_dereferences_discovered_symlink_as_regular_file(tmp_path):
+    from brainlayer import jsonl_backup
+
+    source_root = tmp_path / "sessions"
+    target = tmp_path / "source.jsonl"
+    target.write_bytes(b'{"through":"symlink"}\n')
+    link = source_root / "session.jsonl"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(target)
+    candidates = jsonl_backup._discover_jsonl_candidates([source_root])
+
+    archive = jsonl_backup.create_jsonl_bundle(candidates, tmp_path / "staging", date_stamp="2026-09-09")
+    verification = jsonl_backup.verify_jsonl_bundle(archive, expected_candidates=candidates)
+
+    with tarfile.open(archive, "r:gz") as bundle:
+        member = bundle.getmember("source-0/session.jsonl")
+        extracted = bundle.extractfile(member)
+        assert member.isfile()
+        assert extracted is not None
+        assert extracted.read() == target.read_bytes()
+    assert verification["verified"] is True
+
+
+def test_jsonl_bundle_verification_rejects_same_count_with_changed_bytes(tmp_path):
+    from brainlayer import jsonl_backup
+
+    source_root = tmp_path / "sessions"
+    source = source_root / "session.jsonl"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b'{"original":true}\n')
+    candidates = jsonl_backup._discover_jsonl_candidates([source_root])
+    archive = tmp_path / "changed.tar.gz"
+    changed = b'{"original":null}\n'
+    member = tarfile.TarInfo("source-0/session.jsonl")
+    member.size = len(changed)
+    with tarfile.open(archive, "w:gz") as bundle:
+        bundle.addfile(member, io.BytesIO(changed))
+
+    verification = jsonl_backup.verify_jsonl_bundle(archive, expected_candidates=candidates)
+
+    assert verification["verified"] is False
+    assert verification["content_verified_file_count"] == 0
+    assert verification["verification_error"] == "archive member differs from source bytes: source-0/session.jsonl"
+
+
+def test_jsonl_bundle_verification_rejects_member_shorter_than_discovered_candidate(tmp_path):
+    from brainlayer import jsonl_backup
+
+    source_root = tmp_path / "sessions"
+    source = source_root / "session.jsonl"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"abcdef")
+    candidates = jsonl_backup._discover_jsonl_candidates([source_root])
+    archive = tmp_path / "truncated.tar.gz"
+    member = tarfile.TarInfo("source-0/session.jsonl")
+    member.size = 3
+    with tarfile.open(archive, "w:gz") as bundle:
+        bundle.addfile(member, io.BytesIO(b"abc"))
+
+    verification = jsonl_backup.verify_jsonl_bundle(archive, expected_candidates=candidates)
+
+    assert verification["verified"] is False
+    assert verification["verification_error"] == "archive member size differs from bundle: source-0/session.jsonl"
+
+
+def test_jsonl_bundle_rejects_member_shorter_than_bundle_time_size(tmp_path):
+    from brainlayer import jsonl_backup
+
+    source_root = tmp_path / "sessions"
+    source = source_root / "session.jsonl"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"abc")
+    candidates = jsonl_backup._discover_jsonl_candidates([source_root])
+    source.write_bytes(b"abcdef")
+    archive = tmp_path / "truncated-after-growth.tar.gz"
+    member = tarfile.TarInfo("source-0/session.jsonl")
+    member.size = 4
+    with tarfile.open(archive, "w:gz") as bundle:
+        bundle.addfile(member, io.BytesIO(b"abcd"))
+
+    verification = jsonl_backup.verify_jsonl_bundle(
+        archive,
+        expected_candidates=candidates,
+        expected_sizes={source.as_posix(): 6},
+    )
+
+    assert verification["verified"] is False
+    assert verification["verification_error"] == "archive member size differs from bundle: source-0/session.jsonl"
+
+
+def test_jsonl_bundle_verification_does_not_swallow_backup_timeout(tmp_path, monkeypatch):
+    from brainlayer import backup_daily, jsonl_backup
+
+    source_root = tmp_path / "sessions"
+    source = source_root / "session.jsonl"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"content")
+    candidates = jsonl_backup._discover_jsonl_candidates([source_root])
+    archive = jsonl_backup.create_jsonl_bundle(candidates, tmp_path / "staging", date_stamp="2026-09-09")
+    monkeypatch.setattr(
+        jsonl_backup,
+        "_compare_member_to_source",
+        lambda *args, **kwargs: (_ for _ in ()).throw(backup_daily.BackupTimeoutError("timed out")),
+    )
+
+    with pytest.raises(backup_daily.BackupTimeoutError, match="timed out"):
+        jsonl_backup.verify_jsonl_bundle(archive, expected_candidates=candidates)
+
+
+def test_jsonl_bundle_verification_accepts_and_counts_append_only_snapshot(tmp_path):
+    from brainlayer import jsonl_backup
+
+    source_root = tmp_path / "sessions"
+    source = source_root / "session.jsonl"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b'{"first":true}\n')
+    candidates = jsonl_backup._discover_jsonl_candidates([source_root])
+    archive = jsonl_backup.create_jsonl_bundle(candidates, tmp_path / "staging", date_stamp="2026-09-09")
+    with source.open("ab") as handle:
+        handle.write(b'{"appended":true}\n')
+
+    verification = jsonl_backup.verify_jsonl_bundle(archive, expected_candidates=candidates)
+
+    assert verification["verified"] is True
+    assert verification["content_verified_file_count"] == 1
+    assert verification["append_snapshot_file_count"] == 1
+
+
+def test_jsonl_backup_does_not_upload_or_advance_state_when_content_verification_fails(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    now = time.time()
+    source_root = tmp_path / "sessions"
+    _write_jsonl(source_root / "session.jsonl", mtime=now - 3600)
+    monkeypatch.setattr(
+        jsonl_backup,
+        "verify_jsonl_bundle",
+        lambda *args, **kwargs: {
+            "verified": False,
+            "bundled_file_count": 1,
+            "archive_listing_count": 1,
+            "content_verified_file_count": 0,
+            "verification_error": "archive member differs from source bytes: source-0/session.jsonl",
+        },
+    )
+    monkeypatch.setattr(
+        jsonl_backup.backup_daily,
+        "get_drive_credentials",
+        lambda: pytest.fail("upload must not start before content verification"),
+    )
+
+    result = jsonl_backup.run_backup(
+        source_roots=[source_root],
+        state_path=tmp_path / "state.json",
+        staging_dir=tmp_path / "staging",
+        log_path=tmp_path / "jsonl-backup.log",
+        queue_dir=tmp_path / "queue",
+        date_stamp="2026-09-09",
+        now=now,
+        upload=True,
+    )
+
+    assert result["status"] == "failed"
+    assert result["uploaded"] is False
+    assert result["verified"] is False
+    assert not (tmp_path / "state.json").exists()
+
+
+def test_concurrent_jsonl_backups_serialize_creation_through_state_persistence(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    now = time.time()
+    source_root = tmp_path / "sessions"
+    _write_jsonl(source_root / "session.jsonl", mtime=now - 3600)
+    upload_started = threading.Event()
+    release_upload = threading.Event()
+    uploads: list[bytes] = []
+    surviving: list[dict] = []
+    results: list[dict] = []
+    errors: list[BaseException] = []
+
+    monkeypatch.setattr(jsonl_backup.backup_daily, "get_drive_credentials", lambda: object())
+    monkeypatch.setattr(
+        jsonl_backup.backup_daily,
+        "build_drive_service",
+        lambda: _drive_service_with_surviving(surviving),
+    )
+    monkeypatch.setattr(jsonl_backup.backup_daily, "ensure_drive_folder_chain", lambda *args: "folder-id")
+    monkeypatch.setattr(jsonl_backup.backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
+    monkeypatch.setattr(jsonl_backup.backup_daily, "prune_drive_backups", lambda *args, **kwargs: [])
+
+    def fake_upload(file_path, folder_id, credentials):  # noqa: ARG001
+        uploads.append(Path(file_path).read_bytes())
+        if len(uploads) == 1:
+            upload_started.set()
+            assert release_upload.wait(timeout=2)
+        uploaded = {
+            "id": f"drive-{len(uploads)}",
+            "name": Path(file_path).name,
+            "size": str(Path(file_path).stat().st_size),
+            "md5Checksum": f"md5-{len(uploads)}",
+        }
+        surviving.append(uploaded)
+        return uploaded
+
+    monkeypatch.setattr(jsonl_backup.backup_daily, "upload_file_to_drive_raw", fake_upload)
+    kwargs = {
+        "source_roots": [source_root],
+        "state_path": tmp_path / "state.json",
+        "staging_dir": tmp_path / "staging",
+        "log_path": tmp_path / "jsonl-backup.log",
+        "queue_dir": tmp_path / "queue",
+        "date_stamp": "2026-09-09",
+        "now": now,
+        "upload": True,
+    }
+
+    def run() -> None:
+        try:
+            results.append(jsonl_backup.run_backup(**kwargs))
+        except BaseException as exc:
+            errors.append(exc)
+
+    first = threading.Thread(target=run)
+    second = threading.Thread(target=run)
+    first.start()
+    assert upload_started.wait(timeout=2)
+    second.start()
+    time.sleep(0.1)
+    assert len(uploads) == 1
+    assert second.is_alive()
+    release_upload.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert errors == []
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert len(uploads) == 1
+    assert sorted(result["status"] for result in results) == ["no-op", "uploaded"]
+
+
 def test_run_jsonl_backup_uploads_incremental_bundle_verifies_and_enqueues_summary(tmp_path, monkeypatch):
     from brainlayer import jsonl_backup
 
@@ -152,6 +501,7 @@ def test_run_jsonl_backup_uploads_incremental_bundle_verifies_and_enqueues_summa
     assert result["verified"] is True
     assert result["bundled_file_count"] == 3
     assert result["archive_listing_count"] == 3
+    assert result["content_verified_file_count"] == 3
     assert result["skipped_active_count"] == 1
     assert active.as_posix() not in (tmp_path / "state.json").read_text()
     state = json.loads((tmp_path / "state.json").read_text())
