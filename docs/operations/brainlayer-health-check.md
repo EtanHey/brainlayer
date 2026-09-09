@@ -16,14 +16,20 @@ brainlayer health-check --json --heal
 - BrainBar's served MCP socket can answer a `brain_search` canary with at least one result.
 - The JSONL backup attempt log has a fresh terminal receipt. A verified upload and a
   verified `no-op` are healthy but remain distinct in `jsonl_backup.state`; failed,
-  malformed, missing, or older-than-36-hour receipts are critical issues.
+  malformed, missing, or older-than-36-hour receipts are critical issues. A
+  separate critical issue identifies two or more complete 24-hour windows with
+  no durable attempt receipt.
 
 The backup process appends a timezone-aware `attempted_at` to every normal result and
 to caught terminal failures. The independent five-minute health check reads that
 receipt, so a backup process that never starts cannot make its own absence look
 healthy. The threshold can be changed with
 `BRAINLAYER_JSONL_BACKUP_MAX_AGE_SECONDS`; the monitored log follows
-`BRAINLAYER_JSONL_BACKUP_LOG_PATH` when set. Legacy receipts without
+`BRAINLAYER_JSONL_BACKUP_LOG_PATH` when set. Multi-night escalation defaults
+to two nights and can be raised with
+`BRAINLAYER_JSONL_BACKUP_ABSENCE_ALERT_NIGHTS` (values below two clamp to two).
+It detects an absent attempt receipt, not a bundle that was uploaded and later
+removed by retention. Legacy receipts without
 `attempted_at` are interpreted at the launchd schedule of 05:00 in the producer
 machine's local timezone; this fallback disappears after the next stamped run.
 

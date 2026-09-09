@@ -71,7 +71,13 @@ def _isolate_default_live_paths(tmp_path_factory, monkeypatch):
     live_backup_log_default = Path("~/.local/share/brainlayer/logs/jsonl-backup.log").expanduser()
     real_backup_health = health_check.inspect_jsonl_backup_health
 
-    def _isolated_backup_health(log_path, *, now, max_age_seconds):
+    def _isolated_backup_health(
+        log_path,
+        *,
+        now,
+        max_age_seconds,
+        absence_alert_nights=health_check.DEFAULT_JSONL_BACKUP_ABSENCE_ALERT_NIGHTS,
+    ):
         if log_path.expanduser() == live_backup_log_default:
             return (
                 health_check.JsonlBackupHealth(
@@ -84,7 +90,12 @@ def _isolate_default_live_paths(tmp_path_factory, monkeypatch):
                 ),
                 None,
             )
-        return real_backup_health(log_path, now=now, max_age_seconds=max_age_seconds)
+        return real_backup_health(
+            log_path,
+            now=now,
+            max_age_seconds=max_age_seconds,
+            absence_alert_nights=absence_alert_nights,
+        )
 
     monkeypatch.setattr(health_check, "inspect_jsonl_backup_health", _isolated_backup_health)
     yield
@@ -290,9 +301,39 @@ def test_jsonl_backup_detector_reports_absent_malformed_and_stale_attempts(tmp_p
         log_path,
         now=now,
         max_age_seconds=36 * 60 * 60,
+        absence_alert_nights=3,
     )
     assert stale.state == "stale"
     assert stale_issue.code == "jsonl_backup_attempt_stale"
+
+
+def test_jsonl_backup_detector_escalates_after_multiple_nights_without_attempt(tmp_path):
+    log_path = tmp_path / "jsonl-backup.log"
+    log_path.write_text(
+        json.dumps(
+            {
+                "attempted_at": "2026-09-06T02:00:00+00:00",
+                "status": "uploaded",
+                "uploaded": True,
+                "verified": True,
+                "archive": "claude-jsonl-2026-09-06.tar.gz",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    status, issue = health_check.inspect_jsonl_backup_health(
+        log_path,
+        now=datetime(2026, 9, 9, 12, 0, tzinfo=UTC),
+        max_age_seconds=36 * 60 * 60,
+        absence_alert_nights=2,
+    )
+
+    assert status.state == "stale"
+    assert status.consecutive_nights_without_attempt == 3
+    assert issue.code == "jsonl_backup_attempt_absent_multiple_nights"
+    assert "threshold_nights=2" in issue.message
 
 
 def test_run_health_check_surfaces_jsonl_backup_failure(tmp_path):
@@ -1194,6 +1235,14 @@ def test_heal_min_consecutive_failures_can_be_overridden_by_env(monkeypatch):
     monkeypatch.setenv("BRAINLAYER_HEAL_MIN_CONSECUTIVE_FAILURES", "3")
 
     assert HealthCheckConfig().heal_min_consecutive_failures == 3
+
+
+def test_jsonl_backup_absence_alert_requires_multiple_nights_and_is_configurable(monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_JSONL_BACKUP_ABSENCE_ALERT_NIGHTS", "4")
+    assert HealthCheckConfig().jsonl_backup_absence_alert_nights == 4
+
+    monkeypatch.setenv("BRAINLAYER_JSONL_BACKUP_ABSENCE_ALERT_NIGHTS", "1")
+    assert HealthCheckConfig().jsonl_backup_absence_alert_nights == 2
 
 
 def test_health_check_launchagent_runs_every_five_minutes_and_heals():
