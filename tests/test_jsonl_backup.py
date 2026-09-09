@@ -284,6 +284,25 @@ def test_same_day_incremental_icloud_bundles_do_not_overwrite(tmp_path, monkeypa
     )
 
 
+def test_icloud_poll_sleep_cannot_overshoot_deadline(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    archive = tmp_path / "archive.tar.gz"
+    archive.write_bytes(b"bytes")
+    clock = iter([0.0, 0.75, 0.75, 0.75, 0.75])
+    states = iter(
+        [_icloud_state(uploaded=False, status="notDownloaded"), _icloud_state(uploaded=True, status="current")]
+    )
+    sleeps: list[float] = []
+    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(jsonl_backup.time, "sleep", sleeps.append)
+    monkeypatch.setattr(jsonl_backup, "_icloud_item_state", lambda *args, **kwargs: next(states))
+
+    jsonl_backup.copy_archive_to_icloud(archive, tmp_path / "CloudDocs", timeout_seconds=1, poll_interval_seconds=10)
+
+    assert sleeps == [0.25]
+
+
 def test_jsonl_backup_does_not_advance_state_until_icloud_copy_is_verified(tmp_path, monkeypatch):
     from brainlayer import jsonl_backup
 

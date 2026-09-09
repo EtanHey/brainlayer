@@ -403,7 +403,7 @@ def copy_archive_to_icloud(
                     f"iCloud copy was not uploaded and materialized within {timeout_seconds}s: "
                     f"path={destination} materialization={materialization} state={state!r}"
                 )
-            time.sleep(poll_interval_seconds)
+            time.sleep(min(poll_interval_seconds, remaining_seconds()))
             placeholder = destination.with_name(f".{destination.name}.icloud")
             status_path = placeholder if not destination.exists() and placeholder.exists() else destination
             state = _icloud_item_state(status_path, request_download=True, timeout_seconds=remaining_seconds())
