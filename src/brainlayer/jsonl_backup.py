@@ -454,6 +454,8 @@ def _icloud_item_state(
             text=True,
             timeout=timeout_seconds,
         )
+    except backup_daily.BackupTimeoutError:
+        raise
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or "").strip() or str(exc)
         raise ICloudProbeError(f"iCloud status probe failed for {path}: {detail}") from exc
@@ -649,17 +651,31 @@ def _icloud_inventory_is_verified(
     Legacy marker-only state therefore bootstraps once instead of being trusted.
     """
     directory = Path(icloud_dir).expanduser()
+    files = state.get("files")
+    candidates_by_path = {candidate.path.as_posix(): candidate for candidate in candidates}
     if state.get("icloud_directory") != str(directory):
+        unavailable_sources = []
+        if isinstance(files, dict):
+            unavailable_sources = sorted(
+                source_path
+                for source_path, entry in files.items()
+                if source_path not in candidates_by_path
+                and isinstance(entry, dict)
+                and (entry.get("icloud_required") is True or bool(entry.get("icloud_archive")))
+            )
+        if unavailable_sources:
+            raise RuntimeError(
+                "iCloud directory changed and the new destination cannot be seeded because "
+                f"previously covered sources are unavailable: sources={unavailable_sources!r}"
+            )
         return False
 
-    files = state.get("files")
     receipts = state.get("icloud_archives")
     if not isinstance(files, dict):
         return not candidates
     if not isinstance(receipts, dict):
         receipts = {}
 
-    candidates_by_path = {candidate.path.as_posix(): candidate for candidate in candidates}
     referenced_by_sources: dict[str, set[str]] = {}
     complete = True
     for source_path, entry in files.items():

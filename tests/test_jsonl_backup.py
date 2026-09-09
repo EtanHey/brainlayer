@@ -800,6 +800,16 @@ def test_icloud_status_marks_malformed_json_as_inconclusive_probe_failure(tmp_pa
         jsonl_backup._icloud_item_state(tmp_path / "archive.tar.gz", timeout_seconds=0.5)
 
 
+def test_icloud_status_does_not_wrap_wall_clock_timeout(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    timeout = jsonl_backup.backup_daily.BackupTimeoutError("wall clock expired")
+    monkeypatch.setattr(jsonl_backup.subprocess, "run", lambda *args, **kwargs: (_ for _ in ()).throw(timeout))
+
+    with pytest.raises(jsonl_backup.backup_daily.BackupTimeoutError, match="wall clock expired"):
+        jsonl_backup._icloud_item_state(tmp_path / "archive.tar.gz", timeout_seconds=0.5)
+
+
 def test_icloud_timeout_quarantines_unverified_placeholder(tmp_path, monkeypatch):
     from brainlayer import jsonl_backup
 
@@ -1780,6 +1790,27 @@ def test_vanished_drive_only_update_fails_icloud_revalidation_loudly(tmp_path):
 
     with pytest.raises(RuntimeError, match="required source is unavailable"):
         jsonl_backup._icloud_inventory_is_verified(state, [], tmp_path / "CloudDocs")
+
+
+def test_changed_icloud_directory_fails_when_prior_covered_source_is_unavailable(tmp_path):
+    from brainlayer import jsonl_backup
+
+    source_path = (tmp_path / "vanished.jsonl").as_posix()
+    state = {
+        "files": {
+            source_path: {
+                "mtime": 1.0,
+                "size": 10,
+                "icloud_archive": "prior.tar.gz",
+            }
+        },
+        "icloud_directory": str(tmp_path / "OldCloudDocs"),
+        "icloud_verified": True,
+        "icloud_archives": {"prior.tar.gz": {"bytes": 10, "sha256": "0" * 64}},
+    }
+
+    with pytest.raises(RuntimeError, match="new destination cannot be seeded"):
+        jsonl_backup._icloud_inventory_is_verified(state, [], tmp_path / "NewCloudDocs")
 
 
 def test_icloud_bootstrap_with_active_source_does_not_mark_complete(tmp_path, monkeypatch):
