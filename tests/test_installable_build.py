@@ -187,7 +187,7 @@ def _copy_packaged_launchd(launchd_dir: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(origin, target)
     package_dir = launchd_dir.parent
-    for name in ("__init__.py", "config.py", "paths.py", "spotlight.py"):
+    for name in ("__init__.py", "config.py", "hook_python.py", "paths.py", "spotlight.py"):
         shutil.copy2(REPO_ROOT / "src" / "brainlayer" / name, package_dir / name)
 
 

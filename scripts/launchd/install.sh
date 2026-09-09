@@ -149,33 +149,34 @@ PYTHON_BIN="$(stable_brainlayer_path "${PYTHON_BIN:-${BRAINLAYER_KEG_PYTHON:-$(c
 # .pth injects the mutable root checkout. Explicit overrides remain explicit; a keg
 # uses its stable opt/ path; otherwise reuse hook_python's ARM/Intel-aware resolver
 # and fail closed when neither Homebrew prefix exists.
-if [ -n "$BRAINLAYER_KEG_PYTHON" ] && [ -z "$BRAINLAYER_PYTHON_REQUESTED" ]; then
-    BRAINLAYER_PYTHON="$(stable_brainlayer_path "$BRAINLAYER_KEG_PYTHON")"
-else
+BRAINLAYER_PYTHON="$(stable_brainlayer_path "${BRAINLAYER_PYTHON:-$PYTHON_BIN}")"
+
+resolve_jsonl_backup_python() {
+    if [ -n "$BRAINLAYER_KEG_PYTHON" ] && [ -z "$BRAINLAYER_PYTHON_REQUESTED" ]; then
+        BRAINLAYER_PYTHON="$(stable_brainlayer_path "$BRAINLAYER_KEG_PYTHON")"
+        return 0
+    fi
+
     HOOK_PYTHON_RESOLVER="$BRAINLAYER_DIR/src/brainlayer/hook_python.py"
     if [ ! -f "$HOOK_PYTHON_RESOLVER" ]; then
         HOOK_PYTHON_RESOLVER="$BRAINLAYER_DIR/brainlayer/hook_python.py"
     fi
-    if [ ! -f "$HOOK_PYTHON_RESOLVER" ] && [ -n "$BRAINLAYER_PYTHON_REQUESTED" ]; then
-        # Test/support copies containing only scripts/launchd predate the packaged
-        # resolver. A real source tree or wheel always carries hook_python.py.
-        BRAINLAYER_PYTHON="$(stable_brainlayer_path "$BRAINLAYER_PYTHON_REQUESTED")"
-    elif [ ! -f "$HOOK_PYTHON_RESOLVER" ]; then
+    if [ ! -f "$HOOK_PYTHON_RESOLVER" ]; then
         echo "ERROR: hook_python.py not found; refusing a PATH-derived BrainLayer interpreter" >&2
-        exit 1
-    else
-        # `python hook_python.py` would put brainlayer/ itself on sys.path, where
-        # brainlayer/types.py shadows the stdlib `types` module under Apple's Python.
-        # run_path keeps the resolver executable as a standalone stdlib-only script
-        # without adding its package directory to import resolution.
-        if [ -n "$BRAINLAYER_PYTHON_REQUESTED" ]; then
-            BRAINLAYER_PYTHON="$(BRAINLAYER_HOOK_PYTHON="$BRAINLAYER_PYTHON_REQUESTED" /usr/bin/python3 -c 'import runpy, sys; path = sys.argv.pop(1); runpy.run_path(path, run_name="__main__")' "$HOOK_PYTHON_RESOLVER" --print-interpreter)" || exit 1
-        else
-            BRAINLAYER_PYTHON="$(/usr/bin/python3 -c 'import runpy, sys; path = sys.argv.pop(1); runpy.run_path(path, run_name="__main__")' "$HOOK_PYTHON_RESOLVER" --print-interpreter)" || exit 1
-        fi
-        BRAINLAYER_PYTHON="$(stable_brainlayer_path "$BRAINLAYER_PYTHON")"
+        return 1
     fi
-fi
+
+    # `python hook_python.py` would put brainlayer/ itself on sys.path, where
+    # brainlayer/types.py shadows the stdlib `types` module under Apple's Python.
+    # run_path keeps the resolver executable as a standalone stdlib-only script
+    # without adding its package directory to import resolution.
+    if [ -n "$BRAINLAYER_PYTHON_REQUESTED" ]; then
+        BRAINLAYER_PYTHON="$(BRAINLAYER_HOOK_PYTHON="$BRAINLAYER_PYTHON_REQUESTED" /usr/bin/python3 -c 'import runpy, sys; path = sys.argv.pop(1); runpy.run_path(path, run_name="__main__")' "$HOOK_PYTHON_RESOLVER" --print-interpreter)" || return 1
+    else
+        BRAINLAYER_PYTHON="$(/usr/bin/python3 -c 'import runpy, sys; path = sys.argv.pop(1); runpy.run_path(path, run_name="__main__")' "$HOOK_PYTHON_RESOLVER" --print-interpreter)" || return 1
+    fi
+    BRAINLAYER_PYTHON="$(stable_brainlayer_path "$BRAINLAYER_PYTHON")"
+}
 BRAINLAYER_ENV_FILE="${BRAINLAYER_ENV_FILE:-$HOME/.config/brainlayer/brainlayer.env}"
 BRAINLAYER_ENV_RUN="$BRAINLAYER_LIB_DIR/brainlayer-env-run.sh"
 TIER0_WATCHDOG_DST="$BRAINLAYER_LIB_DIR/tier0-watchdog.sh"
@@ -724,6 +725,8 @@ install_jsonl_backup_script() {
         echo "ERROR: $src not found"
         return 1
     fi
+
+    resolve_jsonl_backup_python || return 1
 
     escaped_brainlayer_dir="$(printf '%s' "$BRAINLAYER_DIR" | sed 's/[\\&|]/\\&/g')" || return 1
     sed \

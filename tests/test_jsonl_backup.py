@@ -2097,9 +2097,9 @@ def test_jsonl_backup_launchd_plist_and_docstring_install_note_are_committed():
     assert "jsonl-backup" in install
     assert "install_jsonl_backup_script" in install
     assert "HOOK_PYTHON_RESOLVER" in install
+    assert "resolve_jsonl_backup_python || return 1" in install
     assert 'runpy.run_path(path, run_name="__main__")' in install
     assert "--print-interpreter" in install
-    assert "BRAINLAYER_PYTHON:-$PYTHON_BIN" not in install
     assert "__BRAINLAYER_DIR_VALUE__" not in wrapper
     assert '"${BRAINLAYER_PYTHON:?' in wrapper
     assert "unset PYTHONPATH" in wrapper
