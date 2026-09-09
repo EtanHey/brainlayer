@@ -85,6 +85,29 @@ def test_jsonl_bundle_round_trips_fixture_byte_identical(tmp_path):
     assert verification["content_verified_file_count"] == 1
 
 
+def test_jsonl_bundle_dereferences_discovered_symlink_as_regular_file(tmp_path):
+    from brainlayer import jsonl_backup
+
+    source_root = tmp_path / "sessions"
+    target = tmp_path / "source.jsonl"
+    target.write_bytes(b'{"through":"symlink"}\n')
+    link = source_root / "session.jsonl"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(target)
+    candidates = jsonl_backup._discover_jsonl_candidates([source_root])
+
+    archive = jsonl_backup.create_jsonl_bundle(candidates, tmp_path / "staging", date_stamp="2026-09-09")
+    verification = jsonl_backup.verify_jsonl_bundle(archive, expected_candidates=candidates)
+
+    with tarfile.open(archive, "r:gz") as bundle:
+        member = bundle.getmember("source-0/session.jsonl")
+        extracted = bundle.extractfile(member)
+        assert member.isfile()
+        assert extracted is not None
+        assert extracted.read() == target.read_bytes()
+    assert verification["verified"] is True
+
+
 def test_jsonl_bundle_verification_rejects_same_count_with_changed_bytes(tmp_path):
     from brainlayer import jsonl_backup
 

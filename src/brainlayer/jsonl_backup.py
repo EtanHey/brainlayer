@@ -415,8 +415,12 @@ def create_jsonl_bundle_with_digests(
                 # archive does not contain -- a file that changed while keeping its mtime
                 # and size would then read as covered. Sources reach ~375MB, so the digest
                 # is taken from the very stream tarfile consumes rather than from a copy.
-                info = tar.gettarinfo(str(candidate.path), arcname=_archive_name(candidate))
-                with candidate.path.open("rb") as handle:
+                # Discovery follows file symlinks, so archive their resolved target as a
+                # regular member too; preserving the link would make verification reject
+                # the whole bundle as non-regular.
+                source_path = candidate.path.resolve()
+                info = tar.gettarinfo(str(source_path), arcname=_archive_name(candidate))
+                with source_path.open("rb") as handle:
                     reader = _HashingReader(handle)
                     tar.addfile(info, reader)
                 digests[candidate.path.as_posix()] = reader.hexdigest()
