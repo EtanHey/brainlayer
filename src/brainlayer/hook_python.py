@@ -23,6 +23,7 @@ import re
 import shlex
 from dataclasses import dataclass
 from typing import Iterable, Iterator, Mapping, Sequence
+from xml.sax.saxutils import escape
 
 __all__ = [
     "BRAINLAYER_HOOK_SCRIPTS",
@@ -36,6 +37,7 @@ __all__ = [
     "is_system_python",
     "main",
     "render_hook_command",
+    "render_launchd_plist",
     "resolve_hook_python",
     "shebang_of",
 ]
@@ -269,6 +271,25 @@ def render_hook_command(
     """Render the `settings.json` command string for one hook script."""
     interpreter = python or resolve_hook_python(env=env)
     return f"{shlex.quote(interpreter) if ' ' in interpreter else interpreter} {script_path}"
+
+
+def render_launchd_plist(
+    template: str,
+    *,
+    python: str | None = None,
+    env: Mapping[str, str] | None = None,
+) -> str:
+    """Render the prefix-aware keg interpreter into a launchd template.
+
+    Templates stay portable across ARM and Intel Homebrew prefixes. Resolution
+    uses the same fail-closed candidate order and override rules as hook command
+    rendering; a caller-supplied interpreter is accepted only when the existing
+    affirmative pin gate can vouch for it.
+    """
+    interpreter = python or resolve_hook_python(env=env)
+    if not is_pinned_interpreter(interpreter):
+        raise HookPythonUnresolved(f"launchd interpreter is not explicitly pinned: {interpreter!r}")
+    return template.replace("__BRAINLAYER_PYTHON__", escape(interpreter))
 
 
 def _iter_hook_entries(settings: Mapping) -> Iterator[tuple[str, str]]:

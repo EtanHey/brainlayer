@@ -506,3 +506,43 @@ class TestLiveSettings:
         assert findings == [], "BrainLayer hooks still resolve their interpreter through PATH: " + "; ".join(
             f"{f.event}: {f.command}" for f in findings
         )
+
+
+def test_launchd_plist_templates_pin_their_interpreter():
+    """Render machine-specific placeholders, then apply the existing pin gate."""
+    import plistlib
+
+    from brainlayer.hook_python import render_launchd_plist
+
+    plists = sorted((REPO_ROOT / "launchd").glob("*.plist"))
+    assert plists, "expected launchd templates to exist"
+
+    unpinned: list[str] = []
+    for path in plists:
+        template = path.read_text(encoding="utf-8")
+        rendered = render_launchd_plist(template, python="/usr/local/opt/brainlayer/libexec/venv/bin/python")
+        args = plistlib.loads(rendered.encode()).get("ProgramArguments") or []
+        if not args:
+            continue
+        interpreter = args[0]
+        # A wrapper or installed CLI is not a direct interpreter claim.
+        if "python" not in interpreter and not interpreter.endswith("/env"):
+            continue
+        if interpreter.endswith("/env"):
+            interpreter = f"{interpreter} {args[1] if len(args) > 1 else ''}".strip()
+        if not is_pinned_interpreter(interpreter):
+            unpinned.append(f"{path.name}: {interpreter}")
+
+    assert not unpinned, "launchd templates must name a pinned interpreter, not PATH: " + "; ".join(unpinned)
+
+
+def test_launchd_plist_render_uses_available_intel_keg(monkeypatch):
+    from brainlayer import hook_python
+
+    template = "<string>__BRAINLAYER_PYTHON__</string>"
+    intel = "/usr/local/opt/brainlayer/libexec/venv/bin/python"
+    monkeypatch.setattr(hook_python.os.path, "exists", lambda path: path == intel)
+
+    rendered = hook_python.render_launchd_plist(template, env={})
+
+    assert rendered == f"<string>{intel}</string>"

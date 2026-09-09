@@ -1171,6 +1171,7 @@ def test_jsonl_backup_launchd_plist_and_docstring_install_note_are_committed():
     assert "<integer>0</integer>" in plist
     assert "<integer>0</integer>" in script_plist
     assert "BRAINLAYER_BACKUP_TIMEOUT_SECONDS" in plist
+    assert "__BRAINLAYER_PYTHON__" in plist
     assert "BRAINLAYER_BACKUP_TIMEOUT_SECONDS" in wrapper
     assert "BRAINLAYER_JSONL_BACKUP_ICLOUD_DIR" not in plist
     assert "BRAINLAYER_JSONL_BACKUP_ICLOUD_DIR" not in script_plist
@@ -1184,6 +1185,7 @@ def test_jsonl_backup_launchd_plist_and_docstring_install_note_are_committed():
     assert "install_jsonl_backup_script" in install
     assert "__BRAINLAYER_DIR_VALUE__" in wrapper
     assert "PYTHONPATH" in wrapper
+    assert "PYTHONPATH" not in plist
     assert "__HOME__/.local/lib/brainlayer/jsonl-backup.sh" in script_plist
     assert "<key>SoftResourceLimits</key>" in plist
     assert "<key>SoftResourceLimits</key>" in script_plist

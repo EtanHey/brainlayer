@@ -10,8 +10,9 @@
 	</array>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/usr/bin/env</string>
-		<string>python3</string>
+		<!-- Rendered through hook_python.resolve_hook_python so ARM and Intel Homebrew
+		     prefixes both use the keg interpreter and never resolve Python through PATH. -->
+		<string>__BRAINLAYER_PYTHON__</string>
 		<string>-m</string>
 		<string>brainlayer.jsonl_backup</string>
 	</array>
@@ -30,8 +31,6 @@
 	<dict>
 		<key>PATH</key>
 		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:__HOME__/.local/bin</string>
-		<key>PYTHONPATH</key>
-		<string>__BRAINLAYER_DIR__/src</string>
 		<key>BRAINLAYER_BACKUP_TIMEOUT_SECONDS</key>
 		<string>1800</string>
 		<key>BRAINLAYER_JSONL_BACKUP_DRIVE_FOLDER</key>

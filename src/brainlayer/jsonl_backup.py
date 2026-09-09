@@ -1,8 +1,9 @@
 """Nightly JSONL transcript backups to Google Drive and iCloud Drive.
 
-Install note: commit `launchd/com.brainlayer.jsonl-backup.plist`, then install it
-after merge with the repo's launchd flow or a manual `launchctl bootstrap`; this
-module intentionally does not install the agent itself.
+Install note: commit `launchd/com.brainlayer.jsonl-backup.plist`, render its
+`__BRAINLAYER_PYTHON__` placeholder through `hook_python.render_launchd_plist`,
+then install it after merge with the repo's launchd flow; this module
+intentionally does not install the agent itself.
 
 Source format policy: Claude/Codex/Cursor/Gemini JSONL files are backed up as
 plain transcript files. Antigravity has no stable text export contract, so this
