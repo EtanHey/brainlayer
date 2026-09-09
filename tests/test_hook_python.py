@@ -167,6 +167,7 @@ class TestIsPinnedInterpreter:
             # this as an override, so the linter must accept it too, or the escape hatch and
             # the gate contradict each other (review round 1, medium).
             "/tmp/myvenv/bin/python",
+            "'/Users/Jane Doe/.venv/bin/python'",
             "/Users/x/Gits/brainlayer/.venv/bin/python3.13",
         ],
     )
@@ -263,6 +264,20 @@ class TestResolveHookPython:
         present.write_text("#!/bin/sh\n")
         present.chmod(0o755)
         assert resolve_hook_python(env={}, candidates=(str(missing), str(present))) == str(present)
+
+    @staticmethod
+    def test_candidate_must_be_a_regular_executable_file(tmp_path):
+        directory = tmp_path / "directory" / "python"
+        directory.mkdir(parents=True)
+        non_executable = tmp_path / "not-executable" / "python"
+        non_executable.parent.mkdir()
+        non_executable.write_text("#!/bin/sh\n")
+        usable = tmp_path / "usable" / "python"
+        usable.parent.mkdir()
+        usable.write_text("#!/bin/sh\n")
+        usable.chmod(0o755)
+
+        assert resolve_hook_python(env={}, candidates=(str(directory), str(non_executable), str(usable))) == str(usable)
 
     @staticmethod
     def test_never_falls_back_to_path():
@@ -581,6 +596,33 @@ def test_launchd_plist_render_rejects_non_executable_interpreter(tmp_path):
     python = tmp_path / "venv" / "bin" / "python"
     python.parent.mkdir(parents=True)
     python.write_text("#!/bin/sh\n")
+
+    with pytest.raises(HookPythonUnresolved):
+        render_launchd_plist("<string>__BRAINLAYER_PYTHON__</string>", python=str(python))
+
+
+def test_launchd_plist_render_accepts_executable_interpreter_with_spaces(tmp_path):
+    import xml.etree.ElementTree as ET
+
+    from brainlayer.hook_python import render_launchd_plist
+
+    python = tmp_path / "Jane Doe" / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("#!/bin/sh\n")
+    python.chmod(0o755)
+
+    rendered = render_launchd_plist("<string>__BRAINLAYER_PYTHON__</string>", python=str(python))
+
+    assert ET.fromstring(rendered).text == str(python)
+
+
+def test_launchd_plist_render_rejects_xml_forbidden_interpreter_path(tmp_path):
+    from brainlayer.hook_python import HookPythonUnresolved, render_launchd_plist
+
+    python = tmp_path / "bad\x01path" / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("#!/bin/sh\n")
+    python.chmod(0o755)
 
     with pytest.raises(HookPythonUnresolved):
         render_launchd_plist("<string>__BRAINLAYER_PYTHON__</string>", python=str(python))

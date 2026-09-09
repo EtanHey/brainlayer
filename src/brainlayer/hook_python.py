@@ -56,6 +56,8 @@ _FALLBACK_CANDIDATES: tuple[str, ...] = (
     "/usr/local/opt/brainlayer/libexec/venv/bin/python",
 )
 
+_XML_10_FORBIDDEN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
+
 #: Hook scripts this repo owns. The settings.json lint matches on these basenames so
 #: it never touches a hook belonging to another repo. `tests/test_hook_python.py`
 #: asserts every shebang-bearing file under `hooks/` appears here.
@@ -117,7 +119,10 @@ def _tokens(value: str | None) -> list[str]:
     token = value.strip()
     if token.startswith("#!"):
         token = token[2:].strip()
-    return token.split()
+    try:
+        return shlex.split(token)
+    except ValueError:
+        return []
 
 
 def is_bare_python3(value: str | None) -> bool:
@@ -252,7 +257,7 @@ def resolve_hook_python(
         return override
 
     for candidate in candidates:
-        if os.path.exists(candidate):
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
         looked_at.append(candidate)
 
@@ -289,7 +294,12 @@ def render_launchd_plist(
     affirmative pin gate can vouch for it.
     """
     interpreter = python or resolve_hook_python(env=env)
-    if not is_pinned_interpreter(interpreter) or not os.path.isfile(interpreter) or not os.access(interpreter, os.X_OK):
+    if (
+        not is_pinned_interpreter(shlex.quote(interpreter))
+        or not os.path.isfile(interpreter)
+        or not os.access(interpreter, os.X_OK)
+        or _XML_10_FORBIDDEN.search(interpreter)
+    ):
         raise HookPythonUnresolved(f"launchd interpreter is not explicitly pinned: {interpreter!r}")
     return template.replace("__BRAINLAYER_PYTHON__", escape(interpreter))
 
