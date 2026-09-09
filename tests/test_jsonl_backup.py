@@ -298,7 +298,7 @@ def test_same_day_incremental_icloud_bundles_do_not_overwrite(tmp_path, monkeypa
     )
 
     first_result = jsonl_backup.copy_archive_to_icloud(first, icloud_dir, timeout_seconds=1)
-    second_result = jsonl_backup.copy_archive_to_icloud(second, icloud_dir, timeout_seconds=1)
+    second_result = jsonl_backup.copy_archive_to_icloud(second, icloud_dir, timeout_seconds=1, poll_interval_seconds=0)
 
     assert first_result["path"] != second_result["path"]
     assert sorted(path.read_bytes() for path in icloud_dir.iterdir()) == sorted(
@@ -329,6 +329,44 @@ def test_icloud_retry_reuses_logical_gzip_payload_destination(tmp_path, monkeypa
     assert first_result["path"] == second_result["path"]
     assert list(icloud_dir.iterdir()) == [Path(second_result["path"])]
     assert Path(second_result["path"]).read_bytes() == second.read_bytes()
+
+
+def test_icloud_replacement_ignores_stale_initial_uploaded_state(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    first = tmp_path / "first" / "claude-jsonl-2026-09-09.tar.gz"
+    second = tmp_path / "second" / first.name
+    first.parent.mkdir()
+    second.parent.mkdir()
+    first.write_bytes(gzip.compress(b"same tar payload", mtime=1))
+    second.write_bytes(gzip.compress(b"same tar payload", mtime=2))
+    icloud_dir = tmp_path / "CloudDocs"
+    monkeypatch.setattr(
+        jsonl_backup,
+        "_icloud_item_state",
+        lambda *args, **kwargs: _icloud_state(uploaded=True, status="current"),
+    )
+    jsonl_backup.copy_archive_to_icloud(first, icloud_dir, timeout_seconds=1)
+
+    states = iter(
+        [
+            _icloud_state(uploaded=True, status="current"),
+            _icloud_state(uploaded=False, status="current"),
+            _icloud_state(uploaded=True, status="current"),
+            _icloud_state(uploaded=True, status="current"),
+        ]
+    )
+    observed: list[dict] = []
+
+    def stale_then_current(*args, **kwargs):  # noqa: ARG001
+        state = next(states)
+        observed.append(state)
+        return state
+
+    monkeypatch.setattr(jsonl_backup, "_icloud_item_state", stale_then_current)
+    jsonl_backup.copy_archive_to_icloud(second, icloud_dir, timeout_seconds=1, poll_interval_seconds=0)
+
+    assert len(observed) == 4
 
 
 def test_icloud_poll_sleep_cannot_overshoot_deadline(tmp_path, monkeypatch):

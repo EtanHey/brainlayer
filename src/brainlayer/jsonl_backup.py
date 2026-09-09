@@ -462,6 +462,7 @@ def copy_archive_to_icloud(
     suffix = "".join(archive_path.suffixes)
     stem = archive_path.name[: -len(suffix)] if suffix else archive_path.name
     destination = icloud_dir / f"{stem}-{logical_sha256}{suffix}"
+    replaced_existing = destination.exists()
     temp_path = icloud_dir / f".{destination.name}.{os.getpid()}.partial"
     try:
         with archive_path.open("rb") as source, temp_path.open("xb") as destination_handle:
@@ -478,6 +479,7 @@ def copy_archive_to_icloud(
         return max(deadline - time.monotonic(), 0.001)
 
     verified = False
+    consecutive_ready_observations = 0
     try:
         state = _icloud_item_state(destination, request_download=True, timeout_seconds=remaining_seconds())
         while True:
@@ -487,23 +489,30 @@ def copy_archive_to_icloud(
             uploaded = state.get("is_uploaded") is True and state.get("is_uploading") is False
             materialized = state.get("downloading_status") == "current" and destination.is_file()
             if state.get("is_ubiquitous") is True and uploaded and materialized:
-                actual_size = destination.stat().st_size
-                actual_sha256 = _sha256_file(destination)
-                if actual_size != expected_size or actual_sha256 != expected_sha256:
-                    raise RuntimeError(
-                        "iCloud copy content mismatch: "
-                        f"expected size={expected_size} sha256={expected_sha256}, "
-                        f"actual size={actual_size} sha256={actual_sha256}"
-                    )
-                verified = True
-                return {
-                    "path": str(destination),
-                    "uploaded": True,
-                    "materialization": "MATERIALIZED",
-                    "bytes": actual_size,
-                    "sha256": actual_sha256,
-                    "downloading_status": state["downloading_status"],
-                }
+                consecutive_ready_observations += 1
+                # Replacing a previously uploaded logical object can briefly expose
+                # stale ready metadata before iCloud notices the new bytes. Require
+                # a second observation after a poll boundary in that case.
+                if not replaced_existing or consecutive_ready_observations >= 2:
+                    actual_size = destination.stat().st_size
+                    actual_sha256 = _sha256_file(destination)
+                    if actual_size != expected_size or actual_sha256 != expected_sha256:
+                        raise RuntimeError(
+                            "iCloud copy content mismatch: "
+                            f"expected size={expected_size} sha256={expected_sha256}, "
+                            f"actual size={actual_size} sha256={actual_sha256}"
+                        )
+                    verified = True
+                    return {
+                        "path": str(destination),
+                        "uploaded": True,
+                        "materialization": "MATERIALIZED",
+                        "bytes": actual_size,
+                        "sha256": actual_sha256,
+                        "downloading_status": state["downloading_status"],
+                    }
+            else:
+                consecutive_ready_observations = 0
             if time.monotonic() >= deadline:
                 placeholder = destination.with_name(f".{destination.name}.icloud")
                 materialization = "PLACEHOLDER" if placeholder.exists() or not destination.exists() else "PENDING"
