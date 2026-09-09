@@ -15,6 +15,52 @@ def _write_jsonl(path: Path, line: str = '{"type":"message"}\n', *, mtime: float
     return path
 
 
+def test_jsonl_retention_invariant_is_a_ci_guard_not_only_a_behavior_fixture():
+    """Fail CI when #815's surviving-copy predicate or call-site ordering is loosened."""
+    from brainlayer.backup_retention_invariant import inspect_jsonl_retention_invariant
+
+    source = Path("src/brainlayer/jsonl_backup.py").read_text(encoding="utf-8")
+
+    assert inspect_jsonl_retention_invariant(source) == []
+
+    mutations = (
+        (
+            "archive_id not in surviving_archives",
+            "archive_id in surviving_archives",
+            "coverage must reject archive IDs absent from the live Drive inventory",
+        ),
+        (
+            "live_md5 != recorded_md5",
+            "live_md5 == recorded_md5",
+            "coverage must reject a surviving Drive object whose archived bytes changed",
+        ),
+        (
+            "recorded_hash == _sha256_file(candidate.path)",
+            "recorded_hash != _sha256_file(candidate.path)",
+            "coverage must compare the live source bytes with the archived source digest",
+        ),
+        (
+            "surviving_archives=surviving_archives",
+            "surviving_archives=None",
+            "run_backup must hand its live Drive inventory to candidate selection",
+        ),
+        (
+            "archive_id=file_id",
+            "missing_archive_id=file_id",
+            "uploaded state must persist archive identity, archive bytes, and source-byte digests",
+        ),
+        (
+            'if result["verified"] and upload:',
+            "if upload:",
+            "backup deletion calls must remain inside verified-upload control flow",
+        ),
+    )
+    for original, weakened, expected_error in mutations:
+        assert original in source, f"mutation fixture drifted: {original}"
+        unsafe = source.replace(original, weakened, 1)
+        assert expected_error in inspect_jsonl_retention_invariant(unsafe)
+
+
 def test_run_jsonl_backup_uploads_incremental_bundle_verifies_and_enqueues_summary(tmp_path, monkeypatch):
     from brainlayer import jsonl_backup
 

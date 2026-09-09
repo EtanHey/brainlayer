@@ -534,6 +534,11 @@ def run_backup(
     service = None
     surviving_archives: dict[str, str | None] | None = None
     if upload:
+        # 2026-09-09 retention incident / PR #815: 22 uploaded+verified daily bundles
+        # later disappeared under retention while unchanged files still read as covered.
+        # The live Drive inventory must be fetched BEFORE coverage is decided; otherwise
+        # state can vouch for an object that no longer exists. CI pins this ordering in
+        # backup_retention_invariant.py.
         # Authenticate only when a listing is actually needed. When no entry claims
         # archive-backed coverage there is nothing to verify, so a run that would be a
         # clean no-op does not touch Drive. Once entries DO claim coverage the listing is
@@ -604,6 +609,10 @@ def run_backup(
 
     result.update(verify_jsonl_bundle(archive_path, expected_file_count=len(changed)))
     if result["verified"] and upload:
+        # The same incident was two individually reasonable deletions composed together:
+        # successful upload removed local staging, then Drive retention removed the remote
+        # bundle. Persist the exact Drive object and archived-source digests before either
+        # deletion path runs so the next selection cannot silently trust the dead copy.
         _atomic_write_json(
             state_path,
             _update_state_for_uploaded(
@@ -616,6 +625,8 @@ def run_backup(
             ),
         )
         try:
+            # Do not move this ahead of the provenance write or loosen `_state_matches` to
+            # mtime/size. That exact shape left 22 successful nights with no surviving bundle.
             deleted = backup_daily.prune_drive_backups(
                 service,
                 folder_parts=folder_parts,
@@ -633,6 +644,9 @@ def run_backup(
                 result["forever_files"] = forever_files
                 result["forever_uploaded_file_count"] = len(forever_files)
         finally:
+            # Local staging may disappear only inside verified-upload control flow. Together
+            # with the retention call above, this unlink is why survivor identity is a deletion
+            # invariant rather than an optional integrity check (2026-09-09 / PR #815).
             archive_path.unlink(missing_ok=True)
             result["local_archive_removed"] = True
 
