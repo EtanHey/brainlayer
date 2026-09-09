@@ -202,6 +202,11 @@ def _state_matches(entry, candidate, surviving_archives=None):
                 archive_id=file_id,
                 archive_md5=uploaded.get("md5Checksum"),
                 digests=bundle_digests,
+                # An active source was deliberately omitted from this bootstrap.
+                # Leave the global marker unset so the next run seeds that source.
+                icloud_dir=icloud_dir,
+                icloud_copy=result.get("icloud_copy"),
+                clear_icloud_verification=bool(icloud_bootstrap_pending and active),
             ),
         )
 """
@@ -212,6 +217,11 @@ def _state_matches(entry, candidate, surviving_archives=None):
             archive_id=file_id,
             archive_md5=uploaded.get("md5Checksum"),
             digests=bundle_digests,
+            # An active source was deliberately omitted from this bootstrap.
+            # Leave the global marker unset so the next run seeds that source.
+            icloud_dir=icloud_dir,
+            icloud_copy=result.get("icloud_copy"),
+            clear_icloud_verification=bool(icloud_bootstrap_pending and active),
         )
 """
     assert persisted_state_block in source
