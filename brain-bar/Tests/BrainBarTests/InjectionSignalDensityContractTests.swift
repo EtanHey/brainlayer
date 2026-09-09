@@ -380,6 +380,7 @@ final class InjectionSignalDensityContractTests: XCTestCase {
         XCTAssertTrue(source.contains("filterSearchAccessibilityID"))
         XCTAssertTrue(source.contains("filterTypeAccessibilityID"))
         XCTAssertTrue(source.contains("burstActionAccessibilityID"))
+        XCTAssertTrue(source.contains("burstAtAGlanceAccessibilityID).\\(burst.id)"))
         XCTAssertTrue(source.contains("Picker(\"Retrieval type\""))
         XCTAssertTrue(source.contains("actionReceipt"))
         XCTAssertTrue(source.contains("InjectionFeedFixture"))

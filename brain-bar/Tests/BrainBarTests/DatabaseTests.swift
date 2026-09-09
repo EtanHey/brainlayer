@@ -1331,6 +1331,40 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(events.first?.tokenCount, 77)
     }
 
+    func testListInjectionEventsPreservesRecipientIdentityAndSelectionReasonWhenRecorded() throws {
+        try db.insertChunk(
+            id: "recorded-identity-chunk",
+            content: "Recorded recipient metadata should survive feed scoping.",
+            sessionId: "recorded-recipient",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 6
+        )
+        db.exec("ALTER TABLE injection_events ADD COLUMN session_name TEXT")
+        db.exec("ALTER TABLE injection_events ADD COLUMN agent_name TEXT")
+        db.exec("ALTER TABLE injection_events ADD COLUMN project_name TEXT")
+        db.exec("ALTER TABLE injection_events ADD COLUMN project TEXT")
+        db.exec("ALTER TABLE injection_events ADD COLUMN selection_reason TEXT")
+        db.exec("""
+            INSERT INTO injection_events (
+                session_id, timestamp, query, chunk_ids, token_count,
+                session_name, agent_name, project_name, project, selection_reason
+            ) VALUES (
+                'recorded-recipient', '2026-09-08T09:00:00.000Z',
+                'why was this memory selected', '["recorded-identity-chunk"]', 41,
+                'Release proof', 'brainlayerClaude', '', 'brainlayer',
+                'Keyword and recency match'
+            )
+        """)
+
+        let event = try XCTUnwrap(db.listInjectionEvents(limit: 1).first)
+
+        XCTAssertEqual(event.sessionName, "Release proof")
+        XCTAssertEqual(event.agentName, "brainlayerClaude")
+        XCTAssertEqual(event.projectName, "brainlayer")
+        XCTAssertEqual(event.selectionReason, "Keyword and recency match")
+    }
+
     func testListInjectionEventsLoadsChunkDisplayMetadata() throws {
         try db.insertChunk(
             id: "chunk-human",
@@ -1345,7 +1379,8 @@ final class DatabaseTests: XCTestCase {
             UPDATE chunks
             SET summary = 'Human readable chunk summary',
                 source = 'mcp',
-                source_file = 'precompact:abc123'
+                source_file = 'precompact:abc123',
+                metadata = '{"attributionAgent":"brainlayerClaude-source"}'
             WHERE id = 'chunk-human'
         """)
         try db.recordInjectionEvent(
@@ -1361,6 +1396,8 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(event.displayTitle, "Human readable chunk summary")
         XCTAssertEqual(event.triggeredByText, "Triggered by: source prompt should be only the trigger")
         XCTAssertEqual(event.chunks.first?.sourceFile, "precompact:abc123")
+        XCTAssertEqual(event.chunks.first?.storingAgent, "brainlayerClaude-source")
+        XCTAssertEqual(event.storingAgentText, "Agent brainlayerClaude-source")
         XCTAssertEqual(event.primaryKind.label, "Checkpoint")
     }
 
@@ -1956,19 +1993,56 @@ final class DatabaseTests: XCTestCase {
 
     // MARK: - brain_digest (rule-based entity extraction)
 
-    func testDigestExtractsEntities() throws {
-        let content = "Etan Heyman discussed BrainLayer architecture with Claude. The project uses SQLite and Swift."
+    func testDigestKeepsUnknownRegexMatchesAsReviewableCandidates() throws {
+        let content = "Both Julius met Both Julius and So Kimi. But Ben said Oh God. Moving On was a section heading."
+        try db.insertEntity(id: "digest-entity-both-julius", type: "concept", name: "Both Julius")
         let result = try db.digest(content: content)
         let entities = result["entities"] as? [String] ?? []
-        // Should extract capitalized multi-word names
-        XCTAssertTrue(entities.contains(where: { $0.contains("Etan") }), "Should extract 'Etan Heyman'")
-        XCTAssertTrue(entities.contains(where: { $0.contains("BrainLayer") }), "Should extract 'BrainLayer'")
+        let candidates = try XCTUnwrap(result["entity_candidates"] as? [[String: Any]])
+        XCTAssertTrue(entities.isEmpty, "Unknown regex matches must not become digest-produced concepts")
+        XCTAssertEqual(
+            Set(candidates.compactMap { $0["surface"] as? String }),
+            Set(["Both Julius", "So Kimi", "But Ben", "Oh God", "Moving On"])
+        )
+        XCTAssertEqual(try sqliteCount(path: tempDBPath, table: "kg_entities"), 1)
+        let chunkID = try XCTUnwrap(result["chunk_id"] as? String)
+        let persisted = try XCTUnwrap(storedMetadata(chunkID)["digest_entity_candidates"] as? [[String: Any]])
+        XCTAssertEqual(persisted.count, 5)
+        for candidate in persisted {
+            let surface = try XCTUnwrap(candidate["surface"] as? String)
+            let span = NSRange(location: try XCTUnwrap(candidate["start_utf16"] as? Int), length: try XCTUnwrap(candidate["length_utf16"] as? Int))
+            XCTAssertEqual((content as NSString).substring(with: span), surface)
+            XCTAssertEqual(candidate["source_chunk_id"] as? String, chunkID)
+            XCTAssertEqual(candidate["extractor_version"] as? String, "brainbar-digest-regex-v2")
+        }
     }
 
     func testDigestExtractsKeyPhrases() throws {
         let content = "Decision: Use SQLite for storage. The architecture should support real-time indexing."
         let result = try db.digest(content: content)
         XCTAssertNotNil(result["chunks_created"])
+    }
+
+    func testStoreMergesDigestCandidateMetadataWithQueueProvenance() throws {
+        _ = try db.store(
+            content: "candidate metadata merge",
+            tags: ["digest"],
+            importance: 5,
+            source: "digest",
+            chunkID: "digest-metadata-merge",
+            queueID: "existing-queue-id",
+            metadata: [
+                "pre_existing_key": "preserved",
+                "digest_entity_candidates": [["surface": "Both Julius"]]
+            ]
+        )
+        let metadata = try storedMetadata("digest-metadata-merge")
+        XCTAssertEqual(metadata["brainbar_queue_id"] as? String, "existing-queue-id")
+        XCTAssertEqual(metadata["pre_existing_key"] as? String, "preserved")
+        XCTAssertEqual(
+            (metadata["digest_entity_candidates"] as? [[String: Any]])?.first?["surface"] as? String,
+            "Both Julius"
+        )
     }
 
     func testDigestScopesChunkToProject() throws {
@@ -1986,6 +2060,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func testDigestEntitiesResolvableViaLookup() throws {
+        try db.insertEntity(id: "project-brainlayer", type: "project", name: "BrainLayer")
         let content = "Etan Heyman discussed BrainLayer architecture with Claude. The project uses SQLite and Swift."
         let result = try db.digest(content: content)
         let chunkID = try XCTUnwrap(result["chunk_id"] as? String)
@@ -2000,6 +2075,63 @@ final class DatabaseTests: XCTestCase {
         let linkedChunks = try db.fetchEntityChunks(entityId: entityID, limit: 10)
         XCTAssertTrue(linkedChunks.contains(where: { $0.chunkID == chunkID }),
                       "Digested chunk should be linked to its extracted entity")
+    }
+
+    func testDigestReusesActiveCanonicalPersonAndLanguageAliasInMixedText() throws {
+        try sqliteExecWrite(path: tempDBPath, sql: "ALTER TABLE kg_entities ADD COLUMN status TEXT DEFAULT 'active'")
+        try db.insertEntity(id: "person-andrew-kelley", type: "person", name: "Andrew Kelley")
+        try db.insertEntity(id: "technology-ecmascript", type: "technology", name: "ECMAScript")
+        try db.insertEntity(id: "person-but-ben", type: "person", name: "But Ben")
+        try sqliteExecWrite(
+            path: tempDBPath,
+            sql: """
+                INSERT INTO kg_entity_aliases (alias, entity_id, alias_type)
+                VALUES ('JavaScript', 'technology-ecmascript', 'name');
+                UPDATE kg_entities SET status = 'archived' WHERE id = 'person-but-ben';
+            """
+        )
+        let content = "שלום 👋 Andrew Kelley כתב JavaScript. But Ben אמר שלום."
+        let result = try db.digest(content: content, title: "כותרת 👋")
+        let entities = Set(result["entities"] as? [String] ?? [])
+        let candidates = try XCTUnwrap(result["entity_candidates"] as? [[String: Any]])
+        XCTAssertEqual(entities, Set(["Andrew Kelley", "ECMAScript"]))
+        XCTAssertEqual(candidates.compactMap { $0["surface"] as? String }, ["But Ben"])
+        XCTAssertEqual(result["entities_created"] as? Int, 2)
+        XCTAssertEqual(try sqliteCount(path: tempDBPath, sql: "SELECT COUNT(*) FROM kg_entities WHERE entity_type = 'concept'"), 0)
+        let chunkID = try XCTUnwrap(result["chunk_id"] as? String)
+        let persisted = try XCTUnwrap(storedMetadata(chunkID)["digest_entity_candidates"] as? [[String: Any]])
+        let candidate = try XCTUnwrap(persisted.first)
+        let storedContent = try XCTUnwrap(sqliteScalarString(path: tempDBPath, sql: "SELECT content FROM chunks WHERE id = '\(chunkID)'"))
+        let span = NSRange(location: try XCTUnwrap(candidate["start_utf16"] as? Int), length: try XCTUnwrap(candidate["length_utf16"] as? Int))
+        XCTAssertEqual((storedContent as NSString).substring(with: span), "But Ben", "Offsets are UTF-16 code units after an emoji")
+        XCTAssertEqual(candidate["span_basis"] as? String, "stored_chunk_content")
+    }
+
+    func testDigestLeavesAmbiguousAliasAsCandidate() throws {
+        try db.insertEntity(id: "technology-js-one", type: "technology", name: "ECMAScript")
+        try db.insertEntity(id: "technology-js-two", type: "technology", name: "Node Language")
+        try sqliteExecWrite(
+            path: tempDBPath,
+            sql: """
+                INSERT INTO kg_entity_aliases (alias, entity_id, alias_type) VALUES ('JavaScript', 'technology-js-one', 'name');
+                INSERT INTO kg_entity_aliases (alias, entity_id, alias_type) VALUES ('JavaScript', 'technology-js-two', 'name');
+                INSERT INTO kg_entity_aliases (alias, entity_id, alias_type, valid_to) VALUES ('CoffeeScript', 'technology-js-one', 'name', '2000-01-01T00:00:00Z');
+                INSERT INTO kg_entity_aliases (alias, entity_id, alias_type, valid_from) VALUES ('FutureScript', 'technology-js-one', 'name', '2999-01-01T00:00:00Z');
+            """
+        )
+
+        let result = try db.digest(content: "JavaScript, CoffeeScript, and FutureScript power runtimes.")
+        let entities = result["entities"] as? [String] ?? []
+        let candidates = try XCTUnwrap(result["entity_candidates"] as? [[String: Any]])
+
+        XCTAssertTrue(entities.isEmpty)
+        XCTAssertEqual(candidates.compactMap { $0["surface"] as? String }, ["JavaScript", "CoffeeScript", "FutureScript"])
+        XCTAssertEqual(try sqliteCount(path: tempDBPath, table: "kg_entity_chunks"), 0)
+    }
+
+    private func storedMetadata(_ chunkID: String) throws -> [String: Any] {
+        let text = try XCTUnwrap(sqliteScalarString(path: tempDBPath, sql: "SELECT metadata FROM chunks WHERE id = '\(chunkID)'"))
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
     }
 
     func testDigestReusesExistingConceptEntityWithoutReplacingMetadata() throws {

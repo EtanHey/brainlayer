@@ -1,5 +1,76 @@
 import Foundation
 
+struct InjectionRecipientIdentity: Equatable, Sendable {
+    let sessionName: String
+    let agentName: String
+    let projectName: String
+
+    static func resolve(
+        sessionID: String,
+        sessionsDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/sessions", isDirectory: true)
+    ) -> InjectionRecipientIdentity? {
+        let normalizedSessionID = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedSessionID.isEmpty else { return nil }
+        return resolveAll(sessionsDirectory: sessionsDirectory)[normalizedSessionID]
+    }
+
+    static func resolveAll(
+        sessionsDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/sessions", isDirectory: true)
+    ) -> [String: InjectionRecipientIdentity] {
+        guard let files = try? FileManager.default.contentsOfDirectory(
+                  at: sessionsDirectory,
+                  includingPropertiesForKeys: [.isRegularFileKey],
+                  options: [.skipsHiddenFiles]
+              ) else {
+            return [:]
+        }
+
+        var identities: [String: InjectionRecipientIdentity] = [:]
+        for file in files where file.pathExtension == "json" {
+            guard let values = try? file.resourceValues(forKeys: [.isRegularFileKey]),
+                  values.isRegularFile == true,
+                  let data = try? Data(contentsOf: file),
+                  let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let sessionID = payload["sessionId"] as? String else {
+                continue
+            }
+            let normalizedSessionID = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalizedSessionID.isEmpty else { continue }
+            identities[normalizedSessionID] = InjectionRecipientIdentity(
+                sessionName: normalized(payload["name"]),
+                agentName: normalized(payload["agent"]),
+                projectName: projectName(from: normalized(payload["cwd"]))
+            )
+        }
+        return identities
+    }
+
+    private static func normalized(_ value: Any?) -> String {
+        (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    private static func projectName(from path: String) -> String {
+        guard !path.isEmpty else { return "" }
+        let standardizedURL = URL(fileURLWithPath: path).standardizedFileURL
+        let components = standardizedURL.pathComponents
+        if let worktreesIndex = components.firstIndex(of: ".worktrees"), worktreesIndex > 0 {
+            return components[worktreesIndex - 1]
+        }
+        var candidate = standardizedURL
+        while candidate.path != "/" {
+            if FileManager.default.fileExists(
+                atPath: candidate.appendingPathComponent(".git", isDirectory: false).path
+            ) {
+                return candidate.lastPathComponent
+            }
+            candidate.deleteLastPathComponent()
+        }
+        return standardizedURL.lastPathComponent
+    }
+}
+
 struct InjectionChunk: Equatable, Sendable, Identifiable {
     let id: String
     let content: String
@@ -9,6 +80,7 @@ struct InjectionChunk: Equatable, Sendable, Identifiable {
     let tags: [String]
     let contentType: String
     let claudeConversationID: String
+    let storingAgent: String
 
     var displayText: String {
         let preferred = summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -33,7 +105,8 @@ struct InjectionChunk: Equatable, Sendable, Identifiable {
         sourceFile: String,
         tags: [String],
         contentType: String,
-        claudeConversationID: String = ""
+        claudeConversationID: String = "",
+        storingAgent: String = ""
     ) {
         self.id = id
         self.content = content
@@ -43,6 +116,7 @@ struct InjectionChunk: Equatable, Sendable, Identifiable {
         self.tags = tags
         self.contentType = contentType
         self.claudeConversationID = claudeConversationID
+        self.storingAgent = storingAgent
     }
 
     init(row: [String: Any]) {
@@ -53,7 +127,22 @@ struct InjectionChunk: Equatable, Sendable, Identifiable {
         sourceFile = row["source_file"] as? String ?? ""
         contentType = row["content_type"] as? String ?? ""
         claudeConversationID = row["claude_conversation_id"] as? String ?? ""
+        storingAgent = row["storing_agent"] as? String ?? ""
         tags = InjectionChunk.decodeTags(row["tags"])
+    }
+
+    func withStoringAgent(_ agent: String) -> InjectionChunk {
+        InjectionChunk(
+            id: id,
+            content: content,
+            summary: summary,
+            source: source,
+            sourceFile: sourceFile,
+            tags: tags,
+            contentType: contentType,
+            claudeConversationID: claudeConversationID,
+            storingAgent: agent
+        )
     }
 
     static func elide(_ text: String, limit: Int) -> String {
@@ -226,6 +315,10 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
     let chunkIDs: [String]
     let tokenCount: Int
     let mode: String
+    let sessionName: String
+    let agentName: String
+    let projectName: String
+    let selectionReason: String
     let chunks: [InjectionChunk]
     let claudeConversationID: String
 
@@ -281,6 +374,30 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
         Self.normalizedForDedupe(query) == Self.normalizedForDedupe(displayTitle) ? nil : triggeredByText
     }
 
+    var recipientIdentityText: String {
+        var parts: [String] = []
+        if !sessionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append("Session \(sessionName)")
+        }
+        if !agentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append("Agent \(agentName)")
+        }
+        if !projectName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append("Project \(projectName)")
+        }
+        if parts.isEmpty {
+            let trimmed = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { return "Session unavailable" }
+            return trimmed.count > 12 ? "Session …\(trimmed.suffix(6))" : "Session \(trimmed)"
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    var storingAgentText: String {
+        let agent = primaryChunk?.storingAgent.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return agent.isEmpty ? "Agent unavailable" : "Agent \(agent)"
+    }
+
     var modalTitle: String {
         primaryKind.modalTitle
     }
@@ -322,6 +439,10 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
         chunkIDs: [String],
         tokenCount: Int,
         mode: String = "normal",
+        sessionName: String = "",
+        agentName: String = "",
+        projectName: String = "",
+        selectionReason: String = "",
         chunks: [InjectionChunk] = [],
         claudeConversationID: String = ""
     ) {
@@ -332,6 +453,10 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
         self.chunkIDs = chunkIDs
         self.tokenCount = tokenCount
         self.mode = mode
+        self.sessionName = sessionName
+        self.agentName = agentName
+        self.projectName = projectName
+        self.selectionReason = selectionReason
         self.chunks = chunks
         self.claudeConversationID = claudeConversationID
     }
@@ -349,6 +474,10 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
         query = row["query"] as? String ?? ""
         tokenCount = row["token_count"] as? Int ?? 0
         mode = row["mode"] as? String ?? "normal"
+        sessionName = row["session_name"] as? String ?? ""
+        agentName = row["agent_name"] as? String ?? ""
+        projectName = row["project_name"] as? String ?? ""
+        selectionReason = row["selection_reason"] as? String ?? ""
         claudeConversationID = row["claude_conversation_id"] as? String ?? ""
 
         if let rawChunkIDs = row["chunk_ids"] as? [String] {

@@ -21,11 +21,18 @@ final class EntityCache: @unchecked Sendable {
 
     private var refreshTimer: DispatchSourceTimer?
 
-    /// Load all entity names from the database.
+    /// Load active entity names from the database. Archived/quarantined rows
+    /// stop participating in MCP query entity detection after the next refresh.
     func load(from db: OpaquePointer?) {
         guard let db else { return }
+        let columns = Self.tableColumns(db)
+        var filters = columns.contains("status") ? ["COALESCE(status, 'active') = 'active'"] : []
+        filters.append(columns.contains("user_verified")
+            ? "NOT (id LIKE 'digest-entity-%' AND entity_type = 'concept' AND COALESCE(user_verified, 0) = 0)"
+            : "NOT (id LIKE 'digest-entity-%' AND entity_type = 'concept')")
+        let sql = "SELECT id, name FROM kg_entities WHERE " + filters.joined(separator: " AND ")
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, "SELECT id, name FROM kg_entities", -1, &stmt, nil) == SQLITE_OK
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK
         else { return }
         defer { sqlite3_finalize(stmt) }
 
@@ -50,6 +57,18 @@ final class EntityCache: @unchecked Sendable {
             self.sortedNames = names
         }
         NSLog("[BrainBar] EntityCache loaded: %d entities", newMap.count)
+    }
+
+    private static func tableColumns(_ db: OpaquePointer) -> Set<String> {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA table_info(kg_entities)", -1, &stmt, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(stmt) }
+        var columns = Set<String>()
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            guard let namePtr = sqlite3_column_text(stmt, 1) else { continue }
+            columns.insert(String(cString: namePtr))
+        }
+        return columns
     }
 
     /// Start a 60-second periodic refresh timer.

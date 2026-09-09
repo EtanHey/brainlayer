@@ -248,6 +248,45 @@ struct InjectionPresentation {
         var selectedResultSummary: String {
             selectedResultChunk?.displayText ?? "Result unavailable"
         }
+        var collapsedHeadline: String {
+            selectedResultSummary
+        }
+        var collapsedContext: String {
+            "To \(recipientIdentityLabel) · \(selectionReasonLabel) · \(tokenCount) tok"
+        }
+        var collapsedTrigger: String {
+            "Trigger: \(queryTitle)"
+        }
+        private var recipientIdentityLabel: String {
+            var parts: [String] = []
+            if let sessionName = firstNonEmpty(\.sessionName) {
+                parts.append("Session \(sessionName)")
+            }
+            if let agentName = firstNonEmpty(\.agentName) {
+                parts.append("Agent \(agentName)")
+            }
+            if let projectName = firstNonEmpty(\.projectName) {
+                parts.append("Project \(projectName)")
+            }
+            return parts.isEmpty ? compactSessionLabel : parts.joined(separator: " · ")
+        }
+        private var selectionReasonLabel: String {
+            guard let reason = firstNonEmpty(\.selectionReason) else {
+                return "Reason unavailable"
+            }
+            return "Reason \(InjectionChunk.elide(reason, limit: 96))"
+        }
+        private func firstNonEmpty(_ keyPath: KeyPath<InjectionEvent, String>) -> String? {
+            events.lazy
+                .map { $0[keyPath: keyPath].trimmingCharacters(in: .whitespacesAndNewlines) }
+                .first { !$0.isEmpty }
+        }
+        private var compactSessionLabel: String {
+            let trimmed = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return "Session unavailable" }
+            guard trimmed.count > 12 else { return "Session \(trimmed)" }
+            return "Session …\(trimmed.suffix(6))"
+        }
         private static func mergeResultProvenance(from events: [InjectionEvent]) -> [ResultProvenance] {
             var resultIndexByChunkID: [String: Int] = [:]
             var results: [ResultProvenance] = []
