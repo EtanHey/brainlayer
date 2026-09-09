@@ -45,7 +45,13 @@ def _icloud_state(*, uploaded: bool, status: str) -> dict:
 
 def _copy_to_icloud_receipt(archive: Path, destination: Path, **kwargs) -> dict:  # noqa: ARG001
     destination.mkdir(parents=True, exist_ok=True)
-    target = destination / archive.name
+    try:
+        logical_bytes = gzip.decompress(archive.read_bytes())
+    except (gzip.BadGzipFile, EOFError):
+        logical_bytes = archive.read_bytes()
+    suffix = "".join(archive.suffixes)
+    logical_sha256 = hashlib.sha256(logical_bytes).hexdigest()
+    target = destination / f"claude-jsonl-{logical_sha256}{suffix}"
     target.write_bytes(archive.read_bytes())
     return {
         "path": str(target),
@@ -1011,6 +1017,30 @@ def test_existing_verified_object_is_not_quarantined_when_polling_reaches_deadli
     monkeypatch.setattr(jsonl_backup, "_icloud_item_state", pending_until_deadline)
 
     with pytest.raises(jsonl_backup.ICloudDeadlineExceeded):
+        jsonl_backup.copy_archive_to_icloud(archive, icloud_dir, timeout_seconds=1)
+
+    assert destination.is_file()
+    assert list(icloud_dir.glob("*.unverified")) == []
+
+
+def test_existing_verified_object_is_not_quarantined_when_status_probe_times_out(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    archive = tmp_path / "archive.tar.gz"
+    archive.write_bytes(gzip.compress(b"same tar payload", mtime=1))
+    icloud_dir = tmp_path / "CloudDocs"
+    icloud_dir.mkdir()
+    logical_sha256 = jsonl_backup._sha256_gzip_payload(archive)
+    destination = icloud_dir / f"claude-jsonl-{logical_sha256}.tar.gz"
+    destination.write_bytes(archive.read_bytes())
+    timeout = subprocess.TimeoutExpired(["osascript"], 1)
+    monkeypatch.setattr(
+        jsonl_backup,
+        "_icloud_item_state",
+        lambda *args, **kwargs: (_ for _ in ()).throw(timeout),
+    )
+
+    with pytest.raises(subprocess.TimeoutExpired):
         jsonl_backup.copy_archive_to_icloud(archive, icloud_dir, timeout_seconds=1)
 
     assert destination.is_file()

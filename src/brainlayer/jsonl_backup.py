@@ -545,7 +545,10 @@ def copy_archive_to_icloud(
         except Exception as exc:
             # This path was not proven usable. Preserve it under a unique hidden
             # name, then let the normal fresh-copy path repair the logical address.
-            if isinstance(exc, (backup_daily.BackupTimeoutError, ICloudDeadlineExceeded)):
+            if isinstance(
+                exc,
+                (backup_daily.BackupTimeoutError, ICloudDeadlineExceeded, subprocess.TimeoutExpired),
+            ):
                 raise
             _quarantine_unverified_icloud_item(destination)
             _quarantine_unverified_icloud_item(placeholder)

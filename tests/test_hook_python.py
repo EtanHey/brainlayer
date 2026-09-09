@@ -258,6 +258,15 @@ class TestResolveHookPython:
         assert is_pinned_interpreter(resolved), "the linter must accept what the hatch returns"
 
     @staticmethod
+    def test_an_absolute_venv_override_with_spaces_is_accepted(tmp_path):
+        target = tmp_path / "Jane Doe" / ".venv" / "bin" / "python"
+        target.parent.mkdir(parents=True)
+        target.write_text("#!/bin/sh\n")
+        target.chmod(0o755)
+
+        assert resolve_hook_python(env={HOOK_PYTHON_ENV: str(target)}, candidates=()) == str(target)
+
+    @staticmethod
     def test_first_existing_candidate_wins(tmp_path):
         missing = tmp_path / "missing" / "python"
         present = tmp_path / "present"
