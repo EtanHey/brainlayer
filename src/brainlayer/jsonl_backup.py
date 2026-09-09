@@ -617,31 +617,48 @@ def _icloud_inventory_is_verified(
 
     files = state.get("files")
     receipts = state.get("icloud_archives")
-    if not isinstance(files, dict) or not isinstance(receipts, dict):
+    if not isinstance(files, dict):
         return not candidates
+    if not isinstance(receipts, dict):
+        receipts = {}
 
-    referenced: set[str] = set()
-    for candidate in candidates:
-        entry = files.get(candidate.path.as_posix())
+    candidates_by_path = {candidate.path.as_posix(): candidate for candidate in candidates}
+    referenced_by_sources: dict[str, set[str]] = {}
+    for source_path, entry in files.items():
+        candidate = candidates_by_path.get(source_path)
         if not isinstance(entry, dict):
             continue
         # Changed/new sources are selected for this run and receive a new receipt.
-        if entry.get("mtime") != candidate.mtime or entry.get("size") != candidate.size:
+        if candidate is not None and (entry.get("mtime") != candidate.mtime or entry.get("size") != candidate.size):
             continue
         archive_name = entry.get("icloud_archive")
         if not isinstance(archive_name, str) or not archive_name or Path(archive_name).name != archive_name:
+            if candidate is None:
+                raise RuntimeError(
+                    "iCloud coverage cannot be repaired because a recorded source is unavailable: "
+                    f"source={source_path} archive_receipt={archive_name!r}"
+                )
             return False
-        referenced.add(archive_name)
+        referenced_by_sources.setdefault(archive_name, set()).add(source_path)
 
-    if candidates and not referenced:
+    if candidates and not referenced_by_sources:
+        return False
+
+    def invalid_archive(archive_name: str, reason: str) -> bool:
+        unavailable_sources = sorted(referenced_by_sources[archive_name] - candidates_by_path.keys())
+        if unavailable_sources:
+            raise RuntimeError(
+                "iCloud coverage cannot be repaired because its archive is invalid and a source is unavailable: "
+                f"archive={archive_name} reason={reason} sources={unavailable_sources!r}"
+            )
         return False
 
     deadline = time.monotonic() + timeout_seconds
-    try:
-        for archive_name in sorted(referenced):
+    for archive_name in sorted(referenced_by_sources):
+        try:
             receipt = receipts.get(archive_name)
             if not isinstance(receipt, dict):
-                return False
+                return invalid_archive(archive_name, "missing exact-byte receipt")
             expected_size = receipt.get("bytes")
             expected_sha256 = receipt.get("sha256")
             if (
@@ -650,12 +667,12 @@ def _icloud_inventory_is_verified(
                 or not isinstance(expected_sha256, str)
                 or len(expected_sha256) != 64
             ):
-                return False
+                return invalid_archive(archive_name, "malformed exact-byte receipt")
 
             destination = directory / archive_name
             placeholder = directory / f".{archive_name}.icloud"
             if not destination.exists() and not placeholder.exists():
-                return False
+                return invalid_archive(archive_name, "archive and placeholder are missing")
 
             while True:
                 remaining = max(deadline - time.monotonic(), 0.001)
@@ -668,16 +685,18 @@ def _icloud_inventory_is_verified(
                 uploaded = item_state.get("is_uploaded") is True and item_state.get("is_uploading") is False
                 materialized = item_state.get("downloading_status") == "current" and destination.is_file()
                 if item_state.get("uploading_error"):
-                    return False
+                    return invalid_archive(archive_name, f"upload error: {item_state['uploading_error']}")
                 if item_state.get("is_ubiquitous") is True and uploaded and materialized:
                     if destination.stat().st_size != expected_size or _sha256_file(destination) != expected_sha256:
-                        return False
+                        return invalid_archive(archive_name, "materialized bytes do not match the receipt")
                     break
                 if time.monotonic() >= deadline:
-                    return False
+                    return invalid_archive(archive_name, "materialization timed out")
                 time.sleep(min(poll_interval_seconds, remaining))
-    except (OSError, RuntimeError, subprocess.TimeoutExpired):
-        return False
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+            if isinstance(exc, RuntimeError) and str(exc).startswith("iCloud coverage cannot be repaired"):
+                raise
+            return invalid_archive(archive_name, str(exc))
     return True
 
 

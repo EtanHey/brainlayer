@@ -597,6 +597,85 @@ def test_missing_recorded_icloud_archive_forces_opt_in_rebootstrap(tmp_path, mon
     assert len(copied) == 1
 
 
+def test_missing_icloud_archive_for_vanished_source_fails_loudly(tmp_path):
+    from brainlayer import jsonl_backup
+
+    now = time.time()
+    source_root = tmp_path / "sessions"
+    vanished = _write_jsonl(source_root / "vanished.jsonl", mtime=now - 3600)
+    stat = vanished.stat()
+    vanished.unlink()
+    icloud_dir = tmp_path / "CloudDocs"
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "files": {
+                    vanished.as_posix(): {
+                        "mtime": stat.st_mtime,
+                        "size": stat.st_size,
+                        "icloud_archive": "missing.tar.gz",
+                    }
+                },
+                "icloud_directory": str(icloud_dir),
+                "icloud_verified": True,
+                "icloud_archives": {"missing.tar.gz": {"bytes": 123, "sha256": "0" * 64}},
+            }
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="source is unavailable"):
+        jsonl_backup.run_backup(
+            source_roots=[source_root],
+            state_path=state_path,
+            staging_dir=tmp_path / "staging",
+            log_path=tmp_path / "jsonl-backup.log",
+            queue_dir=tmp_path / "queue",
+            icloud_dir=icloud_dir,
+            date_stamp="2026-09-09",
+            now=now,
+            upload=True,
+        )
+
+
+def test_icloud_inventory_still_validates_archives_for_vanished_sources(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    source_path = (tmp_path / "sessions" / "vanished.jsonl").as_posix()
+    icloud_dir = tmp_path / "CloudDocs"
+    icloud_dir.mkdir()
+    archive_name = "vanished-source.tar.gz"
+    archive = icloud_dir / archive_name
+    archive.write_bytes(b"only remaining copy")
+    probes: list[Path] = []
+
+    def probe(path, **kwargs):
+        probes.append(Path(path))
+        return _icloud_state(uploaded=True, status="current")
+
+    monkeypatch.setattr(jsonl_backup, "_icloud_item_state", probe)
+    state = {
+        "files": {
+            source_path: {
+                "mtime": 1.0,
+                "size": 10,
+                "icloud_archive": archive_name,
+            }
+        },
+        "icloud_directory": str(icloud_dir),
+        "icloud_verified": True,
+        "icloud_archives": {
+            archive_name: {
+                "bytes": archive.stat().st_size,
+                "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+            }
+        },
+    }
+
+    assert jsonl_backup._icloud_inventory_is_verified(state, [], icloud_dir, timeout_seconds=1)
+    assert probes == [archive]
+
+
 def test_icloud_inventory_rehydrates_placeholder_and_checks_exact_receipt(tmp_path, monkeypatch):
     from brainlayer import jsonl_backup
 
