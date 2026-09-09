@@ -79,7 +79,7 @@ def test_jsonl_retention_invariant_is_a_ci_guard_not_only_a_behavior_fixture():
         ),
         (
             'if result["verified"] and upload:',
-            'if result["verified"] and upload:\n        pass\n    else:',
+            ('if result["verified"] and upload:\n        return result\n    if result["verified"] and upload:'),
             "backup deletion calls must remain inside verified-upload control flow",
         ),
         (
@@ -107,12 +107,11 @@ def test_jsonl_retention_invariant_is_a_ci_guard_not_only_a_behavior_fixture():
         unsafe = source.replace(original, weakened, 1)
         assert expected_error in inspect_jsonl_retention_invariant(unsafe, backup_daily_source=backup_daily_source)
 
+    verified_upload_gate = '    if result["verified"] and upload:'
+    assert verified_upload_gate in source, "mutation fixture drifted: verified-upload gate"
     unsafe = source.replace(
-        "result.update(verify_jsonl_bundle(archive_path, expected_file_count=len(changed)))",
-        (
-            "result.update(verify_jsonl_bundle(archive_path, expected_file_count=len(changed)))\n"
-            '    result["verified"] = True'
-        ),
+        verified_upload_gate,
+        f'    result["verified"] = True\n{verified_upload_gate}',
         1,
     )
     assert "verified-upload deletion gate must consume the bundle verification result without override" in (
