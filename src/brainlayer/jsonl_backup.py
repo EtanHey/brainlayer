@@ -469,11 +469,12 @@ def copy_archive_to_icloud(
     *,
     timeout_seconds: float = DEFAULT_ICLOUD_TIMEOUT_SECONDS,
     poll_interval_seconds: float = 2.0,
+    deadline: float | None = None,
 ) -> dict[str, Any]:
     """Copy to iCloud, force materialization, then verify authoritative state and bytes."""
     archive_path = Path(archive_path).expanduser()
     icloud_dir = Path(icloud_dir).expanduser()
-    deadline = time.monotonic() + timeout_seconds
+    deadline = deadline if deadline is not None else time.monotonic() + timeout_seconds
 
     def remaining_seconds() -> float:
         return max(deadline - time.monotonic(), 0.001)
@@ -484,8 +485,7 @@ def copy_archive_to_icloud(
     expected_sha256 = _sha256_file(archive_path, deadline=deadline)
     logical_sha256 = _sha256_gzip_payload(archive_path, deadline=deadline)
     suffix = "".join(archive_path.suffixes)
-    stem = archive_path.name[: -len(suffix)] if suffix else archive_path.name
-    destination = icloud_dir / f"{stem}-{logical_sha256}{suffix}"
+    destination = icloud_dir / f"claude-jsonl-{logical_sha256}{suffix}"
     placeholder = destination.with_name(f".{destination.name}.icloud")
 
     def receipt(*, reused: bool) -> dict[str, Any]:
@@ -531,7 +531,7 @@ def copy_archive_to_icloud(
                         )
                     return receipt(reused=True)
                 if time.monotonic() >= deadline:
-                    raise RuntimeError(
+                    raise ICloudDeadlineExceeded(
                         f"existing iCloud copy was not uploaded and materialized within {timeout_seconds}s: "
                         f"path={destination} state={state!r}"
                     )
@@ -625,6 +625,7 @@ def _icloud_inventory_is_verified(
     timeout_seconds: float = DEFAULT_ICLOUD_TIMEOUT_SECONDS,
     poll_interval_seconds: float = 2.0,
     validated_sources: set[str] | None = None,
+    deadline: float | None = None,
 ) -> bool:
     """Revalidate every iCloud object that current source-state entries rely on.
 
@@ -657,6 +658,11 @@ def _icloud_inventory_is_verified(
         archive_name = entry.get("icloud_archive")
         if not isinstance(archive_name, str) or not archive_name or Path(archive_name).name != archive_name:
             if candidate is None:
+                if entry.get("icloud_required") is True:
+                    raise RuntimeError(
+                        "iCloud coverage cannot be repaired because a required source is unavailable: "
+                        f"source={source_path}"
+                    )
                 # State predating the optional iCloud leg can retain Drive-only
                 # entries after their local source disappears. Such an entry never
                 # claimed iCloud coverage, so it is outside this inventory.
@@ -681,7 +687,7 @@ def _icloud_inventory_is_verified(
             _quarantine_unverified_icloud_item(directory / f".{archive_name}.icloud")
         return False
 
-    deadline = time.monotonic() + timeout_seconds
+    deadline = deadline if deadline is not None else time.monotonic() + timeout_seconds
     for archive_name in sorted(referenced_by_sources):
         try:
             receipt = receipts.get(archive_name)
@@ -979,6 +985,7 @@ def _update_state_for_uploaded(
     unrecoverable while state still reports it as backed up.
     """
     files = dict(state.get("files") or {})
+    existing_icloud_directory = state.get("icloud_directory")
     icloud_archive_name: str | None = None
     icloud_receipt: dict[str, Any] | None = None
     if icloud_copy is not None:
@@ -996,6 +1003,8 @@ def _update_state_for_uploaded(
             entry["sha256"] = digest if digest else _sha256_file(candidate.path)
         if icloud_archive_name is not None:
             entry["icloud_archive"] = icloud_archive_name
+        elif isinstance(existing_icloud_directory, str) and existing_icloud_directory:
+            entry["icloud_required"] = True
         files[candidate.path.as_posix()] = entry
     updated = {"files": files, "updated_at": dt.datetime.now(dt.UTC).isoformat()}
 
@@ -1090,13 +1099,16 @@ def run_backup(
     candidates = _discover_jsonl_candidates(roots)
     selection_state = state
     icloud_bootstrap_pending = False
+    icloud_deadline: float | None = None
     if upload and icloud_dir is not None:
+        icloud_deadline = time.monotonic() + DEFAULT_ICLOUD_TIMEOUT_SECONDS
         validated_icloud_sources: set[str] = set()
         icloud_covered = _icloud_inventory_is_verified(
             state,
             candidates,
             icloud_dir,
             validated_sources=validated_icloud_sources,
+            deadline=icloud_deadline,
         )
         if not icloud_covered:
             # Legacy state proves only Drive coverage. The first iCloud-enabled run
@@ -1208,7 +1220,11 @@ def run_backup(
         # iCloud goes first: a failed iCloud verification must not create an
         # unrecorded duplicate Drive object that consumes the retention window.
         if icloud_dir is not None:
-            result["icloud_copy"] = copy_archive_to_icloud(archive_path, icloud_dir)
+            result["icloud_copy"] = copy_archive_to_icloud(
+                archive_path,
+                icloud_dir,
+                deadline=icloud_deadline,
+            )
         if service is None:
             credentials = backup_daily.get_drive_credentials()
             service = backup_daily.build_drive_service()
