@@ -653,13 +653,14 @@ def test_icloud_timeout_quarantines_unverified_placeholder(tmp_path, monkeypatch
     archive = tmp_path / "archive.tar.gz"
     archive.write_bytes(b"bytes")
     icloud_dir = tmp_path / "CloudDocs"
-    clock = iter([0.0, 0.0, 2.0])
-    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: next(clock))
+    clock = [0.0]
+    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: clock[0])
 
     def leave_placeholder(path, **kwargs):  # noqa: ARG001
         destination = Path(path)
         destination.unlink()
         destination.with_name(f".{destination.name}.icloud").write_bytes(b"")
+        clock[0] = 2.0
         return _icloud_state(uploaded=False, status="notDownloaded")
 
     monkeypatch.setattr(
@@ -822,6 +823,58 @@ def test_existing_icloud_probe_cannot_restart_timeout_for_repair(tmp_path, monke
     assert calls == 1
 
 
+def test_icloud_deadline_starts_before_first_archive_scan(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    archive = tmp_path / "archive.tar.gz"
+    archive.write_bytes(gzip.compress(b"payload", mtime=1))
+    observed_deadlines: list[float | None] = []
+
+    def stop_first_scan(path, *, deadline=None):  # noqa: ARG001
+        observed_deadlines.append(deadline)
+        raise RuntimeError("scan stopped")
+
+    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: 10.0)
+    monkeypatch.setattr(jsonl_backup, "_sha256_file", stop_first_scan)
+
+    with pytest.raises(RuntimeError, match="scan stopped"):
+        jsonl_backup.copy_archive_to_icloud(archive, tmp_path / "CloudDocs", timeout_seconds=5)
+
+    assert observed_deadlines == [15.0]
+
+
+def test_icloud_copy_deadline_blocks_status_probe(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    archive = tmp_path / "archive.tar.gz"
+    archive.write_bytes(b"payload")
+    clock = [0.0]
+    status_calls = 0
+    real_check = jsonl_backup._check_icloud_deadline
+
+    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(jsonl_backup, "_sha256_file", lambda path, **kwargs: "a" * 64)
+    monkeypatch.setattr(jsonl_backup, "_sha256_gzip_payload", lambda path, **kwargs: "b" * 64)
+
+    def expire_during_copy(deadline, phase):
+        if phase.startswith("copying "):
+            clock[0] = 2.0
+        real_check(deadline, phase)
+
+    def count_status(*args, **kwargs):  # noqa: ARG001
+        nonlocal status_calls
+        status_calls += 1
+        return _icloud_state(uploaded=True, status="current")
+
+    monkeypatch.setattr(jsonl_backup, "_check_icloud_deadline", expire_during_copy)
+    monkeypatch.setattr(jsonl_backup, "_icloud_item_state", count_status)
+
+    with pytest.raises(RuntimeError, match="deadline exceeded during copying"):
+        jsonl_backup.copy_archive_to_icloud(archive, tmp_path / "CloudDocs", timeout_seconds=1)
+
+    assert status_calls == 0
+
+
 def test_icloud_retry_preserves_prior_verified_logical_object(tmp_path, monkeypatch):
     from brainlayer import jsonl_backup
 
@@ -885,14 +938,19 @@ def test_icloud_poll_sleep_cannot_overshoot_deadline(tmp_path, monkeypatch):
 
     archive = tmp_path / "archive.tar.gz"
     archive.write_bytes(b"bytes")
-    clock = iter([0.0, 0.75, 0.75, 0.75, 0.75])
+    clock = [0.0]
     states = iter(
         [_icloud_state(uploaded=False, status="notDownloaded"), _icloud_state(uploaded=True, status="current")]
     )
     sleeps: list[float] = []
-    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(jsonl_backup.time, "sleep", sleeps.append)
-    monkeypatch.setattr(jsonl_backup, "_icloud_item_state", lambda *args, **kwargs: next(states))
+
+    def pending_then_current(*args, **kwargs):  # noqa: ARG001
+        clock[0] = 0.75
+        return next(states)
+
+    monkeypatch.setattr(jsonl_backup, "_icloud_item_state", pending_then_current)
 
     jsonl_backup.copy_archive_to_icloud(archive, tmp_path / "CloudDocs", timeout_seconds=1, poll_interval_seconds=10)
 
@@ -2038,6 +2096,10 @@ def test_jsonl_backup_launchd_plist_and_docstring_install_note_are_committed():
     assert ".local/share/brainlayer/logs/jsonl-backup.log" in plist
     assert "jsonl-backup" in install
     assert "install_jsonl_backup_script" in install
+    assert "HOOK_PYTHON_RESOLVER" in install
+    assert 'runpy.run_path(path, run_name="__main__")' in install
+    assert "--print-interpreter" in install
+    assert "BRAINLAYER_PYTHON:-$PYTHON_BIN" not in install
     assert "__BRAINLAYER_DIR_VALUE__" not in wrapper
     assert '"${BRAINLAYER_PYTHON:?' in wrapper
     assert "unset PYTHONPATH" in wrapper

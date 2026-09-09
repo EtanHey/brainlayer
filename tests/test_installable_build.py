@@ -1624,6 +1624,9 @@ def test_launchd_installer_renders_brainlayer_python_override(tmp_path: Path) ->
     env_file.write_text("BRAINLAYER_ENRICH_ENABLED=0\n", encoding="utf-8")
     env_file.chmod(0o600)
     brainlayer_python = tmp_path / "tool" / "bin" / "python"
+    brainlayer_python.parent.mkdir(parents=True)
+    brainlayer_python.write_text("#!/bin/sh\n", encoding="utf-8")
+    brainlayer_python.chmod(0o755)
 
     result = subprocess.run(
         [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "backup"],
@@ -1646,6 +1649,53 @@ def test_launchd_installer_renders_brainlayer_python_override(tmp_path: Path) ->
     rendered = home / "Library" / "LaunchAgents" / "com.brainlayer.backup-daily.plist"
     assert f"<string>{brainlayer_python}</string>" in rendered.read_text(encoding="utf-8")
     assert "__BRAINLAYER_PYTHON__" not in rendered.read_text(encoding="utf-8")
+
+
+def test_source_jsonl_installer_uses_prefix_aware_resolver_not_path_python(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    authoring_python = fake_bin / "python3"
+    authoring_python.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n', encoding="utf-8")
+    authoring_python.chmod(0o755)
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text("\n".join(_fake_launchctl_lines()), encoding="utf-8")
+    fake_launchctl.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("BRAINLAYER_ENRICH_ENABLED=0\n", encoding="utf-8")
+    env_file.chmod(0o600)
+    pinned_python = tmp_path / "intel-prefix" / "opt" / "brainlayer" / "libexec" / "venv" / "bin" / "python"
+    pinned_python.parent.mkdir(parents=True)
+    pinned_python.write_text("#!/bin/sh\n", encoding="utf-8")
+    pinned_python.chmod(0o755)
+    child_env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"BRAINLAYER_PYTHON", "PYTHON_BIN", "BRAINLAYER_HOOK_PYTHON"}
+    }
+
+    result = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "jsonl-backup"],
+        env={
+            **child_env,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "BRAINLAYER_HOOK_PYTHON": str(pinned_python),
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "FAKE_LAUNCHCTL_LOG": str(tmp_path / "launchctl.log"),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    rendered = home / "Library" / "LaunchAgents" / "com.brainlayer.jsonl-backup.plist"
+    content = rendered.read_text(encoding="utf-8")
+    assert f"<string>{pinned_python}</string>" in content
+    assert str(authoring_python) not in content
 
 
 def test_packaged_launchd_installer_renders_p0_counter_console_shim(tmp_path: Path) -> None:

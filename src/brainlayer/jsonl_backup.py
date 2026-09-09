@@ -332,15 +332,22 @@ def _forever_enabled() -> bool:
     return os.environ.get("BRAINLAYER_JSONL_FOREVER", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _sha256_file(path: Path) -> str:
+def _check_icloud_deadline(deadline: float | None, phase: str) -> None:
+    if deadline is not None and time.monotonic() >= deadline:
+        raise RuntimeError(f"iCloud operation deadline exceeded during {phase}")
+
+
+def _sha256_file(path: Path, *, deadline: float | None = None) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            _check_icloud_deadline(deadline, f"hashing {path}")
             digest.update(chunk)
+    _check_icloud_deadline(deadline, f"hashing {path}")
     return digest.hexdigest()
 
 
-def _sha256_gzip_payload(path: Path) -> str:
+def _sha256_gzip_payload(path: Path, *, deadline: float | None = None) -> str:
     """Address valid gzip archives by their logical payload, not header metadata.
 
     Retrying a bundle can change the gzip header timestamp while preserving the
@@ -352,11 +359,13 @@ def _sha256_gzip_payload(path: Path) -> str:
     try:
         with gzip.open(path, "rb") as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                _check_icloud_deadline(deadline, f"hashing gzip payload {path}")
                 digest.update(chunk)
     except backup_daily.BackupTimeoutError:
         raise
     except (gzip.BadGzipFile, EOFError, OSError):
-        return _sha256_file(path)
+        return _sha256_file(path, deadline=deadline)
+    _check_icloud_deadline(deadline, f"hashing gzip payload {path}")
     return digest.hexdigest()
 
 
@@ -460,22 +469,25 @@ def copy_archive_to_icloud(
     """Copy to iCloud, force materialization, then verify authoritative state and bytes."""
     archive_path = Path(archive_path).expanduser()
     icloud_dir = Path(icloud_dir).expanduser()
-    icloud_dir.mkdir(parents=True, exist_ok=True)
-    expected_size = archive_path.stat().st_size
-    expected_sha256 = _sha256_file(archive_path)
-    logical_sha256 = _sha256_gzip_payload(archive_path)
-    suffix = "".join(archive_path.suffixes)
-    stem = archive_path.name[: -len(suffix)] if suffix else archive_path.name
-    destination = icloud_dir / f"{stem}-{logical_sha256}{suffix}"
-    placeholder = destination.with_name(f".{destination.name}.icloud")
     deadline = time.monotonic() + timeout_seconds
 
     def remaining_seconds() -> float:
         return max(deadline - time.monotonic(), 0.001)
 
+    icloud_dir.mkdir(parents=True, exist_ok=True)
+    _check_icloud_deadline(deadline, "preparing the iCloud directory")
+    expected_size = archive_path.stat().st_size
+    expected_sha256 = _sha256_file(archive_path, deadline=deadline)
+    logical_sha256 = _sha256_gzip_payload(archive_path, deadline=deadline)
+    suffix = "".join(archive_path.suffixes)
+    stem = archive_path.name[: -len(suffix)] if suffix else archive_path.name
+    destination = icloud_dir / f"{stem}-{logical_sha256}{suffix}"
+    placeholder = destination.with_name(f".{destination.name}.icloud")
+
     def receipt(*, reused: bool) -> dict[str, Any]:
+        _check_icloud_deadline(deadline, "building the iCloud receipt")
         actual_size = destination.stat().st_size
-        actual_sha256 = _sha256_file(destination)
+        actual_sha256 = _sha256_file(destination, deadline=deadline)
         return {
             "path": str(destination),
             "uploaded": True,
@@ -507,7 +519,7 @@ def copy_archive_to_icloud(
                 uploaded = state.get("is_uploaded") is True and state.get("is_uploading") is False
                 materialized = state.get("downloading_status") == "current" and destination.is_file()
                 if state.get("is_ubiquitous") is True and uploaded and materialized:
-                    actual_logical_sha256 = _sha256_gzip_payload(destination)
+                    actual_logical_sha256 = _sha256_gzip_payload(destination, deadline=deadline)
                     if actual_logical_sha256 != logical_sha256:
                         raise RuntimeError(
                             "iCloud logical-address collision: "
@@ -539,15 +551,20 @@ def copy_archive_to_icloud(
     temp_path = icloud_dir / f".{destination.name}.{os.getpid()}.partial"
     try:
         with archive_path.open("rb") as source, temp_path.open("xb") as destination_handle:
-            shutil.copyfileobj(source, destination_handle)
+            while chunk := source.read(1024 * 1024):
+                _check_icloud_deadline(deadline, f"copying {archive_path} to iCloud")
+                destination_handle.write(chunk)
+            _check_icloud_deadline(deadline, f"copying {archive_path} to iCloud")
             destination_handle.flush()
             os.fsync(destination_handle.fileno())
+        _check_icloud_deadline(deadline, "publishing the iCloud copy")
         os.replace(temp_path, destination)
     finally:
         temp_path.unlink(missing_ok=True)
 
     verified = False
     try:
+        _check_icloud_deadline(deadline, "starting iCloud status verification")
         state = _icloud_item_state(destination, request_download=True, timeout_seconds=remaining_seconds())
         while True:
             uploading_error = state.get("uploading_error")
@@ -557,7 +574,7 @@ def copy_archive_to_icloud(
             materialized = state.get("downloading_status") == "current" and destination.is_file()
             if state.get("is_ubiquitous") is True and uploaded and materialized:
                 actual_size = destination.stat().st_size
-                actual_sha256 = _sha256_file(destination)
+                actual_sha256 = _sha256_file(destination, deadline=deadline)
                 if actual_size != expected_size or actual_sha256 != expected_sha256:
                     raise RuntimeError(
                         "iCloud copy content mismatch: "

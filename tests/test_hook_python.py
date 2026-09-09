@@ -481,6 +481,17 @@ class TestCli:
         assert main([str(path)]) == 2
         assert "cannot read" in capsys.readouterr().out
 
+    @staticmethod
+    def test_print_interpreter_uses_affirmative_resolver(tmp_path, monkeypatch, capsys):
+        python = tmp_path / "venv" / "bin" / "python"
+        python.parent.mkdir(parents=True)
+        python.write_text("#!/bin/sh\n")
+        python.chmod(0o755)
+        monkeypatch.setenv(HOOK_PYTHON_ENV, str(python))
+
+        assert main(["--print-interpreter"]) == 0
+        assert capsys.readouterr().out.strip() == str(python)
+
 
 #: conftest sandboxes HOME for every test, so `~/.claude/settings.json` is not
 #: reachable by default — deliberately: a unit suite must not read Etan's home. Point

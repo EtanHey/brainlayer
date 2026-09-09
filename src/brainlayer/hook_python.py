@@ -402,7 +402,7 @@ def _why_unpinned(interpreter: str) -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """`python -m brainlayer.hook_python [settings.json]` — lint a settings file.
+    """Lint settings, or print the prefix-aware interpreter for installers.
 
     Exits 0 when every BrainLayer hook names its interpreter, 1 when any is
     PATH-resolved, 2 when the file cannot be read. Hooks owned by other repos are
@@ -410,8 +410,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     """
     import argparse
     import json
+    import sys
 
     parser = argparse.ArgumentParser(prog="brainlayer.hook_python")
+    parser.add_argument(
+        "--print-interpreter",
+        action="store_true",
+        help="print the affirmative prefix-aware interpreter and exit",
+    )
     parser.add_argument(
         "settings",
         nargs="?",
@@ -419,6 +425,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="path to a Claude Code settings.json (default: ~/.claude/settings.json)",
     )
     args = parser.parse_args(argv)
+
+    if args.print_interpreter:
+        try:
+            print(resolve_hook_python())
+        except HookPythonUnresolved as exc:
+            print(f"cannot resolve BrainLayer interpreter: {exc}", file=sys.stderr, flush=True)
+            return 2
+        return 0
 
     try:
         with open(args.settings, encoding="utf-8") as handle:
