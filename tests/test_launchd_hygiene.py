@@ -517,6 +517,7 @@ def test_launchd_installer_rejects_key_only_enrichment_config(tmp_path):
             "HOME": str(tmp_path),
             "BRAINLAYER_BIN": "/usr/bin/true",
             "PYTHON_BIN": "/usr/bin/true",
+            "BRAINLAYER_PYTHON": "/usr/bin/true",
             "BRAINLAYER_ENV_FILE": str(env_file),
         },
         capture_output=True,
