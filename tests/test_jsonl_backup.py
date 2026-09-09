@@ -85,6 +85,26 @@ def test_jsonl_bundle_round_trips_fixture_byte_identical(tmp_path):
     assert verification["content_verified_file_count"] == 1
 
 
+def test_jsonl_bundle_accepts_source_growth_after_discovery_before_bundling(tmp_path):
+    from brainlayer import jsonl_backup
+
+    source_root = tmp_path / "sessions"
+    source = source_root / "session.jsonl"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b'{"first":true}\n')
+    candidates = jsonl_backup._discover_jsonl_candidates([source_root])
+
+    with source.open("ab") as handle:
+        handle.write(b'{"second":true}\n')
+    archive = jsonl_backup.create_jsonl_bundle(candidates, tmp_path / "staging", date_stamp="2026-09-09")
+
+    verification = jsonl_backup.verify_jsonl_bundle(archive, expected_candidates=candidates)
+
+    assert verification["verified"] is True
+    assert verification["content_verified_file_count"] == 1
+    assert verification["append_snapshot_file_count"] == 0
+
+
 def test_jsonl_bundle_dereferences_discovered_symlink_as_regular_file(tmp_path):
     from brainlayer import jsonl_backup
 
@@ -147,7 +167,7 @@ def test_jsonl_bundle_verification_rejects_member_shorter_than_discovered_candid
     verification = jsonl_backup.verify_jsonl_bundle(archive, expected_candidates=candidates)
 
     assert verification["verified"] is False
-    assert verification["verification_error"] == "archive member size differs from candidate: source-0/session.jsonl"
+    assert verification["verification_error"] == "archive member is shorter than candidate: source-0/session.jsonl"
 
 
 def test_jsonl_bundle_verification_does_not_swallow_backup_timeout(tmp_path, monkeypatch):

@@ -497,8 +497,11 @@ def verify_jsonl_bundle(
                         result["verification_error"] = f"archive member is not a regular file: {member.name}"
                         return result
                     candidate = expected_by_name[member.name]
-                    if member.size != candidate.size:
-                        result["verification_error"] = f"archive member size differs from candidate: {member.name}"
+                    # Discovery metadata is a lower bound: JSONL sources may append before
+                    # tar reads them. A smaller member is provably truncated; a larger one
+                    # is valid only if the byte comparison below matches the current source.
+                    if member.size < candidate.size:
+                        result["verification_error"] = f"archive member is shorter than candidate: {member.name}"
                         return result
                     extracted = archive.extractfile(member)
                     if extracted is None:
