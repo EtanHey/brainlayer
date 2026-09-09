@@ -31,6 +31,11 @@ def test_jsonl_retention_invariant_is_a_ci_guard_not_only_a_behavior_fixture():
             "coverage must reject archive IDs absent from the live Drive inventory",
         ),
         (
+            "archive_id not in surviving_archives",
+            "archive_id not in surviving_archives and False",
+            "coverage must reject archive IDs absent from the live Drive inventory",
+        ),
+        (
             "live_md5 != recorded_md5",
             "live_md5 == recorded_md5",
             "coverage must reject a surviving Drive object whose archived bytes changed",
@@ -99,6 +104,18 @@ def test_jsonl_retention_invariant_is_a_ci_guard_not_only_a_behavior_fixture():
         assert original in source, f"mutation fixture drifted: {original}"
         unsafe = source.replace(original, weakened, 1)
         assert expected_error in inspect_jsonl_retention_invariant(unsafe, backup_daily_source=backup_daily_source)
+
+    unsafe = source.replace(
+        "result.update(verify_jsonl_bundle(archive_path, expected_file_count=len(changed)))",
+        (
+            "result.update(verify_jsonl_bundle(archive_path, expected_file_count=len(changed)))\n"
+            '    result["verified"] = True'
+        ),
+        1,
+    )
+    assert "verified-upload deletion gate must consume the bundle verification result without override" in (
+        inspect_jsonl_retention_invariant(unsafe, backup_daily_source=backup_daily_source)
+    )
 
     unsafe = source.replace(
         'archive_md5=uploaded.get("md5Checksum")',

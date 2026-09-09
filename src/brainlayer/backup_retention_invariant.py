@@ -76,6 +76,25 @@ def _has_reachable_compare(
     return False
 
 
+def _has_exact_false_rejection(
+    function: ast.FunctionDef,
+    *,
+    condition: str,
+    parents: dict[ast.AST, ast.AST],
+) -> bool:
+    expected = ast.parse(condition, mode="eval").body
+    for node in ast.walk(function):
+        if not isinstance(node, ast.If) or _inside_statically_dead_branch(node, parents):
+            continue
+        if ast.dump(node.test, include_attributes=False) != ast.dump(expected, include_attributes=False):
+            continue
+        if len(node.body) != 1 or not isinstance(node.body[0], ast.Return):
+            continue
+        if isinstance(node.body[0].value, ast.Constant) and node.body[0].value.value is False:
+            return True
+    return False
+
+
 def _passes_live_inventory(call: ast.Call) -> bool:
     if any(
         keyword.arg == "surviving_archives"
@@ -90,6 +109,21 @@ def _passes_live_inventory(call: ast.Call) -> bool:
 def _is_exact_verified_upload_gate(node: ast.If) -> bool:
     expected = ast.parse('result["verified"] and upload', mode="eval").body
     return ast.dump(node.test, include_attributes=False) == ast.dump(expected, include_attributes=False)
+
+
+def _is_verification_update(statement: ast.stmt) -> bool:
+    if not isinstance(statement, ast.Expr) or not isinstance(statement.value, ast.Call):
+        return False
+    call = statement.value
+    if not (
+        isinstance(call.func, ast.Attribute)
+        and isinstance(call.func.value, ast.Name)
+        and call.func.value.id == "result"
+        and call.func.attr == "update"
+        and len(call.args) == 1
+    ):
+        return False
+    return isinstance(call.args[0], ast.Call) and _call_name(call.args[0]) == "verify_jsonl_bundle"
 
 
 def _calls_in_statements(statements: list[ast.stmt]) -> list[ast.Call]:
@@ -207,17 +241,15 @@ def inspect_jsonl_retention_invariant(source: str, *, backup_daily_source: str) 
     ):
         errors.append("coverage must read the recorded archive md5 from persisted state")
 
-    if not _has_reachable_compare(
+    if not _has_exact_false_rejection(
         state_matches,
-        operator=ast.NotIn,
-        terms=("archive_id", "surviving_archives"),
+        condition="not isinstance(archive_id, str) or archive_id not in surviving_archives",
         parents=parents,
     ):
         errors.append("coverage must reject archive IDs absent from the live Drive inventory")
-    if not _has_reachable_compare(
+    if not _has_exact_false_rejection(
         state_matches,
-        operator=ast.NotEq,
-        terms=("live_md5", "recorded_md5"),
+        condition="not isinstance(live_md5, str) or live_md5 != recorded_md5",
         parents=parents,
     ):
         errors.append("coverage must reject a surviving Drive object whose archived bytes changed")
@@ -253,7 +285,13 @@ def inspect_jsonl_retention_invariant(source: str, *, backup_daily_source: str) 
     verified_gates = [
         node for node in ast.walk(run_backup) if isinstance(node, ast.If) and _is_exact_verified_upload_gate(node)
     ]
-    verified_gate = verified_gates[0] if len(verified_gates) == 1 else None
+    verified_gate = verified_gates[0] if len(verified_gates) == 1 and verified_gates[0] in run_backup.body else None
+    verification_indexes = [
+        index for index, statement in enumerate(run_backup.body) if _is_verification_update(statement)
+    ]
+    gate_index = run_backup.body.index(verified_gate) if verified_gate is not None else None
+    if len(verification_indexes) != 1 or gate_index != verification_indexes[0] + 1:
+        errors.append("verified-upload deletion gate must consume the bundle verification result without override")
     safe_calls = _calls_in_statements(verified_gate.body) if verified_gate is not None else []
 
     persistence: list[tuple[int, ast.Call, ast.Call]] = []
