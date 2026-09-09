@@ -570,6 +570,8 @@ def test_run_jsonl_backup_second_run_noops_when_state_covers_files(tmp_path, mon
 
     assert first["status"] == "uploaded"
     assert second["status"] == "no-op"
+    assert first["attempted_at"] == second["attempted_at"]
+    assert second["attempted_at"].endswith("+00:00")
     assert second["uploaded"] is False
     assert second["already_covered_files"] == 1
     assert second["message"] == "no-op, 1 files already covered"
@@ -691,6 +693,28 @@ def test_corrupt_jsonl_bundle_verifies_false_and_main_returns_nonzero(tmp_path, 
     assert jsonl_backup.main() == 1
     payload = json.loads(capsys.readouterr().out)
     assert payload["verified"] is False
+
+
+def test_jsonl_backup_main_persists_terminal_failure_to_attempt_log(tmp_path, monkeypatch, capsys):
+    from brainlayer import jsonl_backup
+
+    log_path = tmp_path / "jsonl-backup.log"
+    monkeypatch.setenv("BRAINLAYER_JSONL_BACKUP_LOG_PATH", str(log_path))
+    monkeypatch.setattr(jsonl_backup, "_configured_backup_timeout_seconds", lambda: None)
+    monkeypatch.setattr(
+        jsonl_backup,
+        "run_backup",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("upload exploded")),
+    )
+
+    assert jsonl_backup.main() == 1
+
+    stdout_payload = json.loads(capsys.readouterr().out)
+    logged_payload = json.loads(log_path.read_text(encoding="utf-8"))
+    assert logged_payload == stdout_payload
+    assert logged_payload["status"] == "failed"
+    assert logged_payload["verified"] is False
+    assert logged_payload["attempted_at"].endswith("+00:00")
 
 
 def test_jsonl_backup_launchd_plist_and_docstring_install_note_are_committed():

@@ -48,6 +48,8 @@ DEFAULT_BACKLOG_BATCH = 4
 DEFAULT_HEAL_MIN_CONSECUTIVE_FAILURES = 2
 DEFAULT_HEAL_CIRCUIT_BREAKER_LIMIT = 3
 DEFAULT_MAX_DURATION_SECONDS = 45.0
+DEFAULT_JSONL_BACKUP_LOG_PATH = Path("~/.local/share/brainlayer/logs/jsonl-backup.log").expanduser()
+DEFAULT_JSONL_BACKUP_MAX_AGE_SECONDS = 36 * 60 * 60
 HEAL_MIN_CONSECUTIVE_FAILURES_ENV = "BRAINLAYER_HEAL_MIN_CONSECUTIVE_FAILURES"
 
 MISSING_EMBEDDINGS_SQL = """
@@ -134,6 +136,18 @@ class HealthCheckConfig:
         default_factory=lambda: Path("~/.local/share/brainlayer/drain-health.json").expanduser()
     )
     t3_health_path: Path = field(default_factory=lambda: Path("~/.local/share/brainlayer/t3-health.json").expanduser())
+    jsonl_backup_log_path: Path = field(
+        default_factory=lambda: Path(
+            os.environ.get("BRAINLAYER_JSONL_BACKUP_LOG_PATH", str(DEFAULT_JSONL_BACKUP_LOG_PATH))
+        ).expanduser()
+    )
+    jsonl_backup_max_age_seconds: int = field(
+        default_factory=lambda: _env_int(
+            "BRAINLAYER_JSONL_BACKUP_MAX_AGE_SECONDS",
+            DEFAULT_JSONL_BACKUP_MAX_AGE_SECONDS,
+            minimum=60 * 60,
+        )
+    )
     queue_dir: Path = field(default_factory=lambda: Path("~/.brainlayer/queue").expanduser())
     pending_stores_path: Path = field(
         default_factory=lambda: Path("~/.local/share/brainlayer/pending-stores.jsonl").expanduser()
@@ -176,6 +190,17 @@ class LockHolder:
     held_ticks: int = 0
 
 
+@dataclass(frozen=True)
+class JsonlBackupHealth:
+    state: str
+    status: str | None = None
+    attempted_at: str | None = None
+    age_seconds: float | None = None
+    verified: bool | None = None
+    archive: str | None = None
+    detail: str | None = None
+
+
 @dataclass
 class HealthCheckResult:
     checked_at: str
@@ -194,6 +219,7 @@ class HealthCheckResult:
     slow_check: bool = False
     slow_check_stage: str | None = None
     t3_health: dict[str, Any] | None = None
+    jsonl_backup: JsonlBackupHealth | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -787,6 +813,110 @@ def _load_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _jsonl_backup_attempt_time(payload: dict[str, Any]) -> datetime | None:
+    raw_attempted_at = payload.get("attempted_at")
+    if isinstance(raw_attempted_at, str) and raw_attempted_at:
+        try:
+            attempted_at = datetime.fromisoformat(raw_attempted_at.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if attempted_at.tzinfo is None:
+            return None
+        return attempted_at.astimezone(UTC)
+
+    archive = payload.get("archive")
+    if not isinstance(archive, str):
+        return None
+    legacy_date = re.search(r"claude-jsonl-(\d{4}-\d{2}-\d{2})\.tar\.gz$", archive)
+    if legacy_date is None:
+        return None
+    try:
+        # Legacy archive names carry only the UTC date, while launchd schedules
+        # 05:00 in the producer machine's local timezone. Interpret that date at
+        # the local scheduled hour; every new receipt has an exact attempted_at,
+        # so this machine-local compatibility path disappears after one run.
+        scheduled_local = datetime.fromisoformat(f"{legacy_date.group(1)}T05:00:00")
+        return scheduled_local.astimezone(UTC)
+    except ValueError:
+        return None
+
+
+def inspect_jsonl_backup_health(
+    log_path: Path,
+    *,
+    now: datetime,
+    max_age_seconds: int,
+) -> tuple[JsonlBackupHealth, HealthIssue | None]:
+    """Classify the latest durable backup attempt from an independent process."""
+    resolved = log_path.expanduser()
+    try:
+        lines = [line for line in resolved.read_text(encoding="utf-8").splitlines() if line.strip()]
+    except FileNotFoundError:
+        status = JsonlBackupHealth(state="missing", detail=f"attempt log does not exist: {resolved}")
+        return status, HealthIssue("jsonl_backup_attempt_missing", "critical", status.detail)
+    except OSError as exc:
+        status = JsonlBackupHealth(state="invalid", detail=f"attempt log unreadable: {resolved}: {exc}")
+        return status, HealthIssue("jsonl_backup_attempt_invalid", "critical", status.detail)
+
+    if not lines:
+        status = JsonlBackupHealth(state="missing", detail=f"attempt log is empty: {resolved}")
+        return status, HealthIssue("jsonl_backup_attempt_missing", "critical", status.detail)
+    try:
+        payload = json.loads(lines[-1])
+    except json.JSONDecodeError as exc:
+        status = JsonlBackupHealth(state="invalid", detail=f"latest attempt receipt is malformed JSON: {exc}")
+        return status, HealthIssue("jsonl_backup_attempt_invalid", "critical", status.detail)
+    if not isinstance(payload, dict):
+        status = JsonlBackupHealth(state="invalid", detail="latest attempt receipt is not a JSON object")
+        return status, HealthIssue("jsonl_backup_attempt_invalid", "critical", status.detail)
+
+    attempted_at = _jsonl_backup_attempt_time(payload)
+    raw_status = payload.get("status")
+    backup_status = raw_status if isinstance(raw_status, str) else None
+    verified = payload.get("verified") if isinstance(payload.get("verified"), bool) else None
+    archive = payload.get("archive") if isinstance(payload.get("archive"), str) else None
+    if attempted_at is None:
+        status = JsonlBackupHealth(
+            state="invalid",
+            status=backup_status,
+            verified=verified,
+            archive=archive,
+            detail="latest attempt receipt has no valid timezone-aware attempted_at or legacy archive date",
+        )
+        return status, HealthIssue("jsonl_backup_attempt_invalid", "critical", status.detail)
+
+    normalized_now = now.astimezone(UTC) if now.tzinfo is not None else now.replace(tzinfo=UTC)
+    age_seconds = max(0.0, (normalized_now - attempted_at).total_seconds())
+    common = {
+        "status": backup_status,
+        "attempted_at": attempted_at.isoformat(),
+        "age_seconds": age_seconds,
+        "verified": verified,
+        "archive": archive,
+    }
+    if age_seconds > max_age_seconds:
+        detail = (
+            f"latest JSONL backup attempt is stale: attempted_at={attempted_at.isoformat()} "
+            f"age_seconds={age_seconds:.0f} threshold_seconds={max_age_seconds} status={backup_status}"
+        )
+        status = JsonlBackupHealth(state="stale", detail=detail, **common)
+        return status, HealthIssue("jsonl_backup_attempt_stale", "critical", detail)
+
+    if backup_status == "no-op" and verified is True:
+        return JsonlBackupHealth(
+            state="no_op", detail=str(payload.get("message") or "legitimate no-op"), **common
+        ), None
+    if backup_status == "created" and verified is True:
+        return JsonlBackupHealth(state="verified_bundle", **common), None
+    if backup_status == "uploaded" and verified is True and payload.get("uploaded") is True:
+        return JsonlBackupHealth(state="verified_bundle", **common), None
+
+    error = payload.get("error") or payload.get("verification_error") or "unverified terminal result"
+    detail = f"latest JSONL backup attempt failed: status={backup_status} error={error}"
+    status = JsonlBackupHealth(state="failed", detail=detail, **common)
+    return status, HealthIssue("jsonl_backup_attempt_failed", "critical", detail)
+
+
 def _t3_health_issue(payload: dict[str, Any]) -> HealthIssue | None:
     """Turn the T3 adapter's durable health snapshot into a check issue."""
     if not payload.get("alerting"):
@@ -1095,6 +1225,14 @@ def run_health_check(
         if monotonic_fn() < deadline_at:
             return None
         return finish_slow(stage, f"health-check exceeded {config.max_duration_seconds:.0f}s during {stage}")
+
+    result.jsonl_backup, jsonl_backup_issue = inspect_jsonl_backup_health(
+        config.jsonl_backup_log_path,
+        now=now,
+        max_age_seconds=config.jsonl_backup_max_age_seconds,
+    )
+    if jsonl_backup_issue is not None:
+        add_issue(jsonl_backup_issue.code, jsonl_backup_issue.severity, jsonl_backup_issue.message)
 
     pause_payload, pause_active, pause_stale = _pause_sentinel_state(config, now)
 
