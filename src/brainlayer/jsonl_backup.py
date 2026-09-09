@@ -14,6 +14,8 @@ opaque `.pb` implicit records, and per-session `.system_generated` /
 from __future__ import annotations
 
 import datetime as dt
+import fcntl
+import functools
 import hashlib
 import json
 import os
@@ -490,11 +492,15 @@ def verify_jsonl_bundle(
                     if not member.isfile():
                         result["verification_error"] = f"archive member is not a regular file: {member.name}"
                         return result
+                    candidate = expected_by_name[member.name]
+                    if member.size != candidate.size:
+                        result["verification_error"] = f"archive member size differs from candidate: {member.name}"
+                        return result
                     extracted = archive.extractfile(member)
                     if extracted is None:
                         result["verification_error"] = f"archive member cannot be read: {member.name}"
                         return result
-                    comparison = _compare_member_to_source(extracted, expected_by_name[member.name].path)
+                    comparison = _compare_member_to_source(extracted, candidate.path)
                     if comparison == "diverged":
                         result["verification_error"] = f"archive member differs from source bytes: {member.name}"
                         return result
@@ -502,6 +508,8 @@ def verify_jsonl_bundle(
                         result["append_snapshot_file_count"] += 1
                     result["content_verified_file_count"] += 1
         result["verified"] = True
+    except backup_daily.BackupTimeoutError:
+        raise
     except Exception as exc:
         result.setdefault("gzip_test", False)
         result["verification_error"] = str(exc)
@@ -564,6 +572,22 @@ def _enqueue_run_summary(result: dict[str, Any], *, queue_dir: Path | None) -> N
     )
 
 
+def _serialized_by_staging_dir(function):
+    """Serialize discovery through state persistence for one staging directory."""
+
+    @functools.wraps(function)
+    def wrapper(*args, **kwargs):
+        staging_dir = Path(kwargs.get("staging_dir", DEFAULT_STAGING_DIR)).expanduser()
+        staging_dir.mkdir(parents=True, exist_ok=True)
+        lock_path = staging_dir / ".jsonl-backup.lock"
+        with lock_path.open("a") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            return function(*args, **kwargs)
+
+    return wrapper
+
+
+@_serialized_by_staging_dir
 def run_backup(
     *,
     source_roots: list[Path | BackupSourceRoot] | None = None,
