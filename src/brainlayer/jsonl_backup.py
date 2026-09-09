@@ -14,6 +14,7 @@ opaque `.pb` implicit records, and per-session `.system_generated` /
 from __future__ import annotations
 
 import datetime as dt
+import gzip
 import hashlib
 import json
 import os
@@ -335,6 +336,24 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _sha256_gzip_payload(path: Path) -> str:
+    """Address valid gzip archives by their logical payload, not header metadata.
+
+    Retrying a bundle can change the gzip header timestamp while preserving the
+    tar payload. A payload-derived destination therefore reuses the same iCloud
+    object after a later Drive failure instead of accumulating untracked copies.
+    Non-gzip inputs retain byte-addressed behavior for compatibility.
+    """
+    digest = hashlib.sha256()
+    try:
+        with gzip.open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except (gzip.BadGzipFile, EOFError, OSError):
+        return _sha256_file(path)
+    return digest.hexdigest()
+
+
 _ICLOUD_STATUS_SCRIPT = r"""
 ObjC.import("Foundation");
 const args = $.NSProcessInfo.processInfo.arguments;
@@ -438,9 +457,10 @@ def copy_archive_to_icloud(
     icloud_dir.mkdir(parents=True, exist_ok=True)
     expected_size = archive_path.stat().st_size
     expected_sha256 = _sha256_file(archive_path)
+    logical_sha256 = _sha256_gzip_payload(archive_path)
     suffix = "".join(archive_path.suffixes)
     stem = archive_path.name[: -len(suffix)] if suffix else archive_path.name
-    destination = icloud_dir / f"{stem}-{expected_sha256}{suffix}"
+    destination = icloud_dir / f"{stem}-{logical_sha256}{suffix}"
     temp_path = icloud_dir / f".{destination.name}.{os.getpid()}.partial"
     try:
         with archive_path.open("rb") as source, temp_path.open("xb") as destination_handle:
@@ -713,6 +733,7 @@ def run_backup(
     state_path = Path(state_path).expanduser()
     state = _load_state(state_path)
     selection_state = state
+    icloud_bootstrap_pending = False
     if upload and icloud_dir is not None:
         configured_icloud_dir = str(Path(icloud_dir).expanduser())
         icloud_covered = state.get("icloud_verified") is True and state.get("icloud_directory") == configured_icloud_dir
@@ -720,6 +741,7 @@ def run_backup(
             # Legacy state proves only Drive coverage. The first iCloud-enabled run
             # must seed iCloud with every source rather than falsely returning no-op.
             selection_state = {"files": {}}
+            icloud_bootstrap_pending = True
     candidates = _discover_jsonl_candidates(roots)
     credentials = None
     service = None
@@ -806,7 +828,9 @@ def run_backup(
                 archive_id=file_id,
                 archive_md5=uploaded.get("md5Checksum"),
                 digests=bundle_digests,
-                icloud_dir=icloud_dir,
+                # An active source was deliberately omitted from this bootstrap.
+                # Leave the global marker unset so the next run seeds that source.
+                icloud_dir=icloud_dir if not (icloud_bootstrap_pending and active) else None,
             ),
         )
         try:
