@@ -113,9 +113,27 @@ def test_jsonl_retention_invariant_is_a_ci_guard_not_only_a_behavior_fixture():
         '"&fields=id,name,size,md5Checksum"',
         '"&fields=id,name,size"',
         1,
+    ).replace(
+        '"""Upload large backups with Drive\'s raw resumable protocol."""',
+        '"""Upload large backups; mention md5Checksum without requesting it."""',
+        1,
     )
     assert "Drive upload must request md5Checksum from the API" in (
         inspect_jsonl_retention_invariant(source, backup_daily_source=unsafe_backup_daily)
+    )
+
+    duplicate_definition = (
+        source
+        + """
+def _state_matches(entry, candidate, surviving_archives=None):
+    return True
+"""
+    )
+    assert "required retention function is missing: _state_matches" in (
+        inspect_jsonl_retention_invariant(
+            duplicate_definition,
+            backup_daily_source=backup_daily_source,
+        )
     )
 
     persisted_state_block = """        _atomic_write_json(

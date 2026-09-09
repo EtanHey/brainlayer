@@ -11,6 +11,7 @@ from __future__ import annotations
 import ast
 import sys
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 REFACTOR_GUIDANCE = (
     "PR #815 shipped an integrity check that could never execute while its tests passed. "
@@ -23,10 +24,10 @@ def _with_refactor_guidance(errors: list[str]) -> list[str]:
 
 
 def _function(tree: ast.AST, name: str) -> ast.FunctionDef | None:
-    return next(
-        (node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == name),
-        None,
-    )
+    definitions = [
+        node for node in getattr(tree, "body", []) if isinstance(node, ast.FunctionDef) and node.name == name
+    ]
+    return definitions[0] if len(definitions) == 1 else None
 
 
 def _call_name(call: ast.Call) -> str | None:
@@ -150,6 +151,16 @@ def _keyword_matches(call: ast.Call, *, name: str, expression: str) -> bool:
     )
 
 
+def _upload_requests_md5(function: ast.FunctionDef) -> bool:
+    for call in _calls(function, "post"):
+        if not call.args or not isinstance(call.args[0], ast.Constant) or not isinstance(call.args[0].value, str):
+            continue
+        fields = parse_qs(urlsplit(call.args[0].value).query).get("fields", [])
+        if any("md5Checksum" in value.split(",") for value in fields):
+            return True
+    return False
+
+
 def inspect_jsonl_retention_invariant(source: str, *, backup_daily_source: str) -> list[str]:
     """Return deterministic violations of the PR #815 surviving-copy contract."""
     try:
@@ -271,10 +282,7 @@ def inspect_jsonl_retention_invariant(source: str, *, backup_daily_source: str) 
     ):
         errors.append("uploaded state must persist md5Checksum from the upload response")
 
-    if not any(
-        isinstance(node, ast.Constant) and isinstance(node.value, str) and "md5Checksum" in node.value
-        for node in ast.walk(upload_file)
-    ):
+    if not _upload_requests_md5(upload_file):
         errors.append("Drive upload must request md5Checksum from the API")
 
     prune_calls = _calls(run_backup, "prune_drive_backups")
