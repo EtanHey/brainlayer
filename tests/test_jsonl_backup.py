@@ -214,11 +214,16 @@ def test_concurrent_jsonl_backups_serialize_creation_through_state_persistence(t
     upload_started = threading.Event()
     release_upload = threading.Event()
     uploads: list[bytes] = []
+    surviving: list[dict] = []
     results: list[dict] = []
     errors: list[BaseException] = []
 
     monkeypatch.setattr(jsonl_backup.backup_daily, "get_drive_credentials", lambda: object())
-    monkeypatch.setattr(jsonl_backup.backup_daily, "build_drive_service", lambda: object())
+    monkeypatch.setattr(
+        jsonl_backup.backup_daily,
+        "build_drive_service",
+        lambda: _drive_service_with_surviving(surviving),
+    )
     monkeypatch.setattr(jsonl_backup.backup_daily, "ensure_drive_folder_chain", lambda *args: "folder-id")
     monkeypatch.setattr(jsonl_backup.backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
     monkeypatch.setattr(jsonl_backup.backup_daily, "prune_drive_backups", lambda *args, **kwargs: [])
@@ -228,11 +233,14 @@ def test_concurrent_jsonl_backups_serialize_creation_through_state_persistence(t
         if len(uploads) == 1:
             upload_started.set()
             assert release_upload.wait(timeout=2)
-        return {
+        uploaded = {
             "id": f"drive-{len(uploads)}",
             "name": Path(file_path).name,
             "size": str(Path(file_path).stat().st_size),
+            "md5Checksum": f"md5-{len(uploads)}",
         }
+        surviving.append(uploaded)
+        return uploaded
 
     monkeypatch.setattr(jsonl_backup.backup_daily, "upload_file_to_drive_raw", fake_upload)
     kwargs = {

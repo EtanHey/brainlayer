@@ -696,7 +696,7 @@ def run_backup(
         )
         result.update({"status": "uploaded", "uploaded": True, "drive_file": uploaded})
 
-    if upload:
+    if result["verified"] and upload:
         _atomic_write_json(
             state_path,
             _update_state_for_uploaded(
