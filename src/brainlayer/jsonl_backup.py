@@ -468,6 +468,10 @@ def copy_archive_to_icloud(
     stem = archive_path.name[: -len(suffix)] if suffix else archive_path.name
     destination = icloud_dir / f"{stem}-{logical_sha256}{suffix}"
     placeholder = destination.with_name(f".{destination.name}.icloud")
+    deadline = time.monotonic() + timeout_seconds
+
+    def remaining_seconds() -> float:
+        return max(deadline - time.monotonic(), 0.001)
 
     def receipt(*, reused: bool) -> dict[str, Any]:
         actual_size = destination.stat().st_size
@@ -490,16 +494,11 @@ def copy_archive_to_icloud(
     # identical, which is exactly what the logical address represents.
     if destination.exists() or placeholder.exists():
         try:
-            deadline = time.monotonic() + timeout_seconds
-
-            def existing_remaining_seconds() -> float:
-                return max(deadline - time.monotonic(), 0.001)
-
             status_path = placeholder if not destination.exists() and placeholder.exists() else destination
             state = _icloud_item_state(
                 status_path,
                 request_download=True,
-                timeout_seconds=existing_remaining_seconds(),
+                timeout_seconds=remaining_seconds(),
             )
             while True:
                 uploading_error = state.get("uploading_error")
@@ -520,12 +519,12 @@ def copy_archive_to_icloud(
                         f"existing iCloud copy was not uploaded and materialized within {timeout_seconds}s: "
                         f"path={destination} state={state!r}"
                     )
-                time.sleep(min(poll_interval_seconds, existing_remaining_seconds()))
+                time.sleep(min(poll_interval_seconds, remaining_seconds()))
                 status_path = placeholder if not destination.exists() and placeholder.exists() else destination
                 state = _icloud_item_state(
                     status_path,
                     request_download=True,
-                    timeout_seconds=existing_remaining_seconds(),
+                    timeout_seconds=remaining_seconds(),
                 )
         except Exception as exc:
             # This path was not proven usable. Preserve it under a unique hidden
@@ -533,6 +532,8 @@ def copy_archive_to_icloud(
             _quarantine_unverified_icloud_item(destination)
             _quarantine_unverified_icloud_item(placeholder)
             if isinstance(exc, backup_daily.BackupTimeoutError):
+                raise
+            if time.monotonic() >= deadline:
                 raise
 
     temp_path = icloud_dir / f".{destination.name}.{os.getpid()}.partial"
@@ -544,11 +545,6 @@ def copy_archive_to_icloud(
         os.replace(temp_path, destination)
     finally:
         temp_path.unlink(missing_ok=True)
-
-    deadline = time.monotonic() + timeout_seconds
-
-    def remaining_seconds() -> float:
-        return max(deadline - time.monotonic(), 0.001)
 
     verified = False
     try:

@@ -794,6 +794,34 @@ def test_icloud_retry_waits_for_existing_logical_object_to_materialize(tmp_path,
     assert result["reused"] is True
 
 
+def test_existing_icloud_probe_cannot_restart_timeout_for_repair(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    archive = tmp_path / "archive.tar.gz"
+    archive.write_bytes(gzip.compress(b"same tar payload", mtime=1))
+    icloud_dir = tmp_path / "CloudDocs"
+    icloud_dir.mkdir()
+    logical_sha256 = jsonl_backup._sha256_gzip_payload(archive)
+    destination = icloud_dir / f"archive-{logical_sha256}.tar.gz"
+    destination.write_bytes(archive.read_bytes())
+    clock = [0.0]
+    calls = 0
+
+    def exhaust_deadline(*args, **kwargs):  # noqa: ARG001
+        nonlocal calls
+        calls += 1
+        clock[0] = 2.0
+        raise RuntimeError("existing iCloud probe timed out")
+
+    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(jsonl_backup, "_icloud_item_state", exhaust_deadline)
+
+    with pytest.raises(RuntimeError, match="existing iCloud probe timed out"):
+        jsonl_backup.copy_archive_to_icloud(archive, icloud_dir, timeout_seconds=1)
+
+    assert calls == 1
+
+
 def test_icloud_retry_preserves_prior_verified_logical_object(tmp_path, monkeypatch):
     from brainlayer import jsonl_backup
 
