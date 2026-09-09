@@ -1,4 +1,5 @@
 import hashlib
+import io
 import json
 import os
 import tarfile
@@ -61,6 +62,109 @@ def test_jsonl_retention_invariant_is_a_ci_guard_not_only_a_behavior_fixture():
         assert expected_error in inspect_jsonl_retention_invariant(unsafe)
 
 
+def test_jsonl_bundle_round_trips_fixture_byte_identical(tmp_path):
+    from brainlayer import jsonl_backup
+
+    source_root = tmp_path / "sessions"
+    source = source_root / "nested" / "session.jsonl"
+    original = '{"type":"user","message":"raw\\r\\ntext שלום"}\r\n'.encode()
+    source.parent.mkdir(parents=True)
+    source.write_bytes(original)
+    candidates = jsonl_backup._discover_jsonl_candidates([source_root])
+
+    archive = jsonl_backup.create_jsonl_bundle(candidates, tmp_path / "staging", date_stamp="2026-09-09")
+
+    with tarfile.open(archive, "r:gz") as bundle:
+        extracted = bundle.extractfile("source-0/nested/session.jsonl")
+        assert extracted is not None
+        assert extracted.read() == original
+
+    verification = jsonl_backup.verify_jsonl_bundle(archive, expected_candidates=candidates)
+    assert verification["verified"] is True
+    assert verification["content_verified_file_count"] == 1
+
+
+def test_jsonl_bundle_verification_rejects_same_count_with_changed_bytes(tmp_path):
+    from brainlayer import jsonl_backup
+
+    source_root = tmp_path / "sessions"
+    source = source_root / "session.jsonl"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b'{"original":true}\n')
+    candidates = jsonl_backup._discover_jsonl_candidates([source_root])
+    archive = tmp_path / "changed.tar.gz"
+    changed = b'{"original":false}\n'
+    member = tarfile.TarInfo("source-0/session.jsonl")
+    member.size = len(changed)
+    with tarfile.open(archive, "w:gz") as bundle:
+        bundle.addfile(member, io.BytesIO(changed))
+
+    verification = jsonl_backup.verify_jsonl_bundle(archive, expected_candidates=candidates)
+
+    assert verification["verified"] is False
+    assert verification["content_verified_file_count"] == 0
+    assert verification["verification_error"] == "archive member differs from source bytes: source-0/session.jsonl"
+
+
+def test_jsonl_bundle_verification_accepts_and_counts_append_only_snapshot(tmp_path):
+    from brainlayer import jsonl_backup
+
+    source_root = tmp_path / "sessions"
+    source = source_root / "session.jsonl"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b'{"first":true}\n')
+    candidates = jsonl_backup._discover_jsonl_candidates([source_root])
+    archive = jsonl_backup.create_jsonl_bundle(candidates, tmp_path / "staging", date_stamp="2026-09-09")
+    with source.open("ab") as handle:
+        handle.write(b'{"appended":true}\n')
+
+    verification = jsonl_backup.verify_jsonl_bundle(archive, expected_candidates=candidates)
+
+    assert verification["verified"] is True
+    assert verification["content_verified_file_count"] == 1
+    assert verification["append_snapshot_file_count"] == 1
+
+
+def test_jsonl_backup_does_not_upload_or_advance_state_when_content_verification_fails(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    now = time.time()
+    source_root = tmp_path / "sessions"
+    _write_jsonl(source_root / "session.jsonl", mtime=now - 3600)
+    monkeypatch.setattr(
+        jsonl_backup,
+        "verify_jsonl_bundle",
+        lambda *args, **kwargs: {
+            "verified": False,
+            "bundled_file_count": 1,
+            "archive_listing_count": 1,
+            "content_verified_file_count": 0,
+            "verification_error": "archive member differs from source bytes: source-0/session.jsonl",
+        },
+    )
+    monkeypatch.setattr(
+        jsonl_backup.backup_daily,
+        "get_drive_credentials",
+        lambda: pytest.fail("upload must not start before content verification"),
+    )
+
+    result = jsonl_backup.run_backup(
+        source_roots=[source_root],
+        state_path=tmp_path / "state.json",
+        staging_dir=tmp_path / "staging",
+        log_path=tmp_path / "jsonl-backup.log",
+        queue_dir=tmp_path / "queue",
+        date_stamp="2026-09-09",
+        now=now,
+        upload=True,
+    )
+
+    assert result["status"] == "failed"
+    assert result["uploaded"] is False
+    assert result["verified"] is False
+    assert not (tmp_path / "state.json").exists()
+
+
 def test_run_jsonl_backup_uploads_incremental_bundle_verifies_and_enqueues_summary(tmp_path, monkeypatch):
     from brainlayer import jsonl_backup
 
@@ -113,6 +217,7 @@ def test_run_jsonl_backup_uploads_incremental_bundle_verifies_and_enqueues_summa
     assert result["verified"] is True
     assert result["bundled_file_count"] == 3
     assert result["archive_listing_count"] == 3
+    assert result["content_verified_file_count"] == 3
     assert result["skipped_active_count"] == 1
     assert active.as_posix() not in (tmp_path / "state.json").read_text()
     state = json.loads((tmp_path / "state.json").read_text())

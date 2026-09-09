@@ -430,11 +430,36 @@ def create_jsonl_bundle(candidates: list[JsonlCandidate], staging_dir: Path, *, 
     return archive_path
 
 
-def verify_jsonl_bundle(archive_path: Path, *, expected_file_count: int) -> dict[str, Any]:
+def _compare_member_to_source(extracted: Any, source_path: Path) -> str:
+    """Return exact, append_snapshot, or diverged using a bounded byte-for-byte comparison."""
+    with source_path.open("rb") as source:
+        while member_chunk := extracted.read(1024 * 1024):
+            if source.read(len(member_chunk)) != member_chunk:
+                return "diverged"
+        return "append_snapshot" if source.read(1) else "exact"
+
+
+def verify_jsonl_bundle(
+    archive_path: Path,
+    *,
+    expected_file_count: int | None = None,
+    expected_candidates: list[JsonlCandidate] | None = None,
+) -> dict[str, Any]:
+    """Verify a bundle; production callers should supply expected_candidates for content proof."""
+    if expected_candidates is not None:
+        candidate_count = len(expected_candidates)
+        if expected_file_count is not None and expected_file_count != candidate_count:
+            raise ValueError("expected_file_count does not match expected_candidates")
+        expected_file_count = candidate_count
+    if expected_file_count is None:
+        raise ValueError("expected_file_count or expected_candidates is required")
+
     result: dict[str, Any] = {
         "verified": False,
         "bundled_file_count": expected_file_count,
         "archive_listing_count": 0,
+        "content_verified_file_count": 0,
+        "append_snapshot_file_count": 0,
     }
     try:
         subprocess.run(["gunzip", "-t", str(archive_path)], check=True, capture_output=True, text=True)
@@ -447,6 +472,35 @@ def verify_jsonl_bundle(archive_path: Path, *, expected_file_count: int) -> dict
                 f"tar listing count mismatch: expected={expected_file_count} actual={len(entries)}"
             )
             return result
+        if expected_candidates is not None:
+            expected_by_name = {_archive_name(candidate): candidate for candidate in expected_candidates}
+            if len(expected_by_name) != len(expected_candidates):
+                result["verification_error"] = "duplicate archive member name generated for source files"
+                return result
+            with tarfile.open(archive_path, "r:gz") as archive:
+                members = [member for member in archive.getmembers() if not member.isdir()]
+                actual_names = [member.name for member in members]
+                if len(actual_names) != len(set(actual_names)):
+                    result["verification_error"] = "archive contains duplicate member names"
+                    return result
+                if set(actual_names) != set(expected_by_name):
+                    result["verification_error"] = "archive member names do not match source files"
+                    return result
+                for member in members:
+                    if not member.isfile():
+                        result["verification_error"] = f"archive member is not a regular file: {member.name}"
+                        return result
+                    extracted = archive.extractfile(member)
+                    if extracted is None:
+                        result["verification_error"] = f"archive member cannot be read: {member.name}"
+                        return result
+                    comparison = _compare_member_to_source(extracted, expected_by_name[member.name].path)
+                    if comparison == "diverged":
+                        result["verification_error"] = f"archive member differs from source bytes: {member.name}"
+                        return result
+                    if comparison == "append_snapshot":
+                        result["append_snapshot_file_count"] += 1
+                    result["content_verified_file_count"] += 1
         result["verified"] = True
     except Exception as exc:
         result.setdefault("gzip_test", False)
@@ -578,7 +632,7 @@ def run_backup(
     archive_size = archive_path.stat().st_size
     result = {
         "attempted_at": attempted_at,
-        "status": "uploaded" if upload else "created",
+        "status": "created",
         "archive": str(archive_path),
         "bytes": archive_size,
         "uploaded": False,
@@ -592,6 +646,14 @@ def run_backup(
         "forever_uploaded_file_count": 0,
         "forever_files": [],
     }
+
+    result.update(verify_jsonl_bundle(archive_path, expected_candidates=changed))
+    if not result["verified"]:
+        result["status"] = "failed"
+        result["message"] = f"local bundle verification failed: {result.get('verification_error', 'unknown error')}"
+        _append_json_log(log_path, result)
+        _enqueue_run_summary(result, queue_dir=queue_dir)
+        return result
 
     if upload:
         if service is None:
@@ -608,14 +670,9 @@ def run_backup(
             expected_name=archive_path.name,
             expected_size=archive_size,
         )
-        result.update({"uploaded": True, "drive_file": uploaded})
+        result.update({"status": "uploaded", "uploaded": True, "drive_file": uploaded})
 
-    result.update(verify_jsonl_bundle(archive_path, expected_file_count=len(changed)))
-    if result["verified"] and upload:
-        # The same incident was two individually reasonable deletions composed together:
-        # successful upload removed local staging, then Drive retention removed the remote
-        # bundle. Persist the exact Drive object and archived-source digests before either
-        # deletion path runs so the next selection cannot silently trust the dead copy.
+    if upload:
         _atomic_write_json(
             state_path,
             _update_state_for_uploaded(
