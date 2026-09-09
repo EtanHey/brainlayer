@@ -462,7 +462,66 @@ def copy_archive_to_icloud(
     suffix = "".join(archive_path.suffixes)
     stem = archive_path.name[: -len(suffix)] if suffix else archive_path.name
     destination = icloud_dir / f"{stem}-{logical_sha256}{suffix}"
-    replaced_existing = destination.exists()
+    placeholder = destination.with_name(f".{destination.name}.icloud")
+
+    def receipt(*, reused: bool) -> dict[str, Any]:
+        actual_size = destination.stat().st_size
+        actual_sha256 = _sha256_file(destination)
+        return {
+            "path": str(destination),
+            "uploaded": True,
+            "materialization": "MATERIALIZED",
+            "bytes": actual_size,
+            "sha256": actual_sha256,
+            "source_sha256": expected_sha256,
+            "logical_sha256": logical_sha256,
+            "downloading_status": "current",
+            "reused": reused,
+        }
+
+    # A logical address is immutable. If a prior verified copy already occupies
+    # it, materialize and validate that object rather than replacing it before a
+    # retry is proven. Gzip header metadata may differ while the tar payload is
+    # identical, which is exactly what the logical address represents.
+    if destination.exists() or placeholder.exists():
+        deadline = time.monotonic() + timeout_seconds
+
+        def existing_remaining_seconds() -> float:
+            return max(deadline - time.monotonic(), 0.001)
+
+        status_path = placeholder if not destination.exists() and placeholder.exists() else destination
+        state = _icloud_item_state(
+            status_path,
+            request_download=True,
+            timeout_seconds=existing_remaining_seconds(),
+        )
+        while True:
+            uploading_error = state.get("uploading_error")
+            if uploading_error:
+                raise RuntimeError(f"existing iCloud upload failed for {destination}: {uploading_error}")
+            uploaded = state.get("is_uploaded") is True and state.get("is_uploading") is False
+            materialized = state.get("downloading_status") == "current" and destination.is_file()
+            if state.get("is_ubiquitous") is True and uploaded and materialized:
+                actual_logical_sha256 = _sha256_gzip_payload(destination)
+                if actual_logical_sha256 != logical_sha256:
+                    raise RuntimeError(
+                        "iCloud logical-address collision: "
+                        f"path={destination} expected={logical_sha256} actual={actual_logical_sha256}"
+                    )
+                return receipt(reused=True)
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    f"existing iCloud copy was not uploaded and materialized within {timeout_seconds}s: "
+                    f"path={destination} state={state!r}"
+                )
+            time.sleep(min(poll_interval_seconds, existing_remaining_seconds()))
+            status_path = placeholder if not destination.exists() and placeholder.exists() else destination
+            state = _icloud_item_state(
+                status_path,
+                request_download=True,
+                timeout_seconds=existing_remaining_seconds(),
+            )
+
     temp_path = icloud_dir / f".{destination.name}.{os.getpid()}.partial"
     try:
         with archive_path.open("rb") as source, temp_path.open("xb") as destination_handle:
@@ -479,7 +538,6 @@ def copy_archive_to_icloud(
         return max(deadline - time.monotonic(), 0.001)
 
     verified = False
-    consecutive_ready_observations = 0
     try:
         state = _icloud_item_state(destination, request_download=True, timeout_seconds=remaining_seconds())
         while True:
@@ -489,30 +547,16 @@ def copy_archive_to_icloud(
             uploaded = state.get("is_uploaded") is True and state.get("is_uploading") is False
             materialized = state.get("downloading_status") == "current" and destination.is_file()
             if state.get("is_ubiquitous") is True and uploaded and materialized:
-                consecutive_ready_observations += 1
-                # Replacing a previously uploaded logical object can briefly expose
-                # stale ready metadata before iCloud notices the new bytes. Require
-                # a second observation after a poll boundary in that case.
-                if not replaced_existing or consecutive_ready_observations >= 2:
-                    actual_size = destination.stat().st_size
-                    actual_sha256 = _sha256_file(destination)
-                    if actual_size != expected_size or actual_sha256 != expected_sha256:
-                        raise RuntimeError(
-                            "iCloud copy content mismatch: "
-                            f"expected size={expected_size} sha256={expected_sha256}, "
-                            f"actual size={actual_size} sha256={actual_sha256}"
-                        )
-                    verified = True
-                    return {
-                        "path": str(destination),
-                        "uploaded": True,
-                        "materialization": "MATERIALIZED",
-                        "bytes": actual_size,
-                        "sha256": actual_sha256,
-                        "downloading_status": state["downloading_status"],
-                    }
-            else:
-                consecutive_ready_observations = 0
+                actual_size = destination.stat().st_size
+                actual_sha256 = _sha256_file(destination)
+                if actual_size != expected_size or actual_sha256 != expected_sha256:
+                    raise RuntimeError(
+                        "iCloud copy content mismatch: "
+                        f"expected size={expected_size} sha256={expected_sha256}, "
+                        f"actual size={actual_size} sha256={actual_sha256}"
+                    )
+                verified = True
+                return receipt(reused=False)
             if time.monotonic() >= deadline:
                 placeholder = destination.with_name(f".{destination.name}.icloud")
                 materialization = "PLACEHOLDER" if placeholder.exists() or not destination.exists() else "PENDING"

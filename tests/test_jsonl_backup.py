@@ -328,10 +328,11 @@ def test_icloud_retry_reuses_logical_gzip_payload_destination(tmp_path, monkeypa
 
     assert first_result["path"] == second_result["path"]
     assert list(icloud_dir.iterdir()) == [Path(second_result["path"])]
-    assert Path(second_result["path"]).read_bytes() == second.read_bytes()
+    assert second_result["reused"] is True
+    assert Path(second_result["path"]).read_bytes() == first.read_bytes()
 
 
-def test_icloud_replacement_ignores_stale_initial_uploaded_state(tmp_path, monkeypatch):
+def test_icloud_retry_waits_for_existing_logical_object_to_materialize(tmp_path, monkeypatch):
     from brainlayer import jsonl_backup
 
     first = tmp_path / "first" / "claude-jsonl-2026-09-09.tar.gz"
@@ -350,23 +351,53 @@ def test_icloud_replacement_ignores_stale_initial_uploaded_state(tmp_path, monke
 
     states = iter(
         [
-            _icloud_state(uploaded=True, status="current"),
-            _icloud_state(uploaded=False, status="current"),
-            _icloud_state(uploaded=True, status="current"),
+            _icloud_state(uploaded=False, status="notDownloaded"),
             _icloud_state(uploaded=True, status="current"),
         ]
     )
     observed: list[dict] = []
 
-    def stale_then_current(*args, **kwargs):  # noqa: ARG001
+    def pending_then_current(*args, **kwargs):  # noqa: ARG001
         state = next(states)
         observed.append(state)
         return state
 
-    monkeypatch.setattr(jsonl_backup, "_icloud_item_state", stale_then_current)
-    jsonl_backup.copy_archive_to_icloud(second, icloud_dir, timeout_seconds=1, poll_interval_seconds=0)
+    monkeypatch.setattr(jsonl_backup, "_icloud_item_state", pending_then_current)
+    result = jsonl_backup.copy_archive_to_icloud(second, icloud_dir, timeout_seconds=1, poll_interval_seconds=0)
 
-    assert len(observed) == 4
+    assert len(observed) == 2
+    assert result["reused"] is True
+
+
+def test_icloud_retry_preserves_prior_verified_logical_object(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    first = tmp_path / "first" / "claude-jsonl-2026-09-09.tar.gz"
+    second = tmp_path / "second" / first.name
+    first.parent.mkdir()
+    second.parent.mkdir()
+    first.write_bytes(gzip.compress(b"same tar payload", mtime=1))
+    second.write_bytes(gzip.compress(b"same tar payload", mtime=2))
+    icloud_dir = tmp_path / "CloudDocs"
+    monkeypatch.setattr(
+        jsonl_backup,
+        "_icloud_item_state",
+        lambda *args, **kwargs: _icloud_state(uploaded=True, status="current"),
+    )
+    first_result = jsonl_backup.copy_archive_to_icloud(first, icloud_dir, timeout_seconds=1)
+    destination = Path(first_result["path"])
+
+    def only_prior_object_is_verified(path, **kwargs):  # noqa: ARG001
+        if Path(path).read_bytes() == first.read_bytes():
+            return _icloud_state(uploaded=True, status="current")
+        raise RuntimeError("replacement upload failed")
+
+    monkeypatch.setattr(jsonl_backup, "_icloud_item_state", only_prior_object_is_verified)
+    second_result = jsonl_backup.copy_archive_to_icloud(second, icloud_dir, timeout_seconds=1)
+
+    assert second_result["reused"] is True
+    assert destination.read_bytes() == first.read_bytes()
+    assert list(icloud_dir.iterdir()) == [destination]
 
 
 def test_icloud_poll_sleep_cannot_overshoot_deadline(tmp_path, monkeypatch):
