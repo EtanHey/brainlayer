@@ -10,6 +10,15 @@ import ast
 import sys
 from pathlib import Path
 
+REFACTOR_GUIDANCE = (
+    "PR #815 shipped an integrity check that could never execute while its tests passed. "
+    "If you refactored deliberately, UPDATE this guard; do not delete it."
+)
+
+
+def _with_refactor_guidance(errors: list[str]) -> list[str]:
+    return [*errors, REFACTOR_GUIDANCE] if errors else errors
+
 
 def _function(tree: ast.AST, name: str) -> ast.FunctionDef | None:
     return next(
@@ -87,7 +96,7 @@ def inspect_jsonl_retention_invariant(source: str) -> list[str]:
         if function is None:
             errors.append(f"required retention function is missing: {name}")
     if errors:
-        return errors
+        return _with_refactor_guidance(errors)
 
     assert state_matches is not None
     assert select_candidates is not None
@@ -159,7 +168,7 @@ def inspect_jsonl_retention_invariant(source: str) -> list[str]:
     ):
         errors.append("surviving-copy provenance must be persisted before any backup deletion call")
 
-    return errors
+    return _with_refactor_guidance(errors)
 
 
 def main(argv: list[str] | None = None) -> int:
