@@ -672,14 +672,7 @@ def run_backup(
     }
 
     result.update(verify_jsonl_bundle(archive_path, expected_candidates=changed))
-    if not result["verified"]:
-        result["status"] = "failed"
-        result["message"] = f"local bundle verification failed: {result.get('verification_error', 'unknown error')}"
-        _append_json_log(log_path, result)
-        _enqueue_run_summary(result, queue_dir=queue_dir)
-        return result
-
-    if upload:
+    if result["verified"] and upload:
         if service is None:
             credentials = backup_daily.get_drive_credentials()
             service = backup_daily.build_drive_service()
@@ -695,8 +688,6 @@ def run_backup(
             expected_size=archive_size,
         )
         result.update({"status": "uploaded", "uploaded": True, "drive_file": uploaded})
-
-    if result["verified"] and upload:
         _atomic_write_json(
             state_path,
             _update_state_for_uploaded(
@@ -733,6 +724,12 @@ def run_backup(
             # invariant rather than an optional integrity check (2026-09-09 / PR #815).
             archive_path.unlink(missing_ok=True)
             result["local_archive_removed"] = True
+    elif not result["verified"]:
+        result["status"] = "failed"
+        result["message"] = f"local bundle verification failed: {result.get('verification_error', 'unknown error')}"
+        _append_json_log(log_path, result)
+        _enqueue_run_summary(result, queue_dir=queue_dir)
+        return result
 
     _append_json_log(log_path, result)
     _enqueue_run_summary(result, queue_dir=queue_dir)
