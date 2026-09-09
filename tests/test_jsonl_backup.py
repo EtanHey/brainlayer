@@ -486,26 +486,28 @@ def test_run_jsonl_backup_second_run_noops_when_state_covers_files(tmp_path, mon
     source_root = tmp_path / "sessions"
     _write_jsonl(source_root / "covered.jsonl", mtime=now - 3600)
     uploads: list[Path] = []
+    # The bundle uploaded by the first run is still present for the second run, so the
+    # no-op is legitimate: a surviving archive object really does hold these bytes.
+    surviving: list[dict] = []
 
     monkeypatch.setattr(jsonl_backup.backup_daily, "get_drive_credentials", lambda *args, **kwargs: object())
-    monkeypatch.setattr(jsonl_backup.backup_daily, "build_drive_service", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        jsonl_backup.backup_daily, "build_drive_service", lambda *a, **k: _drive_service_with_surviving(surviving)
+    )
     monkeypatch.setattr(
         jsonl_backup.backup_daily, "ensure_drive_folder_chain", lambda service, folder_parts: "folder-id"
     )
     monkeypatch.setattr(jsonl_backup.backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
     monkeypatch.setattr(jsonl_backup.backup_daily, "prune_drive_backups", lambda *args, **kwargs: [])
-    monkeypatch.setattr(
-        jsonl_backup.backup_daily,
-        "upload_file_to_drive_raw",
-        lambda file_path, folder_id, credentials: (
-            uploads.append(Path(file_path))  # noqa: ARG005
-            or {
-                "id": f"drive-{len(uploads)}",
-                "name": Path(file_path).name,
-                "size": str(Path(file_path).stat().st_size),
-            }
-        ),
-    )
+
+    def _upload(file_path, folder_id, credentials):
+        path = Path(file_path)
+        uploads.append(path)
+        obj = {"id": f"drive-{len(uploads)}", "name": path.name, "md5Checksum": f"md5-{len(uploads)}"}
+        surviving.append(obj)
+        return {**obj, "size": str(path.stat().st_size)}
+
+    monkeypatch.setattr(jsonl_backup.backup_daily, "upload_file_to_drive_raw", _upload)
 
     kwargs = {
         "source_roots": [source_root],
@@ -686,3 +688,283 @@ def test_jsonl_backup_launchd_plist_and_docstring_install_note_are_committed():
     assert "<key>NumberOfFiles</key>" in script_plist
     assert "<integer>4096</integer>" in plist
     assert "<integer>4096</integer>" in script_plist
+
+
+def _drive_service_with_surviving(surviving: list[dict]):
+    """Minimal fake Drive service whose folder listing reflects real survival.
+
+    Entries are the objects themselves ({"id", "name", "md5Checksum"}), because Drive
+    identity is the object ID -- names are not unique within a folder.
+    """
+
+    class _Files:
+        def list(self, **kwargs):
+            class _Req:
+                def execute(_self):
+                    return {"files": list(surviving)}
+
+            return _Req()
+
+        def delete(self, **kwargs):
+            class _Req:
+                def execute(_self):
+                    return {}
+
+            return _Req()
+
+    class _Service:
+        def files(self):
+            return _Files()
+
+    return _Service()
+
+
+def test_pruned_bundle_uncovers_its_files_instead_of_orphaning_them(tmp_path, monkeypatch):
+    """P0 retention invariant (defect 2).
+
+    A file is 'covered' only while a SURVIVING archive object holds its exact bytes.
+    Once the bundle that carried it is pruned, the file must be re-bundled -- otherwise
+    its last copy ages out under the 30-file policy while state still claims coverage,
+    and the raw transcript is gone for good.
+    """
+    from brainlayer import jsonl_backup
+
+    now = time.time()
+    source_root = tmp_path / "sessions"
+    _write_jsonl(source_root / "covered.jsonl", mtime=now - 3600)
+    uploads: list[Path] = []
+    surviving: list[dict] = []
+
+    monkeypatch.setattr(jsonl_backup.backup_daily, "get_drive_credentials", lambda *a, **k: object())
+    monkeypatch.setattr(
+        jsonl_backup.backup_daily, "build_drive_service", lambda *a, **k: _drive_service_with_surviving(surviving)
+    )
+    monkeypatch.setattr(jsonl_backup.backup_daily, "ensure_drive_folder_chain", lambda service, folder_parts: "fid")
+    monkeypatch.setattr(jsonl_backup.backup_daily, "verify_drive_upload", lambda *a, **k: None)
+    monkeypatch.setattr(jsonl_backup.backup_daily, "prune_drive_backups", lambda *a, **k: [])
+
+    def _upload(file_path, folder_id, credentials):
+        p = Path(file_path)
+        uploads.append(p)
+        obj = {"id": f"drive-{len(uploads)}", "name": p.name, "md5Checksum": f"md5-{len(uploads)}"}
+        surviving.append(obj)
+        return {**obj, "size": str(p.stat().st_size)}
+
+    monkeypatch.setattr(jsonl_backup.backup_daily, "upload_file_to_drive_raw", _upload)
+
+    kwargs = {
+        "source_roots": [source_root],
+        "state_path": tmp_path / "state.json",
+        "staging_dir": tmp_path / "staging",
+        "log_path": tmp_path / "jsonl-backup.log",
+        "queue_dir": tmp_path / "queue",
+        "now": now,
+        "upload": True,
+    }
+    first = jsonl_backup.run_backup(date_stamp="2026-06-05", **kwargs)
+    assert first["status"] == "uploaded"
+    assert len(uploads) == 1
+
+    # Retention prunes the only bundle holding covered.jsonl. The source file is untouched,
+    # so mtime/size still "match" -- but no surviving object holds its bytes any more.
+    surviving.clear()
+
+    second = jsonl_backup.run_backup(date_stamp="2026-06-06", **kwargs)
+
+    assert second["already_covered_files"] == 0, (
+        "file whose only archive object was pruned must NOT be reported as covered"
+    )
+    assert second["status"] == "uploaded", "an orphaned file must be re-bundled, not skipped as a no-op"
+    assert second["bundled_file_count"] == 1
+
+
+def _covered_state_kwargs(tmp_path, source_root, now):
+    return {
+        "source_roots": [source_root],
+        "state_path": tmp_path / "state.json",
+        "staging_dir": tmp_path / "staging",
+        "log_path": tmp_path / "jsonl-backup.log",
+        "queue_dir": tmp_path / "queue",
+        "now": now,
+        "upload": True,
+    }
+
+
+def _install_drive(monkeypatch, jsonl_backup, uploads, surviving):
+    monkeypatch.setattr(jsonl_backup.backup_daily, "get_drive_credentials", lambda *a, **k: object())
+    monkeypatch.setattr(
+        jsonl_backup.backup_daily, "build_drive_service", lambda *a, **k: _drive_service_with_surviving(surviving)
+    )
+    monkeypatch.setattr(jsonl_backup.backup_daily, "ensure_drive_folder_chain", lambda service, folder_parts: "fid")
+    monkeypatch.setattr(jsonl_backup.backup_daily, "verify_drive_upload", lambda *a, **k: None)
+    monkeypatch.setattr(jsonl_backup.backup_daily, "prune_drive_backups", lambda *a, **k: [])
+
+    def _upload(file_path, folder_id, credentials):
+        path = Path(file_path)
+        uploads.append(path)
+        obj = {"id": f"drive-{len(uploads)}", "name": path.name, "md5Checksum": f"md5-{len(uploads)}"}
+        surviving.append(obj)
+        return {**obj, "size": str(path.stat().st_size)}
+
+    monkeypatch.setattr(jsonl_backup.backup_daily, "upload_file_to_drive_raw", _upload)
+
+
+def test_same_named_replacement_object_does_not_prove_survival(tmp_path, monkeypatch):
+    """Drive names are not unique in a folder, so identity must be the object ID.
+
+    A same-named object standing where the original was pruned must not be able to
+    impersonate it and vouch for files it never contained.
+    """
+    from brainlayer import jsonl_backup
+
+    now = time.time()
+    source_root = tmp_path / "sessions"
+    _write_jsonl(source_root / "covered.jsonl", mtime=now - 3600)
+    uploads: list[Path] = []
+    surviving: list[dict] = []
+    _install_drive(monkeypatch, jsonl_backup, uploads, surviving)
+    kwargs = _covered_state_kwargs(tmp_path, source_root, now)
+
+    first = jsonl_backup.run_backup(date_stamp="2026-06-05", **kwargs)
+    assert first["status"] == "uploaded"
+    original_name = surviving[0]["name"]
+
+    # Original object pruned; a DIFFERENT object with the same name remains.
+    surviving.clear()
+    surviving.append({"id": "some-other-object", "name": original_name, "md5Checksum": "md5-1"})
+
+    second = jsonl_backup.run_backup(date_stamp="2026-06-06", **kwargs)
+    assert second["already_covered_files"] == 0
+    assert second["status"] == "uploaded"
+
+
+def test_modified_surviving_object_does_not_prove_survival(tmp_path, monkeypatch):
+    """A surviving object whose bytes changed out of band cannot vouch for coverage."""
+    from brainlayer import jsonl_backup
+
+    now = time.time()
+    source_root = tmp_path / "sessions"
+    _write_jsonl(source_root / "covered.jsonl", mtime=now - 3600)
+    uploads: list[Path] = []
+    surviving: list[dict] = []
+    _install_drive(monkeypatch, jsonl_backup, uploads, surviving)
+    kwargs = _covered_state_kwargs(tmp_path, source_root, now)
+
+    jsonl_backup.run_backup(date_stamp="2026-06-05", **kwargs)
+    surviving[0]["md5Checksum"] = "tampered-or-rewritten"
+
+    second = jsonl_backup.run_backup(date_stamp="2026-06-06", **kwargs)
+    assert second["already_covered_files"] == 0
+    assert second["status"] == "uploaded"
+
+
+def test_recorded_digest_describes_the_bundled_bytes_not_a_later_read(tmp_path, monkeypatch):
+    """The digest must describe what went INTO the archive, not a later re-read.
+
+    The window is real: create_jsonl_bundle reads the file, then the state write used to
+    re-read it. A source rewritten inside that window -- same mtime, same size -- gets a
+    recorded digest for bytes the archive does not contain, so the NEXT run matches that
+    digest against the live file, calls it covered, and the archived version is the one
+    nobody can recover.
+    """
+    from brainlayer import jsonl_backup
+
+    now = time.time()
+    source_root = tmp_path / "sessions"
+    target = _write_jsonl(source_root / "covered.jsonl", line='{"v":"aaa"}\n', mtime=now - 3600)
+    uploads: list[Path] = []
+    surviving: list[dict] = []
+
+    monkeypatch.setattr(jsonl_backup.backup_daily, "get_drive_credentials", lambda *a, **k: object())
+    monkeypatch.setattr(
+        jsonl_backup.backup_daily, "build_drive_service", lambda *a, **k: _drive_service_with_surviving(surviving)
+    )
+    monkeypatch.setattr(jsonl_backup.backup_daily, "ensure_drive_folder_chain", lambda service, folder_parts: "fid")
+    monkeypatch.setattr(jsonl_backup.backup_daily, "verify_drive_upload", lambda *a, **k: None)
+    monkeypatch.setattr(jsonl_backup.backup_daily, "prune_drive_backups", lambda *a, **k: [])
+
+    def _upload(file_path, folder_id, credentials):
+        path = Path(file_path)
+        uploads.append(path)
+        # Runs AFTER the bundle was built and BEFORE state is written: rewrite the source
+        # with identical length and restore its mtime, exactly the window the old code lost.
+        target.write_text('{"v":"bbb"}\n', encoding="utf-8")
+        os.utime(target, (now - 3600, now - 3600))
+        obj = {"id": f"drive-{len(uploads)}", "name": path.name, "md5Checksum": f"md5-{len(uploads)}"}
+        surviving.append(obj)
+        return {**obj, "size": str(path.stat().st_size)}
+
+    monkeypatch.setattr(jsonl_backup.backup_daily, "upload_file_to_drive_raw", _upload)
+    kwargs = _covered_state_kwargs(tmp_path, source_root, now)
+
+    jsonl_backup.run_backup(date_stamp="2026-06-05", **kwargs)
+    state = json.loads((tmp_path / "state.json").read_text())
+    recorded = state["files"][target.as_posix()]["sha256"]
+    assert recorded == hashlib.sha256(b'{"v":"aaa"}\n').hexdigest(), (
+        "digest must be of the bytes placed in the archive, not of a later re-read"
+    )
+
+    second = jsonl_backup.run_backup(date_stamp="2026-06-06", **kwargs)
+    assert second["already_covered_files"] == 0, "the unarchived rewrite must not read as covered"
+    assert second["status"] == "uploaded"
+
+
+def test_upload_actually_requests_md5checksum_from_drive():
+    """The integrity branch is only real if Drive is ASKED for md5Checksum.
+
+    PR #815's first attempt shipped an md5 comparison that could never fire: the resumable
+    upload requested `fields=id,name,size`, so `md5Checksum` was always absent, `archive_md5`
+    was never recorded, and the branch was dead in production. The regression test for it
+    passed only because the fake `_upload` injected an md5 Drive would never return —
+    mock-green, not live-green. This pins the real request so a fake can never diverge
+    from production again.
+    """
+    import inspect
+
+    from brainlayer import backup_daily
+
+    source = inspect.getsource(backup_daily.upload_file_to_drive_raw)
+    assert "md5Checksum" in source, (
+        "the resumable upload must request md5Checksum, or retention's integrity check is dead code"
+    )
+
+
+def test_vanished_source_does_not_abort_the_nightly_run(tmp_path, monkeypatch):
+    """A file deleted under us mid-run must not take the whole backup down.
+
+    Selection never read source bytes before this PR; it does now, so a path that disappears
+    BETWEEN discovery and hashing became able to kill the run. Deleting it before the run
+    proves nothing — discovery simply would not find it. The window is the race, so the test
+    unlinks the file after discovery has already returned it as a candidate.
+
+    This job is what PREVENTS data loss; failing the entire nightly backup because one
+    transcript vanished is the wrong failure.
+    """
+    from brainlayer import jsonl_backup
+
+    now = time.time()
+    source_root = tmp_path / "sessions"
+    keeper = _write_jsonl(source_root / "keeper.jsonl", mtime=now - 3600)
+    doomed = _write_jsonl(source_root / "doomed.jsonl", mtime=now - 3600)
+    uploads: list[Path] = []
+    surviving: list[dict] = []
+    _install_drive(monkeypatch, jsonl_backup, uploads, surviving)
+    kwargs = _covered_state_kwargs(tmp_path, source_root, now)
+
+    first = jsonl_backup.run_backup(date_stamp="2026-06-05", **kwargs)
+    assert first["bundled_file_count"] == 2
+
+    real_discover = jsonl_backup._discover_jsonl_candidates
+
+    def _discover_then_vanish(roots):
+        found = real_discover(roots)
+        doomed.unlink(missing_ok=True)  # gone after discovery, before coverage hashing
+        return found
+
+    monkeypatch.setattr(jsonl_backup, "_discover_jsonl_candidates", _discover_then_vanish)
+
+    second = jsonl_backup.run_backup(date_stamp="2026-06-06", **kwargs)
+    assert second["status"] == "no-op", "the surviving file was still covered; the run must not die"
+    assert second["already_covered_files"] == 1
+    assert second["vanished_source_count"] == 1
+    assert keeper.exists()

@@ -695,7 +695,10 @@ def upload_file_to_drive_raw(
     total = file_path.stat().st_size
     metadata = {"name": file_path.name, "parents": [folder_id]}
     init = requests.post(
-        "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true&fields=id,name,size",
+        "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true"
+        # md5Checksum is REQUIRED: retention coverage compares it against the surviving
+        # object. Without it the integrity branch silently becomes dead code (PR #815 review).
+        "&fields=id,name,size,md5Checksum",
         headers={
             "Authorization": f"Bearer {credentials.token}",
             "Content-Type": "application/json; charset=UTF-8",
