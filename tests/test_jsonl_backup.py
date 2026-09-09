@@ -105,6 +105,60 @@ def test_jsonl_bundle_accepts_source_growth_after_discovery_before_bundling(tmp_
     assert verification["append_snapshot_file_count"] == 0
 
 
+def test_jsonl_bundle_uses_bundle_digest_when_source_vanishes_before_verification(tmp_path):
+    from brainlayer import jsonl_backup
+
+    source_root = tmp_path / "sessions"
+    source = source_root / "session.jsonl"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b'{"archived":true}\n')
+    candidates = jsonl_backup._discover_jsonl_candidates([source_root])
+    archive, digests = jsonl_backup.create_jsonl_bundle_with_digests(
+        candidates, tmp_path / "staging", date_stamp="2026-09-09"
+    )
+    source.unlink()
+
+    verification = jsonl_backup.verify_jsonl_bundle(
+        archive,
+        expected_candidates=candidates,
+        expected_digests=digests,
+    )
+
+    assert verification["verified"] is True
+    assert verification["content_verified_file_count"] == 1
+    assert verification["vanished_after_bundle_file_count"] == 1
+
+
+def test_jsonl_bundle_rejects_digest_mismatch_when_source_vanishes(tmp_path):
+    from brainlayer import jsonl_backup
+
+    source_root = tmp_path / "sessions"
+    source = source_root / "session.jsonl"
+    source.parent.mkdir(parents=True)
+    original = b'{"archived":true}\n'
+    source.write_bytes(original)
+    candidates = jsonl_backup._discover_jsonl_candidates([source_root])
+    _, digests = jsonl_backup.create_jsonl_bundle_with_digests(
+        candidates, tmp_path / "staging", date_stamp="2026-09-09"
+    )
+    source.unlink()
+    archive = tmp_path / "changed.tar.gz"
+    changed = b'{"archived":null}\n'
+    member = tarfile.TarInfo("source-0/session.jsonl")
+    member.size = len(changed)
+    with tarfile.open(archive, "w:gz") as bundle:
+        bundle.addfile(member, io.BytesIO(changed))
+
+    verification = jsonl_backup.verify_jsonl_bundle(
+        archive,
+        expected_candidates=candidates,
+        expected_digests=digests,
+    )
+
+    assert verification["verified"] is False
+    assert verification["verification_error"] == "archive member differs from source bytes: source-0/session.jsonl"
+
+
 def test_jsonl_bundle_dereferences_discovered_symlink_as_regular_file(tmp_path):
     from brainlayer import jsonl_backup
 
@@ -182,7 +236,7 @@ def test_jsonl_bundle_verification_does_not_swallow_backup_timeout(tmp_path, mon
     monkeypatch.setattr(
         jsonl_backup,
         "_compare_member_to_source",
-        lambda *args: (_ for _ in ()).throw(backup_daily.BackupTimeoutError("timed out")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(backup_daily.BackupTimeoutError("timed out")),
     )
 
     with pytest.raises(backup_daily.BackupTimeoutError, match="timed out"):

@@ -436,9 +436,18 @@ def create_jsonl_bundle(candidates: list[JsonlCandidate], staging_dir: Path, *, 
     return archive_path
 
 
-def _compare_member_to_source(extracted: Any, source_path: Path) -> str:
-    """Return exact, append_snapshot, or diverged using a bounded byte-for-byte comparison."""
-    with source_path.open("rb") as source:
+def _compare_member_to_source(extracted: Any, source_path: Path, *, bundle_digest: str | None = None) -> str:
+    """Compare archived bytes with the live source, or their bundle-time digest if it vanished."""
+    try:
+        source = source_path.open("rb")
+    except FileNotFoundError:
+        if bundle_digest is None:
+            raise
+        digest = hashlib.sha256()
+        while member_chunk := extracted.read(1024 * 1024):
+            digest.update(member_chunk)
+        return "vanished" if digest.hexdigest() == bundle_digest else "diverged"
+    with source:
         while member_chunk := extracted.read(1024 * 1024):
             if source.read(len(member_chunk)) != member_chunk:
                 return "diverged"
@@ -450,6 +459,7 @@ def verify_jsonl_bundle(
     *,
     expected_file_count: int | None = None,
     expected_candidates: list[JsonlCandidate] | None = None,
+    expected_digests: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Verify a bundle; production callers should supply expected_candidates for content proof."""
     if expected_candidates is not None:
@@ -466,6 +476,7 @@ def verify_jsonl_bundle(
         "archive_listing_count": 0,
         "content_verified_file_count": 0,
         "append_snapshot_file_count": 0,
+        "vanished_after_bundle_file_count": 0,
     }
     try:
         subprocess.run(["gunzip", "-t", str(archive_path)], check=True, capture_output=True, text=True)
@@ -507,12 +518,18 @@ def verify_jsonl_bundle(
                     if extracted is None:
                         result["verification_error"] = f"archive member cannot be read: {member.name}"
                         return result
-                    comparison = _compare_member_to_source(extracted, candidate.path)
+                    comparison = _compare_member_to_source(
+                        extracted,
+                        candidate.path,
+                        bundle_digest=(expected_digests or {}).get(candidate.path.as_posix()),
+                    )
                     if comparison == "diverged":
                         result["verification_error"] = f"archive member differs from source bytes: {member.name}"
                         return result
                     if comparison == "append_snapshot":
                         result["append_snapshot_file_count"] += 1
+                    elif comparison == "vanished":
+                        result["vanished_after_bundle_file_count"] += 1
                     result["content_verified_file_count"] += 1
         result["verified"] = True
     except backup_daily.BackupTimeoutError:
@@ -678,7 +695,7 @@ def run_backup(
         "forever_files": [],
     }
 
-    result.update(verify_jsonl_bundle(archive_path, expected_candidates=changed))
+    result.update(verify_jsonl_bundle(archive_path, expected_candidates=changed, expected_digests=bundle_digests))
     if result["verified"] and upload:
         if service is None:
             credentials = backup_daily.get_drive_credentials()
