@@ -301,6 +301,14 @@ def _normalized_icloud_download_status(value: Any) -> str | None:
     return text[:1].lower() + text[1:] if text else text
 
 
+def _quarantine_unverified_icloud_item(path: Path) -> None:
+    """Hide an unverified iCloud item without deleting personal backup data."""
+    if not path.exists():
+        return
+    hidden_name = path.name if path.name.startswith(".") else f".{path.name}"
+    os.replace(path, path.with_name(f"{hidden_name}.unverified"))
+
+
 def _icloud_item_state(
     path: Path,
     *,
@@ -409,8 +417,8 @@ def copy_archive_to_icloud(
             state = _icloud_item_state(status_path, request_download=True, timeout_seconds=remaining_seconds())
     finally:
         if not verified:
-            destination.unlink(missing_ok=True)
-            destination.with_name(f".{destination.name}.icloud").unlink(missing_ok=True)
+            _quarantine_unverified_icloud_item(destination)
+            _quarantine_unverified_icloud_item(destination.with_name(f".{destination.name}.icloud"))
 
 
 def _upload_forever_files(

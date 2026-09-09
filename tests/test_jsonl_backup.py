@@ -206,7 +206,9 @@ def test_icloud_copy_rejects_uploaded_item_with_wrong_materialized_bytes(tmp_pat
             timeout_seconds=1,
             poll_interval_seconds=0,
         )
-    assert list(icloud_dir.iterdir()) == []
+    quarantined = list(icloud_dir.iterdir())
+    assert len(quarantined) == 1
+    assert quarantined[0].name.endswith(".unverified")
 
 
 def test_icloud_status_reports_stderr_when_osascript_fails(tmp_path, monkeypatch):
@@ -219,7 +221,7 @@ def test_icloud_status_reports_stderr_when_osascript_fails(tmp_path, monkeypatch
         jsonl_backup._icloud_item_state(tmp_path / "archive.tar.gz", timeout_seconds=0.5)
 
 
-def test_icloud_timeout_removes_unverified_destination(tmp_path, monkeypatch):
+def test_icloud_timeout_quarantines_unverified_placeholder(tmp_path, monkeypatch):
     from brainlayer import jsonl_backup
 
     archive = tmp_path / "archive.tar.gz"
@@ -242,10 +244,12 @@ def test_icloud_timeout_removes_unverified_destination(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="not uploaded and materialized"):
         jsonl_backup.copy_archive_to_icloud(archive, icloud_dir, timeout_seconds=1, poll_interval_seconds=0)
-    assert list(icloud_dir.iterdir()) == []
+    quarantined = list(icloud_dir.iterdir())
+    assert len(quarantined) == 1
+    assert quarantined[0].name.endswith(".icloud.unverified")
 
 
-def test_icloud_upload_error_removes_unverified_destination(tmp_path, monkeypatch):
+def test_icloud_upload_error_quarantines_unverified_destination(tmp_path, monkeypatch):
     from brainlayer import jsonl_backup
 
     archive = tmp_path / "archive.tar.gz"
@@ -256,7 +260,9 @@ def test_icloud_upload_error_removes_unverified_destination(tmp_path, monkeypatc
 
     with pytest.raises(RuntimeError, match="quota"):
         jsonl_backup.copy_archive_to_icloud(archive, icloud_dir, timeout_seconds=1)
-    assert list(icloud_dir.iterdir()) == []
+    quarantined = list(icloud_dir.iterdir())
+    assert len(quarantined) == 1
+    assert quarantined[0].name.endswith(".unverified")
 
 
 def test_same_day_incremental_icloud_bundles_do_not_overwrite(tmp_path, monkeypatch):
