@@ -1172,6 +1172,45 @@ def test_corrupt_jsonl_bundle_verifies_false_and_main_returns_nonzero(tmp_path, 
     assert payload["verified"] is False
 
 
+def test_failed_bundle_verification_never_reports_uploaded_status(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    now = time.time()
+    source_root = tmp_path / "sessions"
+    _write_jsonl(source_root / "changed.jsonl", mtime=now - 3600)
+    corrupt = tmp_path / "staging" / "claude-jsonl-2026-09-09.tar.gz"
+    corrupt.parent.mkdir()
+    corrupt.write_bytes(b"not a gzip")
+    uploads: list[Path] = []
+    monkeypatch.setattr(jsonl_backup.backup_daily, "get_drive_credentials", lambda: object())
+    monkeypatch.setattr(jsonl_backup.backup_daily, "build_drive_service", lambda: object())
+    monkeypatch.setattr(jsonl_backup.backup_daily, "ensure_drive_folder_chain", lambda *args: "folder-id")
+    monkeypatch.setattr(
+        jsonl_backup.backup_daily,
+        "upload_file_to_drive_raw",
+        lambda path, *args: uploads.append(Path(path)),
+    )
+    monkeypatch.setattr(jsonl_backup, "create_jsonl_bundle_with_digests", lambda *args, **kwargs: (corrupt, {}, {}))
+
+    result = jsonl_backup.run_backup(
+        source_roots=[source_root],
+        state_path=tmp_path / "state.json",
+        staging_dir=tmp_path / "staging",
+        log_path=tmp_path / "jsonl-backup.log",
+        queue_dir=tmp_path / "queue",
+        date_stamp="2026-09-09",
+        now=now,
+        upload=True,
+    )
+
+    assert result["status"] == "failed"
+    assert result["uploaded"] is False
+    assert uploads == []
+    queued = list((tmp_path / "queue").glob("jsonl_backup-*.jsonl"))
+    assert len(queued) == 1
+    assert "JSONL backup local bundle verification failed" in queued[0].read_text()
+
+
 def test_jsonl_backup_main_persists_terminal_failure_to_attempt_log(tmp_path, monkeypatch, capsys):
     from brainlayer import jsonl_backup
 
