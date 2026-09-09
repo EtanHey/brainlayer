@@ -400,6 +400,33 @@ def test_icloud_retry_preserves_prior_verified_logical_object(tmp_path, monkeypa
     assert list(icloud_dir.iterdir()) == [destination]
 
 
+def test_stale_icloud_object_is_quarantined_before_fresh_upload(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    archive = tmp_path / "archive.tar.gz"
+    archive.write_bytes(b"fresh archive")
+    logical_sha256 = hashlib.sha256(archive.read_bytes()).hexdigest()
+    icloud_dir = tmp_path / "CloudDocs"
+    icloud_dir.mkdir()
+    destination = icloud_dir / f"archive-{logical_sha256}.tar.gz"
+    destination.write_bytes(b"stale object")
+    states = iter(
+        [
+            _icloud_state(uploaded=False, status="notDownloaded") | {"uploading_error": "stale"},
+            _icloud_state(uploaded=True, status="current"),
+        ]
+    )
+    monkeypatch.setattr(jsonl_backup, "_icloud_item_state", lambda *args, **kwargs: next(states))
+
+    result = jsonl_backup.copy_archive_to_icloud(archive, icloud_dir, timeout_seconds=1)
+
+    assert result["reused"] is False
+    assert destination.read_bytes() == archive.read_bytes()
+    quarantined = list(icloud_dir.glob("*.unverified"))
+    assert len(quarantined) == 1
+    assert quarantined[0].read_bytes() == b"stale object"
+
+
 def test_icloud_poll_sleep_cannot_overshoot_deadline(tmp_path, monkeypatch):
     from brainlayer import jsonl_backup
 
@@ -549,6 +576,21 @@ def test_icloud_bootstrap_with_active_source_does_not_mark_complete(tmp_path, mo
     state = json.loads(state_path.read_text())
     assert "icloud_directory" not in state
     assert "icloud_verified" not in state
+
+
+def test_drive_only_state_update_preserves_prior_icloud_coverage():
+    from brainlayer import jsonl_backup
+
+    state = {
+        "files": {},
+        "icloud_directory": "/CloudDocs/Archives/brainlayer-jsonl-backups",
+        "icloud_verified": True,
+    }
+
+    updated = jsonl_backup._update_state_for_uploaded(state, [], icloud_dir=None)
+
+    assert updated["icloud_directory"] == state["icloud_directory"]
+    assert updated["icloud_verified"] is True
 
 
 def test_default_source_roots_append_all_agent_cli_transcript_roots(monkeypatch):

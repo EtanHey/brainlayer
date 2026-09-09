@@ -485,43 +485,51 @@ def copy_archive_to_icloud(
     # retry is proven. Gzip header metadata may differ while the tar payload is
     # identical, which is exactly what the logical address represents.
     if destination.exists() or placeholder.exists():
-        deadline = time.monotonic() + timeout_seconds
+        try:
+            deadline = time.monotonic() + timeout_seconds
 
-        def existing_remaining_seconds() -> float:
-            return max(deadline - time.monotonic(), 0.001)
+            def existing_remaining_seconds() -> float:
+                return max(deadline - time.monotonic(), 0.001)
 
-        status_path = placeholder if not destination.exists() and placeholder.exists() else destination
-        state = _icloud_item_state(
-            status_path,
-            request_download=True,
-            timeout_seconds=existing_remaining_seconds(),
-        )
-        while True:
-            uploading_error = state.get("uploading_error")
-            if uploading_error:
-                raise RuntimeError(f"existing iCloud upload failed for {destination}: {uploading_error}")
-            uploaded = state.get("is_uploaded") is True and state.get("is_uploading") is False
-            materialized = state.get("downloading_status") == "current" and destination.is_file()
-            if state.get("is_ubiquitous") is True and uploaded and materialized:
-                actual_logical_sha256 = _sha256_gzip_payload(destination)
-                if actual_logical_sha256 != logical_sha256:
-                    raise RuntimeError(
-                        "iCloud logical-address collision: "
-                        f"path={destination} expected={logical_sha256} actual={actual_logical_sha256}"
-                    )
-                return receipt(reused=True)
-            if time.monotonic() >= deadline:
-                raise RuntimeError(
-                    f"existing iCloud copy was not uploaded and materialized within {timeout_seconds}s: "
-                    f"path={destination} state={state!r}"
-                )
-            time.sleep(min(poll_interval_seconds, existing_remaining_seconds()))
             status_path = placeholder if not destination.exists() and placeholder.exists() else destination
             state = _icloud_item_state(
                 status_path,
                 request_download=True,
                 timeout_seconds=existing_remaining_seconds(),
             )
+            while True:
+                uploading_error = state.get("uploading_error")
+                if uploading_error:
+                    raise RuntimeError(f"existing iCloud upload failed for {destination}: {uploading_error}")
+                uploaded = state.get("is_uploaded") is True and state.get("is_uploading") is False
+                materialized = state.get("downloading_status") == "current" and destination.is_file()
+                if state.get("is_ubiquitous") is True and uploaded and materialized:
+                    actual_logical_sha256 = _sha256_gzip_payload(destination)
+                    if actual_logical_sha256 != logical_sha256:
+                        raise RuntimeError(
+                            "iCloud logical-address collision: "
+                            f"path={destination} expected={logical_sha256} actual={actual_logical_sha256}"
+                        )
+                    return receipt(reused=True)
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        f"existing iCloud copy was not uploaded and materialized within {timeout_seconds}s: "
+                        f"path={destination} state={state!r}"
+                    )
+                time.sleep(min(poll_interval_seconds, existing_remaining_seconds()))
+                status_path = placeholder if not destination.exists() and placeholder.exists() else destination
+                state = _icloud_item_state(
+                    status_path,
+                    request_download=True,
+                    timeout_seconds=existing_remaining_seconds(),
+                )
+        except Exception as exc:
+            # This path was not proven usable. Preserve it under a unique hidden
+            # name, then let the normal fresh-copy path repair the logical address.
+            _quarantine_unverified_icloud_item(destination)
+            _quarantine_unverified_icloud_item(placeholder)
+            if isinstance(exc, backup_daily.BackupTimeoutError):
+                raise
 
     temp_path = icloud_dir / f".{destination.name}.{os.getpid()}.partial"
     try:
@@ -715,6 +723,7 @@ def _update_state_for_uploaded(
     archive_md5: str | None = None,
     digests: dict[str, str] | None = None,
     icloud_dir: Path | None = None,
+    clear_icloud_verification: bool = False,
 ) -> dict[str, Any]:
     """Record which archive object carries each file, and the bytes it carried.
 
@@ -737,6 +746,11 @@ def _update_state_for_uploaded(
     if icloud_dir is not None:
         updated["icloud_directory"] = str(Path(icloud_dir).expanduser())
         updated["icloud_verified"] = True
+    elif not clear_icloud_verification and state.get("icloud_verified") is True:
+        existing_directory = state.get("icloud_directory")
+        if isinstance(existing_directory, str) and existing_directory:
+            updated["icloud_directory"] = existing_directory
+            updated["icloud_verified"] = True
     return updated
 
 
@@ -889,6 +903,7 @@ def run_backup(
                 # An active source was deliberately omitted from this bootstrap.
                 # Leave the global marker unset so the next run seeds that source.
                 icloud_dir=icloud_dir if not (icloud_bootstrap_pending and active) else None,
+                clear_icloud_verification=bool(icloud_bootstrap_pending and active),
             ),
         )
         try:
