@@ -228,7 +228,11 @@ def test_concurrent_jsonl_backups_serialize_creation_through_state_persistence(t
         if len(uploads) == 1:
             upload_started.set()
             assert release_upload.wait(timeout=2)
-        return {"id": f"drive-{len(uploads)}", "name": Path(file_path).name, "size": str(Path(file_path).stat().st_size)}
+        return {
+            "id": f"drive-{len(uploads)}",
+            "name": Path(file_path).name,
+            "size": str(Path(file_path).stat().st_size),
+        }
 
     monkeypatch.setattr(jsonl_backup.backup_daily, "upload_file_to_drive_raw", fake_upload)
     kwargs = {
