@@ -67,6 +67,37 @@ def _isolate_default_live_paths(tmp_path_factory, monkeypatch):
         return real_pause_state(config, now)
 
     monkeypatch.setattr(health_check, "_pause_sentinel_state", _isolated_pause_state)
+
+    live_backup_log_default = Path("~/.local/share/brainlayer/logs/jsonl-backup.log").expanduser()
+    real_backup_health = health_check.inspect_jsonl_backup_health
+
+    def _isolated_backup_health(
+        log_path,
+        *,
+        now,
+        max_age_seconds,
+        absence_alert_nights=health_check.DEFAULT_JSONL_BACKUP_ABSENCE_ALERT_NIGHTS,
+    ):
+        if log_path.expanduser() == live_backup_log_default:
+            return (
+                health_check.JsonlBackupHealth(
+                    state="no_op",
+                    status="no-op",
+                    attempted_at=now.isoformat(),
+                    age_seconds=0.0,
+                    verified=True,
+                    detail="isolated test no-op",
+                ),
+                None,
+            )
+        return real_backup_health(
+            log_path,
+            now=now,
+            max_age_seconds=max_age_seconds,
+            absence_alert_nights=absence_alert_nights,
+        )
+
+    monkeypatch.setattr(health_check, "inspect_jsonl_backup_health", _isolated_backup_health)
     yield
 
 
@@ -165,6 +196,184 @@ def test_health_check_consumes_alerting_t3_health_snapshot(tmp_path):
     issue = next(issue for issue in result.issues if issue.code == "t3_ingest_unhealthy")
     assert issue.severity == "critical"
     assert "schema_drift" in issue.message
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_state", "expected_issue"),
+    [
+        (
+            {
+                "attempted_at": "2026-09-09T02:00:00+00:00",
+                "status": "uploaded",
+                "uploaded": True,
+                "verified": True,
+                "archive": "claude-jsonl-2026-09-09.tar.gz",
+            },
+            "verified_bundle",
+            None,
+        ),
+        (
+            {
+                "status": "uploaded",
+                "uploaded": True,
+                "verified": True,
+                "archive": "claude-jsonl-2026-09-09.tar.gz",
+            },
+            "verified_bundle",
+            None,
+        ),
+        (
+            {
+                "attempted_at": "2026-09-09T02:00:00+00:00",
+                "status": "no-op",
+                "uploaded": False,
+                "verified": True,
+                "message": "no-op, 10 files already covered",
+            },
+            "no_op",
+            None,
+        ),
+        (
+            {
+                "attempted_at": "2026-09-09T02:00:00+00:00",
+                "status": "failed",
+                "uploaded": False,
+                "verified": False,
+                "error": "upload exploded",
+            },
+            "failed",
+            "jsonl_backup_attempt_failed",
+        ),
+    ],
+)
+def test_jsonl_backup_detector_distinguishes_verified_noop_and_failure(
+    tmp_path, payload, expected_state, expected_issue
+):
+    log_path = tmp_path / "jsonl-backup.log"
+    log_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    status, issue = health_check.inspect_jsonl_backup_health(
+        log_path,
+        now=datetime(2026, 9, 9, 12, 0, tzinfo=UTC),
+        max_age_seconds=36 * 60 * 60,
+    )
+
+    assert status.state == expected_state
+    assert status.status == payload["status"]
+    assert (issue.code if issue else None) == expected_issue
+
+
+def test_jsonl_backup_detector_reports_absent_malformed_and_stale_attempts(tmp_path):
+    log_path = tmp_path / "jsonl-backup.log"
+    now = datetime(2026, 9, 9, 12, 0, tzinfo=UTC)
+
+    missing, missing_issue = health_check.inspect_jsonl_backup_health(
+        log_path,
+        now=now,
+        max_age_seconds=36 * 60 * 60,
+    )
+    assert missing.state == "missing"
+    assert missing_issue.code == "jsonl_backup_attempt_missing"
+
+    log_path.write_text("not-json\n", encoding="utf-8")
+    malformed, malformed_issue = health_check.inspect_jsonl_backup_health(
+        log_path,
+        now=now,
+        max_age_seconds=36 * 60 * 60,
+    )
+    assert malformed.state == "invalid"
+    assert malformed_issue.code == "jsonl_backup_attempt_invalid"
+
+    log_path.write_text(
+        json.dumps(
+            {
+                "attempted_at": "2026-09-07T02:00:00+00:00",
+                "status": "uploaded",
+                "uploaded": True,
+                "verified": True,
+                "archive": "claude-jsonl-2026-09-07.tar.gz",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    stale, stale_issue = health_check.inspect_jsonl_backup_health(
+        log_path,
+        now=now,
+        max_age_seconds=36 * 60 * 60,
+        absence_alert_nights=3,
+    )
+    assert stale.state == "stale"
+    assert stale_issue.code == "jsonl_backup_attempt_stale"
+
+
+def test_jsonl_backup_detector_escalates_after_multiple_nights_without_attempt(tmp_path):
+    log_path = tmp_path / "jsonl-backup.log"
+    log_path.write_text(
+        json.dumps(
+            {
+                "attempted_at": "2026-09-06T02:00:00+00:00",
+                "status": "uploaded",
+                "uploaded": True,
+                "verified": True,
+                "archive": "claude-jsonl-2026-09-06.tar.gz",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    status, issue = health_check.inspect_jsonl_backup_health(
+        log_path,
+        now=datetime(2026, 9, 9, 12, 0, tzinfo=UTC),
+        max_age_seconds=36 * 60 * 60,
+        absence_alert_nights=2,
+    )
+
+    assert status.state == "stale"
+    assert status.consecutive_nights_without_attempt == 3
+    assert issue.code == "jsonl_backup_attempt_absent_multiple_nights"
+    assert "threshold_nights=2" in issue.message
+
+
+def test_run_health_check_surfaces_jsonl_backup_failure(tmp_path):
+    db_path = tmp_path / "brainlayer.db"
+    log_path = tmp_path / "jsonl-backup.log"
+    _make_db(db_path, total=1, vector_rows=1)
+    log_path.write_text(
+        json.dumps(
+            {
+                "attempted_at": "2026-09-09T02:00:00+00:00",
+                "status": "failed",
+                "uploaded": False,
+                "verified": False,
+                "error": "upload exploded",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = run_health_check(
+        HealthCheckConfig(
+            db_path=db_path,
+            state_path=tmp_path / "health-state.json",
+            jsonl_backup_log_path=log_path,
+            source_jsonl_globs=[],
+            queue_dir=tmp_path / "queue",
+            pending_stores_path=tmp_path / "pending-stores.jsonl",
+            watcher_health_path=tmp_path / "watcher-health.json",
+            drain_health_path=tmp_path / "drain-health.json",
+        ),
+        ps_output_fn=lambda: "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 4\n",
+        socket_request_fn=_ok_canary,
+        command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        now_fn=lambda: datetime(2026, 9, 9, 12, 0, tzinfo=UTC),
+    )
+
+    assert result.jsonl_backup is not None
+    assert result.jsonl_backup.state == "failed"
+    assert "jsonl_backup_attempt_failed" in [issue.code for issue in result.issues]
 
 
 def test_backlog_batch_zero_alarms_but_waits_until_repeated_failure_to_kickstart_hotlane(tmp_path, capsys):
@@ -1026,6 +1235,14 @@ def test_heal_min_consecutive_failures_can_be_overridden_by_env(monkeypatch):
     monkeypatch.setenv("BRAINLAYER_HEAL_MIN_CONSECUTIVE_FAILURES", "3")
 
     assert HealthCheckConfig().heal_min_consecutive_failures == 3
+
+
+def test_jsonl_backup_absence_alert_requires_multiple_nights_and_is_configurable(monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_JSONL_BACKUP_ABSENCE_ALERT_NIGHTS", "4")
+    assert HealthCheckConfig().jsonl_backup_absence_alert_nights == 4
+
+    monkeypatch.setenv("BRAINLAYER_JSONL_BACKUP_ABSENCE_ALERT_NIGHTS", "1")
+    assert HealthCheckConfig().jsonl_backup_absence_alert_nights == 2
 
 
 def test_health_check_launchagent_runs_every_five_minutes_and_heals():

@@ -14,6 +14,8 @@ opaque `.pb` implicit records, and per-session `.system_generated` /
 from __future__ import annotations
 
 import datetime as dt
+import fcntl
+import functools
 import hashlib
 import json
 import os
@@ -394,7 +396,7 @@ class _HashingReader:
 
 def create_jsonl_bundle_with_digests(
     candidates: list[JsonlCandidate], staging_dir: Path, *, date_stamp: str
-) -> tuple[Path, dict[str, str]]:
+) -> tuple[Path, dict[str, str], dict[str, int]]:
     if not candidates:
         raise ValueError("create_jsonl_bundle requires at least one candidate")
     staging_dir = Path(staging_dir).expanduser()
@@ -405,6 +407,7 @@ def create_jsonl_bundle_with_digests(
     ) as tmp:
         temp_path = Path(tmp.name)
     digests: dict[str, str] = {}
+    sizes: dict[str, int] = {}
     try:
         with tarfile.open(temp_path, "w:gz") as tar:
             for candidate in candidates:
@@ -413,28 +416,70 @@ def create_jsonl_bundle_with_digests(
                 # archive does not contain -- a file that changed while keeping its mtime
                 # and size would then read as covered. Sources reach ~375MB, so the digest
                 # is taken from the very stream tarfile consumes rather than from a copy.
-                info = tar.gettarinfo(str(candidate.path), arcname=_archive_name(candidate))
-                with candidate.path.open("rb") as handle:
+                # Discovery follows file symlinks, so archive their resolved target as a
+                # regular member too; preserving the link would make verification reject
+                # the whole bundle as non-regular.
+                source_path = candidate.path.resolve()
+                info = tar.gettarinfo(str(source_path), arcname=_archive_name(candidate))
+                with source_path.open("rb") as handle:
                     reader = _HashingReader(handle)
                     tar.addfile(info, reader)
                 digests[candidate.path.as_posix()] = reader.hexdigest()
+                sizes[candidate.path.as_posix()] = info.size
         os.replace(temp_path, archive_path)
     finally:
         temp_path.unlink(missing_ok=True)
-    return archive_path, digests
+    return archive_path, digests, sizes
 
 
 def create_jsonl_bundle(candidates: list[JsonlCandidate], staging_dir: Path, *, date_stamp: str) -> Path:
     """Backwards-compatible wrapper returning only the archive path."""
-    archive_path, _ = create_jsonl_bundle_with_digests(candidates, staging_dir, date_stamp=date_stamp)
+    archive_path, _, _ = create_jsonl_bundle_with_digests(candidates, staging_dir, date_stamp=date_stamp)
     return archive_path
 
 
-def verify_jsonl_bundle(archive_path: Path, *, expected_file_count: int) -> dict[str, Any]:
+def _compare_member_to_source(extracted: Any, source_path: Path, *, bundle_digest: str | None = None) -> str:
+    """Compare archived bytes with the live source, or their bundle-time digest if it vanished."""
+    try:
+        source = source_path.open("rb")
+    except FileNotFoundError:
+        if bundle_digest is None:
+            raise
+        digest = hashlib.sha256()
+        while member_chunk := extracted.read(1024 * 1024):
+            digest.update(member_chunk)
+        return "vanished" if digest.hexdigest() == bundle_digest else "diverged"
+    with source:
+        while member_chunk := extracted.read(1024 * 1024):
+            if source.read(len(member_chunk)) != member_chunk:
+                return "diverged"
+        return "append_snapshot" if source.read(1) else "exact"
+
+
+def verify_jsonl_bundle(
+    archive_path: Path,
+    *,
+    expected_file_count: int | None = None,
+    expected_candidates: list[JsonlCandidate] | None = None,
+    expected_digests: dict[str, str] | None = None,
+    expected_sizes: dict[str, int] | None = None,
+) -> dict[str, Any]:
+    """Verify a bundle; production callers should supply expected_candidates for content proof."""
+    if expected_candidates is not None:
+        candidate_count = len(expected_candidates)
+        if expected_file_count is not None and expected_file_count != candidate_count:
+            raise ValueError("expected_file_count does not match expected_candidates")
+        expected_file_count = candidate_count
+    if expected_file_count is None:
+        raise ValueError("expected_file_count or expected_candidates is required")
+
     result: dict[str, Any] = {
         "verified": False,
         "bundled_file_count": expected_file_count,
         "archive_listing_count": 0,
+        "content_verified_file_count": 0,
+        "append_snapshot_file_count": 0,
+        "vanished_after_bundle_file_count": 0,
     }
     try:
         subprocess.run(["gunzip", "-t", str(archive_path)], check=True, capture_output=True, text=True)
@@ -447,7 +492,49 @@ def verify_jsonl_bundle(archive_path: Path, *, expected_file_count: int) -> dict
                 f"tar listing count mismatch: expected={expected_file_count} actual={len(entries)}"
             )
             return result
+        if expected_candidates is not None:
+            expected_by_name = {_archive_name(candidate): candidate for candidate in expected_candidates}
+            if len(expected_by_name) != len(expected_candidates):
+                result["verification_error"] = "duplicate archive member name generated for source files"
+                return result
+            with tarfile.open(archive_path, "r:gz") as archive:
+                members = [member for member in archive.getmembers() if not member.isdir()]
+                actual_names = [member.name for member in members]
+                if len(actual_names) != len(set(actual_names)):
+                    result["verification_error"] = "archive contains duplicate member names"
+                    return result
+                if set(actual_names) != set(expected_by_name):
+                    result["verification_error"] = "archive member names do not match source files"
+                    return result
+                for member in members:
+                    if not member.isfile():
+                        result["verification_error"] = f"archive member is not a regular file: {member.name}"
+                        return result
+                    candidate = expected_by_name[member.name]
+                    expected_size = (expected_sizes or {}).get(candidate.path.as_posix(), candidate.size)
+                    if member.size != expected_size:
+                        result["verification_error"] = f"archive member size differs from bundle: {member.name}"
+                        return result
+                    extracted = archive.extractfile(member)
+                    if extracted is None:
+                        result["verification_error"] = f"archive member cannot be read: {member.name}"
+                        return result
+                    comparison = _compare_member_to_source(
+                        extracted,
+                        candidate.path,
+                        bundle_digest=(expected_digests or {}).get(candidate.path.as_posix()),
+                    )
+                    if comparison == "diverged":
+                        result["verification_error"] = f"archive member differs from source bytes: {member.name}"
+                        return result
+                    if comparison == "append_snapshot":
+                        result["append_snapshot_file_count"] += 1
+                    elif comparison == "vanished":
+                        result["vanished_after_bundle_file_count"] += 1
+                    result["content_verified_file_count"] += 1
         result["verified"] = True
+    except backup_daily.BackupTimeoutError:
+        raise
     except Exception as exc:
         result.setdefault("gzip_test", False)
         result["verification_error"] = str(exc)
@@ -510,6 +597,22 @@ def _enqueue_run_summary(result: dict[str, Any], *, queue_dir: Path | None) -> N
     )
 
 
+def _serialized_by_staging_dir(function):
+    """Serialize discovery through state persistence for one staging directory."""
+
+    @functools.wraps(function)
+    def wrapper(*args, **kwargs):
+        staging_dir = Path(kwargs.get("staging_dir", DEFAULT_STAGING_DIR)).expanduser()
+        staging_dir.mkdir(parents=True, exist_ok=True)
+        lock_path = staging_dir / ".jsonl-backup.lock"
+        with lock_path.open("a") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            return function(*args, **kwargs)
+
+    return wrapper
+
+
+@_serialized_by_staging_dir
 def run_backup(
     *,
     source_roots: list[Path | BackupSourceRoot] | None = None,
@@ -526,6 +629,7 @@ def run_backup(
 ) -> dict[str, Any]:
     date_stamp = date_stamp or _today()
     now = time.time() if now is None else now
+    attempted_at = dt.datetime.fromtimestamp(now, dt.UTC).isoformat()
     roots = source_roots or DEFAULT_SOURCE_ROOTS
     state_path = Path(state_path).expanduser()
     state = _load_state(state_path)
@@ -559,6 +663,7 @@ def run_backup(
 
     if not changed:
         result: dict[str, Any] = {
+            "attempted_at": attempted_at,
             "status": "no-op",
             "uploaded": False,
             "verified": True,
@@ -572,10 +677,13 @@ def run_backup(
         _enqueue_run_summary(result, queue_dir=queue_dir)
         return result
 
-    archive_path, bundle_digests = create_jsonl_bundle_with_digests(changed, staging_dir, date_stamp=date_stamp)
+    archive_path, bundle_digests, bundle_sizes = create_jsonl_bundle_with_digests(
+        changed, staging_dir, date_stamp=date_stamp
+    )
     archive_size = archive_path.stat().st_size
     result = {
-        "status": "uploaded" if upload else "created",
+        "attempted_at": attempted_at,
+        "status": "created",
         "archive": str(archive_path),
         "bytes": archive_size,
         "uploaded": False,
@@ -590,7 +698,15 @@ def run_backup(
         "forever_files": [],
     }
 
-    if upload:
+    result.update(
+        verify_jsonl_bundle(
+            archive_path,
+            expected_candidates=changed,
+            expected_digests=bundle_digests,
+            expected_sizes=bundle_sizes,
+        )
+    )
+    if result["verified"] and upload:
         if service is None:
             credentials = backup_daily.get_drive_credentials()
             service = backup_daily.build_drive_service()
@@ -605,14 +721,7 @@ def run_backup(
             expected_name=archive_path.name,
             expected_size=archive_size,
         )
-        result.update({"uploaded": True, "drive_file": uploaded})
-
-    result.update(verify_jsonl_bundle(archive_path, expected_file_count=len(changed)))
-    if result["verified"] and upload:
-        # The same incident was two individually reasonable deletions composed together:
-        # successful upload removed local staging, then Drive retention removed the remote
-        # bundle. Persist the exact Drive object and archived-source digests before either
-        # deletion path runs so the next selection cannot silently trust the dead copy.
+        result.update({"status": "uploaded", "uploaded": True, "drive_file": uploaded})
         _atomic_write_json(
             state_path,
             _update_state_for_uploaded(
@@ -649,6 +758,12 @@ def run_backup(
             # invariant rather than an optional integrity check (2026-09-09 / PR #815).
             archive_path.unlink(missing_ok=True)
             result["local_archive_removed"] = True
+    elif not result["verified"]:
+        result["status"] = "failed"
+        result["message"] = f"local bundle verification failed: {result.get('verification_error', 'unknown error')}"
+        _append_json_log(log_path, result)
+        _enqueue_run_summary(result, queue_dir=queue_dir)
+        return result
 
     _append_json_log(log_path, result)
     _enqueue_run_summary(result, queue_dir=queue_dir)
@@ -659,8 +774,17 @@ def _raise_backup_timeout(signum, frame) -> None:  # noqa: ARG001
     raise backup_daily.BackupTimeoutError("jsonl backup exceeded configured wall-clock timeout")
 
 
+def _append_terminal_failure(log_path: Path, result: dict[str, Any]) -> None:
+    """Persist terminal failures without hiding the original failure if logging also breaks."""
+    try:
+        _append_json_log(log_path, result)
+    except Exception as exc:
+        result["attempt_log_error"] = str(exc)
+
+
 def main() -> int:
     timeout_seconds = _configured_backup_timeout_seconds()
+    log_path = Path(os.environ.get("BRAINLAYER_JSONL_BACKUP_LOG_PATH", str(DEFAULT_LOG_PATH)))
     previous_alarm_handler = None
     if timeout_seconds is not None:
         previous_alarm_handler = signal.getsignal(signal.SIGALRM)
@@ -670,28 +794,32 @@ def main() -> int:
         result = run_backup(
             staging_dir=Path(os.environ.get("BRAINLAYER_JSONL_BACKUP_STAGING_DIR", str(DEFAULT_STAGING_DIR))),
             state_path=Path(os.environ.get("BRAINLAYER_JSONL_BACKUP_STATE_PATH", str(DEFAULT_STATE_PATH))),
-            log_path=Path(os.environ.get("BRAINLAYER_JSONL_BACKUP_LOG_PATH", str(DEFAULT_LOG_PATH))),
+            log_path=log_path,
             folder_parts=os.environ.get("BRAINLAYER_JSONL_BACKUP_DRIVE_FOLDER", "/".join(DEFAULT_FOLDER_PARTS)).split(
                 "/"
             ),
         )
     except backup_daily.BackupTimeoutError:
         result = {
+            "attempted_at": dt.datetime.now(dt.UTC).isoformat(),
             "status": "failed",
             "uploaded": False,
             "verified": False,
             "error": f"timed out after {timeout_seconds}s",
         }
+        _append_terminal_failure(log_path, result)
         print(json.dumps(result, sort_keys=True), flush=True)
         return 124
     except Exception as exc:
         result = {
+            "attempted_at": dt.datetime.now(dt.UTC).isoformat(),
             "status": "failed",
             "uploaded": False,
             "verified": False,
             "error": str(exc),
             "traceback": traceback.format_exc(),
         }
+        _append_terminal_failure(log_path, result)
         print(json.dumps(result, sort_keys=True), flush=True)
         return 1
     finally:
