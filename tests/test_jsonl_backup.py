@@ -20,8 +20,9 @@ def test_jsonl_retention_invariant_is_a_ci_guard_not_only_a_behavior_fixture():
     from brainlayer.backup_retention_invariant import inspect_jsonl_retention_invariant
 
     source = Path("src/brainlayer/jsonl_backup.py").read_text(encoding="utf-8")
+    backup_daily_source = Path("src/brainlayer/backup_daily.py").read_text(encoding="utf-8")
 
-    assert inspect_jsonl_retention_invariant(source) == []
+    assert inspect_jsonl_retention_invariant(source, backup_daily_source=backup_daily_source) == []
 
     mutations = (
         (
@@ -33,6 +34,11 @@ def test_jsonl_retention_invariant_is_a_ci_guard_not_only_a_behavior_fixture():
             "live_md5 != recorded_md5",
             "live_md5 == recorded_md5",
             "coverage must reject a surviving Drive object whose archived bytes changed",
+        ),
+        (
+            '    recorded_md5 = entry.get("archive_md5")',
+            '    if False:\n        recorded_md5 = entry.get("archive_md5")\n    recorded_md5 = None',
+            "coverage must read the recorded archive md5 from persisted state",
         ),
         (
             "recorded_hash == _sha256_file(candidate.path)",
@@ -54,11 +60,98 @@ def test_jsonl_retention_invariant_is_a_ci_guard_not_only_a_behavior_fixture():
             "if upload:",
             "backup deletion calls must remain inside verified-upload control flow",
         ),
+        (
+            'if result["verified"] and upload:',
+            'if result["verified"] or upload:',
+            "backup deletion calls must remain inside verified-upload control flow",
+        ),
+        (
+            'if result["verified"] and upload:',
+            'if not result["verified"] and upload:',
+            "backup deletion calls must remain inside verified-upload control flow",
+        ),
+        (
+            'if result["verified"] and upload:',
+            'if result["verified"] and upload:\n        pass\n    else:',
+            "backup deletion calls must remain inside verified-upload control flow",
+        ),
+        (
+            "        _atomic_write_json(\n            state_path,",
+            "        if False:\n            _atomic_write_json(\n                state_path,",
+            "surviving-copy provenance must be durably persisted before any backup deletion call",
+        ),
+        (
+            "    if not isinstance(entry, dict):",
+            (
+                "    if surviving_archives is not None and isinstance(entry, dict):\n"
+                "        return True\n"
+                "    if not isinstance(entry, dict):"
+            ),
+            "every successful coverage path must require surviving-copy evidence",
+        ),
+        (
+            ("    if not isinstance(archive_id, str) or archive_id not in surviving_archives:\n        return False"),
+            ("    if False:\n        if archive_id not in surviving_archives:\n            return False"),
+            "coverage must reject archive IDs absent from the live Drive inventory",
+        ),
     )
     for original, weakened, expected_error in mutations:
         assert original in source, f"mutation fixture drifted: {original}"
         unsafe = source.replace(original, weakened, 1)
-        assert expected_error in inspect_jsonl_retention_invariant(unsafe)
+        assert expected_error in inspect_jsonl_retention_invariant(unsafe, backup_daily_source=backup_daily_source)
+
+    unsafe = source.replace(
+        'archive_md5=uploaded.get("md5Checksum")',
+        "archive_md5=None",
+        1,
+    )
+    assert "uploaded state must persist md5Checksum from the upload response" in (
+        inspect_jsonl_retention_invariant(unsafe, backup_daily_source=backup_daily_source)
+    )
+
+    unsafe_backup_daily = backup_daily_source.replace(
+        '"&fields=id,name,size,md5Checksum"',
+        '"&fields=id,name,size"',
+        1,
+    )
+    assert "Drive upload must request md5Checksum from the API" in (
+        inspect_jsonl_retention_invariant(source, backup_daily_source=unsafe_backup_daily)
+    )
+
+    persisted_state_block = """        _atomic_write_json(
+            state_path,
+            _update_state_for_uploaded(
+                state,
+                changed,
+                archive_path.name,
+                archive_id=file_id,
+                archive_md5=uploaded.get("md5Checksum"),
+                digests=bundle_digests,
+            ),
+        )
+"""
+    constructed_state_block = """        uploaded_state = _update_state_for_uploaded(
+            state,
+            changed,
+            archive_path.name,
+            archive_id=file_id,
+            archive_md5=uploaded.get("md5Checksum"),
+            digests=bundle_digests,
+        )
+"""
+    assert persisted_state_block in source
+    unsafe = source.replace(persisted_state_block, constructed_state_block, 1).replace(
+        '            result["local_archive_removed"] = True\n',
+        (
+            '            result["local_archive_removed"] = True\n'
+            "        _atomic_write_json(state_path, uploaded_state)\n"
+        ),
+        1,
+    )
+    assert (
+        "surviving-copy provenance must be durably persisted before any backup deletion call"
+        in inspect_jsonl_retention_invariant(unsafe, backup_daily_source=backup_daily_source)
+    )
 
 
 def test_run_jsonl_backup_uploads_incremental_bundle_verifies_and_enqueues_summary(tmp_path, monkeypatch):

@@ -2,6 +2,8 @@
 
 Behavior tests prove today's examples. This guard also pins the production call graph so a
 future refactor cannot keep the fixtures green while bypassing the surviving-copy evidence.
+It deliberately proves call-graph shape and the specific md5 producer/consumer seam from #815;
+it is not general data-flow analysis. Behavioral tests own proof that runtime values are populated.
 """
 
 from __future__ import annotations
@@ -39,9 +41,33 @@ def _calls(function: ast.FunctionDef, name: str) -> list[ast.Call]:
     return [node for node in ast.walk(function) if isinstance(node, ast.Call) and _call_name(node) == name]
 
 
-def _has_compare(function: ast.FunctionDef, *, operator: type[ast.cmpop], terms: tuple[str, ...]) -> bool:
+def _parent_map(tree: ast.AST) -> dict[ast.AST, ast.AST]:
+    return {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+
+
+def _inside_statically_dead_branch(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> bool:
+    child = node
+    while parent := parents.get(child):
+        if isinstance(parent, ast.If) and isinstance(parent.test, ast.Constant):
+            if parent.test.value is False and child in parent.body:
+                return True
+            if parent.test.value is True and child in parent.orelse:
+                return True
+        child = parent
+    return False
+
+
+def _has_reachable_compare(
+    function: ast.FunctionDef,
+    *,
+    operator: type[ast.cmpop],
+    terms: tuple[str, ...],
+    parents: dict[ast.AST, ast.AST],
+) -> bool:
     for node in ast.walk(function):
         if not isinstance(node, ast.Compare) or not any(isinstance(op, operator) for op in node.ops):
+            continue
+        if _inside_statically_dead_branch(node, parents):
             continue
         rendered = ast.unparse(node)
         if all(term in rendered for term in terms):
@@ -60,37 +86,94 @@ def _passes_live_inventory(call: ast.Call) -> bool:
     return len(call.args) >= 3 and isinstance(call.args[2], ast.Name) and call.args[2].id == "surviving_archives"
 
 
-def _verified_upload_delete_lines(function: ast.FunctionDef) -> set[int]:
-    lines: set[int] = set()
-    for node in ast.walk(function):
-        if not isinstance(node, ast.If):
-            continue
-        condition = ast.unparse(node.test)
-        if 'result["verified"]' not in condition and "result['verified']" not in condition:
-            continue
-        if "upload" not in condition:
-            continue
-        lines.update(child.lineno for child in ast.walk(node) if isinstance(child, ast.Call))
-    return lines
+def _is_exact_verified_upload_gate(node: ast.If) -> bool:
+    expected = ast.parse('result["verified"] and upload', mode="eval").body
+    return ast.dump(node.test, include_attributes=False) == ast.dump(expected, include_attributes=False)
 
 
-def inspect_jsonl_retention_invariant(source: str) -> list[str]:
+def _calls_in_statements(statements: list[ast.stmt]) -> list[ast.Call]:
+    return [child for statement in statements for child in ast.walk(statement) if isinstance(child, ast.Call)]
+
+
+def _direct_expression_call(statement: ast.stmt, name: str) -> ast.Call | None:
+    if not isinstance(statement, ast.Expr) or not isinstance(statement.value, ast.Call):
+        return None
+    return statement.value if _call_name(statement.value) == name else None
+
+
+def _allowed_coverage_return(node: ast.Return, parents: dict[ast.AST, ast.AST]) -> bool:
+    if isinstance(node.value, ast.Constant) and node.value.value is False:
+        return True
+    if isinstance(node.value, ast.Compare):
+        rendered = ast.unparse(node.value)
+        return (
+            any(isinstance(operator, ast.Eq) for operator in node.value.ops)
+            and "recorded_hash" in rendered
+            and "_sha256_file(candidate.path)" in rendered
+        )
+    if not (isinstance(node.value, ast.Constant) and node.value.value is True):
+        return False
+    parent = parents.get(node)
+    if not isinstance(parent, ast.If) or node not in parent.body:
+        return False
+    expected = ast.parse("surviving_archives is None", mode="eval").body
+    return ast.dump(parent.test, include_attributes=False) == ast.dump(expected, include_attributes=False)
+
+
+def _has_exact_single_assignment(
+    function: ast.FunctionDef,
+    *,
+    target: str,
+    expression: str,
+    parents: dict[ast.AST, ast.AST],
+) -> bool:
+    stores = [
+        node
+        for node in ast.walk(function)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store) and node.id == target
+    ]
+    if len(stores) != 1:
+        return False
+    assignment = parents.get(stores[0])
+    if not isinstance(assignment, ast.Assign) or assignment.targets != [stores[0]]:
+        return False
+    expected = ast.parse(expression, mode="eval").body
+    return ast.dump(assignment.value, include_attributes=False) == ast.dump(expected, include_attributes=False)
+
+
+def _keyword_matches(call: ast.Call, *, name: str, expression: str) -> bool:
+    expected = ast.parse(expression, mode="eval").body
+    return any(
+        keyword.arg == name
+        and ast.dump(keyword.value, include_attributes=False) == ast.dump(expected, include_attributes=False)
+        for keyword in call.keywords
+    )
+
+
+def inspect_jsonl_retention_invariant(source: str, *, backup_daily_source: str) -> list[str]:
     """Return deterministic violations of the PR #815 surviving-copy contract."""
     try:
         tree = ast.parse(source)
     except SyntaxError as exc:
         return [f"jsonl_backup.py is not valid Python: {exc}"]
 
+    try:
+        backup_daily_tree = ast.parse(backup_daily_source)
+    except SyntaxError as exc:
+        return [f"backup_daily.py is not valid Python: {exc}"]
+
     errors: list[str] = []
     state_matches = _function(tree, "_state_matches")
     select_candidates = _function(tree, "_select_backup_candidates")
     update_state = _function(tree, "_update_state_for_uploaded")
     run_backup = _function(tree, "run_backup")
+    upload_file = _function(backup_daily_tree, "upload_file_to_drive_raw")
     required = {
         "_state_matches": state_matches,
         "_select_backup_candidates": select_candidates,
         "_update_state_for_uploaded": update_state,
         "run_backup": run_backup,
+        "upload_file_to_drive_raw": upload_file,
     }
     for name, function in required.items():
         if function is None:
@@ -102,25 +185,44 @@ def inspect_jsonl_retention_invariant(source: str) -> list[str]:
     assert select_candidates is not None
     assert update_state is not None
     assert run_backup is not None
+    assert upload_file is not None
+    parents = _parent_map(tree)
 
-    if not _has_compare(
+    if not _has_exact_single_assignment(
+        state_matches,
+        target="recorded_md5",
+        expression='entry.get("archive_md5")',
+        parents=parents,
+    ):
+        errors.append("coverage must read the recorded archive md5 from persisted state")
+
+    if not _has_reachable_compare(
         state_matches,
         operator=ast.NotIn,
         terms=("archive_id", "surviving_archives"),
+        parents=parents,
     ):
         errors.append("coverage must reject archive IDs absent from the live Drive inventory")
-    if not _has_compare(
+    if not _has_reachable_compare(
         state_matches,
         operator=ast.NotEq,
         terms=("live_md5", "recorded_md5"),
+        parents=parents,
     ):
         errors.append("coverage must reject a surviving Drive object whose archived bytes changed")
-    if not _has_compare(
+    if not _has_reachable_compare(
         state_matches,
         operator=ast.Eq,
         terms=("recorded_hash", "_sha256_file(candidate.path)"),
+        parents=parents,
     ):
         errors.append("coverage must compare the live source bytes with the archived source digest")
+    if any(
+        not _allowed_coverage_return(node, parents)
+        for node in ast.walk(state_matches)
+        if isinstance(node, ast.Return) and not _inside_statically_dead_branch(node, parents)
+    ):
+        errors.append("every successful coverage path must require surviving-copy evidence")
 
     select_calls = _calls(select_candidates, "_state_matches")
     if not select_calls or not any(_passes_live_inventory(call) for call in select_calls):
@@ -137,13 +239,43 @@ def inspect_jsonl_retention_invariant(source: str) -> list[str]:
     elif not any(_passes_live_inventory(call) for call in selection_calls):
         errors.append("run_backup must hand its live Drive inventory to candidate selection")
 
-    state_write_calls = _calls(run_backup, "_update_state_for_uploaded")
+    verified_gates = [
+        node for node in ast.walk(run_backup) if isinstance(node, ast.If) and _is_exact_verified_upload_gate(node)
+    ]
+    verified_gate = verified_gates[0] if len(verified_gates) == 1 else None
+    safe_calls = _calls_in_statements(verified_gate.body) if verified_gate is not None else []
+
+    persistence: list[tuple[int, ast.Call, ast.Call]] = []
+    if verified_gate is not None:
+        for index, statement in enumerate(verified_gate.body):
+            atomic_write = _direct_expression_call(statement, "_atomic_write_json")
+            if atomic_write is None:
+                continue
+            updates = [
+                child
+                for child in ast.walk(atomic_write)
+                if isinstance(child, ast.Call) and _call_name(child) == "_update_state_for_uploaded"
+            ]
+            if len(updates) == 1:
+                persistence.append((index, atomic_write, updates[0]))
+
     required_state_keywords = {"archive_id", "archive_md5", "digests"}
-    if not state_write_calls or not any(
+    if not persistence or not any(
         required_state_keywords <= {keyword.arg for keyword in call.keywords if keyword.arg}
-        for call in state_write_calls
+        for _, _, call in persistence
     ):
         errors.append("uploaded state must persist archive identity, archive bytes, and source-byte digests")
+    if not any(
+        _keyword_matches(call, name="archive_md5", expression='uploaded.get("md5Checksum")')
+        for _, _, call in persistence
+    ):
+        errors.append("uploaded state must persist md5Checksum from the upload response")
+
+    if not any(
+        isinstance(node, ast.Constant) and isinstance(node.value, str) and "md5Checksum" in node.value
+        for node in ast.walk(upload_file)
+    ):
+        errors.append("Drive upload must request md5Checksum from the API")
 
     prune_calls = _calls(run_backup, "prune_drive_backups")
     archive_unlinks = [
@@ -154,19 +286,27 @@ def inspect_jsonl_retention_invariant(source: str) -> list[str]:
         and call.func.value.id == "archive_path"
     ]
     delete_calls = [*prune_calls, *archive_unlinks]
-    verified_lines = _verified_upload_delete_lines(run_backup)
     if not prune_calls:
         errors.append("the Drive retention deletion call disappeared instead of retaining its safety contract")
     if not archive_unlinks:
         errors.append("the local staging deletion call disappeared instead of retaining its safety contract")
-    if any(call.lineno not in verified_lines for call in delete_calls):
+    if verified_gate is None or any(call not in safe_calls for call in delete_calls):
         errors.append("backup deletion calls must remain inside verified-upload control flow")
+    deletion_statement_indexes = (
+        [
+            index
+            for index, statement in enumerate(verified_gate.body)
+            if any(call in delete_calls for call in ast.walk(statement) if isinstance(call, ast.Call))
+        ]
+        if verified_gate is not None
+        else []
+    )
     if (
-        state_write_calls
-        and delete_calls
-        and max(call.lineno for call in state_write_calls) >= min(call.lineno for call in delete_calls)
+        not persistence
+        or not deletion_statement_indexes
+        or min(index for index, _, _ in persistence) >= min(deletion_statement_indexes)
     ):
-        errors.append("surviving-copy provenance must be persisted before any backup deletion call")
+        errors.append("surviving-copy provenance must be durably persisted before any backup deletion call")
 
     return _with_refactor_guidance(errors)
 
@@ -174,7 +314,15 @@ def inspect_jsonl_retention_invariant(source: str) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     path = Path(args[0]) if args else Path("src/brainlayer/jsonl_backup.py")
-    errors = inspect_jsonl_retention_invariant(path.read_text(encoding="utf-8"))
+    backup_daily_path = path.with_name("backup_daily.py")
+    if not backup_daily_path.exists():
+        print(f"FAIL: required sibling source is missing: {backup_daily_path}")
+        print(f"FAIL: {REFACTOR_GUIDANCE}")
+        return 1
+    errors = inspect_jsonl_retention_invariant(
+        path.read_text(encoding="utf-8"),
+        backup_daily_source=backup_daily_path.read_text(encoding="utf-8"),
+    )
     if errors:
         for error in errors:
             print(f"FAIL: {error}")
