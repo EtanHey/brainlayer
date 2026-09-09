@@ -50,6 +50,7 @@ DEFAULT_HEAL_CIRCUIT_BREAKER_LIMIT = 3
 DEFAULT_MAX_DURATION_SECONDS = 45.0
 DEFAULT_JSONL_BACKUP_LOG_PATH = Path("~/.local/share/brainlayer/logs/jsonl-backup.log").expanduser()
 DEFAULT_JSONL_BACKUP_MAX_AGE_SECONDS = 36 * 60 * 60
+DEFAULT_JSONL_BACKUP_ABSENCE_ALERT_NIGHTS = 2
 HEAL_MIN_CONSECUTIVE_FAILURES_ENV = "BRAINLAYER_HEAL_MIN_CONSECUTIVE_FAILURES"
 
 MISSING_EMBEDDINGS_SQL = """
@@ -148,6 +149,13 @@ class HealthCheckConfig:
             minimum=60 * 60,
         )
     )
+    jsonl_backup_absence_alert_nights: int = field(
+        default_factory=lambda: _env_int(
+            "BRAINLAYER_JSONL_BACKUP_ABSENCE_ALERT_NIGHTS",
+            DEFAULT_JSONL_BACKUP_ABSENCE_ALERT_NIGHTS,
+            minimum=2,
+        )
+    )
     queue_dir: Path = field(default_factory=lambda: Path("~/.brainlayer/queue").expanduser())
     pending_stores_path: Path = field(
         default_factory=lambda: Path("~/.local/share/brainlayer/pending-stores.jsonl").expanduser()
@@ -196,6 +204,7 @@ class JsonlBackupHealth:
     status: str | None = None
     attempted_at: str | None = None
     age_seconds: float | None = None
+    consecutive_nights_without_attempt: int | None = None
     verified: bool | None = None
     archive: str | None = None
     detail: str | None = None
@@ -846,6 +855,7 @@ def inspect_jsonl_backup_health(
     *,
     now: datetime,
     max_age_seconds: int,
+    absence_alert_nights: int = DEFAULT_JSONL_BACKUP_ABSENCE_ALERT_NIGHTS,
 ) -> tuple[JsonlBackupHealth, HealthIssue | None]:
     """Classify the latest durable backup attempt from an independent process."""
     resolved = log_path.expanduser()
@@ -887,13 +897,28 @@ def inspect_jsonl_backup_health(
 
     normalized_now = now.astimezone(UTC) if now.tzinfo is not None else now.replace(tzinfo=UTC)
     age_seconds = max(0.0, (normalized_now - attempted_at).total_seconds())
+    consecutive_nights_without_attempt = int(age_seconds // (24 * 60 * 60))
     common = {
         "status": backup_status,
         "attempted_at": attempted_at.isoformat(),
         "age_seconds": age_seconds,
+        "consecutive_nights_without_attempt": consecutive_nights_without_attempt,
         "verified": verified,
         "archive": archive,
     }
+    # 2026-09-09 incident: only 2026-06-14 lacked a durable attempt receipt.
+    # The 22 July bundles were uploaded and verified before retention later
+    # pruned them, so this alarm measures receipt absence, never survivor loss.
+    if consecutive_nights_without_attempt >= max(2, absence_alert_nights):
+        threshold_nights = max(2, absence_alert_nights)
+        detail = (
+            "no durable JSONL backup attempt receipt for multiple nights: "
+            f"attempted_at={attempted_at.isoformat()} "
+            f"consecutive_nights={consecutive_nights_without_attempt} "
+            f"threshold_nights={threshold_nights} status={backup_status}"
+        )
+        status = JsonlBackupHealth(state="stale", detail=detail, **common)
+        return status, HealthIssue("jsonl_backup_attempt_absent_multiple_nights", "critical", detail)
     if age_seconds > max_age_seconds:
         detail = (
             f"latest JSONL backup attempt is stale: attempted_at={attempted_at.isoformat()} "
@@ -1230,6 +1255,7 @@ def run_health_check(
         config.jsonl_backup_log_path,
         now=now,
         max_age_seconds=config.jsonl_backup_max_age_seconds,
+        absence_alert_nights=config.jsonl_backup_absence_alert_nights,
     )
     if jsonl_backup_issue is not None:
         add_issue(jsonl_backup_issue.code, jsonl_backup_issue.severity, jsonl_backup_issue.message)
