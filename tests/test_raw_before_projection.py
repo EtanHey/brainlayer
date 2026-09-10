@@ -538,3 +538,100 @@ def test_confirmed_batch_refuses_equal_size_divergent_versions(tmp_path: Path) -
         )
 
     assert watcher.registry.get(str(source))[0] == 0
+
+
+def test_confirmed_batch_deduplicates_exact_receipt_verification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "sources"
+    root.mkdir()
+    source = root / "session.jsonl"
+    first = b'{"type":"user","message":{"role":"user","content":"one"}}\n'
+    second = b'{"type":"user","message":{"role":"user","content":"two"}}\n'
+    source.write_bytes(first)
+    store = make_archive(tmp_path)
+    first_receipt = store.capture(source, "synthetic")
+    with source.open("ab") as handle:
+        handle.write(second)
+    second_receipt = store.capture(source, "synthetic")
+    inode = source.stat().st_ino
+    original_read = store._read_verified_chunk
+
+    def measured(repeated_old_rows: int, registry_name: str) -> tuple[int, int]:
+        calls = 0
+        byte_count = 0
+
+        def counted(sha256: str, expected_size: int) -> bytes:
+            nonlocal calls, byte_count
+            calls += 1
+            byte_count += expected_size
+            return original_read(sha256, expected_size)
+
+        monkeypatch.setattr(store, "_read_verified_chunk", counted)
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("synthetic", root)],
+            registry_path=tmp_path / registry_name,
+            on_flush=lambda _items: None,
+            raw_archive=store,
+        )
+        watcher._tailers[str(source)] = watcher_module.JSONLTailer(
+            str(source),
+            offset=0,
+            observed_inode=inode,
+        )
+        old_item = {
+            "_source_file": str(source),
+            "_source_inode": inode,
+            "_source_generation": 0,
+            "_line_end_offset": len(first),
+            "_raw_archive_receipt": first_receipt,
+        }
+        new_item = {
+            **old_item,
+            "_line_end_offset": len(first) + len(second),
+            "_raw_archive_receipt": second_receipt,
+        }
+        watcher._advance_confirmed_batch(
+            {str(source): len(first) + len(second)},
+            [dict(old_item) for _ in range(repeated_old_rows)] + [new_item],
+        )
+        return calls, byte_count
+
+    one_old = measured(1, "one-offsets.json")
+    hundred_old = measured(100, "hundred-offsets.json")
+
+    assert one_old[0] > 0
+    assert hundred_old == one_old
+
+
+def test_confirmed_batch_refuses_conflicting_same_manifest_receipt_variants(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "sources"
+    root.mkdir()
+    source = root / "session.jsonl"
+    raw = b'{"type":"user","message":{"role":"user","content":"one"}}\n'
+    source.write_bytes(raw)
+    store = make_archive(tmp_path)
+    watcher = make_watcher(tmp_path, root, store, [])
+    watcher.indexer.batch_size = 100
+    watcher.indexer.flush_interval_ms = 60_000
+    watcher.indexer._last_flush = float("inf")
+    assert watcher.poll_once() == 1
+    item = watcher.indexer._buffer[0]
+    variant = {
+        **item,
+        "_raw_archive_receipt": {
+            **item["_raw_archive_receipt"],
+            "manifest_path": str(tmp_path / "different-manifest-path.json"),
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="conflicting archived source receipt variants"):
+        watcher._advance_confirmed_batch(
+            {str(source): len(raw)},
+            [item, variant],
+        )
+
+    assert watcher.registry.get(str(source))[0] == 0

@@ -1433,7 +1433,7 @@ class JSONLWatcher:
             if eligible_items:
                 archive_receipt = None
                 if self.raw_archive is not None:
-                    receipt_items: list[tuple[dict[str, Any], int]] = []
+                    receipts_by_manifest: dict[str, dict[str, Any]] = {}
                     provider = self.provider_for_file(filepath)
                     for item in eligible_items:
                         receipt = item.get("_raw_archive_receipt")
@@ -1444,19 +1444,21 @@ class JSONLWatcher:
                             or receipt.get("source_path") != filepath
                             or type(receipt.get("size")) is not int
                             or receipt["size"] < end_offset
+                            or not isinstance(receipt.get("manifest_sha256"), str)
                         ):
                             raise RuntimeError("confirmed batch omits or mismatches an archived source version")
+                        manifest_sha = receipt["manifest_sha256"]
+                        existing = receipts_by_manifest.get(manifest_sha)
+                        if existing is not None:
+                            if existing != receipt:
+                                raise RuntimeError("conflicting archived source receipt variants")
+                            continue
                         with self.raw_archive.open_snapshot(receipt):
                             pass
-                        receipt_items.append((receipt, end_offset))
-                    archive_receipt = max(
-                        receipt_items,
-                        key=lambda pair: (pair[0]["size"], pair[1]),
-                    )[0]
-                    if any(
-                        not self.raw_archive.is_prefix(receipt, archive_receipt)
-                        for receipt, _end_offset in receipt_items
-                    ):
+                        receipts_by_manifest[manifest_sha] = receipt
+                    receipts = list(receipts_by_manifest.values())
+                    archive_receipt = max(receipts, key=lambda receipt: receipt["size"])
+                    if any(not self.raw_archive.is_prefix(receipt, archive_receipt) for receipt in receipts):
                         raise RuntimeError("confirmed batch archived source versions do not form one prefix chain")
                 current_confirmations[filepath] = (
                     max(item["_line_end_offset"] for item in eligible_items),
