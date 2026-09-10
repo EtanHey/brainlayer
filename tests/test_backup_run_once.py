@@ -266,3 +266,12 @@ def test_cli_rejects_implicit_optional_provider_roots(tmp_path, capsys):
         backup_run_once.main(["--config", str(config)])
     assert exit_info.value.code == 2
     assert "required" in capsys.readouterr().err
+
+
+def test_literal_config_rejects_multiple_tokens(tmp_path):
+    config = tmp_path / "brainlayer.env"
+    config.write_text("BRAINLAYER_BACKUP_DESTINATION='/correct' trailing\n")
+    from brainlayer.config import configured_brainlayer_literal_value
+
+    with pytest.raises(RuntimeError, match="exactly one literal value"):
+        configured_brainlayer_literal_value("BRAINLAYER_BACKUP_DESTINATION", config)

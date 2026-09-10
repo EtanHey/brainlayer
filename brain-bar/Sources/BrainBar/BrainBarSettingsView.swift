@@ -11,10 +11,12 @@ final class BrainBarSettingsViewModel: ObservableObject {
     @Published var isRefreshingLaunchdStatus = false
     @Published private(set) var activeRuntimeObservation: BrainLayerActiveRuntimeObservation
     @Published private(set) var lastSaveReceipt: BrainLayerSettingsSaveReceipt?
+    @Published private(set) var backupRunStatus: BrainLayerBackupCoordinator.Status = .idle
 
     private let store: BrainLayerConfigStore
     private let launchdStatusProvider: any BrainLayerLaunchdStatusSampling
     private let runtimeStatusProvider: any BrainLayerActiveRuntimeSampling
+    private let backupCoordinator: BrainLayerBackupCoordinator
     private let now: @Sendable () -> Date
     private var previousConfigForLastSaveReceipt: BrainLayerConfig?
 
@@ -22,6 +24,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         store: BrainLayerConfigStore = BrainLayerConfigStore(),
         launchdStatusProvider: any BrainLayerLaunchdStatusSampling = BrainLayerLaunchdStatusProvider(),
         runtimeStatusProvider: any BrainLayerActiveRuntimeSampling = UnknownBrainLayerActiveRuntimeProvider(),
+        backupCoordinator: BrainLayerBackupCoordinator = BrainLayerBackupCoordinator(),
         initialLaunchdStates: [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState] = [:],
         refreshStatusOnLoad: Bool = true,
         now: @escaping @Sendable () -> Date = Date.init
@@ -29,6 +32,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         self.store = store
         self.launchdStatusProvider = launchdStatusProvider
         self.runtimeStatusProvider = runtimeStatusProvider
+        self.backupCoordinator = backupCoordinator
         self.now = now
         activeRuntimeObservation = runtimeStatusProvider.sample()
         do {
@@ -114,7 +118,13 @@ final class BrainBarSettingsViewModel: ObservableObject {
     }
 
     func setBackupEnabled(_ enabled: Bool) {
-        _ = updateConfig { $0.backupEnabled = enabled }
+        guard updateConfig({ $0.backupEnabled = enabled }) else { return }
+        if enabled {
+            startBackupIfEnabledAfterSave()
+        } else {
+            backupCoordinator.cancel()
+            backupRunStatus = .idle
+        }
     }
 
     func chooseBackupDestination() {
@@ -130,17 +140,44 @@ final class BrainBarSettingsViewModel: ObservableObject {
             errorMessage = "The selected backup folder could not be identified."
             return
         }
-        _ = updateConfig { config in
+        let knownRoots = BrainLayerBackupKnownRoots.paths()
+        var includedRoots: [String] = []
+        var missingRoots: [String] = []
+        for root in knownRoots {
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory), isDirectory.boolValue {
+                includedRoots.append(root.standardizedFileURL.path)
+            } else {
+                missingRoots.append(root.standardizedFileURL.path)
+            }
+        }
+        guard !includedRoots.isEmpty else {
+            errorMessage = "No known transcript source folder is available."
+            return
+        }
+        guard updateConfig({ config in
             config.backupDestinationPath = url.path
             config.backupDestinationIdentity = identity
-        }
+            config.backupTranscriptRoots = includedRoots
+            config.backupMissingOptionalRoots = missingRoots
+        }) else { return }
+        startBackupIfEnabledAfterSave()
     }
 
     func clearBackupDestination() {
-        _ = updateConfig { config in
+        guard updateConfig({ config in
             config.backupDestinationPath = nil
             config.backupDestinationIdentity = nil
             config.backupEnabled = false
+        }) else { return }
+        backupCoordinator.cancel()
+        backupRunStatus = .idle
+    }
+
+    private func startBackupIfEnabledAfterSave() {
+        guard config.backupEnabled else { return }
+        backupCoordinator.startIfConfigured(config: config) { [weak self] status in
+            self?.backupRunStatus = status
         }
     }
 
@@ -548,6 +585,11 @@ struct BrainBarSettingsView: View {
                 .disabled(viewModel.config.backupDestinationPath == nil)
             }
             settingsTruthRow(label: "Configuration", value: viewModel.config.backupConfigurationState.title)
+            settingsTruthRow(label: "Run", value: viewModel.backupRunStatus.title)
+            settingsTruthRow(
+                label: "Unavailable optional sources",
+                value: String(viewModel.config.backupMissingOptionalRoots.count)
+            )
             Text("Backup status is unavailable until the backup service is connected; this setting does not claim cloud protection.")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Color.brainBarTextMuted)

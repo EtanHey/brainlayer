@@ -162,6 +162,8 @@ def configured_brainlayer_literal_value(name: str, env_path: Path | None = None)
             parsed = shlex.split(assignment[1], comments=False, posix=True)
         except ValueError as exc:
             raise RuntimeError(f"{name} has invalid quoting in {target}") from exc
+        if len(parsed) > 1:
+            raise RuntimeError(f"{name} must contain exactly one literal value in {target}")
         value = parsed[0] if parsed else ""
         if selected is not None:
             raise RuntimeError(f"duplicate valid {name} assignments in {target}")

@@ -182,6 +182,25 @@ struct BrainLayerLaunchdJobSetting: Equatable, Sendable {
     var loadState: BrainLayerLaunchdLoadState
 }
 
+enum BrainLayerBackupKnownRoots {
+    static func paths(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [URL] {
+        [
+            home.appendingPathComponent(".claude/projects"),
+            home.appendingPathComponent(".claude-archive"),
+            home.appendingPathComponent(".codex/sessions"),
+            home.appendingPathComponent(".cursor/sessions"),
+            home.appendingPathComponent(".cursor/projects"),
+            home.appendingPathComponent(".cursor/acp-sessions"),
+            home.appendingPathComponent(".cursor/plans"),
+            home.appendingPathComponent(".gemini/sessions"),
+            home.appendingPathComponent(".gemini/antigravity-cli/conversations"),
+            home.appendingPathComponent(".gemini/antigravity-cli/implicit"),
+            home.appendingPathComponent(".gemini/antigravity-cli/brain"),
+            home.appendingPathComponent(".gemini/antigravity-cli/cache"),
+        ]
+    }
+}
+
 struct BrainLayerBackupDestinationIdentity: Equatable, Sendable {
     let stDev: Int64
     let stIno: Int64
@@ -212,6 +231,8 @@ struct BrainLayerConfig: Equatable, Sendable {
     var backupEnabled: Bool
     var backupDestinationPath: String?
     var backupDestinationIdentity: BrainLayerBackupDestinationIdentity?
+    var backupTranscriptRoots: [String]
+    var backupMissingOptionalRoots: [String]
 
     static let defaultConfig = BrainLayerConfig(
         googleAPIKey: .missing,
@@ -228,7 +249,9 @@ struct BrainLayerConfig: Equatable, Sendable {
         ),
         backupEnabled: false,
         backupDestinationPath: nil,
-        backupDestinationIdentity: nil
+        backupDestinationIdentity: nil,
+        backupTranscriptRoots: [],
+        backupMissingOptionalRoots: []
     )
 
     func persistedValuesEqual(to other: BrainLayerConfig) -> Bool {
@@ -242,6 +265,8 @@ struct BrainLayerConfig: Equatable, Sendable {
             backupEnabled == other.backupEnabled &&
             backupDestinationPath == other.backupDestinationPath &&
             backupDestinationIdentity == other.backupDestinationIdentity &&
+            backupTranscriptRoots == other.backupTranscriptRoots &&
+            backupMissingOptionalRoots == other.backupMissingOptionalRoots &&
             Dictionary(uniqueKeysWithValues: launchdJobs.map { ($0.key, $0.value.enabled) }) ==
             Dictionary(uniqueKeysWithValues: other.launchdJobs.map { ($0.key, $0.value.enabled) })
     }
@@ -306,6 +331,9 @@ enum BrainLayerConfigValidator {
         }
         if config.backupEnabled, config.backupDestinationIdentity == nil {
             return .failed("Choose the backup destination again to record its filesystem identity.")
+        }
+        if config.backupEnabled, config.backupTranscriptRoots.isEmpty {
+            return .failed("No known transcript root is available for backup.")
         }
         if let destination = config.backupDestinationPath {
             let trimmed = destination.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -517,6 +545,11 @@ struct BrainLayerEnvDocument {
         "BRAINLAYER_DISABLED_SLEEP_SECONDS",
     ]
 
+    private static func renderedList(_ values: [String]) -> String {
+        let data = try! JSONSerialization.data(withJSONObject: values, options: [.sortedKeys])
+        return shellSingleQuoted(String(decoding: data, as: UTF8.self))
+    }
+
     private static func managedValues(
         for config: BrainLayerConfig,
         includeLegacyGoogleKey: Bool
@@ -532,6 +565,8 @@ struct BrainLayerEnvDocument {
             "BRAINLAYER_BACKUP_DESTINATION": config.backupDestinationPath.map(shellSingleQuoted) ?? "",
             "BRAINLAYER_BACKUP_DESTINATION_ST_DEV": config.backupDestinationIdentity.map { String($0.stDev) } ?? "",
             "BRAINLAYER_BACKUP_DESTINATION_ST_INO": config.backupDestinationIdentity.map { String($0.stIno) } ?? "",
+            "BRAINLAYER_BACKUP_TRANSCRIPT_ROOTS": renderedList(config.backupTranscriptRoots),
+            "BRAINLAYER_BACKUP_MISSING_OPTIONAL_ROOTS": renderedList(config.backupMissingOptionalRoots),
         ]
         if includeLegacyGoogleKey {
             values["GOOGLE_GENERATIVE_AI_API_KEY"] = ""
@@ -579,6 +614,12 @@ struct BrainLayerEnvDocument {
         if let raw = assignments["BRAINLAYER_BACKUP_DESTINATION_ST_DEV"], let value = Int64(normalized(raw)),
            let inode = assignments["BRAINLAYER_BACKUP_DESTINATION_ST_INO"].flatMap({ Int64(normalized($0)) }) {
             config.backupDestinationIdentity = BrainLayerBackupDestinationIdentity(stDev: value, stIno: inode)
+        }
+        for key in ["BRAINLAYER_BACKUP_TRANSCRIPT_ROOTS", "BRAINLAYER_BACKUP_MISSING_OPTIONAL_ROOTS"] {
+            guard let raw = assignments[key], let data = strippedValue(raw).data(using: .utf8),
+                  let values = try? JSONDecoder().decode([String].self, from: data) else { continue }
+            if key == "BRAINLAYER_BACKUP_TRANSCRIPT_ROOTS" { config.backupTranscriptRoots = values }
+            else { config.backupMissingOptionalRoots = values }
         }
         for key in tuningKeyOrder {
             guard let raw = assignments[key] else { continue }
