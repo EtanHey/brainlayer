@@ -1474,9 +1474,14 @@ final class BrainDatabase: @unchecked Sendable {
             queueID: queueID,
             additionalMetadata: metadata
         )
+        // MCP stores are tagged as assistant_text/agent_explicit to record
+        // explicit agent-channel submission, not a claim of original
+        // authorship or speaker identity.
+        let contentType = source == "mcp" ? "assistant_text" : "user_message"
+        let chunkOrigin = source == "mcp" ? "agent_explicit" : "user_explicit"
         let sql = """
             INSERT INTO chunks (id, content, metadata, source_file, project, tags, importance, source, content_type, value_type, char_count, created_at, preview_text, conversation_id, position, content_hash, chunk_origin, ingested_at, seen_count, last_seen_at, content_class, brick_id, source_uri, status)
-            VALUES (?, ?, ?, 'brainbar-store', ?, ?, ?, ?, 'user_message', 'high', ?, ?, ?, ?, ?, ?, 'user_explicit', ?, 1, ?, 'knowledge', ?, 'brainbar-store', 'active')
+            VALUES (?, ?, ?, 'brainbar-store', ?, ?, ?, ?, ?, 'high', ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 'knowledge', ?, 'brainbar-store', 'active')
         """
         let previousBusyTimeout = busyTimeoutMillis.flatMap { _ in queryPragma(db, name: "busy_timeout") }
         if let busyTimeoutMillis {
@@ -1496,10 +1501,18 @@ final class BrainDatabase: @unchecked Sendable {
                 if let existing = try storedChunk(
                     contentHash: contentHash,
                     project: project,
-                    contentType: "user_message",
+                    contentType: contentType,
+                    source: source,
                     conversationID: conversationID,
                     on: db
-                ) {
+                ) ?? (source == "mcp" ? try storedChunk(
+                    contentHash: contentHash,
+                    project: project,
+                    contentType: "user_message",
+                    source: "mcp",
+                    conversationID: conversationID,
+                    on: db
+                ) : nil) {
                     return existing
                 }
             }
@@ -1516,22 +1529,24 @@ final class BrainDatabase: @unchecked Sendable {
                 bindText(tagsJSON, to: stmt, index: 5)
                 sqlite3_bind_int(stmt, 6, Int32(importance))
                 bindText(source, to: stmt, index: 7)
-                sqlite3_bind_int(stmt, 8, Int32(content.count))
-                bindText(createdAt, to: stmt, index: 9)
-                bindText(Self.previewText(summary: "", content: content), to: stmt, index: 10)
+                bindText(contentType, to: stmt, index: 8)
+                sqlite3_bind_int(stmt, 9, Int32(content.count))
+                bindText(createdAt, to: stmt, index: 10)
+                bindText(Self.previewText(summary: "", content: content), to: stmt, index: 11)
                 if let conversationID {
-                    bindText(conversationID, to: stmt, index: 11)
-                } else {
-                    sqlite3_bind_null(stmt, 11)
-                }
-                if let position {
-                    sqlite3_bind_int64(stmt, 12, position)
+                    bindText(conversationID, to: stmt, index: 12)
                 } else {
                     sqlite3_bind_null(stmt, 12)
                 }
-                bindText(contentHash, to: stmt, index: 13)
-                sqlite3_bind_int64(stmt, 14, Int64(Date().timeIntervalSince1970))
-                bindText(createdAt, to: stmt, index: 15)
+                if let position {
+                    sqlite3_bind_int64(stmt, 13, position)
+                } else {
+                    sqlite3_bind_null(stmt, 13)
+                }
+                bindText(contentHash, to: stmt, index: 14)
+                bindText(chunkOrigin, to: stmt, index: 15)
+                sqlite3_bind_int64(stmt, 16, Int64(Date().timeIntervalSince1970))
+                bindText(createdAt, to: stmt, index: 17)
                 // dedupe_hash, simhash and simhash_band_0..3 are deliberately absent from the
                 // INSERT above, so SQLite stores them as NULL. BrainBar does not compute them: the
                 // Swift port that briefly lived here diverged from Python's simhash64 (hamming
@@ -1539,7 +1554,7 @@ final class BrainDatabase: @unchecked Sendable {
                 // wrote columns that looked computed but could never match a Python-written row.
                 // A faithful port with exact-hex parity tests against Python is its own lane; until
                 // then honest NULL lets a reader tell "not computed" from "computed differently".
-                bindText(chunkID, to: stmt, index: 16)
+                bindText(chunkID, to: stmt, index: 18)
             }
             if failNextStoreAfterInsertForTesting {
                 failNextStoreAfterInsertForTesting = false
@@ -4887,6 +4902,7 @@ final class BrainDatabase: @unchecked Sendable {
         contentHash: String,
         project: String?,
         contentType: String,
+        source: String? = nil,
         conversationID: String,
         on db: OpaquePointer
     ) throws -> StoredChunk? {
@@ -4898,6 +4914,7 @@ final class BrainDatabase: @unchecked Sendable {
               AND project IS ?
               AND content_type = ?
               AND conversation_id = ?
+              AND (source IS ? OR ? IS NULL)
               AND superseded_by IS NULL
               AND aggregated_into IS NULL
               AND archived_at IS NULL
@@ -4916,6 +4933,13 @@ final class BrainDatabase: @unchecked Sendable {
         }
         bindText(contentType, to: stmt, index: 3)
         bindText(conversationID, to: stmt, index: 4)
+        if let source {
+            bindText(source, to: stmt, index: 5)
+            bindText(source, to: stmt, index: 6)
+        } else {
+            sqlite3_bind_null(stmt, 5)
+            sqlite3_bind_null(stmt, 6)
+        }
 
         let stepRC = sqlite3_step(stmt)
         switch stepRC {

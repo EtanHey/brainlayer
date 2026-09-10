@@ -559,6 +559,75 @@ final class DatabaseTests: XCTestCase {
         )
     }
 
+    func testQueuedMcpReplayPreservesSourceMetadata() throws {
+        let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("brainbar-queued-source-replay-\(UUID().uuidString).jsonl")
+        setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
+        defer {
+            unsetenv("BRAINBAR_PENDING_STORES_PATH")
+            try? FileManager.default.removeItem(at: queuePath)
+        }
+
+        var lockDB: OpaquePointer?
+        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
+        XCTAssertEqual(sqlite3_open_v2(tempDBPath, &lockDB, flags, nil), SQLITE_OK)
+        guard let lockDB else {
+            XCTFail("Failed to open secondary lock connection")
+            return
+        }
+        defer { sqlite3_close(lockDB) }
+
+        XCTAssertEqual(sqlite3_exec(lockDB, "BEGIN IMMEDIATE", nil, nil, nil), SQLITE_OK)
+        defer { sqlite3_exec(lockDB, "ROLLBACK", nil, nil, nil) }
+
+        let content = "Queued MCP replay should preserve source metadata"
+        let outcome = try db.storeOrQueueWithinBudget(
+            content: content,
+            tags: ["queued-replay"],
+            importance: 6,
+            source: "mcp",
+            project: "brainbar",
+            conversationID: "mcp-replay-session",
+            busyTimeoutMillis: 1
+        )
+
+        guard case .queued(let queueID, let queuedAt, let chunkID) = outcome else {
+            XCTFail("Expected queued outcome, got \(outcome)")
+            return
+        }
+
+        let queuedLines = try String(contentsOf: queuePath, encoding: .utf8)
+            .split(whereSeparator: \.isNewline)
+        let queuedPayload = try XCTUnwrap(queuedLines.first).data(using: .utf8)
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: queuedPayload) as? [String: Any])
+        XCTAssertEqual(payload["source"] as? String, "mcp")
+        XCTAssertEqual(payload["queue_id"] as? String, queueID)
+        XCTAssertEqual(payload["chunk_id"] as? String, chunkID)
+
+        let queuedSource = try sqliteScalarString(path: tempDBPath, sql: "SELECT source FROM chunks WHERE id = '\(chunkID)'")
+        XCTAssertNil(queuedSource)
+
+        XCTAssertEqual(sqlite3_exec(lockDB, "COMMIT", nil, nil, nil), SQLITE_OK)
+
+        let flushed = db.flushPendingStores()
+        XCTAssertEqual(flushed.count, 1)
+        XCTAssertEqual(flushed.first?.storedChunk.chunkID, chunkID)
+
+        XCTAssertEqual(queuedAt.isEmpty, false)
+        XCTAssertEqual(
+            try sqliteScalarString(path: tempDBPath, sql: "SELECT source FROM chunks WHERE id = '\(chunkID)'"),
+            "mcp"
+        )
+        XCTAssertEqual(
+            try sqliteScalarString(path: tempDBPath, sql: "SELECT content_type FROM chunks WHERE id = '\(chunkID)'"),
+            "assistant_text"
+        )
+        XCTAssertEqual(
+            try sqliteScalarString(path: tempDBPath, sql: "SELECT chunk_origin FROM chunks WHERE id = '\(chunkID)'"),
+            "agent_explicit"
+        )
+    }
+
     func testStoreOrQueueWithinDefaultBudgetStoresAfterBriefWriteLock() throws {
         let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("brainbar-brief-lock-queue-\(UUID().uuidString).jsonl")
@@ -1202,6 +1271,127 @@ final class DatabaseTests: XCTestCase {
 
         let stats = try db.dashboardStats(activityWindowMinutes: 5, bucketCount: 5)
         XCTAssertGreaterThan(stats.recentWriteFiveMinuteCount, 0)
+    }
+
+    func testStoreMcpMarksAssistantTextAndAgentExplicit() throws {
+        let stored = try db.store(
+            content: "MCP-submitted assistant text should be correctly tagged",
+            tags: ["mcp", "origin"],
+            importance: 7,
+            source: "mcp",
+            project: "brainbar",
+            conversationID: "mcp-origin-session"
+        )
+
+        let contentType = try XCTUnwrap(sqliteScalarString(
+            path: tempDBPath,
+            sql: "SELECT content_type FROM chunks WHERE id = '\(stored.chunkID)'"
+        ))
+        let chunkOrigin = try XCTUnwrap(sqliteScalarString(
+            path: tempDBPath,
+            sql: "SELECT chunk_origin FROM chunks WHERE id = '\(stored.chunkID)'"
+        ))
+
+        XCTAssertEqual(contentType, "assistant_text")
+        XCTAssertEqual(chunkOrigin, "agent_explicit")
+    }
+
+    func testStoreQuickCaptureKeepsUserMessageAndUserExplicit() throws {
+        let stored = try db.store(
+            content: "Quick capture remains human-authored by contract",
+            tags: ["quick", "capture"],
+            importance: 5,
+            source: "quick-capture",
+            project: "brainbar",
+            conversationID: "qc-session"
+        )
+
+        let contentType = try XCTUnwrap(sqliteScalarString(
+            path: tempDBPath,
+            sql: "SELECT content_type FROM chunks WHERE id = '\(stored.chunkID)'"
+        ))
+        let chunkOrigin = try XCTUnwrap(sqliteScalarString(
+            path: tempDBPath,
+            sql: "SELECT chunk_origin FROM chunks WHERE id = '\(stored.chunkID)'"
+        ))
+        let source = try XCTUnwrap(sqliteScalarString(
+            path: tempDBPath,
+            sql: "SELECT source FROM chunks WHERE id = '\(stored.chunkID)'"
+        ))
+
+        XCTAssertEqual(source, "quick-capture")
+        XCTAssertEqual(contentType, "user_message")
+        XCTAssertEqual(chunkOrigin, "user_explicit")
+    }
+
+    func testStoreMcpDedupesExistingLegacyMcpUserMessageInScope() throws {
+        let project = "brainlayer"
+        let conversationID = "mcp-legacy-session"
+
+        let seeded = try db.store(
+            content: "Legacy MCP row should be deduped on retry",
+            tags: ["legacy", "retry"],
+            importance: 8,
+            source: "quick-capture",
+            project: project,
+            conversationID: conversationID
+        )
+
+        try db.exec("UPDATE chunks SET source = 'mcp', content_type = 'user_message', chunk_origin = 'user_explicit' WHERE id = '\(seeded.chunkID)'")
+
+        let duplicate = try db.store(
+            content: "Legacy MCP row should be deduped on retry",
+            tags: ["legacy", "retry"],
+            importance: 8,
+            source: "mcp",
+            project: project,
+            conversationID: conversationID
+        )
+
+        XCTAssertEqual(duplicate.chunkID, seeded.chunkID)
+        XCTAssertEqual(
+            try sqliteScalarString(
+                path: tempDBPath,
+                sql: "SELECT content_type FROM chunks WHERE id = '\(seeded.chunkID)'"
+            ),
+            "user_message"
+        )
+    }
+
+    func testStoreMcpDoesNotMatchOtherSourceRows() throws {
+        let project = "brainlayer"
+        let conversationID = "mcp-scope-session"
+
+        let humanStored = try db.store(
+            content: "MCP retry should not reuse non-MCP rows",
+            tags: ["human", "capture"],
+            importance: 8,
+            source: "quick-capture",
+            project: project,
+            conversationID: conversationID
+        )
+
+        let beforeCount = try sqliteScalarInt(
+            path: tempDBPath,
+            sql: "SELECT COUNT(*) FROM chunks WHERE conversation_id = '\(conversationID)'"
+        )
+        XCTAssertEqual(beforeCount, 1)
+
+        let stored = try db.store(
+            content: "MCP retry should not reuse non-MCP rows",
+            tags: ["agent", "capture"],
+            importance: 9,
+            source: "mcp",
+            project: project,
+            conversationID: conversationID
+        )
+
+        let afterCount = try sqliteScalarInt(
+            path: tempDBPath,
+            sql: "SELECT COUNT(*) FROM chunks WHERE conversation_id = '\(conversationID)'"
+        )
+        XCTAssertEqual(afterCount, 2)
+        XCTAssertNotEqual(stored.chunkID, humanStored.chunkID)
     }
 
     // Honest-NULL contract for BrainBar dedupe columns.
