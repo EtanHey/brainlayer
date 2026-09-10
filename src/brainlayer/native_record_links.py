@@ -12,7 +12,11 @@ from typing import Any
 MAX_DECLARED_HEADERS_BYTES = 32_768
 MAX_NATIVE_UUID_LOOKUP_LIMIT = 8
 MAX_PRESERVED_SEGMENT_BYTES = 4_096
-_SUPPORTED_PROVIDER = "claude"
+MAX_TARGET_REPORT_BYTES = 256 * 1024
+TARGET_EXTRACTION_VERSION = 1
+TARGET_SCOPE = "supported_tool_calls_v1"
+_SUPPORTED_PROVIDERS = frozenset({"claude", "codex"})
+_CHAIN_PROVIDER = "claude"
 _SHA256_RE = re.compile(r"[0-9a-fA-F]{64}\Z")
 _DECLARED_TOP_LEVEL_HEADERS = (
     ("type", "/type"),
@@ -63,7 +67,7 @@ def native_record_entry_is_admitted(entry: dict[str, Any]) -> bool:
 
 def native_record_payload_from_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
     """Return exact Claude structural evidence, or None when its namespace is unavailable."""
-    if entry.get("_provider") != _SUPPORTED_PROVIDER:
+    if entry.get("_provider") != _CHAIN_PROVIDER:
         return None
     session_id = entry.get("sessionId")
     source_file = entry.get("_source_file")
@@ -89,7 +93,7 @@ def native_record_payload_from_entry(entry: dict[str, Any]) -> dict[str, Any] | 
     if isinstance(compact_metadata, dict) and "preservedSegment" in compact_metadata:
         declared_headers["/compactMetadata/preservedSegment"] = compact_metadata["preservedSegment"]
     return {
-        "provider": _SUPPORTED_PROVIDER,
+        "provider": _CHAIN_PROVIDER,
         "session_id": session_id,
         "source_file": source_file,
         "record_start_offset": start_offset,
@@ -155,6 +159,58 @@ def _validated_headers(
     )
 
 
+def _validated_target_report(report: Any) -> tuple[int, str, str]:
+    """Accept only the bounded, body-free output contract of native_targets."""
+    if report is None:
+        return 0, "[]", "[]"
+    if not isinstance(report, dict) or set(report) != {"version", "scope", "targets", "diagnostics"}:
+        raise ValueError("target report has unsupported fields")
+    if (
+        type(report["version"]) is not int
+        or report["version"] != TARGET_EXTRACTION_VERSION
+        or report["scope"] != TARGET_SCOPE
+    ):
+        raise ValueError("unsupported target report version or scope")
+    targets, diagnostics = report["targets"], report["diagnostics"]
+    if not isinstance(targets, list) or not isinstance(diagnostics, list):
+        raise ValueError("target report targets and diagnostics must be lists")
+    if len(targets) > 25 or len(diagnostics) > 32:
+        raise ValueError("target report exceeds helper list cap")
+    target_keys = {
+        "tool_name",
+        "target",
+        "target_kind",
+        "declared_unverified",
+        "call_id",
+        "raw_container_pointer",
+        "decoded_pointer",
+        "pointer_kind",
+    }
+    required_string_keys = {"tool_name", "target", "target_kind", "decoded_pointer", "pointer_kind"}
+    nullable_string_keys = {"call_id", "raw_container_pointer"}
+    for target in targets:
+        if not isinstance(target, dict) or set(target) != target_keys or target.get("declared_unverified") is not True:
+            raise ValueError("target report target has unsupported fields")
+        for key in required_string_keys:
+            value = target[key]
+            if not isinstance(value, str) or not value or len(value.encode("utf-8")) > 4_096:
+                raise ValueError("target report target contains invalid required value")
+        for key in nullable_string_keys:
+            value = target[key]
+            if value is not None and (not isinstance(value, str) or not value or len(value.encode("utf-8")) > 4_096):
+                raise ValueError("target report target contains invalid nullable value")
+        if target["target_kind"] not in {"agent_handle", "task_handle", "surface"}:
+            raise ValueError("target report target has unsupported target kind")
+        if target["pointer_kind"] not in {"direct_raw_json", "decoded_json_string"}:
+            raise ValueError("target report target has unsupported pointer kind")
+    if any(not isinstance(item, str) or not item or len(item.encode("utf-8")) > 4_096 for item in diagnostics):
+        raise ValueError("target report contains invalid diagnostic")
+    targets_json, diagnostics_json = _canonical_json(targets), _canonical_json(diagnostics)
+    if len((targets_json + diagnostics_json).encode("utf-8")) > MAX_TARGET_REPORT_BYTES:
+        raise ValueError("target report exceeds byte cap")
+    return TARGET_EXTRACTION_VERSION, targets_json, diagnostics_json
+
+
 def ensure_native_record_links_schema(conn: Any) -> None:
     conn.execute(
         """CREATE TABLE IF NOT EXISTS native_record_links (
@@ -173,9 +229,20 @@ def ensure_native_record_links_schema(conn: Any) -> None:
             declared_headers_json TEXT NOT NULL,
             preserved_segment_json TEXT,
             preserved_segment_sha256 TEXT,
-            preserved_segment_omitted INTEGER NOT NULL DEFAULT 0
+            preserved_segment_omitted INTEGER NOT NULL DEFAULT 0,
+            target_extraction_version INTEGER NOT NULL DEFAULT 0,
+            declared_targets_json TEXT NOT NULL DEFAULT '[]',
+            target_diagnostics_json TEXT NOT NULL DEFAULT '[]'
         )"""
     )
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(native_record_links)")}
+    for name, definition in (
+        ("target_extraction_version", "INTEGER NOT NULL DEFAULT 0"),
+        ("declared_targets_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("target_diagnostics_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ):
+        if name not in columns:
+            conn.execute(f"ALTER TABLE native_record_links ADD COLUMN {name} {definition}")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_native_record_links_uuid "
         "ON native_record_links("
@@ -198,8 +265,9 @@ def catalog_native_record(
     record_end_offset: int,
     raw_record_hash: str,
     declared_headers: dict[str, Any],
+    target_report: dict[str, Any] | None = None,
 ) -> NativeRecordLinkResult:
-    if provider != _SUPPORTED_PROVIDER:
+    if provider not in _SUPPORTED_PROVIDERS:
         raise UnsupportedNativeRecordProvider(f"unsupported provider: {provider!r}")
     if not isinstance(session_id, str) or not session_id:
         raise ValueError("explicit non-empty session_id required")
@@ -216,22 +284,24 @@ def catalog_native_record(
         raise ValueError("raw_record_hash must be an exact SHA-256 hex digest")
     raw_record_hash = raw_record_hash.lower()
     try:
-        (
-            headers_json,
-            native_uuid,
-            parent_state,
-            parent_value,
-            logical_state,
-            logical_value,
-            segment_json,
-            segment_sha256,
-            omitted,
-        ) = _validated_headers(declared_headers)
+        headers = _validated_headers(declared_headers)
+        derived = _validated_target_report(target_report)
     except (TypeError, ValueError) as exc:
-        raise ValueError("invalid native record headers") from exc
+        raise ValueError("invalid native record headers or target report") from exc
     identity = [provider, session_id, source_file, record_start_offset, record_end_offset, raw_record_hash]
     record_key = hashlib.sha256(_canonical_json(identity).encode("utf-8")).hexdigest()
-    incoming = (
+    (
+        headers_json,
+        native_uuid,
+        parent_state,
+        parent_value,
+        logical_state,
+        logical_value,
+        segment_json,
+        segment_sha256,
+        omitted,
+    ) = headers
+    core = (
         provider,
         session_id,
         source_file,
@@ -249,22 +319,32 @@ def catalog_native_record(
         omitted,
     )
     existing = conn.execute(
-        "SELECT provider, session_id, source_file, record_start_offset, record_end_offset, raw_record_hash, "
-        "native_uuid, parent_uuid_state, parent_uuid_value, logical_parent_uuid_state, logical_parent_uuid_value, "
-        "declared_headers_json, preserved_segment_json, preserved_segment_sha256, preserved_segment_omitted "
-        "FROM native_record_links WHERE record_key = ?",
+        "SELECT provider,session_id,source_file,record_start_offset,record_end_offset,raw_record_hash,"
+        "native_uuid,parent_uuid_state,parent_uuid_value,logical_parent_uuid_state,logical_parent_uuid_value,"
+        "declared_headers_json,preserved_segment_json,preserved_segment_sha256,preserved_segment_omitted,"
+        "target_extraction_version,declared_targets_json,target_diagnostics_json FROM native_record_links WHERE record_key=?",
         (record_key,),
     ).fetchone()
     if existing is not None:
-        if tuple(existing) != incoming:
+        if tuple(existing[:15]) != core:
             raise NativeRecordLinkConflict("conflicting declared metadata for one physical native record")
+        existing_version = int(existing[15])
+        if target_report is None:
+            return NativeRecordLinkResult(record_key=record_key, inserted=False)
+        if existing_version > TARGET_EXTRACTION_VERSION:
+            raise NativeRecordLinkConflict("refusing to overwrite newer target extraction version")
+        if existing_version == TARGET_EXTRACTION_VERSION:
+            if tuple(existing[15:]) != derived:
+                raise NativeRecordLinkConflict("conflicting target evidence for one physical native record")
+            return NativeRecordLinkResult(record_key=record_key, inserted=False)
+        conn.execute(
+            "UPDATE native_record_links SET target_extraction_version=?,declared_targets_json=?,target_diagnostics_json=? WHERE record_key=?",
+            (*derived, record_key),
+        )
         return NativeRecordLinkResult(record_key=record_key, inserted=False)
     conn.execute(
-        "INSERT INTO native_record_links (record_key, provider, session_id, source_file, record_start_offset, "
-        "record_end_offset, raw_record_hash, native_uuid, parent_uuid_state, parent_uuid_value, "
-        "logical_parent_uuid_state, logical_parent_uuid_value, declared_headers_json, preserved_segment_json, "
-        "preserved_segment_sha256, preserved_segment_omitted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (record_key, *incoming),
+        "INSERT INTO native_record_links (record_key,provider,session_id,source_file,record_start_offset,record_end_offset,raw_record_hash,native_uuid,parent_uuid_state,parent_uuid_value,logical_parent_uuid_state,logical_parent_uuid_value,declared_headers_json,preserved_segment_json,preserved_segment_sha256,preserved_segment_omitted,target_extraction_version,declared_targets_json,target_diagnostics_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (record_key, *core, *derived),
     )
     return NativeRecordLinkResult(record_key=record_key, inserted=True)
 
@@ -279,8 +359,8 @@ def find_native_uuid_records(
     limit: int = 2,
 ) -> list[dict[str, Any]]:
     """Return a bounded, ordered ambiguity sample; two rows signal a non-unique UUID."""
-    if provider != _SUPPORTED_PROVIDER:
-        raise UnsupportedNativeRecordProvider(f"unsupported provider: {provider!r}")
+    if provider != _CHAIN_PROVIDER:
+        raise UnsupportedNativeRecordProvider("native UUID chain lookup supports Claude only")
     if type(limit) is not int or not 1 <= limit <= MAX_NATIVE_UUID_LOOKUP_LIMIT:
         raise ValueError(f"limit must be 1..{MAX_NATIVE_UUID_LOOKUP_LIMIT}")
     if source_file is not None and (not isinstance(source_file, str) or not source_file):
