@@ -101,10 +101,10 @@ sleep_then_exit_disabled() {
     exit 0
 }
 
-if ! is_false "${BRAINLAYER_ENRICH_ENABLED:-1}"; then
-    export BRAINLAYER_AUTO_ENRICH="1"
-elif [ -n "${BRAINLAYER_ENRICH_ENABLED:-}" ]; then
+if is_false "${BRAINLAYER_ENRICH_ENABLED:-0}"; then
     export BRAINLAYER_AUTO_ENRICH="0"
+else
+    export BRAINLAYER_AUTO_ENRICH="1"
 fi
 
 if [ "${BRAINLAYER_SKIP_DISABLE_GATES:-0}" != "1" ]; then
@@ -119,7 +119,7 @@ if [ "${BRAINLAYER_SKIP_DISABLE_GATES:-0}" != "1" ]; then
         if is_false "$service_enabled"; then
             sleep_then_exit_disabled "$service_enabled_var"
         fi
-        if [ "$BRAINLAYER_LAUNCHD_SERVICE" = "enrichment" ] && is_false "${BRAINLAYER_ENRICH_ENABLED:-1}"; then
+        if [ "$BRAINLAYER_LAUNCHD_SERVICE" = "enrichment" ] && is_false "${BRAINLAYER_ENRICH_ENABLED:-0}"; then
             sleep_then_exit_disabled "BRAINLAYER_ENRICH_ENABLED"
         fi
     fi

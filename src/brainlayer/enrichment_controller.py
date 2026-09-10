@@ -221,7 +221,9 @@ def _result_hit_daily_cap(result: EnrichmentResult) -> bool:
 
 
 # Auto-enrichment on brain_store: set to "0" or "false" to disable
-AUTO_ENRICH_ENABLED = os.environ.get("BRAINLAYER_AUTO_ENRICH", "1").lower() not in ("0", "false", "no")
+AUTO_ENRICH_ENABLED = os.environ.get(
+    "BRAINLAYER_AUTO_ENRICH", os.environ.get("BRAINLAYER_ENRICH_ENABLED", "0")
+).lower() not in ("0", "false", "no")
 
 # Per-mode rate limits (requests per second). Override via env vars.
 RATE_LIMITS = {

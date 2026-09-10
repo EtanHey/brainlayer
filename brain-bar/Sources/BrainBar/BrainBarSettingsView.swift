@@ -399,7 +399,7 @@ struct BrainBarSettingsView: View {
     private var enrichmentControls: some View {
         VStack(alignment: .leading, spacing: 12) {
             Toggle(
-                "Enable enrichment",
+                "Enable automatic background enrichment",
                 isOn: Binding(
                     get: { viewModel.config.enrichmentEnabled },
                     set: { viewModel.setEnrichmentEnabled($0) }

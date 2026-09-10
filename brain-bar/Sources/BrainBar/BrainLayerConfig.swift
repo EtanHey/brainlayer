@@ -195,7 +195,7 @@ struct BrainLayerConfig: Equatable, Sendable {
     static let defaultConfig = BrainLayerConfig(
         googleAPIKey: .missing,
         systemEnabled: true,
-        enrichmentEnabled: true,
+        enrichmentEnabled: false,
         enrichmentMode: .remote,
         enrichmentProvider: .gemini,
         enrichmentBackend: "gemini",

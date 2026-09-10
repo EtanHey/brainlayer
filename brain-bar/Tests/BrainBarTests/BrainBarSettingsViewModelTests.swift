@@ -18,10 +18,10 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
             refreshStatusOnLoad: false
         )
 
-        XCTAssertTrue(viewModel.config.enrichmentEnabled)
-        viewModel.setEnrichmentEnabled(false)
+        XCTAssertFalse(viewModel.config.enrichmentEnabled)
+        viewModel.setEnrichmentEnabled(true)
 
-        XCTAssertTrue(viewModel.config.enrichmentEnabled)
+        XCTAssertFalse(viewModel.config.enrichmentEnabled)
         XCTAssertNotNil(viewModel.errorMessage)
     }
 

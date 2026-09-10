@@ -441,3 +441,23 @@ class TestAutoEnrichEnvVar:
         importlib.reload(ctrl)
 
         assert ctrl.AUTO_ENRICH_ENABLED == expected
+
+    def test_default_is_off_and_global_setting_is_visible_opt_in(self, monkeypatch):
+        """Unset automatic enrichment is off; BRAINLAYER_ENRICH_ENABLED=1 opts in."""
+        import importlib
+
+        from brainlayer import enrichment_controller as ctrl
+
+        with monkeypatch.context() as env:
+            env.delenv("BRAINLAYER_AUTO_ENRICH", raising=False)
+            env.delenv("BRAINLAYER_ENRICH_ENABLED", raising=False)
+            importlib.reload(ctrl)
+            assert ctrl.AUTO_ENRICH_ENABLED is False
+
+            env.setenv("BRAINLAYER_ENRICH_ENABLED", "1")
+            importlib.reload(ctrl)
+            assert ctrl.AUTO_ENRICH_ENABLED is True
+
+        # Reload after the scoped environment is restored so later tests do not
+        # inherit this test's explicit opt-in module constant.
+        importlib.reload(ctrl)

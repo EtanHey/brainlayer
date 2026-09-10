@@ -447,6 +447,28 @@ def test_launchd_env_loader_normalizes_auto_enrich_false_values(tmp_path):
     assert result.returncode == 0
 
 
+def test_launchd_env_loader_defaults_auto_enrichment_off(tmp_path):
+    loader = REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh"
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("BRAINLAYER_DISABLED_SLEEP_SECONDS=0\n", encoding="utf-8")
+    env_file.chmod(0o600)
+
+    result = subprocess.run(
+        [str(loader), "/bin/sh", "-c", 'test "$BRAINLAYER_AUTO_ENRICH" = 0'],
+        env={
+            **os.environ,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_SERVICE": "watch",
+            "BRAINLAYER_ENRICH_ENABLED": "",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+
+
 def test_launchd_env_loader_skip_disable_gates_still_checks_required_key(tmp_path):
     loader = REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh"
     env_file = tmp_path / "brainlayer.env"
