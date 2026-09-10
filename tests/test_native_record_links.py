@@ -140,7 +140,7 @@ def test_oversized_multibyte_segment_is_omitted_but_still_part_of_conflict_ident
             **_record(declared_headers={"/compactMetadata/preservedSegment": "ב" * (MAX_PRESERVED_SEGMENT_BYTES + 1)}),
         )
     with pytest.raises(UnsupportedNativeRecordProvider):
-        catalog_native_record(conn, **_record(provider="codex"))
+        catalog_native_record(conn, **_record(provider="gemini"))
 
 
 @pytest.mark.parametrize("digest", ["+" + "a" * 63, " " + "a" * 63, "a" * 63 + " ", "g" * 64])
@@ -156,3 +156,11 @@ def test_declared_headers_are_bounded_before_storage():
     ensure_native_record_links_schema(conn)
     with pytest.raises(ValueError):
         catalog_native_record(conn, **_record(declared_headers={"/metadata": "x" * MAX_DECLARED_HEADERS_BYTES}))
+
+
+def test_codex_namespace_has_no_native_uuid_chain_lookup():
+    conn = _conn()
+    ensure_native_record_links_schema(conn)
+    catalog_native_record(conn, **_record(provider="codex"))
+    with pytest.raises(UnsupportedNativeRecordProvider):
+        find_native_uuid_records(conn, provider="codex", session_id="session-a", native_uuid="native-1")
