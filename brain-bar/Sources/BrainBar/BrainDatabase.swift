@@ -5347,6 +5347,20 @@ final class BrainDatabase: @unchecked Sendable {
                     row["declared_record_contexts"] = []
                     row["declared_record_context_status"] = hasRecordContexts ? "unavailable_missing" : "unavailable_legacy_schema"
                 }
+                let recordRow = row
+                row["structural_continuity"] = structuralContinuity(
+                    on: db,
+                    sessionID: columnText(stmt, 3),
+                    sourceFile: columnText(stmt, 0),
+                    startOffset: sqlite3_column_type(stmt, 10) == SQLITE_NULL ? nil : sqlite3_column_int64(stmt, 10),
+                    endOffset: sqlite3_column_type(stmt, 11) == SQLITE_NULL ? nil : sqlite3_column_int64(stmt, 11),
+                    rawRecordHash: columnText(stmt, 4)
+                )
+                if let encodedWithContinuity = try? JSONSerialization.data(withJSONObject: row),
+                   encodedWithContinuity.count > boundedBytes - usedBytes {
+                    row = recordRow
+                    row["structural_continuity"] = ["status": "omitted_response_budget"]
+                }
             } else {
                 row["incoming_content_hash"] = columnText(stmt, 4) as Any
             }
@@ -5380,6 +5394,38 @@ final class BrainDatabase: @unchecked Sendable {
             "source_occurrences_boundary": "Recorded ingest coordinates, not authorship proof.",
             "source_occurrences_bytes_scope": "serialized occurrence row payload"
         ]
+    }
+
+    private func structuralContinuity(
+        on db: OpaquePointer,
+        sessionID: String?,
+        sourceFile: String?,
+        startOffset: Int64?,
+        endOffset: Int64?,
+        rawRecordHash: String?
+    ) -> [String: Any] {
+        guard let sessionID, !sessionID.isEmpty else { return ["status": "unavailable_missing_session"] }
+        guard let sourceFile, !sourceFile.isEmpty,
+              let startOffset, let endOffset,
+              let rawRecordHash, !rawRecordHash.isEmpty else {
+            return ["status": "unavailable_missing_record_locator"]
+        }
+        let evidence = NativeContinuityReader.read(
+            db: db, provider: "claude", sessionID: sessionID, sourceFile: sourceFile,
+            startOffset: startOffset, endOffset: endOffset, rawRecordHash: rawRecordHash
+        )
+        let status: String
+        switch evidence.status {
+        case "legacy_schema_unavailable": status = "unavailable_legacy_catalog_schema"
+        case "physical_record_missing": status = "unavailable_catalog_record"
+        default: status = evidence.status
+        }
+        guard let data = try? JSONEncoder().encode(evidence),
+              var payload = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return ["status": "database_error"]
+        }
+        payload["status"] = status
+        return payload
     }
 
     private func resolveOccurrenceChunkID(

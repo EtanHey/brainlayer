@@ -19,6 +19,13 @@ enum NativeContinuityReader {
             let startOffset: Int64
             let endOffset: Int64
             let rawRecordHash: String
+            enum CodingKeys: String, CodingKey {
+                case parentState = "parent_state", parentUUID = "parent_uuid"
+                case logicalParentState = "logical_parent_state", logicalParentUUID = "logical_parent_uuid"
+                case preservedSegmentOmitted = "preserved_segment_omitted"
+                case sourceFile = "source_file", startOffset = "start_offset", endOffset = "end_offset"
+                case rawRecordHash = "raw_record_hash", nativeUUID = "native_uuid"
+            }
         }
         let status: String
         let hops: [Hop]
@@ -28,7 +35,13 @@ enum NativeContinuityReader {
         let originalEndOffset: Int64?
         let originalBoundsStatus: String
 
-        enum Keys: String, CodingKey { case status, hops, logicalParentEvidence, diagnostic, originalStartOffset, originalEndOffset, originalBoundsStatus }
+        enum Keys: String, CodingKey {
+            case status, hops, diagnostic
+            case logicalParentEvidence = "logical_parent_evidence"
+            case originalStartOffset = "original_start_offset"
+            case originalEndOffset = "original_end_offset"
+            case originalBoundsStatus = "original_bounds_status"
+        }
         func encode(to encoder: Encoder) throws {
             var box = encoder.container(keyedBy: Keys.self)
             try box.encode(status, forKey: .status); try box.encode(hops, forKey: .hops)
