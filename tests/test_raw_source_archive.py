@@ -221,3 +221,25 @@ def test_symlink_source_is_refused(tmp_path: Path) -> None:
 
     with pytest.raises(OSError):
         store.capture(source, "synthetic")
+
+
+def test_append_writes_only_new_physical_chunk_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = tmp_path / "source.jsonl"
+    source.write_bytes(b"a" * 8192)
+    store = archive(tmp_path, chunk_bytes=4096, max_bytes=16384)
+    store.capture(source, "synthetic")
+    written_chunk_bytes: list[int] = []
+    original = store._publish_bytes
+
+    def measured_publish(path: Path, data: bytes, *, prefix: str) -> None:
+        if prefix == ".chunk-":
+            written_chunk_bytes.append(len(data))
+        original(path, data, prefix=prefix)
+
+    monkeypatch.setattr(store, "_publish_bytes", measured_publish)
+    with source.open("ab") as handle:
+        handle.write(b"b" * 64)
+
+    store.capture(source, "synthetic")
+
+    assert written_chunk_bytes == [64]

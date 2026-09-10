@@ -14,6 +14,7 @@ This is the Python watchdog prototype. The production version will use
 Swift DispatchSource kqueue in BrainBar for sub-1ms notification latency.
 """
 
+import copy
 import errno
 import hashlib
 import json
@@ -469,7 +470,7 @@ def _unlock_offset_registry_file(lock_file) -> None:
 class OffsetRegistry:
     """Persists file read offsets so we resume after restart.
 
-    Stored as JSON: {filepath: {offset, inode, mtime}}
+    Stored as JSON: {filepath: {offset, inode, mtime, generation, raw_archive_receipt?}}
     Atomic writes via tmpfile + rename.
     """
 
@@ -550,9 +551,25 @@ class OffsetRegistry:
         """Return the current rewind generation for a file."""
         return self._entry_generation(self._data.get(filepath))
 
-    def set(self, filepath: str, offset: int, inode: int, *, generation: int | None = None):
-        """Update offset for a file, optionally preserving its validated generation."""
-        current_generation = self._entry_generation(self._data.get(filepath))
+    def archive_receipt(self, filepath: str) -> Any | None:
+        """Return the archive receipt atomically bound to the acknowledged offset."""
+        entry = self._data.get(filepath)
+        if not isinstance(entry, dict) or "raw_archive_receipt" not in entry:
+            return None
+        return copy.deepcopy(entry["raw_archive_receipt"])
+
+    def set(
+        self,
+        filepath: str,
+        offset: int,
+        inode: int,
+        *,
+        generation: int | None = None,
+        raw_archive_receipt: dict[str, Any] | None = None,
+    ):
+        """Update one atomic offset entry and its optional archived-version binding."""
+        current_entry = self._data.get(filepath)
+        current_generation = self._entry_generation(current_entry)
         preserve_generation = generation is not None
         if generation is None:
             generation = current_generation
@@ -567,12 +584,29 @@ class OffsetRegistry:
                 return
             if not preserve_generation:
                 generation = max(generation, int(tombstone["generation"]) + 1, time.time_ns())
-        self._data[filepath] = {
+        entry = {
             "offset": offset,
             "inode": inode,
             "mtime": time.time(),
             "generation": generation,
         }
+        if raw_archive_receipt is not None:
+            bound_size = raw_archive_receipt.get("size") if isinstance(raw_archive_receipt, dict) else None
+            if (
+                type(bound_size) is not int
+                or bound_size < 0
+                or offset < 0
+                or offset > bound_size
+                or raw_archive_receipt.get("source_path") != filepath
+            ):
+                raise ValueError("raw archive receipt does not bound this offset and source")
+            entry["raw_archive_receipt"] = copy.deepcopy(raw_archive_receipt)
+        elif isinstance(current_entry, dict) and "raw_archive_receipt" in current_entry:
+            existing_receipt = current_entry["raw_archive_receipt"]
+            existing_size = existing_receipt.get("size") if isinstance(existing_receipt, dict) else None
+            if type(existing_size) is int and 0 <= offset <= existing_size:
+                entry["raw_archive_receipt"] = copy.deepcopy(existing_receipt)
+        self._data[filepath] = entry
         if tombstone is None or valid_inode:
             self._removed.pop(filepath, None)
         self._dirty_paths.add(filepath)
@@ -1350,24 +1384,45 @@ class JSONLWatcher:
         self._last_offset_prune_attempt = float("-inf")
         self._last_prune_parent_dirs: frozenset[str] | None = None
 
-    def _advance_confirmed_offsets(self, confirmations: dict[str, tuple[int, int, int]]) -> None:
-        for filepath, (offset, source_inode, source_generation) in confirmations.items():
+    def _advance_confirmed_offsets(
+        self,
+        confirmations: dict[str, tuple[int, int, int, dict[str, Any] | None]],
+    ) -> None:
+        for filepath, (offset, source_inode, source_generation, archive_receipt) in confirmations.items():
             current_offset, _current_inode = self.registry.get(filepath)
             if offset >= current_offset:
-                self.registry.set(filepath, offset, source_inode, generation=source_generation)
-                self._advance_quarantined_offsets(filepath, source_inode, source_generation)
+                if self.raw_archive is not None:
+                    if archive_receipt is None:
+                        raise RuntimeError("confirmed archive read is missing its version receipt")
+                    if archive_receipt.get("provider") != self.provider_for_file(filepath):
+                        raise RuntimeError("confirmed archive receipt has the wrong provider")
+                    with self.raw_archive.open_snapshot(archive_receipt):
+                        pass
+                self.registry.set(
+                    filepath,
+                    offset,
+                    source_inode,
+                    generation=source_generation,
+                    raw_archive_receipt=archive_receipt,
+                )
+                self._advance_quarantined_offsets(
+                    filepath,
+                    source_inode,
+                    source_generation,
+                    archive_receipt,
+                )
 
     def _advance_confirmed_batch(self, watermarks: dict[str, int], batch: list[dict]) -> None:
         """Confirm only offsets produced by the file generation currently being tailed."""
-        current_confirmations: dict[str, tuple[int, int, int]] = {}
+        current_confirmations: dict[str, tuple[int, int, int, dict[str, Any] | None]] = {}
         for filepath, reported_offset in watermarks.items():
             tailer = self._tailers.get(filepath)
             if tailer is None:
                 continue
             current_inode = tailer.observed_inode
             current_generation = self.registry.generation(filepath)
-            eligible_offsets = [
-                item["_line_end_offset"]
+            eligible_items = [
+                item
                 for item in batch
                 if item.get("_source_file") == filepath
                 and item.get("_source_inode") == current_inode
@@ -1375,11 +1430,30 @@ class JSONLWatcher:
                 and isinstance(item.get("_line_end_offset"), int)
                 and item["_line_end_offset"] <= reported_offset
             ]
-            if eligible_offsets:
-                current_confirmations[filepath] = (max(eligible_offsets), current_inode, current_generation)
+            if eligible_items:
+                archive_receipt = None
+                if self.raw_archive is not None:
+                    receipts = [item.get("_raw_archive_receipt") for item in eligible_items]
+                    archive_receipt = receipts[0]
+                    if not isinstance(archive_receipt, dict) or any(
+                        receipt != archive_receipt for receipt in receipts[1:]
+                    ):
+                        raise RuntimeError("confirmed batch mixes or omits archived source versions")
+                current_confirmations[filepath] = (
+                    max(item["_line_end_offset"] for item in eligible_items),
+                    current_inode,
+                    current_generation,
+                    archive_receipt,
+                )
         self._advance_confirmed_offsets(current_confirmations)
 
-    def _advance_quarantined_offsets(self, filepath: str, source_inode: int, source_generation: int) -> None:
+    def _advance_quarantined_offsets(
+        self,
+        filepath: str,
+        source_inode: int,
+        source_generation: int,
+        archive_receipt: dict[str, Any] | None,
+    ) -> None:
         """Advance over consecutive durably quarantined records after prior bytes confirm."""
         pending = self._pending_quarantined_offsets.get(filepath)
         if not pending:
@@ -1397,7 +1471,13 @@ class JSONLWatcher:
                 remaining.append((start_offset, end_offset, pending_inode, pending_generation))
                 continue
             if end_offset > current_offset:
-                self.registry.set(filepath, end_offset, pending_inode, generation=pending_generation)
+                self.registry.set(
+                    filepath,
+                    end_offset,
+                    pending_inode,
+                    generation=pending_generation,
+                    raw_archive_receipt=archive_receipt,
+                )
                 current_offset = end_offset
         if remaining:
             self._pending_quarantined_offsets[filepath] = remaining
@@ -1600,6 +1680,7 @@ class JSONLWatcher:
         normalized_lines: list[dict],
         source_inode: int,
         source_generation: int,
+        archive_receipt: dict[str, Any] | None,
     ) -> None:
         """Confirm intentionally discarded bytes without crossing indexable work."""
         required_confirmed_offset = max(
@@ -1619,6 +1700,7 @@ class JSONLWatcher:
                     read_end_offset,
                     source_inode,
                     source_generation,
+                    archive_receipt,
                 )
             }
         )
@@ -1755,7 +1837,13 @@ class JSONLWatcher:
         self._pending_quarantined_offsets.setdefault(filepath, []).append(
             (start_offset, end_offset, source_inode, source_generation)
         )
-        self._advance_quarantined_offsets(filepath, source_inode, source_generation)
+        archive_receipt = self._archive_receipts.get(filepath) if self.raw_archive is not None else None
+        self._advance_quarantined_offsets(
+            filepath,
+            source_inode,
+            source_generation,
+            archive_receipt,
+        )
         return True
 
     def _max_offset_lag_bytes(self, files: list[str]) -> int:
@@ -2120,6 +2208,36 @@ class JSONLWatcher:
                     archived_inode = archived_stat["inode"] if archived_stat else None
                     archived_size = archive_receipt["size"] if archive_receipt else None
                     tailer = self._tailers.get(filepath)
+                    if self.raw_archive is not None and tailer is None:
+                        confirmed_offset, _confirmed_inode = self.registry.get(filepath)
+                        bound_receipt = self.registry.archive_receipt(filepath)
+                        if bound_receipt is None:
+                            if confirmed_offset > 0:
+                                self.registry.mark_rewind(filepath, archived_inode or 0)
+                                logger.warning(
+                                    "Raw archive receipt absent for persisted offset; replaying from zero: %s",
+                                    filepath,
+                                )
+                        else:
+                            if (
+                                not isinstance(bound_receipt, dict)
+                                or bound_receipt.get("source_path") != filepath
+                                or bound_receipt.get("provider") != archive_receipt.get("provider")
+                                or type(bound_receipt.get("size")) is not int
+                                or confirmed_offset > bound_receipt["size"]
+                            ):
+                                raise RuntimeError("persisted raw archive receipt does not bind offset source/provider")
+                            with self.raw_archive.open_snapshot(bound_receipt):
+                                pass
+                            if self.raw_archive.is_prefix(bound_receipt, archive_receipt):
+                                self._tailer_archive_receipts[filepath] = bound_receipt
+                            else:
+                                self._handle_rewind(
+                                    filepath,
+                                    confirmed_offset,
+                                    archived_size,
+                                    archived_inode or 0,
+                                )
                     previous_receipt = self._tailer_archive_receipts.get(filepath)
                     if (
                         tailer is not None
@@ -2200,6 +2318,8 @@ class JSONLWatcher:
                         for line in normalized_lines:
                             line["_source_inode"] = source_inode
                             line["_source_generation"] = source_generation
+                            if archive_receipt is not None:
+                                line["_raw_archive_receipt"] = archive_receipt
                         self.indexer.add(normalized_lines)
                         read_accepted = True
                         self._health_entries_seen += len(normalized_lines)
@@ -2211,6 +2331,7 @@ class JSONLWatcher:
                         normalized_lines,
                         source_inode,
                         source_generation,
+                        archive_receipt,
                     )
                     if tailer.last_error is not None:
                         if not self._quarantine_failed_record(

@@ -309,7 +309,13 @@ class RawSourceArchive:
 
     def _publish_chunk(self, sha256: str, data: bytes) -> None:
         self._require_sha(sha256)
-        self._publish_bytes(self.objects / sha256, data, prefix=".chunk-")
+        path = self.objects / sha256
+        try:
+            self._read_verified_chunk(sha256, len(data))
+            return
+        except FileNotFoundError:
+            pass
+        self._publish_bytes(path, data, prefix=".chunk-")
         self._read_verified_chunk(sha256, len(data))
 
     def _read_verified_chunk(self, sha256: str, expected_size: int) -> bytes:

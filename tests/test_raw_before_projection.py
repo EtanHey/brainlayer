@@ -8,7 +8,7 @@ import pytest
 
 import brainlayer.watcher as watcher_module
 from brainlayer.raw_source_archive import RawSourceArchive
-from brainlayer.watcher import JSONLWatcher, WatchRoot
+from brainlayer.watcher import JSONLWatcher, OffsetRegistry, WatchRoot
 
 
 def make_archive(tmp_path: Path, *, chunk_bytes: int = 32) -> RawSourceArchive:
@@ -308,3 +308,142 @@ def test_archive_is_explicit_and_default_constructor_creates_no_archive(tmp_path
     assert watcher.raw_archive_enabled is False
     assert watcher.raw_archive is None
     assert not (tmp_path / "archive").exists()
+
+
+def test_restart_same_size_rewrite_replays_new_archived_version(tmp_path: Path) -> None:
+    root = tmp_path / "sources"
+    root.mkdir()
+    source = root / "session.jsonl"
+    first_raw = b'{"type":"user","message":{"role":"user","content":"one"}}\n'
+    second_raw = b'{"type":"user","message":{"role":"user","content":"two"}}\n'
+    assert len(first_raw) == len(second_raw)
+    source.write_bytes(first_raw)
+    store = make_archive(tmp_path)
+    first_flushed: list[dict] = []
+    first = make_watcher(tmp_path, root, store, first_flushed)
+
+    assert first.poll_once() == 1
+    assert first.registry.flush()
+    assert first.registry.get(str(source))[0] == len(first_raw)
+
+    source.write_bytes(second_raw)
+    restarted_flushed: list[dict] = []
+    restarted = make_watcher(tmp_path, root, store, restarted_flushed)
+
+    assert restarted.poll_once() == 1
+    assert [item["message"]["content"] for item in restarted_flushed] == ["two"]
+    assert archived_bytes(store, restarted._archive_receipts[str(source)]) == second_raw
+
+
+def test_normal_restart_resumes_bound_version_without_replay(tmp_path: Path) -> None:
+    root = tmp_path / "sources"
+    root.mkdir()
+    source = root / "session.jsonl"
+    raw = b'{"type":"user","message":{"role":"user","content":"one"}}\n'
+    source.write_bytes(raw)
+    store = make_archive(tmp_path)
+    first_flushed: list[dict] = []
+    first = make_watcher(tmp_path, root, store, first_flushed)
+
+    assert first.poll_once() == 1
+    assert first.registry.flush()
+    bound = first.registry.archive_receipt(str(source))
+    assert bound == first._archive_receipts[str(source)]
+
+    restarted_flushed: list[dict] = []
+    restarted = make_watcher(tmp_path, root, store, restarted_flushed)
+
+    assert restarted.poll_once() == 0
+    assert restarted_flushed == []
+    assert restarted.registry.get(str(source))[0] == len(raw)
+    assert restarted.registry.archive_receipt(str(source)) == bound
+
+
+def test_legacy_unbound_offset_replays_once_then_resumes_bound(tmp_path: Path) -> None:
+    root = tmp_path / "sources"
+    root.mkdir()
+    source = root / "session.jsonl"
+    raw = b'{"type":"user","message":{"role":"user","content":"legacy"}}\n'
+    source.write_bytes(raw)
+    registry_path = tmp_path / "offsets.json"
+    legacy = OffsetRegistry(registry_path)
+    legacy.set(str(source), len(raw), source.stat().st_ino)
+    assert legacy.flush()
+    store = make_archive(tmp_path)
+    replayed: list[dict] = []
+    first_bound = make_watcher(tmp_path, root, store, replayed)
+
+    assert first_bound.poll_once() == 1
+    assert [item["message"]["content"] for item in replayed] == ["legacy"]
+    assert first_bound.registry.archive_receipt(str(source)) is not None
+    assert first_bound.registry.flush()
+
+    resumed: list[dict] = []
+    second_bound = make_watcher(tmp_path, root, store, resumed)
+    assert second_bound.poll_once() == 0
+    assert resumed == []
+
+
+@pytest.mark.parametrize("damage", ["missing", "corrupt"])
+def test_invalid_persisted_manifest_refuses_without_offset_advance(tmp_path: Path, damage: str) -> None:
+    root = tmp_path / "sources"
+    root.mkdir()
+    source = root / "session.jsonl"
+    first_raw = b'{"type":"user","message":{"role":"user","content":"one"}}\n'
+    source.write_bytes(first_raw)
+    store = make_archive(tmp_path)
+    first = make_watcher(tmp_path, root, store, [])
+    assert first.poll_once() == 1
+    assert first.registry.flush()
+    bound = first.registry.archive_receipt(str(source))
+    assert isinstance(bound, dict)
+    bound_manifest = Path(bound["manifest_path"])
+
+    with source.open("ab") as handle:
+        handle.write(b'{"type":"user","message":{"role":"user","content":"two"}}\n')
+    if damage == "missing":
+        bound_manifest.unlink()
+    else:
+        bound_manifest.chmod(0o600)
+        bound_manifest.write_bytes(b"corrupt\n")
+
+    restarted = make_watcher(tmp_path, root, store, [])
+    assert restarted.poll_once() == 0
+    assert restarted.registry.get(str(source))[0] == len(first_raw)
+    assert str(source) in restarted._file_ingestion_failures
+
+
+def test_concurrent_registry_merge_keeps_offset_and_receipt_from_one_entry(tmp_path: Path) -> None:
+    source = tmp_path / "source.jsonl"
+    first_raw = b"first-version"
+    source.write_bytes(first_raw)
+    store = make_archive(tmp_path)
+    first_receipt = store.capture(source, "synthetic")
+    with source.open("ab") as handle:
+        handle.write(b"-second")
+    second_receipt = store.capture(source, "synthetic")
+    registry_path = tmp_path / "offsets.json"
+    initial = OffsetRegistry(registry_path)
+    initial.set(str(source), 0, source.stat().st_ino)
+    assert initial.flush()
+    lower = OffsetRegistry(registry_path)
+    higher = OffsetRegistry(registry_path)
+
+    lower.set(
+        str(source),
+        len(first_raw),
+        source.stat().st_ino,
+        raw_archive_receipt=first_receipt,
+    )
+    higher.set(
+        str(source),
+        second_receipt["size"],
+        source.stat().st_ino,
+        raw_archive_receipt=second_receipt,
+    )
+    assert higher.flush()
+    assert lower.flush()
+
+    merged = OffsetRegistry(registry_path)
+    assert merged.get(str(source))[0] == second_receipt["size"]
+    assert merged.archive_receipt(str(source)) == second_receipt
