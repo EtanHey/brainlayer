@@ -182,6 +182,24 @@ struct BrainLayerLaunchdJobSetting: Equatable, Sendable {
     var loadState: BrainLayerLaunchdLoadState
 }
 
+struct BrainLayerBackupDestinationIdentity: Equatable, Sendable {
+    let stDev: Int64
+    let stIno: Int64
+
+    init(stDev: Int64, stIno: Int64) {
+        self.stDev = stDev
+        self.stIno = stIno
+    }
+
+    init?(path: String) {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              let device = (attributes[.systemNumber] as? NSNumber)?.int64Value,
+              let inode = (attributes[.systemFileNumber] as? NSNumber)?.int64Value else { return nil }
+        stDev = device
+        stIno = inode
+    }
+}
+
 struct BrainLayerConfig: Equatable, Sendable {
     var googleAPIKey: BrainLayerGoogleAPIKey
     var systemEnabled: Bool
@@ -191,6 +209,9 @@ struct BrainLayerConfig: Equatable, Sendable {
     var enrichmentBackend: String
     var tuningValues: [String: String]
     var launchdJobs: [BrainLayerLaunchdJob: BrainLayerLaunchdJobSetting]
+    var backupEnabled: Bool
+    var backupDestinationPath: String?
+    var backupDestinationIdentity: BrainLayerBackupDestinationIdentity?
 
     static let defaultConfig = BrainLayerConfig(
         googleAPIKey: .missing,
@@ -204,7 +225,10 @@ struct BrainLayerConfig: Equatable, Sendable {
             uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map {
                 ($0, BrainLayerLaunchdJobSetting(enabled: true, loadState: .unknown))
             }
-        )
+        ),
+        backupEnabled: false,
+        backupDestinationPath: nil,
+        backupDestinationIdentity: nil
     )
 
     func persistedValuesEqual(to other: BrainLayerConfig) -> Bool {
@@ -215,8 +239,35 @@ struct BrainLayerConfig: Equatable, Sendable {
             enrichmentProvider == other.enrichmentProvider &&
             enrichmentBackend == other.enrichmentBackend &&
             tuningValues == other.tuningValues &&
+            backupEnabled == other.backupEnabled &&
+            backupDestinationPath == other.backupDestinationPath &&
+            backupDestinationIdentity == other.backupDestinationIdentity &&
             Dictionary(uniqueKeysWithValues: launchdJobs.map { ($0.key, $0.value.enabled) }) ==
             Dictionary(uniqueKeysWithValues: other.launchdJobs.map { ($0.key, $0.value.enabled) })
+    }
+}
+
+enum BrainLayerBackupConfigurationState: Equatable, Sendable {
+    case disabled
+    case enabledWithoutDestination
+    case configuredOnly(destination: String)
+
+    var title: String {
+        switch self {
+        case .disabled: "Disabled"
+        case .enabledWithoutDestination: "Enabled, destination required"
+        case let .configuredOnly(destination): "Configured — backup status unavailable (\(destination))"
+        }
+    }
+}
+
+extension BrainLayerConfig {
+    var backupConfigurationState: BrainLayerBackupConfigurationState {
+        guard backupEnabled else { return .disabled }
+        guard let destination = backupDestinationPath, !destination.isEmpty else {
+            return .enabledWithoutDestination
+        }
+        return .configuredOnly(destination: destination)
     }
 }
 
@@ -249,6 +300,21 @@ enum BrainLayerConfigValidator {
         }
         if config.enrichmentBackend.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return .failed("Enrichment backend is required.")
+        }
+        if config.backupEnabled, config.backupDestinationPath?.isEmpty != false {
+            return .failed("Choose a backup destination before enabling backup configuration.")
+        }
+        if config.backupEnabled, config.backupDestinationIdentity == nil {
+            return .failed("Choose the backup destination again to record its filesystem identity.")
+        }
+        if let destination = config.backupDestinationPath {
+            let trimmed = destination.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, destination == trimmed, destination.hasPrefix("/") else {
+                return .failed("Backup destination must be an absolute, nonblank path.")
+            }
+            if destination.contains("\n") || destination.contains("\r") {
+                return .failed("Backup destination cannot contain a line break.")
+            }
         }
         return .passed
     }
@@ -422,6 +488,8 @@ struct BrainLayerEnvDocument {
         "BRAINLAYER_ENRICH_MODE",
         "BRAINLAYER_ENRICH_PROVIDER",
         "BRAINLAYER_ENRICH_BACKEND",
+        "BRAINLAYER_BACKUP_ENABLED",
+        "BRAINLAYER_BACKUP_DESTINATION",
         "BRAINLAYER_ENRICH_RATE",
         "BRAINLAYER_ENRICH_CONCURRENCY",
         "BRAINLAYER_MAX_COMMIT_BATCH",
@@ -460,6 +528,10 @@ struct BrainLayerEnvDocument {
             "BRAINLAYER_ENRICH_MODE": config.enrichmentMode.rawValue,
             "BRAINLAYER_ENRICH_PROVIDER": config.enrichmentProvider.rawValue,
             "BRAINLAYER_ENRICH_BACKEND": config.enrichmentBackend,
+            "BRAINLAYER_BACKUP_ENABLED": config.backupEnabled ? "1" : "0",
+            "BRAINLAYER_BACKUP_DESTINATION": config.backupDestinationPath.map(shellSingleQuoted) ?? "",
+            "BRAINLAYER_BACKUP_DESTINATION_ST_DEV": config.backupDestinationIdentity.map { String($0.stDev) } ?? "",
+            "BRAINLAYER_BACKUP_DESTINATION_ST_INO": config.backupDestinationIdentity.map { String($0.stIno) } ?? "",
         ]
         if includeLegacyGoogleKey {
             values["GOOGLE_GENERATIVE_AI_API_KEY"] = ""
@@ -496,6 +568,17 @@ struct BrainLayerEnvDocument {
         }
         if let raw = assignments["BRAINLAYER_ENRICH_BACKEND"], !normalized(raw).isEmpty {
             config.enrichmentBackend = normalized(raw)
+        }
+        if let raw = assignments["BRAINLAYER_BACKUP_ENABLED"] {
+            config.backupEnabled = !isFalse(raw)
+        }
+        if let raw = assignments["BRAINLAYER_BACKUP_DESTINATION"] {
+            let destination = strippedValue(raw)
+            config.backupDestinationPath = destination.isEmpty ? nil : destination
+        }
+        if let raw = assignments["BRAINLAYER_BACKUP_DESTINATION_ST_DEV"], let value = Int64(normalized(raw)),
+           let inode = assignments["BRAINLAYER_BACKUP_DESTINATION_ST_INO"].flatMap({ Int64(normalized($0)) }) {
+            config.backupDestinationIdentity = BrainLayerBackupDestinationIdentity(stDev: value, stIno: inode)
         }
         for key in tuningKeyOrder {
             guard let raw = assignments[key] else { continue }
@@ -564,10 +647,18 @@ struct BrainLayerEnvDocument {
         if trimmed.count >= 2,
            let first = trimmed.first,
            let last = trimmed.last,
-           (first == "'" && last == "'") || (first == "\"" && last == "\"") {
+           first == "'" && last == "'" {
+            return String(trimmed.dropFirst().dropLast())
+                .replacingOccurrences(of: "'\"'\"'", with: "'")
+        }
+        if trimmed.count >= 2, trimmed.first == "\"", trimmed.last == "\"" {
             return String(trimmed.dropFirst().dropLast())
         }
         return trimmed
+    }
+
+    private static func shellSingleQuoted(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
     }
 }
 

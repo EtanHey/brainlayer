@@ -113,6 +113,37 @@ final class BrainBarSettingsViewModel: ObservableObject {
         }
     }
 
+    func setBackupEnabled(_ enabled: Bool) {
+        _ = updateConfig { $0.backupEnabled = enabled }
+    }
+
+    func chooseBackupDestination() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose Backup Folder"
+        panel.message = "Choose an iCloud or mounted-drive folder. Backup status is unavailable until the backup service is connected."
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard let identity = BrainLayerBackupDestinationIdentity(path: url.path) else {
+            errorMessage = "The selected backup folder could not be identified."
+            return
+        }
+        _ = updateConfig { config in
+            config.backupDestinationPath = url.path
+            config.backupDestinationIdentity = identity
+        }
+    }
+
+    func clearBackupDestination() {
+        _ = updateConfig { config in
+            config.backupDestinationPath = nil
+            config.backupDestinationIdentity = nil
+            config.backupEnabled = false
+        }
+    }
+
     func refreshLaunchdStatus() {
         isRefreshingLaunchdStatus = true
         let provider = launchdStatusProvider
@@ -349,6 +380,9 @@ struct BrainBarSettingsView: View {
                 BrainBarSettingsPanel(title: "Enrichment") {
                     enrichmentControls
                 }
+                BrainBarSettingsPanel(title: "Backups") {
+                    backupControls
+                }
                 if let receipt = viewModel.lastSaveReceipt {
                     BrainBarSettingsPanel(title: "Last save receipt") {
                         saveReceipt(receipt)
@@ -483,6 +517,40 @@ struct BrainBarSettingsView: View {
                 value: BrainLayerActiveRuntimeValues(config: viewModel.config).summary
             )
             settingsTruthRow(label: "Active", value: viewModel.activeRuntimeObservation.summary)
+        }
+    }
+
+    private var backupControls: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Toggle(
+                "Enable backup configuration",
+                isOn: Binding(
+                    get: { viewModel.config.backupEnabled },
+                    set: { viewModel.setBackupEnabled($0) }
+                )
+            )
+            HStack {
+                Text("Destination")
+                    .foregroundStyle(Color.brainBarTextSecondary)
+                    .frame(width: 110, alignment: .leading)
+                Text(viewModel.config.backupDestinationPath ?? "Not selected")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(Color.brainBarTextSecondary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                Spacer()
+                Button("Choose Folder") {
+                    viewModel.chooseBackupDestination()
+                }
+                Button("Clear") {
+                    viewModel.clearBackupDestination()
+                }
+                .disabled(viewModel.config.backupDestinationPath == nil)
+            }
+            settingsTruthRow(label: "Configuration", value: viewModel.config.backupConfigurationState.title)
+            Text("Backup status is unavailable until the backup service is connected; this setting does not claim cloud protection.")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.brainBarTextMuted)
         }
     }
 

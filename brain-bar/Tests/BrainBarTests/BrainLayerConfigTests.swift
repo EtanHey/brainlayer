@@ -109,6 +109,28 @@ final class BrainLayerConfigTests: XCTestCase {
         XCTAssertTrue(reloaded.persistedValuesEqual(to: document.config))
     }
 
+    func testBackupDestinationIdentityRoundTripsAndIsRequiredWhenEnabled() throws {
+        guard let identity = BrainLayerBackupDestinationIdentity(path: "/tmp") else {
+            XCTFail("temporary directory identity unavailable")
+            return
+        }
+        var config = BrainLayerConfig.defaultConfig
+        config.backupEnabled = true
+        config.backupDestinationPath = "/tmp"
+        config.backupDestinationIdentity = identity
+        let document = BrainLayerEnvDocument(config: config)
+        let reloaded = try BrainLayerEnvDocument(text: document.rendered()).config
+
+        XCTAssertEqual(reloaded.backupDestinationIdentity, identity)
+        XCTAssertEqual(BrainLayerConfigValidator.validate(reloaded), .passed)
+        var missingIdentity = reloaded
+        missingIdentity.backupDestinationIdentity = nil
+        XCTAssertEqual(
+            BrainLayerConfigValidator.validate(missingIdentity),
+            .failed("Choose the backup destination again to record its filesystem identity.")
+        )
+    }
+
     func testUpdatingConfigPreservesCommentsAndUnmanagedKeys() throws {
         var document = try BrainLayerEnvDocument(
             text: """
@@ -233,4 +255,60 @@ final class BrainLayerConfigTests: XCTestCase {
             .failed("OpenAI cannot be activated because its runtime integration is unavailable.")
         )
     }
+    func testBackupConfigurationDefaultsDisabledAndDoesNotChangeLaunchdJobs() {
+        let config = BrainLayerConfig.defaultConfig
+        XCTAssertFalse(config.backupEnabled)
+        XCTAssertNil(config.backupDestinationPath)
+        XCTAssertEqual(config.backupConfigurationState, .disabled)
+        XCTAssertTrue(config.launchdJobs[.backupDaily]?.enabled == true)
+        XCTAssertTrue(config.launchdJobs[.jsonlBackup]?.enabled == true)
+    }
+
+    func testBackupDestinationRoundTripsAsManagedShellValue() throws {
+        var document = BrainLayerEnvDocument(config: .defaultConfig)
+        document.update { config in
+            config.backupDestinationPath = "/Volumes/Etan's iCloud/$archive/`daily` Brain Backups"
+            config.backupEnabled = true
+            config.launchdJobs[.backupDaily]?.enabled = false
+            config.launchdJobs[.jsonlBackup]?.enabled = false
+        }
+        let rendered = document.rendered()
+        XCTAssertTrue(rendered.contains("BRAINLAYER_BACKUP_ENABLED=1"))
+        XCTAssertTrue(rendered.contains("BRAINLAYER_BACKUP_DESTINATION='"))
+        let reloaded = try BrainLayerEnvDocument(text: rendered).config
+        XCTAssertEqual(reloaded.backupDestinationPath, "/Volumes/Etan's iCloud/$archive/`daily` Brain Backups")
+        XCTAssertEqual(reloaded.backupConfigurationState, .configuredOnly(destination: "/Volumes/Etan's iCloud/$archive/`daily` Brain Backups"))
+        XCTAssertFalse(reloaded.launchdJobs[.backupDaily]?.enabled == true)
+        XCTAssertFalse(reloaded.launchdJobs[.jsonlBackup]?.enabled == true)
+    }
+
+    func testBackupCannotBeEnabledWithoutDestination() {
+        var config = BrainLayerConfig.defaultConfig
+        config.backupEnabled = true
+        XCTAssertEqual(
+            BrainLayerConfigValidator.validate(config),
+            .failed("Choose a backup destination before enabling backup configuration.")
+        )
+    }
+
+    func testBackupDestinationMustBeAbsoluteAndNonblank() {
+        for destination in ["relative/backups", "   "] {
+            var config = BrainLayerConfig.defaultConfig
+            config.backupDestinationPath = destination
+            XCTAssertEqual(
+                BrainLayerConfigValidator.validate(config),
+                .failed("Backup destination must be an absolute, nonblank path.")
+            )
+        }
+    }
+
+    func testBackupDestinationLineBreakIsRejected() {
+        var config = BrainLayerConfig.defaultConfig
+        config.backupDestinationPath = "/tmp/backup\n-folder"
+        XCTAssertEqual(
+            BrainLayerConfigValidator.validate(config),
+            .failed("Backup destination cannot contain a line break.")
+        )
+    }
+
 }
