@@ -209,6 +209,7 @@ def test_tool_use_targets_match_direct_and_queued_and_excluded_reader(tmp_path, 
     excluded["uuid"] = "excluded-tool"
     excluded_db = tmp_path / "excluded-target.db"
     VectorStore(excluded_db).close()
+    monkeypatch.delenv("BRAINLAYER_INGEST_DENYLIST", raising=False)
     create_flush_callback(excluded_db, arbitrated=False)([excluded])
     assert _target_rows(excluded_db) == []
 
