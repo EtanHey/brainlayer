@@ -250,7 +250,15 @@ def test_cli_reads_literal_destination_and_requires_explicit_roots(tmp_path, mon
         + "\n"
     )
     monkeypatch.setattr(
-        backup_run_once, "_socket_snapshot", lambda _socket, target, _generation: backup_run_once._offline_snapshot(db, target)
+        backup_run_once,
+        "_socket_snapshot",
+        lambda _socket, target, _generation, **_kwargs: {
+            "chunks": backup_run_once._offline_snapshot(db, target),
+            "source_db_filename": str(db),
+            "source_open_generation": "test-generation",
+            "source_observed_path_identity_before": {"kind": "pathname_observation_not_fd_proof"},
+            "source_observed_path_identity_after": {"kind": "pathname_observation_not_fd_proof"},
+        },
     )
     assert backup_run_once.main(["--config", str(config), "--transcript-root", str(root), "--generation-id", "cli"]) == 0
     output = json.loads(capsys.readouterr().out)
@@ -318,20 +326,119 @@ def test_destination_swap_after_bound_generation_keeps_failed_receipt(tmp_path, 
 
 def test_socket_snapshot_serializes_absolute_paths_and_promotes_real_helper(tmp_path, monkeypatch):
     captured = {}
+    served_db = tmp_path / "served-by-daemon.db"
 
     def fake_send(socket_path, request, timeout_seconds):
         captured.update(socket=socket_path, request=request, timeout=timeout_seconds)
         target = Path(request["params"]["arguments"]["target_path"])
         _fixture_db(target)
-        return {"result": {"content": [{"text": "ok"}]}}
+        return {
+            "result": {
+                "content": [{
+                    "text": json.dumps({
+                        "status": "ok",
+                        "source_db_filename": str(served_db),
+                        "source_open_generation": "daemon-open-1",
+                        "source_observed_path_identity_before": {"kind": "pathname_observation_not_fd_proof"},
+                        "source_observed_path_identity_after": {"kind": "pathname_observation_not_fd_proof"},
+                    })
+                }]
+            }
+        }
 
     monkeypatch.setattr(backup_run_once.backup_daily, "_send_brainbar_json_request", fake_send)
     monkeypatch.chdir(tmp_path)
     local_target = Path("generation/db")
     generation = Path("generation")
     generation.mkdir()
-    assert backup_run_once._socket_snapshot(Path("/tmp/unused.sock"), local_target, generation) == 1
+    result = backup_run_once._socket_snapshot(Path("/tmp/unused.sock"), local_target, generation)
+    assert result["chunks"] == 1
+    assert result["source_db_filename"] == str(served_db)
     sent = Path(captured["request"]["params"]["arguments"]["target_path"])
     assert sent.is_absolute()
     assert sent.parent == (tmp_path / "generation").resolve()
     assert (tmp_path / "generation" / "db").exists()
+
+
+def test_socket_backup_records_served_connection_and_refuses_optional_mismatch(tmp_path, monkeypatch):
+    destination = tmp_path / "backups"
+    destination.mkdir()
+    served_db = tmp_path / "served-by-daemon.db"
+    _fixture_db(served_db)
+    caller_guess = tmp_path / "caller-guess.db"
+
+    def fake_send(_socket_path, request, timeout_seconds):
+        target = Path(request["params"]["arguments"]["target_path"])
+        _fixture_db(target)
+        return {
+            "result": {
+                "content": [{
+                    "text": json.dumps({
+                        "status": "ok",
+                        "source_db_filename": str(served_db),
+                        "source_open_generation": "served-open-generation",
+                        "source_observed_path_identity_before": {
+                            "kind": "pathname_observation_not_fd_proof", "path": str(served_db),
+                        },
+                        "source_observed_path_identity_after": {
+                            "kind": "pathname_observation_not_fd_proof", "path": str(served_db),
+                        },
+                    })
+                }]
+            }
+        }
+
+    monkeypatch.setattr(backup_run_once.backup_daily, "_send_brainbar_json_request", fake_send)
+    identity = (destination.stat().st_dev, destination.stat().st_ino)
+    roots = _root(tmp_path)
+    result = backup_run_once.run_backup_once(
+        destination=destination,
+        socket_path=tmp_path / "brainbar.sock",
+        transcript_roots=roots,
+        expected_destination_identity=identity,
+        generation_id="served",
+    )
+    assert result["db_source_path"] == str(served_db)
+    assert result["db_transport_socket"] == str((tmp_path / "brainbar.sock").resolve())
+    assert result["db_source_open_generation"] == "served-open-generation"
+
+    with pytest.raises(backup_run_once.BackupRunOnceError, match="source mismatch"):
+        backup_run_once.run_backup_once(
+            destination=destination,
+            socket_path=tmp_path / "brainbar.sock",
+            transcript_roots=roots,
+            expected_destination_identity=identity,
+            expected_source_path=caller_guess,
+            generation_id="mismatch",
+        )
+    generation = next(destination.glob(".brainlayer-backup-*-mismatch"))
+    assert json.loads((generation / "receipt.incomplete.json").read_text())["status"] == "failed"
+
+
+@pytest.mark.parametrize(
+    ("response", "error_match"),
+    [
+        ({"error": {"message": "top-level terminal error"}}, "top-level terminal error"),
+        ({"result": {"content": [{"text": "not JSON"}]}}, "source authority"),
+    ],
+)
+def test_socket_snapshot_reclaims_attempt_for_terminal_error_or_malformed_authority(
+    tmp_path, monkeypatch, response, error_match
+):
+    seen = {}
+
+    def fake_send(_socket_path, request, timeout_seconds):
+        attempt = Path(request["params"]["arguments"]["target_path"])
+        attempt.write_bytes(b"synthetic partial")
+        attempt.with_name(attempt.name + ".complete").write_text("complete\n")
+        seen["attempt"] = attempt
+        return response
+
+    monkeypatch.setattr(backup_run_once.backup_daily, "_send_brainbar_json_request", fake_send)
+    generation = tmp_path / "generation"
+    generation.mkdir()
+    with pytest.raises(backup_run_once.BackupRunOnceError, match=error_match):
+        backup_run_once._socket_snapshot(Path("/tmp/unused.sock"), generation / "db", generation)
+
+    assert not seen["attempt"].exists()
+    assert not seen["attempt"].with_name(seen["attempt"].name + ".complete").exists()

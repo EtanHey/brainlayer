@@ -235,16 +235,99 @@ def _offline_snapshot(
     return backup_daily._validate_backup_target(target)
 
 
-def _socket_snapshot(socket_path: Path, target: Path, generation: Path) -> int:
+def _socket_snapshot(
+    socket_path: Path,
+    target: Path,
+    generation: Path,
+    *,
+    expected_source_path: Path | None = None,
+    expected_source_open_generation: str | None = None,
+) -> dict[str, Any]:
     # BrainBar resolves the request in a separate process; never send the
     # fchdir-bound relative paths used by the local writer.
-    local_target = target
     outgoing_target = target.expanduser().resolve()
     outgoing_generation = generation.expanduser().resolve()
-    backup_daily.request_brainbar_vacuum_into(
-        outgoing_target, socket_path=socket_path, max_attempts=1, attempt_dir=outgoing_generation
+    attempt_path = outgoing_generation / f".{outgoing_target.name}.attempt-{uuid.uuid4().hex}"
+    request = {
+        "jsonrpc": "2.0",
+        "id": "backup-run-once",
+        "method": "tools/call",
+        "params": {
+            "name": "brain_backup_vacuum_into",
+            "arguments": {"target_path": str(attempt_path)},
+        },
+    }
+    def discard_terminal_attempt() -> None:
+        attempt_path.unlink(missing_ok=True)
+        backup_daily._backup_attempt_completion_marker(attempt_path).unlink(missing_ok=True)
+
+    # Do not enter the terminal-response finally until JSON returned. A timeout
+    # or lost response leaves its isolated path intact because BrainBar may
+    # still be writing it.
+    response = backup_daily._send_brainbar_json_request(
+        Path(socket_path).expanduser(),
+        request,
+        timeout_seconds=backup_daily._configured_backup_client_timeout_seconds(),
     )
-    return backup_daily._validate_backup_target(local_target)
+    try:
+        if not isinstance(response, dict):
+            raise BackupRunOnceError("BrainBar backup response was not a JSON object")
+        if response.get("error"):
+            raise BackupRunOnceError(f"BrainBar backup request failed: {response['error']}")
+        result = response.get("result") or {}
+        if not isinstance(result, dict):
+            raise BackupRunOnceError("BrainBar backup response result was not an object")
+        if result.get("isError"):
+            content = result.get("content") or []
+            text = content[0].get("text") if content and isinstance(content[0], dict) else result
+            raise BackupRunOnceError(f"BrainBar backup request failed: {text}")
+        content = result.get("content") or []
+        text = content[0].get("text") if content and isinstance(content[0], dict) else None
+        try:
+            authority = json.loads(text) if isinstance(text, str) else None
+        except json.JSONDecodeError as exc:
+            raise BackupRunOnceError("BrainBar backup response did not contain source authority") from exc
+        if not isinstance(authority, dict) or authority.get("status") != "ok":
+            raise BackupRunOnceError("BrainBar backup response did not contain a successful source authority")
+        source_path = authority.get("source_db_filename")
+        source_generation = authority.get("source_open_generation")
+        before = authority.get("source_observed_path_identity_before")
+        after = authority.get("source_observed_path_identity_after")
+        if not all(
+            [
+                isinstance(source_path, str) and source_path,
+                isinstance(source_generation, str) and source_generation,
+                isinstance(before, dict),
+                isinstance(after, dict),
+            ]
+        ):
+            raise BackupRunOnceError("BrainBar backup response omitted connection-derived source authority")
+        for observation in (before, after):
+            if observation.get("kind") != "pathname_observation_not_fd_proof":
+                raise BackupRunOnceError("BrainBar backup response mislabeled observed source pathname identity")
+        if expected_source_path is not None and source_path != str(Path(expected_source_path).expanduser().resolve()):
+            expected_path = Path(expected_source_path).expanduser().resolve()
+            raise BackupRunOnceError(
+                f"BrainBar source mismatch: expected={expected_path} actual={source_path}"
+            )
+        if expected_source_open_generation is not None and source_generation != expected_source_open_generation:
+            raise BackupRunOnceError(
+                f"BrainBar source generation mismatch: expected={expected_source_open_generation} actual={source_generation}"
+            )
+        if not attempt_path.exists():
+            raise BackupRunOnceError(f"BrainBar backup did not create snapshot: {attempt_path}")
+        chunks = backup_daily._validate_backup_target(attempt_path)
+        os.replace(attempt_path, outgoing_target)
+        return {
+            "chunks": chunks,
+            "source_db_filename": source_path,
+            "source_open_generation": source_generation,
+            "source_observed_path_identity_before": before,
+            "source_observed_path_identity_after": after,
+        }
+    finally:
+        # A terminal response proves BrainBar is no longer writing this path.
+        discard_terminal_attempt()
 
 
 def _run_backup_once_bound(
@@ -253,6 +336,8 @@ def _run_backup_once_bound(
     transcript_roots: list[Path | jsonl_backup.BackupSourceRoot],
     socket_path: Path | None = None,
     offline_db_path: Path | None = None,
+    expected_source_path: Path | None = None,
+    expected_source_open_generation: str | None = None,
     generation_id: str | None = None,
     now: dt.datetime | None = None,
     expected_destination_identity: tuple[int, int],
@@ -298,9 +383,20 @@ def _run_backup_once_bound(
     try:
         raw_db = generation / "brainlayer.db"
         db_source = "brainbar_socket" if socket_path is not None else "explicit_offline_db"
-        chunks = (
-            _socket_snapshot(Path(socket_path), raw_db, generation)
+        socket_snapshot = (
+            _socket_snapshot(
+                Path(socket_path),
+                raw_db,
+                generation,
+                expected_source_path=expected_source_path,
+                expected_source_open_generation=expected_source_open_generation,
+            )
             if socket_path is not None
+            else None
+        )
+        chunks = (
+            socket_snapshot["chunks"]
+            if socket_snapshot is not None
             else _offline_snapshot(Path(offline_db_path), raw_db)
         )
         _fsync_file(raw_db)
@@ -346,7 +442,13 @@ def _run_backup_once_bound(
             ],
             "db_source_path": str(Path(offline_db_path).expanduser().resolve())
             if offline_db_path is not None
-            else str(Path(socket_path).expanduser().resolve()),
+            else socket_snapshot["source_db_filename"],
+            "db_transport_socket": None if socket_path is None else str(Path(socket_path).expanduser().resolve()),
+            "db_source_open_generation": None if socket_snapshot is None else socket_snapshot["source_open_generation"],
+            "db_source_observed_path_identity_before": None
+            if socket_snapshot is None else socket_snapshot["source_observed_path_identity_before"],
+            "db_source_observed_path_identity_after": None
+            if socket_snapshot is None else socket_snapshot["source_observed_path_identity_after"],
             "destination_identity": _identity(destination),
             "local_verified": True,
             "remote_verified": False,
@@ -453,6 +555,7 @@ def main(argv: list[str] | None = None) -> int:
         "receipt": str(destination / result["generation"] / "receipt.complete.json"),
         "db_source_mode": result["db_source_mode"],
         "db_source_path": result["db_source_path"],
+        "db_transport_socket": result["db_transport_socket"],
         "remote_verified": False,
         "cleanup_permitted": False,
         "transcript_roots": [str(root.path.expanduser().resolve()) if isinstance(root, jsonl_backup.BackupSourceRoot) else str(Path(root).expanduser().resolve()) for root in roots],
@@ -466,6 +569,8 @@ def run_backup_once(
     transcript_roots: list[Path | jsonl_backup.BackupSourceRoot],
     socket_path: Path | None = None,
     offline_db_path: Path | None = None,
+    expected_source_path: Path | None = None,
+    expected_source_open_generation: str | None = None,
     generation_id: str | None = None,
     now: dt.datetime | None = None,
     expected_destination_identity: tuple[int, int],
@@ -492,6 +597,8 @@ def run_backup_once(
                     transcript_roots=transcript_roots,
                     socket_path=socket_path,
                     offline_db_path=offline_db_path,
+                    expected_source_path=expected_source_path,
+                    expected_source_open_generation=expected_source_open_generation,
                     generation_id=generation_id,
                     now=now,
                     expected_destination_identity=expected_destination_identity,
