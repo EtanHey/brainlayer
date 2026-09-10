@@ -33,6 +33,7 @@ from .ingest_guard import recursive_mcp_output_reason
 from .native_record_links import (
     catalog_native_record,
     ensure_native_record_links_schema,
+    native_record_entry_is_admitted,
     native_record_payload_from_entry,
 )
 from .paths import get_db_path
@@ -426,7 +427,10 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
             )
 
         native_records = [
-            payload for entry in entries if (payload := native_record_payload_from_entry(entry)) is not None
+            payload
+            for entry in entries
+            if (payload := native_record_payload_from_entry(entry)) is not None
+            and native_record_entry_is_admitted(entry)
         ]
         if native_records:
             if arbitrated:

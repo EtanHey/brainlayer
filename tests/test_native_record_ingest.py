@@ -264,3 +264,24 @@ def test_actual_watcher_denylist_blocks_memory_reader_before_native_catalog(tmp_
     with sqlite3.connect(db_path) as conn:
         assert conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE name = 'native_record_links'").fetchone() == (0,)
         assert conn.execute("SELECT COUNT(*) FROM chunks").fetchone() == (0,)
+
+    ordinary = watch_dir / "project" / "session" / "subagents" / "workflow-subagent" / "agent.jsonl"
+    ordinary.parent.mkdir(parents=True)
+    raw_entry = _entry(
+        str(ordinary),
+        0,
+        200,
+        "e",
+        entry_type="assistant",
+        session_id="ordinary-session",
+        uuid="ordinary-native",
+    )
+    raw_entry["attributionAgent"] = "workflow-subagent"
+    ordinary.write_text(
+        json.dumps({key: value for key, value in raw_entry.items() if not key.startswith("_")}) + "\n",
+        encoding="utf-8",
+    )
+    watcher.poll_once()
+
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT native_uuid FROM native_record_links").fetchall() == [("ordinary-native",)]

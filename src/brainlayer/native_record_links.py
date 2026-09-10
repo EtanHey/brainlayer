@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -34,6 +35,30 @@ class NativeRecordLinkConflict(ValueError):
 class NativeRecordLinkResult:
     record_key: str
     inserted: bool
+
+
+def native_record_entry_is_admitted(entry: dict[str, Any]) -> bool:
+    """Apply the existing source/class denylist before structural catalog admission."""
+    from .ingest_denylist import (
+        BRAINLAYER_INGEST_DENYLIST_ENV,
+        MEMORY_READER_ATTRIBUTIONS,
+        is_denylisted,
+    )
+
+    source_file = entry.get("_source_file")
+    if not isinstance(source_file, str) or not source_file:
+        return False
+    if BRAINLAYER_INGEST_DENYLIST_ENV in os.environ:
+        return not is_denylisted(source_file)
+
+    raw_attribution = entry.get("attributionAgent")
+    attribution = raw_attribution.strip().casefold().replace("_", "-") if isinstance(raw_attribution, str) else ""
+    if attribution in MEMORY_READER_ATTRIBUTIONS:
+        return False
+    return not is_denylisted(
+        source_file,
+        unknown_subagent_is_denylisted=not bool(attribution),
+    )
 
 
 def native_record_payload_from_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
