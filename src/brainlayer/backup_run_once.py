@@ -327,7 +327,7 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         action="append",
         dest="transcript_roots",
-        help="legacy path-only transcript root; repeat for every configured root",
+        help="legacy JSONL-only path root; repeat for every configured root",
     )
     parser.add_argument(
         "--transcript-root-spec",

@@ -1,4 +1,5 @@
 import json
+import os
 import shlex
 import sqlite3
 from pathlib import Path
@@ -275,3 +276,41 @@ def test_literal_config_rejects_multiple_tokens(tmp_path):
 
     with pytest.raises(RuntimeError, match="exactly one literal value"):
         configured_brainlayer_literal_value("BRAINLAYER_BACKUP_DESTINATION", config)
+
+
+def test_destination_swap_after_bound_generation_keeps_failed_receipt(tmp_path, monkeypatch):
+    destination = tmp_path / "backups"
+    destination.mkdir()
+    replacement = tmp_path / "replacement"
+    replacement.mkdir()
+    original = backup_run_once._run_backup_once_bound
+
+    def swap_after_generation(**kwargs):
+        generation = ".brainlayer-backup-race"
+        Path(generation).mkdir()
+        (Path(generation) / "brainlayer.db").write_bytes(b"db")
+        (Path(generation) / "claude-jsonl-race.tar.gz").write_bytes(b"archive")
+        (Path(generation) / "receipt.complete.json").write_text("{}")
+        selected = destination.with_name("selected-original")
+        os.rename(destination, selected)
+        os.rename(replacement, destination)
+        return {"generation": generation}
+
+    monkeypatch.setattr(backup_run_once, "_run_backup_once_bound", swap_after_generation)
+    identity = (destination.stat().st_dev, destination.stat().st_ino)
+    with pytest.raises(backup_run_once.BackupRunOnceError, match="after generation"):
+        backup_run_once.run_backup_once(
+            destination=destination,
+            offline_db_path=tmp_path / "offline.db",
+            transcript_roots=[],
+            expected_destination_identity=identity,
+            generation_id="race",
+        )
+    assert not list(destination.rglob("*"))
+    selected_generation = next(tmp_path.joinpath("selected-original").glob(".brainlayer-backup-race"))
+    assert not (selected_generation / "receipt.complete.json").exists()
+    assert (selected_generation / "brainlayer.db").read_bytes() == b"db"
+    assert (selected_generation / "claude-jsonl-race.tar.gz").read_bytes() == b"archive"
+    receipt = json.loads((selected_generation / "receipt.incomplete.json").read_text())
+    assert receipt["status"] == "failed"
+    assert "identity changed after generation" in receipt["error"]
