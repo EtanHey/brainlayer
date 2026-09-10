@@ -507,6 +507,9 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
 
                 conversation_id = chunk.metadata.get("session_id") or file_stem
                 metadata = dict(chunk.metadata)
+                for key in ("_line_start_offset", "_line_end_offset", "_raw_record_hash"):
+                    if key in entry:
+                        metadata[key] = entry[key]
                 if secret_scrub_result.redactions:
                     metadata["secret_scrub_redactions"] = sorted(
                         {redaction.provider for redaction in secret_scrub_result.redactions}
