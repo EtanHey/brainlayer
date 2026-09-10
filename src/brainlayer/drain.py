@@ -34,6 +34,7 @@ from .ingest_guard import recursive_mcp_output_reason
 from .paths import get_db_path
 from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
 from .provenance_integration import enqueue_provenance_resolution_for_entities
+from .source_records import ensure_chunk_source_records, record_watcher_source
 from .vector_store import _configure_writer_pragmas
 from .wal_checkpoint import checkpoint_guard
 from .wal_checkpoint import get_wal_size as _wal_size_bytes
@@ -907,10 +908,13 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     source_class = normalize_source_class(event.get("source_class"))
     if source_class is not None and "source_class" in _columns(conn, "chunks"):
         values["source_class"] = source_class
+    ensure_chunk_source_records(conn)
     stored_chunk_id = _insert_or_merge_chunk(
         conn,
         values,
     )
+    metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+    record_watcher_source(conn, canonical_chunk_id=stored_chunk_id, source_file=str(source_file), metadata=metadata)
     _refresh_realtime_watcher_ingested_at(conn, stored_chunk_id, ingested_at)
     _record_watcher_liveness(conn, stored_chunk_id, ingested_at)
     return ApplyResult(chunk_id=stored_chunk_id)

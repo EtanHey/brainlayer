@@ -589,7 +589,10 @@ class TestJSONLTailer:
         lines = tailer.read_new_lines()
         first_line_end = len(b'{"good":"line"}\n')
 
-        assert lines == [{"good": "line", "_line_end_offset": first_line_end}]
+        assert lines[0]["good"] == "line"
+        assert lines[0]["_line_start_offset"] == 0
+        assert lines[0]["_line_end_offset"] == first_line_end
+        assert len(lines[0]["_raw_record_hash"]) == 64
         assert tailer.offset == first_line_end
         assert tailer._buffer.startswith(b"not json at all\n")
         assert tailer.last_error is not None

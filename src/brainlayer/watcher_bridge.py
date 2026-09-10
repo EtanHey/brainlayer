@@ -36,6 +36,7 @@ from .pipeline.classify import classify_content
 from .pipeline.correction_detection import build_correction_tags
 from .pipeline.secret_scrub import scrub_secrets
 from .queue_io import enqueue_watcher_chunk
+from .source_records import ensure_chunk_source_records, record_watcher_source
 from .t3_provenance import DEFAULT_T3_STATE_DB, t3_app_codex_session_ids
 from .vector_store import VectorStore
 from .workspace_identity import canonical_project_from_workspace
@@ -586,6 +587,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                             cursor.execute("BEGIN IMMEDIATE")
                             transaction_started = True
                             ensure_direct_liveness_schema()
+                            ensure_chunk_source_records(store.conn)
                             duplicate, dedupe_fields = find_duplicate(
                                 store.conn,
                                 chunk_id=chunk_id,
@@ -609,6 +611,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                     mechanism=duplicate.mechanism,
                                     hamming_distance_value=duplicate.hamming_distance,
                                 )
+                                record_watcher_source(store.conn, canonical_chunk_id=duplicate.canonical_chunk_id, source_file=source_file, metadata=metadata)
                                 record_direct_liveness(duplicate.canonical_chunk_id, ingested_at)
                                 cursor.execute("COMMIT")
                                 mark_direct_liveness_schema_ready()
@@ -627,6 +630,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                     "source_class": source_class,
                                 },
                             ):
+                                record_watcher_source(store.conn, canonical_chunk_id=chunk_id, source_file=source_file, metadata=metadata)
                                 record_direct_liveness(chunk_id, ingested_at)
                                 cursor.execute("COMMIT")
                                 mark_direct_liveness_schema_ready()
@@ -670,6 +674,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                             )
                             changed = store.conn.changes() > 0
                             if changed:
+                                record_watcher_source(store.conn, canonical_chunk_id=chunk_id, source_file=source_file, metadata=metadata)
                                 record_direct_liveness(chunk_id, ingested_at)
                             cursor.execute("COMMIT")
                             mark_direct_liveness_schema_ready()

@@ -980,6 +980,7 @@ class JSONLTailer:
             nl_idx = self._buffer.find(b"\n", consumed_bytes)
             if nl_idx < 0:
                 break
+            record_start_offset = starting_offset + consumed_bytes
             line_data = self._buffer[consumed_bytes:nl_idx]
 
             if not line_data.strip():
@@ -999,7 +1000,10 @@ class JSONLTailer:
             line_end_offset = starting_offset + nl_idx + 1
             consumed_bytes = nl_idx + 1
             if isinstance(parsed, dict):
+                raw_record = line_data + b"\n"
+                parsed["_line_start_offset"] = record_start_offset
                 parsed["_line_end_offset"] = line_end_offset
+                parsed["_raw_record_hash"] = hashlib.sha256(raw_record).hexdigest()
                 lines.append(parsed)
 
         if consumed_bytes:
@@ -1485,8 +1489,9 @@ class JSONLWatcher:
                 continue
             entry["_source_file"] = filepath
             entry["_provider"] = provider
-            if isinstance(line.get("_line_end_offset"), int):
-                entry["_line_end_offset"] = line["_line_end_offset"]
+            for key in ("_line_start_offset", "_line_end_offset", "_raw_record_hash"):
+                if key in line:
+                    entry[key] = line[key]
             normalized.append(entry)
         return normalized
 
