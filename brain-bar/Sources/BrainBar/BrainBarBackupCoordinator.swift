@@ -273,8 +273,9 @@ final class BrainLayerBackupCoordinator: ObservableObject {
         guard config.backupEnabled,
               config.backupDestinationPath != nil,
               config.backupDestinationIdentity != nil,
-              !config.backupTranscriptRoots.isEmpty else {
-            publish(.failed(message: "Backup needs a saved folder, filesystem identity, and transcript roots."), to: onStatus)
+              !config.backupTranscriptRoots.isEmpty,
+              !config.backupTranscriptRootSpecs.isEmpty else {
+            publish(.failed(message: "Backup needs a saved folder, filesystem identity, and reviewed source-root specs."), to: onStatus)
             return
         }
         var scheduleState: BrainLayerBackupScheduleState
@@ -299,7 +300,6 @@ final class BrainLayerBackupCoordinator: ObservableObject {
         let previous = task
         previous?.cancel()
         publish(.running, to: onStatus)
-        let roots = config.backupTranscriptRoots
         let runID = UUID()
         activeRunID = runID
         task = Task { [commandRunner] in
@@ -313,7 +313,17 @@ final class BrainLayerBackupCoordinator: ObservableObject {
                 "--config", configURL.path,
                 "--generation-id", UUID().uuidString,
             ]
-            for root in roots { arguments += ["--transcript-root", root] }
+            for spec in config.backupTranscriptRootSpecs {
+                let object: [String: Any] = [
+                    "path": spec.path,
+                    "include_globs": spec.includeGlobs,
+                    "exclude_globs": spec.excludeGlobs,
+                    "source_class": spec.sourceClass,
+                ]
+                guard let data = try? JSONSerialization.data(withJSONObject: object),
+                      let encoded = String(data: data, encoding: .utf8) else { continue }
+                arguments += ["--transcript-root-spec", encoded]
+            }
             let result = await commandRunner.run(arguments)
             guard !Task.isCancelled else {
                 if activeRunID == runID { task = nil; activeRunID = nil }

@@ -199,6 +199,34 @@ enum BrainLayerBackupKnownRoots {
             home.appendingPathComponent(".gemini/antigravity-cli/cache"),
         ]
     }
+
+    static func specs(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [BrainLayerBackupSourceRootSpec] {
+        paths(home: home).enumerated().map { index, url in
+            let patterns: [[String]] = [
+                ["**/*.jsonl"], ["**/*.jsonl"], ["**/*.jsonl"],
+                ["**/*.jsonl", "**/*.json"], ["**/agent-transcripts/**/*.jsonl", "**/agent-transcripts/**/*.json"],
+                ["**/*.json"], ["**/*.md"], ["**/*.jsonl"],
+                ["**/*.db", "**/*.db-wal", "**/*.db-shm"], ["**/*.pb"],
+                ["**/.system_generated/**/*.jsonl", "**/.system_generated/**/*.json", "**/.system_generated/**/*.log", "**/.system_generated/**/*.md", "**/.system_generated/**/*.png", "**/.system_generated/**/*.jpg", "**/.system_generated/**/*.mp4", "**/.tempmediaStorage/**/*.png", "**/.tempmediaStorage/**/*.jpg", "**/.tempmediaStorage/**/*.mp4"],
+                ["last_conversations.json", "projects.json"]
+            ]
+            return BrainLayerBackupSourceRootSpec(path: url.standardizedFileURL.path, includeGlobs: patterns[index], sourceClass: index >= 8 ? "antigravity-restore" : "transcript")
+        }
+    }
+}
+
+struct BrainLayerBackupSourceRootSpec: Codable, Equatable, Sendable {
+    let path: String
+    let includeGlobs: [String]
+    let excludeGlobs: [String]
+    let sourceClass: String
+
+    init(path: String, includeGlobs: [String] = ["**/*.jsonl"], excludeGlobs: [String] = [], sourceClass: String = "transcript") {
+        self.path = path
+        self.includeGlobs = includeGlobs
+        self.excludeGlobs = excludeGlobs
+        self.sourceClass = sourceClass
+    }
 }
 
 struct BrainLayerBackupDestinationIdentity: Equatable, Sendable {
@@ -232,6 +260,7 @@ struct BrainLayerConfig: Equatable, Sendable {
     var backupDestinationPath: String?
     var backupDestinationIdentity: BrainLayerBackupDestinationIdentity?
     var backupTranscriptRoots: [String]
+    var backupTranscriptRootSpecs: [BrainLayerBackupSourceRootSpec]
     var backupMissingOptionalRoots: [String]
 
     static let defaultConfig = BrainLayerConfig(
@@ -251,6 +280,7 @@ struct BrainLayerConfig: Equatable, Sendable {
         backupDestinationPath: nil,
         backupDestinationIdentity: nil,
         backupTranscriptRoots: [],
+        backupTranscriptRootSpecs: [],
         backupMissingOptionalRoots: []
     )
 
@@ -266,6 +296,7 @@ struct BrainLayerConfig: Equatable, Sendable {
             backupDestinationPath == other.backupDestinationPath &&
             backupDestinationIdentity == other.backupDestinationIdentity &&
             backupTranscriptRoots == other.backupTranscriptRoots &&
+            backupTranscriptRootSpecs == other.backupTranscriptRootSpecs &&
             backupMissingOptionalRoots == other.backupMissingOptionalRoots &&
             Dictionary(uniqueKeysWithValues: launchdJobs.map { ($0.key, $0.value.enabled) }) ==
             Dictionary(uniqueKeysWithValues: other.launchdJobs.map { ($0.key, $0.value.enabled) })
@@ -518,6 +549,7 @@ struct BrainLayerEnvDocument {
         "BRAINLAYER_ENRICH_BACKEND",
         "BRAINLAYER_BACKUP_ENABLED",
         "BRAINLAYER_BACKUP_DESTINATION",
+        "BRAINLAYER_BACKUP_TRANSCRIPT_ROOT_SPECS",
         "BRAINLAYER_ENRICH_RATE",
         "BRAINLAYER_ENRICH_CONCURRENCY",
         "BRAINLAYER_MAX_COMMIT_BATCH",
@@ -549,6 +581,10 @@ struct BrainLayerEnvDocument {
         let data = try! JSONSerialization.data(withJSONObject: values, options: [.sortedKeys])
         return shellSingleQuoted(String(decoding: data, as: UTF8.self))
     }
+    private static func renderedJSON(_ value: Any) -> String {
+        let data = try! JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
+        return shellSingleQuoted(String(decoding: data, as: UTF8.self))
+    }
 
     private static func managedValues(
         for config: BrainLayerConfig,
@@ -566,6 +602,9 @@ struct BrainLayerEnvDocument {
             "BRAINLAYER_BACKUP_DESTINATION_ST_DEV": config.backupDestinationIdentity.map { String($0.stDev) } ?? "",
             "BRAINLAYER_BACKUP_DESTINATION_ST_INO": config.backupDestinationIdentity.map { String($0.stIno) } ?? "",
             "BRAINLAYER_BACKUP_TRANSCRIPT_ROOTS": renderedList(config.backupTranscriptRoots),
+            "BRAINLAYER_BACKUP_TRANSCRIPT_ROOT_SPECS": renderedJSON(config.backupTranscriptRootSpecs.map { spec in
+                ["path": spec.path, "include_globs": spec.includeGlobs, "exclude_globs": spec.excludeGlobs, "source_class": spec.sourceClass]
+            }),
             "BRAINLAYER_BACKUP_MISSING_OPTIONAL_ROOTS": renderedList(config.backupMissingOptionalRoots),
         ]
         if includeLegacyGoogleKey {
@@ -614,6 +653,14 @@ struct BrainLayerEnvDocument {
         if let raw = assignments["BRAINLAYER_BACKUP_DESTINATION_ST_DEV"], let value = Int64(normalized(raw)),
            let inode = assignments["BRAINLAYER_BACKUP_DESTINATION_ST_INO"].flatMap({ Int64(normalized($0)) }) {
             config.backupDestinationIdentity = BrainLayerBackupDestinationIdentity(stDev: value, stIno: inode)
+        }
+        if let raw = assignments["BRAINLAYER_BACKUP_TRANSCRIPT_ROOT_SPECS"],
+           let data = strippedValue(raw).data(using: .utf8),
+           let values = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            config.backupTranscriptRootSpecs = values.compactMap { value in
+                guard let path = value["path"] as? String, let includes = value["include_globs"] as? [String] else { return nil }
+                return BrainLayerBackupSourceRootSpec(path: path, includeGlobs: includes, excludeGlobs: value["exclude_globs"] as? [String] ?? [], sourceClass: value["source_class"] as? String ?? "transcript")
+            }
         }
         for key in ["BRAINLAYER_BACKUP_TRANSCRIPT_ROOTS", "BRAINLAYER_BACKUP_MISSING_OPTIONAL_ROOTS"] {
             guard let raw = assignments[key], let data = strippedValue(raw).data(using: .utf8),

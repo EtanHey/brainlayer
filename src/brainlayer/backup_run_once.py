@@ -316,8 +316,13 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         action="append",
         dest="transcript_roots",
-        required=True,
-        help="explicit transcript root to include; repeat for every configured root",
+        help="legacy path-only transcript root; repeat for every configured root",
+    )
+    parser.add_argument(
+        "--transcript-root-spec",
+        action="append",
+        dest="transcript_root_specs",
+        help="JSON source-root spec with path, include_globs, exclude_globs, and source_class",
     )
     parser.add_argument("--generation-id")
     args = parser.parse_args(argv)
@@ -325,7 +330,20 @@ def main(argv: list[str] | None = None) -> int:
     config_path = (args.config or config_module.get_user_env_path()).expanduser()
     try:
         destination, identity = _managed_backup_config(config_path)
-        roots = args.transcript_roots
+        roots = list(args.transcript_roots or [])
+        for raw_spec in args.transcript_root_specs or []:
+            try:
+                spec = json.loads(raw_spec)
+                roots.append(jsonl_backup.BackupSourceRoot(
+                    Path(spec["path"]),
+                    tuple(spec["include_globs"]),
+                    tuple(spec.get("exclude_globs", ())),
+                    str(spec.get("source_class", "transcript")),
+                ))
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise BackupRunOnceError("invalid --transcript-root-spec JSON") from exc
+        if not roots:
+            raise BackupRunOnceError("at least one transcript root or source-root spec is required")
         result = run_backup_once(
             destination=destination,
             transcript_roots=roots,
@@ -343,7 +361,7 @@ def main(argv: list[str] | None = None) -> int:
         "db_source_path": result["db_source_path"],
         "remote_verified": False,
         "cleanup_permitted": False,
-        "transcript_roots": [str(Path(root).expanduser().resolve()) for root in roots],
+        "transcript_roots": [str(root.path.expanduser().resolve()) if isinstance(root, jsonl_backup.BackupSourceRoot) else str(Path(root).expanduser().resolve()) for root in roots],
     }, sort_keys=True))
     return 0
 

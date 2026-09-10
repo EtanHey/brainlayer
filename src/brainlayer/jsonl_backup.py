@@ -51,6 +51,8 @@ JSONL_RETENTION = backup_daily.DriveRetentionPolicy(
 class BackupSourceRoot:
     path: Path
     include_globs: tuple[str, ...] = ("**/*.jsonl",)
+    exclude_globs: tuple[str, ...] = ()
+    source_class: str = "transcript"
 
 
 def default_source_roots() -> list[BackupSourceRoot]:
@@ -164,11 +166,18 @@ def _discover_jsonl_candidates(source_roots: list[Path | BackupSourceRoot]) -> l
         expanded_root = config.path.expanduser()
         if not expanded_root.exists():
             continue
+        excluded: set[Path] = {
+            path.resolve()
+            for pattern in config.exclude_globs
+            for path in expanded_root.glob(pattern)
+        }
         for include_glob in config.include_globs:
             for path in sorted(expanded_root.glob(include_glob)):
                 if not path.is_file():
                     continue
                 resolved = path.resolve()
+                if resolved in excluded:
+                    continue
                 if resolved in seen:
                     continue
                 seen.add(resolved)

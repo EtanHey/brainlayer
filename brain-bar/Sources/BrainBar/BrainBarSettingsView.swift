@@ -143,13 +143,17 @@ final class BrainBarSettingsViewModel: ObservableObject {
             errorMessage = "The selected backup folder could not be identified."
             return
         }
-        let knownRoots = BrainLayerBackupKnownRoots.paths()
+        let knownSpecs = BrainLayerBackupKnownRoots.specs()
         var includedRoots: [String] = []
+        var includedSpecs: [BrainLayerBackupSourceRootSpec] = []
         var missingRoots: [String] = []
-        for root in knownRoots {
+        for spec in knownSpecs {
+            let root = URL(fileURLWithPath: spec.path)
+
             var isDirectory: ObjCBool = false
             if FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory), isDirectory.boolValue {
                 includedRoots.append(root.standardizedFileURL.path)
+                includedSpecs.append(spec)
             } else {
                 missingRoots.append(root.standardizedFileURL.path)
             }
@@ -162,6 +166,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
             config.backupDestinationPath = url.path
             config.backupDestinationIdentity = identity
             config.backupTranscriptRoots = includedRoots
+            config.backupTranscriptRootSpecs = includedSpecs
             config.backupMissingOptionalRoots = missingRoots
         }) else { return }
         startBackupIfEnabledAfterSave()
