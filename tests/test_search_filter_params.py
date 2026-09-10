@@ -329,7 +329,7 @@ class TestBrainSearchToSearch:
             ) as mock_search,
             patch("brainlayer.mcp.search_handler._normalize_project_name", return_value=None),
         ):
-            asyncio.run(
+            content, structured = asyncio.run(
                 _brain_search(
                     query="Etan checkpoint context",
                     include_checkpoints=True,
@@ -340,9 +340,35 @@ class TestBrainSearchToSearch:
         store.kg_hybrid_search.assert_called_once()
         assert store.kg_hybrid_search.call_args[1]["include_checkpoints"] is True
         mock_search.assert_not_awaited()
+        assert "facts" not in structured
+        assert "### KG Facts" not in content[0].text
+        assert "entity checkpoint context" in content[0].text
 
-    def test_source_all_does_not_skip_entity_routing(self):
-        """source='all' means unfiltered global search, not an active source filter."""
+    def test_alias_expansion_still_flows_to_ordinary_retrieval(self):
+        """Removing fact prose does not remove query-side alias expansion."""
+        store = MagicMock(count=MagicMock(return_value=100))
+        fallback = ([MagicMock(type="text", text="alias source result")], {"total": 1, "results": []})
+        with (
+            patch("brainlayer.mcp.search_handler._get_vector_store", return_value=store),
+            patch("brainlayer.mcp.search_handler._exact_chunk_lookup_result", return_value=None),
+            patch(
+                "brainlayer.mcp.search_handler._expanded_fts_query",
+                return_value='"stalkerGolem" OR "stalker_golem"',
+            ) as mock_expand,
+            patch(
+                "brainlayer.mcp.search_handler._search",
+                new_callable=AsyncMock,
+                return_value=fallback,
+            ) as mock_search,
+        ):
+            result = asyncio.run(_brain_search(query="stalkerGolem", project="brainlayer"))
+
+        assert result == fallback
+        mock_expand.assert_called_once_with("stalkerGolem", store)
+        assert mock_search.await_args.kwargs["fts_query_override"] == '"stalkerGolem" OR "stalker_golem"'
+
+    def test_source_all_entity_routing_never_injects_fact_only_output(self):
+        """source='all' stays unfiltered, but facts alone fall through to source retrieval."""
         store = MagicMock(count=MagicMock(return_value=100))
         store.kg_hybrid_search.return_value = {
             "chunks": {
@@ -352,7 +378,10 @@ class TestBrainSearchToSearch:
                 "distances": [[]],
             }
         }
-        fact_items = [{"source": "Etan", "relation": "works_on", "target": "BrainLayer"}]
+        fallback = (
+            [MagicMock(type="text", text='## Search results for "Etan"\n\nretrieved source chunk')],
+            {"query": "Etan BrainLayer context", "total": 1, "results": [{"content": "retrieved source chunk"}]},
+        )
         with (
             patch("brainlayer.mcp.search_handler._get_vector_store", return_value=store),
             patch("brainlayer.mcp.search_handler._expanded_fts_query", return_value=None),
@@ -364,15 +393,18 @@ class TestBrainSearchToSearch:
                 "brainlayer.mcp.search_handler._detect_entities",
                 return_value=[{"id": "e1", "name": "Etan", "entity_type": "person"}],
             ) as mock_detect,
-            patch("brainlayer.mcp.search_handler._kg_facts_sql", return_value=fact_items),
+            patch(
+                "brainlayer.mcp.search_handler._kg_facts_sql",
+                return_value=[{"source": "Etan", "relation": "works_on", "target": "BrainLayer"}],
+            ) as mock_facts,
             patch(
                 "brainlayer.mcp.search_handler._search",
                 new_callable=AsyncMock,
-                return_value=MagicMock(),
+                return_value=fallback,
             ) as mock_search,
             patch("brainlayer.mcp.search_handler._normalize_project_name", return_value=None),
         ):
-            _content, structured = asyncio.run(
+            content, structured = asyncio.run(
                 _brain_search(
                     query="Etan BrainLayer context",
                     source="all",
@@ -381,9 +413,12 @@ class TestBrainSearchToSearch:
 
         mock_detect.assert_called_once_with("Etan BrainLayer context", store)
         store.kg_hybrid_search.assert_called_once()
-        mock_search.assert_not_awaited()
-        assert structured["entity"] == "Etan"
-        assert structured["facts"] == fact_items
+        mock_facts.assert_not_called()
+        mock_search.assert_awaited_once()
+        assert structured == fallback[1]
+        assert "retrieved source chunk" in content[0].text
+        assert "### KG Facts" not in content[0].text
+        assert "facts" not in structured
 
 
 class TestKgDegradeObservability:
@@ -414,7 +449,7 @@ class TestKgDegradeObservability:
                 "brainlayer.mcp.search_handler._detect_entities",
                 return_value=[{"id": "e1", "name": "Etan", "entity_type": "person"}],
             ),
-            patch("brainlayer.mcp.search_handler._kg_facts_sql", return_value=fact_items),
+            patch("brainlayer.mcp.search_handler._kg_facts_sql", return_value=fact_items) as mock_facts,
             patch(
                 "brainlayer.mcp.search_handler._search",
                 new_callable=AsyncMock,
@@ -424,16 +459,19 @@ class TestKgDegradeObservability:
         ):
             result = asyncio.run(_brain_search(query="Etan BrainLayer context"))
 
-        return result, store, mock_search
+        return result, store, mock_search, mock_facts
 
-    def test_kg_degrade_emits_structured_reason(self):
-        """Runtime hybrid failures expose a stable reason in structuredContent."""
-        _content, structured = self._run_entity_search_with_degraded_hybrid(
+    def test_kg_degrade_falls_through_without_fact_output(self):
+        """Runtime hybrid failure returns ordinary retrieval and never consults graph facts."""
+        (content, structured), _store, mock_search, mock_facts = self._run_entity_search_with_degraded_hybrid(
             fact_items=[{"source": "Etan", "relation": "works_on", "target": "BrainLayer"}]
-        )[0]
+        )
 
-        assert structured["kg_degraded"] is True
-        assert structured["kg_degrade_reason"] == "embedding_or_model"
+        mock_facts.assert_not_called()
+        mock_search.assert_awaited_once()
+        assert structured["total"] == 0
+        assert "facts" not in structured
+        assert "KG Facts" not in content[0].text
 
     def test_kg_degrade_emits_log_line(self, caplog):
         """Every degrade log includes reason, entity, and query for operators."""
@@ -456,7 +494,9 @@ class TestKgDegradeObservability:
         """Hybrid degrade is logged even when empty KG output falls back to normal search."""
         caplog.set_level(logging.WARNING, logger="brainlayer.mcp._shared")
 
-        _result, _store, mock_search = self._run_entity_search_with_degraded_hybrid(fact_items=[])
+        _result, _store, mock_search, mock_facts = self._run_entity_search_with_degraded_hybrid(fact_items=[])
+
+        mock_facts.assert_not_called()
 
         mock_search.assert_awaited_once()
         messages = [record.getMessage() for record in caplog.records]

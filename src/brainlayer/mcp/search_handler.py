@@ -1225,10 +1225,8 @@ async def _brain_search_dispatch(
             consumer_scope=consumer_scope,
         )
 
-    # Entity-aware routing: detect known entity names in query.
-    # Path 1: Pure SQL KG lookup (no embeddings, always works).
-    # Path 2: Full kg_hybrid_search with vector similarity (optional, needs embedding model).
-    # Skip entity routing when additional filters are active.
+    # Entity-aware routing may retrieve matching source chunks, but default search
+    # never injects graph-fact prose. Skip entity routing when filters are active.
     has_active_filters = any(
         [
             content_type,
@@ -1253,13 +1251,8 @@ async def _brain_search_dispatch(
     if detected_entities:
         entity_name = detected_entities[0]["name"]
 
-        # Path 1: Pure SQL KG facts (no embedding model needed, always runs)
-        with _vector_store_checkout() as store:
-            fact_items = _kg_facts_sql(
-                store, entity_name, include_checkpoints=include_checkpoints, include_audit=include_audit
-            )
-
-        # Path 2: Try full hybrid search (embedding + vector + KG)
+        # Try entity-conditioned source retrieval. Graph facts remain available only
+        # through the explicit brain_entity surface.
         structured_results = []
         kg_degraded = False
         kg_degrade_reason = None
@@ -1368,14 +1361,12 @@ async def _brain_search_dispatch(
             kg_degrade_reason = reason
             _emit_kg_degrade(reason)
 
-        # If we have KG facts OR chunk results, return them
-        if fact_items or structured_results:
+        if structured_results:
             structured = {
                 "query": query,
                 "entity": entity_name,
                 "total": len(structured_results),
                 "results": structured_results,
-                "facts": fact_items,
             }
             if order == "origin":
                 structured["order"] = order
@@ -1383,11 +1374,13 @@ async def _brain_search_dispatch(
             if kg_degraded:
                 structured["kg_degraded"] = True
                 structured["kg_degrade_reason"] = kg_degrade_reason
-            formatted_text = format_kg_search(entity_name, structured_results, fact_items, query)
+            formatted_text = format_kg_search(entity_name, structured_results, [], query)
             if order == "origin":
                 formatted_text += f"\n{_ORIGIN_ORDER_LABEL}"
             if kg_degraded:
-                formatted_text += f"\n⚠ KG search degraded — reason={kg_degrade_reason} — showing SQL-only results"
+                formatted_text += (
+                    f"\n⚠ KG search degraded — reason={kg_degrade_reason} — showing retrieved source results"
+                )
             return ([TextContent(type="text", text=formatted_text)], structured)
 
         if kg_fail_fast:
@@ -1396,7 +1389,6 @@ async def _brain_search_dispatch(
                 "entity": entity_name,
                 "total": 0,
                 "results": [],
-                "facts": fact_items,
                 "kg_degraded": True,
                 "kg_degrade_reason": kg_degrade_reason,
             }

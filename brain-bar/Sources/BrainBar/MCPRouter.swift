@@ -657,13 +657,6 @@ final class MCPRouter: @unchecked Sendable {
         let tag = args["tag"] as? String
         let subscriberID = (args["agent_id"] as? String) ?? (args["subscriber_id"] as? String)
         let unreadOnly = args["unread_only"] as? Bool ?? false
-        let sourceCountsAsFilter: Bool
-        if let source {
-            let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
-            sourceCountsAsFilter = !trimmed.isEmpty && trimmed != "all"
-        } else {
-            sourceCountsAsFilter = false
-        }
         // importance_min may arrive as Int or Double from JSON
         let importanceMin: Double? = if let d = args["importance_min"] as? Double { d }
             else if let i = args["importance_min"] as? Int { Double(i) }
@@ -681,22 +674,6 @@ final class MCPRouter: @unchecked Sendable {
             queryID: profileQueryID,
             durMS: SearchProfileLogger.durationMS(since: profileStartedAt)
         )
-
-        func localKGSection() -> String {
-            let hasActiveFilters = project != nil || sourceCountsAsFilter || tag != nil || subscriberID != nil || importanceMin != nil
-            if hasActiveFilters {
-                return ""
-            }
-            let detected = entityCache.detectEntities(in: query)
-            guard let first = detected.first else {
-                return ""
-            }
-            let facts = (try? db.lookupEntityFacts(entityName: first.name)) ?? []
-            if facts.isEmpty {
-                return ""
-            }
-            return TextFormatter.formatKGFacts(entity: first.name, facts: facts)
-        }
 
         func searchViaBrainBarDatabase() throws -> (text: String, metadata: [String: Any]) {
             let results = try db.search(
@@ -723,7 +700,6 @@ final class MCPRouter: @unchecked Sendable {
 
         let textSection: String
         let metadata: [String: Any]
-        let kgSection: String
         if hybridSearchClient != nil, subscriberID == nil, !unreadOnly {
             do {
                 let response = try hybridSearchWithinBudget(arguments: hybridSearchArguments(
@@ -742,38 +718,29 @@ final class MCPRouter: @unchecked Sendable {
                         let fallback = try searchViaBrainBarDatabase()
                         textSection = fallback.text
                         metadata = fallback.metadata
-                        kgSection = localKGSection()
                     } else {
                         textSection = response.text
                         metadata = sanitizedHybridMetadata(response.metadata)
-                        kgSection = ""
                     }
                 } else {
                     NSLog("[BrainBar] Hybrid search helper exceeded %.3fs budget, falling back to BrainBar database search", hybridSearchBudget)
                     let fallback = try searchViaBrainBarDatabase()
                     textSection = fallback.text
                     metadata = fallback.metadata
-                    kgSection = localKGSection()
                 }
             } catch {
                 NSLog("[BrainBar] Hybrid search helper failed, falling back to BrainBar database search: %@", String(describing: error))
                 let fallback = try searchViaBrainBarDatabase()
                 textSection = fallback.text
                 metadata = fallback.metadata
-                kgSection = localKGSection()
             }
         } else {
             let fallback = try searchViaBrainBarDatabase()
             textSection = fallback.text
             metadata = fallback.metadata
-            kgSection = localKGSection()
         }
 
-        // KG section goes before the <brain_search> envelope
-        if kgSection.isEmpty {
-            return ToolOutput(text: textSection, metadata: metadata)
-        }
-        return ToolOutput(text: kgSection + "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n" + textSection, metadata: metadata)
+        return ToolOutput(text: textSection, metadata: metadata)
     }
 
     private func hybridSearchResponseIsEmpty(_ response: HybridSearchResponse) -> Bool {

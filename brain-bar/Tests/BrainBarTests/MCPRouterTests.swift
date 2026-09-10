@@ -822,7 +822,7 @@ No results found.
         XCTAssertFalse(text.contains(fullContent))
     }
 
-    func testBrainSearchFallbackStillPrependsSwiftKGFacts() throws {
+    func testBrainSearchFallbackReturnsRetrievedChunksWithoutSwiftKGFacts() throws {
         let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-fallback-kg-\(UUID().uuidString).db"
         defer { try? FileManager.default.removeItem(atPath: tempDB) }
         let db = BrainDatabase(path: tempDB)
@@ -858,13 +858,13 @@ No results found.
         let text = content.first?["text"] as? String ?? ""
 
         XCTAssertEqual(helper.requests.count, 1)
-        XCTAssertTrue(text.contains("## Entity: Etan"), text)
-        XCTAssertTrue(text.contains("### KG Facts"), text)
-        XCTAssertTrue(text.contains("works_on: BrainLayer"), text)
+        XCTAssertFalse(text.contains("## Entity: Etan"), text)
+        XCTAssertFalse(text.contains("### KG Facts"), text)
+        XCTAssertFalse(text.contains("works_on: BrainLayer"), text)
         XCTAssertTrue(text.contains("fallback result from BrainBar database search"), text)
     }
 
-    func testBrainSearchFallbackMarksExpiredKGFactsInEntityHeader() throws {
+    func testBrainEntityStillMarksExpiredKGFacts() throws {
         let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-fallback-expired-kg-\(UUID().uuidString).db"
         defer { try? FileManager.default.removeItem(atPath: tempDB) }
         let db = BrainDatabase(path: tempDB)
@@ -900,9 +900,8 @@ No results found.
         let router = MCPRouter(profile: "full", hybridSearchClient: helper)
         router.setDatabase(db)
 
-        let text = try toolText(router.handle(toolCall(id: 173, name: "brain_search", arguments: [
-            "query": "Etan Domica",
-            "num_results": 3
+        let text = try toolText(router.handle(toolCall(id: 173, name: "brain_entity", arguments: [
+            "query": "Etan"
         ])))
 
         XCTAssertTrue(text.contains("## Entity: Etan"), text)
@@ -1777,7 +1776,7 @@ No results found.
         XCTAssertTrue(text.contains("1 of 1 shown"), "Only one matching source should be returned")
     }
 
-    func testBrainSearchSourceAllKeepsKGAugmentation() throws {
+    func testBrainSearchSourceAllReturnsChunksWithoutKGAugmentation() throws {
         let tempDB = NSTemporaryDirectory() + "brainbar-source-all-\(UUID().uuidString).db"
         defer { try? FileManager.default.removeItem(atPath: tempDB) }
         let db = BrainDatabase(path: tempDB)
@@ -1811,8 +1810,9 @@ No results found.
         let content = result?["content"] as? [[String: Any]]
         let text = content?.first?["text"] as? String ?? ""
 
-        XCTAssertTrue(text.contains("## Entity: Sagit Stern"))
-        XCTAssertTrue(text.contains("lectures_at: TechGym"))
+        XCTAssertFalse(text.contains("## Entity: Sagit Stern"))
+        XCTAssertFalse(text.contains("### KG Facts"))
+        XCTAssertFalse(text.contains("lectures_at: TechGym"))
         XCTAssertTrue(text.contains("Sagit Stern delivered the TechGym lecture"))
         XCTAssertFalse(text.contains("kg-search-ta"), "Compact labeled markdown should not expose chunk_id by default")
     }
