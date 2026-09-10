@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 struct BrainLayerBackupCommandResult: Equatable, Sendable {
@@ -8,13 +9,20 @@ struct BrainLayerBackupCommandResult: Equatable, Sendable {
 private final class BrainLayerBackupProcessController: @unchecked Sendable {
     private static let outputLimit = 64 * 1024
     private let arguments: [String]
+    private let executableURL: URL
+    private let timeout: TimeInterval
     private let lock = NSLock()
     private var process: Process?
     private var continuation: CheckedContinuation<BrainLayerBackupCommandResult, Never>?
     private var output = Data()
     private var finished = false
+    private var cancelRequested = false
 
-    init(arguments: [String]) { self.arguments = arguments }
+    init(arguments: [String], executableURL: URL, timeout: TimeInterval) {
+        self.arguments = arguments
+        self.executableURL = executableURL
+        self.timeout = timeout
+    }
 
     func run() async -> BrainLayerBackupCommandResult {
         await withCheckedContinuation { continuation in
@@ -27,15 +35,16 @@ private final class BrainLayerBackupProcessController: @unchecked Sendable {
 
     func cancel() {
         lock.lock()
+        cancelRequested = true
         let process = self.process
         lock.unlock()
-        if let process, process.isRunning { process.terminate() }
+        if let process, process.isRunning { terminateOwned(process) }
     }
 
     private func start() {
         let process = Process()
         let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/opt/homebrew/opt/brainlayer/libexec/venv/bin/python")
+        process.executableURL = executableURL
         process.arguments = arguments
         process.standardOutput = pipe
         process.standardError = pipe
@@ -56,15 +65,27 @@ private final class BrainLayerBackupProcessController: @unchecked Sendable {
                 output: self?.readOutput() ?? ""
             ))
         }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 30 * 60) { [weak self, weak process] in
+        DispatchQueue.global().asyncAfter(deadline: .now() + self.timeout) { [weak self, weak process] in
             guard let process, process.isRunning else { return }
-            process.terminate()
-            self?.append(Data("backup process timed out after 1800 seconds\n".utf8))
+            self?.append(Data("backup process timed out after configured deadline\n".utf8))
+            self?.terminateOwned(process)
         }
         do {
             try process.run()
+            lock.lock()
+            let shouldCancel = cancelRequested
+            lock.unlock()
+            if shouldCancel { terminateOwned(process) }
         } catch {
             finish(BrainLayerBackupCommandResult(terminationStatus: 127, output: "could not launch pinned BrainLayer Python: \(error)"))
+        }
+    }
+
+    private func terminateOwned(_ process: Process) {
+        process.terminate()
+        let pid = process.processIdentifier
+        DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
+            if process.isRunning { _ = Darwin.kill(pid, SIGKILL) }
         }
     }
 
@@ -96,12 +117,20 @@ private final class BrainLayerBackupProcessController: @unchecked Sendable {
 struct BrainLayerBackupCommandRunner: Sendable {
     let run: @Sendable ([String]) async -> BrainLayerBackupCommandResult
 
-    init(run: @escaping @Sendable ([String]) async -> BrainLayerBackupCommandResult = BrainLayerBackupCommandRunner.execute) {
+    init(run: @escaping @Sendable ([String]) async -> BrainLayerBackupCommandResult) {
         self.run = run
     }
 
-    private static func execute(arguments: [String]) async -> BrainLayerBackupCommandResult {
-        let controller = BrainLayerBackupProcessController(arguments: arguments)
+    init(executableURL: URL = URL(fileURLWithPath: "/opt/homebrew/opt/brainlayer/libexec/venv/bin/python"), timeout: TimeInterval = 30 * 60) {
+        self.run = { arguments in
+            await Self.execute(arguments: arguments, executableURL: executableURL, timeout: timeout)
+        }
+    }
+
+    private static func execute(
+        arguments: [String], executableURL: URL, timeout: TimeInterval
+    ) async -> BrainLayerBackupCommandResult {
+        let controller = BrainLayerBackupProcessController(arguments: arguments, executableURL: executableURL, timeout: timeout)
         return await withTaskCancellationHandler(operation: {
             await controller.run()
         }, onCancel: {
