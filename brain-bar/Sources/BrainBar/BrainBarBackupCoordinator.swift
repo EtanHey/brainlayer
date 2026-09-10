@@ -214,7 +214,6 @@ final class BrainLayerBackupCoordinator: ObservableObject {
 
     func cancel() {
         task?.cancel()
-        task = nil
         status = .idle
     }
 }
