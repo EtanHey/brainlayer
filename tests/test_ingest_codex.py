@@ -1,5 +1,6 @@
 """Tests for the Codex CLI session ingestion adapter."""
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from brainlayer.ingest.codex import (
     _is_system_injection,
     parse_codex_session,
 )
+from brainlayer.vector_store import VectorStore
 
 # ---------------------------------------------------------------------------
 # Fixtures — minimal Codex JSONL session files
@@ -118,6 +120,42 @@ def _native_agent_message(content, ts="2026-03-14T12:01:00.000Z"):
 
 
 # ---------------------------------------------------------------------------
+def test_parsed_codex_metadata_reaches_resolved_record_locators_via_ingest(tmp_path, monkeypatch):
+    from brainlayer import index_new
+    from brainlayer.embeddings import EmbeddedChunk
+    from brainlayer.ingest.codex import ingest_codex_session
+
+    item = _assistant_msg("A parsed Codex message contains enough substantive text to exercise physical source persistence through chunking and indexing without being filtered as a short response.")
+    item["id"] = "message-id"
+    item["payload"].update({"recipient": "recipient", "call_id": "call-id", "turn_id": "turn-id"})
+    raw = (json.dumps(item, separators=(",", ":")) + "\r\n").encode()
+    first_source = tmp_path / "first.jsonl"
+    second_source = tmp_path / "second.jsonl"
+    first_source.write_bytes(raw)
+    second_source.write_bytes(raw)
+    monkeypatch.setattr(
+        index_new,
+        "embed_chunks",
+        lambda chunks, on_progress=None: [EmbeddedChunk(chunk, [0.1] * 1024) for chunk in chunks],
+    )
+
+    db_path = tmp_path / "db.sqlite"
+    VectorStore(db_path).close()
+    assert ingest_codex_session(first_source, db_path=db_path, project_override="brainlayer") == 1
+    assert ingest_codex_session(second_source, db_path=db_path, project_override="brainlayer") == 1
+
+    store = VectorStore(db_path)
+    rows = list(store.conn.cursor().execute(
+        "SELECT canonical_chunk_id, source_file, record_start_offset, record_end_offset, raw_record_hash, record_context_json "
+        "FROM chunk_source_records ORDER BY source_file"
+    ))
+    assert [row[0] for row in rows] == [rows[0][0], rows[0][0]]
+    assert [row[1] for row in rows] == [str(first_source), str(second_source)]
+    assert all(row[2:4] == (0, len(raw)) for row in rows)
+    assert all(row[4] == hashlib.sha256(raw).hexdigest() for row in rows)
+    assert all(json.loads(row[5])[0]["/payload/call_id"] == "call-id" for row in rows)
+
+
 # Unit tests — helper functions
 # ---------------------------------------------------------------------------
 
@@ -232,6 +270,47 @@ class TestClassifyToolOutput:
 
 
 class TestParseCodexSession:
+    def test_native_headers_and_raw_byte_coordinates_survive_crlf_and_invalid_lines(self, tmp_path):
+        f = tmp_path / "session.jsonl"
+        meta = _session_meta()
+        meta["id"] = "top-id"
+        meta["payload"]["id"] = "session-id"
+        meta["payload"]["recipient"] = "recipient"
+        meta["payload"]["item"] = {"id": "item-id", "type": "AgentMessage", "channel": "mcp"}
+        assistant = _assistant_msg("This assistant message is long enough to be retained by the parser.")
+        assistant["id"] = "message-id"
+        assistant["payload"].update({"turn_id": "turn-id", "call_id": "call-id", "tool": "terminal", "fork_id": "fork-id"})
+        assistant["payload"]["item"] = {"id": "item-id", "type": "AgentMessage", "channel": "mcp"}
+        assistant["payload"]["recipient"] = "recipient"
+        lines = [
+            json.dumps(meta, separators=(",", ":")).encode() + b"\r\n",
+            b"{malformed\r\n",
+            b"\xff\xfe\r\n",
+            json.dumps(assistant, separators=(",", ":")).encode() + b"\r\n",
+        ]
+        f.write_bytes(b"".join(lines))
+
+        entries = list(parse_codex_session(f))
+
+        assert len(entries) == 1
+        metadata = entries[0]["metadata"]
+        assert metadata["_line_start_offset"] == len(lines[0]) + len(lines[1]) + len(lines[2])
+        assert metadata["_line_end_offset"] == sum(map(len, lines))
+        assert metadata["_raw_record_hash"] == hashlib.sha256(lines[3]).hexdigest()
+        context = metadata["record_context"]
+        assert context["/id"] == "message-id"
+        assert context["/type"] == "response_item"
+        assert context["/payload/type"] == "message"
+        assert context["/payload/role"] == "assistant"
+        assert context["/payload/call_id"] == "call-id"
+        assert context["/payload/fork_id"] == "fork-id"
+        assert context["/payload/tool"] == "terminal"
+        assert context["/payload/item/channel"] == "mcp"
+        assert context["/payload/item/id"] == "item-id"
+        assert context["/payload/item/type"] == "AgentMessage"
+        assert context["/payload/recipient"] == "recipient"
+        assert context["/payload/turn_id"] == "turn-id"
+
     def test_native_agent_message_requires_its_own_valid_provider_timestamp(self, tmp_path, caplog):
         f = tmp_path / "session.jsonl"
         text = "Native completion time validation needs text longer than fifty characters."
@@ -287,6 +366,9 @@ class TestParseCodexSession:
             "/payload/item/content/1/text",
         ]
         assert {entry["metadata"]["source_line"] for entry in entries} == {2}
+        assert len({entry["metadata"]["_line_start_offset"] for entry in entries}) == 1
+        assert len({entry["metadata"]["_line_end_offset"] for entry in entries}) == 1
+        assert len({entry["metadata"]["_raw_record_hash"] for entry in entries}) == 1
         assert {entry["metadata"]["sender"] for entry in entries} == {"assistant"}
         assert {entry["metadata"]["author_identity"] for entry in entries} == {"unverified"}
 

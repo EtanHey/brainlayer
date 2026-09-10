@@ -2507,6 +2507,21 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             ),
         )
 
+    def _record_source_evidence(self, cursor: apsw.Cursor, chunk: Dict[str, Any], canonical_chunk_id: str) -> None:
+        self._record_source_occurrence(cursor, chunk, canonical_chunk_id)
+        metadata = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}
+        if not all(key in metadata for key in ("_line_start_offset", "_line_end_offset", "_raw_record_hash")):
+            return
+        from .source_records import ensure_chunk_source_records, record_watcher_source
+
+        ensure_chunk_source_records(self.conn)
+        record_watcher_source(
+            self.conn,
+            canonical_chunk_id=canonical_chunk_id,
+            source_file=str(chunk.get("source_file") or ""),
+            metadata=metadata,
+        )
+
     def upsert_chunks(
         self,
         chunks: List[Dict[str, Any]],
@@ -2652,7 +2667,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                                 self._upsert_chunk_vector(cursor, duplicate.canonical_chunk_id, merged_embedding)
                             elif not self._chunk_vector_exists(cursor, duplicate.canonical_chunk_id):
                                 self._upsert_chunk_vector(cursor, duplicate.canonical_chunk_id, embedding)
-                            self._record_source_occurrence(cursor, chunk, duplicate.canonical_chunk_id)
+                            self._record_source_evidence(cursor, chunk, duplicate.canonical_chunk_id)
                             continue
                         if merge_existing_chunk_seen(
                             self.conn,
@@ -2666,7 +2681,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                         ):
                             if not self._chunk_vector_exists(cursor, chunk_id):
                                 self._upsert_chunk_vector(cursor, chunk_id, embedding)
-                            self._record_source_occurrence(cursor, chunk, chunk_id)
+                            self._record_source_evidence(cursor, chunk, chunk_id)
                             continue
 
                         has_provenance_class = getattr(self, "_has_provenance_class", False)
@@ -2802,7 +2817,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                             ),
                         )
                         self._upsert_chunk_vector(cursor, chunk_id, embedding)
-                        self._record_source_occurrence(cursor, chunk, chunk_id)
+                        self._record_source_evidence(cursor, chunk, chunk_id)
                     cursor.execute("COMMIT")
                     transaction_started = False
                     telemetry_span.finish("commit")

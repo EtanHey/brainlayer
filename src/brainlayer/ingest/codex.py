@@ -17,6 +17,7 @@ Key response_item types:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -40,6 +41,44 @@ _SYSTEM_INJECTION_PATTERNS = [
 _MIN_USER_LEN = 15
 _MIN_ASSISTANT_LEN = 50
 _MIN_TOOL_OUTPUT_LEN = 50
+
+_NATIVE_HEADER_FIELDS = (
+    "id",
+    "type",
+    "role",
+    "recipient",
+    "channel",
+    "call_id",
+    "tool",
+    "name",
+    "turn_id",
+    "turnId",
+    "message_id",
+    "messageId",
+    "thread_id",
+    "threadId",
+    "parent_id",
+    "parentId",
+    "parentUuid",
+    "fork_id",
+    "forkId",
+    "callId",
+    "toolName",
+)
+
+
+def _native_record_context(line: dict, payload: dict, item: dict | None = None) -> dict[str, object]:
+    """Keep supplied native identity headers without interpreting authorship."""
+    context: dict[str, object] = {}
+    scopes = (("/", line, _NATIVE_HEADER_FIELDS + ("timestamp",)), ("/payload", payload, _NATIVE_HEADER_FIELDS))
+    if isinstance(item, dict):
+        scopes += (("/payload/item", item, _NATIVE_HEADER_FIELDS),)
+    for prefix, value, fields in scopes:
+        for field in fields:
+            candidate = value.get(field)
+            if field in value and (candidate is None or isinstance(candidate, (str, int, float, bool))):
+                context[f"{prefix}{field}" if prefix == "/" else f"{prefix}/{field}"] = candidate
+    return context
 
 
 # ---------------------------------------------------------------------------
@@ -157,19 +196,31 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
 
     rejected_native_agent_messages = 0
 
+    byte_offset = 0
     with open(file_path, "rb") as fh:
-        for line_number, raw in enumerate(fh, start=1):
-            raw = raw.strip()
+        for line_number, raw_line in enumerate(fh, start=1):
+            line_start_offset = byte_offset
+            byte_offset += len(raw_line)
+            raw = raw_line.strip()
             if not raw:
                 continue
             try:
                 line = json.loads(raw)
-            except (json.JSONDecodeError, ValueError):
+            except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+                continue
+            if not isinstance(line, dict):
                 continue
 
             line_type = line.get("type", "")
-            payload = line.get("payload") or {}
+            payload_value = line.get("payload")
+            payload = payload_value if isinstance(payload_value, dict) else {}
             line_ts = line.get("timestamp", session_timestamp or "")
+            record_metadata = {
+                "_line_start_offset": line_start_offset,
+                "_line_end_offset": line_start_offset + len(raw_line),
+                "_raw_record_hash": hashlib.sha256(raw_line).hexdigest(),
+                "record_context": _native_record_context(line, payload, payload.get("item")),
+            }
 
             # ------------------------------------------------------------------
             # session_meta — capture session-level metadata
@@ -254,6 +305,7 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
                             "source_file": str(file_path),
                             "source_line": line_number,
                             "source_pointer": f"/payload/item/content/{block_index}/text",
+                            **record_metadata,
                         },
                     }
                 continue
@@ -306,6 +358,7 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
                         "source_file": str(file_path),
                         "source_line": line_number,
                         "source_pointer": "/payload/content",
+                        **record_metadata,
                     },
                 }
                 continue
@@ -337,6 +390,7 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
                         "source_file": str(file_path),
                         "source_line": line_number,
                         "source_pointer": "/payload/content",
+                        **record_metadata,
                     },
                 }
                 continue
@@ -370,6 +424,7 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
                         "source_file": str(file_path),
                         "source_line": line_number,
                         "source_pointer": "/payload/output",
+                        **record_metadata,
                     },
                 }
 
