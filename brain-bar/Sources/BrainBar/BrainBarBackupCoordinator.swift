@@ -139,6 +139,19 @@ struct BrainLayerBackupCommandRunner: Sendable {
     }
 }
 
+struct BrainLayerBackupScheduleState: Codable, Equatable, Sendable {
+    let schema: Int
+    var lastAttempt: Date?
+    var lastSuccess: Date?
+    var nextDue: Date?
+    var lastStatus: String
+    var lastReceipt: String?
+
+    static let empty = BrainLayerBackupScheduleState(
+        schema: 1, lastAttempt: nil, lastSuccess: nil, nextDue: nil, lastStatus: "never", lastReceipt: nil
+    )
+}
+
 @MainActor
 final class BrainLayerBackupCoordinator: ObservableObject {
     enum Status: Equatable, Sendable {
@@ -157,16 +170,72 @@ final class BrainLayerBackupCoordinator: ObservableObject {
         }
     }
 
+    static let shared = BrainLayerBackupCoordinator()
     @Published private(set) var status: Status = .idle
     private static let statusMessageLimit = 4 * 1024
+    private static let scheduleInterval: TimeInterval = 24 * 60 * 60
+    private static let failureBackoff: TimeInterval = 60 * 60
     private let commandRunner: BrainLayerBackupCommandRunner
+    private let stateURL: URL
+    private let now: @Sendable () -> Date
     private var task: Task<Void, Never>?
+    private var scheduleTimer: DispatchSourceTimer?
 
-    init(commandRunner: BrainLayerBackupCommandRunner = BrainLayerBackupCommandRunner()) {
+    init(
+        commandRunner: BrainLayerBackupCommandRunner = BrainLayerBackupCommandRunner(),
+        stateURL: URL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".local/share/brainlayer/backup-state.json"),
+        now: @escaping @Sendable () -> Date = Date.init
+    ) {
         self.commandRunner = commandRunner
+        self.stateURL = stateURL
+        self.now = now
     }
 
-    deinit { task?.cancel() }
+    deinit {
+        task?.cancel()
+        scheduleTimer?.cancel()
+    }
+
+    func startScheduledIfDue(configURL: URL = BrainLayerConfigStore.defaultConfigURL()) {
+        if scheduleTimer == nil {
+            let timer = DispatchSource.makeTimerSource(queue: .main)
+            timer.schedule(deadline: .now() + 60 * 60, repeating: 60 * 60)
+            timer.setEventHandler { [weak self] in
+                self?.startScheduledIfDue(configURL: configURL)
+            }
+            timer.resume()
+            scheduleTimer = timer
+        }
+        guard task == nil else { return }
+        do {
+            let config = try BrainLayerConfigStore(configURL: configURL).loadDocument().config
+            guard config.backupEnabled else { status = .idle; return }
+            let state = try loadScheduleState()
+            guard state.nextDue == nil || state.nextDue! <= now() else { return }
+            startIfConfigured(config: config, configURL: configURL)
+        } catch {
+            status = .failed(message: "Could not load backup schedule: \(error)")
+        }
+    }
+
+    private func loadScheduleState() throws -> BrainLayerBackupScheduleState {
+        guard FileManager.default.fileExists(atPath: stateURL.path) else { return .empty }
+        return try JSONDecoder().decode(BrainLayerBackupScheduleState.self, from: Data(contentsOf: stateURL))
+    }
+
+    private func saveScheduleState(_ state: BrainLayerBackupScheduleState) throws {
+        let directory = stateURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let temporary = directory.appendingPathComponent(".backup-state.\(UUID().uuidString).tmp")
+        try JSONEncoder().encode(state).write(to: temporary, options: .atomic)
+        if FileManager.default.fileExists(atPath: stateURL.path) {
+            _ = try FileManager.default.replaceItemAt(
+                stateURL, withItemAt: temporary, backupItemName: nil, options: .usingNewMetadataOnly
+            )
+        } else {
+            try FileManager.default.moveItem(at: temporary, to: stateURL)
+        }
+    }
 
     func startIfConfigured(
         config: BrainLayerConfig,
@@ -181,6 +250,10 @@ final class BrainLayerBackupCoordinator: ObservableObject {
             onStatus(status)
             return
         }
+        var scheduleState = (try? loadScheduleState()) ?? .empty
+        scheduleState.lastAttempt = now()
+        scheduleState.lastStatus = "running"
+        try? saveScheduleState(scheduleState)
         let previous = task
         previous?.cancel()
         status = .running
@@ -204,11 +277,20 @@ final class BrainLayerBackupCoordinator: ObservableObject {
                let receipt = object["receipt"] as? String,
                !receipt.isEmpty {
                 status = .localVerified(receipt: receipt)
+                scheduleState.lastSuccess = now()
+                scheduleState.nextDue = now().addingTimeInterval(Self.scheduleInterval)
+                scheduleState.lastStatus = "local_verified"
+                scheduleState.lastReceipt = receipt
+                try? saveScheduleState(scheduleState)
             } else {
                 let message = String(result.output.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.statusMessageLimit))
                 status = .failed(message: message)
+                scheduleState.nextDue = now().addingTimeInterval(Self.failureBackoff)
+                scheduleState.lastStatus = "failed"
+                try? saveScheduleState(scheduleState)
             }
             onStatus(status)
+            task = nil
         }
     }
 

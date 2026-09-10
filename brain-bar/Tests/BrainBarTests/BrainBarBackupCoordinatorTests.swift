@@ -61,4 +61,30 @@ final class BrainBarBackupCoordinatorTests: XCTestCase {
         XCTAssertTrue(invoked.value.isEmpty)
         XCTAssertEqual(coordinator.status, .failed(message: "Backup needs a saved folder, filesystem identity, and transcript roots."))
     }
+    func testSuccessfulRunPersistsDailyScheduleState() async throws {
+        let stateURL = FileManager.default.temporaryDirectory.appendingPathComponent("backup-state-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: stateURL) }
+        let instant = Date(timeIntervalSince1970: 1_800_000_000)
+        let runner = BrainLayerBackupCommandRunner { _ in
+            BrainLayerBackupCommandResult(
+                terminationStatus: 0,
+                output: #"{"status":"local_verified","receipt":"/tmp/receipt"}"#
+            )
+        }
+        let coordinator = BrainLayerBackupCoordinator(commandRunner: runner, stateURL: stateURL, now: { instant })
+        var config = BrainLayerConfig.defaultConfig
+        config.backupEnabled = true
+        config.backupDestinationPath = "/tmp/backups"
+        config.backupDestinationIdentity = BrainLayerBackupDestinationIdentity(stDev: 1, stIno: 2)
+        config.backupTranscriptRoots = ["/tmp/projects"]
+
+        coordinator.startIfConfigured(config: config)
+        try await Task.sleep(for: .milliseconds(20))
+        let state = try JSONDecoder().decode(BrainLayerBackupScheduleState.self, from: Data(contentsOf: stateURL))
+        XCTAssertEqual(state.lastAttempt, instant)
+        XCTAssertEqual(state.lastSuccess, instant)
+        XCTAssertEqual(state.nextDue, instant.addingTimeInterval(24 * 60 * 60))
+        XCTAssertEqual(state.lastStatus, "local_verified")
+    }
+
 }

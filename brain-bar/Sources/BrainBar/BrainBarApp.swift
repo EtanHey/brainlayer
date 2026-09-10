@@ -43,6 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         startUIHeartbeat()
         startDaemonWatchdog()
         configureRuntimeCallbacks()
+        BrainLayerBackupCoordinator.shared.startScheduledIfDue()
 
         runtime.hotkeyStatus.onFallbackChange = { [weak self] in
             self?.configureQuickCaptureHotkey()

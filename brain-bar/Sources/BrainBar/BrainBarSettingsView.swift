@@ -24,7 +24,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         store: BrainLayerConfigStore = BrainLayerConfigStore(),
         launchdStatusProvider: any BrainLayerLaunchdStatusSampling = BrainLayerLaunchdStatusProvider(),
         runtimeStatusProvider: any BrainLayerActiveRuntimeSampling = UnknownBrainLayerActiveRuntimeProvider(),
-        backupCoordinator: BrainLayerBackupCoordinator = BrainLayerBackupCoordinator(),
+        backupCoordinator: BrainLayerBackupCoordinator = BrainLayerBackupCoordinator.shared,
         initialLaunchdStates: [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState] = [:],
         refreshStatusOnLoad: Bool = true,
         now: @escaping @Sendable () -> Date = Date.init
