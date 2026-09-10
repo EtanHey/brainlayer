@@ -28,8 +28,26 @@ final class BrainBarBackupCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(coordinator.status, .localVerified(receipt: "/tmp/receipt.complete.json"))
         XCTAssertEqual(received.value.first, "-I")
-        XCTAssertEqual(Array(received.value[2...4]), ["brainlayer.backup_run_once", "--config", "/tmp/brainlayer.env"])
+        XCTAssertEqual(Array(received.value[2...5]), ["brainlayer.backup_run_once", "--config", "/tmp/brainlayer.env", "--generation-id"])
         XCTAssertTrue(received.value.contains("--transcript-root"))
+    }
+
+    func testExitZeroWithFailurePayloadDoesNotPublishVerified() async throws {
+        let coordinator = BrainLayerBackupCoordinator(commandRunner: BrainLayerBackupCommandRunner { _ in
+            BrainLayerBackupCommandResult(
+                terminationStatus: 0,
+                output: #"{"status":"failed","receipt":"/tmp/incomplete.json"}"#
+            )
+        })
+        var config = BrainLayerConfig.defaultConfig
+        config.backupEnabled = true
+        config.backupDestinationPath = "/tmp/backups"
+        config.backupDestinationIdentity = BrainLayerBackupDestinationIdentity(stDev: 1, stIno: 2)
+        config.backupTranscriptRoots = ["/tmp/projects"]
+
+        coordinator.startIfConfigured(config: config)
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(coordinator.status, .failed(message: #"{"status":"failed","receipt":"/tmp/incomplete.json"}"#))
     }
 
     func testInvalidConfigDoesNotInvokeChild() async throws {

@@ -176,7 +176,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
 
     private func startBackupIfEnabledAfterSave() {
         guard config.backupEnabled else { return }
-        backupCoordinator.startIfConfigured(config: config) { [weak self] status in
+        backupCoordinator.startIfConfigured(config: config, configURL: store.configURL) { [weak self] status in
             self?.backupRunStatus = status
         }
     }
