@@ -30,7 +30,9 @@ from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, BinaryIO, Callable
+
+from .raw_source_archive import RawSourceArchive
 
 try:
     import fcntl
@@ -860,7 +862,14 @@ class JSONLTailer:
     Detects file rewinds (checkpoint restore) when file shrinks.
     """
 
-    def __init__(self, filepath: str, offset: int = 0, max_record_bytes: int | None = None):
+    def __init__(
+        self,
+        filepath: str,
+        offset: int = 0,
+        max_record_bytes: int | None = None,
+        *,
+        observed_inode: int | None = None,
+    ):
         self.filepath = filepath
         self.offset = offset
         self.max_record_bytes = max_record_bytes
@@ -870,7 +879,7 @@ class JSONLTailer:
         self.rewind_new_offset = 0
         self.last_error: OSError | json.JSONDecodeError | UnicodeDecodeError | OversizedJSONLRecordError | None = None
         self.failed_record: bytes | None = None
-        self.observed_inode = self.get_inode()
+        self.observed_inode = self.get_inode() if observed_inode is None else observed_inode
 
     def restore_snapshot(self, snapshot: tuple[int, bytes]) -> None:
         """Put the tailer back to a (offset, buffer) pair captured before a failed read.
@@ -881,12 +890,13 @@ class JSONLTailer:
         """
         self.offset, self._buffer = snapshot
 
-    def check_rewind(self) -> bool:
-        """Check if file has shrunk (checkpoint restore). Returns True if rewound."""
-        try:
-            file_size = os.path.getsize(self.filepath)
-        except OSError:
-            return False
+    def check_rewind(self, file_size: int | None = None) -> bool:
+        """Check if the selected source version shrank. Returns True if rewound."""
+        if file_size is None:
+            try:
+                file_size = os.path.getsize(self.filepath)
+            except OSError:
+                return False
 
         effective_offset = self.offset + len(self._buffer)
         if file_size < effective_offset:
@@ -908,55 +918,64 @@ class JSONLTailer:
         self,
         max_lines: int | None = None,
         max_bytes: int | None = None,
+        *,
+        snapshot: BinaryIO | None = None,
+        source_size: int | None = None,
     ) -> list[dict]:
-        """Read a bounded window of new bytes and return complete parsed JSON dicts."""
+        """Read a bounded window from mutable input or an immutable archive snapshot."""
         self.last_error = None
         self.failed_record = None
         # Check for rewind before reading
-        self.check_rewind()
+        self.check_rewind(source_size)
 
         if self.max_record_bytes is not None and self._partial_record_bytes() > self.max_record_bytes:
             return self.read_buffered_lines(max_lines=max_lines)
 
+        opened: BinaryIO | None = None
         try:
-            with open(self.filepath, "rb") as f:
-                f.seek(self.offset + len(self._buffer))
-                remaining_bytes = max_bytes if max_bytes is not None and max_bytes > 0 else None
-                complete_lines = self._buffer.count(b"\n")
-                current_record_bytes = self._partial_record_bytes()
-                combined = bytearray(self._buffer)
-                while remaining_bytes is None or remaining_bytes > 0:
-                    if max_lines is not None and complete_lines >= max_lines:
+            source = snapshot
+            if source is None:
+                opened = open(self.filepath, "rb")
+                source = opened
+            source.seek(self.offset + len(self._buffer))
+            remaining_bytes = max_bytes if max_bytes is not None and max_bytes > 0 else None
+            complete_lines = self._buffer.count(b"\n")
+            current_record_bytes = self._partial_record_bytes()
+            combined = bytearray(self._buffer)
+            while remaining_bytes is None or remaining_bytes > 0:
+                if max_lines is not None and complete_lines >= max_lines:
+                    break
+                chunk_bytes = _WATCH_READ_CHUNK_BYTES
+                if remaining_bytes is not None:
+                    chunk_bytes = min(chunk_bytes, remaining_bytes)
+                if self.max_record_bytes is not None:
+                    record_capacity = self.max_record_bytes - current_record_bytes + 1
+                    if record_capacity <= 0:
                         break
-                    chunk_bytes = _WATCH_READ_CHUNK_BYTES
-                    if remaining_bytes is not None:
-                        chunk_bytes = min(chunk_bytes, remaining_bytes)
-                    if self.max_record_bytes is not None:
-                        record_capacity = self.max_record_bytes - current_record_bytes + 1
-                        if record_capacity <= 0:
-                            break
-                        chunk_bytes = min(chunk_bytes, record_capacity)
-                    new_data = f.read(chunk_bytes)
-                    if not new_data:
+                    chunk_bytes = min(chunk_bytes, record_capacity)
+                new_data = source.read(chunk_bytes)
+                if not new_data:
+                    break
+                combined.extend(new_data)
+                if remaining_bytes is not None:
+                    remaining_bytes -= len(new_data)
+                cursor = 0
+                while True:
+                    newline_index = new_data.find(b"\n", cursor)
+                    if newline_index < 0:
+                        current_record_bytes += len(new_data) - cursor
                         break
-                    combined.extend(new_data)
-                    if remaining_bytes is not None:
-                        remaining_bytes -= len(new_data)
-
-                    cursor = 0
-                    while True:
-                        newline_index = new_data.find(b"\n", cursor)
-                        if newline_index < 0:
-                            current_record_bytes += len(new_data) - cursor
-                            break
-                        current_record_bytes += newline_index - cursor
-                        complete_lines += 1
-                        current_record_bytes = 0
-                        cursor = newline_index + 1
-                self._buffer = bytes(combined)
+                    current_record_bytes += newline_index - cursor
+                    complete_lines += 1
+                    current_record_bytes = 0
+                    cursor = newline_index + 1
+            self._buffer = bytes(combined)
         except OSError as error:
             self.last_error = error
             return []
+        finally:
+            if opened is not None:
+                opened.close()
 
         if b"\n" not in self._buffer and not self._buffer:
             return []
@@ -1256,6 +1275,7 @@ class JSONLWatcher:
         health_path: str | Path | None = None,
         coverage_watchdog: CoverageWatchdog | None = None,
         max_lines_per_file: int = 100,
+        raw_archive: RawSourceArchive | None = None,
     ):
         if watch_roots is not None:
             self.watch_roots = [WatchRoot(root.provider, root.path, root.glob_pattern) for root in watch_roots]
@@ -1281,6 +1301,14 @@ class JSONLWatcher:
         self.max_lines_per_file = max(1, max_lines_per_file)
         self.max_read_bytes_per_file = _watch_read_window_bytes()
         self.max_record_bytes = _watch_max_record_bytes()
+        # Mechanism-only in this slice: None is an explicit, inspectable bypass.
+        # Production entrypoints do not inject an archive until a later wiring change.
+        self.raw_archive = raw_archive
+        self.raw_archive_enabled = raw_archive is not None
+        self._archive_receipts: dict[str, dict[str, Any]] = {}
+        self._tailer_archive_receipts: dict[str, dict[str, Any]] = {}
+        self._archive_source_signatures: dict[str, tuple[int, int, int, int, int]] = {}
+        self._raw_archive_failures: dict[str, dict[str, Any]] = {}
         self._tailers: dict[str, JSONLTailer] = {}
         self._file_providers: dict[str, str] = {}
         # (mtime, size, inode) per file, so an unchanged file costs nothing on the next
@@ -1392,12 +1420,13 @@ class JSONLWatcher:
         return "unknown"
 
     def _discover_jsonl_files(self) -> list[str]:
-        """Find all .jsonl files under each watched project, including nested session artifacts."""
+        """Archive every rooted candidate before applying projection visibility."""
         discovered: list[tuple[float, str, str]] = []
         self._file_providers = {}
         self._current_file_stats = {}
         self._denylist_memo = {}
         self._denylist_dir_memo = {}
+        seen: set[str] = set()
         for root in self.watch_roots:
             root_path = root.resolved_path
             if not root_path.exists():
@@ -1407,23 +1436,91 @@ class JSONLWatcher:
                 if root.provider == "claude" and root.glob_pattern == "**/*.jsonl":
                     bases = [path for path in root_path.iterdir() if path.is_dir()]
                 for base in bases:
-                    for path, stat_file in _iter_jsonl_files(base, root.glob_pattern, skip_dir=self._denylisted_dir):
-                        if self._denylisted(path):
+                    # Archive mode deliberately enumerates denied directories because raw
+                    # ownership precedes visibility. The disabled production path preserves
+                    # the existing denylist-pruned discovery cost and behavior.
+                    skip_dir = None if self.raw_archive is not None else self._denylisted_dir
+                    for path, stat_file in _iter_jsonl_files(base, root.glob_pattern, skip_dir=skip_dir):
+                        if self.raw_archive is None and self._denylisted(path):
                             continue
                         try:
                             stat_result = stat_file()
-                            mtime = stat_result.st_mtime
-                        except OSError as e:
-                            logger.debug("Skipping JSONL file during discovery after stat failure: %s: %s", path, e)
+                        except OSError as error:
+                            logger.debug("Skipping JSONL file after stat failure: %s: %s", path, error)
                             continue
-                        self._current_file_stats[path] = (mtime, stat_result.st_size, stat_result.st_ino)
-                        discovered.append((mtime, path, root.provider))
+                        seen.add(path)
+                        signature = (
+                            stat_result.st_dev,
+                            stat_result.st_ino,
+                            stat_result.st_size,
+                            stat_result.st_mtime_ns,
+                            stat_result.st_ctime_ns,
+                        )
+                        if self.raw_archive is not None:
+                            try:
+                                if self._archive_source_signatures.get(path) != signature:
+                                    receipt = self.raw_archive.capture(path, root.provider)
+                                    self._archive_receipts[path] = receipt
+                                    source_stat = receipt["source_stat"]
+                                    signature = (
+                                        source_stat["device"],
+                                        source_stat["inode"],
+                                        source_stat["size"],
+                                        source_stat["mtime_ns"],
+                                        source_stat["ctime_ns"],
+                                    )
+                                    self._archive_source_signatures[path] = signature
+                                self._raw_archive_failures.pop(path, None)
+                            except Exception as error:
+                                self._raw_archive_failures[path] = {
+                                    "error_type": type(error).__name__,
+                                    "error": str(error),
+                                }
+                                self._record_file_ingestion_failure(
+                                    path,
+                                    error,
+                                    {"disposition": "raw_archive_failed"},
+                                )
+                                continue
+                        self._current_file_stats[path] = (
+                            signature[3] / 1_000_000_000,
+                            signature[2],
+                            signature[1],
+                        )
+                        self._file_providers[path] = root.provider
+                        if self._denylisted(path):
+                            continue
+                        if self.raw_archive is not None:
+                            try:
+                                current = Path(path).lstat()
+                                current_signature = (
+                                    current.st_dev,
+                                    current.st_ino,
+                                    current.st_size,
+                                    current.st_mtime_ns,
+                                    current.st_ctime_ns,
+                                )
+                                if current_signature != signature:
+                                    raise RuntimeError("source changed after raw archive capture")
+                            except Exception as error:
+                                self._raw_archive_failures[path] = {
+                                    "error_type": type(error).__name__,
+                                    "error": str(error),
+                                }
+                                self._record_file_ingestion_failure(
+                                    path,
+                                    error,
+                                    {"disposition": "source_changed_after_raw_archive"},
+                                )
+                                continue
+                        discovered.append((signature[3] / 1_000_000_000, path, root.provider))
             except OSError:
                 continue
+        for path in set(self._archive_receipts) - seen:
+            self._archive_receipts.pop(path, None)
+            self._archive_source_signatures.pop(path, None)
         discovered.sort(key=lambda item: item[0], reverse=True)
-        files = [path for _mtime, path, provider in discovered]
-        self._file_providers = {path: provider for _mtime, path, provider in discovered}
-        return files
+        return [path for _mtime, path, _provider in discovered]
 
     def _denylisted(self, filepath: str) -> bool:
         """Memoised is_denylisted() for one poll cycle. See _denylist_memo."""
@@ -1772,6 +1869,8 @@ class JSONLWatcher:
             "poll_count": self.poll_count,
             "providers": sorted({root.provider for root in self.watch_roots}),
             "files_tracked": len(files),
+            "raw_archive_state": "ENABLED" if self.raw_archive_enabled else "DISABLED_UNWIRED",
+            "raw_archive_failure_count": len(self._raw_archive_failures),
             "active_jsonl_entries_per_minute": active_entries_per_min,
             "normalized_jsonl_entries_per_minute": normalized_entries_per_min,
             "db_probe_failed": db_probe_failed,
@@ -1827,12 +1926,11 @@ class JSONLWatcher:
             self._health_entries_seen = 0
             self._health_output_at_start = self.indexer.total_outputs
 
-    def _ensure_tailer(self, filepath: str) -> JSONLTailer:
-        """Get or create a tailer for a file, respecting stored offsets."""
+    def _ensure_tailer(self, filepath: str, observed_inode: int | None = None) -> JSONLTailer:
+        """Get or create a tailer for a selected source version."""
         if filepath in self._tailers:
             tailer = self._tailers[filepath]
-            # Check inode hasn't changed (file replaced)
-            current_inode = tailer.get_inode()
+            current_inode = tailer.get_inode() if observed_inode is None else observed_inode
             stored_offset, stored_inode = self.registry.get(filepath)
             inode_changed = current_inode != 0 and (
                 (stored_inode != 0 and current_inode != stored_inode)
@@ -1842,19 +1940,36 @@ class JSONLWatcher:
                 # File was replaced — reset offset
                 self._pending_quarantined_offsets.pop(filepath, None)
                 self.registry.mark_rewind(filepath, current_inode)
-                tailer = JSONLTailer(filepath, offset=0, max_record_bytes=self.max_record_bytes)
+                tailer = JSONLTailer(
+                    filepath,
+                    offset=0,
+                    max_record_bytes=self.max_record_bytes,
+                    observed_inode=current_inode,
+                )
                 self._tailers[filepath] = tailer
             return tailer
 
         stored_offset, stored_inode = self.registry.get(filepath)
-        tailer = JSONLTailer(filepath, offset=stored_offset, max_record_bytes=self.max_record_bytes)
+        current_inode = observed_inode
+        tailer = JSONLTailer(
+            filepath,
+            offset=stored_offset,
+            max_record_bytes=self.max_record_bytes,
+            observed_inode=current_inode,
+        )
 
         # Verify inode matches
-        current_inode = tailer.get_inode()
+        if current_inode is None:
+            current_inode = tailer.get_inode()
         if stored_inode != 0 and current_inode != 0 and current_inode != stored_inode:
             self._pending_quarantined_offsets.pop(filepath, None)
             self.registry.mark_rewind(filepath, current_inode)
-            tailer = JSONLTailer(filepath, offset=0, max_record_bytes=self.max_record_bytes)
+            tailer = JSONLTailer(
+                filepath,
+                offset=0,
+                max_record_bytes=self.max_record_bytes,
+                observed_inode=current_inode,
+            )
 
         self._tailers[filepath] = tailer
         return tailer
@@ -1965,7 +2080,7 @@ class JSONLWatcher:
             self._file_ingestion_failures = {
                 filepath: failure
                 for filepath, failure in self._file_ingestion_failures.items()
-                if filepath in live_files
+                if filepath in live_files or filepath in self._raw_archive_failures
             }
             self._pending_quarantined_offsets = {
                 filepath: pending
@@ -1977,6 +2092,7 @@ class JSONLWatcher:
             for filepath in list(self._tailers):
                 if self._denylisted(filepath):
                     self._tailers.pop(filepath, None)
+                    self._tailer_archive_receipts.pop(filepath, None)
                     self._file_providers.pop(filepath, None)
                     self._pending_quarantined_offsets.pop(filepath, None)
                     self.registry.remove(filepath)
@@ -1984,6 +2100,7 @@ class JSONLWatcher:
             for filepath in files:
                 if self._denylisted(filepath):
                     self._tailers.pop(filepath, None)
+                    self._tailer_archive_receipts.pop(filepath, None)
                     self._file_providers.pop(filepath, None)
                     self._pending_quarantined_offsets.pop(filepath, None)
                     self.registry.remove(filepath)
@@ -1996,16 +2113,39 @@ class JSONLWatcher:
                 source_generation = 0
                 read_accepted = False
                 try:
+                    archive_receipt = self._archive_receipts.get(filepath)
+                    if self.raw_archive is not None and archive_receipt is None:
+                        raise RuntimeError("raw archive enabled without a durable source receipt")
+                    archived_stat = archive_receipt["source_stat"] if archive_receipt else None
+                    archived_inode = archived_stat["inode"] if archived_stat else None
+                    archived_size = archive_receipt["size"] if archive_receipt else None
                     tailer = self._tailers.get(filepath)
+                    previous_receipt = self._tailer_archive_receipts.get(filepath)
+                    if (
+                        tailer is not None
+                        and self.raw_archive is not None
+                        and previous_receipt is not None
+                        and not self.raw_archive.is_prefix(previous_receipt, archive_receipt)
+                    ):
+                        self._handle_rewind(
+                            filepath, tailer.offset + len(tailer._buffer), archived_size, archived_inode
+                        )
+                        tailer = JSONLTailer(
+                            filepath,
+                            offset=0,
+                            max_record_bytes=self.max_record_bytes,
+                            observed_inode=archived_inode,
+                        )
+                        self._tailers[filepath] = tailer
                     drain_buffer = False
                     if tailer is not None and tailer.has_complete_buffered_line():
                         _registry_offset, registry_inode = self.registry.get(filepath)
-                        current_inode = tailer.get_inode()
+                        current_inode = tailer.get_inode() if archived_inode is None else archived_inode
                         inode_changed = current_inode != 0 and (
                             (registry_inode != 0 and registry_inode != current_inode)
                             or (tailer.observed_inode != 0 and tailer.observed_inode != current_inode)
                         )
-                        if not inode_changed and not tailer.check_rewind():
+                        if not inode_changed and not tailer.check_rewind(archived_size):
                             drain_buffer = True
                         elif tailer.rewound:
                             self._handle_rewind(
@@ -2023,15 +2163,24 @@ class JSONLWatcher:
                         source_generation = self.registry.generation(filepath)
                         new_lines = tailer.read_buffered_lines(max_lines=self.max_lines_per_file)
                     else:
-                        tailer = self._ensure_tailer(filepath)
+                        tailer = self._ensure_tailer(filepath, archived_inode)
                         read_start_offset = tailer.offset
                         tailer_snapshot = (tailer.offset, tailer._buffer)
                         source_inode = tailer.observed_inode
                         source_generation = self.registry.generation(filepath)
-                        new_lines = tailer.read_new_lines(
-                            max_lines=self.max_lines_per_file,
-                            max_bytes=self.max_read_bytes_per_file,
-                        )
+                        if self.raw_archive is None:
+                            new_lines = tailer.read_new_lines(
+                                max_lines=self.max_lines_per_file,
+                                max_bytes=self.max_read_bytes_per_file,
+                            )
+                        else:
+                            with self.raw_archive.open_snapshot(archive_receipt) as snapshot:
+                                new_lines = tailer.read_new_lines(
+                                    max_lines=self.max_lines_per_file,
+                                    max_bytes=self.max_read_bytes_per_file,
+                                    snapshot=snapshot,
+                                    source_size=archived_size,
+                                )
 
                     # Handle rewind detection (checkpoint restore)
                     if tailer.rewound:
@@ -2078,6 +2227,8 @@ class JSONLWatcher:
                     ):
                         self.last_poll_made_progress = True
                     read_accepted = True
+                    if archive_receipt is not None:
+                        self._tailer_archive_receipts[filepath] = archive_receipt
                 except Exception as error:
                     if tailer is not None and tailer_snapshot is not None and not read_accepted:
                         tailer.restore_snapshot(tailer_snapshot)
