@@ -60,7 +60,19 @@ _MAX_HEALTH_FAILURE_DETAILS = 100
 _MAX_HEALTH_QUARANTINE_DETAILS = 100
 _NATIVE_HEADER_STRUCTURAL_KIND = "codex_session_meta"
 _NATIVE_HEADER_MAX_BYTES = 256 * 1024
-_NATIVE_HEADER_REGISTRY_FIELDS = ("native_header_root_receipt", "native_header_pending")
+_NATIVE_HEADER_REGISTRY_FIELDS = (
+    "native_header_root_receipt",
+    "native_header_root_basis",
+    "native_header_pending",
+    "native_header_recovery_unknown",
+)
+_NATIVE_HEADER_ROOT_BASES = {"observed_header", "first_admitted_catalog_root"}
+_NATIVE_HEADER_UNKNOWN_REASONS = {
+    "no_bounded_lf_record",
+    "oversized_first_record",
+    "malformed_first_record",
+    "first_record_not_session_meta",
+}
 
 
 _OFFSET_PRUNE_RETRY_ENV = "BRAINLAYER_WATCHER_OFFSET_PRUNE_RETRY_S"
@@ -476,7 +488,8 @@ class OffsetRegistry:
     """Persists file read offsets so we resume after restart.
 
     Stored as JSON: {filepath: {offset, inode, mtime, generation, raw_archive_receipt?,
-    native_header_root_receipt?, native_header_pending?}}
+    native_header_root_receipt?, native_header_root_basis?, native_header_pending?,
+    native_header_recovery_unknown?}}
     Atomic writes via tmpfile + rename.
     """
 
@@ -570,6 +583,24 @@ class OffsetRegistry:
         receipt = entry.get("native_header_root_receipt") if isinstance(entry, dict) else None
         return copy.deepcopy(receipt) if isinstance(receipt, dict) else None
 
+    def native_header_root_basis(self, filepath: str) -> str | None:
+        """Return how the immutable native-header root was established."""
+        entry = self._data.get(filepath)
+        basis = entry.get("native_header_root_basis") if isinstance(entry, dict) else None
+        return basis if basis in _NATIVE_HEADER_ROOT_BASES else None
+
+    def native_header_recovery_unknown(self, filepath: str) -> dict[str, str] | None:
+        """Return a bounded durable diagnostic for an inconclusive legacy recovery."""
+        entry = self._data.get(filepath)
+        diagnostic = entry.get("native_header_recovery_unknown") if isinstance(entry, dict) else None
+        if not isinstance(diagnostic, dict) or set(diagnostic) != {"reason", "manifest_sha256"}:
+            return None
+        reason = diagnostic.get("reason")
+        manifest = diagnostic.get("manifest_sha256")
+        if reason not in _NATIVE_HEADER_UNKNOWN_REASONS or not isinstance(manifest, str) or len(manifest) != 64:
+            return None
+        return copy.deepcopy(diagnostic)
+
     def native_header_pending(self, filepath: str) -> dict[str, Any] | None:
         """Return the exact structural header reference awaiting a later consumer."""
         entry = self._data.get(filepath)
@@ -584,6 +615,8 @@ class OffsetRegistry:
         generation: int,
         provider: str,
         root_receipt: dict[str, Any],
+        occurrence_receipt: dict[str, Any] | None = None,
+        root_basis: str = "observed_header",
         record_start_offset: int,
         record_end_offset: int,
         raw_record_hash: str,
@@ -596,13 +629,17 @@ class OffsetRegistry:
             raise ValueError("native header generation does not match registry generation")
         if offset != current_offset:
             raise ValueError("native header reservation must keep the confirmed offset unchanged")
-        if provider != "codex" or not isinstance(root_receipt, dict):
+        if provider != "codex" or not isinstance(root_receipt, dict) or root_basis not in _NATIVE_HEADER_ROOT_BASES:
             raise ValueError("native header root receipt has invalid provider or shape")
+        if occurrence_receipt is None:
+            occurrence_receipt = root_receipt
         if root_receipt.get("provider") != provider or root_receipt.get("source_path") != filepath:
             raise ValueError("native header root receipt does not bind its provider and source")
+        if occurrence_receipt.get("provider") != provider or occurrence_receipt.get("source_path") != filepath:
+            raise ValueError("native header occurrence receipt does not bind its provider and source")
         if (
-            type(root_receipt.get("size")) is not int
-            or root_receipt["size"] < record_end_offset
+            type(occurrence_receipt.get("size")) is not int
+            or occurrence_receipt["size"] < record_end_offset
             or type(record_start_offset) is not int
             or type(record_end_offset) is not int
             or record_start_offset < 0
@@ -616,12 +653,15 @@ class OffsetRegistry:
             "record_start_offset": record_start_offset,
             "record_end_offset": record_end_offset,
             "raw_record_hash": raw_record_hash,
-            "raw_archive_receipt": copy.deepcopy(root_receipt),
+            "raw_archive_receipt": copy.deepcopy(occurrence_receipt),
         }
         if isinstance(current_entry, dict):
             existing_root = current_entry.get("native_header_root_receipt")
             if existing_root is not None and existing_root != root_receipt:
                 raise ValueError("competing native header root for registry generation")
+            existing_basis = current_entry.get("native_header_root_basis")
+            if existing_basis is not None and existing_basis != root_basis:
+                raise ValueError("competing native header root basis for registry generation")
         if not isinstance(current_entry, dict):
             current_entry = {
                 "offset": current_offset,
@@ -632,8 +672,33 @@ class OffsetRegistry:
             self._data[filepath] = current_entry
         if "native_header_root_receipt" not in current_entry:
             current_entry["native_header_root_receipt"] = copy.deepcopy(root_receipt)
+            current_entry["native_header_root_basis"] = root_basis
         if "native_header_pending" not in current_entry:
             current_entry["native_header_pending"] = pending
+        current_entry.pop("native_header_recovery_unknown", None)
+        self._dirty_paths.add(filepath)
+        self._dirty = True
+
+    def record_native_header_recovery_unknown(
+        self, filepath: str, *, generation: int, receipt: dict[str, Any], reason: str
+    ) -> None:
+        """Persist why one immutable legacy version supplied no usable header."""
+        entry = self._data.get(filepath)
+        if generation != self._entry_generation(entry):
+            raise ValueError("native header recovery diagnostic generation mismatch")
+        manifest = receipt.get("manifest_sha256") if isinstance(receipt, dict) else None
+        if (
+            reason not in _NATIVE_HEADER_UNKNOWN_REASONS
+            or receipt.get("provider") != "codex"
+            or receipt.get("source_path") != filepath
+            or not isinstance(manifest, str)
+            or len(manifest) != 64
+        ):
+            raise ValueError("invalid native header recovery diagnostic")
+        if not isinstance(entry, dict):
+            entry = {"offset": 0, "inode": 0, "mtime": time.time(), "generation": generation}
+            self._data[filepath] = entry
+        entry["native_header_recovery_unknown"] = {"reason": reason, "manifest_sha256": manifest}
         self._dirty_paths.add(filepath)
         self._dirty = True
 
@@ -706,6 +771,8 @@ class OffsetRegistry:
                 raise ValueError(f"competing {field} values for registry generation")
             if local_value is None and disk_value is not None:
                 merged[field] = copy.deepcopy(disk_value)
+        if merged.get("native_header_root_receipt") is not None:
+            merged.pop("native_header_recovery_unknown", None)
         return merged
 
     def flush(self) -> bool:
@@ -769,21 +836,22 @@ class OffsetRegistry:
                             continue
                         if local_generation < disk_generation:
                             continue
+                        same_inode = local_entry.get("inode", 0) == disk_entry.get("inode", 0)
+                        local_wins = (
+                            local_entry.get("offset", 0) >= disk_entry.get("offset", 0)
+                            if same_inode
+                            else local_mtime >= disk_entry.get("mtime", 0)
+                        )
+                        winner, loser = (local_entry, disk_entry) if local_wins else (disk_entry, local_entry)
                         try:
-                            merged_local_entry = self._merge_native_header_fields(local_entry, disk_entry)
+                            merged_entry = self._merge_native_header_fields(winner, loser)
                         except ValueError as error:
                             logger.warning(
                                 "Refusing conflicting native header registry merge for %s: %s", filepath, error
                             )
                             return False
-                        same_inode = local_entry.get("inode", 0) == disk_entry.get("inode", 0)
-                        if same_inode:
-                            if local_entry.get("offset", 0) >= disk_entry.get("offset", 0):
-                                merged[filepath] = merged_local_entry
-                                tombstones.pop(filepath, None)
-                        elif local_mtime >= disk_entry.get("mtime", 0):
-                            merged[filepath] = merged_local_entry
-                            tombstones.pop(filepath, None)
+                        merged[filepath] = merged_entry
+                        tombstones.pop(filepath, None)
                     for filepath, tombstone in list(tombstones.items()):
                         disk_entry = merged.get(filepath)
                         if isinstance(disk_entry, dict):
@@ -1204,12 +1272,17 @@ class JSONLTailer:
 class _DeferredStructuralFlush(dict[str, int]):
     """Keep structural records buffered until a cataloging consumer is wired."""
 
-    inserted = 0
-    skipped = 0
-
-    def __init__(self, entries: list[dict]) -> None:
-        super().__init__()
+    def __init__(
+        self,
+        entries: list[dict],
+        forwarded: dict[str, int] | None = None,
+    ) -> None:
+        super().__init__(forwarded or {})
         self.deferred_entries = list(entries)
+        if forwarded is not None and hasattr(forwarded, "deferred_entries"):
+            self.deferred_entries.extend(forwarded.deferred_entries)
+        self.inserted = getattr(forwarded, "inserted", self.get("inserted", 0)) if forwarded else 0
+        self.skipped = getattr(forwarded, "skipped", self.get("skipped", 0)) if forwarded else 0
 
 
 class BatchIndexer:
@@ -1466,7 +1539,6 @@ class JSONLWatcher:
         self._tailer_archive_receipts: dict[str, dict[str, Any]] = {}
         self._archive_source_signatures: dict[str, tuple[int, int, int, int, int]] = {}
         self._raw_archive_failures: dict[str, dict[str, Any]] = {}
-        self._native_header_recovery_attempted: set[str] = set()
         self._tailers: dict[str, JSONLTailer] = {}
         self._file_providers: dict[str, str] = {}
         # (mtime, size, inode) per file, so an unchanged file costs nothing on the next
@@ -1509,10 +1581,28 @@ class JSONLWatcher:
         self._last_prune_parent_dirs: frozenset[str] | None = None
 
     def _flush_entries(self, entries: list[dict[str, Any]]) -> dict[str, int] | None:
-        """Hold native headers until a later slice supplies a cataloging callback."""
-        if any(item.get("_structural_kind") == _NATIVE_HEADER_STRUCTURAL_KIND for item in entries):
-            return _DeferredStructuralFlush(entries)
-        return self._on_flush_callback(entries)
+        """Hold only sources with a pending native header; forward unrelated work."""
+        structural_sources = {
+            item.get("_source_file")
+            for item in entries
+            if item.get("_structural_kind") == _NATIVE_HEADER_STRUCTURAL_KIND
+            and isinstance(item.get("_source_file"), str)
+        }
+        # Isolation retries invoke this callback with one item at a time. Consult the
+        # durable reservation too, so an assistant record cannot escape without its
+        # same-source structural header during that retry.
+        structural_sources.update(
+            source
+            for item in entries
+            if isinstance((source := item.get("_source_file")), str)
+            and self.registry.native_header_pending(source) is not None
+        )
+        deferred = [item for item in entries if item.get("_source_file") in structural_sources]
+        forwarded = [item for item in entries if item.get("_source_file") not in structural_sources]
+        result = self._on_flush_callback(forwarded) if forwarded else None
+        if deferred:
+            return _DeferredStructuralFlush(deferred, result)
+        return result
 
     def _make_native_header_entry(
         self,
@@ -1572,20 +1662,26 @@ class JSONLWatcher:
         if not raw.endswith(b"\n") or hashlib.sha256(raw).hexdigest() != digest:
             raise RuntimeError("native header bytes do not match its archived bounds and digest")
 
-    def _reserve_native_header_entry(self, entry: dict[str, Any]) -> None:
+    def _reserve_native_header_entry(self, entry: dict[str, Any], *, root_basis: str = "observed_header") -> None:
         self._validate_native_header_entry(entry)
         filepath = str(entry["_source_file"])
         generation = entry.get("_source_generation")
         if type(generation) is not int or generation < 0:
             raise RuntimeError("native header has an invalid watcher generation")
         current_offset, _current_inode = self.registry.get(filepath)
-        receipt = entry["_raw_archive_receipt"]
+        occurrence_receipt = entry["_raw_archive_receipt"]
+        root_receipt = self.registry.native_header_root_receipt(filepath) or occurrence_receipt
+        if root_receipt is not occurrence_receipt and not self.raw_archive.is_prefix(root_receipt, occurrence_receipt):
+            raise RuntimeError("native header occurrence does not extend its stable root")
+        root_basis = self.registry.native_header_root_basis(filepath) or root_basis
         self.registry.reserve_native_header(
             filepath,
             offset=current_offset,
             generation=generation,
             provider="codex",
-            root_receipt=receipt,
+            root_receipt=root_receipt,
+            occurrence_receipt=occurrence_receipt,
+            root_basis=root_basis,
             record_start_offset=entry["_line_start_offset"],
             record_end_offset=entry["_line_end_offset"],
             raw_record_hash=entry["_raw_record_hash"],
@@ -1597,31 +1693,48 @@ class JSONLWatcher:
         if self.raw_archive is None or self.provider_for_file(filepath) != "codex":
             return False
         offset, _inode = self.registry.get(filepath)
-        return (
-            offset > 0
-            and self.registry.native_header_root_receipt(filepath) is None
-            and filepath not in self._native_header_recovery_attempted
+        if offset <= 0 or self.registry.native_header_root_receipt(filepath) is not None:
+            return False
+        diagnostic = self.registry.native_header_recovery_unknown(filepath)
+        current = self._archive_receipts.get(filepath)
+        return not (
+            diagnostic is not None
+            and isinstance(current, dict)
+            and diagnostic["manifest_sha256"] == current.get("manifest_sha256")
         )
+
+    def _record_native_header_recovery_unknown(self, filepath: str, receipt: dict[str, Any], reason: str) -> None:
+        self.registry.record_native_header_recovery_unknown(
+            filepath,
+            generation=self.registry.generation(filepath),
+            receipt=receipt,
+            reason=reason,
+        )
+        if not self.registry.flush():
+            raise RuntimeError("native header recovery diagnostic could not be persisted")
 
     def _recover_native_header(self, filepath: str, receipt: dict[str, Any]) -> dict[str, Any] | None:
         """Recover only the first bounded LF record from a verified snapshot."""
-        self._native_header_recovery_attempted.add(filepath)
         with self.raw_archive.open_snapshot(receipt) as snapshot:
             prefix = snapshot.read(_NATIVE_HEADER_MAX_BYTES + 1)
         newline = prefix.find(b"\n")
         if newline < 0:
+            self._record_native_header_recovery_unknown(filepath, receipt, "no_bounded_lf_record")
             logger.warning("Native header recovery found no bounded LF record: %s", filepath)
             return None
         end = newline + 1
         if end > _NATIVE_HEADER_MAX_BYTES:
+            self._record_native_header_recovery_unknown(filepath, receipt, "oversized_first_record")
             logger.warning("Native header recovery found an oversized first record: %s", filepath)
             return None
         try:
             parsed = json.loads(prefix[:newline])
         except (json.JSONDecodeError, UnicodeDecodeError):
+            self._record_native_header_recovery_unknown(filepath, receipt, "malformed_first_record")
             logger.warning("Native header recovery found malformed first record: %s", filepath)
             return None
         if not isinstance(parsed, dict) or parsed.get("type") != "session_meta":
+            self._record_native_header_recovery_unknown(filepath, receipt, "first_record_not_session_meta")
             logger.warning("Native header recovery found no session_meta first record: %s", filepath)
             return None
         start = 0
@@ -1633,7 +1746,7 @@ class JSONLWatcher:
             end,
             hashlib.sha256(prefix[:end]).hexdigest(),
         )
-        self._reserve_native_header_entry(entry)
+        self._reserve_native_header_entry(entry, root_basis="first_admitted_catalog_root")
         return entry
 
     def _rehydrate_native_header(self, filepath: str) -> None:
@@ -1654,7 +1767,10 @@ class JSONLWatcher:
             pending.get("record_end_offset", -1),
             pending.get("raw_record_hash", ""),
         )
-        self._reserve_native_header_entry(entry)
+        self._reserve_native_header_entry(
+            entry,
+            root_basis=self.registry.native_header_root_basis(filepath) or "observed_header",
+        )
         self.indexer.add([entry])
 
     def _advance_confirmed_offsets(
@@ -2352,7 +2468,6 @@ class JSONLWatcher:
             if inode_changed:
                 # File was replaced — reset offset
                 self._pending_quarantined_offsets.pop(filepath, None)
-                self._native_header_recovery_attempted.discard(filepath)
                 self.registry.mark_rewind(filepath, current_inode)
                 tailer = JSONLTailer(
                     filepath,
@@ -2377,7 +2492,6 @@ class JSONLWatcher:
             current_inode = tailer.get_inode()
         if stored_inode != 0 and current_inode != 0 and current_inode != stored_inode:
             self._pending_quarantined_offsets.pop(filepath, None)
-            self._native_header_recovery_attempted.discard(filepath)
             self.registry.mark_rewind(filepath, current_inode)
             tailer = JSONLTailer(
                 filepath,
@@ -2399,7 +2513,6 @@ class JSONLWatcher:
         """Persist a rewind and notify archival consumers."""
         session_id = Path(filepath).stem
         self._pending_quarantined_offsets.pop(filepath, None)
-        self._native_header_recovery_attempted.discard(filepath)
         self.registry.mark_rewind(filepath, inode)
         logger.warning(
             "Checkpoint restore: %s (offset %d → %d)",
@@ -2541,7 +2654,6 @@ class JSONLWatcher:
                         bound_receipt = self.registry.archive_receipt(filepath)
                         if bound_receipt is None:
                             if confirmed_offset > 0:
-                                self._native_header_recovery_attempted.discard(filepath)
                                 self.registry.mark_rewind(filepath, archived_inode or 0)
                                 logger.warning(
                                     "Raw archive receipt absent for persisted offset; replaying from zero: %s",

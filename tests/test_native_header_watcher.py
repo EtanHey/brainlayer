@@ -63,6 +63,7 @@ def test_offset_registry_reserves_and_preserves_root_across_reload(tmp_path: Pat
     reloaded = OffsetRegistry(registry_path)
     assert reloaded.get(str(source)) == (len(raw), source.stat().st_ino)
     assert reloaded.native_header_root_receipt(str(source)) == receipt
+    assert reloaded.native_header_root_basis(str(source)) == "observed_header"
     assert reloaded.native_header_pending(str(source))["record_end_offset"] == len(raw)
 
 
@@ -162,6 +163,7 @@ def test_header_only_is_structural_and_never_confirmed_without_consumer(tmp_path
     assert flushed == []
     assert current.registry.get(str(source)) == (0, 0)
     assert current.registry.native_header_root_receipt(str(source)) == receipt
+    assert current.registry.native_header_root_basis(str(source)) == "observed_header"
     buffered = current.indexer._buffer
     assert len(buffered) == 1
     assert buffered[0]["_structural_kind"] == _NATIVE_HEADER_STRUCTURAL_KIND
@@ -215,6 +217,7 @@ def test_legacy_eof_recovers_first_header_from_verified_snapshot(tmp_path: Path)
     assert flushed == []
     assert current.registry.get(str(source)) == (len(raw), source.stat().st_ino)
     assert current.registry.native_header_root_receipt(str(source)) == receipt
+    assert current.registry.native_header_root_basis(str(source)) == "first_admitted_catalog_root"
     assert current.registry.native_header_pending(str(source))["record_start_offset"] == 0
     assert current.indexer.has_buffered_structural_source(str(source))
 
@@ -234,3 +237,137 @@ def test_malformed_and_oversized_first_headers_remain_unconfirmed(tmp_path: Path
     assert oversized_watcher.registry.native_header_root_receipt(str(oversized)) is None
     assert oversized_watcher.registry.get(str(oversized)) == (0, 0)
     assert not oversized_watcher.indexer.has_buffered_structural_source(str(oversized))
+
+
+def test_whole_registry_merge_preserves_stale_reservation_on_newer_offset_winner(tmp_path: Path) -> None:
+    raw = header(SESSION_A)
+    _sessions, source, _archive, receipt = setup_source(tmp_path, raw)
+    registry_path = tmp_path / "offsets.json"
+    initial = OffsetRegistry(registry_path)
+    initial.set(str(source), 0, source.stat().st_ino, generation=0)
+    assert initial.flush() is True
+    stale = OffsetRegistry(registry_path)
+    advancing = OffsetRegistry(registry_path)
+    stale.reserve_native_header(
+        str(source),
+        offset=0,
+        generation=0,
+        provider="codex",
+        root_receipt=receipt,
+        record_start_offset=0,
+        record_end_offset=len(raw),
+        raw_record_hash=hashlib.sha256(raw).hexdigest(),
+    )
+    advancing.set(str(source), len(raw), source.stat().st_ino, generation=0, raw_archive_receipt=receipt)
+    assert advancing.flush() is True
+
+    assert stale.flush() is True
+    merged = OffsetRegistry(registry_path)
+    assert merged.get(str(source))[0] == len(raw)
+    assert merged.native_header_root_receipt(str(source)) == receipt
+    assert merged.native_header_root_basis(str(source)) == "observed_header"
+
+
+def test_later_session_meta_uses_stable_root_and_retains_new_occurrence(tmp_path: Path) -> None:
+    first = header(SESSION_A)
+    sessions, source, archive, first_receipt = setup_source(tmp_path, first)
+    current = watcher(sessions, tmp_path / "offsets.json", archive)
+    assert current.poll_once() == 1
+    with source.open("ab") as stream:
+        stream.write(header(SESSION_B))
+    second_receipt = archive.capture(source, "codex")
+
+    assert current.poll_once() == 1
+    assert current.registry.native_header_root_receipt(str(source)) == first_receipt
+    assert current.registry.native_header_pending(str(source))["raw_archive_receipt"] == first_receipt
+    assert second_receipt != first_receipt
+    assert len(current.indexer._buffer) == 2
+
+
+class DeferredResult(dict[str, int]):
+    inserted = 0
+    skipped = 0
+
+    def __init__(self, entries: list[dict]) -> None:
+        super().__init__()
+        self.deferred_entries = entries
+
+
+def test_callback_failure_isolation_holds_pending_source_and_advances_only_unrelated_success(
+    tmp_path: Path,
+) -> None:
+    codex_dir = tmp_path / "codex" / "sessions"
+    claude_dir = tmp_path / "claude" / "projects"
+    claude_project = claude_dir / "project"
+    codex_dir.mkdir(parents=True)
+    claude_project.mkdir(parents=True)
+    codex = codex_dir / "rollout.jsonl"
+    good = claude_project / "good.jsonl"
+    deferred = claude_project / "deferred.jsonl"
+    assistant = {
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "hello"}],
+        },
+    }
+    codex.write_bytes(header(SESSION_A) + (json.dumps(assistant) + "\n").encode())
+    good.write_text(json.dumps({"type": "assistant", "message": {"content": "good"}}) + "\n")
+    deferred.write_text(json.dumps({"type": "assistant", "message": {"content": "later"}}) + "\n")
+    calls: list[list[str]] = []
+
+    def callback(items: list[dict]) -> dict[str, int] | DeferredResult:
+        sources = [item["_source_file"] for item in items]
+        calls.append(sources)
+        if len(items) > 1:
+            raise RuntimeError("force per-item isolation")
+        if sources == [str(deferred)]:
+            return DeferredResult(items)
+        return {str(good): items[0]["_line_end_offset"]}
+
+    current = JSONLWatcher(
+        watch_roots=[WatchRoot("codex", codex_dir), WatchRoot("claude", claude_dir)],
+        registry_path=tmp_path / "offsets.json",
+        on_flush=callback,
+        batch_size=100,
+        flush_interval_ms=60_000,
+        registry_flush_interval_s=3600,
+        raw_archive=RawSourceArchive(tmp_path / "archive"),
+    )
+    assert current.poll_once() == 4
+    current.indexer.flush()
+
+    assert any(call == [str(good)] for call in calls)
+    assert any(call == [str(deferred)] for call in calls)
+    assert all(str(codex) not in call for call in calls)
+    assert current.registry.get(str(good))[0] == good.stat().st_size
+    assert current.registry.get(str(deferred))[0] == 0
+    assert current.registry.get(str(codex))[0] == 0
+    assert len(current.indexer._buffer) == 3
+
+
+def test_legacy_unknown_is_persisted_per_manifest_and_new_generation_can_supply_valid_header(
+    tmp_path: Path,
+) -> None:
+    raw = b"not-json\n"
+    sessions, source, archive, receipt = setup_source(tmp_path, raw)
+    registry_path = tmp_path / "offsets.json"
+    registry = OffsetRegistry(registry_path)
+    registry.set(str(source), len(raw), source.stat().st_ino, generation=0, raw_archive_receipt=receipt)
+    assert registry.flush() is True
+    current = watcher(sessions, registry_path, archive)
+
+    assert current.poll_once() == 0
+    assert current.registry.native_header_recovery_unknown(str(source)) == {
+        "reason": "malformed_first_record",
+        "manifest_sha256": receipt["manifest_sha256"],
+    }
+    assert current.poll_once() == 0
+
+    replacement = source.with_suffix(".replacement")
+    replacement.write_bytes(header(SESSION_B))
+    replacement.replace(source)
+    assert current.poll_once() == 1
+    assert current.registry.native_header_root_basis(str(source)) == "observed_header"
+    assert current.registry.native_header_recovery_unknown(str(source)) is None
