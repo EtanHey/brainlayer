@@ -964,3 +964,17 @@ class TestRewindDetection:
 
         assert len(rewind_calls) == 1
         assert rewind_calls[0][0] == "abc12345"
+
+
+def test_extract_workspace_project_uses_canonical_resolver(monkeypatch):
+    from brainlayer import watcher_bridge
+
+    monkeypatch.setattr(
+        watcher_bridge,
+        "canonical_project_from_workspace",
+        lambda value: "brainlayer" if value.endswith("/.worktrees/feature") else None,
+    )
+    assert (
+        watcher_bridge._extract_workspace_project({"cwd": "/Users/happycampr/Gits/brainlayer/.worktrees/feature"})
+        == "brainlayer"
+    )

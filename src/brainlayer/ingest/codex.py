@@ -24,6 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, List, Optional
 
+from brainlayer.workspace_identity import canonical_project_from_workspace
+
 logger = logging.getLogger(__name__)
 
 # System injection patterns — skip these user-role messages
@@ -95,15 +97,8 @@ def _is_system_injection(text: str) -> bool:
 
 
 def _infer_project_from_cwd(cwd: Optional[str]) -> Optional[str]:
-    """Derive a project name from the working directory path."""
-    if not cwd:
-        return None
-    path = Path(cwd)
-    # Return the last meaningful directory component
-    name = path.name
-    if name and name not in ("", ".", "/"):
-        return name
-    return None
+    """Derive canonical repository project from workspace metadata."""
+    return canonical_project_from_workspace(cwd)
 
 
 def _native_event_timestamp_error(line: dict, payload: dict) -> Optional[str]:

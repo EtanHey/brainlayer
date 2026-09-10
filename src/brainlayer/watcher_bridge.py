@@ -38,6 +38,7 @@ from .pipeline.secret_scrub import scrub_secrets
 from .queue_io import enqueue_watcher_chunk
 from .t3_provenance import DEFAULT_T3_STATE_DB, t3_app_codex_session_ids
 from .vector_store import VectorStore
+from .workspace_identity import canonical_project_from_workspace
 
 logger = logging.getLogger(__name__)
 
@@ -249,7 +250,9 @@ def _extract_workspace_project(entry: dict[str, Any] | None) -> str | None:
             value = candidate.get(key)
             if not isinstance(value, str) or not value.strip():
                 continue
-            name = _normalize_project_name(Path(value).name)
+            name = canonical_project_from_workspace(value)
+            if name:
+                name = _normalize_project_name(name)
             if name and not name.isdigit():
                 return name
     return None

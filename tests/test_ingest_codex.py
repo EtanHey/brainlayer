@@ -541,3 +541,14 @@ class TestParseCodexSession:
         for e in entries:
             assert e["source"] == "codex_cli"
             assert e["project"] == "brainlayer"
+
+
+def test_infer_project_uses_canonical_resolver(monkeypatch):
+    from brainlayer.ingest import codex
+
+    monkeypatch.setattr(
+        codex,
+        "canonical_project_from_workspace",
+        lambda value: "brainlayer" if value.endswith("/.worktrees/feature") else None,
+    )
+    assert codex._infer_project_from_cwd("/Users/happycampr/Gits/brainlayer/.worktrees/feature") == "brainlayer"
