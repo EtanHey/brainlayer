@@ -1433,12 +1433,31 @@ class JSONLWatcher:
             if eligible_items:
                 archive_receipt = None
                 if self.raw_archive is not None:
-                    receipts = [item.get("_raw_archive_receipt") for item in eligible_items]
-                    archive_receipt = receipts[0]
-                    if not isinstance(archive_receipt, dict) or any(
-                        receipt != archive_receipt for receipt in receipts[1:]
+                    receipt_items: list[tuple[dict[str, Any], int]] = []
+                    provider = self.provider_for_file(filepath)
+                    for item in eligible_items:
+                        receipt = item.get("_raw_archive_receipt")
+                        end_offset = item["_line_end_offset"]
+                        if (
+                            not isinstance(receipt, dict)
+                            or receipt.get("provider") != provider
+                            or receipt.get("source_path") != filepath
+                            or type(receipt.get("size")) is not int
+                            or receipt["size"] < end_offset
+                        ):
+                            raise RuntimeError("confirmed batch omits or mismatches an archived source version")
+                        with self.raw_archive.open_snapshot(receipt):
+                            pass
+                        receipt_items.append((receipt, end_offset))
+                    archive_receipt = max(
+                        receipt_items,
+                        key=lambda pair: (pair[0]["size"], pair[1]),
+                    )[0]
+                    if any(
+                        not self.raw_archive.is_prefix(receipt, archive_receipt)
+                        for receipt, _end_offset in receipt_items
                     ):
-                        raise RuntimeError("confirmed batch mixes or omits archived source versions")
+                        raise RuntimeError("confirmed batch archived source versions do not form one prefix chain")
                 current_confirmations[filepath] = (
                     max(item["_line_end_offset"] for item in eligible_items),
                     current_inode,

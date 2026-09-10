@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 import brainlayer.watcher as watcher_module
-from brainlayer.raw_source_archive import RawSourceArchive
+from brainlayer.raw_source_archive import RawArchiveCorruptError, RawSourceArchive
 from brainlayer.watcher import JSONLWatcher, OffsetRegistry, WatchRoot
 
 
@@ -447,3 +447,94 @@ def test_concurrent_registry_merge_keeps_offset_and_receipt_from_one_entry(tmp_p
     merged = OffsetRegistry(registry_path)
     assert merged.get(str(source))[0] == second_receipt["size"]
     assert merged.archive_receipt(str(source)) == second_receipt
+
+
+def test_pending_batch_accepts_verified_prefix_archive_versions(tmp_path: Path) -> None:
+    root = tmp_path / "sources"
+    root.mkdir()
+    source = root / "session.jsonl"
+    first = b'{"type":"user","message":{"role":"user","content":"one"}}\n'
+    second = b'{"type":"user","message":{"role":"user","content":"two"}}\n'
+    source.write_bytes(first)
+    store = make_archive(tmp_path)
+    flushed: list[dict] = []
+    watcher = JSONLWatcher(
+        watch_roots=[WatchRoot("synthetic", root)],
+        registry_path=tmp_path / "offsets.json",
+        on_flush=lambda items: (
+            flushed.extend(items) or {str(item["_source_file"]): item["_line_end_offset"] for item in items}
+        ),
+        raw_archive=store,
+        batch_size=100,
+        flush_interval_ms=60_000,
+        max_lines_per_file=100,
+    )
+
+    assert watcher.poll_once() == 1
+    with source.open("ab") as handle:
+        handle.write(second)
+    assert watcher.poll_once() == 1
+    receipts = [item["_raw_archive_receipt"] for item in watcher.indexer._buffer]
+    assert len(receipts) == 2
+    assert store.is_prefix(receipts[0], receipts[1])
+
+    watcher.indexer.flush()
+
+    assert [item["message"]["content"] for item in flushed] == ["one", "two"]
+    assert watcher.indexer._buffer == []
+    assert watcher.registry.get(str(source))[0] == len(first) + len(second)
+    assert watcher.registry.archive_receipt(str(source)) == receipts[1]
+
+
+def test_confirmed_batch_refuses_corrupt_archive_receipt(tmp_path: Path) -> None:
+    root = tmp_path / "sources"
+    root.mkdir()
+    source = root / "session.jsonl"
+    raw = b'{"type":"user","message":{"role":"user","content":"one"}}\n'
+    source.write_bytes(raw)
+    store = make_archive(tmp_path)
+    watcher = make_watcher(tmp_path, root, store, [])
+    watcher.indexer.batch_size = 100
+    watcher.indexer.flush_interval_ms = 60_000
+    watcher.indexer._last_flush = float("inf")
+    assert watcher.poll_once() == 1
+    item = watcher.indexer._buffer[0]
+    manifest_path = Path(item["_raw_archive_receipt"]["manifest_path"])
+    manifest_path.chmod(0o600)
+    manifest_path.write_bytes(b"corrupt\n")
+
+    with pytest.raises(RawArchiveCorruptError, match="manifest"):
+        watcher._advance_confirmed_batch({str(source): len(raw)}, [item])
+
+    assert watcher.registry.get(str(source))[0] == 0
+
+
+def test_confirmed_batch_refuses_equal_size_divergent_versions(tmp_path: Path) -> None:
+    root = tmp_path / "sources"
+    root.mkdir()
+    source = root / "session.jsonl"
+    first = b'{"type":"user","message":{"role":"user","content":"one"}}\n'
+    second = b'{"type":"user","message":{"role":"user","content":"two"}}\n'
+    assert len(first) == len(second)
+    source.write_bytes(first)
+    store = make_archive(tmp_path)
+    watcher = make_watcher(tmp_path, root, store, [])
+    watcher.indexer.batch_size = 100
+    watcher.indexer.flush_interval_ms = 60_000
+    watcher.indexer._last_flush = float("inf")
+    assert watcher.poll_once() == 1
+    first_item = dict(watcher.indexer._buffer[0])
+    source.write_bytes(second)
+    second_receipt = store.capture(source, "synthetic")
+    second_item = {
+        **first_item,
+        "_raw_archive_receipt": second_receipt,
+    }
+
+    with pytest.raises(RuntimeError, match="prefix"):
+        watcher._advance_confirmed_batch(
+            {str(source): len(first)},
+            [first_item, second_item],
+        )
+
+    assert watcher.registry.get(str(source))[0] == 0
