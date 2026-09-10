@@ -406,7 +406,7 @@ def run_backup_once(
             previous_cwd = os.open(".", os.O_RDONLY)
             try:
                 os.fchdir(destination_fd)
-                return _run_backup_once_bound(
+                result = _run_backup_once_bound(
                     destination=Path("."),
                     transcript_roots=transcript_roots,
                     socket_path=socket_path,
@@ -415,6 +415,22 @@ def run_backup_once(
                     now=now,
                     expected_destination_identity=expected_destination_identity,
                 )
+                try:
+                    visible_identity = _identity(destination)
+                except OSError:
+                    visible_identity = None
+                if visible_identity is None or tuple(visible_identity.values()) != tuple(expected_destination_identity):
+                    generation_name = str(result.get("generation", ""))
+                    if generation_name:
+                        try:
+                            os.unlink(f"{generation_name}/receipt.complete.json", dir_fd=destination_fd)
+                        except OSError:
+                            pass
+                    actual = None if visible_identity is None else tuple(visible_identity.values())
+                    raise BackupRunOnceError(
+                        f"backup destination identity changed after generation: expected={expected_destination_identity} actual={actual}"
+                    )
+                return result
             finally:
                 os.fchdir(previous_cwd)
                 os.close(previous_cwd)
