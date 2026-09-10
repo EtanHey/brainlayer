@@ -830,6 +830,25 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             )
         """)
         cursor.execute("""
+            CREATE TABLE IF NOT EXISTS chunk_source_occurrences (
+                occurrence_key TEXT PRIMARY KEY,
+                canonical_chunk_id TEXT NOT NULL,
+                source_file TEXT NOT NULL,
+                source_line INTEGER NOT NULL,
+                source_pointer TEXT NOT NULL,
+                session_id TEXT,
+                incoming_content_hash TEXT NOT NULL,
+                chunk_created_at TEXT,
+                observed_at TEXT NOT NULL,
+                work_context_json TEXT NOT NULL DEFAULT '{}',
+                FOREIGN KEY(canonical_chunk_id) REFERENCES chunks(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chunk_source_occurrences_canonical "
+            "ON chunk_source_occurrences(canonical_chunk_id)"
+        )
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS agent_profiles (
                 agent_id TEXT PRIMARY KEY,
                 profile_json TEXT NOT NULL,
@@ -2434,6 +2453,57 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
 
     # ── Chunk CRUD ──────────────────────────────────────────────────────
 
+    @staticmethod
+    def _record_source_occurrence(cursor: apsw.Cursor, chunk: Dict[str, Any], canonical_chunk_id: str) -> None:
+        """Persist an exact supplied source coordinate without altering its survivor."""
+        metadata = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}
+        source_file = chunk.get("source_file")
+        source_line = metadata.get("source_line")
+        source_pointer = metadata.get("source_pointer")
+        # A file alone is not an exact occurrence. Do not invent a line or span.
+        if not (
+            isinstance(source_file, str)
+            and source_file
+            and type(source_line) is int
+            and source_line >= 1
+            and isinstance(source_pointer, str)
+            and source_pointer
+        ):
+            return
+        session_id = metadata.get("session_id") if isinstance(metadata.get("session_id"), str) else None
+        context = {
+            key: metadata[key]
+            for key in ("project", "branch", "git_branch", "cwd", "worktree", "repo", "commit")
+            if key in metadata
+        }
+        if chunk.get("project") is not None:
+            context.setdefault("project", chunk["project"])
+        incoming_content_hash = hashlib.sha256(chunk["content"].encode("utf-8")).hexdigest()
+        key_payload = [canonical_chunk_id, source_file, source_line, source_pointer, session_id, incoming_content_hash]
+        occurrence_key = hashlib.sha256(
+            json.dumps(key_payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
+        cursor.execute(
+            """
+            INSERT OR IGNORE INTO chunk_source_occurrences
+            (occurrence_key, canonical_chunk_id, source_file, source_line, source_pointer,
+             session_id, incoming_content_hash, chunk_created_at, observed_at, work_context_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                occurrence_key,
+                canonical_chunk_id,
+                source_file,
+                source_line,
+                source_pointer,
+                session_id,
+                incoming_content_hash,
+                chunk.get("created_at"),
+                datetime.now(timezone.utc).isoformat(),
+                json.dumps(context, sort_keys=True, separators=(",", ":")),
+            ),
+        )
+
     def upsert_chunks(
         self,
         chunks: List[Dict[str, Any]],
@@ -2579,6 +2649,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                                 self._upsert_chunk_vector(cursor, duplicate.canonical_chunk_id, merged_embedding)
                             elif not self._chunk_vector_exists(cursor, duplicate.canonical_chunk_id):
                                 self._upsert_chunk_vector(cursor, duplicate.canonical_chunk_id, embedding)
+                            self._record_source_occurrence(cursor, chunk, duplicate.canonical_chunk_id)
                             continue
                         if merge_existing_chunk_seen(
                             self.conn,
@@ -2592,6 +2663,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                         ):
                             if not self._chunk_vector_exists(cursor, chunk_id):
                                 self._upsert_chunk_vector(cursor, chunk_id, embedding)
+                            self._record_source_occurrence(cursor, chunk, chunk_id)
                             continue
 
                         has_provenance_class = getattr(self, "_has_provenance_class", False)
@@ -2727,6 +2799,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                             ),
                         )
                         self._upsert_chunk_vector(cursor, chunk_id, embedding)
+                        self._record_source_occurrence(cursor, chunk, chunk_id)
                     cursor.execute("COMMIT")
                     transaction_started = False
                     telemetry_span.finish("commit")
