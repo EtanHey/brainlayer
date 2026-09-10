@@ -53,6 +53,93 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(sync, "1")
     }
 
+    // MARK: - Backup source authority
+
+    func testVacuumReportsAuthorityFromItsOpenConnection() throws {
+        let target = NSTemporaryDirectory() + "brainbar-authority-\(UUID().uuidString).db"
+        defer {
+            try? FileManager.default.removeItem(atPath: target)
+            try? FileManager.default.removeItem(atPath: target + ".complete")
+        }
+
+        let backup = try db.vacuumInto(targetPath: target)
+
+        XCTAssertEqual(backup.sourceAuthority.filename, tempDBPath)
+        XCTAssertFalse(backup.sourceAuthority.sourceOpenGeneration.isEmpty)
+        XCTAssertEqual(backup.observedPathIdentityBefore.kind, "pathname_observation_not_fd_proof")
+        XCTAssertEqual(backup.observedPathIdentityAfter.kind, "pathname_observation_not_fd_proof")
+        XCTAssertEqual(backup.observedPathIdentityBefore.path, tempDBPath)
+        XCTAssertEqual(backup.observedPathIdentityAfter.path, tempDBPath)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: target + ".complete"))
+    }
+
+    func testVacuumRefusesUnsupportedOrMovedConnectionBeforePublishingCompletion() throws {
+        let unsupportedTarget = NSTemporaryDirectory() + "brainbar-unsupported-\(UUID().uuidString).db"
+        defer {
+            try? FileManager.default.removeItem(atPath: unsupportedTarget)
+            try? FileManager.default.removeItem(atPath: unsupportedTarget + ".complete")
+        }
+        db.hasMovedFileControlOverride = { _, _ in SQLITE_NOTFOUND }
+        XCTAssertThrowsError(try db.vacuumInto(targetPath: unsupportedTarget)) { error in
+            XCTAssertTrue(String(describing: error).contains("HAS_MOVED unsupported"))
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: unsupportedTarget))
+
+        let movedTarget = NSTemporaryDirectory() + "brainbar-moved-\(UUID().uuidString).db"
+        let replacement = tempDBPath + ".replacement"
+        defer {
+            try? FileManager.default.removeItem(atPath: movedTarget)
+            try? FileManager.default.removeItem(atPath: movedTarget + ".complete")
+            try? FileManager.default.removeItem(atPath: replacement)
+            try? FileManager.default.removeItem(atPath: replacement + "-wal")
+            try? FileManager.default.removeItem(atPath: replacement + "-shm")
+        }
+        var controls = 0
+        db.hasMovedFileControlOverride = { _, moved in
+            controls += 1
+            if controls == 2 {
+                try? FileManager.default.removeItem(atPath: replacement)
+                try? FileManager.default.moveItem(atPath: tempDBPath, toPath: replacement)
+            }
+            moved.pointee = controls == 2 ? 1 : 0
+            return SQLITE_OK
+        }
+        XCTAssertThrowsError(try db.vacuumInto(targetPath: movedTarget)) { error in
+            XCTAssertTrue(String(describing: error).contains("source connection moved"))
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: movedTarget))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: movedTarget + ".complete"))
+    }
+
+    func testVacuumDoesNotPublishCompletionWhenFinalPathnameAuthorityObservationFails() throws {
+        let target = NSTemporaryDirectory() + "brainbar-final-authority-\(UUID().uuidString).db"
+        let renamedSource = tempDBPath + ".renamed"
+        defer {
+            try? FileManager.default.removeItem(atPath: target)
+            try? FileManager.default.removeItem(atPath: target + ".complete")
+            try? FileManager.default.removeItem(atPath: renamedSource)
+            try? FileManager.default.removeItem(atPath: renamedSource + "-wal")
+            try? FileManager.default.removeItem(atPath: renamedSource + "-shm")
+        }
+
+        var controls = 0
+        db.hasMovedFileControlOverride = { _, moved in
+            controls += 1
+            if controls == 2 {
+                try? FileManager.default.moveItem(atPath: tempDBPath, toPath: renamedSource)
+            }
+            moved.pointee = 0
+            return SQLITE_OK
+        }
+
+        XCTAssertThrowsError(try db.vacuumInto(targetPath: target)) { error in
+            XCTAssertTrue(String(describing: error).contains("unable to observe SQLite source pathname"))
+        }
+        XCTAssertEqual(controls, 2)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: target))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: target + ".complete"))
+    }
+
     // MARK: - Schema
 
     func testChunksTableExists() throws {

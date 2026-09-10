@@ -107,11 +107,19 @@ final class MCPRouter: @unchecked Sendable {
         let status: String
         let targetPath: String
         let bytes: Int64
+        let sourceDBFilename: String
+        let sourceOpenGeneration: String
+        let sourceObservedPathIdentityBefore: BrainDatabase.BackupPathnameIdentity
+        let sourceObservedPathIdentityAfter: BrainDatabase.BackupPathnameIdentity
 
         enum CodingKeys: String, CodingKey {
             case status
             case targetPath = "target_path"
             case bytes
+            case sourceDBFilename = "source_db_filename"
+            case sourceOpenGeneration = "source_open_generation"
+            case sourceObservedPathIdentityBefore = "source_observed_path_identity_before"
+            case sourceObservedPathIdentityAfter = "source_observed_path_identity_after"
         }
     }
 
@@ -1561,13 +1569,35 @@ final class MCPRouter: @unchecked Sendable {
             throw ToolError.missingParameter("target_path")
         }
         let db = try writeDB()
-        let bytes = try db.vacuumInto(targetPath: targetPath)
-        let payload = BackupVacuumResult(status: "ok", targetPath: targetPath, bytes: bytes)
+        let backup = try db.vacuumInto(targetPath: targetPath)
+        let payload = BackupVacuumResult(
+            status: "ok",
+            targetPath: targetPath,
+            bytes: backup.bytes,
+            sourceDBFilename: backup.sourceAuthority.filename,
+            sourceOpenGeneration: backup.sourceAuthority.sourceOpenGeneration,
+            sourceObservedPathIdentityBefore: backup.observedPathIdentityBefore,
+            sourceObservedPathIdentityAfter: backup.observedPathIdentityAfter
+        )
         return ToolOutput(
             text: jsonEncode(payload),
             metadata: [
                 "target_path": targetPath,
-                "bytes": bytes,
+                "bytes": backup.bytes,
+                "source_db_filename": backup.sourceAuthority.filename,
+                "source_open_generation": backup.sourceAuthority.sourceOpenGeneration,
+                "source_observed_path_identity_before": [
+                    "kind": backup.observedPathIdentityBefore.kind,
+                    "path": backup.observedPathIdentityBefore.path,
+                    "st_dev": backup.observedPathIdentityBefore.stDev,
+                    "st_ino": backup.observedPathIdentityBefore.stIno,
+                ],
+                "source_observed_path_identity_after": [
+                    "kind": backup.observedPathIdentityAfter.kind,
+                    "path": backup.observedPathIdentityAfter.path,
+                    "st_dev": backup.observedPathIdentityAfter.stDev,
+                    "st_ino": backup.observedPathIdentityAfter.stIno,
+                ],
             ]
         )
     }

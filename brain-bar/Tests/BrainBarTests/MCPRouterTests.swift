@@ -209,6 +209,39 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(result["isError"] as? Bool, true, "The unconfigured test router should reach the DB handler")
     }
 
+    func testBackupVacuumReportsTheServedConnectionInsteadOfCallerAuthority() throws {
+        let servedPath = NSTemporaryDirectory() + "brainbar-served-authority-\(UUID().uuidString).db"
+        let callerClaim = NSTemporaryDirectory() + "brainbar-caller-claim-\(UUID().uuidString).db"
+        let target = NSTemporaryDirectory() + "brainbar-router-authority-\(UUID().uuidString).db"
+        defer {
+            for path in [servedPath, callerClaim, target, target + ".complete"] {
+                try? FileManager.default.removeItem(atPath: path)
+            }
+        }
+        let servedDB = BrainDatabase(path: servedPath)
+        defer { servedDB.close() }
+        let router = MCPRouter(profile: "core")
+        router.setDatabase(servedDB)
+
+        let response = router.handle(toolCall(id: 201, name: "brain_backup_vacuum_into", arguments: [
+            "target_path": target,
+            "source_db_filename": callerClaim,
+            "source_open_generation": "caller-invented-generation",
+        ]))
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        let content = try XCTUnwrap(result["content"] as? [[String: Any]])
+        let text = try XCTUnwrap(content.first?["text"] as? String)
+        let payload = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+
+        XCTAssertEqual(payload["source_db_filename"] as? String, servedPath)
+        XCTAssertNotEqual(payload["source_db_filename"] as? String, callerClaim)
+        XCTAssertNotEqual(payload["source_open_generation"] as? String, "caller-invented-generation")
+        XCTAssertEqual(
+            (payload["source_observed_path_identity_before"] as? [String: Any])?["kind"] as? String,
+            "pathname_observation_not_fd_proof"
+        )
+    }
+
     func testEnvironmentProfileControlsDefaultRouter() throws {
         let environmentKey = "BRAINLAYER_MCP_PROFILE"
         let originalProfile = ProcessInfo.processInfo.environment[environmentKey]

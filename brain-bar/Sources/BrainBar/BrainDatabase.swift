@@ -10,6 +10,29 @@ import Foundation
 import SQLite3
 
 final class BrainDatabase: @unchecked Sendable {
+    struct BackupPathnameIdentity: Encodable, Equatable, Sendable {
+        /// This is a pathname observation made after the connection opened. It
+        /// deliberately is not represented as proof of the connection's fd.
+        let kind = "pathname_observation_not_fd_proof"
+        let path: String
+        let stDev: Int64
+        let stIno: Int64
+    }
+
+    struct BackupSourceAuthority: Encodable, Equatable, Sendable {
+        /// sqlite3_db_filename(db, "main") from this exact open connection.
+        let filename: String
+        /// Replaced only when this BrainDatabase opens a new SQLite connection.
+        let sourceOpenGeneration: String
+    }
+
+    struct VacuumIntoResult: Sendable {
+        let bytes: Int64
+        let sourceAuthority: BackupSourceAuthority
+        let observedPathIdentityBefore: BackupPathnameIdentity
+        let observedPathIdentityAfter: BackupPathnameIdentity
+    }
+
     struct OpenConfiguration: Sendable, Equatable {
         let busyTimeoutMillis: Int32
         let readOnly: Bool
@@ -837,6 +860,10 @@ final class BrainDatabase: @unchecked Sendable {
     private let path: String
     private let openConfiguration: OpenConfiguration
     private let transactionLock = NSRecursiveLock()
+    private var sourceOpenGeneration = UUID().uuidString.lowercased()
+    // Test-only seam for exercising a VFS that does not support HAS_MOVED.
+    // Production always calls sqlite3_file_control below.
+    var hasMovedFileControlOverride: ((OpaquePointer?, UnsafeMutablePointer<Int32>) -> Int32)?
     private var explicitTransactionIsOpen = false
     private var injectionRecipientIdentityCache: [String: InjectionRecipientIdentity] = [:]
     private var injectionRecipientIdentityCacheLoadedAt = Date.distantPast
@@ -857,6 +884,7 @@ final class BrainDatabase: @unchecked Sendable {
     private func openAndConfigure() {
         do {
             db = try openConnection(path: path)
+            sourceOpenGeneration = UUID().uuidString.lowercased()
             NSLog("[BrainBar] Connection opened, configuring...")
             try configureConnection(db)
             NSLog("[BrainBar] Connection configured, checking schema...")
@@ -1126,7 +1154,9 @@ final class BrainDatabase: @unchecked Sendable {
         isOpen = false
     }
 
-    func vacuumInto(targetPath: String) throws -> Int64 {
+    func vacuumInto(targetPath: String) throws -> VacuumIntoResult {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         let trimmedTarget = targetPath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTarget.isEmpty else {
@@ -1134,7 +1164,8 @@ final class BrainDatabase: @unchecked Sendable {
         }
 
         let targetURL = URL(fileURLWithPath: trimmedTarget).standardizedFileURL
-        let sourceURL = URL(fileURLWithPath: path).standardizedFileURL
+        let sourceAuthority = try backupSourceAuthority(for: db)
+        let sourceURL = URL(fileURLWithPath: sourceAuthority.filename).standardizedFileURL
         guard targetURL.path != sourceURL.path else {
             throw DBError.exec(SQLITE_MISUSE, "refusing to VACUUM INTO the live database path")
         }
@@ -1151,6 +1182,9 @@ final class BrainDatabase: @unchecked Sendable {
             throw DBError.exec(SQLITE_CANTOPEN, "backup completion marker already exists: \(completionMarkerURL.path)")
         }
 
+        let observedPathIdentityBefore = try observePathnameIdentity(sourceAuthority.filename)
+        try refuseIfConnectionHasMoved(db, phase: "before VACUUM")
+
         var stmt: OpaquePointer?
         let prepareRC = sqlite3_prepare_v2(db, "VACUUM INTO ?", -1, &stmt, nil)
         guard prepareRC == SQLITE_OK, let stmt else { throw DBError.prepare(prepareRC) }
@@ -1162,8 +1196,54 @@ final class BrainDatabase: @unchecked Sendable {
 
         let attributes = try FileManager.default.attributesOfItem(atPath: targetURL.path)
         try syncBackupTarget(targetURL)
+        try refuseIfConnectionHasMoved(db, phase: "after VACUUM")
+        let observedPathIdentityAfter = try observePathnameIdentity(sourceAuthority.filename)
         try Data("complete\n".utf8).write(to: completionMarkerURL, options: .atomic)
-        return (attributes[.size] as? NSNumber)?.int64Value ?? 0
+        return VacuumIntoResult(
+            bytes: (attributes[.size] as? NSNumber)?.int64Value ?? 0,
+            sourceAuthority: sourceAuthority,
+            observedPathIdentityBefore: observedPathIdentityBefore,
+            observedPathIdentityAfter: observedPathIdentityAfter
+        )
+    }
+
+    private func backupSourceAuthority(for db: OpaquePointer) throws -> BackupSourceAuthority {
+        guard let filename = sqlite3_db_filename(db, "main") else {
+            throw DBError.exec(SQLITE_CANTOPEN, "SQLite connection has no main database filename")
+        }
+        return BackupSourceAuthority(
+            filename: String(cString: filename),
+            sourceOpenGeneration: sourceOpenGeneration
+        )
+    }
+
+    private func observePathnameIdentity(_ pathname: String) throws -> BackupPathnameIdentity {
+        var metadata = Darwin.stat()
+        let result = pathname.withCString { Darwin.fstatat(AT_FDCWD, $0, &metadata, 0) }
+        guard result == 0 else {
+            throw DBError.exec(SQLITE_IOERR, "unable to observe SQLite source pathname: \(pathname)")
+        }
+        return BackupPathnameIdentity(
+            path: pathname,
+            stDev: Int64(metadata.st_dev),
+            stIno: Int64(metadata.st_ino)
+        )
+    }
+
+    private func refuseIfConnectionHasMoved(_ db: OpaquePointer, phase: String) throws {
+        var hasMoved: Int32 = 0
+        let result = withUnsafeMutablePointer(to: &hasMoved) { pointer in
+            if let hasMovedFileControlOverride {
+                return hasMovedFileControlOverride(db, pointer)
+            }
+            return sqlite3_file_control(db, "main", SQLITE_FCNTL_HAS_MOVED, UnsafeMutableRawPointer(pointer))
+        }
+        guard result == SQLITE_OK else {
+            throw DBError.exec(result, "SQLITE_FCNTL_HAS_MOVED unsupported or failed \(phase)")
+        }
+        guard hasMoved == 0 else {
+            throw DBError.exec(SQLITE_IOERR, "SQLite source connection moved \(phase)")
+        }
     }
 
     private func syncBackupTarget(_ targetURL: URL) throws {
