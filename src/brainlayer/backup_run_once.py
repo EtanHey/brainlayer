@@ -8,6 +8,7 @@ import json
 import os
 import sqlite3
 import stat
+import threading
 import uuid
 from contextlib import AbstractContextManager
 from pathlib import Path
@@ -18,6 +19,9 @@ from . import backup_daily, jsonl_backup
 
 class BackupRunOnceError(RuntimeError):
     """A backup generation could not be completed."""
+
+
+_DESTINATION_BIND_LOCK = threading.Lock()
 
 
 def _fsync_file(path: Path) -> None:
@@ -162,7 +166,7 @@ def _socket_snapshot(socket_path: Path, target: Path, generation: Path) -> int:
     return backup_daily._validate_backup_target(target)
 
 
-def run_backup_once(
+def _run_backup_once_bound(
     *,
     destination: Path,
     transcript_roots: list[Path | jsonl_backup.BackupSourceRoot],
@@ -373,6 +377,49 @@ def main(argv: list[str] | None = None) -> int:
         "transcript_roots": [str(root.path.expanduser().resolve()) if isinstance(root, jsonl_backup.BackupSourceRoot) else str(Path(root).expanduser().resolve()) for root in roots],
     }, sort_keys=True))
     return 0
+
+
+def run_backup_once(
+    *,
+    destination: Path,
+    transcript_roots: list[Path | jsonl_backup.BackupSourceRoot],
+    socket_path: Path | None = None,
+    offline_db_path: Path | None = None,
+    generation_id: str | None = None,
+    now: dt.datetime | None = None,
+    expected_destination_identity: tuple[int, int],
+) -> dict[str, Any]:
+    """Run against the selected directory inode, even if its pathname is replaced."""
+    destination = Path(destination).expanduser()
+    try:
+        destination_fd = os.open(destination, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise BackupRunOnceError(f"backup destination must already exist as an accessible directory: {destination}") from exc
+    try:
+        selected = os.fstat(destination_fd)
+        actual = (selected.st_dev, selected.st_ino)
+        if actual != tuple(expected_destination_identity):
+            raise BackupRunOnceError(
+                f"backup destination identity changed: expected={expected_destination_identity} actual={actual}"
+            )
+        with _DESTINATION_BIND_LOCK:
+            previous_cwd = os.open(".", os.O_RDONLY)
+            try:
+                os.fchdir(destination_fd)
+                return _run_backup_once_bound(
+                    destination=Path("."),
+                    transcript_roots=transcript_roots,
+                    socket_path=socket_path,
+                    offline_db_path=offline_db_path,
+                    generation_id=generation_id,
+                    now=now,
+                    expected_destination_identity=expected_destination_identity,
+                )
+            finally:
+                os.fchdir(previous_cwd)
+                os.close(previous_cwd)
+    finally:
+        os.close(destination_fd)
 
 
 if __name__ == "__main__":

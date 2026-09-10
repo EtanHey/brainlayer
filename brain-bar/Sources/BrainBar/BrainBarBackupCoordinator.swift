@@ -343,16 +343,19 @@ final class BrainLayerBackupCoordinator: ObservableObject {
                     try saveScheduleState(scheduleState)
                     publish(.localVerified(receipt: receipt), to: { _ in })
                 } catch {
-                    publish(.failed(message: "Could not persist backup schedule: (error)"), to: { _ in })
+                    publish(.failed(message: "Could not persist backup schedule: \(error)"), to: { _ in })
                 }
             } else {
                 var message = String(result.output.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.statusMessageLimit))
+                if message.isEmpty {
+                    message = "backup process exited with status \(result.terminationStatus)"
+                }
                 scheduleState.nextDue = now().addingTimeInterval(Self.failureBackoff)
                 scheduleState.lastStatus = "failed"
                 do {
                     try saveScheduleState(scheduleState)
                 } catch {
-                    message += " (schedule persistence failed: (error))"
+                    message += " (schedule persistence failed: \(error))"
                 }
                 publish(.failed(message: message), to: { _ in })
             }
