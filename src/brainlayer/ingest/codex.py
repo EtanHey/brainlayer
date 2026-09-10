@@ -23,7 +23,7 @@ import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator, List, Optional
+from typing import Callable, Iterator, List, Optional
 
 from brainlayer.workspace_identity import canonical_project_from_workspace
 
@@ -41,6 +41,7 @@ _SYSTEM_INJECTION_PATTERNS = [
 _MIN_USER_LEN = 15
 _MIN_ASSISTANT_LEN = 50
 _MIN_TOOL_OUTPUT_LEN = 50
+_NATIVE_TARGET_CATALOG_BATCH_SIZE = 100
 
 _NATIVE_HEADER_FIELDS = (
     "id",
@@ -176,7 +177,11 @@ def _native_event_timestamp_error(line: dict, payload: dict) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-def parse_codex_session(file_path: Path) -> Iterator[dict]:
+def parse_codex_session(
+    file_path: Path,
+    *,
+    native_record_sink: Callable[[dict], None] | None = None,
+) -> Iterator[dict]:
     """Parse a Codex session JSONL and yield normalized BrainLayer-compatible entries.
 
     Each yielded dict has:
@@ -195,6 +200,7 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
     model: Optional[str] = None
 
     rejected_native_agent_messages = 0
+    rejected_native_target_records = 0
 
     byte_offset = 0
     with open(file_path, "rb") as fh:
@@ -255,8 +261,7 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
                 if timestamp_error:
                     rejected_native_agent_messages += 1
                     logger.warning(
-                        "Skipping native Codex AgentMessage in %s line %d: %s "
-                        "(rejected_native_agent_messages=%d)",
+                        "Skipping native Codex AgentMessage in %s line %d: %s (rejected_native_agent_messages=%d)",
                         file_path,
                         line_number,
                         timestamp_error,
@@ -327,8 +332,50 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
             if ptype == "reasoning":
                 continue
 
-            # Skip bare function_call entries (metadata only, no readable content)
+            # Function calls have no readable chunk, but supported declarations may be
+            # cataloged as physical native evidence through the optional sink.
             if ptype == "function_call":
+                if native_record_sink is not None:
+                    if not isinstance(session_id, str) or not session_id:
+                        rejected_native_target_records += 1
+                        logger.warning(
+                            "Skipping Codex native target record in %s line %d: "
+                            "missing explicit session_meta.payload.id "
+                            "(rejected_native_target_records=%d)",
+                            file_path,
+                            line_number,
+                            rejected_native_target_records,
+                        )
+                    else:
+                        from ..native_targets import extract_native_targets
+
+                        target_result = extract_native_targets(line)
+                        if target_result.targets or target_result.diagnostics:
+                            headers = {
+                                "/type": line_type,
+                                "/payload/type": ptype,
+                            }
+                            for field in ("name", "call_id"):
+                                value = payload.get(field)
+                                if value is None or isinstance(value, str):
+                                    headers[f"/payload/{field}"] = value
+                            native_record_sink(
+                                {
+                                    "provider": "codex",
+                                    "session_id": session_id,
+                                    "source_file": str(file_path),
+                                    "record_start_offset": line_start_offset,
+                                    "record_end_offset": line_start_offset + len(raw_line),
+                                    "raw_record_hash": hashlib.sha256(raw_line).hexdigest(),
+                                    "declared_headers": headers,
+                                    "target_report": {
+                                        "version": 1,
+                                        "scope": "supported_tool_calls_v1",
+                                        "targets": target_result.targets,
+                                        "diagnostics": target_result.diagnostics,
+                                    },
+                                }
+                            )
                 continue
 
             # ------------------------------------------------------------------
@@ -486,11 +533,12 @@ def ingest_codex_session(
     }
 
     all_chunks: List[Chunk] = []
+    native_records: list[dict] = []
     project: Optional[str] = project_override
     session_id: Optional[str] = None
     session_ts: Optional[str] = None
 
-    for entry in parse_codex_session(file_path):
+    for entry in parse_codex_session(file_path, native_record_sink=native_records.append):
         if project is None:
             project = entry.get("project")
         if session_id is None:
@@ -517,10 +565,6 @@ def ingest_codex_session(
         if verbose:
             print(f"  [{ctype_str}] {entry['content'][:80]!r}")
 
-    if not all_chunks:
-        logger.info("No indexable content in %s", file_path)
-        return 0
-
     if dry_run:
         print(f"Dry run: {len(all_chunks)} chunks from {file_path.name} (not stored)")
         return len(all_chunks)
@@ -529,6 +573,37 @@ def ingest_codex_session(
         from ..paths import DEFAULT_DB_PATH
 
         db_path = DEFAULT_DB_PATH
+
+    if native_records:
+        from ..native_record_links import (
+            catalog_native_record,
+            ensure_native_record_links_schema,
+            native_record_entry_is_admitted,
+        )
+        from ..vector_store import VectorStore
+
+        admitted_records = [
+            record
+            for record in native_records
+            if native_record_entry_is_admitted({"_source_file": record["source_file"], "_provider": record["provider"]})
+        ]
+        if admitted_records:
+            with VectorStore(db_path) as store:
+                cursor = store.conn.cursor()
+                for start in range(0, len(admitted_records), _NATIVE_TARGET_CATALOG_BATCH_SIZE):
+                    cursor.execute("BEGIN IMMEDIATE")
+                    try:
+                        ensure_native_record_links_schema(store.conn)
+                        for record in admitted_records[start : start + _NATIVE_TARGET_CATALOG_BATCH_SIZE]:
+                            catalog_native_record(store.conn, **record)
+                        cursor.execute("COMMIT")
+                    except Exception:
+                        cursor.execute("ROLLBACK")
+                        raise
+
+    if not all_chunks:
+        logger.info("No indexable content in %s", file_path)
+        return 0
 
     from ..index_new import index_chunks_to_sqlite
 
