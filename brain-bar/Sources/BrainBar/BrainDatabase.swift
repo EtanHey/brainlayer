@@ -5227,7 +5227,7 @@ final class BrainDatabase: @unchecked Sendable {
             hasRecordContexts = false
         }
         let recordContextSelect = hasRecordContexts
-            ? "CASE WHEN length(record_context_json) <= 32768 THEN record_context_json ELSE NULL END AS record_context_json, CASE WHEN length(record_context_json) > 32768 THEN 1 ELSE 0 END AS record_context_omitted"
+            ? "CASE WHEN length(CAST(record_context_json AS BLOB)) <= 32768 THEN record_context_json ELSE NULL END AS record_context_json, CASE WHEN length(CAST(record_context_json AS BLOB)) > 32768 THEN 1 ELSE 0 END AS record_context_omitted"
             : "NULL AS record_context_json, 0 AS record_context_omitted"
         guard hasOccurrences || hasRecords else {
             return [

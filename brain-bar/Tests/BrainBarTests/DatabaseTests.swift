@@ -2204,6 +2204,7 @@ final class DatabaseTests: XCTestCase {
         )
         let context = "[{\"origin\":\"native\",\"uuid\":\"u-1\"}]"
         let oversized = "[\"" + String(repeating: "x", count: 32_769) + "\"]"
+        let unicodeOversized = "[\"" + String(repeating: "\u{00E9}", count: 20_000) + "\"]"
         try sqliteExecWrite(path: tempDBPath, sql: """
             CREATE TABLE chunk_source_records (
                 record_key TEXT PRIMARY KEY, canonical_chunk_id TEXT NOT NULL,
@@ -2214,18 +2215,22 @@ final class DatabaseTests: XCTestCase {
             );
             INSERT INTO chunk_source_records VALUES
                 ('record-small', 'record-context-target', 'fixture.jsonl', 0, 10, 'hash-small', 's', '2026-09-10T00:00:00Z', '\(context)'),
-                ('record-large', 'record-context-target', 'fixture.jsonl', 11, 20, 'hash-large', 's', '2026-09-10T00:00:01Z', '\(oversized)');
+                ('record-large', 'record-context-target', 'fixture.jsonl', 11, 20, 'hash-large', 's', '2026-09-10T00:00:01Z', '\(oversized)'),
+                ('record-unicode', 'record-context-target', 'fixture.jsonl', 21, 30, 'hash-unicode', 's', '2026-09-10T00:00:02Z', '\(unicodeOversized)');
         """)
 
         let result = try db.listSourceOccurrences(requestedChunkID: "record-context-target", limit: 20, maxBytes: 64_000)
         let rows = result["source_occurrences"] as? [[String: Any]] ?? []
-        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows.count, 3)
         XCTAssertEqual(rows[0]["declared_record_context_status"] as? String, "declared_unverified")
         XCTAssertEqual((rows[0]["declared_record_contexts"] as? [[String: Any]])?.first?["uuid"] as? String, "u-1")
         XCTAssertNil(rows[0]["original_author"])
         XCTAssertEqual(rows[1]["declared_record_context_status"] as? String, "omitted_byte_cap")
         XCTAssertEqual(rows[1]["raw_record_hash"] as? String, "hash-large")
         XCTAssertEqual(rows[1]["record_start_offset"] as? Int64, 11)
+        XCTAssertEqual(rows[2]["declared_record_context_status"] as? String, "omitted_byte_cap")
+        XCTAssertEqual(rows[2]["raw_record_hash"] as? String, "hash-unicode")
+        XCTAssertEqual(rows[2]["record_start_offset"] as? Int64, 21)
     }
 
     func testSourceOccurrencesMissingTableIsExplicitlyUnavailable() throws {
