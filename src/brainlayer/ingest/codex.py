@@ -336,28 +336,30 @@ def parse_codex_session(
             # cataloged as physical native evidence through the optional sink.
             if ptype == "function_call":
                 if native_record_sink is not None:
-                    if not isinstance(session_id, str) or not session_id:
+                    from ..native_record_links import native_record_entry_is_admitted
+
+                    raw_admission_entry = {**line, "_source_file": str(file_path), "_provider": "codex"}
+                    if not native_record_entry_is_admitted(raw_admission_entry):
+                        logger.info(
+                            "Skipping excluded Codex native target record in %s line %d", file_path, line_number
+                        )
+                    elif not isinstance(session_id, str) or not session_id:
                         rejected_native_target_records += 1
                         logger.warning(
-                            "Skipping Codex native target record in %s line %d: "
-                            "missing explicit session_meta.payload.id "
-                            "(rejected_native_target_records=%d)",
+                            "Skipping Codex native target record in %s line %d: missing explicit session_meta.payload.id (rejected_native_target_records=%d)",
                             file_path,
                             line_number,
                             rejected_native_target_records,
                         )
                     else:
-                        from ..native_targets import extract_native_targets
+                        from ..native_targets import MAX_CALL_ID_BYTES, extract_native_targets
 
                         target_result = extract_native_targets(line)
                         if target_result.targets or target_result.diagnostics:
-                            headers = {
-                                "/type": line_type,
-                                "/payload/type": ptype,
-                            }
+                            headers = {"/type": line_type, "/payload/type": ptype}
                             for field in ("name", "call_id"):
                                 value = payload.get(field)
-                                if value is None or isinstance(value, str):
+                                if isinstance(value, str) and value and len(value.encode("utf-8")) <= MAX_CALL_ID_BYTES:
                                     headers[f"/payload/{field}"] = value
                             native_record_sink(
                                 {
@@ -533,73 +535,71 @@ def ingest_codex_session(
     }
 
     all_chunks: List[Chunk] = []
-    native_records: list[dict] = []
     project: Optional[str] = project_override
     session_id: Optional[str] = None
     session_ts: Optional[str] = None
-
-    for entry in parse_codex_session(file_path, native_record_sink=native_records.append):
-        if project is None:
-            project = entry.get("project")
-        if session_id is None:
-            session_id = entry.get("session_id")
-        if session_ts is None:
-            session_ts = entry.get("timestamp")
-
-        ctype_str = entry.get("content_type", "assistant_text")
-        content_type, value = _type_map.get(ctype_str, (ContentType.ASSISTANT_TEXT, ContentValue.MEDIUM))
-
-        classified = ClassifiedContent(
-            content=entry["content"],
-            content_type=content_type,
-            value=value,
-            metadata={
-                **entry.get("metadata", {}),
-                "source": "codex_cli",
-            },
-        )
-
-        chunks = chunk_content(classified)
-        all_chunks.extend(chunks)
-
-        if verbose:
-            print(f"  [{ctype_str}] {entry['content'][:80]!r}")
-
-    if dry_run:
-        print(f"Dry run: {len(all_chunks)} chunks from {file_path.name} (not stored)")
-        return len(all_chunks)
-
     if db_path is None:
         from ..paths import DEFAULT_DB_PATH
 
         db_path = DEFAULT_DB_PATH
+    native_store = None
+    native_buffer: list[dict] = []
 
-    if native_records:
-        from ..native_record_links import (
-            catalog_native_record,
-            ensure_native_record_links_schema,
-            native_record_entry_is_admitted,
-        )
-        from ..vector_store import VectorStore
+    def flush_native_records() -> None:
+        if not native_buffer:
+            return
+        assert native_store is not None
+        cursor = native_store.conn.cursor()
+        cursor.execute("BEGIN IMMEDIATE")
+        try:
+            from ..native_record_links import catalog_native_record, ensure_native_record_links_schema
 
-        admitted_records = [
-            record
-            for record in native_records
-            if native_record_entry_is_admitted({"_source_file": record["source_file"], "_provider": record["provider"]})
-        ]
-        if admitted_records:
-            with VectorStore(db_path) as store:
-                cursor = store.conn.cursor()
-                for start in range(0, len(admitted_records), _NATIVE_TARGET_CATALOG_BATCH_SIZE):
-                    cursor.execute("BEGIN IMMEDIATE")
-                    try:
-                        ensure_native_record_links_schema(store.conn)
-                        for record in admitted_records[start : start + _NATIVE_TARGET_CATALOG_BATCH_SIZE]:
-                            catalog_native_record(store.conn, **record)
-                        cursor.execute("COMMIT")
-                    except Exception:
-                        cursor.execute("ROLLBACK")
-                        raise
+            ensure_native_record_links_schema(native_store.conn)
+            for record in native_buffer:
+                catalog_native_record(native_store.conn, **record)
+            cursor.execute("COMMIT")
+        except Exception:
+            cursor.execute("ROLLBACK")
+            raise
+        native_buffer.clear()
+
+    def sink_native_record(record: dict) -> None:
+        nonlocal native_store
+        if native_store is None:
+            from ..vector_store import VectorStore
+
+            native_store = VectorStore(db_path)
+        native_buffer.append(record)
+        if len(native_buffer) >= _NATIVE_TARGET_CATALOG_BATCH_SIZE:
+            flush_native_records()
+
+    try:
+        for entry in parse_codex_session(file_path, native_record_sink=None if dry_run else sink_native_record):
+            if project is None:
+                project = entry.get("project")
+            if session_id is None:
+                session_id = entry.get("session_id")
+            if session_ts is None:
+                session_ts = entry.get("timestamp")
+            ctype_str = entry.get("content_type", "assistant_text")
+            content_type, value = _type_map.get(ctype_str, (ContentType.ASSISTANT_TEXT, ContentValue.MEDIUM))
+            classified = ClassifiedContent(
+                content=entry["content"],
+                content_type=content_type,
+                value=value,
+                metadata={**entry.get("metadata", {}), "source": "codex_cli"},
+            )
+            all_chunks.extend(chunk_content(classified))
+            if verbose:
+                print(f"  [{ctype_str}] {entry['content'][:80]!r}")
+        if not dry_run:
+            flush_native_records()
+    finally:
+        if native_store is not None:
+            native_store.close()
+    if dry_run:
+        print(f"Dry run: {len(all_chunks)} chunks from {file_path.name} (not stored)")
+        return len(all_chunks)
 
     if not all_chunks:
         logger.info("No indexable content in %s", file_path)

@@ -145,3 +145,60 @@ def test_catalog_failure_rolls_back_and_precedes_content_indexing(tmp_path, monk
         assert store.conn.execute("SELECT COUNT(*) FROM chunks").fetchone() == (0,)
     finally:
         store.close()
+
+
+def test_raw_attribution_exclusion_and_oversized_call_id_are_bounded(tmp_path):
+    excluded = tmp_path / "excluded.jsonl"
+    entry = _call()
+    entry["attributionAgent"] = "brain-worker"
+    _write(excluded, [_meta(), entry])
+    excluded_db = tmp_path / "excluded.sqlite"
+    assert ingest_codex_session(excluded, db_path=excluded_db) == 0
+    store = VectorStore(excluded_db)
+    try:
+        assert store.conn.execute("SELECT name FROM sqlite_master WHERE name='native_record_links'").fetchone() is None
+    finally:
+        store.close()
+
+    oversized = tmp_path / "oversized.jsonl"
+    entry = _call()
+    entry["payload"]["call_id"] = "x" * (40 * 1024)
+    _write(oversized, [_meta(), entry])
+    db_path = tmp_path / "oversized.sqlite"
+    assert ingest_codex_session(oversized, db_path=db_path) == 0
+    store = VectorStore(db_path)
+    try:
+        headers, diagnostics = store.conn.execute(
+            "SELECT declared_headers_json,target_diagnostics_json FROM native_record_links"
+        ).fetchone()
+    finally:
+        store.close()
+    assert "/payload/call_id" not in json.loads(headers)
+    assert "call ID" in json.loads(diagnostics)[0]
+
+
+def test_more_than_one_batch_flushes_before_late_failure_without_indexing(tmp_path, monkeypatch):
+    import brainlayer.native_record_links as links
+
+    source = tmp_path / "late-failure.jsonl"
+    _write(source, [_meta(), *[_call(f"thread-{i}") for i in range(101)], _assistant()])
+    db_path = tmp_path / "late-failure.sqlite"
+    original = links.catalog_native_record
+    calls = 0
+
+    def fail_on_101(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 101:
+            raise RuntimeError("late catalog failure")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(links, "catalog_native_record", fail_on_101)
+    with pytest.raises(RuntimeError, match="late catalog failure"):
+        ingest_codex_session(source, db_path=db_path)
+    store = VectorStore(db_path)
+    try:
+        assert store.conn.execute("SELECT COUNT(*) FROM native_record_links").fetchone() == (100,)
+        assert store.conn.execute("SELECT COUNT(*) FROM chunks").fetchone() == (0,)
+    finally:
+        store.close()
