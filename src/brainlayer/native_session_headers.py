@@ -16,14 +16,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from .raw_source_archive import RawSourceArchive
+from .raw_source_archive import RawArchiveError, RawSourceArchive
 
 MAX_HEADER_RECORD_BYTES = 256 * 1024
 MAX_CONTEXT_BYTES = 32 * 1024
 MAX_RECEIPT_BYTES = 64 * 1024
 MAX_SCALAR_BYTES = 4 * 1024
 _SHA256 = re.compile(r"[0-9a-f]{64}")
-_RECEIPT_KEYS = {
+_RECEIPT_V1_KEYS = {
     "manifest_sha256",
     "manifest_path",
     "source_path",
@@ -32,6 +32,7 @@ _RECEIPT_KEYS = {
     "size",
     "source_stat",
 }
+_RECEIPT_V2_KEYS = _RECEIPT_V1_KEYS | {"format_version"}
 _PAYLOAD_STRINGS = ("id", "session_id", "parent_thread_id", "agent_path", "agent_nickname", "agent_role")
 _SPAWN_STRINGS = ("parent_thread_id", "agent_path", "agent_nickname", "agent_role")
 _GENERATION_TABLE = "native_source_generations"
@@ -298,7 +299,15 @@ def _verified_receipt(
     provider: str,
     source_file: str,
 ) -> str:
-    if not isinstance(receipt, dict) or set(receipt) != _RECEIPT_KEYS:
+    if not isinstance(receipt, dict):
+        raise NativeHeaderCatalogError("raw archive receipt has invalid shape")
+    keys = set(receipt)
+    if keys == _RECEIPT_V1_KEYS:
+        pass
+    elif keys == _RECEIPT_V2_KEYS:
+        if type(receipt["format_version"]) is not int or receipt["format_version"] != 2:
+            raise NativeHeaderCatalogError("raw archive receipt has invalid format version")
+    else:
         raise NativeHeaderCatalogError("raw archive receipt has invalid shape")
     manifest_sha = receipt.get("manifest_sha256")
     expected_manifest = archive.manifests / f"{manifest_sha}.json"
@@ -316,8 +325,11 @@ def _verified_receipt(
         raise NativeHeaderCatalogError("raw archive receipt is not canonical JSON data") from error
     if len(raw.encode()) > MAX_RECEIPT_BYTES:
         raise NativeHeaderCatalogError("raw archive receipt exceeds byte cap")
-    with archive.open_snapshot(receipt):
-        pass
+    try:
+        with archive.open_snapshot(receipt):
+            pass
+    except RawArchiveError as error:
+        raise NativeHeaderCatalogError("raw archive receipt verification failed") from error
     return raw
 
 

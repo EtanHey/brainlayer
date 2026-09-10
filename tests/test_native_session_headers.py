@@ -54,6 +54,45 @@ def catalog(
     )
 
 
+def legacy_receipt(store: RawSourceArchive, source: Path, raw: bytes) -> dict:
+    chunks = []
+    for start in range(0, len(raw), store.chunk_bytes):
+        data = raw[start : start + store.chunk_bytes]
+        digest = hashlib.sha256(data).hexdigest()
+        store._publish_chunk(digest, data)
+        chunks.append({"sha256": digest, "size": len(data)})
+    info = source.stat()
+    source_stat = {
+        "device": info.st_dev,
+        "inode": info.st_ino,
+        "size": len(raw),
+        "mtime_ns": info.st_mtime_ns,
+        "ctime_ns": info.st_ctime_ns,
+    }
+    document = {
+        "format_version": 1,
+        "provider": "codex",
+        "source_path": str(source),
+        "source_stat": source_stat,
+        "size": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "chunks": chunks,
+    }
+    encoded = store._canonical_manifest(document)
+    digest = hashlib.sha256(encoded).hexdigest()
+    path = store.manifests / f"{digest}.json"
+    store._publish_bytes(path, encoded, prefix=".legacy-")
+    return {
+        "manifest_sha256": digest,
+        "manifest_path": str(path),
+        "source_path": str(source),
+        "provider": "codex",
+        "sha256": document["sha256"],
+        "size": len(raw),
+        "source_stat": source_stat,
+    }
+
+
 def test_prefix_append_keeps_generation_deduplicates_occurrence_and_late_conflict_taints_old(
     tmp_path: Path,
 ) -> None:
@@ -62,6 +101,7 @@ def test_prefix_append_keeps_generation_deduplicates_occurrence_and_late_conflic
     source.write_bytes(first)
     store = archive(tmp_path)
     root = store.capture(source, "codex")
+    assert root["format_version"] == 2
     conn = sqlite3.connect(":memory:")
 
     canonical = catalog(conn, store, source, root, root, first)
@@ -70,6 +110,8 @@ def test_prefix_append_keeps_generation_deduplicates_occurrence_and_late_conflic
     with source.open("ab") as handle:
         handle.write(b'{"type":"response_item","payload":{"role":"assistant"}}\n')
     appended = store.capture(source, "codex")
+    assert appended["format_version"] == 2
+    assert store.is_prefix(root, appended) is True
     repeated = catalog(conn, store, source, root, appended, first)
     assert repeated.generation_key == canonical.generation_key
     assert repeated.occurrence_key == canonical.occurrence_key
@@ -85,6 +127,81 @@ def test_prefix_append_keeps_generation_deduplicates_occurrence_and_late_conflic
     assert conflict.disposition == "conflict"
     assert native_source_generation_status(conn, canonical.generation_key)["status"] == "conflicted"
     assert conn.execute("SELECT COUNT(*) FROM native_session_header_occurrences").fetchone() == (2,)
+
+
+def test_v1_root_and_current_v2_append_bridge_catalogs_one_generation(tmp_path: Path) -> None:
+    source = tmp_path / "mixed-format.jsonl"
+    raw = header(SESSION_A)
+    source.write_bytes(raw)
+    store = archive(tmp_path)
+    root = legacy_receipt(store, source, raw)
+    with source.open("ab") as output:
+        output.write(b'{"type":"response_item"}\n')
+    current = store.capture(source, "codex")
+    conn = sqlite3.connect(":memory:")
+
+    result = catalog(conn, store, source, root, current, raw)
+
+    assert "format_version" not in root
+    assert current["format_version"] == 2
+    assert store.is_prefix(root, current) is True
+    assert result.disposition == "canonical"
+    stored = native_source_generation_status(conn, result.generation_key)
+    assert stored["root_manifest_sha256"] == root["manifest_sha256"]
+    assert stored["current_manifest_sha256"] == current["manifest_sha256"]
+
+
+@pytest.mark.parametrize("claimed", [True, 2.0, 1, 3, None])
+def test_catalog_rejects_nonexact_v2_format_version(tmp_path: Path, claimed: object) -> None:
+    source = tmp_path / "format.jsonl"
+    raw = header(SESSION_A)
+    source.write_bytes(raw)
+    store = archive(tmp_path)
+    receipt = store.capture(source, "codex")
+    receipt["format_version"] = claimed
+
+    with pytest.raises(NativeHeaderCatalogError, match="format version"):
+        catalog(sqlite3.connect(":memory:"), store, source, receipt, receipt, raw)
+
+
+@pytest.mark.parametrize("kind", ["extra", "missing"])
+def test_catalog_rejects_unknown_or_missing_v2_receipt_keys(tmp_path: Path, kind: str) -> None:
+    source = tmp_path / "shape.jsonl"
+    raw = header(SESSION_A)
+    source.write_bytes(raw)
+    store = archive(tmp_path)
+    receipt = store.capture(source, "codex")
+    if kind == "extra":
+        receipt["unknown"] = "value"
+    else:
+        receipt.pop("size")
+
+    with pytest.raises(NativeHeaderCatalogError, match="invalid shape"):
+        catalog(sqlite3.connect(":memory:"), store, source, receipt, receipt, raw)
+
+
+def test_catalog_rejects_v1_receipt_labeled_as_v2_by_archive_validation(tmp_path: Path) -> None:
+    source = tmp_path / "spoof.jsonl"
+    raw = header(SESSION_A)
+    source.write_bytes(raw)
+    store = archive(tmp_path)
+    receipt = legacy_receipt(store, source, raw)
+    receipt["format_version"] = 2
+
+    with pytest.raises(NativeHeaderCatalogError, match="verification failed"):
+        catalog(sqlite3.connect(":memory:"), store, source, receipt, receipt, raw)
+
+
+def test_catalog_rejects_v2_receipt_with_format_label_removed(tmp_path: Path) -> None:
+    source = tmp_path / "stripped.jsonl"
+    raw = header(SESSION_A)
+    source.write_bytes(raw)
+    store = archive(tmp_path)
+    receipt = store.capture(source, "codex")
+    receipt.pop("format_version")
+
+    with pytest.raises(NativeHeaderCatalogError, match="verification failed"):
+        catalog(sqlite3.connect(":memory:"), store, source, receipt, receipt, raw)
 
 
 def test_minimal_header_is_known_session_without_invented_emitter_and_body_is_not_retained(
