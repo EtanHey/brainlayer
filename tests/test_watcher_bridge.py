@@ -996,6 +996,7 @@ def test_watcher_context_round_trips_direct_and_queued_to_clone_db(tmp_path, mon
                               parentUuid="parent-record", logicalParentUuid="logical-parent-record",
                               preservedSegment={"opaque": True},
                               source_line=4, source_pointer="/message/content/0")
+    entry.update(_line_start_offset=10, _line_end_offset=234, _raw_record_hash="a" * 64)
     entry["_source_file"] = source_file
 
     direct_db = tmp_path / "direct.db"
@@ -1006,6 +1007,11 @@ def test_watcher_context_round_trips_direct_and_queued_to_clone_db(tmp_path, mon
     assert direct_metadata["record_context"] == context
     assert direct_metadata["source_line"] == 4
     assert direct_metadata["source_pointer"] == "/message/content/0"
+    with sqlite3.connect(direct_db) as conn:
+        direct_record = conn.execute(
+            "SELECT source_file, record_start_offset, record_end_offset, raw_record_hash FROM chunk_source_records"
+        ).fetchone()
+    assert direct_record == (source_file, 10, 234, "a" * 64)
 
     queued_db = tmp_path / "queued.db"
     queue_dir = tmp_path / "queue"
@@ -1016,4 +1022,8 @@ def test_watcher_context_round_trips_direct_and_queued_to_clone_db(tmp_path, mon
     assert drain_once(db_path=queued_db, queue_dir=queue_dir, batch_size=1, log_path=tmp_path / "drain.log") == 1
     with sqlite3.connect(queued_db) as conn:
         queued_metadata = json.loads(conn.execute("SELECT metadata FROM chunks").fetchone()[0])
+        queued_record = conn.execute(
+            "SELECT source_file, record_start_offset, record_end_offset, raw_record_hash FROM chunk_source_records"
+        ).fetchone()
     assert queued_metadata == direct_metadata
+    assert queued_record == (source_file, 10, 234, "a" * 64)
