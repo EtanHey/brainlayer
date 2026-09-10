@@ -82,6 +82,8 @@ def get_session_timestamps(jsonl_path: Path) -> Tuple[Optional[str], Optional[st
                         last_ts = ts
                 except json.JSONDecodeError:
                     continue
+    except UnicodeDecodeError as e:
+        logger.warning("Could not read session timestamps as UTF-8 from %s: %s", jsonl_path, e)
     except (OSError, IOError) as e:
         logger.debug("Could not read session timestamps: %s", e)
     return first_ts, last_ts
