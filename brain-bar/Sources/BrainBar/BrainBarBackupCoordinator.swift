@@ -146,9 +146,13 @@ struct BrainLayerBackupScheduleState: Codable, Equatable, Sendable {
     var nextDue: Date?
     var lastStatus: String
     var lastReceipt: String?
+    var destinationPath: String?
+    var destinationDevice: Int64?
+    var destinationInode: Int64?
 
     static let empty = BrainLayerBackupScheduleState(
-        schema: 1, lastAttempt: nil, lastSuccess: nil, nextDue: nil, lastStatus: "never", lastReceipt: nil
+        schema: 1, lastAttempt: nil, lastSuccess: nil, nextDue: nil, lastStatus: "never", lastReceipt: nil,
+        destinationPath: nil, destinationDevice: nil, destinationInode: nil
     )
 }
 
@@ -179,7 +183,9 @@ final class BrainLayerBackupCoordinator: ObservableObject {
     private let stateURL: URL
     private let now: @Sendable () -> Date
     private var task: Task<Void, Never>?
+    private var activeRunID: UUID?
     private var scheduleTimer: DispatchSourceTimer?
+    private var statusObservers: [UUID: @MainActor (Status) -> Void] = [:]
 
     init(
         commandRunner: BrainLayerBackupCommandRunner = BrainLayerBackupCommandRunner(),
@@ -196,6 +202,24 @@ final class BrainLayerBackupCoordinator: ObservableObject {
         scheduleTimer?.cancel()
     }
 
+    @discardableResult
+    func observeStatus(_ observer: @escaping @MainActor (Status) -> Void) -> UUID {
+        let id = UUID()
+        statusObservers[id] = observer
+        observer(status)
+        return id
+    }
+
+    func removeStatusObserver(_ id: UUID) {
+        statusObservers.removeValue(forKey: id)
+    }
+
+    private func publish(_ nextStatus: Status, to callback: @escaping @MainActor (Status) -> Void) {
+        status = nextStatus
+        for observer in statusObservers.values { observer(nextStatus) }
+        callback(nextStatus)
+    }
+
     func startScheduledIfDue(configURL: URL = BrainLayerConfigStore.defaultConfigURL()) {
         if scheduleTimer == nil {
             let timer = DispatchSource.makeTimerSource(queue: .main)
@@ -209,12 +233,16 @@ final class BrainLayerBackupCoordinator: ObservableObject {
         guard task == nil else { return }
         do {
             let config = try BrainLayerConfigStore(configURL: configURL).loadDocument().config
-            guard config.backupEnabled else { status = .idle; return }
+            guard config.backupEnabled else { publish(.idle, to: { _ in }); return }
             let state = try loadScheduleState()
-            guard state.nextDue == nil || state.nextDue! <= now() else { return }
+            guard state.schema == 1 else { throw NSError(domain: "BrainLayerBackupSchedule", code: 1, userInfo: [NSLocalizedDescriptionKey: "Unsupported backup schedule schema \(state.schema)"]) }
+            let destination = config.backupDestinationPath
+            let identity = config.backupDestinationIdentity
+            let changed = state.destinationPath != destination || state.destinationDevice != identity?.stDev || state.destinationInode != identity?.stIno
+            guard changed || state.nextDue == nil || state.nextDue! <= now() else { return }
             startIfConfigured(config: config, configURL: configURL)
         } catch {
-            status = .failed(message: "Could not load backup schedule: \(error)")
+            publish(.failed(message: "Could not load backup schedule: \(error)"), to: { _ in })
         }
     }
 
@@ -246,22 +274,40 @@ final class BrainLayerBackupCoordinator: ObservableObject {
               config.backupDestinationPath != nil,
               config.backupDestinationIdentity != nil,
               !config.backupTranscriptRoots.isEmpty else {
-            status = .failed(message: "Backup needs a saved folder, filesystem identity, and transcript roots.")
-            onStatus(status)
+            publish(.failed(message: "Backup needs a saved folder, filesystem identity, and transcript roots."), to: onStatus)
             return
         }
-        var scheduleState = (try? loadScheduleState()) ?? .empty
+        var scheduleState: BrainLayerBackupScheduleState
+        do {
+            scheduleState = try loadScheduleState()
+            guard scheduleState.schema == 1 else { throw NSError(domain: "BrainLayerBackupSchedule", code: 1, userInfo: [NSLocalizedDescriptionKey: "Unsupported backup schedule schema \(scheduleState.schema)"]) }
+        } catch {
+            publish(.failed(message: "Could not load backup schedule: \(error)"), to: onStatus)
+            return
+        }
         scheduleState.lastAttempt = now()
         scheduleState.lastStatus = "running"
-        try? saveScheduleState(scheduleState)
+        scheduleState.destinationPath = config.backupDestinationPath
+        scheduleState.destinationDevice = config.backupDestinationIdentity?.stDev
+        scheduleState.destinationInode = config.backupDestinationIdentity?.stIno
+        do {
+            try saveScheduleState(scheduleState)
+        } catch {
+            publish(.failed(message: "Could not persist backup schedule: \(error)"), to: onStatus)
+            return
+        }
         let previous = task
         previous?.cancel()
-        status = .running
-        onStatus(status)
+        publish(.running, to: onStatus)
         let roots = config.backupTranscriptRoots
+        let runID = UUID()
+        activeRunID = runID
         task = Task { [commandRunner] in
             if let previous { await previous.value }
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else {
+                if activeRunID == runID { task = nil; activeRunID = nil }
+                return
+            }
             var arguments = [
                 "-I", "-B", "-m", "brainlayer.backup_run_once",
                 "--config", configURL.path,
@@ -269,33 +315,43 @@ final class BrainLayerBackupCoordinator: ObservableObject {
             ]
             for root in roots { arguments += ["--transcript-root", root] }
             let result = await commandRunner.run(arguments)
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else {
+                if activeRunID == runID { task = nil; activeRunID = nil }
+                return
+            }
             if result.terminationStatus == 0,
                let payload = result.output.data(using: .utf8),
                let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
                object["status"] as? String == "local_verified",
                let receipt = object["receipt"] as? String,
                !receipt.isEmpty {
-                status = .localVerified(receipt: receipt)
                 scheduleState.lastSuccess = now()
                 scheduleState.nextDue = now().addingTimeInterval(Self.scheduleInterval)
                 scheduleState.lastStatus = "local_verified"
                 scheduleState.lastReceipt = receipt
-                try? saveScheduleState(scheduleState)
+                do {
+                    try saveScheduleState(scheduleState)
+                    publish(.localVerified(receipt: receipt), to: { _ in })
+                } catch {
+                    publish(.failed(message: "Could not persist backup schedule: (error)"), to: { _ in })
+                }
             } else {
-                let message = String(result.output.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.statusMessageLimit))
-                status = .failed(message: message)
+                var message = String(result.output.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.statusMessageLimit))
                 scheduleState.nextDue = now().addingTimeInterval(Self.failureBackoff)
                 scheduleState.lastStatus = "failed"
-                try? saveScheduleState(scheduleState)
+                do {
+                    try saveScheduleState(scheduleState)
+                } catch {
+                    message += " (schedule persistence failed: (error))"
+                }
+                publish(.failed(message: message), to: { _ in })
             }
-            onStatus(status)
-            task = nil
+            if activeRunID == runID { task = nil; activeRunID = nil }
         }
     }
 
     func cancel() {
         task?.cancel()
-        status = .idle
+        publish(.idle, to: { _ in })
     }
 }

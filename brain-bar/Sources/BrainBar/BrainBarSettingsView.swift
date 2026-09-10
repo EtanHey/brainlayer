@@ -47,6 +47,9 @@ final class BrainBarSettingsViewModel: ObservableObject {
             errorMessage = error.localizedDescription
         }
         applyLaunchdStates(initialLaunchdStates)
+        backupCoordinator.observeStatus { [weak self] status in
+            self?.backupRunStatus = status
+        }
         if refreshStatusOnLoad {
             refreshLaunchdStatus()
         }
