@@ -371,3 +371,72 @@ def test_legacy_unknown_is_persisted_per_manifest_and_new_generation_can_supply_
     assert current.poll_once() == 1
     assert current.registry.native_header_root_basis(str(source)) == "observed_header"
     assert current.registry.native_header_recovery_unknown(str(source)) is None
+    assert current.registry.flush() is True
+    reloaded = OffsetRegistry(registry_path)
+    assert reloaded.native_header_root_basis(str(source)) == "observed_header"
+    assert reloaded.native_header_recovery_unknown(str(source)) is None
+
+
+def test_changed_version_replaces_unknown_diagnostic_across_flush_and_reload(tmp_path: Path) -> None:
+    raw = b"not-json\n"
+    _sessions, source, archive, first_receipt = setup_source(tmp_path, raw)
+    registry_path = tmp_path / "offsets.json"
+    first = OffsetRegistry(registry_path)
+    first.set(str(source), len(raw), source.stat().st_ino, generation=3, raw_archive_receipt=first_receipt)
+    first.record_native_header_recovery_unknown(
+        str(source), generation=3, receipt=first_receipt, reason="malformed_first_record"
+    )
+    assert first.flush() is True
+
+    with source.open("ab") as stream:
+        stream.write(b"still-not-a-header\n")
+    second_receipt = archive.capture(source, "codex")
+    changed = OffsetRegistry(registry_path)
+    changed.record_native_header_recovery_unknown(
+        str(source), generation=3, receipt=second_receipt, reason="malformed_first_record"
+    )
+    assert changed.flush() is True
+
+    assert first_receipt["manifest_sha256"] != second_receipt["manifest_sha256"]
+    assert OffsetRegistry(registry_path).native_header_recovery_unknown(str(source)) == {
+        "reason": "malformed_first_record",
+        "manifest_sha256": second_receipt["manifest_sha256"],
+    }
+
+
+def test_valid_root_wins_over_concurrent_changed_version_unknown_diagnostic(tmp_path: Path) -> None:
+    raw = header(SESSION_A)
+    _sessions, source, archive, first_receipt = setup_source(tmp_path, raw)
+    registry_path = tmp_path / "offsets.json"
+    initial = OffsetRegistry(registry_path)
+    initial.set(str(source), 0, source.stat().st_ino, generation=5)
+    initial.record_native_header_recovery_unknown(
+        str(source), generation=5, receipt=first_receipt, reason="malformed_first_record"
+    )
+    assert initial.flush() is True
+    root_writer = OffsetRegistry(registry_path)
+    stale_diagnostic_writer = OffsetRegistry(registry_path)
+
+    root_writer.reserve_native_header(
+        str(source),
+        offset=0,
+        generation=5,
+        provider="codex",
+        root_receipt=first_receipt,
+        record_start_offset=0,
+        record_end_offset=len(raw),
+        raw_record_hash=hashlib.sha256(raw).hexdigest(),
+    )
+    assert root_writer.flush() is True
+    with source.open("ab") as stream:
+        stream.write(b'{"type":"response_item"}\n')
+    second_receipt = archive.capture(source, "codex")
+    stale_diagnostic_writer.record_native_header_recovery_unknown(
+        str(source), generation=5, receipt=second_receipt, reason="first_record_not_session_meta"
+    )
+    assert stale_diagnostic_writer.flush() is True
+
+    reloaded = OffsetRegistry(registry_path)
+    assert reloaded.native_header_root_receipt(str(source)) == first_receipt
+    assert reloaded.native_header_root_basis(str(source)) == "observed_header"
+    assert reloaded.native_header_recovery_unknown(str(source)) is None

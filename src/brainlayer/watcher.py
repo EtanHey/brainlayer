@@ -66,6 +66,11 @@ _NATIVE_HEADER_REGISTRY_FIELDS = (
     "native_header_pending",
     "native_header_recovery_unknown",
 )
+_NATIVE_HEADER_RESERVATION_FIELDS = (
+    "native_header_root_receipt",
+    "native_header_root_basis",
+    "native_header_pending",
+)
 _NATIVE_HEADER_ROOT_BASES = {"observed_header", "first_admitted_catalog_root"}
 _NATIVE_HEADER_UNKNOWN_REASONS = {
     "no_bounded_lf_record",
@@ -762,9 +767,9 @@ class OffsetRegistry:
 
     @staticmethod
     def _merge_native_header_fields(local_entry: dict, disk_entry: dict) -> dict:
-        """Merge stable native-header fields without allowing same-generation forks."""
+        """Merge immutable reservations and select the winning version diagnostic."""
         merged = dict(local_entry)
-        for field in _NATIVE_HEADER_REGISTRY_FIELDS:
+        for field in _NATIVE_HEADER_RESERVATION_FIELDS:
             local_value = local_entry.get(field)
             disk_value = disk_entry.get(field)
             if local_value is not None and disk_value is not None and local_value != disk_value:
@@ -773,6 +778,8 @@ class OffsetRegistry:
                 merged[field] = copy.deepcopy(disk_value)
         if merged.get("native_header_root_receipt") is not None:
             merged.pop("native_header_recovery_unknown", None)
+        elif "native_header_recovery_unknown" not in merged and "native_header_recovery_unknown" in disk_entry:
+            merged["native_header_recovery_unknown"] = copy.deepcopy(disk_entry["native_header_recovery_unknown"])
         return merged
 
     def flush(self) -> bool:
