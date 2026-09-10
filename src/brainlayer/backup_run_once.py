@@ -421,15 +421,33 @@ def run_backup_once(
                     visible_identity = None
                 if visible_identity is None or tuple(visible_identity.values()) != tuple(expected_destination_identity):
                     generation_name = str(result.get("generation", ""))
+                    actual = None if visible_identity is None else tuple(visible_identity.values())
+                    replacement_error = (
+                        f"backup destination identity changed after generation: "
+                        f"expected={expected_destination_identity} actual={actual}"
+                    )
                     if generation_name:
                         try:
                             os.unlink(f"{generation_name}/receipt.complete.json", dir_fd=destination_fd)
                         except OSError:
                             pass
-                    actual = None if visible_identity is None else tuple(visible_identity.values())
-                    raise BackupRunOnceError(
-                        f"backup destination identity changed after generation: expected={expected_destination_identity} actual={actual}"
-                    )
+                        try:
+                            _atomic_json(
+                                Path(generation_name) / "receipt.incomplete.json",
+                                {
+                                    "status": "failed",
+                                    "generation": generation_name,
+                                    "failed_at": dt.datetime.now(dt.UTC).isoformat(),
+                                    "error_type": "BackupRunOnceError",
+                                    "error": replacement_error,
+                                    "destination_identity": expected_destination_identity,
+                                    "remote_verified": False,
+                                    "cleanup_permitted": False,
+                                },
+                            )
+                        except Exception:
+                            pass
+                    raise BackupRunOnceError(replacement_error)
                 return result
             finally:
                 os.fchdir(previous_cwd)
