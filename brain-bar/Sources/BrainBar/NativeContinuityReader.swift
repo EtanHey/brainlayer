@@ -357,12 +357,21 @@ extension NativeContinuityReader {
         guard required.isSubset(of: columns) else {
             return .init(contexts: [], status: "unavailable_legacy_schema", evidenceKeys: [])
         }
+        guard case .value(let indexColumns) = indexColumns(db, "idx_chunk_source_records_physical") else {
+            return .init(contexts: [], status: "unavailable_database_error", evidenceKeys: [])
+        }
+        guard indexColumns == [
+            "source_file", "record_start_offset", "record_end_offset",
+            "raw_record_hash", "session_id", "record_key",
+        ] else {
+            return .init(contexts: [], status: "unavailable_missing_physical_index", evidenceKeys: [])
+        }
         let sql = """
         SELECT record_key,
                CASE WHEN length(CAST(record_context_json AS BLOB)) <= 32768
                     THEN record_context_json ELSE NULL END,
                CASE WHEN length(CAST(record_context_json AS BLOB)) > 32768 THEN 1 ELSE 0 END
-        FROM chunk_source_records
+        FROM chunk_source_records INDEXED BY idx_chunk_source_records_physical
         WHERE source_file=? AND record_start_offset=? AND record_end_offset=?
           AND raw_record_hash=? AND session_id=?
         ORDER BY record_key

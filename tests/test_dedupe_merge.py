@@ -1099,3 +1099,38 @@ def test_source_record_writer_migrates_legacy_schema_and_unions_complete_context
     contexts = conn.execute("SELECT record_context_json FROM chunk_source_records").fetchone()[0]
     conn.close()
     assert contexts == '[{"origin":"declared","uuid":"native-2"},{"parentUuid":"p-1","uuid":"native-1"}]'
+
+
+def test_source_record_writer_migrates_exact_physical_lookup_index_without_losing_rows(tmp_path):
+    db_path = _db(tmp_path, _pair())
+    conn = sqlite3.connect(db_path)
+    conn.execute("""CREATE TABLE chunk_source_records (
+        record_key TEXT PRIMARY KEY, canonical_chunk_id TEXT NOT NULL, source_file TEXT NOT NULL,
+        record_start_offset INTEGER NOT NULL, record_end_offset INTEGER NOT NULL,
+        raw_record_hash TEXT NOT NULL, session_id TEXT, observed_at TEXT NOT NULL,
+        record_context_json TEXT NOT NULL DEFAULT '[]')""")
+    row = ("record-1", "old-one", "fixture.jsonl", 5, 17, "d" * 64, "session", "2026-09-10T00:00:00Z", "[]")
+    conn.execute("INSERT INTO chunk_source_records VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", row)
+
+    ensure_chunk_source_records(conn)
+
+    assert conn.execute("SELECT * FROM chunk_source_records").fetchone() == row
+    assert [entry[2] for entry in conn.execute("PRAGMA index_info('idx_chunk_source_records_physical')")] == [
+        "source_file",
+        "record_start_offset",
+        "record_end_offset",
+        "raw_record_hash",
+        "session_id",
+        "record_key",
+    ]
+    plan = conn.execute(
+        "EXPLAIN QUERY PLAN SELECT record_key FROM chunk_source_records INDEXED BY idx_chunk_source_records_physical "
+        "WHERE source_file=? AND record_start_offset=? AND record_end_offset=? AND raw_record_hash=? AND session_id=? "
+        "ORDER BY record_key LIMIT 17",
+        ("fixture.jsonl", 5, 17, "d" * 64, "session"),
+    ).fetchall()
+    assert any(
+        "SEARCH chunk_source_records USING COVERING INDEX idx_chunk_source_records_physical" in entry[3]
+        for entry in plan
+    )
+    conn.close()

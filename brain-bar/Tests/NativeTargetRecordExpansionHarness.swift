@@ -171,6 +171,38 @@ private func createSourceRecordSchema(_ db: OpaquePointer?) {
     """)
 }
 
+private func createSourceRecordPhysicalIndex(_ db: OpaquePointer?) {
+    execute(db, """
+    CREATE INDEX idx_chunk_source_records_physical ON chunk_source_records(
+        source_file, record_start_offset, record_end_offset, raw_record_hash, session_id, record_key
+    )
+    """)
+}
+
+private func sourceRecordPhysicalPlan(_ db: OpaquePointer?) -> [String] {
+    let sql = """
+    EXPLAIN QUERY PLAN
+    SELECT record_key FROM chunk_source_records INDEXED BY idx_chunk_source_records_physical
+    WHERE source_file=? AND record_start_offset=? AND record_end_offset=?
+      AND raw_record_hash=? AND session_id=?
+    ORDER BY record_key LIMIT 17
+    """
+    var statement: OpaquePointer?
+    require(sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, "plan prepare")
+    defer { sqlite3_finalize(statement) }
+    for (index, value) in [(1, "/generated/fixture.jsonl"), (4, String(repeating: "9", count: 64)), (5, "session-target")] {
+        require(value.withCString { sqlite3_bind_text(statement, Int32(index), $0, -1, transient) } == SQLITE_OK, "plan bind \(index)")
+    }
+    sqlite3_bind_int64(statement, 2, 101)
+    sqlite3_bind_int64(statement, 3, 118)
+    var details: [String] = []
+    while sqlite3_step(statement) == SQLITE_ROW {
+        guard let raw = sqlite3_column_text(statement, 3) else { fatalError("missing plan detail") }
+        details.append(String(cString: raw))
+    }
+    return details
+}
+
 private func insertSourceRecord(
     _ db: OpaquePointer?,
     key: String,
@@ -314,6 +346,24 @@ struct NativeTargetRecordExpansionHarness {
         execute(handle, "UPDATE native_record_links SET source_file=CAST(X'2f610062' AS TEXT) WHERE record_key='\(nulSourceKey)'")
         insertRecord(handle, key: invalidUTF8Key, start: 1_001, hash: hash, version: 1, targetsJSON: "[]")
         execute(handle, "UPDATE native_record_links SET source_file=CAST(X'ff' AS TEXT) WHERE record_key='\(invalidUTF8Key)'")
+
+        let unindexedResponse = request(router, arguments: ["source_record_key": selectedKey, "occurrence_max_bytes": 32_000])
+        let unindexedEmitter = (structured(unindexedResponse)["attribution"] as? [String: Any])?["recorded_emitter"] as? [String: Any] ?? [:]
+        require(unindexedEmitter["declared_agent_label"] is NSNull, "unindexed context was scanned")
+        require(unindexedEmitter["declared_agent_label_status"] as? String == "unknown_missing_record_context_physical_index", "missing physical index status")
+
+        execute(handle, "CREATE INDEX idx_chunk_source_records_physical ON chunk_source_records(source_file)")
+        let wrongIndexResponse = request(router, arguments: ["source_record_key": selectedKey, "occurrence_max_bytes": 32_000])
+        let wrongIndexEmitter = (structured(wrongIndexResponse)["attribution"] as? [String: Any])?["recorded_emitter"] as? [String: Any] ?? [:]
+        require(wrongIndexEmitter["declared_agent_label"] is NSNull, "wrong-shaped index admitted context")
+        require(wrongIndexEmitter["declared_agent_label_status"] as? String == "unknown_missing_record_context_physical_index", "wrong-shaped physical index status")
+        execute(handle, "DROP INDEX idx_chunk_source_records_physical")
+
+        createSourceRecordPhysicalIndex(handle)
+        execute(handle, "ANALYZE chunk_source_records")
+        let plan = sourceRecordPhysicalPlan(handle)
+        require(plan.contains { $0.contains("SEARCH chunk_source_records USING INDEX idx_chunk_source_records_physical") || $0.contains("SEARCH chunk_source_records USING COVERING INDEX idx_chunk_source_records_physical") }, "physical lookup plan: \(plan)")
+        require(!plan.contains { $0.contains("SCAN chunk_source_records") }, "physical lookup scanned: \(plan)")
 
         let selectedResponse = request(router, arguments: ["source_record_key": selectedKey, "occurrence_max_bytes": 32_000])
         let selected = structured(selectedResponse)

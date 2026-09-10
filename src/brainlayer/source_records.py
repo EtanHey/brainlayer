@@ -48,6 +48,12 @@ def ensure_chunk_source_records(conn: Any, *, migrate: bool = True) -> None:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(chunk_source_records)")}
         if "record_context_json" not in columns:
             conn.execute("ALTER TABLE chunk_source_records ADD COLUMN record_context_json TEXT NOT NULL DEFAULT '[]'")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chunk_source_records_physical "
+            "ON chunk_source_records("
+            "source_file, record_start_offset, record_end_offset, raw_record_hash, session_id, record_key"
+            ")"
+        )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_chunk_source_records_canonical ON chunk_source_records(canonical_chunk_id)"
     )

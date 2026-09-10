@@ -76,6 +76,9 @@ enum NativeAttributionAdapter {
         if contextStatus == "unavailable_legacy_schema" {
             return (NSNull(), "unknown_legacy_record_context_schema")
         }
+        if contextStatus == "unavailable_missing_physical_index" {
+            return (NSNull(), "unknown_missing_record_context_physical_index")
+        }
         if contextStatus == "unavailable_database_error" {
             return (NSNull(), "unknown_record_context_read_error")
         }
