@@ -5345,7 +5345,11 @@ final class BrainDatabase: @unchecked Sendable {
                 row["raw_record_hash"] = columnText(stmt, 4) as Any
                 let contextOmitted = sqlite3_column_int(stmt, 13) != 0
                 let contextRaw = columnText(stmt, 12)
+                let attributionContexts: [[String: Any]]
+                let attributionContextStatus: String
                 if contextOmitted {
+                    attributionContexts = []
+                    attributionContextStatus = "omitted_byte_cap"
                     row["declared_record_contexts"] = []
                     row["declared_record_context_status"] = "omitted_byte_cap"
                     row["declared_record_context_omission"] = "Context exceeded the per-record 32768-byte SQL fetch cap."
@@ -5353,12 +5357,21 @@ final class BrainDatabase: @unchecked Sendable {
                           let data = contextRaw.data(using: .utf8),
                           let contexts = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
                           !contexts.isEmpty {
+                    attributionContexts = contexts
+                    attributionContextStatus = "declared_unverified"
                     row["declared_record_contexts"] = contexts
                     row["declared_record_context_status"] = "declared_unverified"
                 } else {
+                    attributionContexts = []
+                    attributionContextStatus = hasRecordContexts ? "unavailable_missing" : "unavailable_legacy_schema"
                     row["declared_record_contexts"] = []
                     row["declared_record_context_status"] = hasRecordContexts ? "unavailable_missing" : "unavailable_legacy_schema"
                 }
+                row["attribution"] = NativeAttributionAdapter.project(
+                    contexts: attributionContexts,
+                    contextStatus: attributionContextStatus,
+                    evidenceKeys: [columnText(stmt, 9)].compactMap { $0 }
+                )
                 let recordRow = row
                 row["structural_continuity"] = structuralContinuity(
                     on: db,
@@ -5375,21 +5388,31 @@ final class BrainDatabase: @unchecked Sendable {
                 }
             } else {
                 row["incoming_content_hash"] = columnText(stmt, 4) as Any
+                row["attribution"] = NativeAttributionAdapter.project(
+                    contexts: [],
+                    contextStatus: "unavailable_field_only",
+                    evidenceKeys: [columnText(stmt, 9)].compactMap { $0 }
+                )
             }
             if sqlite3_column_type(stmt, 10) != SQLITE_NULL {
                 row["record_start_offset"] = sqlite3_column_int64(stmt, 10)
                 row["record_end_offset"] = sqlite3_column_int64(stmt, 11)
             }
             let encoded = (try? JSONSerialization.data(withJSONObject: row)) ?? Data()
+            var boundedRow = row
             if usedBytes + encoded.count > boundedBytes {
+                boundedRow["attribution"] = NativeAttributionAdapter.omittedResponseBudget
+            }
+            let boundedEncoded = (try? JSONSerialization.data(withJSONObject: boundedRow)) ?? Data()
+            if usedBytes + boundedEncoded.count > boundedBytes {
                 if rows.isEmpty {
                     omitted.append(["evidence_key": row["evidence_key"] as Any, "reason": "row_exceeds_byte_budget"])
                 }
                 hasMore = true
                 break
             }
-            usedBytes += encoded.count
-            rows.append(row)
+            usedBytes += boundedEncoded.count
+            rows.append(boundedRow)
         }
         if stepRC != SQLITE_ROW && stepRC != SQLITE_DONE {
             throw DBError.step(stepRC)

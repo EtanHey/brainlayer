@@ -155,6 +155,52 @@ private func createTargetSchema(_ db: OpaquePointer?, primaryKey: Bool = true) {
     """)
 }
 
+private func createSourceRecordSchema(_ db: OpaquePointer?) {
+    execute(db, """
+    CREATE TABLE chunk_source_records(
+        record_key TEXT PRIMARY KEY,
+        canonical_chunk_id TEXT NOT NULL,
+        source_file TEXT NOT NULL,
+        record_start_offset INTEGER NOT NULL,
+        record_end_offset INTEGER NOT NULL,
+        raw_record_hash TEXT NOT NULL,
+        session_id TEXT,
+        observed_at TEXT NOT NULL,
+        record_context_json TEXT NOT NULL DEFAULT '[]'
+    )
+    """)
+}
+
+private func insertSourceRecord(
+    _ db: OpaquePointer?,
+    key: String,
+    chunk: String,
+    source: String = "/generated/fixture.jsonl",
+    start: Int64,
+    hash: String,
+    session: String = "session-target",
+    contexts: [[String: Any]]
+) {
+    let sql = """
+    INSERT INTO chunk_source_records(
+        record_key,canonical_chunk_id,source_file,record_start_offset,record_end_offset,
+        raw_record_hash,session_id,observed_at,record_context_json
+    ) VALUES(?,?,?,?,?,?,?,'2026-09-10T00:00:00Z',?)
+    """
+    var statement: OpaquePointer?
+    require(sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, "source insert prepare")
+    defer { sqlite3_finalize(statement) }
+    let strings: [(Int32, String)] = [
+        (1, key), (2, chunk), (3, source), (6, hash), (7, session), (8, compactJSON(contexts)),
+    ]
+    for (index, value) in strings {
+        require(value.withCString { sqlite3_bind_text(statement, index, $0, -1, transient) } == SQLITE_OK, "source bind \(index)")
+    }
+    sqlite3_bind_int64(statement, 4, start)
+    sqlite3_bind_int64(statement, 5, start + 17)
+    require(sqlite3_step(statement) == SQLITE_DONE, "source insert step")
+}
+
 @main
 struct NativeTargetRecordExpansionHarness {
     static func main() throws {
@@ -199,6 +245,7 @@ struct NativeTargetRecordExpansionHarness {
         require(status(request(router, arguments: ["source_record_key": selectedKey])) == "unavailable_legacy_target_schema", "non-text record key accepted")
         execute(handle, "DROP TABLE native_record_links")
         createTargetSchema(handle)
+        createSourceRecordSchema(handle)
 
         let selectedTargets = [
             target(
@@ -221,12 +268,36 @@ struct NativeTargetRecordExpansionHarness {
             ),
         ]
         insertRecord(handle, key: selectedKey, start: 101, hash: hash, version: 1, targetsJSON: compactJSON(selectedTargets), diagnosticsJSON: compactJSON(["fixture diagnostic"]))
+        insertSourceRecord(
+            handle,
+            key: "selected-source-context",
+            chunk: "selected-chunk",
+            start: 101,
+            hash: hash,
+            contexts: [["attributionAgent": "workflow-subagent", "declared_message_role": "assistant"]]
+        )
         insertRecord(handle, key: decoyKey, source: "/generated/adjacent.jsonl", start: 102, hash: String(repeating: "8", count: 64), version: 1, targetsJSON: compactJSON([target(tool: "send_message", handle: "decoy", kind: "agent_handle", callID: nil, rawPointer: nil, decodedPointer: "/recipient", pointerKind: "direct_raw_json")]))
         insertRecord(handle, key: versionZeroKey, start: 201, hash: hash, version: 0, targetsJSON: "[]")
         insertRecord(handle, key: unknownVersionKey, start: 301, hash: hash, version: 7, targetsJSON: "[]")
         insertRecord(handle, key: malformedKey, start: 401, hash: hash, version: 1, targetsJSON: "{")
         insertRecord(handle, key: budgetKey, start: 501, hash: hash, version: 1, targetsJSON: compactJSON([target(tool: "send_message", handle: String(repeating: "z", count: 3_000), kind: "agent_handle", callID: nil, rawPointer: nil, decodedPointer: "/recipient", pointerKind: "direct_raw_json")]))
         insertRecord(handle, key: emptyKey, start: 601, hash: hash, version: 1, targetsJSON: "[]")
+        insertSourceRecord(
+            handle,
+            key: "conflict-a",
+            chunk: "conflict-a",
+            start: 601,
+            hash: hash,
+            contexts: [["attributionAgent": "workflow-subagent", "declared_message_role": "assistant"]]
+        )
+        insertSourceRecord(
+            handle,
+            key: "conflict-b",
+            chunk: "conflict-b",
+            start: 601,
+            hash: hash,
+            contexts: [["attributionAgent": "source-agent", "declared_message_role": "assistant"]]
+        )
         let numericBoolean = compactJSON([[
             "tool_name": "send_message",
             "target": "numeric",
@@ -257,6 +328,18 @@ struct NativeTargetRecordExpansionHarness {
         require(selected["raw_record_hash"] as? String == hash, "hash")
         require(selected["target_extraction_version"] as? Int == 1, "version")
         require(selected["evidence_boundary"] as? String == "Declared target handles are unverified; no delivery, recipient identity, relay, or authorship is inferred.", "evidence boundary")
+        let selectedAttribution = selected["attribution"] as? [String: Any] ?? [:]
+        let selectedEmitter = selectedAttribution["recorded_emitter"] as? [String: Any] ?? [:]
+        require(selectedEmitter["principal"] is NSNull, "class label promoted to principal")
+        require(selectedEmitter["principal_status"] as? String == "unknown_no_distinct_identity_binding", "principal status")
+        require(selectedEmitter["declared_agent_label"] as? String == "workflow-subagent", "declared agent label")
+        require(selectedEmitter["declared_agent_label_status"] as? String == "declared_unverified", "label status")
+        require(selectedEmitter["raw_declared_role"] as? String == "assistant", "raw role")
+        require((selectedAttribution["observed_sender"] as? [String: Any])?["principal"] is NSNull, "observed sender fabricated")
+        require((selectedAttribution["observed_sender"] as? [String: Any])?["status"] as? String == "unknown_no_transport_sender_evidence", "observed sender status")
+        require((selectedAttribution["original_content_author"] as? [String: Any])?["principal"] is NSNull, "author fabricated")
+        require((selectedAttribution["original_content_author"] as? [String: Any])?["status"] as? String == "unknown_no_authored_source_lineage", "author status")
+        require((selectedAttribution["relay"] as? [String: Any])?["status"] as? String == "unknown_no_delivery_receipt", "relay status")
         let report = selected["target_report"] as? [String: Any] ?? [:]
         require(report["scope"] as? String == "supported_tool_calls_v1", "scope")
         let targets = report["targets"] as? [[String: Any]] ?? []
@@ -271,7 +354,11 @@ struct NativeTargetRecordExpansionHarness {
         require(text(selectedResponse).contains("raw /payload/arguments; decoded /threadId"), "readable pointers")
 
         require(status(request(router, arguments: ["source_record_key": missingKey])) == "unavailable_source_record_not_found", "unknown key")
-        require(status(request(router, arguments: ["source_record_key": versionZeroKey])) == "unavailable_not_extracted", "version zero")
+        let versionZeroResponse = request(router, arguments: ["source_record_key": versionZeroKey])
+        require(status(versionZeroResponse) == "unavailable_not_extracted", "version zero")
+        let missingEmitter = (structured(versionZeroResponse)["attribution"] as? [String: Any])?["recorded_emitter"] as? [String: Any] ?? [:]
+        require(missingEmitter["declared_agent_label"] is NSNull, "missing label fabricated")
+        require(missingEmitter["declared_agent_label_status"] as? String == "unknown_no_record_context", "missing label status")
         require(status(request(router, arguments: ["source_record_key": unknownVersionKey])) == "unavailable_unknown_target_version", "unknown version")
         require(status(request(router, arguments: ["source_record_key": malformedKey])) == "malformed_catalog_evidence", "malformed report")
         require(status(request(router, arguments: ["source_record_key": numericBooleanKey])) == "malformed_catalog_evidence", "numeric one accepted as true")
@@ -282,6 +369,10 @@ struct NativeTargetRecordExpansionHarness {
         let emptyResponse = request(router, arguments: ["source_record_key": emptyKey])
         require(status(emptyResponse) == "available", "empty extracted status")
         require(((structured(emptyResponse)["target_report"] as? [String: Any])?["targets"] as? [Any])?.isEmpty == true, "empty extracted targets")
+        let conflictEmitter = (structured(emptyResponse)["attribution"] as? [String: Any])?["recorded_emitter"] as? [String: Any] ?? [:]
+        require(conflictEmitter["principal"] is NSNull, "conflict principal fabricated")
+        require(conflictEmitter["declared_agent_label"] is NSNull, "conflict label selected")
+        require(conflictEmitter["declared_agent_label_status"] as? String == "unknown_conflicting_declared_agent_labels", "conflict status")
         require(text(emptyResponse).contains("Recipient absence remains unknown."), "empty interpretation")
 
         let cappedResponse = request(router, arguments: ["source_record_key": budgetKey, "occurrence_max_bytes": 1_024])
@@ -302,6 +393,24 @@ struct NativeTargetRecordExpansionHarness {
         require(result(chunkResponse)["isError"] as? Bool != true, "existing chunk mode failed")
         require(text(chunkResponse).contains("existing chunk expansion body"), "existing chunk content missing")
         require(structured(chunkResponse).isEmpty, "chunk mode unexpectedly became source-record mode")
+
+        try database.insertChunk(id: "attributed-short", content: "attributed chunk expansion body", sessionId: "session-target", project: "fixture", contentType: "assistant_text", importance: 1)
+        insertSourceRecord(
+            handle,
+            key: "chunk-occurrence-context",
+            chunk: "attributed-short",
+            source: "/generated/chunk.jsonl",
+            start: 1_201,
+            hash: String(repeating: "7", count: 64),
+            contexts: [["attributionAgent": "brain-worker", "declared_message_role": "user"]]
+        )
+        let attributedChunkResponse = request(router, arguments: ["chunk_id": "attributed-short", "before": 0, "after": 0])
+        let occurrences = result(attributedChunkResponse)["source_occurrences"] as? [[String: Any]] ?? []
+        let recordOccurrence = occurrences.first { $0["evidence_key"] as? String == "chunk-occurrence-context" } ?? [:]
+        let occurrenceEmitter = (recordOccurrence["attribution"] as? [String: Any])?["recorded_emitter"] as? [String: Any] ?? [:]
+        require(occurrenceEmitter["principal"] is NSNull, "occurrence class promoted to principal")
+        require(occurrenceEmitter["declared_agent_label"] as? String == "brain-worker", "occurrence label")
+        require(occurrenceEmitter["raw_declared_role"] as? String == "user", "occurrence raw role")
 
         let toolsResponse = router.handle(["jsonrpc": "2.0", "id": 90, "method": "tools/list"])
         let tools = (toolsResponse["result"] as? [String: Any])?["tools"] as? [[String: Any]] ?? []

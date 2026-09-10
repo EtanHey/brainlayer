@@ -211,6 +211,19 @@ extension NativeContinuityReader {
             "raw_record_hash": rawHash,
             "target_extraction_version": version,
         ]) { _, new in new }
+        let contextEvidence = exactRecordContexts(
+            db,
+            sessionID: sessionID,
+            sourceFile: sourceFile,
+            startOffset: start,
+            endOffset: end,
+            rawRecordHash: rawHash
+        )
+        result["attribution"] = NativeAttributionAdapter.project(
+            contexts: contextEvidence.contexts,
+            contextStatus: contextEvidence.status,
+            evidenceKeys: contextEvidence.evidenceKeys
+        )
 
         if version == 0 {
             result["status"] = "unavailable_not_extracted"
@@ -318,6 +331,96 @@ extension NativeContinuityReader {
             else { return nil }
         }
         return targets
+    }
+
+    private struct ExactRecordContexts {
+        let contexts: [[String: Any]]
+        let status: String
+        let evidenceKeys: [String]
+    }
+
+    private static func exactRecordContexts(
+        _ db: OpaquePointer?,
+        sessionID: String,
+        sourceFile: String,
+        startOffset: Int64,
+        endOffset: Int64,
+        rawRecordHash: String
+    ) -> ExactRecordContexts {
+        let required = Set([
+            "record_key", "source_file", "record_start_offset", "record_end_offset",
+            "raw_record_hash", "session_id", "record_context_json",
+        ])
+        guard let columns = sourceRecordColumns(db) else {
+            return .init(contexts: [], status: "unavailable_database_error", evidenceKeys: [])
+        }
+        guard required.isSubset(of: columns) else {
+            return .init(contexts: [], status: "unavailable_legacy_schema", evidenceKeys: [])
+        }
+        let sql = """
+        SELECT record_key,
+               CASE WHEN length(CAST(record_context_json AS BLOB)) <= 32768
+                    THEN record_context_json ELSE NULL END,
+               CASE WHEN length(CAST(record_context_json AS BLOB)) > 32768 THEN 1 ELSE 0 END
+        FROM chunk_source_records
+        WHERE source_file=? AND record_start_offset=? AND record_end_offset=?
+          AND raw_record_hash=? AND session_id=?
+        ORDER BY record_key
+        LIMIT 17
+        """
+        guard let stmt = statement(db, sql, [
+            .text(sourceFile), .int(startOffset), .int(endOffset),
+            .text(rawRecordHash), .text(sessionID),
+        ]) else {
+            return .init(contexts: [], status: "unavailable_database_error", evidenceKeys: [])
+        }
+        defer { sqlite3_finalize(stmt) }
+        var contexts: [[String: Any]] = []
+        var evidenceKeys: [String] = []
+        var rowCount = 0
+        while true {
+            let step = sqlite3_step(stmt)
+            if step == SQLITE_DONE { break }
+            guard step == SQLITE_ROW else {
+                return .init(contexts: [], status: "unavailable_database_error", evidenceKeys: [])
+            }
+            rowCount += 1
+            if rowCount > 16 {
+                return .init(contexts: [], status: "omitted_match_cap", evidenceKeys: [])
+            }
+            guard let key = boundedText(stmt, 0, maxBytes: 128) else {
+                return .init(contexts: [], status: "unavailable_database_error", evidenceKeys: [])
+            }
+            evidenceKeys.append(key)
+            if sqlite3_column_int(stmt, 2) != 0 {
+                return .init(contexts: [], status: "omitted_byte_cap", evidenceKeys: evidenceKeys)
+            }
+            guard let raw = boundedText(stmt, 1, maxBytes: 32_768),
+                  let data = raw.data(using: .utf8),
+                  let maps = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+                return .init(contexts: [], status: "unavailable_database_error", evidenceKeys: evidenceKeys)
+            }
+            contexts.append(contentsOf: maps)
+        }
+        return contexts.isEmpty
+            ? .init(contexts: [], status: "unavailable_missing", evidenceKeys: evidenceKeys)
+            : .init(contexts: contexts, status: "declared_unverified", evidenceKeys: evidenceKeys)
+    }
+
+    private static func sourceRecordColumns(_ db: OpaquePointer?) -> Set<String>? {
+        guard let stmt = statement(db, "PRAGMA table_info('chunk_source_records')", []) else {
+            return nil
+        }
+        defer { sqlite3_finalize(stmt) }
+        var columns = Set<String>()
+        while true {
+            let step = sqlite3_step(stmt)
+            if step == SQLITE_DONE { return columns }
+            guard step == SQLITE_ROW, let name = boundedText(stmt, 1, maxBytes: 256) else {
+                return nil
+            }
+            columns.insert(name)
+        }
     }
 
     private static func validDiagnostics(_ raw: String) -> [String]? {
