@@ -1,0 +1,175 @@
+"""Standalone catalog of declared native record linkage; not wired to ingestion yet."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import dataclass
+from typing import Any
+
+MAX_PRESERVED_SEGMENT_BYTES = 4_096
+_SUPPORTED_PROVIDER = "claude"
+
+
+class UnsupportedNativeRecordProvider(ValueError):
+    pass
+
+
+class NativeRecordLinkConflict(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class NativeRecordLinkResult:
+    record_key: str
+    inserted: bool
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+
+
+def _parent_state(headers: dict[str, Any], pointer: str) -> tuple[str, str | None]:
+    if pointer not in headers:
+        return "missing", None
+    value = headers[pointer]
+    if value is None:
+        return "null", None
+    if isinstance(value, str):
+        return "string", value
+    return "invalid", None
+
+
+def _validated_headers(headers: Any) -> tuple[str, str | None, str, str | None, str | None, int, str | None]:
+    if not isinstance(headers, dict):
+        raise ValueError("declared_headers must be a JSON object keyed by JSON Pointer")
+    for pointer in headers:
+        if not isinstance(pointer, str) or not pointer.startswith("/"):
+            raise ValueError("declared_headers keys must be JSON Pointers")
+    uuid = headers.get("/uuid")
+    native_uuid = uuid if isinstance(uuid, str) and uuid else None
+    parent_state, parent_value = _parent_state(headers, "/parentUuid")
+    logical_state, logical_value = _parent_state(headers, "/logicalParentUuid")
+    segment = headers.get("/compactMetadata/preservedSegment")
+    stored_headers = {key: value for key, value in headers.items() if key != "/compactMetadata/preservedSegment"}
+    headers_json = _canonical_json(stored_headers)
+    segment_json = None
+    omitted = 0
+    if "/compactMetadata/preservedSegment" in headers:
+        candidate = _canonical_json(segment)
+        if len(candidate.encode("utf-8")) > MAX_PRESERVED_SEGMENT_BYTES:
+            omitted = 1
+        else:
+            segment_json = candidate
+    return headers_json, native_uuid, parent_state, parent_value, logical_state, logical_value, segment_json, omitted
+
+
+def ensure_native_record_links_schema(conn: Any) -> None:
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS native_record_links (
+            record_key TEXT PRIMARY KEY,
+            provider TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            source_file TEXT NOT NULL,
+            record_start_offset INTEGER NOT NULL,
+            record_end_offset INTEGER NOT NULL,
+            raw_record_hash TEXT NOT NULL,
+            native_uuid TEXT,
+            parent_uuid_state TEXT NOT NULL,
+            parent_uuid_value TEXT,
+            logical_parent_uuid_state TEXT NOT NULL,
+            logical_parent_uuid_value TEXT,
+            declared_headers_json TEXT NOT NULL,
+            preserved_segment_json TEXT,
+            preserved_segment_omitted INTEGER NOT NULL DEFAULT 0
+        )"""
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_native_record_links_uuid "
+        "ON native_record_links(provider, session_id, native_uuid)"
+    )
+
+
+def catalog_native_record(
+    conn: Any,
+    *,
+    provider: str,
+    session_id: str,
+    source_file: str,
+    record_start_offset: int,
+    record_end_offset: int,
+    raw_record_hash: str,
+    declared_headers: dict[str, Any],
+) -> NativeRecordLinkResult:
+    if provider != _SUPPORTED_PROVIDER:
+        raise UnsupportedNativeRecordProvider(f"unsupported provider: {provider!r}")
+    if not isinstance(session_id, str) or not session_id:
+        raise ValueError("explicit non-empty session_id required")
+    if not isinstance(source_file, str) or not source_file:
+        raise ValueError("source_file locator required")
+    if (
+        type(record_start_offset) is not int
+        or type(record_end_offset) is not int
+        or record_start_offset < 0
+        or record_end_offset <= record_start_offset
+    ):
+        raise ValueError("invalid record byte offsets")
+    if not isinstance(raw_record_hash, str) or len(raw_record_hash) != 64:
+        raise ValueError("raw_record_hash must be a SHA-256 hex digest")
+    try:
+        int(raw_record_hash, 16)
+        headers_json, native_uuid, parent_state, parent_value, logical_state, logical_value, segment_json, omitted = (
+            _validated_headers(declared_headers)
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid native record headers") from exc
+    identity = [provider, session_id, source_file, record_start_offset, record_end_offset, raw_record_hash]
+    record_key = hashlib.sha256(_canonical_json(identity).encode("utf-8")).hexdigest()
+    incoming = (
+        provider,
+        session_id,
+        source_file,
+        record_start_offset,
+        record_end_offset,
+        raw_record_hash,
+        native_uuid,
+        parent_state,
+        parent_value,
+        logical_state,
+        logical_value,
+        headers_json,
+        segment_json,
+        omitted,
+    )
+    existing = conn.execute(
+        "SELECT provider, session_id, source_file, record_start_offset, record_end_offset, raw_record_hash, native_uuid, parent_uuid_state, parent_uuid_value, logical_parent_uuid_state, logical_parent_uuid_value, declared_headers_json, preserved_segment_json, preserved_segment_omitted FROM native_record_links WHERE record_key = ?",
+        (record_key,),
+    ).fetchone()
+    if existing is not None:
+        if tuple(existing) != incoming:
+            raise NativeRecordLinkConflict("conflicting declared metadata for one physical native record")
+        return NativeRecordLinkResult(record_key=record_key, inserted=False)
+    conn.execute(
+        "INSERT INTO native_record_links (record_key, provider, session_id, source_file, record_start_offset, record_end_offset, raw_record_hash, native_uuid, parent_uuid_state, parent_uuid_value, logical_parent_uuid_state, logical_parent_uuid_value, declared_headers_json, preserved_segment_json, preserved_segment_omitted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (record_key, *incoming),
+    )
+    return NativeRecordLinkResult(record_key=record_key, inserted=True)
+
+
+def find_native_uuid_records(conn: Any, *, provider: str, session_id: str, native_uuid: str) -> list[dict[str, Any]]:
+    if provider != _SUPPORTED_PROVIDER:
+        raise UnsupportedNativeRecordProvider(f"unsupported provider: {provider!r}")
+    rows = conn.execute(
+        "SELECT record_key, source_file, record_start_offset, record_end_offset, raw_record_hash FROM native_record_links WHERE provider = ? AND session_id = ? AND native_uuid = ? ORDER BY source_file, record_start_offset, record_key",
+        (provider, session_id, native_uuid),
+    ).fetchall()
+    return [
+        {
+            "record_key": row[0],
+            "source_file": row[1],
+            "record_start_offset": row[2],
+            "record_end_offset": row[3],
+            "raw_record_hash": row[4],
+        }
+        for row in rows
+    ]
