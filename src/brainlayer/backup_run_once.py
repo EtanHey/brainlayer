@@ -286,16 +286,18 @@ def run_backup_once(
 
 
 def _managed_backup_config(config_path: Path) -> tuple[Path, tuple[int, int]]:
-    from .config import configured_brainlayer_env_value
+    from . import config as config_module
 
-    enabled = configured_brainlayer_env_value("BRAINLAYER_BACKUP_ENABLED", config_path)
+    enabled = config_module.configured_brainlayer_env_value("BRAINLAYER_BACKUP_ENABLED", config_path)
     if enabled not in {"1", "true", "yes", "on"}:
         raise BackupRunOnceError("backup is disabled in the managed BrainLayer config")
-    destination_value = configured_brainlayer_env_value("BRAINLAYER_BACKUP_DESTINATION", config_path)
+    destination_value = config_module.configured_brainlayer_literal_value(
+        "BRAINLAYER_BACKUP_DESTINATION", config_path
+    )
     if not destination_value or not destination_value.startswith("/"):
         raise BackupRunOnceError("managed backup destination is missing or not absolute")
-    raw_dev = configured_brainlayer_env_value("BRAINLAYER_BACKUP_DESTINATION_ST_DEV", config_path)
-    raw_ino = configured_brainlayer_env_value("BRAINLAYER_BACKUP_DESTINATION_ST_INO", config_path)
+    raw_dev = config_module.configured_brainlayer_env_value("BRAINLAYER_BACKUP_DESTINATION_ST_DEV", config_path)
+    raw_ino = config_module.configured_brainlayer_env_value("BRAINLAYER_BACKUP_DESTINATION_ST_INO", config_path)
     try:
         identity = (int(raw_dev), int(raw_ino))
     except (TypeError, ValueError) as exc:
@@ -308,19 +310,26 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(description="Generate one local BrainLayer backup without retention or upload.")
     parser.add_argument("--config", type=Path, help="managed BrainLayer env file (default: ~/.config/brainlayer/brainlayer.env)")
-    parser.add_argument("--socket-path", type=Path, default=Path("/tmp/brainlayer.sock"))
-    parser.add_argument("--transcript-root", type=Path, action="append", dest="transcript_roots")
+    parser.add_argument("--socket-path", type=Path)
+    parser.add_argument(
+        "--transcript-root",
+        type=Path,
+        action="append",
+        dest="transcript_roots",
+        required=True,
+        help="explicit transcript root to include; repeat for every configured root",
+    )
     parser.add_argument("--generation-id")
     args = parser.parse_args(argv)
     from . import config as config_module
     config_path = (args.config or config_module.get_user_env_path()).expanduser()
     try:
         destination, identity = _managed_backup_config(config_path)
-        roots = args.transcript_roots or jsonl_backup.default_source_roots()
+        roots = args.transcript_roots
         result = run_backup_once(
             destination=destination,
             transcript_roots=roots,
-            socket_path=args.socket_path,
+            socket_path=backup_daily._brainbar_socket_path(args.socket_path),
             generation_id=args.generation_id,
             expected_destination_identity=identity,
         )
@@ -334,6 +343,7 @@ def main(argv: list[str] | None = None) -> int:
         "db_source_path": result["db_source_path"],
         "remote_verified": False,
         "cleanup_permitted": False,
+        "transcript_roots": [str(Path(root).expanduser().resolve()) for root in roots],
     }, sort_keys=True))
     return 0
 

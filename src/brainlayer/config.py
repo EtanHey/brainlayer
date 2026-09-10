@@ -144,6 +144,31 @@ def configured_brainlayer_env_value(name: str, env_path: Path | None = None) -> 
     return selected
 
 
+def configured_brainlayer_literal_value(name: str, env_path: Path | None = None) -> str | None:
+    """Read one managed literal without treating shell metacharacters as commands."""
+    target = env_path or get_user_env_path()
+    try:
+        lines = target.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeDecodeError) as exc:
+        raise RuntimeError(f"Could not read BrainLayer env file {target}: {exc}") from exc
+    selected: str | None = None
+    for line in lines:
+        assignment = _split_launchd_env_assignment(line)
+        if assignment is None or assignment[0] != name:
+            continue
+        try:
+            parsed = shlex.split(assignment[1], comments=False, posix=True)
+        except ValueError as exc:
+            raise RuntimeError(f"{name} has invalid quoting in {target}") from exc
+        value = parsed[0] if parsed else ""
+        if selected is not None:
+            raise RuntimeError(f"duplicate valid {name} assignments in {target}")
+        selected = value
+    return selected
+
+
 def get_brainlayer_db_config_error() -> str | None:
     """Return the runtime DB env validation error that triggered canonical fallback."""
     return _brainlayer_db_config_error

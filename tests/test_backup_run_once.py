@@ -1,4 +1,5 @@
 import json
+import shlex
 import sqlite3
 from pathlib import Path
 
@@ -224,3 +225,44 @@ def test_run_once_rejects_source_replacement_during_bundle(tmp_path, monkeypatch
     generation = next(destination.glob(".brainlayer-backup-*-source-swap"))
     receipt = json.loads((generation / "receipt.incomplete.json").read_text())
     assert receipt["status"] == "failed"
+
+
+def test_cli_reads_literal_destination_and_requires_explicit_roots(tmp_path, monkeypatch, capsys):
+    db = tmp_path / "fixture.db"
+    _fixture_db(db)
+    destination = tmp_path / "backup $literal`path`"
+    destination.mkdir()
+    root = tmp_path / "projects"
+    root.mkdir()
+    (root / "synthetic.jsonl").write_text('{"synthetic":true}\n')
+    identity = destination.stat()
+    config = tmp_path / "brainlayer.env"
+    config.write_text(
+        "\n".join(
+            [
+                "BRAINLAYER_BACKUP_ENABLED=1",
+                f"BRAINLAYER_BACKUP_DESTINATION={shlex.quote(str(destination))}",
+                f"BRAINLAYER_BACKUP_DESTINATION_ST_DEV={identity.st_dev}",
+                f"BRAINLAYER_BACKUP_DESTINATION_ST_INO={identity.st_ino}",
+            ]
+        )
+        + "\n"
+    )
+    monkeypatch.setattr(
+        backup_run_once, "_socket_snapshot", lambda _socket, target, _generation: backup_run_once._offline_snapshot(db, target)
+    )
+    assert backup_run_once.main(["--config", str(config), "--transcript-root", str(root), "--generation-id", "cli"]) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["status"] == "local_verified"
+    assert output["db_source_mode"] == "brainbar_socket"
+    assert output["transcript_roots"] == [str(root.resolve())]
+    assert "backup $literal`path`" in output["receipt"]
+
+
+def test_cli_rejects_implicit_optional_provider_roots(tmp_path, capsys):
+    config = tmp_path / "brainlayer.env"
+    config.write_text("BRAINLAYER_BACKUP_ENABLED=0\n")
+    with pytest.raises(SystemExit) as exit_info:
+        backup_run_once.main(["--config", str(config)])
+    assert exit_info.value.code == 2
+    assert "required" in capsys.readouterr().err
