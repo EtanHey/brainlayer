@@ -21,10 +21,12 @@ from brainlayer.dedupe_merge import (
     MIGRATION_NAME,
     PREIMAGE_TABLE,
     _occurrence_key,
+    _record_key,
     content_key,
     merge_duplicates,
     rollback_migration,
 )
+from brainlayer.source_records import ensure_chunk_source_records, record_watcher_source
 from brainlayer.vector_store import VectorStore
 
 GIT_SHA = "0" * 40
@@ -245,6 +247,110 @@ def test_consolidation_retargets_occurrence_to_survivor_and_collapses_equivalent
     restored = conn.execute("SELECT * FROM chunk_source_occurrences ORDER BY occurrence_key").fetchall()
     conn.close()
     assert restored == before
+
+
+def test_consolidation_retargets_source_records_collapses_key_collision_and_rolls_back_exactly(tmp_path):
+    db_path = _db(tmp_path, _pair())
+    conn = sqlite3.connect(db_path)
+    ensure_chunk_source_records(conn)
+    loser_collision = _record_key("old-one", "same.jsonl", 10, 30, "a" * 64)
+    survivor_collision = _record_key("new-two", "same.jsonl", 10, 30, "a" * 64)
+    loser_unique = _record_key("old-one", "other.jsonl", 40, 80, "b" * 64)
+    conn.executemany(
+        "INSERT INTO chunk_source_records VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (loser_collision, "old-one", "same.jsonl", 10, 30, "a" * 64, "session", "2026-09-10T11:00:00Z"),
+            (survivor_collision, "new-two", "same.jsonl", 10, 30, "a" * 64, "session", "2026-09-10T12:00:00Z"),
+            (loser_unique, "old-one", "other.jsonl", 40, 80, "b" * 64, None, "2026-09-10T11:30:00Z"),
+        ],
+    )
+    conn.commit()
+    before = conn.execute("SELECT * FROM chunk_source_records ORDER BY record_key").fetchall()
+    conn.close()
+
+    result = merge_duplicates(db_path, git_sha=GIT_SHA, apply=True)
+    assert result.source_records_retargeted == 2
+    assert result.source_record_collisions_collapsed == 1
+
+    expected_unique = _record_key("new-two", "other.jsonl", 40, 80, "b" * 64)
+    conn = sqlite3.connect(db_path)
+    after = conn.execute(
+        "SELECT record_key, canonical_chunk_id, source_file, observed_at FROM chunk_source_records ORDER BY source_file"
+    ).fetchall()
+    conn.close()
+    assert after == [
+        (expected_unique, "new-two", "other.jsonl", "2026-09-10T11:30:00Z"),
+        (survivor_collision, "new-two", "same.jsonl", "2026-09-10T11:00:00Z"),
+    ]
+
+    receipt = rollback_migration(db_path)
+    assert receipt["source_records_restored"] == 3
+    assert receipt["value_audit"]["source_records_checked"] == 3
+    conn = sqlite3.connect(db_path)
+    restored = conn.execute("SELECT * FROM chunk_source_records ORDER BY record_key").fetchall()
+    conn.close()
+    assert restored == before
+
+
+def test_source_record_key_matches_watcher_writer_for_unicode_path(tmp_path):
+    db_path = _db(tmp_path, _pair())
+    conn = sqlite3.connect(db_path)
+    ensure_chunk_source_records(conn)
+    digest = "d" * 64
+    source_file = "\u05ea\u05d9\u05e2\u05d5\u05d3.jsonl"
+    record_watcher_source(
+        conn,
+        canonical_chunk_id="old-one",
+        source_file=source_file,
+        metadata={
+            "_line_start_offset": 5,
+            "_line_end_offset": 17,
+            "_raw_record_hash": digest,
+            "session_id": "session",
+        },
+    )
+    conn.commit()
+    actual = conn.execute("SELECT record_key FROM chunk_source_records").fetchone()[0]
+    conn.close()
+    assert actual == _record_key("old-one", source_file, 5, 17, digest)
+
+
+def test_source_record_retarget_failure_rolls_back_chunk_and_record_atomically(tmp_path):
+    db_path = _db(tmp_path, _pair())
+    conn = sqlite3.connect(db_path)
+    ensure_chunk_source_records(conn)
+    original_key = _record_key("old-one", "blocked.jsonl", 2, 9, "c" * 64)
+    conn.execute(
+        "INSERT INTO chunk_source_records VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (original_key, "old-one", "blocked.jsonl", 2, 9, "c" * 64, "session", "2026-09-10T11:00:00Z"),
+    )
+    conn.execute(
+        "CREATE TRIGGER reject_source_record_retarget BEFORE UPDATE OF canonical_chunk_id "
+        "ON chunk_source_records BEGIN SELECT RAISE(ABORT, 'blocked retarget'); END"
+    )
+    conn.commit()
+    before_record = conn.execute("SELECT * FROM chunk_source_records").fetchone()
+    before_chunks = conn.execute("SELECT id, aggregated_into, archived_at, status FROM chunks ORDER BY id").fetchall()
+    conn.close()
+
+    with pytest.raises(sqlite3.IntegrityError, match="blocked retarget"):
+        merge_duplicates(db_path, git_sha=GIT_SHA, apply=True)
+
+    conn = sqlite3.connect(db_path)
+    assert conn.execute("SELECT * FROM chunk_source_records").fetchone() == before_record
+    assert (
+        conn.execute("SELECT id, aggregated_into, archived_at, status FROM chunks ORDER BY id").fetchall()
+        == before_chunks
+    )
+    assert conn.execute("SELECT COUNT(*) FROM dedupe_merge_record_preimage").fetchone()[0] == 0
+    migration_table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'"
+    ).fetchone()
+    assert (
+        migration_table is None
+        or conn.execute("SELECT COUNT(*) FROM schema_migrations WHERE name = ?", (MIGRATION_NAME,)).fetchone()[0] == 0
+    )
+    conn.close()
 
 
 def test_consolidation_occurrence_key_matches_vector_store(tmp_path):

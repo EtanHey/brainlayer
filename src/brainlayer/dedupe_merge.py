@@ -62,6 +62,7 @@ from .chunk_origin_wipe import live_canonical_db_path as live_canonical_db_path
 PREIMAGE_TABLE = "dedupe_merge_preimage"
 ALIAS_PREIMAGE_TABLE = "dedupe_merge_alias_preimage"
 OCCURRENCE_PREIMAGE_TABLE = "dedupe_merge_occurrence_preimage"
+RECORD_PREIMAGE_TABLE = "dedupe_merge_record_preimage"
 MIGRATION_NAME = "2026_08_18_dedupe_merge_archive"
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
@@ -121,6 +122,8 @@ class DedupeMergeResult:
     lineage_repointed: int = 0
     preexisting_alias_cycles: int = 0
     seen_count_transferred: int = 0
+    source_records_retargeted: int = 0
+    source_record_collisions_collapsed: int = 0
     batches: int = 0
     checkpoints: int = 0
     held_reasons: dict[str, int] = field(default_factory=dict)
@@ -248,6 +251,82 @@ def _ensure_alias_table(conn: sqlite3.Connection) -> bool:
     return exists is not None
 
 
+def _record_key(
+    canonical_chunk_id: str,
+    source_file: str,
+    record_start_offset: int,
+    record_end_offset: int,
+    raw_record_hash: str,
+) -> str:
+    """Match source_records.record_watcher_source's canonical-inclusive identity."""
+    payload = [
+        canonical_chunk_id,
+        source_file,
+        record_start_offset,
+        record_end_offset,
+        raw_record_hash,
+    ]
+    return hashlib.sha256(json.dumps(payload, separators=(",", ":")).encode()).hexdigest()
+
+
+def _retarget_source_records(conn: sqlite3.Connection, loser_id: str, survivor_id: str) -> tuple[int, int]:
+    """Move exact raw-record locators and collapse a survivor-key collision."""
+    if (
+        conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'chunk_source_records'").fetchone()
+        is None
+    ):
+        return 0, 0
+    rows = conn.execute(
+        """
+        SELECT record_key, canonical_chunk_id, source_file, record_start_offset,
+               record_end_offset, raw_record_hash, session_id, observed_at
+        FROM chunk_source_records WHERE canonical_chunk_id = ?
+        """,
+        (loser_id,),
+    ).fetchall()
+    collisions = 0
+    for row in rows:
+        new_key = _record_key(survivor_id, row[2], row[3], row[4], row[5])
+        existing = conn.execute(
+            """
+            SELECT record_key, canonical_chunk_id, source_file, record_start_offset,
+                   record_end_offset, raw_record_hash, session_id, observed_at
+            FROM chunk_source_records WHERE record_key = ?
+            """,
+            (new_key,),
+        ).fetchone()
+        _record_source_preimage(conn, row, new_key)
+        if existing is None:
+            conn.execute(
+                "UPDATE chunk_source_records SET record_key = ?, canonical_chunk_id = ? WHERE record_key = ?",
+                (new_key, survivor_id, row[0]),
+            )
+            continue
+        _record_source_preimage(conn, existing, new_key)
+        conn.execute(
+            """
+            UPDATE chunk_source_records
+            SET session_id = COALESCE(session_id, ?),
+                observed_at = MIN(observed_at, ?)
+            WHERE record_key = ?
+            """,
+            (row[6], row[7], new_key),
+        )
+        conn.execute("DELETE FROM chunk_source_records WHERE record_key = ?", (row[0],))
+        collisions += 1
+    return len(rows), collisions
+
+
+def _record_source_preimage(conn: sqlite3.Connection, row: sqlite3.Row | tuple, final_key: str) -> None:
+    conn.execute(
+        f"""INSERT OR IGNORE INTO {RECORD_PREIMAGE_TABLE}
+        (record_key, canonical_chunk_id, source_file, record_start_offset,
+         record_end_offset, raw_record_hash, session_id, observed_at, final_key)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        [*row[:8], final_key],
+    )
+
+
 def _occurrence_key(
     canonical_chunk_id: str,
     source_file: str,
@@ -263,9 +342,12 @@ def _occurrence_key(
 
 def _retarget_occurrences(conn: sqlite3.Connection, loser_id: str, survivor_id: str) -> None:
     """Move loser links to the survivor without losing an existing equivalent link."""
-    if conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'chunk_source_occurrences'"
-    ).fetchone() is None:
+    if (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'chunk_source_occurrences'"
+        ).fetchone()
+        is None
+    ):
         return
     rows = conn.execute(
         """
@@ -276,9 +358,7 @@ def _retarget_occurrences(conn: sqlite3.Connection, loser_id: str, survivor_id: 
         (loser_id,),
     ).fetchall()
     for row in rows:
-        new_key = _occurrence_key(
-            survivor_id, row[2], row[3], row[4], row[5], row[6]
-        )
+        new_key = _occurrence_key(survivor_id, row[2], row[3], row[4], row[5], row[6])
         existing = conn.execute(
             "SELECT occurrence_key, canonical_chunk_id, source_file, source_line, source_pointer, session_id, incoming_content_hash, chunk_created_at, observed_at, work_context_json FROM chunk_source_occurrences WHERE occurrence_key = ?",
             (new_key,),
@@ -378,6 +458,13 @@ def merge_duplicates(
                 "source_line INTEGER NOT NULL, source_pointer TEXT NOT NULL, session_id TEXT, "
                 "incoming_content_hash TEXT NOT NULL, chunk_created_at TEXT, observed_at TEXT NOT NULL, "
                 "work_context_json TEXT NOT NULL, final_key TEXT NOT NULL)"
+            )
+            conn.execute(
+                f"CREATE TABLE IF NOT EXISTS {RECORD_PREIMAGE_TABLE} ("
+                "record_key TEXT PRIMARY KEY, canonical_chunk_id TEXT NOT NULL, source_file TEXT NOT NULL, "
+                "record_start_offset INTEGER NOT NULL, record_end_offset INTEGER NOT NULL, "
+                "raw_record_hash TEXT NOT NULL, session_id TEXT, observed_at TEXT NOT NULL, "
+                "final_key TEXT NOT NULL)"
             )
             if has_alias:
                 conn.execute(
@@ -517,6 +604,11 @@ def merge_duplicates(
                             [*assignments.values(), loser_state["id"]],
                         )
                         _retarget_occurrences(conn, str(loser_state["id"]), str(survivor["id"]))
+                        retargeted, collisions = _retarget_source_records(
+                            conn, str(loser_state["id"]), str(survivor["id"])
+                        )
+                        result.source_records_retargeted += retargeted
+                        result.source_record_collisions_collapsed += collisions
                         result.losers_archived += 1
                         seen_total += int(loser_state.get("seen_count") or 0)
 
@@ -646,6 +738,8 @@ def merge_duplicates(
             "seen_count_transferred": result.seen_count_transferred,
             "preexisting_alias_cycles": result.preexisting_alias_cycles,
             "lineage_repointed": result.lineage_repointed,
+            "source_records_retargeted": result.source_records_retargeted,
+            "source_record_collisions_collapsed": result.source_record_collisions_collapsed,
         }
         conn.execute(
             "INSERT OR REPLACE INTO schema_migrations(name, applied_at, details) VALUES (?, ?, ?)",
@@ -847,7 +941,7 @@ def _assert_rollback_restored_values(conn: sqlite3.Connection, tables: set[str])
     the true pre-migration state, and raises rather than reporting a clean count
     over wrong data.
     """
-    audited = {"chunks_checked": 0, "aliases_checked": 0}
+    audited = {"chunks_checked": 0, "aliases_checked": 0, "source_records_checked": 0}
     mismatches: list[str] = []
 
     columns = [r[1] for r in conn.execute(f"PRAGMA table_info({PREIMAGE_TABLE})") if r[1] != "id"]
@@ -892,6 +986,43 @@ def _assert_rollback_restored_values(conn: sqlite3.Connection, tables: set[str])
             if live.get(old) != expected and len(mismatches) < 5:
                 mismatches.append(f"chunk_id_alias.{old}: {live.get(old)!r} != {expected!r}")
 
+    if RECORD_PREIMAGE_TABLE in tables and "chunk_source_records" in tables:
+        record_fields = (
+            "record_key",
+            "canonical_chunk_id",
+            "source_file",
+            "record_start_offset",
+            "record_end_offset",
+            "raw_record_hash",
+            "session_id",
+            "observed_at",
+        )
+        select_pre = ", ".join(f"p.{field} AS pre_{field}" for field in record_fields)
+        select_now = ", ".join(f"r.{field} AS now_{field}" for field in record_fields)
+        for row in conn.execute(
+            f"SELECT {select_pre}, {select_now} FROM {RECORD_PREIMAGE_TABLE} p "
+            "LEFT JOIN chunk_source_records r ON r.record_key = p.record_key"
+        ):
+            audited["source_records_checked"] += 1
+            for field in record_fields:
+                if row[f"pre_{field}"] != row[f"now_{field}"]:
+                    if len(mismatches) < 5:
+                        mismatches.append(
+                            f"chunk_source_records.{row['pre_record_key']}.{field}: "
+                            f"{row[f'now_{field}']!r} != {row[f'pre_{field}']!r}"
+                        )
+        stray = conn.execute(
+            f"""SELECT r.record_key FROM chunk_source_records r
+            JOIN (SELECT DISTINCT final_key FROM {RECORD_PREIMAGE_TABLE}) f
+              ON f.final_key = r.record_key
+            LEFT JOIN {RECORD_PREIMAGE_TABLE} p ON p.record_key = r.record_key
+            WHERE p.record_key IS NULL LIMIT 5"""
+        ).fetchall()
+        mismatches.extend(
+            f"chunk_source_records.{row[0]}: migration final key remained after rollback"
+            for row in stray[: max(0, 5 - len(mismatches))]
+        )
+
     if mismatches:
         raise RuntimeError(f"rollback did not restore the pre-migration values: {mismatches}")
     return audited
@@ -918,6 +1049,7 @@ def rollback_migration(db_path: Path, *, allow_live: bool = False) -> dict[str, 
         "aliases_restored": 0,
         "aliases_removed": 0,
         "preimage_tables": "retained",
+        "source_records_restored": 0,
     }
     try:
         conn.execute("PRAGMA busy_timeout=30000")
@@ -966,6 +1098,30 @@ def rollback_migration(db_path: Path, *, allow_live: bool = False) -> dict[str, 
                         [(r["old_chunk_id"], r["canonical_chunk_id"], r["deprecated_at"]) for r in restore],
                     )
                     out["aliases_restored"] = len(restore)
+            if RECORD_PREIMAGE_TABLE in tables and "chunk_source_records" in tables:
+                record_rows = conn.execute(f"SELECT * FROM {RECORD_PREIMAGE_TABLE}").fetchall()
+                final_keys = sorted({row["final_key"] for row in record_rows})
+                if final_keys:
+                    conn.executemany(
+                        "DELETE FROM chunk_source_records WHERE record_key = ?",
+                        [(key,) for key in final_keys],
+                    )
+                fields = (
+                    "record_key",
+                    "canonical_chunk_id",
+                    "source_file",
+                    "record_start_offset",
+                    "record_end_offset",
+                    "raw_record_hash",
+                    "session_id",
+                    "observed_at",
+                )
+                conn.executemany(
+                    f"INSERT OR REPLACE INTO chunk_source_records ({', '.join(fields)}) "
+                    f"VALUES ({', '.join('?' for _ in fields)})",
+                    [[row[field] for field in fields] for row in record_rows],
+                )
+                out["source_records_restored"] = len(record_rows)
             if OCCURRENCE_PREIMAGE_TABLE in tables and "chunk_source_occurrences" in tables:
                 occurrence_rows = conn.execute(f"SELECT * FROM {OCCURRENCE_PREIMAGE_TABLE}").fetchall()
                 final_keys = sorted({row["final_key"] for row in occurrence_rows})
@@ -974,8 +1130,16 @@ def rollback_migration(db_path: Path, *, allow_live: bool = False) -> dict[str, 
                         "DELETE FROM chunk_source_occurrences WHERE occurrence_key = ?", [(key,) for key in final_keys]
                     )
                 fields = (
-                    "occurrence_key", "canonical_chunk_id", "source_file", "source_line", "source_pointer",
-                    "session_id", "incoming_content_hash", "chunk_created_at", "observed_at", "work_context_json",
+                    "occurrence_key",
+                    "canonical_chunk_id",
+                    "source_file",
+                    "source_line",
+                    "source_pointer",
+                    "session_id",
+                    "incoming_content_hash",
+                    "chunk_created_at",
+                    "observed_at",
+                    "work_context_json",
                 )
                 conn.executemany(
                     "INSERT OR REPLACE INTO chunk_source_occurrences VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1014,6 +1178,8 @@ def _result_payload(db_path: Path, *, apply: bool, result: DedupeMergeResult) ->
         "aliases_repointed": result.aliases_repointed,
         "aliases_dropped_survivor_source": result.aliases_dropped_survivor_source,
         "lineage_repointed": result.lineage_repointed,
+        "source_records_retargeted": result.source_records_retargeted,
+        "source_record_collisions_collapsed": result.source_record_collisions_collapsed,
         "preexisting_alias_cycles": result.preexisting_alias_cycles,
         "batches": result.batches,
         "checkpoints": result.checkpoints,
