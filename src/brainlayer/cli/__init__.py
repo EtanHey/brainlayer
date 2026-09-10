@@ -3442,6 +3442,7 @@ def watch(
 
     from ..parent_death import install_parent_death_watcher
     from ..paths import get_db_path
+    from ..raw_source_archive import create_raw_source_archive
     from ..watcher import JSONLWatcher, WatchRoot, default_watch_roots, enforce_min_poll_interval
     from ..watcher_bridge import create_flush_callback
 
@@ -3477,6 +3478,7 @@ def watch(
         logging.getLogger(__name__).debug("Failed to record watcher launch provenance", exc_info=True)
 
     db_path = get_db_path()
+    raw_archive = create_raw_source_archive(db_path)
     offsets_path = db_path.parent / "offsets.json"
     health_path = Path(os.environ.get("BRAINLAYER_WATCHER_HEALTH_PATH", str(db_path.parent / "watcher-health.json")))
     watch_roots = [WatchRoot("custom", item) for item in source] if source else default_watch_roots()
@@ -3487,6 +3489,7 @@ def watch(
     rprint(f"  Database: [bold]{db_path}[/]")
     rprint(f"  Offsets:  [bold]{offsets_path}[/]")
     rprint(f"  Health:   [bold]{health_path}[/]")
+    rprint(f"  Raw archive: [bold]{raw_archive.root}[/] (ENABLED_REQUIRED)")
     rprint(f"  Poll: {poll_interval}s | Batch: {batch_size} | Flush: {flush_interval}ms")
     rprint("  Writer:   queue arbitration (drain owns DB writes)")
     rprint()
@@ -3540,6 +3543,7 @@ def watch(
         batch_size=batch_size,
         flush_interval_ms=flush_interval,
         health_path=health_path,
+        raw_archive=raw_archive,
     )
 
     def handle_signal(signum, frame):
@@ -3583,12 +3587,14 @@ def watch_backfill(
 ) -> None:
     """One-shot replay for watched JSONL roots using the durable queue writer path."""
     from ..paths import get_db_path
+    from ..raw_source_archive import create_raw_source_archive, raw_archive_path
     from ..watcher import JSONLWatcher, WatchRoot, default_watch_roots
     from ..watcher_bridge import create_flush_callback
 
     db_path = get_db_path()
     registry_path = registry.expanduser() if registry else db_path.parent / "offsets.json"
     watch_roots = [WatchRoot("custom", item) for item in source] if source else default_watch_roots(home=home)
+    archive_path = raw_archive_path(db_path)
 
     if dry_run:
         watcher = JSONLWatcher(
@@ -3603,14 +3609,20 @@ def watch_backfill(
             provider = watcher.provider_for_file(path)
             provider_counts[provider] = provider_counts.get(provider, 0) + 1
         provider_summary = " ".join(f"{provider}={count}" for provider, count in sorted(provider_counts.items()))
-        rprint(f"candidate_files={len(files)} {provider_summary} processed_entries=0 registry={registry_path}")
+        rprint(
+            f"candidate_files={len(files)} {provider_summary} processed_entries=0 "
+            f"registry={registry_path} raw_archive=DRY_RUN_NOT_CREATED path={archive_path}"
+        )
         return
 
+    raw_archive = create_raw_source_archive(db_path)
+    rprint(f"raw_archive=ENABLED_REQUIRED path={raw_archive.root}")
     watcher = JSONLWatcher(
         watch_roots=watch_roots,
         registry_path=registry_path,
         on_flush=create_flush_callback(db_path, arbitrated=True),
         db_path=db_path,
+        raw_archive=raw_archive,
     )
     processed = 0
     cycles = 0
@@ -3620,6 +3632,10 @@ def watch_backfill(
         processed += count
         if count == 0 and not watcher.last_poll_made_progress:
             break
+    if watcher._raw_archive_failures:
+        failed_path = sorted(watcher._raw_archive_failures)[0]
+        failure = watcher._raw_archive_failures[failed_path]
+        raise RuntimeError(f"raw archive failed for {failed_path}: {failure['error_type']}: {failure['error']}")
     watcher.indexer.flush()
     watcher.registry.flush()
     rprint(f"processed_entries={processed} cycles={cycles} registry={registry_path}")

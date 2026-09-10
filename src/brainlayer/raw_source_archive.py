@@ -16,6 +16,9 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 _HEX_SHA256 = re.compile(r"[0-9a-f]{64}")
+RAW_ARCHIVE_PATH_ENV = "BRAINLAYER_RAW_ARCHIVE_PATH"
+RAW_ARCHIVE_MAX_SOURCE_BYTES_ENV = "BRAINLAYER_RAW_ARCHIVE_MAX_SOURCE_BYTES"
+RAW_ARCHIVE_DIRECTORY_NAME = "raw-source-archive-v1"
 
 
 class RawArchiveError(Exception):
@@ -152,14 +155,18 @@ class RawSourceArchive:
         with self._open_regular(source_path) as source:
             before = os.fstat(source.fileno())
             if before.st_size > self.max_source_bytes:
-                raise RawSourceTooLargeError(f"source exceeds {self.max_source_bytes} bytes")
+                raise RawSourceTooLargeError(
+                    f"source {source_path} size {before.st_size} exceeds cap {self.max_source_bytes} bytes"
+                )
             while True:
                 data = source.read(min(self.chunk_bytes, self.max_source_bytes - size + 1))
                 if not data:
                     break
                 size += len(data)
                 if size > self.max_source_bytes:
-                    raise RawSourceTooLargeError(f"source exceeds {self.max_source_bytes} bytes")
+                    raise RawSourceTooLargeError(
+                        f"source {source_path} observed size over cap {self.max_source_bytes} bytes during capture"
+                    )
                 version_hash.update(data)
                 chunk_sha = hashlib.sha256(data).hexdigest()
                 self._publish_chunk(chunk_sha, data)
@@ -382,3 +389,40 @@ class RawSourceArchive:
             os.fsync(fd)
         finally:
             os.close(fd)
+
+
+def raw_archive_path(db_path: str | Path, environ: dict[str, str] | None = None) -> Path:
+    """Resolve the persistent archive root without creating it."""
+    env = os.environ if environ is None else environ
+    configured = env.get(RAW_ARCHIVE_PATH_ENV)
+    if configured is None:
+        return Path(db_path).expanduser().absolute().parent / RAW_ARCHIVE_DIRECTORY_NAME
+    if not configured.strip():
+        raise ValueError(f"{RAW_ARCHIVE_PATH_ENV} must not be empty")
+    path = Path(configured).expanduser()
+    if not path.is_absolute():
+        raise ValueError(f"{RAW_ARCHIVE_PATH_ENV} must be an absolute path")
+    return path
+
+
+def raw_archive_max_source_bytes(environ: dict[str, str] | None = None) -> int:
+    """Resolve the strict per-source ceiling; malformed overrides never fall back."""
+    env = os.environ if environ is None else environ
+    raw = env.get(
+        RAW_ARCHIVE_MAX_SOURCE_BYTES_ENV,
+        str(RawSourceArchive.DEFAULT_MAX_SOURCE_BYTES),
+    )
+    if not raw.isdecimal() or (value := int(raw)) <= 0:
+        raise ValueError(f"{RAW_ARCHIVE_MAX_SOURCE_BYTES_ENV} must be a positive decimal integer")
+    return value
+
+
+def create_raw_source_archive(
+    db_path: str | Path,
+    environ: dict[str, str] | None = None,
+) -> RawSourceArchive:
+    """Construct the required archive for one resolved BrainLayer database."""
+    root = raw_archive_path(db_path, environ)
+    max_source_bytes = raw_archive_max_source_bytes(environ)
+    root.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return RawSourceArchive(root, max_source_bytes=max_source_bytes)
