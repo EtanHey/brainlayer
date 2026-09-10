@@ -657,10 +657,13 @@ struct BrainLayerEnvDocument {
         if let raw = assignments["BRAINLAYER_BACKUP_TRANSCRIPT_ROOT_SPECS"],
            let data = strippedValue(raw).data(using: .utf8),
            let values = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
-            config.backupTranscriptRootSpecs = values.compactMap { value in
-                guard let path = value["path"] as? String, let includes = value["include_globs"] as? [String] else { return nil }
-                return BrainLayerBackupSourceRootSpec(path: path, includeGlobs: includes, excludeGlobs: value["exclude_globs"] as? [String] ?? [], sourceClass: value["source_class"] as? String ?? "transcript")
+            let parsed = values.compactMap { value -> BrainLayerBackupSourceRootSpec? in
+                guard let path = value["path"] as? String, let includes = value["include_globs"] as? [String],
+                      value["exclude_globs"] as? [String] != nil,
+                      value["source_class"] as? String != nil else { return nil }
+                return BrainLayerBackupSourceRootSpec(path: path, includeGlobs: includes, excludeGlobs: value["exclude_globs"] as! [String], sourceClass: value["source_class"] as! String)
             }
+            config.backupTranscriptRootSpecs = parsed.count == values.count ? parsed : []
         }
         for key in ["BRAINLAYER_BACKUP_TRANSCRIPT_ROOTS", "BRAINLAYER_BACKUP_MISSING_OPTIONAL_ROOTS"] {
             guard let raw = assignments[key], let data = strippedValue(raw).data(using: .utf8),

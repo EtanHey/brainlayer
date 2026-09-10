@@ -326,6 +326,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--generation-id")
     args = parser.parse_args(argv)
+    if not args.transcript_roots and not args.transcript_root_specs:
+        parser.error("at least one --transcript-root-spec or --transcript-root is required")
     from . import config as config_module
     config_path = (args.config or config_module.get_user_env_path()).expanduser()
     try:
