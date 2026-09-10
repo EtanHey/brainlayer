@@ -9,10 +9,11 @@ import os
 import sqlite3
 import stat
 import threading
+import time
 import uuid
 from contextlib import AbstractContextManager
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from . import backup_daily, jsonl_backup
 
@@ -154,10 +155,78 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _offline_snapshot(source: Path, target: Path) -> int:
+def _offline_snapshot(
+    source: Path,
+    target: Path,
+    *,
+    total_deadline_seconds: float = 300.0,
+    stalled_progress_seconds: float = 30.0,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> int:
     source_uri = f"file:{source.resolve()}?mode=ro"
-    with sqlite3.connect(source_uri, uri=True) as source_db, sqlite3.connect(str(target)) as target_db:
-        source_db.backup(target_db, pages=1000, sleep=0.01)
+    if total_deadline_seconds <= 0 or stalled_progress_seconds <= 0:
+        raise ValueError("offline backup deadlines must be positive")
+    started = monotonic()
+    last_progress = started
+    previous_remaining: int | None = None
+    calls = busy_count = locked_count = restart_count = 0
+
+    def progress(status: int, remaining: int, total: int) -> None:
+        nonlocal calls, busy_count, last_progress, previous_remaining, restart_count
+        nonlocal locked_count
+        now = monotonic()
+        calls += 1
+        if status == sqlite3.SQLITE_BUSY:
+            busy_count += 1
+        elif status == sqlite3.SQLITE_LOCKED:
+            locked_count += 1
+        if status in {sqlite3.SQLITE_OK, sqlite3.SQLITE_DONE}:
+            if previous_remaining is None or remaining < previous_remaining:
+                last_progress = now
+            elif remaining > previous_remaining:
+                restart_count += 1
+            previous_remaining = remaining
+        elapsed = now - started
+        stalled = now - last_progress
+        status_name = {
+            sqlite3.SQLITE_OK: "SQLITE_OK",
+            sqlite3.SQLITE_BUSY: "SQLITE_BUSY",
+            sqlite3.SQLITE_LOCKED: "SQLITE_LOCKED",
+            sqlite3.SQLITE_DONE: "SQLITE_DONE",
+        }.get(status, f"SQLITE_{status}")
+        diagnostics = (
+            f"status={status_name} remaining={remaining} total={total} "
+            f"elapsed={elapsed:.3f}s stalled={stalled:.3f}s calls={calls} "
+            f"busy={busy_count} locked={locked_count} restarts={restart_count}"
+        )
+        if elapsed >= total_deadline_seconds:
+            raise BackupRunOnceError(f"offline SQLite backup total deadline exceeded: {diagnostics}")
+        if stalled >= stalled_progress_seconds:
+            raise BackupRunOnceError(f"offline SQLite backup stalled: {diagnostics}")
+
+    source_db: sqlite3.Connection | None = None
+    target_db: sqlite3.Connection | None = None
+    primary_error: BaseException | None = None
+    close_error: BaseException | None = None
+    try:
+        busy_timeout = min(5.0, total_deadline_seconds, stalled_progress_seconds)
+        source_db = sqlite3.connect(source_uri, uri=True, timeout=busy_timeout)
+        target_db = sqlite3.connect(str(target), timeout=busy_timeout)
+        source_db.backup(target_db, pages=1000, sleep=0.01, progress=progress)
+    except BaseException as exc:
+        primary_error = exc
+        raise
+    finally:
+        for connection in (target_db, source_db):
+            if connection is None:
+                continue
+            try:
+                connection.close()
+            except BaseException as exc:
+                if close_error is None:
+                    close_error = exc
+        if primary_error is None and close_error is not None:
+            raise close_error
     return backup_daily._validate_backup_target(target)
 
 
