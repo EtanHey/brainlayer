@@ -61,6 +61,7 @@ from .chunk_origin_wipe import live_canonical_db_path as live_canonical_db_path
 
 PREIMAGE_TABLE = "dedupe_merge_preimage"
 ALIAS_PREIMAGE_TABLE = "dedupe_merge_alias_preimage"
+OCCURRENCE_PREIMAGE_TABLE = "dedupe_merge_occurrence_preimage"
 MIGRATION_NAME = "2026_08_18_dedupe_merge_archive"
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
@@ -247,6 +248,89 @@ def _ensure_alias_table(conn: sqlite3.Connection) -> bool:
     return exists is not None
 
 
+def _occurrence_key(
+    canonical_chunk_id: str,
+    source_file: str,
+    source_line: int,
+    source_pointer: str,
+    session_id: str | None,
+    incoming_content_hash: str,
+) -> str:
+    """Match VectorStore's canonical-inclusive occurrence identity."""
+    payload = [canonical_chunk_id, source_file, source_line, source_pointer, session_id, incoming_content_hash]
+    return hashlib.sha256(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def _retarget_occurrences(conn: sqlite3.Connection, loser_id: str, survivor_id: str) -> None:
+    """Move loser links to the survivor without losing an existing equivalent link."""
+    if conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'chunk_source_occurrences'"
+    ).fetchone() is None:
+        return
+    rows = conn.execute(
+        """
+        SELECT occurrence_key, canonical_chunk_id, source_file, source_line, source_pointer, session_id,
+               incoming_content_hash, chunk_created_at, observed_at, work_context_json
+        FROM chunk_source_occurrences WHERE canonical_chunk_id = ?
+        """,
+        (loser_id,),
+    ).fetchall()
+    for row in rows:
+        new_key = _occurrence_key(
+            survivor_id, row[2], row[3], row[4], row[5], row[6]
+        )
+        existing = conn.execute(
+            "SELECT occurrence_key, canonical_chunk_id, source_file, source_line, source_pointer, session_id, incoming_content_hash, chunk_created_at, observed_at, work_context_json FROM chunk_source_occurrences WHERE occurrence_key = ?",
+            (new_key,),
+        ).fetchone()
+        _record_occurrence_preimage(conn, row, new_key)
+        if existing is None:
+            conn.execute(
+                "UPDATE chunk_source_occurrences SET occurrence_key = ?, canonical_chunk_id = ? WHERE occurrence_key = ?",
+                (new_key, survivor_id, row[0]),
+            )
+            continue
+        _record_occurrence_preimage(conn, existing, new_key)
+        context = _merged_occurrence_context(existing[9], row[9])
+        conn.execute(
+            """
+            UPDATE chunk_source_occurrences
+            SET chunk_created_at = COALESCE(chunk_created_at, ?),
+                observed_at = MIN(observed_at, ?),
+                work_context_json = ?
+            WHERE occurrence_key = ?
+            """,
+            (row[7], row[8], context, new_key),
+        )
+        conn.execute("DELETE FROM chunk_source_occurrences WHERE occurrence_key = ?", (row[0],))
+
+
+def _merged_occurrence_context(existing_raw: str, incoming_raw: str) -> str:
+    """Preserve conflicting supplied context rather than silently selecting one."""
+    try:
+        existing = json.loads(existing_raw)
+        incoming = json.loads(incoming_raw)
+    except (TypeError, json.JSONDecodeError):
+        return existing_raw
+    if existing == incoming or not isinstance(existing, dict) or not isinstance(incoming, dict):
+        return existing_raw
+    conflicts = existing.get("_occurrence_conflicts", [])
+    if incoming not in conflicts:
+        conflicts.append(incoming)
+    existing["_occurrence_conflicts"] = conflicts
+    return json.dumps(existing, sort_keys=True, separators=(",", ":"))
+
+
+def _record_occurrence_preimage(conn: sqlite3.Connection, row: sqlite3.Row | tuple, final_key: str) -> None:
+    conn.execute(
+        f"""INSERT OR IGNORE INTO {OCCURRENCE_PREIMAGE_TABLE}
+        (occurrence_key, canonical_chunk_id, source_file, source_line, source_pointer, session_id,
+         incoming_content_hash, chunk_created_at, observed_at, work_context_json, final_key)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        [*row[:10], final_key],
+    )
+
+
 def merge_duplicates(
     db_path: Path,
     *,
@@ -288,6 +372,13 @@ def merge_duplicates(
         result.aux_counts_before = _aux_counts(conn)
         if apply:
             _ensure_preimage(conn, written)
+            conn.execute(
+                f"CREATE TABLE IF NOT EXISTS {OCCURRENCE_PREIMAGE_TABLE} ("
+                "occurrence_key TEXT PRIMARY KEY, canonical_chunk_id TEXT NOT NULL, source_file TEXT NOT NULL, "
+                "source_line INTEGER NOT NULL, source_pointer TEXT NOT NULL, session_id TEXT, "
+                "incoming_content_hash TEXT NOT NULL, chunk_created_at TEXT, observed_at TEXT NOT NULL, "
+                "work_context_json TEXT NOT NULL, final_key TEXT NOT NULL)"
+            )
             if has_alias:
                 conn.execute(
                     f"""
@@ -425,6 +516,7 @@ def merge_duplicates(
                             f"UPDATE chunks SET {', '.join(f'{c} = ?' for c in assignments)} WHERE id = ?",
                             [*assignments.values(), loser_state["id"]],
                         )
+                        _retarget_occurrences(conn, str(loser_state["id"]), str(survivor["id"]))
                         result.losers_archived += 1
                         seen_total += int(loser_state.get("seen_count") or 0)
 
@@ -874,6 +966,21 @@ def rollback_migration(db_path: Path, *, allow_live: bool = False) -> dict[str, 
                         [(r["old_chunk_id"], r["canonical_chunk_id"], r["deprecated_at"]) for r in restore],
                     )
                     out["aliases_restored"] = len(restore)
+            if OCCURRENCE_PREIMAGE_TABLE in tables and "chunk_source_occurrences" in tables:
+                occurrence_rows = conn.execute(f"SELECT * FROM {OCCURRENCE_PREIMAGE_TABLE}").fetchall()
+                final_keys = sorted({row["final_key"] for row in occurrence_rows})
+                if final_keys:
+                    conn.executemany(
+                        "DELETE FROM chunk_source_occurrences WHERE occurrence_key = ?", [(key,) for key in final_keys]
+                    )
+                fields = (
+                    "occurrence_key", "canonical_chunk_id", "source_file", "source_line", "source_pointer",
+                    "session_id", "incoming_content_hash", "chunk_created_at", "observed_at", "work_context_json",
+                )
+                conn.executemany(
+                    "INSERT OR REPLACE INTO chunk_source_occurrences VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [[row[field] for field in fields] for row in occurrence_rows],
+                )
             conn.execute("DELETE FROM schema_migrations WHERE name = ?", (MIGRATION_NAME,))
             conn.execute("COMMIT")
         except Exception:

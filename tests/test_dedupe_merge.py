@@ -20,9 +20,12 @@ import pytest
 from brainlayer.dedupe_merge import (
     MIGRATION_NAME,
     PREIMAGE_TABLE,
+    _occurrence_key,
     content_key,
     merge_duplicates,
+    rollback_migration,
 )
+from brainlayer.vector_store import VectorStore
 
 GIT_SHA = "0" * 40
 
@@ -164,6 +167,106 @@ def test_rows_split_across_hash_schemes_still_merge(tmp_path):
     db_path = _db(tmp_path, rows)
     result = merge_duplicates(db_path, git_sha=GIT_SHA, apply=True)
     assert result.groups_merged == 1
+
+
+def test_consolidation_retargets_occurrence_to_survivor_and_collapses_equivalent_link(tmp_path):
+    db_path = _db(tmp_path, _pair())
+    content_hash = hashlib.sha256(b"the same memory text").hexdigest()
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE chunk_source_occurrences (
+            occurrence_key TEXT PRIMARY KEY, canonical_chunk_id TEXT NOT NULL,
+            source_file TEXT NOT NULL, source_line INTEGER NOT NULL, source_pointer TEXT NOT NULL,
+            session_id TEXT, incoming_content_hash TEXT NOT NULL,
+            chunk_created_at TEXT, observed_at TEXT NOT NULL, work_context_json TEXT NOT NULL
+        )
+        """
+    )
+    survivor_key = _occurrence_key("new-two", "same.jsonl", 2, "/payload/content", "session", content_hash)
+    conn.executemany(
+        "INSERT INTO chunk_source_occurrences VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (
+                "old-link",
+                "old-one",
+                "same.jsonl",
+                2,
+                "/payload/content",
+                "session",
+                content_hash,
+                None,
+                "2026-09-10T11:00:00Z",
+                '{"branch":"old"}',
+            ),
+            (
+                "old-unique",
+                "old-one",
+                "same.jsonl",
+                9,
+                "/payload/unique",
+                "session",
+                content_hash,
+                None,
+                "2026-09-10T11:30:00Z",
+                '{"branch":"unique"}',
+            ),
+            (
+                survivor_key,
+                "new-two",
+                "same.jsonl",
+                2,
+                "/payload/content",
+                "session",
+                content_hash,
+                "2026-09-10T10:00:00Z",
+                "2026-09-10T12:00:00Z",
+                '{"branch":"new"}',
+            ),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    conn = sqlite3.connect(db_path)
+    before = conn.execute("SELECT * FROM chunk_source_occurrences ORDER BY occurrence_key").fetchall()
+    conn.close()
+    merge_duplicates(db_path, git_sha=GIT_SHA, apply=True)
+
+    conn = sqlite3.connect(db_path)
+    rows = conn.execute("SELECT * FROM chunk_source_occurrences ORDER BY source_line").fetchall()
+    conn.close()
+    assert len(rows) == 2
+    assert rows[0][0:2] == (survivor_key, "new-two")
+    assert rows[0][-1] == '{"_occurrence_conflicts":[{"branch":"old"}],"branch":"new"}'
+    assert rows[1][1:5] == ("new-two", "same.jsonl", 9, "/payload/unique")
+    rollback_migration(db_path)
+    conn = sqlite3.connect(db_path)
+    restored = conn.execute("SELECT * FROM chunk_source_occurrences ORDER BY occurrence_key").fetchall()
+    conn.close()
+    assert restored == before
+
+
+def test_consolidation_occurrence_key_matches_vector_store(tmp_path):
+    store = VectorStore(tmp_path / "store.db")
+    content = "Parity fixture content for source occurrence identity across write paths."
+    chunk = {
+        "id": "parity",
+        "content": content,
+        "metadata": {"source_line": 4, "source_pointer": "/p", "session_id": "s"},
+        "source_file": "parity.jsonl",
+        "project": "brainlayer",
+        "content_type": "assistant_text",
+        "value_type": "HIGH",
+        "char_count": len(content),
+        "source": "test",
+        "created_at": "2026-09-10T12:00:00Z",
+    }
+    store.upsert_chunks([chunk], [[0.1] * 1024])
+    actual = store.conn.cursor().execute("SELECT occurrence_key FROM chunk_source_occurrences").fetchone()[0]
+    assert actual == _occurrence_key(
+        "parity", "parity.jsonl", 4, "/p", "s", hashlib.sha256(content.encode()).hexdigest()
+    )
 
 
 # --- scope: conversation identity ---------------------------------------------
