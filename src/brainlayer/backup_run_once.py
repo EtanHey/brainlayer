@@ -187,6 +187,13 @@ def run_backup_once(
     if not transcript_roots:
         raise BackupRunOnceError("transcript_roots must be explicitly provided")
     validated_roots = _validate_roots(transcript_roots)
+    # Root validation may cross a mount replacement window; rebind the selected
+    # destination before creating any generation output.
+    actual_identity = _identity(destination)
+    if tuple(actual_identity.values()) != tuple(expected_destination_identity):
+        raise BackupRunOnceError(
+            f"backup destination identity changed: expected={expected_destination_identity} actual={tuple(actual_identity.values())}"
+        )
     timestamp = now or dt.datetime.now(dt.UTC)
     stamp = timestamp.strftime("%Y%m%dT%H%M%SZ")
     generation = destination / f".brainlayer-backup-{stamp}-{generation_id or uuid.uuid4().hex}"
