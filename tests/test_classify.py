@@ -163,3 +163,62 @@ class TestBareStringMessageDoesNotCrash:
         # Weird shapes must not raise.
         assert classify_content({"type": "user", "message": 123}) is None
         assert classify_content({"type": "assistant", "message": None}) is None
+
+
+def test_classify_preserves_opaque_native_record_context_and_only_supplied_coordinates():
+    entry = {
+        "type": "assistant",
+        "message": {"role": None, "content": "A sufficiently detailed assistant response for context retention."},
+        "uuid": "record-uuid",
+        "parentUuid": None,
+        "logicalParentUuid": ["wrong-shape-is-preserved-raw"],
+        "preservedSegment": {"opaque": ["value"]},
+        "source_line": 7,
+        "source_pointer": "/message/content",
+    }
+
+    classified = classify_content(entry)
+
+    assert classified is not None
+    assert classified.metadata["record_context"] == {
+        "uuid": "record-uuid",
+        "parentUuid": None,
+        "logicalParentUuid": ["wrong-shape-is-preserved-raw"],
+        "preservedSegment": {"opaque": ["value"]},
+        "native_entry_type": "assistant",
+        "declared_message_role": None,
+    }
+    assert classified.metadata["source_line"] == 7
+    assert classified.metadata["source_pointer"] == "/message/content"
+
+
+def test_classify_does_not_invent_missing_native_context_or_coordinates():
+    classified = classify_content({
+        "type": "assistant",
+        "message": {"role": "assistant", "content": "A sufficiently detailed assistant response without supplied coordinates."},
+    })
+
+    assert classified is not None
+    assert classified.metadata["record_context"] == {
+        "native_entry_type": "assistant",
+        "declared_message_role": "assistant",
+    }
+    assert "source_line" not in classified.metadata
+    assert "source_pointer" not in classified.metadata
+
+
+def test_classify_rejects_nonfinite_values_from_opaque_context():
+    classified = classify_content({
+        "type": "assistant",
+        "message": {"role": "assistant", "content": "A sufficiently detailed assistant response with malformed linkage."},
+        "uuid": "record-uuid",
+        "parentUuid": float("nan"),
+        "logicalParentUuid": float("inf"),
+    })
+
+    assert classified is not None
+    assert classified.metadata["record_context"] == {
+        "uuid": "record-uuid",
+        "native_entry_type": "assistant",
+        "declared_message_role": "assistant",
+    }

@@ -8,6 +8,7 @@ Smart filtering to maximize search quality:
 """
 
 import html
+import json
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -317,6 +318,31 @@ def _should_keep_assistant_text(content: str) -> bool:
     return len(stripped) >= min_len
 
 
+_RECORD_CONTEXT_FIELDS = ("uuid", "parentUuid", "logicalParentUuid", "preservedSegment")
+
+
+def _json_safe_raw(value: Any) -> bool:
+    try:
+        json.dumps(value, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _extract_record_context(entry: dict) -> dict[str, Any]:
+    """Retain declared record linkage verbatim without interpreting it."""
+    context: dict[str, Any] = {}
+    for key in _RECORD_CONTEXT_FIELDS:
+        if key in entry and _json_safe_raw(entry[key]):
+            context[key] = entry[key]
+    if "type" in entry and _json_safe_raw(entry["type"]):
+        context["native_entry_type"] = entry["type"]
+    message = entry.get("message")
+    if isinstance(message, dict) and "role" in message and _json_safe_raw(message["role"]):
+        context["declared_message_role"] = message["role"]
+    return context
+
+
 def _extract_entry_metadata(entry: dict) -> dict[str, Any]:
     """Extract conversation context metadata from a JSONL entry.
 
@@ -334,6 +360,12 @@ def _extract_entry_metadata(entry: dict) -> dict[str, Any]:
     entry_type = entry.get("type")
     if entry_type in ("user", "assistant"):
         meta["sender"] = entry_type
+    record_context = _extract_record_context(entry)
+    if record_context:
+        meta["record_context"] = record_context
+    for key in ("source_line", "source_pointer"):
+        if key in entry and _json_safe_raw(entry[key]):
+            meta[key] = entry[key]
     return meta
 
 

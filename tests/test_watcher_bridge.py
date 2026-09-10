@@ -978,3 +978,42 @@ def test_extract_workspace_project_uses_canonical_resolver(monkeypatch):
         watcher_bridge._extract_workspace_project({"cwd": "/Users/happycampr/Gits/brainlayer/.worktrees/feature"})
         == "brainlayer"
     )
+
+
+def test_watcher_context_round_trips_direct_and_queued_to_clone_db(tmp_path, monkeypatch):
+    from brainlayer.drain import drain_once
+
+    source_file = str(tmp_path / "session.jsonl")
+    context = {
+        "uuid": "child-record",
+        "parentUuid": "parent-record",
+        "logicalParentUuid": "logical-parent-record",
+        "preservedSegment": {"opaque": True},
+        "native_entry_type": "assistant",
+        "declared_message_role": "assistant",
+    }
+    entry = _make_jsonl_entry(text=_LONG_TEXT, entry_type="assistant", uuid="child-record",
+                              parentUuid="parent-record", logicalParentUuid="logical-parent-record",
+                              preservedSegment={"opaque": True},
+                              source_line=4, source_pointer="/message/content/0")
+    entry["_source_file"] = source_file
+
+    direct_db = tmp_path / "direct.db"
+    VectorStore(direct_db).close()
+    create_flush_callback(direct_db, arbitrated=False)([entry])
+    with sqlite3.connect(direct_db) as conn:
+        direct_metadata = json.loads(conn.execute("SELECT metadata FROM chunks").fetchone()[0])
+    assert direct_metadata["record_context"] == context
+    assert direct_metadata["source_line"] == 4
+    assert direct_metadata["source_pointer"] == "/message/content/0"
+
+    queued_db = tmp_path / "queued.db"
+    queue_dir = tmp_path / "queue"
+    VectorStore(queued_db).close()
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+    create_flush_callback(queued_db, arbitrated=True)([entry])
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    assert drain_once(db_path=queued_db, queue_dir=queue_dir, batch_size=1, log_path=tmp_path / "drain.log") == 1
+    with sqlite3.connect(queued_db) as conn:
+        queued_metadata = json.loads(conn.execute("SELECT metadata FROM chunks").fetchone()[0])
+    assert queued_metadata == direct_metadata
