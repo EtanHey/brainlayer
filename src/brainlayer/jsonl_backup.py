@@ -28,7 +28,7 @@ import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO, Callable
 
 from . import backup_daily
 from .queue_io import enqueue_store
@@ -395,7 +395,11 @@ class _HashingReader:
 
 
 def create_jsonl_bundle_with_digests(
-    candidates: list[JsonlCandidate], staging_dir: Path, *, date_stamp: str
+    candidates: list[JsonlCandidate],
+    staging_dir: Path,
+    *,
+    date_stamp: str,
+    source_opener: Callable[[JsonlCandidate], BinaryIO] | None = None,
 ) -> tuple[Path, dict[str, str], dict[str, int]]:
     if not candidates:
         raise ValueError("create_jsonl_bundle requires at least one candidate")
@@ -420,8 +424,9 @@ def create_jsonl_bundle_with_digests(
                 # regular member too; preserving the link would make verification reject
                 # the whole bundle as non-regular.
                 source_path = candidate.path.resolve()
-                info = tar.gettarinfo(str(source_path), arcname=_archive_name(candidate))
-                with source_path.open("rb") as handle:
+                source = source_opener(candidate) if source_opener is not None else source_path.open("rb")
+                with source as handle:
+                    info = tar.gettarinfo(fileobj=handle, arcname=_archive_name(candidate))
                     reader = _HashingReader(handle)
                     tar.addfile(info, reader)
                 digests[candidate.path.as_posix()] = reader.hexdigest()

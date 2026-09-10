@@ -7,9 +7,11 @@ import hashlib
 import json
 import os
 import sqlite3
+import stat
 import uuid
+from contextlib import AbstractContextManager
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from . import backup_daily, jsonl_backup
 
@@ -32,8 +34,82 @@ def _sha256(path: Path) -> str:
 
 
 def _identity(path: Path) -> dict[str, int]:
-    stat = path.stat()
-    return {"st_dev": stat.st_dev, "st_ino": stat.st_ino}
+    result = path.stat()
+    return {"st_dev": result.st_dev, "st_ino": result.st_ino}
+
+
+class _BoundSource(AbstractContextManager):
+    """Read one no-follow descriptor and reject replacement during archiving."""
+
+    def __init__(self, fd: int, path: Path) -> None:
+        self._handle = os.fdopen(fd, "rb")
+        self._before = os.fstat(fd)
+        self.name = str(path)
+
+    def __enter__(self) -> "_BoundSource":
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        try:
+            after = os.fstat(self._handle.fileno())
+            if exc_type is None and (
+                (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+                != (self._before.st_dev, self._before.st_ino, self._before.st_size, self._before.st_mtime_ns)
+            ):
+                raise BackupRunOnceError(f"transcript source changed while being archived: {self.name}")
+        finally:
+            self._handle.close()
+
+    def fileno(self) -> int:
+        return self._handle.fileno()
+
+    def read(self, size: int = -1) -> bytes:
+        return self._handle.read(size)
+
+
+def _open_candidate_bound(
+    candidate: jsonl_backup.JsonlCandidate, roots: list[jsonl_backup.BackupSourceRoot]
+) -> _BoundSource:
+    candidate_abs = Path(os.path.abspath(candidate.path.expanduser()))
+    for root in roots:
+        root_abs = Path(os.path.abspath(root.path.expanduser()))
+        try:
+            relative = candidate_abs.relative_to(root_abs)
+        except ValueError:
+            continue
+        root_fd = os.open(root_abs, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        fd = root_fd
+        try:
+            parts = relative.parts
+            if not parts:
+                raise BackupRunOnceError(f"transcript candidate is a directory: {candidate.path}")
+            for part in parts[:-1]:
+                next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                if fd != root_fd:
+                    os.close(fd)
+                fd = next_fd
+            leaf_fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=fd)
+            if fd != root_fd:
+                os.close(fd)
+            os.close(root_fd)
+            fd = root_fd = -1
+            if not stat.S_ISREG(os.fstat(leaf_fd).st_mode):
+                os.close(leaf_fd)
+                raise BackupRunOnceError(f"transcript candidate is not a regular file: {candidate.path}")
+            return _BoundSource(leaf_fd, candidate.path)
+        except OSError as exc:
+            if fd >= 0 and fd != root_fd:
+                os.close(fd)
+            if root_fd >= 0:
+                os.close(root_fd)
+            raise BackupRunOnceError(f"transcript candidate cannot be opened safely: {candidate.path}") from exc
+        except Exception:
+            if fd >= 0 and fd != root_fd:
+                os.close(fd)
+            if root_fd >= 0:
+                os.close(root_fd)
+            raise
+    raise BackupRunOnceError(f"transcript candidate escapes configured roots: {candidate.path}")
 
 
 def _validate_roots(
@@ -94,19 +170,18 @@ def run_backup_once(
     offline_db_path: Path | None = None,
     generation_id: str | None = None,
     now: dt.datetime | None = None,
-    expected_destination_identity: tuple[int, int] | None = None,
+    expected_destination_identity: tuple[int, int],
 ) -> dict[str, Any]:
     """Create one locally verified DB+JSONL generation."""
     destination = Path(destination).expanduser()
     if not destination.exists() or not destination.is_dir():
         raise BackupRunOnceError(f"backup destination must already exist as a directory: {destination}")
     resolved_destination = destination.resolve()
-    if expected_destination_identity is not None:
-        actual_identity = _identity(destination)
-        if tuple(actual_identity.values()) != tuple(expected_destination_identity):
-            raise BackupRunOnceError(
-                f"backup destination identity changed: expected={expected_destination_identity} actual={tuple(actual_identity.values())}"
-            )
+    actual_identity = _identity(destination)
+    if tuple(actual_identity.values()) != tuple(expected_destination_identity):
+        raise BackupRunOnceError(
+            f"backup destination identity changed: expected={expected_destination_identity} actual={tuple(actual_identity.values())}"
+        )
     if (socket_path is None) == (offline_db_path is None):
         raise BackupRunOnceError("choose exactly one of socket_path or offline_db_path")
     if not transcript_roots:
@@ -145,7 +220,10 @@ def run_backup_once(
         if not candidates:
             raise BackupRunOnceError("no explicitly wired transcript roots produced candidates")
         archive, digests, sizes = jsonl_backup.create_jsonl_bundle_with_digests(
-            candidates, generation, date_stamp=stamp
+            candidates,
+            generation,
+            date_stamp=stamp,
+            source_opener=lambda candidate: _open_candidate_bound(candidate, validated_roots),
         )
         verified = jsonl_backup.verify_jsonl_bundle(
             archive, expected_candidates=candidates, expected_digests=digests, expected_sizes=sizes
@@ -183,12 +261,11 @@ def run_backup_once(
             "remote_status": "unverified",
             "cleanup_permitted": False,
         }
-        if expected_destination_identity is not None:
-            actual_identity = _identity(destination)
-            if tuple(actual_identity.values()) != tuple(expected_destination_identity):
-                raise BackupRunOnceError(
-                    f"backup destination identity changed: expected={expected_destination_identity} actual={tuple(actual_identity.values())}"
-                )
+        actual_identity = _identity(destination)
+        if tuple(actual_identity.values()) != tuple(expected_destination_identity):
+            raise BackupRunOnceError(
+                f"backup destination identity changed: expected={expected_destination_identity} actual={tuple(actual_identity.values())}"
+            )
         _atomic_json(generation / "receipt.complete.json", complete)
         incomplete.unlink(missing_ok=True)
         return complete
