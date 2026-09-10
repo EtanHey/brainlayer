@@ -443,6 +443,52 @@ final class MCPRouterTests: XCTestCase {
         }
     }
 
+    func testChunkAddressSchemasAllowPersistedSourceIDs() throws {
+        let addressFields = [
+            ("brain_update", "chunk_id"),
+            ("brain_expand", "chunk_id"),
+            ("brain_supersede", "old_chunk_id"),
+            ("brain_supersede", "new_chunk_id"),
+            ("brain_archive", "chunk_id"),
+            ("brain_enrich", "chunk_ids"),
+        ]
+        for (toolName, fieldName) in addressFields {
+            let tool = try XCTUnwrap(
+                MCPRouter.toolDefinitions.first { ($0["name"] as? String) == toolName }
+            )
+            let schema = try XCTUnwrap(tool["inputSchema"] as? [String: Any])
+            let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+            let field = try XCTUnwrap(properties[fieldName] as? [String: Any])
+            let maxLength = fieldName == "chunk_ids"
+                ? ((field["items"] as? [String: Any])?["maxLength"] as? Int)
+                : (field["maxLength"] as? Int)
+            XCTAssertEqual(maxLength, 4_096, "(toolName).(fieldName)")
+        }
+    }
+
+    func testChunkAddressValidationAcceptsLongPersistedIDButRejectsExcessiveInput() throws {
+        let router = MCPRouter(profile: "full")
+        let longID = String(repeating: "x", count: 175)
+        let accepted = router.handle([
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": ["name": "brain_update", "arguments": ["chunk_id": longID]],
+        ])
+        let acceptedText = ((accepted["result"] as? [String: Any])?["content"] as? [[String: Any]])?
+            .compactMap { $0["text"] as? String }.joined(separator: "
+") ?? ""
+        XCTAssertFalse(acceptedText.contains("exceeds maxLength"), acceptedText)
+
+        let excessiveID = String(repeating: "x", count: 4_097)
+        let rejected = router.handle([
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": ["name": "brain_update", "arguments": ["chunk_id": excessiveID]],
+        ])
+        let rejectedText = ((rejected["result"] as? [String: Any])?["content"] as? [[String: Any]])?
+            .compactMap { $0["text"] as? String }.joined(separator: "
+") ?? ""
+        XCTAssertTrue(rejectedText.contains("maxLength 4096"), rejectedText)
+    }
+
     func testBrainSearchSchemaIncludesSourceParameter() throws {
         let tool = try XCTUnwrap(MCPRouter.toolDefinitions.first { ($0["name"] as? String) == "brain_search" })
         let schema = try XCTUnwrap(tool["inputSchema"] as? [String: Any])
