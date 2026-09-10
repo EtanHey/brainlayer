@@ -255,7 +255,8 @@ def test_wrong_preexisting_index_refuses_before_catalog_data_write(tmp_path: Pat
     assert conn.execute("SELECT COUNT(*) FROM native_session_header_occurrences").fetchone() == (0,)
 
 
-def test_schema_requires_canonical_unique_partial_index_predicate(tmp_path: Path) -> None:
+@pytest.mark.parametrize("predicate", ["'CANONICAL'", "'can onical'"])
+def test_schema_requires_canonical_unique_partial_index_predicate(tmp_path: Path, predicate: str) -> None:
     raw = header(SESSION_A)
     source = tmp_path / "canonical-index.jsonl"
     source.write_bytes(raw)
@@ -266,12 +267,61 @@ def test_schema_requires_canonical_unique_partial_index_predicate(tmp_path: Path
     conn.execute("DROP INDEX idx_native_session_headers_canonical")
     conn.execute(
         "CREATE UNIQUE INDEX idx_native_session_headers_canonical "
-        "ON native_session_header_occurrences(generation_key) WHERE disposition = 'repeat'"
+        f"ON native_session_header_occurrences(generation_key) WHERE disposition = {predicate}"
     )
     conn.commit()
 
     with pytest.raises(NativeHeaderCatalogError, match="index predicate mismatch"):
         catalog(conn, store, source, receipt, receipt, raw)
+
+
+def test_schema_preserves_check_constraint_literal_bytes(tmp_path: Path) -> None:
+    raw = header(SESSION_A)
+    source = tmp_path / "check-literal.jsonl"
+    source.write_bytes(raw)
+    store = archive(tmp_path)
+    receipt = store.capture(source, "codex")
+    conn = sqlite3.connect(":memory:")
+    ensure_native_session_headers_schema(conn)
+    generation_sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='native_source_generations'"
+    ).fetchone()[0]
+    occurrence_sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='native_session_header_occurrences'"
+    ).fetchone()[0]
+    for index in (
+        "idx_native_source_generations_source",
+        "idx_native_session_headers_generation",
+        "idx_native_session_headers_canonical",
+    ):
+        conn.execute(f"DROP INDEX {index}")
+    conn.execute("DROP TABLE native_session_header_occurrences")
+    conn.execute("DROP TABLE native_source_generations")
+    altered_generation_sql = generation_sql.replace(
+        "status IN ('active','conflicted','invalid')",
+        "status IN ('ACTIVE','conflicted','invalid')",
+    )
+    assert altered_generation_sql != generation_sql
+    conn.execute(altered_generation_sql)
+    conn.execute(occurrence_sql)
+    conn.execute(
+        "CREATE INDEX idx_native_source_generations_source "
+        "ON native_source_generations(provider,source_file,watcher_generation,status,generation_key)"
+    )
+    conn.execute(
+        "CREATE INDEX idx_native_session_headers_generation "
+        "ON native_session_header_occurrences(generation_key,disposition,record_start_offset,occurrence_key)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX idx_native_session_headers_canonical "
+        "ON native_session_header_occurrences(generation_key) WHERE disposition = 'canonical'"
+    )
+
+    with pytest.raises(NativeHeaderCatalogError, match="generation constraints mismatch"):
+        catalog(conn, store, source, receipt, receipt, raw)
+
+    assert conn.execute("SELECT COUNT(*) FROM native_source_generations").fetchone() == (0,)
+    assert conn.execute("SELECT COUNT(*) FROM native_session_header_occurrences").fetchone() == (0,)
 
 
 def test_older_prefix_replay_does_not_downgrade_current_receipt(tmp_path: Path) -> None:

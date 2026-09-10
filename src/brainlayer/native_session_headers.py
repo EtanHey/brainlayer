@@ -131,6 +131,31 @@ def _table_columns(conn: Any, table: str) -> list[tuple[str, str, int, Any, int]
     return [(str(row[1]), str(row[2]).upper(), int(row[3]), row[4], int(row[5])) for row in rows]
 
 
+def _compact_sql(sql: str) -> str:
+    compact: list[str] = []
+    quote: str | None = None
+    index = 0
+    while index < len(sql):
+        char = sql[index]
+        if quote is not None:
+            compact.append(char)
+            if char == quote:
+                if index + 1 < len(sql) and sql[index + 1] == quote:
+                    compact.append(sql[index + 1])
+                    index += 2
+                    continue
+                quote = None
+            index += 1
+            continue
+        if char in ("'", '"', "`"):
+            quote = char
+            compact.append(char)
+        elif not char.isspace():
+            compact.append(char.lower())
+        index += 1
+    return "".join(compact)
+
+
 def _table_sql(conn: Any, table: str) -> str:
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
@@ -138,7 +163,7 @@ def _table_sql(conn: Any, table: str) -> str:
     ).fetchone()
     if row is None or not isinstance(row[0], str):
         raise NativeHeaderCatalogError(f"native header catalog table missing: {table}")
-    return re.sub(r"\s+", "", row[0].lower())
+    return _compact_sql(row[0])
 
 
 def _require_unique_constraint(conn: Any, table: str, columns: tuple[str, ...]) -> None:
@@ -175,8 +200,8 @@ def _require_index(
             "SELECT sql FROM sqlite_master WHERE type='index' AND name=?",
             (name,),
         ).fetchone()
-        compact = re.sub(r"\s+", "", str(definition[0]).lower()) if definition else ""
-        if compact != re.sub(r"\s+", "", sql.lower()):
+        compact = _compact_sql(str(definition[0])) if definition else ""
+        if compact != _compact_sql(sql):
             raise NativeHeaderCatalogError(f"native header catalog index predicate mismatch: {name}")
 
 
