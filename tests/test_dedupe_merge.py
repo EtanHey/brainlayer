@@ -257,11 +257,31 @@ def test_consolidation_retargets_source_records_collapses_key_collision_and_roll
     survivor_collision = _record_key("new-two", "same.jsonl", 10, 30, "a" * 64)
     loser_unique = _record_key("old-one", "other.jsonl", 40, 80, "b" * 64)
     conn.executemany(
-        "INSERT INTO chunk_source_records VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO chunk_source_records (record_key, canonical_chunk_id, source_file, record_start_offset, record_end_offset, raw_record_hash, session_id, observed_at, record_context_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
-            (loser_collision, "old-one", "same.jsonl", 10, 30, "a" * 64, "session", "2026-09-10T11:00:00Z"),
-            (survivor_collision, "new-two", "same.jsonl", 10, 30, "a" * 64, "session", "2026-09-10T12:00:00Z"),
-            (loser_unique, "old-one", "other.jsonl", 40, 80, "b" * 64, None, "2026-09-10T11:30:00Z"),
+            (
+                loser_collision,
+                "old-one",
+                "same.jsonl",
+                10,
+                30,
+                "a" * 64,
+                "session",
+                "2026-09-10T11:00:00Z",
+                '[{"uuid":"old"}]',
+            ),
+            (
+                survivor_collision,
+                "new-two",
+                "same.jsonl",
+                10,
+                30,
+                "a" * 64,
+                "session",
+                "2026-09-10T12:00:00Z",
+                '[{"uuid":"new"}]',
+            ),
+            (loser_unique, "old-one", "other.jsonl", 40, 80, "b" * 64, None, "2026-09-10T11:30:00Z", "[]"),
         ],
     )
     conn.commit()
@@ -275,12 +295,12 @@ def test_consolidation_retargets_source_records_collapses_key_collision_and_roll
     expected_unique = _record_key("new-two", "other.jsonl", 40, 80, "b" * 64)
     conn = sqlite3.connect(db_path)
     after = conn.execute(
-        "SELECT record_key, canonical_chunk_id, source_file, observed_at FROM chunk_source_records ORDER BY source_file"
+        "SELECT record_key, canonical_chunk_id, source_file, observed_at, record_context_json FROM chunk_source_records ORDER BY source_file"
     ).fetchall()
     conn.close()
     assert after == [
-        (expected_unique, "new-two", "other.jsonl", "2026-09-10T11:30:00Z"),
-        (survivor_collision, "new-two", "same.jsonl", "2026-09-10T11:00:00Z"),
+        (expected_unique, "new-two", "other.jsonl", "2026-09-10T11:30:00Z", "[]"),
+        (survivor_collision, "new-two", "same.jsonl", "2026-09-10T11:00:00Z", '[{"uuid":"new"},{"uuid":"old"}]'),
     ]
 
     receipt = rollback_migration(db_path)
@@ -321,7 +341,7 @@ def test_source_record_retarget_failure_rolls_back_chunk_and_record_atomically(t
     ensure_chunk_source_records(conn)
     original_key = _record_key("old-one", "blocked.jsonl", 2, 9, "c" * 64)
     conn.execute(
-        "INSERT INTO chunk_source_records VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO chunk_source_records (record_key, canonical_chunk_id, source_file, record_start_offset, record_end_offset, raw_record_hash, session_id, observed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (original_key, "old-one", "blocked.jsonl", 2, 9, "c" * 64, "session", "2026-09-10T11:00:00Z"),
     )
     conn.execute(
@@ -1054,3 +1074,28 @@ def test_rollback_value_audit_passes_on_a_clean_rollback(tmp_path):
     audited = dm._assert_rollback_restored_values(conn, tables)
     conn.close()
     assert audited == result["value_audit"]
+
+
+def test_source_record_writer_migrates_legacy_schema_and_unions_complete_context_maps(tmp_path):
+    db_path = _db(tmp_path, _pair())
+    conn = sqlite3.connect(db_path)
+    conn.execute("""CREATE TABLE chunk_source_records (
+        record_key TEXT PRIMARY KEY, canonical_chunk_id TEXT NOT NULL, source_file TEXT NOT NULL,
+        record_start_offset INTEGER NOT NULL, record_end_offset INTEGER NOT NULL,
+        raw_record_hash TEXT NOT NULL, session_id TEXT, observed_at TEXT NOT NULL)""")
+    ensure_chunk_source_records(conn)
+    assert conn.execute("SELECT record_context_json FROM chunk_source_records").fetchall() == []
+    metadata = {
+        "_line_start_offset": 1,
+        "_line_end_offset": 5,
+        "_raw_record_hash": "e" * 64,
+        "record_context": {"uuid": "native-1", "parentUuid": "p-1"},
+    }
+    record_watcher_source(conn, canonical_chunk_id="old-one", source_file="fixture.jsonl", metadata=metadata)
+    metadata["record_context"] = {"uuid": "native-2", "origin": "declared"}
+    record_watcher_source(conn, canonical_chunk_id="old-one", source_file="fixture.jsonl", metadata=metadata)
+    metadata["record_context"] = {"uuid": "native-1", "parentUuid": "p-1"}
+    record_watcher_source(conn, canonical_chunk_id="old-one", source_file="fixture.jsonl", metadata=metadata)
+    contexts = conn.execute("SELECT record_context_json FROM chunk_source_records").fetchone()[0]
+    conn.close()
+    assert contexts == '[{"origin":"declared","uuid":"native-2"},{"parentUuid":"p-1","uuid":"native-1"}]'

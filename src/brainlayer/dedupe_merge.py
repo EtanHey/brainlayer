@@ -58,6 +58,7 @@ from typing import Any
 
 from .chunk_origin_wipe import AUX_COUNT_TABLES, assert_not_live_db
 from .chunk_origin_wipe import live_canonical_db_path as live_canonical_db_path
+from .source_records import canonical_record_context_json
 
 PREIMAGE_TABLE = "dedupe_merge_preimage"
 ALIAS_PREIMAGE_TABLE = "dedupe_merge_alias_preimage"
@@ -279,7 +280,7 @@ def _retarget_source_records(conn: sqlite3.Connection, loser_id: str, survivor_i
     rows = conn.execute(
         """
         SELECT record_key, canonical_chunk_id, source_file, record_start_offset,
-               record_end_offset, raw_record_hash, session_id, observed_at
+               record_end_offset, raw_record_hash, session_id, observed_at, record_context_json
         FROM chunk_source_records WHERE canonical_chunk_id = ?
         """,
         (loser_id,),
@@ -290,7 +291,7 @@ def _retarget_source_records(conn: sqlite3.Connection, loser_id: str, survivor_i
         existing = conn.execute(
             """
             SELECT record_key, canonical_chunk_id, source_file, record_start_offset,
-                   record_end_offset, raw_record_hash, session_id, observed_at
+                   record_end_offset, raw_record_hash, session_id, observed_at, record_context_json
             FROM chunk_source_records WHERE record_key = ?
             """,
             (new_key,),
@@ -307,10 +308,11 @@ def _retarget_source_records(conn: sqlite3.Connection, loser_id: str, survivor_i
             """
             UPDATE chunk_source_records
             SET session_id = COALESCE(session_id, ?),
-                observed_at = MIN(observed_at, ?)
+                observed_at = MIN(observed_at, ?),
+                record_context_json = ?
             WHERE record_key = ?
             """,
-            (row[6], row[7], new_key),
+            (row[6], row[7], canonical_record_context_json(existing[8], row[8]), new_key),
         )
         conn.execute("DELETE FROM chunk_source_records WHERE record_key = ?", (row[0],))
         collisions += 1
@@ -321,9 +323,9 @@ def _record_source_preimage(conn: sqlite3.Connection, row: sqlite3.Row | tuple, 
     conn.execute(
         f"""INSERT OR IGNORE INTO {RECORD_PREIMAGE_TABLE}
         (record_key, canonical_chunk_id, source_file, record_start_offset,
-         record_end_offset, raw_record_hash, session_id, observed_at, final_key)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        [*row[:8], final_key],
+         record_end_offset, raw_record_hash, session_id, observed_at, record_context_json, final_key)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        [*row[:9], final_key],
     )
 
 
@@ -464,8 +466,13 @@ def merge_duplicates(
                 "record_key TEXT PRIMARY KEY, canonical_chunk_id TEXT NOT NULL, source_file TEXT NOT NULL, "
                 "record_start_offset INTEGER NOT NULL, record_end_offset INTEGER NOT NULL, "
                 "raw_record_hash TEXT NOT NULL, session_id TEXT, observed_at TEXT NOT NULL, "
-                "final_key TEXT NOT NULL)"
+                "record_context_json TEXT NOT NULL DEFAULT '[]', final_key TEXT NOT NULL)"
             )
+            record_preimage_columns = {row[1] for row in conn.execute(f"PRAGMA table_info({RECORD_PREIMAGE_TABLE})")}
+            if "record_context_json" not in record_preimage_columns:
+                conn.execute(
+                    f"ALTER TABLE {RECORD_PREIMAGE_TABLE} ADD COLUMN record_context_json TEXT NOT NULL DEFAULT '[]'"
+                )
             if has_alias:
                 conn.execute(
                     f"""
@@ -996,6 +1003,7 @@ def _assert_rollback_restored_values(conn: sqlite3.Connection, tables: set[str])
             "raw_record_hash",
             "session_id",
             "observed_at",
+            "record_context_json",
         )
         select_pre = ", ".join(f"p.{field} AS pre_{field}" for field in record_fields)
         select_now = ", ".join(f"r.{field} AS now_{field}" for field in record_fields)
@@ -1115,6 +1123,7 @@ def rollback_migration(db_path: Path, *, allow_live: bool = False) -> dict[str, 
                     "raw_record_hash",
                     "session_id",
                     "observed_at",
+                    "record_context_json",
                 )
                 conn.executemany(
                     f"INSERT OR REPLACE INTO chunk_source_records ({', '.join(fields)}) "

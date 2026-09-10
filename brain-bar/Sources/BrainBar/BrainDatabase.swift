@@ -5220,6 +5220,15 @@ final class BrainDatabase: @unchecked Sendable {
         let resolved = try resolveOccurrenceChunkID(requestedChunkID, on: db)
         let hasOccurrences = try tableExists("chunk_source_occurrences")
         let hasRecords = try tableExists("chunk_source_records")
+        let hasRecordContexts: Bool
+        if hasRecords {
+            hasRecordContexts = try tableColumns(name: "chunk_source_records", on: db).contains("record_context_json")
+        } else {
+            hasRecordContexts = false
+        }
+        let recordContextSelect = hasRecordContexts
+            ? "CASE WHEN length(record_context_json) <= 32768 THEN record_context_json ELSE NULL END AS record_context_json, CASE WHEN length(record_context_json) > 32768 THEN 1 ELSE 0 END AS record_context_omitted"
+            : "NULL AS record_context_json, 0 AS record_context_omitted"
         guard hasOccurrences || hasRecords else {
             return [
                 "source_occurrences_status": "unavailable",
@@ -5238,19 +5247,20 @@ final class BrainDatabase: @unchecked Sendable {
             SELECT source_file, source_line, source_pointer, session_id,
                    incoming_content_hash, chunk_created_at, observed_at,
                    work_context_json, evidence_kind, evidence_key,
-                   record_start_offset, record_end_offset
+                   record_start_offset, record_end_offset, record_context_json, record_context_omitted
             FROM (
                 SELECT source_file, source_line, source_pointer, session_id,
                        incoming_content_hash, chunk_created_at, observed_at,
                        work_context_json, 'field' AS evidence_kind,
                        occurrence_key AS evidence_key, NULL AS record_start_offset,
-                       NULL AS record_end_offset
+                       NULL AS record_end_offset, NULL AS record_context_json,
+                       0 AS record_context_omitted
                 FROM chunk_source_occurrences
                 WHERE canonical_chunk_id = ?
                 UNION ALL
                 SELECT source_file, NULL, NULL, session_id, raw_record_hash,
                        NULL, observed_at, NULL, 'record', record_key,
-                       record_start_offset, record_end_offset
+                       record_start_offset, record_end_offset, \(recordContextSelect)
                 FROM chunk_source_records
                 WHERE canonical_chunk_id = ?
             )
@@ -5263,7 +5273,8 @@ final class BrainDatabase: @unchecked Sendable {
                    incoming_content_hash, chunk_created_at, observed_at,
                    work_context_json, 'field' AS evidence_kind,
                    occurrence_key AS evidence_key, NULL AS record_start_offset,
-                   NULL AS record_end_offset
+                   NULL AS record_end_offset, NULL AS record_context_json,
+                   0 AS record_context_omitted
             FROM chunk_source_occurrences
             WHERE canonical_chunk_id = ?
             ORDER BY observed_at ASC, evidence_key ASC
@@ -5274,7 +5285,7 @@ final class BrainDatabase: @unchecked Sendable {
             SELECT source_file, NULL, NULL, session_id, raw_record_hash,
                    NULL, observed_at, NULL, 'record' AS evidence_kind,
                    record_key AS evidence_key, record_start_offset,
-                   record_end_offset
+                   record_end_offset, \(recordContextSelect)
             FROM chunk_source_records
             WHERE canonical_chunk_id = ?
             ORDER BY observed_at ASC, evidence_key ASC
@@ -5320,6 +5331,22 @@ final class BrainDatabase: @unchecked Sendable {
             ]
             if kind == "record" {
                 row["raw_record_hash"] = columnText(stmt, 4) as Any
+                let contextOmitted = sqlite3_column_int(stmt, 13) != 0
+                let contextRaw = columnText(stmt, 12)
+                if contextOmitted {
+                    row["declared_record_contexts"] = []
+                    row["declared_record_context_status"] = "omitted_byte_cap"
+                    row["declared_record_context_omission"] = "Context exceeded the per-record 32768-byte SQL fetch cap."
+                } else if let contextRaw,
+                          let data = contextRaw.data(using: .utf8),
+                          let contexts = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+                          !contexts.isEmpty {
+                    row["declared_record_contexts"] = contexts
+                    row["declared_record_context_status"] = "declared_unverified"
+                } else {
+                    row["declared_record_contexts"] = []
+                    row["declared_record_context_status"] = hasRecordContexts ? "unavailable_missing" : "unavailable_legacy_schema"
+                }
             } else {
                 row["incoming_content_hash"] = columnText(stmt, 4) as Any
             }

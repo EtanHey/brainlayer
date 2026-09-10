@@ -830,7 +830,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             )
         """)
         from .source_records import ensure_chunk_source_records
-        ensure_chunk_source_records(self.conn)
+
+        ensure_chunk_source_records(self.conn, migrate=not self._readonly)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS chunk_source_occurrences (
                 occurrence_key TEXT PRIMARY KEY,
