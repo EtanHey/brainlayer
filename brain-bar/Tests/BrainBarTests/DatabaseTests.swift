@@ -2134,6 +2134,71 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(fullTarget["content"] as? String, fullBody)
     }
 
+    func testSourceOccurrencesAreBoundedReadOnlyAndResolveAliases() throws {
+        try db.insertChunk(
+            id: "occ-survivor",
+            content: "occurrence target",
+            sessionId: "occ-session",
+            project: "test",
+            contentType: "assistant_text",
+            importance: 5
+        )
+        try sqliteExecWrite(path: tempDBPath, sql: """
+            CREATE TABLE chunk_source_occurrences (
+                occurrence_key TEXT PRIMARY KEY,
+                canonical_chunk_id TEXT NOT NULL,
+                source_file TEXT NOT NULL,
+                source_line INTEGER NOT NULL,
+                source_pointer TEXT NOT NULL,
+                session_id TEXT,
+                incoming_content_hash TEXT NOT NULL,
+                chunk_created_at TEXT,
+                observed_at TEXT NOT NULL,
+                work_context_json TEXT NOT NULL DEFAULT '{}'
+            );
+            CREATE TABLE chunk_id_alias (
+                old_chunk_id TEXT PRIMARY KEY,
+                canonical_chunk_id TEXT NOT NULL,
+                deprecated_at TEXT
+            );
+            INSERT INTO chunk_id_alias VALUES ('occ-old', 'occ-survivor', NULL);
+            INSERT INTO chunk_source_occurrences VALUES
+                ('k1', 'occ-survivor', 'fixture.jsonl', 4, '/payload/0', 's', 'h1', NULL, '2026-09-10T00:00:00Z', '{}'),
+                ('k2', 'occ-survivor', 'fixture.jsonl', 5, '/payload/1', 's', 'h2', NULL, '2026-09-10T00:00:01Z', '{}');
+        """)
+        let page = try db.listSourceOccurrences(requestedChunkID: "occ-old", limit: 1, offset: 0, maxBytes: 4096)
+        XCTAssertEqual(page["source_occurrences_status"] as? String, "available")
+        XCTAssertEqual(page["requested_chunk_id"] as? String, "occ-old")
+        XCTAssertEqual(page["resolved_chunk_id"] as? String, "occ-survivor")
+        XCTAssertEqual((page["source_occurrences"] as? [[String: Any]])?.count, 1)
+        XCTAssertEqual(page["source_occurrences_has_more"] as? Bool, true)
+        XCTAssertEqual(page["source_occurrences_next_offset"] as? Int, 1)
+        let next = try db.listSourceOccurrences(requestedChunkID: "occ-old", limit: 1, offset: 1, maxBytes: 4096)
+        XCTAssertEqual((next["source_occurrences"] as? [[String: Any]])?.first?["source_line"] as? Int32, 5)
+    }
+
+    func testSourceOccurrencesPageBoundaryDoesNotSkipRows() throws {
+        try sqliteExecWrite(path: tempDBPath, sql: """
+            INSERT INTO chunk_source_occurrences VALUES
+                ('page-a', 'page-target', '\(String(repeating: "p", count: 380))', 1, '/a', 's', 'ha', NULL, '2026-09-10T00:00:00Z', '{}'),
+                ('page-b', 'page-target', '\(String(repeating: "p", count: 380))', 2, '/b', 's', 'hb', NULL, '2026-09-10T00:00:01Z', '{}');
+        """)
+        let first = try db.listSourceOccurrences(requestedChunkID: "page-target", limit: 20, maxBytes: 1_024)
+        let firstRows = first["source_occurrences"] as? [[String: Any]] ?? []
+        XCTAssertEqual(firstRows.count, 1)
+        XCTAssertEqual(first["source_occurrences_next_offset"] as? Int, 1)
+        let second = try db.listSourceOccurrences(requestedChunkID: "page-target", limit: 20, offset: 1, maxBytes: 1_024)
+        let secondRows = second["source_occurrences"] as? [[String: Any]] ?? []
+        XCTAssertEqual(secondRows.count, 1)
+        XCTAssertNotEqual(firstRows.first?["evidence_key"] as? String, secondRows.first?["evidence_key"] as? String)
+    }
+
+    func testSourceOccurrencesMissingTableIsExplicitlyUnavailable() throws {
+        let result = try db.listSourceOccurrences(requestedChunkID: "missing")
+        XCTAssertEqual(result["source_occurrences_status"] as? String, "unavailable")
+        XCTAssertEqual((result["source_occurrences"] as? [[String: Any]])?.count, 0)
+    }
+
     // MARK: - brain_entity (lookup entity + relations)
 
     func testEntityLookup() throws {

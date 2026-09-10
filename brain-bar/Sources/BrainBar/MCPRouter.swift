@@ -1249,8 +1249,18 @@ final class MCPRouter: @unchecked Sendable {
         let db = try readDB()
         let before = args["before"] as? Int ?? 3
         let after = args["after"] as? Int ?? 3
+        let occurrenceLimit = args["occurrence_limit"] as? Int ?? 20
+        let occurrenceOffset = args["occurrence_offset"] as? Int ?? 0
+        let occurrenceMaxBytes = args["occurrence_max_bytes"] as? Int ?? 32_000
+        let occurrences = try db.listSourceOccurrences(
+            requestedChunkID: chunkId,
+            limit: occurrenceLimit,
+            offset: occurrenceOffset,
+            maxBytes: occurrenceMaxBytes
+        )
+        let resolvedChunkId = occurrences["resolved_chunk_id"] as? String ?? chunkId
         let expanded = try db.expandChunk(
-            id: chunkId,
+            id: resolvedChunkId,
             before: before,
             after: after,
             includeFullTargetContent: true
@@ -1272,8 +1282,31 @@ final class MCPRouter: @unchecked Sendable {
                 lines.append("\u{2502}  [\(cid)] \(snippet)")
             }
         }
+        let occurrenceStatus = occurrences["source_occurrences_status"] as? String ?? "unavailable"
+        let occurrenceRows = occurrences["source_occurrences"] as? [[String: Any]] ?? []
+        lines.append("\u{251c}\u{2500} Source occurrences (\(occurrenceStatus), \(occurrenceRows.count))")
+        if occurrenceStatus == "available" {
+            for occurrence in occurrenceRows {
+                let file = occurrence["source_file"] as? String ?? ""
+                if occurrence["evidence_kind"] as? String == "record" {
+                    let start = occurrence["record_start_offset"] as? Int64 ?? 0
+                    let end = occurrence["record_end_offset"] as? Int64 ?? 0
+                    lines.append("\u{2502}  recorded source record \(file):[\(start),\(end))")
+                } else {
+                    let line = occurrence["source_line"] as? Int32 ?? 0
+                    let pointer = occurrence["source_pointer"] as? String ?? ""
+                    lines.append("\u{2502}  recorded field coordinate \(file):\(line) \(pointer)")
+                }
+            }
+        } else {
+            lines.append("\u{2502}  retained occurrence table unavailable")
+        }
         lines.append("\u{2514}\u{2500}")
-        return ToolOutput(text: lines.joined(separator: "\n"))
+        lines.append("│  Recorded coordinates only; not authorship proof.")
+        lines.append("└─")
+        var metadata = occurrences
+        metadata.removeValue(forKey: "source_occurrences_boundary")
+        return ToolOutput(text: lines.joined(separator: "\n"), metadata: metadata)
     }
 
     private func handleBrainTags(_ args: [String: Any]) throws -> ToolOutput {
@@ -1807,6 +1840,9 @@ final class MCPRouter: @unchecked Sendable {
                     "chunk_id": ["type": "string", "description": "Chunk ID to expand"],
                     "before": ["type": "integer", "description": "Context chunks before (default: 3)"],
                     "after": ["type": "integer", "description": "Context chunks after (default: 3)"],
+                    "occurrence_limit": ["type": "integer", "description": "Recorded source coordinates to return (default: 20, max: 20)"],
+                    "occurrence_offset": ["type": "integer", "description": "Recorded source coordinate offset (default: 0)"],
+                    "occurrence_max_bytes": ["type": "integer", "description": "Maximum serialized occurrence row payload bytes (default: 32000)"],
                 ] as [String: Any],
                 "required": ["chunk_id"]
             ] as [String: Any])

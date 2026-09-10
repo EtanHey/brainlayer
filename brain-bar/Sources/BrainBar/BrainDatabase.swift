@@ -5207,6 +5207,180 @@ final class BrainDatabase: @unchecked Sendable {
 
     // MARK: - brain_expand: get chunk + surrounding session context
 
+    func listSourceOccurrences(
+        requestedChunkID: String,
+        limit: Int = 20,
+        offset: Int = 0,
+        maxBytes: Int = 32_000
+    ) throws -> [String: Any] {
+        guard let db else { throw DBError.notOpen }
+        let boundedLimit = min(max(limit, 1), 20)
+        let boundedOffset = min(max(offset, 0), Int.max - 21)
+        let boundedBytes = min(max(maxBytes, 1_024), 128_000)
+        let resolved = try resolveOccurrenceChunkID(requestedChunkID, on: db)
+        let hasOccurrences = try tableExists("chunk_source_occurrences")
+        let hasRecords = try tableExists("chunk_source_records")
+        guard hasOccurrences || hasRecords else {
+            return [
+                "source_occurrences_status": "unavailable",
+                "requested_chunk_id": requestedChunkID,
+                "resolved_chunk_id": resolved.id,
+                "source_occurrences": [],
+                "source_occurrences_has_more": false,
+                "source_occurrences_next_offset": NSNull(),
+                "source_occurrences_diagnostic": resolved.diagnostic as Any
+            ]
+        }
+
+        let sql: String
+        if hasOccurrences && hasRecords {
+            sql = """
+            SELECT source_file, source_line, source_pointer, session_id,
+                   incoming_content_hash, chunk_created_at, observed_at,
+                   work_context_json, evidence_kind, evidence_key,
+                   record_start_offset, record_end_offset
+            FROM (
+                SELECT source_file, source_line, source_pointer, session_id,
+                       incoming_content_hash, chunk_created_at, observed_at,
+                       work_context_json, 'field' AS evidence_kind,
+                       occurrence_key AS evidence_key, NULL AS record_start_offset,
+                       NULL AS record_end_offset
+                FROM chunk_source_occurrences
+                WHERE canonical_chunk_id = ?
+                UNION ALL
+                SELECT source_file, NULL, NULL, session_id, raw_record_hash,
+                       NULL, observed_at, NULL, 'record', record_key,
+                       record_start_offset, record_end_offset
+                FROM chunk_source_records
+                WHERE canonical_chunk_id = ?
+            )
+            ORDER BY observed_at ASC, evidence_key ASC
+            LIMIT ? OFFSET ?
+        """
+        } else if hasOccurrences {
+            sql = """
+            SELECT source_file, source_line, source_pointer, session_id,
+                   incoming_content_hash, chunk_created_at, observed_at,
+                   work_context_json, 'field' AS evidence_kind,
+                   occurrence_key AS evidence_key, NULL AS record_start_offset,
+                   NULL AS record_end_offset
+            FROM chunk_source_occurrences
+            WHERE canonical_chunk_id = ?
+            ORDER BY observed_at ASC, evidence_key ASC
+            LIMIT ? OFFSET ?
+        """
+        } else {
+            sql = """
+            SELECT source_file, NULL, NULL, session_id, raw_record_hash,
+                   NULL, observed_at, NULL, 'record' AS evidence_kind,
+                   record_key AS evidence_key, record_start_offset,
+                   record_end_offset
+            FROM chunk_source_records
+            WHERE canonical_chunk_id = ?
+            ORDER BY observed_at ASC, evidence_key ASC
+            LIMIT ? OFFSET ?
+        """
+        }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw DBError.prepare(sqlite3_errcode(db))
+        }
+        defer { sqlite3_finalize(stmt) }
+        bindText(resolved.id, to: stmt, index: 1)
+        var bindIndex: Int32 = 2
+        if hasOccurrences && hasRecords {
+            bindText(resolved.id, to: stmt, index: bindIndex)
+            bindIndex += 1
+        }
+        sqlite3_bind_int64(stmt, bindIndex, Int64(boundedLimit + 1))
+        sqlite3_bind_int64(stmt, bindIndex + 1, Int64(boundedOffset))
+        var rows: [[String: Any]] = []
+        var omitted: [[String: Any]] = []
+        var hasMore = false
+        var usedBytes = 0
+        var stepRC = SQLITE_ROW
+        while stepRC == SQLITE_ROW {
+            stepRC = sqlite3_step(stmt)
+            guard stepRC == SQLITE_ROW else { break }
+            if rows.count >= boundedLimit {
+                hasMore = true
+                break
+            }
+            let kind = columnText(stmt, 8) ?? "field"
+            var row: [String: Any] = [
+                "source_file": columnText(stmt, 0) as Any,
+                "source_line": sqlite3_column_type(stmt, 1) == SQLITE_NULL ? NSNull() : sqlite3_column_int(stmt, 1),
+                "source_pointer": columnText(stmt, 2) as Any,
+                "session_id": columnText(stmt, 3) as Any,
+                "chunk_created_at": columnText(stmt, 5) as Any,
+                "observed_at": columnText(stmt, 6) as Any,
+                "work_context_json": columnText(stmt, 7) as Any,
+                "evidence_kind": kind,
+                "evidence_key": columnText(stmt, 9) as Any
+            ]
+            if kind == "record" {
+                row["raw_record_hash"] = columnText(stmt, 4) as Any
+            } else {
+                row["incoming_content_hash"] = columnText(stmt, 4) as Any
+            }
+            if sqlite3_column_type(stmt, 10) != SQLITE_NULL {
+                row["record_start_offset"] = sqlite3_column_int64(stmt, 10)
+                row["record_end_offset"] = sqlite3_column_int64(stmt, 11)
+            }
+            let encoded = (try? JSONSerialization.data(withJSONObject: row)) ?? Data()
+            if usedBytes + encoded.count > boundedBytes {
+                if rows.isEmpty {
+                    omitted.append(["evidence_key": row["evidence_key"] as Any, "reason": "row_exceeds_byte_budget"])
+                }
+                hasMore = true
+                break
+            }
+            usedBytes += encoded.count
+            rows.append(row)
+        }
+        if stepRC != SQLITE_ROW && stepRC != SQLITE_DONE {
+            throw DBError.step(stepRC)
+        }
+        return [
+            "source_occurrences_status": "available",
+            "requested_chunk_id": requestedChunkID,
+            "resolved_chunk_id": resolved.id,
+            "source_occurrences": rows,
+            "source_occurrences_has_more": hasMore,
+            "source_occurrences_next_offset": hasMore ? boundedOffset + rows.count + omitted.count : NSNull(),
+            "source_occurrences_omitted": omitted,
+            "source_occurrences_diagnostic": resolved.diagnostic as Any,
+            "source_occurrences_boundary": "Recorded ingest coordinates, not authorship proof.",
+            "source_occurrences_bytes_scope": "serialized occurrence row payload"
+        ]
+    }
+
+    private func resolveOccurrenceChunkID(
+        _ requested: String,
+        on db: OpaquePointer
+    ) throws -> (id: String, diagnostic: String?) {
+        guard try tableExists("chunk_id_alias") else { return (requested, nil) }
+        var current = requested
+        var seen: Set<String> = []
+        for _ in 0..<16 {
+            guard seen.insert(current).inserted else {
+                return (requested, "alias_cycle_detected")
+            }
+            var stmt: OpaquePointer?
+            let sql = "SELECT canonical_chunk_id FROM chunk_id_alias WHERE old_chunk_id = ?"
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                throw DBError.prepare(sqlite3_errcode(db))
+            }
+            defer { sqlite3_finalize(stmt) }
+            bindText(current, to: stmt, index: 1)
+            guard sqlite3_step(stmt) == SQLITE_ROW, let next = columnText(stmt, 0), !next.isEmpty else {
+                return (current, nil)
+            }
+            current = next
+        }
+        return (requested, "alias_hop_limit_exceeded")
+    }
+
     func expandChunk(
         id: String,
         before: Int = 3,
