@@ -314,3 +314,18 @@ def test_destination_swap_after_bound_generation_keeps_failed_receipt(tmp_path, 
     receipt = json.loads((selected_generation / "receipt.incomplete.json").read_text())
     assert receipt["status"] == "failed"
     assert "identity changed after generation" in receipt["error"]
+
+
+def test_socket_snapshot_sends_absolute_paths_across_process_boundary(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_request(target, *, socket_path, max_attempts, attempt_dir):
+        captured.update(target=target, socket=socket_path, attempts=max_attempts, directory=attempt_dir)
+
+    monkeypatch.setattr(backup_run_once.backup_daily, "request_brainbar_vacuum_into", fake_request)
+    monkeypatch.setattr(backup_run_once.backup_daily, "_validate_backup_target", lambda target: 7)
+    monkeypatch.chdir(tmp_path)
+    assert backup_run_once._socket_snapshot(Path("/tmp/unused.sock"), Path("generation/db"), Path("generation")) == 7
+    assert captured["target"].is_absolute()
+    assert captured["directory"].is_absolute()
+    assert captured["target"].parent == captured["directory"]
