@@ -13,6 +13,13 @@ MAX_NATIVE_UUID_LOOKUP_LIMIT = 8
 MAX_PRESERVED_SEGMENT_BYTES = 4_096
 _SUPPORTED_PROVIDER = "claude"
 _SHA256_RE = re.compile(r"[0-9a-fA-F]{64}\Z")
+_DECLARED_TOP_LEVEL_HEADERS = (
+    ("type", "/type"),
+    ("uuid", "/uuid"),
+    ("parentUuid", "/parentUuid"),
+    ("logicalParentUuid", "/logicalParentUuid"),
+    ("preservedSegment", "/preservedSegment"),
+)
 
 
 class UnsupportedNativeRecordProvider(ValueError):
@@ -27,6 +34,44 @@ class NativeRecordLinkConflict(ValueError):
 class NativeRecordLinkResult:
     record_key: str
     inserted: bool
+
+
+def native_record_payload_from_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
+    """Return exact Claude structural evidence, or None when its namespace is unavailable."""
+    if entry.get("_provider") != _SUPPORTED_PROVIDER:
+        return None
+    session_id = entry.get("sessionId")
+    source_file = entry.get("_source_file")
+    start_offset = entry.get("_line_start_offset")
+    end_offset = entry.get("_line_end_offset")
+    raw_record_hash = entry.get("_raw_record_hash")
+    if (
+        not isinstance(session_id, str)
+        or not session_id
+        or not isinstance(source_file, str)
+        or not source_file
+        or type(start_offset) is not int
+        or type(end_offset) is not int
+        or start_offset < 0
+        or end_offset <= start_offset
+        or not isinstance(raw_record_hash, str)
+        or not _SHA256_RE.fullmatch(raw_record_hash)
+    ):
+        return None
+
+    declared_headers = {pointer: entry[key] for key, pointer in _DECLARED_TOP_LEVEL_HEADERS if key in entry}
+    compact_metadata = entry.get("compactMetadata")
+    if isinstance(compact_metadata, dict) and "preservedSegment" in compact_metadata:
+        declared_headers["/compactMetadata/preservedSegment"] = compact_metadata["preservedSegment"]
+    return {
+        "provider": _SUPPORTED_PROVIDER,
+        "session_id": session_id,
+        "source_file": source_file,
+        "record_start_offset": start_offset,
+        "record_end_offset": end_offset,
+        "raw_record_hash": raw_record_hash,
+        "declared_headers": declared_headers,
+    }
 
 
 def _canonical_json(value: Any) -> str:
@@ -108,7 +153,13 @@ def ensure_native_record_links_schema(conn: Any) -> None:
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_native_record_links_uuid "
-        "ON native_record_links(provider, session_id, native_uuid, source_file, record_start_offset)"
+        "ON native_record_links("
+        "provider, session_id, native_uuid, source_file, record_start_offset, record_key)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_native_record_links_physical "
+        "ON native_record_links(provider, session_id, source_file, record_start_offset, "
+        "record_end_offset, raw_record_hash)"
     )
 
 

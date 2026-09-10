@@ -30,12 +30,17 @@ from .claude_paths import extract_claude_conversation_id as _extract_claude_conv
 from .content_class import classify_content_class
 from .dedupe import find_duplicate, merge_duplicate_chunk, merge_existing_chunk_seen, normalized_exact_hash
 from .ingest_guard import recursive_mcp_output_reason
+from .native_record_links import (
+    catalog_native_record,
+    ensure_native_record_links_schema,
+    native_record_payload_from_entry,
+)
 from .paths import get_db_path
 from .pipeline.chunk import chunk_content
 from .pipeline.classify import classify_content
 from .pipeline.correction_detection import build_correction_tags
 from .pipeline.secret_scrub import scrub_secrets
-from .queue_io import enqueue_watcher_chunk
+from .queue_io import enqueue_watcher_chunk, enqueue_watcher_native_records
 from .source_records import ensure_chunk_source_records, record_watcher_source
 from .t3_provenance import DEFAULT_T3_STATE_DB, t3_app_codex_session_ids
 from .vector_store import VectorStore
@@ -419,6 +424,49 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                 provenance_class=provenance_class,
                 source_class=source_class,
             )
+
+        native_records = [
+            payload for entry in entries if (payload := native_record_payload_from_entry(entry)) is not None
+        ]
+        if native_records:
+            if arbitrated:
+                enqueue_watcher_native_records(native_records)
+            else:
+                assert cursor is not None and store is not None
+                deadline_s = _nonnegative_float_env("BRAINLAYER_WATCHER_WRITE_DEADLINE_S", 15.0)
+                deadline = time.monotonic() + deadline_s
+                attempt = 0
+                while True:
+                    transaction_started = False
+                    try:
+                        cursor.execute("BEGIN IMMEDIATE")
+                        transaction_started = True
+                        ensure_native_record_links_schema(store.conn)
+                        for payload in native_records:
+                            catalog_native_record(store.conn, **payload)
+                        cursor.execute("COMMIT")
+                        transaction_started = False
+                        break
+                    except apsw.BusyError:
+                        if transaction_started:
+                            cursor.execute("ROLLBACK")
+                        if time.monotonic() >= deadline:
+                            enqueue_watcher_native_records(native_records)
+                            logger.warning(
+                                "Direct native record catalog busy; spilled %d records to queue",
+                                len(native_records),
+                            )
+                            break
+                        delay = min(0.05 * (2**attempt), 1.0) * random.uniform(0.8, 1.2)
+                        attempt += 1
+                        time.sleep(delay)
+                    except Exception:
+                        if transaction_started:
+                            try:
+                                cursor.execute("ROLLBACK")
+                            except Exception:
+                                pass
+                        raise
 
         for entry in entries:
             source_file = entry.get("_source_file", "unknown")

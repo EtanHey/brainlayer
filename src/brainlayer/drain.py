@@ -31,6 +31,7 @@ from .dedupe import (
     merge_existing_chunk_seen,
 )
 from .ingest_guard import recursive_mcp_output_reason
+from .native_record_links import catalog_native_record, ensure_native_record_links_schema
 from .paths import get_db_path
 from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
 from .provenance_integration import enqueue_provenance_resolution_for_entities
@@ -1106,6 +1107,18 @@ def _apply_event(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
         return _apply_store(conn, event)
     elif kind == "watcher_chunk":
         return _apply_watcher(conn, event)
+    elif kind == "watcher_native_record":
+        ensure_native_record_links_schema(conn)
+        catalog_native_record(
+            conn,
+            provider=event.get("provider"),
+            session_id=event.get("session_id"),
+            source_file=event.get("source_file"),
+            record_start_offset=event.get("record_start_offset"),
+            record_end_offset=event.get("record_end_offset"),
+            raw_record_hash=event.get("raw_record_hash"),
+            declared_headers=event.get("declared_headers"),
+        )
     elif kind == "hook_chunk":
         return _apply_hook(conn, event)
     elif kind == "enrichment_update":

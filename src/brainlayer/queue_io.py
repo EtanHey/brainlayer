@@ -170,6 +170,16 @@ def enqueue_watcher_chunk(
     )
 
 
+def enqueue_watcher_native_records(
+    records: list[dict[str, Any]],
+    *,
+    queue_dir: Path | None = None,
+) -> Path:
+    """Publish one durable queue batch of native structural evidence."""
+    events = [{"kind": "watcher_native_record", **record} for record in records]
+    return enqueue_jsonl_batch(events, source="watcher-native-record", queue_dir=queue_dir)
+
+
 def enqueue_rewind_archive_batch(
     intents: list[dict[str, Any]],
     *,
