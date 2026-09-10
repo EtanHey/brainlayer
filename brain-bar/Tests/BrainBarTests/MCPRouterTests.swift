@@ -57,6 +57,16 @@ private func collectStringArrays(in schema: [String: Any], path: String = "") ->
     }
 }
 
+private func containsSchemaKey(_ value: Any, key: String) -> Bool {
+    if let object = value as? [String: Any] {
+        return object[key] != nil || object.values.contains { containsSchemaKey($0, key: key) }
+    }
+    if let array = value as? [Any] {
+        return array.contains { containsSchemaKey($0, key: key) }
+    }
+    return false
+}
+
 final class MCPRouterTests: XCTestCase {
     private static let coreToolNames = [
         "brain_search",
@@ -240,6 +250,69 @@ final class MCPRouterTests: XCTestCase {
         // spend -- the next description that does not fit is the next decision,
         // and it comes back here for the same conversation.
         XCTAssertLessThanOrEqual(data.count, 1_600)
+    }
+
+    func testCoreCompactionOmitsOnlyLengthAndItemCountHints() throws {
+        let core = Dictionary(uniqueKeysWithValues: listedTools(MCPRouter(profile: "core")).compactMap { tool in
+            (tool["name"] as? String).map { ($0, tool) }
+        })
+        let full = Dictionary(uniqueKeysWithValues: listedTools(MCPRouter(profile: "full")).compactMap { tool in
+            (tool["name"] as? String).map { ($0, tool) }
+        })
+
+        for name in ["brain_search", "brain_store", "brain_recall", "brain_expand"] {
+            let compact = try XCTUnwrap(core[name]?["inputSchema"] as? [String: Any])
+            let canonical = try XCTUnwrap(full[name]?["inputSchema"] as? [String: Any])
+            XCTAssertFalse(containsSchemaKey(compact, key: "maxLength"), "\(name) compact maxLength")
+            XCTAssertFalse(containsSchemaKey(compact, key: "maxItems"), "\(name) compact maxItems")
+            XCTAssertTrue(containsSchemaKey(canonical, key: "maxLength"), "\(name) canonical maxLength")
+            XCTAssertEqual(
+                Set((compact["properties"] as? [String: Any] ?? [:]).keys),
+                Set((canonical["properties"] as? [String: Any] ?? [:]).keys),
+                "\(name) property discoverability"
+            )
+        }
+
+        let compactSearch = try XCTUnwrap(core["brain_search"]?["inputSchema"] as? [String: Any])
+        let fullSearch = try XCTUnwrap(full["brain_search"]?["inputSchema"] as? [String: Any])
+        let compactSource = try XCTUnwrap((compactSearch["properties"] as? [String: Any])?["source"] as? [String: Any])
+        let fullSource = try XCTUnwrap((fullSearch["properties"] as? [String: Any])?["source"] as? [String: Any])
+        XCTAssertEqual(compactSource["enum"] as? [String], fullSource["enum"] as? [String])
+
+        let compactExpand = try XCTUnwrap(core["brain_expand"]?["inputSchema"] as? [String: Any])
+        let fullExpand = try XCTUnwrap(full["brain_expand"]?["inputSchema"] as? [String: Any])
+        let compactOneOf = try XCTUnwrap(compactExpand["oneOf"] as? [[String: Any]])
+        let fullOneOf = try XCTUnwrap(fullExpand["oneOf"] as? [[String: Any]])
+        XCTAssertEqual(
+            try JSONSerialization.data(withJSONObject: compactOneOf, options: [.sortedKeys]),
+            try JSONSerialization.data(withJSONObject: fullOneOf, options: [.sortedKeys])
+        )
+        let compactKey = try XCTUnwrap((compactExpand["properties"] as? [String: Any])?["source_record_key"] as? [String: Any])
+        let fullKey = try XCTUnwrap((fullExpand["properties"] as? [String: Any])?["source_record_key"] as? [String: Any])
+        XCTAssertEqual(compactKey["pattern"] as? String, fullKey["pattern"] as? String)
+        XCTAssertEqual(
+            core["brain_store"]?["description"] as? String,
+            "Store memory. status: STORED|DUPLICATE|MERGED|DEFERRED all = success, "
+                + "do NOT re-store; REJECTED|ERROR = nothing stored, no chunk_id."
+        )
+    }
+
+    func testCanonicalLimitsStillRejectCoreCallsAfterWireCompaction() {
+        let router = MCPRouter(profile: "core")
+        let cases: [(String, [String: Any], String)] = [
+            ("brain_search", ["query": String(repeating: "q", count: 4_097)], "maxLength 4096"),
+            ("brain_store", ["content": String(repeating: "c", count: 200_001)], "maxLength 200000"),
+            ("brain_expand", ["chunk_id": String(repeating: "i", count: 4_097)], "maxLength 4096"),
+            ("brain_store", ["content": "x", "tags": Array(repeating: "tag", count: 101)], "maxItems 100"),
+        ]
+        for (name, arguments, expected) in cases {
+            let response = router.handle(toolCall(id: 240, name: name, arguments: arguments))
+            let result = response["result"] as? [String: Any]
+            let content = result?["content"] as? [[String: Any]] ?? []
+            let text = content.compactMap { $0["text"] as? String }.joined(separator: "\n")
+            XCTAssertEqual(result?["isError"] as? Bool, true, "\(name) should reject excessive input")
+            XCTAssertTrue(text.contains(expected), "\(name): \(text)")
+        }
     }
 
     func testCoreCompactionFallsBackToTheCanonicalDescription() throws {

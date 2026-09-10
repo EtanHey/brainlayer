@@ -31,7 +31,7 @@ final class MCPRouter: @unchecked Sendable {
         "brain_backup_vacuum_into",
     ]
     private static let coreToolDescriptions: [String: String] = [
-        "brain_search": "Search memory.",
+        "brain_search": "Search.",
         // The core palette is token-terse, but it is also the ONLY description a
         // default agent sees (the full text needs expand_palette), so it has to
         // carry the outcome contract Etan asked for on 2026-08-19 -- compressed to
@@ -44,12 +44,12 @@ final class MCPRouter: @unchecked Sendable {
         // not headroom to spend -- see testCoreToolsListStaysWithinBootBudget.
         "brain_store": "Store memory. status: STORED|DUPLICATE|MERGED|DEFERRED all = success, "
             + "do NOT re-store; REJECTED|ERROR = nothing stored, no chunk_id.",
-        "brain_recall": "Recall context.",
-        "brain_expand": "Expand chunk.",
+        "brain_recall": "Recall.",
+        "brain_expand": "Expand.",
     ]
     nonisolated(unsafe) private static let expandPaletteToolDefinition: [String: Any] = [
         "name": "expand_palette",
-        "description": "Expose all tools.",
+        "description": "All tools.",
         "inputSchema": [
             "type": "object",
         ] as [String: Any],
@@ -273,20 +273,24 @@ final class MCPRouter: @unchecked Sendable {
             "description": description,
         ]
         if let inputSchema = definition["inputSchema"] as? [String: Any] {
-            compact["inputSchema"] = removingDescriptions(from: inputSchema)
+            compact["inputSchema"] = compactingCoreSchema(inputSchema)
         }
         return compact
     }
 
-    private static func removingDescriptions(from value: Any) -> Any {
+    private static func compactingCoreSchema(_ value: Any) -> Any {
         if let dictionary = value as? [String: Any] {
             return dictionary.reduce(into: [String: Any]()) { result, entry in
-                guard entry.key != "description" else { return }
-                result[entry.key] = removingDescriptions(from: entry.value)
+                // Canonical toolDefinitions retain the limits for enforcement and full profiles.
+                // The compact boot form keeps properties, types, enums, required/oneOf, and regex.
+                guard entry.key != "description",
+                      entry.key != "maxLength",
+                      entry.key != "maxItems" else { return }
+                result[entry.key] = compactingCoreSchema(entry.value)
             }
         }
         if let array = value as? [Any] {
-            return array.map(removingDescriptions(from:))
+            return array.map(compactingCoreSchema)
         }
         return value
     }
