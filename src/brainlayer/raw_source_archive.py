@@ -6,6 +6,8 @@ Mechanism only: callers explicitly construct and inject an archive.
 from __future__ import annotations
 
 import bisect
+import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -14,7 +16,7 @@ import secrets
 import stat
 import tempfile
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Iterator
 
 _HEX_SHA256 = re.compile(r"[0-9a-f]{64}")
 RAW_ARCHIVE_PATH_ENV = "BRAINLAYER_RAW_ARCHIVE_PATH"
@@ -159,8 +161,14 @@ class RawSourceArchive:
             raise ValueError("provider must be a nonempty string of at most 128 characters")
         source_path = Path(path).absolute()
         state = self._source_state(source_path, provider)
+        with self._source_lock(state):
+            return self._capture_locked(source_path, provider, state)
+
+    def _capture_locked(self, source_path: Path, provider: str, state: Path) -> dict[str, Any]:
         previous = self._load_head(state)
         previous_manifest = self._manifest_for_receipt(previous) if previous is not None else None
+        if previous is not None:
+            self._verify_snapshot_digest(previous)
         version_hash, size = hashlib.sha256(), 0
         prefix = True
         prefix_hash = hashlib.sha256()
@@ -217,7 +225,13 @@ class RawSourceArchive:
                         raise RawSourceChangedError("source became unreadable during capture")
                     segments.extend(self._publish_segments(data))
                     remaining -= len(data)
-                if signature != self._signature(os.fstat(source.fileno())):
+                try:
+                    final_current = source_path.lstat()
+                except OSError as error:
+                    raise RawSourceChangedError("source path disappeared during capture") from error
+                if signature != self._signature(os.fstat(source.fileno())) or signature != self._signature(
+                    final_current
+                ):
                     raise RawSourceChangedError("source changed during capture")
 
         digest = version_hash.hexdigest()
@@ -225,7 +239,8 @@ class RawSourceArchive:
         if previous is not None and prefix and size == previous["size"] and digest == previous["sha256"]:
             receipt = dict(previous)
             receipt["source_stat"] = source_stat
-            self._replace_head(state, receipt)
+            if receipt != previous:
+                self._replace_head(state, receipt)
             return receipt
 
         parent_sha = previous["manifest_sha256"] if prefix and previous is not None else None
@@ -279,10 +294,12 @@ class RawSourceArchive:
             if receipt.get(key) != manifest.get(key):
                 raise RawArchiveCorruptError(f"receipt {key} does not match manifest")
         if manifest["format_version"] == self.LEGACY_FORMAT_VERSION:
+            if "format_version" in receipt:
+                raise RawArchiveCorruptError("legacy receipt must not claim a format version")
             if receipt.get("source_stat") != manifest.get("source_stat"):
                 raise RawArchiveCorruptError("receipt source_stat does not match manifest")
         else:
-            if receipt.get("format_version") != self.FORMAT_VERSION:
+            if type(receipt.get("format_version")) is not int or receipt["format_version"] != self.FORMAT_VERSION:
                 raise RawArchiveCorruptError("receipt format_version does not match manifest")
             self._validate_source_stat(receipt.get("source_stat"), manifest["size"])
             state = self._source_state_path(Path(manifest["source_path"]), manifest["provider"])
@@ -298,22 +315,27 @@ class RawSourceArchive:
         new = self._manifest_for_receipt(later)
         if old["source_path"] != new["source_path"] or old["provider"] != new["provider"]:
             return False
-        if old["size"] > new["size"]:
-            return False
-        if old["size"] == new["size"]:
-            return old["sha256"] == new["sha256"]
         if old["format_version"] == self.FORMAT_VERSION and new["format_version"] == self.FORMAT_VERSION:
             old_root = self._generation_root(old, earlier["manifest_sha256"])
             new_root = self._generation_root(new, later["manifest_sha256"])
             if old_root != new_root:
                 return False
+        if old["size"] > new["size"]:
+            return False
+        if old["size"] == new["size"]:
+            return old["sha256"] == new["sha256"]
+        if old["format_version"] == self.FORMAT_VERSION and new["format_version"] == self.FORMAT_VERSION:
             cursor = later["manifest_sha256"]
+            steps = 0
             while cursor != earlier["manifest_sha256"]:
                 item = self._load_manifest(cursor)
+                if item["format_version"] != self.FORMAT_VERSION or steps >= self.MAX_CHAIN_MANIFESTS:
+                    raise RawArchiveCorruptError("invalid or overlong v2 prefix chain")
                 parent = item.get("parent_manifest_sha256")
                 if parent is None or item["size"] <= old["size"]:
                     return False
                 cursor = parent
+                steps += 1
             self._verify_snapshot_digest(earlier)
             return True
         return self._stream_prefix(earlier, later)
@@ -346,6 +368,8 @@ class RawSourceArchive:
                 root_sha = manifest_sha
                 break
             current = self._load_manifest(parent)
+            if current["format_version"] != self.FORMAT_VERSION:
+                raise RawArchiveCorruptError("v2 manifest chain references another format")
         chain.reverse()
         expected_start = 0
         chunks: list[dict[str, Any]] = []
@@ -468,16 +492,21 @@ class RawSourceArchive:
         self._require_sha(sha256)
         path = self.objects / sha256
         try:
-            self._read_verified_chunk(sha256, len(data))
-            return
+            raw = self._read_regular_bounded(path, len(data))
         except FileNotFoundError:
-            pass
-        self._publish_bytes(path, data, prefix=".chunk-")
+            self._publish_bytes(path, data, prefix=".chunk-")
+        else:
+            if len(raw) != len(data) or hashlib.sha256(raw).hexdigest() != sha256:
+                raise RawArchiveCorruptError(f"chunk digest mismatch: {sha256}")
+            return
         self._read_verified_chunk(sha256, len(data))
 
     def _read_verified_chunk(self, sha256: str, expected_size: int) -> bytes:
         self._require_sha(sha256)
-        raw = self._read_regular_bounded(self.objects / sha256, expected_size)
+        try:
+            raw = self._read_regular_bounded(self.objects / sha256, expected_size)
+        except FileNotFoundError as error:
+            raise RawArchiveCorruptError(f"chunk is missing: {sha256}") from error
         if len(raw) != expected_size or hashlib.sha256(raw).hexdigest() != sha256:
             raise RawArchiveCorruptError(f"chunk digest mismatch: {sha256}")
         return raw
@@ -516,13 +545,42 @@ class RawSourceArchive:
 
     def _publish_root_marker(self, state: Path, root_sha: str) -> None:
         marker = state / "roots" / f"{root_sha}.ref"
-        self._publish_bytes(marker, (root_sha + "\n").encode("ascii"), prefix=".root-")
+        expected = (root_sha + "\n").encode("ascii")
+        try:
+            current = self._read_regular_bounded(marker, len(expected))
+            if current != expected:
+                raise RawArchiveCorruptError("generation root marker mismatch")
+            return
+        except FileNotFoundError:
+            pass
+        self._publish_bytes(marker, expected, prefix=".root-")
         self._verify_root_marker(state, root_sha)
 
     def _verify_root_marker(self, state: Path, root_sha: str) -> None:
         expected = (root_sha + "\n").encode("ascii")
-        if self._read_regular_bounded(state / "roots" / f"{root_sha}.ref", len(expected)) != expected:
+        try:
+            current = self._read_regular_bounded(state / "roots" / f"{root_sha}.ref", len(expected))
+        except FileNotFoundError as error:
+            raise RawArchiveCorruptError("generation root marker is missing") from error
+        if current != expected:
             raise RawArchiveCorruptError("generation root marker mismatch")
+
+    @contextlib.contextmanager
+    def _source_lock(self, state: Path) -> Iterator[None]:
+        fd = os.open(
+            state / "LOCK",
+            os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+        )
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+                raise RawArchiveError("source archive lock is not an owned regular file")
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
     @staticmethod
     def _generation_root(manifest: dict[str, Any], manifest_sha: str) -> str:
