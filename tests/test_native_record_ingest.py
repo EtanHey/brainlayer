@@ -205,6 +205,7 @@ def test_tool_use_targets_match_direct_and_queued_and_excluded_reader(tmp_path, 
 
     excluded = dict(entry)
     excluded["attributionAgent"] = "brain-worker"
+    excluded["_source_file"] = str(tmp_path / "subagents" / "brain-worker" / "session.jsonl")
     excluded["uuid"] = "excluded-tool"
     excluded_db = tmp_path / "excluded-target.db"
     VectorStore(excluded_db).close()
