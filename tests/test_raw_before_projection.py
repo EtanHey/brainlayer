@@ -635,3 +635,83 @@ def test_confirmed_batch_refuses_conflicting_same_manifest_receipt_variants(
         )
 
     assert watcher.registry.get(str(source))[0] == 0
+
+
+def test_pending_quarantine_uses_its_newer_prefix_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "sources"
+    root.mkdir()
+    source = root / "session.jsonl"
+    valid = b'{"type":"user","message":{"role":"user","content":"one"}}\n'
+    malformed = b"{bad}\n"
+    source.write_bytes(valid)
+    store = make_archive(tmp_path)
+    flushed: list[dict] = []
+    monkeypatch.setenv("BRAINLAYER_WATCHER_QUARANTINE_DIR", str(tmp_path / "quarantine"))
+    watcher = JSONLWatcher(
+        watch_roots=[WatchRoot("synthetic", root)],
+        registry_path=tmp_path / "offsets.json",
+        on_flush=lambda items: (
+            flushed.extend(items) or {str(item["_source_file"]): item["_line_end_offset"] for item in items}
+        ),
+        raw_archive=store,
+        batch_size=100,
+        flush_interval_ms=60_000,
+        max_lines_per_file=100,
+    )
+
+    assert watcher.poll_once() == 1
+    old_receipt = watcher.indexer._buffer[0]["_raw_archive_receipt"]
+    with source.open("ab") as handle:
+        handle.write(malformed)
+    assert watcher.poll_once() == 0
+    newer_receipt = watcher._archive_receipts[str(source)]
+    assert store.is_prefix(old_receipt, newer_receipt)
+    assert watcher.registry.get(str(source))[0] == 0
+
+    watcher.indexer.flush()
+
+    assert len(flushed) == 1
+    assert watcher.indexer._buffer == []
+    assert watcher.registry.get(str(source))[0] == len(valid) + len(malformed)
+    assert watcher.registry.archive_receipt(str(source)) == newer_receipt
+
+
+def test_pending_quarantine_refuses_own_receipt_shorter_than_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "sources"
+    root.mkdir()
+    source = root / "session.jsonl"
+    valid = b'{"type":"user","message":{"role":"user","content":"one"}}\n'
+    source.write_bytes(valid)
+    store = make_archive(tmp_path)
+    watcher = JSONLWatcher(
+        watch_roots=[WatchRoot("synthetic", root)],
+        registry_path=tmp_path / "offsets.json",
+        on_flush=lambda items: {str(item["_source_file"]): item["_line_end_offset"] for item in items},
+        raw_archive=store,
+        batch_size=100,
+        flush_interval_ms=60_000,
+    )
+    monkeypatch.setenv("BRAINLAYER_WATCHER_QUARANTINE_DIR", str(tmp_path / "quarantine"))
+    assert watcher.poll_once() == 1
+    old_receipt = watcher.indexer._buffer[0]["_raw_archive_receipt"]
+    with source.open("ab") as handle:
+        handle.write(b"{bad}\n")
+    assert watcher.poll_once() == 0
+    pending = watcher._pending_quarantined_offsets[str(source)]
+    start, end, inode, generation, _receipt = pending[0]
+    pending[0] = (start, end, inode, generation, old_receipt)
+
+    with pytest.raises(RuntimeError, match="does not bind its source bytes"):
+        watcher._advance_confirmed_batch(
+            {str(source): len(valid)},
+            watcher.indexer._buffer,
+        )
+
+    assert watcher.registry.get(str(source))[0] == len(valid)
+    assert watcher.registry.archive_receipt(str(source)) == old_receipt

@@ -1362,7 +1362,7 @@ class JSONLWatcher:
         self._file_ingestion_failures: dict[str, dict[str, Any]] = {}
         self._quarantined_record_count_total = 0
         self._quarantined_records: list[dict[str, Any]] = []
-        self._pending_quarantined_offsets: dict[str, list[tuple[int, int, int, int]]] = {}
+        self._pending_quarantined_offsets: dict[str, list[tuple[int, int, int, int, dict[str, Any] | None]]] = {}
         self._stop = threading.Event()
         self._last_registry_flush = time.monotonic()
         self.health_path = Path(health_path).expanduser() if health_path else None
@@ -1483,22 +1483,45 @@ class JSONLWatcher:
         current_generation = self.registry.generation(filepath)
         if current_generation != source_generation or current_inode not in (0, source_inode):
             return
-        remaining: list[tuple[int, int, int, int]] = []
-        for start_offset, end_offset, pending_inode, pending_generation in sorted(pending):
+        remaining: list[tuple[int, int, int, int, dict[str, Any] | None]] = []
+        for pending_entry in sorted(pending, key=lambda item: (item[0], item[1])):
+            start_offset, end_offset, pending_inode, pending_generation, pending_receipt = pending_entry
             if (pending_inode, pending_generation) != (source_inode, source_generation):
-                remaining.append((start_offset, end_offset, pending_inode, pending_generation))
+                remaining.append(pending_entry)
                 continue
             if current_offset < start_offset:
-                remaining.append((start_offset, end_offset, pending_inode, pending_generation))
+                remaining.append(pending_entry)
                 continue
             if end_offset > current_offset:
+                next_receipt = archive_receipt
+                if self.raw_archive is not None:
+                    provider = self.provider_for_file(filepath)
+                    if (
+                        not isinstance(pending_receipt, dict)
+                        or pending_receipt.get("provider") != provider
+                        or pending_receipt.get("source_path") != filepath
+                        or type(pending_receipt.get("size")) is not int
+                        or pending_receipt["size"] < end_offset
+                    ):
+                        raise RuntimeError("quarantined record receipt does not bind its source bytes")
+                    with self.raw_archive.open_snapshot(pending_receipt):
+                        pass
+                    confirmed_receipt = (
+                        self.registry.archive_receipt(filepath) if current_offset > 0 else archive_receipt
+                    )
+                    if not isinstance(confirmed_receipt, dict) or not self.raw_archive.is_prefix(
+                        confirmed_receipt, pending_receipt
+                    ):
+                        raise RuntimeError("quarantined record receipt does not extend the confirmed source version")
+                    next_receipt = pending_receipt
                 self.registry.set(
                     filepath,
                     end_offset,
                     pending_inode,
                     generation=pending_generation,
-                    raw_archive_receipt=archive_receipt,
+                    raw_archive_receipt=next_receipt,
                 )
+                archive_receipt = next_receipt
                 current_offset = end_offset
         if remaining:
             self._pending_quarantined_offsets[filepath] = remaining
@@ -1855,10 +1878,16 @@ class JSONLWatcher:
         discarded = tailer.discard_failed_record()
         if discarded is None:
             raise RuntimeError("quarantined record no longer matches the tailer buffer")
-        self._pending_quarantined_offsets.setdefault(filepath, []).append(
-            (start_offset, end_offset, source_inode, source_generation)
-        )
         archive_receipt = self._archive_receipts.get(filepath) if self.raw_archive is not None else None
+        self._pending_quarantined_offsets.setdefault(filepath, []).append(
+            (
+                start_offset,
+                end_offset,
+                source_inode,
+                source_generation,
+                copy.deepcopy(archive_receipt),
+            )
+        )
         self._advance_quarantined_offsets(
             filepath,
             source_inode,
