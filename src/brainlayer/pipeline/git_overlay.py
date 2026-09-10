@@ -147,6 +147,7 @@ def get_git_context(
     repo_path: Path,
     start_ts: str,
     end_ts: str,
+    recorded_branch: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Get git context for a time range in a repo.
 
@@ -159,8 +160,8 @@ def get_git_context(
         "files_changed": [],
     }
 
-    # Current branch (at time of overlay, not session time)
-    branch = _git_cmd(["rev-parse", "--abbrev-ref", "HEAD"], repo_path)
+    # Branch comes from the session recording; current checkout may be unrelated.
+    branch = recorded_branch
     context["branch"] = branch
 
     # Commits in the time range
@@ -264,10 +265,15 @@ def run_git_overlay(
             for fa in file_actions:
                 fa["project"] = display_name
 
-            # Get git context if repo exists
+            # Get git context if repo exists. Native metadata is authoritative when clear.
             git_ctx = {}
             if has_git and repo_path:
-                git_ctx = get_git_context(repo_path, start_ts, end_ts)
+                git_ctx = get_git_context(
+                    repo_path,
+                    start_ts,
+                    end_ts,
+                    recorded_branch=extract_recorded_branch(jsonl_file),
+                )
 
             # Store session context
             vector_store.store_session_context(
@@ -299,3 +305,39 @@ def run_git_overlay(
             break
 
     return stats
+
+
+def extract_recorded_branch(jsonl_path: Path) -> Optional[str]:
+    """Read one unambiguous native top-level gitBranch from a session."""
+    branches = set()
+    detached_seen = False
+    try:
+        with open(jsonl_path) as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError as e:
+                    logger.warning("Malformed recorded branch line in %s: %s", jsonl_path, e)
+                    return None
+                if not isinstance(obj, dict):
+                    continue
+                value = obj.get("gitBranch")
+                if isinstance(value, str):
+                    branch = value.strip()
+                    if branch == "HEAD":
+                        detached_seen = True
+                    elif branch:
+                        branches.add(branch)
+    except (OSError, IOError, UnicodeDecodeError) as e:
+        logger.warning("Could not read recorded branch from %s: %s", jsonl_path, e)
+        return None
+    if len(branches) > 1 or (detached_seen and branches):
+        logger.warning(
+            "Session %s has conflicting native gitBranch values: %s",
+            jsonl_path.name,
+            sorted(branches),
+        )
+        return None
+    return next(iter(branches), None)
