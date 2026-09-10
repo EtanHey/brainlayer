@@ -202,3 +202,23 @@ def test_more_than_one_batch_flushes_before_late_failure_without_indexing(tmp_pa
         assert store.conn.execute("SELECT COUNT(*) FROM chunks").fetchone() == (0,)
     finally:
         store.close()
+
+
+def test_escaped_surrogate_call_id_keeps_diagnostic_and_locator(tmp_path):
+    source = tmp_path / "surrogate.jsonl"
+    entry = _call()
+    entry["payload"]["call_id"] = "\ud800"
+    raw = _write(source, [_meta(), entry])
+    db_path = tmp_path / "surrogate.sqlite"
+    assert ingest_codex_session(source, db_path=db_path) == 0
+    store = VectorStore(db_path)
+    try:
+        offset, digest, headers, diagnostics = store.conn.execute(
+            "SELECT record_start_offset,raw_record_hash,declared_headers_json,target_diagnostics_json FROM native_record_links"
+        ).fetchone()
+    finally:
+        store.close()
+    assert offset == len(raw[0])
+    assert digest == hashlib.sha256(raw[1]).hexdigest()
+    assert "/payload/call_id" not in json.loads(headers)
+    assert "call ID" in json.loads(diagnostics)[0]

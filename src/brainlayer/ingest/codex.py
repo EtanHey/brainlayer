@@ -68,6 +68,16 @@ _NATIVE_HEADER_FIELDS = (
 )
 
 
+def _bounded_native_header_string(value: object, *, byte_cap: int) -> str | None:
+    """Return a JSON-safe scalar header without retaining malformed text."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return value if len(value.encode("utf-8")) <= byte_cap else None
+    except UnicodeEncodeError:
+        return None
+
+
 def _native_record_context(line: dict, payload: dict, item: dict | None = None) -> dict[str, object]:
     """Keep supplied native identity headers without interpreting authorship."""
     context: dict[str, object] = {}
@@ -359,8 +369,10 @@ def parse_codex_session(
                             headers = {"/type": line_type, "/payload/type": ptype}
                             for field in ("name", "call_id"):
                                 value = payload.get(field)
-                                if isinstance(value, str) and value and len(value.encode("utf-8")) <= MAX_CALL_ID_BYTES:
-                                    headers[f"/payload/{field}"] = value
+                                if (
+                                    bounded := _bounded_native_header_string(value, byte_cap=MAX_CALL_ID_BYTES)
+                                ) is not None:
+                                    headers[f"/payload/{field}"] = bounded
                             native_record_sink(
                                 {
                                     "provider": "codex",
