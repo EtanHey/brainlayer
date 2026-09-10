@@ -192,6 +192,26 @@ def test_classify_preserves_opaque_native_record_context_and_only_supplied_coord
     assert classified.metadata["source_pointer"] == "/message/content"
 
 
+def test_task_notification_preserves_native_envelope_role_and_opaque_origin_fields():
+    entry = {
+        "type": "user",
+        "message": {"role": "user", "content": "<task-notification><result>A sufficiently detailed result from a sub-agent with enough substantive context to retain.</result></task-notification>"},
+        "origin": {"kind": "agent", "relay": ["opaque"]},
+        "promptSource": "user",
+        "attributionAgent": "workflow-subagent",
+    }
+
+    classified = classify_content(entry)
+
+    assert classified is not None
+    assert classified.metadata["record_context"]["declared_message_role"] == "user"
+    assert classified.metadata["record_context"]["origin"] == {"kind": "agent", "relay": ["opaque"]}
+    assert classified.metadata["record_context"]["promptSource"] == "user"
+    assert classified.metadata["record_context"]["attributionAgent"] == "workflow-subagent"
+    assert classified.metadata["sender"] == "assistant"
+    assert classified.metadata["role_source"] == "task_notification_result"
+
+
 def test_classify_does_not_invent_missing_native_context_or_coordinates():
     classified = classify_content({
         "type": "assistant",

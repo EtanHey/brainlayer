@@ -991,10 +991,15 @@ def test_watcher_context_round_trips_direct_and_queued_to_clone_db(tmp_path, mon
         "preservedSegment": {"opaque": True},
         "native_entry_type": "assistant",
         "declared_message_role": "assistant",
+        "origin": {"kind": "agent", "relay": ["opaque"]},
+        "promptSource": "user",
+        "attributionAgent": "workflow-subagent",
     }
     entry = _make_jsonl_entry(text=_LONG_TEXT, entry_type="assistant", uuid="child-record",
                               parentUuid="parent-record", logicalParentUuid="logical-parent-record",
                               preservedSegment={"opaque": True},
+                              origin={"kind": "agent", "relay": ["opaque"]},
+                              promptSource="user", attributionAgent="workflow-subagent",
                               source_line=4, source_pointer="/message/content/0")
     entry.update(_line_start_offset=10, _line_end_offset=234, _raw_record_hash="a" * 64)
     entry["_source_file"] = source_file

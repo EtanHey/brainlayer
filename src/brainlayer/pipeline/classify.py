@@ -318,7 +318,10 @@ def _should_keep_assistant_text(content: str) -> bool:
     return len(stripped) >= min_len
 
 
-_RECORD_CONTEXT_FIELDS = ("uuid", "parentUuid", "logicalParentUuid", "preservedSegment")
+_RECORD_CONTEXT_FIELDS = (
+    "uuid", "parentUuid", "logicalParentUuid", "preservedSegment",
+    "origin", "promptSource", "attributionAgent",
+)
 
 
 def _json_safe_raw(value: Any) -> bool:
