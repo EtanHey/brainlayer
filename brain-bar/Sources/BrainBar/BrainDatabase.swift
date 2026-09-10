@@ -5207,6 +5207,18 @@ final class BrainDatabase: @unchecked Sendable {
 
     // MARK: - brain_expand: get chunk + surrounding session context
 
+    func inspectNativeSourceRecord(
+        sourceRecordKey: String,
+        maxBytes: Int = 32_000
+    ) throws -> [String: Any] {
+        guard let db else { throw DBError.notOpen }
+        return NativeContinuityReader.readTargetRecord(
+            db: db,
+            sourceRecordKey: sourceRecordKey,
+            maxBytes: maxBytes
+        )
+    }
+
     func listSourceOccurrences(
         requestedChunkID: String,
         limit: Int = 20,

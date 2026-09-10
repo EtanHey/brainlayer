@@ -28,6 +28,7 @@ struct NativeContinuityReaderHarness {
         exec("ANALYZE native_record_links")
         let chain = NativeContinuityReader.read(db: db, provider: "claude", sessionID: "s", sourceFile: "/a", startOffset: 10, endOffset: 11, rawRecordHash: "a")
         check(chain.status == "native_chain_root" && chain.hops.count == 2 && chain.originalStartOffset == nil, "positive chain")
+        check(chain.hops[0].sourceRecordKey == "k/a10a" && chain.hops[1].sourceRecordKey == "k/a5b", "catalog keys exposed")
         let encoded = try! JSONSerialization.jsonObject(with: JSONEncoder().encode(chain)) as! [String: Any]
         check(encoded["original_start_offset"] is NSNull && encoded["original_end_offset"] is NSNull && encoded["original_bounds_status"] as? String == "unknown_not_inferred", "explicit unknown bounds")
         insert("cross-child", "string", "only-other", source: "/a", start: 20, hash: "c")

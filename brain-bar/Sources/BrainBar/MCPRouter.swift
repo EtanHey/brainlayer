@@ -1245,15 +1245,36 @@ final class MCPRouter: @unchecked Sendable {
     }
 
     private func handleBrainExpand(_ args: [String: Any]) throws -> ToolOutput {
-        guard let chunkId = args["chunk_id"] as? String else {
-            throw ToolError.missingParameter("chunk_id")
+        let requestedChunkId = args["chunk_id"] as? String
+        let sourceRecordKey = args["source_record_key"] as? String
+        guard (requestedChunkId == nil) != (sourceRecordKey == nil) else {
+            throw ToolError.schemaValidation("exactly one of chunk_id or source_record_key is required")
         }
         let db = try readDB()
+        let occurrenceMaxBytes = args["occurrence_max_bytes"] as? Int ?? 32_000
+        if let sourceRecordKey {
+            guard sourceRecordKey.utf8.count == 64,
+                  sourceRecordKey.utf8.allSatisfy({
+                      (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0)
+                  }) else {
+                throw ToolError.schemaValidation("source_record_key must be exactly 64 hexadecimal characters")
+            }
+            let structured = try db.inspectNativeSourceRecord(
+                sourceRecordKey: sourceRecordKey,
+                maxBytes: occurrenceMaxBytes
+            )
+            return sourceRecordOutput(
+                structured,
+                sourceRecordKey: sourceRecordKey,
+                maxBytes: occurrenceMaxBytes
+            )
+        }
+
+        let chunkId = requestedChunkId!
         let before = args["before"] as? Int ?? 3
         let after = args["after"] as? Int ?? 3
         let occurrenceLimit = args["occurrence_limit"] as? Int ?? 20
         let occurrenceOffset = args["occurrence_offset"] as? Int ?? 0
-        let occurrenceMaxBytes = args["occurrence_max_bytes"] as? Int ?? 32_000
         let occurrences = try db.listSourceOccurrences(
             requestedChunkID: chunkId,
             limit: occurrenceLimit,
@@ -1309,6 +1330,62 @@ final class MCPRouter: @unchecked Sendable {
         var metadata = occurrences
         metadata.removeValue(forKey: "source_occurrences_boundary")
         return ToolOutput(text: lines.joined(separator: "\n"), metadata: metadata)
+    }
+
+    private func sourceRecordOutput(
+        _ structured: [String: Any],
+        sourceRecordKey: String,
+        maxBytes: Int
+    ) -> ToolOutput {
+        let budget = min(max(maxBytes, 1_024), 128_000)
+        var lines = ["┌─ brain_expand source record: \(sourceRecordKey)"]
+        let status = structured["status"] as? String ?? "database_error"
+        lines.append("├─ Status: \(status)")
+        if let sourceFile = structured["source_file"] as? String,
+           let start = structured["record_start_offset"] as? Int64,
+           let end = structured["record_end_offset"] as? Int64 {
+            lines.append("├─ Source: \(sourceFile):[\(start),\(end))")
+        }
+        if status == "available",
+           let report = structured["target_report"] as? [String: Any],
+           let targets = report["targets"] as? [[String: Any]] {
+            if targets.isEmpty {
+                lines.append("├─ Extraction v1 completed: 0 supported target declarations.")
+                lines.append("│  Recipient absence remains unknown.")
+            } else {
+                lines.append("├─ Declared targets (\(targets.count))")
+                for target in targets {
+                    let handle = target["target"] as? String ?? ""
+                    let kind = target["target_kind"] as? String ?? ""
+                    let tool = target["tool_name"] as? String ?? ""
+                    let rawPointer = target["raw_container_pointer"] as? String ?? "unavailable"
+                    let decodedPointer = target["decoded_pointer"] as? String ?? ""
+                    lines.append("│  \(kind) \(handle) via \(tool) [declared/unverified]")
+                    lines.append("│    raw \(rawPointer); decoded \(decodedPointer)")
+                }
+            }
+        }
+        lines.append("└─")
+        lines.append("│  Declared target handles only; no delivery, recipient identity, relay, or authorship proof.")
+        lines.append("└─")
+        let outputText = lines.joined(separator: "\n")
+        let candidate: [String: Any] = [
+            "content": [["type": "text", "text": outputText]],
+            "structuredContent": structured,
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: candidate), data.count <= budget {
+            return ToolOutput(text: outputText, metadata: ["structuredContent": structured])
+        }
+        let omitted: [String: Any] = [
+            "schema_version": 1,
+            "mode": "source_record",
+            "status": "omitted_response_budget",
+            "source_record_key": sourceRecordKey,
+            "serialized_max_bytes": budget,
+            "evidence_boundary": "Declared target handles are unverified; no delivery, recipient identity, relay, or authorship is inferred.",
+        ]
+        let omittedText = "brain_expand source record \(sourceRecordKey): omitted at serialized response budget."
+        return ToolOutput(text: omittedText, metadata: ["structuredContent": omitted])
     }
 
     private func handleBrainTags(_ args: [String: Any]) throws -> ToolOutput {
@@ -1840,13 +1917,21 @@ final class MCPRouter: @unchecked Sendable {
                 "type": "object",
                 "properties": [
                     "chunk_id": ["type": "string", "description": "Chunk ID to expand"],
+                    "source_record_key": [
+                        "type": "string",
+                        "pattern": "^[0-9a-fA-F]{64}$",
+                        "description": "Exact catalog source-record key",
+                    ] as [String: Any],
                     "before": ["type": "integer", "description": "Context chunks before (default: 3)"],
                     "after": ["type": "integer", "description": "Context chunks after (default: 3)"],
                     "occurrence_limit": ["type": "integer", "description": "Recorded source coordinates to return (default: 20, max: 20)"],
                     "occurrence_offset": ["type": "integer", "description": "Recorded source coordinate offset (default: 0)"],
                     "occurrence_max_bytes": ["type": "integer", "description": "Maximum serialized occurrence row payload bytes (default: 32000)"],
                 ] as [String: Any],
-                "required": ["chunk_id"]
+                "oneOf": [
+                    ["required": ["chunk_id"]],
+                    ["required": ["source_record_key"]],
+                ] as [[String: Any]]
             ] as [String: Any])
         ],
         [

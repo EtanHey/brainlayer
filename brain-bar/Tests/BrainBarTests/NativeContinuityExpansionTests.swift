@@ -44,7 +44,10 @@ final class NativeContinuityExpansionTests: XCTestCase {
         try native("control-only-parent", "/a", 1, "h-root", "root", "null")
         let continuity = try XCTUnwrap((try occurrence("short-id"))["structural_continuity"] as? [String: Any])
         XCTAssertEqual(continuity["status"] as? String, "native_chain_root")
-        XCTAssertEqual((continuity["hops"] as? [[String: Any]])?.count, 2)
+        let hops = try XCTUnwrap(continuity["hops"] as? [[String: Any]])
+        XCTAssertEqual(hops.count, 2)
+        XCTAssertEqual(hops[0]["source_record_key"] as? String, "child")
+        XCTAssertEqual(hops[1]["source_record_key"] as? String, "control-only-parent")
         XCTAssertTrue(continuity["original_start_offset"] is NSNull)
         XCTAssertNil(continuity["provider"])
     }
