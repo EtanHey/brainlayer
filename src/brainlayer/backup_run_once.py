@@ -11,7 +11,7 @@ import stat
 import uuid
 from contextlib import AbstractContextManager
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any
 
 from . import backup_daily, jsonl_backup
 
