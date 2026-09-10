@@ -215,3 +215,124 @@ def test_occurrence_and_generation_status_change_share_one_transaction(tmp_path:
 
     assert conn.execute("SELECT COUNT(*) FROM native_source_generations").fetchone() == (0,)
     assert conn.execute("SELECT COUNT(*) FROM native_session_header_occurrences").fetchone() == (0,)
+
+
+def test_malformed_preexisting_schema_refuses_before_catalog_data_write(tmp_path: Path) -> None:
+    raw = header(SESSION_A)
+    source = tmp_path / "malformed.jsonl"
+    store = archive(tmp_path)
+    source.write_bytes(raw)
+    receipt = store.capture(source, "codex")
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE native_source_generations (generation_key TEXT PRIMARY KEY)")
+    conn.commit()
+
+    with pytest.raises(NativeHeaderCatalogError, match="schema is incomplete"):
+        catalog(conn, store, source, receipt, receipt, raw)
+
+    assert conn.execute("SELECT COUNT(*) FROM native_source_generations").fetchone() == (0,)
+    assert conn.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='native_session_header_occurrences'"
+    ).fetchone() == (0,)
+
+
+def test_wrong_preexisting_index_refuses_before_catalog_data_write(tmp_path: Path) -> None:
+    raw = header(SESSION_A)
+    source = tmp_path / "wrong-index.jsonl"
+    source.write_bytes(raw)
+    store = archive(tmp_path)
+    receipt = store.capture(source, "codex")
+    conn = sqlite3.connect(":memory:")
+    ensure_native_session_headers_schema(conn)
+    conn.execute("DROP INDEX idx_native_source_generations_source")
+    conn.execute("CREATE INDEX idx_native_source_generations_source ON native_source_generations(status)")
+    conn.commit()
+
+    with pytest.raises(NativeHeaderCatalogError, match="index columns mismatch"):
+        catalog(conn, store, source, receipt, receipt, raw)
+
+    assert conn.execute("SELECT COUNT(*) FROM native_source_generations").fetchone() == (0,)
+    assert conn.execute("SELECT COUNT(*) FROM native_session_header_occurrences").fetchone() == (0,)
+
+
+def test_schema_requires_canonical_unique_partial_index_predicate(tmp_path: Path) -> None:
+    raw = header(SESSION_A)
+    source = tmp_path / "canonical-index.jsonl"
+    source.write_bytes(raw)
+    store = archive(tmp_path)
+    receipt = store.capture(source, "codex")
+    conn = sqlite3.connect(":memory:")
+    ensure_native_session_headers_schema(conn)
+    conn.execute("DROP INDEX idx_native_session_headers_canonical")
+    conn.execute(
+        "CREATE UNIQUE INDEX idx_native_session_headers_canonical "
+        "ON native_session_header_occurrences(generation_key) WHERE disposition = 'repeat'"
+    )
+    conn.commit()
+
+    with pytest.raises(NativeHeaderCatalogError, match="index predicate mismatch"):
+        catalog(conn, store, source, receipt, receipt, raw)
+
+
+def test_older_prefix_replay_does_not_downgrade_current_receipt(tmp_path: Path) -> None:
+    source = tmp_path / "older-prefix.jsonl"
+    raw = header(SESSION_A)
+    source.write_bytes(raw)
+    store = archive(tmp_path)
+    root = store.capture(source, "codex")
+    conn = sqlite3.connect(":memory:")
+    first = catalog(conn, store, source, root, root, raw)
+    with source.open("ab") as output:
+        output.write(b'{"type":"response_item"}\n')
+    latest = store.capture(source, "codex")
+
+    catalog(conn, store, source, root, latest, raw)
+    current_after_latest = native_source_generation_status(conn, first.generation_key)["current_manifest_sha256"]
+    catalog(conn, store, source, root, root, raw)
+    current_after_old = native_source_generation_status(conn, first.generation_key)["current_manifest_sha256"]
+
+    assert current_after_latest == latest["manifest_sha256"]
+    assert current_after_old == current_after_latest
+
+
+def test_late_invalid_header_taints_generation_and_preserves_canonical(tmp_path: Path) -> None:
+    source = tmp_path / "late-invalid.jsonl"
+    raw = header(SESSION_A)
+    source.write_bytes(raw)
+    store = archive(tmp_path)
+    root = store.capture(source, "codex")
+    conn = sqlite3.connect(":memory:")
+    first = catalog(conn, store, source, root, root, raw)
+    invalid = b"not-json\n"
+    start = len(raw)
+    with source.open("ab") as output:
+        output.write(invalid)
+    latest = store.capture(source, "codex")
+
+    second = catalog(conn, store, source, root, latest, invalid, start)
+    status = native_source_generation_status(conn, first.generation_key)
+    assert second.disposition == "invalid"
+    assert status["status"] == "invalid"
+    assert status["canonical_occurrence_key"] == first.occurrence_key
+    assert conn.execute("SELECT COUNT(*) FROM native_session_header_occurrences").fetchone() == (2,)
+
+
+def test_distinct_offset_same_context_is_repeat_and_active(tmp_path: Path) -> None:
+    source = tmp_path / "repeat.jsonl"
+    raw = header(SESSION_A)
+    source.write_bytes(raw)
+    store = archive(tmp_path)
+    root = store.capture(source, "codex")
+    conn = sqlite3.connect(":memory:")
+    first = catalog(conn, store, source, root, root, raw)
+    start = len(raw)
+    with source.open("ab") as output:
+        output.write(raw)
+    latest = store.capture(source, "codex")
+
+    second = catalog(conn, store, source, root, latest, raw, start)
+    status = native_source_generation_status(conn, first.generation_key)
+    assert second.disposition == "repeat"
+    assert second.inserted is True
+    assert status["status"] == "active"
+    assert conn.execute("SELECT COUNT(*) FROM native_session_header_occurrences").fetchone() == (2,)

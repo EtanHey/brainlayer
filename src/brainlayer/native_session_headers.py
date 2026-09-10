@@ -34,6 +34,8 @@ _RECEIPT_KEYS = {
 }
 _PAYLOAD_STRINGS = ("id", "session_id", "parent_thread_id", "agent_path", "agent_nickname", "agent_role")
 _SPAWN_STRINGS = ("parent_thread_id", "agent_path", "agent_nickname", "agent_role")
+_GENERATION_TABLE = "native_source_generations"
+_OCCURRENCE_TABLE = "native_session_header_occurrences"
 
 
 class NativeHeaderCatalogError(ValueError):
@@ -71,8 +73,13 @@ def _savepoint(conn: Any) -> Iterator[None]:
 
 
 def ensure_native_session_headers_schema(conn: Any) -> None:
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS native_source_generations (
+    generation_exists = _table_exists(conn, _GENERATION_TABLE)
+    occurrence_exists = _table_exists(conn, _OCCURRENCE_TABLE)
+    if generation_exists != occurrence_exists:
+        raise NativeHeaderCatalogError("native header catalog schema is incomplete")
+    if not generation_exists:
+        conn.execute(
+            """CREATE TABLE native_source_generations (
         generation_key TEXT PRIMARY KEY, provider TEXT NOT NULL, source_file TEXT NOT NULL,
         watcher_generation INTEGER NOT NULL, root_manifest_sha256 TEXT NOT NULL,
         root_receipt_json TEXT NOT NULL, current_manifest_sha256 TEXT NOT NULL,
@@ -80,9 +87,9 @@ def ensure_native_session_headers_schema(conn: Any) -> None:
         canonical_occurrence_key TEXT, first_seen_at TEXT NOT NULL, updated_at TEXT NOT NULL,
         UNIQUE(provider, source_file, watcher_generation, root_manifest_sha256),
         CHECK(watcher_generation >= 0), CHECK(status IN ('active','conflicted','invalid')))"""
-    )
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS native_session_header_occurrences (
+        )
+        conn.execute(
+            """CREATE TABLE native_session_header_occurrences (
         occurrence_key TEXT PRIMARY KEY, generation_key TEXT NOT NULL,
         disposition TEXT NOT NULL, manifest_sha256 TEXT NOT NULL,
         record_start_offset INTEGER NOT NULL, record_end_offset INTEGER NOT NULL,
@@ -91,14 +98,172 @@ def ensure_native_session_headers_schema(conn: Any) -> None:
         UNIQUE(generation_key, record_start_offset, record_end_offset, raw_record_hash),
         FOREIGN KEY(generation_key) REFERENCES native_source_generations(generation_key),
         CHECK(disposition IN ('canonical','repeat','conflict','invalid')))"""
+        )
+        conn.execute(
+            "CREATE INDEX idx_native_source_generations_source "
+            "ON native_source_generations(provider,source_file,watcher_generation,status,generation_key)"
+        )
+        conn.execute(
+            "CREATE INDEX idx_native_session_headers_generation "
+            "ON native_session_header_occurrences(generation_key,disposition,record_start_offset,occurrence_key)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX idx_native_session_headers_canonical "
+            "ON native_session_header_occurrences(generation_key) "
+            "WHERE disposition = 'canonical'"
+        )
+        return
+    _validate_native_header_catalog_schema(conn)
+
+
+def _table_exists(conn: Any, table: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+            (table,),
+        ).fetchone()
+        is not None
     )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_native_source_generations_source "
-        "ON native_source_generations(provider,source_file,watcher_generation,status,generation_key)"
+
+
+def _table_columns(conn: Any, table: str) -> list[tuple[str, str, int, Any, int]]:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return [(str(row[1]), str(row[2]).upper(), int(row[3]), row[4], int(row[5])) for row in rows]
+
+
+def _table_sql(conn: Any, table: str) -> str:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+        (table,),
+    ).fetchone()
+    if row is None or not isinstance(row[0], str):
+        raise NativeHeaderCatalogError(f"native header catalog table missing: {table}")
+    return re.sub(r"\s+", "", row[0].lower())
+
+
+def _require_unique_constraint(conn: Any, table: str, columns: tuple[str, ...]) -> None:
+    for row in conn.execute(f"PRAGMA index_list({table})").fetchall():
+        if int(row[2]) != 1 or str(row[3]) != "u":
+            continue
+        name = str(row[1])
+        actual = tuple(str(item[2]) for item in conn.execute(f"PRAGMA index_info({name})").fetchall())
+        if actual == columns:
+            return
+    raise NativeHeaderCatalogError(f"native header catalog unique constraint mismatch: {table} {columns!r}")
+
+
+def _require_index(
+    conn: Any,
+    table: str,
+    name: str,
+    columns: tuple[str, ...],
+    *,
+    unique: bool,
+    partial: bool,
+    sql: str | None = None,
+) -> None:
+    row = next((item for item in conn.execute(f"PRAGMA index_list({table})").fetchall() if item[1] == name), None)
+    if row is None:
+        raise NativeHeaderCatalogError(f"native header catalog index missing: {name}")
+    if bool(row[2]) != unique or bool(row[4]) != partial:
+        raise NativeHeaderCatalogError(f"native header catalog index flags mismatch: {name}")
+    actual = tuple(str(item[2]) for item in conn.execute(f"PRAGMA index_info({name})").fetchall())
+    if actual != columns:
+        raise NativeHeaderCatalogError(f"native header catalog index columns mismatch: {name}")
+    if sql is not None:
+        definition = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND name=?",
+            (name,),
+        ).fetchone()
+        compact = re.sub(r"\s+", "", str(definition[0]).lower()) if definition else ""
+        if compact != re.sub(r"\s+", "", sql.lower()):
+            raise NativeHeaderCatalogError(f"native header catalog index predicate mismatch: {name}")
+
+
+def _validate_native_header_catalog_schema(conn: Any) -> None:
+    generation_columns = [
+        ("generation_key", "TEXT", 0, None, 1),
+        ("provider", "TEXT", 1, None, 0),
+        ("source_file", "TEXT", 1, None, 0),
+        ("watcher_generation", "INTEGER", 1, None, 0),
+        ("root_manifest_sha256", "TEXT", 1, None, 0),
+        ("root_receipt_json", "TEXT", 1, None, 0),
+        ("current_manifest_sha256", "TEXT", 1, None, 0),
+        ("current_receipt_json", "TEXT", 1, None, 0),
+        ("status", "TEXT", 1, None, 0),
+        ("canonical_occurrence_key", "TEXT", 0, None, 0),
+        ("first_seen_at", "TEXT", 1, None, 0),
+        ("updated_at", "TEXT", 1, None, 0),
+    ]
+    occurrence_columns = [
+        ("occurrence_key", "TEXT", 0, None, 1),
+        ("generation_key", "TEXT", 1, None, 0),
+        ("disposition", "TEXT", 1, None, 0),
+        ("manifest_sha256", "TEXT", 1, None, 0),
+        ("record_start_offset", "INTEGER", 1, None, 0),
+        ("record_end_offset", "INTEGER", 1, None, 0),
+        ("raw_record_hash", "TEXT", 1, None, 0),
+        ("session_id", "TEXT", 0, None, 0),
+        ("header_context_json", "TEXT", 0, None, 0),
+        ("header_context_sha256", "TEXT", 0, None, 0),
+        ("validation_error", "TEXT", 0, None, 0),
+        ("observed_at", "TEXT", 1, None, 0),
+    ]
+    if _table_columns(conn, _GENERATION_TABLE) != generation_columns:
+        raise NativeHeaderCatalogError("native header catalog generation columns mismatch")
+    if _table_columns(conn, _OCCURRENCE_TABLE) != occurrence_columns:
+        raise NativeHeaderCatalogError("native header catalog occurrence columns mismatch")
+    generation_sql = _table_sql(conn, _GENERATION_TABLE)
+    occurrence_sql = _table_sql(conn, _OCCURRENCE_TABLE)
+    for expression in ("check(watcher_generation>=0)", "check(statusin('active','conflicted','invalid'))"):
+        if expression not in generation_sql:
+            raise NativeHeaderCatalogError("native header catalog generation constraints mismatch")
+    if "check(dispositionin('canonical','repeat','conflict','invalid'))" not in occurrence_sql:
+        raise NativeHeaderCatalogError("native header catalog occurrence constraints mismatch")
+    foreign_keys = [
+        (str(row[2]), str(row[3]), str(row[4]), str(row[5]), str(row[6]))
+        for row in conn.execute(f"PRAGMA foreign_key_list({_OCCURRENCE_TABLE})").fetchall()
+    ]
+    if foreign_keys != [("native_source_generations", "generation_key", "generation_key", "NO ACTION", "NO ACTION")]:
+        raise NativeHeaderCatalogError("native header catalog foreign key mismatch")
+    _require_unique_constraint(
+        conn,
+        _GENERATION_TABLE,
+        ("provider", "source_file", "watcher_generation", "root_manifest_sha256"),
     )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_native_session_headers_generation "
-        "ON native_session_header_occurrences(generation_key,disposition,record_start_offset,occurrence_key)"
+    _require_unique_constraint(
+        conn,
+        _OCCURRENCE_TABLE,
+        ("generation_key", "record_start_offset", "record_end_offset", "raw_record_hash"),
+    )
+    _require_index(
+        conn,
+        _GENERATION_TABLE,
+        "idx_native_source_generations_source",
+        ("provider", "source_file", "watcher_generation", "status", "generation_key"),
+        unique=False,
+        partial=False,
+    )
+    _require_index(
+        conn,
+        _OCCURRENCE_TABLE,
+        "idx_native_session_headers_generation",
+        ("generation_key", "disposition", "record_start_offset", "occurrence_key"),
+        unique=False,
+        partial=False,
+    )
+    _require_index(
+        conn,
+        _OCCURRENCE_TABLE,
+        "idx_native_session_headers_canonical",
+        ("generation_key",),
+        unique=True,
+        partial=True,
+        sql=(
+            "CREATE UNIQUE INDEX idx_native_session_headers_canonical "
+            "ON native_session_header_occurrences(generation_key) "
+            "WHERE disposition = 'canonical'"
+        ),
     )
 
 
@@ -166,7 +331,12 @@ def _reserve(
     now = datetime.now(timezone.utc).isoformat()
     if row is None:
         conn.execute(
-            "INSERT INTO native_source_generations VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            """INSERT INTO native_source_generations (
+                generation_key, provider, source_file, watcher_generation,
+                root_manifest_sha256, root_receipt_json, current_manifest_sha256,
+                current_receipt_json, status, canonical_occurrence_key,
+                first_seen_at, updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 key,
                 provider,
@@ -386,7 +556,12 @@ def catalog_native_session_header(
             next_status = generation[0] if disposition == "repeat" or generation[0] == "invalid" else "conflicted"
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
-            "INSERT INTO native_session_header_occurrences VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            """INSERT INTO native_session_header_occurrences (
+                occurrence_key, generation_key, disposition, manifest_sha256,
+                record_start_offset, record_end_offset, raw_record_hash,
+                session_id, header_context_json, header_context_sha256,
+                validation_error, observed_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 occurrence_key,
                 generation_key,
