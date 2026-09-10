@@ -1,4 +1,6 @@
+import fcntl
 import json
+import multiprocessing
 import os
 import shlex
 import sqlite3
@@ -20,6 +22,16 @@ def _root(path: Path) -> list[Path]:
     root.mkdir()
     (root / "synthetic.jsonl").write_text('{"synthetic":true}\n')
     return [root]
+
+
+def _hold_destination_directory_lock(destination: str, ready, release) -> None:
+    fd = os.open(destination, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        ready.put(os.getpid())
+        release.wait(10)
+    finally:
+        os.close(fd)
 
 
 def test_run_once_creates_verified_db_and_jsonl_generation_without_remote_claim(tmp_path):
@@ -442,3 +454,177 @@ def test_socket_snapshot_reclaims_attempt_for_terminal_error_or_malformed_author
 
     assert not seen["attempt"].exists()
     assert not seen["attempt"].with_name(seen["attempt"].name + ".complete").exists()
+
+
+def test_cli_explicit_offline_path_uses_only_offline_helper_and_socket_remains_default(tmp_path, monkeypatch, capsys):
+    db = tmp_path / "fixture.db"
+    _fixture_db(db)
+    destination = tmp_path / "backups"
+    destination.mkdir()
+    root = _root(tmp_path)
+    identity = destination.stat()
+    config = tmp_path / "brainlayer.env"
+    config.write_text(
+        "\n".join(
+            [
+                "BRAINLAYER_BACKUP_ENABLED=1",
+                f"BRAINLAYER_BACKUP_DESTINATION={shlex.quote(str(destination))}",
+                f"BRAINLAYER_BACKUP_DESTINATION_ST_DEV={identity.st_dev}",
+                f"BRAINLAYER_BACKUP_DESTINATION_ST_INO={identity.st_ino}",
+            ]
+        )
+        + "\n"
+    )
+    seen = []
+
+    def offline_only(source, target):
+        seen.append(source)
+        _fixture_db(target)
+        return 1
+
+    monkeypatch.setattr(backup_run_once, "_offline_snapshot", offline_only)
+    monkeypatch.setattr(backup_run_once, "_socket_snapshot", lambda *_args, **_kwargs: pytest.fail("socket fallback"))
+    assert backup_run_once.main([
+        "--config", str(config), "--transcript-root", str(root[0]), "--offline-db-path", str(db), "--generation-id", "offline-cli",
+    ]) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert seen == [db]
+    assert output["db_source_mode"] == "explicit_offline_db"
+    assert output["db_source_path"] == str(db.resolve())
+    assert output["db_transport_socket"] is None
+
+
+def test_cli_rejects_relative_or_ambiguous_offline_authority(tmp_path, capsys):
+    config = tmp_path / "brainlayer.env"
+    config.write_text("BRAINLAYER_BACKUP_ENABLED=0\n")
+    with pytest.raises(SystemExit) as exit_info:
+        backup_run_once.main([
+            "--config", str(config), "--transcript-root", str(tmp_path), "--socket-path", "/tmp/socket", "--offline-db-path", "relative.db",
+        ])
+    assert exit_info.value.code == 2
+    assert "not allowed with argument" in capsys.readouterr().err
+
+    destination = tmp_path / "backups"
+    destination.mkdir()
+    identity = destination.stat()
+    config.write_text(
+        "\n".join(
+            [
+                "BRAINLAYER_BACKUP_ENABLED=1",
+                f"BRAINLAYER_BACKUP_DESTINATION={shlex.quote(str(destination))}",
+                f"BRAINLAYER_BACKUP_DESTINATION_ST_DEV={identity.st_dev}",
+                f"BRAINLAYER_BACKUP_DESTINATION_ST_INO={identity.st_ino}",
+            ]
+        )
+        + "\n"
+    )
+    root = _root(tmp_path)
+    assert backup_run_once.main([
+        "--config", str(config), "--transcript-root", str(root[0]), "--offline-db-path", "relative.db",
+    ]) == 1
+    failure = json.loads(capsys.readouterr().out)
+    assert "absolute explicit source path" in failure["error"]
+    assert not list(destination.glob(".brainlayer-backup-*"))
+
+
+@pytest.mark.parametrize("socket_error", ["returned authority error", "lost socket response"])
+def test_socket_errors_never_automatically_fall_back_to_offline(tmp_path, monkeypatch, socket_error):
+    destination = tmp_path / "backups"
+    destination.mkdir()
+    offline_called = False
+
+    def reject_socket(*_args, **_kwargs):
+        raise backup_run_once.BackupRunOnceError(socket_error)
+
+    def reject_offline(*_args, **_kwargs):
+        nonlocal offline_called
+        offline_called = True
+        pytest.fail("offline helper must not be reached")
+
+    monkeypatch.setattr(backup_run_once, "_socket_snapshot", reject_socket)
+    monkeypatch.setattr(backup_run_once, "_offline_snapshot", reject_offline)
+    with pytest.raises(backup_run_once.BackupRunOnceError, match=socket_error):
+        backup_run_once.run_backup_once(
+            destination=destination,
+            socket_path=tmp_path / "brainbar.sock",
+            transcript_roots=_root(tmp_path),
+            expected_destination_identity=(destination.stat().st_dev, destination.stat().st_ino),
+            generation_id="no-fallback",
+        )
+    assert offline_called is False
+    generation = next(destination.glob(".brainlayer-backup-*-no-fallback"))
+    assert json.loads((generation / "receipt.incomplete.json").read_text())["status"] == "failed"
+
+
+def test_cli_refuses_subprocess_destination_lock_without_generation_then_releases(tmp_path, capsys):
+    db = tmp_path / "fixture.db"
+    _fixture_db(db)
+    destination = tmp_path / "backups"
+    destination.mkdir()
+    root = _root(tmp_path)
+    identity = destination.stat()
+    config = tmp_path / "brainlayer.env"
+    config.write_text(
+        "\n".join(
+            [
+                "BRAINLAYER_BACKUP_ENABLED=1",
+                f"BRAINLAYER_BACKUP_DESTINATION={shlex.quote(str(destination))}",
+                f"BRAINLAYER_BACKUP_DESTINATION_ST_DEV={identity.st_dev}",
+                f"BRAINLAYER_BACKUP_DESTINATION_ST_INO={identity.st_ino}",
+            ]
+        )
+        + "\n"
+    )
+    context = multiprocessing.get_context("spawn")
+    ready = context.Queue()
+    release = context.Event()
+    holder = context.Process(target=_hold_destination_directory_lock, args=(str(destination), ready, release))
+    holder.start()
+    assert ready.get(timeout=10)
+    try:
+        assert backup_run_once.main([
+            "--config", str(config), "--transcript-root", str(root[0]), "--offline-db-path", str(db), "--generation-id", "busy",
+        ]) == 2
+        refusal = json.loads(capsys.readouterr().out)
+        assert refusal["status"] == "refused"
+        assert refusal["reason"] == "destination_busy"
+        assert refusal["generation"] is None
+        assert not list(destination.glob(".brainlayer-backup-*-busy"))
+    finally:
+        release.set()
+        holder.join(timeout=10)
+    assert holder.exitcode == 0
+    result = backup_run_once.run_backup_once(
+        destination=destination / ".",
+        offline_db_path=db,
+        transcript_roots=root,
+        expected_destination_identity=(identity.st_dev, identity.st_ino),
+        generation_id="released",
+    )
+    assert result["status"] == "local_verified"
+
+
+def test_destination_process_lock_releases_after_failed_generation(tmp_path, monkeypatch):
+    db = tmp_path / "fixture.db"
+    _fixture_db(db)
+    destination = tmp_path / "backups"
+    destination.mkdir()
+    roots = _root(tmp_path)
+    identity = (destination.stat().st_dev, destination.stat().st_ino)
+    original = backup_run_once._offline_snapshot
+    monkeypatch.setattr(
+        backup_run_once,
+        "_offline_snapshot",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(backup_run_once.BackupRunOnceError("synthetic failure")),
+    )
+    with pytest.raises(backup_run_once.BackupRunOnceError, match="synthetic failure"):
+        backup_run_once.run_backup_once(
+            destination=destination, offline_db_path=db, transcript_roots=roots,
+            expected_destination_identity=identity, generation_id="failed-lock",
+        )
+    monkeypatch.setattr(backup_run_once, "_offline_snapshot", original)
+    result = backup_run_once.run_backup_once(
+        destination=destination, offline_db_path=db, transcript_roots=roots,
+        expected_destination_identity=identity, generation_id="after-failure",
+    )
+    assert result["status"] == "local_verified"

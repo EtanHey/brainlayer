@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -20,6 +22,10 @@ from . import backup_daily, jsonl_backup
 
 class BackupRunOnceError(RuntimeError):
     """A backup generation could not be completed."""
+
+
+class BackupRunOnceBusyError(BackupRunOnceError):
+    """A destination-bound run is already active in another process."""
 
 
 _DESTINATION_BIND_LOCK = threading.Lock()
@@ -41,6 +47,18 @@ def _sha256(path: Path) -> str:
 def _identity(path: Path) -> dict[str, int]:
     result = path.stat()
     return {"st_dev": result.st_dev, "st_ino": result.st_ino}
+
+
+def _acquire_destination_process_lock(destination_fd: int, identity: tuple[int, int]) -> None:
+    """Lock the selected destination directory inode without a mutable lock path."""
+    try:
+        fcntl.flock(destination_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        if exc.errno in {errno.EACCES, errno.EAGAIN}:
+            raise BackupRunOnceBusyError(
+                f"backup run already active for destination identity: {identity}"
+            ) from exc
+        raise BackupRunOnceError(f"unable to lock backup destination identity: {identity}") from exc
 
 
 class _BoundSource(AbstractContextManager):
@@ -504,7 +522,9 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(description="Generate one local BrainLayer backup without retention or upload.")
     parser.add_argument("--config", type=Path, help="managed BrainLayer env file (default: ~/.config/brainlayer/brainlayer.env)")
-    parser.add_argument("--socket-path", type=Path)
+    authority = parser.add_mutually_exclusive_group()
+    authority.add_argument("--socket-path", type=Path)
+    authority.add_argument("--offline-db-path", type=Path)
     parser.add_argument(
         "--transcript-root",
         type=Path,
@@ -540,13 +560,28 @@ def main(argv: list[str] | None = None) -> int:
                 raise BackupRunOnceError("invalid --transcript-root-spec JSON") from exc
         if not roots:
             raise BackupRunOnceError("at least one transcript root or source-root spec is required")
+        offline_db_path = args.offline_db_path.expanduser() if args.offline_db_path is not None else None
+        if offline_db_path is not None and not offline_db_path.is_absolute():
+            raise BackupRunOnceError("--offline-db-path must be an absolute explicit source path")
         result = run_backup_once(
             destination=destination,
             transcript_roots=roots,
-            socket_path=backup_daily._brainbar_socket_path(args.socket_path),
+            socket_path=None if offline_db_path is not None else backup_daily._brainbar_socket_path(args.socket_path),
+            offline_db_path=offline_db_path,
             generation_id=args.generation_id,
             expected_destination_identity=identity,
         )
+    except BackupRunOnceBusyError as exc:
+        print(json.dumps({
+            "status": "refused",
+            "reason": "destination_busy",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "generation": None,
+            "remote_verified": False,
+            "cleanup_permitted": False,
+        }, sort_keys=True))
+        return 2
     except Exception as exc:
         print(json.dumps({"status": "failed", "error_type": type(exc).__name__, "error": str(exc)}))
         return 1
@@ -588,58 +623,62 @@ def run_backup_once(
             raise BackupRunOnceError(
                 f"backup destination identity changed: expected={expected_destination_identity} actual={actual}"
             )
-        with _DESTINATION_BIND_LOCK:
-            previous_cwd = os.open(".", os.O_RDONLY)
-            try:
-                os.fchdir(destination_fd)
-                result = _run_backup_once_bound(
-                    destination=Path("."),
-                    transcript_roots=transcript_roots,
-                    socket_path=socket_path,
-                    offline_db_path=offline_db_path,
-                    expected_source_path=expected_source_path,
-                    expected_source_open_generation=expected_source_open_generation,
-                    generation_id=generation_id,
-                    now=now,
-                    expected_destination_identity=expected_destination_identity,
-                )
+        _acquire_destination_process_lock(destination_fd, actual)
+        try:
+            with _DESTINATION_BIND_LOCK:
+                previous_cwd = os.open(".", os.O_RDONLY)
                 try:
-                    visible_identity = _identity(destination)
-                except OSError:
-                    visible_identity = None
-                if visible_identity is None or tuple(visible_identity.values()) != tuple(expected_destination_identity):
-                    generation_name = str(result.get("generation", ""))
-                    actual = None if visible_identity is None else tuple(visible_identity.values())
-                    replacement_error = (
-                        f"backup destination identity changed after generation: "
-                        f"expected={expected_destination_identity} actual={actual}"
+                    os.fchdir(destination_fd)
+                    result = _run_backup_once_bound(
+                        destination=Path("."),
+                        transcript_roots=transcript_roots,
+                        socket_path=socket_path,
+                        offline_db_path=offline_db_path,
+                        expected_source_path=expected_source_path,
+                        expected_source_open_generation=expected_source_open_generation,
+                        generation_id=generation_id,
+                        now=now,
+                        expected_destination_identity=expected_destination_identity,
                     )
-                    if generation_name:
-                        try:
-                            os.unlink(f"{generation_name}/receipt.complete.json", dir_fd=destination_fd)
-                        except OSError:
-                            pass
-                        try:
-                            _atomic_json(
-                                Path(generation_name) / "receipt.incomplete.json",
-                                {
-                                    "status": "failed",
-                                    "generation": generation_name,
-                                    "failed_at": dt.datetime.now(dt.UTC).isoformat(),
-                                    "error_type": "BackupRunOnceError",
-                                    "error": replacement_error,
-                                    "destination_identity": expected_destination_identity,
-                                    "remote_verified": False,
-                                    "cleanup_permitted": False,
-                                },
-                            )
-                        except Exception:
-                            pass
-                    raise BackupRunOnceError(replacement_error)
-                return result
-            finally:
-                os.fchdir(previous_cwd)
-                os.close(previous_cwd)
+                    try:
+                        visible_identity = _identity(destination)
+                    except OSError:
+                        visible_identity = None
+                    if visible_identity is None or tuple(visible_identity.values()) != tuple(expected_destination_identity):
+                        generation_name = str(result.get("generation", ""))
+                        actual = None if visible_identity is None else tuple(visible_identity.values())
+                        replacement_error = (
+                            f"backup destination identity changed after generation: "
+                            f"expected={expected_destination_identity} actual={actual}"
+                        )
+                        if generation_name:
+                            try:
+                                os.unlink(f"{generation_name}/receipt.complete.json", dir_fd=destination_fd)
+                            except OSError:
+                                pass
+                            try:
+                                _atomic_json(
+                                    Path(generation_name) / "receipt.incomplete.json",
+                                    {
+                                        "status": "failed",
+                                        "generation": generation_name,
+                                        "failed_at": dt.datetime.now(dt.UTC).isoformat(),
+                                        "error_type": "BackupRunOnceError",
+                                        "error": replacement_error,
+                                        "destination_identity": expected_destination_identity,
+                                        "remote_verified": False,
+                                        "cleanup_permitted": False,
+                                    },
+                                )
+                            except Exception:
+                                pass
+                        raise BackupRunOnceError(replacement_error)
+                    return result
+                finally:
+                    os.fchdir(previous_cwd)
+                    os.close(previous_cwd)
+        finally:
+            fcntl.flock(destination_fd, fcntl.LOCK_UN)
     finally:
         os.close(destination_fd)
 
