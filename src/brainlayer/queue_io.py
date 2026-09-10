@@ -47,9 +47,20 @@ def enqueue_jsonl_batch(events: list[dict[str, Any]], *, source: str, queue_dir:
     ]
     final_path = resolved_dir / f"{safe_source}-{now_ms}-{uuid.uuid4().hex}.jsonl"
     tmp_path = final_path.with_suffix(".tmp")
-    tmp_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    tmp_path.replace(final_path)
-    return final_path
+    try:
+        with tmp_path.open("w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        tmp_path.replace(final_path)
+        directory_fd = os.open(resolved_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        return final_path
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def enqueue_jsonl(event: dict[str, Any], *, source: str, queue_dir: Path | None = None) -> Path:
