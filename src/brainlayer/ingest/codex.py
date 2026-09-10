@@ -106,6 +106,37 @@ def _infer_project_from_cwd(cwd: Optional[str]) -> Optional[str]:
     return None
 
 
+def _native_event_timestamp_error(line: dict, payload: dict) -> Optional[str]:
+    """Return a native completion timestamp validation error, if any.
+
+    Native event messages must retain their provider-recorded event time.  A
+    session-start fallback would misrepresent when the completion occurred.
+    Operation timing is optional for assistant text, but a supplied completion
+    time must be a valid integer and cannot follow the recorded event time.
+    """
+    timestamp = line.get("timestamp")
+    if not isinstance(timestamp, str) or not timestamp.strip():
+        return "missing provider timestamp"
+    try:
+        recorded_at = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        if recorded_at.tzinfo is None:
+            return "provider timestamp lacks timezone"
+        recorded_seconds = recorded_at.timestamp()
+    except (ValueError, OverflowError, OSError):
+        return "invalid provider timestamp"
+
+    completed_at_ms = payload.get("completed_at_ms")
+    if completed_at_ms is not None:
+        if type(completed_at_ms) is not int:
+            return "invalid completion timestamp"
+        # Keep the comparison integral: an unbounded JSON integer can overflow
+        # when divided by a float before it reaches the rejection path.
+        recorded_at_ms = int(recorded_seconds * 1000)
+        if completed_at_ms > recorded_at_ms:
+            return "completion timestamp follows provider timestamp"
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Core parsing
 # ---------------------------------------------------------------------------
@@ -129,8 +160,10 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
     project: Optional[str] = None
     model: Optional[str] = None
 
+    rejected_native_agent_messages = 0
+
     with open(file_path, "rb") as fh:
-        for raw in fh:
+        for line_number, raw in enumerate(fh, start=1):
             raw = raw.strip()
             if not raw:
                 continue
@@ -162,9 +195,72 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
                 continue
 
             # ------------------------------------------------------------------
-            # event_msg — skip (system lifecycle events, token counts, etc.)
+            # event_msg — accept only completed native agent text. Other lifecycle
+            # events remain non-content records.
             # ------------------------------------------------------------------
             if line_type == "event_msg":
+                item = payload.get("item")
+                if payload.get("type") != "item_completed" or not isinstance(item, dict):
+                    continue
+                if item.get("type") != "AgentMessage":
+                    continue
+
+                timestamp_error = _native_event_timestamp_error(line, payload)
+                if timestamp_error:
+                    rejected_native_agent_messages += 1
+                    logger.warning(
+                        "Skipping native Codex AgentMessage in %s line %d: %s "
+                        "(rejected_native_agent_messages=%d)",
+                        file_path,
+                        line_number,
+                        timestamp_error,
+                        rejected_native_agent_messages,
+                    )
+                    continue
+
+                blocks = item.get("content")
+                if (
+                    not isinstance(blocks, list)
+                    or not blocks
+                    or any(
+                        not isinstance(block, dict)
+                        or block.get("type") != "Text"
+                        or not isinstance(block.get("text"), str)
+                        for block in blocks
+                    )
+                ):
+                    rejected_native_agent_messages += 1
+                    logger.warning(
+                        "Skipping malformed native Codex AgentMessage in %s line %d "
+                        "(rejected_native_agent_messages=%d)",
+                        file_path,
+                        line_number,
+                        rejected_native_agent_messages,
+                    )
+                    continue
+
+                for block_index, block in enumerate(blocks):
+                    text = block["text"]
+                    if not text.strip() or len(text.strip()) < _MIN_ASSISTANT_LEN:
+                        continue
+                    ctype = "ai_code" if "```" in text else "assistant_text"
+                    yield {
+                        "content": text,
+                        "content_type": ctype,
+                        "session_id": session_id,
+                        "timestamp": line_ts,
+                        "project": project,
+                        "source": "codex_cli",
+                        "metadata": {
+                            "session_id": session_id,
+                            "sender": "assistant",
+                            "author_identity": "unverified",
+                            "model": model,
+                            "source_file": str(file_path),
+                            "source_line": line_number,
+                            "source_pointer": f"/payload/item/content/{block_index}/text",
+                        },
+                    }
                 continue
 
             # ------------------------------------------------------------------
@@ -213,6 +309,8 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
                         "sender": "user",
                         "model": model,
                         "source_file": str(file_path),
+                        "source_line": line_number,
+                        "source_pointer": "/payload/content",
                     },
                 }
                 continue
@@ -242,6 +340,8 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
                         "sender": "assistant",
                         "model": model,
                         "source_file": str(file_path),
+                        "source_line": line_number,
+                        "source_pointer": "/payload/content",
                     },
                 }
                 continue
@@ -273,6 +373,8 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
                         "call_id": payload.get("call_id"),
                         "model": model,
                         "source_file": str(file_path),
+                        "source_line": line_number,
+                        "source_pointer": "/payload/output",
                     },
                 }
 

@@ -106,6 +106,17 @@ def _reasoning():
     )
 
 
+def _native_agent_message(content, ts="2026-03-14T12:01:00.000Z"):
+    return {
+        "timestamp": ts,
+        "type": "event_msg",
+        "payload": {
+            "type": "item_completed",
+            "item": {"type": "AgentMessage", "content": content},
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # Unit tests — helper functions
 # ---------------------------------------------------------------------------
@@ -221,6 +232,103 @@ class TestClassifyToolOutput:
 
 
 class TestParseCodexSession:
+    def test_native_agent_message_requires_its_own_valid_provider_timestamp(self, tmp_path, caplog):
+        f = tmp_path / "session.jsonl"
+        text = "Native completion time validation needs text longer than fifty characters."
+        event = _native_agent_message([{"type": "Text", "text": text}])
+        event.pop("timestamp")
+        _write_jsonl(f, [_session_meta(), event])
+
+        assert list(parse_codex_session(f)) == []
+        assert "missing provider timestamp" in caplog.text
+
+    def test_native_agent_message_rejects_invalid_or_contradictory_provider_time(self, tmp_path, caplog):
+        f = tmp_path / "session.jsonl"
+        text = "Native completion time validation needs text longer than fifty characters."
+        invalid = _native_agent_message([{"type": "Text", "text": text}], ts="not-a-time")
+        contradictory = _native_agent_message([{"type": "Text", "text": text}])
+        contradictory["payload"]["completed_at_ms"] = 9_999_999_999_999
+        oversized = _native_agent_message([{"type": "Text", "text": text}])
+        oversized["payload"]["completed_at_ms"] = 10**1000
+        boolean = _native_agent_message([{"type": "Text", "text": text}])
+        boolean["payload"]["completed_at_ms"] = True
+        _write_jsonl(f, [_session_meta(), invalid, contradictory, oversized, boolean])
+
+        assert list(parse_codex_session(f)) == []
+        assert "invalid provider timestamp" in caplog.text
+        assert "completion timestamp follows provider timestamp" in caplog.text
+        assert "invalid completion timestamp" in caplog.text
+
+    def test_response_item_keeps_legacy_session_timestamp_fallback(self, tmp_path):
+        f = tmp_path / "session.jsonl"
+        text = "Legacy response item timestamp fallback remains intentionally unchanged here."
+        response = _assistant_msg(text)
+        response.pop("timestamp")
+        _write_jsonl(f, [_session_meta(), response])
+
+        entries = list(parse_codex_session(f))
+        assert len(entries) == 1
+        assert entries[0]["timestamp"] == "2026-03-14T12:00:00.000Z"
+
+    def test_completed_native_agent_text_is_parsed_with_physical_coordinates(self, tmp_path):
+        f = tmp_path / "session.jsonl"
+        first = "Native completion one is deliberately longer than fifty characters."
+        second = "Native completion two is also deliberately longer than fifty characters."
+        _write_jsonl(
+            f,
+            [_session_meta(), _native_agent_message([{"type": "Text", "text": first}, {"type": "Text", "text": second}])],
+        )
+
+        entries = list(parse_codex_session(f))
+
+        assert [entry["content"] for entry in entries] == [first, second]
+        assert [entry["metadata"]["source_pointer"] for entry in entries] == [
+            "/payload/item/content/0/text",
+            "/payload/item/content/1/text",
+        ]
+        assert {entry["metadata"]["source_line"] for entry in entries} == {2}
+        assert {entry["metadata"]["sender"] for entry in entries} == {"assistant"}
+        assert {entry["metadata"]["author_identity"] for entry in entries} == {"unverified"}
+
+    def test_native_agent_message_rejects_the_whole_malformed_content_array(self, tmp_path, caplog):
+        f = tmp_path / "session.jsonl"
+        _write_jsonl(
+            f,
+            [
+                _session_meta(),
+                _native_agent_message(
+                    [
+                        {"type": "Text", "text": "This valid-looking content must not be partly indexed when its sibling is invalid."},
+                        {"type": "Image", "url": "ignored"},
+                    ]
+                ),
+            ],
+        )
+
+        assert list(parse_codex_session(f)) == []
+        assert "rejected_native_agent_messages=1" in caplog.text
+
+    def test_native_and_response_item_mirrors_keep_distinct_coordinates(self, tmp_path):
+        f = tmp_path / "session.jsonl"
+        text = "The same assistant content appears in both physical transcript records here."
+        _write_jsonl(
+            f,
+            [
+                _session_meta(),
+                _native_agent_message([{"type": "Text", "text": text}]),
+                _assistant_msg(text),
+            ],
+        )
+
+        entries = list(parse_codex_session(f))
+
+        assert [entry["content"] for entry in entries] == [text, text]
+        assert [entry["metadata"]["source_line"] for entry in entries] == [2, 3]
+        assert [entry["metadata"]["source_pointer"] for entry in entries] == [
+            "/payload/item/content/0/text",
+            "/payload/content",
+        ]
+
     def test_real_user_message_is_parsed(self, tmp_path):
         f = tmp_path / "session.jsonl"
         _write_jsonl(
