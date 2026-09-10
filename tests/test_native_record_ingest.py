@@ -46,6 +46,35 @@ def _entry(
     return entry
 
 
+def _tool_use_entry(source_file: str, start: int, end: int, digest_char: str, target: str) -> dict:
+    entry = _entry(source_file, start, end, digest_char, entry_type="assistant", uuid="native-tool")
+    entry["message"] = {
+        "role": "assistant",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "tool-call-1",
+                "name": "mcp__codex_app__send_message_to_thread",
+                "input": {"threadId": target},
+            }
+        ],
+    }
+    return entry
+
+
+def _target_rows(db_path) -> list[tuple]:
+    with sqlite3.connect(db_path) as conn:
+        try:
+            return conn.execute(
+                "SELECT target_extraction_version, declared_targets_json, target_diagnostics_json "
+                "FROM native_record_links ORDER BY record_start_offset"
+            ).fetchall()
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc):
+                raise
+            return []
+
+
 def _drain(db_path, queue_dir, log_path) -> int:
     return drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=20, log_path=log_path)
 
@@ -144,6 +173,43 @@ def test_direct_and_queued_native_catalog_content_match(tmp_path, monkeypatch):
     assert _drain(queued_db, queue_dir, tmp_path / "drain.log") == 3
     assert _native_rows(queued_db) == _native_rows(direct_db)
 
+
+def test_tool_use_targets_match_direct_and_queued_and_excluded_reader(tmp_path, monkeypatch):
+    direct_db = tmp_path / "direct-target.db"
+    queued_db = tmp_path / "queued-target.db"
+    queue_dir = tmp_path / "target-queue"
+    VectorStore(direct_db).close()
+    VectorStore(queued_db).close()
+    source_file = str(tmp_path / "session.jsonl")
+    target = "thread-" + "x" * 80
+    entry = _tool_use_entry(source_file, 0, 240, "c", target)
+
+    create_flush_callback(direct_db, arbitrated=False)([entry])
+    create_flush_callback(direct_db, arbitrated=False)([entry])
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+    create_flush_callback(queued_db, arbitrated=True)([entry])
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    assert _drain(queued_db, queue_dir, tmp_path / "target-drain.log") == 1
+
+    assert _target_rows(direct_db) == _target_rows(queued_db)
+    assert len(_target_rows(direct_db)) == 1
+    version, targets_json, diagnostics_json = _target_rows(direct_db)[0]
+    assert version == 1
+    targets = json.loads(targets_json)
+    assert targets[0]["target"] == target
+    assert targets[0]["declared_unverified"] is True
+    assert targets[0]["decoded_pointer"] == "/message/content/0/input/threadId"
+    assert json.loads(diagnostics_json) == []
+    with sqlite3.connect(direct_db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM chunks").fetchone() == (0,)
+
+    excluded = dict(entry)
+    excluded["attributionAgent"] = "brain-worker"
+    excluded["uuid"] = "excluded-tool"
+    excluded_db = tmp_path / "excluded-target.db"
+    VectorStore(excluded_db).close()
+    create_flush_callback(excluded_db, arbitrated=False)([excluded])
+    assert _target_rows(excluded_db) == []
 
 def test_native_enqueue_error_cannot_confirm_offset(tmp_path, monkeypatch):
     from brainlayer import watcher_bridge

@@ -36,6 +36,7 @@ from .native_record_links import (
     native_record_entry_is_admitted,
     native_record_payload_from_entry,
 )
+from .native_targets import extract_native_targets
 from .paths import get_db_path
 from .pipeline.chunk import chunk_content
 from .pipeline.classify import classify_content
@@ -426,12 +427,21 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                 source_class=source_class,
             )
 
-        native_records = [
-            payload
-            for entry in entries
-            if (payload := native_record_payload_from_entry(entry)) is not None
-            and native_record_entry_is_admitted(entry)
-        ]
+        native_records: list[dict[str, Any]] = []
+        for entry in entries:
+            if not native_record_entry_is_admitted(entry):
+                continue
+            payload = native_record_payload_from_entry(entry)
+            if payload is None:
+                continue
+            target_report = extract_native_targets(entry)
+            payload["target_report"] = {
+                "version": 1,
+                "scope": "supported_tool_calls_v1",
+                "targets": target_report.targets,
+                "diagnostics": target_report.diagnostics,
+            }
+            native_records.append(payload)
         if native_records:
             if arbitrated:
                 enqueue_watcher_native_records(native_records)

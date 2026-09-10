@@ -1118,6 +1118,7 @@ def _apply_event(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
             record_end_offset=event.get("record_end_offset"),
             raw_record_hash=event.get("raw_record_hash"),
             declared_headers=event.get("declared_headers"),
+            target_report=event.get("target_report"),
         )
     elif kind == "hook_chunk":
         return _apply_hook(conn, event)
