@@ -73,27 +73,48 @@ class TestQueueStore:
 
     def test_enqueue_batch_fsyncs_temp_then_directory_before_ack(self, tmp_path, monkeypatch):
         from brainlayer import queue_io
+
         calls = []
+        visibility = []
         original_fsync = queue_io.os.fsync
+
         def record_fsync(fd):
             calls.append(fd)
+            visibility.append((bool(list(tmp_path.glob("*.tmp"))), bool(list(tmp_path.glob("test-*.jsonl")))))
             return original_fsync(fd)
+
         monkeypatch.setattr(queue_io.os, "fsync", record_fsync)
         path = queue_io.enqueue_jsonl_batch([{"kind": "synthetic"}], source="test", queue_dir=tmp_path)
         assert path.exists()
         assert len(calls) == 2
+        assert visibility == [(True, False), (False, True)]
+        assert not list(tmp_path.glob("*.tmp"))
+
+    def test_enqueue_batch_file_fsync_failure_publishes_nothing(self, tmp_path, monkeypatch):
+        from brainlayer import queue_io
+
+        def fail_file_fsync(_fd):
+            raise OSError("file fsync failed")
+
+        monkeypatch.setattr(queue_io.os, "fsync", fail_file_fsync)
+        with pytest.raises(OSError, match="file fsync failed"):
+            queue_io.enqueue_jsonl_batch([{"kind": "synthetic"}], source="test", queue_dir=tmp_path)
+        assert not list(tmp_path.glob("test-*.jsonl"))
         assert not list(tmp_path.glob("*.tmp"))
 
     def test_enqueue_batch_keeps_published_file_when_directory_fsync_fails(self, tmp_path, monkeypatch):
         from brainlayer import queue_io
+
         calls = 0
         original_fsync = queue_io.os.fsync
+
         def fail_directory_fsync(fd):
             nonlocal calls
             calls += 1
             if calls == 2:
                 raise OSError("directory fsync failed")
             return original_fsync(fd)
+
         monkeypatch.setattr(queue_io.os, "fsync", fail_directory_fsync)
         with pytest.raises(OSError, match="directory fsync failed"):
             queue_io.enqueue_jsonl_batch([{"kind": "synthetic"}], source="test", queue_dir=tmp_path)

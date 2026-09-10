@@ -30,6 +30,14 @@ def enqueue_jsonl_batch(events: list[dict[str, Any]], *, source: str, queue_dir:
     if not events:
         raise ValueError("enqueue_jsonl_batch requires at least one event")
     resolved_dir = queue_dir or get_queue_dir()
+    missing_directories: list[Path] = []
+    probe = resolved_dir
+    while not probe.exists():
+        missing_directories.append(probe)
+        parent = probe.parent
+        if parent == probe:
+            break
+        probe = parent
     resolved_dir.mkdir(parents=True, exist_ok=True)
     now_ms = int(time.time() * 1000)
     queued_at = time.time()
@@ -53,11 +61,18 @@ def enqueue_jsonl_batch(events: list[dict[str, Any]], *, source: str, queue_dir:
             handle.flush()
             os.fsync(handle.fileno())
         tmp_path.replace(final_path)
-        directory_fd = os.open(resolved_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        directories_to_sync = [resolved_dir]
+        directories_to_sync.extend(directory.parent for directory in missing_directories)
+        seen_directories: set[Path] = set()
+        for directory in directories_to_sync:
+            if directory in seen_directories:
+                continue
+            seen_directories.add(directory)
+            directory_fd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
         return final_path
     finally:
         tmp_path.unlink(missing_ok=True)
