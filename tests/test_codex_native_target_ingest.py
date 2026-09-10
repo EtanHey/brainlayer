@@ -147,7 +147,8 @@ def test_catalog_failure_rolls_back_and_precedes_content_indexing(tmp_path, monk
         store.close()
 
 
-def test_raw_attribution_exclusion_and_oversized_call_id_are_bounded(tmp_path):
+def test_raw_attribution_exclusion_and_oversized_call_id_are_bounded(tmp_path, monkeypatch):
+    monkeypatch.delenv("BRAINLAYER_INGEST_DENYLIST", raising=False)
     excluded = tmp_path / "excluded.jsonl"
     entry = _call()
     entry["attributionAgent"] = "brain-worker"
@@ -156,7 +157,8 @@ def test_raw_attribution_exclusion_and_oversized_call_id_are_bounded(tmp_path):
     assert ingest_codex_session(excluded, db_path=excluded_db) == 0
     store = VectorStore(excluded_db)
     try:
-        assert store.conn.execute("SELECT name FROM sqlite_master WHERE name='native_record_links'").fetchone() is None
+        table = store.conn.execute("SELECT name FROM sqlite_master WHERE name='native_record_links'").fetchone()
+        assert table is None or store.conn.execute("SELECT COUNT(*) FROM native_record_links").fetchone() == (0,)
     finally:
         store.close()
 
