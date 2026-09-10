@@ -164,12 +164,13 @@ def _offline_snapshot(source: Path, target: Path) -> int:
 def _socket_snapshot(socket_path: Path, target: Path, generation: Path) -> int:
     # BrainBar resolves the request in a separate process; never send the
     # fchdir-bound relative paths used by the local writer.
-    target = target.expanduser().resolve()
-    generation = generation.expanduser().resolve()
+    local_target = target
+    outgoing_target = target.expanduser().resolve()
+    outgoing_generation = generation.expanduser().resolve()
     backup_daily.request_brainbar_vacuum_into(
-        target, socket_path=socket_path, max_attempts=1, attempt_dir=generation
+        outgoing_target, socket_path=socket_path, max_attempts=1, attempt_dir=outgoing_generation
     )
-    return backup_daily._validate_backup_target(target)
+    return backup_daily._validate_backup_target(local_target)
 
 
 def _run_backup_once_bound(

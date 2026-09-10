@@ -316,16 +316,22 @@ def test_destination_swap_after_bound_generation_keeps_failed_receipt(tmp_path, 
     assert "identity changed after generation" in receipt["error"]
 
 
-def test_socket_snapshot_sends_absolute_paths_across_process_boundary(tmp_path, monkeypatch):
+def test_socket_snapshot_serializes_absolute_paths_and_promotes_real_helper(tmp_path, monkeypatch):
     captured = {}
 
-    def fake_request(target, *, socket_path, max_attempts, attempt_dir):
-        captured.update(target=target, socket=socket_path, attempts=max_attempts, directory=attempt_dir)
+    def fake_send(socket_path, request, timeout_seconds):
+        captured.update(socket=socket_path, request=request, timeout=timeout_seconds)
+        target = Path(request["params"]["arguments"]["target_path"])
+        _fixture_db(target)
+        return {"result": {"content": [{"text": "ok"}]}}
 
-    monkeypatch.setattr(backup_run_once.backup_daily, "request_brainbar_vacuum_into", fake_request)
-    monkeypatch.setattr(backup_run_once.backup_daily, "_validate_backup_target", lambda target: 7)
+    monkeypatch.setattr(backup_run_once.backup_daily, "_send_brainbar_json_request", fake_send)
     monkeypatch.chdir(tmp_path)
-    assert backup_run_once._socket_snapshot(Path("/tmp/unused.sock"), Path("generation/db"), Path("generation")) == 7
-    assert captured["target"].is_absolute()
-    assert captured["directory"].is_absolute()
-    assert captured["target"].parent == captured["directory"]
+    local_target = Path("generation/db")
+    generation = Path("generation")
+    generation.mkdir()
+    assert backup_run_once._socket_snapshot(Path("/tmp/unused.sock"), local_target, generation) == 1
+    sent = Path(captured["request"]["params"]["arguments"]["target_path"])
+    assert sent.is_absolute()
+    assert sent.parent == (tmp_path / "generation").resolve()
+    assert (tmp_path / "generation" / "db").exists()
