@@ -48,11 +48,16 @@ struct KGAtlasPresentation {
         minimumImportance: Double,
         mode: KGAtlasMode = .importance,
         altitude: Double = Double(KGAltitudeTier.signal.rawValue),
+        nodeTypes: Set<String>? = nil,
+        relationTypes: Set<String>? = nil,
         userDefaults: UserDefaults = .standard
     ) -> Snapshot {
         let activeAltitudeTier = KGAltitudeTier.tier(at: altitude)
         let visibleAltitudeTiers = KGAltitudeTier.visibleTiers(at: altitude)
-        let visibleNodes = nodes.filter { node in
+        let typeFilteredNodes = nodes.filter { node in
+            nodeTypes?.contains(node.entityType) ?? true
+        }
+        let visibleNodes = typeFilteredNodes.filter { node in
             switch mode {
             case .importance:
                 node.importance >= minimumImportance
@@ -69,7 +74,11 @@ struct KGAtlasPresentation {
         let renderableNodes = regions.flatMap { $0.nodes }
         let renderableIDs = Set(renderableNodes.map(\.id))
         let visibleEdges = virtualizedVisibleEdges(
-            from: edges.filter { renderableIDs.contains($0.sourceId) && renderableIDs.contains($0.targetId) },
+            from: edges.filter { edge in
+                (relationTypes?.contains(edge.relationType) ?? true)
+                    && renderableIDs.contains(edge.sourceId)
+                    && renderableIDs.contains(edge.targetId)
+            },
             maxLinksPerNode: maxLinksPerNode(from: userDefaults),
             selectedNodeId: selectedNodeId
         )
@@ -85,6 +94,18 @@ struct KGAtlasPresentation {
             selectedRegion: selectedRegion,
             activeAltitudeTier: activeAltitudeTier
         )
+    }
+
+    static func availableNodeTypes(in nodes: [KGNode]) -> [String] {
+        Array(Set(nodes.map(\.entityType))).sorted { lhs, rhs in
+            lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+        }
+    }
+
+    static func availableRelationTypes(in edges: [KGEdge]) -> [String] {
+        Array(Set(edges.map(\.relationType))).sorted { lhs, rhs in
+            lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+        }
     }
 
     static func title(for entityType: String) -> String {
@@ -287,7 +308,8 @@ struct KGAtlasPresentation {
         switch mode {
         case .importance:
             let grouped = Dictionary(grouping: visibleNodes, by: \.entityType)
-            return orderedEntityTypes.compactMap { entityType in
+            let extraTypes = Set(grouped.keys).subtracting(orderedEntityTypes).sorted()
+            return (orderedEntityTypes + extraTypes).compactMap { entityType in
                 guard let values = grouped[entityType], !values.isEmpty else { return nil }
                 return Region(
                     entityType: entityType,

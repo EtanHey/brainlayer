@@ -31,6 +31,9 @@ struct KGCanvasView: View {
     @State private var canvasSize: CGSize = .zero
     @State private var minimumImportance: Double = 6
     @State private var altitudeLevel: Double = Double(KGAltitudeTier.signal.rawValue)
+    // nil means all available types; an empty set deliberately renders none.
+    @State private var selectedNodeTypes: Set<String>? = ["person", "project"]
+    @State private var selectedRelationTypes: Set<String>?
     @State private var hasLoadedGraph = false
     @State private var simulationController = KGSimulationController()
     @State private var isFindPresented: Bool
@@ -63,7 +66,9 @@ struct KGCanvasView: View {
             selectedNodeId: viewModel.selectedNodeId,
             minimumImportance: minimumImportance,
             mode: viewModel.layoutMode,
-            altitude: altitudeLevel
+            altitude: altitudeLevel,
+            nodeTypes: selectedNodeTypes,
+            relationTypes: selectedRelationTypes
         )
     }
 
@@ -157,6 +162,12 @@ struct KGCanvasView: View {
             }
             .onChange(of: viewModel.layoutMode) { _, _ in
                 startSimulation()
+            }
+            .onChange(of: atlas.visibleNodes.map(\.id)) { _, _ in
+                clearSelectionIfHidden(in: atlas)
+            }
+            .onChange(of: viewModel.selectedNodeId) { _, _ in
+                clearSelectionIfHidden(in: atlas)
             }
             .onChange(of: viewModel.isLayoutPinned) { _, pinned in
                 if !pinned {
@@ -333,6 +344,8 @@ struct KGCanvasView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("knowledge-graph-mode-effect")
 
+            graphTypeFilters
+
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text(viewModel.layoutMode == .importance ? "Minimum importance" : "Altitude")
@@ -372,6 +385,65 @@ struct KGCanvasView: View {
         .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .onTapGesture {}
         .simultaneousGesture(toolbarInteractionGesture)
+    }
+
+    private var graphTypeFilters: some View {
+        HStack(spacing: 8) {
+            typeFilterMenu(
+                title: "Entities",
+                availableTypes: KGAtlasPresentation.availableNodeTypes(in: viewModel.nodes),
+                selection: $selectedNodeTypes
+            )
+            typeFilterMenu(
+                title: "Relations",
+                availableTypes: KGAtlasPresentation.availableRelationTypes(in: viewModel.edges),
+                selection: $selectedRelationTypes
+            )
+        }
+    }
+
+    private func typeFilterMenu(
+        title: String,
+        availableTypes: [String],
+        selection: Binding<Set<String>?>
+    ) -> some View {
+        Menu("\(title): \(filterSummary(selection.wrappedValue, availableTypes: availableTypes))") {
+            Button("All") { selection.wrappedValue = nil }
+            Button("None") { selection.wrappedValue = [] }
+            Divider()
+            ForEach(availableTypes, id: \.self) { type in
+                Toggle(type, isOn: Binding(
+                    get: { selection.wrappedValue?.contains(type) ?? true },
+                    set: { enabled in
+                        var selected = selection.wrappedValue ?? Set(availableTypes)
+                        if enabled {
+                            selected.insert(type)
+                        } else {
+                            selected.remove(type)
+                        }
+                        selection.wrappedValue = selected
+                    }
+                ))
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .accessibilityLabel("\(title) type filter")
+    }
+
+    private func filterSummary(_ selection: Set<String>?, availableTypes: [String]) -> String {
+        guard let selection else { return "All" }
+        if selection.isEmpty { return "None" }
+        let available = Set(availableTypes)
+        if selection == available { return "All" }
+        return "\(selection.intersection(available).count)"
+    }
+
+    private func clearSelectionIfHidden(in snapshot: KGAtlasPresentation.Snapshot) {
+        guard let selectedNodeId = viewModel.selectedNodeId,
+              !snapshot.visibleNodes.contains(where: { $0.id == selectedNodeId }) else {
+            return
+        }
+        viewModel.selectNode(id: nil)
     }
 
     private func atlasOverview(snapshot: KGAtlasPresentation.Snapshot) -> some View {

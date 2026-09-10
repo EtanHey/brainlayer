@@ -239,6 +239,66 @@ final class KGAtlasPresentationTests: XCTestCase {
         XCTAssertEqual(snapshot.visibleEdges.map(\.targetId), ["project-1", "project-2"])
     }
 
+    func testTypeFiltersProjectNodesThenRelationsWithoutDanglingEdges() {
+        let nodes = [
+            KGNode(id: "person", name: "Etan", entityType: "person", importance: 10, position: .zero),
+            KGNode(id: "project", name: "BrainLayer", entityType: "project", importance: 8, position: .zero),
+            KGNode(id: "tool", name: "MCP", entityType: "tool", importance: 7, position: .zero),
+        ]
+        let edges = [
+            KGEdge(sourceId: "person", targetId: "project", relationType: "builds"),
+            KGEdge(sourceId: "person", targetId: "project", relationType: "uses"),
+            KGEdge(sourceId: "project", targetId: "tool", relationType: "uses"),
+            KGEdge(sourceId: "person", targetId: "tool", relationType: "uses"),
+        ]
+
+        let snapshot = KGAtlasPresentation.snapshot(
+            nodes: nodes,
+            edges: edges,
+            selectedNodeId: "tool",
+            minimumImportance: 0,
+            nodeTypes: ["person", "project"],
+            relationTypes: ["uses"],
+            userDefaults: testUserDefaults
+        )
+
+        XCTAssertEqual(snapshot.visibleNodes.map(\.id), ["person", "project"])
+        XCTAssertEqual(snapshot.visibleEdges.map(\.id), ["person-uses-project"])
+        XCTAssertNil(snapshot.selectedRegion)
+    }
+
+    func testEmptyTypeSelectionIsDistinctFromAllTypes() {
+        let nodes = [
+            KGNode(id: "person", name: "Etan", entityType: "person", importance: 10, position: .zero),
+            KGNode(id: "project", name: "BrainLayer", entityType: "project", importance: 8, position: .zero),
+        ]
+        let edges = [KGEdge(sourceId: "person", targetId: "project", relationType: "builds")]
+
+        let all = KGAtlasPresentation.snapshot(
+            nodes: nodes,
+            edges: edges,
+            selectedNodeId: nil,
+            minimumImportance: 0,
+            nodeTypes: nil,
+            relationTypes: nil,
+            userDefaults: testUserDefaults
+        )
+        let none = KGAtlasPresentation.snapshot(
+            nodes: nodes,
+            edges: edges,
+            selectedNodeId: nil,
+            minimumImportance: 0,
+            nodeTypes: [],
+            relationTypes: nil,
+            userDefaults: testUserDefaults
+        )
+
+        XCTAssertEqual(all.visibleNodes.map(\.id), ["person", "project"])
+        XCTAssertEqual(all.visibleEdges.map(\.id), ["person-builds-project"])
+        XCTAssertTrue(none.visibleNodes.isEmpty)
+        XCTAssertTrue(none.visibleEdges.isEmpty)
+    }
+
     private func makeHubGraph(edgeCount: Int) -> (nodes: [KGNode], edges: [KGEdge]) {
         let hub = KGNode(
             id: "hub",
