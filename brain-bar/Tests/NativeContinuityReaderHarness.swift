@@ -22,9 +22,10 @@ struct NativeContinuityReaderHarness {
         defer { sqlite3_close(db) }
         exec("CREATE TABLE native_record_links(record_key TEXT PRIMARY KEY,provider TEXT,session_id TEXT,source_file TEXT,record_start_offset INTEGER,record_end_offset INTEGER,raw_record_hash TEXT,native_uuid TEXT,parent_uuid_state TEXT,parent_uuid_value TEXT,logical_parent_uuid_state TEXT,logical_parent_uuid_value TEXT,declared_headers_json TEXT,preserved_segment_json TEXT,preserved_segment_sha256 TEXT,preserved_segment_omitted INTEGER)")
         exec("CREATE INDEX idx_native_record_links_physical ON native_record_links(provider,session_id,source_file,record_start_offset,record_end_offset,raw_record_hash)")
-        exec("CREATE INDEX idx_native_record_links_uuid ON native_record_links(provider,session_id,source_file,native_uuid,record_start_offset)")
+        exec("CREATE INDEX idx_native_record_links_uuid ON native_record_links(provider,session_id,native_uuid,source_file,record_start_offset,record_key)")
         insert("child", "string", "root", start: 10, hash: "a")
         insert("root", "null", nil, start: 5, hash: "b")
+        exec("ANALYZE native_record_links")
         let chain = NativeContinuityReader.read(db: db, provider: "claude", sessionID: "s", sourceFile: "/a", startOffset: 10, endOffset: 11, rawRecordHash: "a")
         check(chain.status == "native_chain_root" && chain.hops.count == 2 && chain.originalStartOffset == nil, "positive chain")
         let encoded = try! JSONSerialization.jsonObject(with: JSONEncoder().encode(chain)) as! [String: Any]
@@ -53,16 +54,18 @@ struct NativeContinuityReaderHarness {
         check(NativeContinuityReader.read(db: db, provider: "claude", sessionID: "s", sourceFile: longSource, startOffset: 60, endOffset: 61, rawRecordHash: "o").status == "response_byte_cap", "response cap")
         exec("DROP INDEX idx_native_record_links_uuid")
         check(NativeContinuityReader.read(db: db, provider: "claude", sessionID: "s", sourceFile: "/a", startOffset: 10, endOffset: 11, rawRecordHash: "a").status == "missing_uuid_index", "uuid index guard")
-        exec("CREATE INDEX idx_native_record_links_uuid ON native_record_links(provider,session_id,source_file,native_uuid,record_start_offset)")
+        exec("CREATE INDEX idx_native_record_links_uuid ON native_record_links(provider,session_id,native_uuid,source_file,record_start_offset,record_key)")
         exec("DROP INDEX idx_native_record_links_physical")
         check(NativeContinuityReader.read(db: db, provider: "claude", sessionID: "s", sourceFile: "/a", startOffset: 10, endOffset: 11, rawRecordHash: "a").status == "missing_physical_index", "index guard")
+        exec("CREATE INDEX idx_native_record_links_physical ON native_record_links(provider,session_id,source_file,record_start_offset,raw_record_hash,record_end_offset)")
+        check(NativeContinuityReader.read(db: db, provider: "claude", sessionID: "s", sourceFile: "/a", startOffset: 10, endOffset: 11, rawRecordHash: "a").status == "missing_physical_index", "wrong index definition guard")
         check(sqlite3_close(db) == SQLITE_OK, "close")
         db = nil
         check(sqlite3_open(":memory:", &db) == SQLITE_OK, "reopen")
         check(NativeContinuityReader.read(db: db, provider: "claude", sessionID: "s", sourceFile: "/a", startOffset: 1, endOffset: 2, rawRecordHash: "z").status == "legacy_schema_unavailable", "legacy schema")
-        exec("CREATE TABLE native_record_links(provider TEXT,session_id TEXT,source_file TEXT,record_start_offset INTEGER,record_end_offset INTEGER,raw_record_hash TEXT,native_uuid TEXT)")
+        exec("CREATE TABLE native_record_links(record_key TEXT,provider TEXT,session_id TEXT,source_file TEXT,record_start_offset INTEGER,record_end_offset INTEGER,raw_record_hash TEXT,native_uuid TEXT)")
         exec("CREATE INDEX idx_native_record_links_physical ON native_record_links(provider,session_id,source_file,record_start_offset,record_end_offset,raw_record_hash)")
-        exec("CREATE INDEX idx_native_record_links_uuid ON native_record_links(provider,session_id,source_file,native_uuid)")
+        exec("CREATE INDEX idx_native_record_links_uuid ON native_record_links(provider,session_id,native_uuid,source_file,record_start_offset,record_key)")
         check(NativeContinuityReader.read(db: db, provider: "claude", sessionID: "s", sourceFile: "/a", startOffset: 1, endOffset: 2, rawRecordHash: "z").status == "database_error", "sql error is explicit")
         print("native continuity harness: PASS")
     }

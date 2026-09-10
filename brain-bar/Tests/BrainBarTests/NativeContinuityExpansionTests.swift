@@ -49,6 +49,18 @@ final class NativeContinuityExpansionTests: XCTestCase {
         XCTAssertNil(continuity["provider"])
     }
 
+    func testExpandForcesRequiredIndexesWhenAnalyzedTinyCatalogWouldPreferScan() throws {
+        try db.insertChunk(id: "short-indexed", content: "target", sessionId: "s", project: "t", contentType: "assistant_text", importance: 1)
+        try schema()
+        try record("indexed-record", "short-indexed", "/a", 10, "h-child")
+        try native("indexed-child", "/a", 10, "h-child", "child", "string", "root")
+        try native("indexed-control", "/a", 1, "h-root", "root", "null")
+        try sql("ANALYZE native_record_links")
+
+        let continuity = try XCTUnwrap((try occurrence("short-indexed"))["structural_continuity"] as? [String: Any])
+        XCTAssertEqual(continuity["status"] as? String, "native_chain_root")
+    }
+
     func testExpandMarksUnavailableAndDisputedContinuityWithoutFabricatingProvider() throws {
         try db.insertChunk(id: "short-two", content: "target", sessionId: "s", project: "t", contentType: "assistant_text", importance: 1)
         try schema(); try record("no-catalog", "short-two", "/a", 10, "h-none")
