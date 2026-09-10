@@ -88,6 +88,9 @@ def run_backup_once(
             else _offline_snapshot(Path(offline_db_path), raw_db)
         )
         _fsync_file(raw_db)
+        integrity = backup_daily._sqlite_pragma_check(raw_db, "quick_check")
+        if integrity != "ok":
+            raise BackupRunOnceError(f"SQLite quick_check failed: {integrity}")
         candidates = jsonl_backup._discover_jsonl_candidates(transcript_roots)
         if not candidates:
             raise BackupRunOnceError("no explicitly wired transcript roots produced candidates")
@@ -106,6 +109,7 @@ def run_backup_once(
             "db_source_mode": db_source,
             "db_snapshot": raw_db.name,
             "db_snapshot_chunks": chunks,
+            "db_quick_check": integrity,
             "jsonl_bundle": archive.name,
             "jsonl_file_count": len(candidates),
             "local_verified": True,
