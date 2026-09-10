@@ -88,25 +88,6 @@ def test_run_once_rejects_corrupt_db_before_complete_receipt_with_real_quick_che
     assert not (generation / "receipt.complete.json").exists()
 
 
-def test_run_once_rejects_corrupt_db_before_complete_receipt(tmp_path, monkeypatch):
-    db = tmp_path / "fixture.db"
-    _fixture_db(db)
-    destination = tmp_path / "backups"
-    destination.mkdir()
-    monkeypatch.setattr(backup_run_once.backup_daily, "_sqlite_pragma_check", lambda *_: "*** in database main ***")
-    with pytest.raises(backup_run_once.BackupRunOnceError, match="quick_check failed"):
-        backup_run_once.run_backup_once(
-            destination=destination,
-            offline_db_path=db,
-            transcript_roots=_root(tmp_path),
-            generation_id="corrupt",
-            now=__import__("datetime").datetime(2026, 1, 1, tzinfo=__import__("datetime").timezone.utc),
-        )
-    generation = next(destination.glob(".brainlayer-backup-*-corrupt"))
-    receipt = json.loads((generation / "receipt.incomplete.json").read_text())
-    assert receipt["status"] == "failed" and not (generation / "receipt.complete.json").exists()
-
-
 def test_run_once_failure_keeps_incomplete_receipt_and_partial_artifacts(tmp_path, monkeypatch):
     db = tmp_path / "fixture.db"
     _fixture_db(db)
@@ -132,3 +113,74 @@ def test_run_once_failure_keeps_incomplete_receipt_and_partial_artifacts(tmp_pat
         and not (generation / "receipt.complete.json").exists()
         and (generation / "brainlayer.db").is_file()
     )
+
+
+def test_run_once_rejects_missing_root_and_outside_symlink(tmp_path):
+    db = tmp_path / "fixture.db"
+    _fixture_db(db)
+    destination = tmp_path / "backups"
+    destination.mkdir()
+    missing = tmp_path / "missing"
+    with pytest.raises(backup_run_once.BackupRunOnceError, match="transcript root"):
+        backup_run_once.run_backup_once(
+            destination=destination, offline_db_path=db, transcript_roots=[tmp_path / "projects", missing]
+        )
+    root = tmp_path / "projects"
+    root.mkdir()
+    outside = tmp_path / "outside.jsonl"
+    outside.write_text("outside")
+    (root / "escape.jsonl").symlink_to(outside)
+    with pytest.raises(backup_run_once.BackupRunOnceError, match="symlink"):
+        backup_run_once.run_backup_once(
+            destination=destination, offline_db_path=db, transcript_roots=[root], generation_id="escape"
+        )
+
+
+def test_run_once_binds_destination_identity_and_records_digests(tmp_path):
+    db = tmp_path / "fixture.db"
+    _fixture_db(db)
+    destination = tmp_path / "backups"
+    destination.mkdir()
+    roots = _root(tmp_path)
+    identity = (destination.stat().st_dev, destination.stat().st_ino)
+    result = backup_run_once.run_backup_once(
+        destination=destination,
+        offline_db_path=db,
+        transcript_roots=roots,
+        generation_id="identity",
+        expected_destination_identity=identity,
+    )
+    assert result["destination_identity"] == {"st_dev": identity[0], "st_ino": identity[1]}
+    assert len(result["db_snapshot_sha256"]) == 64 and len(result["jsonl_bundle_sha256"]) == 64
+    with pytest.raises(backup_run_once.BackupRunOnceError, match="identity changed"):
+        backup_run_once.run_backup_once(
+            destination=destination,
+            offline_db_path=db,
+            transcript_roots=roots,
+            generation_id="mismatch",
+            expected_destination_identity=(identity[0], identity[1] + 1),
+        )
+
+
+def test_run_once_preserves_primary_error_when_failure_receipt_fails(tmp_path, monkeypatch):
+    db = tmp_path / "fixture.db"
+    _fixture_db(db)
+    destination = tmp_path / "backups"
+    destination.mkdir()
+    original = backup_run_once._atomic_json
+
+    def fail_failed_receipt(path, payload):
+        if payload.get("status") == "failed":
+            raise OSError("receipt finalizer failed")
+        return original(path, payload)
+
+    monkeypatch.setattr(
+        backup_run_once.backup_daily,
+        "_validate_backup_target",
+        lambda _: (_ for _ in ()).throw(RuntimeError("primary failure")),
+    )
+    monkeypatch.setattr(backup_run_once, "_atomic_json", fail_failed_receipt)
+    with pytest.raises(RuntimeError, match="primary failure"):
+        backup_run_once.run_backup_once(
+            destination=destination, offline_db_path=db, transcript_roots=_root(tmp_path), generation_id="primary"
+        )
