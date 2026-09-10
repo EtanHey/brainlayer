@@ -211,6 +211,11 @@ def _offline_snapshot(
     try:
         busy_timeout = min(5.0, total_deadline_seconds, stalled_progress_seconds)
         source_db = sqlite3.connect(source_uri, uri=True, timeout=busy_timeout)
+        try:
+            source_db.execute("BEGIN")
+            source_db.execute("SELECT count(*) FROM sqlite_schema").fetchone()
+        except sqlite3.Error as exc:
+            raise BackupRunOnceError(f"offline SQLite read snapshot acquisition failed: {exc}") from exc
         target_db = sqlite3.connect(str(target), timeout=busy_timeout)
         source_db.backup(target_db, pages=1000, sleep=0.01, progress=progress)
     except BaseException as exc:

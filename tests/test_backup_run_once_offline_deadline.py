@@ -1,5 +1,10 @@
+import hashlib
 import json
+import os
+import signal
 import sqlite3
+import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -68,7 +73,7 @@ def test_offline_snapshot_succeeds_when_real_writer_lock_releases(tmp_path):
         assert connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
 
 
-def test_run_once_real_writer_lock_deadline_records_compact_failed_receipt(tmp_path, monkeypatch):
+def test_run_once_real_writer_lock_records_snapshot_acquisition_failure(tmp_path, monkeypatch):
     source = tmp_path / "source.db"
     _source_db(source)
     destination = tmp_path / "backups"
@@ -87,7 +92,7 @@ def test_run_once_real_writer_lock_deadline_records_compact_failed_receipt(tmp_p
 
     monkeypatch.setattr(backup_run_once, "_offline_snapshot", short_deadline)
     try:
-        with pytest.raises(backup_run_once.BackupRunOnceError, match="offline SQLite backup stalled"):
+        with pytest.raises(backup_run_once.BackupRunOnceError, match="read snapshot acquisition failed"):
             backup_run_once.run_backup_once(
                 destination=destination,
                 transcript_roots=[root],
@@ -104,14 +109,14 @@ def test_run_once_real_writer_lock_deadline_records_compact_failed_receipt(tmp_p
     receipt = json.loads((generation / "receipt.incomplete.json").read_text())
     assert receipt["status"] == "failed"
     assert receipt["error_type"] == "BackupRunOnceError"
-    assert "status=SQLITE_BUSY" in receipt["error"]
-    assert "busy=" in receipt["error"]
-    assert "restarts=0" in receipt["error"]
+    assert "read snapshot acquisition failed" in receipt["error"]
+    assert "backup stalled" not in receipt["error"]
     assert len(receipt["error"]) < 300
     assert not (generation / "receipt.complete.json").exists()
-    with sqlite3.connect(generation / "brainlayer.db", timeout=0) as target_connection:
-        target_connection.execute("BEGIN EXCLUSIVE")
-        target_connection.rollback()
+    assert not (generation / "brainlayer.db").exists()
+    with sqlite3.connect(source, timeout=0) as source_connection:
+        source_connection.execute("BEGIN EXCLUSIVE")
+        source_connection.rollback()
 
 
 def test_offline_snapshot_source_restarts_still_hit_total_deadline_and_close_connections(tmp_path, monkeypatch):
@@ -119,6 +124,12 @@ def test_offline_snapshot_source_restarts_still_hit_total_deadline_and_close_con
         def __init__(self, source: bool) -> None:
             self.source = source
             self.closed = False
+
+        def execute(self, _sql):
+            return self
+
+        def fetchone(self):
+            return (2,)
 
         def backup(self, _target, *, pages, sleep, progress):
             assert pages == 1000 and sleep == 0.01
@@ -151,3 +162,96 @@ def test_offline_snapshot_source_restarts_still_hit_total_deadline_and_close_con
     assert "restarts=1" in message
     assert "busy=0 locked=0" in message
     assert source_connection.closed and target_connection.closed
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _readonly_wal_source(root: Path) -> tuple[Path, dict[str, str]]:
+    source_dir = root / "readonly-wal"
+    source_dir.mkdir()
+    source = source_dir / "source.db"
+    connection = sqlite3.connect(source)
+    try:
+        assert connection.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+        connection.execute("CREATE TABLE chunks (id INTEGER PRIMARY KEY, content TEXT)")
+        connection.execute("INSERT INTO chunks(content) VALUES ('synthetic fixture')")
+        connection.execute("CREATE TABLE padding(payload BLOB)")
+        connection.executemany("INSERT INTO padding(payload) VALUES(?)", ((b"x" * 3000,) for _ in range(3000)))
+        connection.commit()
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        assert connection.execute("PRAGMA page_count").fetchone()[0] > 2000
+        wal = Path(str(source) + "-wal")
+        shm = Path(str(source) + "-shm")
+        wal_bytes = wal.read_bytes()
+        shm_bytes = shm.read_bytes()
+    finally:
+        connection.close()
+    wal.write_bytes(wal_bytes)
+    shm.write_bytes(shm_bytes)
+    files = (source, wal, shm)
+    for item in files:
+        item.chmod(0o444)
+    source_dir.chmod(0o555)
+    return source, {item.name: _sha256(item) for item in files}
+
+
+def test_offline_snapshot_pins_readonly_wal_source_before_backup_steps(tmp_path):
+    source, before = _readonly_wal_source(tmp_path)
+    source_dir = source.parent
+    old_target = tmp_path / "old-unpinned.db"
+    progress_path = tmp_path / "old-progress.json"
+    old_code = r"""
+import json, os, sqlite3, sys
+from pathlib import Path
+source, target, progress_path = map(Path, sys.argv[1:])
+state = {"calls": 0, "first_remaining": None, "last_remaining": None, "statuses": {}}
+def progress(status, remaining, total):
+    state["calls"] += 1
+    state["first_remaining"] = remaining if state["first_remaining"] is None else state["first_remaining"]
+    state["last_remaining"] = remaining
+    name = {0: "SQLITE_OK", 5: "SQLITE_BUSY", 6: "SQLITE_LOCKED", 101: "SQLITE_DONE"}.get(status, str(status))
+    state["statuses"][name] = state["statuses"].get(name, 0) + 1
+    if state["calls"] % 100 == 0:
+        temporary = progress_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(state, sort_keys=True) + "\n")
+        os.replace(temporary, progress_path)
+source_db = sqlite3.connect(f"file:{source}?mode=ro", uri=True, timeout=0.05)
+target_db = sqlite3.connect(target, timeout=0.05)
+source_db.backup(target_db, pages=1000, sleep=0.01, progress=progress)
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-I", "-B", "-c", old_code, str(source), str(old_target), str(progress_path)],
+        start_new_session=True,
+    )
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            process.wait(timeout=1)
+        os.killpg(process.pid, signal.SIGTERM)
+        process.wait(timeout=1)
+        old_progress = json.loads(progress_path.read_text())
+        assert process.returncode == -signal.SIGTERM
+        assert old_progress["calls"] >= 100
+        assert old_progress["statuses"] == {"SQLITE_OK": old_progress["calls"]}
+        assert old_progress["first_remaining"] == old_progress["last_remaining"]
+
+        target = tmp_path / "pinned.db"
+        assert (
+            backup_run_once._offline_snapshot(
+                source,
+                target,
+                total_deadline_seconds=2,
+                stalled_progress_seconds=0.5,
+            )
+            == 1
+        )
+        with sqlite3.connect(f"file:{target}?mode=ro", uri=True) as target_connection:
+            assert target_connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        after = {item.name: _sha256(item) for item in (source, Path(str(source) + "-wal"), Path(str(source) + "-shm"))}
+        assert after == before
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=1)
+        source_dir.chmod(0o755)
