@@ -61,6 +61,12 @@ final class BrainBarSettingsViewModel: ObservableObject {
         }
     }
 
+    var scheduledSourceBindingSummary: String {
+        config.backupScheduledOfflineSourceBinding == nil
+            ? "Not configured — scheduled backup will refuse"
+            : "Saved connection binding — validated when scheduled backup runs"
+    }
+
     func setEnrichmentEnabled(_ enabled: Bool) {
         updateConfig { $0.enrichmentEnabled = enabled }
     }
@@ -195,7 +201,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         }
     }
 
-    func refreshLaunchdStatus() {
+    func refreshLaunchdStatus(forceBackupProviderRetry: Bool = false) {
         isRefreshingLaunchdStatus = true
         let provider = launchdStatusProvider
         Task {
@@ -205,6 +211,10 @@ final class BrainBarSettingsViewModel: ObservableObject {
             applyLaunchdStates(states)
             activeRuntimeObservation = runtimeStatusProvider.sample()
             refreshLastSaveReceiptActiveState()
+            backupCoordinator.refreshScheduledStatus(
+                config: config,
+                forceProviderRetry: forceBackupProviderRetry
+            )
             isRefreshingLaunchdStatus = false
         }
     }
@@ -485,7 +495,7 @@ struct BrainBarSettingsView: View {
             }
             Spacer()
             Button {
-                viewModel.refreshLaunchdStatus()
+                viewModel.refreshLaunchdStatus(forceBackupProviderRetry: true)
             } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
@@ -614,9 +624,7 @@ struct BrainBarSettingsView: View {
             settingsTruthRow(label: "Configuration", value: viewModel.config.backupConfigurationState.title)
             settingsTruthRow(
                 label: "Scheduled source",
-                value: viewModel.config.backupScheduledOfflineSourceBinding == nil
-                    ? "Not configured — scheduled backup will refuse"
-                    : "Bound to current BrainDatabase connection"
+                value: viewModel.scheduledSourceBindingSummary
             )
             settingsTruthRow(label: "Run", value: viewModel.backupRunStatus.title)
             settingsTruthRow(

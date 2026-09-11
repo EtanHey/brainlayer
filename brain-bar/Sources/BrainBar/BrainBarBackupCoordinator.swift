@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 
@@ -174,13 +175,37 @@ final class BrainLayerBackupCoordinator: ObservableObject {
             switch self {
             case .idle: "Not run"
             case .running: "Running"
-            case let .localVerified(receipt): "Local backup verified — \(receipt)"
+            case .localVerified: "Saved locally"
             case let .schedulerObserved(status, detail):
-                detail.map { "Scheduled backup \(status) — \($0)" } ?? "Scheduled backup \(status)"
-            case let .providerObserved(_, providerReceipt, state):
-                "Local backup verified; provider \(state.rawValue), remote unverified — \(providerReceipt)"
+                Self.schedulerTitle(status: status, detail: detail)
+            case let .providerObserved(_, _, state):
+                switch state {
+                case .staged:
+                    "Saved locally"
+                case .uploadPending:
+                    "Waiting for iCloud upload"
+                case .uploadedOSReported:
+                    "iCloud reports upload complete; not independently verified"
+                case .failed:
+                    "iCloud provider check failed"
+                }
             case let .failed(message): "Backup failed — \(message)"
             }
+        }
+
+        private static func schedulerTitle(status: String, detail: String?) -> String {
+            let title = switch status {
+            case "disabled": "Scheduled backup disabled"
+            case "not_run": "Scheduled backup has not run"
+            case "not_due": "Scheduled backup waiting for its next run"
+            case "busy": "Scheduled backup is already running"
+            case "refused": "Scheduled backup needs attention"
+            case "failed": "Scheduled backup failed"
+            case "destination_changed": "Backup destination changed"
+            default: "Scheduled backup status unavailable"
+            }
+            guard let detail, !detail.isEmpty else { return title }
+            return "\(title) — \(detail)"
         }
     }
 
@@ -194,8 +219,17 @@ final class BrainLayerBackupCoordinator: ObservableObject {
     private let stateURL: URL
     private let scheduledStateURL: URL
     private let now: @Sendable () -> Date
+    private struct ScheduledObservationKey: Equatable {
+        let stateSHA256: String
+        let receipt: String
+        let destinationPath: String
+        let destinationIdentity: BrainLayerBackupDestinationIdentity
+    }
+
     private var task: Task<Void, Never>?
     private var activeRunID: UUID?
+    private var lastScheduledObservationKey: ScheduledObservationKey?
+    private var lastScheduledObservationStatus: Status?
     private var statusObservers: [UUID: @MainActor (Status) -> Void] = [:]
 
     init(
@@ -238,24 +272,30 @@ final class BrainLayerBackupCoordinator: ObservableObject {
     /// Compatibility entry point used by the app launch path. The durable Python
     /// scheduler is the sole automatic trigger; this method only reconciles its
     /// persisted result and observes an already completed local receipt.
-    func startScheduledIfDue(configURL: URL = BrainLayerConfigStore.defaultConfigURL()) {
+    func startScheduledIfDue(
+        configURL: URL = BrainLayerConfigStore.defaultConfigURL(),
+        forceProviderRetry: Bool = false
+    ) {
         do {
             let config = try BrainLayerConfigStore(configURL: configURL).loadDocument().config
-            refreshScheduledStatus(config: config)
+            refreshScheduledStatus(config: config, forceProviderRetry: forceProviderRetry)
         } catch {
             publish(.failed(message: "Could not load backup configuration: \(error)"), to: { _ in })
         }
     }
 
-    func refreshScheduledStatus(config: BrainLayerConfig) {
+    func refreshScheduledStatus(config: BrainLayerConfig, forceProviderRetry: Bool = false) {
         guard task == nil else { return }
         guard config.backupEnabled else {
             publish(.schedulerObserved(status: "disabled", detail: "backup disabled"), to: { _ in })
             return
         }
         let object: [String: Any]
+        let stateSHA256: String
         do {
-            let data = try Data(contentsOf: scheduledStateURL)
+            let handle = try FileHandle(forReadingFrom: scheduledStateURL)
+            defer { try? handle.close() }
+            let data = try handle.read(upToCount: Self.statusMessageLimit + 1) ?? Data()
             guard data.count <= Self.statusMessageLimit,
                   let decoded = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let version = decoded["version"] as? NSNumber,
@@ -270,6 +310,9 @@ final class BrainLayerBackupCoordinator: ObservableObject {
                 )
             }
             object = decoded
+            stateSHA256 = Data(SHA256.hash(data: data))
+                .map { String(format: "%02x", $0) }
+                .joined()
         } catch CocoaError.fileReadNoSuchFile {
             publish(.schedulerObserved(status: "not_run", detail: nil), to: { _ in })
             return
@@ -286,15 +329,43 @@ final class BrainLayerBackupCoordinator: ObservableObject {
         if ["local_verified", "not_due"].contains(scheduledStatus),
            let receipt,
            !receipt.isEmpty,
-           let destinationPath = config.backupDestinationPath {
-            observeScheduledReceipt(receipt, destinationPath: destinationPath)
+           let destinationPath = config.backupDestinationPath,
+           let expectedIdentity = config.backupDestinationIdentity {
+            guard let currentIdentity = BrainLayerBackupDestinationIdentity(path: destinationPath),
+                  currentIdentity == expectedIdentity else {
+                publish(
+                    .schedulerObserved(
+                        status: "destination_changed",
+                        detail: "saved destination identity is not current"
+                    ),
+                    to: { _ in }
+                )
+                return
+            }
+            let key = ScheduledObservationKey(
+                stateSHA256: stateSHA256,
+                receipt: receipt,
+                destinationPath: URL(fileURLWithPath: destinationPath).standardizedFileURL.path,
+                destinationIdentity: currentIdentity
+            )
+            if !forceProviderRetry,
+               key == lastScheduledObservationKey,
+               let cached = lastScheduledObservationStatus {
+                publish(cached, to: { _ in })
+                return
+            }
+            observeScheduledReceipt(receipt, destinationPath: destinationPath, observationKey: key)
             return
         }
         let detail = (object["reason"] as? String) ?? (object["error"] as? String)
         publish(.schedulerObserved(status: scheduledStatus, detail: detail), to: { _ in })
     }
 
-    private func observeScheduledReceipt(_ receipt: String, destinationPath: String) {
+    private func observeScheduledReceipt(
+        _ receipt: String,
+        destinationPath: String,
+        observationKey: ScheduledObservationKey
+    ) {
         publish(.running, to: { _ in })
         let runID = UUID()
         activeRunID = runID
@@ -318,23 +389,29 @@ final class BrainLayerBackupCoordinator: ObservableObject {
                         userInfo: [NSLocalizedDescriptionKey: "provider attempted to authorize unverified cleanup"]
                     )
                 }
+                let observedStatus: Status
                 if providerReceipt.state == .failed {
-                    publish(
-                        .failed(message: providerReceipt.failureReason ?? "provider verification failed"),
-                        to: { _ in }
+                    observedStatus = .failed(
+                        message: providerReceipt.failureReason ?? "provider verification failed"
                     )
                 } else {
-                    publish(.providerObserved(
+                    observedStatus = .providerObserved(
                         localReceipt: receipt,
                         providerReceipt: providerReceiptURL.path,
                         state: providerReceipt.state
-                    ), to: { _ in })
+                    )
                 }
+                lastScheduledObservationKey = observationKey
+                lastScheduledObservationStatus = observedStatus
+                publish(observedStatus, to: { _ in })
             } catch is CancellationError {
                 if activeRunID == runID { task = nil; activeRunID = nil }
                 return
             } catch {
-                publish(.failed(message: "Provider verification failed: \(error)"), to: { _ in })
+                let failedStatus = Status.failed(message: "Provider verification failed: \(error)")
+                lastScheduledObservationKey = observationKey
+                lastScheduledObservationStatus = failedStatus
+                publish(failedStatus, to: { _ in })
             }
             if activeRunID == runID { task = nil; activeRunID = nil }
         }
