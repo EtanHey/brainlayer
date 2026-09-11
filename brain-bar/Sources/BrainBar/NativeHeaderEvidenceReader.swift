@@ -91,12 +91,12 @@ enum NativeHeaderEvidenceReader {
                 ? "unknown_multiple_native_header_bindings"
                 : "unknown_native_header_schema")
         }
-        guard let provider, let sessionID, let sourceFile, let rawHash, let start, let end,
-              provider == "codex", isCanonicalUUID(sessionID), isSHA256(rawHash) else {
+        guard let provider, let sourceFile, let rawHash, let start, let end,
+              provider == "codex", isSHA256(rawHash) else {
             return base.withStatus("unknown_malformed_native_header_binding")
         }
         var result = base.merging([
-            "provider": provider, "session_id": sessionID, "source_file": sourceFile,
+            "provider": provider, "source_file": sourceFile,
             "record_start_offset": start, "record_end_offset": end, "raw_record_hash": rawHash,
         ]) { _, value in value }
         func unknown(_ status: String) -> [String: Any] {
@@ -111,10 +111,6 @@ enum NativeHeaderEvidenceReader {
               let recordManifest, isSHA256(recordManifest) else {
             return unknown(recordRole == nil ? "unknown_missing_native_header_binding" : "unknown_malformed_native_header_binding")
         }
-        guard let boundOccurrenceKey else {
-            return unknown(headerAfterAssistant(db, generationKey: generationKey, assistantStart: start)
-                ? "unknown_header_after_assistant" : "unknown_missing_native_header_binding")
-        }
         guard let joinedGenerationProvider, let generationSource,
               let generationWatcher, let rootManifest,
               let currentManifest, let generationStatus,
@@ -128,9 +124,10 @@ enum NativeHeaderEvidenceReader {
         }
         guard joinedGenerationProvider == provider, generationSource == sourceFile,
               generationWatcher == watcherGeneration, generationStatus == "active",
-              canonicalOccurrenceKey == occurrenceKey, boundOccurrenceKey == occurrenceKey,
+              canonicalOccurrenceKey == occurrenceKey,
+              (boundOccurrenceKey == nil || boundOccurrenceKey == occurrenceKey),
               occurrenceGeneration == generationKey, disposition == "canonical",
-              headerSessionID == sessionID, headerStart >= 0, headerEnd > headerStart,
+              (sessionID == nil || sessionID == headerSessionID), headerStart >= 0, headerEnd > headerStart,
               headerEnd <= start, headerEnd - headerStart <= Int64(maxRecordBytes),
               isSHA256(rootManifest), isSHA256(currentManifest), isSHA256(headerManifest),
               isSHA256(headerHash), contextJSON.utf8.count <= maxContextBytes,
