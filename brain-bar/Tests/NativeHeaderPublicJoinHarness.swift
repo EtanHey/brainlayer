@@ -26,6 +26,8 @@ struct NativeHeaderPublicJoinHarness {
         require(header["provider_recorded"] as? Bool == true, "provider evidence")
         require(header["declared_unverified"] as? Bool == true, "unverified evidence")
         require(header["recorded_thread_id"] as? String == "01a08d1e-42f6-7093-83a4-1c1b160f4911", "thread id")
+        require(header["recorded_agent_path"] as? String == "/worker" && header["recorded_agent_nickname"] as? String == "Luna", "payload metadata")
+        require(header["spawn_agent_path"] as? String == "/spawned" && header["spawn_agent_nickname"] as? String == "SpawnLuna", "nested spawn metadata")
         require(header["person_principal"] is NSNull && header["original_author_principal"] is NSNull, "principal boundary")
         let attribution = result["attribution"] as? [String: Any] ?? [:]
         let emitter = attribution["recorded_emitter"] as? [String: Any] ?? [:]
