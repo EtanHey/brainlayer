@@ -108,6 +108,12 @@ def test_active_daemon_launchd_hygiene_matrix():
             "ExitTimeOut": 300,
             "LowPriorityIO": True,
         },
+        "scripts/launchd/com.brainlayer.backup-scheduled.plist": {
+            "ProcessType": "Background",
+            "ExitTimeOut": 300,
+            "LowPriorityIO": True,
+            "StartInterval": 3600,
+        },
         "scripts/launchd/com.brainlayer.throughput-watchdog.plist": {
             "ProcessType": "Background",
             "ExitTimeOut": 30,
@@ -134,6 +140,18 @@ def test_active_daemon_launchd_hygiene_matrix():
     backup = _load("scripts/launchd/com.brainlayer.backup-daily.plist")
     assert "KeepAlive" not in backup
     assert "StartCalendarInterval" in backup
+
+
+def test_scheduled_backup_is_pinned_offline_scheduler_with_no_socket_fallback():
+    scheduled = _load("scripts/launchd/com.brainlayer.backup-scheduled.plist")
+    args = scheduled["ProgramArguments"]
+    assert args[:6] == [
+        "__BRAINLAYER_ENV_RUN__", "__BRAINLAYER_PYTHON__", "-I", "-B", "-m", "brainlayer.durable_backup_scheduler",
+    ]
+    assert "--config" in args
+    assert "--state-path" in args
+    assert not any("socket" in argument.lower() for argument in args)
+    assert scheduled["EnvironmentVariables"]["BRAINLAYER_PYTHON"] == "__BRAINLAYER_PYTHON__"
 
 
 def test_all_script_launchd_plists_have_common_hygiene():

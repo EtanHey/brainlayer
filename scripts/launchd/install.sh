@@ -180,11 +180,11 @@ fi
 
 BRAINLAYER_INSTALL_ACTION="${1:-all}"
 launchd_install_usage() {
-    echo "Usage: $0 [index|t3-ingest|watch|enrich|enrichment|decay|drain|hotlane|hotlane-brainbar|repair-fts|load [name]|unload [name]|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|tier0|tier0-watchdog|throughput-watchdog|fleet-watchdog|fleet-watchdog-quiesce|fleet-watchdog-resume|p0-counter|all|remove]"
+    echo "Usage: $0 [index|t3-ingest|watch|enrich|enrichment|decay|drain|hotlane|hotlane-brainbar|repair-fts|load [name]|unload [name]|checkpoint|backup|backup-scheduled|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|tier0|tier0-watchdog|throughput-watchdog|fleet-watchdog|fleet-watchdog-quiesce|fleet-watchdog-resume|p0-counter|all|remove]"
 }
 
 case "$BRAINLAYER_INSTALL_ACTION" in
-    index|t3-ingest|watch|enrich|enrichment|decay|drain|hotlane|hotlane-brainbar|repair-fts|load|unload|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|tier0|tier0-watchdog|throughput-watchdog|fleet|fleet-watchdog|fleet-watchdog-quiesce|fleet-watchdog-resume|p0-counter|all|remove)
+    index|t3-ingest|watch|enrich|enrichment|decay|drain|hotlane|hotlane-brainbar|repair-fts|load|unload|checkpoint|backup|backup-scheduled|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|tier0|tier0-watchdog|throughput-watchdog|fleet|fleet-watchdog|fleet-watchdog-quiesce|fleet-watchdog-resume|p0-counter|all|remove)
         ;;
     *)
         launchd_install_usage
@@ -968,6 +968,9 @@ case "${1:-all}" in
         install_backup_script
         install_plist backup-daily
         ;;
+    backup-scheduled)
+        install_plist backup-scheduled
+        ;;
     jsonl|jsonl-backup)
         install_jsonl_backup_script
         install_plist jsonl-backup
@@ -1031,6 +1034,9 @@ case "${1:-all}" in
         elif ! install_many backup-daily; then
             failures=1
         fi
+        if ! install_many backup-scheduled; then
+            failures=1
+        fi
         if ! install_jsonl_backup_script; then
             failures=1
         elif ! install_many jsonl-backup; then
@@ -1067,6 +1073,7 @@ case "${1:-all}" in
         remove_plist wal-checkpoint
         remove_plist repair-fts 2>/dev/null || true
         remove_plist backup-daily 2>/dev/null || true
+        remove_plist backup-scheduled 2>/dev/null || true
         remove_plist jsonl-backup 2>/dev/null || true
         remove_plist maintenance-nightly 2>/dev/null || true
         remove_plist maintenance-weekly 2>/dev/null || true

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.brainlayer.backup-scheduled</string>
+	<key>AssociatedBundleIdentifiers</key>
+	<array><string>com.brainlayer.brainbar</string></array>
+	<key>ProgramArguments</key>
+	<array>
+		<string>__BRAINLAYER_ENV_RUN__</string>
+		<string>__BRAINLAYER_PYTHON__</string>
+		<string>-I</string><string>-B</string><string>-m</string><string>brainlayer.durable_backup_scheduler</string>
+		<string>--config</string><string>__BRAINLAYER_ENV_FILE__</string>
+		<string>--state-path</string><string>__HOME__/.local/share/brainlayer/durable-backup-schedule-state.json</string>
+	</array>
+	<key>StartInterval</key><integer>3600</integer>
+	<key>RunAtLoad</key><true/>
+	<key>StandardOutPath</key><string>__HOME__/Library/Logs/brainlayer/backup-scheduled.out.log</string>
+	<key>StandardErrorPath</key><string>__HOME__/Library/Logs/brainlayer/backup-scheduled.err.log</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key><string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:__HOME__/.local/bin</string>
+		<key>BRAINLAYER_REPO_ROOT</key><string>__BRAINLAYER_DIR__</string>
+		<key>BRAINLAYER_ENV_FILE</key><string>__BRAINLAYER_ENV_FILE__</string>
+		<key>BRAINLAYER_PYTHON</key><string>__BRAINLAYER_PYTHON__</string>
+		<key>BRAINLAYER_LAUNCHD_SERVICE</key><string>backup-scheduled</string>
+	</dict>
+	<key>Nice</key><integer>15</integer>
+	<key>ExitTimeOut</key><integer>300</integer>
+	<key>ProcessType</key><string>Background</string>
+	<key>LowPriorityIO</key><true/>
+	<key>SoftResourceLimits</key><dict><key>NumberOfFiles</key><integer>4096</integer></dict>
+</dict>
+</plist>
