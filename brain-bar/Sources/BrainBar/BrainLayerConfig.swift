@@ -122,6 +122,7 @@ enum BrainLayerLaunchdJob: String, CaseIterable, Identifiable, Sendable {
     case watch
     case index
     case backupDaily
+    case backupScheduled
     case jsonlBackup
     case maintenanceNightly
     case maintenanceWeekly
@@ -139,6 +140,7 @@ enum BrainLayerLaunchdJob: String, CaseIterable, Identifiable, Sendable {
         case .watch: "Watch"
         case .index: "Index"
         case .backupDaily: "Backup Daily"
+        case .backupScheduled: "Scheduled Settings Backup"
         case .jsonlBackup: "JSONL Backup"
         case .maintenanceNightly: "Maintenance Nightly"
         case .maintenanceWeekly: "Maintenance Weekly"
@@ -156,6 +158,7 @@ enum BrainLayerLaunchdJob: String, CaseIterable, Identifiable, Sendable {
         case .watch: "BRAINLAYER_LAUNCHD_WATCH_ENABLED"
         case .index: "BRAINLAYER_LAUNCHD_INDEX_ENABLED"
         case .backupDaily: "BRAINLAYER_LAUNCHD_BACKUP_DAILY_ENABLED"
+        case .backupScheduled: "BRAINLAYER_LAUNCHD_BACKUP_SCHEDULED_ENABLED"
         case .jsonlBackup: "BRAINLAYER_LAUNCHD_JSONL_BACKUP_ENABLED"
         case .maintenanceNightly: "BRAINLAYER_LAUNCHD_MAINTENANCE_NIGHTLY_ENABLED"
         case .maintenanceWeekly: "BRAINLAYER_LAUNCHD_MAINTENANCE_WEEKLY_ENABLED"
@@ -167,6 +170,7 @@ enum BrainLayerLaunchdJob: String, CaseIterable, Identifiable, Sendable {
     var launchdLabel: String {
         switch self {
         case .backupDaily: "com.brainlayer.backup-daily"
+        case .backupScheduled: "com.brainlayer.backup-scheduled"
         case .jsonlBackup: "com.brainlayer.jsonl-backup"
         case .maintenanceNightly: "com.brainlayer.maintenance-nightly"
         case .maintenanceWeekly: "com.brainlayer.maintenance-weekly"
@@ -247,6 +251,34 @@ struct BrainLayerBackupDestinationIdentity: Equatable, Sendable {
     }
 }
 
+struct BrainLayerScheduledOfflineSourceBinding: Codable, Equatable, Sendable {
+    /// Increment on incompatible serialization changes; schedulers refuse an
+    /// unknown version rather than guessing a database pathname.
+    let version: Int
+    let path: String
+    let stDev: Int64
+    let stIno: Int64
+    let sourceOpenGeneration: String
+
+    init(path: String, stDev: Int64, stIno: Int64, sourceOpenGeneration: String) {
+        version = 1
+        self.path = path
+        self.stDev = stDev
+        self.stIno = stIno
+        self.sourceOpenGeneration = sourceOpenGeneration
+    }
+
+    var environmentValue: [String: Any] {
+        [
+            "version": version,
+            "path": path,
+            "st_dev": stDev,
+            "st_ino": stIno,
+            "source_open_generation": sourceOpenGeneration,
+        ]
+    }
+}
+
 struct BrainLayerConfig: Equatable, Sendable {
     var googleAPIKey: BrainLayerGoogleAPIKey
     var systemEnabled: Bool
@@ -259,6 +291,7 @@ struct BrainLayerConfig: Equatable, Sendable {
     var backupEnabled: Bool
     var backupDestinationPath: String?
     var backupDestinationIdentity: BrainLayerBackupDestinationIdentity?
+    var backupScheduledOfflineSourceBinding: BrainLayerScheduledOfflineSourceBinding?
     var backupTranscriptRoots: [String]
     var backupTranscriptRootSpecs: [BrainLayerBackupSourceRootSpec]
     var backupMissingOptionalRoots: [String]
@@ -279,6 +312,7 @@ struct BrainLayerConfig: Equatable, Sendable {
         backupEnabled: false,
         backupDestinationPath: nil,
         backupDestinationIdentity: nil,
+        backupScheduledOfflineSourceBinding: nil,
         backupTranscriptRoots: [],
         backupTranscriptRootSpecs: [],
         backupMissingOptionalRoots: []
@@ -295,6 +329,7 @@ struct BrainLayerConfig: Equatable, Sendable {
             backupEnabled == other.backupEnabled &&
             backupDestinationPath == other.backupDestinationPath &&
             backupDestinationIdentity == other.backupDestinationIdentity &&
+            backupScheduledOfflineSourceBinding == other.backupScheduledOfflineSourceBinding &&
             backupTranscriptRoots == other.backupTranscriptRoots &&
             backupTranscriptRootSpecs == other.backupTranscriptRootSpecs &&
             backupMissingOptionalRoots == other.backupMissingOptionalRoots &&
@@ -601,6 +636,7 @@ struct BrainLayerEnvDocument {
             "BRAINLAYER_BACKUP_DESTINATION": config.backupDestinationPath.map(shellSingleQuoted) ?? "",
             "BRAINLAYER_BACKUP_DESTINATION_ST_DEV": config.backupDestinationIdentity.map { String($0.stDev) } ?? "",
             "BRAINLAYER_BACKUP_DESTINATION_ST_INO": config.backupDestinationIdentity.map { String($0.stIno) } ?? "",
+            "BRAINLAYER_BACKUP_SCHEDULED_OFFLINE_SOURCE_BINDING": config.backupScheduledOfflineSourceBinding.map { renderedJSON($0.environmentValue) } ?? "",
             "BRAINLAYER_BACKUP_TRANSCRIPT_ROOTS": renderedList(config.backupTranscriptRoots),
             "BRAINLAYER_BACKUP_TRANSCRIPT_ROOT_SPECS": renderedJSON(config.backupTranscriptRootSpecs.map { spec in
                 ["path": spec.path, "include_globs": spec.includeGlobs, "exclude_globs": spec.excludeGlobs, "source_class": spec.sourceClass]
@@ -653,6 +689,18 @@ struct BrainLayerEnvDocument {
         if let raw = assignments["BRAINLAYER_BACKUP_DESTINATION_ST_DEV"], let value = Int64(normalized(raw)),
            let inode = assignments["BRAINLAYER_BACKUP_DESTINATION_ST_INO"].flatMap({ Int64(normalized($0)) }) {
             config.backupDestinationIdentity = BrainLayerBackupDestinationIdentity(stDev: value, stIno: inode)
+        }
+        if let raw = assignments["BRAINLAYER_BACKUP_SCHEDULED_OFFLINE_SOURCE_BINDING"],
+           let data = strippedValue(raw).data(using: .utf8),
+           let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           value["version"] as? Int == 1,
+           let path = value["path"] as? String,
+           let sourceOpenGeneration = value["source_open_generation"] as? String,
+           let stDev = (value["st_dev"] as? NSNumber)?.int64Value,
+           let stIno = (value["st_ino"] as? NSNumber)?.int64Value {
+            config.backupScheduledOfflineSourceBinding = BrainLayerScheduledOfflineSourceBinding(
+                path: path, stDev: stDev, stIno: stIno, sourceOpenGeneration: sourceOpenGeneration
+            )
         }
         if let raw = assignments["BRAINLAYER_BACKUP_TRANSCRIPT_ROOT_SPECS"],
            let data = strippedValue(raw).data(using: .utf8),

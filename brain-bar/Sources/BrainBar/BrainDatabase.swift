@@ -33,6 +33,23 @@ final class BrainDatabase: @unchecked Sendable {
         let observedPathIdentityAfter: BackupPathnameIdentity
     }
 
+    /// A scheduler source is derived from this open connection, then stored by
+    /// Settings. It is intentionally a pathname observation, not an fd proof.
+    func scheduledOfflineSourceBinding() throws -> BrainLayerScheduledOfflineSourceBinding {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
+        guard let db else { throw DBError.notOpen }
+        let authority = try backupSourceAuthority(for: db)
+        try refuseIfConnectionHasMoved(db, phase: "while saving scheduled backup source")
+        let identity = try observePathnameIdentity(authority.filename)
+        return BrainLayerScheduledOfflineSourceBinding(
+            path: identity.path,
+            stDev: identity.stDev,
+            stIno: identity.stIno,
+            sourceOpenGeneration: authority.sourceOpenGeneration
+        )
+    }
+
     struct OpenConfiguration: Sendable, Equatable {
         let busyTimeoutMillis: Int32
         let readOnly: Bool

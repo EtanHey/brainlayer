@@ -17,6 +17,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
     private let launchdStatusProvider: any BrainLayerLaunchdStatusSampling
     private let runtimeStatusProvider: any BrainLayerActiveRuntimeSampling
     private let backupCoordinator: BrainLayerBackupCoordinator
+    private let scheduledOfflineSourceBindingProvider: () throws -> BrainLayerScheduledOfflineSourceBinding?
     private let now: @Sendable () -> Date
     private var previousConfigForLastSaveReceipt: BrainLayerConfig?
 
@@ -25,6 +26,10 @@ final class BrainBarSettingsViewModel: ObservableObject {
         launchdStatusProvider: any BrainLayerLaunchdStatusSampling = BrainLayerLaunchdStatusProvider(),
         runtimeStatusProvider: any BrainLayerActiveRuntimeSampling = UnknownBrainLayerActiveRuntimeProvider(),
         backupCoordinator: BrainLayerBackupCoordinator = BrainLayerBackupCoordinator.shared,
+        scheduledOfflineSourceBindingProvider: @escaping () throws -> BrainLayerScheduledOfflineSourceBinding? = {
+            guard let database = (NSApp.delegate as? AppDelegate)?.runtime.database else { return nil }
+            return try database.scheduledOfflineSourceBinding()
+        },
         initialLaunchdStates: [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState] = [:],
         refreshStatusOnLoad: Bool = true,
         now: @escaping @Sendable () -> Date = Date.init
@@ -33,6 +38,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         self.launchdStatusProvider = launchdStatusProvider
         self.runtimeStatusProvider = runtimeStatusProvider
         self.backupCoordinator = backupCoordinator
+        self.scheduledOfflineSourceBindingProvider = scheduledOfflineSourceBindingProvider
         self.now = now
         activeRuntimeObservation = runtimeStatusProvider.sample()
         do {
@@ -214,6 +220,19 @@ final class BrainBarSettingsViewModel: ObservableObject {
         let previousConfig = config
         var nextConfig = config
         apply(&nextConfig)
+        // Only an actually open BrainDatabase connection may create or refresh
+        // the durable offline source binding.  No source pathname is inferred
+        // when Settings has no live connection.
+        if nextConfig.backupEnabled {
+            do {
+                if let binding = try scheduledOfflineSourceBindingProvider() {
+                    nextConfig.backupScheduledOfflineSourceBinding = binding
+                }
+            } catch {
+                recordValidationFailure("Could not save the scheduled backup source: \(error.localizedDescription)")
+                return false
+            }
+        }
         let validation = BrainLayerConfigValidator.validate(nextConfig, previousConfig: previousConfig)
         guard validation == .passed else {
             if case let .failed(message) = validation {
@@ -593,6 +612,12 @@ struct BrainBarSettingsView: View {
                 .disabled(viewModel.config.backupDestinationPath == nil)
             }
             settingsTruthRow(label: "Configuration", value: viewModel.config.backupConfigurationState.title)
+            settingsTruthRow(
+                label: "Scheduled source",
+                value: viewModel.config.backupScheduledOfflineSourceBinding == nil
+                    ? "Not configured — scheduled backup will refuse"
+                    : "Bound to current BrainDatabase connection"
+            )
             settingsTruthRow(label: "Run", value: viewModel.backupRunStatus.title)
             settingsTruthRow(
                 label: "Unavailable optional sources",
