@@ -39,7 +39,7 @@ public struct BrainBarFoundationICloudResourceProvider: BrainBarICloudResourcePr
         ]
         let values = try url.resourceValues(forKeys: keys)
         return BrainBarICloudResourceState(
-            isUbiquitous: values.isUbiquitousItem ?? false,
+            isUbiquitous: values.isUbiquitousItem ?? FileManager.default.isUbiquitousItem(at: url),
             isUploading: values.ubiquitousItemIsUploading,
             isUploaded: values.ubiquitousItemIsUploaded,
             isDownloaded: values.ubiquitousItemDownloadingStatus.map { $0 == .current }
