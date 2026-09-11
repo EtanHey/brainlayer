@@ -122,6 +122,7 @@ final class BrainBarServer: @unchecked Sendable {
     private var hybridSearchHelperClient: HybridSearchHelperClient?
     private let providedHybridSearchClient: HybridSearchClientProtocol?
     private let enableHybridSearchHelper: Bool
+    private let enableDaemonHeartbeat: Bool
     private let brainBus = BrainBusEventHub()
     private var brainBusQueueDepthEstimate = 0
     private var databaseRetryWorkItem: DispatchWorkItem?
@@ -189,6 +190,7 @@ final class BrainBarServer: @unchecked Sendable {
         database: BrainDatabase? = nil,
         hybridSearchClient: HybridSearchClientProtocol? = nil,
         enableHybridSearchHelper: Bool = true,
+        enableDaemonHeartbeat: Bool = true,
         databaseRecoveryPolicy: DatabaseRecoveryPolicy = DatabaseRecoveryPolicy(),
         instanceLockPath: String? = nil
     ) {
@@ -197,6 +199,7 @@ final class BrainBarServer: @unchecked Sendable {
         providedDatabase = database
         providedHybridSearchClient = hybridSearchClient
         self.enableHybridSearchHelper = enableHybridSearchHelper
+        self.enableDaemonHeartbeat = enableDaemonHeartbeat
         self.databaseRecoveryPolicy = databaseRecoveryPolicy
         self.instanceLockPath = instanceLockPath ?? Self.defaultInstanceLockPath(socketPath: self.socketPath)
         queue.setSpecific(key: Self.queueKey, value: queueID)
@@ -247,7 +250,7 @@ final class BrainBarServer: @unchecked Sendable {
             onStartRejected?("failed to acquire single-instance lock \(instanceLockPath): \(error)")
             return
         }
-        startDaemonHeartbeatOnQueue()
+        if enableDaemonHeartbeat { startDaemonHeartbeatOnQueue() }
 
         let ownedHybridClient: HybridSearchHelperClient?
         let hybridClient: HybridSearchClientProtocol?
