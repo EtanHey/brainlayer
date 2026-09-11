@@ -532,6 +532,10 @@ final class DashboardTests: XCTestCase {
                 || source.contains("@ObservedObject var collector: StatsCollector"),
             "Refresh UI must observe StatsCollector so spinner/disabled state update without unrelated header redraws."
         )
+        XCTAssertTrue(
+            source.contains("BrainLayerBackupCoordinator.shared.startScheduledIfDue(forceProviderRetry: true)"),
+            "The explicit dashboard refresh must reconcile durable backup status without launching a second scheduler."
+        )
     }
 
     func testStatsCollectorDoesNotKeepUnusedDatabaseConnection() throws {

@@ -92,6 +92,31 @@ struct BackupCoordinatorProviderHarness {
             return false
         }
         require(!invocations.invoked, "read-only scheduler reconciliation launched a backup")
+        let firstProviderBytes = try Data(contentsOf: providerReceipt)
+        scheduled.refreshScheduledStatus(config: config)
+        let cachedProviderBytes = try Data(contentsOf: providerReceipt)
+        require(cachedProviderBytes == firstProviderBytes, "unchanged receipt was rehashed")
+        scheduled.refreshScheduledStatus(config: config, forceProviderRetry: true)
+        await waitUntil {
+            if case .providerObserved = scheduled.status { return true }
+            return false
+        }
+        let retriedProviderBytes = try Data(contentsOf: providerReceipt)
+        require(retriedProviderBytes != firstProviderBytes, "explicit refresh did not retry provider")
+
+        var staleDestinationConfig = config
+        staleDestinationConfig.backupDestinationIdentity = BrainLayerBackupDestinationIdentity(
+            stDev: config.backupDestinationIdentity!.stDev,
+            stIno: config.backupDestinationIdentity!.stIno + 1
+        )
+        scheduled.refreshScheduledStatus(config: staleDestinationConfig)
+        require(
+            scheduled.status == .schedulerObserved(
+                status: "destination_changed",
+                detail: "saved destination identity is not current"
+            ),
+            "cached success was displayed for a changed destination"
+        )
 
         let changedDestination = destination.deletingLastPathComponent().appendingPathComponent("changed")
         try FileManager.default.createDirectory(at: changedDestination, withIntermediateDirectories: true)
@@ -112,7 +137,7 @@ struct BackupCoordinatorProviderHarness {
         require(persisted.lastSuccess == nil, "old destination success was reattributed")
         require(persisted.lastReceipt == nil, "old destination receipt was reattributed")
         require(persisted.lastStatus == "failed", "changed-destination failure status was ambiguous")
-        print("BACKUP_COORDINATOR_PROVIDER_OK state=staged remote_verified=false cleanup_permitted=false scheduled_refresh=read_only changed_destination_history=cleared")
+        print("BACKUP_COORDINATOR_PROVIDER_OK state=staged remote_verified=false cleanup_permitted=false scheduled_refresh=read_only cache=hit explicit_retry=ran stale_destination=refused changed_destination_history=cleared")
     }
 }
 

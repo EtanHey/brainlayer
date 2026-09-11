@@ -164,6 +164,40 @@ final class BrainBarBackupCoordinatorTests: XCTestCase {
         )
     }
 
+    func testBackupStatusTitlesUsePlainLanguageWithoutReceiptPaths() {
+        XCTAssertEqual(
+            BrainLayerBackupCoordinator.Status.providerObserved(
+                localReceipt: "/private/generated/receipt.complete.json",
+                providerReceipt: "/private/generated/icloud-provider.receipt.json",
+                state: .staged
+            ).title,
+            "Saved locally"
+        )
+        XCTAssertEqual(
+            BrainLayerBackupCoordinator.Status.providerObserved(
+                localReceipt: "/private/generated/receipt.complete.json",
+                providerReceipt: "/private/generated/icloud-provider.receipt.json",
+                state: .uploadPending
+            ).title,
+            "Waiting for iCloud upload"
+        )
+        XCTAssertEqual(
+            BrainLayerBackupCoordinator.Status.providerObserved(
+                localReceipt: "/private/generated/receipt.complete.json",
+                providerReceipt: "/private/generated/icloud-provider.receipt.json",
+                state: .uploadedOSReported
+            ).title,
+            "iCloud reports upload complete; not independently verified"
+        )
+        XCTAssertEqual(
+            BrainLayerBackupCoordinator.Status.schedulerObserved(
+                status: "refused",
+                detail: "saved source changed"
+            ).title,
+            "Scheduled backup needs attention — saved source changed"
+        )
+    }
+
     func testInvalidConfigDoesNotInvokeChild() async throws {
         let invoked = ArgumentsBox()
         let coordinator = BrainLayerBackupCoordinator(commandRunner: BrainLayerBackupCommandRunner { _ in
@@ -315,6 +349,31 @@ final class BrainBarBackupCoordinatorTests: XCTestCase {
         XCTAssertFalse(
             FileManager.default.fileExists(
                 atPath: fixture.root.appendingPathComponent("manual-state.json").path
+            )
+        )
+
+        let initialProviderData = try Data(contentsOf: providerReceipt)
+        coordinator.refreshScheduledStatus(config: fixture.config)
+        XCTAssertEqual(try Data(contentsOf: providerReceipt), initialProviderData)
+
+        coordinator.refreshScheduledStatus(config: fixture.config, forceProviderRetry: true)
+        try await waitUntil {
+            if case .providerObserved = coordinator.status { return true }
+            return false
+        }
+        XCTAssertNotEqual(try Data(contentsOf: providerReceipt), initialProviderData)
+
+        var staleConfig = fixture.config
+        staleConfig.backupDestinationIdentity = BrainLayerBackupDestinationIdentity(
+            stDev: fixture.config.backupDestinationIdentity!.stDev,
+            stIno: fixture.config.backupDestinationIdentity!.stIno + 1
+        )
+        coordinator.refreshScheduledStatus(config: staleConfig)
+        XCTAssertEqual(
+            coordinator.status,
+            .schedulerObserved(
+                status: "destination_changed",
+                detail: "saved destination identity is not current"
             )
         )
     }

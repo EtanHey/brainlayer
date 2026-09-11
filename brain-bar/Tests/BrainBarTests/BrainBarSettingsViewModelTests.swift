@@ -256,6 +256,77 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testRefreshAlsoReconcilesDurableBackupStateWithoutLaunchingBackup() async throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("brainbar-settings-backup-refresh-\(UUID().uuidString)", isDirectory: true)
+        let destination = root.appendingPathComponent("destination", isDirectory: true)
+        let transcripts = root.appendingPathComponent("transcripts", isDirectory: true)
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: transcripts, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        var config = BrainLayerConfig.defaultConfig
+        config.backupEnabled = true
+        config.backupDestinationPath = destination.path
+        config.backupDestinationIdentity = BrainLayerBackupDestinationIdentity(path: destination.path)
+        config.backupTranscriptRoots = [transcripts.path]
+        config.backupTranscriptRootSpecs = [BrainLayerBackupSourceRootSpec(path: transcripts.path)]
+        config.backupScheduledOfflineSourceBinding = BrainLayerScheduledOfflineSourceBinding(
+            path: root.appendingPathComponent("saved.db").path,
+            stDev: 1,
+            stIno: 2,
+            sourceOpenGeneration: "saved-generation"
+        )
+        let scheduledState = root.appendingPathComponent("durable-state.json")
+        try JSONSerialization.data(withJSONObject: [
+            "version": 1,
+            "status": "refused",
+            "reason": "scheduled offline source changed",
+        ]).write(to: scheduledState)
+        let invocations = BackupCommandInvocationBox()
+        let coordinator = BrainLayerBackupCoordinator(
+            commandRunner: BrainLayerBackupCommandRunner { _ in
+                invocations.didRun = true
+                return BrainLayerBackupCommandResult(terminationStatus: 99, output: "must not launch")
+            },
+            stateURL: root.appendingPathComponent("manual-state.json"),
+            scheduledStateURL: scheduledState
+        )
+        let fixture = try makeFixture(config: config, backupCoordinator: coordinator)
+
+        fixture.viewModel.refreshLaunchdStatus(forceBackupProviderRetry: true)
+        let deadline = Date().addingTimeInterval(2)
+        while fixture.viewModel.isRefreshingLaunchdStatus {
+            if Date() > deadline {
+                XCTFail("Timed out waiting for settings refresh")
+                break
+            }
+            await Task.yield()
+        }
+
+        XCTAssertFalse(invocations.didRun)
+        XCTAssertEqual(
+            fixture.viewModel.backupRunStatus,
+            .schedulerObserved(status: "refused", detail: "scheduled offline source changed")
+        )
+        XCTAssertEqual(
+            fixture.viewModel.scheduledSourceBindingSummary,
+            "Saved connection binding — validated when scheduled backup runs"
+        )
+    }
+
+    @MainActor
+    func testMissingScheduledSourceLabelDoesNotClaimCurrentConnection() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        XCTAssertEqual(
+            fixture.viewModel.scheduledSourceBindingSummary,
+            "Not configured — scheduled backup will refuse"
+        )
+    }
+
+    @MainActor
     func testSecretSaveReceiptAndDebugOutputNeverContainSecret() throws {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -277,7 +348,8 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
             "Active runtime configuration is not observable."
         ),
         launchdStatusProvider: (any BrainLayerLaunchdStatusSampling)? = nil,
-        initialLaunchdStates: [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState] = [:]
+        initialLaunchdStates: [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState] = [:],
+        backupCoordinator: BrainLayerBackupCoordinator = BrainLayerBackupCoordinator()
     ) throws -> (
         root: URL,
         store: BrainLayerConfigStore,
@@ -293,6 +365,7 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
             launchdStatusProvider: launchdStatusProvider ??
                 StaticBrainLayerLaunchdStatusProvider(states: initialLaunchdStates),
             runtimeStatusProvider: StaticBrainLayerActiveRuntimeProvider(observation: runtimeObservation),
+            backupCoordinator: backupCoordinator,
             initialLaunchdStates: initialLaunchdStates,
             refreshStatusOnLoad: false,
             now: { now }
@@ -318,4 +391,9 @@ private final class MutableBrainLayerLaunchdStatusProvider: BrainLayerLaunchdSta
     func sample() -> [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState] {
         lock.withLock { states }
     }
+}
+
+
+private final class BackupCommandInvocationBox: @unchecked Sendable {
+    var didRun = false
 }
