@@ -122,7 +122,7 @@ public struct BrainBarICloudBackupProvider: Sendable {
     private let resourceProvider: any BrainBarICloudResourceProviding
     private let now: @Sendable () -> Date
 
-    public init(resourceProvider: any BrainBarICloudResourceProviding = BrainBarFoundationICloudResourceProvider(), now: @escaping @Sendable () -> Date = Date.init) {
+    public init(resourceProvider: any BrainBarICloudResourceProviding = BrainBarFoundationICloudResourceProvider(), now: @escaping @Sendable () -> Date = { Date() }) {
         self.resourceProvider = resourceProvider
         self.now = now
     }
