@@ -789,8 +789,7 @@ class TestBatchIndexer:
         assert indexer.total_failed_inputs == 1
         assert indexer.total_flushed == 0
 
-
-# ── JSONLWatcher Integration Tests ──────────────────────────────────────────
+    # ── JSONLWatcher Integration Tests ──────────────────────────────────────────
 
     def test_failure_isolation_stops_watermark_after_deferred_same_source_but_confirms_unrelated(self):
         source = "/tmp/source.jsonl"
