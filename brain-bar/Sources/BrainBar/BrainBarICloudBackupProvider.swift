@@ -338,19 +338,99 @@ public struct BrainBarICloudBackupProvider: Sendable {
 
     private func write(_ receipt: BrainBarICloudBackupProviderReceipt, to url: URL) throws {
         let data = try JSONEncoder().encode(receipt)
-        let directory = url.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let temporary = directory.appendingPathComponent(".icloud-provider-\(UUID().uuidString).tmp")
-        try data.write(to: temporary, options: .atomic)
-        if FileManager.default.fileExists(atPath: url.path) {
-            _ = try FileManager.default.replaceItemAt(url, withItemAt: temporary, backupItemName: nil, options: .usingNewMetadataOnly)
-        } else {
-            try FileManager.default.moveItem(at: temporary, to: url)
+        let destinationURL = url.deletingLastPathComponent().deletingLastPathComponent()
+        let destinationFD = try Self.openDirectory(destinationURL.path)
+        defer { close(destinationFD) }
+        let destinationIdentity = try Self.directoryIdentity(destinationFD)
+        guard try Self.pathIdentity(destinationURL) == destinationIdentity else {
+            throw ProviderFailure.receiptWriteFailed("destination_replaced")
+        }
+
+        let namespaceFD = try Self.openOrCreateNamespace(destinationFD)
+        defer { close(namespaceFD) }
+        let namespaceURL = destinationURL.appendingPathComponent(Self.providerReceiptDirectoryName, isDirectory: true)
+        let namespaceIdentity = try Self.directoryIdentity(namespaceFD)
+        guard try Self.pathIdentity(namespaceURL) == namespaceIdentity else {
+            throw ProviderFailure.receiptWriteFailed("namespace_replaced")
+        }
+
+        let temporaryName = ".icloud-provider-\(UUID().uuidString).tmp"
+        let receiptName = Self.providerReceiptName
+        let temporaryFD = temporaryName.withCString { name in
+            openat(namespaceFD, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode_t(0o600))
+        }
+        guard temporaryFD >= 0 else {
+            throw ProviderFailure.receiptWriteFailed("temporary_open")
+        }
+        var temporaryOpen = true
+        do {
+            try data.withUnsafeBytes { buffer in
+                guard let base = buffer.baseAddress else { return }
+                var offset = 0
+                while offset < data.count {
+                    let count = Darwin.write(temporaryFD, base.advanced(by: offset), data.count - offset)
+                    guard count > 0 else { throw ProviderFailure.receiptWriteFailed("temporary_write") }
+                    offset += count
+                }
+            }
+            guard fsync(temporaryFD) == 0 else { throw ProviderFailure.receiptWriteFailed("temporary_sync") }
+            close(temporaryFD)
+            temporaryOpen = false
+            guard try Self.pathIdentity(destinationURL) == destinationIdentity,
+                  try Self.pathIdentity(namespaceURL) == namespaceIdentity else {
+                throw ProviderFailure.receiptWriteFailed("namespace_replaced")
+            }
+            let renameResult = temporaryName.withCString { from in
+                receiptName.withCString { to in renameat(namespaceFD, from, namespaceFD, to) }
+            }
+            guard renameResult == 0 else { throw ProviderFailure.receiptWriteFailed("receipt_rename") }
+            guard try Self.pathIdentity(destinationURL) == destinationIdentity,
+                  try Self.pathIdentity(namespaceURL) == namespaceIdentity else {
+                throw ProviderFailure.receiptWriteFailed("namespace_replaced_after_write")
+            }
+        } catch {
+            if temporaryOpen { close(temporaryFD) }
+            temporaryName.withCString { _ = unlinkat(namespaceFD, $0, 0) }
+            throw error
         }
     }
 
+    private static func openDirectory(_ path: String) throws -> Int32 {
+        let fd = path.withCString { open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC) }
+        guard fd >= 0 else { throw ProviderFailure.receiptWriteFailed("destination_open") }
+        return fd
+    }
+
+    private static func openOrCreateNamespace(_ destinationFD: Int32) throws -> Int32 {
+        let flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        var fd = providerReceiptDirectoryName.withCString { openat(destinationFD, $0, flags) }
+        if fd < 0, errno == ENOENT {
+            let created = providerReceiptDirectoryName.withCString { mkdirat(destinationFD, $0, mode_t(0o700)) }
+            guard created == 0 || errno == EEXIST else { throw ProviderFailure.receiptWriteFailed("namespace_create") }
+            fd = providerReceiptDirectoryName.withCString { openat(destinationFD, $0, flags) }
+        }
+        guard fd >= 0 else { throw ProviderFailure.receiptWriteFailed("namespace_open") }
+        return fd
+    }
+
+    private static func directoryIdentity(_ fd: Int32) throws -> (device: Int64, inode: Int64) {
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFDIR else {
+            throw ProviderFailure.receiptWriteFailed("namespace_identity")
+        }
+        return (Int64(info.st_dev), Int64(info.st_ino))
+    }
+
+    private static func pathIdentity(_ url: URL) throws -> (device: Int64, inode: Int64) {
+        var info = stat()
+        guard lstat(url.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR else {
+            throw ProviderFailure.receiptWriteFailed("namespace_path_identity")
+        }
+        return (Int64(info.st_dev), Int64(info.st_ino))
+    }
+
     private enum ProviderFailure: Error, CustomStringConvertible {
-        case invalidReceipt(String), digestMismatch(String), sourceChanged(String), staleDestination, invalidReceiptOutput, placeholder(String), materialization(String), resourceError(String, String), resourceState(String), deadline
+        case invalidReceipt(String), digestMismatch(String), sourceChanged(String), staleDestination, invalidReceiptOutput, receiptWriteFailed(String), placeholder(String), materialization(String), resourceError(String, String), resourceState(String), deadline
         var description: String {
             switch self {
             case let .invalidReceipt(value): "invalid_receipt: \(value)"
@@ -358,6 +438,7 @@ public struct BrainBarICloudBackupProvider: Sendable {
             case let .sourceChanged(value): "source_changed: \(value)"
             case .staleDestination: "stale_or_mismatched_destination"
             case .invalidReceiptOutput: "invalid_provider_receipt_path"
+            case let .receiptWriteFailed(value): "provider_receipt_write_failed: \(value)"
             case let .placeholder(value): "icloud_placeholder: \(value)"
             case let .materialization(value): "materialization_timeout: \(value)"
             case let .resourceError(name, error): "resource_error: \(name): \(error)"

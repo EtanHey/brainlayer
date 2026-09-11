@@ -50,6 +50,35 @@ private final class FakeResources: @unchecked Sendable, BrainBarICloudResourcePr
     }
 }
 
+private final class PivotResources: @unchecked Sendable, BrainBarICloudResourceProviding {
+    let sourceLabel = "injected_race"
+    private let lock = NSLock()
+    private let destination: URL
+    private let namespace: URL
+    private let outside: URL
+    private var pivoted = false
+
+    init(destination: URL, namespace: URL, outside: URL) {
+        self.destination = destination
+        self.namespace = namespace
+        self.outside = outside
+    }
+
+    func inspect(_ url: URL) throws -> BrainBarICloudResourceState {
+        lock.lock(); defer { lock.unlock() }
+        if url.standardizedFileURL == destination.standardizedFileURL && !pivoted {
+            try FileManager.default.removeItem(at: namespace)
+            try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+            try Data("sentinel\n".utf8).write(to: outside.appendingPathComponent("icloud-provider.receipt.json"))
+            try FileManager.default.createSymbolicLink(at: namespace, withDestinationURL: outside)
+            pivoted = true
+        }
+        return BrainBarICloudResourceState(isUbiquitous: false, isUploading: false, isUploaded: false, isDownloaded: true)
+    }
+
+    func startDownloading(_ url: URL) throws {}
+}
+
 private func fakeMap(generation: URL, destination: URL, artifacts: [URL], uploaded: Bool, downloaded: Bool, uploading: Bool) -> [URL: BrainBarICloudResourceState] {
     let state = BrainBarICloudResourceState(isUbiquitous: true, isUploading: uploading, isUploaded: uploaded, isDownloaded: downloaded)
     return Dictionary(uniqueKeysWithValues: ([destination] + artifacts).map { ($0, state) })
@@ -144,6 +173,16 @@ struct ICloudBackupProviderHarness {
         let repeatFirst = try await BrainBarICloudBackupProvider().process(input)
         let repeatSecond = try await BrainBarICloudBackupProvider().process(input)
         assertTrue(repeatFirst.state == .staged && repeatSecond.state == .staged, "valid provider status update did not repeat")
+
+        let outside = root.appendingPathComponent("outside")
+        let pivot = PivotResources(destination: destination, namespace: namespace, outside: outside)
+        do {
+            _ = try await BrainBarICloudBackupProvider(resourceProvider: pivot).process(input)
+            preconditionFailure("provider accepted a namespace pivot")
+        } catch { }
+        let outsideAfter = try bytes(outside.appendingPathComponent("icloud-provider.receipt.json"))
+        assertTrue(outsideAfter == Data("sentinel\n".utf8), "namespace pivot changed an outside receipt")
+        try FileManager.default.removeItem(at: namespace)
 
         let uploadedRoot = FileManager.default.temporaryDirectory.appendingPathComponent("brainlayer-icloud-uploaded-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: uploadedRoot, withIntermediateDirectories: true)
