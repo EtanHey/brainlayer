@@ -151,7 +151,7 @@ def _load_previous_state(state_path: Path) -> dict[str, Any]:
     if version is not None and (type(version) is not int or version != _STATE_VERSION):
         raise ScheduledBackupRefusal("scheduler state is unsupported")
     status = raw.get("status")
-    if status is not None and status not in _SCHEDULE_STATUSES:
+    if status is not None and (not isinstance(status, str) or status not in _SCHEDULE_STATUSES):
         raise ScheduledBackupRefusal("scheduler state has invalid status")
     for field in ("next_due", "retry_after"):
         if field in raw:
@@ -232,7 +232,16 @@ def run_scheduled_backup(
             try:
                 binding = _load_binding(config_path)
                 source, identity = _require_bound_source(binding)
-                destination, destination_identity = backup_run_once._managed_backup_config(config_path)
+                try:
+                    destination, destination_identity = backup_run_once._managed_backup_config(config_path)
+                except backup_run_once.BackupRunOnceError as exc:
+                    raise ScheduledBackupRefusal(str(exc)) from exc
+                try:
+                    actual_destination_identity = backup_run_once._identity(destination)
+                except OSError as exc:
+                    raise ScheduledBackupRefusal("managed backup destination changed") from exc
+                if tuple(actual_destination_identity.values()) != destination_identity:
+                    raise ScheduledBackupRefusal("managed backup destination changed")
                 roots = _roots(config_path)
                 try:
                     roots = backup_run_once._validate_roots(roots)

@@ -289,6 +289,7 @@ def test_unchanged_schedule_scope_honors_next_due(tmp_path, monkeypatch):
         ("[]", "scheduler state is malformed"),
         ("null", "scheduler state is malformed"),
         ('{"version": 2}', "scheduler state is unsupported"),
+        ('{"version": 1, "status": []}', "scheduler state has invalid status"),
         ('{"version": 1, "next_due": "2026-09-11T00:01:00"}', "scheduler state next_due must be timezone-aware"),
     ],
 )
