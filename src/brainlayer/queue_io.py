@@ -180,6 +180,29 @@ def enqueue_watcher_native_records(
     return enqueue_jsonl_batch(events, source="watcher-native-record", queue_dir=queue_dir)
 
 
+def enqueue_watcher_native_session_headers(
+    headers: list[dict[str, Any]],
+    *,
+    raw_archive: Any,
+    queue_dir: Path | None = None,
+) -> Path:
+    """Durably accept verified native session-header evidence for later DB drain."""
+    from .native_session_header_events import build_native_session_header_event_from_mapping
+
+    events = [build_native_session_header_event_from_mapping(header, archive=raw_archive) for header in headers]
+    return enqueue_jsonl_batch(events, source="watcher-native-session-header", queue_dir=queue_dir)
+
+
+def enqueue_watcher_native_session_header(
+    *,
+    raw_archive: Any,
+    queue_dir: Path | None = None,
+    **header: Any,
+) -> Path:
+    """Durably accept one verified native session-header event."""
+    return enqueue_watcher_native_session_headers([header], raw_archive=raw_archive, queue_dir=queue_dir)
+
+
 def enqueue_rewind_archive_batch(
     intents: list[dict[str, Any]],
     *,

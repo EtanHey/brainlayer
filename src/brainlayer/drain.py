@@ -32,6 +32,8 @@ from .dedupe import (
 )
 from .ingest_guard import recursive_mcp_output_reason
 from .native_record_links import catalog_native_record, ensure_native_record_links_schema
+from .native_session_header_events import EVENT_KIND as NATIVE_SESSION_HEADER_EVENT_KIND
+from .native_session_header_events import apply_native_session_header_event
 from .paths import get_db_path
 from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
 from .provenance_integration import enqueue_provenance_resolution_for_entities
@@ -1100,9 +1102,24 @@ def _apply_enrichment(conn: apsw.Connection, event: dict[str, Any]) -> None:
     _run_enrichment_provenance_hooks(conn, event, chunk_id=chunk_id, provenance_class=provenance_class or "")
 
 
-def _apply_event(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
+def _apply_event(
+    conn: apsw.Connection,
+    event: dict[str, Any],
+    *,
+    raw_archive: Any | None = None,
+) -> ApplyResult:
     event = _event_payload(event)
     kind = event.get("kind")
+    native_header_shape = {
+        "root_receipt",
+        "occurrence_receipt",
+        "watcher_generation",
+        "record_start_offset",
+        "record_end_offset",
+        "raw_record_hash",
+    }
+    if kind != NATIVE_SESSION_HEADER_EVENT_KIND and native_header_shape.issubset(event):
+        raise ValueError("native session header event has invalid kind")
     if kind == "store_memory":
         return _apply_store(conn, event)
     elif kind == "watcher_chunk":
@@ -1120,6 +1137,10 @@ def _apply_event(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
             declared_headers=event.get("declared_headers"),
             target_report=event.get("target_report"),
         )
+    elif kind == NATIVE_SESSION_HEADER_EVENT_KIND:
+        if raw_archive is None:
+            raise ValueError("native session header drain requires an explicit resolved raw archive")
+        apply_native_session_header_event(conn, raw_archive, event)
     elif kind == "hook_chunk":
         return _apply_hook(conn, event)
     elif kind == "enrichment_update":
@@ -1127,6 +1148,27 @@ def _apply_event(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     elif kind == "rewind_archive":
         return _apply_rewind_archive(conn, event)
     return ApplyResult()
+
+
+def _events_include_native_session_header(events: list[dict[str, Any]]) -> bool:
+    return any(_event_payload(event).get("kind") == NATIVE_SESSION_HEADER_EVENT_KIND for event in events)
+
+
+def _resolved_native_header_archive(
+    events: list[dict[str, Any]],
+    db_path: Path,
+    raw_archive: Any | None,
+) -> Any | None:
+    if not _events_include_native_session_header(events):
+        return raw_archive
+    if raw_archive is not None:
+        return raw_archive
+    raw_db_path = str(db_path)
+    if not raw_db_path or raw_db_path == ":memory:" or raw_db_path.startswith("file::memory:"):
+        raise ValueError("native session header drain cannot infer archive from an in-memory database")
+    from .raw_source_archive import create_raw_source_archive
+
+    return create_raw_source_archive(db_path)
 
 
 def _read_events(path: Path) -> list[dict[str, Any]]:
@@ -1430,6 +1472,7 @@ def burn_drain_once(
     log_path: Path | None = None,
     embed_fn: Callable[[str], list[float]] | None = None,
     pause_sentinel_path: Path | None = None,
+    raw_archive: Any | None = None,
 ) -> BurnDrainResult:
     """Drain a large queue backlog with one writer and one commit per large batch.
 
@@ -1492,6 +1535,12 @@ def burn_drain_once(
         ):
             result.failed_files = len(batch)
             return result
+        try:
+            event_raw_archive = _resolved_native_header_archive(all_events, db_path, raw_archive)
+        except Exception as exc:
+            result.failed_files = len(batch)
+            _log(log_path, f"burn drain failed; batch preserved: {exc}")
+            return result
         precomputed_embeddings = _precompute_event_embeddings(all_events, embed_fn)
         for schema_attempt in range(2):
             conn = _open_connection(db_path)
@@ -1528,7 +1577,10 @@ def burn_drain_once(
                             )
                             attempt_skipped_verified_stale += 1
                             continue
-                        applied = _apply_event(conn, event)
+                        if event_raw_archive is None:
+                            applied = _apply_event(conn, event)
+                        else:
+                            applied = _apply_event(conn, event, raw_archive=event_raw_archive)
                         attempt_applied_events += 1
                         if applied.chunk_id:
                             content = str(_event_payload(event).get("content") or "").strip()
@@ -1609,6 +1661,7 @@ def drain_once(
     log_path: Path | None = None,
     embed_fn: Callable[[str], list[float]] | None = None,
     pause_sentinel_path: Path | None = None,
+    raw_archive: Any | None = None,
 ) -> int:
     db_path = db_path or _default_db_path()
     queue_dir = queue_dir or _default_queue_dir()
@@ -1661,6 +1714,12 @@ def drain_once(
             ):
                 break
 
+            try:
+                event_raw_archive = _resolved_native_header_archive(events_to_apply, db_path, raw_archive)
+            except Exception as exc:
+                _log(log_path, f"drain failed for {path.name}: {exc}")
+                continue
+
             stop_draining = False
             precomputed_embeddings = _precompute_event_embeddings(events_to_apply, embed_fn)
             for attempt in range(5):
@@ -1688,7 +1747,10 @@ def drain_once(
                     ensure_dedupe_schema(conn)
                     conn.execute("BEGIN IMMEDIATE")
                     for event in events_to_apply:
-                        result = _apply_event(conn, event)
+                        if event_raw_archive is None:
+                            result = _apply_event(conn, event)
+                        else:
+                            result = _apply_event(conn, event, raw_archive=event_raw_archive)
                         if result.chunk_id:
                             store_chunk_ids.append(result.chunk_id)
                             fallback_markers.extend(result.fallback_markers)
