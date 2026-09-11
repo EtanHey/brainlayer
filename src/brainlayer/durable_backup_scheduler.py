@@ -19,6 +19,8 @@ from . import backup_run_once, config, jsonl_backup
 
 _BINDING_KEY = "BRAINLAYER_BACKUP_SCHEDULED_OFFLINE_SOURCE_BINDING"
 _STATE_VERSION = 1
+_FAILURE_BACKOFF_BASE_SECONDS = 60
+_FAILURE_BACKOFF_MAX_SECONDS = 3_600
 
 
 class ScheduledBackupRefusal(backup_run_once.BackupRunOnceError):
@@ -49,7 +51,16 @@ def _load_binding(config_path: Path) -> dict[str, Any]:
         st_dev, st_ino = int(binding["st_dev"]), int(binding["st_ino"])
     except (KeyError, TypeError, ValueError) as exc:
         raise ScheduledBackupRefusal("scheduled offline source binding has invalid identity") from exc
-    return {"version": 1, "path": str(Path(path)), "st_dev": st_dev, "st_ino": st_ino}
+    source_open_generation = binding.get("source_open_generation")
+    if not isinstance(source_open_generation, str) or not source_open_generation.strip():
+        raise ScheduledBackupRefusal("scheduled offline source binding has invalid source generation")
+    return {
+        "version": 1,
+        "path": str(Path(path)),
+        "st_dev": st_dev,
+        "st_ino": st_ino,
+        "source_open_generation": source_open_generation,
+    }
 
 
 def _require_bound_source(binding: dict[str, Any]) -> tuple[Path, tuple[int, int]]:
@@ -70,8 +81,10 @@ def _roots(config_path: Path) -> list[jsonl_backup.BackupSourceRoot]:
         values = json.loads(raw or "[]")
         roots = [
             jsonl_backup.BackupSourceRoot(
-                Path(value["path"]), tuple(value["include_globs"]),
-                tuple(value.get("exclude_globs", ())), str(value.get("source_class", "transcript")),
+                Path(value["path"]),
+                tuple(value["include_globs"]),
+                tuple(value.get("exclude_globs", ())),
+                str(value.get("source_class", "transcript")),
             )
             for value in values
         ]
@@ -119,7 +132,12 @@ def run_scheduled_backup(
             if isinstance(next_due, str):
                 try:
                     if dt.datetime.fromisoformat(next_due) > now:
-                        return _status("not_due", next_due=next_due)
+                        extra = {"next_due": next_due}
+                        if previous.get("status") == "failed":
+                            extra["reason"] = "failure_backoff"
+                            extra["failure_count"] = previous.get("failure_count", 0)
+                            extra["retry_after"] = previous.get("retry_after", next_due)
+                        return _status("not_due", **extra)
                 except ValueError:
                     pass
             try:
@@ -139,13 +157,28 @@ def run_scheduled_backup(
                 _require_bound_source(binding)
                 receipt = destination / result["generation"] / "receipt.complete.json"
                 outcome = _status(
-                    "local_verified", receipt=str(receipt), next_due=(now + dt.timedelta(seconds=interval_seconds)).isoformat(),
+                    "local_verified",
+                    receipt=str(receipt),
+                    next_due=(now + dt.timedelta(seconds=interval_seconds)).isoformat(),
                     saved_source=binding,
                 )
             except ScheduledBackupRefusal as exc:
                 outcome = _status("refused", reason=str(exc))
             except Exception as exc:
-                outcome = _status("failed", error_type=type(exc).__name__, error=str(exc))
+                prior_failures = previous.get("failure_count", 0)
+                failure_count = prior_failures + 1 if type(prior_failures) is int and prior_failures >= 0 else 1
+                delay = min(
+                    _FAILURE_BACKOFF_MAX_SECONDS, _FAILURE_BACKOFF_BASE_SECONDS * (2 ** min(failure_count - 1, 6))
+                )
+                retry_after = now + dt.timedelta(seconds=delay)
+                outcome = _status(
+                    "failed",
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                    failure_count=failure_count,
+                    retry_after=retry_after.isoformat(),
+                    next_due=retry_after.isoformat(),
+                )
             _write_json(state_path, outcome)
             return outcome
         finally:
@@ -159,7 +192,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--interval-seconds", type=float, default=86_400)
     args = parser.parse_args(argv)
     result = run_scheduled_backup(
-        config_path=args.config.expanduser(), state_path=args.state_path.expanduser(), interval_seconds=args.interval_seconds
+        config_path=args.config.expanduser(),
+        state_path=args.state_path.expanduser(),
+        interval_seconds=args.interval_seconds,
     )
     print(json.dumps(result, sort_keys=True))
     return 0 if result["status"] in {"disabled", "not_due", "local_verified", "refused", "busy"} else 1

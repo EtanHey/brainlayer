@@ -1,16 +1,24 @@
 from __future__ import annotations
 
+import datetime as dt
 import json
-import os
 import sqlite3
 from pathlib import Path
 
 import pytest
 
-from brainlayer import backup_run_once, durable_backup_scheduler as scheduler
+from brainlayer import backup_run_once
+from brainlayer import durable_backup_scheduler as scheduler
 
 
-def _config(path: Path, *, source: Path | None, destination: Path, enabled: bool = True) -> None:
+def _config(
+    path: Path,
+    *,
+    source: Path | None,
+    destination: Path,
+    enabled: bool = True,
+    source_open_generation: str = "daemon-open-test",
+) -> None:
     destination_stat = destination.stat()
     values = [
         f"BRAINLAYER_BACKUP_ENABLED={'1' if enabled else '0'}",
@@ -21,7 +29,13 @@ def _config(path: Path, *, source: Path | None, destination: Path, enabled: bool
     ]
     if source is not None:
         source_stat = source.stat()
-        binding = {"version": 1, "path": str(source), "st_dev": source_stat.st_dev, "st_ino": source_stat.st_ino}
+        binding = {
+            "version": 1,
+            "path": str(source),
+            "st_dev": source_stat.st_dev,
+            "st_ino": source_stat.st_ino,
+            "source_open_generation": source_open_generation,
+        }
         values.append("BRAINLAYER_BACKUP_SCHEDULED_OFFLINE_SOURCE_BINDING='" + json.dumps(binding) + "'")
     path.write_text("\n".join(values) + "\n", encoding="utf-8")
 
@@ -31,7 +45,9 @@ def test_missing_saved_source_refuses_before_any_backup_request(tmp_path, monkey
     destination.mkdir()
     env = tmp_path / "brainlayer.env"
     _config(env, source=None, destination=destination)
-    monkeypatch.setattr(scheduler.backup_run_once, "run_backup_once", lambda **_: (_ for _ in ()).throw(AssertionError("called")))
+    monkeypatch.setattr(
+        scheduler.backup_run_once, "run_backup_once", lambda **_: (_ for _ in ()).throw(AssertionError("called"))
+    )
 
     result = scheduler.run_scheduled_backup(config_path=env, state_path=tmp_path / "state.json")
 
@@ -47,7 +63,9 @@ def test_stale_saved_source_refuses_before_any_backup_request(tmp_path, monkeypa
     _config(env, source=source, destination=destination)
     source.unlink()
     source.write_bytes(b"replacement")
-    monkeypatch.setattr(scheduler.backup_run_once, "run_backup_once", lambda **_: (_ for _ in ()).throw(AssertionError("called")))
+    monkeypatch.setattr(
+        scheduler.backup_run_once, "run_backup_once", lambda **_: (_ for _ in ()).throw(AssertionError("called"))
+    )
 
     result = scheduler.run_scheduled_backup(config_path=env, state_path=tmp_path / "state.json")
 
@@ -80,7 +98,56 @@ def test_saved_binding_is_passed_to_offline_helper_and_labeled_in_result(tmp_pat
     assert observed["expected_offline_source_identity"] == (source_stat.st_dev, source_stat.st_ino)
     assert result["status"] == "local_verified"
     assert result["saved_source"] == {
-        "version": 1, "path": str(source), "st_dev": source_stat.st_dev, "st_ino": source_stat.st_ino,
+        "version": 1,
+        "path": str(source),
+        "st_dev": source_stat.st_dev,
+        "st_ino": source_stat.st_ino,
+        "source_open_generation": "daemon-open-test",
+    }
+
+
+def test_saved_source_open_generation_is_required_and_preserved(tmp_path):
+    destination = tmp_path / "destination"
+    destination.mkdir()
+    source = tmp_path / "brainlayer.db"
+    source.write_bytes(b"source")
+    env = tmp_path / "brainlayer.env"
+    _config(env, source=source, destination=destination, source_open_generation="  ")
+
+    with pytest.raises(scheduler.ScheduledBackupRefusal, match="invalid source generation"):
+        scheduler._load_binding(env)
+
+    _config(env, source=source, destination=destination, source_open_generation="daemon-open-42")
+    assert scheduler._load_binding(env)["source_open_generation"] == "daemon-open-42"
+
+
+def test_failed_schedule_persists_bounded_backoff(tmp_path, monkeypatch):
+    destination = tmp_path / "destination"
+    destination.mkdir()
+    source = tmp_path / "brainlayer.db"
+    source.write_bytes(b"source")
+    env = tmp_path / "brainlayer.env"
+    _config(env, source=source, destination=destination)
+    monkeypatch.setattr(scheduler, "_roots", lambda _: [])
+    monkeypatch.setattr(
+        scheduler.backup_run_once, "run_backup_once", lambda **_: (_ for _ in ()).throw(RuntimeError("offline failed"))
+    )
+    t0 = dt.datetime(2026, 9, 11, tzinfo=dt.UTC)
+
+    first = scheduler.run_scheduled_backup(config_path=env, state_path=tmp_path / "state.json", now=t0)
+    assert first["status"] == "failed"
+    assert first["failure_count"] == 1
+    assert first["retry_after"] == "2026-09-11T00:01:00+00:00"
+    held = scheduler.run_scheduled_backup(
+        config_path=env, state_path=tmp_path / "state.json", now=t0 + dt.timedelta(seconds=30)
+    )
+    assert held == {
+        "version": 1,
+        "status": "not_due",
+        "next_due": "2026-09-11T00:01:00+00:00",
+        "reason": "failure_backoff",
+        "failure_count": 1,
+        "retry_after": "2026-09-11T00:01:00+00:00",
     }
 
 

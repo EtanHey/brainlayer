@@ -500,6 +500,7 @@ def _run_backup_once_bound(
                 if socket_snapshot is None and expected_offline_source_identity is not None
                 else None
             ),
+            "destination_path": str(resolved_destination),
             "destination_identity": _identity(destination),
             "local_verified": True,
             "remote_verified": False,
