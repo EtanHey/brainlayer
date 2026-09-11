@@ -27,7 +27,7 @@ enum BrainBarDaemonMain {
             NSLog("[BrainBarDaemon] Database ready")
         }
         server.start()
-        NSLog("[BrainBarDaemon] Started on %@", BrainBarServer.defaultSocketPath())
+        NSLog("[BrainBarDaemon] Started on %@", mode.socketPath ?? BrainBarServer.defaultSocketPath())
             withExtendedLifetime(server) {
                 withExtendedLifetime(uiWatchdog) {
                     RunLoop.main.run()
