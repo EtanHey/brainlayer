@@ -184,3 +184,169 @@ def test_offline_helper_refuses_post_snapshot_source_replacement(tmp_path, monke
 
     with pytest.raises(backup_run_once.BackupRunOnceError, match="changed after snapshot"):
         backup_run_once._offline_snapshot(source, tmp_path / "snapshot.db", expected_source_identity=expected)
+
+
+
+def test_successful_schedule_scope_change_destination_is_immediately_due(tmp_path, monkeypatch):
+    source = tmp_path / "brainlayer.db"
+    source.write_bytes(b"source")
+    destination_a = tmp_path / "destination-a"
+    destination_b = tmp_path / "destination-b"
+    destination_a.mkdir()
+    destination_b.mkdir()
+    env = tmp_path / "brainlayer.env"
+    state = tmp_path / "state.json"
+    _config(env, source=source, destination=destination_a)
+    monkeypatch.setattr(scheduler, "_roots", lambda _: [])
+    calls = 0
+
+    def fake_run(**_kwargs):
+        nonlocal calls
+        calls += 1
+        return {"generation": f"generation-{calls}"}
+
+    monkeypatch.setattr(scheduler.backup_run_once, "run_backup_once", fake_run)
+    t0 = dt.datetime(2026, 9, 11, tzinfo=dt.UTC)
+    first = scheduler.run_scheduled_backup(config_path=env, state_path=state, now=t0)
+    assert first["status"] == "local_verified"
+    first_scope = json.loads(state.read_text())["schedule_scope"]
+
+    _config(env, source=source, destination=destination_b)
+    second = scheduler.run_scheduled_backup(
+        config_path=env, state_path=state, now=t0 + dt.timedelta(seconds=30)
+    )
+
+    assert second["status"] == "local_verified"
+    assert calls == 2
+    assert json.loads(state.read_text())["schedule_scope"] != first_scope
+
+
+def test_successful_schedule_scope_change_source_is_immediately_due(tmp_path, monkeypatch):
+    source_a = tmp_path / "brainlayer-a.db"
+    source_b = tmp_path / "brainlayer-b.db"
+    source_a.write_bytes(b"source-a")
+    source_b.write_bytes(b"source-b")
+    destination = tmp_path / "destination"
+    destination.mkdir()
+    env = tmp_path / "brainlayer.env"
+    state = tmp_path / "state.json"
+    _config(env, source=source_a, destination=destination)
+    monkeypatch.setattr(scheduler, "_roots", lambda _: [])
+    calls = 0
+
+    def fake_run(**_kwargs):
+        nonlocal calls
+        calls += 1
+        return {"generation": f"generation-{calls}"}
+
+    monkeypatch.setattr(scheduler.backup_run_once, "run_backup_once", fake_run)
+    t0 = dt.datetime(2026, 9, 11, tzinfo=dt.UTC)
+    assert scheduler.run_scheduled_backup(config_path=env, state_path=state, now=t0)["status"] == "local_verified"
+    _config(env, source=source_b, destination=destination)
+
+    second = scheduler.run_scheduled_backup(
+        config_path=env, state_path=state, now=t0 + dt.timedelta(seconds=30)
+    )
+
+    assert second["status"] == "local_verified"
+    assert calls == 2
+
+
+def test_unchanged_schedule_scope_honors_next_due(tmp_path, monkeypatch):
+    source = tmp_path / "brainlayer.db"
+    source.write_bytes(b"source")
+    destination = tmp_path / "destination"
+    destination.mkdir()
+    env = tmp_path / "brainlayer.env"
+    state = tmp_path / "state.json"
+    _config(env, source=source, destination=destination)
+    monkeypatch.setattr(scheduler, "_roots", lambda _: [])
+    calls = 0
+
+    def fake_run(**_kwargs):
+        nonlocal calls
+        calls += 1
+        return {"generation": f"generation-{calls}"}
+
+    monkeypatch.setattr(scheduler.backup_run_once, "run_backup_once", fake_run)
+    t0 = dt.datetime(2026, 9, 11, tzinfo=dt.UTC)
+    assert scheduler.run_scheduled_backup(config_path=env, state_path=state, now=t0)["status"] == "local_verified"
+    held = scheduler.run_scheduled_backup(
+        config_path=env, state_path=state, now=t0 + dt.timedelta(seconds=30)
+    )
+
+    assert held == {
+        "version": 1,
+        "status": "not_due",
+        "next_due": "2026-09-12T00:00:00+00:00",
+    }
+    assert calls == 1
+
+
+@pytest.mark.parametrize(
+    ("raw_state", "reason"),
+    [
+        ("[]", "scheduler state is malformed"),
+        ("null", "scheduler state is malformed"),
+        ('{"version": 2}', "scheduler state is unsupported"),
+        ('{"version": 1, "next_due": "2026-09-11T00:01:00"}', "scheduler state next_due must be timezone-aware"),
+    ],
+)
+def test_invalid_scheduler_state_refuses_without_overwrite(tmp_path, monkeypatch, raw_state, reason):
+    source = tmp_path / "brainlayer.db"
+    source.write_bytes(b"source")
+    destination = tmp_path / "destination"
+    destination.mkdir()
+    env = tmp_path / "brainlayer.env"
+    _config(env, source=source, destination=destination)
+    state = tmp_path / "state.json"
+    state.write_text(raw_state, encoding="utf-8")
+    monkeypatch.setattr(
+        scheduler.backup_run_once,
+        "run_backup_once",
+        lambda **_: (_ for _ in ()).throw(AssertionError("backup called")),
+    )
+
+    result = scheduler.run_scheduled_backup(
+        config_path=env,
+        state_path=state,
+        now=dt.datetime(2026, 9, 11, tzinfo=dt.UTC),
+    )
+
+    assert result == {"version": 1, "status": "refused", "reason": reason}
+    assert state.read_text(encoding="utf-8") == raw_state
+
+
+
+def test_failure_backoff_is_ignored_after_scope_change(tmp_path, monkeypatch):
+    source = tmp_path / "brainlayer.db"
+    source.write_bytes(b"source")
+    destination_a = tmp_path / "destination-a"
+    destination_b = tmp_path / "destination-b"
+    destination_a.mkdir()
+    destination_b.mkdir()
+    env = tmp_path / "brainlayer.env"
+    state = tmp_path / "state.json"
+    _config(env, source=source, destination=destination_a)
+    monkeypatch.setattr(scheduler, "_roots", lambda _: [])
+    calls = 0
+
+    def failed_run(**_kwargs):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("offline failed")
+
+    monkeypatch.setattr(scheduler.backup_run_once, "run_backup_once", failed_run)
+    t0 = dt.datetime(2026, 9, 11, tzinfo=dt.UTC)
+    first = scheduler.run_scheduled_backup(config_path=env, state_path=state, now=t0)
+    assert first["status"] == "failed"
+    assert first["failure_count"] == 1
+    _config(env, source=source, destination=destination_b)
+
+    second = scheduler.run_scheduled_backup(
+        config_path=env, state_path=state, now=t0 + dt.timedelta(seconds=30)
+    )
+
+    assert second["status"] == "failed"
+    assert second["failure_count"] == 1
+    assert calls == 2
