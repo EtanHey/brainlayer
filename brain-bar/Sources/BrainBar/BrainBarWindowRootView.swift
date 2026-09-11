@@ -265,7 +265,9 @@ private struct BrainBarHeaderRefreshControls: View {
     var body: some View {
         Button {
             collector.manualRefresh()
+#if BRAINBAR_UI
             BrainLayerBackupCoordinator.shared.startScheduledIfDue(forceProviderRetry: true)
+#endif
         } label: {
             Label("Refresh now", systemImage: "arrow.clockwise")
         }
@@ -273,7 +275,11 @@ private struct BrainBarHeaderRefreshControls: View {
         .controlSize(.small)
         .keyboardShortcut("r", modifiers: .command)
         .disabled(collector.isManualRefreshInProgress)
+#if BRAINBAR_UI
         .help("Refresh dashboard and backup status now")
+#else
+        .help("Refresh dashboard now")
+#endif
 
         if collector.isManualRefreshInProgress {
             ProgressView()
