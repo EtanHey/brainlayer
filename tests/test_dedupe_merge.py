@@ -1114,7 +1114,31 @@ def test_source_record_writer_migrates_exact_physical_lookup_index_without_losin
 
     ensure_chunk_source_records(conn)
 
-    assert conn.execute("SELECT * FROM chunk_source_records").fetchone() == row
+    original_columns = (
+        "record_key",
+        "canonical_chunk_id",
+        "source_file",
+        "record_start_offset",
+        "record_end_offset",
+        "raw_record_hash",
+        "session_id",
+        "observed_at",
+        "record_context_json",
+    )
+    assert conn.execute(
+        f"SELECT {','.join(original_columns)} FROM chunk_source_records WHERE record_key=?", (row[0],)
+    ).fetchone() == row
+    typed_columns = (
+        "native_generation_key",
+        "native_provider",
+        "native_watcher_generation",
+        "native_record_role",
+        "native_occurrence_key",
+        "native_record_manifest_sha256",
+    )
+    assert conn.execute(
+        f"SELECT {','.join(typed_columns)} FROM chunk_source_records WHERE record_key=?", (row[0],)
+    ).fetchone() == (None, None, None, None, None, None)
     assert [entry[2] for entry in conn.execute("PRAGMA index_info('idx_chunk_source_records_physical')")] == [
         "source_file",
         "record_start_offset",
