@@ -66,7 +66,7 @@ private func fixture() throws -> Fixture {
         "local_verified": true, "remote_verified": false, "cleanup_permitted": false,
     ]
     try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys]).write(to: generation.appendingPathComponent("receipt.complete.json"))
-    let receiptURL = root.appendingPathComponent("provider.json")
+    let receiptURL = destination.appendingPathComponent(".brainlayer-provider/icloud-provider.receipt.json")
     return Fixture(root: root, generation: generation, destination: destination, input: BrainBarICloudBackupInput(generationDirectory: generation, selectedDestination: destination, providerReceiptURL: receiptURL), artifactURLs: files.map { generation.appendingPathComponent($0.0) })
 }
 
@@ -140,5 +140,30 @@ final class BrainBarICloudBackupProviderTests: XCTestCase {
 
         let deadlineReceipt = try await BrainBarICloudBackupProvider().process(BrainBarICloudBackupInput(generationDirectory: f.generation, selectedDestination: f.destination, providerReceiptURL: f.input.providerReceiptURL, deadline: Date(timeIntervalSince1970: 0)))
         XCTAssertEqual(deadlineReceipt.failureReason, "deadline_exceeded")
+    }
+
+    func testReceiptOutputCannotOverwriteGenerationOrFollowAlias() async throws {
+        let f = try fixture(); defer { try? FileManager.default.removeItem(at: f.root) }
+        let db = f.generation.appendingPathComponent("brainlayer.db")
+        let complete = f.generation.appendingPathComponent("receipt.complete.json")
+        let dbBefore = try Data(contentsOf: db)
+        let completeBefore = try Data(contentsOf: complete)
+        for unsafeURL in [db, complete] {
+            do {
+                _ = try await BrainBarICloudBackupProvider().process(BrainBarICloudBackupInput(generationDirectory: f.generation, selectedDestination: f.destination, providerReceiptURL: unsafeURL))
+                XCTFail("accepted unsafe provider receipt URL")
+            } catch { }
+        }
+        XCTAssertEqual(try Data(contentsOf: db), dbBefore)
+        XCTAssertEqual(try Data(contentsOf: complete), completeBefore)
+
+        let namespace = f.destination.appendingPathComponent(".brainlayer-provider")
+        try FileManager.default.createSymbolicLink(at: namespace, withDestinationURL: f.generation)
+        defer { try? FileManager.default.removeItem(at: namespace) }
+        do {
+            _ = try await BrainBarICloudBackupProvider().process(f.input)
+            XCTFail("accepted symlinked provider receipt namespace")
+        } catch { }
+        XCTAssertEqual(try Data(contentsOf: db), dbBefore)
     }
 }

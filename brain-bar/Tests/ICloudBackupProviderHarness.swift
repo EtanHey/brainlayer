@@ -17,6 +17,8 @@ private func digest(_ data: Data) -> String {
     Data(SHA256.hash(data: data)).map { String(format: "%02x", $0) }.joined()
 }
 
+private func bytes(_ url: URL) throws -> Data { try Data(contentsOf: url) }
+
 private func log(_ message: String) { FileHandle.standardError.write(Data((message + "\n").utf8)) }
 
 private func assertTrue(_ condition: @autoclosure () -> Bool, _ message: String) {
@@ -89,7 +91,7 @@ struct ICloudBackupProviderHarness {
         defer { try? FileManager.default.removeItem(at: root) }
 
         let (generation, destination) = try makeGeneration(root: root)
-        let providerReceipt = root.appendingPathComponent("icloud-provider.receipt.json")
+        let providerReceipt = destination.appendingPathComponent(".brainlayer-provider/icloud-provider.receipt.json")
         let input = BrainBarICloudBackupInput(generationDirectory: generation, selectedDestination: destination, providerReceiptURL: providerReceipt)
         let receipt = try await BrainBarICloudBackupProvider(resourceProvider: BrainBarFoundationICloudResourceProvider()).process(input)
 
@@ -103,6 +105,45 @@ struct ICloudBackupProviderHarness {
         assertTrue(FileManager.default.fileExists(atPath: providerReceipt.path), "provider receipt was not persisted")
         let persisted = try Data(contentsOf: providerReceipt)
         assertTrue(persisted.count < 64 * 1024, "provider receipt is not compact")
+        let dbURL = generation.appendingPathComponent("brainlayer.db")
+        let completeURL = generation.appendingPathComponent("receipt.complete.json")
+        let dbBefore = try bytes(dbURL)
+        let completeBefore = try bytes(completeURL)
+        let dbPathInput = BrainBarICloudBackupInput(generationDirectory: generation, selectedDestination: destination, providerReceiptURL: dbURL)
+        do {
+            _ = try await BrainBarICloudBackupProvider().process(dbPathInput)
+            preconditionFailure("provider accepted a source artifact as receipt output")
+        } catch { }
+        let dbAfterUnsafe = try bytes(dbURL)
+        assertTrue(dbAfterUnsafe == dbBefore, "DB changed through an unsafe receipt path")
+        let completePathInput = BrainBarICloudBackupInput(generationDirectory: generation, selectedDestination: destination, providerReceiptURL: completeURL)
+        do {
+            _ = try await BrainBarICloudBackupProvider().process(completePathInput)
+            preconditionFailure("provider accepted complete receipt as receipt output")
+        } catch { }
+        let completeAfterUnsafe = try bytes(completeURL)
+        assertTrue(completeAfterUnsafe == completeBefore, "complete receipt changed through an unsafe path")
+        let expiredUnsafe = BrainBarICloudBackupInput(generationDirectory: generation, selectedDestination: destination, providerReceiptURL: dbURL, deadline: Date(timeIntervalSince1970: 0))
+        do {
+            _ = try await BrainBarICloudBackupProvider().process(expiredUnsafe)
+            preconditionFailure("expired unsafe output path was accepted")
+        } catch { }
+        let dbAfterDeadline = try bytes(dbURL)
+        assertTrue(dbAfterDeadline == dbBefore, "expired deadline changed the DB")
+        let namespace = destination.appendingPathComponent(".brainlayer-provider")
+        try FileManager.default.removeItem(at: namespace)
+        try FileManager.default.createSymbolicLink(at: namespace, withDestinationURL: generation)
+        defer { try? FileManager.default.removeItem(at: namespace) }
+        do {
+            _ = try await BrainBarICloudBackupProvider().process(input)
+            preconditionFailure("provider accepted a symlinked receipt namespace")
+        } catch { }
+        let dbAfterAlias = try bytes(dbURL)
+        assertTrue(dbAfterAlias == dbBefore, "symlinked namespace changed the DB")
+        try FileManager.default.removeItem(at: namespace)
+        let repeatFirst = try await BrainBarICloudBackupProvider().process(input)
+        let repeatSecond = try await BrainBarICloudBackupProvider().process(input)
+        assertTrue(repeatFirst.state == .staged && repeatSecond.state == .staged, "valid provider status update did not repeat")
 
         let uploadedRoot = FileManager.default.temporaryDirectory.appendingPathComponent("brainlayer-icloud-uploaded-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: uploadedRoot, withIntermediateDirectories: true)
@@ -110,7 +151,7 @@ struct ICloudBackupProviderHarness {
         let (uploadedGeneration, uploadedDestination) = try makeGeneration(root: uploadedRoot)
         let uploadedArtifacts = ["brainlayer.db", "jsonl.bundle.tar", "receipt.complete.json"].map { uploadedGeneration.appendingPathComponent($0) }
         let uploadedResources = FakeResources(fakeMap(generation: uploadedGeneration, destination: uploadedDestination, artifacts: uploadedArtifacts, uploaded: true, downloaded: true, uploading: false))
-        let uploadedInput = BrainBarICloudBackupInput(generationDirectory: uploadedGeneration, selectedDestination: uploadedDestination, providerReceiptURL: uploadedRoot.appendingPathComponent("provider.json"))
+        let uploadedInput = BrainBarICloudBackupInput(generationDirectory: uploadedGeneration, selectedDestination: uploadedDestination, providerReceiptURL: uploadedDestination.appendingPathComponent(".brainlayer-provider/icloud-provider.receipt.json"))
         let uploaded = try await BrainBarICloudBackupProvider(resourceProvider: uploadedResources).process(uploadedInput)
         assertTrue(uploaded.state == .uploadedOSReported, "expected OS-uploaded state")
         assertTrue(uploaded.artifacts.allSatisfy { $0.localSHA256 == $0.finalSHA256 }, "final hashes did not match local hashes")
@@ -122,7 +163,7 @@ struct ICloudBackupProviderHarness {
         let (pendingGeneration, pendingDestination) = try makeGeneration(root: pendingRoot)
         let pendingArtifacts = ["brainlayer.db", "jsonl.bundle.tar", "receipt.complete.json"].map { pendingGeneration.appendingPathComponent($0) }
         let pendingResources = FakeResources(fakeMap(generation: pendingGeneration, destination: pendingDestination, artifacts: pendingArtifacts, uploaded: false, downloaded: false, uploading: true))
-        let pending = try await BrainBarICloudBackupProvider(resourceProvider: pendingResources).process(BrainBarICloudBackupInput(generationDirectory: pendingGeneration, selectedDestination: pendingDestination, providerReceiptURL: pendingRoot.appendingPathComponent("provider.json")))
+        let pending = try await BrainBarICloudBackupProvider(resourceProvider: pendingResources).process(BrainBarICloudBackupInput(generationDirectory: pendingGeneration, selectedDestination: pendingDestination, providerReceiptURL: pendingDestination.appendingPathComponent(".brainlayer-provider/icloud-provider.receipt.json")))
         assertTrue(pending.state == .uploadPending && pendingResources.downloads.count == 3, "pending upload did not request bounded materialization")
 
         log("ICLOUD_PROVIDER_HARNESS_OK local=staged uploaded=uploaded_os_reported pending=upload_pending source=foundation/injected_test receipt_bytes=\(persisted.count)")

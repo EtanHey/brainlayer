@@ -128,40 +128,39 @@ public struct BrainBarICloudBackupProvider: Sendable {
     }
 
     public func process(_ input: BrainBarICloudBackupInput) async throws -> BrainBarICloudBackupProviderReceipt {
+        let safeInput = try validatedInput(input)
         try Task.checkCancellation()
-        if let deadline = input.deadline, now() >= deadline {
-            return try persist(failure: "deadline_exceeded", input: input, generation: nil, artifacts: [])
-        }
         do {
+            // Validate the generation before any failure receipt, including an expired deadline.
             let checked = try await Task.detached(priority: .utility) {
-                try Self.validateAndHash(input)
+                try Self.validateAndHash(safeInput)
             }.value
             try Task.checkCancellation()
             if let deadline = input.deadline, now() >= deadline {
-                return try persist(failure: "deadline_exceeded", input: input, generation: checked.generation, artifacts: checked.artifacts)
+                return try persist(failure: "deadline_exceeded", input: safeInput, generation: checked.generation, artifacts: checked.artifacts)
             }
-            let destinationState = try resourceProvider.inspect(input.selectedDestination)
+            let destinationState = try resourceProvider.inspect(safeInput.selectedDestination)
             if let error = destinationState.errorDescription {
-                return try persist(failure: "destination_resource_error: \(error)", input: input, generation: checked.generation, artifacts: checked.artifacts)
+                return try persist(failure: "destination_resource_error: \(error)", input: safeInput, generation: checked.generation, artifacts: checked.artifacts)
             }
             guard destinationState.isUbiquitous != nil else {
-                return try persist(failure: "destination_resource_state_unknown", input: input, generation: checked.generation, artifacts: checked.artifacts)
+                return try persist(failure: "destination_resource_state_unknown", input: safeInput, generation: checked.generation, artifacts: checked.artifacts)
             }
             guard destinationState.isUbiquitous == true else {
-                return try persist(state: .staged, input: input, generation: checked.generation, artifacts: checked.artifacts, destinationKind: "local")
+                return try persist(state: .staged, input: safeInput, generation: checked.generation, artifacts: checked.artifacts, destinationKind: "local")
             }
             let finalDirectory: URL
             if input.generationDirectory.deletingLastPathComponent().standardizedFileURL == input.selectedDestination.standardizedFileURL {
                 finalDirectory = input.generationDirectory
             } else {
-                finalDirectory = try copyGeneration(checked: checked, input: input)
+                finalDirectory = try copyGeneration(checked: checked, input: safeInput)
             }
-            let finalArtifacts = try await inspectAndHashFinal(checked: checked, finalDirectory: finalDirectory, input: input)
+            let finalArtifacts = try await inspectAndHashFinal(checked: checked, finalDirectory: finalDirectory, input: safeInput)
             let allUploaded = finalArtifacts.allSatisfy { $0.resourceState?.isUploaded == true }
             let uploading = finalArtifacts.contains { $0.resourceState?.isUploading == true || $0.resourceState?.isUploaded != true }
             return try persist(
                 state: allUploaded ? .uploadedOSReported : (uploading ? .uploadPending : .uploadPending),
-                input: input,
+                input: safeInput,
                 generation: checked.generation,
                 artifacts: finalArtifacts,
                 destinationKind: "icloud"
@@ -169,7 +168,48 @@ public struct BrainBarICloudBackupProvider: Sendable {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            return try persist(failure: Self.failureMessage(error), input: input, generation: nil, artifacts: [])
+            return try persist(failure: Self.failureMessage(error), input: safeInput, generation: nil, artifacts: [])
+        }
+    }
+
+    private func validatedInput(_ input: BrainBarICloudBackupInput) throws -> BrainBarICloudBackupInput {
+        let destination = input.selectedDestination.standardizedFileURL
+        _ = try Self.regularIdentity(destination, directory: true)
+        let namespace = destination.appendingPathComponent(Self.providerReceiptDirectoryName, isDirectory: true)
+        let expected = namespace.appendingPathComponent(Self.providerReceiptName, isDirectory: false)
+        guard input.providerReceiptURL.standardizedFileURL == expected.standardizedFileURL else {
+            throw ProviderFailure.invalidReceiptOutput
+        }
+        try Self.validateReceiptPath(expected, under: destination)
+        return BrainBarICloudBackupInput(
+            generationDirectory: input.generationDirectory,
+            selectedDestination: input.selectedDestination,
+            providerReceiptURL: expected,
+            deadline: input.deadline
+        )
+    }
+
+    private static let providerReceiptDirectoryName = ".brainlayer-provider"
+    private static let providerReceiptName = "icloud-provider.receipt.json"
+
+    private static func validateReceiptPath(_ url: URL, under destination: URL) throws {
+        let expectedPrefix = destination.standardizedFileURL.path.hasSuffix("/")
+            ? destination.standardizedFileURL.path
+            : destination.standardizedFileURL.path + "/"
+        guard url.standardizedFileURL.path.hasPrefix(expectedPrefix) else {
+            throw ProviderFailure.invalidReceiptOutput
+        }
+        let relative = String(url.standardizedFileURL.path.dropFirst(expectedPrefix.count))
+        let parts = relative.split(separator: "/", omittingEmptySubsequences: true)
+        guard parts.count == 2, parts[0] == providerReceiptDirectoryName, parts[1] == providerReceiptName else {
+            throw ProviderFailure.invalidReceiptOutput
+        }
+        let namespace = destination.appendingPathComponent(providerReceiptDirectoryName, isDirectory: true)
+        if FileManager.default.fileExists(atPath: namespace.path) {
+            _ = try regularIdentity(namespace, directory: true)
+        }
+        if FileManager.default.fileExists(atPath: url.path) {
+            _ = try regularIdentity(url, directory: false)
         }
     }
 
@@ -310,13 +350,14 @@ public struct BrainBarICloudBackupProvider: Sendable {
     }
 
     private enum ProviderFailure: Error, CustomStringConvertible {
-        case invalidReceipt(String), digestMismatch(String), sourceChanged(String), staleDestination, placeholder(String), materialization(String), resourceError(String, String), resourceState(String), deadline
+        case invalidReceipt(String), digestMismatch(String), sourceChanged(String), staleDestination, invalidReceiptOutput, placeholder(String), materialization(String), resourceError(String, String), resourceState(String), deadline
         var description: String {
             switch self {
             case let .invalidReceipt(value): "invalid_receipt: \(value)"
             case let .digestMismatch(value): "digest_mismatch: \(value)"
             case let .sourceChanged(value): "source_changed: \(value)"
             case .staleDestination: "stale_or_mismatched_destination"
+            case .invalidReceiptOutput: "invalid_provider_receipt_path"
             case let .placeholder(value): "icloud_placeholder: \(value)"
             case let .materialization(value): "materialization_timeout: \(value)"
             case let .resourceError(name, error): "resource_error: \(name): \(error)"
