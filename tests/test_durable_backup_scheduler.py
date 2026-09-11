@@ -288,9 +288,11 @@ def test_unchanged_schedule_scope_honors_next_due(tmp_path, monkeypatch):
     [
         ("[]", "scheduler state is malformed"),
         ("null", "scheduler state is malformed"),
+        ('{}', "scheduler state is unsupported"),
         ('{"version": 2}', "scheduler state is unsupported"),
+        ('{"version": 1}', "scheduler state has invalid status"),
         ('{"version": 1, "status": []}', "scheduler state has invalid status"),
-        ('{"version": 1, "next_due": "2026-09-11T00:01:00"}', "scheduler state next_due must be timezone-aware"),
+        ('{"version": 1, "status": "local_verified", "next_due": "2026-09-11T00:01:00"}', "scheduler state next_due must be timezone-aware"),
     ],
 )
 def test_invalid_scheduler_state_refuses_without_overwrite(tmp_path, monkeypatch, raw_state, reason):
@@ -366,3 +368,44 @@ def test_invalid_scheduler_state_refuses_when_disabled_without_overwrite(tmp_pat
 
     assert result == {"version": 1, "status": "refused", "reason": "scheduler state is malformed"}
     assert state.read_text(encoding="utf-8") == "[]"
+
+
+
+def test_invalid_utf8_scheduler_state_refuses_without_overwrite(tmp_path):
+    destination = tmp_path / "destination"
+    destination.mkdir()
+    env = tmp_path / "brainlayer.env"
+    _config(env, source=None, destination=destination, enabled=False)
+    state = tmp_path / "state.json"
+    raw_state = b"\xff\xfe"
+    state.write_bytes(raw_state)
+
+    result = scheduler.run_scheduled_backup(config_path=env, state_path=state)
+
+    assert result == {"version": 1, "status": "refused", "reason": "scheduler state is not valid UTF-8"}
+    assert state.read_bytes() == raw_state
+
+
+def test_v1_state_without_scope_is_due_once_for_migration(tmp_path, monkeypatch):
+    source = tmp_path / "brainlayer.db"
+    source.write_bytes(b"source")
+    destination = tmp_path / "destination"
+    destination.mkdir()
+    env = tmp_path / "brainlayer.env"
+    state = tmp_path / "state.json"
+    _config(env, source=source, destination=destination)
+    monkeypatch.setattr(scheduler, "_roots", lambda _: [])
+    monkeypatch.setattr(scheduler.backup_run_once, "run_backup_once", lambda **_: {"generation": "generation-1"})
+    state.write_text(
+        json.dumps({"version": 1, "status": "local_verified", "next_due": "2099-01-01T00:00:00+00:00"}),
+        encoding="utf-8",
+    )
+
+    result = scheduler.run_scheduled_backup(
+        config_path=env,
+        state_path=state,
+        now=dt.datetime(2026, 9, 11, tzinfo=dt.UTC),
+    )
+
+    assert result["status"] == "local_verified"
+    assert "schedule_scope" in json.loads(state.read_text())

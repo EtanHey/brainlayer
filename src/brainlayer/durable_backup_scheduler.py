@@ -143,15 +143,17 @@ def _load_previous_state(state_path: Path) -> dict[str, Any]:
         return {}
     except OSError as exc:
         raise ScheduledBackupRefusal("scheduler state is unreadable") from exc
+    except UnicodeDecodeError as exc:
+        raise ScheduledBackupRefusal("scheduler state is not valid UTF-8") from exc
     except json.JSONDecodeError as exc:
         raise ScheduledBackupRefusal("scheduler state is malformed") from exc
     if not isinstance(raw, dict):
         raise ScheduledBackupRefusal("scheduler state is malformed")
     version = raw.get("version")
-    if version is not None and (type(version) is not int or version != _STATE_VERSION):
+    if type(version) is not int or version != _STATE_VERSION:
         raise ScheduledBackupRefusal("scheduler state is unsupported")
     status = raw.get("status")
-    if status is not None and (not isinstance(status, str) or status not in _SCHEDULE_STATUSES):
+    if not isinstance(status, str) or status not in _SCHEDULE_STATUSES:
         raise ScheduledBackupRefusal("scheduler state has invalid status")
     for field in ("next_due", "retry_after"):
         if field in raw:
