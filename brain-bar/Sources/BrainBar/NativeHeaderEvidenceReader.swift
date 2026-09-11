@@ -46,17 +46,24 @@ enum NativeHeaderEvidenceReader {
         LEFT JOIN native_session_header_occurrences AS o
           ON o.occurrence_key=g.canonical_occurrence_key AND o.generation_key=g.generation_key
         WHERE csr.record_key=?
-        LIMIT 18
+        LIMIT 2
         """
-        guard let countStatement = prepare(db, "SELECT COUNT(*) FROM chunk_source_records AS csr LEFT JOIN native_source_generations AS g ON g.generation_key=csr.native_generation_key LEFT JOIN native_session_header_occurrences AS o ON o.occurrence_key=g.canonical_occurrence_key AND o.generation_key=g.generation_key WHERE csr.record_key=?", [sourceRecordKey]) else { return base.withStatus("unknown_native_header_schema") }
-        defer { sqlite3_finalize(countStatement) }
-        guard sqlite3_step(countStatement) == SQLITE_ROW else { return base.withStatus("unknown_native_header_missing_source_row") }
-        let rowCount = sqlite3_column_int64(countStatement, 0)
-        guard rowCount > 0 else { return base.withStatus("unknown_native_header_missing_source_row") }
-        guard rowCount <= 17 else { return base.withStatus("unknown_multiple_native_header_bindings") }
         guard let statement = prepare(db, sql, [sourceRecordKey]) else { return base.withStatus("unknown_native_header_schema") }
         defer { sqlite3_finalize(statement) }
-        guard sqlite3_step(statement) == SQLITE_ROW else { return base.withStatus("unknown_native_header_missing_source_row") }
+        // A valid binding has one joined row. Read one additional row only so
+        // a corrupt catalog cannot be accepted based on whichever twin SQLite
+        // happens to return first, while keeping the query bounded.
+        let firstRow = sqlite3_step(statement)
+        guard firstRow == SQLITE_ROW else { return base.withStatus("unknown_native_header_missing_source_row") }
+        let secondRow = sqlite3_step(statement)
+        guard secondRow == SQLITE_DONE else {
+            return base.withStatus(secondRow == SQLITE_ROW
+                ? "unknown_multiple_native_header_bindings"
+                : "unknown_native_header_schema")
+        }
+        guard sqlite3_reset(statement) == SQLITE_OK, sqlite3_step(statement) == SQLITE_ROW else {
+            return base.withStatus("unknown_native_header_schema")
+        }
         guard let provider = text(statement, 1), let sessionID = text(statement, 2),
               let sourceFile = text(statement, 3), let rawHash = text(statement, 6),
               sqlite3_column_type(statement, 4) == SQLITE_INTEGER,
