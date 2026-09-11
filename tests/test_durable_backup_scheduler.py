@@ -351,3 +351,18 @@ def test_failure_backoff_is_ignored_after_scope_change(tmp_path, monkeypatch):
     assert second["status"] == "failed"
     assert second["failure_count"] == 1
     assert calls == 2
+
+
+
+def test_invalid_scheduler_state_refuses_when_disabled_without_overwrite(tmp_path):
+    destination = tmp_path / "destination"
+    destination.mkdir()
+    env = tmp_path / "brainlayer.env"
+    _config(env, source=None, destination=destination, enabled=False)
+    state = tmp_path / "state.json"
+    state.write_text("[]", encoding="utf-8")
+
+    result = scheduler.run_scheduled_backup(config_path=env, state_path=state)
+
+    assert result == {"version": 1, "status": "refused", "reason": "scheduler state is malformed"}
+    assert state.read_text(encoding="utf-8") == "[]"

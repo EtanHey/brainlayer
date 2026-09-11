@@ -208,11 +208,6 @@ def run_scheduled_backup(
     if now.tzinfo is None or now.utcoffset() is None:
         return _status("refused", reason="scheduler clock must be timezone-aware")
     enabled = config.configured_brainlayer_env_value("BRAINLAYER_BACKUP_ENABLED", config_path)
-    if enabled not in {"1", "true", "yes", "on"}:
-        result = _status("disabled", reason="backup_disabled")
-        _write_json(state_path, result)
-        return result
-
     lock_path = state_path.with_suffix(state_path.suffix + ".lock")
     lock_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     with lock_path.open("a+") as lock:
@@ -227,6 +222,10 @@ def run_scheduled_backup(
                 # Preserve malformed state for diagnosis; a refusal is visible to
                 # the caller but must not turn corrupt bytes into a valid state.
                 return _status("refused", reason=str(exc))
+            if enabled not in {"1", "true", "yes", "on"}:
+                result = _status("disabled", reason="backup_disabled")
+                _write_json(state_path, result)
+                return result
 
             schedule_scope: dict[str, Any] | None = None
             try:
