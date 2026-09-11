@@ -155,6 +155,12 @@ extension NativeContinuityReader {
         guard isSHA256(sourceRecordKey) else {
             return base.merging(["status": "malformed_source_record_key"]) { _, new in new }
         }
+        // Codex assistants are persisted by the source-record binder, not by
+        // Claude's native_record_links continuity writer. Try that actual key
+        // first; preserve the existing Claude route as its fallback.
+        if let nativeHeader = NativeHeaderEvidenceReader.read(db: db, sourceRecordKey: sourceRecordKey, maxBytes: maxBytes) {
+            return nativeHeader
+        }
         guard case .value(let hasTable) = tableExists(db) else {
             return base.merging(["status": "database_error"]) { _, new in new }
         }
