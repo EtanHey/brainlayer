@@ -37,7 +37,7 @@ enum BrainBarDaemonStartupMode: Equatable {
               !sameExistingFile(socketPath, canonicalSocketPath ?? "/tmp/brainbar.sock") else {
             return .failure("--isolated routes resolve to a canonical or aliased path")
         }
-        return .success(.isolated(dbPath: dbPath, socketPath: socketPath))
+        return .success(.isolated(dbPath: resolvedDB, socketPath: resolvedSocket))
     }
 
     private static func resolvedPath(_ path: String) -> String? {
