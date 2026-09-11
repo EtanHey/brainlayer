@@ -43,16 +43,36 @@ def ensure_chunk_source_records(conn: Any, *, migrate: bool = True) -> None:
         record_end_offset INTEGER NOT NULL, raw_record_hash TEXT NOT NULL,
         session_id TEXT, observed_at TEXT NOT NULL,
         record_context_json TEXT NOT NULL DEFAULT '[]',
+        native_generation_key TEXT,
+        native_provider TEXT,
+        native_watcher_generation INTEGER,
+        native_record_role TEXT,
+        native_occurrence_key TEXT,
+        native_record_manifest_sha256 TEXT,
         FOREIGN KEY(canonical_chunk_id) REFERENCES chunks(id) ON DELETE CASCADE)""")
     if migrate:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(chunk_source_records)")}
         if "record_context_json" not in columns:
             conn.execute("ALTER TABLE chunk_source_records ADD COLUMN record_context_json TEXT NOT NULL DEFAULT '[]'")
+        for column, definition in (
+            ("native_generation_key", "TEXT"),
+            ("native_provider", "TEXT"),
+            ("native_watcher_generation", "INTEGER"),
+            ("native_record_role", "TEXT"),
+            ("native_occurrence_key", "TEXT"),
+            ("native_record_manifest_sha256", "TEXT"),
+        ):
+            if column not in columns:
+                conn.execute(f"ALTER TABLE chunk_source_records ADD COLUMN {column} {definition}")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_chunk_source_records_physical "
             "ON chunk_source_records("
             "source_file, record_start_offset, record_end_offset, raw_record_hash, session_id, record_key"
             ")"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chunk_source_records_native_binding "
+            "ON chunk_source_records(native_generation_key, native_provider, native_watcher_generation, record_key)"
         )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_chunk_source_records_canonical ON chunk_source_records(canonical_chunk_id)"
