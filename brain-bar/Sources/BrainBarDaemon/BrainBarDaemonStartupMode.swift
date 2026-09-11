@@ -10,7 +10,7 @@ enum BrainBarDaemonStartupMode: Equatable {
     case normal
     case isolated(dbPath: String, socketPath: String)
 
-    static func parse(arguments: [String], environment: [String: String]) -> ParseOutcome {
+    static func parse(arguments: [String], environment: [String: String], canonicalDBPath: String? = nil, canonicalSocketPath: String? = nil) -> ParseOutcome {
         let flags = Array(arguments.dropFirst())
         guard flags == ["--isolated"] || flags.isEmpty else {
             return .failure("unsupported arguments; use --isolated")
@@ -29,10 +29,12 @@ enum BrainBarDaemonStartupMode: Equatable {
               resolvedDB != resolvedSocket else {
             return .failure("--isolated requires routes beneath the same owned 0700 private directory")
         }
-        let canonicalDB = resolvedPath(NSHomeDirectory() + "/.local/share/brainlayer/brainlayer.db")
-        let canonicalSocket = resolvedPath("/tmp/brainbar.sock")
+        let canonicalDB = resolvedPath(canonicalDBPath ?? (NSHomeDirectory() + "/.local/share/brainlayer/brainlayer.db"))
+        let canonicalSocket = resolvedPath(canonicalSocketPath ?? "/tmp/brainbar.sock")
         guard resolvedDB != canonicalDB, resolvedSocket != canonicalSocket,
-              !sameExistingFile(dbPath, socketPath) else {
+              !sameExistingFile(dbPath, socketPath),
+              !sameExistingFile(dbPath, canonicalDBPath ?? (NSHomeDirectory() + "/.local/share/brainlayer/brainlayer.db")),
+              !sameExistingFile(socketPath, canonicalSocketPath ?? "/tmp/brainbar.sock") else {
             return .failure("--isolated routes resolve to a canonical or aliased path")
         }
         return .success(.isolated(dbPath: dbPath, socketPath: socketPath))
@@ -56,9 +58,10 @@ enum BrainBarDaemonStartupMode: Equatable {
     }
 
     private static func sameExistingFile(_ left: String, _ right: String) -> Bool {
+        guard let resolvedLeft = resolvedPath(left), let resolvedRight = resolvedPath(right) else { return false }
         var leftInfo = stat()
         var rightInfo = stat()
-        guard lstat(left, &leftInfo) == 0, lstat(right, &rightInfo) == 0 else { return false }
+        guard lstat(resolvedLeft, &leftInfo) == 0, lstat(resolvedRight, &rightInfo) == 0 else { return false }
         return leftInfo.st_dev == rightInfo.st_dev && leftInfo.st_ino == rightInfo.st_ino
     }
 
