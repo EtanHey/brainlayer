@@ -162,6 +162,12 @@ final class BrainLayerBackupCoordinator: ObservableObject {
         case idle
         case running
         case localVerified(receipt: String)
+        case schedulerObserved(status: String, detail: String?)
+        case providerObserved(
+            localReceipt: String,
+            providerReceipt: String,
+            state: BrainBarICloudBackupState
+        )
         case failed(message: String)
 
         var title: String {
@@ -169,6 +175,10 @@ final class BrainLayerBackupCoordinator: ObservableObject {
             case .idle: "Not run"
             case .running: "Running"
             case let .localVerified(receipt): "Local backup verified — \(receipt)"
+            case let .schedulerObserved(status, detail):
+                detail.map { "Scheduled backup \(status) — \($0)" } ?? "Scheduled backup \(status)"
+            case let .providerObserved(_, providerReceipt, state):
+                "Local backup verified; provider \(state.rawValue), remote unverified — \(providerReceipt)"
             case let .failed(message): "Backup failed — \(message)"
             }
         }
@@ -180,26 +190,31 @@ final class BrainLayerBackupCoordinator: ObservableObject {
     private static let scheduleInterval: TimeInterval = 24 * 60 * 60
     private static let failureBackoff: TimeInterval = 60 * 60
     private let commandRunner: BrainLayerBackupCommandRunner
+    private let provider: BrainBarICloudBackupProvider
     private let stateURL: URL
+    private let scheduledStateURL: URL
     private let now: @Sendable () -> Date
     private var task: Task<Void, Never>?
     private var activeRunID: UUID?
-    private var scheduleTimer: DispatchSourceTimer?
     private var statusObservers: [UUID: @MainActor (Status) -> Void] = [:]
 
     init(
         commandRunner: BrainLayerBackupCommandRunner = BrainLayerBackupCommandRunner(),
+        provider: BrainBarICloudBackupProvider = BrainBarICloudBackupProvider(),
         stateURL: URL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".local/share/brainlayer/backup-state.json"),
-        now: @escaping @Sendable () -> Date = Date.init
+        scheduledStateURL: URL = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".local/share/brainlayer/durable-backup-schedule-state.json"),
+        now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.commandRunner = commandRunner
+        self.provider = provider
         self.stateURL = stateURL
+        self.scheduledStateURL = scheduledStateURL
         self.now = now
     }
 
     deinit {
         task?.cancel()
-        scheduleTimer?.cancel()
     }
 
     @discardableResult
@@ -220,29 +235,108 @@ final class BrainLayerBackupCoordinator: ObservableObject {
         callback(nextStatus)
     }
 
+    /// Compatibility entry point used by the app launch path. The durable Python
+    /// scheduler is the sole automatic trigger; this method only reconciles its
+    /// persisted result and observes an already completed local receipt.
     func startScheduledIfDue(configURL: URL = BrainLayerConfigStore.defaultConfigURL()) {
-        if scheduleTimer == nil {
-            let timer = DispatchSource.makeTimerSource(queue: .main)
-            timer.schedule(deadline: .now() + 60 * 60, repeating: 60 * 60)
-            timer.setEventHandler { [weak self] in
-                self?.startScheduledIfDue(configURL: configURL)
-            }
-            timer.resume()
-            scheduleTimer = timer
-        }
-        guard task == nil else { return }
         do {
             let config = try BrainLayerConfigStore(configURL: configURL).loadDocument().config
-            guard config.backupEnabled else { publish(.idle, to: { _ in }); return }
-            let state = try loadScheduleState()
-            guard state.schema == 1 else { throw NSError(domain: "BrainLayerBackupSchedule", code: 1, userInfo: [NSLocalizedDescriptionKey: "Unsupported backup schedule schema \(state.schema)"]) }
-            let destination = config.backupDestinationPath
-            let identity = config.backupDestinationIdentity
-            let changed = state.destinationPath != destination || state.destinationDevice != identity?.stDev || state.destinationInode != identity?.stIno
-            guard changed || state.nextDue == nil || state.nextDue! <= now() else { return }
-            startIfConfigured(config: config, configURL: configURL)
+            refreshScheduledStatus(config: config)
         } catch {
-            publish(.failed(message: "Could not load backup schedule: \(error)"), to: { _ in })
+            publish(.failed(message: "Could not load backup configuration: \(error)"), to: { _ in })
+        }
+    }
+
+    func refreshScheduledStatus(config: BrainLayerConfig) {
+        guard task == nil else { return }
+        guard config.backupEnabled else {
+            publish(.schedulerObserved(status: "disabled", detail: "backup disabled"), to: { _ in })
+            return
+        }
+        let object: [String: Any]
+        do {
+            let data = try Data(contentsOf: scheduledStateURL)
+            guard data.count <= Self.statusMessageLimit,
+                  let decoded = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let version = decoded["version"] as? NSNumber,
+                  CFGetTypeID(version) != CFBooleanGetTypeID(),
+                  version.intValue == 1,
+                  let status = decoded["status"] as? String,
+                  !status.isEmpty else {
+                throw NSError(
+                    domain: "BrainLayerBackupSchedule",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "malformed durable scheduler state"]
+                )
+            }
+            object = decoded
+        } catch CocoaError.fileReadNoSuchFile {
+            publish(.schedulerObserved(status: "not_run", detail: nil), to: { _ in })
+            return
+        } catch {
+            publish(.failed(message: "Could not read durable scheduler state: \(error)"), to: { _ in })
+            return
+        }
+
+        guard let scheduledStatus = object["status"] as? String else {
+            publish(.failed(message: "Durable scheduler state lost its status"), to: { _ in })
+            return
+        }
+        let receipt = object["receipt"] as? String
+        if ["local_verified", "not_due"].contains(scheduledStatus),
+           let receipt,
+           !receipt.isEmpty,
+           let destinationPath = config.backupDestinationPath {
+            observeScheduledReceipt(receipt, destinationPath: destinationPath)
+            return
+        }
+        let detail = (object["reason"] as? String) ?? (object["error"] as? String)
+        publish(.schedulerObserved(status: scheduledStatus, detail: detail), to: { _ in })
+    }
+
+    private func observeScheduledReceipt(_ receipt: String, destinationPath: String) {
+        publish(.running, to: { _ in })
+        let runID = UUID()
+        activeRunID = runID
+        let localReceiptURL = URL(fileURLWithPath: receipt).standardizedFileURL
+        let destinationURL = URL(fileURLWithPath: destinationPath).standardizedFileURL
+        let providerReceiptURL = destinationURL
+            .appendingPathComponent(".brainlayer-provider", isDirectory: true)
+            .appendingPathComponent("icloud-provider.receipt.json", isDirectory: false)
+        task = Task {
+            do {
+                let providerReceipt = try await provider.process(BrainBarICloudBackupInput(
+                    generationDirectory: localReceiptURL.deletingLastPathComponent(),
+                    selectedDestination: destinationURL,
+                    providerReceiptURL: providerReceiptURL
+                ))
+                try Task.checkCancellation()
+                guard !providerReceipt.remoteVerified, !providerReceipt.cleanupPermitted else {
+                    throw NSError(
+                        domain: "BrainLayerBackupProvider",
+                        code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "provider attempted to authorize unverified cleanup"]
+                    )
+                }
+                if providerReceipt.state == .failed {
+                    publish(
+                        .failed(message: providerReceipt.failureReason ?? "provider verification failed"),
+                        to: { _ in }
+                    )
+                } else {
+                    publish(.providerObserved(
+                        localReceipt: receipt,
+                        providerReceipt: providerReceiptURL.path,
+                        state: providerReceipt.state
+                    ), to: { _ in })
+                }
+            } catch is CancellationError {
+                if activeRunID == runID { task = nil; activeRunID = nil }
+                return
+            } catch {
+                publish(.failed(message: "Provider verification failed: \(error)"), to: { _ in })
+            }
+            if activeRunID == runID { task = nil; activeRunID = nil }
         }
     }
 
@@ -285,6 +379,15 @@ final class BrainLayerBackupCoordinator: ObservableObject {
         } catch {
             publish(.failed(message: "Could not load backup schedule: \(error)"), to: onStatus)
             return
+        }
+        let destinationChanged =
+            scheduleState.destinationPath != config.backupDestinationPath
+            || scheduleState.destinationDevice != config.backupDestinationIdentity?.stDev
+            || scheduleState.destinationInode != config.backupDestinationIdentity?.stIno
+        if destinationChanged {
+            scheduleState.lastSuccess = nil
+            scheduleState.lastReceipt = nil
+            scheduleState.nextDue = nil
         }
         scheduleState.lastAttempt = now()
         scheduleState.lastStatus = "running"
@@ -334,16 +437,72 @@ final class BrainLayerBackupCoordinator: ObservableObject {
                let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
                object["status"] as? String == "local_verified",
                let receipt = object["receipt"] as? String,
-               !receipt.isEmpty {
+               !receipt.isEmpty,
+               let destinationPath = config.backupDestinationPath {
+                let localReceiptURL = URL(fileURLWithPath: receipt).standardizedFileURL
+                let destinationURL = URL(fileURLWithPath: destinationPath).standardizedFileURL
+                let providerReceiptURL = destinationURL
+                    .appendingPathComponent(".brainlayer-provider", isDirectory: true)
+                    .appendingPathComponent("icloud-provider.receipt.json", isDirectory: false)
                 scheduleState.lastSuccess = now()
+                scheduleState.lastReceipt = receipt
                 scheduleState.nextDue = now().addingTimeInterval(Self.scheduleInterval)
                 scheduleState.lastStatus = "local_verified"
-                scheduleState.lastReceipt = receipt
                 do {
                     try saveScheduleState(scheduleState)
-                    publish(.localVerified(receipt: receipt), to: { _ in })
                 } catch {
-                    publish(.failed(message: "Could not persist backup schedule: \(error)"), to: { _ in })
+                    publish(.failed(message: "Could not persist local backup verification: \(error)"), to: { _ in })
+                    if activeRunID == runID { task = nil; activeRunID = nil }
+                    return
+                }
+                do {
+                    let providerReceipt = try await provider.process(BrainBarICloudBackupInput(
+                        generationDirectory: localReceiptURL.deletingLastPathComponent(),
+                        selectedDestination: destinationURL,
+                        providerReceiptURL: providerReceiptURL
+                    ))
+                    try Task.checkCancellation()
+                    guard !providerReceipt.remoteVerified, !providerReceipt.cleanupPermitted else {
+                        throw NSError(
+                            domain: "BrainLayerBackupProvider",
+                            code: 1,
+                            userInfo: [NSLocalizedDescriptionKey: "provider attempted to authorize unverified cleanup"]
+                        )
+                    }
+                    if providerReceipt.state == .failed {
+                        scheduleState.nextDue = now().addingTimeInterval(Self.failureBackoff)
+                        scheduleState.lastStatus = "provider_failed"
+                    } else {
+                        scheduleState.nextDue = now().addingTimeInterval(Self.scheduleInterval)
+                        scheduleState.lastStatus = "provider_\(providerReceipt.state.rawValue)"
+                    }
+                    try saveScheduleState(scheduleState)
+                    if providerReceipt.state == .failed {
+                        publish(
+                            .failed(message: providerReceipt.failureReason ?? "provider verification failed"),
+                            to: { _ in }
+                        )
+                    } else {
+                        publish(.providerObserved(
+                            localReceipt: receipt,
+                            providerReceipt: providerReceiptURL.path,
+                            state: providerReceipt.state
+                        ), to: { _ in })
+                    }
+                } catch is CancellationError {
+                    if activeRunID == runID { task = nil; activeRunID = nil }
+                    return
+                } catch {
+                    scheduleState.nextDue = now().addingTimeInterval(Self.failureBackoff)
+                    scheduleState.lastStatus = "provider_failed"
+                    do {
+                        try saveScheduleState(scheduleState)
+                    } catch {
+                        publish(.failed(message: "Provider and schedule persistence failed: \(error)"), to: { _ in })
+                        if activeRunID == runID { task = nil; activeRunID = nil }
+                        return
+                    }
+                    publish(.failed(message: "Provider verification failed: \(error)"), to: { _ in })
                 }
             } else {
                 var message = String(result.output.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.statusMessageLimit))
@@ -351,7 +510,8 @@ final class BrainLayerBackupCoordinator: ObservableObject {
                     message = "backup process exited with status \(result.terminationStatus)"
                 }
                 scheduleState.nextDue = now().addingTimeInterval(Self.failureBackoff)
-                scheduleState.lastStatus = "failed"
+                scheduleState.lastStatus =
+                    scheduleState.lastSuccess == nil ? "failed" : "failed_with_historical_local_success"
                 do {
                     try saveScheduleState(scheduleState)
                 } catch {
