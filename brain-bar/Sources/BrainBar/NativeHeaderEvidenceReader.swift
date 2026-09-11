@@ -171,7 +171,7 @@ enum NativeHeaderEvidenceReader {
         }
         result["status"] = "available"
         result["native_header"] = header
-        result["attribution"] = NativeAttributionAdapter.project(contexts: [], contextStatus: "unavailable_missing", evidenceKeys: [])
+        result["attribution"] = NativeAttributionAdapter.projectProviderHeader(header, evidenceKey: sourceRecordKey)
         return capped(result, budget: budget)
     }
 

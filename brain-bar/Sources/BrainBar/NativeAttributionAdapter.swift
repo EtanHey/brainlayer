@@ -58,6 +58,53 @@ enum NativeAttributionAdapter {
         ]
     }
 
+    /// Projects provider-recorded header declarations without treating them as identity.
+    /// Callers must invoke this only after the native reader has validated the catalog join.
+    static func projectProviderHeader(
+        _ header: [String: Any],
+        evidenceKey: String
+    ) -> [String: Any] {
+        var projection = project(contexts: [], contextStatus: "unavailable_missing", evidenceKeys: [])
+        guard header["status"] as? String == "available",
+              header["provider_recorded"] as? Bool == true,
+              header["declared_unverified"] as? Bool == true else {
+            return projection
+        }
+        guard var emitter = projection["recorded_emitter"] as? [String: Any] else {
+            return projection
+        }
+        let fields = [
+            ("recorded_thread_id", "recorded_thread_id"),
+            ("recorded_agent_path", "recorded_agent_path"),
+            ("recorded_agent_nickname", "recorded_agent_nickname"),
+            ("recorded_parent_thread_id", "recorded_parent_thread_id"),
+            ("recorded_agent_role", "recorded_agent_role"),
+            ("spawn_agent_path", "spawn_agent_path"),
+            ("spawn_agent_nickname", "spawn_agent_nickname"),
+            ("spawn_parent_thread_id", "spawn_parent_thread_id"),
+            ("spawn_agent_role", "spawn_agent_role"),
+        ]
+        var copied = false
+        for (input, output) in fields {
+            guard let value = header[input] as? String,
+                  !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  value.utf8.count <= maximumDeclaredFieldBytes,
+                  !value.utf8.contains(0) else { continue }
+            emitter[output] = value
+            copied = true
+        }
+        guard copied else { return projection }
+        emitter["principal"] = NSNull()
+        emitter["principal_status"] = "unknown_no_distinct_identity_binding"
+        emitter["status"] = "declared_fields_no_principal_binding"
+        emitter["evidence_kind"] = "provider_recorded_header"
+        emitter["evidence_keys"] = [evidenceKey]
+        emitter["provider_recorded"] = true
+        emitter["declared_unverified"] = true
+        projection["recorded_emitter"] = emitter
+        return projection
+    }
+
     static var omittedResponseBudget: [String: Any] {
         ["status": "omitted_response_budget"]
     }
