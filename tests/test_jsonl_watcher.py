@@ -792,6 +792,69 @@ class TestBatchIndexer:
 
 # ── JSONLWatcher Integration Tests ──────────────────────────────────────────
 
+    def test_failure_isolation_stops_watermark_after_deferred_same_source_but_confirms_unrelated(self):
+        source = "/tmp/source.jsonl"
+        deferred = {"id": "deferred", "_source_file": source, "_line_end_offset": 20}
+        later = {"id": "later", "_source_file": source, "_line_end_offset": 30}
+        unrelated = {"id": "unrelated", "_source_file": "/tmp/other.jsonl", "_line_end_offset": 5}
+        confirmed = []
+
+        class DeferredWatermark(dict):
+            def __init__(self, item):
+                super().__init__({item["_source_file"]: item["_line_end_offset"]})
+                self.deferred_entries = [item]
+                self.inserted = 0
+
+        def flush(items):
+            if len(items) > 1:
+                raise RuntimeError("isolate this flush")
+            item = items[0]
+            if item is deferred:
+                return DeferredWatermark(item)
+            return {item["_source_file"]: item["_line_end_offset"]}
+
+        indexer = BatchIndexer(
+            on_flush=flush,
+            batch_size=4,
+            on_confirm_batch=lambda watermarks, _batch: confirmed.append(watermarks),
+        )
+        indexer.add(
+            [
+                {"id": "first", "_source_file": source, "_line_end_offset": 10},
+                deferred,
+                later,
+                unrelated,
+            ]
+        )
+
+        assert confirmed == [{source: 10, "/tmp/other.jsonl": 5}]
+        assert indexer._buffer == [deferred]
+
+    def test_failure_isolation_stops_watermark_after_thrown_same_source(self):
+        source = "/tmp/source.jsonl"
+        failed = {"id": "failed", "_source_file": source, "_line_end_offset": 20}
+        later = {"id": "later", "_source_file": source, "_line_end_offset": 30}
+        unrelated = {"id": "unrelated", "_source_file": "/tmp/other.jsonl", "_line_end_offset": 5}
+        confirmed = []
+
+        def flush(items):
+            if len(items) > 1:
+                raise RuntimeError("isolate this flush")
+            item = items[0]
+            if item is failed:
+                raise RuntimeError("injected failure")
+            return {item["_source_file"]: item["_line_end_offset"]}
+
+        indexer = BatchIndexer(
+            on_flush=flush,
+            batch_size=3,
+            on_confirm_batch=lambda watermarks, _batch: confirmed.append(watermarks),
+        )
+        indexer.add([failed, later, unrelated])
+
+        assert confirmed == [{"/tmp/other.jsonl": 5}]
+        assert indexer._buffer == [failed]
+
 
 class TestJSONLWatcher:
     def _make_project_dir(self, tmp_path, name="test-project"):

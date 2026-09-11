@@ -1510,23 +1510,31 @@ class BatchIndexer:
         retained: list[dict] = []
         confirmed_items: list[dict] = []
         confirmed: dict[str, int] = {}
+        blocked_sources: set[str] = set()
         outputs = 0
         failed_inputs = 0
         for item in batch:
+            source_file = item.get("_source_file")
+            source_key = str(source_file) if isinstance(source_file, str) else None
             try:
                 result = self.on_flush([item])
             except Exception:
                 retained.append(item)
+                if source_key is not None:
+                    blocked_sources.add(source_key)
                 failed_inputs += 1
                 continue
             deferred_entries = self._deferred_entries([item], result)
             item_watermarks = self._confirmed_watermarks([item], result, deferred_entries)
-            for source_file, offset in item_watermarks.items():
-                confirmed[source_file] = max(confirmed.get(source_file, 0), offset)
             retained.extend(deferred_entries)
             if deferred_entries:
+                if source_key is not None:
+                    blocked_sources.add(source_key)
                 outputs += getattr(result, "inserted", 0)
                 continue
+            for watermark_source, offset in item_watermarks.items():
+                if watermark_source not in blocked_sources:
+                    confirmed[watermark_source] = max(confirmed.get(watermark_source, 0), offset)
             confirmed_items.append(item)
             outputs += getattr(result, "inserted", 1)
 
