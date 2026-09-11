@@ -314,6 +314,9 @@ final class BrainBarBackupCoordinatorTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let calls = ArgumentsBox()
         let scheduledState = fixture.root.appendingPathComponent("durable-state.json")
+        let providerReceipt = fixture.destination
+            .appendingPathComponent(".brainlayer-provider")
+            .appendingPathComponent("icloud-provider.receipt.json")
         try JSONSerialization.data(withJSONObject: [
             "version": 1,
             "status": "local_verified",
