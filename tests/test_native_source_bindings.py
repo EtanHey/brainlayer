@@ -236,6 +236,12 @@ def test_conflicting_rebind_rolls_back_and_multiple_rows_stay_scoped(tmp_path: P
     ).fetchone()[0]
     current = archive.capture(source, "codex")
     _bind(conn, archive, source, root, current, assistant, len(header))
+    bound_columns = conn.execute(
+        "SELECT native_generation_key,native_provider,native_watcher_generation,"
+        "native_record_role,native_occurrence_key,native_record_manifest_sha256 "
+        "FROM chunk_source_records WHERE record_key=?",
+        (first_key,),
+    ).fetchone()
     with pytest.raises(NativeSourceBindingConflict):
         bind_native_source_record(
             conn,
@@ -250,6 +256,20 @@ def test_conflicting_rebind_rolls_back_and_multiple_rows_stay_scoped(tmp_path: P
             raw_record_hash=hashlib.sha256(assistant).hexdigest(),
             record_key=first_key,
         )
+    assert lookup_native_source_binding(conn, record_key=first_key) is None
+    assert conn.execute(
+        "SELECT native_generation_key,native_provider,native_watcher_generation,"
+        "native_record_role,native_occurrence_key,native_record_manifest_sha256 "
+        "FROM chunk_source_records WHERE record_key=?",
+        (first_key,),
+    ).fetchone() == bound_columns
+    assert conn.execute(
+        "SELECT native_generation_key,native_provider,native_watcher_generation,"
+        "native_record_role,native_occurrence_key,native_record_manifest_sha256 "
+        "FROM chunk_source_records WHERE record_key=?",
+        (second_key,),
+    ).fetchone() == (None, None, None, None, None, None)
+    _catalog_header(conn, archive, source, root, current, header)
     assert lookup_native_source_binding(conn, record_key=first_key) is not None
     assert lookup_native_source_binding(conn, record_key=second_key) is None
 
