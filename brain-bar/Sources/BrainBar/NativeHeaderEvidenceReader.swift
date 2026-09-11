@@ -55,24 +55,46 @@ enum NativeHeaderEvidenceReader {
         // happens to return first, while keeping the query bounded.
         let firstRow = sqlite3_step(statement)
         guard firstRow == SQLITE_ROW else { return base.withStatus("unknown_native_header_missing_source_row") }
+        let provider = text(statement, 1)
+        let sessionID = text(statement, 2)
+        let sourceFile = text(statement, 3)
+        let rawHash = text(statement, 6)
+        let start = integer(statement, 4)
+        let end = integer(statement, 5)
+        let generationKey = text(statement, 7)
+        let generationProvider = text(statement, 8)
+        let watcherGeneration = integer(statement, 9)
+        let recordRole = text(statement, 10)
+        let boundOccurrenceKey = text(statement, 11)
+        let recordManifest = text(statement, 12)
+        let joinedGenerationProvider = text(statement, 13)
+        let generationSource = text(statement, 14)
+        let generationWatcher = integer(statement, 15)
+        let rootManifest = text(statement, 16)
+        let currentManifest = text(statement, 17)
+        let generationStatus = text(statement, 18)
+        let canonicalOccurrenceKey = text(statement, 19)
+        let occurrenceKey = text(statement, 20)
+        let occurrenceGeneration = text(statement, 21)
+        let disposition = text(statement, 22)
+        let headerManifest = text(statement, 23)
+        let headerStart = integer(statement, 24)
+        let headerEnd = integer(statement, 25)
+        let headerHash = text(statement, 26)
+        let headerSessionID = text(statement, 27)
+        let contextJSON = text(statement, 28)
+        let contextHash = text(statement, 29)
+        let validationErrorIsNull = sqlite3_column_type(statement, 30) == SQLITE_NULL
         let secondRow = sqlite3_step(statement)
         guard secondRow == SQLITE_DONE else {
             return base.withStatus(secondRow == SQLITE_ROW
                 ? "unknown_multiple_native_header_bindings"
                 : "unknown_native_header_schema")
         }
-        guard sqlite3_reset(statement) == SQLITE_OK, sqlite3_step(statement) == SQLITE_ROW else {
-            return base.withStatus("unknown_native_header_schema")
-        }
-        guard let provider = text(statement, 1), let sessionID = text(statement, 2),
-              let sourceFile = text(statement, 3), let rawHash = text(statement, 6),
-              sqlite3_column_type(statement, 4) == SQLITE_INTEGER,
-              sqlite3_column_type(statement, 5) == SQLITE_INTEGER,
+        guard let provider, let sessionID, let sourceFile, let rawHash, let start, let end,
               provider == "codex", isCanonicalUUID(sessionID), isSHA256(rawHash) else {
             return base.withStatus("unknown_malformed_native_header_binding")
         }
-        let start = sqlite3_column_int64(statement, 4)
-        let end = sqlite3_column_int64(statement, 5)
         var result = base.merging([
             "provider": provider, "session_id": sessionID, "source_file": sourceFile,
             "record_start_offset": start, "record_end_offset": end, "raw_record_hash": rawHash,
@@ -84,27 +106,27 @@ enum NativeHeaderEvidenceReader {
             return capped(result, budget: budget)
         }
         guard start >= 0, end > start, end - start <= Int64(maxRecordBytes) else { return unknown("unknown_malformed_native_header_binding") }
-        guard let generationKey = text(statement, 7), text(statement, 8) == "codex",
-              let watcherGeneration = integer(statement, 9), text(statement, 10) == "assistant",
-              let recordManifest = text(statement, 12), isSHA256(recordManifest) else {
-            return unknown(text(statement, 10) == nil ? "unknown_missing_native_header_binding" : "unknown_malformed_native_header_binding")
+        guard let generationKey, generationProvider == "codex",
+              let watcherGeneration, recordRole == "assistant",
+              let recordManifest, isSHA256(recordManifest) else {
+            return unknown(recordRole == nil ? "unknown_missing_native_header_binding" : "unknown_malformed_native_header_binding")
         }
-        guard let boundOccurrenceKey = text(statement, 11) else {
+        guard let boundOccurrenceKey else {
             return unknown(headerAfterAssistant(db, generationKey: generationKey, assistantStart: start)
                 ? "unknown_header_after_assistant" : "unknown_missing_native_header_binding")
         }
-        guard let generationProvider = text(statement, 13), let generationSource = text(statement, 14),
-              let generationWatcher = integer(statement, 15), let rootManifest = text(statement, 16),
-              let currentManifest = text(statement, 17), let generationStatus = text(statement, 18),
-              let canonicalOccurrenceKey = text(statement, 19), let occurrenceKey = text(statement, 20),
-              let occurrenceGeneration = text(statement, 21), let disposition = text(statement, 22),
-              let headerManifest = text(statement, 23), let headerStart = integer(statement, 24),
-              let headerEnd = integer(statement, 25), let headerHash = text(statement, 26),
-              let headerSessionID = text(statement, 27), let contextJSON = text(statement, 28),
-              let contextHash = text(statement, 29) else {
+        guard let joinedGenerationProvider, let generationSource,
+              let generationWatcher, let rootManifest,
+              let currentManifest, let generationStatus,
+              let canonicalOccurrenceKey, let occurrenceKey,
+              let occurrenceGeneration, let disposition,
+              let headerManifest, let headerStart,
+              let headerEnd, let headerHash,
+              let headerSessionID, let contextJSON,
+              let contextHash else {
             return unknown("unknown_missing_native_header_binding")
         }
-        guard generationProvider == provider, generationSource == sourceFile,
+        guard joinedGenerationProvider == provider, generationSource == sourceFile,
               generationWatcher == watcherGeneration, generationStatus == "active",
               canonicalOccurrenceKey == occurrenceKey, boundOccurrenceKey == occurrenceKey,
               occurrenceGeneration == generationKey, disposition == "canonical",
@@ -112,7 +134,7 @@ enum NativeHeaderEvidenceReader {
               headerEnd <= start, headerEnd - headerStart <= Int64(maxRecordBytes),
               isSHA256(rootManifest), isSHA256(currentManifest), isSHA256(headerManifest),
               isSHA256(headerHash), contextJSON.utf8.count <= maxContextBytes,
-              sqlite3_column_type(statement, 30) == SQLITE_NULL,
+              validationErrorIsNull,
               contextHash == sha256CanonicalJSON(contextJSON) else {
             let status = generationStatus == "conflicted" || generationStatus == "invalid"
                 ? "unknown_tainted_native_header"
