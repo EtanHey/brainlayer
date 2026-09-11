@@ -43,6 +43,7 @@ from .pipeline.classify import classify_content
 from .pipeline.correction_detection import build_correction_tags
 from .pipeline.secret_scrub import scrub_secrets
 from .queue_io import (
+    enqueue_jsonl_batch,
     enqueue_watcher_chunk,
     enqueue_watcher_native_records,
     enqueue_watcher_native_session_headers,
@@ -357,6 +358,7 @@ def create_flush_callback(
     source_projects: dict[str, str] = {}
     resolved_source_identities: dict[str, tuple[int, int, int]] = {}
     unresolved_source_versions: dict[str, tuple[int, int] | None] = {}
+    native_source_roots: dict[str, dict[str, Any]] = {}
 
     def bind_raw_archive(archive: Any) -> None:
         """Bind the watcher-owned archive authority exactly once."""
@@ -429,7 +431,31 @@ def create_flush_callback(
             content_class: str,
             provenance_class: str,
             source_class: str | None,
+            native_source_binding: dict[str, Any] | None,
         ) -> None:
+            if native_source_binding is not None:
+                event = {
+                    "kind": "watcher_chunk",
+                    "chunk_id": chunk_id,
+                    "content": clean_content,
+                    "metadata": metadata,
+                    "source_file": source_file,
+                    "project": project,
+                    "content_type": content_type,
+                    "value_type": value_type,
+                    "created_at": created_at,
+                    "conversation_id": conversation_id,
+                    "source_end_offset": source_end_offset,
+                    "sender": sender,
+                    "tags": json.loads(tags) if tags else None,
+                    "chunk_origin": chunk_origin,
+                    "content_class": content_class,
+                    "provenance_class": provenance_class,
+                    "source_class": source_class,
+                    "native_source_binding": native_source_binding,
+                }
+                enqueue_jsonl_batch([event], source="watcher")
+                return
             enqueue_watcher_chunk(
                 chunk_id=chunk_id,
                 content=clean_content,
@@ -465,6 +491,10 @@ def create_flush_callback(
                     "raw_record_hash": entry.get("_raw_record_hash"),
                 }
                 native_header_handoffs.append(intent)
+                source_file = intent["source_file"]
+                root_receipt = intent["root_receipt"]
+                if isinstance(source_file, str) and isinstance(root_receipt, dict):
+                    native_source_roots[source_file] = root_receipt
             enqueue_watcher_native_session_headers(native_header_handoffs, raw_archive=raw_archive)
             for entry in native_headers:
                 source_file = entry.get("_source_file")
@@ -594,6 +624,21 @@ def create_flush_callback(
                 continue
 
             entry_confirmed = True
+            native_source_binding = None
+            if (
+                entry.get("_provider") == "codex"
+                and entry.get("type") == "assistant"
+                and isinstance(entry.get("_raw_archive_receipt"), dict)
+            ):
+                native_source_binding = {
+                    "provider": "codex",
+                    "watcher_generation": entry.get("_source_generation"),
+                    "root_receipt": native_source_roots.get(source_file),
+                    "occurrence_receipt": entry.get("_raw_archive_receipt"),
+                    "record_start_offset": entry.get("_line_start_offset"),
+                    "record_end_offset": entry.get("_line_end_offset"),
+                    "raw_record_hash": entry.get("_raw_record_hash"),
+                }
 
             for chunk in chunks:
                 clean_content = _strip_system_reminders(chunk.content)
@@ -677,6 +722,7 @@ def create_flush_callback(
                             content_class=content_class,
                             provenance_class=provenance_class,
                             source_class=source_class,
+                            native_source_binding=native_source_binding,
                         )
                     except Exception:
                         entry_confirmed = False
@@ -728,6 +774,15 @@ def create_flush_callback(
                                     source_file=source_file,
                                     metadata=metadata,
                                 )
+                                from .drain import _apply_native_source_binding
+
+                                _apply_native_source_binding(
+                                    store.conn,
+                                    raw_archive,
+                                    canonical_chunk_id=duplicate.canonical_chunk_id,
+                                    source_file=source_file,
+                                    intent=native_source_binding,
+                                )
                                 record_direct_liveness(duplicate.canonical_chunk_id, ingested_at)
                                 cursor.execute("COMMIT")
                                 mark_direct_liveness_schema_ready()
@@ -748,6 +803,15 @@ def create_flush_callback(
                             ):
                                 record_watcher_source(
                                     store.conn, canonical_chunk_id=chunk_id, source_file=source_file, metadata=metadata
+                                )
+                                from .drain import _apply_native_source_binding
+
+                                _apply_native_source_binding(
+                                    store.conn,
+                                    raw_archive,
+                                    canonical_chunk_id=chunk_id,
+                                    source_file=source_file,
+                                    intent=native_source_binding,
                                 )
                                 record_direct_liveness(chunk_id, ingested_at)
                                 cursor.execute("COMMIT")
@@ -795,6 +859,15 @@ def create_flush_callback(
                                 record_watcher_source(
                                     store.conn, canonical_chunk_id=chunk_id, source_file=source_file, metadata=metadata
                                 )
+                                from .drain import _apply_native_source_binding
+
+                                _apply_native_source_binding(
+                                    store.conn,
+                                    raw_archive,
+                                    canonical_chunk_id=chunk_id,
+                                    source_file=source_file,
+                                    intent=native_source_binding,
+                                )
                                 record_direct_liveness(chunk_id, ingested_at)
                             cursor.execute("COMMIT")
                             mark_direct_liveness_schema_ready()
@@ -826,6 +899,7 @@ def create_flush_callback(
                                         content_class=content_class,
                                         provenance_class=provenance_class,
                                         source_class=source_class,
+                                        native_source_binding=native_source_binding,
                                     )
                                 except Exception:
                                     logger.exception("spill_failed chunk_id=%s source_file=%s", chunk_id, source_file)

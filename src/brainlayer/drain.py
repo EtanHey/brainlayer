@@ -34,6 +34,7 @@ from .ingest_guard import recursive_mcp_output_reason
 from .native_record_links import catalog_native_record, ensure_native_record_links_schema
 from .native_session_header_events import EVENT_KIND as NATIVE_SESSION_HEADER_EVENT_KIND
 from .native_session_header_events import apply_native_session_header_event
+from .native_source_bindings import bind_native_source_record
 from .paths import get_db_path
 from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
 from .provenance_integration import enqueue_provenance_resolution_for_entities
@@ -918,9 +919,65 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     )
     metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
     record_watcher_source(conn, canonical_chunk_id=stored_chunk_id, source_file=str(source_file), metadata=metadata)
+    _apply_native_source_binding(
+        conn,
+        event.get("_resolved_raw_archive"),
+        canonical_chunk_id=stored_chunk_id,
+        source_file=str(source_file),
+        intent=event.get("native_source_binding"),
+    )
     _refresh_realtime_watcher_ingested_at(conn, stored_chunk_id, ingested_at)
     _record_watcher_liveness(conn, stored_chunk_id, ingested_at)
     return ApplyResult(chunk_id=stored_chunk_id)
+
+
+def _apply_native_source_binding(
+    conn: Any,
+    archive: Any | None,
+    *,
+    canonical_chunk_id: str,
+    source_file: str,
+    intent: Any,
+) -> None:
+    if intent is None:
+        return
+    expected = {
+        "provider",
+        "watcher_generation",
+        "root_receipt",
+        "occurrence_receipt",
+        "record_start_offset",
+        "record_end_offset",
+        "raw_record_hash",
+    }
+    if not isinstance(intent, dict) or set(intent) != expected or archive is None:
+        raise ValueError("watcher native source binding intent is malformed or has no archive authority")
+    root_receipt = intent["root_receipt"]
+    if root_receipt is None:
+        rows = conn.execute(
+            "SELECT root_receipt_json FROM native_source_generations "
+            "WHERE provider=? AND source_file=? AND watcher_generation=?",
+            (intent["provider"], source_file, intent["watcher_generation"]),
+        ).fetchall()
+        if len(rows) != 1:
+            raise ValueError("watcher native source binding has no unique reserved generation root")
+        try:
+            root_receipt = json.loads(rows[0][0])
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise ValueError("watcher native source binding stored generation root is malformed") from error
+    bind_native_source_record(
+        conn,
+        archive,
+        canonical_chunk_id=canonical_chunk_id,
+        source_file=source_file,
+        provider=intent["provider"],
+        watcher_generation=intent["watcher_generation"],
+        root_receipt=root_receipt,
+        occurrence_receipt=intent["occurrence_receipt"],
+        record_start_offset=intent["record_start_offset"],
+        record_end_offset=intent["record_end_offset"],
+        raw_record_hash=intent["raw_record_hash"],
+    )
 
 
 def _apply_rewind_archive(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
@@ -1123,6 +1180,8 @@ def _apply_event(
     if kind == "store_memory":
         return _apply_store(conn, event)
     elif kind == "watcher_chunk":
+        if event.get("native_source_binding") is not None:
+            event["_resolved_raw_archive"] = raw_archive
         return _apply_watcher(conn, event)
     elif kind == "watcher_native_record":
         ensure_native_record_links_schema(conn)
@@ -1154,12 +1213,20 @@ def _events_include_native_session_header(events: list[dict[str, Any]]) -> bool:
     return any(_event_payload(event).get("kind") == NATIVE_SESSION_HEADER_EVENT_KIND for event in events)
 
 
+def _events_include_native_source_binding(events: list[dict[str, Any]]) -> bool:
+    return any(
+        _event_payload(event).get("kind") == "watcher_chunk"
+        and _event_payload(event).get("native_source_binding") is not None
+        for event in events
+    )
+
+
 def _resolved_native_header_archive(
     events: list[dict[str, Any]],
     db_path: Path,
     raw_archive: Any | None,
 ) -> Any | None:
-    if not _events_include_native_session_header(events):
+    if not _events_include_native_session_header(events) and not _events_include_native_source_binding(events):
         return raw_archive
     if raw_archive is not None:
         return raw_archive
