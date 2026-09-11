@@ -78,6 +78,16 @@ _NATIVE_HEADER_UNKNOWN_REASONS = {
     "malformed_first_record",
     "first_record_not_session_meta",
 }
+_NATIVE_HEADER_HANDOFF_KEYS = {
+    "provider",
+    "source_file",
+    "watcher_generation",
+    "root_receipt",
+    "occurrence_receipt",
+    "record_start_offset",
+    "record_end_offset",
+    "raw_record_hash",
+}
 
 
 _OFFSET_PRUNE_RETRY_ENV = "BRAINLAYER_WATCHER_OFFSET_PRUNE_RETRY_S"
@@ -503,6 +513,7 @@ class OffsetRegistry:
         self._data: dict[str, dict] = {}
         self._removed: dict[str, dict[str, int | float]] = {}
         self._dirty_paths: set[str] = set()
+        self._confirmed_native_header_handoffs: dict[str, dict[str, Any]] = {}
         self._dirty = False
         self._last_prune_complete = True
         self._load()
@@ -707,6 +718,31 @@ class OffsetRegistry:
         self._dirty_paths.add(filepath)
         self._dirty = True
 
+    def confirm_native_header_handoff(self, filepath: str, handoff: dict[str, Any]) -> bool:
+        """Clear one pending reservation only for its exact durable handoff token."""
+        entry = self._data.get(filepath)
+        pending = entry.get("native_header_pending") if isinstance(entry, dict) else None
+        if pending is None:
+            return False
+        if not isinstance(handoff, dict) or set(handoff) != _NATIVE_HEADER_HANDOFF_KEYS:
+            raise ValueError("native header handoff token has invalid shape")
+        expected = {
+            "provider": "codex",
+            "source_file": filepath,
+            "watcher_generation": self._entry_generation(entry),
+            "root_receipt": entry.get("native_header_root_receipt"),
+            "occurrence_receipt": pending.get("raw_archive_receipt"),
+            "record_start_offset": pending.get("record_start_offset"),
+            "record_end_offset": pending.get("record_end_offset"),
+            "raw_record_hash": pending.get("raw_record_hash"),
+        }
+        if handoff != expected:
+            raise ValueError("native header handoff token does not match pending evidence")
+        self._confirmed_native_header_handoffs[filepath] = copy.deepcopy(handoff)
+        self._dirty_paths.add(filepath)
+        self._dirty = True
+        return True
+
     def set(
         self,
         filepath: str,
@@ -782,6 +818,27 @@ class OffsetRegistry:
             merged["native_header_recovery_unknown"] = copy.deepcopy(disk_entry["native_header_recovery_unknown"])
         return merged
 
+    def _apply_confirmed_native_header_handoff(self, filepath: str, entry: dict) -> dict:
+        handoff = self._confirmed_native_header_handoffs.get(filepath)
+        if handoff is None:
+            return entry
+        pending = entry.get("native_header_pending")
+        expected = {
+            "provider": "codex",
+            "source_file": filepath,
+            "watcher_generation": self._entry_generation(entry),
+            "root_receipt": entry.get("native_header_root_receipt"),
+            "occurrence_receipt": pending.get("raw_archive_receipt") if isinstance(pending, dict) else None,
+            "record_start_offset": pending.get("record_start_offset") if isinstance(pending, dict) else None,
+            "record_end_offset": pending.get("record_end_offset") if isinstance(pending, dict) else None,
+            "raw_record_hash": pending.get("raw_record_hash") if isinstance(pending, dict) else None,
+        }
+        if handoff != expected:
+            raise ValueError("native header durable handoff conflicts with merged pending evidence")
+        cleared = dict(entry)
+        cleared.pop("native_header_pending", None)
+        return cleared
+
     def flush(self) -> bool:
         """Atomically write to disk. Returns True on success."""
         if not self._dirty:
@@ -832,16 +889,21 @@ class OffsetRegistry:
                                 continue
                         disk_entry = disk_data.get(filepath)
                         if not isinstance(disk_entry, dict):
-                            merged[filepath] = local_entry
+                            merged[filepath] = self._apply_confirmed_native_header_handoff(filepath, local_entry)
                             tombstones.pop(filepath, None)
                             continue
                         local_generation = self._entry_generation(local_entry)
                         disk_generation = self._entry_generation(disk_entry)
                         if local_generation > disk_generation:
-                            merged[filepath] = local_entry
+                            merged[filepath] = self._apply_confirmed_native_header_handoff(filepath, local_entry)
                             tombstones.pop(filepath, None)
                             continue
                         if local_generation < disk_generation:
+                            if filepath in self._confirmed_native_header_handoffs:
+                                logger.warning(
+                                    "Refusing stale native header handoff for newer registry generation: %s", filepath
+                                )
+                                return False
                             continue
                         same_inode = local_entry.get("inode", 0) == disk_entry.get("inode", 0)
                         local_wins = (
@@ -857,7 +919,13 @@ class OffsetRegistry:
                                 "Refusing conflicting native header registry merge for %s: %s", filepath, error
                             )
                             return False
-                        merged[filepath] = merged_entry
+                        try:
+                            merged[filepath] = self._apply_confirmed_native_header_handoff(filepath, merged_entry)
+                        except ValueError as error:
+                            logger.warning(
+                                "Refusing conflicting native header handoff merge for %s: %s", filepath, error
+                            )
+                            return False
                         tombstones.pop(filepath, None)
                     for filepath, tombstone in list(tombstones.items()):
                         disk_entry = merged.get(filepath)
@@ -890,6 +958,8 @@ class OffsetRegistry:
                         os.close(directory_fd)
                     self._data = merged
                     self._removed = tombstones
+                    for filepath in self._dirty_paths:
+                        self._confirmed_native_header_handoffs.pop(filepath, None)
                     self._dirty_paths.clear()
                 finally:
                     _unlock_offset_registry_file(lock_file)
@@ -906,6 +976,7 @@ class OffsetRegistry:
 
     def remove(self, filepath: str):
         """Remove tracking for a file."""
+        self._confirmed_native_header_handoffs.pop(filepath, None)
         removed_entry = self._data.pop(filepath, None)
         existing_tombstone = self._removed.get(filepath)
         entry_generation = self._entry_generation(removed_entry)
@@ -923,6 +994,7 @@ class OffsetRegistry:
 
     def mark_rewind(self, filepath: str, inode: int) -> int:
         """Start a newer offset generation so a confirmed rewind may move backward."""
+        self._confirmed_native_header_handoffs.pop(filepath, None)
         current_generation = self._entry_generation(self._data.get(filepath))
         tombstone = self._removed.get(filepath)
         tombstone_generation = int(tombstone["generation"]) if tombstone else 0
@@ -1290,6 +1362,7 @@ class _DeferredStructuralFlush(dict[str, int]):
             self.deferred_entries.extend(forwarded.deferred_entries)
         self.inserted = getattr(forwarded, "inserted", self.get("inserted", 0)) if forwarded else 0
         self.skipped = getattr(forwarded, "skipped", self.get("skipped", 0)) if forwarded else 0
+        self.native_header_handoffs = list(getattr(forwarded, "native_header_handoffs", []))
 
 
 class BatchIndexer:
@@ -1538,10 +1611,13 @@ class JSONLWatcher:
         self.max_lines_per_file = max(1, max_lines_per_file)
         self.max_read_bytes_per_file = _watch_read_window_bytes()
         self.max_record_bytes = _watch_max_record_bytes()
-        # Mechanism-only in this slice: None is an explicit, inspectable bypass.
-        # Production entrypoints do not inject an archive until a later wiring change.
+        # None remains an explicit, inspectable bypass for dry-run and legacy callers.
+        # An archive-enabled watcher binds that same authority into a capable flush callback.
         self.raw_archive = raw_archive
         self.raw_archive_enabled = raw_archive is not None
+        bind_raw_archive = getattr(self._on_flush_callback, "bind_raw_archive", None)
+        if self.raw_archive is not None and callable(bind_raw_archive):
+            bind_raw_archive(self.raw_archive)
         self._archive_receipts: dict[str, dict[str, Any]] = {}
         self._tailer_archive_receipts: dict[str, dict[str, Any]] = {}
         self._archive_source_signatures: dict[str, tuple[int, int, int, int, int]] = {}
@@ -1589,7 +1665,7 @@ class JSONLWatcher:
 
     def _flush_entries(self, entries: list[dict[str, Any]]) -> dict[str, int] | None:
         """Hold only sources with a pending native header; forward unrelated work."""
-        structural_sources = {
+        current_structural_sources = {
             item.get("_source_file")
             for item in entries
             if item.get("_structural_kind") == _NATIVE_HEADER_STRUCTURAL_KIND
@@ -1598,18 +1674,72 @@ class JSONLWatcher:
         # Isolation retries invoke this callback with one item at a time. Consult the
         # durable reservation too, so an assistant record cannot escape without its
         # same-source structural header during that retry.
-        structural_sources.update(
+        pending_sources = {
             source
             for item in entries
             if isinstance((source := item.get("_source_file")), str)
             and self.registry.native_header_pending(source) is not None
-        )
-        deferred = [item for item in entries if item.get("_source_file") in structural_sources]
-        forwarded = [item for item in entries if item.get("_source_file") not in structural_sources]
+        }
+        transport_ready = getattr(self._on_flush_callback, "native_header_transport_ready", None)
+        if callable(transport_ready) and transport_ready():
+            held_sources = pending_sources - current_structural_sources
+        else:
+            held_sources = pending_sources | current_structural_sources
+        deferred = [item for item in entries if item.get("_source_file") in held_sources]
+        forwarded = [item for item in entries if item.get("_source_file") not in held_sources]
         result = self._on_flush_callback(forwarded) if forwarded else None
+        if current_structural_sources - held_sources:
+            self._confirm_native_header_handoffs(forwarded, result)
         if deferred:
             return _DeferredStructuralFlush(deferred, result)
         return result
+
+    def _confirm_native_header_handoffs(self, entries: list[dict[str, Any]], result: dict[str, int] | None) -> None:
+        """Persist queue acceptance only when the callback returns exact evidence tokens."""
+        deferred_ids = {id(item) for item in getattr(result, "deferred_entries", [])}
+        handoffs = getattr(result, "native_header_handoffs", None)
+        structural = [
+            item
+            for item in entries
+            if item.get("_structural_kind") == _NATIVE_HEADER_STRUCTURAL_KIND and id(item) not in deferred_ids
+        ]
+        if not structural:
+            return
+        if not isinstance(handoffs, list) or any(not isinstance(item, dict) for item in handoffs):
+            raise RuntimeError("native header callback omitted exact durable handoff tokens")
+        for entry in structural:
+            expected = {
+                "provider": entry.get("_provider"),
+                "source_file": entry.get("_source_file"),
+                "watcher_generation": entry.get("_source_generation"),
+                "root_receipt": entry.get("_native_header_root_receipt"),
+                "occurrence_receipt": entry.get("_raw_archive_receipt"),
+                "record_start_offset": entry.get("_line_start_offset"),
+                "record_end_offset": entry.get("_line_end_offset"),
+                "raw_record_hash": entry.get("_raw_record_hash"),
+            }
+            if expected not in handoffs:
+                raise RuntimeError("native header callback returned a mismatched durable handoff token")
+        cleared = False
+        for source in {item.get("_source_file") for item in structural if isinstance(item.get("_source_file"), str)}:
+            pending = self.registry.native_header_pending(source)
+            if pending is None:
+                continue
+            pending_handoff = {
+                "provider": "codex",
+                "source_file": source,
+                "watcher_generation": self.registry.generation(source),
+                "root_receipt": self.registry.native_header_root_receipt(source),
+                "occurrence_receipt": pending.get("raw_archive_receipt"),
+                "record_start_offset": pending.get("record_start_offset"),
+                "record_end_offset": pending.get("record_end_offset"),
+                "raw_record_hash": pending.get("raw_record_hash"),
+            }
+            if pending_handoff not in handoffs:
+                raise RuntimeError("native header callback omitted the pending durable handoff token")
+            cleared = self.registry.confirm_native_header_handoff(source, pending_handoff) or cleared
+        if cleared and not self.registry.flush():
+            raise RuntimeError("native header durable handoff could not be persisted")
 
     def _make_native_header_entry(
         self,
@@ -1681,6 +1811,7 @@ class JSONLWatcher:
         if root_receipt is not occurrence_receipt and not self.raw_archive.is_prefix(root_receipt, occurrence_receipt):
             raise RuntimeError("native header occurrence does not extend its stable root")
         root_basis = self.registry.native_header_root_basis(filepath) or root_basis
+        entry["_native_header_root_receipt"] = copy.deepcopy(root_receipt)
         self.registry.reserve_native_header(
             filepath,
             offset=current_offset,
@@ -2781,8 +2912,8 @@ class JSONLWatcher:
                             for line in normalized_lines
                             if line.get("_structural_kind") == _NATIVE_HEADER_STRUCTURAL_KIND
                         ]
-                        if native_headers:
-                            self._reserve_native_header_entry(native_headers[0])
+                        for native_header in native_headers:
+                            self._reserve_native_header_entry(native_header)
                         self.indexer.add(normalized_lines)
                         read_accepted = True
                         self._health_entries_seen += len(normalized_lines)

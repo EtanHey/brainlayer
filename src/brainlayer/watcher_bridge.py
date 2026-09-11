@@ -42,7 +42,11 @@ from .pipeline.chunk import chunk_content
 from .pipeline.classify import classify_content
 from .pipeline.correction_detection import build_correction_tags
 from .pipeline.secret_scrub import scrub_secrets
-from .queue_io import enqueue_watcher_chunk, enqueue_watcher_native_records
+from .queue_io import (
+    enqueue_watcher_chunk,
+    enqueue_watcher_native_records,
+    enqueue_watcher_native_session_headers,
+)
 from .source_records import ensure_chunk_source_records, record_watcher_source
 from .t3_provenance import DEFAULT_T3_STATE_DB, t3_app_codex_session_ids
 from .vector_store import VectorStore
@@ -92,12 +96,14 @@ class FlushWatermarks(dict[str, int]):
         inserted: int = 0,
         skipped: int = 0,
         deferred_entries: list[dict[str, Any]] | None = None,
+        native_header_handoffs: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ):
         super().__init__(*args, **kwargs)
         self.inserted = inserted
         self.skipped = skipped
         self.deferred_entries = list(deferred_entries or [])
+        self.native_header_handoffs = list(native_header_handoffs or [])
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, int):
@@ -333,7 +339,12 @@ def _content_class_for_visibility(base_content_class: str, visibility: str) -> s
 # ── Flush callback ───────────────────────────────────────────────────────────
 
 
-def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | None = None) -> callable:
+def create_flush_callback(
+    db_path: Path | None = None,
+    *,
+    arbitrated: bool | None = None,
+    raw_archive: Any | None = None,
+) -> callable:
     """Create an on_flush callback that processes JSONL lines into BrainLayer.
 
     Returns a callable that takes a list[dict] of raw JSONL entries and
@@ -346,6 +357,16 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
     source_projects: dict[str, str] = {}
     resolved_source_identities: dict[str, tuple[int, int, int]] = {}
     unresolved_source_versions: dict[str, tuple[int, int] | None] = {}
+
+    def bind_raw_archive(archive: Any) -> None:
+        """Bind the watcher-owned archive authority exactly once."""
+        nonlocal raw_archive
+        if raw_archive is not None and raw_archive is not archive:
+            raise RuntimeError("flush callback raw archive authority is already bound")
+        raw_archive = archive
+
+    def native_header_transport_ready() -> bool:
+        return raw_archive is not None
 
     def ensure_direct_liveness_schema() -> None:
         if liveness_schema_ready or store is None:
@@ -383,6 +404,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
         deferred_entries: list[dict[str, Any]] = []
         source_files_seen: set[str] = set()
         confirmed_offsets: dict[str, int] = {}
+        native_header_handoffs: list[dict[str, Any]] = []
 
         def confirm_entry(entry: dict[str, Any], source_file: str) -> None:
             raw_offset = entry.get("_line_end_offset")
@@ -426,6 +448,28 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                 provenance_class=provenance_class,
                 source_class=source_class,
             )
+
+        native_headers = [entry for entry in entries if entry.get("_structural_kind") == "codex_session_meta"]
+        if native_headers:
+            if raw_archive is None:
+                raise RuntimeError("native header transport requires the watcher raw archive")
+            for entry in native_headers:
+                intent = {
+                    "provider": entry.get("_provider"),
+                    "source_file": entry.get("_source_file"),
+                    "watcher_generation": entry.get("_source_generation"),
+                    "root_receipt": entry.get("_native_header_root_receipt"),
+                    "occurrence_receipt": entry.get("_raw_archive_receipt"),
+                    "record_start_offset": entry.get("_line_start_offset"),
+                    "record_end_offset": entry.get("_line_end_offset"),
+                    "raw_record_hash": entry.get("_raw_record_hash"),
+                }
+                native_header_handoffs.append(intent)
+            enqueue_watcher_native_session_headers(native_header_handoffs, raw_archive=raw_archive)
+            for entry in native_headers:
+                source_file = entry.get("_source_file")
+                if isinstance(source_file, str):
+                    confirm_entry(entry, source_file)
 
         native_records: list[dict[str, Any]] = []
         for entry in entries:
@@ -485,6 +529,8 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
         for entry in entries:
             source_file = entry.get("_source_file", "unknown")
             source_files_seen.add(source_file)
+            if entry.get("_structural_kind") == "codex_session_meta":
+                continue
             if not t3_linkage_resolved:
                 source_only_provenance = classify_provenance(source_file, t3_linked_session_ids=set())
                 if source_only_provenance.provenance_tag == "codex-session":
@@ -676,7 +722,12 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                     mechanism=duplicate.mechanism,
                                     hamming_distance_value=duplicate.hamming_distance,
                                 )
-                                record_watcher_source(store.conn, canonical_chunk_id=duplicate.canonical_chunk_id, source_file=source_file, metadata=metadata)
+                                record_watcher_source(
+                                    store.conn,
+                                    canonical_chunk_id=duplicate.canonical_chunk_id,
+                                    source_file=source_file,
+                                    metadata=metadata,
+                                )
                                 record_direct_liveness(duplicate.canonical_chunk_id, ingested_at)
                                 cursor.execute("COMMIT")
                                 mark_direct_liveness_schema_ready()
@@ -695,7 +746,9 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                     "source_class": source_class,
                                 },
                             ):
-                                record_watcher_source(store.conn, canonical_chunk_id=chunk_id, source_file=source_file, metadata=metadata)
+                                record_watcher_source(
+                                    store.conn, canonical_chunk_id=chunk_id, source_file=source_file, metadata=metadata
+                                )
                                 record_direct_liveness(chunk_id, ingested_at)
                                 cursor.execute("COMMIT")
                                 mark_direct_liveness_schema_ready()
@@ -739,7 +792,9 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                             )
                             changed = store.conn.changes() > 0
                             if changed:
-                                record_watcher_source(store.conn, canonical_chunk_id=chunk_id, source_file=source_file, metadata=metadata)
+                                record_watcher_source(
+                                    store.conn, canonical_chunk_id=chunk_id, source_file=source_file, metadata=metadata
+                                )
                                 record_direct_liveness(chunk_id, ingested_at)
                             cursor.execute("COMMIT")
                             mark_direct_liveness_schema_ready()
@@ -821,6 +876,9 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
             inserted=inserted,
             skipped=skipped,
             deferred_entries=deferred_entries,
+            native_header_handoffs=native_header_handoffs,
         )
 
+    flush_to_db.bind_raw_archive = bind_raw_archive
+    flush_to_db.native_header_transport_ready = native_header_transport_ready
     return flush_to_db
