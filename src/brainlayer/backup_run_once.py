@@ -372,6 +372,7 @@ def _run_backup_once_bound(
     offline_db_path: Path | None = None,
     expected_source_path: Path | None = None,
     expected_source_open_generation: str | None = None,
+    offline_source_open_generation: str | None = None,
     expected_offline_source_identity: tuple[int, int] | None = None,
     generation_id: str | None = None,
     now: dt.datetime | None = None,
@@ -483,7 +484,11 @@ def _run_backup_once_bound(
             if offline_db_path is not None
             else socket_snapshot["source_db_filename"],
             "db_transport_socket": None if socket_path is None else str(Path(socket_path).expanduser().resolve()),
-            "db_source_open_generation": None if socket_snapshot is None else socket_snapshot["source_open_generation"],
+            "db_source_open_generation": (
+                offline_source_open_generation
+                if socket_snapshot is None
+                else socket_snapshot["source_open_generation"]
+            ),
             "db_source_observed_path_identity_before": (
                 {"kind": "scheduled_saved_source_binding", "st_dev": expected_offline_source_identity[0], "st_ino": expected_offline_source_identity[1]}
                 if socket_snapshot is None and expected_offline_source_identity is not None
@@ -495,8 +500,13 @@ def _run_backup_once_bound(
                 else (None if socket_snapshot is None else socket_snapshot["source_observed_path_identity_after"])
             ),
             "scheduled_offline_source_binding": (
-                {"version": 1, "path": str(Path(offline_db_path).expanduser().resolve()),
-                 "st_dev": expected_offline_source_identity[0], "st_ino": expected_offline_source_identity[1]}
+                {
+                    "version": 1,
+                    "path": str(Path(offline_db_path).expanduser().resolve()),
+                    "st_dev": expected_offline_source_identity[0],
+                    "st_ino": expected_offline_source_identity[1],
+                    "source_open_generation": offline_source_open_generation,
+                }
                 if socket_snapshot is None and expected_offline_source_identity is not None
                 else None
             ),
@@ -640,6 +650,7 @@ def run_backup_once(
     offline_db_path: Path | None = None,
     expected_source_path: Path | None = None,
     expected_source_open_generation: str | None = None,
+    offline_source_open_generation: str | None = None,
     expected_offline_source_identity: tuple[int, int] | None = None,
     generation_id: str | None = None,
     now: dt.datetime | None = None,
@@ -671,6 +682,7 @@ def run_backup_once(
                         offline_db_path=offline_db_path,
                         expected_source_path=expected_source_path,
                         expected_source_open_generation=expected_source_open_generation,
+                        offline_source_open_generation=offline_source_open_generation,
                         expected_offline_source_identity=expected_offline_source_identity,
                         generation_id=generation_id,
                         now=now,

@@ -148,6 +148,7 @@ def run_scheduled_backup(
                     destination=destination,
                     transcript_roots=_roots(config_path),
                     offline_db_path=source,
+                    offline_source_open_generation=binding["source_open_generation"],
                     expected_offline_source_identity=identity,
                     expected_destination_identity=destination_identity,
                 )

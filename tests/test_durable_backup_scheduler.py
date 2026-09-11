@@ -95,6 +95,7 @@ def test_saved_binding_is_passed_to_offline_helper_and_labeled_in_result(tmp_pat
 
     assert "socket_path" not in observed
     assert observed["offline_db_path"] == source
+    assert observed["offline_source_open_generation"] == "daemon-open-test"
     assert observed["expected_offline_source_identity"] == (source_stat.st_dev, source_stat.st_ino)
     assert result["status"] == "local_verified"
     assert result["saved_source"] == {

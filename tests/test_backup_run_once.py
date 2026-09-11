@@ -169,10 +169,14 @@ def test_run_once_binds_destination_identity_and_records_digests(tmp_path):
         offline_db_path=db,
         transcript_roots=roots,
         generation_id="identity",
+        offline_source_open_generation="daemon-open-test",
+        expected_offline_source_identity=(db.stat().st_dev, db.stat().st_ino),
         expected_destination_identity=identity,
     )
     assert result["destination_identity"] == {"st_dev": identity[0], "st_ino": identity[1]}
     assert result["destination_path"] == destination.resolve().as_posix()
+    assert result["db_source_open_generation"] == "daemon-open-test"
+    assert result["scheduled_offline_source_binding"]["source_open_generation"] == "daemon-open-test"
     assert len(result["db_snapshot_sha256"]) == 64 and len(result["jsonl_bundle_sha256"]) == 64
     with pytest.raises(backup_run_once.BackupRunOnceError, match="identity changed"):
         backup_run_once.run_backup_once(
