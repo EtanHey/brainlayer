@@ -177,10 +177,20 @@ def _offline_snapshot(
     source: Path,
     target: Path,
     *,
+    expected_source_identity: tuple[int, int] | None = None,
     total_deadline_seconds: float = 300.0,
     stalled_progress_seconds: float = 30.0,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> int:
+    source = source.expanduser()
+    if not source.is_absolute():
+        raise BackupRunOnceError("offline backup source must be an absolute path")
+    if expected_source_identity is not None:
+        observed = _identity(source)
+        if tuple(observed.values()) != expected_source_identity:
+            raise BackupRunOnceError(
+                f"offline backup source changed before snapshot: expected={expected_source_identity} actual={tuple(observed.values())}"
+            )
     source_uri = f"file:{source.resolve()}?mode=ro"
     if total_deadline_seconds <= 0 or stalled_progress_seconds <= 0:
         raise ValueError("offline backup deadlines must be positive")
@@ -236,6 +246,12 @@ def _offline_snapshot(
             raise BackupRunOnceError(f"offline SQLite read snapshot acquisition failed: {exc}") from exc
         target_db = sqlite3.connect(str(target), timeout=busy_timeout)
         source_db.backup(target_db, pages=1000, sleep=0.01, progress=progress)
+        if expected_source_identity is not None:
+            observed = _identity(source)
+            if tuple(observed.values()) != expected_source_identity:
+                raise BackupRunOnceError(
+                    f"offline backup source changed after snapshot: expected={expected_source_identity} actual={tuple(observed.values())}"
+                )
     except BaseException as exc:
         primary_error = exc
         raise
@@ -356,6 +372,7 @@ def _run_backup_once_bound(
     offline_db_path: Path | None = None,
     expected_source_path: Path | None = None,
     expected_source_open_generation: str | None = None,
+    expected_offline_source_identity: tuple[int, int] | None = None,
     generation_id: str | None = None,
     now: dt.datetime | None = None,
     expected_destination_identity: tuple[int, int],
@@ -412,11 +429,15 @@ def _run_backup_once_bound(
             if socket_path is not None
             else None
         )
-        chunks = (
-            socket_snapshot["chunks"]
-            if socket_snapshot is not None
-            else _offline_snapshot(Path(offline_db_path), raw_db)
-        )
+        if socket_snapshot is not None:
+            chunks = socket_snapshot["chunks"]
+        elif expected_offline_source_identity is None:
+            chunks = _offline_snapshot(Path(offline_db_path), raw_db)
+        else:
+            chunks = _offline_snapshot(
+                Path(offline_db_path), raw_db,
+                expected_source_identity=expected_offline_source_identity,
+            )
         _fsync_file(raw_db)
         integrity = backup_daily._sqlite_pragma_check(raw_db, "quick_check")
         if integrity != "ok":
@@ -463,10 +484,22 @@ def _run_backup_once_bound(
             else socket_snapshot["source_db_filename"],
             "db_transport_socket": None if socket_path is None else str(Path(socket_path).expanduser().resolve()),
             "db_source_open_generation": None if socket_snapshot is None else socket_snapshot["source_open_generation"],
-            "db_source_observed_path_identity_before": None
-            if socket_snapshot is None else socket_snapshot["source_observed_path_identity_before"],
-            "db_source_observed_path_identity_after": None
-            if socket_snapshot is None else socket_snapshot["source_observed_path_identity_after"],
+            "db_source_observed_path_identity_before": (
+                {"kind": "scheduled_saved_source_binding", "st_dev": expected_offline_source_identity[0], "st_ino": expected_offline_source_identity[1]}
+                if socket_snapshot is None and expected_offline_source_identity is not None
+                else (None if socket_snapshot is None else socket_snapshot["source_observed_path_identity_before"])
+            ),
+            "db_source_observed_path_identity_after": (
+                {"kind": "scheduled_saved_source_binding", "st_dev": expected_offline_source_identity[0], "st_ino": expected_offline_source_identity[1]}
+                if socket_snapshot is None and expected_offline_source_identity is not None
+                else (None if socket_snapshot is None else socket_snapshot["source_observed_path_identity_after"])
+            ),
+            "scheduled_offline_source_binding": (
+                {"version": 1, "path": str(Path(offline_db_path).expanduser().resolve()),
+                 "st_dev": expected_offline_source_identity[0], "st_ino": expected_offline_source_identity[1]}
+                if socket_snapshot is None and expected_offline_source_identity is not None
+                else None
+            ),
             "destination_identity": _identity(destination),
             "local_verified": True,
             "remote_verified": False,
@@ -606,6 +639,7 @@ def run_backup_once(
     offline_db_path: Path | None = None,
     expected_source_path: Path | None = None,
     expected_source_open_generation: str | None = None,
+    expected_offline_source_identity: tuple[int, int] | None = None,
     generation_id: str | None = None,
     now: dt.datetime | None = None,
     expected_destination_identity: tuple[int, int],
@@ -636,6 +670,7 @@ def run_backup_once(
                         offline_db_path=offline_db_path,
                         expected_source_path=expected_source_path,
                         expected_source_open_generation=expected_source_open_generation,
+                        expected_offline_source_identity=expected_offline_source_identity,
                         generation_id=generation_id,
                         now=now,
                         expected_destination_identity=expected_destination_identity,
