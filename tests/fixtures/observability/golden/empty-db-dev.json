@@ -1,0 +1,123 @@
+{
+  "author_unknown": {
+    "census_2026_09_13": "never_classified = 476,679 of 731,153 live (65.2%); both-NULL = 65,017; classified_unknown literal not observed on the copy",
+    "classified_unknown": {
+      "count": 0,
+      "definition": "provenance_class = 'unknown', archived_at IS NULL",
+      "share": 0.0
+    },
+    "inputs": [
+      {
+        "mtime": "2026-09-13T12:00:00Z",
+        "path": "db/empty-db-dev.sqlite",
+        "rows_or_bytes": 0,
+        "sha256_first_64kb": null,
+        "skipped_lines": 0,
+        "status": "read"
+      }
+    ],
+    "never_classified": {
+      "count": 0,
+      "definition": "provenance_class IS NULL OR source_class IS NULL, archived_at IS NULL",
+      "share": 0.0
+    },
+    "reason": "",
+    "state": "measured",
+    "top_source_files": [],
+    "trend_7d": []
+  },
+  "backups": {
+    "db_snapshot": {
+      "destination": "synthetic-drive",
+      "last_at": "2026-09-13T09:00:00Z",
+      "verified": true
+    },
+    "error_type": null,
+    "freshness": "fresh",
+    "inputs": [
+      {
+        "mtime": "2026-09-13T12:00:00Z",
+        "path": "logs/empty-db-dev/jsonl-backup.log",
+        "rows_or_bytes": 1034,
+        "sha256_first_64kb": "fc751356d69cb6452d50a2816a1bf150180a480d26ecfbea359f0afa292e5d1e",
+        "skipped_lines": 0,
+        "status": "read"
+      },
+      {
+        "mtime": "2026-09-13T12:00:00Z",
+        "path": "logs/empty-db-dev/backup-daily.log",
+        "rows_or_bytes": 293,
+        "sha256_first_64kb": "c4c707bd7d86018084cf4b1a7c4b8cc40a21a3568be0ce611f633c2545daeef2",
+        "skipped_lines": 2,
+        "status": "read"
+      },
+      {
+        "mtime": "2026-09-13T12:00:00Z",
+        "path": "launchd/empty-db-dev.txt",
+        "rows_or_bytes": 101,
+        "sha256_first_64kb": "c7e7fae25ca60561a06ba1439384c7ea3b89257fd2e8e133fcef611e9a6fe8e2",
+        "skipped_lines": 0,
+        "status": "read"
+      }
+    ],
+    "last_verified_upload": {
+      "age_hours": 2.0,
+      "archive_id": "synthetic-archive-815",
+      "at": "2026-09-13T10:00:00Z",
+      "verified": true
+    },
+    "launchd": {
+      "bootstrapped": true,
+      "disabled_dir_present": true,
+      "label": "com.brainlayer.jsonl-backup"
+    },
+    "reason": "",
+    "retention_invariant": "PASS",
+    "state": "measured",
+    "surviving_archives_30d": 7,
+    "threshold_hours": 36
+  },
+  "db_path": "db/empty-db-dev.sqlite",
+  "emitters": {
+    "by_emitter": [],
+    "by_source_class": [],
+    "derivation_note": "metadata.attributionAgent is absent in the 2026-09-13 census; emitter derives from source, then sender, then source_file, or the section is unmeasurable",
+    "hidden_from_default_search": 0,
+    "inputs": [
+      {
+        "mtime": "2026-09-13T12:00:00Z",
+        "path": "db/empty-db-dev.sqlite",
+        "rows_or_bytes": 0,
+        "sha256_first_64kb": null,
+        "skipped_lines": 0,
+        "status": "read"
+      }
+    ],
+    "reason": "",
+    "state": "measured"
+  },
+  "generated_at": "2026-09-13T12:00:00Z",
+  "schema_version": 1,
+  "stores": {
+    "by_content_class": [],
+    "in_window": {
+      "by_hour": [],
+      "count": 0
+    },
+    "inputs": [
+      {
+        "mtime": "2026-09-13T12:00:00Z",
+        "path": "db/empty-db-dev.sqlite",
+        "rows_or_bytes": 0,
+        "sha256_first_64kb": null,
+        "skipped_lines": 0,
+        "status": "read"
+      }
+    ],
+    "latest": [],
+    "reason": "",
+    "state": "measured",
+    "total_chunks": 0
+  },
+  "window_hours": 24
+}

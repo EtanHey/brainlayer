@@ -1,0 +1,47 @@
+# Observability scoreboard — all — da297f5eab46d82dd7ec6a1fb669b123d2c66cbf
+
+| Case | Field mismatches | MOCK_GREEN | Traceability | Result |
+|---|---:|---:|---:|---|
+| healthy-dev | 1 | 0 | 0 | FAIL |
+| missing-source-class-dev | 1 | 0 | 0 | FAIL |
+| missing-log-dev | 1 | 0 | 0 | FAIL |
+| malformed-log-dev-1 | 1 | 0 | 0 | FAIL |
+| missing-launchd-dev | 1 | 0 | 0 | FAIL |
+| empty-db-dev | 1 | 0 | 0 | FAIL |
+| clock-skew-dev | 1 | 0 | 0 | FAIL |
+| no-op-dev | 1 | 0 | 0 | FAIL |
+| backup-errors-dev | 1 | 0 | 0 | FAIL |
+| healthy-heldout-3 | 1 | 0 | 0 | FAIL |
+| missing-source-class-heldout | 1 | 0 | 0 | FAIL |
+| missing-log-heldout-2 | 1 | 0 | 0 | FAIL |
+| malformed-log-heldout | 1 | 0 | 0 | FAIL |
+| missing-launchd-heldout-2 | 1 | 0 | 0 | FAIL |
+| empty-db-heldout-3 | 1 | 0 | 0 | FAIL |
+| clock-skew-heldout | 1 | 0 | 0 | FAIL |
+| no-op-heldout-2 | 1 | 0 | 0 | FAIL |
+| backup-errors-heldout | 1 | 0 | 0 | FAIL |
+
+- Cases: 18
+- Passed: 0
+- Field mismatches: 18
+- MOCK_GREEN: 0
+- Traceability failures: 0
+
+- `healthy-dev`: $: producer failed rc=1: /Library/Frameworks/Python.framework/Versions/3.13/bin/python3: No module named brainlayer.observability_surface
+- `missing-source-class-dev`: $: producer failed rc=1: /Library/Frameworks/Python.framework/Versions/3.13/bin/python3: No module named brainlayer.observability_surface
+- `missing-log-dev`: $: producer failed rc=1: /Library/Frameworks/Python.framework/Versions/3.13/bin/python3: No module named brainlayer.observability_surface
+- `malformed-log-dev-1`: $: producer failed rc=1: /Library/Frameworks/Python.framework/Versions/3.13/bin/python3: No module named brainlayer.observability_surface
+- `missing-launchd-dev`: $: producer failed rc=1: /Library/Frameworks/Python.framework/Versions/3.13/bin/python3: No module named brainlayer.observability_surface
+- `empty-db-dev`: $: producer failed rc=1: /Library/Frameworks/Python.framework/Versions/3.13/bin/python3: No module named brainlayer.observability_surface
+- `clock-skew-dev`: $: producer failed rc=1: /Library/Frameworks/Python.framework/Versions/3.13/bin/python3: No module named brainlayer.observability_surface
+- `no-op-dev`: $: producer failed rc=1: /Library/Frameworks/Python.framework/Versions/3.13/bin/python3: No module named brainlayer.observability_surface
+- `backup-errors-dev`: $: producer failed rc=1: /Library/Frameworks/Python.framework/Versions/3.13/bin/python3: No module named brainlayer.observability_surface
+- `healthy-heldout-3`: $: producer failed rc=1: /Library/Frameworks/Python.framework/Versions/3.13/bin/python3: No module named brainlayer.observability_surface
+- `missing-source-class-heldout`: $: producer failed rc=1: /Library/Frameworks/Python.framework/Versions/3.13/bin/python3: No module named brainlayer.observability_surface
+- `missing-log-heldout-2`: $: producer failed rc=1: /Library/Frameworks/Python.framework/Versions/3.13/bin/python3: No module named brainlayer.observability_surface
+- `malformed-log-heldout`: $: producer failed rc=1: /Library/Frameworks/Python.framework/Versions/3.13/bin/python3: No module named brainlayer.observability_surface
+- `missing-launchd-heldout-2`: $: producer failed rc=1: /Library/Frameworks/Python.framework/Versions/3.13/bin/python3: No module named brainlayer.observability_surface
+- `empty-db-heldout-3`: $: producer failed rc=1: /Library/Frameworks/Python.framework/Versions/3.13/bin/python3: No module named brainlayer.observability_surface
+- `clock-skew-heldout`: $: producer failed rc=1: /Library/Frameworks/Python.framework/Versions/3.13/bin/python3: No module named brainlayer.observability_surface
+- `no-op-heldout-2`: $: producer failed rc=1: /Library/Frameworks/Python.framework/Versions/3.13/bin/python3: No module named brainlayer.observability_surface
+- `backup-errors-heldout`: $: producer failed rc=1: /Library/Frameworks/Python.framework/Versions/3.13/bin/python3: No module named brainlayer.observability_surface
