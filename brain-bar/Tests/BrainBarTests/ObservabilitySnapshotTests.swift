@@ -4,8 +4,6 @@ import SwiftUI
 import XCTest
 @testable import BrainBar
 
-private func isOnMainThread() -> Bool { Thread.isMainThread }
-
 @MainActor
 final class ObservabilitySnapshotTests: XCTestCase {
     private var fixtureRoot: URL {
@@ -164,25 +162,31 @@ final class ObservabilitySnapshotTests: XCTestCase {
         XCTAssertTrue(snapshot.cards.allSatisfy { $0.tone == .amber })
     }
 
-    func testObservabilityLiveViewReadRunsOffMainAndPropagatesCancellation() async throws {
-        let read = Task {
-            await ObservabilityLiveView.Reader.read(url: URL(fileURLWithPath: "/tmp/unused")) { _ in
-                let main = isOnMainThread()
-                do {
-                    try await Task.sleep(for: .seconds(1))
-                    return .unreadable("not cancelled")
-                } catch {
-                    return .unreadable("main=\(main) cancelled=\(Task.isCancelled)")
-                }
+    func testSupersededLiveViewReadCancelsWorkerAndDoesNotOverwriteNewerResult() async {
+        let cancellation = AsyncStream<Bool>.makeStream()
+        var applied: [String] = []
+        let url = URL(fileURLWithPath: "/tmp/unused")
+        let old = ObservabilityLiveView.Loader.load(replacing: nil, url: url, using: { _ in
+            do {
+                try await Task.sleep(for: .seconds(1))
+                cancellation.continuation.yield(false)
+            } catch {
+                cancellation.continuation.yield(Task.isCancelled)
             }
-        }
+            cancellation.continuation.finish()
+            return .unreadable("old")
+        }, apply: { if case let .unreadable(value) = $0 { applied.append(value) } })
         await Task.yield()
-        read.cancel()
+        let new = ObservabilityLiveView.Loader.load(replacing: old, url: url, using: { _ in
+            .unreadable("new")
+        }, apply: { if case let .unreadable(value) = $0 { applied.append(value) } })
 
-        guard case let .unreadable(receipt) = await read.value else {
-            return XCTFail("Expected cancellation receipt")
-        }
-        XCTAssertEqual(receipt, "main=false cancelled=true")
+        await old.value
+        await new.value
+        var events = cancellation.stream.makeAsyncIterator()
+        let workerWasCancelled = await events.next()
+        XCTAssertEqual(workerWasCancelled, true)
+        XCTAssertEqual(applied, ["new"])
     }
 
     private func readableDocument(named name: String) throws -> ObservabilityDocument {

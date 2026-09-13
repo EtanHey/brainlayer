@@ -258,6 +258,23 @@ struct ObservabilityLiveView: View {
         }
     }
 
+    @MainActor
+    enum Loader {
+        static func load(
+            replacing previous: Task<Void, Never>?,
+            url: URL,
+            using operation: @escaping Reader.Operation = { ObservabilityReader.read(url: $0) },
+            apply: @escaping @MainActor (ObservabilityReadResult) -> Void
+        ) -> Task<Void, Never> {
+            previous?.cancel()
+            return Task { @MainActor in
+                let next = await Reader.read(url: url, using: operation)
+                guard !Task.isCancelled else { return }
+                apply(next)
+            }
+        }
+    }
+
     let dbPath: String
     private let cadence = ObservabilityReader.installedHealthCheckCadence
     @State private var result: ObservabilityReadResult = .unreadable("Loading observability data.")
@@ -272,12 +289,9 @@ struct ObservabilityLiveView: View {
     }
 
     private func reload() {
-        readTask?.cancel()
         let url = ObservabilityReader.url(dbPath: dbPath)
-        readTask = Task { @MainActor in
-            let next = await Reader.read(url: url)
-            guard !Task.isCancelled else { return }
-            result = next
+        readTask = Loader.load(replacing: readTask, url: url) {
+            result = $0
         }
     }
 }
