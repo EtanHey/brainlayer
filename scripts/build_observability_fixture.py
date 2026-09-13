@@ -16,7 +16,7 @@ from brainlayer.vector_store import VectorStore
 
 SEED, GENERATED_AT = 20260913, datetime(2026, 9, 13, 12, tzinfo=UTC)
 FIXED_MTIME = int(GENERATED_AT.timestamp())
-HELDOUT_SHA256, MANIFEST = "7c14c1457dd3702b0980e8a755b4aadec59a2a62d99091cd3950d94682296ea9", Path(__file__).resolve().parents[1] / "tests/fixtures/observability/cases.json"  # fmt: skip
+HELDOUT_SHA256, MANIFEST = "a945fed90d3b943a994e952f7b041b6745991d68bf6e2d16de66ad7aa5475228", Path(__file__).resolve().parents[1] / "tests/fixtures/observability/cases.json"  # fmt: skip
 
 
 @dataclass(frozen=True)
@@ -27,11 +27,17 @@ class CaseDefinition:
 
     @property
     def split(self) -> str:
+        if self.case_id == "legacy-no-op-dev":
+            return "dev"
         return "heldout" if hashlib.sha256(self.case_id.encode()).digest()[0] < 0x60 else "dev"
 
     @property
     def db_path(self) -> str:
         return f"db/{self.case_id}.sqlite"
+
+
+def _mtime_iso(*, future: bool = False) -> str:
+    return datetime.fromtimestamp(FIXED_MTIME + (4 * 3600 if future else 0), tz=UTC).isoformat().replace("+00:00", "Z")
 
 
 def case_definitions() -> list[CaseDefinition]:
@@ -60,8 +66,9 @@ def _rows() -> list[tuple[object, ...]]:
         # fmt: off
         rows.append((f"synthetic-{index:02d}", f"Synthetic observability fixture row {index:02d}",
             "{}", source_file, "brainlayer-fixture", "assistant_text", source, sender, created,
-            provenance[index % len(provenance)], source_classes[index % len(source_classes)],
-            ("knowledge", "decision", "operational", "noise")[index % 4],
+            (None if index in {5, 17} else provenance[index % len(provenance)]),
+            source_classes[index % len(source_classes)],
+            ("knowledge", "decision", "operational", "test")[index % 4],
             "synthetic-00" if index == 21 else None,
             GENERATED_AT.isoformat().replace("+00:00", "Z") if index == 20 else None))
         # fmt: on
@@ -97,8 +104,11 @@ def _build_db(path: Path, case: CaseDefinition, pid_root: Path) -> None:
 
 
 def _jsonl_log(profile: str) -> str:
-    if profile == "no_op":
-        return json.dumps({"status": "no-op", "message": "no-op, 0 files already covered", "uploaded": False, "verified": True}) + "\n"  # fmt: skip
+    if profile in {"no_op", "legacy_no_op"}:
+        receipt = {"status": "no-op", "message": "no-op, 0 files already covered", "uploaded": False, "verified": True}
+        if profile == "no_op":
+            receipt["attempted_at"] = "2026-09-13T10:00:00Z"
+        return json.dumps(receipt) + "\n"
     # fmt: off
     shapes = [
         {"status": "uploaded", "archive": "claude-jsonl-2026-09-10.tar.gz", "uploaded": True,
@@ -132,8 +142,8 @@ def _daily_log(profile: str) -> str:
 def build_fixture_bundle(root: Path, *, seed: int) -> None:
     if seed != SEED:
         raise ValueError(f"seed must be {SEED}")
-    manifest_text = MANIFEST.read_text(encoding="utf-8")
-    if json.loads(manifest_text)["heldout_goldens_sha256"] != HELDOUT_SHA256:
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    if manifest["heldout_goldens_sha256"] != HELDOUT_SHA256:
         raise ValueError("cases.json held-out digest does not match the sealed digest")
     root.mkdir(parents=True, exist_ok=True)
     for generated_dir in ("db", "logs", "launchd", ".writer-pids"):
@@ -161,7 +171,13 @@ def build_fixture_bundle(root: Path, *, seed: int) -> None:
             db_path.with_name(db_path.name + suffix).unlink(missing_ok=True)
         os.utime(db_path, (FIXED_MTIME, FIXED_MTIME))
     shutil.rmtree(root / ".writer-pids", ignore_errors=True)
-    _write(root / "cases.json", manifest_text)
+    for case in manifest["cases"]:
+        future = case["failure"] == "clock_skew"
+        case["input_mtimes"] = {
+            path: _mtime_iso(future=future and path.endswith("jsonl-backup.log"))
+            for path in case["declared_inputs"]
+        }
+    (root / "cases.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
 
 def _build_case(root: Path, case: CaseDefinition) -> None:
@@ -174,12 +190,14 @@ def _build_case(root: Path, case: CaseDefinition) -> None:
     launchd = root / "launchd" / f"{case.case_id}.txt"
     if case.failure == "missing_launchd":
         _write(launchd, "")
-    elif case.profile == "no_op":
+    elif case.profile in {"no_op", "legacy_no_op"}:
         _write(launchd, 'Bad request.\nCould not find service "com.brainlayer.jsonl-backup" in domain for user gui: 501\n')  # fmt: skip
     else:
         _write(launchd, "gui/501/com.brainlayer.jsonl-backup = {\n\tstate = running\n\truns = 6\n\tpid = 4242\n\tlast exit code = 0\n}\n")  # fmt: skip
     if case.profile == "healthy":
-        _write(root / "launchd" / f"{case.case_id}.disabled/com.brainlayer.jsonl-backup.plist", "synthetic disabled fixture\n")  # fmt: skip
+        disabled_dir = root / "launchd" / f"{case.case_id}.disabled"
+        _write(disabled_dir / "com.brainlayer.jsonl-backup.plist", "synthetic disabled fixture\n")  # fmt: skip
+        os.utime(disabled_dir, (FIXED_MTIME, FIXED_MTIME))
 
 
 def main() -> int:
