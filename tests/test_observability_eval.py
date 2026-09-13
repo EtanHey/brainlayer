@@ -63,13 +63,20 @@ def test_runner_stages_pinned_mtimes_without_mutating_fixture(tmp_path: Path) ->
     source.write_bytes(b"fixture")
     os.utime(source, (1, 1))
     case = json.loads(Path("tests/fixtures/observability/cases.json").read_text())["cases"][0]
-    case = {**case, "declared_inputs": ["db/healthy-dev.sqlite"], "input_mtimes": {"db/healthy-dev.sqlite": "2026-09-13T12:00:00Z"}}
+    case = {
+        **case,
+        "declared_inputs": ["db/healthy-dev.sqlite"],
+        "input_mtimes": {"db/healthy-dev.sqlite": "2026-09-13T12:00:00Z"},
+    }
 
     staged_root = tmp_path / "staged"
     evaluator._stage_case_inputs(case, source_root, staged_root)
 
     assert source.stat().st_mtime == 1
-    assert staged_root.joinpath("db/healthy-dev.sqlite").stat().st_mtime == datetime.fromisoformat("2026-09-13T12:00:00+00:00").timestamp()
+    assert (
+        staged_root.joinpath("db/healthy-dev.sqlite").stat().st_mtime
+        == datetime.fromisoformat("2026-09-13T12:00:00+00:00").timestamp()
+    )
 
 
 def test_runner_fails_closed_when_input_mtime_is_missing(tmp_path: Path) -> None:
@@ -77,7 +84,8 @@ def test_runner_fails_closed_when_input_mtime_is_missing(tmp_path: Path) -> None
     case = {**case, "input_mtimes": {}}
     result = evaluator._run_case(case, Path("tests/fixtures/observability"), Path.cwd(), None)
     assert result.field_mismatches == [
-        "$: input staging failed: missing input_mtimes for declared inputs: " + ", ".join(sorted(case["declared_inputs"]))
+        "$: input staging failed: missing input_mtimes for declared inputs: "
+        + ", ".join(sorted(case["declared_inputs"]))
     ]
 
 
@@ -91,9 +99,12 @@ def test_faithful_stub_requires_runner_mtime_staging(tmp_path: Path, monkeypatch
         payload = evaluator.load_golden("healthy-dev", fixture)
         actual = json.loads(json.dumps(payload))
         expected_mtime = case["input_mtimes"][case["inputs"]["db"]]
-        observed = __import__("datetime").datetime.fromtimestamp(
-            Path(env["BRAINLAYER_DB"]).stat().st_mtime, __import__("datetime").UTC
-        ).isoformat().replace("+00:00", "Z")
+        observed = (
+            __import__("datetime")
+            .datetime.fromtimestamp(Path(env["BRAINLAYER_DB"]).stat().st_mtime, __import__("datetime").UTC)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
         if observed != expected_mtime:
             for section in actual.values():
                 if isinstance(section, dict):
@@ -101,7 +112,9 @@ def test_faithful_stub_requires_runner_mtime_staging(tmp_path: Path, monkeypatch
                         if isinstance(item, dict) and item.get("path") == case["inputs"]["db"]:
                             item["mtime"] = observed
         Path(env["BRAINLAYER_OBSERVABILITY_PATH"]).write_text(json.dumps(actual), encoding="utf-8")
-        Path(env["BRAINLAYER_OBSERVABILITY_TRACE_PATH"]).write_text(json.dumps(case["declared_inputs"]), encoding="utf-8")
+        Path(env["BRAINLAYER_OBSERVABILITY_TRACE_PATH"]).write_text(
+            json.dumps(case["declared_inputs"]), encoding="utf-8"
+        )
         return SimpleNamespace(returncode=0, stderr="", stdout="")
 
     monkeypatch.setattr(evaluator.subprocess, "run", stub)
