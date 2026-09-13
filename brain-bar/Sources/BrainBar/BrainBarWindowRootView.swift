@@ -7,7 +7,7 @@ enum BrainBarPlaceholderCopy {
 }
 
 struct BrainBarWindowRootView: View {
-    static let defaultTab: BrainBarTab = .dashboard
+    static let defaultTab: BrainBarTab = .observability
 
     @ObservedObject var runtime: BrainBarRuntime
     private let managesWindowFrame: Bool
