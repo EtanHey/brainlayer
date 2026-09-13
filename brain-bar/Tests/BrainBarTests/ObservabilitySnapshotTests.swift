@@ -4,9 +4,7 @@ import SwiftUI
 import XCTest
 @testable import BrainBar
 
-private func isOnMainThread() -> Bool {
-    Thread.isMainThread
-}
+private func isOnMainThread() -> Bool { Thread.isMainThread }
 
 @MainActor
 final class ObservabilitySnapshotTests: XCTestCase {
