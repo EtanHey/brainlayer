@@ -73,10 +73,12 @@ def _build_db(path: Path, case: CaseDefinition, pid_root: Path) -> None:
     store = VectorStore(path)
     try:
         if case.failure != "empty_db":
-            store.conn.executemany(
-                "INSERT INTO chunks (id,content,metadata,source_file,project,content_type,source,sender,created_at,provenance_class,source_class,content_class,superseded_by,archived_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                _rows(),
-            )
+            columns = "id content metadata source_file project content_type source sender created_at provenance_class source_class content_class superseded_by archived_at".split()
+            chunks = [dict(zip(columns, row)) for row in _rows()]
+            store.upsert_chunks(chunks, [[0.0] * 1024] * len(chunks))
+            store.conn.execute("UPDATE chunks SET source = NULLIF(source, 'unknown'), ingested_at = ?", (FIXED_MTIME,))
+            store.conn.execute("UPDATE chunks SET superseded_by = 'synthetic-00' WHERE id = 'synthetic-21'")
+            store.conn.execute("UPDATE chunks SET archived_at = ? WHERE id = 'synthetic-20'", (GENERATED_AT.isoformat().replace("+00:00", "Z"),))
         store.conn.execute("UPDATE schema_migrations SET applied_at = ?", (GENERATED_AT.isoformat(),))
         if case.failure == "missing_source_class":
             store.conn.execute("DROP INDEX idx_chunks_source_class")
