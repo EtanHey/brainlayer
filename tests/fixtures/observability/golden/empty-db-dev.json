@@ -24,7 +24,43 @@
     "reason": "",
     "state": "measured",
     "top_source_files": [],
-    "trend_7d": []
+    "trend_7d": [
+      {
+        "classified_unknown": 0,
+        "day": "2026-09-07",
+        "never_classified": 0
+      },
+      {
+        "classified_unknown": 0,
+        "day": "2026-09-08",
+        "never_classified": 0
+      },
+      {
+        "classified_unknown": 0,
+        "day": "2026-09-09",
+        "never_classified": 0
+      },
+      {
+        "classified_unknown": 0,
+        "day": "2026-09-10",
+        "never_classified": 0
+      },
+      {
+        "classified_unknown": 0,
+        "day": "2026-09-11",
+        "never_classified": 0
+      },
+      {
+        "classified_unknown": 0,
+        "day": "2026-09-12",
+        "never_classified": 0
+      },
+      {
+        "classified_unknown": 0,
+        "day": "2026-09-13",
+        "never_classified": 0
+      }
+    ]
   },
   "backups": {
     "db_snapshot": {
@@ -74,7 +110,7 @@
     "reason": "",
     "retention_invariant": "PASS",
     "state": "measured",
-    "surviving_archives_30d": 7,
+    "surviving_archives_30d": 1,
     "threshold_hours": 36
   },
   "db_path": "db/empty-db-dev.sqlite",

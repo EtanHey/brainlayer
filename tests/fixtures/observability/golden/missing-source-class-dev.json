@@ -61,7 +61,7 @@
     "reason": "",
     "retention_invariant": "PASS",
     "state": "measured",
-    "surviving_archives_30d": 7,
+    "surviving_archives_30d": 1,
     "threshold_hours": 36
   },
   "db_path": "db/missing-source-class-dev.sqlite",

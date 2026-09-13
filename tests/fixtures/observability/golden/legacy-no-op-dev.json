@@ -9,7 +9,7 @@
     "inputs": [
       {
         "mtime": "2026-09-13T12:00:00Z",
-        "path": "db/healthy-dev.sqlite",
+        "path": "db/legacy-no-op-dev.sqlite",
         "rows_or_bytes": 25,
         "sha256_first_64kb": null,
         "skipped_lines": 0,
@@ -77,20 +77,20 @@
       "last_at": "2026-09-13T09:00:00Z",
       "verified": true
     },
-    "error_type": null,
-    "freshness": "fresh",
+    "error_type": "jsonl_backup_attempt_invalid",
+    "freshness": "unknown",
     "inputs": [
       {
         "mtime": "2026-09-13T12:00:00Z",
-        "path": "logs/healthy-dev/jsonl-backup.log",
-        "rows_or_bytes": 1034,
-        "sha256_first_64kb": "fc751356d69cb6452d50a2816a1bf150180a480d26ecfbea359f0afa292e5d1e",
+        "path": "logs/legacy-no-op-dev/jsonl-backup.log",
+        "rows_or_bytes": 102,
+        "sha256_first_64kb": "714843bf392b43087703143b0e900b90dcb89b82c684fee45c7c44e2a202ff52",
         "skipped_lines": 0,
         "status": "read"
       },
       {
         "mtime": "2026-09-13T12:00:00Z",
-        "path": "logs/healthy-dev/backup-daily.log",
+        "path": "logs/legacy-no-op-dev/backup-daily.log",
         "rows_or_bytes": 293,
         "sha256_first_64kb": "c4c707bd7d86018084cf4b1a7c4b8cc40a21a3568be0ce611f633c2545daeef2",
         "skipped_lines": 2,
@@ -98,31 +98,26 @@
       },
       {
         "mtime": "2026-09-13T12:00:00Z",
-        "path": "launchd/healthy-dev.txt",
-        "rows_or_bytes": 101,
-        "sha256_first_64kb": "c7e7fae25ca60561a06ba1439384c7ea3b89257fd2e8e133fcef611e9a6fe8e2",
+        "path": "launchd/legacy-no-op-dev.txt",
+        "rows_or_bytes": 94,
+        "sha256_first_64kb": "78d567d3dcf4aef4cebfa9c79fab6f05278f35aa18d147cdd6761c8bef8eff02",
         "skipped_lines": 0,
         "status": "read"
       }
     ],
-    "last_verified_upload": {
-      "age_hours": 2.0,
-      "archive_id": "synthetic-archive-815",
-      "at": "2026-09-13T10:00:00Z",
-      "verified": true
-    },
+    "last_verified_upload": null,
     "launchd": {
-      "bootstrapped": true,
-      "disabled_dir_present": true,
+      "bootstrapped": false,
+      "disabled_dir_present": false,
       "label": "com.brainlayer.jsonl-backup"
     },
     "reason": "",
     "retention_invariant": "PASS",
     "state": "measured",
-    "surviving_archives_30d": 1,
+    "surviving_archives_30d": 0,
     "threshold_hours": 36
   },
-  "db_path": "db/healthy-dev.sqlite",
+  "db_path": "db/legacy-no-op-dev.sqlite",
   "emitters": {
     "by_emitter": [
       {
@@ -193,7 +188,7 @@
     "inputs": [
       {
         "mtime": "2026-09-13T12:00:00Z",
-        "path": "db/healthy-dev.sqlite",
+        "path": "db/legacy-no-op-dev.sqlite",
         "rows_or_bytes": 25,
         "sha256_first_64kb": null,
         "skipped_lines": 0,
@@ -280,7 +275,7 @@
     "inputs": [
       {
         "mtime": "2026-09-13T12:00:00Z",
-        "path": "db/healthy-dev.sqlite",
+        "path": "db/legacy-no-op-dev.sqlite",
         "rows_or_bytes": 25,
         "sha256_first_64kb": null,
         "skipped_lines": 0,
