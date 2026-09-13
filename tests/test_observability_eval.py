@@ -4,12 +4,13 @@ import hashlib
 import json
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
 import jsonschema
+import pytest
 
 from scripts import build_observability_fixture as builder
 from scripts import observability_eval as evaluator
-
 
 REQUIRED_FAILURES = {
     "missing_source_class",
@@ -73,6 +74,50 @@ def test_frozen_schema_validates_every_dev_golden() -> None:
         jsonschema.validate(golden, schema)
 
 
+def test_heldout_goldens_are_not_committed() -> None:
+    fixture_root = Path("tests/fixtures/observability")
+    cases = json.loads((fixture_root / "cases.json").read_text(encoding="utf-8"))["cases"]
+
+    assert all(not (fixture_root / case["golden"]).exists() for case in cases if case["split"] == "heldout")
+
+
+def test_recon_log_and_launchd_shapes_are_frozen() -> None:
+    root = Path("tests/fixtures/observability")
+    healthy_jsonl = (root / "logs/healthy-dev/jsonl-backup.log").read_text(encoding="utf-8").splitlines()
+    daily = (root / "logs/healthy-dev/backup-daily.log").read_text(encoding="utf-8").splitlines()
+    errors = (root / "logs/backup-errors-dev/backup-daily.log").read_text(encoding="utf-8").splitlines()
+
+    receipts = [json.loads(line) for line in healthy_jsonl]
+    assert "archive_id" not in receipts[0] and "forever_files" not in receipts[0]
+    assert "forever_files" in receipts[1] and "archive_id" not in receipts[1]
+    assert {"archive_id", "md5Checksum"} <= receipts[2].keys()
+    assert sum(not line.startswith("{") for line in daily) == 2
+    assert all(json.loads(line)["error_type"] == "FileNotFoundError" for line in errors)
+    assert json.loads((root / "logs/no-op-dev/jsonl-backup.log").read_text())["status"] == "no-op"
+    assert "Could not find service" in (root / "launchd/no-op-dev.txt").read_text()
+    assert (root / "launchd/missing-launchd-dev.txt").read_text() == ""
+
+
+def test_db_census_emitter_and_unknown_author_shapes_are_frozen() -> None:
+    root = Path("tests/fixtures/observability")
+    with sqlite3.connect(root / "db/healthy-dev.sqlite") as connection:
+        rows = connection.execute(
+            "SELECT metadata, source, sender, source_file, provenance_class, source_class FROM chunks"
+        ).fetchall()
+    assert all("attributionAgent" not in json.loads(row[0]) for row in rows)
+    assert {"realtime_watcher", "claude_code", "codex_cli", "mcp"} <= {row[1] for row in rows}
+    assert any(row[1] is None and row[2] == "assistant" for row in rows)
+    assert any(row[1] is None and row[2] is None and row[3] == "realtime-hook" for row in rows)
+    assert any(row[4] is None for row in rows)
+    assert any(row[4] == "unknown" and row[5] is not None for row in rows)
+
+    golden = evaluator.load_golden("healthy-dev")
+    derivations = {item["derived_from"] for item in golden["emitters"]["by_emitter"]}
+    assert derivations == {"source", "sender", "source_file"}
+    assert golden["author_unknown"]["never_classified"]["count"] > 0
+    assert golden["author_unknown"]["classified_unknown"]["count"] > 0
+
+
 def test_mutated_golden_control_fails_field_by_field() -> None:
     expected = evaluator.load_golden("healthy-dev")
     actual = json.loads(json.dumps(expected))
@@ -87,6 +132,19 @@ def test_mutated_golden_control_fails_field_by_field() -> None:
 
     assert result.passed is False
     assert result.field_mismatches == ["$.stores.total_chunks: expected 25, actual 26"]
+
+
+def test_malformed_producer_json_is_a_grade_not_a_traceback(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(*args: object, env: dict[str, str], **kwargs: object) -> SimpleNamespace:
+        Path(env["BRAINLAYER_OBSERVABILITY_PATH"]).write_text("{malformed", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(evaluator.subprocess, "run", fake_run)
+    case = evaluator.load_case("healthy-dev")
+    result = evaluator._run_case(case, Path("tests/fixtures/observability"), Path.cwd(), None)
+
+    assert result.passed is False
+    assert result.field_mismatches[0].startswith("$: malformed producer JSON:")
 
 
 def test_mock_green_detects_numbers_when_a_required_input_is_missing() -> None:
@@ -116,4 +174,3 @@ def test_traceability_requires_exact_declared_opened_input_set() -> None:
     )
 
     assert result.traceability == [f"missing opened input: {declared[-1]}"]
-

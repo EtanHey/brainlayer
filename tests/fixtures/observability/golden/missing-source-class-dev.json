@@ -1,0 +1,99 @@
+{
+  "author_unknown": {
+    "inputs": [
+      {
+        "mtime": "2026-09-13T12:00:00Z",
+        "path": "db/missing-source-class-dev.sqlite",
+        "rows_or_bytes": 25,
+        "sha256_first_64kb": null,
+        "skipped_lines": 0,
+        "status": "read"
+      }
+    ],
+    "reason": "required column missing: chunks.source_class",
+    "state": "unmeasurable"
+  },
+  "backups": {
+    "db_snapshot": {
+      "destination": "synthetic-drive",
+      "last_at": "2026-09-13T09:00:00Z",
+      "verified": true
+    },
+    "error_type": null,
+    "freshness": "fresh",
+    "inputs": [
+      {
+        "mtime": "2026-09-13T12:00:00Z",
+        "path": "logs/missing-source-class-dev/jsonl-backup.log",
+        "rows_or_bytes": 1034,
+        "sha256_first_64kb": "fc751356d69cb6452d50a2816a1bf150180a480d26ecfbea359f0afa292e5d1e",
+        "skipped_lines": 0,
+        "status": "read"
+      },
+      {
+        "mtime": "2026-09-13T12:00:00Z",
+        "path": "logs/missing-source-class-dev/backup-daily.log",
+        "rows_or_bytes": 293,
+        "sha256_first_64kb": "c4c707bd7d86018084cf4b1a7c4b8cc40a21a3568be0ce611f633c2545daeef2",
+        "skipped_lines": 2,
+        "status": "read"
+      },
+      {
+        "mtime": "2026-09-13T12:00:00Z",
+        "path": "launchd/missing-source-class-dev.txt",
+        "rows_or_bytes": 101,
+        "sha256_first_64kb": "c7e7fae25ca60561a06ba1439384c7ea3b89257fd2e8e133fcef611e9a6fe8e2",
+        "skipped_lines": 0,
+        "status": "read"
+      }
+    ],
+    "last_verified_upload": {
+      "age_hours": 2.0,
+      "archive_id": "synthetic-archive-815",
+      "at": "2026-09-13T10:00:00Z",
+      "verified": true
+    },
+    "launchd": {
+      "bootstrapped": true,
+      "disabled_dir_present": true,
+      "label": "com.brainlayer.jsonl-backup"
+    },
+    "reason": "",
+    "retention_invariant": "PASS",
+    "state": "measured",
+    "surviving_archives_30d": 7,
+    "threshold_hours": 36
+  },
+  "db_path": "db/missing-source-class-dev.sqlite",
+  "emitters": {
+    "inputs": [
+      {
+        "mtime": "2026-09-13T12:00:00Z",
+        "path": "db/missing-source-class-dev.sqlite",
+        "rows_or_bytes": 25,
+        "sha256_first_64kb": null,
+        "skipped_lines": 0,
+        "status": "read"
+      }
+    ],
+    "reason": "required column missing: chunks.source_class",
+    "state": "unmeasurable"
+  },
+  "generated_at": "2026-09-13T12:00:00Z",
+  "schema_version": 1,
+  "stores": {
+    "inputs": [
+      {
+        "mtime": "2026-09-13T12:00:00Z",
+        "path": "db/missing-source-class-dev.sqlite",
+        "rows_or_bytes": 25,
+        "sha256_first_64kb": null,
+        "skipped_lines": 0,
+        "status": "read"
+      }
+    ],
+    "reason": "required column missing: chunks.source_class",
+    "state": "unmeasurable"
+  },
+  "window_hours": 24
+}

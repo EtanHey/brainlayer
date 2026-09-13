@@ -1,0 +1,6 @@
+gui/501/com.brainlayer.jsonl-backup = {
+	state = running
+	runs = 6
+	pid = 4242
+	last exit code = 0
+}

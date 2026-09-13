@@ -1,0 +1,463 @@
+{
+  "cases": [
+    {
+      "case_id": "healthy-dev",
+      "db": "db/healthy-dev.sqlite",
+      "declared_inputs": [
+        "db/healthy-dev.sqlite",
+        "logs/healthy-dev/jsonl-backup.log",
+        "logs/healthy-dev/backup-daily.log",
+        "launchd/healthy-dev.txt"
+      ],
+      "failure": "none",
+      "generated_at": "2026-09-13T12:00:00Z",
+      "golden": "golden/healthy-dev.json",
+      "inputs": {
+        "backup_daily_log": "logs/healthy-dev/backup-daily.log",
+        "db": "db/healthy-dev.sqlite",
+        "disabled_dir": "launchd/healthy-dev.disabled",
+        "jsonl_backup_log": "logs/healthy-dev/jsonl-backup.log",
+        "launchd_output": "launchd/healthy-dev.txt"
+      },
+      "profile": "healthy",
+      "split": "dev",
+      "unmeasurable_sections": [],
+      "window_hours": 24
+    },
+    {
+      "case_id": "missing-source-class-dev",
+      "db": "db/missing-source-class-dev.sqlite",
+      "declared_inputs": [
+        "db/missing-source-class-dev.sqlite",
+        "logs/missing-source-class-dev/jsonl-backup.log",
+        "logs/missing-source-class-dev/backup-daily.log",
+        "launchd/missing-source-class-dev.txt"
+      ],
+      "failure": "missing_source_class",
+      "generated_at": "2026-09-13T12:00:00Z",
+      "golden": "golden/missing-source-class-dev.json",
+      "inputs": {
+        "backup_daily_log": "logs/missing-source-class-dev/backup-daily.log",
+        "db": "db/missing-source-class-dev.sqlite",
+        "disabled_dir": "launchd/missing-source-class-dev.disabled",
+        "jsonl_backup_log": "logs/missing-source-class-dev/jsonl-backup.log",
+        "launchd_output": "launchd/missing-source-class-dev.txt"
+      },
+      "profile": "healthy",
+      "split": "dev",
+      "unmeasurable_sections": [
+        "stores",
+        "emitters",
+        "author_unknown"
+      ],
+      "window_hours": 24
+    },
+    {
+      "case_id": "missing-log-dev",
+      "db": "db/missing-log-dev.sqlite",
+      "declared_inputs": [
+        "db/missing-log-dev.sqlite",
+        "logs/missing-log-dev/jsonl-backup.log",
+        "logs/missing-log-dev/backup-daily.log",
+        "launchd/missing-log-dev.txt"
+      ],
+      "failure": "missing_log",
+      "generated_at": "2026-09-13T12:00:00Z",
+      "golden": "golden/missing-log-dev.json",
+      "inputs": {
+        "backup_daily_log": "logs/missing-log-dev/backup-daily.log",
+        "db": "db/missing-log-dev.sqlite",
+        "disabled_dir": "launchd/missing-log-dev.disabled",
+        "jsonl_backup_log": "logs/missing-log-dev/jsonl-backup.log",
+        "launchd_output": "launchd/missing-log-dev.txt"
+      },
+      "profile": "healthy",
+      "split": "dev",
+      "unmeasurable_sections": [
+        "backups"
+      ],
+      "window_hours": 24
+    },
+    {
+      "case_id": "malformed-log-dev-1",
+      "db": "db/malformed-log-dev-1.sqlite",
+      "declared_inputs": [
+        "db/malformed-log-dev-1.sqlite",
+        "logs/malformed-log-dev-1/jsonl-backup.log",
+        "logs/malformed-log-dev-1/backup-daily.log",
+        "launchd/malformed-log-dev-1.txt"
+      ],
+      "failure": "malformed_log",
+      "generated_at": "2026-09-13T12:00:00Z",
+      "golden": "golden/malformed-log-dev-1.json",
+      "inputs": {
+        "backup_daily_log": "logs/malformed-log-dev-1/backup-daily.log",
+        "db": "db/malformed-log-dev-1.sqlite",
+        "disabled_dir": "launchd/malformed-log-dev-1.disabled",
+        "jsonl_backup_log": "logs/malformed-log-dev-1/jsonl-backup.log",
+        "launchd_output": "launchd/malformed-log-dev-1.txt"
+      },
+      "profile": "healthy",
+      "split": "dev",
+      "unmeasurable_sections": [
+        "backups"
+      ],
+      "window_hours": 24
+    },
+    {
+      "case_id": "missing-launchd-dev",
+      "db": "db/missing-launchd-dev.sqlite",
+      "declared_inputs": [
+        "db/missing-launchd-dev.sqlite",
+        "logs/missing-launchd-dev/jsonl-backup.log",
+        "logs/missing-launchd-dev/backup-daily.log",
+        "launchd/missing-launchd-dev.txt"
+      ],
+      "failure": "missing_launchd",
+      "generated_at": "2026-09-13T12:00:00Z",
+      "golden": "golden/missing-launchd-dev.json",
+      "inputs": {
+        "backup_daily_log": "logs/missing-launchd-dev/backup-daily.log",
+        "db": "db/missing-launchd-dev.sqlite",
+        "disabled_dir": "launchd/missing-launchd-dev.disabled",
+        "jsonl_backup_log": "logs/missing-launchd-dev/jsonl-backup.log",
+        "launchd_output": "launchd/missing-launchd-dev.txt"
+      },
+      "profile": "healthy",
+      "split": "dev",
+      "unmeasurable_sections": [
+        "backups"
+      ],
+      "window_hours": 24
+    },
+    {
+      "case_id": "empty-db-dev",
+      "db": "db/empty-db-dev.sqlite",
+      "declared_inputs": [
+        "db/empty-db-dev.sqlite",
+        "logs/empty-db-dev/jsonl-backup.log",
+        "logs/empty-db-dev/backup-daily.log",
+        "launchd/empty-db-dev.txt"
+      ],
+      "failure": "empty_db",
+      "generated_at": "2026-09-13T12:00:00Z",
+      "golden": "golden/empty-db-dev.json",
+      "inputs": {
+        "backup_daily_log": "logs/empty-db-dev/backup-daily.log",
+        "db": "db/empty-db-dev.sqlite",
+        "disabled_dir": "launchd/empty-db-dev.disabled",
+        "jsonl_backup_log": "logs/empty-db-dev/jsonl-backup.log",
+        "launchd_output": "launchd/empty-db-dev.txt"
+      },
+      "profile": "healthy",
+      "split": "dev",
+      "unmeasurable_sections": [],
+      "window_hours": 24
+    },
+    {
+      "case_id": "clock-skew-dev",
+      "db": "db/clock-skew-dev.sqlite",
+      "declared_inputs": [
+        "db/clock-skew-dev.sqlite",
+        "logs/clock-skew-dev/jsonl-backup.log",
+        "logs/clock-skew-dev/backup-daily.log",
+        "launchd/clock-skew-dev.txt"
+      ],
+      "failure": "clock_skew",
+      "generated_at": "2026-09-13T12:00:00Z",
+      "golden": "golden/clock-skew-dev.json",
+      "inputs": {
+        "backup_daily_log": "logs/clock-skew-dev/backup-daily.log",
+        "db": "db/clock-skew-dev.sqlite",
+        "disabled_dir": "launchd/clock-skew-dev.disabled",
+        "jsonl_backup_log": "logs/clock-skew-dev/jsonl-backup.log",
+        "launchd_output": "launchd/clock-skew-dev.txt"
+      },
+      "profile": "healthy",
+      "split": "dev",
+      "unmeasurable_sections": [
+        "backups"
+      ],
+      "window_hours": 24
+    },
+    {
+      "case_id": "no-op-dev",
+      "db": "db/no-op-dev.sqlite",
+      "declared_inputs": [
+        "db/no-op-dev.sqlite",
+        "logs/no-op-dev/jsonl-backup.log",
+        "logs/no-op-dev/backup-daily.log",
+        "launchd/no-op-dev.txt"
+      ],
+      "failure": "none",
+      "generated_at": "2026-09-13T12:00:00Z",
+      "golden": "golden/no-op-dev.json",
+      "inputs": {
+        "backup_daily_log": "logs/no-op-dev/backup-daily.log",
+        "db": "db/no-op-dev.sqlite",
+        "disabled_dir": "launchd/no-op-dev.disabled",
+        "jsonl_backup_log": "logs/no-op-dev/jsonl-backup.log",
+        "launchd_output": "launchd/no-op-dev.txt"
+      },
+      "profile": "no_op",
+      "split": "dev",
+      "unmeasurable_sections": [],
+      "window_hours": 24
+    },
+    {
+      "case_id": "backup-errors-dev",
+      "db": "db/backup-errors-dev.sqlite",
+      "declared_inputs": [
+        "db/backup-errors-dev.sqlite",
+        "logs/backup-errors-dev/jsonl-backup.log",
+        "logs/backup-errors-dev/backup-daily.log",
+        "launchd/backup-errors-dev.txt"
+      ],
+      "failure": "none",
+      "generated_at": "2026-09-13T12:00:00Z",
+      "golden": "golden/backup-errors-dev.json",
+      "inputs": {
+        "backup_daily_log": "logs/backup-errors-dev/backup-daily.log",
+        "db": "db/backup-errors-dev.sqlite",
+        "disabled_dir": "launchd/backup-errors-dev.disabled",
+        "jsonl_backup_log": "logs/backup-errors-dev/jsonl-backup.log",
+        "launchd_output": "launchd/backup-errors-dev.txt"
+      },
+      "profile": "errors",
+      "split": "dev",
+      "unmeasurable_sections": [],
+      "window_hours": 24
+    },
+    {
+      "case_id": "healthy-heldout-3",
+      "db": "db/healthy-heldout-3.sqlite",
+      "declared_inputs": [
+        "db/healthy-heldout-3.sqlite",
+        "logs/healthy-heldout-3/jsonl-backup.log",
+        "logs/healthy-heldout-3/backup-daily.log",
+        "launchd/healthy-heldout-3.txt"
+      ],
+      "failure": "none",
+      "generated_at": "2026-09-13T12:00:00Z",
+      "golden": "golden/healthy-heldout-3.json",
+      "inputs": {
+        "backup_daily_log": "logs/healthy-heldout-3/backup-daily.log",
+        "db": "db/healthy-heldout-3.sqlite",
+        "disabled_dir": "launchd/healthy-heldout-3.disabled",
+        "jsonl_backup_log": "logs/healthy-heldout-3/jsonl-backup.log",
+        "launchd_output": "launchd/healthy-heldout-3.txt"
+      },
+      "profile": "healthy",
+      "split": "heldout",
+      "unmeasurable_sections": [],
+      "window_hours": 24
+    },
+    {
+      "case_id": "missing-source-class-heldout",
+      "db": "db/missing-source-class-heldout.sqlite",
+      "declared_inputs": [
+        "db/missing-source-class-heldout.sqlite",
+        "logs/missing-source-class-heldout/jsonl-backup.log",
+        "logs/missing-source-class-heldout/backup-daily.log",
+        "launchd/missing-source-class-heldout.txt"
+      ],
+      "failure": "missing_source_class",
+      "generated_at": "2026-09-13T12:00:00Z",
+      "golden": "golden/missing-source-class-heldout.json",
+      "inputs": {
+        "backup_daily_log": "logs/missing-source-class-heldout/backup-daily.log",
+        "db": "db/missing-source-class-heldout.sqlite",
+        "disabled_dir": "launchd/missing-source-class-heldout.disabled",
+        "jsonl_backup_log": "logs/missing-source-class-heldout/jsonl-backup.log",
+        "launchd_output": "launchd/missing-source-class-heldout.txt"
+      },
+      "profile": "healthy",
+      "split": "heldout",
+      "unmeasurable_sections": [
+        "stores",
+        "emitters",
+        "author_unknown"
+      ],
+      "window_hours": 24
+    },
+    {
+      "case_id": "missing-log-heldout-2",
+      "db": "db/missing-log-heldout-2.sqlite",
+      "declared_inputs": [
+        "db/missing-log-heldout-2.sqlite",
+        "logs/missing-log-heldout-2/jsonl-backup.log",
+        "logs/missing-log-heldout-2/backup-daily.log",
+        "launchd/missing-log-heldout-2.txt"
+      ],
+      "failure": "missing_log",
+      "generated_at": "2026-09-13T12:00:00Z",
+      "golden": "golden/missing-log-heldout-2.json",
+      "inputs": {
+        "backup_daily_log": "logs/missing-log-heldout-2/backup-daily.log",
+        "db": "db/missing-log-heldout-2.sqlite",
+        "disabled_dir": "launchd/missing-log-heldout-2.disabled",
+        "jsonl_backup_log": "logs/missing-log-heldout-2/jsonl-backup.log",
+        "launchd_output": "launchd/missing-log-heldout-2.txt"
+      },
+      "profile": "healthy",
+      "split": "heldout",
+      "unmeasurable_sections": [
+        "backups"
+      ],
+      "window_hours": 24
+    },
+    {
+      "case_id": "malformed-log-heldout",
+      "db": "db/malformed-log-heldout.sqlite",
+      "declared_inputs": [
+        "db/malformed-log-heldout.sqlite",
+        "logs/malformed-log-heldout/jsonl-backup.log",
+        "logs/malformed-log-heldout/backup-daily.log",
+        "launchd/malformed-log-heldout.txt"
+      ],
+      "failure": "malformed_log",
+      "generated_at": "2026-09-13T12:00:00Z",
+      "golden": "golden/malformed-log-heldout.json",
+      "inputs": {
+        "backup_daily_log": "logs/malformed-log-heldout/backup-daily.log",
+        "db": "db/malformed-log-heldout.sqlite",
+        "disabled_dir": "launchd/malformed-log-heldout.disabled",
+        "jsonl_backup_log": "logs/malformed-log-heldout/jsonl-backup.log",
+        "launchd_output": "launchd/malformed-log-heldout.txt"
+      },
+      "profile": "healthy",
+      "split": "heldout",
+      "unmeasurable_sections": [
+        "backups"
+      ],
+      "window_hours": 24
+    },
+    {
+      "case_id": "missing-launchd-heldout-2",
+      "db": "db/missing-launchd-heldout-2.sqlite",
+      "declared_inputs": [
+        "db/missing-launchd-heldout-2.sqlite",
+        "logs/missing-launchd-heldout-2/jsonl-backup.log",
+        "logs/missing-launchd-heldout-2/backup-daily.log",
+        "launchd/missing-launchd-heldout-2.txt"
+      ],
+      "failure": "missing_launchd",
+      "generated_at": "2026-09-13T12:00:00Z",
+      "golden": "golden/missing-launchd-heldout-2.json",
+      "inputs": {
+        "backup_daily_log": "logs/missing-launchd-heldout-2/backup-daily.log",
+        "db": "db/missing-launchd-heldout-2.sqlite",
+        "disabled_dir": "launchd/missing-launchd-heldout-2.disabled",
+        "jsonl_backup_log": "logs/missing-launchd-heldout-2/jsonl-backup.log",
+        "launchd_output": "launchd/missing-launchd-heldout-2.txt"
+      },
+      "profile": "healthy",
+      "split": "heldout",
+      "unmeasurable_sections": [
+        "backups"
+      ],
+      "window_hours": 24
+    },
+    {
+      "case_id": "empty-db-heldout-3",
+      "db": "db/empty-db-heldout-3.sqlite",
+      "declared_inputs": [
+        "db/empty-db-heldout-3.sqlite",
+        "logs/empty-db-heldout-3/jsonl-backup.log",
+        "logs/empty-db-heldout-3/backup-daily.log",
+        "launchd/empty-db-heldout-3.txt"
+      ],
+      "failure": "empty_db",
+      "generated_at": "2026-09-13T12:00:00Z",
+      "golden": "golden/empty-db-heldout-3.json",
+      "inputs": {
+        "backup_daily_log": "logs/empty-db-heldout-3/backup-daily.log",
+        "db": "db/empty-db-heldout-3.sqlite",
+        "disabled_dir": "launchd/empty-db-heldout-3.disabled",
+        "jsonl_backup_log": "logs/empty-db-heldout-3/jsonl-backup.log",
+        "launchd_output": "launchd/empty-db-heldout-3.txt"
+      },
+      "profile": "healthy",
+      "split": "heldout",
+      "unmeasurable_sections": [],
+      "window_hours": 24
+    },
+    {
+      "case_id": "clock-skew-heldout",
+      "db": "db/clock-skew-heldout.sqlite",
+      "declared_inputs": [
+        "db/clock-skew-heldout.sqlite",
+        "logs/clock-skew-heldout/jsonl-backup.log",
+        "logs/clock-skew-heldout/backup-daily.log",
+        "launchd/clock-skew-heldout.txt"
+      ],
+      "failure": "clock_skew",
+      "generated_at": "2026-09-13T12:00:00Z",
+      "golden": "golden/clock-skew-heldout.json",
+      "inputs": {
+        "backup_daily_log": "logs/clock-skew-heldout/backup-daily.log",
+        "db": "db/clock-skew-heldout.sqlite",
+        "disabled_dir": "launchd/clock-skew-heldout.disabled",
+        "jsonl_backup_log": "logs/clock-skew-heldout/jsonl-backup.log",
+        "launchd_output": "launchd/clock-skew-heldout.txt"
+      },
+      "profile": "healthy",
+      "split": "heldout",
+      "unmeasurable_sections": [
+        "backups"
+      ],
+      "window_hours": 24
+    },
+    {
+      "case_id": "no-op-heldout-2",
+      "db": "db/no-op-heldout-2.sqlite",
+      "declared_inputs": [
+        "db/no-op-heldout-2.sqlite",
+        "logs/no-op-heldout-2/jsonl-backup.log",
+        "logs/no-op-heldout-2/backup-daily.log",
+        "launchd/no-op-heldout-2.txt"
+      ],
+      "failure": "none",
+      "generated_at": "2026-09-13T12:00:00Z",
+      "golden": "golden/no-op-heldout-2.json",
+      "inputs": {
+        "backup_daily_log": "logs/no-op-heldout-2/backup-daily.log",
+        "db": "db/no-op-heldout-2.sqlite",
+        "disabled_dir": "launchd/no-op-heldout-2.disabled",
+        "jsonl_backup_log": "logs/no-op-heldout-2/jsonl-backup.log",
+        "launchd_output": "launchd/no-op-heldout-2.txt"
+      },
+      "profile": "no_op",
+      "split": "heldout",
+      "unmeasurable_sections": [],
+      "window_hours": 24
+    },
+    {
+      "case_id": "backup-errors-heldout",
+      "db": "db/backup-errors-heldout.sqlite",
+      "declared_inputs": [
+        "db/backup-errors-heldout.sqlite",
+        "logs/backup-errors-heldout/jsonl-backup.log",
+        "logs/backup-errors-heldout/backup-daily.log",
+        "launchd/backup-errors-heldout.txt"
+      ],
+      "failure": "none",
+      "generated_at": "2026-09-13T12:00:00Z",
+      "golden": "golden/backup-errors-heldout.json",
+      "inputs": {
+        "backup_daily_log": "logs/backup-errors-heldout/backup-daily.log",
+        "db": "db/backup-errors-heldout.sqlite",
+        "disabled_dir": "launchd/backup-errors-heldout.disabled",
+        "jsonl_backup_log": "logs/backup-errors-heldout/jsonl-backup.log",
+        "launchd_output": "launchd/backup-errors-heldout.txt"
+      },
+      "profile": "errors",
+      "split": "heldout",
+      "unmeasurable_sections": [],
+      "window_hours": 24
+    }
+  ],
+  "heldout_goldens_sha256": "7c14c1457dd3702b0980e8a755b4aadec59a2a62d99091cd3950d94682296ea9",
+  "schema_version": 1,
+  "seed": 20260913
+}

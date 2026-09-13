@@ -1,0 +1,311 @@
+{
+  "author_unknown": {
+    "census_2026_09_13": "never_classified = 476,679 of 731,153 live (65.2%); both-NULL = 65,017; classified_unknown literal not observed on the copy",
+    "classified_unknown": {
+      "count": 2,
+      "definition": "provenance_class = 'unknown', archived_at IS NULL",
+      "share": 0.083333
+    },
+    "inputs": [
+      {
+        "mtime": "2026-09-13T12:00:00Z",
+        "path": "db/clock-skew-dev.sqlite",
+        "rows_or_bytes": 25,
+        "sha256_first_64kb": null,
+        "skipped_lines": 0,
+        "status": "read"
+      }
+    ],
+    "never_classified": {
+      "count": 4,
+      "definition": "provenance_class IS NULL OR source_class IS NULL, archived_at IS NULL",
+      "share": 0.166667
+    },
+    "reason": "",
+    "state": "measured",
+    "top_source_files": [
+      {
+        "count": 4,
+        "source_file": "realtime-hook"
+      },
+      {
+        "count": 2,
+        "source_file": "brainbar-store"
+      }
+    ],
+    "trend_7d": [
+      {
+        "classified_unknown": 0,
+        "day": "2026-09-07",
+        "never_classified": 1
+      },
+      {
+        "classified_unknown": 1,
+        "day": "2026-09-08",
+        "never_classified": 1
+      },
+      {
+        "classified_unknown": 0,
+        "day": "2026-09-09",
+        "never_classified": 0
+      },
+      {
+        "classified_unknown": 0,
+        "day": "2026-09-10",
+        "never_classified": 0
+      },
+      {
+        "classified_unknown": 0,
+        "day": "2026-09-11",
+        "never_classified": 0
+      },
+      {
+        "classified_unknown": 0,
+        "day": "2026-09-12",
+        "never_classified": 0
+      },
+      {
+        "classified_unknown": 1,
+        "day": "2026-09-13",
+        "never_classified": 2
+      }
+    ]
+  },
+  "backups": {
+    "inputs": [
+      {
+        "mtime": "2026-09-13T16:00:00Z",
+        "path": "logs/clock-skew-dev/jsonl-backup.log",
+        "rows_or_bytes": 1034,
+        "sha256_first_64kb": "fc751356d69cb6452d50a2816a1bf150180a480d26ecfbea359f0afa292e5d1e",
+        "skipped_lines": 0,
+        "status": "future"
+      },
+      {
+        "mtime": "2026-09-13T12:00:00Z",
+        "path": "logs/clock-skew-dev/backup-daily.log",
+        "rows_or_bytes": 293,
+        "sha256_first_64kb": "c4c707bd7d86018084cf4b1a7c4b8cc40a21a3568be0ce611f633c2545daeef2",
+        "skipped_lines": 2,
+        "status": "read"
+      },
+      {
+        "mtime": "2026-09-13T12:00:00Z",
+        "path": "launchd/clock-skew-dev.txt",
+        "rows_or_bytes": 101,
+        "sha256_first_64kb": "c7e7fae25ca60561a06ba1439384c7ea3b89257fd2e8e133fcef611e9a6fe8e2",
+        "skipped_lines": 0,
+        "status": "read"
+      }
+    ],
+    "reason": "input mtime is later than generated_at: logs/clock-skew-dev/jsonl-backup.log",
+    "state": "unmeasurable"
+  },
+  "db_path": "db/clock-skew-dev.sqlite",
+  "emitters": {
+    "by_emitter": [
+      {
+        "count_in_window": 2,
+        "derived_from": "sender",
+        "emitter": "assistant"
+      },
+      {
+        "count_in_window": 2,
+        "derived_from": "source",
+        "emitter": "claude_code"
+      },
+      {
+        "count_in_window": 2,
+        "derived_from": "source",
+        "emitter": "codex_cli"
+      },
+      {
+        "count_in_window": 2,
+        "derived_from": "source",
+        "emitter": "mcp"
+      },
+      {
+        "count_in_window": 2,
+        "derived_from": "source_file",
+        "emitter": "realtime-hook"
+      },
+      {
+        "count_in_window": 2,
+        "derived_from": "source",
+        "emitter": "realtime_watcher"
+      }
+    ],
+    "by_source_class": [
+      {
+        "count": 5,
+        "in_window": 2,
+        "source_class": "brain-worker"
+      },
+      {
+        "count": 4,
+        "in_window": 2,
+        "source_class": "cli-agent"
+      },
+      {
+        "count": 4,
+        "in_window": 2,
+        "source_class": "desktop"
+      },
+      {
+        "count": 4,
+        "in_window": 2,
+        "source_class": "fleet-coordination"
+      },
+      {
+        "count": 4,
+        "in_window": 2,
+        "source_class": "subagent"
+      },
+      {
+        "count": 4,
+        "in_window": 2,
+        "source_class": null
+      }
+    ],
+    "derivation_note": "metadata.attributionAgent is absent in the 2026-09-13 census; emitter derives from source, then sender, then source_file, or the section is unmeasurable",
+    "hidden_from_default_search": 9,
+    "inputs": [
+      {
+        "mtime": "2026-09-13T12:00:00Z",
+        "path": "db/clock-skew-dev.sqlite",
+        "rows_or_bytes": 25,
+        "sha256_first_64kb": null,
+        "skipped_lines": 0,
+        "status": "read"
+      }
+    ],
+    "reason": "",
+    "state": "measured"
+  },
+  "generated_at": "2026-09-13T12:00:00Z",
+  "schema_version": 1,
+  "stores": {
+    "by_content_class": [
+      {
+        "content_class": "decision",
+        "count": 6
+      },
+      {
+        "content_class": "knowledge",
+        "count": 7
+      },
+      {
+        "content_class": "noise",
+        "count": 6
+      },
+      {
+        "content_class": "operational",
+        "count": 6
+      }
+    ],
+    "in_window": {
+      "by_hour": [
+        {
+          "count": 1,
+          "hour": "2026-09-13T01:00:00Z"
+        },
+        {
+          "count": 1,
+          "hour": "2026-09-13T02:00:00Z"
+        },
+        {
+          "count": 1,
+          "hour": "2026-09-13T03:00:00Z"
+        },
+        {
+          "count": 1,
+          "hour": "2026-09-13T04:00:00Z"
+        },
+        {
+          "count": 1,
+          "hour": "2026-09-13T05:00:00Z"
+        },
+        {
+          "count": 1,
+          "hour": "2026-09-13T06:00:00Z"
+        },
+        {
+          "count": 1,
+          "hour": "2026-09-13T07:00:00Z"
+        },
+        {
+          "count": 1,
+          "hour": "2026-09-13T08:00:00Z"
+        },
+        {
+          "count": 1,
+          "hour": "2026-09-13T09:00:00Z"
+        },
+        {
+          "count": 1,
+          "hour": "2026-09-13T10:00:00Z"
+        },
+        {
+          "count": 1,
+          "hour": "2026-09-13T11:00:00Z"
+        },
+        {
+          "count": 1,
+          "hour": "2026-09-13T12:00:00Z"
+        }
+      ],
+      "count": 12
+    },
+    "inputs": [
+      {
+        "mtime": "2026-09-13T12:00:00Z",
+        "path": "db/clock-skew-dev.sqlite",
+        "rows_or_bytes": 25,
+        "sha256_first_64kb": null,
+        "skipped_lines": 0,
+        "status": "read"
+      }
+    ],
+    "latest": [
+      {
+        "chunk_id": "synthetic-00",
+        "emitter": "realtime_watcher",
+        "preview": "Synthetic observability fixture row 00",
+        "source_class": "brain-worker",
+        "stored_at": "2026-09-13T12:00:00Z"
+      },
+      {
+        "chunk_id": "synthetic-01",
+        "emitter": "claude_code",
+        "preview": "Synthetic observability fixture row 01",
+        "source_class": "cli-agent",
+        "stored_at": "2026-09-13T11:00:00Z"
+      },
+      {
+        "chunk_id": "synthetic-02",
+        "emitter": "codex_cli",
+        "preview": "Synthetic observability fixture row 02",
+        "source_class": "desktop",
+        "stored_at": "2026-09-13T10:00:00Z"
+      },
+      {
+        "chunk_id": "synthetic-03",
+        "emitter": "mcp",
+        "preview": "Synthetic observability fixture row 03",
+        "source_class": "fleet-coordination",
+        "stored_at": "2026-09-13T09:00:00Z"
+      },
+      {
+        "chunk_id": "synthetic-04",
+        "emitter": "assistant",
+        "preview": "Synthetic observability fixture row 04",
+        "source_class": "subagent",
+        "stored_at": "2026-09-13T08:00:00Z"
+      }
+    ],
+    "reason": "",
+    "state": "measured",
+    "total_chunks": 25
+  },
+  "window_hours": 24
+}
