@@ -15,9 +15,13 @@ from typer.testing import CliRunner
 REPO = Path(__file__).resolve().parents[1]
 FIXTURES = REPO / "tests/fixtures/observability"
 OWNED_SECTIONS = ("stores", "emitters", "author_unknown")
+
+
 def _dev_cases() -> list[dict[str, object]]:
     manifest = json.loads((FIXTURES / "cases.json").read_text(encoding="utf-8"))
     return [case for case in manifest["cases"] if case["split"] == "dev"]
+
+
 def _stage_db(case: dict[str, object], tmp_path: Path) -> Path:
     inputs = case["inputs"]
     assert isinstance(inputs, dict)
@@ -29,6 +33,8 @@ def _stage_db(case: dict[str, object], tmp_path: Path) -> Path:
     fixed = int(datetime.fromisoformat(str(case["generated_at"]).replace("Z", "+00:00")).timestamp())
     os.utime(staged, (fixed, fixed))
     return staged
+
+
 def _run_case(case: dict[str, object], tmp_path: Path) -> tuple[dict[str, object], list[str]]:
     inputs = case["inputs"]
     assert isinstance(inputs, dict)
@@ -58,6 +64,8 @@ def _run_case(case: dict[str, object], tmp_path: Path) -> tuple[dict[str, object
     )
     assert run.returncode == 0, run.stderr
     return json.loads(output.read_text(encoding="utf-8")), json.loads(trace.read_text(encoding="utf-8"))
+
+
 @pytest.mark.parametrize("case", _dev_cases(), ids=lambda case: str(case["case_id"]))
 def test_dev_goldens_for_owned_sections(case: dict[str, object], tmp_path: Path) -> None:
     actual, trace = _run_case(case, tmp_path)
@@ -67,6 +75,8 @@ def test_dev_goldens_for_owned_sections(case: dict[str, object], tmp_path: Path)
         assert actual[section] == expected[section]
     assert actual["db_path"] == expected["db_path"]
     assert trace.count(str(case["inputs"]["db"])) == 1
+
+
 @pytest.mark.parametrize(("secret", "prefix"), [("sk-ant-" + "A" * 30, "[REDACTED:anthropic]"), ("Q7mV2pL9xR4cT8nW3kY6dF1sH5jB", "[REDACTED:quarantined]")])  # fmt: skip
 def test_preview_is_secret_scrubbed_and_limited_to_80_chars(tmp_path: Path, secret: str, prefix: str) -> None:
     case = next(case for case in _dev_cases() if case["case_id"] == "healthy-dev")
@@ -86,6 +96,8 @@ def test_preview_is_secret_scrubbed_and_limited_to_80_chars(tmp_path: Path, secr
     assert secret not in preview
     assert preview.startswith(prefix)
     assert len(preview) <= 80
+
+
 def test_offset_timestamps_are_compared_as_utc_instants(tmp_path: Path) -> None:
     case = next(case for case in _dev_cases() if case["case_id"] == "healthy-dev")
     db = tmp_path / "offset.sqlite"
@@ -98,6 +110,8 @@ def test_offset_timestamps_are_compared_as_utc_instants(tmp_path: Path) -> None:
     assert actual["stores"]["latest"][0]["chunk_id"] == "synthetic-01"
     assert actual["stores"]["in_window"]["count"] == 11
     assert sum(item["count_in_window"] for item in actual["emitters"]["by_emitter"]) == 11
+
+
 def test_malformed_timestamp_degrades_sections_and_names_row(tmp_path: Path) -> None:
     case = next(case for case in _dev_cases() if case["case_id"] == "healthy-dev")
     db = tmp_path / "malformed-time.sqlite"
@@ -109,6 +123,8 @@ def test_malformed_timestamp_degrades_sections_and_names_row(tmp_path: Path) -> 
     for section in OWNED_SECTIONS:
         assert actual[section]["state"] == "unmeasurable"
         assert "synthetic-00" in actual[section]["reason"]
+
+
 def test_trace_is_written_when_build_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import brainlayer.observability_surface as surface
 
@@ -118,6 +134,8 @@ def test_trace_is_written_when_build_fails(monkeypatch: pytest.MonkeyPatch, tmp_
     with pytest.raises(RuntimeError, match="boom"):
         surface.build_document(env={"BRAINLAYER_DB": str(db), "BRAINLAYER_OBSERVABILITY_INPUT_ROOT": str(tmp_path / "inputs"), "BRAINLAYER_OBSERVABILITY_TRACE_PATH": str(trace), "BRAINLAYER_OBSERVABILITY_NOW": str(case["generated_at"])})  # fmt: skip
     assert json.loads(trace.read_text()) == [str(case["inputs"]["db"])]
+
+
 def test_trace_only_input_is_excluded_from_recorder_section_inputs(tmp_path: Path) -> None:
     from brainlayer.observability_surface import InputRecorder
 
@@ -125,11 +143,15 @@ def test_trace_only_input_is_excluded_from_recorder_section_inputs(tmp_path: Pat
     included = recorder(tmp_path / "missing")
     recorder(tmp_path, rows_or_bytes=0, in_section_inputs=False)
     assert recorder.section_inputs == [included]
+
+
 @pytest.mark.parametrize(("source_file", "expected"), [("/Users/x/.claude/projects/-Users-x-Gits-brainlayer/session.jsonl", "brainlayer"), ("/Users/x/.codex/sessions/2026/09/13/rollout.jsonl", "codex"), ("brainbar-store", "brainbar-store"), ("realtime-hook", "realtime-hook"), ("unknown", "unknown"), ("", "unknown")])  # fmt: skip
 def test_source_file_emitter_derivation(source_file: str, expected: str) -> None:
     from brainlayer.observability_surface import derive_emitter
 
     assert derive_emitter(None, None, source_file) == (expected, "source_file")
+
+
 def test_cli_observability_stdout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from brainlayer.cli import app
 
