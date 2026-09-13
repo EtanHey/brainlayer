@@ -153,3 +153,51 @@ def test_drive_token_file_not_found_maps_to_credentials_error() -> None:
 
     assert error_type == "drive_credentials_missing"
     assert all_errors is True
+
+
+def test_legacy_daily_snapshot_derives_attempt_time_from_snapshot_date() -> None:
+    snapshot, error_type, all_errors = observability_backup._daily_snapshot(
+        [{
+            "backup_log_provenance": "real",
+            "snapshot": "/synthetic/backups/2026-09-13.db.gz",
+            "destination": "synthetic-drive",
+            "verified": True,
+            "drive_md5_match": True,
+        }]
+    )
+    expected = datetime.fromisoformat("2026-09-13T05:00:00").astimezone(UTC).isoformat().replace("+00:00", "Z")
+    assert snapshot == {
+        "last_at": expected,
+        "destination": "synthetic-drive",
+        "verified": True,
+    }
+    assert error_type is None
+    assert all_errors is False
+
+
+def test_stale_health_error_type_is_propagated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        observability_backup,
+        "inspect_jsonl_backup_health",
+        lambda *args, **kwargs: (type("Health", (), {"state": "stale"})(), type("Issue", (), {"code": "stale_receipt"})()),
+    )
+    result, _ = _build("healthy-dev")
+    assert result["error_type"] == "stale_receipt"
+
+
+def test_unbootstrapped_service_with_disabled_directory_is_measured(tmp_path: Path) -> None:
+    env = _env("healthy-dev")
+    disabled = tmp_path / "disabled"
+    disabled.mkdir()
+    env["BRAINLAYER_OBSERVABILITY_DISABLED_DIR"] = str(disabled)
+    env["BRAINLAYER_OBSERVABILITY_LAUNCHD_OUTPUT"] = str(tmp_path / "launchd.txt")
+    Path(env["BRAINLAYER_OBSERVABILITY_LAUNCHD_OUTPUT"]).write_text(
+        'Could not find service "com.brainlayer.jsonl-backup" in domain for user gui: 501\n', encoding="utf-8"
+    )
+    def recorder(path: Path, **kwargs: object) -> dict[str, object]:
+        return {"path": str(path), "status": str(kwargs.get("status", "read")), "mtime": None,
+                "rows_or_bytes": kwargs.get("rows_or_bytes"), "sha256_first_64kb": None,
+                "skipped_lines": kwargs.get("skipped_lines", 0)}
+    result = build_backups_section(env=env, record_input=recorder, now=NOW)
+    assert result["state"] == "measured"
+    assert result["launchd"] == {"label": "com.brainlayer.jsonl-backup", "bootstrapped": False, "disabled_dir_present": True}

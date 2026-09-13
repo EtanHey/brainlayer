@@ -949,6 +949,7 @@ def run_backup(
     resolved_log_path = _backup_log_path(log_path)
     resolved_db_path = db_path or get_db_path()
     result: dict[str, Any] = {
+        "attempted_at": dt.datetime.now(dt.UTC).isoformat(),
         "db": str(resolved_db_path),
         "uploaded": False,
         "local_removed": False,
