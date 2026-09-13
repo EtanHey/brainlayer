@@ -13,6 +13,7 @@ import jsonschema
 import pytest
 
 from scripts import build_observability_fixture as builder
+from scripts import check_observability_golden_inputs as golden_inputs
 from scripts import observability_eval as evaluator
 
 REQUIRED_FAILURES = {
@@ -41,6 +42,18 @@ def test_builder_is_byte_deterministic(tmp_path: Path) -> None:
     builder.build_fixture_bundle(second, seed=20260913)
 
     assert _tree_digest(first) == _tree_digest(second)
+
+
+def test_dev_golden_input_receipts_match_fixture_artifacts() -> None:
+    assert (
+        golden_inputs.check(
+            fixture_root=evaluator.FIXTURES,
+            heldout_root=None,
+            split="dev",
+            write=False,
+        )
+        == []
+    )
 
 
 def test_builder_uses_vector_store_schema_without_handwritten_ddl(tmp_path: Path) -> None:

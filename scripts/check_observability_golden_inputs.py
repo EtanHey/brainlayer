@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import sqlite3
+import tarfile
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +44,21 @@ def _golden_path(
     if root is None:
         raise ValueError("--heldout-golden-root is required for heldout cases")
     return root / case["golden"]
+
+
+def seal_heldout(root: Path, cases: list[dict[str, Any]], output: Path) -> str:
+    stream = io.BytesIO()
+    with tarfile.open(fileobj=stream, mode="w", format=tarfile.PAX_FORMAT) as archive:
+        for name in sorted(case["golden"] for case in cases if case["split"] == "heldout"):
+            payload = (root / name).read_bytes()
+            info = tarfile.TarInfo(name)
+            info.size, info.mtime, info.uid, info.gid = len(payload), 20260913, 0, 0
+            info.uname, info.gname, info.mode = "", "", 0o644
+            archive.addfile(info, io.BytesIO(payload))
+    payload = stream.getvalue()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(payload)
+    return hashlib.sha256(payload).hexdigest()
 
 
 def check(
@@ -84,6 +101,7 @@ def main() -> int:
     parser.add_argument("--split", choices=("dev", "heldout", "all"), default="dev")
     parser.add_argument("--fixture-root", type=Path, default=FIXTURES)
     parser.add_argument("--heldout-golden-root", type=Path)
+    parser.add_argument("--heldout-tar", type=Path)
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args()
     try:
@@ -97,6 +115,12 @@ def main() -> int:
         parser.error(str(exc))
     for finding in findings:
         print(finding)
+    if args.heldout_tar:
+        if not args.write or args.heldout_golden_root is None:
+            parser.error("--heldout-tar requires --write and --heldout-golden-root")
+        manifest = json.loads((args.fixture_root / "cases.json").read_text(encoding="utf-8"))
+        digest = seal_heldout(args.heldout_golden_root, manifest["cases"], args.heldout_tar)
+        print(f"heldout_goldens_sha256={digest}")
     if findings:
         print(f"{'updated' if args.write else 'stale'} input receipts: {len(findings)}")
     else:
