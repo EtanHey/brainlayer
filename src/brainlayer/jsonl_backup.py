@@ -1295,7 +1295,13 @@ def run_backup(
             expected_name=archive_path.name,
             expected_size=archive_size,
         )
-        result.update({"status": "uploaded", "uploaded": True, "drive_file": uploaded})
+        result.update({
+            "status": "uploaded",
+            "uploaded": True,
+            "drive_file": uploaded,
+            "archive_id": file_id,
+            "md5Checksum": uploaded.get("md5Checksum"),
+        })
         # The same incident was two individually reasonable deletions composed together:
         # successful upload removed local staging, then Drive retention removed the remote
         # bundle. Persist the exact Drive object and archived-source digests before either
