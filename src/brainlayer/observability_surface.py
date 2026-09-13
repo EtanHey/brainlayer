@@ -21,8 +21,6 @@ DERIVATION_NOTE = "metadata.attributionAgent is absent in the 2026-09-13 census;
 CENSUS_NOTE = "never_classified = 476,679 of 731,153 live (65.2%); both-NULL = 65,017; classified_unknown literal not observed on the copy"
 def _iso_utc(value: datetime) -> str:
     return value.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
 def _parse_time(value: str) -> datetime:
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
@@ -68,8 +66,6 @@ class InputRecorder:
         if self.trace_path is not None:
             self.trace_path.parent.mkdir(parents=True, exist_ok=True)
             self.trace_path.write_text(json.dumps(self.trace, indent=2) + "\n", encoding="utf-8")
-
-
 def _clean(value: object) -> str | None:
     text = str(value).strip() if value is not None else ""
     return text or None
@@ -77,8 +73,6 @@ def _input(path: str, status: str, mtime: str | None, size: int | None,
            digest: str | None, skipped: int) -> dict[str, Any]:
     return {"path": path, "status": status, "mtime": mtime, "rows_or_bytes": size,
             "sha256_first_64kb": digest, "skipped_lines": skipped}
-
-
 def derive_emitter(source: object, sender: object, source_file: object) -> tuple[str, str]:
     """Derive the emitter in source, sender, source_file precedence order."""
     for value, origin in ((source, "source"), (sender, "sender")):
@@ -93,8 +87,6 @@ def derive_emitter(source: object, sender: object, source_file: object) -> tuple
             return project_dir.rsplit("-Gits-", 1)[1] or "unknown", "source_file"
         return project_dir or "unknown", "source_file"
     return path, "source_file"
-
-
 def _unmeasurable(reason: str, db_input: dict[str, Any]) -> dict[str, Any]:
     return {"state": "unmeasurable", "reason": reason, "inputs": [db_input]}
 def _measured(db_input: dict[str, Any], **fields: Any) -> dict[str, Any]:
@@ -112,32 +104,31 @@ def _stores(connection: sqlite3.Connection, columns: set[str], db_input: dict[st
     total = connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
     rows = connection.execute("SELECT content_class, COUNT(*) FROM chunks GROUP BY content_class ORDER BY content_class IS NULL, content_class")
     content_classes = [{"content_class": row[0], "count": row[1]} for row in rows]
-    rows = connection.execute("SELECT strftime('%Y-%m-%dT%H:00:00Z', created_at), COUNT(*) FROM chunks WHERE created_at >= ? AND created_at <= ? GROUP BY 1 ORDER BY 1", (cutoff, now_text))
+    rows = connection.execute("SELECT strftime('%Y-%m-%dT%H:00:00Z', created_at), COUNT(*) FROM chunks WHERE datetime(created_at) >= datetime(?) AND datetime(created_at) <= datetime(?) GROUP BY 1 ORDER BY 1", (cutoff, now_text))
     by_hour = [{"hour": row[0], "count": row[1]} for row in rows]
     latest = []
     for row in connection.execute(
         "SELECT id, created_at, source_class, source, sender, source_file, content "
-        "FROM chunks ORDER BY created_at DESC LIMIT 5"
+        "FROM chunks ORDER BY datetime(created_at) DESC, id LIMIT 5"
     ):
         emitter, _ = derive_emitter(row[3], row[4], row[5])
+        scrubbed = scrub_secrets(row[6] or "")
         latest.append({"chunk_id": str(row[0]), "stored_at": _iso_utc(_parse_time(row[1])),
                        "source_class": row[2], "emitter": emitter,
-                       "preview": scrub_secrets(row[6] or "").text[:80]})
+                       "preview": "[REDACTED:quarantined]" if scrubbed.quarantine else scrubbed.text[:80]})
     return _measured(db_input, total_chunks=total,
                      in_window={"count": sum(item["count"] for item in by_hour), "by_hour": by_hour},
                      by_content_class=content_classes, latest=latest)
-
-
 def _emitters(connection: sqlite3.Connection, columns: set[str], db_input: dict[str, Any], now: datetime) -> dict[str, Any]:
     required = ("source_class", "source", "sender", "source_file", "created_at")
     if missing := _missing(columns, required):
         return _unmeasurable(f"required column missing: chunks.{missing}", db_input)
     cutoff, now_text = _iso_utc(now - timedelta(hours=WINDOW_HOURS)), _iso_utc(now)
-    rows = connection.execute("SELECT source_class, COUNT(*), SUM(CASE WHEN created_at >= ? AND created_at <= ? THEN 1 ELSE 0 END) FROM chunks GROUP BY source_class ORDER BY source_class IS NULL, source_class", (cutoff, now_text))
+    rows = connection.execute("SELECT source_class, COUNT(*), SUM(CASE WHEN datetime(created_at) >= datetime(?) AND datetime(created_at) <= datetime(?) THEN 1 ELSE 0 END) FROM chunks GROUP BY source_class ORDER BY source_class IS NULL, source_class", (cutoff, now_text))
     by_source = [{"source_class": row[0], "count": row[1], "in_window": row[2]} for row in rows]
     counts: Counter[tuple[str, str]] = Counter()
     for row in connection.execute(
-        "SELECT source, sender, source_file FROM chunks WHERE created_at >= ? AND created_at <= ?",
+        "SELECT source, sender, source_file FROM chunks WHERE datetime(created_at) >= datetime(?) AND datetime(created_at) <= datetime(?)",
         (cutoff, now_text),
     ):
         counts[derive_emitter(*row)] += 1

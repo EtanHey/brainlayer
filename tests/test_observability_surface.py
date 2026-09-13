@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 from datetime import datetime
@@ -69,15 +70,14 @@ def test_dev_goldens_for_owned_sections(case: dict[str, object], tmp_path: Path)
     assert trace.count(str(case["inputs"]["db"])) == 1
 
 
-def test_preview_is_secret_scrubbed_and_limited_to_80_chars(tmp_path: Path) -> None:
-    import sqlite3
-
+@pytest.mark.parametrize(("secret", "prefix"), [("sk-ant-" + "A" * 30, "[REDACTED:anthropic]"), ("Q7mV2pL9xR4cT8nW3kY6dF1sH5jB", "[REDACTED:quarantined]")])  # fmt: skip
+def test_preview_is_secret_scrubbed_and_limited_to_80_chars(tmp_path: Path, secret: str, prefix: str) -> None:
     case = next(case for case in _dev_cases() if case["case_id"] == "healthy-dev")
     db = tmp_path / "preview.sqlite"
     shutil.copy2(FIXTURES / str(case["inputs"]["db"]), db)
-    secret = "sk-ant-" + "A" * 30
     connection = sqlite3.connect(db)
-    connection.execute("UPDATE chunks SET content = ? WHERE id = 'synthetic-00'", (secret + "x" * 100,))
+    connection.execute("PRAGMA journal_mode=DELETE")
+    connection.execute("UPDATE chunks SET content = ? WHERE id = 'synthetic-00'", (secret + " " + "x" * 100,))
     connection.commit()
     connection.close()
     frozen = int(datetime.fromisoformat(str(case["generated_at"]).replace("Z", "+00:00")).timestamp())
@@ -87,8 +87,22 @@ def test_preview_is_secret_scrubbed_and_limited_to_80_chars(tmp_path: Path) -> N
     actual, _ = _run_case(case, tmp_path)
     preview = actual["stores"]["latest"][0]["preview"]
     assert secret not in preview
-    assert preview.startswith("[REDACTED:anthropic]")
+    assert preview.startswith(prefix)
     assert len(preview) <= 80
+
+
+def test_offset_timestamps_are_compared_as_utc_instants(tmp_path: Path) -> None:
+    case = next(case for case in _dev_cases() if case["case_id"] == "healthy-dev")
+    db = tmp_path / "offset.sqlite"
+    shutil.copy2(FIXTURES / str(case["inputs"]["db"]), db)
+    with sqlite3.connect(db) as connection:
+        connection.execute("PRAGMA journal_mode=DELETE")
+        connection.executemany("UPDATE chunks SET created_at = ? WHERE id = ?", [("2026-09-13T13:00:00+02:00", "synthetic-00"), ("2026-09-13T11:30:00Z", "synthetic-01"), ("2026-09-12T13:00:00+14:00", "synthetic-02")])  # fmt: skip
+    case = {**case, "inputs": {**case["inputs"], "db": str(db)}}
+    actual, _ = _run_case(case, tmp_path)
+    assert actual["stores"]["latest"][0]["chunk_id"] == "synthetic-01"
+    assert actual["stores"]["in_window"]["count"] == 11
+    assert sum(item["count_in_window"] for item in actual["emitters"]["by_emitter"]) == 11
 
 
 @pytest.mark.parametrize(("source_file", "expected"), [("/Users/x/.claude/projects/-Users-x-Gits-brainlayer/session.jsonl", "brainlayer"), ("/Users/x/.codex/sessions/2026/09/13/rollout.jsonl", "codex"), ("brainbar-store", "brainbar-store"), ("realtime-hook", "realtime-hook"), ("unknown", "unknown"), ("", "unknown")])  # fmt: skip
