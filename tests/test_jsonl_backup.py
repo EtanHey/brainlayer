@@ -617,7 +617,12 @@ def test_run_jsonl_backup_uploads_incremental_bundle_verifies_and_enqueues_summa
 
     def fake_upload(file_path, folder_id, credentials):  # noqa: ARG001
         uploads.append(Path(file_path))
-        return {"id": "drive-jsonl-id", "name": Path(file_path).name, "size": str(Path(file_path).stat().st_size), "md5Checksum": "md5-jsonl"}
+        return {
+            "id": "drive-jsonl-id",
+            "name": Path(file_path).name,
+            "size": str(Path(file_path).stat().st_size),
+            "md5Checksum": "md5-jsonl",
+        }
 
     def fake_prune(service, *, folder_parts, retention_policy):  # noqa: ARG001
         pruned.append(retention_policy.keep_latest)
