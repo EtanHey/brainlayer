@@ -10,7 +10,7 @@ struct BrainBarWindowRootView: View {
     @ObservedObject var runtime: BrainBarRuntime
     private let managesWindowFrame: Bool
 
-    @State private var selectedTab: BrainBarTab = .observability
+    @State private var selectedTab: BrainBarTab = .dashboard
     @State private var hasActivatedInjectionsTab = false
     @State private var hasActivatedGraphTab = false
     @State private var commandBarProvider = BrainBarCommandBarViewModelProvider()

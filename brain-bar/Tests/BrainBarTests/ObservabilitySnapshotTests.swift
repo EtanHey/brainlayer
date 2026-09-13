@@ -31,12 +31,19 @@ final class ObservabilitySnapshotTests: XCTestCase {
             let snapshot = ObservabilityPresentation.snapshot(
                 document: document,
                 now: document.generatedAt,
-                cadence: 300
+                cadence: .known(300)
             )
             XCTAssertEqual(snapshot.cards.map(\.title), ["Stores", "Emitters", "Author-unknown", "Backups"])
             XCTAssertEqual(snapshot.cards.count, 4, fixture.id)
             XCTAssertTrue(snapshot.cards.allSatisfy { !$0.detail.isEmpty }, fixture.id)
-            try render(document: document, named: fixture.id)
+            for section in fixture.unmeasurableSections {
+                let card = try XCTUnwrap(snapshot.cards.first { $0.title == title(for: section) }, "\(fixture.id): \(section)")
+                XCTAssertEqual(card.tone, .neutral, "\(fixture.id): \(section)")
+                XCTAssertEqual(card.detail, "unmeasurable — \(reason(for: section, in: document))", "\(fixture.id): \(section)")
+                let fallback = card.detail.replacingOccurrences(of: reason(for: section, in: document), with: "")
+                XCTAssertNil(fallback.rangeOfCharacter(from: .decimalDigits), "\(fixture.id): \(section)")
+            }
+            _ = try render(document: document, named: fixture.id)
         }
     }
 
@@ -46,7 +53,7 @@ final class ObservabilitySnapshotTests: XCTestCase {
         )
         guard case let .readable(document) = result else { return XCTFail("Expected readable fixture") }
         let card = try XCTUnwrap(
-            ObservabilityPresentation.snapshot(document: document, now: document.generatedAt, cadence: 300)
+            ObservabilityPresentation.snapshot(document: document, now: document.generatedAt, cadence: .known(300))
                 .cards.first { $0.title == "Stores" }
         )
 
@@ -61,13 +68,42 @@ final class ObservabilitySnapshotTests: XCTestCase {
         )
         guard case let .readable(document) = result else { return XCTFail("Expected readable fixture") }
         let card = try XCTUnwrap(
-            ObservabilityPresentation.snapshot(document: document, now: document.generatedAt, cadence: 300)
+            ObservabilityPresentation.snapshot(document: document, now: document.generatedAt, cadence: .known(300))
                 .cards.first { $0.title == "Backups" }
         )
 
         XCTAssertEqual(card.tone, .neutral)
-        XCTAssertEqual(card.detail, "unknown · retention PASS")
+        XCTAssertEqual(card.detail, "unknown · retention PASS · 0 archives in 30d · jsonl_backup_attempt_invalid")
         XCTAssertFalse(card.detail.contains("unmeasurable"))
+    }
+
+    func testBackupDiagnosticsAreRendered() throws {
+        let document = try readableDocument(named: "backup-errors-dev")
+        let card = try XCTUnwrap(
+            ObservabilityPresentation.snapshot(document: document, now: document.generatedAt, cadence: .known(300))
+                .cards.first { $0.title == "Backups" }
+        )
+        XCTAssertTrue(card.detail.contains("FileNotFoundError"))
+        XCTAssertTrue(card.detail.contains("1 archive in 30d"))
+    }
+
+    func testRenderedTonesAndOpaqueBackgroundAreDistinct() throws {
+        let healthy = try render(document: readableDocument(named: "healthy-dev"), named: "tone-healthy")
+        let neutral = try render(document: readableDocument(named: "missing-source-class-dev"), named: "tone-neutral")
+        let amber = try render(document: readableDocument(named: "backup-errors-dev"), named: "tone-amber")
+
+        let standardColor = try color(in: healthy, normalizedX: 0.22, normalizedY: 0.27)
+        let neutralColor = try color(in: neutral, normalizedX: 0.22, normalizedY: 0.27)
+        let amberColor = try color(in: amber, normalizedX: 0.72, normalizedY: 0.49)
+        let backgroundColor = try XCTUnwrap(healthy.colorAt(x: 5, y: 5))
+
+        XCTAssertNotEqual(standardColor, neutralColor)
+        XCTAssertNotEqual(standardColor, amberColor)
+        XCTAssertNotEqual(neutralColor, amberColor)
+        XCTAssertNotEqual(standardColor, backgroundColor)
+        XCTAssertNotEqual(neutralColor, backgroundColor)
+        XCTAssertNotEqual(amberColor, backgroundColor)
+        XCTAssertEqual(backgroundColor.alphaComponent, 1, accuracy: 0.001)
     }
 
     func testSchemaVersionMismatchIsUnreadableWithReason() throws {
@@ -96,6 +132,21 @@ final class ObservabilitySnapshotTests: XCTestCase {
         )
     }
 
+    func testMissingHealthCheckCadenceIsDisclosedOnCard() throws {
+        let cadence = ObservabilityReader.healthCheckCadence(environment: [
+            "BRAINLAYER_HEALTH_CHECK_PLIST_PATH": "/tmp/brainbar-missing-health-check-\(UUID().uuidString).plist",
+        ])
+        XCTAssertEqual(cadence.interval, 300)
+        XCTAssertEqual(cadence.assumption, "cadence unknown, assuming 300s")
+
+        let document = try readableDocument(named: "healthy-dev")
+        let stores = try XCTUnwrap(
+            ObservabilityPresentation.snapshot(document: document, now: document.generatedAt, cadence: cadence)
+                .cards.first { $0.title == "Stores" }
+        )
+        XCTAssertEqual(stores.note, "cadence unknown, assuming 300s")
+    }
+
     func testStaleDocumentRendersAmberWithAge() throws {
         let result = ObservabilityReader.read(
             url: fixtureRoot.appendingPathComponent("golden/healthy-dev.json")
@@ -104,16 +155,56 @@ final class ObservabilitySnapshotTests: XCTestCase {
         let snapshot = ObservabilityPresentation.snapshot(
             document: document,
             now: document.generatedAt.addingTimeInterval(601),
-            cadence: 300
+            cadence: .known(300)
         )
         XCTAssertTrue(snapshot.isStale)
         XCTAssertTrue(snapshot.ageText.contains("old"))
         XCTAssertTrue(snapshot.cards.allSatisfy { $0.tone == .amber })
     }
 
-    private func render(document: ObservabilityDocument, named name: String) throws {
+    private func readableDocument(named name: String) throws -> ObservabilityDocument {
+        let result = ObservabilityReader.read(url: fixtureRoot.appendingPathComponent("golden/\(name).json"))
+        guard case let .readable(document) = result else {
+            XCTFail("Expected readable fixture: \(name)")
+            throw FixtureError.unreadable(name)
+        }
+        return document
+    }
+
+    private func color(
+        in bitmap: NSBitmapImageRep,
+        normalizedX: Double,
+        normalizedY: Double
+    ) throws -> NSColor {
+        try XCTUnwrap(bitmap.colorAt(
+            x: Int(Double(bitmap.pixelsWide) * normalizedX),
+            y: Int(Double(bitmap.pixelsHigh) * normalizedY)
+        ))
+    }
+
+    private func title(for section: String) -> String {
+        switch section {
+        case "stores": "Stores"
+        case "emitters": "Emitters"
+        case "author_unknown": "Author-unknown"
+        case "backups": "Backups"
+        default: section
+        }
+    }
+
+    private func reason(for section: String, in document: ObservabilityDocument) -> String {
+        switch section {
+        case "stores": document.stores.reason
+        case "emitters": document.emitters.reason
+        case "author_unknown": document.authorUnknown.reason
+        case "backups": document.backups.reason
+        default: ""
+        }
+    }
+
+    private func render(document: ObservabilityDocument, named name: String) throws -> NSBitmapImageRep {
         let view = NSHostingView(rootView: ObservabilityDashboardView(
-            result: .readable(document), now: document.generatedAt, cadence: 300
+            result: .readable(document), now: document.generatedAt, cadence: .known(300)
         ).environment(\.colorScheme, .dark))
         view.frame = NSRect(x: 0, y: 0, width: 760, height: 560)
         view.layoutSubtreeIfNeeded()
@@ -127,8 +218,11 @@ final class ObservabilitySnapshotTests: XCTestCase {
             try png.write(to: url)
             print("[observability-render] wrote \(url.path) (\(png.count) bytes)")
         }
+        return bitmap
     }
 }
+
+private enum FixtureError: Error { case unreadable(String) }
 
 private struct FixtureManifest: Decodable {
     let cases: [FixtureCase]
@@ -138,5 +232,8 @@ private struct FixtureCase: Decodable {
     let id: String
     let split: String
     let golden: String
-    enum CodingKeys: String, CodingKey { case id = "case_id", split, golden }
+    let unmeasurableSections: [String]
+    enum CodingKeys: String, CodingKey {
+        case id = "case_id", split, golden, unmeasurableSections = "unmeasurable_sections"
+    }
 }

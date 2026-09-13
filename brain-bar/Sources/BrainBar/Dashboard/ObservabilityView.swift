@@ -38,7 +38,7 @@ struct ObservabilityDocument: Codable, Sendable {
         let inputs: [Input]
         let freshness: String?
         let retentionInvariant: String?
-        let survivingArchives30d: Int?
+        let survivingArchives30D: Int?
         let errorType: String?
     }
     struct Input: Codable, Sendable { let path: String, status: String }
@@ -49,7 +49,18 @@ enum ObservabilityReadResult: Sendable {
     case unreadable(String)
 }
 
+struct ObservabilityCadence: Sendable {
+    let interval: TimeInterval
+    let assumption: String?
+
+    static func known(_ interval: TimeInterval) -> Self {
+        .init(interval: interval, assumption: nil)
+    }
+}
+
 enum ObservabilityReader {
+    static let installedHealthCheckCadence = healthCheckCadence()
+
     static func url(
         dbPath: String,
         environment: [String: String] = ProcessInfo.processInfo.environment
@@ -89,16 +100,16 @@ enum ObservabilityReader {
 
     static func healthCheckCadence(
         environment: [String: String] = ProcessInfo.processInfo.environment
-    ) -> TimeInterval {
+    ) -> ObservabilityCadence {
         let path = environment["BRAINLAYER_HEALTH_CHECK_PLIST_PATH"] ??
             FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent("Library/LaunchAgents/com.brainlayer.health-check.plist").path
         guard let data = FileManager.default.contents(atPath: path),
               let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
               let interval = (plist as? [String: Any])?["StartInterval"] as? NSNumber else {
-            return 300
+            return .init(interval: 300, assumption: "cadence unknown, assuming 300s")
         }
-        return interval.doubleValue
+        return .known(interval.doubleValue)
     }
 
     private struct SchemaEnvelope: Decodable {
@@ -107,11 +118,12 @@ enum ObservabilityReader {
     }
 }
 
-enum ObservabilityCardTone: Equatable, Sendable { case standard, neutral, amber }
+enum ObservabilityCardTone: String, Equatable, Sendable { case standard, neutral, amber }
 
 struct ObservabilitySnapshot: Sendable {
     struct Card: Sendable {
         let title: String, detail: String
+        let note: String?
         let tone: ObservabilityCardTone
     }
     let generatedAt: Date, ageText: String, isStale: Bool, cards: [Card]
@@ -121,11 +133,11 @@ enum ObservabilityPresentation {
     static func snapshot(
         document: ObservabilityDocument,
         now: Date,
-        cadence: TimeInterval
+        cadence: ObservabilityCadence
     ) -> ObservabilitySnapshot {
         let age = max(0, now.timeIntervalSince(document.generatedAt))
-        let stale = age > cadence * 2
-        let stores = card("Stores", document.stores.state, document.stores.reason, stale) {
+        let stale = age > cadence.interval * 2
+        let stores = card("Stores", document.stores.state, document.stores.reason, stale, note: cadence.assumption) {
             guard let total = document.stores.totalChunks, let recent = document.stores.inWindow?.count else { return nil }
             return "\(total) total · \(recent) in 24h"
         }
@@ -145,7 +157,14 @@ enum ObservabilityPresentation {
         let backups = card("Backups", document.backups.state, document.backups.reason, stale, tone: backupTone) {
             guard let freshness = document.backups.freshness,
                   let retention = document.backups.retentionInvariant else { return nil }
-            return "\(freshness) · retention \(retention)"
+            var parts = [freshness, "retention \(retention)"]
+            if let archives = document.backups.survivingArchives30D {
+                parts.append("\(archives) \(archives == 1 ? "archive" : "archives") in 30d")
+            }
+            if let errorType = document.backups.errorType, !errorType.isEmpty {
+                parts.append(errorType)
+            }
+            return parts.joined(separator: " · ")
         }
         return ObservabilitySnapshot(
             generatedAt: document.generatedAt,
@@ -158,20 +177,21 @@ enum ObservabilityPresentation {
     private static func card(
         _ title: String, _ state: String, _ reason: String, _ stale: Bool,
         tone: ObservabilityCardTone = .standard,
+        note: String? = nil,
         measured: () -> String?
     ) -> ObservabilitySnapshot.Card {
         guard state == "measured", let detail = measured() else {
             let detail = reason.isEmpty ? "unmeasurable" : "unmeasurable — \(reason)"
-            return .init(title: title, detail: detail, tone: .neutral)
+            return .init(title: title, detail: detail, note: note, tone: .neutral)
         }
-        return .init(title: title, detail: detail, tone: stale ? .amber : tone)
+        return .init(title: title, detail: detail, note: note, tone: stale ? .amber : tone)
     }
 }
 
 struct ObservabilityDashboardView: View {
     let result: ObservabilityReadResult
     var now = Date()
-    var cadence = ObservabilityReader.healthCheckCadence()
+    var cadence = ObservabilityCadence.known(300)
 
     var body: some View {
         switch result {
@@ -190,9 +210,13 @@ struct ObservabilityDashboardView: View {
                             Text(card.title).font(.headline)
                             Text(card.detail)
                                 .foregroundStyle(card.tone == .neutral ? Color.secondary : Color.primary)
+                            if let note = card.note {
+                                Text(note).font(.caption).foregroundStyle(Color.secondary)
+                            }
                         }
                         .frame(maxWidth: .infinity, minHeight: 110, alignment: .topLeading)
                         .padding(16).background(fill(card.tone), in: RoundedRectangle(cornerRadius: 14))
+                        .accessibilityIdentifier("card.\(identifier(card.title)).tone=\(card.tone.rawValue)")
                     }
                 }
                 Spacer()
@@ -211,15 +235,20 @@ struct ObservabilityDashboardView: View {
         case .amber: Color.orange.opacity(0.20)
         }
     }
+
+    private func identifier(_ title: String) -> String {
+        title.lowercased().replacingOccurrences(of: "-", with: "_")
+    }
 }
 
 struct ObservabilityLiveView: View {
     let dbPath: String
+    private let cadence = ObservabilityReader.installedHealthCheckCadence
     @State private var result: ObservabilityReadResult = .unreadable("Loading observability data.")
     private let refresh = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        ObservabilityDashboardView(result: result)
+        ObservabilityDashboardView(result: result, cadence: cadence)
             .onAppear(perform: reload)
             .onReceive(refresh) { _ in reload() }
     }
