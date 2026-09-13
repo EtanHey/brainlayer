@@ -177,7 +177,7 @@ def build_fixture_bundle(root: Path, *, seed: int) -> None:
             path: _mtime_iso(future=future and path.endswith("jsonl-backup.log"))
             for path in case["declared_inputs"]
         }
-    (root / "cases.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    _write(root / "cases.json", json.dumps(manifest, indent=2) + "\n")
 
 
 def _build_case(root: Path, case: CaseDefinition) -> None:

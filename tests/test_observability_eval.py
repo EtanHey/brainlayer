@@ -79,6 +79,32 @@ def test_runner_stages_pinned_mtimes_without_mutating_fixture(tmp_path: Path) ->
     )
 
 
+def test_runner_stages_future_clock_skew_log_mtime_without_mutating_fixture(tmp_path: Path) -> None:
+    source_root = tmp_path / "fixture"
+    source_root.mkdir()
+    for relative in ("db/clock-skew-dev.sqlite", "logs/clock-skew-dev/jsonl-backup.log"):
+        source = source_root / relative
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes(b"fixture")
+        os.utime(source, (1, 1))
+    original = evaluator.load_case("clock-skew-dev")
+    declared = ["db/clock-skew-dev.sqlite", "logs/clock-skew-dev/jsonl-backup.log"]
+    case = {
+        **original,
+        "declared_inputs": declared,
+        "input_mtimes": {path: original["input_mtimes"][path] for path in declared},
+    }
+
+    staged_root = tmp_path / "staged"
+    evaluator._stage_case_inputs(case, source_root, staged_root)
+
+    assert (source_root / "logs/clock-skew-dev/jsonl-backup.log").stat().st_mtime == 1
+    assert (
+        staged_root.joinpath("logs/clock-skew-dev/jsonl-backup.log").stat().st_mtime
+        == datetime.fromisoformat("2026-09-13T16:00:00+00:00").timestamp()
+    )
+
+
 def test_runner_fails_closed_when_input_mtime_is_missing(tmp_path: Path) -> None:
     case = evaluator.load_case("healthy-dev")
     case = {**case, "input_mtimes": {}}

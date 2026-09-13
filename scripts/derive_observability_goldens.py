@@ -106,9 +106,9 @@ def _db_sections(case: dict[str, Any], root: Path, template: dict[str, Any]) -> 
         for offset in range(6, -1, -1):
             day = (generated - timedelta(days=offset)).date().isoformat()
             trend.append({
-                "classified_unknown": connection.execute("SELECT COUNT(*) FROM chunks WHERE provenance_class = 'unknown' AND substr(created_at, 1, 10) = ?", (day,)).fetchone()[0],
+                "classified_unknown": connection.execute("SELECT COUNT(*) FROM chunks WHERE provenance_class = 'unknown' AND archived_at IS NULL AND substr(created_at, 1, 10) = ?", (day,)).fetchone()[0],
                 "day": day,
-                "never_classified": connection.execute("SELECT COUNT(*) FROM chunks WHERE (provenance_class IS NULL OR source_class IS NULL) AND substr(created_at, 1, 10) = ?", (day,)).fetchone()[0],
+                "never_classified": connection.execute("SELECT COUNT(*) FROM chunks WHERE (provenance_class IS NULL OR source_class IS NULL) AND archived_at IS NULL AND substr(created_at, 1, 10) = ?", (day,)).fetchone()[0],
             })
         stores = {
             "by_content_class": [{"content_class": row["content_class"], "count": row["count"]} for row in by_class],
