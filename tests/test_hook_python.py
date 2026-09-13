@@ -167,6 +167,7 @@ class TestIsPinnedInterpreter:
             # this as an override, so the linter must accept it too, or the escape hatch and
             # the gate contradict each other (review round 1, medium).
             "/tmp/myvenv/bin/python",
+            "'/Users/Jane Doe/.venv/bin/python'",
             "/Users/x/Gits/brainlayer/.venv/bin/python3.13",
         ],
     )
@@ -251,9 +252,19 @@ class TestResolveHookPython:
         target = tmp_path / "myvenv" / "bin" / "python"
         target.parent.mkdir(parents=True)
         target.write_text("#!/bin/sh\n")
+        target.chmod(0o755)
         resolved = resolve_hook_python(env={HOOK_PYTHON_ENV: str(target)}, candidates=())
         assert resolved == str(target)
         assert is_pinned_interpreter(resolved), "the linter must accept what the hatch returns"
+
+    @staticmethod
+    def test_an_absolute_venv_override_with_spaces_is_accepted(tmp_path):
+        target = tmp_path / "Jane Doe" / ".venv" / "bin" / "python"
+        target.parent.mkdir(parents=True)
+        target.write_text("#!/bin/sh\n")
+        target.chmod(0o755)
+
+        assert resolve_hook_python(env={HOOK_PYTHON_ENV: str(target)}, candidates=()) == str(target)
 
     @staticmethod
     def test_first_existing_candidate_wins(tmp_path):
@@ -262,6 +273,20 @@ class TestResolveHookPython:
         present.write_text("#!/bin/sh\n")
         present.chmod(0o755)
         assert resolve_hook_python(env={}, candidates=(str(missing), str(present))) == str(present)
+
+    @staticmethod
+    def test_candidate_must_be_a_regular_executable_file(tmp_path):
+        directory = tmp_path / "directory" / "python"
+        directory.mkdir(parents=True)
+        non_executable = tmp_path / "not-executable" / "python"
+        non_executable.parent.mkdir()
+        non_executable.write_text("#!/bin/sh\n")
+        usable = tmp_path / "usable" / "python"
+        usable.parent.mkdir()
+        usable.write_text("#!/bin/sh\n")
+        usable.chmod(0o755)
+
+        assert resolve_hook_python(env={}, candidates=(str(directory), str(non_executable), str(usable))) == str(usable)
 
     @staticmethod
     def test_never_falls_back_to_path():
@@ -297,6 +322,15 @@ class TestResolveHookPython:
     def test_default_candidate_is_the_opt_symlink():
         """`opt/` outlives the Cellar version a command was rendered against."""
         assert DEFAULT_KEG_PYTHON == "/opt/homebrew/opt/brainlayer/libexec/venv/bin/python"
+
+    @staticmethod
+    def test_non_python_executable_override_is_refused(tmp_path):
+        target = tmp_path / "bin" / "bash"
+        target.parent.mkdir()
+        target.write_text("#!/bin/sh\n")
+        target.chmod(0o755)
+        with pytest.raises(HookPythonUnresolved, match="executable Python"):
+            resolve_hook_python(env={HOOK_PYTHON_ENV: str(target)}, candidates=())
 
 
 class TestRenderHookCommand:
@@ -481,6 +515,17 @@ class TestCli:
         assert main([str(path)]) == 2
         assert "cannot read" in capsys.readouterr().out
 
+    @staticmethod
+    def test_print_interpreter_uses_affirmative_resolver(tmp_path, monkeypatch, capsys):
+        python = tmp_path / "venv" / "bin" / "python"
+        python.parent.mkdir(parents=True)
+        python.write_text("#!/bin/sh\n")
+        python.chmod(0o755)
+        monkeypatch.setenv(HOOK_PYTHON_ENV, str(python))
+
+        assert main(["--print-interpreter"]) == 0
+        assert capsys.readouterr().out.strip() == str(python)
+
 
 #: conftest sandboxes HOME for every test, so `~/.claude/settings.json` is not
 #: reachable by default — deliberately: a unit suite must not read Etan's home. Point
@@ -506,3 +551,87 @@ class TestLiveSettings:
         assert findings == [], "BrainLayer hooks still resolve their interpreter through PATH: " + "; ".join(
             f"{f.event}: {f.command}" for f in findings
         )
+
+
+def test_launchd_plist_templates_pin_their_interpreter(tmp_path):
+    """Render machine-specific placeholders, then apply the existing pin gate."""
+    import plistlib
+
+    from brainlayer.hook_python import render_launchd_plist
+
+    plists = sorted((REPO_ROOT / "launchd").glob("*.plist"))
+    assert plists, "expected launchd templates to exist"
+    python = tmp_path / "intel" / "opt" / "brainlayer" / "libexec" / "venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("#!/bin/sh\n")
+    python.chmod(0o755)
+
+    unpinned: list[str] = []
+    for path in plists:
+        template = path.read_text(encoding="utf-8")
+        rendered = render_launchd_plist(template, python=str(python))
+        args = plistlib.loads(rendered.encode()).get("ProgramArguments") or []
+        if not args:
+            continue
+        interpreter = args[0]
+        # A wrapper or installed CLI is not a direct interpreter claim.
+        if "python" not in interpreter and not interpreter.endswith("/env"):
+            continue
+        if interpreter.endswith("/env"):
+            interpreter = f"{interpreter} {args[1] if len(args) > 1 else ''}".strip()
+        if not is_pinned_interpreter(interpreter):
+            unpinned.append(f"{path.name}: {interpreter}")
+
+    assert not unpinned, "launchd templates must name a pinned interpreter, not PATH: " + "; ".join(unpinned)
+
+
+def test_launchd_plist_render_uses_available_intel_keg(monkeypatch):
+    from brainlayer import hook_python
+
+    template = "<string>__BRAINLAYER_PYTHON__</string>"
+    intel = "/usr/local/opt/brainlayer/libexec/venv/bin/python"
+    monkeypatch.setattr(hook_python.os.path, "exists", lambda path: path == intel)
+    monkeypatch.setattr(hook_python.os.path, "isfile", lambda path: path == intel)
+    monkeypatch.setattr(hook_python.os, "access", lambda path, mode: path == intel and mode == hook_python.os.X_OK)
+
+    rendered = hook_python.render_launchd_plist(template, env={})
+
+    assert rendered == f"<string>{intel}</string>"
+
+
+def test_launchd_plist_render_rejects_non_executable_interpreter(tmp_path):
+    from brainlayer.hook_python import HookPythonUnresolved, render_launchd_plist
+
+    python = tmp_path / "venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("#!/bin/sh\n")
+
+    with pytest.raises(HookPythonUnresolved):
+        render_launchd_plist("<string>__BRAINLAYER_PYTHON__</string>", python=str(python))
+
+
+def test_launchd_plist_render_accepts_executable_interpreter_with_spaces(tmp_path):
+    import xml.etree.ElementTree as ET
+
+    from brainlayer.hook_python import render_launchd_plist
+
+    python = tmp_path / "Jane Doe" / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("#!/bin/sh\n")
+    python.chmod(0o755)
+
+    rendered = render_launchd_plist("<string>__BRAINLAYER_PYTHON__</string>", python=str(python))
+
+    assert ET.fromstring(rendered).text == str(python)
+
+
+def test_launchd_plist_render_rejects_xml_forbidden_interpreter_path(tmp_path):
+    from brainlayer.hook_python import HookPythonUnresolved, render_launchd_plist
+
+    python = tmp_path / "bad\x01path" / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("#!/bin/sh\n")
+    python.chmod(0o755)
+
+    with pytest.raises(HookPythonUnresolved):
+        render_launchd_plist("<string>__BRAINLAYER_PYTHON__</string>", python=str(python))

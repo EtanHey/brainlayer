@@ -138,11 +138,45 @@ fi
 # PATH happens to front. On the M4 that is the framework Python's `brainlayer`, and installing from a
 # source checkout fronts `~/Gits/brainlayer/.venv/bin/brainlayer` -- neither of which any release moves.
 BRAINLAYER_BIN="$(stable_brainlayer_path "${BRAINLAYER_BIN:-${BRAINLAYER_KEG_CLI:-$(which brainlayer 2>/dev/null || echo "$HOME/.local/bin/brainlayer")}}")"
+# Capture only caller intent before PYTHON_BIN receives its legacy PATH fallback.
+BRAINLAYER_PYTHON_REQUESTED="${BRAINLAYER_PYTHON:-}"
 # In a keg, an unset PYTHON_BIN must NOT fall through to `command -v python3`: on a Mac whose PATH
 # puts /Library/Frameworks/Python.framework first, that renders a framework interpreter that never
 # sees the keg's site-packages, and no release can move it. An explicit override still wins.
 PYTHON_BIN="$(stable_brainlayer_path "${PYTHON_BIN:-${BRAINLAYER_KEG_PYTHON:-$(command -v python3)}}")"
+# The backup wrappers import BrainLayer itself, so a source install must not inherit
+# `command -v python3`: on the M4 that is the framework interpreter whose global
+# .pth injects the mutable root checkout. Explicit overrides remain explicit; a keg
+# uses its stable opt/ path; otherwise reuse hook_python's ARM/Intel-aware resolver
+# and fail closed when neither Homebrew prefix exists.
 BRAINLAYER_PYTHON="$(stable_brainlayer_path "${BRAINLAYER_PYTHON:-$PYTHON_BIN}")"
+
+resolve_jsonl_backup_python() {
+    if [ -n "$BRAINLAYER_KEG_PYTHON" ] && [ -z "$BRAINLAYER_PYTHON_REQUESTED" ] && [ -z "${BRAINLAYER_HOOK_PYTHON:-}" ]; then
+        BRAINLAYER_PYTHON="$(stable_brainlayer_path "$BRAINLAYER_KEG_PYTHON")"
+        return 0
+    fi
+
+    HOOK_PYTHON_RESOLVER="$BRAINLAYER_DIR/src/brainlayer/hook_python.py"
+    if [ ! -f "$HOOK_PYTHON_RESOLVER" ]; then
+        HOOK_PYTHON_RESOLVER="$BRAINLAYER_DIR/brainlayer/hook_python.py"
+    fi
+    if [ ! -f "$HOOK_PYTHON_RESOLVER" ]; then
+        echo "ERROR: hook_python.py not found; refusing a PATH-derived BrainLayer interpreter" >&2
+        return 1
+    fi
+
+    # `python hook_python.py` would put brainlayer/ itself on sys.path, where
+    # brainlayer/types.py shadows the stdlib `types` module under Apple's Python.
+    # run_path keeps the resolver executable as a standalone stdlib-only script
+    # without adding its package directory to import resolution.
+    if [ -n "$BRAINLAYER_PYTHON_REQUESTED" ]; then
+        BRAINLAYER_PYTHON="$(BRAINLAYER_HOOK_PYTHON="$BRAINLAYER_PYTHON_REQUESTED" /usr/bin/python3 -c 'import runpy, sys; path = sys.argv.pop(1); runpy.run_path(path, run_name="__main__")' "$HOOK_PYTHON_RESOLVER" --print-interpreter)" || return 1
+    else
+        BRAINLAYER_PYTHON="$(/usr/bin/python3 -c 'import runpy, sys; path = sys.argv.pop(1); runpy.run_path(path, run_name="__main__")' "$HOOK_PYTHON_RESOLVER" --print-interpreter)" || return 1
+    fi
+    BRAINLAYER_PYTHON="$(stable_brainlayer_path "$BRAINLAYER_PYTHON")"
+}
 BRAINLAYER_ENV_FILE="${BRAINLAYER_ENV_FILE:-$HOME/.config/brainlayer/brainlayer.env}"
 BRAINLAYER_ENV_RUN="$BRAINLAYER_LIB_DIR/brainlayer-env-run.sh"
 TIER0_WATCHDOG_DST="$BRAINLAYER_LIB_DIR/tier0-watchdog.sh"
@@ -622,6 +656,13 @@ install_plist() {
         verify_gemini_env_file || return 1
     fi
 
+    # XML-escape the interpreter path, then escape sed replacement metacharacters.
+    # `&` is legal in a filename but means "the matched placeholder" to sed.
+    local brainlayer_python_xml
+    local brainlayer_python_sed
+    brainlayer_python_xml="$(printf '%s' "$BRAINLAYER_PYTHON" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')" || return 1
+    brainlayer_python_sed="$(printf '%s' "$brainlayer_python_xml" | sed -e 's/[\\&|]/\\&/g')" || return 1
+
     # Replace placeholders
     sed \
         -e "s|__HOME__|$HOME|g" \
@@ -629,7 +670,7 @@ install_plist() {
         -e "s|__BRAINLAYER_DIR__|$BRAINLAYER_DIR|g" \
         -e "s|__BRAINLAYER_LAUNCHD_DIR__|$BRAINLAYER_LAUNCHD_DIR|g" \
         -e "s|__PYTHON_BIN__|$PYTHON_BIN|g" \
-        -e "s|__BRAINLAYER_PYTHON__|$BRAINLAYER_PYTHON|g" \
+        -e "s|__BRAINLAYER_PYTHON__|$brainlayer_python_sed|g" \
         -e "s|__REPO_ROOT__|$BRAINLAYER_DIR|g" \
         -e "s|__BRAINLAYER_ENV_FILE__|$BRAINLAYER_ENV_FILE|g" \
         -e "s|__BRAINLAYER_ENV_RUN__|$BRAINLAYER_ENV_RUN|g" \
@@ -691,6 +732,8 @@ install_jsonl_backup_script() {
         echo "ERROR: $src not found"
         return 1
     fi
+
+    resolve_jsonl_backup_python || return 1
 
     escaped_brainlayer_dir="$(printf '%s' "$BRAINLAYER_DIR" | sed 's/[\\&|]/\\&/g')" || return 1
     sed \

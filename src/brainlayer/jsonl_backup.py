@@ -1,8 +1,9 @@
-"""Nightly JSONL transcript backups to Google Drive.
+"""Nightly JSONL transcript backups to Google Drive and iCloud Drive.
 
-Install note: commit `launchd/com.brainlayer.jsonl-backup.plist`, then install it
-after merge with the repo's launchd flow or a manual `launchctl bootstrap`; this
-module intentionally does not install the agent itself.
+Install note: commit `launchd/com.brainlayer.jsonl-backup.plist`, render its
+`__BRAINLAYER_PYTHON__` placeholder through `hook_python.render_launchd_plist`,
+then install it after merge with the repo's launchd flow; this module
+intentionally does not install the agent itself.
 
 Source format policy: Claude/Codex/Cursor/Gemini JSONL files are backed up as
 plain transcript files. Antigravity has no stable text export contract, so this
@@ -16,6 +17,7 @@ from __future__ import annotations
 import datetime as dt
 import fcntl
 import functools
+import gzip
 import hashlib
 import json
 import os
@@ -26,6 +28,7 @@ import tarfile
 import tempfile
 import time
 import traceback
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -38,8 +41,14 @@ DEFAULT_FOREVER_FOLDER_PARTS = ["Brain Drive", "06_ARCHIVE", "backups", "claude-
 DEFAULT_STATE_PATH = Path.home() / ".local" / "share" / "brainlayer" / "jsonl-backup-state.json"
 DEFAULT_STAGING_DIR = Path.home() / ".local" / "share" / "brainlayer" / "jsonl-backups"
 DEFAULT_LOG_PATH = Path.home() / ".local" / "share" / "brainlayer" / "logs" / "jsonl-backup.log"
+DEFAULT_ICLOUD_DIR = (
+    Path.home() / "Library" / "Mobile Documents" / "com~apple~CloudDocs" / "Archives" / "brainlayer-jsonl-backups"
+)
+# A distinct sibling of golems' reserved path avoids shared naming/pruning ownership.
 DEFAULT_ACTIVE_SKIP_SECONDS = 10 * 60
 DEFAULT_TIMEOUT_SECONDS = 1800
+DEFAULT_ICLOUD_TIMEOUT_SECONDS = 300
+ICLOUD_DIR_ENV = "BRAINLAYER_JSONL_BACKUP_ICLOUD_DIR"
 JSONL_RETENTION = backup_daily.DriveRetentionPolicy(
     keep_latest=30,
     filename_prefix="claude-jsonl-",
@@ -123,6 +132,12 @@ def _configured_backup_timeout_seconds() -> int | None:
     except ValueError as exc:
         raise ValueError(f"{backup_daily.BACKUP_TIMEOUT_ENV} must be an integer number of seconds") from exc
     return seconds if seconds > 0 else None
+
+
+def _configured_icloud_dir() -> Path | None:
+    """Return the opt-in iCloud destination; Drive-only is the default."""
+    raw = os.environ.get(ICLOUD_DIR_ENV, "").strip()
+    return Path(raw).expanduser() if raw else None
 
 
 def _load_state(path: Path) -> dict[str, Any]:
@@ -317,12 +332,478 @@ def _forever_enabled() -> bool:
     return os.environ.get("BRAINLAYER_JSONL_FOREVER", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _sha256_file(path: Path) -> str:
+class ICloudDeadlineExceeded(RuntimeError):
+    """The local iCloud operation budget expired without disproving an object."""
+
+
+class ICloudProbeError(RuntimeError):
+    """Foundation state could not be read, so the object was not disproved."""
+
+
+def _check_icloud_deadline(deadline: float | None, phase: str) -> None:
+    if deadline is not None and time.monotonic() >= deadline:
+        raise ICloudDeadlineExceeded(f"iCloud operation deadline exceeded during {phase}")
+
+
+def _sha256_file(path: Path, *, deadline: float | None = None) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            _check_icloud_deadline(deadline, f"hashing {path}")
             digest.update(chunk)
+    _check_icloud_deadline(deadline, f"hashing {path}")
     return digest.hexdigest()
+
+
+def _sha256_gzip_payload(path: Path, *, deadline: float | None = None) -> str:
+    """Address valid gzip archives by their logical payload, not header metadata.
+
+    Retrying a bundle can change the gzip header timestamp while preserving the
+    tar payload. A payload-derived destination therefore reuses the same iCloud
+    object after a later Drive failure instead of accumulating untracked copies.
+    Non-gzip inputs retain byte-addressed behavior for compatibility.
+    """
+    digest = hashlib.sha256()
+    try:
+        with gzip.open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                _check_icloud_deadline(deadline, f"hashing gzip payload {path}")
+                digest.update(chunk)
+    except backup_daily.BackupTimeoutError:
+        raise
+    except (gzip.BadGzipFile, EOFError, OSError):
+        return _sha256_file(path, deadline=deadline)
+    _check_icloud_deadline(deadline, f"hashing gzip payload {path}")
+    return digest.hexdigest()
+
+
+_ICLOUD_STATUS_SCRIPT = r"""
+ObjC.import("Foundation");
+const args = $.NSProcessInfo.processInfo.arguments;
+const action = ObjC.unwrap(args.objectAtIndex(args.count - 2));
+const path = ObjC.unwrap(args.lastObject);
+const url = $.NSURL.fileURLWithPath(path);
+function resourceValue(key) {
+    const value = Ref();
+    const error = Ref();
+    if (!url.getResourceValueForKeyError(value, key, error)) {
+        const detail = error[0] ? ObjC.unwrap(error[0].localizedDescription) : "unknown error";
+        throw new Error(detail);
+    }
+    if (value[0] === undefined || value[0] === null) return null;
+    const unwrapped = ObjC.unwrap(value[0]);
+    return unwrapped === undefined ? null : unwrapped;
+}
+if (action === "download") {
+    const error = Ref();
+    if (!$.NSFileManager.defaultManager.startDownloadingUbiquitousItemAtURLError(url, error)) {
+        const detail = error[0] ? ObjC.unwrap(error[0].localizedDescription) : "unknown error";
+        throw new Error(detail);
+    }
+}
+const uploadError = resourceValue($.NSURLUbiquitousItemUploadingErrorKey);
+JSON.stringify({
+    is_ubiquitous: resourceValue($.NSURLIsUbiquitousItemKey),
+    is_uploaded: resourceValue($.NSURLUbiquitousItemIsUploadedKey),
+    is_uploading: resourceValue($.NSURLUbiquitousItemIsUploadingKey),
+    downloading_status: resourceValue($.NSURLUbiquitousItemDownloadingStatusKey),
+    uploading_error: uploadError === null ? null : String(uploadError)
+});
+"""
+
+
+def _normalized_icloud_download_status(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    prefix = "NSURLUbiquitousItemDownloadingStatus"
+    if text.startswith(prefix):
+        text = text[len(prefix) :]
+    return text[:1].lower() + text[1:] if text else text
+
+
+def _quarantine_unverified_icloud_item(path: Path) -> None:
+    """Hide an unverified iCloud item without deleting personal backup data."""
+    if not path.exists():
+        return
+    hidden_name = path.name if path.name.startswith(".") else f".{path.name}"
+    os.replace(path, path.with_name(f"{hidden_name}.{uuid.uuid4().hex}.unverified"))
+
+
+def _icloud_item_state(
+    path: Path,
+    *,
+    request_download: bool = False,
+    timeout_seconds: float | None = None,
+) -> dict[str, Any]:
+    """Read authoritative iCloud state, optionally forcing cloud materialization."""
+    try:
+        completed = subprocess.run(
+            [
+                "/usr/bin/osascript",
+                "-l",
+                "JavaScript",
+                "-e",
+                _ICLOUD_STATUS_SCRIPT,
+                "--",
+                "download" if request_download else "status",
+                str(path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except backup_daily.BackupTimeoutError:
+        raise
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or "").strip() or str(exc)
+        raise ICloudProbeError(f"iCloud status probe failed for {path}: {detail}") from exc
+    except OSError as exc:
+        raise ICloudProbeError(f"iCloud status probe could not run for {path}: {exc}") from exc
+    try:
+        state = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise ICloudProbeError(f"iCloud status returned invalid JSON: {completed.stdout!r}") from exc
+    if not isinstance(state, dict):
+        raise ICloudProbeError(f"iCloud status returned a non-object: {state!r}")
+    state["downloading_status"] = _normalized_icloud_download_status(state.get("downloading_status"))
+    return state
+
+
+def copy_archive_to_icloud(
+    archive_path: Path,
+    icloud_dir: Path,
+    *,
+    timeout_seconds: float = DEFAULT_ICLOUD_TIMEOUT_SECONDS,
+    poll_interval_seconds: float = 2.0,
+    deadline: float | None = None,
+) -> dict[str, Any]:
+    """Copy to iCloud, force materialization, then verify authoritative state and bytes."""
+    archive_path = Path(archive_path).expanduser()
+    icloud_dir = Path(icloud_dir).expanduser()
+    deadline = deadline if deadline is not None else time.monotonic() + timeout_seconds
+
+    def remaining_seconds() -> float:
+        return max(deadline - time.monotonic(), 0.001)
+
+    icloud_dir.mkdir(parents=True, exist_ok=True)
+    _check_icloud_deadline(deadline, "preparing the iCloud directory")
+    expected_size = archive_path.stat().st_size
+    expected_sha256 = _sha256_file(archive_path, deadline=deadline)
+    logical_sha256 = _sha256_gzip_payload(archive_path, deadline=deadline)
+    suffix = "".join(archive_path.suffixes)
+    destination = icloud_dir / f"claude-jsonl-{logical_sha256}{suffix}"
+    placeholder = destination.with_name(f".{destination.name}.icloud")
+
+    def receipt(*, reused: bool) -> dict[str, Any]:
+        _check_icloud_deadline(deadline, "building the iCloud receipt")
+        actual_size = destination.stat().st_size
+        actual_sha256 = _sha256_file(destination, deadline=deadline)
+        return {
+            "path": str(destination),
+            "uploaded": True,
+            "materialization": "MATERIALIZED",
+            "bytes": actual_size,
+            "sha256": actual_sha256,
+            "source_sha256": expected_sha256,
+            "logical_sha256": logical_sha256,
+            "downloading_status": "current",
+            "reused": reused,
+        }
+
+    # A logical address is immutable. If a prior verified copy already occupies
+    # it, materialize and validate that object rather than replacing it before a
+    # retry is proven. Gzip header metadata may differ while the tar payload is
+    # identical, which is exactly what the logical address represents.
+    if destination.exists() or placeholder.exists():
+        try:
+            status_path = placeholder if not destination.exists() and placeholder.exists() else destination
+            state = _icloud_item_state(
+                status_path,
+                request_download=True,
+                timeout_seconds=remaining_seconds(),
+            )
+            while True:
+                uploading_error = state.get("uploading_error")
+                if uploading_error:
+                    raise RuntimeError(f"existing iCloud upload failed for {destination}: {uploading_error}")
+                uploaded = state.get("is_uploaded") is True and state.get("is_uploading") is False
+                materialized = state.get("downloading_status") == "current" and destination.is_file()
+                if state.get("is_ubiquitous") is True and uploaded and materialized:
+                    actual_logical_sha256 = _sha256_gzip_payload(destination, deadline=deadline)
+                    if actual_logical_sha256 != logical_sha256:
+                        raise RuntimeError(
+                            "iCloud logical-address collision: "
+                            f"path={destination} expected={logical_sha256} actual={actual_logical_sha256}"
+                        )
+                    return receipt(reused=True)
+                if time.monotonic() >= deadline:
+                    raise ICloudDeadlineExceeded(
+                        f"existing iCloud copy was not uploaded and materialized within {timeout_seconds}s: "
+                        f"path={destination} state={state!r}"
+                    )
+                time.sleep(min(poll_interval_seconds, remaining_seconds()))
+                status_path = placeholder if not destination.exists() and placeholder.exists() else destination
+                state = _icloud_item_state(
+                    status_path,
+                    request_download=True,
+                    timeout_seconds=remaining_seconds(),
+                )
+        except Exception as exc:
+            # This path was not proven usable. Preserve it under a unique hidden
+            # name, then let the normal fresh-copy path repair the logical address.
+            if isinstance(
+                exc,
+                (
+                    backup_daily.BackupTimeoutError,
+                    ICloudDeadlineExceeded,
+                    ICloudProbeError,
+                    subprocess.TimeoutExpired,
+                ),
+            ):
+                raise
+            _quarantine_unverified_icloud_item(destination)
+            _quarantine_unverified_icloud_item(placeholder)
+            if time.monotonic() >= deadline:
+                raise
+
+    temp_path = icloud_dir / f".{destination.name}.{os.getpid()}.partial"
+    try:
+        with archive_path.open("rb") as source, temp_path.open("xb") as destination_handle:
+            while chunk := source.read(1024 * 1024):
+                _check_icloud_deadline(deadline, f"copying {archive_path} to iCloud")
+                destination_handle.write(chunk)
+            _check_icloud_deadline(deadline, f"copying {archive_path} to iCloud")
+            destination_handle.flush()
+            os.fsync(destination_handle.fileno())
+        _check_icloud_deadline(deadline, "publishing the iCloud copy")
+        os.replace(temp_path, destination)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+    verified = False
+    try:
+        _check_icloud_deadline(deadline, "starting iCloud status verification")
+        state = _icloud_item_state(destination, request_download=True, timeout_seconds=remaining_seconds())
+        while True:
+            uploading_error = state.get("uploading_error")
+            if uploading_error:
+                raise RuntimeError(f"iCloud upload failed for {destination}: {uploading_error}")
+            uploaded = state.get("is_uploaded") is True and state.get("is_uploading") is False
+            materialized = state.get("downloading_status") == "current" and destination.is_file()
+            if state.get("is_ubiquitous") is True and uploaded and materialized:
+                actual_size = destination.stat().st_size
+                actual_sha256 = _sha256_file(destination, deadline=deadline)
+                if actual_size != expected_size or actual_sha256 != expected_sha256:
+                    raise RuntimeError(
+                        "iCloud copy content mismatch: "
+                        f"expected size={expected_size} sha256={expected_sha256}, "
+                        f"actual size={actual_size} sha256={actual_sha256}"
+                    )
+                verified = True
+                return receipt(reused=False)
+            if time.monotonic() >= deadline:
+                placeholder = destination.with_name(f".{destination.name}.icloud")
+                materialization = "PLACEHOLDER" if placeholder.exists() or not destination.exists() else "PENDING"
+                raise RuntimeError(
+                    f"iCloud copy was not uploaded and materialized within {timeout_seconds}s: "
+                    f"path={destination} materialization={materialization} state={state!r}"
+                )
+            time.sleep(min(poll_interval_seconds, remaining_seconds()))
+            placeholder = destination.with_name(f".{destination.name}.icloud")
+            status_path = placeholder if not destination.exists() and placeholder.exists() else destination
+            state = _icloud_item_state(status_path, request_download=True, timeout_seconds=remaining_seconds())
+    finally:
+        if not verified:
+            _quarantine_unverified_icloud_item(destination)
+            _quarantine_unverified_icloud_item(destination.with_name(f".{destination.name}.icloud"))
+
+
+def _icloud_copy_receipt(copy_result: dict[str, Any], icloud_dir: Path) -> tuple[str, dict[str, Any]]:
+    """Reduce a verified copy result to the durable state needed for later revalidation."""
+    path = Path(copy_result.get("path", "")).expanduser()
+    directory = Path(icloud_dir).expanduser()
+    if not path.name or path.parent != directory:
+        raise RuntimeError(f"iCloud copy receipt is outside the configured directory: {path}")
+    size = copy_result.get("bytes")
+    sha256 = copy_result.get("sha256")
+    if not isinstance(size, int) or size < 0 or not isinstance(sha256, str) or len(sha256) != 64:
+        raise RuntimeError(f"iCloud copy receipt is missing exact-byte proof: {copy_result!r}")
+    return path.name, {"bytes": size, "sha256": sha256}
+
+
+def _icloud_inventory_is_verified(
+    state: dict[str, Any],
+    candidates: list[JsonlCandidate],
+    icloud_dir: Path,
+    *,
+    timeout_seconds: float = DEFAULT_ICLOUD_TIMEOUT_SECONDS,
+    poll_interval_seconds: float = 2.0,
+    validated_sources: set[str] | None = None,
+    deadline: float | None = None,
+) -> bool:
+    """Revalidate every iCloud object that current source-state entries rely on.
+
+    Finder placeholders are not proof. Each referenced object is requested for
+    download, required to report authoritative uploaded/current state, then
+    checked against the exact size and SHA-256 persisted after its original copy.
+    Legacy marker-only state therefore bootstraps once instead of being trusted.
+    """
+    directory = Path(icloud_dir).expanduser()
+    files = state.get("files")
+    candidates_by_path = {candidate.path.as_posix(): candidate for candidate in candidates}
+    if state.get("icloud_directory") != str(directory):
+        unavailable_sources = []
+        if isinstance(files, dict):
+            unavailable_sources = sorted(
+                source_path
+                for source_path, entry in files.items()
+                if source_path not in candidates_by_path
+                and isinstance(entry, dict)
+                and (entry.get("icloud_required") is True or bool(entry.get("icloud_archive")))
+            )
+        if unavailable_sources:
+            raise RuntimeError(
+                "iCloud directory changed and the new destination cannot be seeded because "
+                f"previously covered sources are unavailable: sources={unavailable_sources!r}"
+            )
+        return False
+
+    receipts = state.get("icloud_archives")
+    if not isinstance(files, dict):
+        return not candidates
+    if not isinstance(receipts, dict):
+        receipts = {}
+
+    referenced_by_sources: dict[str, set[str]] = {}
+    complete = True
+    for source_path, entry in files.items():
+        candidate = candidates_by_path.get(source_path)
+        if not isinstance(entry, dict):
+            continue
+        # Changed/new sources are selected for this run and receive a new receipt.
+        if candidate is not None and (entry.get("mtime") != candidate.mtime or entry.get("size") != candidate.size):
+            continue
+        archive_name = entry.get("icloud_archive")
+        if not isinstance(archive_name, str) or not archive_name or Path(archive_name).name != archive_name:
+            if candidate is None:
+                if entry.get("icloud_required") is True:
+                    raise RuntimeError(
+                        "iCloud coverage cannot be repaired because a required source is unavailable: "
+                        f"source={source_path}"
+                    )
+                # State predating the optional iCloud leg can retain Drive-only
+                # entries after their local source disappears. Such an entry never
+                # claimed iCloud coverage, so it is outside this inventory.
+                continue
+            complete = False
+            continue
+        referenced_by_sources.setdefault(archive_name, set()).add(source_path)
+
+    if candidates and not referenced_by_sources:
+        return False
+
+    def invalid_archive(archive_name: str, reason: str, *, quarantine: bool = False) -> bool:
+        unavailable_sources = sorted(referenced_by_sources[archive_name] - candidates_by_path.keys())
+        if unavailable_sources:
+            raise RuntimeError(
+                "iCloud coverage cannot be repaired because its archive is invalid and a source is unavailable: "
+                f"archive={archive_name} reason={reason} sources={unavailable_sources!r}"
+            )
+        if quarantine:
+            destination = directory / archive_name
+            _quarantine_unverified_icloud_item(destination)
+            _quarantine_unverified_icloud_item(directory / f".{archive_name}.icloud")
+        return False
+
+    deadline = deadline if deadline is not None else time.monotonic() + timeout_seconds
+    for archive_name in sorted(referenced_by_sources):
+        try:
+            _check_icloud_deadline(deadline, f"validating iCloud inventory archive {archive_name}")
+            receipt = receipts.get(archive_name)
+            if not isinstance(receipt, dict):
+                invalid_archive(archive_name, "missing exact-byte receipt")
+                complete = False
+                continue
+            expected_size = receipt.get("bytes")
+            expected_sha256 = receipt.get("sha256")
+            if (
+                not isinstance(expected_size, int)
+                or expected_size < 0
+                or not isinstance(expected_sha256, str)
+                or len(expected_sha256) != 64
+            ):
+                invalid_archive(archive_name, "malformed exact-byte receipt")
+                complete = False
+                continue
+
+            destination = directory / archive_name
+            placeholder = directory / f".{archive_name}.icloud"
+            if not destination.exists() and not placeholder.exists():
+                invalid_archive(archive_name, "archive and placeholder are missing")
+                complete = False
+                continue
+
+            archive_valid = True
+            while True:
+                _check_icloud_deadline(deadline, f"probing iCloud inventory archive {archive_name}")
+                remaining = max(deadline - time.monotonic(), 0.001)
+                status_path = placeholder if not destination.exists() and placeholder.exists() else destination
+                item_state = _icloud_item_state(
+                    status_path,
+                    request_download=True,
+                    timeout_seconds=remaining,
+                )
+                uploaded = item_state.get("is_uploaded") is True and item_state.get("is_uploading") is False
+                materialized = item_state.get("downloading_status") == "current" and destination.is_file()
+                if item_state.get("uploading_error"):
+                    invalid_archive(
+                        archive_name,
+                        f"upload error: {item_state['uploading_error']}",
+                        quarantine=True,
+                    )
+                    archive_valid = False
+                    break
+                if item_state.get("is_ubiquitous") is True and uploaded and materialized:
+                    if (
+                        destination.stat().st_size != expected_size
+                        or _sha256_file(destination, deadline=deadline) != expected_sha256
+                    ):
+                        invalid_archive(
+                            archive_name,
+                            "materialized bytes do not match the receipt",
+                            quarantine=True,
+                        )
+                        archive_valid = False
+                    elif validated_sources is not None:
+                        validated_sources.update(referenced_by_sources[archive_name])
+                    break
+                if time.monotonic() >= deadline:
+                    raise ICloudDeadlineExceeded(
+                        f"iCloud operation deadline exceeded while materializing inventory archive {archive_name}"
+                    )
+                time.sleep(min(poll_interval_seconds, remaining))
+            if not archive_valid:
+                complete = False
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+            if isinstance(
+                exc,
+                (
+                    backup_daily.BackupTimeoutError,
+                    ICloudDeadlineExceeded,
+                    ICloudProbeError,
+                    subprocess.TimeoutExpired,
+                ),
+            ):
+                raise
+            if isinstance(exc, RuntimeError) and str(exc).startswith("iCloud coverage cannot be repaired"):
+                raise
+            invalid_archive(archive_name, str(exc))
+            complete = False
+            continue
+    referenced_sources = set().union(*referenced_by_sources.values()) if referenced_by_sources else set()
+    return complete and candidates_by_path.keys() <= referenced_sources
 
 
 def _upload_forever_files(
@@ -549,6 +1030,9 @@ def _update_state_for_uploaded(
     archive_id: str | None = None,
     archive_md5: str | None = None,
     digests: dict[str, str] | None = None,
+    icloud_dir: Path | None = None,
+    icloud_copy: dict[str, Any] | None = None,
+    clear_icloud_verification: bool = False,
 ) -> dict[str, Any]:
     """Record which archive object carries each file, and the bytes it carried.
 
@@ -557,6 +1041,13 @@ def _update_state_for_uploaded(
     unrecoverable while state still reports it as backed up.
     """
     files = dict(state.get("files") or {})
+    existing_icloud_directory = state.get("icloud_directory")
+    icloud_archive_name: str | None = None
+    icloud_receipt: dict[str, Any] | None = None
+    if icloud_copy is not None:
+        if icloud_dir is None:
+            raise RuntimeError("an iCloud copy receipt requires its configured directory")
+        icloud_archive_name, icloud_receipt = _icloud_copy_receipt(icloud_copy, icloud_dir)
     for candidate in candidates:
         entry: dict[str, Any] = {"mtime": candidate.mtime, "size": candidate.size}
         if archive_name and archive_id:
@@ -566,8 +1057,35 @@ def _update_state_for_uploaded(
                 entry["archive_md5"] = archive_md5
             digest = (digests or {}).get(candidate.path.as_posix())
             entry["sha256"] = digest if digest else _sha256_file(candidate.path)
+        if icloud_archive_name is not None:
+            entry["icloud_archive"] = icloud_archive_name
+        elif isinstance(existing_icloud_directory, str) and existing_icloud_directory:
+            entry["icloud_required"] = True
         files[candidate.path.as_posix()] = entry
-    return {"files": files, "updated_at": dt.datetime.now(dt.UTC).isoformat()}
+    updated = {"files": files, "updated_at": dt.datetime.now(dt.UTC).isoformat()}
+
+    archives = dict(state.get("icloud_archives") or {})
+    if icloud_archive_name is not None and icloud_receipt is not None:
+        archives[icloud_archive_name] = icloud_receipt
+    referenced_archives = {
+        entry.get("icloud_archive")
+        for entry in files.values()
+        if isinstance(entry, dict) and isinstance(entry.get("icloud_archive"), str)
+    }
+    retained_archives = {name: receipt for name, receipt in archives.items() if name in referenced_archives}
+    if retained_archives:
+        updated["icloud_archives"] = retained_archives
+
+    if icloud_dir is not None:
+        updated["icloud_directory"] = str(Path(icloud_dir).expanduser())
+        if not clear_icloud_verification:
+            updated["icloud_verified"] = True
+    elif not clear_icloud_verification and state.get("icloud_verified") is True:
+        existing_directory = state.get("icloud_directory")
+        if isinstance(existing_directory, str) and existing_directory:
+            updated["icloud_directory"] = existing_directory
+            updated["icloud_verified"] = True
+    return updated
 
 
 def _enqueue_run_summary(result: dict[str, Any], *, queue_dir: Path | None) -> None:
@@ -626,6 +1144,7 @@ def run_backup(
     upload: bool = True,
     active_skip_seconds: int = DEFAULT_ACTIVE_SKIP_SECONDS,
     forever_folder_parts: list[str] = DEFAULT_FOREVER_FOLDER_PARTS,
+    icloud_dir: Path | None = None,
 ) -> dict[str, Any]:
     date_stamp = date_stamp or _today()
     now = time.time() if now is None else now
@@ -634,6 +1153,31 @@ def run_backup(
     state_path = Path(state_path).expanduser()
     state = _load_state(state_path)
     candidates = _discover_jsonl_candidates(roots)
+    selection_state = state
+    icloud_bootstrap_pending = False
+    icloud_deadline: float | None = None
+    if upload and icloud_dir is not None:
+        icloud_deadline = time.monotonic() + DEFAULT_ICLOUD_TIMEOUT_SECONDS
+        validated_icloud_sources: set[str] = set()
+        icloud_covered = _icloud_inventory_is_verified(
+            state,
+            candidates,
+            icloud_dir,
+            validated_sources=validated_icloud_sources,
+            deadline=icloud_deadline,
+        )
+        if not icloud_covered:
+            # Legacy state proves only Drive coverage. The first iCloud-enabled run
+            # must seed iCloud with every source rather than falsely returning no-op.
+            state_files = state.get("files") or {}
+            selection_state = {
+                "files": {
+                    source_path: entry
+                    for source_path, entry in state_files.items()
+                    if source_path in validated_icloud_sources
+                }
+            }
+            icloud_bootstrap_pending = True
     credentials = None
     service = None
     surviving_archives: dict[str, str | None] | None = None
@@ -655,11 +1199,33 @@ def run_backup(
             surviving_archives = {}
     changed, active, covered, vanished = _select_backup_candidates(
         candidates,
-        state=state,
+        state=selection_state,
         now=now,
         active_skip_seconds=active_skip_seconds,
         surviving_archives=surviving_archives,
     )
+
+    if not changed and icloud_bootstrap_pending and active:
+        error = (
+            "iCloud coverage is not verified; repair deferred because "
+            f"{len(active)} discovered source(s) are still active"
+        )
+        result = {
+            "attempted_at": attempted_at,
+            "status": "deferred",
+            "uploaded": False,
+            "verified": False,
+            "already_covered_files": covered,
+            "discovered_file_count": len(candidates),
+            "skipped_active_count": len(active),
+            "vanished_source_count": vanished,
+            "icloud_repair_deferred": True,
+            "error": error,
+            "message": error,
+        }
+        _append_json_log(log_path, result)
+        _enqueue_run_summary(result, queue_dir=queue_dir)
+        return result
 
     if not changed:
         result: dict[str, Any] = {
@@ -707,6 +1273,14 @@ def run_backup(
         )
     )
     if result["verified"] and upload:
+        # iCloud goes first: a failed iCloud verification must not create an
+        # unrecorded duplicate Drive object that consumes the retention window.
+        if icloud_dir is not None:
+            result["icloud_copy"] = copy_archive_to_icloud(
+                archive_path,
+                icloud_dir,
+                deadline=icloud_deadline,
+            )
         if service is None:
             credentials = backup_daily.get_drive_credentials()
             service = backup_daily.build_drive_service()
@@ -722,6 +1296,10 @@ def run_backup(
             expected_size=archive_size,
         )
         result.update({"status": "uploaded", "uploaded": True, "drive_file": uploaded})
+        # The same incident was two individually reasonable deletions composed together:
+        # successful upload removed local staging, then Drive retention removed the remote
+        # bundle. Persist the exact Drive object and archived-source digests before either
+        # deletion path runs so the next selection cannot silently trust the dead copy.
         _atomic_write_json(
             state_path,
             _update_state_for_uploaded(
@@ -731,6 +1309,11 @@ def run_backup(
                 archive_id=file_id,
                 archive_md5=uploaded.get("md5Checksum"),
                 digests=bundle_digests,
+                # An active source was deliberately omitted from this bootstrap.
+                # Leave the global marker unset so the next run seeds that source.
+                icloud_dir=icloud_dir,
+                icloud_copy=result.get("icloud_copy"),
+                clear_icloud_verification=bool(icloud_bootstrap_pending and active),
             ),
         )
         try:
@@ -798,6 +1381,7 @@ def main() -> int:
             folder_parts=os.environ.get("BRAINLAYER_JSONL_BACKUP_DRIVE_FOLDER", "/".join(DEFAULT_FOLDER_PARTS)).split(
                 "/"
             ),
+            icloud_dir=_configured_icloud_dir(),
         )
     except backup_daily.BackupTimeoutError:
         result = {
