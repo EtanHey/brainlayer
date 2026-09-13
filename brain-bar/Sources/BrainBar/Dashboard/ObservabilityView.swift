@@ -161,7 +161,8 @@ enum ObservabilityPresentation {
         measured: () -> String?
     ) -> ObservabilitySnapshot.Card {
         guard state == "measured", let detail = measured() else {
-            return .init(title: title, detail: reason.isEmpty ? "unmeasurable" : reason, tone: .neutral)
+            let detail = reason.isEmpty ? "unmeasurable" : "unmeasurable — \(reason)"
+            return .init(title: title, detail: detail, tone: .neutral)
         }
         return .init(title: title, detail: detail, tone: stale ? .amber : tone)
     }
@@ -187,7 +188,7 @@ struct ObservabilityDashboardView: View {
                     ForEach(Array(snapshot.cards.enumerated()), id: \.offset) { _, card in
                         VStack(alignment: .leading, spacing: 8) {
                             Text(card.title).font(.headline)
-                            Text(card.tone == .neutral ? "unmeasurable — \(card.detail)" : card.detail)
+                            Text(card.detail)
                                 .foregroundStyle(card.tone == .neutral ? Color.secondary : Color.primary)
                         }
                         .frame(maxWidth: .infinity, minHeight: 110, alignment: .topLeading)
@@ -195,7 +196,9 @@ struct ObservabilityDashboardView: View {
                     }
                 }
                 Spacer()
-            }.padding(20)
+            }
+            .padding(20)
+            .background(Color(nsColor: .windowBackgroundColor))
         case let .unreadable(reason):
             ContentUnavailableView("Observability unreadable", systemImage: "questionmark.circle", description: Text(reason))
         }

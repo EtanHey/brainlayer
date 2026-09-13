@@ -51,8 +51,23 @@ final class ObservabilitySnapshotTests: XCTestCase {
         )
 
         XCTAssertEqual(card.tone, .neutral)
-        XCTAssertEqual(card.detail, "required column missing: chunks.source_class")
+        XCTAssertEqual(card.detail, "unmeasurable — required column missing: chunks.source_class")
         XCTAssertFalse(card.detail.contains("0"))
+    }
+
+    func testMeasuredUnknownBackupIsNeutralWithoutClaimingUnmeasurable() throws {
+        let result = ObservabilityReader.read(
+            url: fixtureRoot.appendingPathComponent("golden/legacy-no-op-dev.json")
+        )
+        guard case let .readable(document) = result else { return XCTFail("Expected readable fixture") }
+        let card = try XCTUnwrap(
+            ObservabilityPresentation.snapshot(document: document, now: document.generatedAt, cadence: 300)
+                .cards.first { $0.title == "Backups" }
+        )
+
+        XCTAssertEqual(card.tone, .neutral)
+        XCTAssertEqual(card.detail, "unknown · retention PASS")
+        XCTAssertFalse(card.detail.contains("unmeasurable"))
     }
 
     func testSchemaVersionMismatchIsUnreadableWithReason() throws {
