@@ -7,10 +7,12 @@ enum BrainBarPlaceholderCopy {
 }
 
 struct BrainBarWindowRootView: View {
+    static let defaultTab: BrainBarTab = .dashboard
+
     @ObservedObject var runtime: BrainBarRuntime
     private let managesWindowFrame: Bool
 
-    @State private var selectedTab: BrainBarTab = .dashboard
+    @State private var selectedTab = BrainBarWindowRootView.defaultTab
     @State private var hasActivatedInjectionsTab = false
     @State private var hasActivatedGraphTab = false
     @State private var commandBarProvider = BrainBarCommandBarViewModelProvider()
