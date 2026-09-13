@@ -76,6 +76,19 @@ def _index_max_runtime_s() -> float:
     return value
 
 
+@app.command("observability")
+def observability_command(
+    write: bool = typer.Option(False, "--write", help="Write observability.json beside the resolved database."),
+    stdout: bool = typer.Option(False, "--stdout", help="Print the observability document instead of writing it."),
+) -> None:
+    """Produce the versioned BrainLayer observability document."""
+    if write and stdout:
+        raise typer.BadParameter("choose either --write or --stdout")
+    from ..observability_surface import write_document
+
+    write_document(stdout=stdout)
+
+
 @app.command("writer-telemetry")
 def writer_telemetry_command(
     action: Annotated[str, typer.Argument(help="Read mode: tail or summary.")] = "summary",

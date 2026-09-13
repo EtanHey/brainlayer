@@ -156,6 +156,7 @@ def _run_case(
             "BRAINLAYER_OBSERVABILITY_LAUNCHD_OUTPUT": str(input_root / case["inputs"]["launchd_output"]),
             "BRAINLAYER_OBSERVABILITY_DISABLED_DIR": str(input_root / case["inputs"]["disabled_dir"]),
             "BRAINLAYER_OBSERVABILITY_NOW": case["generated_at"], "PYTHONPATH": str(producer_root / "src"),
+            "BRAINLAYER_OBSERVABILITY_PRODUCER_ROOT": str(producer_root),
         })
         try:
             run = subprocess.run([sys.executable, "-m", "brainlayer.observability_surface"], cwd=producer_root,
