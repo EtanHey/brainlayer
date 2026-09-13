@@ -9,6 +9,7 @@ final class BrainBarRuntime: ObservableObject {
     @Published private(set) var collector: StatsCollector?
     @Published private(set) var injectionStore: InjectionStore?
     @Published private(set) var database: BrainDatabase?
+    private(set) var databasePath: String?
     @Published private(set) var requestedQuickAction: BrainBarQuickAction?
 
     private var injectionStoreFactory: (() -> InjectionStore?)?
@@ -29,11 +30,13 @@ final class BrainBarRuntime: ObservableObject {
         collector: StatsCollector,
         injectionStore: InjectionStore?,
         database: BrainDatabase?,
+        databasePath: String? = nil,
         injectionStoreFactory: (() -> InjectionStore?)? = nil
     ) {
         self.collector = collector
         self.injectionStore = injectionStore
         self.database = database
+        self.databasePath = databasePath
         self.injectionStoreFactory = injectionStoreFactory
     }
 

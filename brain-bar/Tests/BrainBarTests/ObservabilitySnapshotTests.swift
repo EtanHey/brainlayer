@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import SwiftUI
 import XCTest
 @testable import BrainBar
 
@@ -34,6 +36,7 @@ final class ObservabilitySnapshotTests: XCTestCase {
             XCTAssertEqual(snapshot.cards.map(\.title), ["Stores", "Emitters", "Author-unknown", "Backups"])
             XCTAssertEqual(snapshot.cards.count, 4, fixture.id)
             XCTAssertTrue(snapshot.cards.allSatisfy { !$0.detail.isEmpty }, fixture.id)
+            try render(document: document, named: fixture.id)
         }
     }
 
@@ -92,6 +95,24 @@ final class ObservabilitySnapshotTests: XCTestCase {
         XCTAssertTrue(snapshot.ageText.contains("old"))
         XCTAssertTrue(snapshot.cards.allSatisfy { $0.tone == .amber })
     }
+
+    private func render(document: ObservabilityDocument, named name: String) throws {
+        let view = NSHostingView(rootView: ObservabilityDashboardView(
+            result: .readable(document), now: document.generatedAt, cadence: 300
+        ).environment(\.colorScheme, .dark))
+        view.frame = NSRect(x: 0, y: 0, width: 760, height: 560)
+        view.layoutSubtreeIfNeeded()
+        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        XCTAssertGreaterThan(png.count, 1_000, name)
+        if let directory = ProcessInfo.processInfo.environment["BRAINBAR_OBSERVABILITY_RENDER_DIR"] {
+            let url = URL(fileURLWithPath: directory, isDirectory: true).appendingPathComponent("\(name).png")
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try png.write(to: url)
+            print("[observability-render] wrote \(url.path) (\(png.count) bytes)")
+        }
+    }
 }
 
 private struct FixtureManifest: Decodable {
@@ -102,4 +123,5 @@ private struct FixtureCase: Decodable {
     let id: String
     let split: String
     let golden: String
+    enum CodingKeys: String, CodingKey { case id = "case_id", split, golden }
 }

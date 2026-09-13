@@ -9,12 +9,14 @@ enum PopoverTab: Int, CaseIterable, Sendable {
     case dashboard = 0
     case injections = 1
     case graph = 2
+    case observability = 3
 
     var label: String {
         switch self {
         case .dashboard: "Dashboard"
         case .injections: "Injections"
         case .graph: "Graph"
+        case .observability: "Observability"
         }
     }
 
@@ -38,7 +40,7 @@ final class StatusPopoverView: NSViewController {
 
     private let segmentedControl = NSSegmentedControl()
     private let containerView = NSView()
-    private(set) var currentTab: PopoverTab = .dashboard
+    private(set) var currentTab: PopoverTab = .observability
     var onPreferredSizeChange: (@MainActor (NSSize) -> Void)?
 
     // Dashboard labels
@@ -73,6 +75,7 @@ final class StatusPopoverView: NSViewController {
     private var dashboardContent: NSView?
     private var injectionHosting: NSHostingController<PopoverInjectionTab>?
     private var graphHosting: NSHostingController<PopoverGraphTab>?
+    private var observabilityHosting: NSHostingController<ObservabilityLiveView>?
 
     init(
         collector: StatsCollector,
@@ -93,14 +96,14 @@ final class StatusPopoverView: NSViewController {
     }
 
     override func loadView() {
-        let size = PopoverTab.dashboard.contentSize
+        let size = PopoverTab.observability.contentSize
         view = NSView(frame: NSRect(origin: .zero, size: size))
         view.wantsLayer = true
         view.layer?.backgroundColor = BrainBarDesignTokens.Colors.backgroundBase.cgColor
         configureDashboardLabels()
         configureSegmentedControl()
         configureLayout()
-        showTab(.dashboard)
+        showTab(.observability)
     }
 
     override func viewDidLoad() {
@@ -118,6 +121,8 @@ final class StatusPopoverView: NSViewController {
 
         let content: NSView
         switch tab {
+        case .observability:
+            content = makeObservabilityContent()
         case .dashboard:
             content = makeDashboardContent()
         case .injections:
@@ -148,7 +153,7 @@ final class StatusPopoverView: NSViewController {
             segmentedControl.setLabel(tab.label, forSegment: tab.rawValue)
             segmentedControl.setWidth(0, forSegment: tab.rawValue)
         }
-        segmentedControl.selectedSegment = 0
+        segmentedControl.selectedSegment = PopoverTab.observability.rawValue
         segmentedControl.segmentStyle = .automatic
         segmentedControl.target = self
         segmentedControl.action = #selector(tabChanged(_:))
@@ -187,6 +192,14 @@ final class StatusPopoverView: NSViewController {
     }
 
     // MARK: - Dashboard Content
+
+    private func makeObservabilityContent() -> NSView {
+        if let hosting = observabilityHosting { return hosting.view }
+        let hosting = NSHostingController(rootView: ObservabilityLiveView(dbPath: collector.databasePathForObservability))
+        observabilityHosting = hosting
+        addChild(hosting)
+        return hosting.view
+    }
 
     private func configureDashboardLabels() {
         titleLabel.font = .systemFont(ofSize: 18, weight: .bold)

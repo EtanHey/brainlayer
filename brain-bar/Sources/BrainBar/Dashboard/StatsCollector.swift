@@ -202,6 +202,7 @@ final class StatsCollector: ObservableObject {
     private var selectedWindowMinutes: Int?
 
     private let dbPath: String
+    var databasePathForObservability: String { dbPath }
     private let databaseOpenConfiguration: BrainDatabase.OpenConfiguration
     private let daemonMonitor: DaemonHealthMonitor
     private let watcherProcessProbe: any WatcherProcessProbing

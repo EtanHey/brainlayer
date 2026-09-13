@@ -10,7 +10,7 @@ struct BrainBarWindowRootView: View {
     @ObservedObject var runtime: BrainBarRuntime
     private let managesWindowFrame: Bool
 
-    @State private var selectedTab: BrainBarTab = .dashboard
+    @State private var selectedTab: BrainBarTab = .observability
     @State private var hasActivatedInjectionsTab = false
     @State private var hasActivatedGraphTab = false
     @State private var commandBarProvider = BrainBarCommandBarViewModelProvider()
@@ -34,6 +34,9 @@ struct BrainBarWindowRootView: View {
             )
 
             ZStack {
+                observabilityContent
+                    .brainBarTabVisibility(selectedTab == .observability)
+
                 dashboardContent
                     .brainBarTabVisibility(selectedTab == .dashboard)
 
@@ -101,6 +104,15 @@ struct BrainBarWindowRootView: View {
     }
 
     @ViewBuilder
+    private var observabilityContent: some View {
+        if let dbPath = runtime.databasePath {
+            ObservabilityLiveView(dbPath: dbPath)
+        } else {
+            ObservabilityDashboardView(result: .unreadable("Database path unavailable."))
+        }
+    }
+
+    @ViewBuilder
     private var dashboardContent: some View {
         if let collector = runtime.collector {
             BrainBarDashboardContent(
@@ -146,6 +158,8 @@ struct BrainBarWindowRootView: View {
 
     private func activate(tab: BrainBarTab) {
         switch tab {
+        case .observability:
+            break
         case .dashboard:
             runtime.collector?.requestRefresh(force: true, trigger: .tabSwitch)
         case .injections:

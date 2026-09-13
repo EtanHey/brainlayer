@@ -54,11 +54,12 @@ final class BrainBarWindowStateTests: XCTestCase {
         XCTAssertEqual(BrainBarWindowFrameAutosave.dashboardPanelDefaultsKey, "NSWindow Frame BrainBarPanel")
     }
 
-    func testBrainBarTabsCoverDashboardInjectionsAndGraph() {
-        XCTAssertEqual(BrainBarTab.allCases, [.dashboard, .injections, .graph])
+    func testBrainBarTabsIncludeObservability() {
+        XCTAssertEqual(BrainBarTab.allCases, [.dashboard, .injections, .graph, .observability])
         XCTAssertEqual(BrainBarTab.dashboard.title, "Dashboard")
         XCTAssertEqual(BrainBarTab.injections.title, "Injections")
         XCTAssertEqual(BrainBarTab.graph.title, "Graph")
+        XCTAssertEqual(BrainBarTab.observability.title, "Observability")
     }
 
     func testLivePresentationShowsRateBadgeWhenEnrichmentIsActive() {
