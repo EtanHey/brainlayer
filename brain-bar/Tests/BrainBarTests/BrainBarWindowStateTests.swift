@@ -62,6 +62,11 @@ final class BrainBarWindowStateTests: XCTestCase {
         XCTAssertEqual(BrainBarTab.observability.title, "Observability")
     }
 
+    @MainActor
+    func testLiveWindowDefaultsToObservability() {
+        XCTAssertEqual(BrainBarWindowRootView.defaultTab, .observability)
+    }
+
     func testLivePresentationShowsRateBadgeWhenEnrichmentIsActive() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let stats = DashboardStats(
