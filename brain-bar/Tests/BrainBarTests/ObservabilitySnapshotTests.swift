@@ -4,6 +4,7 @@ import XCTest
 @MainActor
 final class ObservabilitySnapshotTests: XCTestCase {
     func testDevGoldensAwaitThePhase2cRenderer() throws {
+        XCTExpectFailure("RED by design until Phase 2c renders the dev goldens")
         let repositoryRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()

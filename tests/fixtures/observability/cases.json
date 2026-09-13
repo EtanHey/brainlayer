@@ -7,7 +7,8 @@
         "db/healthy-dev.sqlite",
         "logs/healthy-dev/jsonl-backup.log",
         "logs/healthy-dev/backup-daily.log",
-        "launchd/healthy-dev.txt"
+        "launchd/healthy-dev.txt",
+        "launchd/healthy-dev.disabled"
       ],
       "failure": "none",
       "generated_at": "2026-09-13T12:00:00Z",
@@ -31,7 +32,8 @@
         "db/missing-source-class-dev.sqlite",
         "logs/missing-source-class-dev/jsonl-backup.log",
         "logs/missing-source-class-dev/backup-daily.log",
-        "launchd/missing-source-class-dev.txt"
+        "launchd/missing-source-class-dev.txt",
+        "launchd/missing-source-class-dev.disabled"
       ],
       "failure": "missing_source_class",
       "generated_at": "2026-09-13T12:00:00Z",
@@ -59,7 +61,8 @@
         "db/missing-log-dev.sqlite",
         "logs/missing-log-dev/jsonl-backup.log",
         "logs/missing-log-dev/backup-daily.log",
-        "launchd/missing-log-dev.txt"
+        "launchd/missing-log-dev.txt",
+        "launchd/missing-log-dev.disabled"
       ],
       "failure": "missing_log",
       "generated_at": "2026-09-13T12:00:00Z",
@@ -85,7 +88,8 @@
         "db/malformed-log-dev-1.sqlite",
         "logs/malformed-log-dev-1/jsonl-backup.log",
         "logs/malformed-log-dev-1/backup-daily.log",
-        "launchd/malformed-log-dev-1.txt"
+        "launchd/malformed-log-dev-1.txt",
+        "launchd/malformed-log-dev-1.disabled"
       ],
       "failure": "malformed_log",
       "generated_at": "2026-09-13T12:00:00Z",
@@ -111,7 +115,8 @@
         "db/missing-launchd-dev.sqlite",
         "logs/missing-launchd-dev/jsonl-backup.log",
         "logs/missing-launchd-dev/backup-daily.log",
-        "launchd/missing-launchd-dev.txt"
+        "launchd/missing-launchd-dev.txt",
+        "launchd/missing-launchd-dev.disabled"
       ],
       "failure": "missing_launchd",
       "generated_at": "2026-09-13T12:00:00Z",
@@ -137,7 +142,8 @@
         "db/empty-db-dev.sqlite",
         "logs/empty-db-dev/jsonl-backup.log",
         "logs/empty-db-dev/backup-daily.log",
-        "launchd/empty-db-dev.txt"
+        "launchd/empty-db-dev.txt",
+        "launchd/empty-db-dev.disabled"
       ],
       "failure": "empty_db",
       "generated_at": "2026-09-13T12:00:00Z",
@@ -161,7 +167,8 @@
         "db/clock-skew-dev.sqlite",
         "logs/clock-skew-dev/jsonl-backup.log",
         "logs/clock-skew-dev/backup-daily.log",
-        "launchd/clock-skew-dev.txt"
+        "launchd/clock-skew-dev.txt",
+        "launchd/clock-skew-dev.disabled"
       ],
       "failure": "clock_skew",
       "generated_at": "2026-09-13T12:00:00Z",
@@ -187,7 +194,8 @@
         "db/no-op-dev.sqlite",
         "logs/no-op-dev/jsonl-backup.log",
         "logs/no-op-dev/backup-daily.log",
-        "launchd/no-op-dev.txt"
+        "launchd/no-op-dev.txt",
+        "launchd/no-op-dev.disabled"
       ],
       "failure": "none",
       "generated_at": "2026-09-13T12:00:00Z",
@@ -211,7 +219,8 @@
         "db/backup-errors-dev.sqlite",
         "logs/backup-errors-dev/jsonl-backup.log",
         "logs/backup-errors-dev/backup-daily.log",
-        "launchd/backup-errors-dev.txt"
+        "launchd/backup-errors-dev.txt",
+        "launchd/backup-errors-dev.disabled"
       ],
       "failure": "none",
       "generated_at": "2026-09-13T12:00:00Z",
@@ -235,7 +244,8 @@
         "db/healthy-heldout-3.sqlite",
         "logs/healthy-heldout-3/jsonl-backup.log",
         "logs/healthy-heldout-3/backup-daily.log",
-        "launchd/healthy-heldout-3.txt"
+        "launchd/healthy-heldout-3.txt",
+        "launchd/healthy-heldout-3.disabled"
       ],
       "failure": "none",
       "generated_at": "2026-09-13T12:00:00Z",
@@ -259,7 +269,8 @@
         "db/missing-source-class-heldout.sqlite",
         "logs/missing-source-class-heldout/jsonl-backup.log",
         "logs/missing-source-class-heldout/backup-daily.log",
-        "launchd/missing-source-class-heldout.txt"
+        "launchd/missing-source-class-heldout.txt",
+        "launchd/missing-source-class-heldout.disabled"
       ],
       "failure": "missing_source_class",
       "generated_at": "2026-09-13T12:00:00Z",
@@ -287,7 +298,8 @@
         "db/missing-log-heldout-2.sqlite",
         "logs/missing-log-heldout-2/jsonl-backup.log",
         "logs/missing-log-heldout-2/backup-daily.log",
-        "launchd/missing-log-heldout-2.txt"
+        "launchd/missing-log-heldout-2.txt",
+        "launchd/missing-log-heldout-2.disabled"
       ],
       "failure": "missing_log",
       "generated_at": "2026-09-13T12:00:00Z",
@@ -313,7 +325,8 @@
         "db/malformed-log-heldout.sqlite",
         "logs/malformed-log-heldout/jsonl-backup.log",
         "logs/malformed-log-heldout/backup-daily.log",
-        "launchd/malformed-log-heldout.txt"
+        "launchd/malformed-log-heldout.txt",
+        "launchd/malformed-log-heldout.disabled"
       ],
       "failure": "malformed_log",
       "generated_at": "2026-09-13T12:00:00Z",
@@ -339,7 +352,8 @@
         "db/missing-launchd-heldout-2.sqlite",
         "logs/missing-launchd-heldout-2/jsonl-backup.log",
         "logs/missing-launchd-heldout-2/backup-daily.log",
-        "launchd/missing-launchd-heldout-2.txt"
+        "launchd/missing-launchd-heldout-2.txt",
+        "launchd/missing-launchd-heldout-2.disabled"
       ],
       "failure": "missing_launchd",
       "generated_at": "2026-09-13T12:00:00Z",
@@ -365,7 +379,8 @@
         "db/empty-db-heldout-3.sqlite",
         "logs/empty-db-heldout-3/jsonl-backup.log",
         "logs/empty-db-heldout-3/backup-daily.log",
-        "launchd/empty-db-heldout-3.txt"
+        "launchd/empty-db-heldout-3.txt",
+        "launchd/empty-db-heldout-3.disabled"
       ],
       "failure": "empty_db",
       "generated_at": "2026-09-13T12:00:00Z",
@@ -389,7 +404,8 @@
         "db/clock-skew-heldout.sqlite",
         "logs/clock-skew-heldout/jsonl-backup.log",
         "logs/clock-skew-heldout/backup-daily.log",
-        "launchd/clock-skew-heldout.txt"
+        "launchd/clock-skew-heldout.txt",
+        "launchd/clock-skew-heldout.disabled"
       ],
       "failure": "clock_skew",
       "generated_at": "2026-09-13T12:00:00Z",
@@ -415,7 +431,8 @@
         "db/no-op-heldout-2.sqlite",
         "logs/no-op-heldout-2/jsonl-backup.log",
         "logs/no-op-heldout-2/backup-daily.log",
-        "launchd/no-op-heldout-2.txt"
+        "launchd/no-op-heldout-2.txt",
+        "launchd/no-op-heldout-2.disabled"
       ],
       "failure": "none",
       "generated_at": "2026-09-13T12:00:00Z",
@@ -439,7 +456,8 @@
         "db/backup-errors-heldout.sqlite",
         "logs/backup-errors-heldout/jsonl-backup.log",
         "logs/backup-errors-heldout/backup-daily.log",
-        "launchd/backup-errors-heldout.txt"
+        "launchd/backup-errors-heldout.txt",
+        "launchd/backup-errors-heldout.disabled"
       ],
       "failure": "none",
       "generated_at": "2026-09-13T12:00:00Z",

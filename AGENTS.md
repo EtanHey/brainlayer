@@ -240,7 +240,7 @@ brainlayer enrich
 ## Observability surface
 - The Python producer writes `observability.json` beside the resolved DB; `BRAINLAYER_OBSERVABILITY_PATH` overrides that path.
 - The frozen contract is `tests/fixtures/observability/observability-schema.v1.json` (`schema_version: 1`).
-- `stores`, `emitters`, `author_unknown`, and `backups` fail closed: every section carries `state`, non-silent `reason`, and `inputs[]`; an unreadable or missing required input is `unmeasurable`, never a numeric zero.
+- `stores`, `emitters`, `author_unknown`, and `backups` fail closed: every section carries `state`, `reason`, and `inputs[]`; measured sections use an empty reason, while `unmeasurable` sections require a non-silent one and no numeric output.
 
 ## P1 Pipeline Contracts
 - BL-10 source denylist is implemented in `src/brainlayer/ingest_denylist.py`. By default, provider
