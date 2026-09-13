@@ -115,7 +115,7 @@
     "reason": "",
     "retention_invariant": "PASS",
     "state": "measured",
-    "surviving_archives_30d": 7,
+    "surviving_archives_30d": 1,
     "threshold_hours": 36
   },
   "db_path": "db/backup-errors-dev.sqlite",
@@ -154,13 +154,13 @@
     ],
     "by_source_class": [
       {
-        "count": 5,
-        "in_window": 2,
+        "count": 2,
+        "in_window": 1,
         "source_class": "brain-worker"
       },
       {
-        "count": 4,
-        "in_window": 2,
+        "count": 9,
+        "in_window": 4,
         "source_class": "cli-agent"
       },
       {
@@ -174,8 +174,8 @@
         "source_class": "fleet-coordination"
       },
       {
-        "count": 4,
-        "in_window": 2,
+        "count": 2,
+        "in_window": 1,
         "source_class": "subagent"
       },
       {
@@ -185,7 +185,7 @@
       }
     ],
     "derivation_note": "metadata.attributionAgent is absent in the 2026-09-13 census; emitter derives from source, then sender, then source_file, or the section is unmeasurable",
-    "hidden_from_default_search": 9,
+    "hidden_from_default_search": 6,
     "inputs": [
       {
         "mtime": "2026-09-13T12:00:00Z",
@@ -212,11 +212,11 @@
         "count": 7
       },
       {
-        "content_class": "noise",
+        "content_class": "operational",
         "count": 6
       },
       {
-        "content_class": "operational",
+        "content_class": "test",
         "count": 6
       }
     ],
@@ -288,7 +288,7 @@
         "chunk_id": "synthetic-00",
         "emitter": "realtime_watcher",
         "preview": "Synthetic observability fixture row 00",
-        "source_class": "brain-worker",
+        "source_class": "cli-agent",
         "stored_at": "2026-09-13T12:00:00Z"
       },
       {
@@ -302,7 +302,7 @@
         "chunk_id": "synthetic-02",
         "emitter": "codex_cli",
         "preview": "Synthetic observability fixture row 02",
-        "source_class": "desktop",
+        "source_class": "cli-agent",
         "stored_at": "2026-09-13T10:00:00Z"
       },
       {
@@ -316,7 +316,7 @@
         "chunk_id": "synthetic-04",
         "emitter": "assistant",
         "preview": "Synthetic observability fixture row 04",
-        "source_class": "subagent",
+        "source_class": "cli-agent",
         "stored_at": "2026-09-13T08:00:00Z"
       }
     ],

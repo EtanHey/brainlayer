@@ -6,11 +6,13 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -97,7 +99,38 @@ def grade_payload(
         *(f"undeclared opened input: {item}" for item in sorted(opened - declared)),
     ]
     return Grade(case["case_id"], _field_diff(expected, actual), mock_green, traceability)
-def _run_case(case: dict[str, Any], root: Path, producer_root: Path, golden_root: Path | None) -> Grade:
+
+
+def _stage_case_inputs(case: dict[str, Any], source_root: Path, staged_root: Path) -> None:
+    source_root, staged_root = source_root.resolve(), staged_root.resolve()
+    declared = case["declared_inputs"]
+    mtimes = case.get("input_mtimes", {})
+    missing = sorted(set(declared) - set(mtimes))
+    if missing:
+        raise ValueError(f"missing input_mtimes for declared inputs: {', '.join(missing)}")
+    unexpected = sorted(set(mtimes) - set(declared))
+    if unexpected:
+        raise ValueError(f"input_mtimes contains undeclared inputs: {', '.join(unexpected)}")
+    for relative in declared:
+        source = (source_root / relative).resolve()
+        target = (staged_root / relative).resolve()
+        if source_root not in source.parents and source != source_root:
+            raise ValueError(f"declared input escapes fixture root: {relative}")
+        if staged_root not in target.parents and target != staged_root:
+            raise ValueError(f"declared input escapes staging root: {relative}")
+        if source.is_dir():
+            shutil.copytree(source, target)
+        elif source.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+        if target.exists():
+            timestamp = datetime.fromisoformat(mtimes[relative].replace("Z", "+00:00")).timestamp()
+            os.utime(target, (timestamp, timestamp))
+
+
+def _run_case(
+    case: dict[str, Any], root: Path, producer_root: Path, golden_root: Path | None, *, stage_inputs: bool = True
+) -> Grade:
     root, producer_root = root.resolve(), producer_root.resolve()
     golden_root = golden_root.resolve() if golden_root is not None else None
     try:
@@ -106,14 +139,22 @@ def _run_case(case: dict[str, Any], root: Path, producer_root: Path, golden_root
         return Grade(case["case_id"], [f"$: golden unavailable: {exc}"], [], [])
     with tempfile.TemporaryDirectory(prefix="observability-eval-") as temp:
         output, trace = Path(temp) / "observability.json", Path(temp) / "inputs.json"
+        input_root = root
+        if stage_inputs:
+            input_root = Path(temp) / "inputs"
+            input_root.mkdir()
+            try:
+                _stage_case_inputs(case, root, input_root)
+            except (OSError, ValueError) as exc:
+                return Grade(case["case_id"], [f"$: input staging failed: {exc}"], [], [])
         env = {key: os.environ[key] for key in ("HOME", "PATH") if key in os.environ}
         env.update({
-            "BRAINLAYER_DB": str(root / case["inputs"]["db"]), "BRAINLAYER_OBSERVABILITY_PATH": str(output),
-            "BRAINLAYER_OBSERVABILITY_TRACE_PATH": str(trace), "BRAINLAYER_OBSERVABILITY_INPUT_ROOT": str(root),
-            "BRAINLAYER_OBSERVABILITY_JSONL_BACKUP_LOG": str(root / case["inputs"]["jsonl_backup_log"]),
-            "BRAINLAYER_OBSERVABILITY_BACKUP_DAILY_LOG": str(root / case["inputs"]["backup_daily_log"]),
-            "BRAINLAYER_OBSERVABILITY_LAUNCHD_OUTPUT": str(root / case["inputs"]["launchd_output"]),
-            "BRAINLAYER_OBSERVABILITY_DISABLED_DIR": str(root / case["inputs"]["disabled_dir"]),
+            "BRAINLAYER_DB": str(input_root / case["inputs"]["db"]), "BRAINLAYER_OBSERVABILITY_PATH": str(output),
+            "BRAINLAYER_OBSERVABILITY_TRACE_PATH": str(trace), "BRAINLAYER_OBSERVABILITY_INPUT_ROOT": str(input_root),
+            "BRAINLAYER_OBSERVABILITY_JSONL_BACKUP_LOG": str(input_root / case["inputs"]["jsonl_backup_log"]),
+            "BRAINLAYER_OBSERVABILITY_BACKUP_DAILY_LOG": str(input_root / case["inputs"]["backup_daily_log"]),
+            "BRAINLAYER_OBSERVABILITY_LAUNCHD_OUTPUT": str(input_root / case["inputs"]["launchd_output"]),
+            "BRAINLAYER_OBSERVABILITY_DISABLED_DIR": str(input_root / case["inputs"]["disabled_dir"]),
             "BRAINLAYER_OBSERVABILITY_NOW": case["generated_at"], "PYTHONPATH": str(producer_root / "src"),
         })
         try:

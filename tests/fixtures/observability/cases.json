@@ -23,7 +23,14 @@
       "profile": "healthy",
       "split": "dev",
       "unmeasurable_sections": [],
-      "window_hours": 24
+      "window_hours": 24,
+      "input_mtimes": {
+        "db/healthy-dev.sqlite": "2026-09-13T12:00:00Z",
+        "logs/healthy-dev/jsonl-backup.log": "2026-09-13T12:00:00Z",
+        "logs/healthy-dev/backup-daily.log": "2026-09-13T12:00:00Z",
+        "launchd/healthy-dev.txt": "2026-09-13T12:00:00Z",
+        "launchd/healthy-dev.disabled": "2026-09-13T12:00:00Z"
+      }
     },
     {
       "case_id": "missing-source-class-dev",
@@ -52,7 +59,14 @@
         "emitters",
         "author_unknown"
       ],
-      "window_hours": 24
+      "window_hours": 24,
+      "input_mtimes": {
+        "db/missing-source-class-dev.sqlite": "2026-09-13T12:00:00Z",
+        "logs/missing-source-class-dev/jsonl-backup.log": "2026-09-13T12:00:00Z",
+        "logs/missing-source-class-dev/backup-daily.log": "2026-09-13T12:00:00Z",
+        "launchd/missing-source-class-dev.txt": "2026-09-13T12:00:00Z",
+        "launchd/missing-source-class-dev.disabled": "2026-09-13T12:00:00Z"
+      }
     },
     {
       "case_id": "missing-log-dev",
@@ -79,7 +93,14 @@
       "unmeasurable_sections": [
         "backups"
       ],
-      "window_hours": 24
+      "window_hours": 24,
+      "input_mtimes": {
+        "db/missing-log-dev.sqlite": "2026-09-13T12:00:00Z",
+        "logs/missing-log-dev/jsonl-backup.log": "2026-09-13T12:00:00Z",
+        "logs/missing-log-dev/backup-daily.log": "2026-09-13T12:00:00Z",
+        "launchd/missing-log-dev.txt": "2026-09-13T12:00:00Z",
+        "launchd/missing-log-dev.disabled": "2026-09-13T12:00:00Z"
+      }
     },
     {
       "case_id": "malformed-log-dev-1",
@@ -106,7 +127,14 @@
       "unmeasurable_sections": [
         "backups"
       ],
-      "window_hours": 24
+      "window_hours": 24,
+      "input_mtimes": {
+        "db/malformed-log-dev-1.sqlite": "2026-09-13T12:00:00Z",
+        "logs/malformed-log-dev-1/jsonl-backup.log": "2026-09-13T12:00:00Z",
+        "logs/malformed-log-dev-1/backup-daily.log": "2026-09-13T12:00:00Z",
+        "launchd/malformed-log-dev-1.txt": "2026-09-13T12:00:00Z",
+        "launchd/malformed-log-dev-1.disabled": "2026-09-13T12:00:00Z"
+      }
     },
     {
       "case_id": "missing-launchd-dev",
@@ -133,7 +161,14 @@
       "unmeasurable_sections": [
         "backups"
       ],
-      "window_hours": 24
+      "window_hours": 24,
+      "input_mtimes": {
+        "db/missing-launchd-dev.sqlite": "2026-09-13T12:00:00Z",
+        "logs/missing-launchd-dev/jsonl-backup.log": "2026-09-13T12:00:00Z",
+        "logs/missing-launchd-dev/backup-daily.log": "2026-09-13T12:00:00Z",
+        "launchd/missing-launchd-dev.txt": "2026-09-13T12:00:00Z",
+        "launchd/missing-launchd-dev.disabled": "2026-09-13T12:00:00Z"
+      }
     },
     {
       "case_id": "empty-db-dev",
@@ -158,7 +193,14 @@
       "profile": "healthy",
       "split": "dev",
       "unmeasurable_sections": [],
-      "window_hours": 24
+      "window_hours": 24,
+      "input_mtimes": {
+        "db/empty-db-dev.sqlite": "2026-09-13T12:00:00Z",
+        "logs/empty-db-dev/jsonl-backup.log": "2026-09-13T12:00:00Z",
+        "logs/empty-db-dev/backup-daily.log": "2026-09-13T12:00:00Z",
+        "launchd/empty-db-dev.txt": "2026-09-13T12:00:00Z",
+        "launchd/empty-db-dev.disabled": "2026-09-13T12:00:00Z"
+      }
     },
     {
       "case_id": "clock-skew-dev",
@@ -185,7 +227,14 @@
       "unmeasurable_sections": [
         "backups"
       ],
-      "window_hours": 24
+      "window_hours": 24,
+      "input_mtimes": {
+        "db/clock-skew-dev.sqlite": "2026-09-13T12:00:00Z",
+        "logs/clock-skew-dev/jsonl-backup.log": "2026-09-13T16:00:00Z",
+        "logs/clock-skew-dev/backup-daily.log": "2026-09-13T12:00:00Z",
+        "launchd/clock-skew-dev.txt": "2026-09-13T12:00:00Z",
+        "launchd/clock-skew-dev.disabled": "2026-09-13T12:00:00Z"
+      }
     },
     {
       "case_id": "no-op-dev",
@@ -210,7 +259,46 @@
       "profile": "no_op",
       "split": "dev",
       "unmeasurable_sections": [],
-      "window_hours": 24
+      "window_hours": 24,
+      "input_mtimes": {
+        "db/no-op-dev.sqlite": "2026-09-13T12:00:00Z",
+        "logs/no-op-dev/jsonl-backup.log": "2026-09-13T12:00:00Z",
+        "logs/no-op-dev/backup-daily.log": "2026-09-13T12:00:00Z",
+        "launchd/no-op-dev.txt": "2026-09-13T12:00:00Z",
+        "launchd/no-op-dev.disabled": "2026-09-13T12:00:00Z"
+      }
+    },
+    {
+      "case_id": "legacy-no-op-dev",
+      "db": "db/legacy-no-op-dev.sqlite",
+      "declared_inputs": [
+        "db/legacy-no-op-dev.sqlite",
+        "logs/legacy-no-op-dev/jsonl-backup.log",
+        "logs/legacy-no-op-dev/backup-daily.log",
+        "launchd/legacy-no-op-dev.txt",
+        "launchd/legacy-no-op-dev.disabled"
+      ],
+      "failure": "none",
+      "generated_at": "2026-09-13T12:00:00Z",
+      "golden": "golden/legacy-no-op-dev.json",
+      "inputs": {
+        "backup_daily_log": "logs/legacy-no-op-dev/backup-daily.log",
+        "db": "db/legacy-no-op-dev.sqlite",
+        "disabled_dir": "launchd/legacy-no-op-dev.disabled",
+        "jsonl_backup_log": "logs/legacy-no-op-dev/jsonl-backup.log",
+        "launchd_output": "launchd/legacy-no-op-dev.txt"
+      },
+      "profile": "legacy_no_op",
+      "split": "dev",
+      "unmeasurable_sections": [],
+      "window_hours": 24,
+      "input_mtimes": {
+        "db/legacy-no-op-dev.sqlite": "2026-09-13T12:00:00Z",
+        "logs/legacy-no-op-dev/jsonl-backup.log": "2026-09-13T12:00:00Z",
+        "logs/legacy-no-op-dev/backup-daily.log": "2026-09-13T12:00:00Z",
+        "launchd/legacy-no-op-dev.txt": "2026-09-13T12:00:00Z",
+        "launchd/legacy-no-op-dev.disabled": "2026-09-13T12:00:00Z"
+      }
     },
     {
       "case_id": "backup-errors-dev",
@@ -235,7 +323,14 @@
       "profile": "errors",
       "split": "dev",
       "unmeasurable_sections": [],
-      "window_hours": 24
+      "window_hours": 24,
+      "input_mtimes": {
+        "db/backup-errors-dev.sqlite": "2026-09-13T12:00:00Z",
+        "logs/backup-errors-dev/jsonl-backup.log": "2026-09-13T12:00:00Z",
+        "logs/backup-errors-dev/backup-daily.log": "2026-09-13T12:00:00Z",
+        "launchd/backup-errors-dev.txt": "2026-09-13T12:00:00Z",
+        "launchd/backup-errors-dev.disabled": "2026-09-13T12:00:00Z"
+      }
     },
     {
       "case_id": "healthy-heldout-3",
@@ -260,7 +355,14 @@
       "profile": "healthy",
       "split": "heldout",
       "unmeasurable_sections": [],
-      "window_hours": 24
+      "window_hours": 24,
+      "input_mtimes": {
+        "db/healthy-heldout-3.sqlite": "2026-09-13T12:00:00Z",
+        "logs/healthy-heldout-3/jsonl-backup.log": "2026-09-13T12:00:00Z",
+        "logs/healthy-heldout-3/backup-daily.log": "2026-09-13T12:00:00Z",
+        "launchd/healthy-heldout-3.txt": "2026-09-13T12:00:00Z",
+        "launchd/healthy-heldout-3.disabled": "2026-09-13T12:00:00Z"
+      }
     },
     {
       "case_id": "missing-source-class-heldout",
@@ -289,7 +391,14 @@
         "emitters",
         "author_unknown"
       ],
-      "window_hours": 24
+      "window_hours": 24,
+      "input_mtimes": {
+        "db/missing-source-class-heldout.sqlite": "2026-09-13T12:00:00Z",
+        "logs/missing-source-class-heldout/jsonl-backup.log": "2026-09-13T12:00:00Z",
+        "logs/missing-source-class-heldout/backup-daily.log": "2026-09-13T12:00:00Z",
+        "launchd/missing-source-class-heldout.txt": "2026-09-13T12:00:00Z",
+        "launchd/missing-source-class-heldout.disabled": "2026-09-13T12:00:00Z"
+      }
     },
     {
       "case_id": "missing-log-heldout-2",
@@ -316,7 +425,14 @@
       "unmeasurable_sections": [
         "backups"
       ],
-      "window_hours": 24
+      "window_hours": 24,
+      "input_mtimes": {
+        "db/missing-log-heldout-2.sqlite": "2026-09-13T12:00:00Z",
+        "logs/missing-log-heldout-2/jsonl-backup.log": "2026-09-13T12:00:00Z",
+        "logs/missing-log-heldout-2/backup-daily.log": "2026-09-13T12:00:00Z",
+        "launchd/missing-log-heldout-2.txt": "2026-09-13T12:00:00Z",
+        "launchd/missing-log-heldout-2.disabled": "2026-09-13T12:00:00Z"
+      }
     },
     {
       "case_id": "malformed-log-heldout",
@@ -343,7 +459,14 @@
       "unmeasurable_sections": [
         "backups"
       ],
-      "window_hours": 24
+      "window_hours": 24,
+      "input_mtimes": {
+        "db/malformed-log-heldout.sqlite": "2026-09-13T12:00:00Z",
+        "logs/malformed-log-heldout/jsonl-backup.log": "2026-09-13T12:00:00Z",
+        "logs/malformed-log-heldout/backup-daily.log": "2026-09-13T12:00:00Z",
+        "launchd/malformed-log-heldout.txt": "2026-09-13T12:00:00Z",
+        "launchd/malformed-log-heldout.disabled": "2026-09-13T12:00:00Z"
+      }
     },
     {
       "case_id": "missing-launchd-heldout-2",
@@ -370,7 +493,14 @@
       "unmeasurable_sections": [
         "backups"
       ],
-      "window_hours": 24
+      "window_hours": 24,
+      "input_mtimes": {
+        "db/missing-launchd-heldout-2.sqlite": "2026-09-13T12:00:00Z",
+        "logs/missing-launchd-heldout-2/jsonl-backup.log": "2026-09-13T12:00:00Z",
+        "logs/missing-launchd-heldout-2/backup-daily.log": "2026-09-13T12:00:00Z",
+        "launchd/missing-launchd-heldout-2.txt": "2026-09-13T12:00:00Z",
+        "launchd/missing-launchd-heldout-2.disabled": "2026-09-13T12:00:00Z"
+      }
     },
     {
       "case_id": "empty-db-heldout-3",
@@ -395,7 +525,14 @@
       "profile": "healthy",
       "split": "heldout",
       "unmeasurable_sections": [],
-      "window_hours": 24
+      "window_hours": 24,
+      "input_mtimes": {
+        "db/empty-db-heldout-3.sqlite": "2026-09-13T12:00:00Z",
+        "logs/empty-db-heldout-3/jsonl-backup.log": "2026-09-13T12:00:00Z",
+        "logs/empty-db-heldout-3/backup-daily.log": "2026-09-13T12:00:00Z",
+        "launchd/empty-db-heldout-3.txt": "2026-09-13T12:00:00Z",
+        "launchd/empty-db-heldout-3.disabled": "2026-09-13T12:00:00Z"
+      }
     },
     {
       "case_id": "clock-skew-heldout",
@@ -422,7 +559,14 @@
       "unmeasurable_sections": [
         "backups"
       ],
-      "window_hours": 24
+      "window_hours": 24,
+      "input_mtimes": {
+        "db/clock-skew-heldout.sqlite": "2026-09-13T12:00:00Z",
+        "logs/clock-skew-heldout/jsonl-backup.log": "2026-09-13T16:00:00Z",
+        "logs/clock-skew-heldout/backup-daily.log": "2026-09-13T12:00:00Z",
+        "launchd/clock-skew-heldout.txt": "2026-09-13T12:00:00Z",
+        "launchd/clock-skew-heldout.disabled": "2026-09-13T12:00:00Z"
+      }
     },
     {
       "case_id": "no-op-heldout-2",
@@ -447,7 +591,14 @@
       "profile": "no_op",
       "split": "heldout",
       "unmeasurable_sections": [],
-      "window_hours": 24
+      "window_hours": 24,
+      "input_mtimes": {
+        "db/no-op-heldout-2.sqlite": "2026-09-13T12:00:00Z",
+        "logs/no-op-heldout-2/jsonl-backup.log": "2026-09-13T12:00:00Z",
+        "logs/no-op-heldout-2/backup-daily.log": "2026-09-13T12:00:00Z",
+        "launchd/no-op-heldout-2.txt": "2026-09-13T12:00:00Z",
+        "launchd/no-op-heldout-2.disabled": "2026-09-13T12:00:00Z"
+      }
     },
     {
       "case_id": "backup-errors-heldout",
@@ -472,10 +623,17 @@
       "profile": "errors",
       "split": "heldout",
       "unmeasurable_sections": [],
-      "window_hours": 24
+      "window_hours": 24,
+      "input_mtimes": {
+        "db/backup-errors-heldout.sqlite": "2026-09-13T12:00:00Z",
+        "logs/backup-errors-heldout/jsonl-backup.log": "2026-09-13T12:00:00Z",
+        "logs/backup-errors-heldout/backup-daily.log": "2026-09-13T12:00:00Z",
+        "launchd/backup-errors-heldout.txt": "2026-09-13T12:00:00Z",
+        "launchd/backup-errors-heldout.disabled": "2026-09-13T12:00:00Z"
+      }
     }
   ],
-  "heldout_goldens_sha256": "7c14c1457dd3702b0980e8a755b4aadec59a2a62d99091cd3950d94682296ea9",
+  "heldout_goldens_sha256": "a945fed90d3b943a994e952f7b041b6745991d68bf6e2d16de66ad7aa5475228",
   "schema_version": 1,
   "seed": 20260913
 }
