@@ -90,6 +90,7 @@ enum BrainBarAppSupport {
             collector: collector,
             injectionStore: nil,
             database: database,
+            databasePath: dbPath,
             injectionStoreFactory: {
                 do {
                     return try InjectionStore(databasePath: dbPath)

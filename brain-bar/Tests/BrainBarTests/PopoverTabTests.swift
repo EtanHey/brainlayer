@@ -19,20 +19,22 @@ final class PopoverTabTests: XCTestCase {
 
     // MARK: - PopoverTab Enum
 
-    func testPopoverTabHasThreeCases() {
-        XCTAssertEqual(PopoverTab.allCases.count, 3)
+    func testPopoverTabHasFourCases() {
+        XCTAssertEqual(PopoverTab.allCases.count, 4)
     }
 
     func testPopoverTabRawValues() {
         XCTAssertEqual(PopoverTab.dashboard.rawValue, 0)
         XCTAssertEqual(PopoverTab.injections.rawValue, 1)
         XCTAssertEqual(PopoverTab.graph.rawValue, 2)
+        XCTAssertEqual(PopoverTab.observability.rawValue, 3)
     }
 
     func testPopoverTabLabels() {
         XCTAssertEqual(PopoverTab.dashboard.label, "Dashboard")
         XCTAssertEqual(PopoverTab.injections.label, "Injections")
         XCTAssertEqual(PopoverTab.graph.label, "Graph")
+        XCTAssertEqual(PopoverTab.observability.label, "Observability")
     }
 
     func testPopoverTabDashboardSizeIsUtilityPanel() {
@@ -74,7 +76,7 @@ final class PopoverTabTests: XCTestCase {
 
         let segmented = findSegmentedControl(in: vc.view)
         XCTAssertNotNil(segmented, "Popover should contain a segmented control")
-        XCTAssertEqual(segmented?.segmentCount, 3)
+        XCTAssertEqual(segmented?.segmentCount, 4)
     }
 
     @MainActor
@@ -178,7 +180,7 @@ final class PopoverTabTests: XCTestCase {
         let vc = StatusPopoverView(collector: collector, database: db)
         _ = vc.view
 
-        XCTAssertEqual(vc.currentTab, .dashboard)
+        XCTAssertEqual(vc.currentTab, .observability)
 
         vc.showTab(.graph)
         XCTAssertEqual(vc.currentTab, .graph)

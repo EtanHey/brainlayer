@@ -32,6 +32,7 @@ enum BrainBarTab: Int, CaseIterable, Equatable, Identifiable {
     case dashboard = 0
     case injections = 1
     case graph = 2
+    case observability = 3
 
     var id: Int { rawValue }
 
@@ -43,6 +44,8 @@ enum BrainBarTab: Int, CaseIterable, Equatable, Identifiable {
             return "Injections"
         case .graph:
             return "Graph"
+        case .observability:
+            return "Observability"
         }
     }
 }
