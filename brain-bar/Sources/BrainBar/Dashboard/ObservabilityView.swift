@@ -245,15 +245,26 @@ struct ObservabilityLiveView: View {
     let dbPath: String
     private let cadence = ObservabilityReader.installedHealthCheckCadence
     @State private var result: ObservabilityReadResult = .unreadable("Loading observability data.")
+    @State private var readTask: Task<Void, Never>?
     private let refresh = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
         ObservabilityDashboardView(result: result, cadence: cadence)
             .onAppear(perform: reload)
             .onReceive(refresh) { _ in reload() }
+            .onDisappear { readTask?.cancel() }
     }
 
     private func reload() {
-        result = ObservabilityReader.read(url: ObservabilityReader.url(dbPath: dbPath))
+        readTask?.cancel()
+        let url = ObservabilityReader.url(dbPath: dbPath)
+        let read = Task.detached(priority: .utility) {
+            ObservabilityReader.read(url: url)
+        }
+        readTask = Task { @MainActor in
+            let next = await read.value
+            guard !Task.isCancelled else { return }
+            result = next
+        }
     }
 }
