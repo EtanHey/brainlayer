@@ -74,7 +74,7 @@
   "backups": {
     "db_snapshot": {
       "destination": "synthetic-drive",
-      "last_at": "2026-09-13T09:00:00Z",
+        "last_at": "2026-09-13T02:00:00Z",
       "verified": true
     },
     "error_type": "jsonl_backup_attempt_invalid",
@@ -91,8 +91,8 @@
       {
         "mtime": "2026-09-13T12:00:00Z",
         "path": "logs/legacy-no-op-dev/backup-daily.log",
-        "rows_or_bytes": 293,
-        "sha256_first_64kb": "c4c707bd7d86018084cf4b1a7c4b8cc40a21a3568be0ce611f633c2545daeef2",
+        "rows_or_bytes": 253,
+        "sha256_first_64kb": "b17d75767068368d9fd9d003990f58789898400d52afdbc783d915fa596e4fab",
         "skipped_lines": 2,
         "status": "read"
       },
