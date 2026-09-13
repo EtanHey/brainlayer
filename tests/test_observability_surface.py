@@ -145,6 +145,27 @@ def test_trace_only_input_is_excluded_from_recorder_section_inputs(tmp_path: Pat
     assert recorder.section_inputs == [included]
 
 
+def test_input_recorder_fails_closed_on_unreadable_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from brainlayer.observability_surface import InputRecorder
+
+    path = tmp_path / "unreadable.log"
+    path.write_text("receipt\n", encoding="utf-8")
+    original_open = Path.open
+
+    def refuse_open(self: Path, *args, **kwargs):
+        if self == path:
+            raise PermissionError("permission denied")
+        return original_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", refuse_open)
+    recorder = InputRecorder(root=tmp_path, trace_path=None, now=datetime.now().astimezone())
+    item = recorder(path)
+    assert item["status"] == "malformed"
+    assert item["sha256_first_64kb"] is None
+    assert item["rows_or_bytes"] is None
+    assert recorder.section_inputs == [item]
+
+
 @pytest.mark.parametrize(("source_file", "expected"), [("/Users/x/.claude/projects/-Users-x-Gits-brainlayer/session.jsonl", "brainlayer"), ("/Users/x/.codex/sessions/2026/09/13/rollout.jsonl", "codex"), ("brainbar-store", "brainbar-store"), ("realtime-hook", "realtime-hook"), ("unknown", "unknown"), ("", "unknown")])  # fmt: skip
 def test_source_file_emitter_derivation(source_file: str, expected: str) -> None:
     from brainlayer.observability_surface import derive_emitter

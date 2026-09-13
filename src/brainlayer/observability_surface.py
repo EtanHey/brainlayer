@@ -54,8 +54,14 @@ class InputRecorder:
                 effective_status = "future"
             digest = None
             if resolved.is_file() and resolved.suffix not in {".sqlite", ".db"}:
-                with resolved.open("rb") as handle:
-                    digest = hashlib.sha256(handle.read(65_536)).hexdigest()
+                try:
+                    with resolved.open("rb") as handle:
+                        digest = hashlib.sha256(handle.read(65_536)).hexdigest()
+                except OSError:
+                    item = _input(displayed, "malformed", _iso_utc(datetime.fromtimestamp(stat.st_mtime, UTC)), None, None, skipped_lines)
+                    if in_section_inputs:
+                        self.section_inputs.append(item)
+                    return item
             item = _input(displayed, effective_status, _iso_utc(datetime.fromtimestamp(stat.st_mtime, UTC)),
                           stat.st_size if rows_or_bytes is None else rows_or_bytes, digest, skipped_lines)
         if in_section_inputs:
