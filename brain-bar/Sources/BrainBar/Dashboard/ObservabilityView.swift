@@ -242,6 +242,22 @@ struct ObservabilityDashboardView: View {
 }
 
 struct ObservabilityLiveView: View {
+    enum Reader {
+        typealias Operation = @Sendable (URL) async -> ObservabilityReadResult
+
+        static func read(
+            url: URL,
+            using operation: @escaping Operation = { ObservabilityReader.read(url: $0) }
+        ) async -> ObservabilityReadResult {
+            let worker = Task.detached(priority: .utility) { await operation(url) }
+            return await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
+        }
+    }
+
     let dbPath: String
     private let cadence = ObservabilityReader.installedHealthCheckCadence
     @State private var result: ObservabilityReadResult = .unreadable("Loading observability data.")
@@ -258,11 +274,8 @@ struct ObservabilityLiveView: View {
     private func reload() {
         readTask?.cancel()
         let url = ObservabilityReader.url(dbPath: dbPath)
-        let read = Task.detached(priority: .utility) {
-            ObservabilityReader.read(url: url)
-        }
         readTask = Task { @MainActor in
-            let next = await read.value
+            let next = await Reader.read(url: url)
             guard !Task.isCancelled else { return }
             result = next
         }

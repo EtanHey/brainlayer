@@ -4,6 +4,10 @@ import SwiftUI
 import XCTest
 @testable import BrainBar
 
+private func isOnMainThread() -> Bool {
+    Thread.isMainThread
+}
+
 @MainActor
 final class ObservabilitySnapshotTests: XCTestCase {
     private var fixtureRoot: URL {
@@ -160,6 +164,27 @@ final class ObservabilitySnapshotTests: XCTestCase {
         XCTAssertTrue(snapshot.isStale)
         XCTAssertTrue(snapshot.ageText.contains("old"))
         XCTAssertTrue(snapshot.cards.allSatisfy { $0.tone == .amber })
+    }
+
+    func testObservabilityLiveViewReadRunsOffMainAndPropagatesCancellation() async throws {
+        let read = Task {
+            await ObservabilityLiveView.Reader.read(url: URL(fileURLWithPath: "/tmp/unused")) { _ in
+                let main = isOnMainThread()
+                do {
+                    try await Task.sleep(for: .seconds(1))
+                    return .unreadable("not cancelled")
+                } catch {
+                    return .unreadable("main=\(main) cancelled=\(Task.isCancelled)")
+                }
+            }
+        }
+        await Task.yield()
+        read.cancel()
+
+        guard case let .unreadable(receipt) = await read.value else {
+            return XCTFail("Expected cancellation receipt")
+        }
+        XCTAssertEqual(receipt, "main=false cancelled=true")
     }
 
     private func readableDocument(named name: String) throws -> ObservabilityDocument {
