@@ -58,6 +58,135 @@ def _mock_drive_success(jsonl_backup, monkeypatch, uploads: list[Path] | None = 
     monkeypatch.setattr(jsonl_backup.backup_daily, "prune_drive_backups", lambda *args, **kwargs: [])
 
 
+def test_jsonl_retention_is_disabled_by_default_and_keeps_local_archives(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    monkeypatch.delenv("BRAINLAYER_JSONL_BACKUP_RETENTION", raising=False)
+    now = time.time()
+    source_root = tmp_path / "sessions"
+    _write_jsonl(source_root / "session.jsonl", mtime=now - 3600)
+    staging_dir = tmp_path / "staging"
+    staging_dir.mkdir()
+    old_archives = [staging_dir / f"claude-jsonl-2026-09-{day:02d}.tar.gz" for day in (1, 2)]
+    for archive in old_archives:
+        archive.write_bytes(b"preserve me")
+    _mock_drive_success(jsonl_backup, monkeypatch)
+
+    result = jsonl_backup.run_backup(
+        source_roots=[source_root],
+        state_path=tmp_path / "state.json",
+        staging_dir=staging_dir,
+        log_path=tmp_path / "jsonl-backup.log",
+        queue_dir=tmp_path / "queue",
+        date_stamp="2026-09-14",
+        now=now,
+        upload=True,
+    )
+
+    assert result["retention"] == "disabled"
+    assert result["retention_mode"] == "trash"
+    assert result["retention_deleted"] == []
+    assert result["local_archive_removed"] is False
+    assert all(archive.exists() for archive in old_archives)
+    assert Path(result["archive"]).exists()
+
+
+def test_jsonl_retention_opt_in_trashes_drive_objects_and_never_hard_deletes(tmp_path, monkeypatch):
+    from brainlayer import backup_daily, jsonl_backup
+
+    class Files:
+        def __init__(self):
+            self.updates = []
+            self.deleted = []
+
+        def list(self, **kwargs):
+            assert kwargs["q"] == "'folder-id' in parents and trashed = false"
+            return self
+
+        def update(self, **kwargs):
+            self.updates.append(kwargs)
+            return self
+
+        def delete(self, **kwargs):
+            self.deleted.append(kwargs)
+            raise AssertionError("JSONL retention must never hard-delete Drive objects")
+
+        def execute(self):
+            if self.updates:
+                return {}
+            return {
+                "files": [
+                    {"id": "new-id", "name": "claude-jsonl-2026-09-14.tar.gz"},
+                    {"id": "old-id", "name": "claude-jsonl-2026-09-01.tar.gz"},
+                ]
+            }
+
+    class Service:
+        def __init__(self):
+            self._files = Files()
+
+        def files(self):
+            return self._files
+
+    monkeypatch.setenv("BRAINLAYER_JSONL_BACKUP_RETENTION", "1")
+    monkeypatch.setattr(
+        jsonl_backup,
+        "JSONL_RETENTION",
+        backup_daily.DriveRetentionPolicy(
+            keep_latest=1,
+            filename_prefix="claude-jsonl-",
+            filename_suffix=".tar.gz",
+        ),
+    )
+    now = time.time()
+    source_root = tmp_path / "sessions"
+    _write_jsonl(source_root / "session.jsonl", mtime=now - 3600)
+    service = Service()
+    monkeypatch.setattr(jsonl_backup.backup_daily, "get_drive_credentials", lambda: object())
+    monkeypatch.setattr(jsonl_backup.backup_daily, "build_drive_service", lambda: service)
+    monkeypatch.setattr(jsonl_backup.backup_daily, "ensure_drive_folder_chain", lambda *args: "folder-id")
+    monkeypatch.setattr(jsonl_backup.backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        jsonl_backup.backup_daily,
+        "upload_file_to_drive_raw",
+        lambda path, *args: {
+            "id": "new-id",
+            "name": Path(path).name,
+            "size": str(Path(path).stat().st_size),
+        },
+    )
+
+    result = jsonl_backup.run_backup(
+        source_roots=[source_root],
+        state_path=tmp_path / "state.json",
+        staging_dir=tmp_path / "staging",
+        log_path=tmp_path / "jsonl-backup.log",
+        queue_dir=tmp_path / "queue",
+        date_stamp="2026-09-14",
+        now=now,
+        upload=True,
+    )
+
+    assert result["retention"] == "enabled"
+    assert result["retention_mode"] == "trash"
+    assert result["retention_deleted"] == ["claude-jsonl-2026-09-01.tar.gz"]
+    assert service._files.updates == [
+        {
+            "fileId": "old-id",
+            "body": {"trashed": True},
+            "supportsAllDrives": True,
+        }
+    ]
+    assert service._files.deleted == []
+    assert result["local_archive_removed"] is True
+
+
+def test_jsonl_backup_source_has_no_drive_hard_delete_call():
+    source = Path("src/brainlayer/jsonl_backup.py").read_text(encoding="utf-8")
+
+    assert ".delete(" not in source
+
+
 def _icloud_state(*, uploaded: bool, status: str) -> dict:
     return {
         "is_ubiquitous": True,
@@ -256,10 +385,10 @@ def _state_matches(entry, candidate, surviving_archives=None):
 """
     assert persisted_state_block in source
     unsafe = source.replace(persisted_state_block, constructed_state_block, 1).replace(
-        '            result["local_archive_removed"] = True\n',
+        '            else:\n                result["local_archive_removed"] = False\n',
         (
-            '            result["local_archive_removed"] = True\n'
-            "        _atomic_write_json(state_path, uploaded_state)\n"
+            '            else:\n                result["local_archive_removed"] = False\n'
+            "            _atomic_write_json(state_path, uploaded_state)\n"
         ),
         1,
     )
@@ -619,6 +748,7 @@ def test_concurrent_jsonl_backups_serialize_creation_through_state_persistence(t
 def test_run_jsonl_backup_uploads_incremental_bundle_verifies_and_enqueues_summary(tmp_path, monkeypatch):
     from brainlayer import jsonl_backup
 
+    monkeypatch.setenv("BRAINLAYER_JSONL_BACKUP_RETENTION", "1")
     now = time.time()
     claude_root = tmp_path / "home" / ".claude" / "projects"
     archive_root = tmp_path / "home" / ".claude-archive"
@@ -653,7 +783,7 @@ def test_run_jsonl_backup_uploads_incremental_bundle_verifies_and_enqueues_summa
         return ["claude-jsonl-2026-05-01.tar.gz"]
 
     monkeypatch.setattr(jsonl_backup.backup_daily, "upload_file_to_drive_raw", fake_upload)
-    monkeypatch.setattr(jsonl_backup.backup_daily, "prune_drive_backups", fake_prune)
+    monkeypatch.setattr(jsonl_backup, "_prune_drive_backups_to_trash", fake_prune)
 
     result = jsonl_backup.run_backup(
         source_roots=[claude_root, archive_root, codex_root],
@@ -689,7 +819,9 @@ def test_run_jsonl_backup_uploads_incremental_bundle_verifies_and_enqueues_summa
         "gzip_test",
         "local_archive_removed",
         "md5Checksum",
+        "retention",
         "retention_deleted",
+        "retention_mode",
         "skipped_active_count",
         "source_file_count",
         "status",
@@ -2204,6 +2336,7 @@ def test_antigravity_sqlite_restore_unit_is_bundled_together_when_sidecar_change
 def test_jsonl_forever_upload_uses_separate_folder_and_rolling_prune_only(tmp_path, monkeypatch):
     from brainlayer import jsonl_backup
 
+    monkeypatch.setenv("BRAINLAYER_JSONL_BACKUP_RETENTION", "1")
     now = time.time()
     source_root = tmp_path / "sessions"
     source_file = source_root / "changed.db"
@@ -2237,7 +2370,7 @@ def test_jsonl_forever_upload_uses_separate_folder_and_rolling_prune_only(tmp_pa
     monkeypatch.setattr(jsonl_backup.backup_daily, "ensure_drive_folder_chain", fake_ensure)
     monkeypatch.setattr(jsonl_backup.backup_daily, "upload_file_to_drive_raw", fake_upload)
     monkeypatch.setattr(jsonl_backup.backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
-    monkeypatch.setattr(jsonl_backup.backup_daily, "prune_drive_backups", fake_prune)
+    monkeypatch.setattr(jsonl_backup, "_prune_drive_backups_to_trash", fake_prune)
 
     result = jsonl_backup.run_backup(
         source_roots=[jsonl_backup.BackupSourceRoot(source_root, ("**/*.db",))],
@@ -2359,6 +2492,7 @@ def test_jsonl_forever_upload_caches_source_folder_lookup_per_root(tmp_path, mon
 def test_jsonl_backup_persists_daily_state_when_forever_upload_fails(tmp_path, monkeypatch):
     from brainlayer import jsonl_backup
 
+    monkeypatch.setenv("BRAINLAYER_JSONL_BACKUP_RETENTION", "1")
     now = time.time()
     source_root = tmp_path / "sessions"
     source_file = source_root / "changed.db"
@@ -2387,7 +2521,7 @@ def test_jsonl_backup_persists_daily_state_when_forever_upload_fails(tmp_path, m
         return []
 
     monkeypatch.setattr(jsonl_backup.backup_daily, "upload_file_to_drive_raw", fake_upload)
-    monkeypatch.setattr(jsonl_backup.backup_daily, "prune_drive_backups", fake_prune)
+    monkeypatch.setattr(jsonl_backup, "_prune_drive_backups_to_trash", fake_prune)
 
     with pytest.raises(RuntimeError, match="forever failed"):
         jsonl_backup.run_backup(
