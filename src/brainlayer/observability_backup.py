@@ -108,8 +108,9 @@ def _daily_snapshot(records: list[dict[str, Any]]) -> tuple[dict[str, Any] | Non
         elif isinstance(drive_file, str):
             destination = drive_file
         else:
-            destination = Path(str(record.get("db", "brainlayer.db"))).name
-        if attempted_at and isinstance(destination, str) and destination and record.get("snapshot"):
+            destination = None
+        successful = record.get("verified") is True and record.get("uploaded") is True
+        if attempted_at and successful and isinstance(destination, str) and destination:
             return (
                 {
                     "last_at": attempted_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),

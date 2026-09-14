@@ -162,6 +162,7 @@ def test_legacy_daily_snapshot_derives_attempt_time_from_snapshot_date() -> None
                 "backup_log_provenance": "real",
                 "snapshot": "/synthetic/backups/2026-09-13.db.gz",
                 "drive_file": "synthetic-drive",
+                "uploaded": True,
                 "verified": True,
                 "drive_md5_match": True,
             }
@@ -182,17 +183,52 @@ def test_daily_snapshot_fits_current_drive_file_receipt_and_md5_verification() -
         [
             {
                 "backup_log_provenance": "real",
-                "attempted_at": "2026-09-13T09:00:00Z",
+                "attempted_at": "2026-09-13T02:00:00Z",
                 "db": "/synthetic/brainlayer.db",
                 "drive_file": {"id": "drive-id", "name": "2026-09-13.db.gz", "size": "123"},
                 "snapshot": "/synthetic/2026-09-13.db.gz",
+                "uploaded": True,
                 "verified": True,
                 "drive_md5_match": True,
             }
         ]
     )
-    assert snapshot == {"last_at": "2026-09-13T09:00:00Z", "destination": "2026-09-13.db.gz", "verified": True}
+    assert snapshot == {"last_at": "2026-09-13T02:00:00Z", "destination": "2026-09-13.db.gz", "verified": True}
     assert error_type is None
+    assert all_errors is False
+
+
+def test_daily_snapshot_skips_failed_latest_attempt_for_last_success() -> None:
+    snapshot, error_type, all_errors = observability_backup._daily_snapshot(
+        [
+            {
+                "backup_log_provenance": "real",
+                "attempted_at": "2026-09-09T02:00:00Z",
+                "snapshot": "/synthetic/2026-09-09.db.gz",
+                "uploaded": False,
+                "verified": True,
+            },
+            {
+                "backup_log_provenance": "real",
+                "attempted_at": "2026-09-13T09:00:00Z",
+                "drive_file": {"name": "2026-09-13.db.gz"},
+                "snapshot": "/synthetic/2026-09-13.db.gz",
+                "uploaded": True,
+                "verified": True,
+            },
+            {
+                "backup_log_provenance": "real",
+                "attempted_at": "2026-09-14T02:00:00Z",
+                "db": "/synthetic/brainlayer.db",
+                "snapshot": "/synthetic/2026-09-14.db.gz",
+                "uploaded": False,
+                "verified": False,
+                "error_type": "RuntimeError",
+            },
+        ]
+    )
+    assert snapshot == {"last_at": "2026-09-13T09:00:00Z", "destination": "2026-09-13.db.gz", "verified": True}
+    assert error_type == "RuntimeError"
     assert all_errors is False
 
 

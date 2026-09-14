@@ -198,9 +198,13 @@ def _build_document(*, env: Mapping[str, str], now: datetime, recorder: InputRec
     if failure or connection is None:
         stores = emitters = author_unknown = _unmeasurable(failure or "database unavailable", db_input)
     else:
-        skipped = connection.execute(
-            "SELECT COUNT(*) FROM chunks WHERE created_at IS NULL OR datetime(created_at) IS NULL"
-        ).fetchone()[0]
+        skipped = (
+            connection.execute(
+                "SELECT COUNT(*) FROM chunks WHERE created_at IS NULL OR datetime(created_at) IS NULL"
+            ).fetchone()[0]
+            if "created_at" in columns
+            else 0
+        )
         db_input["skipped_lines"] = skipped
         stores = _stores(connection, columns, db_input, now)
         emitters = _emitters(connection, columns, db_input, now)
