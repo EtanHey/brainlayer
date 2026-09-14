@@ -7,6 +7,7 @@ import plistlib
 import sqlite3
 import subprocess
 import sys
+from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -54,6 +55,24 @@ def _progress(module, chunk_rowid: int, liveness_rowid: int = 0):
     return module.WatcherProgress(
         chunk_rowid=chunk_rowid,
         liveness_rowid=liveness_rowid,
+    )
+
+
+def _stalled_result(module):
+    return module.WatchdogResult(
+        checked_at_epoch=1_000,
+        watcher_highwater_rowid=40,
+        watcher_highwater_delta=0,
+        watcher_liveness_highwater_rowid=0,
+        watcher_liveness_highwater_delta=0,
+        pending_files=1,
+        pending_bytes=20,
+        recent_files=1,
+        untracked_recent_files=0,
+        newest_source_mtime=999.0,
+        scan_errors=0,
+        stalled_ticks=3,
+        action="stalled",
     )
 
 
@@ -108,6 +127,80 @@ def test_first_observation_establishes_a_baseline_without_restart(tmp_path: Path
     assert result.action == "baseline"
     assert result.stalled_ticks == 0
     assert commands == []
+
+
+def test_explicit_by_design_watcher_condition_skips_alert_side_effects(tmp_path: Path, monkeypatch) -> None:
+    module = _load_module()
+    config = _config(module, tmp_path)
+    monkeypatch.delenv("BRAINLAYER_FORBID_DESKTOP_NOTIFICATION", raising=False)
+    marker = tmp_path / "by-design-notifications.json"
+    marker.write_text(
+        '{"conditions":{"watcher_stopped":"planned watcher maintenance"}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BRAINLAYER_BY_DESIGN_REASON_FILE", str(marker))
+    subprocess_calls: list[object] = []
+    urlopen_calls: list[object] = []
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *args, **kwargs: (subprocess_calls.append((args, kwargs)), SimpleNamespace(returncode=0))[1],
+    )
+    monkeypatch.setattr(
+        module.urllib.request,
+        "urlopen",
+        lambda *args, **kwargs: (urlopen_calls.append((args, kwargs)), nullcontext())[1],
+    )
+
+    result = _stalled_result(module)
+    assert module._best_effort_alert(config, result) is False
+
+    assert subprocess_calls == []
+    assert urlopen_calls == []
+
+    assert module._best_effort_alert(config, replace(result, action="checkpoint_deferral_alert")) is True
+
+    assert len(subprocess_calls) == 1
+    assert len(urlopen_calls) == 1
+
+
+def test_watcher_condition_without_marker_still_alerts(tmp_path: Path, monkeypatch) -> None:
+    module = _load_module()
+    config = _config(module, tmp_path)
+    monkeypatch.delenv("BRAINLAYER_FORBID_DESKTOP_NOTIFICATION", raising=False)
+    monkeypatch.setenv("BRAINLAYER_BY_DESIGN_REASON_FILE", str(tmp_path / "missing.json"))
+    subprocess_calls: list[object] = []
+    urlopen_calls: list[object] = []
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *args, **kwargs: (subprocess_calls.append((args, kwargs)), SimpleNamespace(returncode=0))[1],
+    )
+    monkeypatch.setattr(
+        module.urllib.request,
+        "urlopen",
+        lambda *args, **kwargs: (urlopen_calls.append((args, kwargs)), nullcontext())[1],
+    )
+
+    module._best_effort_alert(config, _stalled_result(module))
+
+    assert len(subprocess_calls) == 1
+    assert len(urlopen_calls) == 1
+
+
+def test_alert_delivery_failure_does_not_latch_as_delivered(tmp_path: Path, monkeypatch) -> None:
+    module = _load_module()
+    config = _config(module, tmp_path)
+    monkeypatch.delenv("BRAINLAYER_FORBID_DESKTOP_NOTIFICATION", raising=False)
+    monkeypatch.setenv("BRAINLAYER_BY_DESIGN_REASON_FILE", str(tmp_path / "missing.json"))
+    monkeypatch.setattr(module.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(returncode=1))
+
+    def fail_urlopen(*_args, **_kwargs):
+        raise OSError("notify endpoint unavailable")
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fail_urlopen)
+
+    assert module._best_effort_alert(config, _stalled_result(module)) is False
 
 
 def test_process_alive_zero_throughput_with_pending_bytes_kickstarts_after_threshold(tmp_path: Path) -> None:

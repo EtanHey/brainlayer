@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
 
+from brainlayer.notification_policy import by_design_reason
 from brainlayer.wal_checkpoint import checkpoint_guard
 
 DEFAULT_WATCH_LABEL = "com.brainlayer.watch"
@@ -109,7 +110,7 @@ CommandRunner = Callable[[list[str]], object]
 ProgressReader = Callable[[Path], WatcherProgress]
 OperationalProgressReader = Callable[[Config], OperationalProgress]
 SourceProbe = Callable[[Config, int], SourceEvidence]
-AlertFn = Callable[[Config, WatchdogResult], None]
+AlertFn = Callable[[Config, WatchdogResult], bool | None]
 
 
 def _positive_int(value: str) -> int:
@@ -519,10 +520,16 @@ def _restart_watch(
     )
 
 
-def _best_effort_alert(config: Config, result: WatchdogResult) -> None:
+def _best_effort_alert(config: Config, result: WatchdogResult) -> bool:
     config.log_path.expanduser().parent.mkdir(parents=True, exist_ok=True)
     with config.log_path.expanduser().open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(asdict(result), sort_keys=True) + "\n")
+    if result.action == "stalled" and (reason := by_design_reason("watcher_stopped")):
+        print(
+            f"INFO throughput-watchdog notification suppressed by design reason={reason}",
+            file=sys.stderr,
+        )
+        return False
     if result.action == "checkpoint_deferral_alert":
         body = (
             "Watcher recovery is blocked because the WAL checkpoint guard remains held across "
@@ -536,9 +543,10 @@ def _best_effort_alert(config: Config, result: WatchdogResult) -> None:
     # Same guard as brainlayer.health_check: a desktop popup and an alert POST are side effects on
     # a real person's screen and a real channel, so a test must never be able to reach either.
     if os.environ.get("BRAINLAYER_FORBID_DESKTOP_NOTIFICATION") == "1":
-        return
+        return False
+    delivered = False
     try:
-        subprocess.run(
+        completed = subprocess.run(
             [
                 "/usr/bin/osascript",
                 "-e",
@@ -548,6 +556,7 @@ def _best_effort_alert(config: Config, result: WatchdogResult) -> None:
             timeout=3,
             check=False,
         )
+        delivered = completed.returncode == 0
     except (OSError, subprocess.SubprocessError):
         pass
     request = urllib.request.Request(
@@ -558,9 +567,10 @@ def _best_effort_alert(config: Config, result: WatchdogResult) -> None:
     )
     try:
         with urllib.request.urlopen(request, timeout=3):
-            pass
+            delivered = True
     except Exception:
         pass
+    return delivered
 
 
 def run_once(
@@ -712,8 +722,7 @@ def run_once(
                             result.action = "checkpoint_deferral_alert"
                             if not checkpoint_deferral_alerted:
                                 try:
-                                    alert_fn(config, result)
-                                    checkpoint_deferral_alerted = True
+                                    checkpoint_deferral_alerted = alert_fn(config, result) is not False
                                 except Exception as exc:
                                     result.alert_error = str(exc)
                                     print(
@@ -735,8 +744,7 @@ def run_once(
                         episode_alerted = bool(state.get("episode_alerted"))
                         if not episode_alerted:
                             try:
-                                alert_fn(config, result)
-                                episode_alerted = True
+                                episode_alerted = alert_fn(config, result) is not False
                             except Exception as exc:
                                 result.alert_error = str(exc)
                                 print(f"throughput-watchdog alert failed: {exc}", file=sys.stderr)

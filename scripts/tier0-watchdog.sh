@@ -13,6 +13,9 @@ TIER0_SLEEP=${TIER0_SLEEP:-/bin/sleep}
 TIER0_DIRNAME=${TIER0_DIRNAME:-/usr/bin/dirname}
 TIER0_MKDIR=${TIER0_MKDIR:-/bin/mkdir}
 TIER0_GREP=${TIER0_GREP:-/usr/bin/grep}
+TIER0_RM=${TIER0_RM:-/bin/rm}
+TIER0_NOTIFICATION_POLICY_PYTHON=${TIER0_NOTIFICATION_POLICY_PYTHON:-/opt/homebrew/opt/brainlayer/libexec/venv/bin/python}
+TIER0_ENV_RUN=${TIER0_ENV_RUN:-$HOME/.local/lib/brainlayer/brainlayer-env-run.sh}
 
 TIER0_LABEL=${TIER0_LABEL:-com.brainlayer.health-check}
 if [ -z "${TIER0_DOMAIN:-}" ]; then
@@ -96,8 +99,11 @@ record_own_run() {
     printf '%s\n' "$now_epoch" > "$TIER0_RUN_STATE_PATH"
 }
 
-wait_for_alerts() {
-    remaining=$TIER0_ALERT_TIMEOUT_SECONDS
+wait_for_children() {
+    remaining=$1
+    shift
+    timed_out=0
+    child_status=0
 
     while [ "$remaining" -gt 0 ]; do
         any_running=0
@@ -118,12 +124,31 @@ wait_for_alerts() {
 
     for child_pid in "$@"; do
         if kill -0 "$child_pid" 2>/dev/null; then
+            timed_out=1
             kill "$child_pid" 2>/dev/null || :
         fi
     done
+    if [ "$timed_out" -ne 0 ]; then
+        "$TIER0_SLEEP" 1 2>/dev/null || :
+        for child_pid in "$@"; do
+            if kill -0 "$child_pid" 2>/dev/null; then
+                kill -KILL "$child_pid" 2>/dev/null || :
+            fi
+        done
+    fi
     for child_pid in "$@"; do
-        wait "$child_pid" 2>/dev/null || :
+        wait_status=0
+        wait "$child_pid" 2>/dev/null || wait_status=$?
+        if [ "$child_status" -eq 0 ] && [ "$wait_status" -ne 0 ]; then
+            child_status=$wait_status
+        fi
     done
+    [ "$timed_out" -eq 0 ] || return 124
+    return "$child_status"
+}
+
+wait_for_alerts() {
+    wait_for_children "$TIER0_ALERT_TIMEOUT_SECONDS" "$@" || :
 }
 
 alert_all_channels() {
@@ -136,6 +161,34 @@ alert_all_channels() {
         printf 'epoch=%s label=%s reason=%s\n' "$now_epoch" "$TIER0_LABEL" "$reason" >> "$TIER0_LOG_PATH"
     ) &
     log_pid=$!
+
+    by_design_reason=
+    policy_output="${TIER0_RUN_STATE_PATH}.policy-output.$$"
+    BRAINLAYER_SKIP_DISABLE_GATES=1 "$TIER0_ENV_RUN" "$TIER0_NOTIFICATION_POLICY_PYTHON" \
+        -m brainlayer.notification_policy "tier0:$failure_key" > "$policy_output" 2>/dev/null &
+    policy_pid=$!
+    policy_status=0
+    if wait_for_children "$TIER0_ALERT_TIMEOUT_SECONDS" "$policy_pid"; then
+        IFS= read -r by_design_reason < "$policy_output" || by_design_reason=
+    else
+        policy_status=$?
+        if [ "$policy_status" -eq 124 ]; then
+            log_tier0_event "notification_policy_timeout_fail_open condition=tier0:$failure_key" || :
+        else
+            log_tier0_event "notification_policy_failed_fail_open condition=tier0:$failure_key status=$policy_status" || :
+        fi
+    fi
+    "$TIER0_RM" -f "$policy_output" 2>/dev/null || :
+
+    if [ "$policy_status" -eq 0 ] && [ -n "$by_design_reason" ]; then
+        log_safe_reason=$(printf '%s' "$by_design_reason" | tr '[:space:]' '_')
+        log_tier0_event "notification_suppressed_by_design condition=tier0:$failure_key reason=$log_safe_reason" || :
+        wait_for_alerts "$log_pid"
+        return 2
+    fi
+    if [ "$policy_status" -eq 0 ] && [ -z "$by_design_reason" ]; then
+        log_tier0_event "notification_policy_empty_fail_open condition=tier0:$failure_key" || :
+    fi
 
     "$TIER0_OSASCRIPT" \
         -e 'display notification "Health-check is unavailable or stale; see the Tier-0 log." with title "BrainLayer Tier-0 watchdog"' \
@@ -267,8 +320,11 @@ fi
 
 # Detection and all due alert attempts intentionally precede every recovery command.
 if should_alert "$failure_key"; then
-    alert_all_channels "$failure_reason"
-    record_alert "$failure_key" || :
+    alert_status=0
+    alert_all_channels "$failure_reason" || alert_status=$?
+    if [ "$alert_status" -ne 2 ]; then
+        record_alert "$failure_key" || :
+    fi
 fi
 
 if [ "$label_loaded" -eq 0 ]; then

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shlex
@@ -30,6 +31,7 @@ from .launchd_primitive import (
     is_launchd_label_loaded,
     launchd_target,
 )
+from .notification_policy import by_design_reason
 from .paths import get_db_path
 from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
 from .watcher import default_watch_roots
@@ -340,6 +342,7 @@ def _emit_heal_event(event: dict[str, Any]) -> None:
 # pids and pytest tmp db_paths -- into the developer's Notification Center, indistinguishable
 # from a production alert.
 FORBID_DESKTOP_NOTIFICATION_ENV = "BRAINLAYER_FORBID_DESKTOP_NOTIFICATION"
+logger = logging.getLogger(__name__)
 
 
 def desktop_notifications_forbidden() -> bool:
@@ -363,6 +366,13 @@ def _push_notification(title: str, message: str) -> None:
         )
     except Exception:
         pass
+
+
+def _push_notification_for_condition(title: str, message: str, *, condition: str) -> None:
+    if reason := by_design_reason(condition):
+        logger.info("desktop notification suppressed by design condition=%s reason=%s", condition, reason)
+        return
+    _push_notification(title, message)
 
 
 def _parse_backlog_batch(command: str) -> int:
@@ -755,9 +765,10 @@ def _apply_heals(
                     if details
                     else f"{label} {issue_code} failed repeatedly"
                 )
-                _push_notification(
+                _push_notification_for_condition(
                     "BrainLayer heal escalation",
                     message,
+                    condition=f"heal:{issue_code}",
                 )
             continue
         if consecutive_failures >= threshold:
@@ -803,9 +814,10 @@ def _apply_heals(
                         **details,
                     }
                 )
-                _push_notification(
+                _push_notification_for_condition(
                     "BrainLayer heal action",
                     _heal_notification_message(action, issue_code, details),
+                    condition=f"heal:{issue_code}",
                 )
     return heal_failures, tripped
 
@@ -1044,6 +1056,7 @@ def _paused_enrichment_queue_explanation(
     *,
     pause_payload: dict[str, Any],
     pause_active: bool,
+    queue_is_entirely_enrichment: bool | None = None,
 ) -> str | None:
     """Explain a queue that the active pause makes completely undrainable.
 
@@ -1053,26 +1066,40 @@ def _paused_enrichment_queue_explanation(
     """
     if expected_count <= 0 or not pause_active or not pause_applies_to_label(pause_payload, DEFAULT_ENRICHMENT_LABEL):
         return None
-    try:
-        paths = [path for path in queue_dir.expanduser().glob("*.jsonl") if path.is_file()]
-    except OSError:
-        return None
-    if len(paths) != expected_count or not all(_queue_file_is_paused_enrichment(path) for path in paths):
+    if queue_is_entirely_enrichment is None:
+        queue_is_entirely_enrichment = _queue_is_entirely_enrichment(queue_dir, expected_count)
+    if not queue_is_entirely_enrichment:
         return None
     paused_at = pause_payload.get("paused_at")
     since = str(paused_at)[:10] if isinstance(paused_at, str) and len(paused_at) >= 10 else "an unknown date"
     return f"enrichment lane paused since {since}; drain restart would be a no-op"
 
 
+def _queue_is_entirely_enrichment(queue_dir: Path, expected_count: int) -> bool:
+    if expected_count <= 0:
+        return False
+    try:
+        paths = [path for path in queue_dir.expanduser().glob("*.jsonl") if path.is_file()]
+    except OSError:
+        return False
+    return len(paths) == expected_count and all(_queue_file_is_paused_enrichment(path) for path in paths)
+
+
 def _queue_file_is_paused_enrichment(path: Path) -> bool:
     """Return true only when every drain-visible event is an enrichment update."""
     try:
-        events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        saw_event = False
+        with path.open(encoding="utf-8") as queue_file:
+            for line in queue_file:
+                if not line.strip():
+                    continue
+                event = json.loads(line)
+                saw_event = True
+                if not isinstance(event, dict) or event.get("kind") != "enrichment_update":
+                    return False
     except (OSError, json.JSONDecodeError):
         return False
-    return bool(events) and all(
-        isinstance(event, dict) and event.get("kind") == "enrichment_update" for event in events
-    )
+    return saw_event
 
 
 def _queue_heal_summary(
@@ -1137,11 +1164,13 @@ def _report_queue_backlog(
     queue_count: int,
     queue_bytes: int,
     queue_should_page: bool,
+    queue_is_entirely_enrichment: bool,
     pause_explanation: str | None,
     heal_blocking_reason: str | None,
     previous_failures: dict[str, int],
     heal_failures: dict[str, int],
     heal_tripped: set[str],
+    now: datetime,
 ) -> dict[str, Any] | None:
     backlog_issue_active = queue_count >= config.queue_auto_heal_count
     if not backlog_issue_active and not queue_should_page:
@@ -1168,10 +1197,24 @@ def _report_queue_backlog(
         "pause_explanation": pause_explanation,
     }
     if pause_explanation is None or state.get("queue_backlog_notice") != signature:
-        _push_notification(
-            "BrainLayer queue backlog",
-            f"queue_count={queue_count} queue_bytes={queue_bytes} {heal_summary}",
+        condition = "enrichment_backlog" if queue_is_entirely_enrichment else "queue_backlog"
+        reason = by_design_reason(
+            condition,
+            now=now,
+            pause_sentinel_path=config.pause_sentinel_path,
         )
+        if reason is not None:
+            logger.info(
+                "desktop notification suppressed by design condition=%s reason=%s",
+                condition,
+                reason,
+            )
+            return None
+        else:
+            _push_notification(
+                "BrainLayer queue backlog",
+                f"queue_count={queue_count} queue_bytes={queue_bytes} {heal_summary}",
+            )
     return signature
 
 
@@ -1426,7 +1469,11 @@ def run_health_check(
         add_issue(
             "pause_sentinel_stale", "critical", "pause sentinel is expired; launchd resume may have been forgotten"
         )
-        _push_notification("BrainLayer pause expired", "pause.sentinel is stale")
+        _push_notification_for_condition(
+            "BrainLayer pause expired",
+            "pause.sentinel is stale",
+            condition="pause_expired",
+        )
         if config.heal:
             try:
                 config.pause_sentinel_path.expanduser().unlink()
@@ -1435,18 +1482,23 @@ def run_health_check(
                 result.actions.append("resume_failed:stale-pause-sentinel")
 
     queue_count, queue_bytes, queue_oldest_age = _queue_stats(config.queue_dir, now)
-    queue_pause_explanation = _paused_enrichment_queue_explanation(
-        config.queue_dir,
-        queue_count,
-        pause_payload=pause_payload,
-        pause_active=pause_active,
-    )
-    queue_heal_blocking_reason = queue_pause_explanation
     queue_should_page = queue_count > 0 and (
         queue_count >= config.queue_page_count
         or queue_bytes >= config.queue_page_bytes
         or (queue_oldest_age is not None and queue_oldest_age >= config.queue_page_oldest_seconds)
     )
+    queue_is_entirely_enrichment = (pause_active or queue_should_page) and _queue_is_entirely_enrichment(
+        config.queue_dir,
+        queue_count,
+    )
+    queue_pause_explanation = _paused_enrichment_queue_explanation(
+        config.queue_dir,
+        queue_count,
+        pause_payload=pause_payload,
+        pause_active=pause_active,
+        queue_is_entirely_enrichment=queue_is_entirely_enrichment,
+    )
+    queue_heal_blocking_reason = queue_pause_explanation
     try:
         pending_stores_count = _pending_stores_count(config.pending_stores_path)
     except OSError as exc:
@@ -1592,7 +1644,11 @@ def run_health_check(
                     **holder_details,
                 }
             )
-            _push_notification("BrainLayer lock-holder wedge", _holder_message(holder))
+            _push_notification_for_condition(
+                "BrainLayer lock-holder wedge",
+                _holder_message(holder),
+                condition="heal:lock_holder_wedge",
+            )
             holder_label = _known_lock_holder_label(holder, config, command_runner)
             if holder_label:
                 heal_issue_labels["lock_holder_wedge"] = (
@@ -1625,11 +1681,13 @@ def run_health_check(
         queue_count=queue_count,
         queue_bytes=queue_bytes,
         queue_should_page=queue_should_page,
+        queue_is_entirely_enrichment=queue_is_entirely_enrichment,
         pause_explanation=queue_pause_explanation,
         heal_blocking_reason=queue_heal_blocking_reason,
         previous_failures=previous_heal_failures,
         heal_failures=heal_failures,
         heal_tripped=heal_tripped,
+        now=now,
     )
     state_payload: dict[str, Any] = dict(state)
     state_payload["heal_failures"] = heal_failures
