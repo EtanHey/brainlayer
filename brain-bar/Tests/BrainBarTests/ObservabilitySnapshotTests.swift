@@ -6,6 +6,75 @@ import XCTest
 
 @MainActor
 final class ObservabilitySnapshotTests: XCTestCase {
+    func testLiveShapedBackupFieldsDecode() throws {
+        let result = ObservabilityReader.read(
+            url: Bundle.module.url(
+                forResource: "observability-main-58849a70",
+                withExtension: "json",
+                subdirectory: "Fixtures"
+            )!
+        )
+        guard case let .readable(document) = result else { return XCTFail("Expected live-shaped fixture to decode") }
+
+        XCTAssertNil(document.backups.lastVerifiedUpload)
+        XCTAssertNotNil(document.backups.dbSnapshot)
+        XCTAssertEqual(document.backups.dbSnapshot?.destination, "2026-09-13.db.gz")
+        XCTAssertEqual(document.backups.launchd?.bootstrapped, false)
+        XCTAssertEqual(document.backups.thresholdHours, 36)
+    }
+
+    func testMeasuredCardsLabelEveryCountForHumans() throws {
+        let document = try readableDocument(named: "healthy-dev")
+        let cards = ObservabilityPresentation.snapshot(
+            document: document,
+            now: document.generatedAt,
+            cadence: .known(300)
+        ).cards
+
+        XCTAssertTrue(cards[0].detail.contains("chunks total"))
+        XCTAssertTrue(cards[0].detail.contains("added in the last 24 h"))
+        XCTAssertTrue(cards[1].detail.contains("from CLI agents"))
+        XCTAssertTrue(cards[1].detail.contains("from MCP brain_store"))
+        XCTAssertTrue(cards[1].detail.contains("hidden from search by default"))
+        XCTAssertTrue(cards[2].detail.contains("chunks never classified"))
+        XCTAssertTrue(cards[2].detail.contains("these never match a person filter"))
+        XCTAssertTrue(cards.allSatisfy { !($0.subtitle ?? "").isEmpty })
+
+        let unlabeledInteger = try NSRegularExpression(
+            pattern: #"(?<![\\p{L}\\d_-])\\d[\\d,.]*(?!\\s*(?:chunks?|added|from|desktop|hidden|h\\b|days?\\b|archives?\\b|classified|verified|%))"#
+        )
+        for card in cards.prefix(3) {
+            let range = NSRange(card.detail.startIndex..., in: card.detail)
+            XCTAssertNil(unlabeledInteger.firstMatch(in: card.detail, range: range), card.detail)
+        }
+    }
+
+    func testBackupStatusUsesTruthfulGreenRedLogic() throws {
+        let healthy = try readableDocument(named: "healthy-dev")
+        let stale = try readableDocument(named: "backup-errors-dev")
+        let missing = try readableDocument(named: "no-op-dev")
+        let live = try liveShapedDocument()
+
+        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: healthy.backups).upload.tone, .green)
+        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: stale.backups).upload.tone, .red)
+        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: missing.backups).upload.tone, .red)
+        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: live.backups).job.tone, .red)
+    }
+
+    func testBackupStatusSaysWhenWhereAndWhy() throws {
+        let live = try liveShapedDocument()
+        let status = ObservabilityPresentation.backupStatus(for: live.backups)
+
+        XCTAssertEqual(status.upload.text, "No verified upload on record")
+        XCTAssertTrue(status.snapshot.text.contains("Latest DB snapshot:"))
+        XCTAssertTrue(status.snapshot.text.contains("→ 2026-09-13.db.gz"))
+        XCTAssertEqual(status.job.text, "Backup job: NOT loaded (parked in .disabled-retention-P0)")
+        XCTAssertEqual(status.freshness.text, "stale (> 36 h)")
+        XCTAssertEqual(status.retention.text, "Retention invariant: PASS")
+        XCTAssertEqual(status.archives.text, "0 verified archives in the last 30 days")
+        XCTAssertEqual(status.error?.text, "Google Drive credentials missing — re-auth needed")
+    }
+
     private var fixtureRoot: URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
@@ -194,6 +263,21 @@ final class ObservabilitySnapshotTests: XCTestCase {
         guard case let .readable(document) = result else {
             XCTFail("Expected readable fixture: \(name)")
             throw FixtureError.unreadable(name)
+        }
+        return document
+    }
+
+    private func liveShapedDocument() throws -> ObservabilityDocument {
+        let result = ObservabilityReader.read(
+            url: Bundle.module.url(
+                forResource: "observability-main-58849a70",
+                withExtension: "json",
+                subdirectory: "Fixtures"
+            )!
+        )
+        guard case let .readable(document) = result else {
+            XCTFail("Expected live-shaped fixture")
+            throw FixtureError.unreadable("live-shaped")
         }
         return document
     }
