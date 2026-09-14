@@ -17,6 +17,8 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -663,3 +665,22 @@ def test_observability_launchd_runs_writer_every_five_minutes_with_rendered_keg_
     assert plist["StandardOutPath"] == "__HOME__/.local/share/brainlayer/logs/observability.out.log"
     assert plist["StandardErrorPath"] == "__HOME__/.local/share/brainlayer/logs/observability.err.log"
     assert plist["Nice"] == 10
+
+
+def test_brainlayer_module_executes_observability_cli_from_isolated_source_environment(tmp_path):
+    env = {
+        "HOME": str(tmp_path),
+        "PATH": os.environ["PATH"],
+        "PYTHONPATH": str(REPO_ROOT / "src"),
+    }
+
+    result = subprocess.run(
+        [sys.executable, "-m", "brainlayer", "observability", "--help"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
