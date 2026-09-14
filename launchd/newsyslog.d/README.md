@@ -9,8 +9,9 @@ This drop-in only rotates finite scheduled LaunchAgent jobs. Long-running jobs
 such as BrainBar, watch, and enrichment keep their `StandardOutPath` and
 `StandardErrorPath` descriptors open; macOS `newsyslog` has no post-rotate hook
 or copy-truncate mode, so those logs need a coupled launchd restart or pid-file
-signal path before they can be safely added. Drain is also excluded because it
-can be spawned while a rotation pass is running.
+signal path before they can be safely added. Drain is excluded because its
+daemon owns `drain.err.log` through a rotating Python handler; launchd captures
+only bootstrap failures in `drain.bootstrap.err.log`.
 
 Install `brainlayer.conf` into `/etc/newsyslog.d/` with:
 
