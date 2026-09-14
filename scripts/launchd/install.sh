@@ -363,12 +363,18 @@ remove_job_wrapper() {
 install_rendered_plist() {
     local rendered="$1"
     local destination="$2"
+    local reload_marker="${destination}.reload-pending"
     PLIST_CHANGED=1
     if [ -f "$destination" ] && cmp -s "$rendered" "$destination"; then
-        PLIST_CHANGED=0
         rm -f "$rendered"
-        echo "Unchanged: $destination"
+        if [ -f "$reload_marker" ]; then
+            echo "Reload pending: $destination"
+        else
+            PLIST_CHANGED=0
+            echo "Unchanged: $destination"
+        fi
     else
+        : > "$reload_marker" || return 1
         chmod 0644 "$rendered" || return 1
         mv "$rendered" "$destination" || return 1
         echo "Installed: $destination"
@@ -456,6 +462,10 @@ load_plist() {
     local unload_output=""
     local current_pid=""
     local plist_exit_timeout=""
+
+    if [ -f "${dst}.reload-pending" ]; then
+        plist_changed=1
+    fi
 
     case "$name" in
         hotlane-brainbar|watch|drain|health-check|enrichment)
@@ -605,6 +615,7 @@ if isinstance(value, (int, float)) and value >= 0:
         echo "ERROR: launchctl print failed for $label after bootstrap" >&2
         return 1
     fi
+    rm -f "${dst}.reload-pending"
     echo "  Loaded: com.brainlayer.${name}"
 }
 
@@ -947,10 +958,43 @@ load_fleet_watchdog() {
     local plist_dst="$LAUNCH_DIR/$FLEET_WATCHDOG_PLIST_NAME"
     local domain="gui/$UID/$FLEET_WATCHDOG_LABEL"
     local disabled_rc=0
-    local unload_attempts="${BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS:-20}"
+    local unload_attempts="${BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS:-}"
     local unload_interval="${BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL:-0.1}"
     local unload_attempt=1
     local confirmed_unloaded=0
+    local plist_exit_timeout=""
+
+    if [ -f "${plist_dst}.reload-pending" ]; then
+        plist_changed=1
+    fi
+
+    if [ -z "$unload_attempts" ]; then
+        plist_exit_timeout="$(
+            "$PYTHON_BIN" -c '
+import plistlib
+import sys
+
+with open(sys.argv[1], "rb") as plist_file:
+    value = plistlib.load(plist_file).get("ExitTimeOut")
+if isinstance(value, (int, float)) and value >= 0:
+    print(value)
+' "$plist_dst" 2>/dev/null || true
+        )"
+        if [ -n "$plist_exit_timeout" ]; then
+            if ! unload_attempts="$(awk -v timeout="$plist_exit_timeout" -v interval="$unload_interval" '
+                BEGIN {
+                    if (interval <= 0 || timeout < 0) exit 1
+                    quotient = timeout / interval
+                    attempts = int(quotient)
+                    if (attempts < quotient) attempts++
+                    print attempts + 1
+                }
+            ')"; then
+                unload_attempts=""
+            fi
+        fi
+    fi
+    unload_attempts="${unload_attempts:-20}"
 
     case "$unload_attempts" in
         *[!0-9]*)
@@ -963,10 +1007,12 @@ load_fleet_watchdog() {
         return 1
     fi
 
+    LOAD_PLIST_SKIPPED=0
     label_disabled_by_operator "$FLEET_WATCHDOG_LABEL" || disabled_rc=$?
     case "$disabled_rc" in
         0)
             echo "SKIP: $FLEET_WATCHDOG_LABEL disabled by operator ($0 fleet-watchdog-resume to re-arm)"
+            LOAD_PLIST_SKIPPED=1
             return 0
             ;;
         1) ;;
@@ -1002,6 +1048,7 @@ load_fleet_watchdog() {
         echo "ERROR: launchctl print failed for $FLEET_WATCHDOG_LABEL after bootstrap" >&2
         return 1
     fi
+    rm -f "${plist_dst}.reload-pending"
     echo "  Loaded: $FLEET_WATCHDOG_LABEL"
 }
 
@@ -1092,6 +1139,7 @@ resume_fleet_watchdog() {
         echo "ERROR: launchctl bootstrap failed for $FLEET_WATCHDOG_LABEL" >&2
         return 1
     fi
+    rm -f "${plist_dst}.reload-pending"
     echo "Resumed: $FLEET_WATCHDOG_LABEL"
 }
 
@@ -1099,6 +1147,7 @@ remove_fleet_watchdog() {
     local plist_dst="$LAUNCH_DIR/$FLEET_WATCHDOG_PLIST_NAME"
     launchctl bootout "gui/$UID/$FLEET_WATCHDOG_LABEL" 2>/dev/null || true
     rm -f "$plist_dst"
+    rm -f "${plist_dst}.reload-pending"
     rm -f "$FLEET_WATCHDOG_DST"
     echo "Removed: $FLEET_WATCHDOG_LABEL"
 }
@@ -1108,6 +1157,7 @@ remove_plist() {
     local dst="$LAUNCH_DIR/com.brainlayer.${name}.plist"
     unload_plist "$name"
     rm -f "$dst"
+    rm -f "${dst}.reload-pending"
     remove_job_wrapper "$name"
     echo "Removed: com.brainlayer.${name}"
 }
