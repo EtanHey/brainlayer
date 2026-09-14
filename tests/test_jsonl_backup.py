@@ -8,6 +8,7 @@ import tarfile
 import threading
 import time
 from pathlib import Path
+from unittest.mock import create_autospec
 
 import pytest
 
@@ -61,6 +62,118 @@ def _mock_drive_success(jsonl_backup, monkeypatch, uploads: list[Path] | None = 
     monkeypatch.setattr(jsonl_backup.backup_daily, "upload_file_to_drive_raw", upload)
     monkeypatch.setattr(jsonl_backup.backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
     monkeypatch.setattr(jsonl_backup.backup_daily, "prune_drive_backups", lambda *args, **kwargs: [])
+
+
+def test_jsonl_nightly_drive_calls_follow_backup_daily_signatures(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    now = time.time()
+    source_root = tmp_path / "sessions"
+    _write_jsonl(source_root / "changed.jsonl", mtime=now - 3600)
+    service = object()
+    credentials = object()
+    monkeypatch.delenv("BRAINLAYER_JSONL_FOREVER", raising=False)
+    monkeypatch.setattr(jsonl_backup.backup_daily, "resolve_machine_id", lambda: "test-machine")
+    monkeypatch.setattr(jsonl_backup.backup_daily, "get_drive_credentials", lambda: credentials)
+    monkeypatch.setattr(jsonl_backup.backup_daily, "build_drive_service", lambda: service)
+    monkeypatch.setattr(jsonl_backup.backup_daily, "ensure_drive_folder_chain", lambda *args: "folder-id")
+    upload = create_autospec(
+        jsonl_backup.backup_daily.upload_file_to_drive_raw,
+        return_value={"id": "drive-id", "md5Checksum": "abc123"},
+    )
+    verify = create_autospec(jsonl_backup.backup_daily.verify_drive_upload, return_value=None)
+    monkeypatch.setattr(jsonl_backup.backup_daily, "upload_file_to_drive_raw", upload)
+    monkeypatch.setattr(jsonl_backup.backup_daily, "verify_drive_upload", verify)
+
+    result = jsonl_backup.run_backup(
+        source_roots=[source_root],
+        state_path=tmp_path / "state.json",
+        staging_dir=tmp_path / "staging",
+        log_path=tmp_path / "jsonl-backup.log",
+        queue_dir=tmp_path / "queue",
+        date_stamp="2026-09-14",
+        now=now,
+        upload=True,
+    )
+
+    assert result["status"] == "uploaded"
+    upload.assert_called_once()
+    assert upload.call_args.kwargs["machine_id"] == "test-machine"
+    verify.assert_called_once()
+    assert verify.call_args.kwargs["expected_machine_id"] == "test-machine"
+
+
+def test_jsonl_forever_drive_calls_follow_backup_daily_signatures(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    source_root = tmp_path / "sessions"
+    source_path = _write_jsonl(source_root / "changed.jsonl", mtime=time.time() - 3600)
+    candidate = jsonl_backup.JsonlCandidate(
+        path=source_path,
+        root=source_root,
+        root_index=0,
+        mtime=source_path.stat().st_mtime,
+        size=source_path.stat().st_size,
+    )
+    service = object()
+    credentials = object()
+    monkeypatch.setattr(jsonl_backup.backup_daily, "ensure_drive_folder_chain", lambda *args: "folder-id")
+    upload = create_autospec(
+        jsonl_backup.backup_daily.upload_file_to_drive_raw,
+        return_value={"id": "forever-id"},
+    )
+    verify = create_autospec(jsonl_backup.backup_daily.verify_drive_upload, return_value=None)
+    monkeypatch.setattr(jsonl_backup.backup_daily, "upload_file_to_drive_raw", upload)
+    monkeypatch.setattr(jsonl_backup.backup_daily, "verify_drive_upload", verify)
+
+    uploaded = jsonl_backup._upload_forever_files(
+        [candidate],
+        service=service,
+        credentials=credentials,
+        staging_dir=tmp_path / "staging",
+        forever_folder_parts=["Brain Drive", "06_ARCHIVE", "backups", "jsonl-forever"],
+        machine_id="test-machine",
+    )
+
+    assert len(uploaded) == 1
+    upload.assert_called_once()
+    assert upload.call_args.kwargs["machine_id"] == "test-machine"
+    verify.assert_called_once()
+    assert verify.call_args.kwargs["expected_machine_id"] == "test-machine"
+
+
+def test_invalid_jsonl_machine_id_writes_error_receipt_without_upload(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    now = time.time()
+    source_root = tmp_path / "sessions"
+    _write_jsonl(source_root / "changed.jsonl", mtime=now - 3600)
+    uploads: list[Path] = []
+    _mock_drive_success(jsonl_backup, monkeypatch, uploads)
+    monkeypatch.setattr(
+        jsonl_backup.backup_daily,
+        "resolve_machine_id",
+        lambda: (_ for _ in ()).throw(jsonl_backup.backup_daily.InvalidMachineIdError("invalid test id")),
+    )
+    log_path = tmp_path / "jsonl-backup.log"
+
+    result = jsonl_backup.run_backup(
+        source_roots=[source_root],
+        state_path=tmp_path / "state.json",
+        staging_dir=tmp_path / "staging",
+        log_path=log_path,
+        queue_dir=tmp_path / "queue",
+        date_stamp="2026-09-14",
+        now=now,
+        upload=True,
+    )
+
+    assert result["status"] == "failed"
+    assert result["uploaded"] is False
+    assert result["verified"] is False
+    assert result["error_code"] == "invalid_machine_id"
+    assert uploads == []
+    assert json.loads(log_path.read_text(encoding="utf-8"))["error_code"] == "invalid_machine_id"
 
 
 def test_jsonl_retention_is_disabled_by_default_and_keeps_local_archives(tmp_path, monkeypatch):
