@@ -23,7 +23,7 @@ import tempfile
 import time
 import traceback
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -99,10 +99,16 @@ def _append_json_log(path: Path, payload: dict[str, Any]) -> None:
         handle.write(json.dumps(payload, sort_keys=True) + "\n")
 
 
-def _backup_log_path(log_path: Path | None) -> Path:
+def _backup_log_path(
+    log_path: Path | None, *, db_path: Path | None = None, env: Mapping[str, str] | None = None
+) -> Path:
     if log_path is not None:
         return Path(log_path)
-    return Path(os.environ.get(BACKUP_LOG_PATH_ENV, str(DEFAULT_LOG_PATH)))
+    configured = (env or os.environ).get(BACKUP_LOG_PATH_ENV)
+    if configured:
+        return Path(configured)
+    resolved_db_path = db_path or get_db_path()
+    return resolved_db_path.parent / "logs" / "backup-daily.log"
 
 
 def _backup_log_provenance() -> str:

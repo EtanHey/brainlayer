@@ -37,8 +37,24 @@ class InputRecorder:
             except ValueError:
                 pass
         return str(resolved)
-    def __call__(self, path: Path | str, *, status: str = "read", rows_or_bytes: int | None = None,
-                 skipped_lines: int = 0, in_section_inputs: bool = True) -> dict[str, Any]:
+    def __call__(self, path: Path | str | None, *, status: str = "read", rows_or_bytes: int | None = None,
+                 skipped_lines: int = 0, in_section_inputs: bool = True, kind: str = "file",
+                 argv: list[str] | None = None, exit_code: int | None = None,
+                 stdout: str = "", state: str | None = None) -> dict[str, Any]:
+        if kind == "command":
+            command_argv = list(argv or [])
+            self.trace.append("$ " + " ".join(command_argv))
+            item = {
+                "kind": "command",
+                "argv": command_argv,
+                "exit_code": exit_code,
+                "sha256_first_64kb": hashlib.sha256(stdout.encode("utf-8")[:65_536]).hexdigest(),
+                "state": state or status,
+            }
+            if in_section_inputs:
+                self.section_inputs.append(item)
+            return item
+        assert path is not None
         resolved = Path(path).expanduser().resolve()
         displayed = self.display_path(resolved)
         self.trace.append(displayed)

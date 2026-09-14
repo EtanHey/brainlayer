@@ -306,7 +306,7 @@ def test_production_defaults_are_db_relative(monkeypatch: pytest.MonkeyPatch, tm
 
 def test_unset_launchd_input_uses_command_and_records_stdout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     env, recorder = _command_env(tmp_path)
-    output = 'service = com.brainlayer.jsonl-backup\n'
+    output = "service = com.brainlayer.jsonl-backup\n"
 
     def run(argv, **kwargs):
         assert kwargs["timeout"] <= 5
@@ -319,7 +319,11 @@ def test_unset_launchd_input_uses_command_and_records_stdout(monkeypatch: pytest
     assert result["state"] == "measured"
     command = result["inputs"][2]
     assert command["kind"] == "command"
-    assert command["argv"] == ["launchctl", "print", f"gui/{observability_backup.os.getuid()}/{observability_backup.LABEL}"]
+    assert command["argv"] == [
+        "launchctl",
+        "print",
+        f"gui/{observability_backup.os.getuid()}/{observability_backup.LABEL}",
+    ]
     assert command["exit_code"] == 0
     assert command["sha256_first_64kb"] == hashlib.sha256(output.encode()).hexdigest()
     assert command["state"] == "read"
@@ -360,7 +364,7 @@ def test_unset_launchd_command_failure_is_unmeasurable_with_argv(
 def test_launchd_file_override_still_wins(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     env, recorder = _command_env(tmp_path)
     launchd = tmp_path / "override.txt"
-    launchd.write_text('service = com.brainlayer.jsonl-backup\n', encoding="utf-8")
+    launchd.write_text("service = com.brainlayer.jsonl-backup\n", encoding="utf-8")
     env["BRAINLAYER_OBSERVABILITY_LAUNCHD_OUTPUT"] = str(launchd)
     monkeypatch.setattr(
         observability_backup.subprocess,
