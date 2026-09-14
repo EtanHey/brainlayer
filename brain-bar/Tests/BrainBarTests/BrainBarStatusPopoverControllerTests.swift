@@ -39,6 +39,30 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         XCTAssertTrue(itemTitles.contains("Quit BrainBar"))
     }
 
+    func testStatusItemOwnsOneActionableSettingsMenu() {
+        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+        let windowController = BrainBarDashboardPanelController(runtime: runtime)
+        let controller = BrainBarStatusPopoverController(
+            runtime: runtime,
+            dashboardPanelController: windowController
+        )
+        defer { controller.stop() }
+
+        let menu = controller.contextMenuForTesting
+        let actionableItems = menu.items.filter { !$0.isSeparatorItem }
+
+        XCTAssertTrue(controller.statusItemForTesting.menu === menu)
+        XCTAssertEqual(actionableItems.filter { $0.title.hasPrefix("Settings") }.count, 1)
+        XCTAssertEqual(actionableItems.map(\.title), ["Settings...", "Restart BrainBar", "Quit BrainBar"])
+        for item in actionableItems {
+            XCTAssertNotNil(item.action, "\(item.title) must have an action")
+            XCTAssertTrue(item.target === controller, "\(item.title) must target the status controller")
+            if let action = item.action {
+                XCTAssertTrue(controller.responds(to: action), "\(item.title) target must respond to its action")
+            }
+        }
+    }
+
     func testAppSupportCollectorFactoryWiresBrainBusEvents() {
         let tempDBPath = NSTemporaryDirectory() + "brainbar-status-popover-\(UUID().uuidString).db"
         let eventSource = RecordingBrainBusEventSource()
