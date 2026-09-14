@@ -50,9 +50,9 @@ BACKUP_SUPERVISED_CHILD_ENV = "BRAINLAYER_BACKUP_SUPERVISED_CHILD"
 BACKUP_SQLITE_CHECK_TIMEOUT_ENV = "BRAINLAYER_BACKUP_SQLITE_CHECK_TIMEOUT_SECONDS"
 DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
-DEFAULT_DAILY_KEEP = 3
-DEFAULT_WEEKLY_KEEP = 0
-DEFAULT_LOCAL_UNCOMPRESSED_KEEP = 1
+DEFAULT_DAILY_KEEP = 7
+DEFAULT_WEEKLY_KEEP = 4
+DEFAULT_LOCAL_UNCOMPRESSED_KEEP = 2
 DEFAULT_BACKUP_CLIENT_TIMEOUT_SECONDS = 0
 DEFAULT_BACKUP_TIMEOUT_SECONDS = 8 * 60 * 60
 DEFAULT_BACKUP_ATTEMPT_MAX_AGE_SECONDS = 24 * 60 * 60
@@ -66,8 +66,8 @@ class DriveRetentionPolicy:
     filename_suffix: str = ".db.gz"
 
     def __post_init__(self) -> None:
-        if self.keep_latest < 0:
-            raise ValueError("keep_latest must be non-negative")
+        if self.keep_latest < 1:
+            raise ValueError("keep_latest must be at least 1")
 
 
 DAILY_RETENTION = DriveRetentionPolicy(keep_latest=DEFAULT_DAILY_KEEP)
