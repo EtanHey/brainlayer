@@ -86,16 +86,15 @@ enum ObservabilityReader {
         configURL: URL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".config/brainlayer/brainlayer.env")
     ) -> URL {
-        let dbPath = environment["BRAINLAYER_DB"] ?? configuredDatabasePath(at: configURL) ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".local/share/brainlayer/brainlayer.db").path
+        let fallback = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/share/brainlayer/brainlayer.db").path
+        let dbPath = environment["BRAINLAYER_DB"] ?? configuredDatabasePath(at: configURL) ?? fallback
         return url(dbPath: dbPath, environment: environment)
     }
 
     private static func configuredDatabasePath(at url: URL) -> String? {
         guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
         return text.split(separator: "\n").lazy.compactMap { raw -> String? in
-            let line = raw.trimmingCharacters(in: .whitespaces)
-                .replacingOccurrences(of: "export ", with: "", options: .anchored)
+            let line = raw.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "export ", with: "", options: .anchored)
             guard line.hasPrefix("BRAINLAYER_DB=") else { return nil }
             let value = String(line.dropFirst("BRAINLAYER_DB=".count)).trimmingCharacters(in: .whitespaces)
             guard !value.isEmpty else { return nil }
@@ -272,32 +271,25 @@ enum ObservabilityPresentation {
 
     static func number(_ value: Int) -> String {
         let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        formatter.locale = .current
+        formatter.numberStyle = .decimal; formatter.locale = .current
         return formatter.string(from: NSNumber(value: value)) ?? String(value)
     }
 
     static func backupStatus(for backups: ObservabilityDocument.Backups) -> ObservabilityBackupStatus {
         let isFresh = backups.freshness == "fresh"
-        let upload: ObservabilityStatusLine
-        if let value = backups.lastVerifiedUpload {
-            upload = .init(
+        let upload = backups.lastVerifiedUpload.map { value in
+            ObservabilityStatusLine(
                 text: "\(value.verified ? "Last verified upload" : "Last upload (NOT verified)"): \(localDate(value.at)) (\(hours(value.ageHours)) ago) · archive \(value.archiveId)",
                 tone: value.verified && isFresh ? .green : .red
             )
-        } else {
-            upload = .init(text: "No verified upload on record", tone: .red)
-        }
+        } ?? .init(text: "No verified upload on record", tone: .red)
 
-        let snapshot: ObservabilityStatusLine
-        if let value = backups.dbSnapshot {
-            snapshot = .init(
+        let snapshot = backups.dbSnapshot.map { value in
+            ObservabilityStatusLine(
                 text: "Latest DB snapshot (\(value.verified ? "verified" : "NOT verified")): \(localDate(value.lastAt)) → \(value.destination)",
                 tone: value.verified && isFresh ? .green : .red
             )
-        } else {
-            snapshot = .init(text: "No verified DB snapshot on record", tone: .red)
-        }
+        } ?? .init(text: "No verified DB snapshot on record", tone: .red)
 
         let job: ObservabilityStatusLine
         if backups.launchd?.bootstrapped == true {
@@ -340,8 +332,7 @@ enum ObservabilityPresentation {
 
     private static func hours(_ value: Double) -> String {
         let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        formatter.maximumFractionDigits = value.rounded() == value ? 0 : 1
+        formatter.numberStyle = .decimal; formatter.maximumFractionDigits = value.rounded() == value ? 0 : 1
         formatter.locale = .current
         return "\(formatter.string(from: NSNumber(value: value)) ?? String(value)) h"
     }

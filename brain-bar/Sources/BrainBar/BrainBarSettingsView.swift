@@ -145,6 +145,12 @@ final class BrainBarSettingsViewModel: ObservableObject {
         return ObservabilityPresentation.backupStatus(for: document.backups)
     }
 
+    var backupStatusReason: String? { switch observabilityResult {
+    case let .unreadable(value): value
+    case let .readable(document): document.backups.state == "measured" ? nil : document.backups.reason.isEmpty ?
+        "Backup status is unmeasurable." : "Backup status is unmeasurable — \(document.backups.reason)"
+    } }
+
     func refreshAllStatus() {
         refreshLaunchdStatus()
         if let observabilityURL {
@@ -612,11 +618,7 @@ struct BrainBarSettingsView: View {
                     .font(.system(size: 11, weight: .medium))
             }
         } else {
-            let reason: String = switch viewModel.observabilityResult {
-            case let .unreadable(value): value
-            case let .readable(document): document.backups.reason.isEmpty ?
-                "Backup status is unmeasurable." : "Backup status is unmeasurable — \(document.backups.reason)"
-            }
+            let reason = viewModel.backupStatusReason ?? "Backup status is unmeasurable."
             Label(reason, systemImage: "exclamationmark.triangle")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Color(nsColor: BrainBarStateTheme.error.theme.color))

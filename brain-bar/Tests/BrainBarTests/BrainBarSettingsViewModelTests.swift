@@ -6,8 +6,7 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
 
     @MainActor
     func testSettingsReadsBackupTruthFromObservabilityDocument() throws {
-        let fixture = try makeFixture()
-        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let fixture = try makeFixture(); defer { try? FileManager.default.removeItem(at: fixture.root) }
         let url = try XCTUnwrap(Bundle.module.url(
             forResource: "observability-main-58849a70", withExtension: "json", subdirectory: "fixtures"
         ))
@@ -23,6 +22,16 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         XCTAssertTrue(status.snapshot.text.contains("→ 2026-09-13.db.gz"))
         XCTAssertEqual(status.job.text, "Backup job: NOT loaded (parked in .disabled-retention-P0)")
         XCTAssertEqual(status.job.tone, .red)
+    }
+
+    @MainActor
+    func testSettingsPreservesReadableUnmeasurableBackupReason() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("tests/fixtures/observability/golden/missing-launchd-dev.json")
+        let viewModel = BrainBarSettingsViewModel(store: fixture.store, refreshStatusOnLoad: false, observabilityURL: url)
+        XCTAssertEqual(viewModel.backupStatusReason, "Backup status is unmeasurable — launchd output is empty: launchd/missing-launchd-dev.txt")
     }
 
     @MainActor
