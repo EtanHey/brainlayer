@@ -396,17 +396,22 @@ def _record_drain_blocked(
         episode.suppressed_logs = 0
     else:
         episode.suppressed_logs += 1
-    if blocked_reporter is not None:
-        try:
-            blocked_reporter(state)
-        except OSError as report_exc:
-            if log_due:
-                message = f"drain state reporter failed: {report_exc}"
-                try:
-                    _log(log_path, message)
-                except OSError:
-                    pass
-                logger.warning(message, exc_info=True)
+    _report_drain_state(blocked_reporter, state, log_path, log_failure=log_due)
+
+
+def _report_drain_state(reporter, state, log_path, *, log_failure=True) -> None:
+    if reporter is None:
+        return
+    try:
+        reporter(state)
+    except OSError as report_exc:
+        if log_failure:
+            message = f"drain state reporter failed: {report_exc}"
+            try:
+                _log(log_path, message)
+            except OSError:
+                pass
+            logger.warning(message, exc_info=True)
 
 
 def _record_drain_unblocked(
@@ -420,15 +425,7 @@ def _record_drain_unblocked(
         _log(log_path, f"drain_unblocked blocked_seconds={duration:.3f} busy_events={episode.busy_events}")
         logger.info("Drain resumed after %.3fs and %d busy event(s)", duration, episode.busy_events)
     if episode is not None and blocked_reporter is not None:
-        try:
-            blocked_reporter({"state": "ok", "reason": ""})
-        except OSError as report_exc:
-            message = f"drain state reporter failed: {report_exc}"
-            try:
-                _log(log_path, message)
-            except OSError:
-                pass
-            logger.warning(message, exc_info=True)
+        _report_drain_state(blocked_reporter, {"state": "ok", "reason": ""}, log_path)
 
 
 def _open_connection(db_path: Path) -> apsw.Connection:
