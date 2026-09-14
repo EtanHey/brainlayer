@@ -56,6 +56,7 @@ def _run_drill(
     alert_timeout_seconds: int = 3,
     state_contents: str = "{}\n",
     by_design_reason_file: Path | None = None,
+    policy_hangs: bool = False,
 ) -> DrillResult:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -145,6 +146,11 @@ def _run_drill(
             ),
         )
 
+    policy_python = Path(sys.executable)
+    if policy_hangs:
+        policy_python = fake_bin / "policy-python"
+        _write_executable(policy_python, "#!/bin/sh\nexec /bin/sleep 30\n")
+
     env = {
         **os.environ,
         "FAKE_LAUNCHCTL_PRINT_EXIT": "0" if label_loaded else "113",
@@ -170,7 +176,7 @@ def _run_drill(
         "TIER0_STALE_SECONDS": str(STALE_SECONDS),
         "TIER0_STATE_PATH": str(state_path),
         "TIER0_STAT": str(fake_bin / "stat"),
-        "TIER0_NOTIFICATION_POLICY_PYTHON": sys.executable,
+        "TIER0_NOTIFICATION_POLICY_PYTHON": str(policy_python),
         "TIER0_ENV_RUN": str(REPO_ROOT / "scripts" / "launchd" / "brainlayer-env-run.sh"),
         "PYTHONPATH": str(REPO_ROOT / "src"),
     }
@@ -260,6 +266,20 @@ def test_explicit_by_design_stale_state_logs_without_notification(tmp_path: Path
     assert "notification_suppressed_by_design" in result.tier0_log
     assert "planned_health-check_maintenance" in result.tier0_log
     assert result.alert_state == ""
+
+
+def test_hung_notification_policy_fails_open_to_alert_and_heal(tmp_path: Path) -> None:
+    result = _run_drill(
+        tmp_path,
+        label_loaded=True,
+        state_mtime=NOW_EPOCH - STALE_SECONDS - 1,
+        policy_hangs=True,
+        alert_timeout_seconds=1,
+    )
+
+    assert result.process.returncode == 1, result.process.stdout + result.process.stderr
+    _assert_alert_contract(result)
+    assert "notification_policy_timeout_fail_open" in result.tier0_log
 
 
 def test_repeat_stale_alert_is_suppressed_during_cooldown_but_recovery_still_runs(tmp_path: Path) -> None:
