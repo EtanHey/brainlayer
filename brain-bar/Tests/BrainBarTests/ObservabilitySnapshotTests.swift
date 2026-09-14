@@ -162,6 +162,33 @@ final class ObservabilitySnapshotTests: XCTestCase {
         XCTAssertTrue(snapshot.cards.allSatisfy { $0.tone == .amber })
     }
 
+    func testSupersededLiveViewReadCancelsWorkerAndDoesNotOverwriteNewerResult() async {
+        let cancellation = AsyncStream<Bool>.makeStream()
+        var applied: [String] = []
+        let url = URL(fileURLWithPath: "/tmp/unused")
+        let old = ObservabilityLiveView.Loader.load(replacing: nil, url: url, using: { _ in
+            do {
+                try await Task.sleep(for: .seconds(1))
+                cancellation.continuation.yield(false)
+            } catch {
+                cancellation.continuation.yield(Task.isCancelled)
+            }
+            cancellation.continuation.finish()
+            return .unreadable("old")
+        }, apply: { if case let .unreadable(value) = $0 { applied.append(value) } })
+        await Task.yield()
+        let new = ObservabilityLiveView.Loader.load(replacing: old, url: url, using: { _ in
+            .unreadable("new")
+        }, apply: { if case let .unreadable(value) = $0 { applied.append(value) } })
+
+        await old.value
+        await new.value
+        var events = cancellation.stream.makeAsyncIterator()
+        let workerWasCancelled = await events.next()
+        XCTAssertEqual(workerWasCancelled, true)
+        XCTAssertEqual(applied, ["new"])
+    }
+
     private func readableDocument(named name: String) throws -> ObservabilityDocument {
         let result = ObservabilityReader.read(url: fixtureRoot.appendingPathComponent("golden/\(name).json"))
         guard case let .readable(document) = result else {

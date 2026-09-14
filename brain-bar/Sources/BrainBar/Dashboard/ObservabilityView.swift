@@ -242,18 +242,51 @@ struct ObservabilityDashboardView: View {
 }
 
 struct ObservabilityLiveView: View {
+    enum Reader {
+        typealias Operation = @Sendable (URL) async -> ObservabilityReadResult
+
+        static func read(
+            url: URL,
+            using operation: @escaping Operation = { ObservabilityReader.read(url: $0) }
+        ) async -> ObservabilityReadResult {
+            return await operation(url)
+        }
+    }
+
+    @MainActor
+    enum Loader {
+        static func load(
+            replacing previous: Task<Void, Never>?,
+            url: URL,
+            using operation: @escaping Reader.Operation = { ObservabilityReader.read(url: $0) },
+            apply: @escaping @MainActor (ObservabilityReadResult) -> Void
+        ) -> Task<Void, Never> {
+            previous?.cancel()
+            return Task { @MainActor in
+                let next = await Reader.read(url: url, using: operation)
+                guard !Task.isCancelled else { return }
+                apply(next)
+            }
+        }
+    }
+
     let dbPath: String
     private let cadence = ObservabilityReader.installedHealthCheckCadence
     @State private var result: ObservabilityReadResult = .unreadable("Loading observability data.")
+    @State private var readTask: Task<Void, Never>?
     private let refresh = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
         ObservabilityDashboardView(result: result, cadence: cadence)
             .onAppear(perform: reload)
             .onReceive(refresh) { _ in reload() }
+            .onDisappear { readTask?.cancel() }
     }
 
     private func reload() {
-        result = ObservabilityReader.read(url: ObservabilityReader.url(dbPath: dbPath))
+        let url = ObservabilityReader.url(dbPath: dbPath)
+        readTask = Loader.load(replacing: readTask, url: url) {
+            result = $0
+        }
     }
 }
