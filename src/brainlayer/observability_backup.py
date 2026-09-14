@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -77,27 +76,6 @@ def _coverage(records: list[dict[str, Any]], now: datetime) -> tuple[dict[str, A
     return None, None
 
 
-def _daily_backup_attempt_time(record: dict[str, Any]) -> datetime | None:
-    attempted_at = record.get("attempted_at")
-    if isinstance(attempted_at, str) and attempted_at:
-        try:
-            parsed = datetime.fromisoformat(attempted_at.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-        return parsed.astimezone(UTC) if parsed.tzinfo else None
-    snapshot = record.get("snapshot")
-    if not isinstance(snapshot, str):
-        return None
-    match = re.search(r"(?:^|/)\d{4}-\d{2}-\d{2}\.db\.gz$", snapshot)
-    if not match:
-        return None
-    date = snapshot.rsplit("/", 1)[-1][:-6]
-    try:
-        return datetime.fromisoformat(f"{date}T05:00:00").astimezone(UTC)
-    except ValueError:
-        return None
-
-
 def _retention_status() -> str:
     source = Path(jsonl_backup.__file__).resolve()
     sibling = source.with_name("backup_daily.py")
@@ -123,7 +101,7 @@ def _daily_snapshot(records: list[dict[str, Any]]) -> tuple[dict[str, Any] | Non
     elif all_errors and error_type is None:
         error_type = "backup_error"
     for record in reversed(real):
-        attempted_at = _daily_backup_attempt_time(record)
+        attempted_at = _jsonl_backup_attempt_time(record)
         destination = record.get("destination")
         if attempted_at and isinstance(destination, str) and record.get("snapshot"):
             return (
@@ -217,7 +195,7 @@ def build_backups_section(
     if not any(record.get("backup_log_provenance") == "real" for record in daily_records):
         return _unmeasurable("backup daily log has no real-provenance receipts", inputs)
     if launchd_status != "read":
-        return _unmeasurable(f"launchd output is {launchd_status}", inputs)
+        return _unmeasurable(f"launchd output is {launchd_status}: {launchd_input['path']}", inputs)
     if LABEL not in launchd_text and "Could not find service" not in launchd_text:
         return _unmeasurable("launchd output is unrecognized", inputs)
     if disabled_input.get("status") == "malformed":

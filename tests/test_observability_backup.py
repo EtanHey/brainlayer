@@ -123,7 +123,7 @@ def test_all_error_daily_log_is_measured_stale() -> None:
             "malformed",
             False,
         ),
-        ("missing-launchd-dev", "launchd output is empty", "empty", False),
+        ("missing-launchd-dev", "launchd output is empty: launchd/missing-launchd-dev.txt", "empty", False),
         (
             "clock-skew-dev",
             "input mtime is later than generated_at: logs/clock-skew-dev/jsonl-backup.log",
@@ -157,13 +157,15 @@ def test_drive_token_file_not_found_maps_to_credentials_error() -> None:
 
 def test_legacy_daily_snapshot_derives_attempt_time_from_snapshot_date() -> None:
     snapshot, error_type, all_errors = observability_backup._daily_snapshot(
-        [{
-            "backup_log_provenance": "real",
-            "snapshot": "/synthetic/backups/2026-09-13.db.gz",
-            "destination": "synthetic-drive",
-            "verified": True,
-            "drive_md5_match": True,
-        }]
+        [
+            {
+                "backup_log_provenance": "real",
+                "snapshot": "/synthetic/backups/2026-09-13.db.gz",
+                "destination": "synthetic-drive",
+                "verified": True,
+                "drive_md5_match": True,
+            }
+        ]
     )
     expected = datetime.fromisoformat("2026-09-13T05:00:00").astimezone(UTC).isoformat().replace("+00:00", "Z")
     assert snapshot == {
@@ -175,14 +177,17 @@ def test_legacy_daily_snapshot_derives_attempt_time_from_snapshot_date() -> None
     assert all_errors is False
 
 
-def test_stale_health_error_type_is_propagated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(("state", "code"), [("stale", "stale_receipt"), ("failed", "failed_receipt")])
+def test_health_error_type_is_propagated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str, code: str
+) -> None:
     monkeypatch.setattr(
         observability_backup,
         "inspect_jsonl_backup_health",
-        lambda *args, **kwargs: (type("Health", (), {"state": "stale"})(), type("Issue", (), {"code": "stale_receipt"})()),
+        lambda *args, **kwargs: (type("Health", (), {"state": state})(), type("Issue", (), {"code": code})()),
     )
     result, _ = _build("healthy-dev")
-    assert result["error_type"] == "stale_receipt"
+    assert result["error_type"] == code
 
 
 def test_unbootstrapped_service_with_disabled_directory_is_measured(tmp_path: Path) -> None:
@@ -194,10 +199,21 @@ def test_unbootstrapped_service_with_disabled_directory_is_measured(tmp_path: Pa
     Path(env["BRAINLAYER_OBSERVABILITY_LAUNCHD_OUTPUT"]).write_text(
         'Could not find service "com.brainlayer.jsonl-backup" in domain for user gui: 501\n', encoding="utf-8"
     )
+
     def recorder(path: Path, **kwargs: object) -> dict[str, object]:
-        return {"path": str(path), "status": str(kwargs.get("status", "read")), "mtime": None,
-                "rows_or_bytes": kwargs.get("rows_or_bytes"), "sha256_first_64kb": None,
-                "skipped_lines": kwargs.get("skipped_lines", 0)}
+        return {
+            "path": str(path),
+            "status": str(kwargs.get("status", "read")),
+            "mtime": None,
+            "rows_or_bytes": kwargs.get("rows_or_bytes"),
+            "sha256_first_64kb": None,
+            "skipped_lines": kwargs.get("skipped_lines", 0),
+        }
+
     result = build_backups_section(env=env, record_input=recorder, now=NOW)
     assert result["state"] == "measured"
-    assert result["launchd"] == {"label": "com.brainlayer.jsonl-backup", "bootstrapped": False, "disabled_dir_present": True}
+    assert result["launchd"] == {
+        "label": "com.brainlayer.jsonl-backup",
+        "bootstrapped": False,
+        "disabled_dir_present": True,
+    }

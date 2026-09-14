@@ -147,7 +147,8 @@ def _run_case(
                 _stage_case_inputs(case, root, input_root)
             except (OSError, ValueError) as exc:
                 return Grade(case["case_id"], [f"$: input staging failed: {exc}"], [], [])
-        env = {key: os.environ[key] for key in ("HOME", "PATH") if key in os.environ}
+        env = {key: os.environ[key] for key in ("HOME", "PATH", "TZ") if key in os.environ}
+        env["TZ"] = case.get("producer_tz", "UTC")
         env.update({
             "BRAINLAYER_DB": str(input_root / case["inputs"]["db"]), "BRAINLAYER_OBSERVABILITY_PATH": str(output),
             "BRAINLAYER_OBSERVABILITY_TRACE_PATH": str(trace), "BRAINLAYER_OBSERVABILITY_INPUT_ROOT": str(input_root),

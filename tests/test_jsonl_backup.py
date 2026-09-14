@@ -12,6 +12,32 @@ from pathlib import Path
 import pytest
 
 
+def test_real_jsonl_receipt_shapes_pin_legacy_current_and_post_815() -> None:
+    fixture = Path(__file__).parent / "fixtures/observability/logs/healthy-dev/jsonl-backup.log"
+    receipts = [json.loads(line) for line in fixture.read_text(encoding="utf-8").splitlines()]
+    legacy, current = (set(receipts[index]) for index in (0, 1))
+    expected_legacy = {
+        "already_covered_files",
+        "archive",
+        "archive_listing_count",
+        "bundled_file_count",
+        "bytes",
+        "drive_file",
+        "gzip_test",
+        "retention_deleted",
+        "skipped_active_count",
+        "source_file_count",
+        "status",
+        "uploaded",
+        "verified",
+    }
+    expected_current = expected_legacy | {"forever_files", "forever_uploaded_file_count", "local_archive_removed"}
+    assert legacy == expected_legacy
+    assert current == expected_current
+    post_815 = dict(receipts[1], archive_id="drive-id", md5Checksum="md5")
+    assert set(post_815) == expected_current | {"archive_id", "md5Checksum"}
+
+
 def _write_jsonl(path: Path, line: str = '{"type":"message"}\n', *, mtime: float) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(line, encoding="utf-8")
