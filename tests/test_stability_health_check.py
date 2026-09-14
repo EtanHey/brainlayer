@@ -1675,6 +1675,63 @@ def test_paused_enrichment_backlog_reports_skipped_heal_and_prior_failure_count(
     assert "com.brainlayer.drain:queue_backed_up" not in saved["heal_failures"]
 
 
+def test_paused_enrichment_backlog_below_page_threshold_never_heals_or_toasts(tmp_path, monkeypatch):
+    config, _state_path, queue_dir, pause_path = _queue_backlog_config(tmp_path, heal=True)
+    config = replace(
+        config,
+        queue_auto_heal_count=25,
+        queue_page_count=200,
+        heal_min_consecutive_failures=2,
+    )
+    for index in range(30):
+        (queue_dir / f"enrichment-{index}.jsonl").write_text(ENRICHMENT_EVENT, encoding="utf-8")
+    pause_path.write_text(
+        json.dumps(
+            {
+                "paused_at": "2026-09-08T11:00:00Z",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "labels": ["com.brainlayer.enrichment"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    commands: list[list[str]] = []
+    notifications = _capture_queue_notifications(monkeypatch)
+
+    results = [_run_queue_backlog_health(config, _loaded_launchd_runner(commands)) for _ in range(4)]
+
+    for result in results:
+        queue_issue = next(issue for issue in result.issues if issue.code == "queue_backed_up")
+        assert "heal=skipped" in queue_issue.message
+        assert "drain restart would be a no-op" in queue_issue.message
+    assert not any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands)
+    assert notifications == []
+
+
+def test_unpaused_enrichment_backlog_below_page_threshold_still_heals(tmp_path, monkeypatch):
+    config, _state_path, queue_dir, _pause_path = _queue_backlog_config(tmp_path, heal=True)
+    config = replace(
+        config,
+        queue_auto_heal_count=25,
+        queue_page_count=200,
+        heal_min_consecutive_failures=2,
+    )
+    for index in range(30):
+        (queue_dir / f"enrichment-{index}.jsonl").write_text(ENRICHMENT_EVENT, encoding="utf-8")
+    commands: list[list[str]] = []
+    _capture_queue_notifications(monkeypatch)
+
+    for _ in range(4):
+        _run_queue_backlog_health(config, _loaded_launchd_runner(commands))
+
+    assert [
+        "launchctl",
+        "kickstart",
+        "-k",
+        f"gui/{os.getuid()}/com.brainlayer.drain",
+    ] in commands
+
+
 def test_unpaused_backlog_still_attempts_drain_heal_and_reports_outcome(tmp_path, monkeypatch):
     config, _state_path, queue_dir, _pause_path = _queue_backlog_config(tmp_path, heal=True)
     (queue_dir / "watcher-live.jsonl").write_text("{}\n", encoding="utf-8")
