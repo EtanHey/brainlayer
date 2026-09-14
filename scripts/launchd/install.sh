@@ -111,6 +111,10 @@ BRAINLAYER_LAUNCHD_DIR="$(stable_brainlayer_path "${BRAINLAYER_LAUNCHD_DIR:-$SCR
 # plist outlives the keg it was rendered against.
 BRAINLAYER_KEG="$(find_brainlayer_keg || true)"
 BRAINLAYER_KEG_STABLE="$(stable_brainlayer_path "$BRAINLAYER_KEG")"
+BRAINLAYER_CURRENT_KEG=""
+if [ -n "$BRAINLAYER_KEG_STABLE" ]; then
+    BRAINLAYER_CURRENT_KEG="$(readlink "$BRAINLAYER_KEG_STABLE" 2>/dev/null || printf '%s' "$BRAINLAYER_KEG")"
+fi
 BRAINLAYER_KEG_PYTHON=""
 BRAINLAYER_KEG_CLI=""
 if [ -n "$BRAINLAYER_KEG_STABLE" ]; then
@@ -441,6 +445,27 @@ label_disabled_by_operator() {
     return 1
 }
 
+is_resident_keepalive_job() {
+    case "$1" in
+        drain|enrichment|hotlane-brainbar|watch) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+loaded_keg_changed() {
+    local state_file="${1}.loaded-keg"
+    [ -n "$BRAINLAYER_CURRENT_KEG" ] \
+        && [ -f "$state_file" ] \
+        && [ "$(cat "$state_file")" != "$BRAINLAYER_CURRENT_KEG" ]
+}
+
+record_loaded_keg() {
+    local state_file="${1}.loaded-keg"
+    if [ -n "$BRAINLAYER_CURRENT_KEG" ]; then
+        printf '%s\n' "$BRAINLAYER_CURRENT_KEG" > "$state_file"
+    fi
+}
+
 load_plist() {
     local name="$1"
     local plist_changed="${2:-0}"
@@ -535,6 +560,15 @@ if isinstance(value, (int, float)) and value >= 0:
 
     if initial_output="$(launchctl print "$domain" 2>/dev/null)"; then
         if [ "$plist_changed" -eq 0 ]; then
+            if is_resident_keepalive_job "$name" && loaded_keg_changed "$dst"; then
+                if ! launchctl kickstart -k "$domain"; then
+                    echo "ERROR: launchctl kickstart failed for $label after keg change" >&2
+                    return 1
+                fi
+                record_loaded_keg "$dst"
+                echo "  Restarted for new keg: $label"
+                return 0
+            fi
             echo "  Unchanged and loaded: $label"
             return 0
         fi
@@ -616,6 +650,7 @@ if isinstance(value, (int, float)) and value >= 0:
         return 1
     fi
     rm -f "${dst}.reload-pending"
+    record_loaded_keg "$dst"
     echo "  Loaded: com.brainlayer.${name}"
 }
 
@@ -1187,6 +1222,7 @@ remove_plist() {
     fi
     rm -f "$dst"
     rm -f "${dst}.reload-pending"
+    rm -f "${dst}.loaded-keg"
     remove_job_wrapper "$name"
     echo "Removed: com.brainlayer.${name}"
 }
