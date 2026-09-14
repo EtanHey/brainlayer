@@ -608,16 +608,8 @@ struct BrainBarSettingsView: View {
     private var backupStatus: some View {
         if let status = viewModel.backupStatus {
             VStack(alignment: .leading, spacing: 8) {
-                ForEach(Array(status.lines.enumerated()), id: \.offset) { _, line in
-                    HStack(alignment: .firstTextBaseline, spacing: 7) {
-                        Circle()
-                            .fill(backupStatusColor(line.tone))
-                            .frame(width: 7, height: 7)
-                        Text(line.text)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(Color.brainBarTextSecondary)
-                    }
-                }
+                ObservabilityStatusRows(lines: status.lines, textColor: Color.brainBarTextSecondary)
+                    .font(.system(size: 11, weight: .medium))
             }
         } else {
             let reason: String = if case let .unreadable(value) = viewModel.observabilityResult {
@@ -628,14 +620,6 @@ struct BrainBarSettingsView: View {
             Label(reason, systemImage: "exclamationmark.triangle")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Color(nsColor: BrainBarStateTheme.error.theme.color))
-        }
-    }
-
-    private func backupStatusColor(_ tone: ObservabilityStatusTone) -> Color {
-        switch tone {
-        case .green: Color.green
-        case .red: Color.red
-        case .neutral: Color.brainBarTextMuted
         }
     }
 

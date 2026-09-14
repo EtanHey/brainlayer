@@ -9,9 +9,7 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let url = try XCTUnwrap(Bundle.module.url(
-            forResource: "observability-main-58849a70",
-            withExtension: "json",
-            subdirectory: "Fixtures"
+            forResource: "observability-main-58849a70", withExtension: "json", subdirectory: "Fixtures"
         ))
         let viewModel = BrainBarSettingsViewModel(
             store: fixture.store,

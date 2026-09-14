@@ -42,7 +42,7 @@
       },
       {
         "count": 6989,
-        "source_file": "/Users/etanheyman/.claude/projects/-Users-etanheyman-Desktop-Gits-domica/b68ce66e-2c2e-4cee-a32e-dda83805b167.jsonl"
+        "source_file": "fixtures/claude/projects/example-session.jsonl"
       }
     ],
     "trend_7d": [

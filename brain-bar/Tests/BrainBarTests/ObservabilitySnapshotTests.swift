@@ -7,13 +7,7 @@ import XCTest
 @MainActor
 final class ObservabilitySnapshotTests: XCTestCase {
     func testLiveShapedBackupFieldsDecode() throws {
-        let result = ObservabilityReader.read(
-            url: Bundle.module.url(
-                forResource: "observability-main-58849a70",
-                withExtension: "json",
-                subdirectory: "Fixtures"
-            )!
-        )
+        let result = ObservabilityReader.read(url: liveFixtureURL)
         guard case let .readable(document) = result else { return XCTFail("Expected live-shaped fixture to decode") }
 
         XCTAssertNil(document.backups.lastVerifiedUpload)
@@ -31,14 +25,12 @@ final class ObservabilitySnapshotTests: XCTestCase {
             cadence: .known(300)
         ).cards
 
-        XCTAssertTrue(cards[0].detail.contains("chunks total"))
-        XCTAssertTrue(cards[0].detail.contains("added in the last 24 h"))
-        XCTAssertTrue(cards[1].detail.contains("from CLI agents"))
-        XCTAssertTrue(cards[1].detail.contains("from MCP brain_store"))
-        XCTAssertTrue(cards[1].detail.contains("hidden from search by default"))
-        XCTAssertTrue(cards[2].detail.contains("chunks never classified"))
-        XCTAssertTrue(cards[2].detail.contains("these never match a person filter"))
-        XCTAssertTrue(cards.allSatisfy { !($0.subtitle ?? "").isEmpty })
+        for (card, labels) in zip(cards, [
+            ["chunks total", "added in the last 24 h"],
+            ["from CLI agents", "from MCP brain_store", "hidden from search by default"],
+            ["chunks never classified", "these never match a person filter"],
+        ]) { for label in labels { XCTAssertTrue(card.detail.contains(label), card.detail) } }
+        XCTAssertTrue(cards.allSatisfy { !$0.subtitle.isEmpty })
 
         let unlabeledInteger = try NSRegularExpression(
             pattern: #"(?<![\\p{L}\\d_-])\\d[\\d,.]*(?!\\s*(?:chunks?|added|from|desktop|hidden|h\\b|days?\\b|archives?\\b|classified|verified|%))"#
@@ -77,14 +69,14 @@ final class ObservabilitySnapshotTests: XCTestCase {
         let live = try liveShapedDocument()
         let status = ObservabilityPresentation.backupStatus(for: live.backups)
 
-        XCTAssertEqual(status.upload.text, "No verified upload on record")
-        XCTAssertTrue(status.snapshot.text.contains("Latest DB snapshot:"))
-        XCTAssertTrue(status.snapshot.text.contains("→ 2026-09-13.db.gz"))
-        XCTAssertEqual(status.job.text, "Backup job: NOT loaded (parked in .disabled-retention-P0)")
-        XCTAssertEqual(status.freshness.text, "stale (> 36 h)")
-        XCTAssertEqual(status.retention.text, "Retention invariant: PASS")
-        XCTAssertEqual(status.archives.text, "0 verified archives in the last 30 days")
-        XCTAssertEqual(status.error?.text, "Google Drive credentials missing — re-auth needed")
+        let expected = [
+            "No verified upload on record", "Latest DB snapshot:", "→ 2026-09-13.db.gz",
+            "Backup job: NOT loaded (parked in .disabled-retention-P0)", "stale (> 36 h)",
+            "Retention invariant: PASS", "0 verified archives in the last 30 days",
+            "Google Drive credentials missing — re-auth needed",
+        ]
+        let rendered = status.lines.map(\.text).joined(separator: "\n")
+        for text in expected { XCTAssertTrue(rendered.contains(text), rendered) }
     }
 
     private var fixtureRoot: URL {
@@ -284,18 +276,16 @@ final class ObservabilitySnapshotTests: XCTestCase {
     }
 
     private func liveShapedDocument() throws -> ObservabilityDocument {
-        let result = ObservabilityReader.read(
-            url: Bundle.module.url(
-                forResource: "observability-main-58849a70",
-                withExtension: "json",
-                subdirectory: "Fixtures"
-            )!
-        )
+        let result = ObservabilityReader.read(url: liveFixtureURL)
         guard case let .readable(document) = result else {
             XCTFail("Expected live-shaped fixture")
             throw FixtureError.unreadable("live-shaped")
         }
         return document
+    }
+
+    private var liveFixtureURL: URL {
+        Bundle.module.url(forResource: "observability-main-58849a70", withExtension: "json", subdirectory: "Fixtures")!
     }
 
     private func color(

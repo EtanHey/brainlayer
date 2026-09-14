@@ -27,11 +27,7 @@ struct ObservabilityDocument: Codable, Sendable {
         let hiddenFromDefaultSearch: Int?
     }
     struct Emitter: Codable, Sendable { let emitter: String, countInWindow: Int }
-    struct SourceClass: Codable, Sendable {
-        let sourceClass: String?
-        let count: Int
-        let inWindow: Int
-    }
+    struct SourceClass: Codable, Sendable { let sourceClass: String?; let count, inWindow: Int }
     struct AuthorUnknown: Codable, Sendable {
         let state: String, reason: String
         let inputs: [Input]
@@ -51,22 +47,9 @@ struct ObservabilityDocument: Codable, Sendable {
         let dbSnapshot: DBSnapshot?
         let launchd: Launchd?
     }
-    struct LastVerifiedUpload: Codable, Sendable {
-        let at: Date
-        let ageHours: Double
-        let archiveId: String
-        let verified: Bool
-    }
-    struct DBSnapshot: Codable, Sendable {
-        let lastAt: Date
-        let destination: String
-        let verified: Bool
-    }
-    struct Launchd: Codable, Sendable {
-        let label: String
-        let bootstrapped: Bool
-        let disabledDirPresent: Bool
-    }
+    struct LastVerifiedUpload: Codable, Sendable { let at: Date; let ageHours: Double; let archiveId: String; let verified: Bool }
+    struct DBSnapshot: Codable, Sendable { let lastAt: Date; let destination: String; let verified: Bool }
+    struct Launchd: Codable, Sendable { let label: String; let bootstrapped, disabledDirPresent: Bool }
     struct Input: Codable, Sendable { let path: String, status: String }
 }
 
@@ -160,14 +143,31 @@ struct ObservabilityStatusLine: Equatable, Sendable {
     let tone: ObservabilityStatusTone
 }
 
+struct ObservabilityStatusRows: View {
+    let lines: [ObservabilityStatusLine]
+    var textColor = Color.primary
+
+    var body: some View {
+        ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                Circle().fill(color(line.tone)).frame(width: 7, height: 7)
+                Text(line.text).foregroundStyle(textColor)
+            }
+        }
+    }
+
+    private func color(_ tone: ObservabilityStatusTone) -> Color {
+        switch tone {
+        case .green: .green
+        case .red: .red
+        case .neutral: .secondary
+        }
+    }
+}
+
 struct ObservabilityBackupStatus: Equatable, Sendable {
-    let upload: ObservabilityStatusLine
-    let snapshot: ObservabilityStatusLine
-    let job: ObservabilityStatusLine
-    let freshness: ObservabilityStatusLine
-    let retention: ObservabilityStatusLine
-    let archives: ObservabilityStatusLine
-    let error: ObservabilityStatusLine?
+    let upload, snapshot, job, freshness: ObservabilityStatusLine
+    let retention, archives: ObservabilityStatusLine; let error: ObservabilityStatusLine?
 
     var lines: [ObservabilityStatusLine] {
         [upload, snapshot, job, freshness, retention, archives] + [error].compactMap { $0 }
@@ -381,14 +381,7 @@ struct ObservabilityDashboardView: View {
                                 Text(card.detail)
                                     .foregroundStyle(card.tone == .neutral ? Color.secondary : Color.primary)
                             } else {
-                                ForEach(Array(card.statusLines.enumerated()), id: \.offset) { _, line in
-                                    HStack(alignment: .firstTextBaseline, spacing: 7) {
-                                        Circle()
-                                            .fill(statusColor(line.tone))
-                                            .frame(width: 7, height: 7)
-                                        Text(line.text)
-                                    }
-                                }
+                                ObservabilityStatusRows(lines: card.statusLines)
                             }
                             if let note = card.note {
                                 Text(note).font(.caption).foregroundStyle(Color.secondary)
@@ -413,14 +406,6 @@ struct ObservabilityDashboardView: View {
         case .standard: Color.blue.opacity(0.16)
         case .neutral: Color.gray.opacity(0.16)
         case .amber: Color.orange.opacity(0.20)
-        }
-    }
-
-    private func statusColor(_ tone: ObservabilityStatusTone) -> Color {
-        switch tone {
-        case .green: Color.green
-        case .red: Color.red
-        case .neutral: Color.secondary
         }
     }
 
