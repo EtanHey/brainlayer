@@ -14,14 +14,17 @@ final class BrainBarSettingsSnapshotTests: XCTestCase {
         providerConfig.googleAPIKey = .onePasswordReference("op://Private/Google AI/Gemini API key")
         providerConfig.enrichmentProvider = .openai
         providerConfig.launchdJobs[.hotlane]?.enabled = false
+        let observabilityURL = try XCTUnwrap(Bundle.module.url(
+            forResource: "observability-main-58849a70", withExtension: "json", subdirectory: "Fixtures"
+        ))
         let providerViewModel = try makeViewModel(
             root: tempRoot,
             name: "provider",
             config: providerConfig,
-            observabilityURL: try XCTUnwrap(Bundle.module.url(
-                forResource: "observability-main-58849a70", withExtension: "json", subdirectory: "Fixtures"
-            ))
+            observabilityURL: observabilityURL,
+            initialObservabilityResult: ObservabilityReader.read(url: observabilityURL)
         )
+        XCTAssertNotNil(providerViewModel.backupStatus, "The settings snapshot must render measured backup truth.")
         try render(viewModel: providerViewModel, named: "provider-and-jobs")
 
         let savedViewModel = try makeViewModel(
@@ -59,7 +62,8 @@ final class BrainBarSettingsSnapshotTests: XCTestCase {
         root: URL,
         name: String,
         config: BrainLayerConfig,
-        observabilityURL: URL? = nil
+        observabilityURL: URL? = nil,
+        initialObservabilityResult: ObservabilityReadResult = .unreadable("Backup status unavailable.")
     ) throws -> BrainBarSettingsViewModel {
         let configURL = root.appendingPathComponent("\(name)-brainlayer.env")
         let store = BrainLayerConfigStore(configURL: configURL)
@@ -78,7 +82,8 @@ final class BrainBarSettingsSnapshotTests: XCTestCase {
             ),
             initialLaunchdStates: states,
             refreshStatusOnLoad: false,
-            observabilityURL: observabilityURL
+            observabilityURL: observabilityURL,
+            initialObservabilityResult: initialObservabilityResult
         )
     }
 

@@ -49,6 +49,31 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testNewestObservabilityRefreshWinsWhenOlderReadFinishesLast() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let reads = SequencedObservabilityReads()
+        let url = fixture.root.appendingPathComponent("observability.json")
+        let viewModel = BrainBarSettingsViewModel(
+            store: fixture.store,
+            launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
+            refreshStatusOnLoad: false,
+            observabilityURL: url,
+            observabilityRead: { url in reads.read(url: url) }
+        )
+
+        try await reads.waitForCallCount(1)
+        viewModel.refreshObservabilityStatus()
+        try await reads.waitForCallCount(2)
+        reads.release(call: 2)
+        try await waitForBackupReason(viewModel, equalTo: "Newest status")
+        reads.release(call: 1)
+        try await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertEqual(viewModel.backupStatusReason, "Newest status")
+    }
+
+    @MainActor
     func testRetrievalToolsSettingPersistsEnabledState() throws {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -351,6 +376,18 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
     }
 
     @MainActor
+    private func waitForBackupReason(
+        _ viewModel: BrainBarSettingsViewModel,
+        equalTo expected: String
+    ) async throws {
+        for _ in 0 ..< 100 {
+            if viewModel.backupStatusReason == expected { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(viewModel.backupStatusReason, expected)
+    }
+
+    @MainActor
     private func makeFixture(
         config: BrainLayerConfig = .defaultConfig,
         runtimeObservation: BrainLayerActiveRuntimeObservation = .unknown(
@@ -378,6 +415,33 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
             now: { now }
         )
         return (root, store, viewModel)
+    }
+}
+
+private final class SequencedObservabilityReads: @unchecked Sendable {
+    private let lock = NSLock()
+    private var callCount = 0
+    private let gates = [DispatchSemaphore(value: 0), DispatchSemaphore(value: 0)]
+
+    func read(url _: URL) -> ObservabilityReadResult {
+        let call = lock.withLock {
+            callCount += 1
+            return callCount
+        }
+        gates[call - 1].wait()
+        return .unreadable(call == 1 ? "Stale status" : "Newest status")
+    }
+
+    func waitForCallCount(_ expected: Int) async throws {
+        for _ in 0 ..< 100 {
+            if lock.withLock({ callCount >= expected }) { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Timed out waiting for observability read \(expected)")
+    }
+
+    func release(call: Int) {
+        gates[call - 1].signal()
     }
 }
 
