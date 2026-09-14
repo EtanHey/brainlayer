@@ -193,12 +193,15 @@ class TestQueueStore:
 
         try:
             for _attempt in range(2):
-                assert drain.drain_once(
-                    db_path=db_path,
-                    queue_dir=queue_dir,
-                    log_path=log_path,
-                    blocked_reporter=fail_reporter,
-                ) == 0
+                assert (
+                    drain.drain_once(
+                        db_path=db_path,
+                        queue_dir=queue_dir,
+                        log_path=log_path,
+                        blocked_reporter=fail_reporter,
+                    )
+                    == 0
+                )
             assert queued.exists()
             assert log_path.read_text(encoding="utf-8").count("drain state reporter failed") == 1
         finally:
@@ -228,12 +231,15 @@ class TestQueueStore:
         def fail_reporter(_state):
             raise OSError("health path unwritable")
 
-        assert drain.drain_once(
-            db_path=db_path,
-            queue_dir=queue_dir,
-            log_path=log_path,
-            blocked_reporter=fail_reporter,
-        ) == 1
+        assert (
+            drain.drain_once(
+                db_path=db_path,
+                queue_dir=queue_dir,
+                log_path=log_path,
+                blocked_reporter=fail_reporter,
+            )
+            == 1
+        )
         assert not queued.exists()
         conn = apsw.Connection(str(db_path))
         assert conn.execute("SELECT COUNT(*) FROM chunks WHERE id = 'unblocked-reporter'").fetchone() == (1,)
