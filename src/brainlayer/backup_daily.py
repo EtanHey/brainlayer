@@ -44,6 +44,7 @@ CANONICAL_FOLDER_PARTS = ["Brain Drive", "06_ARCHIVE", "backups", "brainlayer-db
 # Compatibility alias for callers that explicitly target the legacy M4 folder.
 DEFAULT_FOLDER_PARTS = CANONICAL_FOLDER_PARTS
 BACKUP_MACHINE_ID_ENV = "BRAINLAYER_MACHINE_ID"
+DRIVE_MACHINE_PROPERTY = "brainlayer_machine"
 DEFAULT_STAGING_DIR = Path.home() / ".local" / "share" / "brainlayer" / "backups"
 DEFAULT_LOG_PATH = Path.home() / ".local" / "share" / "brainlayer" / "logs" / "backup-daily.log"
 DEFAULT_BRAINBAR_SOCKET_PATH = "/tmp/brainbar.sock"
@@ -190,6 +191,19 @@ class DriveUploadStalledError(RuntimeError):
         self.bytes_confirmed = bytes_confirmed
         super().__init__(
             f"{self.error_code}: confirmed {bytes_confirmed}/{total_bytes} bytes after {attempts} stalled attempts"
+        )
+
+
+class DriveFolderOwnedByOtherMachineError(RuntimeError):
+    error_code = "drive_folder_owned_by_other_machine"
+
+    def __init__(self, *, folder_id: str, machine_id: str, other_machine_ids: set[str]):
+        self.folder_id = folder_id
+        self.machine_id = machine_id
+        self.other_machine_ids = sorted(other_machine_ids)
+        super().__init__(
+            f"{self.error_code}: folder {folder_id!r} contains snapshots owned by "
+            f"{', '.join(self.other_machine_ids)}; current machine is {machine_id!r}"
         )
 
 
@@ -803,6 +817,44 @@ def ensure_drive_folder_chain(service: Any, folder_parts: list[str]) -> str:
     return parent_id
 
 
+def assert_drive_folder_owned_by_machine(service: Any, *, folder_id: str, machine_id: str) -> None:
+    """Refuse a target folder containing snapshots owned by another host."""
+    other_machine_ids: set[str] = set()
+    page_token = None
+    while True:
+        result = (
+            service.files()
+            .list(
+                q=f"'{folder_id}' in parents and trashed = false",
+                spaces="drive",
+                fields="nextPageToken,files(id,name,appProperties)",
+                pageSize=1000,
+                pageToken=page_token,
+                supportsAllDrives=True,
+            )
+            .execute()
+        )
+        for item in result.get("files", []):
+            if _parse_snapshot_date(item.get("name", "")) is None:
+                continue
+            properties = item.get("appProperties")
+            owner = properties.get(DRIVE_MACHINE_PROPERTY) if isinstance(properties, dict) else None
+            # Snapshots predating FU #99 belong to the canonical M4. A new host
+            # must never silently adopt the legacy pool.
+            resolved_owner = owner if isinstance(owner, str) and owner else CANONICAL_MACHINE_ID
+            if resolved_owner != machine_id:
+                other_machine_ids.add(resolved_owner)
+        page_token = result.get("nextPageToken")
+        if not page_token:
+            break
+    if other_machine_ids:
+        raise DriveFolderOwnedByOtherMachineError(
+            folder_id=folder_id,
+            machine_id=machine_id,
+            other_machine_ids=other_machine_ids,
+        )
+
+
 def upload_file_to_drive_raw(
     file_path: Path,
     folder_id: str,
@@ -1286,6 +1338,11 @@ def run_backup(
             credentials = get_drive_credentials()
             service = build_drive_service()
             folder_id = ensure_drive_folder_chain(service, resolved_folder_parts)
+            assert_drive_folder_owned_by_machine(
+                service,
+                folder_id=folder_id,
+                machine_id=resolved_machine_id,
+            )
             uploaded = upload_file_to_drive_raw(snapshot, folder_id, credentials)
             file_id = uploaded.get("id")
             if not file_id:
@@ -1336,6 +1393,9 @@ def run_backup(
             )
     except Exception as exc:
         result.update({"error_type": type(exc).__name__, "error": str(exc)})
+        error_code = getattr(exc, "error_code", None)
+        if isinstance(error_code, str):
+            result["error_code"] = error_code
         if isinstance(exc, DriveUploadStalledError):
             result.update(
                 {
