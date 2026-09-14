@@ -341,18 +341,16 @@ private struct BrainBarDashboardView: View {
     @State private var previousAllCommitBuckets: [Int] = []
     @State private var previousWriteBuckets: [Int] = []
     @State private var previousWatcherBuckets: [Int] = []
-    @State private var previousEnrichmentBuckets: [Int] = []
     @State private var allCommitPulseRevision = 0
     @State private var writePulseRevision = 0
     @State private var watcherPulseRevision = 0
-    @State private var enrichmentPulseRevision = 0
     @State private var detailsExpanded = false
     @State private var signalCoverageExpanded = false
     @State private var vectorSignalDetailExpanded = false
     @State private var vectorSignalRowFrame: CGRect = .zero
     @State private var vectorSignalRootFrame: CGRect = .zero
     /// ONE shared timeframe for all pipeline graphs (chunk rows / agent-origin /
-    /// watcher-ingested / successful enrichment). Selecting 3h/24h re-fetches real DB history for
+    /// watcher-ingested). Selecting 3h/24h re-fetches real DB history for
     /// that window via the collector and feeds every chart at once — no
     /// per-card expand.
     @State private var selectedTimeframe: PipelineTimeframe = .live
@@ -415,7 +413,6 @@ private struct BrainBarDashboardView: View {
                         Group {
                             overviewCard(layout: layout)
                             pipelinePanel(layout: layout)
-                            flowPanel(layout: layout)
                             diagnostics(layout: layout)
                             if let observabilityResult {
                                 ObservabilityDashboardView(result: observabilityResult)
@@ -477,7 +474,6 @@ private struct BrainBarDashboardView: View {
             previousAllCommitBuckets = collector.stats.recentActivityBuckets
             previousWriteBuckets = collector.stats.recentAgentWriteBuckets
             previousWatcherBuckets = collector.stats.recentWatcherWriteBuckets
-            previousEnrichmentBuckets = collector.stats.recentEnrichmentBuckets
         }
         .onChange(of: collector.stats.recentActivityBuckets) { _, newBuckets in
             if BrainBarPipelinePulseGate.shouldPulse(
@@ -500,12 +496,6 @@ private struct BrainBarDashboardView: View {
                 watcherPulseRevision += 1
             }
             previousWatcherBuckets = newBuckets
-        }
-        .onChange(of: collector.stats.recentEnrichmentBuckets) { _, newBuckets in
-            if BrainBarLivePulse.shouldPulse(previous: previousEnrichmentBuckets, current: newBuckets) {
-                enrichmentPulseRevision += 1
-            }
-            previousEnrichmentBuckets = newBuckets
         }
         // Shared timeframe selector → REAL windowed re-fetch. Selecting 3h/24h
         // triggers an off-main DB fetch over that window; the published buckets
@@ -576,11 +566,11 @@ private struct BrainBarDashboardView: View {
 
     private func overviewNarrative(layout: BrainBarDashboardLayout) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(flowSummary.headline)
+            Text(ingestHeadline)
                 .font(.system(size: layout.overviewTitleFontSize, weight: .bold))
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text(flowSummary.detail)
+            Text(ingestDetail)
                 .font(.system(size: layout.overviewSubtitleFontSize, weight: .medium))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -595,7 +585,25 @@ private struct BrainBarDashboardView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+
+            Text("Enrichment: off (manual batch only)")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.brainBarTextMuted)
         }
+    }
+
+    private var ingestHeadline: String {
+        switch pipelineFlowSummary.ingress.status {
+        case .live: "Memory ingestion is active"
+        case .recent: "Memory ingestion was recently active"
+        case .unavailable: "Memory ingestion is unavailable"
+        default: "Memory ingestion is idle"
+        }
+    }
+
+    private var ingestDetail: String {
+        let count = DashboardMetricFormatter.integerString(pipelineStats.recentWriteCount)
+        return "\(count) chunk rows landed in \(pipelineFlowSummary.windowLabel.lowercased())."
     }
 
     private var freshnessBanner: some View {
@@ -626,8 +634,7 @@ private struct BrainBarDashboardView: View {
 
     private var overviewBadgeRow: some View {
         Group {
-            BrainBarHeroBadge(text: flowSummary.windowLabel)
-            BrainBarHeroBadge(text: flowSummary.queue.status.label)
+            BrainBarHeroBadge(text: pipelineFlowSummary.windowLabel)
             BrainBarHeroBadge(text: "Watcher \(flowSummary.watcherFlowState.label)")
             if collector.stats.replayDebtBreakdown.deduplicatedTotal > 0 {
                 BrainBarHeroBadge(text: replayDebtBadgeText)
@@ -649,10 +656,6 @@ private struct BrainBarDashboardView: View {
 
         return LazyVGrid(columns: columns, spacing: layout.gridSpacing) {
             BrainBarOverviewStat(label: "Chunk rows", value: DashboardMetricFormatter.integerString(collector.stats.chunkCount), isHero: true)
-            BrainBarOverviewStat(label: "Enriched successfully", value: DashboardMetricFormatter.integerString(collector.stats.enrichedChunkCount), isHero: false)
-            BrainBarOverviewStat(label: "Pending", value: DashboardMetricFormatter.integerString(collector.stats.pendingEnrichmentCount), isHero: false)
-            BrainBarOverviewStat(label: "Failed", value: DashboardMetricFormatter.integerString(collector.stats.failedEnrichmentCount), isHero: false)
-            BrainBarOverviewStat(label: "Skipped", value: DashboardMetricFormatter.integerString(collector.stats.skippedEnrichmentCount), isHero: false)
         }
     }
 
@@ -661,8 +664,8 @@ private struct BrainBarDashboardView: View {
     @ViewBuilder
     private func pipelinePanel(layout: BrainBarDashboardLayout) -> some View {
         VStack(alignment: .leading, spacing: layout.gridSpacing) {
-            // ONE shared timeframe selector for ALL pipeline graphs lives in the
-            // INGEST header. It switches agent + watcher + enrichment at once; no
+            // ONE shared timeframe selector for ALL visible pipeline graphs lives in the
+            // INGEST header. It switches agent + watcher at once; no
             // per-card expand is needed to change the window.
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .center, spacing: 12) {
@@ -790,48 +793,6 @@ private struct BrainBarDashboardView: View {
         )
     }
 
-    // MARK: - Flow (Band 3, below the fold)
-
-    @ViewBuilder
-    private func flowPanel(layout: BrainBarDashboardLayout) -> some View {
-        let fetchedAt = collector.lastDataFetchedAt ?? Date()
-        let restingHeight = layout.sparklineHeight
-
-        VStack(alignment: .leading, spacing: layout.gridSpacing) {
-            BrainBarSectionLabel(
-                "Enrichment",
-                caption: "What is being processed out of the backlog — enrichment completions and the queue draining behind them."
-            )
-
-            BrainBarPipelineSeriesCard(
-                series: .enrichment,
-                lane: pipelineFlowSummary.lane(for: .enrichment),
-                pulseRevision: enrichmentPulseRevision,
-                compact: layout.compactCards,
-                chartHeight: restingHeight,
-                fetchedAt: fetchedAt,
-                timeframe: displayedTimeframe
-            )
-
-            queueRail(layout: layout)
-        }
-        .padding(layout.cardPadding)
-        .background(
-            BrainBarGlassPanel(cornerRadius: layout.panelCornerRadius, tint: .brainBarAccentViolet)
-        )
-    }
-
-    private func queueRail(layout: BrainBarDashboardLayout) -> some View {
-        BrainBarQueueRail(
-            summary: flowSummary.queue,
-            replayDebtBreakdown: collector.stats.replayDebtBreakdown,
-            censusText: collector.lastDataFetchedAt.map(DashboardMetricFormatter.absoluteTimeString) ?? "not yet",
-            coverageText: "\(Int(collector.stats.enrichmentPercent.rounded()))% enriched",
-            watcherText: collector.stats.watcherHealth?.updatedAt.map(DashboardMetricFormatter.absoluteTimeString) ?? "unavailable",
-            compact: layout.compactCards
-        )
-    }
-
     private func vectorDetailXOffset(layout: BrainBarDashboardLayout) -> CGFloat {
         max(layout.outerPadding, vectorSignalRootFrame.minX)
     }
@@ -873,8 +834,6 @@ private struct BrainBarDashboardView: View {
             title: "Activity",
             rows: [
                 ("Writes", flowSummary.ingress.statusText),
-                ("Enrichment", flowSummary.enrichment.statusText),
-                ("Queue", flowSummary.queue.title),
                 ("Window", flowSummary.windowLabel),
                 ("DB", ByteCountFormatter.string(
                     fromByteCount: collector.stats.databaseSizeBytes,
@@ -2274,29 +2233,6 @@ private struct BrainBarPipelinePanelPreviewView: View {
             )
             .coordinateSpace(name: BrainBarVectorSignalCoordinateSpace.pipelinePanel)
 
-            // Band 3 — the below-the-fold ENRICHMENT panel.
-            VStack(alignment: .leading, spacing: layout.gridSpacing) {
-                BrainBarSectionLabel(
-                    "Enrichment",
-                    caption: "What is being processed out of the backlog — enrichment completions and the queue draining behind them."
-                )
-
-                seriesCard(.enrichment, layout: layout, restingHeight: restingHeight)
-
-                BrainBarQueueRail(
-                    summary: flowSummary.queue,
-                    replayDebtBreakdown: stats.replayDebtBreakdown,
-                    censusText: DashboardMetricFormatter.absoluteTimeString(fetchedAt),
-                    coverageText: "\(Int(stats.enrichmentPercent.rounded()))% enriched",
-                    watcherText: watcherText,
-                    compact: layout.compactCards,
-                    replayDebtExpanded: replayDebtExpanded
-                )
-            }
-            .padding(layout.cardPadding)
-            .background(
-                BrainBarGlassPanel(cornerRadius: layout.panelCornerRadius, tint: .brainBarAccentViolet)
-            )
         }
     }
 

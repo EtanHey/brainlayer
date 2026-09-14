@@ -74,6 +74,23 @@ final class BrainBarSettingsSnapshotTests: XCTestCase {
             .drain: .running,
             .watch: .probeError("launchctl exited 1"),
         ]
+        let lastRun = Date(timeIntervalSince1970: 1_784_466_000)
+        let nextRun = Date(timeIntervalSince1970: 1_784_552_400)
+        let activityFixture: [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation] = [
+            .watch: .init(loadState: .running, runs: 8, lastExitCode: 0, lastRunAt: lastRun, nextRunAt: nil, isContinuous: true),
+            .index: .init(loadState: .loaded, runs: 6, lastExitCode: 0, lastRunAt: lastRun, nextRunAt: nextRun, isContinuous: false),
+            .backupDaily: .init(loadState: .loaded, runs: 5, lastExitCode: 1, lastRunAt: lastRun, nextRunAt: nextRun, isContinuous: false),
+            .jsonlBackup: .init(loadState: .loaded, runs: 0, lastExitCode: nil, lastRunAt: nil, nextRunAt: nextRun, isContinuous: false),
+            .maintenanceNightly: .init(
+                loadState: .loaded, runs: 4, lastExitCode: 0,
+                lastRunAt: lastRun, nextRunAt: nextRun, isContinuous: false
+            ),
+            .maintenanceWeekly: .init(
+                loadState: .loaded, runs: 2, lastExitCode: 75,
+                lastRunAt: lastRun, nextRunAt: nextRun, isContinuous: false
+            ),
+        ]
+        let observations = name == "provider" ? activityFixture : [:]
         return BrainBarSettingsViewModel(
             store: store,
             launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: states),
@@ -81,6 +98,7 @@ final class BrainBarSettingsSnapshotTests: XCTestCase {
                 observation: .unknown("Active runtime configuration is not observable.")
             ),
             initialLaunchdStates: states,
+            initialLaunchdObservations: observations,
             refreshStatusOnLoad: false,
             observabilityURL: observabilityURL,
             initialObservabilityResult: initialObservabilityResult

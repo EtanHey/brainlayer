@@ -49,7 +49,8 @@ final class BrainBarSettingsJobsTests: XCTestCase {
         XCTAssertEqual(status.health, .healthy)
         XCTAssertEqual(
             status.lastRunText,
-            "Watcher \(DashboardMetricFormatter.shortAbsoluteTimeString(lastWatch)) · Index \(DashboardMetricFormatter.shortAbsoluteTimeString(lastIndex))"
+            "Watcher \(DashboardMetricFormatter.shortAbsoluteTimeString(lastWatch)) · " +
+                "Index \(DashboardMetricFormatter.shortAbsoluteTimeString(lastIndex))"
         )
         XCTAssertEqual(
             status.nextRunText,
@@ -89,11 +90,24 @@ final class BrainBarSettingsJobsTests: XCTestCase {
                     "Minute" => 15
                     "Hour" => 3
         """
+        let weeklyOutput = """
+        state = not running
+        stdout path = /tmp/weekly.out.log
+        runs = 2
+        last exit code = 0
+                    "Minute" => 0
+                    "Hour" => 4
+                    "Weekday" => 7
+        """
         let provider = BrainLayerLaunchdStatusProvider(
             commandRunner: { command in
-                command.last?.hasSuffix("com.brainlayer.index") == true
-                    ? BrainLayerLaunchdCommandResult(terminationStatus: 0, output: output)
-                    : BrainLayerLaunchdCommandResult(terminationStatus: 113, output: "Could not find service")
+                if command.last?.hasSuffix("com.brainlayer.index") == true {
+                    return BrainLayerLaunchdCommandResult(terminationStatus: 0, output: output)
+                }
+                if command.last?.hasSuffix("com.brainlayer.maintenance-weekly") == true {
+                    return BrainLayerLaunchdCommandResult(terminationStatus: 0, output: weeklyOutput)
+                }
+                return BrainLayerLaunchdCommandResult(terminationStatus: 113, output: "Could not find service")
             },
             uidProvider: { 501 },
             fileModificationDate: { url in
@@ -112,6 +126,8 @@ final class BrainBarSettingsJobsTests: XCTestCase {
         XCTAssertEqual(calendar.component(.hour, from: next), 3)
         XCTAssertEqual(calendar.component(.minute, from: next), 15)
         XCTAssertGreaterThan(next, now)
+        let weeklyNext = try XCTUnwrap(provider.sampleActivity()[.maintenanceWeekly]?.nextRunAt)
+        XCTAssertEqual(calendar.component(.weekday, from: weeklyNext), 1)
     }
 
     func testSettingsPresentationHidesAdvancedByDefaultAndContainsNoEnrichmentSection() throws {
