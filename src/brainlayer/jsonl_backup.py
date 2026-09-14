@@ -941,6 +941,7 @@ def _icloud_inventory_is_verified(
     timeout_seconds: float | None = None,
     poll_interval_seconds: float = 2.0,
     validated_sources: set[str] | None = None,
+    pending_sources: set[str] | None = None,
     deadline: float | None = None,
 ) -> bool:
     """Revalidate every iCloud object that current source-state entries rely on.
@@ -1039,6 +1040,16 @@ def _icloud_inventory_is_verified(
                 complete = False
                 continue
             if receipt.get("status") == "pending":
+                destination = directory / archive_name
+                if (
+                    destination.is_file()
+                    and destination.stat().st_size == expected_size
+                    and _sha256_file(destination, deadline=deadline) == expected_sha256
+                ):
+                    if pending_sources is not None:
+                        pending_sources.update(referenced_by_sources[archive_name])
+                else:
+                    invalid_archive(archive_name, "pending archive is missing or its bytes changed")
                 complete = False
                 continue
 
@@ -1469,6 +1480,7 @@ def run_backup(
     candidates = _discover_jsonl_candidates(roots)
     selection_state = state
     icloud_bootstrap_pending = False
+    pending_icloud_sources: set[str] = set()
     if upload and icloud_dir is not None:
         if _resolve_pending_icloud_receipts(state, icloud_dir):
             _atomic_write_json(state_path, state)
@@ -1478,6 +1490,7 @@ def run_backup(
             candidates,
             icloud_dir,
             validated_sources=validated_icloud_sources,
+            pending_sources=pending_icloud_sources,
         )
         if not icloud_covered:
             # Legacy state proves only Drive coverage. The first iCloud-enabled run
@@ -1517,6 +1530,37 @@ def run_backup(
         active_skip_seconds=active_skip_seconds,
         surviving_archives=surviving_archives,
     )
+
+    # A byte-stable pending iCloud copy is deliberately neither covered nor
+    # eligible for a replacement bundle. Its existing upload gets another run
+    # to resolve; only a missing or changed copy is selected again.
+    pending_candidates = [candidate for candidate in changed if candidate.path.as_posix() in pending_icloud_sources]
+    if pending_candidates:
+        changed = [candidate for candidate in changed if candidate.path.as_posix() not in pending_icloud_sources]
+
+    if not changed and pending_candidates:
+        error = (
+            "iCloud coverage is pending; repair deferred while "
+            f"{len(pending_candidates)} source(s) finish uploading"
+        )
+        result = {
+            "attempted_at": attempted_at,
+            "status": "deferred",
+            "uploaded": False,
+            "verified": False,
+            "already_covered_files": covered,
+            "discovered_file_count": len(candidates),
+            "skipped_active_count": len(active),
+            "vanished_source_count": vanished,
+            "icloud_pending_file_count": len(pending_candidates),
+            "icloud_repair_deferred": True,
+            "error": error,
+            "message": error,
+            **retention_receipt,
+        }
+        _append_json_log(log_path, result)
+        _enqueue_run_summary(result, queue_dir=queue_dir)
+        return result
 
     if not changed and icloud_bootstrap_pending and active:
         error = (
