@@ -487,7 +487,6 @@ private struct BrainBarDashboardView: View {
     @State private var vectorSignalRowFrame: CGRect = .zero
     @State private var vectorSignalRootFrame: CGRect = .zero
     @State private var liveObservabilityResult: ObservabilityReadResult = .unreadable("Loading observability data.")
-    @State private var observabilityReadTask: Task<Void, Never>?
     private let observabilityCadence = ObservabilityReader.installedHealthCheckCadence
     /// ONE shared timeframe for all pipeline graphs (chunk rows / agent-origin /
     /// watcher-ingested). Selecting 3h/24h re-fetches real DB history for
@@ -495,7 +494,6 @@ private struct BrainBarDashboardView: View {
     /// per-card expand.
     @State private var selectedTimeframe: PipelineTimeframe = .live
     @State private var vectorDetailHeight: CGFloat = 0
-    private let observabilityRefresh = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     /// The stats the graphs render. For the live (1h) lens this is the resting
     /// `collector.stats`; for a wider lens, if the collector has published REAL
@@ -663,9 +661,13 @@ private struct BrainBarDashboardView: View {
                 isLive: newTimeframe == .live
             )
         }
-        .onAppear(perform: reloadObservability)
-        .onReceive(observabilityRefresh) { _ in reloadObservability() }
-        .onDisappear { observabilityReadTask?.cancel() }
+        .task(id: dbPath) {
+            guard observabilityResult == nil, let dbPath else { return }
+            let url = ObservabilityReader.url(dbPath: dbPath)
+            await ObservabilityLiveView.Reader.watch(url: url) {
+                liveObservabilityResult = $0
+            }
+        }
     }
 
     @ViewBuilder
@@ -767,17 +769,6 @@ private struct BrainBarDashboardView: View {
         guard let updatedAt = collector.heartbeat.updatedAt else { return nil }
         let type = collector.heartbeat.lastEvent?.type.rawValue ?? "db"
         return "\(type) \(DashboardMetricFormatter.absoluteTimeString(updatedAt))"
-    }
-
-    private func reloadObservability() {
-        guard observabilityResult == nil, let dbPath else { return }
-        let url = ObservabilityReader.url(dbPath: dbPath)
-        observabilityReadTask = ObservabilityLiveView.Loader.load(
-            replacing: observabilityReadTask,
-            url: url
-        ) {
-            liveObservabilityResult = $0
-        }
     }
 
     // MARK: - Pipeline (Band 1) + Coverage (Band 2)

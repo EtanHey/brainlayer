@@ -316,31 +316,79 @@ final class ObservabilitySnapshotTests: XCTestCase {
         XCTAssertTrue(snapshot.cards.allSatisfy { $0.tone == .amber })
     }
 
-    func testSupersededLiveViewReadCancelsWorkerAndDoesNotOverwriteNewerResult() async {
+    func testCancelledLiveWatcherDoesNotApplySupersededResult() async {
         let cancellation = AsyncStream<Bool>.makeStream()
         var applied: [String] = []
         let url = URL(fileURLWithPath: "/tmp/unused")
-        let old = ObservabilityLiveView.Loader.load(replacing: nil, url: url, using: { _ in
-            do {
-                try await Task.sleep(for: .seconds(1))
-                cancellation.continuation.yield(false)
-            } catch {
-                cancellation.continuation.yield(Task.isCancelled)
-            }
-            cancellation.continuation.finish()
-            return .unreadable("old")
-        }, apply: { if case let .unreadable(value) = $0 { applied.append(value) } })
+        let watcher = Task {
+            await ObservabilityLiveView.Reader.watch(url: url, every: .seconds(1), using: { _ in
+                do {
+                    try await Task.sleep(for: .seconds(1))
+                    cancellation.continuation.yield(false)
+                } catch {
+                    cancellation.continuation.yield(Task.isCancelled)
+                }
+                cancellation.continuation.finish()
+                return .unreadable("old")
+            }, apply: { if case let .unreadable(value) = $0 { applied.append(value) } })
+        }
         await Task.yield()
-        let new = ObservabilityLiveView.Loader.load(replacing: old, url: url, using: { _ in
-            .unreadable("new")
-        }, apply: { if case let .unreadable(value) = $0 { applied.append(value) } })
-
-        await old.value
-        await new.value
+        watcher.cancel()
+        await watcher.value
         var events = cancellation.stream.makeAsyncIterator()
         let workerWasCancelled = await events.next()
         XCTAssertEqual(workerWasCancelled, true)
-        XCTAssertEqual(applied, ["new"])
+        XCTAssertTrue(applied.isEmpty)
+    }
+
+    func testLiveReaderReloadsRewrittenFileAndSurfacesUnreadableReplacement() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("observability-live-reload-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let fixtureURL = fixtureRoot.appendingPathComponent("golden/healthy-dev.json")
+        let originalData = try Data(contentsOf: fixtureURL)
+        try originalData.write(to: url, options: .atomic)
+
+        var rewrittenObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: originalData) as? [String: Any]
+        )
+        rewrittenObject["generated_at"] = "2026-09-14T18:11:14Z"
+        let rewrittenData = try JSONSerialization.data(withJSONObject: rewrittenObject, options: [.sortedKeys])
+
+        let observed = expectation(description: "initial, rewritten, and unreadable snapshots applied")
+        observed.expectedFulfillmentCount = 3
+        var results: [ObservabilityReadResult] = []
+        let watch = Task {
+            await ObservabilityLiveView.Reader.watch(url: url, every: .milliseconds(10)) { result in
+                results.append(result)
+                switch results.count {
+                case 1:
+                    try? rewrittenData.write(to: url, options: .atomic)
+                case 2:
+                    try? Data("{not-json".utf8).write(to: url, options: .atomic)
+                default:
+                    break
+                }
+                observed.fulfill()
+            }
+        }
+
+        await fulfillment(of: [observed], timeout: 1)
+        watch.cancel()
+        await watch.value
+
+        guard results.count >= 3 else {
+            return XCTFail("Expected three results, received \(results.count)")
+        }
+        guard case let .readable(first) = results[0],
+              case let .readable(second) = results[1],
+              case let .unreadable(reason) = results[2] else {
+            return XCTFail("Expected readable → rewritten readable → explicit unreadable results")
+        }
+        XCTAssertNotEqual(first.generatedAt, second.generatedAt)
+        XCTAssertEqual(second.generatedAt, ISO8601DateFormatter().date(from: "2026-09-14T18:11:14Z"))
+        XCTAssertTrue(reason.contains("Observability data unreadable"))
     }
 
     private func readableDocument(named name: String) throws -> ObservabilityDocument {
