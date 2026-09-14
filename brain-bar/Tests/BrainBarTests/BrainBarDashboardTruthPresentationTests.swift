@@ -65,11 +65,7 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         ] {
             XCTAssertFalse(dashboardView.contains(forbidden), "One-page dashboard still presents \(forbidden)")
         }
-        XCTAssertEqual(
-            dashboardView.components(separatedBy: "Enrichment: off (manual batch only)").count - 1,
-            1,
-            "The approved enrichment-off disclosure must appear exactly once."
-        )
+        XCTAssertFalse(dashboardView.contains("Enrichment: off (manual batch only)"))
         XCTAssertFalse(pipeline.contains("Enrichment is draining backlog"))
     }
 
