@@ -34,8 +34,6 @@ def test_real_jsonl_receipt_shapes_pin_legacy_current_and_post_815() -> None:
     expected_current = expected_legacy | {"forever_files", "forever_uploaded_file_count", "local_archive_removed"}
     assert legacy == expected_legacy
     assert current == expected_current
-    post_815 = dict(receipts[1], archive_id="drive-id", md5Checksum="md5")
-    assert set(post_815) == expected_current | {"archive_id", "md5Checksum"}
 
 
 def _write_jsonl(path: Path, line: str = '{"type":"message"}\n', *, mtime: float) -> Path:
@@ -675,6 +673,31 @@ def test_run_jsonl_backup_uploads_incremental_bundle_verifies_and_enqueues_summa
     assert result["verified"] is True
     assert result["archive_id"] == "drive-jsonl-id"
     assert result["md5Checksum"] == "md5-jsonl"
+    assert set(result) == {
+        "already_covered_files",
+        "append_snapshot_file_count",
+        "archive",
+        "archive_id",
+        "archive_listing_count",
+        "attempted_at",
+        "bundled_file_count",
+        "bytes",
+        "content_verified_file_count",
+        "drive_file",
+        "forever_files",
+        "forever_uploaded_file_count",
+        "gzip_test",
+        "local_archive_removed",
+        "md5Checksum",
+        "retention_deleted",
+        "skipped_active_count",
+        "source_file_count",
+        "status",
+        "uploaded",
+        "vanished_after_bundle_file_count",
+        "vanished_source_count",
+        "verified",
+    }
     assert result["bundled_file_count"] == 3
     assert result["archive_listing_count"] == 3
     assert result["content_verified_file_count"] == 3

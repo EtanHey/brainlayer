@@ -1,5 +1,5 @@
 -- Review aid for scripts/derive_observability_goldens.py.
--- Run against a built case DB with: sqlite3 -readonly db/<case>.sqlite < derivation.sql
+-- Run against a built case DB with: sqlite3 "file:db/<case>.sqlite?immutable=1" < derivation.sql
 SELECT COALESCE(content_class, 'knowledge') AS content_class, COUNT(*) AS count
 FROM chunks GROUP BY COALESCE(content_class, 'knowledge') ORDER BY content_class;
 SELECT source_class, COUNT(*) AS count
