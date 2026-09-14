@@ -1141,6 +1141,52 @@ def test_prune_drive_backups_keeps_only_latest_n_snapshots():
     assert service.files().deleted == ["id-5", "id-4", "id-3", "id-2", "id-1"]
 
 
+def test_weekly_shared_drive_pool_keeps_the_three_newest_archives():
+    from brainlayer import backup_daily
+
+    class FakeExecute:
+        def __init__(self, value):
+            self.value = value
+
+        def execute(self):
+            return self.value
+
+    class FakeFiles:
+        def __init__(self):
+            self.deleted: list[str] = []
+            self.files = [
+                {"id": f"id-{day}", "name": f"2026-05-{day:02d}.db.gz"} for day in range(1, 5)
+            ]
+
+        def list(self, **kwargs):  # noqa: ARG002
+            query = kwargs["q"]
+            if "mimeType = 'application/vnd.google-apps.folder'" in query:
+                return FakeExecute({"files": [{"id": "folder-id", "name": "brainlayer-db"}]})
+            return FakeExecute({"files": self.files})
+
+        def delete(self, fileId, **kwargs):  # noqa: N803, ARG002
+            self.deleted.append(fileId)
+            return FakeExecute({})
+
+    class FakeService:
+        def __init__(self):
+            self._files = FakeFiles()
+
+        def files(self):
+            return self._files
+
+    service = FakeService()
+
+    deleted = backup_daily.prune_drive_backups(
+        service,
+        folder_parts=["brainlayer-db"],
+        retention_policy=backup_daily.WEEKLY_RETENTION,
+    )
+
+    assert deleted == ["2026-05-01.db.gz"]
+    assert service.files().deleted == ["id-1"]
+
+
 def test_launchd_installer_knows_backup_target():
     install_path = Path("scripts/launchd/install.sh")
     wrapper_path = Path("scripts/launchd/backup-daily.sh")
