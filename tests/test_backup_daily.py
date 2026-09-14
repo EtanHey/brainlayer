@@ -332,6 +332,7 @@ def test_run_backup_wires_verified_log_provenance_into_local_gzip_pruning(tmp_pa
         + "\n",
         encoding="utf-8",
     )
+
     class FakeArtifact:
         gzip_path = snapshot
         uncompressed_path = None
