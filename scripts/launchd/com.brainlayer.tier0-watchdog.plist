@@ -17,8 +17,6 @@
 	<dict>
 		<key>HOME</key>
 		<string>__HOME__</string>
-		<key>BRAINLAYER_ENV_FILE</key>
-		<string>__BRAINLAYER_ENV_FILE__</string>
 		<key>PATH</key>
 		<string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
 		<key>TIER0_ALERT_STATE_PATH</key>

@@ -1065,15 +1065,21 @@ def _paused_enrichment_queue_explanation(
     """
     if expected_count <= 0 or not pause_active or not pause_applies_to_label(pause_payload, DEFAULT_ENRICHMENT_LABEL):
         return None
-    try:
-        paths = [path for path in queue_dir.expanduser().glob("*.jsonl") if path.is_file()]
-    except OSError:
-        return None
-    if len(paths) != expected_count or not all(_queue_file_is_paused_enrichment(path) for path in paths):
+    if not _queue_is_entirely_enrichment(queue_dir, expected_count):
         return None
     paused_at = pause_payload.get("paused_at")
     since = str(paused_at)[:10] if isinstance(paused_at, str) and len(paused_at) >= 10 else "an unknown date"
     return f"enrichment lane paused since {since}; drain restart would be a no-op"
+
+
+def _queue_is_entirely_enrichment(queue_dir: Path, expected_count: int) -> bool:
+    if expected_count <= 0:
+        return False
+    try:
+        paths = [path for path in queue_dir.expanduser().glob("*.jsonl") if path.is_file()]
+    except OSError:
+        return False
+    return len(paths) == expected_count and all(_queue_file_is_paused_enrichment(path) for path in paths)
 
 
 def _queue_file_is_paused_enrichment(path: Path) -> bool:
@@ -1149,11 +1155,13 @@ def _report_queue_backlog(
     queue_count: int,
     queue_bytes: int,
     queue_should_page: bool,
+    queue_is_entirely_enrichment: bool,
     pause_explanation: str | None,
     heal_blocking_reason: str | None,
     previous_failures: dict[str, int],
     heal_failures: dict[str, int],
     heal_tripped: set[str],
+    now: datetime,
 ) -> dict[str, Any] | None:
     backlog_issue_active = queue_count >= config.queue_auto_heal_count
     if not backlog_issue_active and not queue_should_page:
@@ -1180,10 +1188,16 @@ def _report_queue_backlog(
         "pause_explanation": pause_explanation,
     }
     if pause_explanation is None or state.get("queue_backlog_notice") != signature:
-        reason = by_design_reason("enrichment_backlog", pause_sentinel_path=config.pause_sentinel_path)
+        condition = "enrichment_backlog" if queue_is_entirely_enrichment else "queue_backlog"
+        reason = by_design_reason(
+            condition,
+            now=now,
+            pause_sentinel_path=config.pause_sentinel_path,
+        )
         if reason is not None:
             logger.info(
-                "desktop notification suppressed by design condition=enrichment_backlog reason=%s",
+                "desktop notification suppressed by design condition=%s reason=%s",
+                condition,
                 reason,
             )
             return None
@@ -1465,6 +1479,7 @@ def run_health_check(
         pause_payload=pause_payload,
         pause_active=pause_active,
     )
+    queue_is_entirely_enrichment = _queue_is_entirely_enrichment(config.queue_dir, queue_count)
     queue_heal_blocking_reason = queue_pause_explanation
     queue_should_page = queue_count > 0 and (
         queue_count >= config.queue_page_count
@@ -1653,11 +1668,13 @@ def run_health_check(
         queue_count=queue_count,
         queue_bytes=queue_bytes,
         queue_should_page=queue_should_page,
+        queue_is_entirely_enrichment=queue_is_entirely_enrichment,
         pause_explanation=queue_pause_explanation,
         heal_blocking_reason=queue_heal_blocking_reason,
         previous_failures=previous_heal_failures,
         heal_failures=heal_failures,
         heal_tripped=heal_tripped,
+        now=now,
     )
     state_payload: dict[str, Any] = dict(state)
     state_payload["heal_failures"] = heal_failures

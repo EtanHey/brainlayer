@@ -1944,7 +1944,7 @@ def test_packaged_launchd_installer_wires_tier0_notification_policy(tmp_path: Pa
     assert plist["EnvironmentVariables"]["TIER0_ALERT_STATE_PATH"] == str(
         home / ".local" / "share" / "brainlayer" / "tier0-watchdog-alert-state"
     )
-    assert plist["EnvironmentVariables"]["BRAINLAYER_ENV_FILE"] == str(env_file)
+    assert "BRAINLAYER_ENV_FILE" not in plist["EnvironmentVariables"]
     assert plist["EnvironmentVariables"]["TIER0_ENV_RUN"] == str(
         home / ".local" / "lib" / "brainlayer" / "brainlayer-env-run.sh"
     )

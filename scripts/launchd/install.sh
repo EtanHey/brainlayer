@@ -910,7 +910,6 @@ install_tier0_watchdog() {
     local plist_src="$SCRIPT_DIR/com.brainlayer.tier0-watchdog.plist"
     local plist_dst="$LAUNCH_DIR/com.brainlayer.tier0-watchdog.plist"
     local escaped_home
-    local escaped_env_file
     local escaped_env_run
     local escaped_python_bin
     local escaped_tier0_watchdog_dst
@@ -935,10 +934,6 @@ install_tier0_watchdog() {
         printf '%s' "$HOME" \
             | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/[\\&|]/\\&/g'
     )" || return 1
-    escaped_env_file="$(
-        printf '%s' "$BRAINLAYER_ENV_FILE" \
-            | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/[\\&|]/\\&/g'
-    )" || return 1
     escaped_env_run="$(
         printf '%s' "$BRAINLAYER_ENV_RUN" \
             | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/[\\&|]/\\&/g'
@@ -957,7 +952,6 @@ install_tier0_watchdog() {
     install -m 0755 "$script_src" "$TIER0_WATCHDOG_DST" || return 1
     sed \
         -e "s|__HOME__|$escaped_home|g" \
-        -e "s|__BRAINLAYER_ENV_FILE__|$escaped_env_file|g" \
         -e "s|__BRAINLAYER_ENV_RUN__|$escaped_env_run|g" \
         -e "s|__PYTHON_BIN__|$escaped_python_bin|g" \
         -e "s|__TIER0_WATCHDOG_SCRIPT__|$escaped_tier0_watchdog_dst|g" \
