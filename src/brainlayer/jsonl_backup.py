@@ -521,6 +521,19 @@ JSON.stringify({
 """
 
 
+_ICLOUD_TRASH_SCRIPT = r"""
+ObjC.import("Foundation");
+const path = ObjC.unwrap($.NSProcessInfo.processInfo.arguments.lastObject);
+const url = $.NSURL.fileURLWithPath(path);
+const resultingURL = Ref();
+const error = Ref();
+if (!$.NSFileManager.defaultManager.trashItemAtURLResultingItemURLError(url, resultingURL, error)) {
+    const detail = error[0] ? ObjC.unwrap(error[0].localizedDescription) : "unknown error";
+    throw new Error(detail);
+}
+"""
+
+
 def _normalized_icloud_download_status(value: Any) -> str | None:
     if value is None:
         return None
@@ -537,6 +550,49 @@ def _quarantine_unverified_icloud_item(path: Path) -> None:
         return
     hidden_name = path.name if path.name.startswith(".") else f".{path.name}"
     os.replace(path, path.with_name(f"{hidden_name}.{uuid.uuid4().hex}.unverified"))
+
+
+def _trash_icloud_item(path: Path) -> None:
+    """Move a stale iCloud copy to macOS Trash, preserving recovery."""
+    path = Path(path)
+    if not path.exists():
+        return
+    try:
+        subprocess.run(
+            [
+                "/usr/bin/osascript",
+                "-l",
+                "JavaScript",
+                "-e",
+                _ICLOUD_TRASH_SCRIPT,
+                "--",
+                str(path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=_configured_icloud_timeout_seconds(),
+        )
+    except backup_daily.BackupTimeoutError:
+        raise
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or "").strip() or str(exc)
+        raise ICloudProbeError(f"iCloud trash operation failed for {path}: {detail}") from exc
+    except OSError as exc:
+        raise ICloudProbeError(f"iCloud trash operation could not run for {path}: {exc}") from exc
+
+
+def _trash_stale_unverified_icloud_items(icloud_dir: Path, logical_sha256: str) -> None:
+    """Trash failed copies only after this run verified the same logical archive."""
+    if not logical_sha256:
+        return
+    prefix = f".claude-jsonl-{logical_sha256}"
+    matching = sorted(Path(icloud_dir).glob(f"{prefix}*.unverified"), key=lambda path: path.stat().st_mtime)
+    # Keep one recoverable failed copy even after a verified copy exists; repeated
+    # failures must not accumulate, while the newest quarantined bytes remain available.
+    targets = matching[:-1] if len(matching) > 1 else matching
+    for path in targets:
+        _trash_icloud_item(path)
 
 
 def _icloud_item_state(
@@ -613,12 +669,13 @@ def copy_archive_to_icloud(
     destination = icloud_dir / f"claude-jsonl-{logical_sha256}{suffix}"
     placeholder = destination.with_name(f".{destination.name}.icloud")
 
-    def receipt(*, reused: bool) -> dict[str, Any]:
-        _check_icloud_deadline(deadline, "building the iCloud receipt")
+    def receipt(*, reused: bool, proof_deadline: float | None = deadline) -> dict[str, Any]:
+        _check_icloud_deadline(proof_deadline, "building the iCloud receipt")
         actual_size = destination.stat().st_size
-        actual_sha256 = _sha256_file(destination, deadline=deadline)
+        actual_sha256 = _sha256_file(destination, deadline=proof_deadline)
         return {
             "path": str(destination),
+            "status": "verified",
             "uploaded": True,
             "materialization": "MATERIALIZED",
             "bytes": actual_size,
@@ -627,6 +684,20 @@ def copy_archive_to_icloud(
             "logical_sha256": logical_sha256,
             "downloading_status": "current",
             "reused": reused,
+        }
+
+    def pending_receipt() -> dict[str, Any]:
+        return {
+            "path": str(destination),
+            "status": "pending",
+            "uploaded": False,
+            "materialization": "MATERIALIZED",
+            "bytes": expected_size,
+            "sha256": expected_sha256,
+            "source_sha256": expected_sha256,
+            "logical_sha256": logical_sha256,
+            "downloading_status": "current",
+            "reused": False,
         }
 
     # A logical address is immutable. If a prior verified copy already occupies
@@ -654,8 +725,12 @@ def copy_archive_to_icloud(
                             "iCloud logical-address collision: "
                             f"path={destination} expected={logical_sha256} actual={actual_logical_sha256}"
                         )
-                    return receipt(reused=True)
+                    result = receipt(reused=True)
+                    _trash_stale_unverified_icloud_items(icloud_dir, logical_sha256)
+                    return result
                 if time.monotonic() >= deadline:
+                    if state.get("is_uploading") is True and destination.is_file():
+                        return pending_receipt()
                     raise ICloudDeadlineExceeded(
                         "existing iCloud copy was not uploaded and materialized before its deadline: "
                         f"path={destination} state={state!r}"
@@ -699,10 +774,31 @@ def copy_archive_to_icloud(
     finally:
         temp_path.unlink(missing_ok=True)
 
+    # The local phase ends only after the published destination has its own exact
+    # size/hash proof. The network phase may still be in progress after this point;
+    # that is a durable pending receipt, not a failed local copy.
+    actual_size = destination.stat().st_size
+    actual_sha256 = _sha256_file(destination, deadline=deadline)
+    if actual_size != expected_size or actual_sha256 != expected_sha256:
+        _quarantine_unverified_icloud_item(destination)
+        raise RuntimeError(
+            "iCloud local copy content mismatch: "
+            f"expected size={expected_size} sha256={expected_sha256}, "
+            f"actual size={actual_size} sha256={actual_sha256}"
+        )
+
+    # The local copy/hash budget is complete. Network status gets a fresh phase
+    # budget, so an expired disk-scaled deadline cannot become a 0.001-second
+    # osascript timeout on the upload probe.
+    network_deadline = time.monotonic() + configured_timeout
+
+    def network_remaining_seconds() -> float:
+        return max(network_deadline - time.monotonic(), 0.001)
+
     verified = False
+    pending = False
     try:
-        _check_icloud_deadline(deadline, "starting iCloud status verification")
-        state = _icloud_item_state(destination, request_download=True, timeout_seconds=remaining_seconds())
+        state = _icloud_item_state(destination, request_download=True, timeout_seconds=network_remaining_seconds())
         while True:
             uploading_error = state.get("uploading_error")
             if uploading_error:
@@ -711,7 +807,7 @@ def copy_archive_to_icloud(
             materialized = state.get("downloading_status") == "current" and destination.is_file()
             if state.get("is_ubiquitous") is True and uploaded and materialized:
                 actual_size = destination.stat().st_size
-                actual_sha256 = _sha256_file(destination, deadline=deadline)
+                actual_sha256 = _sha256_file(destination, deadline=network_deadline)
                 if actual_size != expected_size or actual_sha256 != expected_sha256:
                     raise RuntimeError(
                         "iCloud copy content mismatch: "
@@ -719,20 +815,28 @@ def copy_archive_to_icloud(
                         f"actual size={actual_size} sha256={actual_sha256}"
                     )
                 verified = True
-                return receipt(reused=False)
-            if time.monotonic() >= deadline:
+                result = receipt(reused=False, proof_deadline=network_deadline)
+                _trash_stale_unverified_icloud_items(icloud_dir, logical_sha256)
+                return result
+            if time.monotonic() >= deadline and state.get("is_uploading") is True and destination.is_file():
+                pending = True
+                return pending_receipt()
+            if time.monotonic() >= network_deadline:
+                if state.get("is_uploading") is True and destination.is_file():
+                    pending = True
+                    return pending_receipt()
                 placeholder = destination.with_name(f".{destination.name}.icloud")
                 materialization = "PLACEHOLDER" if placeholder.exists() or not destination.exists() else "PENDING"
                 raise RuntimeError(
                     "iCloud copy was not uploaded and materialized before its deadline: "
                     f"path={destination} materialization={materialization} state={state!r}"
                 )
-            time.sleep(min(poll_interval_seconds, remaining_seconds()))
+            time.sleep(min(poll_interval_seconds, network_remaining_seconds()))
             placeholder = destination.with_name(f".{destination.name}.icloud")
             status_path = placeholder if not destination.exists() and placeholder.exists() else destination
-            state = _icloud_item_state(status_path, request_download=True, timeout_seconds=remaining_seconds())
+            state = _icloud_item_state(status_path, request_download=True, timeout_seconds=network_remaining_seconds())
     finally:
-        if not verified:
+        if not verified and not pending:
             _quarantine_unverified_icloud_item(destination)
             _quarantine_unverified_icloud_item(destination.with_name(f".{destination.name}.icloud"))
 
@@ -747,7 +851,86 @@ def _icloud_copy_receipt(copy_result: dict[str, Any], icloud_dir: Path) -> tuple
     sha256 = copy_result.get("sha256")
     if not isinstance(size, int) or size < 0 or not isinstance(sha256, str) or len(sha256) != 64:
         raise RuntimeError(f"iCloud copy receipt is missing exact-byte proof: {copy_result!r}")
-    return path.name, {"bytes": size, "sha256": sha256}
+    status = copy_result.get("status", "verified")
+    if status not in {"pending", "verified"}:
+        raise RuntimeError(f"iCloud copy receipt has an invalid status: {copy_result!r}")
+    receipt = {
+        "path": str(path),
+        "bytes": size,
+        "sha256": sha256,
+        "status": status,
+    }
+    logical_sha256 = copy_result.get("logical_sha256")
+    if isinstance(logical_sha256, str) and logical_sha256:
+        receipt["logical_sha256"] = logical_sha256
+    return path.name, receipt
+
+
+def _drop_pending_icloud_archive(state: dict[str, Any], archive_name: str) -> None:
+    files = state.get("files")
+    if isinstance(files, dict):
+        for entry in files.values():
+            if isinstance(entry, dict) and entry.get("icloud_archive") == archive_name:
+                entry.pop("icloud_archive", None)
+                entry["icloud_required"] = True
+    receipts = state.get("icloud_archives")
+    if isinstance(receipts, dict):
+        receipts.pop(archive_name, None)
+
+
+def _resolve_pending_icloud_receipts(state: dict[str, Any], icloud_dir: Path) -> bool:
+    """Resolve pending copies with a cheap status/hash check before inventory selection."""
+    receipts = state.get("icloud_archives")
+    if not isinstance(receipts, dict):
+        return False
+    directory = Path(icloud_dir).expanduser()
+    changed = False
+    for archive_name, receipt in list(receipts.items()):
+        if not isinstance(receipt, dict) or receipt.get("status") != "pending":
+            continue
+        path = Path(receipt.get("path", directory / archive_name)).expanduser()
+        if path.parent != directory or not path.is_file():
+            _drop_pending_icloud_archive(state, archive_name)
+            changed = True
+            continue
+        item_state = _icloud_item_state(path, request_download=False, timeout_seconds=5.0)
+        uploading_error = item_state.get("uploading_error")
+        if uploading_error:
+            raise RuntimeError(f"iCloud upload failed for {path}: {uploading_error}")
+        uploaded = item_state.get("is_uploaded") is True and item_state.get("is_uploading") is False
+        materialized = item_state.get("downloading_status") == "current" and path.is_file()
+        if not (item_state.get("is_ubiquitous") is True and uploaded and materialized):
+            continue
+        expected_size = receipt.get("bytes")
+        expected_sha256 = receipt.get("sha256")
+        if (
+            not isinstance(expected_size, int)
+            or not isinstance(expected_sha256, str)
+            or path.stat().st_size != expected_size
+            or _sha256_file(path) != expected_sha256
+        ):
+            _quarantine_unverified_icloud_item(path)
+            _drop_pending_icloud_archive(state, archive_name)
+            changed = True
+            continue
+        receipt.update(
+            {
+                "status": "verified",
+                "uploaded": True,
+                "materialization": "MATERIALIZED",
+                "downloading_status": "current",
+            }
+        )
+        changed = True
+        _trash_stale_unverified_icloud_items(directory, receipt.get("logical_sha256", ""))
+
+    if changed:
+        state["icloud_archives"] = dict(receipts)
+        state["icloud_directory"] = str(directory)
+        state["icloud_verified"] = not any(
+            isinstance(receipt, dict) and receipt.get("status") == "pending" for receipt in receipts.values()
+        )
+    return changed
 
 
 def _icloud_inventory_is_verified(
@@ -853,6 +1036,9 @@ def _icloud_inventory_is_verified(
                 or len(expected_sha256) != 64
             ):
                 invalid_archive(archive_name, "malformed exact-byte receipt")
+                complete = False
+                continue
+            if receipt.get("status") == "pending":
                 complete = False
                 continue
 
@@ -1162,10 +1348,12 @@ def _update_state_for_uploaded(
     existing_icloud_directory = state.get("icloud_directory")
     icloud_archive_name: str | None = None
     icloud_receipt: dict[str, Any] | None = None
+    icloud_copy_status = "verified"
     if icloud_copy is not None:
         if icloud_dir is None:
             raise RuntimeError("an iCloud copy receipt requires its configured directory")
         icloud_archive_name, icloud_receipt = _icloud_copy_receipt(icloud_copy, icloud_dir)
+        icloud_copy_status = icloud_receipt["status"]
     for candidate in candidates:
         entry: dict[str, Any] = {"mtime": candidate.mtime, "size": candidate.size}
         if archive_name and archive_id:
@@ -1196,8 +1384,10 @@ def _update_state_for_uploaded(
 
     if icloud_dir is not None:
         updated["icloud_directory"] = str(Path(icloud_dir).expanduser())
-        if not clear_icloud_verification:
+        if not clear_icloud_verification and icloud_copy_status == "verified":
             updated["icloud_verified"] = True
+        elif icloud_copy_status == "pending":
+            updated["icloud_verified"] = False
     elif not clear_icloud_verification and state.get("icloud_verified") is True:
         existing_directory = state.get("icloud_directory")
         if isinstance(existing_directory, str) and existing_directory:
@@ -1280,6 +1470,8 @@ def run_backup(
     selection_state = state
     icloud_bootstrap_pending = False
     if upload and icloud_dir is not None:
+        if _resolve_pending_icloud_receipts(state, icloud_dir):
+            _atomic_write_json(state_path, state)
         validated_icloud_sources: set[str] = set()
         icloud_covered = _icloud_inventory_is_verified(
             state,
