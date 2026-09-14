@@ -7,6 +7,7 @@ import plistlib
 import sqlite3
 import subprocess
 import sys
+from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -140,8 +141,16 @@ def test_explicit_by_design_watcher_condition_skips_alert_side_effects(tmp_path:
     monkeypatch.setenv("BRAINLAYER_BY_DESIGN_REASON_FILE", str(marker))
     subprocess_calls: list[object] = []
     urlopen_calls: list[object] = []
-    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: subprocess_calls.append((args, kwargs)))
-    monkeypatch.setattr(module.urllib.request, "urlopen", lambda *args, **kwargs: urlopen_calls.append((args, kwargs)))
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *args, **kwargs: (subprocess_calls.append((args, kwargs)), SimpleNamespace(returncode=0))[1],
+    )
+    monkeypatch.setattr(
+        module.urllib.request,
+        "urlopen",
+        lambda *args, **kwargs: (urlopen_calls.append((args, kwargs)), nullcontext())[1],
+    )
 
     result = _stalled_result(module)
     assert module._best_effort_alert(config, result) is False
@@ -162,13 +171,36 @@ def test_watcher_condition_without_marker_still_alerts(tmp_path: Path, monkeypat
     monkeypatch.setenv("BRAINLAYER_BY_DESIGN_REASON_FILE", str(tmp_path / "missing.json"))
     subprocess_calls: list[object] = []
     urlopen_calls: list[object] = []
-    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: subprocess_calls.append((args, kwargs)))
-    monkeypatch.setattr(module.urllib.request, "urlopen", lambda *args, **kwargs: urlopen_calls.append((args, kwargs)))
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *args, **kwargs: (subprocess_calls.append((args, kwargs)), SimpleNamespace(returncode=0))[1],
+    )
+    monkeypatch.setattr(
+        module.urllib.request,
+        "urlopen",
+        lambda *args, **kwargs: (urlopen_calls.append((args, kwargs)), nullcontext())[1],
+    )
 
     module._best_effort_alert(config, _stalled_result(module))
 
     assert len(subprocess_calls) == 1
     assert len(urlopen_calls) == 1
+
+
+def test_alert_delivery_failure_does_not_latch_as_delivered(tmp_path: Path, monkeypatch) -> None:
+    module = _load_module()
+    config = _config(module, tmp_path)
+    monkeypatch.delenv("BRAINLAYER_FORBID_DESKTOP_NOTIFICATION", raising=False)
+    monkeypatch.setenv("BRAINLAYER_BY_DESIGN_REASON_FILE", str(tmp_path / "missing.json"))
+    monkeypatch.setattr(module.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(returncode=1))
+
+    def fail_urlopen(*_args, **_kwargs):
+        raise OSError("notify endpoint unavailable")
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fail_urlopen)
+
+    assert module._best_effort_alert(config, _stalled_result(module)) is False
 
 
 def test_process_alive_zero_throughput_with_pending_bytes_kickstarts_after_threshold(tmp_path: Path) -> None:

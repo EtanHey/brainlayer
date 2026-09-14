@@ -128,6 +128,14 @@ wait_for_children() {
             kill "$child_pid" 2>/dev/null || :
         fi
     done
+    if [ "$timed_out" -ne 0 ]; then
+        "$TIER0_SLEEP" 1 2>/dev/null || :
+        for child_pid in "$@"; do
+            if kill -0 "$child_pid" 2>/dev/null; then
+                kill -KILL "$child_pid" 2>/dev/null || :
+            fi
+        done
+    fi
     for child_pid in "$@"; do
         wait_status=0
         wait "$child_pid" 2>/dev/null || wait_status=$?

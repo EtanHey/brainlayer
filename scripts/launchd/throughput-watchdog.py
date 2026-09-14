@@ -543,9 +543,10 @@ def _best_effort_alert(config: Config, result: WatchdogResult) -> bool:
     # Same guard as brainlayer.health_check: a desktop popup and an alert POST are side effects on
     # a real person's screen and a real channel, so a test must never be able to reach either.
     if os.environ.get("BRAINLAYER_FORBID_DESKTOP_NOTIFICATION") == "1":
-        return
+        return False
+    delivered = False
     try:
-        subprocess.run(
+        completed = subprocess.run(
             [
                 "/usr/bin/osascript",
                 "-e",
@@ -555,6 +556,7 @@ def _best_effort_alert(config: Config, result: WatchdogResult) -> bool:
             timeout=3,
             check=False,
         )
+        delivered = completed.returncode == 0
     except (OSError, subprocess.SubprocessError):
         pass
     request = urllib.request.Request(
@@ -565,10 +567,10 @@ def _best_effort_alert(config: Config, result: WatchdogResult) -> bool:
     )
     try:
         with urllib.request.urlopen(request, timeout=3):
-            pass
+            delivered = True
     except Exception:
         pass
-    return True
+    return delivered
 
 
 def run_once(

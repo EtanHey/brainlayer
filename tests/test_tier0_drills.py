@@ -153,7 +153,7 @@ def _run_drill(
     policy_python = Path(sys.executable)
     if policy_hangs:
         policy_python = fake_bin / "policy-python"
-        _write_executable(policy_python, "#!/bin/sh\nexec /bin/sleep 30\n")
+        _write_executable(policy_python, "#!/bin/sh\ntrap '' TERM\nexec /bin/sleep 30\n")
     elif policy_returns_empty:
         policy_python = fake_bin / "policy-python"
         _write_executable(policy_python, "#!/bin/sh\nexit 0\n")
@@ -407,8 +407,8 @@ def test_alert_fanout_uses_one_shared_deadline(tmp_path: Path) -> None:
     )
 
     assert result.process.returncode == 1, result.process.stdout + result.process.stderr
-    # One bounded wait covers policy lookup; one separate shared wait covers both alert children.
-    assert sum(event.startswith("wait-sleep:") for event in result.events) == 2
+    # Policy lookup is bounded separately; the alert children still share one deadline and grace.
+    assert sum(event.startswith("wait-sleep:") for event in result.events) == 3
     assert any(event == f"launchctl:kickstart -k {DOMAIN}/{LABEL}" for event in result.events)
 
 

@@ -1056,6 +1056,7 @@ def _paused_enrichment_queue_explanation(
     *,
     pause_payload: dict[str, Any],
     pause_active: bool,
+    queue_is_entirely_enrichment: bool | None = None,
 ) -> str | None:
     """Explain a queue that the active pause makes completely undrainable.
 
@@ -1065,7 +1066,9 @@ def _paused_enrichment_queue_explanation(
     """
     if expected_count <= 0 or not pause_active or not pause_applies_to_label(pause_payload, DEFAULT_ENRICHMENT_LABEL):
         return None
-    if not _queue_is_entirely_enrichment(queue_dir, expected_count):
+    if queue_is_entirely_enrichment is None:
+        queue_is_entirely_enrichment = _queue_is_entirely_enrichment(queue_dir, expected_count)
+    if not queue_is_entirely_enrichment:
         return None
     paused_at = pause_payload.get("paused_at")
     since = str(paused_at)[:10] if isinstance(paused_at, str) and len(paused_at) >= 10 else "an unknown date"
@@ -1085,12 +1088,18 @@ def _queue_is_entirely_enrichment(queue_dir: Path, expected_count: int) -> bool:
 def _queue_file_is_paused_enrichment(path: Path) -> bool:
     """Return true only when every drain-visible event is an enrichment update."""
     try:
-        events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        saw_event = False
+        with path.open(encoding="utf-8") as queue_file:
+            for line in queue_file:
+                if not line.strip():
+                    continue
+                event = json.loads(line)
+                saw_event = True
+                if not isinstance(event, dict) or event.get("kind") != "enrichment_update":
+                    return False
     except (OSError, json.JSONDecodeError):
         return False
-    return bool(events) and all(
-        isinstance(event, dict) and event.get("kind") == "enrichment_update" for event in events
-    )
+    return saw_event
 
 
 def _queue_heal_summary(
@@ -1473,19 +1482,23 @@ def run_health_check(
                 result.actions.append("resume_failed:stale-pause-sentinel")
 
     queue_count, queue_bytes, queue_oldest_age = _queue_stats(config.queue_dir, now)
-    queue_pause_explanation = _paused_enrichment_queue_explanation(
-        config.queue_dir,
-        queue_count,
-        pause_payload=pause_payload,
-        pause_active=pause_active,
-    )
-    queue_is_entirely_enrichment = _queue_is_entirely_enrichment(config.queue_dir, queue_count)
-    queue_heal_blocking_reason = queue_pause_explanation
     queue_should_page = queue_count > 0 and (
         queue_count >= config.queue_page_count
         or queue_bytes >= config.queue_page_bytes
         or (queue_oldest_age is not None and queue_oldest_age >= config.queue_page_oldest_seconds)
     )
+    queue_is_entirely_enrichment = queue_should_page and _queue_is_entirely_enrichment(
+        config.queue_dir,
+        queue_count,
+    )
+    queue_pause_explanation = _paused_enrichment_queue_explanation(
+        config.queue_dir,
+        queue_count,
+        pause_payload=pause_payload,
+        pause_active=pause_active,
+        queue_is_entirely_enrichment=queue_is_entirely_enrichment,
+    )
+    queue_heal_blocking_reason = queue_pause_explanation
     try:
         pending_stores_count = _pending_stores_count(config.pending_stores_path)
     except OSError as exc:
