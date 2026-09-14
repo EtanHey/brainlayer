@@ -1723,6 +1723,39 @@ def test_pause_explained_backlog_stays_quiet_until_pause_lifts(tmp_path, monkeyp
     assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 1
 
 
+@pytest.mark.parametrize(
+    "queue_kinds",
+    [
+        ["watcher_chunk", "watcher_chunk", "watcher_chunk"],
+        ["enrichment_update", "watcher_chunk", "enrichment_update"],
+    ],
+    ids=["watcher-only", "mixed"],
+)
+def test_enrichment_pause_does_not_silence_unexplained_backlog(
+    tmp_path,
+    monkeypatch,
+    queue_kinds,
+):
+    config, _state_path, queue_dir, pause_path = _queue_backlog_config(tmp_path, heal=False)
+    for index, kind in enumerate(queue_kinds):
+        (queue_dir / f"queued-{index}.jsonl").write_text(
+            json.dumps({"kind": kind}) + "\n",
+            encoding="utf-8",
+        )
+    pause_path.write_text(
+        json.dumps({"paused_at": "2026-08-04T13:50:36Z", "labels": ["com.brainlayer.enrichment"]}),
+        encoding="utf-8",
+    )
+    notifications = _capture_queue_notifications(monkeypatch)
+
+    _run_queue_backlog_health(
+        config,
+        lambda _command: SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 1
+
+
 def test_unchanged_unexplained_backlog_pages_every_check(tmp_path, monkeypatch):
     config, _state_path, queue_dir, _pause_path = _queue_backlog_config(tmp_path, heal=False)
     (queue_dir / "watcher-stuck.jsonl").write_text("{}\n", encoding="utf-8")
