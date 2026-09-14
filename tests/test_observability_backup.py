@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from brainlayer import observability_backup
+from brainlayer import observability_backup, observability_surface
 from brainlayer.observability_backup import build_backups_section
 
 FIXTURES = Path(__file__).parent / "fixtures/observability"
@@ -302,6 +302,38 @@ def test_production_defaults_are_db_relative(monkeypatch: pytest.MonkeyPatch, tm
         str(logs / "backup-daily.log"),
         str(launchd),
     ]
+
+
+def test_producer_without_observability_wiring_measures_all_sections(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    case = FIXTURES / "db" / "healthy-dev.sqlite"
+    db = tmp_path / "snapshot" / "brainlayer.db"
+    db.parent.mkdir(parents=True)
+    db.write_bytes(case.read_bytes())
+    logs = db.parent / "logs"
+    logs.mkdir()
+    for name in ("jsonl-backup.log", "backup-daily.log"):
+        (logs / name).write_bytes((FIXTURES / "logs" / "healthy-dev" / name).read_bytes())
+    disabled = tmp_path / "Library" / "LaunchAgents" / ".disabled-retention-P0"
+    disabled.mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    launchd_text = (FIXTURES / "launchd" / "healthy-dev.txt").read_text(encoding="utf-8")
+    monkeypatch.setattr(
+        observability_backup.subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, launchd_text, ""),
+    )
+
+    document, _ = observability_surface.build_document(env={"BRAINLAYER_DB": str(db)})
+
+    for section in ("stores", "emitters", "author_unknown", "backups"):
+        assert document[section]["state"] == "measured"
+    assert [item["path"] for item in document["backups"]["inputs"][:2]] == [
+        str(logs / "jsonl-backup.log"),
+        str(logs / "backup-daily.log"),
+    ]
+    assert document["backups"]["inputs"][2]["kind"] == "command"
 
 
 def test_unset_launchd_input_uses_command_and_records_stdout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
