@@ -662,8 +662,8 @@ def test_observability_launchd_runs_writer_every_five_minutes_with_rendered_keg_
         "--write",
     ]
     assert plist["StartInterval"] == 300
-    assert plist["StandardOutPath"] == "__HOME__/.local/share/brainlayer/logs/observability.out.log"
-    assert plist["StandardErrorPath"] == "__HOME__/.local/share/brainlayer/logs/observability.err.log"
+    assert plist["StandardOutPath"] == "__HOME__/Library/Logs/brainlayer/observability.out.log"
+    assert plist["StandardErrorPath"] == "__HOME__/Library/Logs/brainlayer/observability.err.log"
     assert plist["Nice"] == 10
 
 

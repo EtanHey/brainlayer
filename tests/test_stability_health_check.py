@@ -1461,6 +1461,7 @@ def test_health_check_bootstraps_non_paused_labels_during_active_pause(tmp_path,
         "com.brainlayer.watch",
         "com.brainlayer.drain",
         "com.brainlayer.health-check",
+        "com.brainlayer.observability",
     }
 
 

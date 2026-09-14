@@ -15,8 +15,6 @@ from brainlayer.cli import app
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOG_ROOT = "__HOME__/Library/Logs/brainlayer/"
 RENDERED_LOG_ROOT = "/Users/etanheyman/Library/Logs/brainlayer/"
-OBSERVABILITY_LOG_ROOT = "__HOME__/.local/share/brainlayer/logs/"
-RENDERED_OBSERVABILITY_LOG_ROOT = "/Users/etanheyman/.local/share/brainlayer/logs/"
 REQUIRED_PATH_PARTS = ["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
 DEV_SRC_PATH_RE = re.compile(r"/Users/[^:\s]+/Gits/[^:\s]+/src(?:$|:)")
 ENV_RUN_EXEMPT_LABELS = {
@@ -39,11 +37,8 @@ def _assert_common_hygiene(plist: dict) -> None:
     for part in REQUIRED_PATH_PARTS:
         assert os.path.normpath(part) in path_dirs
 
-    log_roots = (LOG_ROOT, RENDERED_LOG_ROOT)
-    if plist.get("Label") == "com.brainlayer.observability":
-        log_roots += (OBSERVABILITY_LOG_ROOT, RENDERED_OBSERVABILITY_LOG_ROOT)
-    assert plist["StandardOutPath"].startswith(log_roots)
-    assert plist["StandardErrorPath"].startswith(log_roots)
+    assert plist["StandardOutPath"].startswith((LOG_ROOT, RENDERED_LOG_ROOT))
+    assert plist["StandardErrorPath"].startswith((LOG_ROOT, RENDERED_LOG_ROOT))
 
     limits = plist.get("SoftResourceLimits")
     assert isinstance(limits, dict)

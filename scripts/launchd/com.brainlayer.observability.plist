@@ -31,9 +31,9 @@
 		<string>observability</string>
 	</dict>
 	<key>StandardOutPath</key>
-	<string>__HOME__/.local/share/brainlayer/logs/observability.out.log</string>
+	<string>__HOME__/Library/Logs/brainlayer/observability.out.log</string>
 	<key>StandardErrorPath</key>
-	<string>__HOME__/.local/share/brainlayer/logs/observability.err.log</string>
+	<string>__HOME__/Library/Logs/brainlayer/observability.err.log</string>
 	<key>StartInterval</key>
 	<integer>300</integer>
 	<key>RunAtLoad</key>
