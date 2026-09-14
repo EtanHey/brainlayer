@@ -7,9 +7,7 @@ import XCTest
 @MainActor
 final class ObservabilitySnapshotTests: XCTestCase {
     func testLiveShapedBackupFieldsDecode() throws {
-        let result = ObservabilityReader.read(url: liveFixtureURL)
-        guard case let .readable(document) = result else { return XCTFail("Expected live-shaped fixture to decode") }
-
+        let document = try liveShapedDocument()
         XCTAssertNil(document.backups.lastVerifiedUpload)
         XCTAssertNotNil(document.backups.dbSnapshot)
         XCTAssertEqual(document.backups.dbSnapshot?.destination, "2026-09-13.db.gz")
@@ -20,9 +18,7 @@ final class ObservabilitySnapshotTests: XCTestCase {
     func testMeasuredCardsLabelEveryCountForHumans() throws {
         let document = try readableDocument(named: "healthy-dev")
         let cards = ObservabilityPresentation.snapshot(
-            document: document,
-            now: document.generatedAt,
-            cadence: .known(300)
+            document: document, now: document.generatedAt, cadence: .known(300)
         ).cards
 
         for (card, labels) in zip(cards, [
@@ -32,9 +28,7 @@ final class ObservabilitySnapshotTests: XCTestCase {
         ]) { for label in labels { XCTAssertTrue(card.detail.contains(label), card.detail) } }
         XCTAssertTrue(cards.allSatisfy { !$0.subtitle.isEmpty })
 
-        let unlabeledInteger = try NSRegularExpression(
-            pattern: #"(?<![\\p{L}\\d_-])\\d[\\d,.]*(?!\\s*(?:chunks?|added|from|desktop|hidden|h\\b|days?\\b|archives?\\b|classified|verified|%))"#
-        )
+        let unlabeledInteger = try NSRegularExpression(pattern: #"(?<![\\p{L}\\d_-])\\d[\\d,.]*(?!\\s*(?:chunks?|added|from|desktop|hidden|h\\b|days?\\b|archives?\\b|classified|verified|%))"#)
         for card in cards.prefix(3) {
             let range = NSRange(card.detail.startIndex..., in: card.detail)
             XCTAssertNil(unlabeledInteger.firstMatch(in: card.detail, range: range), card.detail)
@@ -49,17 +43,17 @@ final class ObservabilitySnapshotTests: XCTestCase {
         let explicitlyUnverified = ObservabilityDocument.Backups(
             state: "measured", reason: "", inputs: [], freshness: "fresh", thresholdHours: 36,
             retentionInvariant: "PASS", survivingArchives30D: 1, errorType: nil,
-            lastVerifiedUpload: .init(
-                at: healthy.generatedAt, ageHours: 1, archiveId: "unverified-archive", verified: false
-            ),
+            lastVerifiedUpload: .init(at: healthy.generatedAt, ageHours: 1, archiveId: "unverified-archive", verified: false),
             dbSnapshot: .init(lastAt: healthy.generatedAt, destination: "snapshot.db", verified: false),
             launchd: .init(label: "com.brainlayer.jsonl-backup", bootstrapped: false, disabledDirPresent: false)
         )
 
-        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: healthy.backups).upload.tone, .green)
-        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: healthy.backups).snapshot.tone, .green)
-        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: explicitlyUnverified).upload.tone, .red)
-        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: explicitlyUnverified).snapshot.tone, .red)
+        let healthyStatus = ObservabilityPresentation.backupStatus(for: healthy.backups)
+        let unverifiedStatus = ObservabilityPresentation.backupStatus(for: explicitlyUnverified)
+        XCTAssertEqual([healthyStatus.upload.tone, healthyStatus.snapshot.tone], [.green, .green])
+        XCTAssertEqual([unverifiedStatus.upload.tone, unverifiedStatus.snapshot.tone], [.red, .red])
+        XCTAssertTrue(unverifiedStatus.upload.text.contains("NOT verified"))
+        XCTAssertTrue(unverifiedStatus.snapshot.text.contains("NOT verified"))
         XCTAssertEqual(ObservabilityPresentation.backupStatus(for: stale.backups).upload.tone, .red)
         XCTAssertEqual(ObservabilityPresentation.backupStatus(for: missing.backups).upload.tone, .red)
         XCTAssertEqual(ObservabilityPresentation.backupStatus(for: live.backups).job.tone, .red)
@@ -69,12 +63,10 @@ final class ObservabilitySnapshotTests: XCTestCase {
         let live = try liveShapedDocument()
         let status = ObservabilityPresentation.backupStatus(for: live.backups)
 
-        let expected = [
-            "No verified upload on record", "Latest DB snapshot:", "→ 2026-09-13.db.gz",
-            "Backup job: NOT loaded (parked in .disabled-retention-P0)", "stale (> 36 h)",
-            "Retention invariant: PASS", "0 verified archives in the last 30 days",
-            "Google Drive credentials missing — re-auth needed",
-        ]
+        let expected = ["No verified upload on record", "Latest DB snapshot (verified):", "→ 2026-09-13.db.gz",
+                        "Backup job: NOT loaded (parked in .disabled-retention-P0)", "stale (> 36 h)",
+                        "Retention invariant: PASS", "0 verified archives in the last 30 days",
+                        "Google Drive credentials missing — re-auth needed"]
         let rendered = status.lines.map(\.text).joined(separator: "\n")
         for text in expected { XCTAssertTrue(rendered.contains(text), rendered) }
     }
@@ -195,7 +187,11 @@ final class ObservabilitySnapshotTests: XCTestCase {
         XCTAssertTrue(reason.contains("schema_version 2"))
     }
 
-    func testPathIsBesideDatabaseUnlessOverridden() {
+    func testPathIsBesideConfiguredDatabaseUnlessOverridden() throws {
+        let configURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: configURL) }
+        try "BRAINLAYER_DB='/tmp/configured/brainlayer.db'\n".write(to: configURL, atomically: true, encoding: .utf8)
+        XCTAssertEqual(ObservabilityReader.installedURL(environment: [:], configURL: configURL).path, "/tmp/configured/observability.json")
         XCTAssertEqual(
             ObservabilityReader.url(dbPath: "/tmp/brainlayer/brainlayer.db", environment: [:]).path,
             "/tmp/brainlayer/observability.json"
@@ -277,16 +273,12 @@ final class ObservabilitySnapshotTests: XCTestCase {
 
     private func liveShapedDocument() throws -> ObservabilityDocument {
         let result = ObservabilityReader.read(url: liveFixtureURL)
-        guard case let .readable(document) = result else {
-            XCTFail("Expected live-shaped fixture")
-            throw FixtureError.unreadable("live-shaped")
-        }
+        guard case let .readable(document) = result else { throw FixtureError.unreadable("live-shaped") }
         return document
     }
-
-    private var liveFixtureURL: URL {
-        Bundle.module.url(forResource: "observability-main-58849a70", withExtension: "json", subdirectory: "fixtures")!
-    }
+    private var liveFixtureURL: URL { Bundle.module.url(
+        forResource: "observability-main-58849a70", withExtension: "json", subdirectory: "fixtures"
+    )! }
 
     private func color(
         in bitmap: NSBitmapImageRep,

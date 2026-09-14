@@ -82,11 +82,25 @@ enum ObservabilityReader {
     }
 
     static func installedURL(
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        configURL: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/brainlayer/brainlayer.env")
     ) -> URL {
-        let dbPath = environment["BRAINLAYER_DB"] ?? FileManager.default.homeDirectoryForCurrentUser
+        let dbPath = environment["BRAINLAYER_DB"] ?? configuredDatabasePath(at: configURL) ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".local/share/brainlayer/brainlayer.db").path
         return url(dbPath: dbPath, environment: environment)
+    }
+
+    private static func configuredDatabasePath(at url: URL) -> String? {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        return text.split(separator: "\n").lazy.compactMap { raw -> String? in
+            let line = raw.trimmingCharacters(in: .whitespaces)
+                .replacingOccurrences(of: "export ", with: "", options: .anchored)
+            guard line.hasPrefix("BRAINLAYER_DB=") else { return nil }
+            let value = String(line.dropFirst("BRAINLAYER_DB=".count)).trimmingCharacters(in: .whitespaces)
+            guard !value.isEmpty else { return nil }
+            return value.trimmingCharacters(in: CharacterSet(charactersIn: "'\""))
+        }.first
     }
 
     static func read(url: URL) -> ObservabilityReadResult {
@@ -136,7 +150,7 @@ enum ObservabilityReader {
 }
 
 enum ObservabilityCardTone: String, Equatable, Sendable { case standard, neutral, amber }
-enum ObservabilityStatusTone: String, Equatable, Sendable { case green, red, neutral }
+enum ObservabilityStatusTone: String, Equatable, Hashable, Sendable { case green, red, neutral }
 
 struct ObservabilityStatusLine: Equatable, Sendable { let text: String; let tone: ObservabilityStatusTone }
 
@@ -153,21 +167,14 @@ struct ObservabilityStatusRows: View {
     }
 
     private func color(_ tone: ObservabilityStatusTone) -> Color {
-        switch tone {
-        case .green: .green
-        case .red: .red
-        case .neutral: .secondary
-        }
+        [.green: Color.green, .red: .red, .neutral: .secondary][tone] ?? .secondary
     }
 }
 
 struct ObservabilityBackupStatus: Equatable, Sendable {
     let upload, snapshot, job, freshness: ObservabilityStatusLine
     let retention, archives: ObservabilityStatusLine; let error: ObservabilityStatusLine?
-
-    var lines: [ObservabilityStatusLine] {
-        [upload, snapshot, job, freshness, retention, archives] + [error].compactMap { $0 }
-    }
+    var lines: [ObservabilityStatusLine] { [upload, snapshot, job, freshness, retention, archives] + [error].compactMap { $0 } }
 }
 
 struct ObservabilitySnapshot: Sendable {
@@ -275,7 +282,7 @@ enum ObservabilityPresentation {
         let upload: ObservabilityStatusLine
         if let value = backups.lastVerifiedUpload {
             upload = .init(
-                text: "Last verified upload: \(localDate(value.at)) (\(hours(value.ageHours)) ago) · archive \(value.archiveId)",
+                text: "\(value.verified ? "Last verified upload" : "Last upload (NOT verified)"): \(localDate(value.at)) (\(hours(value.ageHours)) ago) · archive \(value.archiveId)",
                 tone: value.verified && isFresh ? .green : .red
             )
         } else {
@@ -285,7 +292,7 @@ enum ObservabilityPresentation {
         let snapshot: ObservabilityStatusLine
         if let value = backups.dbSnapshot {
             snapshot = .init(
-                text: "Latest DB snapshot: \(localDate(value.lastAt)) → \(value.destination)",
+                text: "Latest DB snapshot (\(value.verified ? "verified" : "NOT verified")): \(localDate(value.lastAt)) → \(value.destination)",
                 tone: value.verified && isFresh ? .green : .red
             )
         } else {
@@ -329,9 +336,7 @@ enum ObservabilityPresentation {
         )
     }
 
-    private static func localDate(_ date: Date) -> String {
-        date.formatted(date: .abbreviated, time: .shortened)
-    }
+    private static func localDate(_ date: Date) -> String { date.formatted(date: .abbreviated, time: .shortened) }
 
     private static func hours(_ value: Double) -> String {
         let formatter = NumberFormatter()
@@ -341,13 +346,11 @@ enum ObservabilityPresentation {
         return "\(formatter.string(from: NSNumber(value: value)) ?? String(value)) h"
     }
 
-    private static func errorText(_ value: String) -> String {
-        switch value {
+    private static func errorText(_ value: String) -> String { switch value {
         case "drive_credentials_missing": "Google Drive credentials missing — re-auth needed"
         case "FileNotFoundError": "Backup input file missing"
         default: value.replacingOccurrences(of: "_", with: " ").capitalized
-        }
-    }
+    } }
 }
 
 struct ObservabilityDashboardView: View {

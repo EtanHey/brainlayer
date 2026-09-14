@@ -612,10 +612,10 @@ struct BrainBarSettingsView: View {
                     .font(.system(size: 11, weight: .medium))
             }
         } else {
-            let reason: String = if case let .unreadable(value) = viewModel.observabilityResult {
-                value
-            } else {
-                "Backup status is unmeasurable."
+            let reason: String = switch viewModel.observabilityResult {
+            case let .unreadable(value): value
+            case let .readable(document): document.backups.reason.isEmpty ?
+                "Backup status is unmeasurable." : "Backup status is unmeasurable — \(document.backups.reason)"
             }
             Label(reason, systemImage: "exclamationmark.triangle")
                 .font(.system(size: 11, weight: .medium))
