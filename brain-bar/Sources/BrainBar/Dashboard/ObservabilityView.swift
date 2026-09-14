@@ -446,21 +446,22 @@ struct ObservabilityLiveView: View {
         ) async -> ObservabilityReadResult {
             return await operation(url)
         }
-    }
 
-    @MainActor
-    enum Loader {
-        static func load(
-            replacing previous: Task<Void, Never>?,
+        static func watch(
             url: URL,
+            every interval: Duration = .seconds(30),
             using operation: @escaping Reader.Operation = { ObservabilityReader.read(url: $0) },
             apply: @escaping @MainActor (ObservabilityReadResult) -> Void
-        ) -> Task<Void, Never> {
-            previous?.cancel()
-            return Task { @MainActor in
+        ) async {
+            while !Task.isCancelled {
                 let next = await Reader.read(url: url, using: operation)
                 guard !Task.isCancelled else { return }
-                apply(next)
+                await apply(next)
+                do {
+                    try await Task.sleep(for: interval)
+                } catch {
+                    return
+                }
             }
         }
     }
@@ -468,20 +469,14 @@ struct ObservabilityLiveView: View {
     let dbPath: String
     private let cadence = ObservabilityReader.installedHealthCheckCadence
     @State private var result: ObservabilityReadResult = .unreadable("Loading observability data.")
-    @State private var readTask: Task<Void, Never>?
-    private let refresh = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
         ObservabilityDashboardView(result: result, cadence: cadence)
-            .onAppear(perform: reload)
-            .onReceive(refresh) { _ in reload() }
-            .onDisappear { readTask?.cancel() }
-    }
-
-    private func reload() {
-        let url = ObservabilityReader.url(dbPath: dbPath)
-        readTask = Loader.load(replacing: readTask, url: url) {
-            result = $0
-        }
+            .task(id: dbPath) {
+                let url = ObservabilityReader.url(dbPath: dbPath)
+                await Reader.watch(url: url) {
+                    result = $0
+                }
+            }
     }
 }

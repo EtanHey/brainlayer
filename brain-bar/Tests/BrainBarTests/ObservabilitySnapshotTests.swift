@@ -316,31 +316,29 @@ final class ObservabilitySnapshotTests: XCTestCase {
         XCTAssertTrue(snapshot.cards.allSatisfy { $0.tone == .amber })
     }
 
-    func testSupersededLiveViewReadCancelsWorkerAndDoesNotOverwriteNewerResult() async {
+    func testCancelledLiveWatcherDoesNotApplySupersededResult() async {
         let cancellation = AsyncStream<Bool>.makeStream()
         var applied: [String] = []
         let url = URL(fileURLWithPath: "/tmp/unused")
-        let old = ObservabilityLiveView.Loader.load(replacing: nil, url: url, using: { _ in
-            do {
-                try await Task.sleep(for: .seconds(1))
-                cancellation.continuation.yield(false)
-            } catch {
-                cancellation.continuation.yield(Task.isCancelled)
-            }
-            cancellation.continuation.finish()
-            return .unreadable("old")
-        }, apply: { if case let .unreadable(value) = $0 { applied.append(value) } })
+        let watcher = Task {
+            await ObservabilityLiveView.Reader.watch(url: url, every: .seconds(1), using: { _ in
+                do {
+                    try await Task.sleep(for: .seconds(1))
+                    cancellation.continuation.yield(false)
+                } catch {
+                    cancellation.continuation.yield(Task.isCancelled)
+                }
+                cancellation.continuation.finish()
+                return .unreadable("old")
+            }, apply: { if case let .unreadable(value) = $0 { applied.append(value) } })
+        }
         await Task.yield()
-        let new = ObservabilityLiveView.Loader.load(replacing: old, url: url, using: { _ in
-            .unreadable("new")
-        }, apply: { if case let .unreadable(value) = $0 { applied.append(value) } })
-
-        await old.value
-        await new.value
+        watcher.cancel()
+        await watcher.value
         var events = cancellation.stream.makeAsyncIterator()
         let workerWasCancelled = await events.next()
         XCTAssertEqual(workerWasCancelled, true)
-        XCTAssertEqual(applied, ["new"])
+        XCTAssertTrue(applied.isEmpty)
     }
 
     func testLiveReaderReloadsRewrittenFileAndSurfacesUnreadableReplacement() async throws {
