@@ -159,6 +159,43 @@ def test_drive_token_file_not_found_maps_to_credentials_error() -> None:
     assert all_errors is True
 
 
+@pytest.mark.parametrize(
+    ("token_text", "expected_error"),
+    [
+        (
+            json.dumps({"access_token": "restored-access", "refresh_token": "restored-refresh"}),
+            "drive_credentials_restored_backup_pending",
+        ),
+        (None, "drive_credentials_missing"),
+        ("not-json", "drive_credentials_missing"),
+        ("[]", "drive_credentials_missing"),
+        (json.dumps({"access_token": "restored-access"}), "drive_credentials_missing"),
+    ],
+)
+def test_current_drive_credentials_replace_only_the_stale_missing_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    token_text: str | None,
+    expected_error: str,
+) -> None:
+    token_path = tmp_path / "google-drive-mcp" / "tokens.json"
+    if token_text is not None:
+        token_path.parent.mkdir()
+        token_path.write_text(token_text, encoding="utf-8")
+    monkeypatch.setattr(backup_daily, "DEFAULT_TOKEN_PATH", token_path)
+    monkeypatch.setattr(
+        observability_backup,
+        "_daily_snapshot",
+        lambda records: (None, "drive_credentials_missing", True),
+    )
+
+    result, _ = _build("healthy-dev")
+
+    assert result["error_type"] == expected_error
+    assert result["freshness"] == "stale"
+    assert result["last_verified_upload"]["at"] == "2026-09-13T10:00:00Z"
+
+
 def test_legacy_daily_snapshot_derives_attempt_time_from_snapshot_date() -> None:
     snapshot, error_type, all_errors = observability_backup._daily_snapshot(
         [

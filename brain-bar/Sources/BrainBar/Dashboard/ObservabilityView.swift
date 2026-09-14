@@ -338,6 +338,9 @@ enum ObservabilityPresentation {
         }
         let error = backups.errorType.flatMap { value -> ObservabilityStatusLine? in
             guard !value.isEmpty else { return nil }
+            if value == "drive_credentials_restored_backup_pending" {
+                return .init(text: "Google Drive credentials restored — next backup pending", tone: .neutral)
+            }
             let kind = value.hasPrefix("jsonl_backup_attempt_") ? "Transcript" : "DB"
             return .init(text: "\(kind) backup error: \(errorText(value))", tone: .red)
         }

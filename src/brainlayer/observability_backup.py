@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from brainlayer import jsonl_backup
+from brainlayer import backup_daily, jsonl_backup
 from brainlayer.backup_daily import _backup_log_path
 from brainlayer.backup_retention_invariant import inspect_jsonl_retention_invariant
 from brainlayer.health_check import (
@@ -137,6 +137,17 @@ def _daily_snapshot(records: list[dict[str, Any]]) -> tuple[dict[str, Any] | Non
                 all_errors,
             )
     return None, error_type, all_errors
+
+
+def _drive_token_is_usable(path: Path) -> bool:
+    """Check the on-disk token shape without refreshing it or contacting Drive."""
+    try:
+        token = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(token, dict):
+        return False
+    return all(isinstance(token.get(key), str) and token[key] for key in ("access_token", "refresh_token"))
 
 
 def _surviving_archives_30d(records: list[dict[str, Any]], now: datetime) -> int:
@@ -277,6 +288,8 @@ def build_backups_section(
         max_age_seconds=DEFAULT_JSONL_BACKUP_MAX_AGE_SECONDS,
     )
     snapshot, error_type, all_daily_errors = _daily_snapshot(daily_records)
+    if error_type == "drive_credentials_missing" and _drive_token_is_usable(backup_daily.DEFAULT_TOKEN_PATH):
+        error_type = "drive_credentials_restored_backup_pending"
     if error_type is None and health_issue is not None and health.state in {"invalid", "stale", "failed"}:
         error_type = health_issue.code
     if all_daily_errors or health.state in {"stale", "failed"}:
