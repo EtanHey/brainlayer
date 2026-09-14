@@ -72,6 +72,10 @@ def _rows() -> list[tuple[object, ...]]:
             "synthetic-00" if index == 21 else None,
             GENERATED_AT.isoformat().replace("+00:00", "Z") if index == 20 else None))
         # fmt: on
+    rows.append(("synthetic-null-created", "Synthetic row with NULL created_at", "{}", "brainbar-store",
+        "brainlayer-fixture", "assistant_text", "mcp", None, None, None, "mcp", "knowledge", None, None))
+    rows.append(("synthetic-tilde-created", "Synthetic row with malformed created_at", "{}", "brainbar-store",
+        "brainlayer-fixture", "assistant_text", "mcp", None, "2026-05-28T~12:35:00Z", None, "mcp", "knowledge", None, None))
     return rows
 
 
@@ -83,6 +87,9 @@ def _build_db(path: Path, case: CaseDefinition, pid_root: Path) -> None:
             columns = "id content metadata source_file project content_type source sender created_at provenance_class source_class content_class superseded_by archived_at".split()
             chunks = [dict(zip(columns, row)) for row in _rows()]
             store.upsert_chunks(chunks, [[0.0] * 1024] * len(chunks))
+            store.conn.execute("UPDATE chunks SET created_at = NULL WHERE id = 'synthetic-null-created'")
+            store.conn.execute("UPDATE chunks SET created_at = '2026-05-28T~12:35:00Z' WHERE id = 'synthetic-tilde-created'")
+            store.conn.execute("UPDATE chunks SET last_seen_at = ? WHERE id IN ('synthetic-null-created', 'synthetic-tilde-created')", (GENERATED_AT.isoformat().replace("+00:00", "Z"),))
             store.conn.execute("UPDATE chunks SET source = NULLIF(source, 'unknown'), ingested_at = ?", (FIXED_MTIME,))
             store.conn.execute("UPDATE chunks SET superseded_by = 'synthetic-00' WHERE id = 'synthetic-21'")
             store.conn.execute("UPDATE chunks SET archived_at = ? WHERE id = 'synthetic-20'", (GENERATED_AT.isoformat().replace("+00:00", "Z"),))  # fmt: skip
@@ -134,7 +141,8 @@ def _daily_log(profile: str) -> str:
         failures = [{"attempted_at": f"2026-09-{day:02d}T05:00:00Z", "error_type": "FileNotFoundError", "error": "Synthetic Drive token fixture missing", "uploaded": False, "verified": False, "backup_log_provenance": "real"} for day in (11, 12, 13)]  # fmt: skip
         return "".join(json.dumps(item, sort_keys=True) + "\n" for item in failures)
     receipt = {"attempted_at": "2026-09-13T09:00:00Z", "snapshot": "/synthetic/backups/2026-09-13.db.gz",
-        "destination": "synthetic-drive", "uploaded": True, "verified": True, "drive_md5_match": True,
+        "db": "/synthetic/brainlayer.db", "drive_file": {"id": "synthetic-id", "name": "synthetic-drive", "size": "123"},
+        "uploaded": True, "verified": True, "drive_md5_match": True,
         "backup_log_provenance": "real"}  # fmt: skip
     if profile == "legacy_no_op":
         receipt.pop("attempted_at")

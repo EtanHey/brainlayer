@@ -4,33 +4,33 @@
     "classified_unknown": {
       "count": 2,
       "definition": "provenance_class = 'unknown', archived_at IS NULL",
-      "share": 0.083333
+      "share": 0.076923
     },
     "inputs": [
       {
         "mtime": "2026-09-13T12:00:00Z",
         "path": "db/missing-log-dev.sqlite",
-        "rows_or_bytes": 25,
+        "rows_or_bytes": 27,
         "sha256_first_64kb": null,
-        "skipped_lines": 0,
+        "skipped_lines": 2,
         "status": "read"
       }
     ],
     "never_classified": {
-      "count": 4,
+      "count": 6,
       "definition": "provenance_class IS NULL OR source_class IS NULL, archived_at IS NULL",
-      "share": 0.166667
+      "share": 0.230769
     },
     "reason": "",
     "state": "measured",
     "top_source_files": [
       {
         "count": 4,
-        "source_file": "realtime-hook"
+        "source_file": "brainbar-store"
       },
       {
-        "count": 2,
-        "source_file": "brainbar-store"
+        "count": 4,
+        "source_file": "realtime-hook"
       }
     ],
     "trend_7d": [
@@ -84,8 +84,8 @@
       {
         "mtime": "2026-09-13T12:00:00Z",
         "path": "logs/missing-log-dev/backup-daily.log",
-        "rows_or_bytes": 293,
-        "sha256_first_64kb": "c4c707bd7d86018084cf4b1a7c4b8cc40a21a3568be0ce611f633c2545daeef2",
+        "rows_or_bytes": 373,
+        "sha256_first_64kb": "ee25e3181dd68fa793f75ce96e04e2b086758b1effd39b834e2f39b47ec2cde0",
         "skipped_lines": 2,
         "status": "read"
       },
@@ -162,7 +162,7 @@
         "source_class": "subagent"
       },
       {
-        "count": 4,
+        "count": 6,
         "in_window": 2,
         "source_class": null
       }
@@ -173,9 +173,9 @@
       {
         "mtime": "2026-09-13T12:00:00Z",
         "path": "db/missing-log-dev.sqlite",
-        "rows_or_bytes": 25,
+        "rows_or_bytes": 27,
         "sha256_first_64kb": null,
-        "skipped_lines": 0,
+        "skipped_lines": 2,
         "status": "read"
       }
     ],
@@ -192,7 +192,7 @@
       },
       {
         "content_class": "knowledge",
-        "count": 7
+        "count": 9
       },
       {
         "content_class": "operational",
@@ -260,9 +260,9 @@
       {
         "mtime": "2026-09-13T12:00:00Z",
         "path": "db/missing-log-dev.sqlite",
-        "rows_or_bytes": 25,
+        "rows_or_bytes": 27,
         "sha256_first_64kb": null,
-        "skipped_lines": 0,
+        "skipped_lines": 2,
         "status": "read"
       }
     ],
@@ -305,7 +305,7 @@
     ],
     "reason": "",
     "state": "measured",
-    "total_chunks": 25
+    "total_chunks": 27
   },
   "window_hours": 24
 }

@@ -102,13 +102,21 @@ def _daily_snapshot(records: list[dict[str, Any]]) -> tuple[dict[str, Any] | Non
         error_type = "backup_error"
     for record in reversed(real):
         attempted_at = _jsonl_backup_attempt_time(record)
-        destination = record.get("destination")
-        if attempted_at and isinstance(destination, str) and record.get("snapshot"):
+        drive_file = record.get("drive_file")
+        if isinstance(drive_file, dict):
+            destination = drive_file.get("name")
+        elif isinstance(drive_file, str):
+            destination = drive_file
+        else:
+            destination = Path(str(record.get("db", "brainlayer.db"))).name
+        if attempted_at and isinstance(destination, str) and destination and record.get("snapshot"):
             return (
                 {
                     "last_at": attempted_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
                     "destination": destination,
-                    "verified": record.get("verified") is True,
+                    "verified": record.get("verified") is True and (
+                        "drive_md5_match" not in record or record.get("drive_md5_match") is True
+                    ),
                 },
                 error_type,
                 all_errors,

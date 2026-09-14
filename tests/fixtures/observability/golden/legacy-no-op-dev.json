@@ -4,33 +4,33 @@
     "classified_unknown": {
       "count": 2,
       "definition": "provenance_class = 'unknown', archived_at IS NULL",
-      "share": 0.083333
+      "share": 0.076923
     },
     "inputs": [
       {
         "mtime": "2026-09-13T12:00:00Z",
         "path": "db/legacy-no-op-dev.sqlite",
-        "rows_or_bytes": 25,
+        "rows_or_bytes": 27,
         "sha256_first_64kb": null,
-        "skipped_lines": 0,
+        "skipped_lines": 2,
         "status": "read"
       }
     ],
     "never_classified": {
-      "count": 4,
+      "count": 6,
       "definition": "provenance_class IS NULL OR source_class IS NULL, archived_at IS NULL",
-      "share": 0.166667
+      "share": 0.230769
     },
     "reason": "",
     "state": "measured",
     "top_source_files": [
       {
         "count": 4,
-        "source_file": "realtime-hook"
+        "source_file": "brainbar-store"
       },
       {
-        "count": 2,
-        "source_file": "brainbar-store"
+        "count": 4,
+        "source_file": "realtime-hook"
       }
     ],
     "trend_7d": [
@@ -74,7 +74,7 @@
   "backups": {
     "db_snapshot": {
       "destination": "synthetic-drive",
-        "last_at": "2026-09-13T02:00:00Z",
+      "last_at": "2026-09-13T02:00:00Z",
       "verified": true
     },
     "error_type": "jsonl_backup_attempt_invalid",
@@ -91,8 +91,8 @@
       {
         "mtime": "2026-09-13T12:00:00Z",
         "path": "logs/legacy-no-op-dev/backup-daily.log",
-        "rows_or_bytes": 253,
-        "sha256_first_64kb": "b17d75767068368d9fd9d003990f58789898400d52afdbc783d915fa596e4fab",
+        "rows_or_bytes": 333,
+        "sha256_first_64kb": "03f815a229096b24c62735c5a0637f860c995c3da20edab2849982d825b68128",
         "skipped_lines": 2,
         "status": "read"
       },
@@ -178,7 +178,7 @@
         "source_class": "subagent"
       },
       {
-        "count": 4,
+        "count": 6,
         "in_window": 2,
         "source_class": null
       }
@@ -189,9 +189,9 @@
       {
         "mtime": "2026-09-13T12:00:00Z",
         "path": "db/legacy-no-op-dev.sqlite",
-        "rows_or_bytes": 25,
+        "rows_or_bytes": 27,
         "sha256_first_64kb": null,
-        "skipped_lines": 0,
+        "skipped_lines": 2,
         "status": "read"
       }
     ],
@@ -208,7 +208,7 @@
       },
       {
         "content_class": "knowledge",
-        "count": 7
+        "count": 9
       },
       {
         "content_class": "operational",
@@ -276,9 +276,9 @@
       {
         "mtime": "2026-09-13T12:00:00Z",
         "path": "db/legacy-no-op-dev.sqlite",
-        "rows_or_bytes": 25,
+        "rows_or_bytes": 27,
         "sha256_first_64kb": null,
-        "skipped_lines": 0,
+        "skipped_lines": 2,
         "status": "read"
       }
     ],
@@ -321,7 +321,7 @@
     ],
     "reason": "",
     "state": "measured",
-    "total_chunks": 25
+    "total_chunks": 27
   },
   "window_hours": 24
 }

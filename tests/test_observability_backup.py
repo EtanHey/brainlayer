@@ -161,7 +161,7 @@ def test_legacy_daily_snapshot_derives_attempt_time_from_snapshot_date() -> None
             {
                 "backup_log_provenance": "real",
                 "snapshot": "/synthetic/backups/2026-09-13.db.gz",
-                "destination": "synthetic-drive",
+                "drive_file": "synthetic-drive",
                 "verified": True,
                 "drive_md5_match": True,
             }
@@ -173,6 +173,18 @@ def test_legacy_daily_snapshot_derives_attempt_time_from_snapshot_date() -> None
         "destination": "synthetic-drive",
         "verified": True,
     }
+    assert error_type is None
+    assert all_errors is False
+
+
+def test_daily_snapshot_fits_current_drive_file_receipt_and_md5_verification() -> None:
+    snapshot, error_type, all_errors = observability_backup._daily_snapshot([{
+        "backup_log_provenance": "real", "attempted_at": "2026-09-13T09:00:00Z",
+        "db": "/synthetic/brainlayer.db",
+        "drive_file": {"id": "drive-id", "name": "2026-09-13.db.gz", "size": "123"},
+        "snapshot": "/synthetic/2026-09-13.db.gz", "verified": True, "drive_md5_match": True,
+    }])
+    assert snapshot == {"last_at": "2026-09-13T09:00:00Z", "destination": "2026-09-13.db.gz", "verified": True}
     assert error_type is None
     assert all_errors is False
 
