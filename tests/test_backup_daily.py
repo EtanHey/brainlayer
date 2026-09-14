@@ -77,6 +77,15 @@ def _create_source_db(path: Path, *, chunk_count: int = 1) -> None:
     conn.close()
 
 
+def test_backup_retention_defaults_are_capped_and_weekly_cannot_underflow_daily():
+    from brainlayer import backup_daily
+
+    assert backup_daily.DEFAULT_DAILY_KEEP == 3
+    assert backup_daily.DEFAULT_WEEKLY_KEEP == 3
+    assert backup_daily.DEFAULT_LOCAL_UNCOMPRESSED_KEEP == 1
+    assert backup_daily.WEEKLY_RETENTION.keep_latest >= backup_daily.DAILY_RETENTION.keep_latest
+
+
 def test_create_snapshot_gzip_is_restorable(tmp_path):
     from brainlayer.backup_daily import create_sqlite_backup_gzip
 
@@ -237,6 +246,190 @@ def test_create_snapshot_reports_no_uncompressed_path_when_current_raw_is_pruned
     assert artifact.local_retention_deleted == ["2026-06-03.db"]
     assert not (out_dir / "2026-06-03.db").exists()
     assert sorted(path.name for path in out_dir.glob("*.db")) == ["2026-06-04.db", "2026-06-05.db"]
+
+
+def test_prune_local_gzip_snapshots_keeps_newest_three_and_requires_verified_coverage(tmp_path):
+    from brainlayer.backup_daily import prune_local_gzip_snapshots
+
+    for day in range(1, 7):
+        (tmp_path / f"2026-06-{day:02d}.db.gz").write_bytes(f"gzip-{day}".encode())
+
+    deleted = prune_local_gzip_snapshots(
+        tmp_path,
+        verified_drive_names={
+            "2026-06-01.db.gz",
+            "2026-06-02.db.gz",
+            "2026-06-03.db.gz",
+        },
+    )
+
+    assert deleted == ["2026-06-03.db.gz", "2026-06-02.db.gz", "2026-06-01.db.gz"]
+    assert sorted(path.name for path in tmp_path.glob("*.db.gz")) == [
+        "2026-06-04.db.gz",
+        "2026-06-05.db.gz",
+        "2026-06-06.db.gz",
+    ]
+
+
+def test_prune_local_gzip_snapshots_preserves_unverified_archive_without_three_newer_verified_copies(tmp_path):
+    from brainlayer.backup_daily import prune_local_gzip_snapshots
+
+    for day in range(1, 6):
+        (tmp_path / f"2026-06-{day:02d}.db.gz").write_bytes(f"gzip-{day}".encode())
+
+    deleted = prune_local_gzip_snapshots(
+        tmp_path,
+        verified_drive_names={"2026-06-02.db.gz", "2026-06-03.db.gz"},
+    )
+
+    assert deleted == ["2026-06-02.db.gz"]
+    assert (tmp_path / "2026-06-01.db.gz").exists()
+    assert (tmp_path / "2026-06-04.db.gz").exists()
+
+
+def test_prune_local_gzip_snapshots_deletes_unverified_archive_with_three_newer_verified_copies(tmp_path):
+    from brainlayer.backup_daily import prune_local_gzip_snapshots
+
+    for day in range(1, 7):
+        (tmp_path / f"2026-06-{day:02d}.db.gz").write_bytes(f"gzip-{day}".encode())
+
+    deleted = prune_local_gzip_snapshots(
+        tmp_path,
+        verified_drive_names={
+            "2026-06-04.db.gz",
+            "2026-06-05.db.gz",
+            "2026-06-06.db.gz",
+        },
+    )
+
+    assert deleted == ["2026-06-03.db.gz", "2026-06-02.db.gz", "2026-06-01.db.gz"]
+    assert sorted(path.name for path in tmp_path.glob("*.db.gz")) == [
+        "2026-06-04.db.gz",
+        "2026-06-05.db.gz",
+        "2026-06-06.db.gz",
+    ]
+
+
+def test_run_backup_wires_verified_log_provenance_into_local_gzip_pruning(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    snapshot = tmp_path / "2026-06-10.db.gz"
+    snapshot.write_bytes(b"backup-bytes")
+    for day in range(1, 10):
+        (tmp_path / f"2026-06-{day:02d}.db.gz").write_bytes(f"gzip-{day}".encode())
+    log_path = tmp_path / "backup-daily.log"
+    log_path.write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "uploaded": True,
+                    "verified": True,
+                    "snapshot": str(tmp_path / f"2026-06-{day:02d}.db.gz"),
+                }
+            )
+            for day in (4, 6, 8)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    class FakeArtifact:
+        gzip_path = snapshot
+        uncompressed_path = None
+        sentinel_chunks = 1
+        local_retention_deleted: list[str] = []
+
+    monkeypatch.setattr(backup_daily, "create_sqlite_backup_artifact", lambda *args, **kwargs: FakeArtifact())
+    monkeypatch.setattr(backup_daily, "get_drive_credentials", lambda *args, **kwargs: object())
+    monkeypatch.setattr(backup_daily, "build_drive_service", lambda *args, **kwargs: object())
+    monkeypatch.setattr(backup_daily, "ensure_drive_folder_chain", lambda service, folder_parts: "folder-id")
+    monkeypatch.setattr(backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        backup_daily,
+        "verify_sqlite_backup_artifact",
+        lambda *args, **kwargs: {"verified": True, "verification_mode": "quick"},
+    )
+    monkeypatch.setattr(
+        backup_daily,
+        "upload_file_to_drive_raw",
+        lambda file_path, folder_id, credentials: {
+            "id": "drive-file-id",
+            "name": Path(file_path).name,
+            "size": str(Path(file_path).stat().st_size),
+        },
+    )
+    monkeypatch.setattr(backup_daily, "prune_drive_backups", lambda *args, **kwargs: [])
+
+    result = backup_daily.run_backup(
+        db_path=tmp_path / "brainlayer.db",
+        staging_dir=tmp_path,
+        date_stamp="2026-06-10",
+        upload=True,
+        remove_local_after_upload=False,
+        log_path=log_path,
+    )
+
+    assert result["verified"] is True
+    assert result["local_gzip_retention_deleted"] == [
+        "2026-06-06.db.gz",
+        "2026-06-05.db.gz",
+        "2026-06-04.db.gz",
+        "2026-06-03.db.gz",
+        "2026-06-02.db.gz",
+        "2026-06-01.db.gz",
+    ]
+    assert (tmp_path / "2026-06-07.db.gz").exists()
+    assert (tmp_path / "2026-06-09.db.gz").exists()
+    assert not (tmp_path / "2026-06-03.db.gz").exists()
+
+
+def test_verified_snapshot_log_parser_accepts_only_uploaded_verified_snapshot_names(tmp_path):
+    from brainlayer import backup_daily
+
+    log_path = tmp_path / "backup-daily.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "uploaded": True,
+                        "verified": True,
+                        "snapshot": "/backups/2026-06-01.db.gz",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "uploaded": True,
+                        "verified": False,
+                        "snapshot": "/backups/2026-06-02.db.gz",
+                    }
+                ),
+                "not-json",
+                json.dumps({"uploaded": True, "verified": True, "snapshot": "not-a-snapshot.db"}),
+                json.dumps(
+                    {
+                        "uploaded": False,
+                        "verified": True,
+                        "snapshot": "/backups/2026-06-03.db.gz",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "uploaded": True,
+                        "verified": True,
+                        "snapshot": "/backups/2026-06-04.db.gz",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert backup_daily._verified_snapshot_names_from_log(log_path) == {
+        "2026-06-01.db.gz",
+        "2026-06-04.db.gz",
+    }
 
 
 def test_create_snapshot_routes_vacuum_into_over_brainbar_socket(tmp_path):
@@ -916,6 +1109,68 @@ def test_run_backup_verifies_upload_removes_local_and_rotates_last_n(tmp_path, m
     assert not snapshot.exists()
 
 
+def test_run_backup_unverified_upload_skips_drive_and_local_gzip_pruning(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    snapshot = tmp_path / "2026-05-30.db.gz"
+    snapshot.write_bytes(b"backup-bytes")
+    drive_prune_calls: list[object] = []
+    local_prune_calls: list[object] = []
+
+    class FakeArtifact:
+        gzip_path = snapshot
+        uncompressed_path = None
+        sentinel_chunks = 1
+        local_retention_deleted: list[str] = []
+
+    monkeypatch.setattr(backup_daily, "create_sqlite_backup_artifact", lambda *args, **kwargs: FakeArtifact())
+    monkeypatch.setattr(backup_daily, "get_drive_credentials", lambda *args, **kwargs: object())
+    monkeypatch.setattr(backup_daily, "build_drive_service", lambda *args, **kwargs: object())
+    monkeypatch.setattr(backup_daily, "ensure_drive_folder_chain", lambda service, folder_parts: "folder-id")
+    monkeypatch.setattr(backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        backup_daily,
+        "verify_sqlite_backup_artifact",
+        lambda *args, **kwargs: {"verified": False, "verification_mode": "quick"},
+    )
+    monkeypatch.setattr(
+        backup_daily,
+        "upload_file_to_drive_raw",
+        lambda file_path, folder_id, credentials: {
+            "id": "drive-file-id",
+            "name": Path(file_path).name,
+            "size": str(Path(file_path).stat().st_size),
+        },
+    )
+    monkeypatch.setattr(
+        backup_daily,
+        "prune_drive_backups",
+        lambda *args, **kwargs: drive_prune_calls.append((args, kwargs)) or [],
+    )
+    monkeypatch.setattr(
+        backup_daily,
+        "prune_local_gzip_snapshots",
+        lambda *args, **kwargs: local_prune_calls.append((args, kwargs)) or [],
+    )
+
+    result = backup_daily.run_backup(
+        db_path=tmp_path / "brainlayer.db",
+        staging_dir=tmp_path,
+        date_stamp="2026-05-30",
+        upload=True,
+        remove_local_after_upload=True,
+        log_path=tmp_path / "backup-daily.log",
+    )
+
+    assert result["uploaded"] is True
+    assert result["verified"] is False
+    assert result["retention_deleted"] == []
+    assert result["local_gzip_retention_deleted"] == []
+    assert drive_prune_calls == []
+    assert local_prune_calls == []
+    assert snapshot.exists()
+
+
 def test_run_backup_appends_result_to_file_log(tmp_path, monkeypatch):
     from brainlayer import backup_daily
 
@@ -1139,6 +1394,50 @@ def test_prune_drive_backups_keeps_only_latest_n_snapshots():
         "2026-05-01.db.gz",
     ]
     assert service.files().deleted == ["id-5", "id-4", "id-3", "id-2", "id-1"]
+
+
+def test_weekly_shared_drive_pool_keeps_the_three_newest_archives():
+    from brainlayer import backup_daily
+
+    class FakeExecute:
+        def __init__(self, value):
+            self.value = value
+
+        def execute(self):
+            return self.value
+
+    class FakeFiles:
+        def __init__(self):
+            self.deleted: list[str] = []
+            self.files = [{"id": f"id-{day}", "name": f"2026-05-{day:02d}.db.gz"} for day in range(1, 5)]
+
+        def list(self, **kwargs):  # noqa: ARG002
+            query = kwargs["q"]
+            if "mimeType = 'application/vnd.google-apps.folder'" in query:
+                return FakeExecute({"files": [{"id": "folder-id", "name": "brainlayer-db"}]})
+            return FakeExecute({"files": self.files})
+
+        def delete(self, fileId, **kwargs):  # noqa: N803, ARG002
+            self.deleted.append(fileId)
+            return FakeExecute({})
+
+    class FakeService:
+        def __init__(self):
+            self._files = FakeFiles()
+
+        def files(self):
+            return self._files
+
+    service = FakeService()
+
+    deleted = backup_daily.prune_drive_backups(
+        service,
+        folder_parts=["brainlayer-db"],
+        retention_policy=backup_daily.WEEKLY_RETENTION,
+    )
+
+    assert deleted == ["2026-05-01.db.gz"]
+    assert service.files().deleted == ["id-1"]
 
 
 def test_launchd_installer_knows_backup_target():
