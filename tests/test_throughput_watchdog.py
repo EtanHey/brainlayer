@@ -57,6 +57,24 @@ def _progress(module, chunk_rowid: int, liveness_rowid: int = 0):
     )
 
 
+def _stalled_result(module):
+    return module.WatchdogResult(
+        checked_at_epoch=1_000,
+        watcher_highwater_rowid=40,
+        watcher_highwater_delta=0,
+        watcher_liveness_highwater_rowid=0,
+        watcher_liveness_highwater_delta=0,
+        pending_files=1,
+        pending_bytes=20,
+        recent_files=1,
+        untracked_recent_files=0,
+        newest_source_mtime=999.0,
+        scan_errors=0,
+        stalled_ticks=3,
+        action="stalled",
+    )
+
+
 def _enabled_command_runner(args: list[str]):
     """Shared runner for ticks that never recover: launchd reports the label enabled, everything else succeeds.
 
@@ -125,21 +143,7 @@ def test_explicit_by_design_watcher_condition_skips_alert_side_effects(tmp_path:
     monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: subprocess_calls.append((args, kwargs)))
     monkeypatch.setattr(module.urllib.request, "urlopen", lambda *args, **kwargs: urlopen_calls.append((args, kwargs)))
 
-    result = module.WatchdogResult(
-        checked_at_epoch=1_000,
-        watcher_highwater_rowid=40,
-        watcher_highwater_delta=0,
-        watcher_liveness_highwater_rowid=0,
-        watcher_liveness_highwater_delta=0,
-        pending_files=1,
-        pending_bytes=20,
-        recent_files=1,
-        untracked_recent_files=0,
-        newest_source_mtime=999.0,
-        scan_errors=0,
-        stalled_ticks=3,
-        action="stalled",
-    )
+    result = _stalled_result(module)
     module._best_effort_alert(config, result)
 
     assert subprocess_calls == []
@@ -161,24 +165,7 @@ def test_watcher_condition_without_marker_still_alerts(tmp_path: Path, monkeypat
     monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: subprocess_calls.append((args, kwargs)))
     monkeypatch.setattr(module.urllib.request, "urlopen", lambda *args, **kwargs: urlopen_calls.append((args, kwargs)))
 
-    module._best_effort_alert(
-        config,
-        module.WatchdogResult(
-            checked_at_epoch=1_000,
-            watcher_highwater_rowid=40,
-            watcher_highwater_delta=0,
-            watcher_liveness_highwater_rowid=0,
-            watcher_liveness_highwater_delta=0,
-            pending_files=1,
-            pending_bytes=20,
-            recent_files=1,
-            untracked_recent_files=0,
-            newest_source_mtime=999.0,
-            scan_errors=0,
-            stalled_ticks=3,
-            action="stalled",
-        ),
-    )
+    module._best_effort_alert(config, _stalled_result(module))
 
     assert len(subprocess_calls) == 1
     assert len(urlopen_calls) == 1
