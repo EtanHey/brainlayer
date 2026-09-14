@@ -436,8 +436,8 @@ def test_jsonl_retention_invariant_is_a_ci_guard_not_only_a_behavior_fixture():
     )
 
     unsafe_backup_daily = backup_daily_source.replace(
-        '"&fields=id,name,size,md5Checksum"',
-        '"&fields=id,name,size"',
+        '"&fields=id,name,size,md5Checksum,appProperties"',
+        '"&fields=id,name,size,appProperties"',
         1,
     ).replace(
         '"""Upload large backups with Drive\'s raw resumable protocol."""',
