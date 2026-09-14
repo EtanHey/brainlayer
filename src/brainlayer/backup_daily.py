@@ -39,7 +39,11 @@ _sleep = time.sleep
 
 DEFAULT_TOKEN_PATH = Path.home() / ".config" / "google-drive-mcp" / "tokens.json"
 DEFAULT_CLIENT_PATH = Path.home() / ".config" / "google-drive-mcp" / "gcp-oauth.keys.json"
-DEFAULT_FOLDER_PARTS = ["Brain Drive", "06_ARCHIVE", "backups", "brainlayer-db"]
+CANONICAL_MACHINE_ID = "MacBook-Pro"
+CANONICAL_FOLDER_PARTS = ["Brain Drive", "06_ARCHIVE", "backups", "brainlayer-db"]
+# Compatibility alias for callers that explicitly target the legacy M4 folder.
+DEFAULT_FOLDER_PARTS = CANONICAL_FOLDER_PARTS
+BACKUP_MACHINE_ID_ENV = "BRAINLAYER_MACHINE_ID"
 DEFAULT_STAGING_DIR = Path.home() / ".local" / "share" / "brainlayer" / "backups"
 DEFAULT_LOG_PATH = Path.home() / ".local" / "share" / "brainlayer" / "logs" / "backup-daily.log"
 DEFAULT_BRAINBAR_SOCKET_PATH = "/tmp/brainbar.sock"
@@ -105,6 +109,46 @@ class SQLiteBackupArtifact:
 
 def _today() -> str:
     return dt.datetime.now(dt.UTC).date().isoformat()
+
+
+def _validate_machine_id(machine_id: str) -> str:
+    value = machine_id.strip()
+    if not value or any(not (character.isalnum() or character in "._-") for character in value):
+        raise ValueError(f"{BACKUP_MACHINE_ID_ENV} must contain only letters, numbers, '.', '_', or '-'")
+    return value
+
+
+def resolve_machine_id(env: Mapping[str, str] | None = None) -> str:
+    """Resolve a stable host identifier, preferring an explicit deployment value."""
+    source = env if env is not None else os.environ
+    configured = source.get(BACKUP_MACHINE_ID_ENV)
+    if configured is not None:
+        return _validate_machine_id(configured)
+
+    try:
+        completed = subprocess.run(
+            ["scutil", "--get", "LocalHostName"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        completed = None
+    if completed is not None and completed.returncode == 0 and completed.stdout.strip():
+        return _validate_machine_id(completed.stdout)
+
+    # Non-macOS development and CI hosts do not ship scutil. gethostname is a
+    # portability fallback, not the production identity source.
+    return _validate_machine_id(socket.gethostname().removesuffix(".local"))
+
+
+def default_drive_folder_parts(machine_id: str) -> list[str]:
+    """Return the per-machine Drive folder, preserving the M4's legacy folder."""
+    resolved = _validate_machine_id(machine_id)
+    if resolved == CANONICAL_MACHINE_ID:
+        return list(CANONICAL_FOLDER_PARTS)
+    return [*CANONICAL_FOLDER_PARTS[:-1], f"brainlayer-db-{resolved}"]
 
 
 def _append_json_log(path: Path, payload: dict[str, Any]) -> None:
@@ -1173,7 +1217,8 @@ def prune_drive_backups(
 def run_backup(
     db_path: Path | None = None,
     staging_dir: Path = DEFAULT_STAGING_DIR,
-    folder_parts: list[str] = DEFAULT_FOLDER_PARTS,
+    folder_parts: list[str] | None = None,
+    machine_id: str | None = None,
     log_path: Path | None = None,
     date_stamp: str | None = None,
     upload: bool = True,
@@ -1183,6 +1228,10 @@ def run_backup(
     resolved_db_path = db_path or get_db_path()
     resolved_date_stamp = date_stamp or _today()
     resolved_log_path = _backup_log_path(log_path, db_path=resolved_db_path)
+    resolved_machine_id = _validate_machine_id(machine_id) if machine_id is not None else resolve_machine_id()
+    resolved_folder_parts = (
+        list(folder_parts) if folder_parts is not None else default_drive_folder_parts(resolved_machine_id)
+    )
     retention_enabled = _drive_retention_enabled()
     result: dict[str, Any] = {
         "attempted_at": dt.datetime.now(dt.UTC).isoformat(),
@@ -1236,7 +1285,7 @@ def run_backup(
         if upload:
             credentials = get_drive_credentials()
             service = build_drive_service()
-            folder_id = ensure_drive_folder_chain(service, folder_parts)
+            folder_id = ensure_drive_folder_chain(service, resolved_folder_parts)
             uploaded = upload_file_to_drive_raw(snapshot, folder_id, credentials)
             file_id = uploaded.get("id")
             if not file_id:
@@ -1268,7 +1317,7 @@ def run_backup(
                 deleted = (
                     prune_drive_backups(
                         service,
-                        folder_parts=folder_parts,
+                        folder_parts=resolved_folder_parts,
                         retention_policy=retention_policy,
                     )
                     if retention_enabled
@@ -1310,11 +1359,18 @@ def _run_backup_process(timeout_seconds: int) -> int:
         resolved_db_path = get_db_path()
         result = run_backup(
             staging_dir=Path(os.environ.get("BRAINLAYER_BACKUP_STAGING_DIR", str(DEFAULT_STAGING_DIR))),
-            # Prefer BRAINLAYER_BACKUP_DRIVE_FOLDER; BRAINLAYER_BACKUP_DRIVE_PATH is a legacy alias before DEFAULT_FOLDER_PARTS.
-            folder_parts=os.environ.get(
-                "BRAINLAYER_BACKUP_DRIVE_FOLDER",
-                os.environ.get("BRAINLAYER_BACKUP_DRIVE_PATH", "/".join(DEFAULT_FOLDER_PARTS)),
-            ).split("/"),
+            # Prefer BRAINLAYER_BACKUP_DRIVE_FOLDER; BRAINLAYER_BACKUP_DRIVE_PATH
+            # is a legacy alias. With neither set, run_backup derives the host folder.
+            folder_parts=(
+                configured_folder.split("/")
+                if (
+                    configured_folder := os.environ.get(
+                        "BRAINLAYER_BACKUP_DRIVE_FOLDER",
+                        os.environ.get("BRAINLAYER_BACKUP_DRIVE_PATH"),
+                    )
+                )
+                else None
+            ),
             log_path=_backup_log_path(None, db_path=resolved_db_path, env=os.environ),
         )
     except BackupTimeoutError:

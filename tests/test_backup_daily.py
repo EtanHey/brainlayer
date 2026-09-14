@@ -94,6 +94,42 @@ def test_local_backup_cap_is_decoupled_from_drive_retention(monkeypatch):
     assert backup_daily._drive_upload_stall_max_attempts() == 3
 
 
+def test_noncanonical_machine_uses_its_own_default_drive_folder(monkeypatch):
+    from brainlayer import backup_daily
+
+    monkeypatch.setenv("BRAINLAYER_MACHINE_ID", "m1-brainlayer")
+
+    machine_id = backup_daily.resolve_machine_id()
+
+    assert machine_id == "m1-brainlayer"
+    assert backup_daily.default_drive_folder_parts(machine_id) == [
+        "Brain Drive",
+        "06_ARCHIVE",
+        "backups",
+        "brainlayer-db-m1-brainlayer",
+    ]
+    assert backup_daily.default_drive_folder_parts(machine_id) != backup_daily.CANONICAL_FOLDER_PARTS
+
+
+def test_canonical_m4_machine_keeps_existing_drive_folder():
+    from brainlayer import backup_daily
+
+    assert backup_daily.default_drive_folder_parts(backup_daily.CANONICAL_MACHINE_ID) == [
+        "Brain Drive",
+        "06_ARCHIVE",
+        "backups",
+        "brainlayer-db",
+    ]
+
+
+def test_backup_daily_plist_does_not_override_per_machine_drive_folder():
+    import plistlib
+
+    plist = plistlib.loads(Path("scripts/launchd/com.brainlayer.backup-daily.plist").read_bytes())
+
+    assert "BRAINLAYER_BACKUP_DRIVE_FOLDER" not in plist["EnvironmentVariables"]
+
+
 @pytest.mark.parametrize(
     ("value", "enabled"),
     (("0", False), ("", False), ("false", False), ("yes", False), ("on", False), ("1", True), ("true", True)),
