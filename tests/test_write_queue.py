@@ -122,6 +122,9 @@ class TestQueueStore:
             ),
             encoding="utf-8",
         )
+        heartbeat_prefix = str(heartbeat_path).rsplit("-", 1)[0]
+        for offset, content in enumerate(("null", "[]", json.dumps("x"), "{"), start=1):
+            Path(f"{heartbeat_prefix}-{blocker_pid + offset}.json").write_text(content, encoding="utf-8")
         watcher_path = enqueue_jsonl(
             {
                 "kind": "watcher_chunk",
