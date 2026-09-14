@@ -2,6 +2,19 @@ import XCTest
 @testable import BrainBar
 
 final class BrainLayerConfigTests: XCTestCase {
+    func testRetrievalToolsDefaultHiddenAndRoundTripWhenEnabled() throws {
+        XCTAssertFalse(BrainLayerConfig.defaultConfig.showRetrievalTools)
+
+        var document = BrainLayerEnvDocument(config: .defaultConfig)
+        document.update { $0.showRetrievalTools = true }
+        let rendered = document.rendered()
+        let reloaded = try BrainLayerEnvDocument(text: rendered).config
+
+        XCTAssertTrue(rendered.contains("BRAINLAYER_SHOW_RETRIEVAL_TOOLS=1"))
+        XCTAssertTrue(reloaded.showRetrievalTools)
+        XCTAssertTrue(reloaded.persistedValuesEqual(to: document.config))
+    }
+
     func testProviderAvailabilityOnlyExposesRuntimeWiredChoices() {
         XCTAssertEqual(BrainLayerEnrichmentProvider.selectableCases, [.gemini])
         XCTAssertNil(BrainLayerEnrichmentProvider.gemini.unavailableReason)

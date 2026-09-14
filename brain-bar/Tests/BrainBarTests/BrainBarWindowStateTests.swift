@@ -62,6 +62,22 @@ final class BrainBarWindowStateTests: XCTestCase {
         XCTAssertEqual(BrainBarTab.observability.title, "Observability")
     }
 
+    func testRetrievalEntryPointsAreHiddenByDefaultAndShownBySetting() {
+        XCTAssertEqual(
+            BrainBarRetrievalToolsPolicy.visibleTabs(showRetrievalTools: false),
+            [.injections, .observability]
+        )
+        XCTAssertFalse(BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: false))
+        XCTAssertFalse(BrainBarRetrievalToolsPolicy.allowsQuickActions(showRetrievalTools: false))
+
+        XCTAssertEqual(
+            BrainBarRetrievalToolsPolicy.visibleTabs(showRetrievalTools: true),
+            BrainBarTab.allCases
+        )
+        XCTAssertTrue(BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: true))
+        XCTAssertTrue(BrainBarRetrievalToolsPolicy.allowsQuickActions(showRetrievalTools: true))
+    }
+
     @MainActor
     func testLiveWindowDefaultsToObservability() {
         XCTAssertEqual(BrainBarWindowRootView.defaultTab, .observability)

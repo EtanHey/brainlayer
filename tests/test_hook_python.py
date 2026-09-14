@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import plistlib
 from pathlib import Path
 
 import pytest
@@ -635,3 +636,21 @@ def test_launchd_plist_render_rejects_xml_forbidden_interpreter_path(tmp_path):
 
     with pytest.raises(HookPythonUnresolved):
         render_launchd_plist("<string>__BRAINLAYER_PYTHON__</string>", python=str(python))
+
+
+def test_health_check_launchd_runs_observability_writer_with_rendered_keg_python(tmp_path):
+    from brainlayer.hook_python import render_launchd_plist
+
+    template = (REPO_ROOT / "scripts/launchd/com.brainlayer.health-check.plist").read_text(encoding="utf-8")
+    python = tmp_path / "opt" / "brainlayer" / "libexec" / "venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("#!/bin/sh\n")
+    python.chmod(0o755)
+
+    rendered = render_launchd_plist(template, python=str(python))
+    args = plistlib.loads(rendered.encode())["ProgramArguments"]
+
+    assert str(python) in args
+    assert "health-check" in args
+    assert "observability" in args
+    assert "--write" in args

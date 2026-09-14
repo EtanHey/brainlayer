@@ -5,6 +5,18 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
     private let fixedNow = Date(timeIntervalSince1970: 1_784_466_000)
 
     @MainActor
+    func testRetrievalToolsSettingPersistsEnabledState() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        XCTAssertFalse(fixture.viewModel.config.showRetrievalTools)
+        fixture.viewModel.setShowRetrievalTools(true)
+
+        XCTAssertTrue(fixture.viewModel.config.showRetrievalTools)
+        XCTAssertTrue(try fixture.store.loadDocument().config.showRetrievalTools)
+    }
+
+    @MainActor
     func testFailedSaveLeavesDisplayedConfigAtLastPersistedValue() throws {
         let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("brainbar-settings-model-\(UUID().uuidString)", isDirectory: false)
