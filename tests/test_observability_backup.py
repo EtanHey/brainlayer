@@ -6,8 +6,8 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
-import pytest
 import jsonschema
+import pytest
 
 from brainlayer import backup_daily, observability_backup, observability_surface
 from brainlayer.observability_backup import build_backups_section
@@ -326,7 +326,7 @@ def test_producer_without_observability_wiring_measures_all_sections(
     monkeypatch.setattr(
         observability_backup.subprocess,
         "run",
-        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, launchd_text, ""),
+        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, launchd_text.encode(), b""),
     )
 
     document, _ = observability_surface.build_document(env={"BRAINLAYER_DB": str(db)})
@@ -339,7 +339,8 @@ def test_producer_without_observability_wiring_measures_all_sections(
         str(logs / "jsonl-backup.log"),
         str(logs / "backup-daily.log"),
     ]
-    assert document["backups"]["inputs"][2]["kind"] == "command"
+    assert document["backups"]["inputs"][2]["path"].startswith("command:launchctl print gui/")
+    assert document["backups"]["inputs"][2]["status"] == "read"
 
 
 def test_backup_daily_empty_env_does_not_fall_back_to_process_environment(
@@ -357,7 +358,7 @@ def test_nonzero_unrecognized_launchd_exit_is_unmeasurable(monkeypatch: pytest.M
     monkeypatch.setattr(
         observability_backup.subprocess,
         "run",
-        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 1, output, ""),
+        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 1, output.encode(), b""),
     )
 
     result = build_backups_section(env=env, record_input=recorder, now=NOW)
@@ -442,22 +443,19 @@ def test_unset_launchd_input_uses_command_and_records_stdout(monkeypatch: pytest
     def run(argv, **kwargs):
         assert kwargs["timeout"] <= 5
         assert kwargs["shell"] is False
-        return subprocess.CompletedProcess(argv, 0, output, "")
+        return subprocess.CompletedProcess(argv, 0, output.encode(), b"")
 
     monkeypatch.setattr(observability_backup.subprocess, "run", run)
     result = build_backups_section(env=env, record_input=recorder, now=NOW)
 
     assert result["state"] == "measured"
     command = result["inputs"][2]
-    assert command["kind"] == "command"
-    assert command["argv"] == [
-        "launchctl",
-        "print",
-        f"gui/{observability_backup.os.getuid()}/{observability_backup.LABEL}",
-    ]
-    assert command["exit_code"] == 0
+    assert (
+        command["path"]
+        == f"command:launchctl print gui/{observability_backup.os.getuid()}/{observability_backup.LABEL}"
+    )
     assert command["sha256_first_64kb"] == hashlib.sha256(output.encode()).hexdigest()
-    assert command["state"] == "read"
+    assert command["status"] == "read"
 
 
 def test_unset_launchd_command_recognizes_not_loaded(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -466,14 +464,14 @@ def test_unset_launchd_command_recognizes_not_loaded(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(
         observability_backup.subprocess,
         "run",
-        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 113, output, ""),
+        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 113, b"", output.encode()),
     )
 
     result = build_backups_section(env=env, record_input=recorder, now=NOW)
 
     assert result["state"] == "measured"
     assert result["launchd"]["bootstrapped"] is False
-    assert result["inputs"][2]["state"] == "not_loaded"
+    assert result["inputs"][2]["status"] == "read"
 
 
 def test_unset_launchd_command_failure_is_unmeasurable_with_argv(
@@ -542,13 +540,18 @@ def _command_env(tmp_path: Path) -> tuple[dict[str, str], object]:
 
     def recorder(path: Path | None, **kwargs: object) -> dict[str, object]:
         if kwargs.get("kind") == "command":
-            stdout = str(kwargs.get("stdout", "")).encode()
+            stdout = kwargs.get("stdout", b"")
+            stderr = kwargs.get("stderr", b"")
+            stdout_bytes = stdout if isinstance(stdout, bytes) else str(stdout).encode()
+            stderr_bytes = stderr if isinstance(stderr, bytes) else str(stderr).encode()
+            command_argv = kwargs["argv"]
             return {
-                "kind": "command",
-                "argv": kwargs["argv"],
-                "exit_code": kwargs.get("exit_code"),
-                "sha256_first_64kb": hashlib.sha256(stdout).hexdigest(),
-                "state": kwargs["state"],
+                "path": "command:" + " ".join(command_argv),
+                "status": kwargs.get("status", "read"),
+                "mtime": None,
+                "rows_or_bytes": len(stdout_bytes + stderr_bytes),
+                "sha256_first_64kb": hashlib.sha256((stdout_bytes + stderr_bytes)[:65_536]).hexdigest(),
+                "skipped_lines": 0,
             }
         assert path is not None
         return {

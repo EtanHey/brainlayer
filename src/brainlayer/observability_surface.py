@@ -40,17 +40,15 @@ class InputRecorder:
     def __call__(self, path: Path | str | None, *, status: str = "read", rows_or_bytes: int | None = None,
                  skipped_lines: int = 0, in_section_inputs: bool = True, kind: str = "file",
                  argv: list[str] | None = None, exit_code: int | None = None,
-                 stdout: str = "", state: str | None = None) -> dict[str, Any]:
+                 stdout: bytes | str = b"", stderr: bytes | str = b"", state: str | None = None) -> dict[str, Any]:
         if kind == "command":
             command_argv = list(argv or [])
-            self.trace.append("$ " + " ".join(command_argv))
-            item = {
-                "kind": "command",
-                "argv": command_argv,
-                "exit_code": exit_code,
-                "sha256_first_64kb": hashlib.sha256(stdout.encode("utf-8")[:65_536]).hexdigest(),
-                "state": state or status,
-            }
+            stdout_bytes = stdout if isinstance(stdout, bytes) else stdout.encode("utf-8")
+            stderr_bytes = stderr if isinstance(stderr, bytes) else stderr.encode("utf-8")
+            command_path = "command:" + " ".join(command_argv)
+            self.trace.append(json.dumps({"path": command_path, "argv": command_argv, "exit_code": exit_code}))
+            item = _input(command_path, status, None, len(stdout_bytes + stderr_bytes),
+                          hashlib.sha256((stdout_bytes + stderr_bytes)[:65_536]).hexdigest(), 0)
             if in_section_inputs:
                 self.section_inputs.append(item)
             return item
@@ -109,6 +107,8 @@ def derive_emitter(source: object, sender: object, source_file: object) -> tuple
     return path, "source_file"
 def _unmeasurable(reason: str, db_input: dict[str, Any]) -> dict[str, Any]:
     return {"state": "unmeasurable", "reason": reason, "inputs": [db_input]}
+def _builder_failure(name: str, exc: Exception, db_input: dict[str, Any]) -> dict[str, Any]:
+    return _unmeasurable(f"{name} raised {type(exc).__name__}: {exc}", db_input)
 def _measured(db_input: dict[str, Any], **fields: Any) -> dict[str, Any]:
     return {"state": "measured", "reason": "", "inputs": [db_input], **fields}
 def _missing(columns: set[str], required: tuple[str, ...]) -> str | None:
@@ -222,9 +222,18 @@ def _build_document(*, env: Mapping[str, str], now: datetime, recorder: InputRec
             else 0
         )
         db_input["skipped_lines"] = skipped
-        stores = _stores(connection, columns, db_input, now)
-        emitters = _emitters(connection, columns, db_input, now)
-        author_unknown = _author_unknown(connection, columns, db_input, now)
+        try:
+            stores = _stores(connection, columns, db_input, now)
+        except Exception as exc:
+            stores = _builder_failure("stores", exc, db_input)
+        try:
+            emitters = _emitters(connection, columns, db_input, now)
+        except Exception as exc:
+            emitters = _builder_failure("emitters", exc, db_input)
+        try:
+            author_unknown = _author_unknown(connection, columns, db_input, now)
+        except Exception as exc:
+            author_unknown = _builder_failure("author_unknown", exc, db_input)
     if connection is not None:
         connection.close()
     try:
@@ -236,6 +245,8 @@ def _build_document(*, env: Mapping[str, str], now: datetime, recorder: InputRec
             if path := env.get(f"BRAINLAYER_OBSERVABILITY_{name}"):
                 recorder(path, in_section_inputs=False)
         backups = {"state": "unmeasurable", "reason": "backups module not installed", "inputs": []}
+    except Exception as exc:
+        backups = _unmeasurable(f"backups raised {type(exc).__name__}: {exc}", db_input)
     document = {"schema_version": 1, "generated_at": _iso_utc(now), "db_path": recorder.display_path(db_path),
                 "window_hours": WINDOW_HOURS, "stores": stores, "emitters": emitters,
                 "author_unknown": author_unknown, "backups": backups}

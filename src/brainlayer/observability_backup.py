@@ -27,7 +27,7 @@ def _path(env: Mapping[str, str], name: str, *, db_path: Path) -> Path:
         return Path(value).expanduser()
     defaults = {
         "BRAINLAYER_OBSERVABILITY_JSONL_BACKUP_LOG": Path(
-            env.get("BRAINLAYER_JSONL_BACKUP_LOG_PATH", str(jsonl_backup.DEFAULT_LOG_PATH))
+            env.get("BRAINLAYER_JSONL_BACKUP_LOG_PATH") or str(jsonl_backup.DEFAULT_LOG_PATH)
         ).expanduser(),
         "BRAINLAYER_OBSERVABILITY_BACKUP_DAILY_LOG": _backup_log_path(None, db_path=db_path, env=env),
         "BRAINLAYER_OBSERVABILITY_DISABLED_DIR": Path.home() / "Library" / "LaunchAgents" / ".disabled-retention-P0",
@@ -194,30 +194,39 @@ def build_backups_section(
     else:
         argv = ["launchctl", "print", f"gui/{os.getuid()}/{LABEL}"]
         launchd_text = ""
-        launchd_status = "malformed"
+        launchd_status = "missing"
         exit_code: int | None = None
-        command_state = "unmeasurable"
-        command_stdout = ""
+        command_stdout = b""
+        command_stderr = b""
         try:
-            completed = subprocess.run(argv, capture_output=True, text=True, timeout=5, check=False, shell=False)
+            completed = subprocess.run(argv, capture_output=True, text=False, timeout=5, check=False, shell=False)
             exit_code = completed.returncode
-            command_stdout = completed.stdout or ""
-            launchd_text = command_stdout + (completed.stderr or "")
+            command_stdout = completed.stdout or b""
+            command_stderr = completed.stderr or b""
+            if isinstance(command_stdout, str):
+                command_stdout = command_stdout.encode("utf-8")
+            if isinstance(command_stderr, str):
+                command_stderr = command_stderr.encode("utf-8")
+            launchd_text = (command_stdout + command_stderr).decode("utf-8", errors="replace")
             if exit_code == 113 and "Could not find service" in launchd_text:
-                command_state, launchd_status, launchd_not_loaded = "not_loaded", "read", True
+                launchd_status, launchd_not_loaded = "read", True
             elif exit_code == 0 and LABEL in launchd_text:
-                command_state, launchd_status = "read", "read"
+                launchd_status = "read"
             else:
+                launchd_status = "malformed"
                 command_failure = f"launchd command failed for argv {argv}: exit_code={exit_code}; unrecognized output"
-        except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
-            command_failure = f"launchd command failed for argv {argv}: {exc}"
+        except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.SubprocessError, OSError) as exc:
+            command_failure = (
+                f"launchd command failed for argv {argv}: exit_code={exit_code}; {type(exc).__name__}: {exc}"
+            )
         launchd_input = record_input(
             None,
             kind="command",
             argv=argv,
             exit_code=exit_code,
             stdout=command_stdout,
-            state=command_state,
+            stderr=command_stderr,
+            status=launchd_status,
         )
 
     try:
@@ -243,13 +252,7 @@ def build_backups_section(
             return _unmeasurable(f"input mtime is later than generated_at: {item['path']}", inputs)
     jsonl_status = str(jsonl_input.get("status"))
     daily_status = str(daily_input.get("status"))
-    launchd_status = (
-        str(launchd_input.get("status"))
-        if launchd_override
-        else "read"
-        if launchd_input.get("state") in {"read", "not_loaded"}
-        else "malformed"
-    )
+    launchd_status = str(launchd_input.get("status"))
     if jsonl_status == "missing":
         return _unmeasurable(f"required input missing: {jsonl_input['path']}", inputs)
     if jsonl_status == "malformed":
