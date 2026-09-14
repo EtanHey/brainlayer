@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -272,3 +274,155 @@ def test_unbootstrapped_service_with_disabled_directory_is_measured(tmp_path: Pa
         "bootstrapped": False,
         "disabled_dir_present": True,
     }
+
+
+def test_production_defaults_are_db_relative(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    db = tmp_path / "snapshot" / "brainlayer.db"
+    db.parent.mkdir(parents=True)
+    source = FIXTURES / "logs" / "healthy-dev"
+    logs = db.parent / "logs"
+    logs.mkdir()
+    for name in ("jsonl-backup.log", "backup-daily.log"):
+        (logs / name).write_bytes((source / name).read_bytes())
+    disabled = tmp_path / "Library" / "LaunchAgents" / ".disabled-retention-P0"
+    disabled.mkdir(parents=True)
+    launchd = tmp_path / "launchd.txt"
+    launchd.write_bytes((FIXTURES / "launchd" / "healthy-dev.txt").read_bytes())
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    env = {
+        "BRAINLAYER_DB": str(db),
+        "BRAINLAYER_OBSERVABILITY_LAUNCHD_OUTPUT": str(launchd),
+    }
+    result, _ = _build_with_env(env)
+
+    assert result["state"] == "measured"
+    assert [item["path"] for item in result["inputs"]] == [
+        str(logs / "jsonl-backup.log"),
+        str(logs / "backup-daily.log"),
+        str(launchd),
+    ]
+
+
+def test_unset_launchd_input_uses_command_and_records_stdout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    env, recorder = _command_env(tmp_path)
+    output = 'service = com.brainlayer.jsonl-backup\n'
+
+    def run(argv, **kwargs):
+        assert kwargs["timeout"] <= 5
+        assert kwargs["shell"] is False
+        return subprocess.CompletedProcess(argv, 0, output, "")
+
+    monkeypatch.setattr(observability_backup.subprocess, "run", run)
+    result = build_backups_section(env=env, record_input=recorder, now=NOW)
+
+    assert result["state"] == "measured"
+    command = result["inputs"][2]
+    assert command["kind"] == "command"
+    assert command["argv"] == ["launchctl", "print", f"gui/{observability_backup.os.getuid()}/{observability_backup.LABEL}"]
+    assert command["exit_code"] == 0
+    assert command["sha256_first_64kb"] == hashlib.sha256(output.encode()).hexdigest()
+    assert command["state"] == "read"
+
+
+def test_unset_launchd_command_recognizes_not_loaded(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    env, recorder = _command_env(tmp_path)
+    output = f'Could not find service "{observability_backup.LABEL}" in domain for user gui: 501\n'
+    monkeypatch.setattr(
+        observability_backup.subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 113, output, ""),
+    )
+
+    result = build_backups_section(env=env, record_input=recorder, now=NOW)
+
+    assert result["state"] == "measured"
+    assert result["launchd"]["bootstrapped"] is False
+    assert result["inputs"][2]["state"] == "not_loaded"
+
+
+def test_unset_launchd_command_failure_is_unmeasurable_with_argv(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    env, recorder = _command_env(tmp_path)
+    monkeypatch.setattr(
+        observability_backup.subprocess,
+        "run",
+        lambda argv, **kwargs: (_ for _ in ()).throw(FileNotFoundError("launchctl")),
+    )
+
+    result = build_backups_section(env=env, record_input=recorder, now=NOW)
+
+    assert result["state"] == "unmeasurable"
+    assert "['launchctl', 'print', 'gui/" in result["reason"]
+
+
+def test_launchd_file_override_still_wins(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    env, recorder = _command_env(tmp_path)
+    launchd = tmp_path / "override.txt"
+    launchd.write_text('service = com.brainlayer.jsonl-backup\n', encoding="utf-8")
+    env["BRAINLAYER_OBSERVABILITY_LAUNCHD_OUTPUT"] = str(launchd)
+    monkeypatch.setattr(
+        observability_backup.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("command fallback used")),
+    )
+
+    result = build_backups_section(env=env, record_input=recorder, now=NOW)
+
+    assert result["state"] == "measured"
+    assert result["inputs"][2]["path"] == str(launchd)
+
+
+def _build_with_env(env: dict[str, str]) -> tuple[dict[str, object], list[str]]:
+    opened: list[str] = []
+
+    def recorder(path: Path, **kwargs: object) -> dict[str, object]:
+        opened.append(str(path))
+        return {
+            "path": str(path),
+            "status": str(kwargs.get("status", "read")),
+            "mtime": None,
+            "rows_or_bytes": kwargs.get("rows_or_bytes"),
+            "sha256_first_64kb": None,
+            "skipped_lines": kwargs.get("skipped_lines", 0),
+        }
+
+    return build_backups_section(env=env, record_input=recorder, now=NOW), opened
+
+
+def _command_env(tmp_path: Path) -> tuple[dict[str, str], object]:
+    source = FIXTURES / "logs" / "healthy-dev"
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    for name in ("jsonl-backup.log", "backup-daily.log"):
+        (logs / name).write_bytes((source / name).read_bytes())
+    disabled = tmp_path / "disabled"
+    disabled.mkdir()
+    env = {
+        "BRAINLAYER_OBSERVABILITY_JSONL_BACKUP_LOG": str(logs / "jsonl-backup.log"),
+        "BRAINLAYER_OBSERVABILITY_BACKUP_DAILY_LOG": str(logs / "backup-daily.log"),
+        "BRAINLAYER_OBSERVABILITY_DISABLED_DIR": str(disabled),
+    }
+
+    def recorder(path: Path | None, **kwargs: object) -> dict[str, object]:
+        if kwargs.get("kind") == "command":
+            stdout = str(kwargs.get("stdout", "")).encode()
+            return {
+                "kind": "command",
+                "argv": kwargs["argv"],
+                "exit_code": kwargs.get("exit_code"),
+                "sha256_first_64kb": hashlib.sha256(stdout).hexdigest(),
+                "state": kwargs["state"],
+            }
+        assert path is not None
+        return {
+            "path": str(path),
+            "status": str(kwargs.get("status", "read")),
+            "mtime": None,
+            "rows_or_bytes": kwargs.get("rows_or_bytes"),
+            "sha256_first_64kb": None,
+            "skipped_lines": kwargs.get("skipped_lines", 0),
+        }
+
+    return env, recorder
