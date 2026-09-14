@@ -1,16 +1,20 @@
-import re
+import ast
 from pathlib import Path
 
 DRIVE_HARD_DELETE_ALLOWLIST: frozenset[str] = frozenset()
 
 
 def _repo_drive_hard_delete_references(root: Path = Path("src/brainlayer")) -> list[str]:
-    pattern = re.compile(r"\.files\(\)\s*\.delete\s*\(")
+    from brainlayer.backup_retention_invariant import drive_hard_delete_lines
+
     return [
         f"{path}:{line_number}"
         for path in sorted(root.rglob("*.py"))
-        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
-        if pattern.search(line) and path.as_posix() not in DRIVE_HARD_DELETE_ALLOWLIST
+        for line_number in drive_hard_delete_lines(
+            ast.parse(path.read_text(encoding="utf-8")),
+            strict_backup_module=path.name in {"backup_daily.py", "jsonl_backup.py"},
+        )
+        if path.as_posix() not in DRIVE_HARD_DELETE_ALLOWLIST
     ]
 
 
