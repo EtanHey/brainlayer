@@ -657,7 +657,7 @@ def copy_archive_to_icloud(
                     return receipt(reused=True)
                 if time.monotonic() >= deadline:
                     raise ICloudDeadlineExceeded(
-                        f"existing iCloud copy was not uploaded and materialized within {configured_timeout}s: "
+                        "existing iCloud copy was not uploaded and materialized before its deadline: "
                         f"path={destination} state={state!r}"
                     )
                 time.sleep(min(poll_interval_seconds, remaining_seconds()))
@@ -724,7 +724,7 @@ def copy_archive_to_icloud(
                 placeholder = destination.with_name(f".{destination.name}.icloud")
                 materialization = "PLACEHOLDER" if placeholder.exists() or not destination.exists() else "PENDING"
                 raise RuntimeError(
-                    f"iCloud copy was not uploaded and materialized within {configured_timeout}s: "
+                    "iCloud copy was not uploaded and materialized before its deadline: "
                     f"path={destination} materialization={materialization} state={state!r}"
                 )
             time.sleep(min(poll_interval_seconds, remaining_seconds()))
