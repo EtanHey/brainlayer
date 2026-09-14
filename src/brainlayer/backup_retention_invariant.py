@@ -195,6 +195,22 @@ def _upload_requests_md5(function: ast.FunctionDef) -> bool:
     return False
 
 
+def _has_trash_update(function: ast.FunctionDef) -> bool:
+    for call in _calls(function, "update"):
+        for keyword in call.keywords:
+            if keyword.arg != "body" or not isinstance(keyword.value, ast.Dict):
+                continue
+            for key, value in zip(keyword.value.keys, keyword.value.values, strict=True):
+                if (
+                    isinstance(key, ast.Constant)
+                    and key.value == "trashed"
+                    and isinstance(value, ast.Constant)
+                    and value.value is True
+                ):
+                    return True
+    return False
+
+
 def inspect_jsonl_retention_invariant(source: str, *, backup_daily_source: str) -> list[str]:
     """Return deterministic violations of the PR #815 surviving-copy contract."""
     try:
@@ -212,12 +228,14 @@ def inspect_jsonl_retention_invariant(source: str, *, backup_daily_source: str) 
     select_candidates = _function(tree, "_select_backup_candidates")
     update_state = _function(tree, "_update_state_for_uploaded")
     run_backup = _function(tree, "run_backup")
+    trash_pruner = _function(tree, "_prune_drive_backups_to_trash")
     upload_file = _function(backup_daily_tree, "upload_file_to_drive_raw")
     required = {
         "_state_matches": state_matches,
         "_select_backup_candidates": select_candidates,
         "_update_state_for_uploaded": update_state,
         "run_backup": run_backup,
+        "_prune_drive_backups_to_trash": trash_pruner,
         "upload_file_to_drive_raw": upload_file,
     }
     for name, function in required.items():
@@ -230,6 +248,7 @@ def inspect_jsonl_retention_invariant(source: str, *, backup_daily_source: str) 
     assert select_candidates is not None
     assert update_state is not None
     assert run_backup is not None
+    assert trash_pruner is not None
     assert upload_file is not None
     parents = _parent_map(tree)
 
@@ -323,7 +342,23 @@ def inspect_jsonl_retention_invariant(source: str, *, backup_daily_source: str) 
     if not _upload_requests_md5(upload_file):
         errors.append("Drive upload must request md5Checksum from the API")
 
-    prune_calls = _calls(run_backup, "prune_drive_backups")
+    legacy_prune_calls = _calls(run_backup, "prune_drive_backups")
+    legacy_prune_refs = [
+        node
+        for node in ast.walk(tree)
+        if (isinstance(node, ast.Attribute) and node.attr == "prune_drive_backups")
+        or (isinstance(node, ast.Name) and node.id == "prune_drive_backups")
+    ]
+    if legacy_prune_calls or _calls(trash_pruner, "prune_drive_backups"):
+        errors.append("JSONL retention must not call backup_daily.prune_drive_backups")
+    if legacy_prune_refs:
+        errors.append("JSONL retention must not reference backup_daily.prune_drive_backups")
+    if _calls(trash_pruner, "delete"):
+        errors.append("JSONL retention must not hard-delete Drive objects")
+    if not _has_trash_update(trash_pruner):
+        errors.append("JSONL retention must trash Drive objects with update(body={'trashed': True})")
+
+    prune_calls = _calls(run_backup, "_prune_drive_backups_to_trash")
     archive_unlinks = [
         call
         for call in _calls(run_backup, "unlink")

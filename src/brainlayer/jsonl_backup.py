@@ -49,6 +49,11 @@ DEFAULT_ACTIVE_SKIP_SECONDS = 10 * 60
 DEFAULT_TIMEOUT_SECONDS = 1800
 DEFAULT_ICLOUD_TIMEOUT_SECONDS = 300
 ICLOUD_DIR_ENV = "BRAINLAYER_JSONL_BACKUP_ICLOUD_DIR"
+BRAINLAYER_JSONL_BACKUP_RETENTION_ENV = "BRAINLAYER_JSONL_BACKUP_RETENTION"
+# Retention is a destructive operation even when the source-side coverage check passes. Keep
+# it off until archive-level history coverage is proven; the explicit environment override is
+# the only opt-in for a deliberately bounded run.
+RETENTION_ENABLED = False
 JSONL_RETENTION = backup_daily.DriveRetentionPolicy(
     keep_latest=30,
     filename_prefix="claude-jsonl-",
@@ -330,6 +335,66 @@ def _archive_name(candidate: JsonlCandidate) -> str:
 
 def _forever_enabled() -> bool:
     return os.environ.get("BRAINLAYER_JSONL_FOREVER", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _retention_enabled() -> bool:
+    return RETENTION_ENABLED or os.environ.get(BRAINLAYER_JSONL_BACKUP_RETENTION_ENV, "").strip().lower() in {
+        "1",
+        "true",
+    }
+
+
+def _prune_drive_backups_to_trash(
+    service: Any,
+    *,
+    folder_parts: list[str],
+    retention_policy: backup_daily.DriveRetentionPolicy,
+) -> list[str]:
+    """Move old JSONL Drive archives to trash without hard-deleting them."""
+    folder_id = backup_daily.ensure_drive_folder_chain(service, folder_parts)
+    files: list[dict[str, Any]] = []
+    page_token = None
+    while True:
+        response = (
+            service.files()
+            .list(
+                q=f"'{folder_id}' in parents and trashed = false",
+                spaces="drive",
+                fields="nextPageToken,files(id,name)",
+                pageSize=1000,
+                pageToken=page_token,
+                supportsAllDrives=True,
+            )
+            .execute()
+        )
+        files.extend(response.get("files", []))
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            break
+
+    dated = []
+    for item in files:
+        parsed = backup_daily._parse_snapshot_date(
+            item.get("name", ""),
+            prefix=retention_policy.filename_prefix,
+            suffix=retention_policy.filename_suffix,
+        )
+        if parsed:
+            dated.append((parsed, item))
+
+    dated.sort(key=lambda pair: pair[0], reverse=True)
+    keep_ids = {item["id"] for _, item in dated[: retention_policy.keep_latest]}
+    trashed: list[str] = []
+    for _, item in dated:
+        if item["id"] in keep_ids:
+            continue
+        service.files().update(
+            fileId=item["id"],
+            body={"trashed": True},
+            supportsAllDrives=True,
+        ).execute()
+        trashed.append(item["name"])
+    return trashed
 
 
 class ICloudDeadlineExceeded(RuntimeError):
@@ -1149,6 +1214,12 @@ def run_backup(
     date_stamp = date_stamp or _today()
     now = time.time() if now is None else now
     attempted_at = dt.datetime.fromtimestamp(now, dt.UTC).isoformat()
+    retention_enabled = _retention_enabled()
+    retention_receipt = {
+        "retention": "enabled" if retention_enabled else "disabled",
+        "retention_mode": "trash",
+        "retention_deleted": [],
+    }
     roots = source_roots or DEFAULT_SOURCE_ROOTS
     state_path = Path(state_path).expanduser()
     state = _load_state(state_path)
@@ -1222,6 +1293,7 @@ def run_backup(
             "icloud_repair_deferred": True,
             "error": error,
             "message": error,
+            **retention_receipt,
         }
         _append_json_log(log_path, result)
         _enqueue_run_summary(result, queue_dir=queue_dir)
@@ -1238,6 +1310,7 @@ def run_backup(
             "skipped_active_count": len(active),
             "vanished_source_count": vanished,
             "message": f"no-op, {covered} files already covered",
+            **retention_receipt,
         }
         _append_json_log(log_path, result)
         _enqueue_run_summary(result, queue_dir=queue_dir)
@@ -1259,9 +1332,9 @@ def run_backup(
         "already_covered_files": covered,
         "vanished_source_count": vanished,
         "source_file_count": len(candidates),
-        "retention_deleted": [],
         "forever_uploaded_file_count": 0,
         "forever_files": [],
+        **retention_receipt,
     }
 
     result.update(
@@ -1327,10 +1400,14 @@ def run_backup(
         try:
             # Do not move this ahead of the provenance write or loosen `_state_matches` to
             # mtime/size. That exact shape left 22 successful nights with no surviving bundle.
-            deleted = backup_daily.prune_drive_backups(
-                service,
-                folder_parts=folder_parts,
-                retention_policy=JSONL_RETENTION,
+            deleted = (
+                _prune_drive_backups_to_trash(
+                    service,
+                    folder_parts=folder_parts,
+                    retention_policy=JSONL_RETENTION,
+                )
+                if retention_enabled
+                else []
             )
             result["retention_deleted"] = deleted
             if _forever_enabled():
@@ -1347,8 +1424,11 @@ def run_backup(
             # Local staging may disappear only inside verified-upload control flow. Together
             # with the retention call above, this unlink is why survivor identity is a deletion
             # invariant rather than an optional integrity check (2026-09-09 / PR #815).
-            archive_path.unlink(missing_ok=True)
-            result["local_archive_removed"] = True
+            if retention_enabled:
+                archive_path.unlink(missing_ok=True)
+                result["local_archive_removed"] = True
+            else:
+                result["local_archive_removed"] = False
     elif not result["verified"]:
         result["status"] = "failed"
         result["message"] = f"local bundle verification failed: {result.get('verification_error', 'unknown error')}"
