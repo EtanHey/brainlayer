@@ -669,10 +669,16 @@ def copy_archive_to_icloud(
     destination = icloud_dir / f"claude-jsonl-{logical_sha256}{suffix}"
     placeholder = destination.with_name(f".{destination.name}.icloud")
 
-    def receipt(*, reused: bool, proof_deadline: float | None = deadline) -> dict[str, Any]:
+    def receipt(
+        *,
+        reused: bool,
+        proof_deadline: float | None = deadline,
+        proven_size: int | None = None,
+        proven_sha256: str | None = None,
+    ) -> dict[str, Any]:
         _check_icloud_deadline(proof_deadline, "building the iCloud receipt")
-        actual_size = destination.stat().st_size
-        actual_sha256 = _sha256_file(destination, deadline=proof_deadline)
+        actual_size = destination.stat().st_size if proven_size is None else proven_size
+        actual_sha256 = _sha256_file(destination, deadline=proof_deadline) if proven_sha256 is None else proven_sha256
         return {
             "path": str(destination),
             "status": "verified",
@@ -807,7 +813,15 @@ def copy_archive_to_icloud(
             materialized = state.get("downloading_status") == "current" and destination.is_file()
             if state.get("is_ubiquitous") is True and uploaded and materialized:
                 actual_size = destination.stat().st_size
-                actual_sha256 = _sha256_file(destination, deadline=network_deadline)
+                proof_deadline = _icloud_deadline_for_archive(
+                    destination,
+                    timeout_seconds=configured_timeout,
+                )
+                try:
+                    actual_sha256 = _sha256_file(destination, deadline=proof_deadline)
+                except ICloudDeadlineExceeded:
+                    pending = True
+                    return pending_receipt()
                 if actual_size != expected_size or actual_sha256 != expected_sha256:
                     raise RuntimeError(
                         "iCloud copy content mismatch: "
@@ -815,7 +829,12 @@ def copy_archive_to_icloud(
                         f"actual size={actual_size} sha256={actual_sha256}"
                     )
                 verified = True
-                result = receipt(reused=False, proof_deadline=network_deadline)
+                result = receipt(
+                    reused=False,
+                    proof_deadline=proof_deadline,
+                    proven_size=actual_size,
+                    proven_sha256=actual_sha256,
+                )
                 _trash_stale_unverified_icloud_items(icloud_dir, logical_sha256)
                 return result
             if time.monotonic() >= deadline and state.get("is_uploading") is True and destination.is_file():
@@ -1540,8 +1559,7 @@ def run_backup(
 
     if not changed and pending_candidates:
         error = (
-            "iCloud coverage is pending; repair deferred while "
-            f"{len(pending_candidates)} source(s) finish uploading"
+            f"iCloud coverage is pending; repair deferred while {len(pending_candidates)} source(s) finish uploading"
         )
         result = {
             "attempted_at": attempted_at,
