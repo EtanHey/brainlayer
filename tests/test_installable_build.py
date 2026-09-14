@@ -55,7 +55,8 @@ def _fake_launchctl_lines(
         *behavior,
         'if [ "$1" = "print" ]; then',
         '  label="${2##*/}"',
-        '  if grep -Fq "${label}.plist" "$FAKE_LAUNCHCTL_LOG"; then',
+        '  last_action="$(grep -F "${label}.plist" "$FAKE_LAUNCHCTL_LOG" | tail -1)"',
+        '  if [ "${last_action%% *}" = "bootstrap" ]; then',
         *output_commands,
         "    exit 0",
         "  fi",
@@ -1492,7 +1493,10 @@ def test_launchd_teardown_does_not_create_runtime_roots(tmp_path: Path, action: 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake_launchctl = fake_bin / "launchctl"
-    fake_launchctl.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_launchctl.write_text(
+        '#!/bin/sh\n[ "$1" = "print" ] && exit 1\nexit 0\n',
+        encoding="utf-8",
+    )
     fake_launchctl.chmod(0o755)
     fake_brainlayer = tmp_path / "brainlayer"
     fake_brainlayer.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
