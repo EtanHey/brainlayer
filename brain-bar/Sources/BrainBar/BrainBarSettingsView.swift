@@ -386,11 +386,11 @@ struct BrainBarSettingsView: View {
                 BrainBarSettingsPanel(title: "Gemini API Key") {
                     secretControls
                 }
-                BrainBarSettingsPanel(title: "System Jobs") {
-                    jobsGrid
-                }
                 BrainBarSettingsPanel(title: "Backup Status") {
                     backupStatus
+                }
+                BrainBarSettingsPanel(title: "System Jobs") {
+                    jobsGrid
                 }
                 BrainBarSettingsPanel(title: "Interface") {
                     Toggle(

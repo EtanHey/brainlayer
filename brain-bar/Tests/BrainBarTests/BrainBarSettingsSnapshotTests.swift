@@ -17,7 +17,8 @@ final class BrainBarSettingsSnapshotTests: XCTestCase {
         let providerViewModel = try makeViewModel(
             root: tempRoot,
             name: "provider",
-            config: providerConfig
+            config: providerConfig,
+            observabilityURL: Bundle.module.url(forResource: "observability-main-58849a70", withExtension: "json", subdirectory: "Fixtures")
         )
         try render(viewModel: providerViewModel, named: "provider-and-jobs")
 
@@ -55,7 +56,8 @@ final class BrainBarSettingsSnapshotTests: XCTestCase {
     private func makeViewModel(
         root: URL,
         name: String,
-        config: BrainLayerConfig
+        config: BrainLayerConfig,
+        observabilityURL: URL? = nil
     ) throws -> BrainBarSettingsViewModel {
         let configURL = root.appendingPathComponent("\(name)-brainlayer.env")
         let store = BrainLayerConfigStore(configURL: configURL)
@@ -73,7 +75,8 @@ final class BrainBarSettingsSnapshotTests: XCTestCase {
                 observation: .unknown("Active runtime configuration is not observable.")
             ),
             initialLaunchdStates: states,
-            refreshStatusOnLoad: false
+            refreshStatusOnLoad: false,
+            observabilityURL: observabilityURL
         )
     }
 

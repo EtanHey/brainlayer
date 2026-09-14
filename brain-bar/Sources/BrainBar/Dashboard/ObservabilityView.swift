@@ -138,14 +138,10 @@ enum ObservabilityReader {
 enum ObservabilityCardTone: String, Equatable, Sendable { case standard, neutral, amber }
 enum ObservabilityStatusTone: String, Equatable, Sendable { case green, red, neutral }
 
-struct ObservabilityStatusLine: Equatable, Sendable {
-    let text: String
-    let tone: ObservabilityStatusTone
-}
+struct ObservabilityStatusLine: Equatable, Sendable { let text: String; let tone: ObservabilityStatusTone }
 
 struct ObservabilityStatusRows: View {
-    let lines: [ObservabilityStatusLine]
-    var textColor = Color.primary
+    let lines: [ObservabilityStatusLine]; var textColor = Color.primary
 
     var body: some View {
         ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
