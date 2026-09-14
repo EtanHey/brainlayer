@@ -1205,6 +1205,187 @@ def test_icloud_upload_error_quarantines_unverified_destination(tmp_path, monkey
     assert quarantined[0].name.endswith(".unverified")
 
 
+def test_icloud_upload_still_in_progress_is_pending_not_quarantined(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    archive = tmp_path / "archive.tar.gz"
+    archive.write_bytes(b"locally verified bytes")
+    icloud_dir = tmp_path / "CloudDocs"
+    clock = [0.0]
+
+    def still_uploading(*args, **kwargs):  # noqa: ARG001
+        clock[0] = 2.0
+        return _icloud_state(uploaded=False, status="current")
+
+    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(jsonl_backup, "_icloud_item_state", still_uploading)
+
+    result = jsonl_backup.copy_archive_to_icloud(
+        archive,
+        icloud_dir,
+        timeout_seconds=1,
+        poll_interval_seconds=0,
+    )
+
+    assert result["status"] == "pending"
+    assert result["uploaded"] is False
+    assert result["bytes"] == archive.stat().st_size
+    assert result["sha256"] == hashlib.sha256(archive.read_bytes()).hexdigest()
+    assert Path(result["path"]).read_bytes() == archive.read_bytes()
+    assert list(icloud_dir.glob("*.unverified")) == []
+
+
+def test_pending_icloud_receipt_resolves_without_rebundling(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    monkeypatch.setenv("BRAINLAYER_JSONL_BACKUP_ICLOUD_TIMEOUT_SECONDS", "1")
+    now = time.time()
+    source_root = tmp_path / "sessions"
+    source_file = _write_jsonl(source_root / "pending.jsonl", mtime=now - 3600)
+    state_path = tmp_path / "state.json"
+    icloud_dir = tmp_path / "CloudDocs"
+    clock = [0.0]
+    resolved = [False]
+
+    _mock_drive_success(jsonl_backup, monkeypatch)
+    monkeypatch.setattr(jsonl_backup, "_list_surviving_archives", lambda *args, **kwargs: {"drive-id": None})
+
+    def state_probe(*args, **kwargs):  # noqa: ARG001
+        if not resolved[0]:
+            clock[0] = 2.0
+            return _icloud_state(uploaded=False, status="current")
+        return _icloud_state(uploaded=True, status="current")
+
+    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(jsonl_backup, "_icloud_item_state", state_probe)
+
+    first = jsonl_backup.run_backup(
+        source_roots=[source_root],
+        state_path=state_path,
+        staging_dir=tmp_path / "staging",
+        log_path=tmp_path / "first.log",
+        queue_dir=tmp_path / "queue",
+        icloud_dir=icloud_dir,
+        date_stamp="2026-09-14",
+        now=now,
+        upload=True,
+    )
+
+    assert first["status"] == "uploaded"
+    assert first["icloud_copy"]["status"] == "pending"
+    assert first["already_covered_files"] == 0
+    state = json.loads(state_path.read_text())
+    archive_name = state["files"][source_file.as_posix()]["icloud_archive"]
+    assert state["icloud_archives"][archive_name]["status"] == "pending"
+
+    resolved[0] = True
+    clock[0] = 0.0
+    monkeypatch.setattr(
+        jsonl_backup,
+        "create_jsonl_bundle_with_digests",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("pending resolution rebundled")),
+    )
+
+    second = jsonl_backup.run_backup(
+        source_roots=[source_root],
+        state_path=state_path,
+        staging_dir=tmp_path / "staging",
+        log_path=tmp_path / "second.log",
+        queue_dir=tmp_path / "queue",
+        icloud_dir=icloud_dir,
+        date_stamp="2026-09-15",
+        now=now + 86400,
+        upload=True,
+    )
+
+    assert second["status"] == "no-op"
+    assert second["already_covered_files"] == 1
+    assert json.loads(state_path.read_text())["icloud_archives"][archive_name]["status"] == "verified"
+
+
+def test_verified_icloud_copy_trashes_matching_unverified_copy(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    archive = tmp_path / "archive.tar.gz"
+    archive.write_bytes(b"verified bytes")
+    icloud_dir = tmp_path / "CloudDocs"
+    icloud_dir.mkdir()
+    logical_sha256 = hashlib.sha256(archive.read_bytes()).hexdigest()
+    old = icloud_dir / f".claude-jsonl-{logical_sha256}.tar.gz.old.unverified"
+    old.write_bytes(b"stale bytes")
+    trashed: list[Path] = []
+
+    monkeypatch.setattr(
+        jsonl_backup,
+        "_icloud_item_state",
+        lambda *args, **kwargs: _icloud_state(uploaded=True, status="current"),
+    )
+
+    def trash(path: Path) -> None:
+        trashed.append(Path(path))
+        path.unlink()
+
+    monkeypatch.setattr(jsonl_backup, "_trash_icloud_item", trash)
+
+    result = jsonl_backup.copy_archive_to_icloud(archive, icloud_dir, timeout_seconds=1)
+
+    assert result["status"] == "verified"
+    assert trashed == [old]
+    assert not old.exists()
+
+
+def test_verified_icloud_copy_keeps_only_one_matching_unverified_copy(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    archive = tmp_path / "archive.tar.gz"
+    archive.write_bytes(b"verified bytes")
+    icloud_dir = tmp_path / "CloudDocs"
+    icloud_dir.mkdir()
+    logical_sha256 = hashlib.sha256(archive.read_bytes()).hexdigest()
+    old = icloud_dir / f".claude-jsonl-{logical_sha256}.tar.gz.old.unverified"
+    newer = icloud_dir / f".claude-jsonl-{logical_sha256}.tar.gz.newer.unverified"
+    old.write_bytes(b"stale bytes")
+    newer.write_bytes(b"newer stale bytes")
+    os.utime(old, (1, 1))
+    os.utime(newer, (2, 2))
+    trashed: list[Path] = []
+
+    monkeypatch.setattr(
+        jsonl_backup,
+        "_icloud_item_state",
+        lambda *args, **kwargs: _icloud_state(uploaded=True, status="current"),
+    )
+    monkeypatch.setattr(
+        jsonl_backup,
+        "_trash_icloud_item",
+        lambda path: (trashed.append(Path(path)), path.unlink()),
+    )
+
+    jsonl_backup.copy_archive_to_icloud(archive, icloud_dir, timeout_seconds=1)
+
+    assert trashed == [old]
+    assert list(icloud_dir.glob("*.unverified")) == [newer]
+
+
+def test_unverified_icloud_copy_without_verified_match_is_untouched(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    archive = tmp_path / "archive.tar.gz"
+    archive.write_bytes(b"replacement bytes")
+    icloud_dir = tmp_path / "CloudDocs"
+    icloud_dir.mkdir()
+    logical_sha256 = hashlib.sha256(archive.read_bytes()).hexdigest()
+    old = icloud_dir / f".claude-jsonl-{logical_sha256}.tar.gz.old.unverified"
+    old.write_bytes(b"older failed bytes")
+    state = _icloud_state(uploaded=False, status="current") | {"uploading_error": "quota"}
+    monkeypatch.setattr(jsonl_backup, "_icloud_item_state", lambda *args, **kwargs: state)
+
+    with pytest.raises(RuntimeError, match="quota"):
+        jsonl_backup.copy_archive_to_icloud(archive, icloud_dir, timeout_seconds=1)
+
+    assert old.exists()
+
+
 def test_repeated_icloud_failures_preserve_every_quarantined_copy(tmp_path):
     from brainlayer import jsonl_backup
 
@@ -1541,14 +1722,15 @@ def test_stale_icloud_object_is_quarantined_before_fresh_upload(tmp_path, monkey
         ]
     )
     monkeypatch.setattr(jsonl_backup, "_icloud_item_state", lambda *args, **kwargs: next(states))
+    trashed: list[Path] = []
+    monkeypatch.setattr(jsonl_backup, "_trash_icloud_item", lambda path: trashed.append(Path(path)))
 
     result = jsonl_backup.copy_archive_to_icloud(archive, icloud_dir, timeout_seconds=1)
 
     assert result["reused"] is False
     assert destination.read_bytes() == archive.read_bytes()
-    quarantined = list(icloud_dir.glob("*.unverified"))
-    assert len(quarantined) == 1
-    assert quarantined[0].read_bytes() == b"stale object"
+    assert len(trashed) == 1
+    assert trashed[0].name.endswith(".unverified")
 
 
 def test_icloud_poll_sleep_cannot_overshoot_deadline(tmp_path, monkeypatch):
