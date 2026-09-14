@@ -122,6 +122,14 @@ def test_backup_daily_invariant_rejects_raw_drive_rest_delete() -> None:
     )
 
 
+def test_backup_daily_invariant_rejects_raw_drive_request_delete() -> None:
+    _assert_backup_daily_hard_delete_rejected(
+        _backup_daily_with_pruner_statement(
+            '        requests.request("DELETE", f"https://www.googleapis.com/drive/v3/files/{item[\'id\']}")\n'
+        )
+    )
+
+
 def test_jsonl_retention_guard_failure_tells_refactors_to_update_not_delete(tmp_path: Path, capsys) -> None:
     from brainlayer.backup_retention_invariant import main
     from tests import test_jsonl_backup
