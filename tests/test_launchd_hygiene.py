@@ -689,7 +689,11 @@ def test_launchd_installer_hotlane_skip_bypasses_runtime_verification(tmp_path):
         f'SCRIPT_DIR="{script_dir}"\nLAUNCH_DIR="{tmp_path}"\nLOG_DIR="{tmp_path}"\nBRAINLAYER_LOG_DIR="{tmp_path}"\n'
         "PYTHON_BIN=/usr/bin/true\nBRAINLAYER_BIN=x\nBRAINLAYER_DIR=x\nBRAINLAYER_LAUNCHD_DIR=x\nBRAINLAYER_PYTHON=x\n"
         "BRAINLAYER_ENV_FILE=x\nBRAINLAYER_ENV_RUN=x\nHOTLANE_BRAINBAR_DST=x\nLOAD_PLIST_SKIPPED=0\n"
-        "install_hotlane_brainbar_daemon() { :; }\ninstall_env_runner() { :; }\nverify_config_file() { :; }\n"
+        "install_hotlane_brainbar_daemon() { :; }\ninstall_env_runner() { :; }\n"
+        "install_job_wrapper() { BRAINLAYER_JOB_WRAPPER=x; }\n"
+        "cleanup_install_temp() { :; }\n"
+        'install_rendered_plist() { mv "$1" "$2"; PLIST_CHANGED=1; }\n'
+        "verify_config_file() { :; }\n"
         f'verify_hotlane_runtime() {{ touch "{verify_marker}"; return 1; }}\n'
         + _fn("label_disabled_by_operator")
         + _fn("load_plist")

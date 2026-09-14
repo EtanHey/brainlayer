@@ -1561,6 +1561,70 @@ def test_launchd_load_existing_unmarked_install_skips_spotlight_preflight(tmp_pa
     assert not (legacy_data / ".metadata_never_index").exists()
 
 
+def test_launchd_install_uses_named_job_wrapper_and_skips_unchanged_loaded_plist(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    loaded = tmp_path / "loaded"
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+                'case "$1" in',
+                "  print-disabled) exit 0 ;;",
+                '  print) [ -f "$FAKE_LOADED" ] && printf "%s\\n" "state = running" "pid = 4242" && exit 0; exit 1 ;;',
+                '  bootout) rm -f "$FAKE_LOADED"; exit 0 ;;',
+                '  bootstrap) touch "$FAKE_LOADED"; exit 0 ;;',
+                "  *) exit 0 ;;",
+                "esac",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("BRAINLAYER_ENRICH_ENABLED=0\n", encoding="utf-8")
+    env_file.chmod(0o600)
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "HOME": str(home),
+        "BRAINLAYER_BIN": sys.executable,
+        "PYTHON_BIN": sys.executable,
+        "BRAINLAYER_ENV_FILE": str(env_file),
+        "BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS": "1",
+        "BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL": "0",
+        "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+        "FAKE_LOADED": str(loaded),
+    }
+
+    for _ in range(2):
+        result = subprocess.run(
+            [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "watch"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    plist = plistlib.loads((home / "Library" / "LaunchAgents" / "com.brainlayer.watch.plist").read_bytes())
+    wrapper = home / ".local" / "lib" / "brainlayer" / "BrainLayer Watcher"
+    assert plist["ProgramArguments"][0] == str(wrapper)
+    assert plist["AssociatedBundleIdentifiers"] == ["com.brainlayer.brainbar"]
+    assert os.access(wrapper, os.X_OK)
+    assert "brainlayer-env-run.sh" in wrapper.read_text(encoding="utf-8")
+    commands = launchctl_log.read_text(encoding="utf-8").splitlines()
+    assert sum(command.startswith("bootout ") for command in commands) == 1
+    assert sum(command.startswith("bootstrap ") for command in commands) == 1
+
+
 def test_launchd_install_preflight_refusal_names_runbook_without_traceback(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -1737,7 +1801,7 @@ def test_packaged_launchd_installer_renders_p0_counter_console_shim(tmp_path: Pa
     rendered = home / "Library" / "LaunchAgents" / "com.brainlayer.p0-counter.plist"
     plist = plistlib.loads(rendered.read_bytes())
     assert plist["ProgramArguments"] == [
-        str(home / ".local" / "lib" / "brainlayer" / "brainlayer-env-run.sh"),
+        str(home / ".local" / "lib" / "brainlayer" / "BrainLayer P0 Counter"),
         sys.executable,
         "p0-counter",
     ]
@@ -1810,7 +1874,7 @@ def test_packaged_launchd_installer_installs_tier0_watchdog_without_env_runner(t
     bootstrap_command = f"bootstrap {domain} {rendered}"
     print_command = f"print {domain}/com.brainlayer.tier0-watchdog"
     assert commands.count(bootstrap_command) == 1
-    assert commands.count(print_command) == 2
+    assert commands.count(print_command) == 3
     assert commands[-1] == print_command
 
 
@@ -1859,7 +1923,8 @@ def test_packaged_launchd_installer_installs_throughput_watchdog(tmp_path: Path)
 
     rendered = home / "Library" / "LaunchAgents" / "com.brainlayer.throughput-watchdog.plist"
     plist = plistlib.loads(rendered.read_bytes())
-    assert plist["ProgramArguments"] == [str(installed_env_runner), sys.executable, str(installed_script), "--json"]
+    named_wrapper = home / ".local" / "lib" / "brainlayer" / "BrainLayer Throughput Watchdog"
+    assert plist["ProgramArguments"] == [str(named_wrapper), sys.executable, str(installed_script), "--json"]
     assert plist["EnvironmentVariables"]["HOME"] == str(home)
     assert plist["EnvironmentVariables"]["BRAINLAYER_ENV_FILE"] == str(env_file)
     assert plist["EnvironmentVariables"]["BRAINLAYER_LAUNCHD_SERVICE"] == "watch"
@@ -3047,6 +3112,7 @@ def test_launchd_enable_missing_service_is_retried_after_bootstrap(tmp_path: Pat
     assert result.returncode == 0, result.stdout + result.stderr
     assert [command.split()[0] for command in commands] == [
         "print-disabled",
+        "print",
         "bootout",
         "print",
         "enable",
