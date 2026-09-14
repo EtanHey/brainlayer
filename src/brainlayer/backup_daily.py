@@ -104,7 +104,8 @@ def _backup_log_path(
 ) -> Path:
     if log_path is not None:
         return Path(log_path)
-    configured = (env or os.environ).get(BACKUP_LOG_PATH_ENV)
+    source = env if env is not None else os.environ
+    configured = source.get(BACKUP_LOG_PATH_ENV)
     if configured:
         return Path(configured)
     resolved_db_path = db_path or get_db_path()

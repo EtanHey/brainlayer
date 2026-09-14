@@ -26,7 +26,9 @@ def _path(env: Mapping[str, str], name: str, *, db_path: Path) -> Path:
     if value:
         return Path(value).expanduser()
     defaults = {
-        "BRAINLAYER_OBSERVABILITY_JSONL_BACKUP_LOG": db_path.parent / "logs" / "jsonl-backup.log",
+        "BRAINLAYER_OBSERVABILITY_JSONL_BACKUP_LOG": Path(
+            env.get("BRAINLAYER_JSONL_BACKUP_LOG_PATH", str(jsonl_backup.DEFAULT_LOG_PATH))
+        ).expanduser(),
         "BRAINLAYER_OBSERVABILITY_BACKUP_DAILY_LOG": _backup_log_path(None, db_path=db_path, env=env),
         "BRAINLAYER_OBSERVABILITY_DISABLED_DIR": Path.home() / "Library" / "LaunchAgents" / ".disabled-retention-P0",
     }
@@ -201,12 +203,12 @@ def build_backups_section(
             exit_code = completed.returncode
             command_stdout = completed.stdout or ""
             launchd_text = command_stdout + (completed.stderr or "")
-            if "Could not find service" in launchd_text:
+            if exit_code == 113 and "Could not find service" in launchd_text:
                 command_state, launchd_status, launchd_not_loaded = "not_loaded", "read", True
-            elif LABEL in launchd_text:
+            elif exit_code == 0 and LABEL in launchd_text:
                 command_state, launchd_status = "read", "read"
             else:
-                command_failure = f"launchd command failed for argv {argv}: unrecognized output"
+                command_failure = f"launchd command failed for argv {argv}: exit_code={exit_code}; unrecognized output"
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
             command_failure = f"launchd command failed for argv {argv}: {exc}"
         launchd_input = record_input(

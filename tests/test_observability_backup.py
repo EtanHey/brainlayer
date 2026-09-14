@@ -284,6 +284,7 @@ def test_production_defaults_are_db_relative(monkeypatch: pytest.MonkeyPatch, tm
     logs.mkdir()
     for name in ("jsonl-backup.log", "backup-daily.log"):
         (logs / name).write_bytes((source / name).read_bytes())
+    monkeypatch.setattr(observability_backup.jsonl_backup, "DEFAULT_LOG_PATH", logs / "jsonl-backup.log")
     disabled = tmp_path / "Library" / "LaunchAgents" / ".disabled-retention-P0"
     disabled.mkdir(parents=True)
     launchd = tmp_path / "launchd.txt"
@@ -315,6 +316,7 @@ def test_producer_without_observability_wiring_measures_all_sections(
     logs.mkdir()
     for name in ("jsonl-backup.log", "backup-daily.log"):
         (logs / name).write_bytes((FIXTURES / "logs" / "healthy-dev" / name).read_bytes())
+    monkeypatch.setattr(observability_backup.jsonl_backup, "DEFAULT_LOG_PATH", logs / "jsonl-backup.log")
     disabled = tmp_path / "Library" / "LaunchAgents" / ".disabled-retention-P0"
     disabled.mkdir(parents=True)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -345,9 +347,7 @@ def test_backup_daily_empty_env_does_not_fall_back_to_process_environment(
     assert backup_daily._backup_log_path(None, db_path=db, env={}) == db.parent / "logs" / "backup-daily.log"
 
 
-def test_nonzero_unrecognized_launchd_exit_is_unmeasurable(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_nonzero_unrecognized_launchd_exit_is_unmeasurable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     env, recorder = _command_env(tmp_path)
     output = f"service = {observability_backup.LABEL}\n"
     monkeypatch.setattr(
@@ -363,12 +363,11 @@ def test_nonzero_unrecognized_launchd_exit_is_unmeasurable(
     assert "['launchctl', 'print', 'gui/" in result["reason"]
 
 
-def test_jsonl_writer_override_controls_reader_default(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_jsonl_writer_override_controls_reader_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     env, recorder = _command_env(tmp_path)
     writer_path = tmp_path / "writer-jsonl.log"
     writer_path.write_bytes((FIXTURES / "logs" / "healthy-dev" / "jsonl-backup.log").read_bytes())
+    env.pop("BRAINLAYER_OBSERVABILITY_JSONL_BACKUP_LOG")
     env["BRAINLAYER_JSONL_BACKUP_LOG_PATH"] = str(writer_path)
 
     result = build_backups_section(env=env, record_input=recorder, now=NOW)
