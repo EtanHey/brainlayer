@@ -19,6 +19,11 @@ from tests.drive_listing_assertions import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _stable_backup_machine_id(monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_MACHINE_ID", "test-machine")
+
+
 def _start_fake_brainbar_vacuum_server(socket_path: Path, source_db: Path):
     received: queue.Queue[dict] = queue.Queue()
     ready = threading.Event()
@@ -1430,7 +1435,7 @@ def test_drive_upload_resumes_from_confirmed_offset_after_one_stall(tmp_path, mo
                 "file_id": "drive-file-id",
                 "expected_name": snapshot.name,
                 "expected_size": 6,
-                "expected_machine_id": backup_daily.CANONICAL_MACHINE_ID,
+                "expected_machine_id": "test-machine",
             },
         )
     ]
