@@ -169,6 +169,77 @@ class TestQueueStore:
         )
         conn.close()
 
+    def test_contended_drain_survives_reporter_oserror_and_logs_once(self, tmp_path, monkeypatch):
+        from brainlayer import drain
+        from brainlayer.queue_io import enqueue_jsonl
+        from brainlayer.vector_store import VectorStore
+
+        db_path = tmp_path / "blocked-reporter.db"
+        queue_dir = tmp_path / "queue"
+        log_path = tmp_path / "drain.log"
+        VectorStore(db_path).close()
+        holder = apsw.Connection(str(db_path))
+        holder.execute("BEGIN IMMEDIATE")
+        monkeypatch.setenv("BRAINLAYER_DRAIN_BUSY_TIMEOUT_MS", "50")
+        monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+        queued = enqueue_jsonl(
+            {"kind": "watcher_chunk", "chunk_id": "blocked-reporter", "content": "preserve me"},
+            source="watcher",
+            queue_dir=queue_dir,
+        )
+
+        def fail_reporter(_state):
+            raise OSError("health path unwritable")
+
+        try:
+            for _attempt in range(2):
+                assert drain.drain_once(
+                    db_path=db_path,
+                    queue_dir=queue_dir,
+                    log_path=log_path,
+                    blocked_reporter=fail_reporter,
+                ) == 0
+            assert queued.exists()
+            assert log_path.read_text(encoding="utf-8").count("drain state reporter failed") == 1
+        finally:
+            holder.execute("ROLLBACK")
+            holder.close()
+
+    def test_post_commit_reporter_oserror_does_not_replay_queue_file(self, tmp_path, monkeypatch):
+        from brainlayer import drain
+        from brainlayer.queue_io import enqueue_jsonl
+        from brainlayer.vector_store import VectorStore
+
+        db_path = tmp_path / "unblocked-reporter.db"
+        queue_dir = tmp_path / "queue"
+        log_path = tmp_path / "drain.log"
+        VectorStore(db_path).close()
+        monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+        queued = enqueue_jsonl(
+            {"kind": "watcher_chunk", "chunk_id": "unblocked-reporter", "content": "commit me once"},
+            source="watcher",
+            queue_dir=queue_dir,
+        )
+        drain._DRAIN_BLOCKED_EPISODES[db_path.resolve()] = drain._DrainBlockedEpisode(
+            "2026-09-14T00:00:00+00:00",
+            time.monotonic(),
+        )
+
+        def fail_reporter(_state):
+            raise OSError("health path unwritable")
+
+        assert drain.drain_once(
+            db_path=db_path,
+            queue_dir=queue_dir,
+            log_path=log_path,
+            blocked_reporter=fail_reporter,
+        ) == 1
+        assert not queued.exists()
+        conn = apsw.Connection(str(db_path))
+        assert conn.execute("SELECT COUNT(*) FROM chunks WHERE id = 'unblocked-reporter'").fetchone() == (1,)
+        conn.close()
+        assert log_path.read_text(encoding="utf-8").count("drain state reporter failed") == 1
+
     def test_queue_store_writes_jsonl(self, tmp_path):
         """_queue_store writes to the unified arbitration queue."""
         with patch("brainlayer.queue_io.get_queue_dir", return_value=tmp_path):
