@@ -1115,6 +1115,7 @@ def _stub_backup_for_drive_upload(backup_daily, monkeypatch, snapshot):
 
 def test_drive_upload_that_blocks_forever_fails_loudly_with_confirmed_bytes(tmp_path, monkeypatch):
     from brainlayer import backup_daily
+    from brainlayer.observability_backup import _daily_snapshot
 
     snapshot = tmp_path / "2026-09-14.db.gz"
     snapshot.write_bytes(b"abcdef")
@@ -1125,7 +1126,10 @@ def test_drive_upload_that_blocks_forever_fails_loudly_with_confirmed_bytes(tmp_
 
     class BlockingSession:
         def put(self, url, *, headers, data, timeout):  # noqa: ARG002
-            ranges.append(headers["Content-Range"])
+            content_range = headers["Content-Range"]
+            ranges.append(content_range)
+            if content_range == "bytes */6":
+                return _DriveResponse(308, headers={"Range": "bytes=0-2"})
             never.wait()
 
         def close(self):
@@ -1150,10 +1154,12 @@ def test_drive_upload_that_blocks_forever_fails_loudly_with_confirmed_bytes(tmp_
     assert time.monotonic() - started < 1
     assert any(value == "bytes */6" for value in ranges)
     logged = json.loads(log_path.read_text(encoding="utf-8"))
+    assert logged["error_type"] == "drive_upload_stalled"
     assert logged["error_code"] == "drive_upload_stalled"
-    assert logged["bytes_confirmed"] == 0
+    assert logged["bytes_confirmed"] == 3
     assert logged["uploaded"] is False
     assert logged["verified"] is False
+    assert _daily_snapshot([{**logged, "backup_log_provenance": "real"}])[1] == "drive_upload_stalled"
 
 
 def test_drive_upload_resumes_from_confirmed_offset_after_one_stall(tmp_path, monkeypatch):
@@ -1163,19 +1169,25 @@ def test_drive_upload_resumes_from_confirmed_offset_after_one_stall(tmp_path, mo
     snapshot.write_bytes(b"abcdef")
     service = _stub_backup_for_drive_upload(backup_daily, monkeypatch, snapshot)
     ranges = []
+    timeouts = []
     first_chunk = True
+    query_attempts = 0
     never = threading.Event()
     verified = []
 
     class StallOnceSession:
         def put(self, url, *, headers, data, timeout):  # noqa: ARG002
-            nonlocal first_chunk
+            nonlocal first_chunk, query_attempts
             content_range = headers["Content-Range"]
             ranges.append(content_range)
+            timeouts.append(timeout)
             if content_range == "bytes 0-5/6" and first_chunk:
                 first_chunk = False
                 never.wait()
             if content_range == "bytes */6":
+                query_attempts += 1
+                if query_attempts == 1:
+                    return _DriveResponse(503)
                 return _DriveResponse(308, headers={"Range": "bytes=0-2"})
             return _DriveResponse(
                 200,
@@ -1204,7 +1216,8 @@ def test_drive_upload_resumes_from_confirmed_offset_after_one_stall(tmp_path, mo
         log_path=tmp_path / "backup-daily.log",
     )
 
-    assert ranges == ["bytes 0-5/6", "bytes */6", "bytes 3-5/6"]
+    assert ranges == ["bytes 0-5/6", "bytes */6", "bytes */6", "bytes 3-5/6"]
+    assert all(timeout > 0.02 for timeout in timeouts)
     assert verified == [(service, {"file_id": "drive-file-id", "expected_name": snapshot.name, "expected_size": 6})]
     assert result["uploaded"] is True
     assert result["verified"] is True
