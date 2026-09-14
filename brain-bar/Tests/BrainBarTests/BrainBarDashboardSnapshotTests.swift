@@ -95,6 +95,50 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
     }
 
     @MainActor
+    func testAllGoodStateRendersWithVerifiedBackups() throws {
+        let result = try BrainBarOnePageTestFixture.healthyResult()
+        let collector = BrainBarDashboardFixture.makeCollector()
+        let view = BrainBarDashboardPreview.make(
+            collector: collector,
+            observabilityResult: result,
+            now: BrainBarOnePageTestFixture.now
+        )
+        let (png, bitmap) = try renderPNG(view, size: Breakpoint.default.size)
+        let url = try writePNG(png, name: "dashboard-all-good")
+
+        let flow = DashboardFlowSummary.derive(
+            daemon: collector.daemon,
+            stats: collector.stats,
+            now: BrainBarOnePageTestFixture.now
+        )
+        let hero = BrainBarHeroPresentation.derive(
+            flow: flow,
+            stats: collector.stats,
+            backupTruth: BrainBarHeroBackupTruth.derive(
+                from: result,
+                now: BrainBarOnePageTestFixture.now,
+                cadence: .known(300)
+            )
+        )
+        let presentation = BrainBarOnePagePresentation.derive(
+            snapshotFreshness: collector.snapshotFreshnessState,
+            hero: hero,
+            observability: result,
+            stats: collector.stats,
+            ingest: flow.allCommits,
+            now: BrainBarOnePageTestFixture.now,
+            calendar: BrainBarOnePageTestFixture.calendar
+        )
+
+        XCTAssertEqual(presentation.status.headline, "All good")
+        XCTAssertNil(presentation.status.reason)
+        XCTAssertEqual(presentation.backupLines.map(\.tone), [.green, .green])
+        XCTAssertGreaterThan(png.count, 5_000, "all-good PNG looks empty")
+        XCTAssertGreaterThan(distinctSampledColorCount(in: bitmap), 16, "all-good render is too flat")
+        print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
+    }
+
+    @MainActor
     func testSettingsRendersDeterministically() throws {
         try XCTSkipIf(
             shouldSkipDisplayDependentRenderInCI,
