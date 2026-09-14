@@ -92,6 +92,19 @@ def test_local_backup_cap_is_decoupled_from_drive_retention():
     assert backup_daily.WEEKLY_RETENTION.keep_latest == 7
 
 
+@pytest.mark.parametrize(
+    ("value", "enabled"),
+    (("0", False), ("", False), ("false", False), ("yes", False), ("on", False), ("1", True), ("true", True)),
+)
+def test_drive_retention_env_is_explicit_only(value, enabled, monkeypatch):
+    from brainlayer import backup_daily
+
+    monkeypatch.setattr(backup_daily, "DRIVE_RETENTION_ENABLED", False)
+    monkeypatch.setenv("BRAINLAYER_BACKUP_DRIVE_RETENTION", value)
+
+    assert backup_daily._drive_retention_enabled() is enabled
+
+
 def test_create_snapshot_gzip_is_restorable(tmp_path):
     from brainlayer.backup_daily import create_sqlite_backup_gzip
 
