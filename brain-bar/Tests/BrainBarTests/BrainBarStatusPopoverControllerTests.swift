@@ -51,7 +51,10 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         let menu = controller.contextMenuForTesting
         let actionableItems = menu.items.filter { !$0.isSeparatorItem }
 
-        XCTAssertTrue(controller.statusItemForTesting.menu === menu)
+        XCTAssertNil(controller.statusItemForTesting.menu)
+        XCTAssertTrue(controller.statusItemForTesting.button?.target as? BrainBarStatusPopoverController === controller)
+        XCTAssertNotNil(controller.statusItemForTesting.button?.action)
+        XCTAssertFalse(menu === NSApp.mainMenu)
         XCTAssertEqual(actionableItems.filter { $0.title.hasPrefix("Settings") }.count, 1)
         XCTAssertEqual(actionableItems.map(\.title), ["Settings...", "Restart BrainBar", "Quit BrainBar"])
         for item in actionableItems {

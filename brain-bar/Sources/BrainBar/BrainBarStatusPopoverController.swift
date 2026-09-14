@@ -89,6 +89,7 @@ final class BrainBarStatusPopoverController: NSObject {
     @objc private func toggleFromStatusItem(_ sender: Any?) {
         if let event = NSApp.currentEvent, event.type == .rightMouseUp,
            let button = statusItemForTesting.button {
+            NSApp.activate(ignoringOtherApps: true)
             NSMenu.popUpContextMenu(contextMenuForTesting, with: event, for: button)
             return
         }
