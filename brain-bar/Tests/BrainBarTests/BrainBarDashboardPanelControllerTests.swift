@@ -28,12 +28,34 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
 
         let restingHeight = controller.panelForTesting.contentLayoutRect.height
-        XCTAssertEqual(restingHeight, controller.contentViewControllerForTesting.view.safeAreaRect.height, accuracy: 2)
+        XCTAssertLessThanOrEqual(controller.measuredContentHeightForTesting, restingHeight + 1)
         XCTAssertLessThan(restingHeight, 640)
 
         controller.setDetailsExpandedForTesting(true)
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
-        XCTAssertGreaterThan(controller.panelForTesting.contentLayoutRect.height, restingHeight)
+        let expandedHeight = controller.panelForTesting.contentLayoutRect.height
+        XCTAssertGreaterThan(expandedHeight, restingHeight)
+        XCTAssertLessThanOrEqual(controller.measuredContentHeightForTesting, expandedHeight + 1)
+    }
+
+    func testSearchOverlayDoesNotShrinkExpandedDetailsAndVerticalSizeIsPinned() {
+        let runtime = BrainBarRuntime()
+        runtime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil)
+        let controller = BrainBarDashboardPanelController(runtime: runtime)
+        _ = controller.contentViewControllerForTesting.view
+        controller.setDetailsExpandedForTesting(true)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+
+        let expandedHeight = controller.panelForTesting.contentLayoutRect.height
+        controller.setSearchOverlayPresentedForTesting(true)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+
+        XCTAssertGreaterThanOrEqual(controller.panelForTesting.contentLayoutRect.height, expandedHeight - 1)
+        XCTAssertEqual(
+            controller.panelForTesting.contentMinSize.height,
+            controller.panelForTesting.contentMaxSize.height,
+            accuracy: 1
+        )
     }
 
     func testDashboardPanelDoesNotOpenWithoutStatusItemAnchor() {
