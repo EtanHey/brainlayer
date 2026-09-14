@@ -621,7 +621,6 @@ private struct BrainBarDashboardView: View {
     @State private var detailsExpanded = BrainBarOnePageComposition.detailsExpandedByDefault
     @State private var signalCoverageExpanded = false
     @State private var vectorSignalDetailExpanded = false
-    @State private var vectorSignalRowFrame: CGRect = .zero
     @State private var vectorSignalRootFrame: CGRect = .zero
     @State private var liveObservabilityResult: ObservabilityReadResult = .unreadable("Loading observability data.")
     private let observabilityCadence = ObservabilityReader.installedHealthCheckCadence
@@ -919,8 +918,7 @@ private struct BrainBarDashboardView: View {
     }
 
     private func vectorDetailWidth(layout: BrainBarDashboardLayout) -> CGFloat {
-        let measuredWidth = vectorSignalRootFrame == .zero ? vectorSignalRowFrame.width : vectorSignalRootFrame.width
-        return max(layout.compactCards ? 150 : 170, measuredWidth)
+        max(layout.compactCards ? 150 : 170, vectorSignalRootFrame.width)
     }
 
     private var vectorDetailTransition: AnyTransition {
@@ -1164,19 +1162,7 @@ private struct RevealClip: ViewModifier, Animatable {
 }
 
 private enum BrainBarVectorSignalCoordinateSpace {
-    static let pipelinePanel = "BrainBarPipelinePanel"
     static let root = "BrainBarRoot"
-}
-
-private struct BrainBarVectorSignalFrameKey: PreferenceKey {
-    static let defaultValue: CGRect = .zero
-
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
-        let next = nextValue()
-        if next != .zero {
-            value = next
-        }
-    }
 }
 
 private struct BrainBarVectorSignalRootFrameKey: PreferenceKey {
@@ -1448,10 +1434,6 @@ private struct BrainBarSignalCoveragePanel: View {
             if signal.showsDetail {
                 GeometryReader { proxy in
                     Color.clear
-                        .preference(
-                            key: BrainBarVectorSignalFrameKey.self,
-                            value: proxy.frame(in: .named(BrainBarVectorSignalCoordinateSpace.pipelinePanel))
-                        )
                         .preference(
                             key: BrainBarVectorSignalRootFrameKey.self,
                             value: proxy.frame(in: .named(BrainBarVectorSignalCoordinateSpace.root))
@@ -2332,8 +2314,6 @@ private struct BrainBarPipelinePanelPreviewView: View {
             .background(
                 BrainBarGlassPanel(cornerRadius: layout.panelCornerRadius, tint: .brainBarAccent)
             )
-            .coordinateSpace(name: BrainBarVectorSignalCoordinateSpace.pipelinePanel)
-
         }
     }
 

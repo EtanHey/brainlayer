@@ -633,6 +633,8 @@ final class DashboardTests: XCTestCase {
             source.contains("anchorPreference(key: VectorRowAnchorKey.self"),
             "The Vector row click path should mount the detail directly instead of only emitting an anchor preference."
         )
+        XCTAssertFalse(source.contains("vectorSignalRowFrame"), "The removed in-panel frame must not leave dead state.")
+        XCTAssertFalse(source.contains("BrainBarVectorSignalFrameKey"), "Only the root-space frame is still consumed.")
         XCTAssertTrue(
             bodySource.contains(".coordinateSpace(name: BrainBarVectorSignalCoordinateSpace.root)"),
             "The root GeometryReader should define the coordinate space used to position the unclipped Vector detail."
