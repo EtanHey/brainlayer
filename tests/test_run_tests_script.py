@@ -1048,6 +1048,32 @@ def test_changed_only_scope_maps_package_init_to_version_consistency_tests(
     assert str(test_root / "test_version_consistency.py") in logged
     assert str(test_root / "test_build_sha.py") in logged
     assert "falling back to full pytest unit suite" not in result.stdout
+
+
+def test_changed_only_scope_maps_package_main_to_module_execution_test(tmp_path: Path) -> None:
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    (test_root / "test_hook_python.py").write_text("test placeholder\n")
+    (test_root / "test_think_recall_integration.py").write_text("test placeholder\n")
+
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+    env = _script_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
+    env["BRAINLAYER_CHANGED_FILES"] = "src/brainlayer/__main__.py"
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    result = subprocess.run(  # noqa: S603 - returncode is asserted below
+        ["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env, check=False
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert str(test_root / "test_hook_python.py") in pytest_log.read_text()
+    assert "falling back to full pytest unit suite" not in result.stdout
     assert f"{test_root}/ -v" not in logged
 
 
