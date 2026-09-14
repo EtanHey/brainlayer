@@ -998,10 +998,7 @@ enum PipelineState: String, Sendable, Equatable {
             return .indexing
         }
         if summary.enrichment.status == .live ||
-            summary.enrichment.status == .queued ||
-            (summary.enrichment.status == .recent && summary.queue.status == .draining) ||
-            summary.queue.status == .draining ||
-            summary.queue.status == .backlogged {
+            (summary.enrichment.status == .recent && summary.queue.status == .draining) {
             return .enriching
         }
         return .idle

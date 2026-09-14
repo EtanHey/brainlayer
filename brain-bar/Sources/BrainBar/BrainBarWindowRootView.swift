@@ -585,10 +585,6 @@ private struct BrainBarDashboardView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-
-            Text("Enrichment: off (manual batch only)")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color.brainBarTextMuted)
         }
     }
 
