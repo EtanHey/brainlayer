@@ -11,6 +11,8 @@ enum BrainBarSettingsActions {
     private static var windowController: NSWindowController?
     private static var closeObserver: NSObjectProtocol?
 
+    static var windowForTesting: NSWindow? { windowController?.window }
+
     static func openSettingsWindow(databasePath: String?) {
         NSApp.activate(ignoringOtherApps: true)
 

@@ -3,13 +3,18 @@ import BrainBarLifecycle
 import SwiftUI
 
 enum BrainBarAppMenuCommands {
+    static let settingsSceneTitle = "Settings…"
     static let settingsSceneEntryCount = 1
     static let searchTitle = "Search BrainLayer"
     static let captureTitle = "Capture Note"
     static let manualCommandTitles = [searchTitle, captureTitle]
 
+    static func isSettingsTitle(_ title: String) -> Bool {
+        title.replacingOccurrences(of: "...", with: "…") == settingsSceneTitle
+    }
+
     static var settingsEntryCountForTesting: Int {
-        settingsSceneEntryCount + manualCommandTitles.filter { $0.hasPrefix("Settings") }.count
+        settingsSceneEntryCount + manualCommandTitles.filter(isSettingsTitle).count
     }
 }
 

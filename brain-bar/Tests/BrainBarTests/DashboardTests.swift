@@ -721,9 +721,12 @@ final class DashboardTests: XCTestCase {
     func testAppMainMenuHasOnlyTheSettingsSceneEntry() throws {
         let appSource = try brainBarSourceFile("Sources/BrainBar/BrainBarApp.swift")
 
+        XCTAssertTrue(appSource.contains("settingsSceneTitle = \"Settings…\""))
         XCTAssertEqual(BrainBarAppMenuCommands.settingsEntryCountForTesting, 1)
         XCTAssertFalse(BrainBarAppMenuCommands.manualCommandTitles.contains("Settings..."))
         XCTAssertFalse(BrainBarAppMenuCommands.manualCommandTitles.contains("Toggle BrainBar"))
+        XCTAssertTrue(BrainBarAppMenuCommands.isSettingsTitle("Settings..."))
+        XCTAssertTrue(BrainBarAppMenuCommands.isSettingsTitle("Settings…"))
         XCTAssertEqual(
             appSource.components(separatedBy: "Button(\"Settings...\")").count - 1,
             0,
