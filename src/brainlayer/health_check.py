@@ -833,17 +833,20 @@ def _jsonl_backup_attempt_time(payload: dict[str, Any]) -> datetime | None:
             return None
         return attempted_at.astimezone(UTC)
 
-    archive = payload.get("archive")
-    if not isinstance(archive, str):
+    artifact = payload.get("archive")
+    pattern = r"claude-jsonl-(\d{4}-\d{2}-\d{2})\.tar\.gz$"
+    if not isinstance(artifact, str):
+        artifact = payload.get("snapshot")
+        pattern = r"(?:^|/)(\d{4}-\d{2}-\d{2})\.db\.gz$"
+    if not isinstance(artifact, str):
         return None
-    legacy_date = re.search(r"claude-jsonl-(\d{4}-\d{2}-\d{2})\.tar\.gz$", archive)
+    legacy_date = re.search(pattern, artifact)
     if legacy_date is None:
         return None
     try:
-        # Legacy archive names carry only the UTC date, while launchd schedules
+        # Legacy artifact names carry only the date, while launchd schedules
         # 05:00 in the producer machine's local timezone. Interpret that date at
-        # the local scheduled hour; every new receipt has an exact attempted_at,
-        # so this machine-local compatibility path disappears after one run.
+        # the local scheduled hour; every new receipt has an exact attempted_at.
         scheduled_local = datetime.fromisoformat(f"{legacy_date.group(1)}T05:00:00")
         return scheduled_local.astimezone(UTC)
     except ValueError:

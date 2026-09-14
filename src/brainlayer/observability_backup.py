@@ -195,7 +195,7 @@ def build_backups_section(
     if not any(record.get("backup_log_provenance") == "real" for record in daily_records):
         return _unmeasurable("backup daily log has no real-provenance receipts", inputs)
     if launchd_status != "read":
-        return _unmeasurable(f"launchd output is {launchd_status}", inputs)
+        return _unmeasurable(f"launchd output is {launchd_status}: {launchd_input['path']}", inputs)
     if LABEL not in launchd_text and "Could not find service" not in launchd_text:
         return _unmeasurable("launchd output is unrecognized", inputs)
     if disabled_input.get("status") == "malformed":
@@ -208,7 +208,7 @@ def build_backups_section(
         max_age_seconds=DEFAULT_JSONL_BACKUP_MAX_AGE_SECONDS,
     )
     snapshot, error_type, all_daily_errors = _daily_snapshot(daily_records)
-    if error_type is None and health_issue is not None and health.state == "invalid":
+    if error_type is None and health_issue is not None and health.state in {"invalid", "stale", "failed"}:
         error_type = health_issue.code
     if all_daily_errors or health.state in {"stale", "failed"}:
         freshness = "stale"

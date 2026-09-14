@@ -98,7 +98,7 @@
         "status": "empty"
       }
     ],
-    "reason": "launchd output is empty",
+    "reason": "launchd output is empty: launchd/missing-launchd-dev.txt",
     "state": "unmeasurable"
   },
   "db_path": "db/missing-launchd-dev.sqlite",

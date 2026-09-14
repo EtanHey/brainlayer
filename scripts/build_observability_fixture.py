@@ -136,6 +136,8 @@ def _daily_log(profile: str) -> str:
     receipt = {"attempted_at": "2026-09-13T09:00:00Z", "snapshot": "/synthetic/backups/2026-09-13.db.gz",
         "destination": "synthetic-drive", "uploaded": True, "verified": True, "drive_md5_match": True,
         "backup_log_provenance": "real"}  # fmt: skip
+    if profile == "legacy_no_op":
+        receipt.pop("attempted_at")
     return "drive upload progress: 50/100 bytes\n" + json.dumps(receipt, sort_keys=True) + "\ndrive upload progress: 100/100 bytes\n"  # fmt: skip
 
 

@@ -912,6 +912,7 @@ def test_run_backup_verifies_upload_removes_local_and_rotates_last_n(tmp_path, m
     assert result["uploaded"] is True
     assert result["local_removed"] is True
     assert result["retention_deleted"] == ["2026-05-01.db.gz"]
+    assert result["attempted_at"].endswith("+00:00")
     assert not snapshot.exists()
 
 
@@ -972,6 +973,7 @@ def test_run_backup_appends_result_to_file_log(tmp_path, monkeypatch):
     assert logged["verified"] is True
     assert logged["attempt_reclamation"] == "degraded"
     assert logged["writer_probe_error"] == "RuntimeError: missing writer timestamp"
+    assert logged["attempted_at"].endswith("+00:00")
     assert logged == result
 
 
