@@ -407,8 +407,11 @@ def test_alert_fanout_uses_one_shared_deadline(tmp_path: Path) -> None:
     )
 
     assert result.process.returncode == 1, result.process.stdout + result.process.stderr
-    # Policy lookup is bounded separately; the alert children still share one deadline and grace.
-    assert sum(event.startswith("wait-sleep:") for event in result.events) == 3
+    # Policy lookup is bounded separately, and runner speed decides whether its child is
+    # observed before it exits. The two alert children still share one deadline plus one
+    # termination grace instead of each consuming a separate timeout.
+    wait_sleep_count = sum(event.startswith("wait-sleep:") for event in result.events)
+    assert 2 <= wait_sleep_count <= 4
     assert any(event == f"launchctl:kickstart -k {DOMAIN}/{LABEL}" for event in result.events)
 
 
