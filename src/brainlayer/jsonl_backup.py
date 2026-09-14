@@ -1147,6 +1147,7 @@ def _upload_forever_files(
     credentials: Any,
     staging_dir: Path,
     forever_folder_parts: list[str],
+    machine_id: str,
 ) -> list[dict[str, Any]]:
     staging_dir = Path(staging_dir).expanduser()
     staging_dir.mkdir(parents=True, exist_ok=True)
@@ -1166,7 +1167,12 @@ def _upload_forever_files(
             if folder_id is None:
                 folder_id = backup_daily.ensure_drive_folder_chain(service, folder_parts)
                 folder_ids_by_root_index[candidate.root_index] = folder_id
-            drive_file = backup_daily.upload_file_to_drive_raw(forever_path, folder_id, credentials)
+            drive_file = backup_daily.upload_file_to_drive_raw(
+                forever_path,
+                folder_id,
+                credentials,
+                machine_id=machine_id,
+            )
             file_id = drive_file.get("id")
             if not file_id:
                 raise RuntimeError(f"Drive forever upload response missing file id: {drive_file!r}")
@@ -1175,6 +1181,7 @@ def _upload_forever_files(
                 file_id=file_id,
                 expected_name=forever_name,
                 expected_size=forever_path.stat().st_size,
+                expected_machine_id=machine_id,
             )
             uploaded.append(
                 {
@@ -1650,6 +1657,22 @@ def run_backup(
         )
     )
     if result["verified"] and upload:
+        try:
+            machine_id = backup_daily.resolve_machine_id()
+        except backup_daily.InvalidMachineIdError as exc:
+            result.update(
+                {
+                    "status": "failed",
+                    "uploaded": False,
+                    "verified": False,
+                    "error": str(exc),
+                    "message": str(exc),
+                    "error_code": exc.error_code,
+                }
+            )
+            _append_json_log(log_path, result)
+            _enqueue_run_summary(result, queue_dir=queue_dir)
+            return result
         # iCloud goes first: a failed iCloud verification must not create an
         # unrecorded duplicate Drive object that consumes the retention window.
         if icloud_dir is not None:
@@ -1661,7 +1684,12 @@ def run_backup(
             credentials = backup_daily.get_drive_credentials()
             service = backup_daily.build_drive_service()
         folder_id = backup_daily.ensure_drive_folder_chain(service, folder_parts)
-        uploaded = backup_daily.upload_file_to_drive_raw(archive_path, folder_id, credentials)
+        uploaded = backup_daily.upload_file_to_drive_raw(
+            archive_path,
+            folder_id,
+            credentials,
+            machine_id=machine_id,
+        )
         file_id = uploaded.get("id")
         if not file_id:
             raise RuntimeError(f"Drive upload response missing file id: {uploaded!r}")
@@ -1670,6 +1698,7 @@ def run_backup(
             file_id=file_id,
             expected_name=archive_path.name,
             expected_size=archive_size,
+            expected_machine_id=machine_id,
         )
         result.update(
             {
@@ -1720,6 +1749,7 @@ def run_backup(
                     credentials=credentials,
                     staging_dir=staging_dir,
                     forever_folder_parts=forever_folder_parts,
+                    machine_id=machine_id,
                 )
                 result["forever_files"] = forever_files
                 result["forever_uploaded_file_count"] = len(forever_files)
