@@ -28,7 +28,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         runMainRunLoop(0.5)
 
         let restingHeight = controller.panelForTesting.contentLayoutRect.height
-        XCTAssertEqual(restingHeight, controller.contentViewControllerForTesting.view.fittingSize.height, accuracy: 2)
+        XCTAssertEqual(restingHeight, controller.contentViewControllerForTesting.view.safeAreaRect.height, accuracy: 2)
         XCTAssertLessThan(restingHeight, 640)
 
         controller.setDetailsExpandedForTesting(true)

@@ -312,12 +312,14 @@ struct BrainBarCommandBarResultsOverlay: View {
     /// scoped to the Dashboard tab. When the user switches to Injections or
     /// Graph, the overlay hides so it doesn't float over unrelated content.
     let isOnActiveTab: Bool
+    var panelState: BrainBarDashboardPanelState? = nil
 
     var body: some View {
         if let viewModel {
             BrainBarCommandBarResultsOverlayGate(
                 viewModel: viewModel,
-                isOnActiveTab: isOnActiveTab
+                isOnActiveTab: isOnActiveTab,
+                panelState: panelState
             )
         }
     }
@@ -326,6 +328,7 @@ struct BrainBarCommandBarResultsOverlay: View {
 private struct BrainBarCommandBarResultsOverlayGate: View {
     @ObservedObject var viewModel: QuickCaptureViewModel
     let isOnActiveTab: Bool
+    let panelState: BrainBarDashboardPanelState?
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -347,6 +350,8 @@ private struct BrainBarCommandBarResultsOverlayGate: View {
             }
         }
         .animation(.easeInOut(duration: 0.18), value: shouldShow)
+        .onChange(of: shouldShow, initial: true) { _, shown in panelState?.searchOverlayPresented = shown }
+        .onDisappear { panelState?.searchOverlayPresented = false }
     }
 
     private var shouldShow: Bool {

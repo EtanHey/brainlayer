@@ -7,6 +7,7 @@ struct BrainBarWindowRootView: View {
 
     @ObservedObject var runtime: BrainBarRuntime
     private let managesWindowFrame: Bool
+    @ObservedObject private var panelState: BrainBarDashboardPanelState
 
     @State private var selectedTab = BrainBarWindowRootView.defaultTab
     @State private var hasActivatedGraphTab = false
@@ -14,9 +15,14 @@ struct BrainBarWindowRootView: View {
     @StateObject private var windowObserver: BrainBarWindowObserver
     @ObservedObject private var retrievalTools = BrainBarRetrievalToolsSettings.shared
 
-    init(runtime: BrainBarRuntime, managesWindowFrame: Bool = true) {
+    init(
+        runtime: BrainBarRuntime,
+        managesWindowFrame: Bool = true,
+        panelState: BrainBarDashboardPanelState = BrainBarDashboardPanelState()
+    ) {
         self.runtime = runtime
         self.managesWindowFrame = managesWindowFrame
+        self.panelState = panelState
         _windowObserver = StateObject(
             wrappedValue: BrainBarWindowObserver(coordinator: runtime.windowCoordinator)
         )
@@ -35,6 +41,9 @@ struct BrainBarWindowRootView: View {
                     selectedTab = selectedTab == .graph ? .dashboard : .graph
                 }
             )
+            .background(GeometryReader { proxy in
+                Color.clear.preference(key: BrainBarHeaderHeightKey.self, value: proxy.size.height)
+            })
 
             ZStack {
                 dashboardContent
@@ -45,14 +54,15 @@ struct BrainBarWindowRootView: View {
                         .brainBarTabVisibility(selectedTab == .graph)
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity)
             .overlay {
                 // Overlay carries its own full-area tap-catcher and only
                 // renders when the user is on the Dashboard tab with a
                 // non-empty search query that hasn't been dismissed.
                 BrainBarCommandBarResultsOverlay(
                     viewModel: commandBarViewModel,
-                    isOnActiveTab: selectedTab == .dashboard
+                    isOnActiveTab: selectedTab == .dashboard,
+                    panelState: panelState
                 )
             }
         }
@@ -60,14 +70,13 @@ struct BrainBarWindowRootView: View {
             minWidth: 760,
             idealWidth: 900,
             maxWidth: .infinity,
-            minHeight: 560,
-            idealHeight: 640,
-            maxHeight: .infinity
+            idealHeight: panelState.fittingHeight
         )
         .opacity(managesWindowFrame ? (windowObserver.isContentReady ? 1 : 0) : 1)
         .background(BrainBarAppBackground())
         .environment(\.colorScheme, .dark)
         .background(windowAttachment)
+        .onPreferenceChange(BrainBarHeaderHeightKey.self) { panelState.headerHeight = $0 }
         .onAppear {
             activate(tab: selectedTab)
             if let action = runtime.requestedQuickAction {
@@ -75,6 +84,7 @@ struct BrainBarWindowRootView: View {
             }
         }
         .onChange(of: selectedTab) { _, newTab in
+            panelState.graphPresented = newTab == .graph
             activate(tab: newTab)
         }
         .onChange(of: retrievalTools.isEnabled) { _, enabled in
@@ -110,7 +120,8 @@ struct BrainBarWindowRootView: View {
             BrainBarDashboardContent(
                 collector: collector,
                 hotkeyStatus: runtime.hotkeyStatus.statusLine,
-                dbPath: runtime.databasePath
+                dbPath: runtime.databasePath,
+                panelState: panelState
             )
         } else {
             BrainBarLoadingView(title: "BrainBar", subtitle: "Opening database and warming the dashboard...")
@@ -157,12 +168,19 @@ struct BrainBarWindowRootView: View {
     }
 }
 
+private struct BrainBarHeaderHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
 private struct BrainBarDashboardContent: View {
     @ObservedObject var collector: StatsCollector
+    @StateObject private var standalonePanelState = BrainBarDashboardPanelState()
     let hotkeyStatus: String
     var dbPath: String? = nil
     var observabilityResult: ObservabilityReadResult? = nil
     var referenceNow: Date? = nil
+    var panelState: BrainBarDashboardPanelState? = nil
 
     var body: some View {
         if collector.snapshotFreshnessState.isLoading {
@@ -173,7 +191,8 @@ private struct BrainBarDashboardContent: View {
                 hotkeyStatus: hotkeyStatus,
                 dbPath: dbPath,
                 observabilityResult: observabilityResult,
-                referenceNow: referenceNow
+                referenceNow: referenceNow,
+                panelState: panelState ?? standalonePanelState
             )
         }
     }
@@ -614,17 +633,19 @@ private struct BrainBarDashboardView: View {
     var dbPath: String? = nil
     var observabilityResult: ObservabilityReadResult? = nil
     var referenceNow: Date? = nil
+    @ObservedObject var panelState: BrainBarDashboardPanelState
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var previousAllCommitBuckets: [Int] = []
     @State private var allCommitPulseRevision = 0
-    @State private var detailsExpanded = BrainBarOnePageComposition.detailsExpandedByDefault
     @State private var signalCoverageExpanded = false
     @State private var vectorSignalDetailExpanded = false
     @State private var vectorSignalRootFrame: CGRect = .zero
     @State private var liveObservabilityResult: ObservabilityReadResult = .unreadable("Loading observability data.")
     private let observabilityCadence = ObservabilityReader.installedHealthCheckCadence
     @State private var vectorDetailHeight: CGFloat = 0
+    @State private var containerSize = CGSize(width: 900, height: 640)
+    @State private var measuredContentHeight: CGFloat = 0
 
     private var flowSummary: DashboardFlowSummary {
         DashboardFlowSummary.derive(daemon: collector.daemon, stats: collector.stats, now: currentNow)
@@ -678,10 +699,9 @@ private struct BrainBarDashboardView: View {
     }
 
     var body: some View {
-        GeometryReader { proxy in
-            let layout = BrainBarDashboardLayout(containerSize: proxy.size)
+        let layout = BrainBarDashboardLayout(containerSize: containerSize)
 
-            ZStack(alignment: .topLeading) {
+        ZStack(alignment: .topLeading) {
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: layout.sectionSpacing) {
                         statusStrip
@@ -692,8 +712,11 @@ private struct BrainBarDashboardView: View {
                     .frame(maxWidth: layout.maxContentWidth, alignment: .topLeading)
                     .frame(maxWidth: .infinity, alignment: .top)
                     .focusSection()
+                    .background(GeometryReader { proxy in
+                        Color.clear.preference(key: BrainBarDashboardHeightKey.self, value: proxy.size.height)
+                    })
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .frame(maxWidth: .infinity, alignment: .top)
                 .accessibilityIdentifier("brainbar.dashboard.scroll")
                 .focusable()
             }
@@ -718,7 +741,7 @@ private struct BrainBarDashboardView: View {
                         )
                         .offset(
                             x: vectorDetailXOffset(layout: layout),
-                            y: vectorDetailYOffset(layout: layout, containerHeight: proxy.size.height)
+                            y: vectorDetailYOffset(layout: layout, containerHeight: containerSize.height)
                         )
                         .shadow(color: .brainBarBlack.opacity(0.55), radius: 22, y: 12)
                         .shadow(color: .brainBarBlack.opacity(0.30), radius: 6, y: 2)
@@ -733,6 +756,14 @@ private struct BrainBarDashboardView: View {
                     }
                 }
             }
+        .frame(idealHeight: max(measuredContentHeight, 300))
+        .background(GeometryReader { proxy in
+            Color.clear.preference(key: BrainBarDashboardSizeKey.self, value: proxy.size)
+        })
+        .onPreferenceChange(BrainBarDashboardSizeKey.self) { containerSize = $0 }
+        .onPreferenceChange(BrainBarDashboardHeightKey.self) { height in
+            measuredContentHeight = height
+            panelState.dashboardHeight = height
         }
         .onAppear {
             previousAllCommitBuckets = collector.stats.recentActivityBuckets
@@ -754,6 +785,10 @@ private struct BrainBarDashboardView: View {
                 liveObservabilityResult = $0
             }
         }
+    }
+
+    private var detailsBinding: Binding<Bool> {
+        $panelState.detailsExpanded
     }
 
     private var statusStrip: some View {
@@ -965,7 +1000,7 @@ private struct BrainBarDashboardView: View {
         )
 
         VStack(alignment: .leading, spacing: 12) {
-            DisclosureGroup(isExpanded: $detailsExpanded) {
+            DisclosureGroup(isExpanded: detailsBinding) {
                 VStack(alignment: .leading, spacing: layout.gridSpacing) {
                     if layout.diagnosticColumns == 2 {
                         HStack(alignment: .top, spacing: layout.gridSpacing) {
@@ -1008,6 +1043,16 @@ private struct BrainBarDashboardView: View {
             activityWindowMinutes: collector.stats.activityWindowMinutes
         )
     }
+}
+
+private struct BrainBarDashboardSizeKey: PreferenceKey {
+    static let defaultValue = CGSize(width: 900, height: 640)
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
+}
+
+private struct BrainBarDashboardHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
 private struct BrainBarSnapshotFreshnessBanner: View {

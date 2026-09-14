@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 final class BrainBarDashboardPanel: NSPanel {
@@ -7,15 +8,25 @@ final class BrainBarDashboardPanel: NSPanel {
 }
 
 @MainActor
+final class BrainBarDashboardPanelState: ObservableObject {
+    @Published var detailsExpanded = BrainBarOnePageComposition.detailsExpandedByDefault
+    @Published var dashboardHeight: CGFloat = 0
+    @Published var headerHeight: CGFloat = 0
+    @Published var searchOverlayPresented = false
+    @Published var graphPresented = false
+
+    var fittingHeight: CGFloat {
+        searchOverlayPresented || graphPresented ? 640 : max(headerHeight + dashboardHeight, 300)
+    }
+}
+
+@MainActor
 final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     static let defaultSize = NSSize(
         width: BrainBarWindowPlacement.defaultSize.width,
         height: BrainBarWindowPlacement.defaultSize.height
     )
-    static let minSize = NSSize(
-        width: BrainBarWindowPlacement.minimumSize.width,
-        height: BrainBarWindowPlacement.minimumSize.height
-    )
+    static let minSize = NSSize(width: BrainBarWindowPlacement.minimumSize.width, height: 300)
     static let maxSize = NSSize(width: 1_600, height: 1_200)
 
     let panelForTesting: NSPanel
@@ -23,6 +34,9 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     var isShownForTesting: Bool { panel.isVisible }
 
     private let panel: NSPanel
+    private let panelState = BrainBarDashboardPanelState()
+    private var refitScheduled = false
+    private var sizingObservation: AnyCancellable?
     private var clickOutsideMonitor: Any?
     private var localClickMonitor: Any?
     private var shownAt: Date = .distantPast
@@ -30,10 +44,11 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
 
     init(runtime: BrainBarRuntime) {
         let hostingController = NSHostingController(
-            rootView: BrainBarWindowRootView(runtime: runtime, managesWindowFrame: false)
-                .frame(minWidth: Self.minSize.width, minHeight: Self.minSize.height)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            rootView: BrainBarWindowRootView(runtime: runtime, managesWindowFrame: false, panelState: panelState)
+                .frame(minWidth: Self.minSize.width)
+                .frame(maxWidth: .infinity)
         )
+        hostingController.sizingOptions = []
         hostingController.view.frame = NSRect(origin: .zero, size: Self.defaultSize)
         hostingController.view.autoresizingMask = [.width, .height]
 
@@ -42,6 +57,8 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         panelForTesting = panel
         super.init()
         panel.delegate = self
+        sizingObservation = panelState.objectWillChange.sink { [weak self] _ in self?.scheduleRefit() }
+        scheduleRefit()
     }
 
     func toggle(anchoredTo anchorView: NSView? = nil) {
@@ -108,6 +125,32 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         removeClickOutsideMonitor()
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        scheduleRefit()
+    }
+
+    func setDetailsExpandedForTesting(_ expanded: Bool) {
+        panelState.detailsExpanded = expanded
+    }
+
+    private func scheduleRefit() {
+        guard !refitScheduled else { return }
+        refitScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            self?.refitScheduled = false
+            self?.fitPanelToContent()
+        }
+    }
+
+    private func fitPanelToContent() {
+        let width = panel.contentLayoutRect.width
+        let visibleHeight = statusItemButton?.window?.screen?.visibleFrame.height ?? Self.maxSize.height
+        let height = min(panelState.fittingHeight, visibleHeight)
+        guard abs(panel.contentLayoutRect.height - height) > 0.5 else { return }
+        panel.setContentSize(NSSize(width: width, height: height))
+        if let statusItemButton { positionPanel(below: statusItemButton) }
     }
 
     private static func makePanel(contentViewController: NSViewController) -> NSPanel {

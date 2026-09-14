@@ -100,19 +100,19 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             shouldSkipDisplayDependentRenderInCI,
             "Dashboard PNG render verification is display-dependent; set BRAINBAR_RENDER_IN_CI=1 to run in CI."
         )
-        let width: CGFloat = 960
         let view = BrainBarDashboardPreview.make(collector: BrainBarDashboardFixture.makeCollector())
         let host = NSHostingController(rootView: view)
-        let fittedHeight = host.sizeThatFits(
-            in: CGSize(width: width, height: .greatestFiniteMagnitude)
-        ).height
+        host.view.frame = NSRect(x: 0, y: 0, width: 960, height: 640)
+        host.view.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+        host.view.layoutSubtreeIfNeeded()
+        let fittedHeight = host.view.fittingSize.height
 
         XCTAssertGreaterThan(fittedHeight, 300)
         XCTAssertLessThan(fittedHeight, 640)
-        let (png, bitmap) = try renderPNG(view, size: NSSize(width: width, height: fittedHeight))
-        let url = try writePNG(png, name: "dashboard-default")
+        let (png, bitmap) = try renderPNG(view, size: NSSize(width: 960, height: fittedHeight))
+        _ = try writePNG(png, name: "dashboard-default")
         XCTAssertTrue(bottomBandContainsForeground(in: bitmap))
-        print("[brainbar-render] wrote \(url.path) (\(png.count) bytes, fitted height \(fittedHeight))")
     }
 
     @MainActor
