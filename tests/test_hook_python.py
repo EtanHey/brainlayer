@@ -638,19 +638,25 @@ def test_launchd_plist_render_rejects_xml_forbidden_interpreter_path(tmp_path):
         render_launchd_plist("<string>__BRAINLAYER_PYTHON__</string>", python=str(python))
 
 
-def test_health_check_launchd_runs_observability_writer_with_rendered_keg_python(tmp_path):
+def test_observability_launchd_runs_writer_every_five_minutes_with_rendered_keg_python(tmp_path):
     from brainlayer.hook_python import render_launchd_plist
 
-    template = (REPO_ROOT / "scripts/launchd/com.brainlayer.health-check.plist").read_text(encoding="utf-8")
+    template = (REPO_ROOT / "scripts/launchd/com.brainlayer.observability.plist").read_text(encoding="utf-8")
     python = tmp_path / "opt" / "brainlayer" / "libexec" / "venv" / "bin" / "python"
     python.parent.mkdir(parents=True)
     python.write_text("#!/bin/sh\n")
     python.chmod(0o755)
 
     rendered = render_launchd_plist(template, python=str(python))
-    args = plistlib.loads(rendered.encode())["ProgramArguments"]
+    plist = plistlib.loads(rendered.encode())
 
-    assert str(python) in args
-    assert "health-check" in args
-    assert "observability" in args
-    assert "--write" in args
+    assert plist["Label"] == "com.brainlayer.observability"
+    assert plist["ProgramArguments"] == [
+        "__BRAINLAYER_ENV_RUN__",
+        str(python),
+        "-m",
+        "brainlayer",
+        "observability",
+        "--write",
+    ]
+    assert plist["StartInterval"] == 300

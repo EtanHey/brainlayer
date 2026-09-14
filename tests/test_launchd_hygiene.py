@@ -539,6 +539,16 @@ def test_launchd_installer_wires_health_check_target():
     assert "remove_plist health-check" in install_source
 
 
+def test_launchd_installer_wires_observability_target_for_fresh_installs():
+    install_source = (REPO_ROOT / "scripts/launchd/install.sh").read_text(encoding="utf-8")
+
+    assert "./scripts/launchd/install.sh observability" in install_source
+    assert "observability)" in install_source
+    assert "install_plist observability" in install_source
+    assert "install_many maintenance-nightly maintenance-weekly health-check observability p0-counter" in install_source
+    assert "remove_plist observability" in install_source
+
+
 def test_launchd_installer_wires_t3_ingest_target():
     install_source = (REPO_ROOT / "scripts/launchd/install.sh").read_text(encoding="utf-8")
 
