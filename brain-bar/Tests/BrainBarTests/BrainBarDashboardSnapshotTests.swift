@@ -32,20 +32,18 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
         case `default`
         case wide
 
-        // Heights are intentionally generous: the dashboard is a ScrollView, so a
-        // too-short frame clips the lower cards (queue rail, agent presence,
-        // diagnostics) while a too-tall frame only adds dark background below the
-        // content. Narrower widths stack everything vertically and run tallest.
+        // Match the actual dashboard window height. The resting one-page layout
+        // must stay useful without relying on an artificially tall proof frame.
         var size: NSSize {
             switch self {
-            case .compact: NSSize(width: 760, height: 2_500)
-            case .default: NSSize(width: 960, height: 2_650)
-            case .wide: NSSize(width: 1_280, height: 2_500)
+            case .compact: NSSize(width: 760, height: 640)
+            case .default: NSSize(width: 960, height: 640)
+            case .wide: NSSize(width: 1_280, height: 640)
             }
         }
     }
 
-    func testOnePageCompositionContract() {
+    func testOnePageCompositionContract() throws {
         XCTAssertEqual(
             BrainBarOnePageComposition.visibleSectionIDs,
             ["status", "backups", "memory", "ingest", "details"]
@@ -53,15 +51,18 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
         XCTAssertEqual(BrainBarOnePageComposition.primaryTileCount, 3)
         XCTAssertTrue(BrainBarOnePageComposition.primaryTilesHaveEqualHeight)
         XCTAssertFalse(BrainBarOnePageComposition.detailsExpandedByDefault)
+
+        let source = try String(
+            contentsOf: packageRoot().appendingPathComponent("Sources/BrainBar/BrainBarWindowRootView.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(source.contains("statusStrip\n                        summaryTiles(layout: layout)"))
+        XCTAssertFalse(source.contains("ObservabilityDashboardView("), "The old lower observability grid must not return.")
+        XCTAssertFalse(source.contains("Runtime & Details"), "Technical summaries must stay hidden while Details is collapsed.")
     }
 
     @MainActor
     func testDashboardRendersAtAllBreakpoints() throws {
-        try XCTSkipIf(
-            shouldSkipDisplayDependentRenderInCI,
-            "Dashboard PNG render verification is display-dependent; set BRAINBAR_RENDER_IN_CI=1 to run in CI."
-        )
-
         let observabilityURL = try XCTUnwrap(Bundle.module.url(
             forResource: "observability-main-58849a70",
             withExtension: "json",
@@ -82,6 +83,11 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             XCTAssertGreaterThan(
                 distinctSampledColorCount(in: bitmap), 16,
                 "dashboard-\(breakpoint.rawValue) render is too flat — likely blank/clipped"
+            )
+            XCTAssertLessThan(
+                warmBrownPixelShare(in: bitmap),
+                0.12,
+                "dashboard-\(breakpoint.rawValue) regressed to the old brown-card layout"
             )
             // Surface the path in the test log so an agent knows what to Read.
             print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
@@ -428,6 +434,13 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             .appendingPathComponent("docs.local/brainbar-render", isDirectory: true)
     }
 
+    private func packageRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
     private func distinctSampledColorCount(in bitmap: NSBitmapImageRep) -> Int {
         guard let data = bitmap.bitmapData else { return 0 }
         let bytesPerPixel = max(bitmap.bitsPerPixel / 8, 1)
@@ -443,6 +456,24 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             }
         }
         return colors.count
+    }
+
+    private func warmBrownPixelShare(in bitmap: NSBitmapImageRep) -> Double {
+        var warm = 0
+        var sampled = 0
+        for y in stride(from: 0, to: bitmap.pixelsHigh, by: 8) {
+            for x in stride(from: 0, to: bitmap.pixelsWide, by: 8) {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                sampled += 1
+                if color.redComponent > 0.16,
+                   color.redComponent > color.blueComponent * 1.35,
+                   color.greenComponent > color.blueComponent * 1.10,
+                   color.redComponent > color.greenComponent * 1.12 {
+                    warm += 1
+                }
+            }
+        }
+        return sampled == 0 ? 1 : Double(warm) / Double(sampled)
     }
 
     private enum RenderError: Error {

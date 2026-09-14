@@ -69,26 +69,22 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         XCTAssertFalse(pipeline.contains("Enrichment is draining backlog"))
     }
 
-    func testDashboardMakesFreshnessPrimaryAndKeepsLastGoodDataVisible() throws {
+    func testDashboardMakesOneLineStatusPrimaryAndKeepsTechnicalFreshnessInDetails() throws {
         let source = try sourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
         let dashboardSource = try sourceSlice(
             from: "private struct BrainBarDashboardView",
             throughBefore: "private struct BrainBarSnapshotFreshnessBanner",
             in: source
         )
-        let freshnessBannerSource = try sourceSlice(
-            from: "private struct BrainBarSnapshotFreshnessBanner",
-            throughBefore: "private struct BrainBarPipelineSeriesCard",
-            in: source
-        )
-        let freshnessIndex = try XCTUnwrap(dashboardSource.range(of: "freshnessBanner")?.lowerBound)
-        let overviewIndex = try XCTUnwrap(dashboardSource.range(of: "overviewCard(layout: layout)")?.lowerBound)
+        let statusIndex = try XCTUnwrap(dashboardSource.range(of: "statusStrip")?.lowerBound)
+        let tilesIndex = try XCTUnwrap(dashboardSource.range(of: "summaryTiles(layout: layout)")?.lowerBound)
 
-        XCTAssertLessThan(freshnessIndex, overviewIndex, "Freshness must precede last-good dashboard content.")
-        XCTAssertTrue(dashboardSource.contains("lastGoodContentOpacity"))
-        XCTAssertTrue(freshnessBannerSource.contains("Last good"))
-        XCTAssertTrue(freshnessBannerSource.contains("Data age"))
-        XCTAssertTrue(freshnessBannerSource.contains("brainbar.dashboard.freshness"))
+        XCTAssertLessThan(statusIndex, tilesIndex, "The one-line status must precede the three dashboard tiles.")
+        XCTAssertTrue(dashboardSource.contains("All good"))
+        XCTAssertTrue(dashboardSource.contains("1 thing needs you"))
+        XCTAssertTrue(dashboardSource.contains("brainbar.dashboard.status"))
+        XCTAssertTrue(dashboardSource.contains("ObservabilityTechnicalDetailsView"))
+        XCTAssertFalse(dashboardSource.contains("lastGoodContentOpacity"))
     }
 
     func testDashboardUsesCompactDensityAtSupportedBreakpoints() {
@@ -227,22 +223,19 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         XCTAssertTrue(source.contains("role: .destructive"))
     }
 
-    func testWideHeroLabelsAndChartStatusColorsRemainSemanticallyLegible() throws {
+    func testOnePageTileLabelsAndChartStatusColorsRemainSemanticallyLegible() throws {
         let dashboard = try sourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
         let pipeline = try sourceFile("Sources/BrainBar/Dashboard/PipelineState.swift")
-        let overviewSource = try sourceSlice(
-            from: "private func overviewCard",
-            throughBefore: "// MARK: - Pipeline",
+        let tilesSource = try sourceSlice(
+            from: "private func summaryTiles",
+            throughBefore: "private var onePageMemoryCounts",
             in: dashboard
         )
-        let indexedSource = try sourceSlice(
-            from: "Text(hero.indexedInWindow)",
-            throughBefore: "Text(hero.totalIndexed)",
-            in: overviewSource
-        )
 
-        XCTAssertTrue(overviewSource.contains("Text(hero.indexedInWindow)"))
-        XCTAssertTrue(indexedSource.contains(".fixedSize(horizontal: false, vertical: true)"), "Indexed hero truth must wrap instead of truncating.")
+        XCTAssertTrue(tilesSource.contains("title: \"Backups\""))
+        XCTAssertTrue(tilesSource.contains("title: \"Memory\""))
+        XCTAssertTrue(tilesSource.contains("title: \"Ingest\""))
+        XCTAssertTrue(tilesSource.contains("minHeight: height, maxHeight: height"), "All primary tiles must use one equal height.")
         XCTAssertTrue(dashboard.contains("lane.status.stateTheme"), "Chart status pills must use semantic state color, not series color.")
         XCTAssertTrue(pipeline.contains("extension DashboardFlowLaneStatus"))
         XCTAssertTrue(pipeline.contains("case .live:\n            return .active"))
