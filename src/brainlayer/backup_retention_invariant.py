@@ -211,6 +211,111 @@ def _has_trash_update(function: ast.FunctionDef) -> bool:
     return False
 
 
+def _is_drive_files_resource(expression: ast.AST) -> bool:
+    if isinstance(expression, ast.NamedExpr):
+        return _is_drive_files_resource(expression.value)
+    if not isinstance(expression, ast.Call):
+        return False
+    return isinstance(expression.func, ast.Attribute) and expression.func.attr == "files"
+
+
+def _is_getattr_delete(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "getattr"
+        and len(node.args) >= 2
+        and isinstance(node.args[1], ast.Constant)
+        and node.args[1].value == "delete"
+    )
+
+
+def _mentions_drive_files_endpoint(node: ast.AST) -> bool:
+    return any(
+        isinstance(child, ast.Constant)
+        and isinstance(child.value, str)
+        and "googleapis.com/drive/v3/files" in child.value
+        for child in ast.walk(node)
+    )
+
+
+def _keyword_value(call: ast.Call, name: str) -> ast.AST | None:
+    return next((keyword.value for keyword in call.keywords if keyword.arg == name), None)
+
+
+def _http_delete_targets_drive(call: ast.Call) -> bool:
+    if isinstance(call.func, ast.Attribute) and call.func.attr == "delete":
+        url = call.args[0] if call.args else _keyword_value(call, "url")
+        return url is not None and _mentions_drive_files_endpoint(url)
+    if not (isinstance(call.func, ast.Attribute) and call.func.attr == "request"):
+        return False
+    method = call.args[0] if call.args else _keyword_value(call, "method")
+    url = call.args[1] if len(call.args) >= 2 else _keyword_value(call, "url")
+    return (
+        isinstance(method, ast.Constant)
+        and isinstance(method.value, str)
+        and method.value.upper() == "DELETE"
+        and url is not None
+        and _mentions_drive_files_endpoint(url)
+    )
+
+
+def drive_hard_delete_lines(tree: ast.AST, *, strict_backup_module: bool) -> list[int]:
+    """Locate remote hard-delete references with fail-closed backup-module rules."""
+    parents = _parent_map(tree)
+    matches: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr == "delete":
+            parent = parents.get(node)
+            if (
+                strict_backup_module
+                or _is_drive_files_resource(node.value)
+                or (isinstance(parent, ast.Call) and parent.func is node and _http_delete_targets_drive(parent))
+            ):
+                matches.add(node.lineno)
+        elif _is_getattr_delete(node):
+            assert isinstance(node, ast.Call)
+            if strict_backup_module or _is_drive_files_resource(node.args[0]):
+                matches.add(node.lineno)
+        elif isinstance(node, ast.Call) and _http_delete_targets_drive(node):
+            matches.add(node.lineno)
+    return sorted(matches)
+
+
+def _module_assigns_false(tree: ast.Module, name: str) -> bool:
+    assignments = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == name
+    ]
+    return (
+        len(assignments) == 1 and isinstance(assignments[0].value, ast.Constant) and assignments[0].value.value is False
+    )
+
+
+def inspect_backup_daily_retention_invariant(source: str) -> list[str]:
+    """Return violations of backup-daily's fail-closed Drive retention contract."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        return [f"backup_daily.py is not valid Python: {exc}"]
+
+    errors: list[str] = []
+    pruner = _function(tree, "prune_drive_backups")
+    if pruner is None:
+        return ["required retention function is missing: prune_drive_backups"]
+    if drive_hard_delete_lines(tree, strict_backup_module=True):
+        errors.append("backup_daily retention must not hard-delete Drive objects")
+    if not _has_trash_update(pruner):
+        errors.append("backup_daily retention must trash Drive objects with update(body={'trashed': True})")
+    if not _module_assigns_false(tree, "DRIVE_RETENTION_ENABLED"):
+        errors.append("backup_daily Drive retention must be disabled by default")
+    return errors
+
+
 def inspect_jsonl_retention_invariant(source: str, *, backup_daily_source: str) -> list[str]:
     """Return deterministic violations of the PR #815 surviving-copy contract."""
     try:
@@ -223,7 +328,9 @@ def inspect_jsonl_retention_invariant(source: str, *, backup_daily_source: str) 
     except SyntaxError as exc:
         return [f"backup_daily.py is not valid Python: {exc}"]
 
-    errors: list[str] = []
+    errors: list[str] = inspect_backup_daily_retention_invariant(backup_daily_source)
+    if drive_hard_delete_lines(tree, strict_backup_module=True):
+        errors.append("JSONL retention must not hard-delete Drive objects")
     state_matches = _function(tree, "_state_matches")
     select_candidates = _function(tree, "_select_backup_candidates")
     update_state = _function(tree, "_update_state_for_uploaded")
@@ -353,8 +460,6 @@ def inspect_jsonl_retention_invariant(source: str, *, backup_daily_source: str) 
         errors.append("JSONL retention must not call backup_daily.prune_drive_backups")
     if legacy_prune_refs:
         errors.append("JSONL retention must not reference backup_daily.prune_drive_backups")
-    if _calls(trash_pruner, "delete"):
-        errors.append("JSONL retention must not hard-delete Drive objects")
     if not _has_trash_update(trash_pruner):
         errors.append("JSONL retention must trash Drive objects with update(body={'trashed': True})")
 
