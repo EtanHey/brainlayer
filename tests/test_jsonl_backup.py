@@ -984,6 +984,72 @@ def test_icloud_destination_is_strictly_opt_in(monkeypatch):
     assert jsonl_backup._configured_icloud_dir() == Path("/CloudDocs/Archives/brainlayer-jsonl-backups")
 
 
+def test_icloud_deadline_is_size_scaled_and_env_configurable(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    archive = tmp_path / "archive.tar.gz"
+    archive.write_bytes(b"12345")
+    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(jsonl_backup, "DEFAULT_ICLOUD_TIMEOUT_SECONDS", 1)
+    monkeypatch.setattr(jsonl_backup, "ICLOUD_MIN_BYTES_PER_SECOND", 2)
+    monkeypatch.delenv("BRAINLAYER_JSONL_BACKUP_ICLOUD_TIMEOUT_SECONDS", raising=False)
+
+    assert jsonl_backup._icloud_deadline_for_archive(archive) == 102.5
+
+    monkeypatch.setenv("BRAINLAYER_JSONL_BACKUP_ICLOUD_TIMEOUT_SECONDS", "7")
+    assert jsonl_backup._icloud_deadline_for_archive(archive) == 107.0
+
+
+def test_icloud_seed_copy_deadline_starts_after_slow_bundle(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    now = time.time()
+    source_root = tmp_path / "sessions"
+    _write_jsonl(source_root / "session.jsonl", mtime=now - 3600)
+    icloud_dir = tmp_path / "CloudDocs"
+    clock = [0.0]
+    original_create = jsonl_backup.create_jsonl_bundle_with_digests
+
+    _mock_drive_success(jsonl_backup, monkeypatch)
+    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        jsonl_backup,
+        "_icloud_item_state",
+        lambda *args, **kwargs: _icloud_state(uploaded=True, status="current"),
+    )
+
+    def slow_bundle(*args, **kwargs):
+        result = original_create(*args, **kwargs)
+        clock[0] = jsonl_backup.DEFAULT_ICLOUD_TIMEOUT_SECONDS + 1
+        return result
+
+    monkeypatch.setattr(jsonl_backup, "create_jsonl_bundle_with_digests", slow_bundle)
+
+    result = jsonl_backup.run_backup(
+        source_roots=[source_root],
+        state_path=tmp_path / "state.json",
+        staging_dir=tmp_path / "staging",
+        log_path=tmp_path / "jsonl-backup.log",
+        queue_dir=tmp_path / "queue",
+        icloud_dir=icloud_dir,
+        date_stamp="2026-09-14",
+        now=now,
+        upload=True,
+    )
+
+    assert result["status"] == "uploaded"
+    assert result["icloud_copy"]["materialization"] == "MATERIALIZED"
+
+
+def test_jsonl_seed_recipe_documents_wall_clock_override():
+    from brainlayer import jsonl_backup
+
+    source = Path(jsonl_backup.__file__).read_text(encoding="utf-8")
+
+    assert "BRAINLAYER_BACKUP_TIMEOUT_SECONDS=14400" in source
+    assert "BRAINLAYER_JSONL_BACKUP_ICLOUD_TIMEOUT_SECONDS" in source
+
+
 def test_logical_gzip_hash_does_not_swallow_wall_clock_timeout(tmp_path, monkeypatch):
     from brainlayer import jsonl_backup
 
@@ -1543,7 +1609,7 @@ def test_jsonl_backup_does_not_advance_state_until_icloud_copy_is_verified(tmp_p
     assert drive_uploads == []
 
 
-def test_run_backup_reuses_one_icloud_deadline_for_inventory_and_repair(tmp_path, monkeypatch):
+def test_run_backup_does_not_share_inventory_deadline_with_repair(tmp_path, monkeypatch):
     from brainlayer import jsonl_backup
 
     now = time.time()
@@ -1578,8 +1644,7 @@ def test_run_backup_reuses_one_icloud_deadline_for_inventory_and_repair(tmp_path
 
     assert observed[0][0] == "inventory"
     assert observed[1][0] == "copy"
-    assert observed[0][1] is not None
-    assert observed[0][1] == observed[1][1]
+    assert observed == [("inventory", None), ("copy", None)]
 
 
 def test_enabling_icloud_bootstraps_files_covered_only_by_legacy_drive_state(tmp_path, monkeypatch):

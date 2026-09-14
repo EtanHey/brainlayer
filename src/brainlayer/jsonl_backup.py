@@ -1,5 +1,19 @@
 """Nightly JSONL transcript backups to Google Drive and iCloud Drive.
 
+To seed a newly enabled iCloud destination, run the installed wrapper manually
+with a larger wall-clock budget, for example::
+
+    BRAINLAYER_BACKUP_TIMEOUT_SECONDS=14400 \\
+    BRAINLAYER_JSONL_BACKUP_ICLOUD_DIR="$HOME/Library/Mobile Documents/com~apple~CloudDocs/Archives/brainlayer-jsonl-backups" \\
+    BRAINLAYER_PYTHON=/opt/homebrew/opt/brainlayer/libexec/venv/bin/python \\
+    /path/to/installed/jsonl-backup.sh
+
+The wrapper preserves the explicit timeout and the module reads it through
+``_configured_backup_timeout_seconds``. The LaunchAgent's ordinary 1800-second
+wall-clock limit remains unchanged for nightly runs. Set
+``BRAINLAYER_JSONL_BACKUP_ICLOUD_TIMEOUT_SECONDS`` to replace the default
+per-copy floor; archive-size scaling still applies when it requires more time.
+
 Install note: commit `launchd/com.brainlayer.jsonl-backup.plist`, render its
 `__BRAINLAYER_PYTHON__` placeholder through `hook_python.render_launchd_plist`,
 then install it after merge with the repo's launchd flow; this module
@@ -20,6 +34,7 @@ import functools
 import gzip
 import hashlib
 import json
+import math
 import os
 import shutil
 import signal
@@ -48,7 +63,12 @@ DEFAULT_ICLOUD_DIR = (
 DEFAULT_ACTIVE_SKIP_SECONDS = 10 * 60
 DEFAULT_TIMEOUT_SECONDS = 1800
 DEFAULT_ICLOUD_TIMEOUT_SECONDS = 300
+# 20 MiB/s is a conservative local iCloud Drive floor. It keeps a large seed
+# from receiving only the fixed five-minute budget while avoiding optimistic
+# network throughput assumptions in the deadline calculation.
+ICLOUD_MIN_BYTES_PER_SECOND = 20 * 1024 * 1024
 ICLOUD_DIR_ENV = "BRAINLAYER_JSONL_BACKUP_ICLOUD_DIR"
+ICLOUD_TIMEOUT_ENV = "BRAINLAYER_JSONL_BACKUP_ICLOUD_TIMEOUT_SECONDS"
 BRAINLAYER_JSONL_BACKUP_RETENTION_ENV = "BRAINLAYER_JSONL_BACKUP_RETENTION"
 # Retention is a destructive operation even when the source-side coverage check passes. Keep
 # it off until archive-level history coverage is proven; the explicit environment override is
@@ -143,6 +163,30 @@ def _configured_icloud_dir() -> Path | None:
     """Return the opt-in iCloud destination; Drive-only is the default."""
     raw = os.environ.get(ICLOUD_DIR_ENV, "").strip()
     return Path(raw).expanduser() if raw else None
+
+
+def _configured_icloud_timeout_seconds() -> float:
+    raw = os.environ.get(ICLOUD_TIMEOUT_ENV)
+    if raw is None or raw.strip() == "":
+        return DEFAULT_ICLOUD_TIMEOUT_SECONDS
+    try:
+        seconds = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{ICLOUD_TIMEOUT_ENV} must be a number of seconds") from exc
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise ValueError(f"{ICLOUD_TIMEOUT_ENV} must be a finite number greater than 0 seconds")
+    return seconds
+
+
+def _icloud_deadline_for_archive(
+    archive_path: Path,
+    *,
+    timeout_seconds: float | None = None,
+) -> float:
+    """Set an archive-sized budget when the iCloud copy operation begins."""
+    archive_size = Path(archive_path).expanduser().stat().st_size
+    configured_timeout = _configured_icloud_timeout_seconds() if timeout_seconds is None else timeout_seconds
+    return time.monotonic() + max(configured_timeout, archive_size / ICLOUD_MIN_BYTES_PER_SECOND)
 
 
 def _load_state(path: Path) -> dict[str, Any]:
@@ -540,21 +584,29 @@ def copy_archive_to_icloud(
     archive_path: Path,
     icloud_dir: Path,
     *,
-    timeout_seconds: float = DEFAULT_ICLOUD_TIMEOUT_SECONDS,
+    timeout_seconds: float | None = None,
     poll_interval_seconds: float = 2.0,
     deadline: float | None = None,
 ) -> dict[str, Any]:
     """Copy to iCloud, force materialization, then verify authoritative state and bytes."""
     archive_path = Path(archive_path).expanduser()
     icloud_dir = Path(icloud_dir).expanduser()
-    deadline = deadline if deadline is not None else time.monotonic() + timeout_seconds
+    expected_size = archive_path.stat().st_size
+    configured_timeout = _configured_icloud_timeout_seconds() if timeout_seconds is None else timeout_seconds
+    deadline = (
+        deadline
+        if deadline is not None
+        else _icloud_deadline_for_archive(
+            archive_path,
+            timeout_seconds=configured_timeout,
+        )
+    )
 
     def remaining_seconds() -> float:
         return max(deadline - time.monotonic(), 0.001)
 
     icloud_dir.mkdir(parents=True, exist_ok=True)
     _check_icloud_deadline(deadline, "preparing the iCloud directory")
-    expected_size = archive_path.stat().st_size
     expected_sha256 = _sha256_file(archive_path, deadline=deadline)
     logical_sha256 = _sha256_gzip_payload(archive_path, deadline=deadline)
     suffix = "".join(archive_path.suffixes)
@@ -605,7 +657,7 @@ def copy_archive_to_icloud(
                     return receipt(reused=True)
                 if time.monotonic() >= deadline:
                     raise ICloudDeadlineExceeded(
-                        f"existing iCloud copy was not uploaded and materialized within {timeout_seconds}s: "
+                        "existing iCloud copy was not uploaded and materialized before its deadline: "
                         f"path={destination} state={state!r}"
                     )
                 time.sleep(min(poll_interval_seconds, remaining_seconds()))
@@ -672,7 +724,7 @@ def copy_archive_to_icloud(
                 placeholder = destination.with_name(f".{destination.name}.icloud")
                 materialization = "PLACEHOLDER" if placeholder.exists() or not destination.exists() else "PENDING"
                 raise RuntimeError(
-                    f"iCloud copy was not uploaded and materialized within {timeout_seconds}s: "
+                    "iCloud copy was not uploaded and materialized before its deadline: "
                     f"path={destination} materialization={materialization} state={state!r}"
                 )
             time.sleep(min(poll_interval_seconds, remaining_seconds()))
@@ -703,7 +755,7 @@ def _icloud_inventory_is_verified(
     candidates: list[JsonlCandidate],
     icloud_dir: Path,
     *,
-    timeout_seconds: float = DEFAULT_ICLOUD_TIMEOUT_SECONDS,
+    timeout_seconds: float | None = None,
     poll_interval_seconds: float = 2.0,
     validated_sources: set[str] | None = None,
     deadline: float | None = None,
@@ -782,7 +834,8 @@ def _icloud_inventory_is_verified(
             _quarantine_unverified_icloud_item(directory / f".{archive_name}.icloud")
         return False
 
-    deadline = deadline if deadline is not None else time.monotonic() + timeout_seconds
+    configured_timeout = _configured_icloud_timeout_seconds() if timeout_seconds is None else timeout_seconds
+    deadline = deadline if deadline is not None else time.monotonic() + configured_timeout
     for archive_name in sorted(referenced_by_sources):
         try:
             _check_icloud_deadline(deadline, f"validating iCloud inventory archive {archive_name}")
@@ -1226,16 +1279,13 @@ def run_backup(
     candidates = _discover_jsonl_candidates(roots)
     selection_state = state
     icloud_bootstrap_pending = False
-    icloud_deadline: float | None = None
     if upload and icloud_dir is not None:
-        icloud_deadline = time.monotonic() + DEFAULT_ICLOUD_TIMEOUT_SECONDS
         validated_icloud_sources: set[str] = set()
         icloud_covered = _icloud_inventory_is_verified(
             state,
             candidates,
             icloud_dir,
             validated_sources=validated_icloud_sources,
-            deadline=icloud_deadline,
         )
         if not icloud_covered:
             # Legacy state proves only Drive coverage. The first iCloud-enabled run
@@ -1352,7 +1402,6 @@ def run_backup(
             result["icloud_copy"] = copy_archive_to_icloud(
                 archive_path,
                 icloud_dir,
-                deadline=icloud_deadline,
             )
         if service is None:
             credentials = backup_daily.get_drive_credentials()
