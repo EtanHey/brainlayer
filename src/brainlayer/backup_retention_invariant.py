@@ -211,6 +211,63 @@ def _has_trash_update(function: ast.FunctionDef) -> bool:
     return False
 
 
+def _drive_files_resource_aliases(tree: ast.Module) -> set[str]:
+    aliases: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
+            continue
+        factory = node.value.func
+        if not isinstance(factory, ast.Attribute) or factory.attr != "files":
+            continue
+        aliases.update(target.id for target in node.targets if isinstance(target, ast.Name))
+    return aliases
+
+
+def _is_drive_files_delete(call: ast.Call, *, aliases: set[str]) -> bool:
+    if not isinstance(call.func, ast.Attribute) or call.func.attr != "delete":
+        return False
+    receiver = call.func.value
+    direct = (
+        isinstance(receiver, ast.Call) and isinstance(receiver.func, ast.Attribute) and receiver.func.attr == "files"
+    )
+    return direct or (isinstance(receiver, ast.Name) and receiver.id in aliases)
+
+
+def _module_assigns_false(tree: ast.Module, name: str) -> bool:
+    assignments = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == name
+    ]
+    return (
+        len(assignments) == 1 and isinstance(assignments[0].value, ast.Constant) and assignments[0].value.value is False
+    )
+
+
+def inspect_backup_daily_retention_invariant(source: str) -> list[str]:
+    """Return violations of backup-daily's fail-closed Drive retention contract."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        return [f"backup_daily.py is not valid Python: {exc}"]
+
+    errors: list[str] = []
+    pruner = _function(tree, "prune_drive_backups")
+    if pruner is None:
+        return ["required retention function is missing: prune_drive_backups"]
+    aliases = _drive_files_resource_aliases(tree)
+    if any(_is_drive_files_delete(node, aliases=aliases) for node in ast.walk(tree) if isinstance(node, ast.Call)):
+        errors.append("backup_daily retention must not hard-delete Drive objects")
+    if not _has_trash_update(pruner):
+        errors.append("backup_daily retention must trash Drive objects with update(body={'trashed': True})")
+    if not _module_assigns_false(tree, "DRIVE_RETENTION_ENABLED"):
+        errors.append("backup_daily Drive retention must be disabled by default")
+    return errors
+
+
 def inspect_jsonl_retention_invariant(source: str, *, backup_daily_source: str) -> list[str]:
     """Return deterministic violations of the PR #815 surviving-copy contract."""
     try:
@@ -223,7 +280,7 @@ def inspect_jsonl_retention_invariant(source: str, *, backup_daily_source: str) 
     except SyntaxError as exc:
         return [f"backup_daily.py is not valid Python: {exc}"]
 
-    errors: list[str] = []
+    errors: list[str] = inspect_backup_daily_retention_invariant(backup_daily_source)
     state_matches = _function(tree, "_state_matches")
     select_candidates = _function(tree, "_select_backup_candidates")
     update_state = _function(tree, "_update_state_for_uploaded")
