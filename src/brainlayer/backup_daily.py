@@ -1231,9 +1231,7 @@ def verify_drive_upload(
     properties = metadata.get("appProperties")
     actual_machine_id = properties.get(DRIVE_MACHINE_PROPERTY) if isinstance(properties, dict) else None
     if actual_machine_id != expected_machine_id:
-        raise RuntimeError(
-            f"Uploaded Drive backup machine mismatch: {actual_machine_id!r} != {expected_machine_id!r}"
-        )
+        raise RuntimeError(f"Uploaded Drive backup machine mismatch: {actual_machine_id!r} != {expected_machine_id!r}")
 
 
 def prune_drive_backups(
