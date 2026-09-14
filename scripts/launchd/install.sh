@@ -622,8 +622,35 @@ if isinstance(value, (int, float)) and value >= 0:
 unload_plist() {
     local name="$1"
     local dst="$LAUNCH_DIR/com.brainlayer.${name}.plist"
+    local label="com.brainlayer.${name}"
+    local domain="gui/$UID/$label"
+    local attempts="${BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS:-20}"
+    local interval="${BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL:-0.1}"
+    local attempt=1
+
+    case "$attempts" in
+        *[!0-9]*|'')
+            echo "ERROR: unload attempts must be a positive integer for $label; got '$attempts'" >&2
+            return 1
+            ;;
+    esac
+    if [ "$attempts" -lt 1 ]; then
+        echo "ERROR: unload attempts must be a positive integer for $label; got '$attempts'" >&2
+        return 1
+    fi
     launchctl unload "$dst" 2>/dev/null || true
-    echo "  Unloaded: com.brainlayer.${name}"
+    while [ "$attempt" -le "$attempts" ]; do
+        if ! launchctl print "$domain" >/dev/null 2>&1; then
+            echo "  Unloaded: $label"
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        if [ "$attempt" -le "$attempts" ]; then
+            sleep "$interval"
+        fi
+    done
+    echo "ERROR: $label did not unload; refusing to remove its plist or executable" >&2
+    return 1
 }
 
 install_hotlane_brainbar_daemon() {
@@ -1155,7 +1182,9 @@ remove_fleet_watchdog() {
 remove_plist() {
     local name="$1"
     local dst="$LAUNCH_DIR/com.brainlayer.${name}.plist"
-    unload_plist "$name"
+    if ! unload_plist "$name"; then
+        return 1
+    fi
     rm -f "$dst"
     rm -f "${dst}.reload-pending"
     remove_job_wrapper "$name"
@@ -1292,25 +1321,25 @@ case "${1:-all}" in
         ;;
     remove)
         remove_plist index
-        remove_plist t3-ingest 2>/dev/null || true
-        remove_plist enrich 2>/dev/null || true
-        remove_plist enrichment 2>/dev/null || true
-        remove_plist watch 2>/dev/null || true
-        remove_plist decay 2>/dev/null || true
-        remove_plist drain 2>/dev/null || true
+        remove_plist t3-ingest
+        remove_plist enrich
+        remove_plist enrichment
+        remove_plist watch
+        remove_plist decay
+        remove_plist drain
         remove_plist wal-checkpoint
-        remove_plist repair-fts 2>/dev/null || true
-        remove_plist backup-daily 2>/dev/null || true
-        remove_plist jsonl-backup 2>/dev/null || true
-        remove_plist maintenance-nightly 2>/dev/null || true
-        remove_plist maintenance-weekly 2>/dev/null || true
-        remove_plist health-check 2>/dev/null || true
-        remove_plist observability 2>/dev/null || true
-        remove_plist tier0-watchdog 2>/dev/null || true
-        remove_plist throughput-watchdog 2>/dev/null || true
-        remove_fleet_watchdog 2>/dev/null || true
-        remove_plist hotlane-brainbar 2>/dev/null || true
-        remove_plist p0-counter 2>/dev/null || true
+        remove_plist repair-fts
+        remove_plist backup-daily
+        remove_plist jsonl-backup
+        remove_plist maintenance-nightly
+        remove_plist maintenance-weekly
+        remove_plist health-check
+        remove_plist observability
+        remove_plist tier0-watchdog
+        remove_plist throughput-watchdog
+        remove_fleet_watchdog
+        remove_plist hotlane-brainbar
+        remove_plist p0-counter
         rm -f "$BRAINLAYER_LIB_DIR/backup-daily.sh"
         rm -f "$BRAINLAYER_LIB_DIR/jsonl-backup.sh"
         rm -f "$TIER0_WATCHDOG_DST"
