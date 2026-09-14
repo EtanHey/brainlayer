@@ -252,9 +252,9 @@ def test_brainbar_swift_daemon_is_independent_of_python_daemon() -> None:
 
     required_surfaces = [
         REPO_ROOT / "brain-bar/Sources/BrainBarDaemon/BrainBarDaemonMain.swift",
-        REPO_ROOT / "brain-bar/Sources/BrainBar/InjectionFeedView.swift",
+        REPO_ROOT / "brain-bar/Sources/BrainBar/BrainBarWindowRootView.swift",
         REPO_ROOT / "brain-bar/Sources/BrainBar/BrainBarDashboardPanelController.swift",
-        REPO_ROOT / "brain-bar/Tests/BrainBarTests/InjectionPresentationTests.swift",
+        REPO_ROOT / "brain-bar/Tests/BrainBarTests/BrainBarWindowStateTests.swift",
         REPO_ROOT / "brain-bar/Tests/BrainBarTests/KnowledgeGraphTests.swift",
     ]
     for surface in required_surfaces:

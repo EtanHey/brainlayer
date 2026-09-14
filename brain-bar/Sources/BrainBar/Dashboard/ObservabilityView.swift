@@ -317,9 +317,9 @@ enum ObservabilityPresentation {
         let threshold = backups.thresholdHours.map { number(Int($0), locale: locale) } ?? "unknown"
         let freshness: ObservabilityStatusLine
         switch backups.freshness {
-        case "fresh": freshness = .init(text: "Transcript backup freshness: fresh (within \(threshold) h)", tone: .green)
-        case "stale": freshness = .init(text: "Transcript backup freshness: stale (> \(threshold) h)", tone: .red)
-        default: freshness = .init(text: "Transcript backup freshness: unknown", tone: .red)
+        case "fresh": freshness = .init(text: "Backup freshness (DB + transcript): fresh (within \(threshold) h)", tone: .green)
+        case "stale": freshness = .init(text: "Backup freshness (DB + transcript): stale (> \(threshold) h)", tone: .red)
+        default: freshness = .init(text: "Backup freshness (DB + transcript): unknown", tone: .red)
         }
 
         let retentionValue = backups.retentionInvariant ?? "unknown"
@@ -338,7 +338,8 @@ enum ObservabilityPresentation {
         }
         let error = backups.errorType.flatMap { value -> ObservabilityStatusLine? in
             guard !value.isEmpty else { return nil }
-            return .init(text: "DB backup error: \(errorText(value))", tone: .red)
+            let kind = value.hasPrefix("jsonl_backup_attempt_") ? "Transcript" : "DB"
+            return .init(text: "\(kind) backup error: \(errorText(value))", tone: .red)
         }
         return .init(
             upload: upload, snapshot: snapshot, job: job, freshness: freshness,
