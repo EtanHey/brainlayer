@@ -36,6 +36,22 @@ def test_backup_daily_invariant_rejects_an_injected_drive_hard_delete() -> None:
     )
 
 
+def test_backup_daily_invariant_rejects_a_files_resource_alias_delete() -> None:
+    from brainlayer.backup_retention_invariant import inspect_backup_daily_retention_invariant
+
+    source = Path("src/brainlayer/backup_daily.py").read_text(encoding="utf-8")
+    mutated = source.replace(
+        '        service.files().update(\n            fileId=item["id"],\n            body={"trashed": True},\n',
+        '        files = service.files()\n        files.delete(\n            fileId=item["id"],\n',
+        1,
+    )
+
+    assert mutated != source
+    assert "backup_daily retention must not hard-delete Drive objects" in inspect_backup_daily_retention_invariant(
+        mutated
+    )
+
+
 def test_jsonl_retention_guard_failure_tells_refactors_to_update_not_delete(tmp_path: Path, capsys) -> None:
     from brainlayer.backup_retention_invariant import main
     from tests import test_jsonl_backup
