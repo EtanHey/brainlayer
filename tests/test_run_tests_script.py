@@ -1048,6 +1048,7 @@ def test_changed_only_scope_maps_package_init_to_version_consistency_tests(
     assert str(test_root / "test_version_consistency.py") in logged
     assert str(test_root / "test_build_sha.py") in logged
     assert "falling back to full pytest unit suite" not in result.stdout
+    assert f"{test_root}/ -v" not in logged
 
 
 def test_changed_only_scope_maps_package_main_to_module_execution_test(tmp_path: Path) -> None:
@@ -1072,7 +1073,8 @@ def test_changed_only_scope_maps_package_main_to_module_execution_test(tmp_path:
     )
 
     assert result.returncode == 0, result.stdout
-    assert str(test_root / "test_hook_python.py") in pytest_log.read_text()
+    logged = pytest_log.read_text()
+    assert str(test_root / "test_hook_python.py") in logged
     assert "falling back to full pytest unit suite" not in result.stdout
     assert f"{test_root}/ -v" not in logged
 
