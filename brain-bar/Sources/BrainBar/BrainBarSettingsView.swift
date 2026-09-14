@@ -374,7 +374,7 @@ struct BrainBarSettingsView: View {
                             set: { viewModel.setShowRetrievalTools($0) }
                         )
                     )
-                    Text("Shows Dashboard, Search, Knowledge Graph, and Quick Capture in BrainBar.")
+                    Text("Shows Search, Knowledge Graph, and Quick Capture in BrainBar.")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(Color.brainBarTextMuted)
                 }

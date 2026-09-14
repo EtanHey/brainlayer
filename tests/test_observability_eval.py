@@ -68,11 +68,20 @@ def test_golden_input_checker_reports_malformed_database_as_drift(tmp_path: Path
     assert any("status: malformed" in finding for finding in findings)
 
 
-def test_golden_input_checker_write_mode_exits_nonzero_when_it_updates(monkeypatch) -> None:
-    monkeypatch.setattr(golden_inputs, "check", lambda **kwargs: ["updated receipt"])
-    monkeypatch.setattr(sys, "argv", ["check_observability_golden_inputs.py", "--write"])
+def test_golden_input_checker_write_mode_repairs_real_drift_and_exits_nonzero(tmp_path: Path, monkeypatch) -> None:
+    fixture = tmp_path / "fixtures"
+    shutil.copytree(evaluator.FIXTURES, fixture)
+    case = next(item for item in json.loads((fixture / "cases.json").read_text())["cases"] if item["split"] == "dev")
+    log_path = fixture / case["inputs"]["jsonl_backup_log"]
+    log_path.write_text(log_path.read_text() + "drift\n")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["check_observability_golden_inputs.py", "--fixture-root", str(fixture), "--split", "dev", "--write"],
+    )
 
     assert golden_inputs.main() == 1
+    assert golden_inputs.check(fixture_root=fixture, heldout_root=None, split="dev", write=False) == []
 
 
 def test_builder_uses_vector_store_schema_without_handwritten_ddl(tmp_path: Path) -> None:

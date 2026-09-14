@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 
-def test_real_jsonl_receipt_shapes_pin_legacy_current_and_post_815() -> None:
+def test_real_jsonl_receipt_shapes_pin_legacy_and_current() -> None:
     fixture = Path(__file__).parent / "fixtures/observability/logs/healthy-dev/jsonl-backup.log"
     receipts = [json.loads(line) for line in fixture.read_text(encoding="utf-8").splitlines()]
     legacy, current = (set(receipts[index]) for index in (0, 1))

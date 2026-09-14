@@ -109,7 +109,7 @@ Call `expand_palette` or set `BRAINLAYER_MCP_PROFILE=full` for the rest.
 
 ## PR Workflow
 - Review = Codex↔Claude pair + CodeRabbit (+ at most one bot); never write the Codex bot's at-mention token.
-- Request the lead-routed Claude pair review through the active collab lane.
+- Request a lead-routed Claude pair review through the active collab lane.
 - Do not route mandatory reviews to Bugbot or Greptile.
 
 ## Known Issues

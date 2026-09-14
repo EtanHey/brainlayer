@@ -503,7 +503,7 @@ struct BrainLayerEnvDocument {
             config.enrichmentBackend = normalized(raw)
         }
         if let raw = assignments["BRAINLAYER_SHOW_RETRIEVAL_TOOLS"] {
-            config.showRetrievalTools = !isFalse(raw)
+            config.showRetrievalTools = isTrue(raw)
         }
         for key in tuningKeyOrder {
             guard let raw = assignments[key] else { continue }
@@ -561,6 +561,10 @@ struct BrainLayerEnvDocument {
 
     private static func isFalse(_ value: String) -> Bool {
         ["0", "false", "no", "off", "disabled"].contains(normalized(value))
+    }
+
+    private static func isTrue(_ value: String) -> Bool {
+        ["1", "true"].contains(normalized(value))
     }
 
     private static func normalized(_ value: String) -> String {

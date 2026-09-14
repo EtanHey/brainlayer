@@ -54,7 +54,7 @@ enum BrainBarTab: Int, CaseIterable, Equatable, Identifiable {
 enum BrainBarRetrievalToolsPolicy {
     static func visibleTabs(showRetrievalTools: Bool) -> [BrainBarTab] {
         showRetrievalTools ? BrainBarTab.allCases : BrainBarTab.allCases.filter { tab in
-            tab != .dashboard && tab != .graph
+            tab != .graph
         }
     }
 
