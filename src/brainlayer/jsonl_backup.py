@@ -185,9 +185,7 @@ def _icloud_deadline_for_archive(
 ) -> float:
     """Set an archive-sized budget when the iCloud copy operation begins."""
     archive_size = Path(archive_path).expanduser().stat().st_size
-    configured_timeout = (
-        _configured_icloud_timeout_seconds() if timeout_seconds is None else timeout_seconds
-    )
+    configured_timeout = _configured_icloud_timeout_seconds() if timeout_seconds is None else timeout_seconds
     return time.monotonic() + max(configured_timeout, archive_size / ICLOUD_MIN_BYTES_PER_SECOND)
 
 
@@ -594,12 +592,14 @@ def copy_archive_to_icloud(
     archive_path = Path(archive_path).expanduser()
     icloud_dir = Path(icloud_dir).expanduser()
     expected_size = archive_path.stat().st_size
-    configured_timeout = (
-        _configured_icloud_timeout_seconds() if timeout_seconds is None else timeout_seconds
-    )
-    deadline = deadline if deadline is not None else _icloud_deadline_for_archive(
-        archive_path,
-        timeout_seconds=configured_timeout,
+    configured_timeout = _configured_icloud_timeout_seconds() if timeout_seconds is None else timeout_seconds
+    deadline = (
+        deadline
+        if deadline is not None
+        else _icloud_deadline_for_archive(
+            archive_path,
+            timeout_seconds=configured_timeout,
+        )
     )
 
     def remaining_seconds() -> float:
