@@ -1287,6 +1287,25 @@ def test_backup_receipt_records_drive_folder_and_machine_id(tmp_path, monkeypatc
     assert result["machine_id"] == "m1"
 
 
+def test_invalid_machine_id_is_recorded_in_backup_receipt(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    log_path = tmp_path / "backup-daily.log"
+    monkeypatch.setenv("BRAINLAYER_MACHINE_ID", "bad machine id")
+
+    with pytest.raises(backup_daily.InvalidMachineIdError):
+        backup_daily.run_backup(
+            db_path=tmp_path / "brainlayer.db",
+            staging_dir=tmp_path,
+            upload=False,
+            log_path=log_path,
+        )
+
+    receipt = json.loads(log_path.read_text(encoding="utf-8"))
+    assert receipt["error_code"] == "invalid_machine_id"
+    assert receipt["uploaded"] is False
+
+
 def _stub_backup_for_drive_upload(backup_daily, monkeypatch, snapshot):
     class FakeArtifact:
         gzip_path = snapshot

@@ -112,10 +112,14 @@ def _today() -> str:
     return dt.datetime.now(dt.UTC).date().isoformat()
 
 
+class InvalidMachineIdError(ValueError):
+    error_code = "invalid_machine_id"
+
+
 def _validate_machine_id(machine_id: str) -> str:
     value = machine_id.strip()
     if not value or any(not (character.isalnum() or character in "._-") for character in value):
-        raise ValueError(f"{BACKUP_MACHINE_ID_ENV} must contain only letters, numbers, '.', '_', or '-'")
+        raise InvalidMachineIdError(f"{BACKUP_MACHINE_ID_ENV} must contain only letters, numbers, '.', '_', or '-'")
     return value
 
 
@@ -1301,16 +1305,10 @@ def run_backup(
     resolved_db_path = db_path or get_db_path()
     resolved_date_stamp = date_stamp or _today()
     resolved_log_path = _backup_log_path(log_path, db_path=resolved_db_path)
-    resolved_machine_id = _validate_machine_id(machine_id) if machine_id is not None else resolve_machine_id()
-    resolved_folder_parts = (
-        list(folder_parts) if folder_parts is not None else default_drive_folder_parts(resolved_machine_id)
-    )
     retention_enabled = _drive_retention_enabled()
     result: dict[str, Any] = {
         "attempted_at": dt.datetime.now(dt.UTC).isoformat(),
         "db": str(resolved_db_path),
-        "drive_folder": "/".join(resolved_folder_parts),
-        "machine_id": resolved_machine_id,
         "uploaded": False,
         "local_removed": False,
         "verified": False,
@@ -1328,6 +1326,16 @@ def run_backup(
         result["writer_probe_error"] = error
 
     try:
+        resolved_machine_id = _validate_machine_id(machine_id) if machine_id is not None else resolve_machine_id()
+        resolved_folder_parts = (
+            list(folder_parts) if folder_parts is not None else default_drive_folder_parts(resolved_machine_id)
+        )
+        result.update(
+            {
+                "drive_folder": "/".join(resolved_folder_parts),
+                "machine_id": resolved_machine_id,
+            }
+        )
         artifact = create_sqlite_backup_artifact(
             resolved_db_path,
             staging_dir,
