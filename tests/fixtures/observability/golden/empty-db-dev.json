@@ -82,8 +82,8 @@
       {
         "mtime": "2026-09-13T12:00:00Z",
         "path": "logs/empty-db-dev/backup-daily.log",
-        "rows_or_bytes": 293,
-        "sha256_first_64kb": "c4c707bd7d86018084cf4b1a7c4b8cc40a21a3568be0ce611f633c2545daeef2",
+        "rows_or_bytes": 373,
+        "sha256_first_64kb": "ee25e3181dd68fa793f75ce96e04e2b086758b1effd39b834e2f39b47ec2cde0",
         "skipped_lines": 2,
         "status": "read"
       },

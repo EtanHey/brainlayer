@@ -112,17 +112,51 @@ def test_offset_timestamps_are_compared_as_utc_instants(tmp_path: Path) -> None:
     assert sum(item["count_in_window"] for item in actual["emitters"]["by_emitter"]) == 11
 
 
-def test_malformed_timestamp_degrades_sections_and_names_row(tmp_path: Path) -> None:
+def test_invalid_timestamps_are_counted_but_excluded_from_windowed_metrics(tmp_path: Path) -> None:
     case = next(case for case in _dev_cases() if case["case_id"] == "healthy-dev")
     db = tmp_path / "malformed-time.sqlite"
     shutil.copy2(FIXTURES / str(case["inputs"]["db"]), db)
     with sqlite3.connect(db) as connection:
         connection.execute("PRAGMA journal_mode=DELETE")
-        connection.execute("UPDATE chunks SET created_at = 'not-a-time' WHERE id = 'synthetic-00'")
+        connection.execute("UPDATE chunks SET created_at = NULL WHERE id = 'synthetic-00'")
+        connection.execute("UPDATE chunks SET created_at = '2026-05-28T~12:35:00Z' WHERE id = 'synthetic-01'")
     actual, _ = _run_case({**case, "inputs": {**case["inputs"], "db": str(db)}}, tmp_path)
     for section in OWNED_SECTIONS:
-        assert actual[section]["state"] == "unmeasurable"
-        assert "synthetic-00" in actual[section]["reason"]
+        assert actual[section]["state"] == "measured"
+        assert actual[section]["inputs"][0]["skipped_lines"] == 4
+    assert actual["stores"]["total_chunks"] == 27
+    assert actual["stores"]["in_window"]["count"] == 10
+    assert all(item["chunk_id"] not in {"synthetic-00", "synthetic-01"} for item in actual["stores"]["latest"])
+
+
+def test_missing_created_at_column_stays_fail_closed_with_document_and_trace(tmp_path: Path) -> None:
+    case = next(case for case in _dev_cases() if case["case_id"] == "healthy-dev")
+    db = tmp_path / "missing-created-at.sqlite"
+    shutil.copy2(FIXTURES / str(case["inputs"]["db"]), db)
+    with sqlite3.connect(db) as connection:
+        connection.execute("PRAGMA journal_mode=DELETE")
+        connection.execute("DROP INDEX idx_chunks_created")
+        connection.execute("DROP INDEX idx_chunks_current_active")
+        connection.execute("ALTER TABLE chunks DROP COLUMN created_at")
+    actual, trace = _run_case({**case, "inputs": {**case["inputs"], "db": str(db)}}, tmp_path)
+    assert any(item.endswith("missing-created-at.sqlite") for item in trace)
+    for section in OWNED_SECTIONS:
+        assert actual[section] == {
+            "state": "unmeasurable",
+            "reason": "required column missing: chunks.created_at",
+            "inputs": actual[section]["inputs"],
+        }
+
+
+def test_latest_excludes_invalid_rows_even_when_they_would_fill_the_limit(tmp_path: Path) -> None:
+    case = next(case for case in _dev_cases() if case["case_id"] == "healthy-dev")
+    db = tmp_path / "latest-invalid.sqlite"
+    shutil.copy2(FIXTURES / str(case["inputs"]["db"]), db)
+    with sqlite3.connect(db) as connection:
+        connection.execute("PRAGMA journal_mode=DELETE")
+        connection.execute("UPDATE chunks SET created_at = NULL WHERE id NOT IN ('synthetic-00', 'synthetic-01')")
+    actual, _ = _run_case({**case, "inputs": {**case["inputs"], "db": str(db)}}, tmp_path)
+    assert [item["chunk_id"] for item in actual["stores"]["latest"]] == ["synthetic-00", "synthetic-01"]
 
 
 def test_trace_is_written_when_build_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

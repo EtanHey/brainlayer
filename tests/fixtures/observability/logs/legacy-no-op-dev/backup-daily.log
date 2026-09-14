@@ -1,3 +1,3 @@
 drive upload progress: 50/100 bytes
-{"backup_log_provenance": "real", "destination": "synthetic-drive", "drive_md5_match": true, "snapshot": "/synthetic/backups/2026-09-13.db.gz", "uploaded": true, "verified": true}
+{"backup_log_provenance": "real", "db": "/synthetic/brainlayer.db", "drive_file": {"id": "synthetic-id", "name": "synthetic-drive", "size": "123"}, "drive_md5_match": true, "snapshot": "/synthetic/backups/2026-09-13.db.gz", "uploaded": true, "verified": true}
 drive upload progress: 100/100 bytes

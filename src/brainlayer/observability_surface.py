@@ -109,7 +109,8 @@ def _stores(connection: sqlite3.Connection, columns: set[str], db_input: dict[st
     by_hour = [{"hour": row[0], "count": row[1]} for row in rows]
     latest = []
     for row in connection.execute("SELECT id, created_at, source_class, source, sender, source_file, content "
-                                  "FROM chunks ORDER BY datetime(created_at) DESC, id LIMIT 5"):
+                                  "FROM chunks WHERE datetime(created_at) IS NOT NULL "
+                                  "ORDER BY datetime(created_at) DESC, id LIMIT 5"):
         emitter, _ = derive_emitter(row[3], row[4], row[5])
         scrubbed = scrub_secrets(row[6] or "")
         latest.append({"chunk_id": str(row[0]), "stored_at": _iso_utc(_parse_time(row[1])),
@@ -197,14 +198,17 @@ def _build_document(*, env: Mapping[str, str], now: datetime, recorder: InputRec
     if failure or connection is None:
         stores = emitters = author_unknown = _unmeasurable(failure or "database unavailable", db_input)
     else:
-        malformed_time = connection.execute("SELECT id FROM chunks WHERE created_at IS NOT NULL AND datetime(created_at) IS NULL ORDER BY id LIMIT 1").fetchone() if "created_at" in columns else None  # fmt: skip
-        if malformed_time:
-            reason = f"malformed created_at: chunks row {malformed_time[0]}"
-            stores = emitters = author_unknown = _unmeasurable(reason, db_input)
-        else:
-            stores = _stores(connection, columns, db_input, now)
-            emitters = _emitters(connection, columns, db_input, now)
-            author_unknown = _author_unknown(connection, columns, db_input, now)
+        skipped = (
+            connection.execute(
+                "SELECT COUNT(*) FROM chunks WHERE created_at IS NULL OR datetime(created_at) IS NULL"
+            ).fetchone()[0]
+            if "created_at" in columns
+            else 0
+        )
+        db_input["skipped_lines"] = skipped
+        stores = _stores(connection, columns, db_input, now)
+        emitters = _emitters(connection, columns, db_input, now)
+        author_unknown = _author_unknown(connection, columns, db_input, now)
     if connection is not None:
         connection.close()
     try:

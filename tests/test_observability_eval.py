@@ -254,7 +254,7 @@ def test_mutated_golden_control_fails_field_by_field() -> None:
     )
 
     assert result.passed is False
-    assert result.field_mismatches == ["$.stores.total_chunks: expected 25, actual 26"]
+    assert result.field_mismatches == ["$.stores.total_chunks: expected 27, actual 28"]
 
 
 def test_malformed_producer_json_is_a_grade_not_a_traceback(monkeypatch: pytest.MonkeyPatch) -> None:

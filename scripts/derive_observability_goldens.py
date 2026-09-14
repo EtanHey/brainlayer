@@ -27,12 +27,15 @@ def _input(case: dict[str, Any], root: Path) -> dict[str, Any]:
     db = root / path
     with sqlite3.connect(db) as connection:
         count = connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        skipped = connection.execute(
+            "SELECT COUNT(*) FROM chunks WHERE created_at IS NULL OR datetime(created_at) IS NULL"
+        ).fetchone()[0]
     return {
         "mtime": case["input_mtimes"][path],
         "path": path,
         "rows_or_bytes": count,
         "sha256_first_64kb": None,
-        "skipped_lines": 0,
+        "skipped_lines": skipped,
         "status": "read",
     }
 
@@ -71,7 +74,17 @@ def _db_sections(case: dict[str, Any], root: Path, template: dict[str, Any]) -> 
             "SELECT id, content, source_file, source, sender, created_at, provenance_class, "
             "source_class, content_class, archived_at, superseded_by FROM chunks"
         ).fetchall()
-        window = [row for row in rows if window_start <= datetime.fromisoformat(row["created_at"].replace("Z", "+00:00")) <= generated]
+        window = []
+        for row in rows:
+            value = row["created_at"]
+            if not value:
+                continue
+            try:
+                timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if window_start <= timestamp <= generated:
+                window.append(row)
         by_class = connection.execute(
             "SELECT COALESCE(content_class, 'knowledge') AS content_class, COUNT(*) AS count "
             "FROM chunks GROUP BY COALESCE(content_class, 'knowledge') ORDER BY content_class"
