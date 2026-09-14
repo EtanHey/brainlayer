@@ -343,8 +343,16 @@ def inspect_jsonl_retention_invariant(source: str, *, backup_daily_source: str) 
         errors.append("Drive upload must request md5Checksum from the API")
 
     legacy_prune_calls = _calls(run_backup, "prune_drive_backups")
+    legacy_prune_refs = [
+        node
+        for node in ast.walk(tree)
+        if (isinstance(node, ast.Attribute) and node.attr == "prune_drive_backups")
+        or (isinstance(node, ast.Name) and node.id == "prune_drive_backups")
+    ]
     if legacy_prune_calls or _calls(trash_pruner, "prune_drive_backups"):
         errors.append("JSONL retention must not call backup_daily.prune_drive_backups")
+    if legacy_prune_refs:
+        errors.append("JSONL retention must not reference backup_daily.prune_drive_backups")
     if _calls(trash_pruner, "delete"):
         errors.append("JSONL retention must not hard-delete Drive objects")
     if not _has_trash_update(trash_pruner):
