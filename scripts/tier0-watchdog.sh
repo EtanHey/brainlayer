@@ -14,6 +14,7 @@ TIER0_DIRNAME=${TIER0_DIRNAME:-/usr/bin/dirname}
 TIER0_MKDIR=${TIER0_MKDIR:-/bin/mkdir}
 TIER0_GREP=${TIER0_GREP:-/usr/bin/grep}
 TIER0_NOTIFICATION_POLICY_PYTHON=${TIER0_NOTIFICATION_POLICY_PYTHON:-/opt/homebrew/opt/brainlayer/libexec/venv/bin/python}
+TIER0_ENV_RUN=${TIER0_ENV_RUN:-$HOME/.local/lib/brainlayer/brainlayer-env-run.sh}
 
 TIER0_LABEL=${TIER0_LABEL:-com.brainlayer.health-check}
 if [ -z "${TIER0_DOMAIN:-}" ]; then
@@ -139,11 +140,11 @@ alert_all_channels() {
     log_pid=$!
 
     by_design_reason=
-    if by_design_reason=$("$TIER0_NOTIFICATION_POLICY_PYTHON" -m brainlayer.notification_policy "tier0:$failure_key" 2>/dev/null); then
+    if by_design_reason=$(BRAINLAYER_SKIP_DISABLE_GATES=1 "$TIER0_ENV_RUN" "$TIER0_NOTIFICATION_POLICY_PYTHON" -m brainlayer.notification_policy "tier0:$failure_key" 2>/dev/null); then
         log_safe_reason=$(printf '%s' "$by_design_reason" | tr '[:space:]' '_')
         log_tier0_event "notification_suppressed_by_design condition=tier0:$failure_key reason=$log_safe_reason" || :
         wait_for_alerts "$log_pid"
-        return
+        return 2
     fi
 
     "$TIER0_OSASCRIPT" \
@@ -276,8 +277,11 @@ fi
 
 # Detection and all due alert attempts intentionally precede every recovery command.
 if should_alert "$failure_key"; then
-    alert_all_channels "$failure_reason"
-    record_alert "$failure_key" || :
+    alert_status=0
+    alert_all_channels "$failure_reason" || alert_status=$?
+    if [ "$alert_status" -ne 2 ]; then
+        record_alert "$failure_key" || :
+    fi
 fi
 
 if [ "$label_loaded" -eq 0 ]; then

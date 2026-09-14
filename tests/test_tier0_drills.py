@@ -65,6 +65,7 @@ def _run_drill(
     tier0_log_path = tmp_path / "logs" / "tier0-watchdog.log"
     alert_state_path = tmp_path / "tier0-watchdog-alert-state"
     run_state_path = tmp_path / "tier0-watchdog-last-run"
+    env_file = tmp_path / "brainlayer.env"
     if run_state_unwritable:
         # A directory in its place: mkdir -p succeeds, the redirect that writes the epoch
         # cannot. Nothing else about the drill changes.
@@ -82,6 +83,11 @@ def _run_drill(
 
     if state_mtime is not None:
         state_path.write_text(state_contents, encoding="utf-8")
+
+    env_file.write_text(
+        (f"BRAINLAYER_BY_DESIGN_REASON_FILE={by_design_reason_file}\n" if by_design_reason_file is not None else ""),
+        encoding="utf-8",
+    )
 
     _write_executable(
         fake_bin / "launchctl",
@@ -143,6 +149,7 @@ def _run_drill(
         **os.environ,
         "FAKE_LAUNCHCTL_PRINT_EXIT": "0" if label_loaded else "113",
         "FAKE_STATE_MTIME": str(state_mtime or 0),
+        "BRAINLAYER_ENV_FILE": str(env_file),
         "TIER0_ALERT_TIMEOUT_SECONDS": str(alert_timeout_seconds),
         "TIER0_ALERT_STATE_PATH": str(alert_state_path),
         "TIER0_CURL": str(fake_bin / "curl"),
@@ -164,10 +171,9 @@ def _run_drill(
         "TIER0_STATE_PATH": str(state_path),
         "TIER0_STAT": str(fake_bin / "stat"),
         "TIER0_NOTIFICATION_POLICY_PYTHON": sys.executable,
+        "TIER0_ENV_RUN": str(REPO_ROOT / "scripts" / "launchd" / "brainlayer-env-run.sh"),
         "PYTHONPATH": str(REPO_ROOT / "src"),
     }
-    if by_design_reason_file is not None:
-        env["BRAINLAYER_BY_DESIGN_REASON_FILE"] = str(by_design_reason_file)
     process = subprocess.run(
         ["/bin/sh", str(SCRIPT_PATH)],
         env=env,
@@ -253,6 +259,7 @@ def test_explicit_by_design_stale_state_logs_without_notification(tmp_path: Path
     assert not any(event.startswith("curl:") for event in result.events)
     assert "notification_suppressed_by_design" in result.tier0_log
     assert "planned_health-check_maintenance" in result.tier0_log
+    assert result.alert_state == ""
 
 
 def test_repeat_stale_alert_is_suppressed_during_cooldown_but_recovery_still_runs(tmp_path: Path) -> None:
@@ -374,6 +381,9 @@ def test_tier0_launchagent_uses_bin_sh_without_python_wrapper() -> None:
     assert plist["EnvironmentVariables"]["TIER0_ALERT_STATE_PATH"] == (
         "__HOME__/.local/share/brainlayer/tier0-watchdog-alert-state"
     )
+    assert plist["EnvironmentVariables"]["BRAINLAYER_ENV_FILE"] == "__BRAINLAYER_ENV_FILE__"
+    assert plist["EnvironmentVariables"]["TIER0_ENV_RUN"] == "__BRAINLAYER_ENV_RUN__"
+    assert plist["EnvironmentVariables"]["TIER0_NOTIFICATION_POLICY_PYTHON"] == "__PYTHON_BIN__"
     args = " ".join(plist["ProgramArguments"])
     assert "ENV_RUN" not in args
     assert "PYTHON" not in args.upper()

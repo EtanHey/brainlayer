@@ -1602,6 +1602,8 @@ def _run_queue_backlog_health(config, command_runner):
 
 
 def _capture_queue_notifications(monkeypatch) -> list[tuple[str, str]]:
+    monkeypatch.delenv("BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED", raising=False)
+    monkeypatch.delenv("BRAINLAYER_ENRICH_ENABLED", raising=False)
     notifications: list[tuple[str, str]] = []
     monkeypatch.setattr(
         health_check, "_push_notification", lambda title, message: notifications.append((title, message))
@@ -1730,6 +1732,27 @@ def test_unchanged_unexplained_backlog_pages_every_check(tmp_path, monkeypatch):
         _run_queue_backlog_health(config, lambda _command: SimpleNamespace(returncode=0, stdout="", stderr=""))
 
     assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 2
+
+
+def test_disabled_enrichment_backlog_pages_immediately_after_reenable(tmp_path, monkeypatch):
+    config, state_path, queue_dir, _pause_path = _queue_backlog_config(tmp_path, heal=False)
+    (queue_dir / "enrichment-one.jsonl").write_text(ENRICHMENT_EVENT, encoding="utf-8")
+    notifications = _capture_queue_notifications(monkeypatch)
+
+    def runner(_command):
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setenv("BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED", "0")
+
+    _run_queue_backlog_health(config, runner)
+
+    assert not any(title == "BrainLayer queue backlog" for title, _message in notifications)
+    assert "queue_backlog_notice" not in json.loads(state_path.read_text(encoding="utf-8"))
+
+    monkeypatch.delenv("BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED")
+    _run_queue_backlog_health(config, runner)
+
+    assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 1
 
 
 def test_old_paused_queue_below_auto_heal_count_does_not_page(tmp_path, monkeypatch):

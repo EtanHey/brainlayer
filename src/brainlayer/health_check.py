@@ -1186,6 +1186,7 @@ def _report_queue_backlog(
                 "desktop notification suppressed by design condition=enrichment_backlog reason=%s",
                 reason,
             )
+            return None
         else:
             _push_notification(
                 "BrainLayer queue backlog",

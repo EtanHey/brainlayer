@@ -144,12 +144,12 @@ def test_explicit_by_design_watcher_condition_skips_alert_side_effects(tmp_path:
     monkeypatch.setattr(module.urllib.request, "urlopen", lambda *args, **kwargs: urlopen_calls.append((args, kwargs)))
 
     result = _stalled_result(module)
-    module._best_effort_alert(config, result)
+    assert module._best_effort_alert(config, result) is False
 
     assert subprocess_calls == []
     assert urlopen_calls == []
 
-    module._best_effort_alert(config, replace(result, action="checkpoint_deferral_alert"))
+    assert module._best_effort_alert(config, replace(result, action="checkpoint_deferral_alert")) is True
 
     assert len(subprocess_calls) == 1
     assert len(urlopen_calls) == 1

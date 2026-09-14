@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -26,10 +27,13 @@ def test_paused_enrichment_only_suppresses_enrichment_backlog(tmp_path: Path) ->
 
 
 def test_disabled_enrichment_suppresses_only_enrichment_backlog() -> None:
-    env = {"BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED": "0"}
-
-    assert by_design_reason("enrichment_backlog", env=env) == "enrichment is disabled by configuration"
-    assert by_design_reason("watcher_stopped", env=env) is None
+    for variable in ("BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED", "BRAINLAYER_ENRICH_ENABLED"):
+        for value in ("0", "false", "NO", "Off", "disabled"):
+            env = {variable: value}
+            assert by_design_reason("enrichment_backlog", env=env) == (
+                f"enrichment is disabled by configuration ({variable})"
+            )
+            assert by_design_reason("watcher_stopped", env=env) is None
 
 
 def test_parked_backup_suppresses_backup_freshness_only(tmp_path: Path) -> None:
@@ -70,6 +74,32 @@ def test_malformed_explicit_reason_file_fails_open_to_alert(tmp_path: Path) -> N
 def test_non_utf8_explicit_reason_file_fails_open_to_alert(tmp_path: Path) -> None:
     marker = tmp_path / "by-design-notifications.json"
     marker.write_bytes(b"\xff\xfe")
+
+    assert (
+        by_design_reason(
+            "tier0:state_stale",
+            env={"BRAINLAYER_BY_DESIGN_REASON_FILE": str(marker)},
+        )
+        is None
+    )
+
+
+def test_deeply_nested_reason_file_fails_open_to_alert(tmp_path: Path) -> None:
+    marker = tmp_path / "by-design-notifications.json"
+    marker.write_text("[" * 9_999, encoding="utf-8")
+
+    assert (
+        by_design_reason(
+            "tier0:state_stale",
+            env={"BRAINLAYER_BY_DESIGN_REASON_FILE": str(marker)},
+        )
+        is None
+    )
+
+
+def test_fifo_reason_marker_fails_open_without_blocking(tmp_path: Path) -> None:
+    marker = tmp_path / "by-design-notifications.json"
+    os.mkfifo(marker)
 
     assert (
         by_design_reason(

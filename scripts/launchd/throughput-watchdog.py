@@ -110,7 +110,7 @@ CommandRunner = Callable[[list[str]], object]
 ProgressReader = Callable[[Path], WatcherProgress]
 OperationalProgressReader = Callable[[Config], OperationalProgress]
 SourceProbe = Callable[[Config, int], SourceEvidence]
-AlertFn = Callable[[Config, WatchdogResult], None]
+AlertFn = Callable[[Config, WatchdogResult], bool | None]
 
 
 def _positive_int(value: str) -> int:
@@ -520,7 +520,7 @@ def _restart_watch(
     )
 
 
-def _best_effort_alert(config: Config, result: WatchdogResult) -> None:
+def _best_effort_alert(config: Config, result: WatchdogResult) -> bool:
     config.log_path.expanduser().parent.mkdir(parents=True, exist_ok=True)
     with config.log_path.expanduser().open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(asdict(result), sort_keys=True) + "\n")
@@ -529,7 +529,7 @@ def _best_effort_alert(config: Config, result: WatchdogResult) -> None:
             f"INFO throughput-watchdog notification suppressed by design reason={reason}",
             file=sys.stderr,
         )
-        return
+        return False
     if result.action == "checkpoint_deferral_alert":
         body = (
             "Watcher recovery is blocked because the WAL checkpoint guard remains held across "
@@ -568,6 +568,7 @@ def _best_effort_alert(config: Config, result: WatchdogResult) -> None:
             pass
     except Exception:
         pass
+    return True
 
 
 def run_once(
@@ -719,8 +720,7 @@ def run_once(
                             result.action = "checkpoint_deferral_alert"
                             if not checkpoint_deferral_alerted:
                                 try:
-                                    alert_fn(config, result)
-                                    checkpoint_deferral_alerted = True
+                                    checkpoint_deferral_alerted = alert_fn(config, result) is not False
                                 except Exception as exc:
                                     result.alert_error = str(exc)
                                     print(
@@ -742,8 +742,7 @@ def run_once(
                         episode_alerted = bool(state.get("episode_alerted"))
                         if not episode_alerted:
                             try:
-                                alert_fn(config, result)
-                                episode_alerted = True
+                                episode_alerted = alert_fn(config, result) is not False
                             except Exception as exc:
                                 result.alert_error = str(exc)
                                 print(f"throughput-watchdog alert failed: {exc}", file=sys.stderr)

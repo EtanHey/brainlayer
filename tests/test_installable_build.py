@@ -1891,7 +1891,7 @@ def test_packaged_launchd_installer_renders_p0_counter_console_shim(tmp_path: Pa
     assert "scripts/p0_longitudinal_count.py" not in content
 
 
-def test_packaged_launchd_installer_installs_tier0_watchdog_without_env_runner(tmp_path: Path) -> None:
+def test_packaged_launchd_installer_wires_tier0_notification_policy(tmp_path: Path) -> None:
     launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
     _copy_packaged_launchd(launchd_dir)
     source_script = REPO_ROOT / "scripts" / "tier0-watchdog.sh"
@@ -1910,6 +1910,9 @@ def test_packaged_launchd_installer_installs_tier0_watchdog_without_env_runner(t
 
     home = tmp_path / "home&watchdog"
     home.mkdir()
+    env_file = home / ".config" / "brainlayer" / "brainlayer.env"
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text("BRAINLAYER_SYSTEM_ENABLED=1\n", encoding="utf-8")
     result = subprocess.run(
         [str(launchd_dir / "install.sh"), "tier0-watchdog"],
         env={
@@ -1941,10 +1944,15 @@ def test_packaged_launchd_installer_installs_tier0_watchdog_without_env_runner(t
     assert plist["EnvironmentVariables"]["TIER0_ALERT_STATE_PATH"] == str(
         home / ".local" / "share" / "brainlayer" / "tier0-watchdog-alert-state"
     )
+    assert plist["EnvironmentVariables"]["BRAINLAYER_ENV_FILE"] == str(env_file)
+    assert plist["EnvironmentVariables"]["TIER0_ENV_RUN"] == str(
+        home / ".local" / "lib" / "brainlayer" / "brainlayer-env-run.sh"
+    )
+    assert plist["EnvironmentVariables"]["TIER0_NOTIFICATION_POLICY_PYTHON"] == sys.executable
     rendered_content = rendered.read_text(encoding="utf-8")
     assert "__TIER0_WATCHDOG_SCRIPT__" not in rendered_content
-    assert "brainlayer-env-run" not in rendered_content
-    assert "python" not in rendered_content.lower()
+    assert "__BRAINLAYER_ENV_RUN__" not in rendered_content
+    assert "__PYTHON_BIN__" not in rendered_content
 
     domain = f"gui/{os.getuid()}"
     commands = launchctl_log.read_text(encoding="utf-8").splitlines()
