@@ -12,6 +12,7 @@ import fcntl
 import gzip
 import hashlib
 import json
+import math
 import os
 import queue
 import shutil
@@ -200,13 +201,13 @@ def _configured_sqlite_check_timeout_seconds() -> int:
     return seconds
 
 
-def _configured_positive_number(name: str, default: float) -> float:
+def _configured_positive_number(name: str, default: float, *, maximum: float | None = None) -> float:
     raw = os.environ.get(name)
     try:
         value = default if raw is None or raw.strip() == "" else float(raw)
     except ValueError as exc:
         raise ValueError(f"{name} must be a positive number") from exc
-    if value <= 0:
+    if not math.isfinite(value) or value <= 0 or (maximum is not None and value > maximum):
         raise ValueError(f"{name} must be a positive number")
     return value
 
@@ -788,7 +789,9 @@ def upload_file_to_drive_raw(
 
     sent = 0
     deadline_floor = _configured_positive_number(
-        DRIVE_UPLOAD_DEADLINE_FLOOR_ENV, DEFAULT_DRIVE_UPLOAD_DEADLINE_FLOOR_SECONDS
+        DRIVE_UPLOAD_DEADLINE_FLOOR_ENV,
+        DEFAULT_DRIVE_UPLOAD_DEADLINE_FLOOR_SECONDS,
+        maximum=threading.TIMEOUT_MAX,
     )
     minimum_rate = _configured_positive_number(
         DRIVE_UPLOAD_MIN_BYTES_PER_SECOND_ENV, DEFAULT_DRIVE_UPLOAD_MIN_BYTES_PER_SECOND
@@ -823,10 +826,19 @@ def upload_file_to_drive_raw(
                             return response.json()
                         if response.status_code == 308:
                             uploaded_range = response.headers.get("Range")
-                            if uploaded_range and "-" in uploaded_range:
-                                sent = int(uploaded_range.rsplit("-", 1)[1]) + 1
-                            else:
-                                sent = end + 1
+                            confirmed = (
+                                int(uploaded_range.rsplit("-", 1)[1]) + 1
+                                if uploaded_range and "-" in uploaded_range
+                                else sent
+                            )
+                            if confirmed < sent or confirmed > total:
+                                raise RuntimeError(
+                                    f"Drive upload returned invalid confirmed offset {confirmed}; "
+                                    f"expected {sent}..{total}"
+                                )
+                            if confirmed == sent:
+                                raise _DriveRequestDeadlineExceeded("Drive upload returned no newly confirmed bytes")
+                            sent = confirmed
                             stalled_attempts = 0
                             print(f"drive upload progress: {sent}/{total} bytes", flush=True)
                             break

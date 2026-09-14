@@ -82,9 +82,10 @@ def _create_source_db(path: Path, *, chunk_count: int = 1) -> None:
     conn.close()
 
 
-def test_local_backup_cap_is_decoupled_from_drive_retention():
+def test_local_backup_cap_is_decoupled_from_drive_retention(monkeypatch):
     from brainlayer import backup_daily
 
+    monkeypatch.delenv("BRAINLAYER_DRIVE_UPLOAD_STALL_MAX_ATTEMPTS", raising=False)
     assert backup_daily.DEFAULT_LOCAL_COMPRESSED_KEEP == 3
     assert backup_daily.DEFAULT_LOCAL_UNCOMPRESSED_KEEP == 1
     assert backup_daily.DEFAULT_DRIVE_KEEP == 7
@@ -104,6 +105,20 @@ def test_drive_retention_env_is_explicit_only(value, enabled, monkeypatch):
     monkeypatch.setenv("BRAINLAYER_BACKUP_DRIVE_RETENTION", value)
 
     assert backup_daily._drive_retention_enabled() is enabled
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf", str(threading.TIMEOUT_MAX * 2)])
+def test_drive_upload_numeric_settings_reject_non_finite_or_unusable_timeouts(monkeypatch, value):
+    from brainlayer import backup_daily
+
+    monkeypatch.setenv("BRAINLAYER_DRIVE_UPLOAD_DEADLINE_FLOOR_SECONDS", value)
+
+    with pytest.raises(ValueError, match="must be a positive number"):
+        backup_daily._configured_positive_number(
+            backup_daily.DRIVE_UPLOAD_DEADLINE_FLOOR_ENV,
+            backup_daily.DEFAULT_DRIVE_UPLOAD_DEADLINE_FLOOR_SECONDS,
+            maximum=threading.TIMEOUT_MAX,
+        )
 
 
 def test_create_snapshot_gzip_is_restorable(tmp_path):
@@ -1222,6 +1237,37 @@ def test_drive_upload_resumes_from_confirmed_offset_after_one_stall(tmp_path, mo
     assert verified == [(service, {"file_id": "drive-file-id", "expected_name": snapshot.name, "expected_size": 6})]
     assert result["uploaded"] is True
     assert result["verified"] is True
+
+
+def test_drive_upload_missing_range_never_advances_unconfirmed_bytes(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    snapshot = tmp_path / "2026-09-14.db.gz"
+    snapshot.write_bytes(b"abcdef")
+    _stub_backup_for_drive_upload(backup_daily, monkeypatch, snapshot)
+    ranges = []
+
+    class NoConfirmedProgressSession:
+        def put(self, url, *, headers, data, timeout):  # noqa: ARG002
+            ranges.append(headers["Content-Range"])
+            return _DriveResponse(308)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(backup_daily.requests, "Session", NoConfirmedProgressSession)
+    monkeypatch.setenv("BRAINLAYER_DRIVE_UPLOAD_STALL_MAX_ATTEMPTS", "2")
+    monkeypatch.setattr(backup_daily, "_sleep", lambda _seconds: None)
+
+    with pytest.raises(backup_daily.DriveUploadStalledError) as exc_info:
+        backup_daily.upload_file_to_drive_raw(
+            snapshot,
+            "folder-id",
+            type("Credentials", (), {"token": "test-token"})(),
+        )
+
+    assert ranges == ["bytes 0-5/6", "bytes */6", "bytes 0-5/6", "bytes */6"]
+    assert exc_info.value.bytes_confirmed == 0
 
 
 class _RetentionExecute:
