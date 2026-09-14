@@ -110,10 +110,10 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
             "brainbar.dashboard.timeframe.error",
             "brainbar.dashboard.signal-coverage-disclosure",
             "brainbar.dashboard.runtime-disclosure",
-            "brainbar.shell.tabs",
         ] {
             XCTAssertTrue(dashboard.contains(identifier), "Missing stable Dashboard accessibility identifier: \(identifier)")
         }
+        XCTAssertFalse(dashboard.contains("brainbar.shell.tabs"), "The one-page shell must not render a tab bar.")
         XCTAssertTrue(sparkline.contains("metricDisclosure"))
         XCTAssertTrue(sparkline.contains("Text(metricDisclosure)"), "Pointer tooltip must name window, count unit, and clock.")
         XCTAssertTrue(dashboard.contains("accessibilitySummary"), "Charts need a non-pointer semantic summary.")

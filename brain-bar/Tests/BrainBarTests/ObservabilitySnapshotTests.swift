@@ -31,17 +31,23 @@ final class ObservabilitySnapshotTests: XCTestCase {
             cadence: .known(300)
         ).cards
 
-        XCTAssertTrue(cards[0].detail.contains("chunks total"))
-        XCTAssertTrue(cards[0].detail.contains("added in the last 24 h"))
-        XCTAssertTrue(cards[1].detail.contains("from CLI agents"))
-        XCTAssertTrue(cards[1].detail.contains("from MCP brain_store"))
-        XCTAssertTrue(cards[1].detail.contains("hidden from search by default"))
-        XCTAssertTrue(cards[2].detail.contains("chunks never classified"))
-        XCTAssertTrue(cards[2].detail.contains("these never match a person filter"))
+        XCTAssertEqual(cards.map(\.title), ["Chunks", "Stores", "Emitters", "Backups"])
+        XCTAssertTrue(cards[0].detail.contains("chunks indexed"))
+        XCTAssertTrue(cards[0].detail.contains("in the last 24 h"))
+        XCTAssertTrue(cards[0].detail.contains("everything BrainLayer has read, all sources"))
+        XCTAssertTrue(cards[0].detail.contains("chunks not yet attributed to a person or source class"))
+        XCTAssertTrue(cards[1].detail.contains("MCP brain_store writes in the last 24 h"))
+        XCTAssertTrue(cards[1].detail.contains("what agents wrote via brain_store"))
+        for meaning in [
+            "CLI agents", "MCP brain_store", "subagents",
+            "desktop apps hidden from search", "fleet coordination", "unclassified",
+        ] {
+            XCTAssertTrue(cards[2].detail.contains(meaning), cards[2].detail)
+        }
         XCTAssertTrue(cards.allSatisfy { !($0.subtitle ?? "").isEmpty })
 
         let unlabeledInteger = try NSRegularExpression(
-            pattern: #"(?<![\\p{L}\\d_-])\\d[\\d,.]*(?!\\s*(?:chunks?|added|from|desktop|hidden|h\\b|days?\\b|archives?\\b|classified|verified|%))"#
+            pattern: #"(?<![\\p{L}\\d_-])\\d[\\d,.]*(?!\\s*(?:chunks?|MCP|CLI|subagent|desktop|fleet|unclassified|h\\b|days?\\b|archives?\\b|verified|%))"#
         )
         for card in cards.prefix(3) {
             let range = NSRange(card.detail.startIndex..., in: card.detail)
@@ -102,7 +108,7 @@ final class ObservabilitySnapshotTests: XCTestCase {
                 now: document.generatedAt,
                 cadence: .known(300)
             )
-            XCTAssertEqual(snapshot.cards.map(\.title), ["Stores", "Emitters", "Author-unknown", "Backups"])
+            XCTAssertEqual(snapshot.cards.map(\.title), ["Chunks", "Stores", "Emitters", "Backups"])
             XCTAssertEqual(snapshot.cards.count, 4, fixture.id)
             XCTAssertTrue(snapshot.cards.allSatisfy { !$0.detail.isEmpty }, fixture.id)
             for section in fixture.unmeasurableSections {
@@ -295,9 +301,8 @@ final class ObservabilitySnapshotTests: XCTestCase {
 
     private func title(for section: String) -> String {
         switch section {
-        case "stores": "Stores"
+        case "stores", "author_unknown": "Chunks"
         case "emitters": "Emitters"
-        case "author_unknown": "Author-unknown"
         case "backups": "Backups"
         default: section
         }
