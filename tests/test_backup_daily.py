@@ -77,13 +77,14 @@ def _create_source_db(path: Path, *, chunk_count: int = 1) -> None:
     conn.close()
 
 
-def test_backup_retention_defaults_are_capped_and_weekly_cannot_underflow_daily():
+def test_local_backup_cap_is_decoupled_from_drive_retention():
     from brainlayer import backup_daily
 
-    assert backup_daily.DEFAULT_DAILY_KEEP == 3
-    assert backup_daily.DEFAULT_WEEKLY_KEEP == 3
+    assert backup_daily.DEFAULT_LOCAL_COMPRESSED_KEEP == 3
     assert backup_daily.DEFAULT_LOCAL_UNCOMPRESSED_KEEP == 1
-    assert backup_daily.WEEKLY_RETENTION.keep_latest >= backup_daily.DAILY_RETENTION.keep_latest
+    assert backup_daily.DEFAULT_DRIVE_KEEP == 7
+    assert backup_daily.DAILY_RETENTION.keep_latest == 7
+    assert backup_daily.WEEKLY_RETENTION.keep_latest == 7
 
 
 def test_create_snapshot_gzip_is_restorable(tmp_path):
@@ -1044,14 +1045,43 @@ def test_ensure_drive_folder_chain_creates_missing_folders():
     assert ("brainlayer-db", "folder-backups") in service.files().created
 
 
-def test_run_backup_verifies_upload_removes_local_and_rotates_last_n(tmp_path, monkeypatch):
-    from brainlayer import backup_daily
+class _RetentionExecute:
+    def __init__(self, value):
+        self.value = value
 
-    snapshot = tmp_path / "2026-05-30.db.gz"
-    snapshot.write_bytes(b"backup-bytes")
-    verified: list[tuple[str, str, int]] = []
-    pruned: list[backup_daily.DriveRetentionPolicy] = []
+    def execute(self):
+        return self.value
 
+
+class _RetentionFiles:
+    def __init__(self, count=8):
+        self.items = [{"id": f"id-{day}", "name": f"2026-05-{day:02d}.db.gz"} for day in range(1, count + 1)]
+        self.trashed: list[tuple[str, dict]] = []
+        self.deleted: list[str] = []
+        self.list_calls = 0
+
+    def list(self, **kwargs):  # noqa: ARG002
+        self.list_calls += 1
+        return _RetentionExecute({"files": self.items})
+
+    def update(self, *, fileId, body, **kwargs):  # noqa: N803, ARG002
+        self.trashed.append((fileId, body))
+        return _RetentionExecute({})
+
+    def delete(self, *, fileId, **kwargs):  # noqa: N803, ARG002
+        self.deleted.append(fileId)
+        return _RetentionExecute({})
+
+
+class _RetentionService:
+    def __init__(self, count=8):
+        self._files = _RetentionFiles(count)
+
+    def files(self):
+        return self._files
+
+
+def _stub_verified_backup_run(backup_daily, monkeypatch, snapshot, service):
     class FakeArtifact:
         gzip_path = snapshot
         uncompressed_path = None
@@ -1060,17 +1090,13 @@ def test_run_backup_verifies_upload_removes_local_and_rotates_last_n(tmp_path, m
 
     monkeypatch.setattr(backup_daily, "create_sqlite_backup_artifact", lambda *args, **kwargs: FakeArtifact())
     monkeypatch.setattr(backup_daily, "get_drive_credentials", lambda *args, **kwargs: object())
-    monkeypatch.setattr(backup_daily, "build_drive_service", lambda *args, **kwargs: object())
-    monkeypatch.setattr(backup_daily, "ensure_drive_folder_chain", lambda service, folder_parts: "folder-id")
+    monkeypatch.setattr(backup_daily, "build_drive_service", lambda *args, **kwargs: service)
+    monkeypatch.setattr(backup_daily, "ensure_drive_folder_chain", lambda *args, **kwargs: "folder-id")
+    monkeypatch.setattr(backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         backup_daily,
         "verify_sqlite_backup_artifact",
-        lambda *args, **kwargs: {
-            "verified": True,
-            "verification_mode": "quick",
-            "sentinel_snapshot_chunks": 1,
-            "sentinel_verified_chunks": 1,
-        },
+        lambda *args, **kwargs: {"verified": True, "verification_mode": "quick"},
     )
     monkeypatch.setattr(
         backup_daily,
@@ -1082,31 +1108,53 @@ def test_run_backup_verifies_upload_removes_local_and_rotates_last_n(tmp_path, m
         },
     )
 
-    def fake_verify(service, *, file_id: str, expected_name: str, expected_size: int) -> None:  # noqa: ARG001
-        verified.append((file_id, expected_name, expected_size))
 
-    def fake_prune(service, *, folder_parts, retention_policy):  # noqa: ARG001
-        pruned.append(retention_policy)
-        return ["2026-05-01.db.gz"]
+def test_run_backup_default_retention_leaves_eight_drive_snapshots_untouched(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
 
-    monkeypatch.setattr(backup_daily, "verify_drive_upload", fake_verify)
-    monkeypatch.setattr(backup_daily, "prune_drive_backups", fake_prune)
+    snapshot = tmp_path / "2026-05-30.db.gz"
+    snapshot.write_bytes(b"backup-bytes")
+    service = _RetentionService(count=8)
+    _stub_verified_backup_run(backup_daily, monkeypatch, snapshot, service)
 
     result = backup_daily.run_backup(
         db_path=tmp_path / "brainlayer.db",
         staging_dir=tmp_path,
         date_stamp="2026-05-30",
         upload=True,
-        retention_policy=backup_daily.DriveRetentionPolicy(keep_latest=7),
+        log_path=tmp_path / "backup-daily.log",
     )
 
-    assert verified == [("drive-file-id", "2026-05-30.db.gz", len(b"backup-bytes"))]
-    assert pruned == [backup_daily.DriveRetentionPolicy(keep_latest=7)]
-    assert result["uploaded"] is True
-    assert result["local_removed"] is True
+    assert result["drive_retention"] == "disabled"
+    assert result["retention_mode"] == "trash"
+    assert result["retention_deleted"] == []
+    assert service.files().list_calls == 0
+    assert service.files().trashed == []
+    assert service.files().deleted == []
+
+
+def test_run_backup_opted_in_retention_trashes_older_drive_snapshots(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    snapshot = tmp_path / "2026-05-30.db.gz"
+    snapshot.write_bytes(b"backup-bytes")
+    service = _RetentionService(count=8)
+    _stub_verified_backup_run(backup_daily, monkeypatch, snapshot, service)
+    monkeypatch.setenv("BRAINLAYER_BACKUP_DRIVE_RETENTION", "1")
+
+    result = backup_daily.run_backup(
+        db_path=tmp_path / "brainlayer.db",
+        staging_dir=tmp_path,
+        date_stamp="2026-05-30",
+        upload=True,
+        log_path=tmp_path / "backup-daily.log",
+    )
+
+    assert result["drive_retention"] == "enabled"
+    assert result["retention_mode"] == "trash"
     assert result["retention_deleted"] == ["2026-05-01.db.gz"]
-    assert result["attempted_at"].endswith("+00:00")
-    assert not snapshot.exists()
+    assert service.files().trashed == [("id-1", {"trashed": True})]
+    assert service.files().deleted == []
 
 
 def test_run_backup_unverified_upload_skips_drive_and_local_gzip_pruning(tmp_path, monkeypatch):
@@ -1346,7 +1394,7 @@ def test_tests_autouse_backup_log_guard_points_away_from_prod_log() -> None:
     assert "pytest" in guarded.as_posix()
 
 
-def test_prune_drive_backups_keeps_only_latest_n_snapshots():
+def test_prune_drive_backups_trashes_older_snapshots_without_hard_delete():
     from brainlayer.backup_daily import DriveRetentionPolicy, prune_drive_backups
 
     class FakeExecute:
@@ -1359,6 +1407,7 @@ def test_prune_drive_backups_keeps_only_latest_n_snapshots():
     class FakeFiles:
         def __init__(self):
             self.deleted: list[str] = []
+            self.trashed: list[tuple[str, dict]] = []
             self.files = [{"id": f"id-{day}", "name": f"2026-05-{day:02d}.db.gz"} for day in range(1, 10)]
 
         def list(self, **kwargs):  # noqa: ARG002
@@ -1369,6 +1418,10 @@ def test_prune_drive_backups_keeps_only_latest_n_snapshots():
 
         def delete(self, fileId, **kwargs):  # noqa: N803, ARG002
             self.deleted.append(fileId)
+            return FakeExecute({})
+
+        def update(self, *, fileId, body, **kwargs):  # noqa: N803, ARG002
+            self.trashed.append((fileId, body))
             return FakeExecute({})
 
     class FakeService:
@@ -1393,10 +1446,17 @@ def test_prune_drive_backups_keeps_only_latest_n_snapshots():
         "2026-05-02.db.gz",
         "2026-05-01.db.gz",
     ]
-    assert service.files().deleted == ["id-5", "id-4", "id-3", "id-2", "id-1"]
+    assert service.files().trashed == [
+        ("id-5", {"trashed": True}),
+        ("id-4", {"trashed": True}),
+        ("id-3", {"trashed": True}),
+        ("id-2", {"trashed": True}),
+        ("id-1", {"trashed": True}),
+    ]
+    assert service.files().deleted == []
 
 
-def test_weekly_shared_drive_pool_keeps_the_three_newest_archives():
+def test_weekly_shared_drive_pool_uses_the_nonshrinking_drive_cap():
     from brainlayer import backup_daily
 
     class FakeExecute:
@@ -1409,7 +1469,8 @@ def test_weekly_shared_drive_pool_keeps_the_three_newest_archives():
     class FakeFiles:
         def __init__(self):
             self.deleted: list[str] = []
-            self.files = [{"id": f"id-{day}", "name": f"2026-05-{day:02d}.db.gz"} for day in range(1, 5)]
+            self.trashed: list[tuple[str, dict]] = []
+            self.files = [{"id": f"id-{day}", "name": f"2026-05-{day:02d}.db.gz"} for day in range(1, 9)]
 
         def list(self, **kwargs):  # noqa: ARG002
             query = kwargs["q"]
@@ -1419,6 +1480,10 @@ def test_weekly_shared_drive_pool_keeps_the_three_newest_archives():
 
         def delete(self, fileId, **kwargs):  # noqa: N803, ARG002
             self.deleted.append(fileId)
+            return FakeExecute({})
+
+        def update(self, *, fileId, body, **kwargs):  # noqa: N803, ARG002
+            self.trashed.append((fileId, body))
             return FakeExecute({})
 
     class FakeService:
@@ -1437,7 +1502,8 @@ def test_weekly_shared_drive_pool_keeps_the_three_newest_archives():
     )
 
     assert deleted == ["2026-05-01.db.gz"]
-    assert service.files().deleted == ["id-1"]
+    assert service.files().trashed == [("id-1", {"trashed": True})]
+    assert service.files().deleted == []
 
 
 def test_launchd_installer_knows_backup_target():
