@@ -8,6 +8,7 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
     func testRetrievalToolsSettingPersistsEnabledState() throws {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
+        defer { BrainBarRetrievalToolsSettings.shared.update(enabled: false) }
 
         XCTAssertFalse(fixture.viewModel.config.showRetrievalTools)
         fixture.viewModel.setShowRetrievalTools(true)

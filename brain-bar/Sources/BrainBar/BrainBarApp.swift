@@ -16,6 +16,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var daemonWatchdog: BrainBarLifecycleWatchdog?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let showRetrievalTools = (try? BrainLayerConfigStore().loadDocument().config.showRetrievalTools) ?? false
+        BrainBarRetrievalToolsSettings.shared.update(enabled: showRetrievalTools)
         NSAppleEventManager.shared().setEventHandler(
             self,
             andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
@@ -94,11 +96,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func showSearchPanel() {
+        guard BrainBarRetrievalToolsSettings.shared.isEnabled else { return }
         runtime.presentQuickAction(.search)
         showDashboardPanel()
     }
 
     func showQuickCapturePanel() {
+        guard BrainBarRetrievalToolsSettings.shared.isEnabled else { return }
         runtime.presentQuickAction(.capture)
         showDashboardPanel()
     }
@@ -270,6 +274,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct BrainBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @StateObject private var retrievalTools = BrainBarRetrievalToolsSettings.shared
 
     var body: some Scene {
         Settings {
@@ -285,13 +290,15 @@ struct BrainBarApp: App {
                     appDelegate.runtime.handleToggleRequest()
                 }
 
-                Button("Search BrainLayer") {
-                    appDelegate.showSearchPanel()
-                }
-                .keyboardShortcut("k", modifiers: [.command])
+                if retrievalTools.isEnabled {
+                    Button("Search BrainLayer") {
+                        appDelegate.showSearchPanel()
+                    }
+                    .keyboardShortcut("k", modifiers: [.command])
 
-                Button("Capture Note") {
-                    appDelegate.showQuickCapturePanel()
+                    Button("Capture Note") {
+                        appDelegate.showQuickCapturePanel()
+                    }
                 }
             }
         }

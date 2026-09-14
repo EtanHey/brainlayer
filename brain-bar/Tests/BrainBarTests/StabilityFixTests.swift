@@ -144,14 +144,3 @@ final class EnterKeySearchTests: XCTestCase {
         XCTAssertNotNil(vm.copiedResultID, "Enter on search result should copy it")
     }
 }
-
-// MARK: - (4) Popover size should be stable
-
-final class PopoverSizeTests: XCTestCase {
-
-    func testStatusPopoverViewFrameMatchesStableUtilityPanel() {
-        let frame = NSRect(x: 0, y: 0, width: 560, height: 520)
-        XCTAssertEqual(frame.width, 560)
-        XCTAssertEqual(frame.height, 520)
-    }
-}

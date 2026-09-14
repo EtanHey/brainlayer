@@ -189,6 +189,7 @@ struct BrainLayerConfig: Equatable, Sendable {
     var enrichmentMode: BrainLayerEnrichmentMode
     var enrichmentProvider: BrainLayerEnrichmentProvider
     var enrichmentBackend: String
+    var showRetrievalTools: Bool
     var tuningValues: [String: String]
     var launchdJobs: [BrainLayerLaunchdJob: BrainLayerLaunchdJobSetting]
 
@@ -199,6 +200,7 @@ struct BrainLayerConfig: Equatable, Sendable {
         enrichmentMode: .remote,
         enrichmentProvider: .gemini,
         enrichmentBackend: "gemini",
+        showRetrievalTools: false,
         tuningValues: BrainLayerEnvDocument.tuningDefaults,
         launchdJobs: Dictionary(
             uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map {
@@ -214,6 +216,7 @@ struct BrainLayerConfig: Equatable, Sendable {
             enrichmentMode == other.enrichmentMode &&
             enrichmentProvider == other.enrichmentProvider &&
             enrichmentBackend == other.enrichmentBackend &&
+            showRetrievalTools == other.showRetrievalTools &&
             tuningValues == other.tuningValues &&
             Dictionary(uniqueKeysWithValues: launchdJobs.map { ($0.key, $0.value.enabled) }) ==
             Dictionary(uniqueKeysWithValues: other.launchdJobs.map { ($0.key, $0.value.enabled) })
@@ -422,6 +425,7 @@ struct BrainLayerEnvDocument {
         "BRAINLAYER_ENRICH_MODE",
         "BRAINLAYER_ENRICH_PROVIDER",
         "BRAINLAYER_ENRICH_BACKEND",
+        "BRAINLAYER_SHOW_RETRIEVAL_TOOLS",
         "BRAINLAYER_ENRICH_RATE",
         "BRAINLAYER_ENRICH_CONCURRENCY",
         "BRAINLAYER_MAX_COMMIT_BATCH",
@@ -460,6 +464,7 @@ struct BrainLayerEnvDocument {
             "BRAINLAYER_ENRICH_MODE": config.enrichmentMode.rawValue,
             "BRAINLAYER_ENRICH_PROVIDER": config.enrichmentProvider.rawValue,
             "BRAINLAYER_ENRICH_BACKEND": config.enrichmentBackend,
+            "BRAINLAYER_SHOW_RETRIEVAL_TOOLS": config.showRetrievalTools ? "1" : "0",
         ]
         if includeLegacyGoogleKey {
             values["GOOGLE_GENERATIVE_AI_API_KEY"] = ""
@@ -496,6 +501,9 @@ struct BrainLayerEnvDocument {
         }
         if let raw = assignments["BRAINLAYER_ENRICH_BACKEND"], !normalized(raw).isEmpty {
             config.enrichmentBackend = normalized(raw)
+        }
+        if let raw = assignments["BRAINLAYER_SHOW_RETRIEVAL_TOOLS"] {
+            config.showRetrievalTools = !isFalse(raw)
         }
         for key in tuningKeyOrder {
             guard let raw = assignments[key] else { continue }

@@ -56,6 +56,12 @@ final class BrainBarSettingsViewModel: ObservableObject {
         updateConfig { $0.systemEnabled = enabled }
     }
 
+    func setShowRetrievalTools(_ enabled: Bool) {
+        if updateConfig({ $0.showRetrievalTools = enabled }) {
+            BrainBarRetrievalToolsSettings.shared.update(enabled: enabled)
+        }
+    }
+
     func setEnrichmentMode(_ mode: BrainLayerEnrichmentMode) {
         updateConfig { $0.enrichmentMode = mode }
     }
@@ -359,6 +365,18 @@ struct BrainBarSettingsView: View {
                 }
                 BrainBarSettingsPanel(title: "System Jobs") {
                     jobsGrid
+                }
+                BrainBarSettingsPanel(title: "Interface") {
+                    Toggle(
+                        "Show retrieval tools",
+                        isOn: Binding(
+                            get: { viewModel.config.showRetrievalTools },
+                            set: { viewModel.setShowRetrievalTools($0) }
+                        )
+                    )
+                    Text("Shows Dashboard, Search, Knowledge Graph, and Quick Capture in BrainBar.")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Color.brainBarTextMuted)
                 }
             }
             .padding(22)

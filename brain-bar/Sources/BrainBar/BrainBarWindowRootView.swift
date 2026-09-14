@@ -17,6 +17,7 @@ struct BrainBarWindowRootView: View {
     @State private var hasActivatedGraphTab = false
     @State private var commandBarProvider = BrainBarCommandBarViewModelProvider()
     @StateObject private var windowObserver: BrainBarWindowObserver
+    @ObservedObject private var retrievalTools = BrainBarRetrievalToolsSettings.shared
 
     init(runtime: BrainBarRuntime, managesWindowFrame: Bool = true) {
         self.runtime = runtime
@@ -32,7 +33,8 @@ struct BrainBarWindowRootView: View {
                 selectedTab: $selectedTab,
                 collector: runtime.collector,
                 hotkeyStatus: runtime.hotkeyStatus.statusLine,
-                commandBarViewModel: commandBarViewModel
+                commandBarViewModel: commandBarViewModel,
+                showRetrievalTools: retrievalTools.isEnabled
             )
 
             ZStack {
@@ -83,6 +85,12 @@ struct BrainBarWindowRootView: View {
         }
         .onChange(of: selectedTab) { _, newTab in
             activate(tab: newTab)
+        }
+        .onChange(of: retrievalTools.isEnabled) { _, enabled in
+            selectedTab = BrainBarRetrievalToolsPolicy.selectedTab(
+                selectedTab,
+                showRetrievalTools: enabled
+            )
         }
         .onChange(of: runtime.database != nil, initial: true) { _, _ in
             // DB just became available — replay any pending request that was
@@ -145,10 +153,17 @@ struct BrainBarWindowRootView: View {
     }
 
     private var commandBarViewModel: QuickCaptureViewModel? {
-        commandBarProvider.viewModel(database: runtime.database)
+        guard BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: retrievalTools.isEnabled) else {
+            return nil
+        }
+        return commandBarProvider.viewModel(database: runtime.database)
     }
 
     private func handleRequestedQuickAction(_ action: BrainBarQuickAction) {
+        guard BrainBarRetrievalToolsPolicy.allowsQuickActions(showRetrievalTools: retrievalTools.isEnabled) else {
+            runtime.clearQuickActionRequest()
+            return
+        }
         // If the DB isn't ready yet, leave the request in flight and replay
         // when the runtime database readiness token changes.
         guard let vm = commandBarViewModel else { return }
@@ -218,6 +233,7 @@ private struct BrainBarWindowHeader: View {
     let collector: StatsCollector?
     let hotkeyStatus: String
     let commandBarViewModel: QuickCaptureViewModel?
+    let showRetrievalTools: Bool
 
     var body: some View {
         VStack(spacing: 10) {
@@ -231,7 +247,9 @@ private struct BrainBarWindowHeader: View {
                 refreshControls
             }
 
-            BrainBarCommandBar(viewModel: commandBarViewModel)
+            if BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: showRetrievalTools) {
+                BrainBarCommandBar(viewModel: commandBarViewModel)
+            }
         }
         .padding(.horizontal, 20)
         .padding(.top, 14)
@@ -257,7 +275,7 @@ private struct BrainBarWindowHeader: View {
 
     private func sectionPicker(maxWidth: CGFloat) -> some View {
         Picker("Section", selection: $selectedTab) {
-            ForEach(BrainBarTab.allCases) { tab in
+            ForEach(BrainBarRetrievalToolsPolicy.visibleTabs(showRetrievalTools: showRetrievalTools)) { tab in
                 Text(tab.title)
                     .tag(tab)
                     .accessibilityIdentifier("brainbar.shell.tab.\(tab.title.lowercased())")

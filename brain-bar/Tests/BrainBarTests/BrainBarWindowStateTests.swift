@@ -69,6 +69,10 @@ final class BrainBarWindowStateTests: XCTestCase {
         )
         XCTAssertFalse(BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: false))
         XCTAssertFalse(BrainBarRetrievalToolsPolicy.allowsQuickActions(showRetrievalTools: false))
+        XCTAssertEqual(
+            BrainBarRetrievalToolsPolicy.selectedTab(.graph, showRetrievalTools: false),
+            .observability
+        )
 
         XCTAssertEqual(
             BrainBarRetrievalToolsPolicy.visibleTabs(showRetrievalTools: true),
@@ -76,6 +80,10 @@ final class BrainBarWindowStateTests: XCTestCase {
         )
         XCTAssertTrue(BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: true))
         XCTAssertTrue(BrainBarRetrievalToolsPolicy.allowsQuickActions(showRetrievalTools: true))
+        XCTAssertEqual(
+            BrainBarRetrievalToolsPolicy.selectedTab(.graph, showRetrievalTools: true),
+            .graph
+        )
     }
 
     @MainActor
