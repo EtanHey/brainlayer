@@ -52,6 +52,42 @@ def test_guard_off_would_notify_so_the_test_above_is_not_vacuous(monkeypatch):
     assert spawned[0][0] == "osascript"
 
 
+def test_push_notification_skips_osascript_for_explicit_by_design_condition(monkeypatch, tmp_path):
+    marker = tmp_path / "by-design-notifications.json"
+    marker.write_text(
+        '{"conditions":{"heal:watcher_stalled":"planned watcher maintenance"}}',
+        encoding="utf-8",
+    )
+    monkeypatch.delenv(GUARD_ENV, raising=False)
+    monkeypatch.setenv("BRAINLAYER_BY_DESIGN_REASON_FILE", str(marker))
+    spawned: list[list[str]] = []
+    monkeypatch.setattr(subprocess, "run", lambda args, **_kwargs: spawned.append(args))
+
+    health_check._push_notification_for_condition(
+        "BrainLayer heal action",
+        "watcher stalled",
+        condition="heal:watcher_stalled",
+    )
+
+    assert spawned == []
+
+
+def test_condition_without_by_design_marker_still_calls_osascript(monkeypatch, tmp_path):
+    monkeypatch.delenv(GUARD_ENV, raising=False)
+    monkeypatch.setenv("BRAINLAYER_BY_DESIGN_REASON_FILE", str(tmp_path / "missing.json"))
+    spawned: list[list[str]] = []
+    monkeypatch.setattr(subprocess, "run", lambda args, **_kwargs: spawned.append(args))
+
+    health_check._push_notification_for_condition(
+        "BrainLayer heal action",
+        "watcher stalled",
+        condition="heal:watcher_stalled",
+    )
+
+    assert len(spawned) == 1
+    assert spawned[0][0] == "osascript"
+
+
 def test_every_osascript_notification_site_in_the_package_checks_the_guard():
     """Discovery, not enumeration: a notification site added later inherits the assertion."""
     sources = [

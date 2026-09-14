@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
 
+from brainlayer.notification_policy import by_design_reason
 from brainlayer.wal_checkpoint import checkpoint_guard
 
 DEFAULT_WATCH_LABEL = "com.brainlayer.watch"
@@ -523,6 +524,12 @@ def _best_effort_alert(config: Config, result: WatchdogResult) -> None:
     config.log_path.expanduser().parent.mkdir(parents=True, exist_ok=True)
     with config.log_path.expanduser().open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(asdict(result), sort_keys=True) + "\n")
+    if result.action == "stalled" and (reason := by_design_reason("watcher_stopped")):
+        print(
+            f"INFO throughput-watchdog notification suppressed by design reason={reason}",
+            file=sys.stderr,
+        )
+        return
     if result.action == "checkpoint_deferral_alert":
         body = (
             "Watcher recovery is blocked because the WAL checkpoint guard remains held across "

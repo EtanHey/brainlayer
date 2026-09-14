@@ -13,6 +13,7 @@ TIER0_SLEEP=${TIER0_SLEEP:-/bin/sleep}
 TIER0_DIRNAME=${TIER0_DIRNAME:-/usr/bin/dirname}
 TIER0_MKDIR=${TIER0_MKDIR:-/bin/mkdir}
 TIER0_GREP=${TIER0_GREP:-/usr/bin/grep}
+TIER0_NOTIFICATION_POLICY_PYTHON=${TIER0_NOTIFICATION_POLICY_PYTHON:-/opt/homebrew/opt/brainlayer/libexec/venv/bin/python}
 
 TIER0_LABEL=${TIER0_LABEL:-com.brainlayer.health-check}
 if [ -z "${TIER0_DOMAIN:-}" ]; then
@@ -136,6 +137,14 @@ alert_all_channels() {
         printf 'epoch=%s label=%s reason=%s\n' "$now_epoch" "$TIER0_LABEL" "$reason" >> "$TIER0_LOG_PATH"
     ) &
     log_pid=$!
+
+    by_design_reason=
+    if by_design_reason=$("$TIER0_NOTIFICATION_POLICY_PYTHON" -m brainlayer.notification_policy "tier0:$failure_key" 2>/dev/null); then
+        log_safe_reason=$(printf '%s' "$by_design_reason" | tr '[:space:]' '_')
+        log_tier0_event "notification_suppressed_by_design condition=tier0:$failure_key reason=$log_safe_reason" || :
+        wait_for_alerts "$log_pid"
+        return
+    fi
 
     "$TIER0_OSASCRIPT" \
         -e 'display notification "Health-check is unavailable or stale; see the Tier-0 log." with title "BrainLayer Tier-0 watchdog"' \

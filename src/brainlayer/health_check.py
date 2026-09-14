@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shlex
@@ -30,6 +31,7 @@ from .launchd_primitive import (
     is_launchd_label_loaded,
     launchd_target,
 )
+from .notification_policy import by_design_reason
 from .paths import get_db_path
 from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
 from .watcher import default_watch_roots
@@ -340,6 +342,7 @@ def _emit_heal_event(event: dict[str, Any]) -> None:
 # pids and pytest tmp db_paths -- into the developer's Notification Center, indistinguishable
 # from a production alert.
 FORBID_DESKTOP_NOTIFICATION_ENV = "BRAINLAYER_FORBID_DESKTOP_NOTIFICATION"
+logger = logging.getLogger(__name__)
 
 
 def desktop_notifications_forbidden() -> bool:
@@ -363,6 +366,13 @@ def _push_notification(title: str, message: str) -> None:
         )
     except Exception:
         pass
+
+
+def _push_notification_for_condition(title: str, message: str, *, condition: str) -> None:
+    if reason := by_design_reason(condition):
+        logger.info("desktop notification suppressed by design condition=%s reason=%s", condition, reason)
+        return
+    _push_notification(title, message)
 
 
 def _parse_backlog_batch(command: str) -> int:
@@ -755,9 +765,10 @@ def _apply_heals(
                     if details
                     else f"{label} {issue_code} failed repeatedly"
                 )
-                _push_notification(
+                _push_notification_for_condition(
                     "BrainLayer heal escalation",
                     message,
+                    condition=f"heal:{issue_code}",
                 )
             continue
         if consecutive_failures >= threshold:
@@ -803,9 +814,10 @@ def _apply_heals(
                         **details,
                     }
                 )
-                _push_notification(
+                _push_notification_for_condition(
                     "BrainLayer heal action",
                     _heal_notification_message(action, issue_code, details),
+                    condition=f"heal:{issue_code}",
                 )
     return heal_failures, tripped
 
@@ -1168,10 +1180,17 @@ def _report_queue_backlog(
         "pause_explanation": pause_explanation,
     }
     if pause_explanation is None or state.get("queue_backlog_notice") != signature:
-        _push_notification(
-            "BrainLayer queue backlog",
-            f"queue_count={queue_count} queue_bytes={queue_bytes} {heal_summary}",
-        )
+        reason = by_design_reason("enrichment_backlog", pause_sentinel_path=config.pause_sentinel_path)
+        if reason is not None:
+            logger.info(
+                "desktop notification suppressed by design condition=enrichment_backlog reason=%s",
+                reason,
+            )
+        else:
+            _push_notification(
+                "BrainLayer queue backlog",
+                f"queue_count={queue_count} queue_bytes={queue_bytes} {heal_summary}",
+            )
     return signature
 
 
@@ -1426,7 +1445,11 @@ def run_health_check(
         add_issue(
             "pause_sentinel_stale", "critical", "pause sentinel is expired; launchd resume may have been forgotten"
         )
-        _push_notification("BrainLayer pause expired", "pause.sentinel is stale")
+        _push_notification_for_condition(
+            "BrainLayer pause expired",
+            "pause.sentinel is stale",
+            condition="pause_expired",
+        )
         if config.heal:
             try:
                 config.pause_sentinel_path.expanduser().unlink()
@@ -1592,7 +1615,11 @@ def run_health_check(
                     **holder_details,
                 }
             )
-            _push_notification("BrainLayer lock-holder wedge", _holder_message(holder))
+            _push_notification_for_condition(
+                "BrainLayer lock-holder wedge",
+                _holder_message(holder),
+                condition="heal:lock_holder_wedge",
+            )
             holder_label = _known_lock_holder_label(holder, config, command_runner)
             if holder_label:
                 heal_issue_labels["lock_holder_wedge"] = (

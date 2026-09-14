@@ -110,6 +110,80 @@ def test_first_observation_establishes_a_baseline_without_restart(tmp_path: Path
     assert commands == []
 
 
+def test_explicit_by_design_watcher_condition_skips_alert_side_effects(tmp_path: Path, monkeypatch) -> None:
+    module = _load_module()
+    config = _config(module, tmp_path)
+    monkeypatch.delenv("BRAINLAYER_FORBID_DESKTOP_NOTIFICATION", raising=False)
+    marker = tmp_path / "by-design-notifications.json"
+    marker.write_text(
+        '{"conditions":{"watcher_stopped":"planned watcher maintenance"}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BRAINLAYER_BY_DESIGN_REASON_FILE", str(marker))
+    subprocess_calls: list[object] = []
+    urlopen_calls: list[object] = []
+    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: subprocess_calls.append((args, kwargs)))
+    monkeypatch.setattr(module.urllib.request, "urlopen", lambda *args, **kwargs: urlopen_calls.append((args, kwargs)))
+
+    result = module.WatchdogResult(
+        checked_at_epoch=1_000,
+        watcher_highwater_rowid=40,
+        watcher_highwater_delta=0,
+        watcher_liveness_highwater_rowid=0,
+        watcher_liveness_highwater_delta=0,
+        pending_files=1,
+        pending_bytes=20,
+        recent_files=1,
+        untracked_recent_files=0,
+        newest_source_mtime=999.0,
+        scan_errors=0,
+        stalled_ticks=3,
+        action="stalled",
+    )
+    module._best_effort_alert(config, result)
+
+    assert subprocess_calls == []
+    assert urlopen_calls == []
+
+    module._best_effort_alert(config, replace(result, action="checkpoint_deferral_alert"))
+
+    assert len(subprocess_calls) == 1
+    assert len(urlopen_calls) == 1
+
+
+def test_watcher_condition_without_marker_still_alerts(tmp_path: Path, monkeypatch) -> None:
+    module = _load_module()
+    config = _config(module, tmp_path)
+    monkeypatch.delenv("BRAINLAYER_FORBID_DESKTOP_NOTIFICATION", raising=False)
+    monkeypatch.setenv("BRAINLAYER_BY_DESIGN_REASON_FILE", str(tmp_path / "missing.json"))
+    subprocess_calls: list[object] = []
+    urlopen_calls: list[object] = []
+    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: subprocess_calls.append((args, kwargs)))
+    monkeypatch.setattr(module.urllib.request, "urlopen", lambda *args, **kwargs: urlopen_calls.append((args, kwargs)))
+
+    module._best_effort_alert(
+        config,
+        module.WatchdogResult(
+            checked_at_epoch=1_000,
+            watcher_highwater_rowid=40,
+            watcher_highwater_delta=0,
+            watcher_liveness_highwater_rowid=0,
+            watcher_liveness_highwater_delta=0,
+            pending_files=1,
+            pending_bytes=20,
+            recent_files=1,
+            untracked_recent_files=0,
+            newest_source_mtime=999.0,
+            scan_errors=0,
+            stalled_ticks=3,
+            action="stalled",
+        ),
+    )
+
+    assert len(subprocess_calls) == 1
+    assert len(urlopen_calls) == 1
+
+
 def test_process_alive_zero_throughput_with_pending_bytes_kickstarts_after_threshold(tmp_path: Path) -> None:
     module = _load_module()
     config = _config(module, tmp_path, stall_threshold=3)

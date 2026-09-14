@@ -6,6 +6,7 @@ import os
 import plistlib
 import stat
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -54,6 +55,7 @@ def _run_drill(
     run_state_unwritable: bool = False,
     alert_timeout_seconds: int = 3,
     state_contents: str = "{}\n",
+    by_design_reason_file: Path | None = None,
 ) -> DrillResult:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -161,7 +163,11 @@ def _run_drill(
         "TIER0_STALE_SECONDS": str(STALE_SECONDS),
         "TIER0_STATE_PATH": str(state_path),
         "TIER0_STAT": str(fake_bin / "stat"),
+        "TIER0_NOTIFICATION_POLICY_PYTHON": sys.executable,
+        "PYTHONPATH": str(REPO_ROOT / "src"),
     }
+    if by_design_reason_file is not None:
+        env["BRAINLAYER_BY_DESIGN_REASON_FILE"] = str(by_design_reason_file)
     process = subprocess.run(
         ["/bin/sh", str(SCRIPT_PATH)],
         env=env,
@@ -226,6 +232,27 @@ def test_d2_stale_state_alerts_before_direct_kickstart(tmp_path: Path) -> None:
     assert not any(event.startswith("launchctl:bootstrap ") for event in result.events)
     assert f"state_stale age={STALE_SECONDS + 1}s threshold={STALE_SECONDS}s" in result.tier0_log
     assert result.alert_state == f"{NOW_EPOCH}\tstate_stale\n"
+
+
+def test_explicit_by_design_stale_state_logs_without_notification(tmp_path: Path) -> None:
+    marker = tmp_path / "by-design-notifications.json"
+    marker.write_text(
+        '{"conditions":{"tier0:state_stale":"planned health-check maintenance"}}',
+        encoding="utf-8",
+    )
+
+    result = _run_drill(
+        tmp_path,
+        label_loaded=True,
+        state_mtime=NOW_EPOCH - STALE_SECONDS - 1,
+        by_design_reason_file=marker,
+    )
+
+    assert result.process.returncode == 1
+    assert not any(event.startswith("osascript:") for event in result.events)
+    assert not any(event.startswith("curl:") for event in result.events)
+    assert "notification_suppressed_by_design" in result.tier0_log
+    assert "planned_health-check_maintenance" in result.tier0_log
 
 
 def test_repeat_stale_alert_is_suppressed_during_cooldown_but_recovery_still_runs(tmp_path: Path) -> None:
