@@ -1047,6 +1047,7 @@ def test_jsonl_seed_recipe_documents_wall_clock_override():
     source = Path(jsonl_backup.__file__).read_text(encoding="utf-8")
 
     assert "BRAINLAYER_BACKUP_TIMEOUT_SECONDS=14400" in source
+    assert "BRAINLAYER_JSONL_BACKUP_ICLOUD_TIMEOUT_SECONDS" in source
 
 
 def test_logical_gzip_hash_does_not_swallow_wall_clock_timeout(tmp_path, monkeypatch):

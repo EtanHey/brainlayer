@@ -10,7 +10,9 @@ with a larger wall-clock budget, for example::
 
 The wrapper preserves the explicit timeout and the module reads it through
 ``_configured_backup_timeout_seconds``. The LaunchAgent's ordinary 1800-second
-wall-clock limit remains unchanged for nightly runs.
+wall-clock limit remains unchanged for nightly runs. Set
+``BRAINLAYER_JSONL_BACKUP_ICLOUD_TIMEOUT_SECONDS`` to replace the default
+per-copy floor; archive-size scaling still applies when it requires more time.
 
 Install note: commit `launchd/com.brainlayer.jsonl-backup.plist`, render its
 `__BRAINLAYER_PYTHON__` placeholder through `hook_python.render_launchd_plist`,
