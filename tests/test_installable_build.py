@@ -1566,6 +1566,9 @@ def test_launchd_install_uses_named_job_wrapper_and_skips_unchanged_loaded_plist
     fake_bin.mkdir()
     launchctl_log = tmp_path / "launchctl.log"
     loaded = tmp_path / "loaded"
+    fail_bootout_once = tmp_path / "fail-bootout-once"
+    loaded.touch()
+    fail_bootout_once.touch()
     fake_launchctl = fake_bin / "launchctl"
     fake_launchctl.write_text(
         "\n".join(
@@ -1574,8 +1577,8 @@ def test_launchd_install_uses_named_job_wrapper_and_skips_unchanged_loaded_plist
                 'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
                 'case "$1" in',
                 "  print-disabled) exit 0 ;;",
-                '  print) [ -f "$FAKE_LOADED" ] && printf "%s\\n" "state = running" "pid = 4242" && exit 0; exit 1 ;;',
-                '  bootout) rm -f "$FAKE_LOADED"; exit 0 ;;',
+                '  print) [ "${2##*/}" = "com.brainlayer.watch" ] && [ -f "$FAKE_LOADED" ] && printf "%s\\n" "state = running" "pid = 4242" && exit 0; exit 1 ;;',
+                '  bootout) if [ -f "$FAKE_FAIL_BOOTOUT_ONCE" ]; then exit 5; fi; rm -f "$FAKE_LOADED"; exit 0 ;;',
                 '  bootstrap) touch "$FAKE_LOADED"; exit 0 ;;',
                 "  *) exit 0 ;;",
                 "esac",
@@ -1601,9 +1604,10 @@ def test_launchd_install_uses_named_job_wrapper_and_skips_unchanged_loaded_plist
         "BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL": "0",
         "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
         "FAKE_LOADED": str(loaded),
+        "FAKE_FAIL_BOOTOUT_ONCE": str(fail_bootout_once),
     }
 
-    for _ in range(2):
+    for attempt, expected_returncode in enumerate((1, 1, 0, 0)):
         result = subprocess.run(
             [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "watch"],
             env=env,
@@ -1612,7 +1616,9 @@ def test_launchd_install_uses_named_job_wrapper_and_skips_unchanged_loaded_plist
             timeout=30,
             check=False,
         )
-        assert result.returncode == 0, result.stdout + result.stderr
+        assert result.returncode == expected_returncode, result.stdout + result.stderr
+        if attempt == 1:
+            fail_bootout_once.unlink()
 
     plist = plistlib.loads((home / "Library" / "LaunchAgents" / "com.brainlayer.watch.plist").read_bytes())
     wrapper = home / ".local" / "lib" / "brainlayer" / "BrainLayer Watcher"
@@ -1621,13 +1627,17 @@ def test_launchd_install_uses_named_job_wrapper_and_skips_unchanged_loaded_plist
     assert os.access(wrapper, os.X_OK)
     assert "brainlayer-env-run.sh" in wrapper.read_text(encoding="utf-8")
     commands = launchctl_log.read_text(encoding="utf-8").splitlines()
-    assert sum(command.startswith("bootout ") for command in commands) == 1
+    assert sum(command.startswith("bootout ") for command in commands) == 3
     assert sum(command.startswith("bootstrap ") for command in commands) == 1
+    assert not (home / "Library" / "LaunchAgents" / "com.brainlayer.watch.plist.reload-pending").exists()
 
 
 def test_fleet_watchdog_rejects_unload_timeout_before_enable_or_bootstrap(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
+    fake_sleep = fake_bin / "sleep"
+    fake_sleep.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_sleep.chmod(0o755)
     launchctl_log = tmp_path / "launchctl.log"
     fake_launchctl = fake_bin / "launchctl"
     fake_launchctl.write_text(
@@ -1658,8 +1668,7 @@ def test_fleet_watchdog_rejects_unload_timeout_before_enable_or_bootstrap(tmp_pa
             "HOME": str(home),
             "BRAINLAYER_BIN": sys.executable,
             "PYTHON_BIN": sys.executable,
-            "BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS": "1",
-            "BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL": "0",
+            "BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL": "1",
             "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
         },
         capture_output=True,
@@ -1671,6 +1680,7 @@ def test_fleet_watchdog_rejects_unload_timeout_before_enable_or_bootstrap(tmp_pa
     assert result.returncode != 0
     assert "did not unload before replacement" in result.stderr
     commands = launchctl_log.read_text(encoding="utf-8").splitlines()
+    assert sum(command.startswith("print gui/") for command in commands) == 16
     assert not any(command.startswith("enable ") for command in commands)
     assert not any(command.startswith("bootstrap ") for command in commands)
 
