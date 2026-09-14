@@ -947,6 +947,21 @@ load_fleet_watchdog() {
     local plist_dst="$LAUNCH_DIR/$FLEET_WATCHDOG_PLIST_NAME"
     local domain="gui/$UID/$FLEET_WATCHDOG_LABEL"
     local disabled_rc=0
+    local unload_attempts="${BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS:-20}"
+    local unload_interval="${BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL:-0.1}"
+    local unload_attempt=1
+    local confirmed_unloaded=0
+
+    case "$unload_attempts" in
+        *[!0-9]*)
+            echo "ERROR: unload attempts must be a positive integer for $FLEET_WATCHDOG_LABEL; got '$unload_attempts'" >&2
+            return 1
+            ;;
+    esac
+    if [ "$unload_attempts" -lt 1 ]; then
+        echo "ERROR: unload attempts must be a positive integer for $FLEET_WATCHDOG_LABEL; got '$unload_attempts'" >&2
+        return 1
+    fi
 
     label_disabled_by_operator "$FLEET_WATCHDOG_LABEL" || disabled_rc=$?
     case "$disabled_rc" in
@@ -964,6 +979,20 @@ load_fleet_watchdog() {
     fi
 
     launchctl bootout "$domain" 2>/dev/null || true
+    while [ "$unload_attempt" -le "$unload_attempts" ]; do
+        if ! launchctl print "$domain" >/dev/null 2>&1; then
+            confirmed_unloaded=1
+            break
+        fi
+        unload_attempt=$((unload_attempt + 1))
+        if [ "$unload_attempt" -le "$unload_attempts" ]; then
+            sleep "$unload_interval"
+        fi
+    done
+    if [ "$confirmed_unloaded" -ne 1 ]; then
+        echo "ERROR: $FLEET_WATCHDOG_LABEL did not unload before replacement; refusing to enable or bootstrap" >&2
+        return 1
+    fi
     launchctl enable "$domain" 2>/dev/null || true
     if ! launchctl bootstrap "gui/$UID" "$plist_dst"; then
         echo "ERROR: launchctl bootstrap failed for $FLEET_WATCHDOG_LABEL" >&2

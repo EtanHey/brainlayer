@@ -1625,6 +1625,56 @@ def test_launchd_install_uses_named_job_wrapper_and_skips_unchanged_loaded_plist
     assert sum(command.startswith("bootstrap ") for command in commands) == 1
 
 
+def test_fleet_watchdog_rejects_unload_timeout_before_enable_or_bootstrap(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+                'case "$1" in',
+                "  print-disabled) exit 0 ;;",
+                '  print) printf "%s\\n" "state = running" "pid = 4242"; exit 0 ;;',
+                "  bootout) exit 5 ;;",
+                "  *) exit 0 ;;",
+                "esac",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+
+    result = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "fleet-watchdog"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": sys.executable,
+            "BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS": "1",
+            "BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL": "0",
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "did not unload before replacement" in result.stderr
+    commands = launchctl_log.read_text(encoding="utf-8").splitlines()
+    assert not any(command.startswith("enable ") for command in commands)
+    assert not any(command.startswith("bootstrap ") for command in commands)
+
+
 def test_launchd_install_preflight_refusal_names_runbook_without_traceback(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
