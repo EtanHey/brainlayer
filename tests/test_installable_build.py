@@ -3528,6 +3528,8 @@ def _run_keg_installer(fixture: dict[str, Path], action: str, tmp_path: Path):
             "FAKE_PS_COMMAND": f"{fixture['keg_python']} {fixture['packaged_daemon']} --interval 1.0",
         }
     )
+    if "readlink_state" in fixture:
+        env["FAKE_READLINK_STATE"] = str(fixture["readlink_state"])
     return subprocess.run(
         [str(fixture["launchd_dir"] / "install.sh"), action],
         env=env,
@@ -3536,6 +3538,28 @@ def _run_keg_installer(fixture: dict[str, Path], action: str, tmp_path: Path):
         timeout=120,
         check=False,
     )
+
+
+def test_keg_change_kickstarts_unchanged_keepalive_without_bootstrap(tmp_path: Path) -> None:
+    fixture = _build_keg_with_checkout_decoys(tmp_path)
+    readlink_state = tmp_path / "readlink.state"
+    readlink_state.write_text("/opt/homebrew/Cellar/brainlayer/1.5.27\n", encoding="utf-8")
+    fixture["readlink_state"] = readlink_state
+    fake_readlink = fixture["fake_bin"] / "readlink"
+    fake_readlink.write_text('#!/bin/sh\ncat "$FAKE_READLINK_STATE"\n', encoding="utf-8")
+    fake_readlink.chmod(0o755)
+
+    first = _run_keg_installer(fixture, "watch", tmp_path)
+    assert first.returncode == 0, first.stdout + first.stderr
+    launchctl_log = tmp_path / "launchctl.log"
+    first_command_count = len(launchctl_log.read_text(encoding="utf-8").splitlines())
+    readlink_state.write_text("/opt/homebrew/Cellar/brainlayer/1.5.28\n", encoding="utf-8")
+
+    second = _run_keg_installer(fixture, "watch", tmp_path)
+    assert second.returncode == 0, second.stdout + second.stderr
+    commands = launchctl_log.read_text(encoding="utf-8").splitlines()[first_command_count:]
+    assert f"kickstart -k gui/{os.getuid()}/com.brainlayer.watch" in commands
+    assert not any(command.startswith("bootstrap ") for command in commands)
 
 
 def _program_argument_strings(plist_path: Path) -> list[str]:
