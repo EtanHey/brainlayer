@@ -2983,7 +2983,7 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(state, .indexing)
     }
 
-    func testPipelineStateReportsEnrichingWhenBacklogExistsWithoutFreshWrites() {
+    func testPipelineStateReportsIdleWhenBacklogExistsWithoutFreshWrites() {
         let stats = DashboardStats(
             chunkCount: 20,
             enrichedChunkCount: 12,
@@ -3005,7 +3005,7 @@ final class DashboardTests: XCTestCase {
 
         let state = PipelineState.derive(daemon: daemon, stats: stats)
 
-        XCTAssertEqual(state, .enriching)
+        XCTAssertEqual(state, .idle)
     }
 
     func testPipelineStateReportsIdleForHealthySettledSystem() {

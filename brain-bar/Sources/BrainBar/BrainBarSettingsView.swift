@@ -12,29 +12,41 @@ final class BrainBarSettingsViewModel: ObservableObject {
     @Published private(set) var activeRuntimeObservation: BrainLayerActiveRuntimeObservation
     @Published private(set) var lastSaveReceipt: BrainLayerSettingsSaveReceipt?
     @Published private(set) var observabilityResult: ObservabilityReadResult
+    @Published private(set) var launchdObservations: [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation]
 
     private let store: BrainLayerConfigStore
     private let launchdStatusProvider: any BrainLayerLaunchdStatusSampling
     private let runtimeStatusProvider: any BrainLayerActiveRuntimeSampling
     private let now: @Sendable () -> Date
     private let observabilityURL: URL?
+    private let observabilityRead: @Sendable (URL) async -> ObservabilityReadResult
     private var previousConfigForLastSaveReceipt: BrainLayerConfig?
+    private var observabilityTask: Task<Void, Never>?
 
     init(
         store: BrainLayerConfigStore = BrainLayerConfigStore(),
         launchdStatusProvider: any BrainLayerLaunchdStatusSampling = BrainLayerLaunchdStatusProvider(),
         runtimeStatusProvider: any BrainLayerActiveRuntimeSampling = UnknownBrainLayerActiveRuntimeProvider(),
         initialLaunchdStates: [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState] = [:],
+        initialLaunchdObservations: [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation] = [:],
         refreshStatusOnLoad: Bool = true,
         now: @escaping @Sendable () -> Date = Date.init,
-        observabilityURL: URL? = nil
+        observabilityURL: URL? = nil,
+        initialObservabilityResult: ObservabilityReadResult = .unreadable("Backup status unavailable."),
+        observabilityRead: @escaping @Sendable (URL) async -> ObservabilityReadResult = { url in
+            await Task.detached { ObservabilityReader.read(url: url) }.value
+        }
     ) {
         self.store = store
         self.launchdStatusProvider = launchdStatusProvider
         self.runtimeStatusProvider = runtimeStatusProvider
         self.now = now
         self.observabilityURL = observabilityURL
-        observabilityResult = .unreadable("Backup status unavailable.")
+        self.observabilityRead = observabilityRead
+        observabilityResult = initialObservabilityResult
+        launchdObservations = initialLaunchdObservations.isEmpty
+            ? initialLaunchdStates.mapValues(BrainLayerLaunchdJobObservation.stateOnly)
+            : initialLaunchdObservations
         activeRuntimeObservation = runtimeStatusProvider.sample()
         do {
             let document = try store.loadDocument()
@@ -47,7 +59,11 @@ final class BrainBarSettingsViewModel: ObservableObject {
             backendDraft = BrainLayerConfig.defaultConfig.enrichmentBackend
             errorMessage = error.localizedDescription
         }
-        applyLaunchdStates(initialLaunchdStates)
+        applyLaunchdStates(
+            initialLaunchdObservations.isEmpty
+                ? initialLaunchdStates
+                : initialLaunchdObservations.mapValues(\.loadState)
+        )
         refreshObservabilityStatus()
         if refreshStatusOnLoad {
             refreshLaunchdStatus()
@@ -125,14 +141,35 @@ final class BrainBarSettingsViewModel: ObservableObject {
         }
     }
 
+    func setGroup(_ group: BrainLayerLaunchdJobGroup, enabled: Bool) {
+        updateConfig { config in
+            for job in group.jobs {
+                config.launchdJobs[job, default: BrainLayerLaunchdJobSetting(enabled: true, loadState: .unknown)].enabled = enabled
+            }
+        }
+    }
+
+    func isGroupEnabled(_ group: BrainLayerLaunchdJobGroup) -> Bool {
+        group.jobs.allSatisfy { config.launchdJobs[$0]?.enabled == true }
+    }
+
+    func groupStatus(_ group: BrainLayerLaunchdJobGroup) -> BrainLayerLaunchdGroupStatus {
+        group.status(
+            settings: config.launchdJobs,
+            observations: launchdObservations,
+            formatDate: DashboardMetricFormatter.shortAbsoluteTimeString
+        )
+    }
+
     func refreshLaunchdStatus() {
         isRefreshingLaunchdStatus = true
         let provider = launchdStatusProvider
         Task {
-            let states = await Task.detached {
-                provider.sample()
+            let observations = await Task.detached {
+                provider.sampleActivity()
             }.value
-            applyLaunchdStates(states)
+            launchdObservations = observations
+            applyLaunchdStates(observations.mapValues(\.loadState))
             activeRuntimeObservation = runtimeStatusProvider.sample()
             refreshLastSaveReceiptActiveState()
             isRefreshingLaunchdStatus = false
@@ -161,12 +198,14 @@ final class BrainBarSettingsViewModel: ObservableObject {
         refreshObservabilityStatus()
     }
 
-    private func refreshObservabilityStatus() {
+    func refreshObservabilityStatus() {
         guard let observabilityURL else { return }
-        Task {
-            let result = await Task.detached {
-                ObservabilityReader.read(url: observabilityURL)
-            }.value
+        observabilityTask?.cancel()
+        let read = observabilityRead
+        observabilityTask = Task { [weak self] in
+            let result = await read(observabilityURL)
+            guard !Task.isCancelled else { return }
+            guard let self else { return }
             observabilityResult = result
         }
     }
@@ -371,13 +410,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
 
 struct BrainBarSettingsView: View {
     @StateObject var viewModel: BrainBarSettingsViewModel
-    @FocusState private var focusedField: Field?
-
-    enum Field {
-        case plainKey
-        case opReference
-        case backend
-    }
+    @State private var isAdvancedExpanded = BrainBarSettingsPresentation.defaultAdvancedExpanded
 
     static func observabilityURL(
         databasePath: String,
@@ -403,16 +436,10 @@ struct BrainBarSettingsView: View {
                 if let errorMessage = viewModel.errorMessage {
                     errorBanner(errorMessage)
                 }
-                BrainBarSettingsPanel(title: "Enrichment") {
-                    enrichmentControls
-                }
                 if let receipt = viewModel.lastSaveReceipt {
                     BrainBarSettingsPanel(title: "Last save receipt") {
                         saveReceipt(receipt)
                     }
-                }
-                BrainBarSettingsPanel(title: "Gemini API Key") {
-                    secretControls
                 }
                 BrainBarSettingsPanel(title: "Backup Status") {
                     backupStatus
@@ -468,96 +495,6 @@ struct BrainBarSettingsView: View {
         }
     }
 
-    private var enrichmentControls: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Toggle(
-                "Enable enrichment",
-                isOn: Binding(
-                    get: { viewModel.config.enrichmentEnabled },
-                    set: { viewModel.setEnrichmentEnabled($0) }
-                )
-            )
-            Toggle(
-                "Enable BrainLayer jobs",
-                isOn: Binding(
-                    get: { viewModel.config.systemEnabled },
-                    set: { viewModel.setSystemEnabled($0) }
-                )
-            )
-
-            Picker(
-                "Mode",
-                selection: Binding(
-                    get: { viewModel.config.enrichmentMode },
-                    set: { viewModel.setEnrichmentMode($0) }
-                )
-            ) {
-                ForEach(BrainLayerEnrichmentMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-
-            Picker(
-                "Provider",
-                selection: Binding(
-                    get: { viewModel.config.enrichmentProvider },
-                    set: { viewModel.setEnrichmentProvider($0) }
-                )
-            ) {
-                ForEach(BrainLayerEnrichmentProvider.allCases) { provider in
-                    Text(provider.isWiredToday ? provider.title : "\(provider.title) — Unavailable")
-                        .tag(provider)
-                        .disabled(!provider.isWiredToday)
-                }
-            }
-
-            if let reason = viewModel.config.enrichmentProvider.unavailableReason {
-                Label(
-                    "Configured provider unavailable: \(reason)",
-                    systemImage: "exclamationmark.triangle"
-                )
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Color(nsColor: BrainBarStateTheme.error.theme.color))
-            } else {
-                Text("OpenAI and Anthropic are unavailable because this build has no runtime integration for them.")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Color.brainBarTextMuted)
-            }
-
-            HStack {
-                Text("Backend")
-                    .foregroundStyle(Color.brainBarTextSecondary)
-                    .frame(width: 110, alignment: .leading)
-                TextField(
-                    "gemini",
-                    text: $viewModel.backendDraft
-                )
-                .focused($focusedField, equals: .backend)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit {
-                    viewModel.commitBackendDraft()
-                }
-                Button("Save") {
-                    viewModel.commitBackendDraft()
-                }
-                .disabled(
-                    viewModel.backendDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                        viewModel.backendDraft.trimmingCharacters(in: .whitespacesAndNewlines) == viewModel.config.enrichmentBackend
-                )
-            }
-
-            Divider()
-                .overlay(Color.brainBarBorderSoft)
-
-            settingsTruthRow(
-                label: "Configured",
-                value: BrainLayerActiveRuntimeValues(config: viewModel.config).summary
-            )
-            settingsTruthRow(label: "Active", value: viewModel.activeRuntimeObservation.summary)
-        }
-    }
-
     private func saveReceipt(_ receipt: BrainLayerSettingsSaveReceipt) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             settingsTruthRow(label: "File", value: receipt.fileUpdated ? "Updated" : "Not updated")
@@ -585,49 +522,25 @@ struct BrainBarSettingsView: View {
         }
     }
 
-    private var secretControls: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Label(viewModel.config.googleAPIKey.displayText, systemImage: "key")
-                    .foregroundStyle(Color.brainBarTextSecondary)
-                Spacer()
-                Button("Clear") {
-                    viewModel.clearGoogleAPIKey()
-                }
-                .disabled(viewModel.config.googleAPIKey.kind == .missing)
-            }
-
-            HStack {
-                Text("1Password")
-                    .foregroundStyle(Color.brainBarTextSecondary)
-                    .frame(width: 110, alignment: .leading)
-                TextField("op://Private/Google AI/Gemini API key", text: $viewModel.onePasswordReference)
-                    .focused($focusedField, equals: .opReference)
-                    .textFieldStyle(.roundedBorder)
-                Button("Use") {
-                    viewModel.storeOnePasswordReference()
-                }
-            }
-
-            HStack {
-                Text("Plain key")
-                    .foregroundStyle(Color.brainBarTextSecondary)
-                    .frame(width: 110, alignment: .leading)
-                SecureField("Paste new key", text: $viewModel.pendingPlainAPIKey)
-                    .focused($focusedField, equals: .plainKey)
-                    .textFieldStyle(.roundedBorder)
-                Button("Store") {
-                    viewModel.storePlainAPIKey()
-                }
-                .disabled(viewModel.pendingPlainAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-    }
-
     private var jobsGrid: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 205), spacing: 12)], alignment: .leading, spacing: 12) {
-            ForEach(BrainLayerLaunchdJob.allCases) { job in
-                BrainBarJobToggle(job: job, viewModel: viewModel)
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(BrainLayerLaunchdJobGroup.allCases) { group in
+                BrainBarJobGroupCard(group: group, viewModel: viewModel)
+            }
+            DisclosureGroup(isExpanded: $isAdvancedExpanded) {
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 205), spacing: 12)],
+                    alignment: .leading,
+                    spacing: 12
+                ) {
+                    ForEach(BrainBarSettingsPresentation.visibleAdvancedJobs(isExpanded: isAdvancedExpanded)) { job in
+                        BrainBarJobToggle(job: job, viewModel: viewModel)
+                    }
+                }
+                .padding(.top, 8)
+            } label: {
+                Text("Advanced")
+                    .font(.system(size: 12, weight: .semibold))
             }
         }
     }
@@ -659,6 +572,61 @@ struct BrainBarSettingsView: View {
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
+}
+
+private struct BrainBarJobGroupCard: View {
+    let group: BrainLayerLaunchdJobGroup
+    @ObservedObject var viewModel: BrainBarSettingsViewModel
+
+    var body: some View {
+        let status = viewModel.groupStatus(group)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Toggle(
+                    group.title,
+                    isOn: Binding(
+                        get: { viewModel.isGroupEnabled(group) },
+                        set: { viewModel.setGroup(group, enabled: $0) }
+                    )
+                )
+                Spacer()
+                Label(
+                    status.health.title,
+                    systemImage: status.health == .healthy ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+                )
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(
+                        status.health == .healthy
+                            ? BrainBarStateTheme.active.theme.swiftUIColor
+                            : BrainBarStateTheme.error.theme.swiftUIColor
+                    )
+            }
+            Text(group.summary)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.brainBarTextMuted)
+            groupTiming(label: "LAST RUN", value: status.lastRunText)
+            groupTiming(label: "NEXT RUN", value: status.nextRunText)
+        }
+        .padding(12)
+        .background(Color.brainBarGlassSecondary)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.brainBarBorderSoft, lineWidth: 1)
+        )
+    }
+
+    private func groupTiming(label: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.system(size: 9, weight: .bold))
+                .tracking(0.6)
+                .foregroundStyle(Color.brainBarTextMuted)
+            Text(value)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(Color.brainBarTextSecondary)
+        }
+    }
 }
 
 private struct BrainBarSettingsPanel<Content: View>: View {

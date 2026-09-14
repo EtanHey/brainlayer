@@ -48,6 +48,27 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         XCTAssertEqual(enriched.sparklineLabel, "Successful enrichment completions over Last 1h")
     }
 
+    func testOnePageDoesNotPresentEnrichmentAsAnActiveFlow() throws {
+        let dashboard = try sourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
+        let dashboardView = try sourceSlice(
+            from: "private struct BrainBarDashboardView",
+            throughBefore: "private struct BrainBarSnapshotFreshnessBanner",
+            in: dashboard
+        )
+        let pipeline = try sourceFile("Sources/BrainBar/Dashboard/PipelineState.swift")
+
+        for forbidden in [
+            "Enriched successfully",
+            "BrainBarSectionLabel(\n                \"Enrichment\"",
+            "(\"Enrichment\", flowSummary.enrichment.statusText)",
+            "series: .enrichment",
+        ] {
+            XCTAssertFalse(dashboardView.contains(forbidden), "One-page dashboard still presents \(forbidden)")
+        }
+        XCTAssertFalse(dashboardView.contains("Enrichment: off (manual batch only)"))
+        XCTAssertFalse(pipeline.contains("Enrichment is draining backlog"))
+    }
+
     func testDashboardMakesFreshnessPrimaryAndKeepsLastGoodDataVisible() throws {
         let source = try sourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
         let dashboardSource = try sourceSlice(
@@ -105,7 +126,6 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
             "brainbar.dashboard.chart.chunk-rows",
             "brainbar.dashboard.chart.agent-origin-chunks",
             "brainbar.dashboard.chart.watcher-ingested-chunks",
-            "brainbar.dashboard.chart.enriched-successfully",
             "brainbar.dashboard.timeframe",
             "brainbar.dashboard.timeframe.error",
             "brainbar.dashboard.signal-coverage-disclosure",

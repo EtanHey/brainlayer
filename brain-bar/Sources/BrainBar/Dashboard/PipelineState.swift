@@ -453,7 +453,7 @@ struct DashboardFlowSummary: Sendable, Equatable {
             detail = "\(DashboardMetricFormatter.integerString(backlogCount)) chunks are waiting while ingress is still active."
         } else if backlogCount > 0 &&
             (queueStatus == .draining || enrichmentStatus == .draining || enrichmentStatus == .live) {
-            headline = "Enrichment is draining backlog"
+            headline = "Queued work is draining"
             detail = "\(DashboardMetricFormatter.integerString(backlogCount)) chunks remain queued, and completions are still moving."
         } else if queueStatus == .backlogged || enrichmentStatus == .queued {
             headline = "Backlog is waiting for enrichment"
@@ -998,10 +998,7 @@ enum PipelineState: String, Sendable, Equatable {
             return .indexing
         }
         if summary.enrichment.status == .live ||
-            summary.enrichment.status == .queued ||
-            (summary.enrichment.status == .recent && summary.queue.status == .draining) ||
-            summary.queue.status == .draining ||
-            summary.queue.status == .backlogged {
+            (summary.enrichment.status == .recent && summary.queue.status == .draining) {
             return .enriching
         }
         return .idle

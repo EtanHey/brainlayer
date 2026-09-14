@@ -639,6 +639,13 @@ struct BrainLayerLaunchdCommandResult: Sendable, Equatable {
 
 protocol BrainLayerLaunchdStatusSampling: Sendable {
     func sample() -> [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState]
+    func sampleActivity() -> [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation]
+}
+
+extension BrainLayerLaunchdStatusSampling {
+    func sampleActivity() -> [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation] {
+        sample().mapValues(BrainLayerLaunchdJobObservation.stateOnly)
+    }
 }
 
 struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
@@ -646,35 +653,91 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
 
     private let commandRunner: CommandRunner
     private let uidProvider: @Sendable () -> uid_t
+    private let fileModificationDate: @Sendable (URL) -> Date?
+    private let calendar: Calendar
+    private let now: @Sendable () -> Date
 
     init(
         commandRunner: @escaping CommandRunner = BrainLayerLaunchdStatusProvider.run,
-        uidProvider: @escaping @Sendable () -> uid_t = getuid
+        uidProvider: @escaping @Sendable () -> uid_t = getuid,
+        fileModificationDate: @escaping @Sendable (URL) -> Date? = BrainLayerLaunchdStatusProvider.modificationDate,
+        calendar: Calendar = .current,
+        now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.commandRunner = commandRunner
         self.uidProvider = uidProvider
+        self.fileModificationDate = fileModificationDate
+        self.calendar = calendar
+        self.now = now
     }
 
     func sample() -> [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState] {
-        Dictionary(
-            uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map { job in
-                (job, state(for: job.launchdLabel))
-            }
-        )
+        sampleActivity().mapValues(\.loadState)
     }
 
-    private func state(for label: String) -> BrainLayerLaunchdLoadState {
-        let target = "gui/\(uidProvider())/\(label)"
+    func sampleActivity() -> [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation] {
+        Dictionary(uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map { ($0, observation(for: $0)) })
+    }
+
+    private func observation(for job: BrainLayerLaunchdJob) -> BrainLayerLaunchdJobObservation {
+        let target = "gui/\(uidProvider())/\(job.launchdLabel)"
         let result = commandRunner(["/bin/launchctl", "print", target])
         if result.terminationStatus == 0 {
-            return result.output.contains("pid =") ? .running : .loaded
+            let hour = integer(named: "Hour", in: result.output)
+            let minute = integer(named: "Minute", in: result.output)
+            let weekday = integer(named: "Weekday", in: result.output)
+            let paths = ["stdout path", "stderr path"].compactMap { path(named: $0, in: result.output) }
+            return BrainLayerLaunchdJobObservation(
+                loadState: result.output.contains("pid =") ? .running : .loaded,
+                runs: integerLine(named: "runs", in: result.output),
+                lastExitCode: integerLine(named: "last exit code", in: result.output).map(Int32.init),
+                lastRunAt: paths.compactMap { fileModificationDate(URL(fileURLWithPath: $0)) }.max(),
+                nextRunAt: nextRun(hour: hour, minute: minute, weekday: weekday),
+                isContinuous: hour == nil && job.isContinuous
+            )
         }
 
         if result.terminationStatus == 113 ||
             result.output.localizedCaseInsensitiveContains("could not find service") {
-            return .unloaded
+            return .stateOnly(.unloaded)
         }
-        return .probeError("launchctl exited \(result.terminationStatus)")
+        return .stateOnly(.probeError("launchctl exited \(result.terminationStatus)"))
+    }
+
+    private func integer(named key: String, in output: String) -> Int? {
+        let pattern = "\\\"\(NSRegularExpression.escapedPattern(for: key))\\\"\\s*=>\\s*(-?\\d+)"
+        return firstInteger(matching: pattern, in: output)
+    }
+
+    private func integerLine(named key: String, in output: String) -> Int? {
+        let pattern = "(?m)^\\s*\(NSRegularExpression.escapedPattern(for: key))\\s*=\\s*(-?\\d+)"
+        return firstInteger(matching: pattern, in: output)
+    }
+
+    private func firstInteger(matching pattern: String, in output: String) -> Int? {
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: output, range: NSRange(output.startIndex..., in: output)),
+              let range = Range(match.range(at: 1), in: output)
+        else { return nil }
+        return Int(output[range])
+    }
+
+    private func path(named key: String, in output: String) -> String? {
+        let prefix = "\(key) = "
+        return output.split(separator: "\n").compactMap { line -> String? in
+            let value = line.trimmingCharacters(in: .whitespaces)
+            guard value.hasPrefix(prefix) else { return nil }
+            return String(value.dropFirst(prefix.count))
+        }.first
+    }
+
+    private func nextRun(hour: Int?, minute: Int?, weekday: Int?) -> Date? {
+        guard let hour, let minute else { return nil }
+        var components = DateComponents(hour: hour, minute: minute, second: 0)
+        if let weekday {
+            components.weekday = (weekday % 7) + 1
+        }
+        return calendar.nextDate(after: now(), matching: components, matchingPolicy: .nextTime)
     }
 
     private static func run(_ command: [String]) -> BrainLayerLaunchdCommandResult {
@@ -697,6 +760,19 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
             )
         } catch {
             return BrainLayerLaunchdCommandResult(terminationStatus: 1, output: "")
+        }
+    }
+
+    private static func modificationDate(_ url: URL) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date
+    }
+}
+
+private extension BrainLayerLaunchdJob {
+    var isContinuous: Bool {
+        switch self {
+        case .watch, .drain, .hotlane, .enrichment: true
+        default: false
         }
     }
 }

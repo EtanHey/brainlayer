@@ -59,6 +59,31 @@ final class BrainBarUXLogicTests: XCTestCase {
         XCTAssertEqual(indicators.enriching.status, .queued)
     }
 
+    func testPipelineStateIsIdleForPendingBacklogWhenEnrichmentIsOff() {
+        let stats = DashboardStats(
+            chunkCount: 120,
+            enrichedChunkCount: 100,
+            pendingEnrichmentCount: 20,
+            enrichmentPercent: 83.3,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 4_096,
+            recentActivityBuckets: [0, 0, 0, 0, 0],
+            recentEnrichmentBuckets: [0, 0, 0, 0, 0]
+        )
+        let daemon = DaemonHealthSnapshot(
+            pid: 4242,
+            isResponsive: true,
+            rssBytes: 1_024,
+            uptime: 60,
+            openConnections: 1,
+            lastSeenAt: Date()
+        )
+
+        let state = PipelineState.derive(daemon: daemon, stats: stats)
+
+        XCTAssertEqual(state, .idle)
+    }
+
     func testDashboardMetricFormatterUsesChunksPerMinute() {
         XCTAssertEqual(
             DashboardMetricFormatter.speedString(ratePerMinute: 22.2),
@@ -743,8 +768,9 @@ final class BrainBarUXLogicTests: XCTestCase {
 
         XCTAssertEqual(summary.enrichment.sparklineLabel, "Successful enrichment completions over Last 1h")
         XCTAssertEqual(summary.enrichment.latestBucketName, "latest successful-enrichment bucket")
-        XCTAssertEqual(summary.enrichment.statusText, "Backlog drain burst: 2,055 enriched in latest 15m")
-        XCTAssertEqual(summary.enrichment.volumeText, "2,055 in 1h")
+        let formattedCount = DashboardMetricFormatter.integerString(2_055)
+        XCTAssertEqual(summary.enrichment.statusText, "Backlog drain burst: \(formattedCount) enriched in latest 15m")
+        XCTAssertEqual(summary.enrichment.volumeText, "\(formattedCount) in 1h")
     }
 
     func testDashboardQueueSummaryReportsActiveDrainingForSmallFreshStoreQueue() {

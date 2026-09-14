@@ -14,14 +14,17 @@ final class BrainBarSettingsSnapshotTests: XCTestCase {
         providerConfig.googleAPIKey = .onePasswordReference("op://Private/Google AI/Gemini API key")
         providerConfig.enrichmentProvider = .openai
         providerConfig.launchdJobs[.hotlane]?.enabled = false
+        let observabilityURL = try XCTUnwrap(Bundle.module.url(
+            forResource: "observability-main-58849a70", withExtension: "json", subdirectory: "Fixtures"
+        ))
         let providerViewModel = try makeViewModel(
             root: tempRoot,
             name: "provider",
             config: providerConfig,
-            observabilityURL: try XCTUnwrap(Bundle.module.url(
-                forResource: "observability-main-58849a70", withExtension: "json", subdirectory: "Fixtures"
-            ))
+            observabilityURL: observabilityURL,
+            initialObservabilityResult: ObservabilityReader.read(url: observabilityURL)
         )
+        XCTAssertNotNil(providerViewModel.backupStatus, "The settings snapshot must render measured backup truth.")
         try render(viewModel: providerViewModel, named: "provider-and-jobs")
 
         let savedViewModel = try makeViewModel(
@@ -59,7 +62,8 @@ final class BrainBarSettingsSnapshotTests: XCTestCase {
         root: URL,
         name: String,
         config: BrainLayerConfig,
-        observabilityURL: URL? = nil
+        observabilityURL: URL? = nil,
+        initialObservabilityResult: ObservabilityReadResult = .unreadable("Backup status unavailable.")
     ) throws -> BrainBarSettingsViewModel {
         let configURL = root.appendingPathComponent("\(name)-brainlayer.env")
         let store = BrainLayerConfigStore(configURL: configURL)
@@ -70,6 +74,23 @@ final class BrainBarSettingsSnapshotTests: XCTestCase {
             .drain: .running,
             .watch: .probeError("launchctl exited 1"),
         ]
+        let lastRun = Date(timeIntervalSince1970: 1_784_466_000)
+        let nextRun = Date(timeIntervalSince1970: 1_784_552_400)
+        let activityFixture: [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation] = [
+            .watch: .init(loadState: .running, runs: 8, lastExitCode: 0, lastRunAt: lastRun, nextRunAt: nil, isContinuous: true),
+            .index: .init(loadState: .loaded, runs: 6, lastExitCode: 0, lastRunAt: lastRun, nextRunAt: nextRun, isContinuous: false),
+            .backupDaily: .init(loadState: .loaded, runs: 5, lastExitCode: 1, lastRunAt: lastRun, nextRunAt: nextRun, isContinuous: false),
+            .jsonlBackup: .init(loadState: .loaded, runs: 0, lastExitCode: nil, lastRunAt: nil, nextRunAt: nextRun, isContinuous: false),
+            .maintenanceNightly: .init(
+                loadState: .loaded, runs: 4, lastExitCode: 0,
+                lastRunAt: lastRun, nextRunAt: nextRun, isContinuous: false
+            ),
+            .maintenanceWeekly: .init(
+                loadState: .loaded, runs: 2, lastExitCode: 75,
+                lastRunAt: lastRun, nextRunAt: nextRun, isContinuous: false
+            ),
+        ]
+        let observations = name == "provider" ? activityFixture : [:]
         return BrainBarSettingsViewModel(
             store: store,
             launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: states),
@@ -77,8 +98,10 @@ final class BrainBarSettingsSnapshotTests: XCTestCase {
                 observation: .unknown("Active runtime configuration is not observable.")
             ),
             initialLaunchdStates: states,
+            initialLaunchdObservations: observations,
             refreshStatusOnLoad: false,
-            observabilityURL: observabilityURL
+            observabilityURL: observabilityURL,
+            initialObservabilityResult: initialObservabilityResult
         )
     }
 
