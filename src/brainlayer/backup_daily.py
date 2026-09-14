@@ -39,7 +39,12 @@ _sleep = time.sleep
 
 DEFAULT_TOKEN_PATH = Path.home() / ".config" / "google-drive-mcp" / "tokens.json"
 DEFAULT_CLIENT_PATH = Path.home() / ".config" / "google-drive-mcp" / "gcp-oauth.keys.json"
-DEFAULT_FOLDER_PARTS = ["Brain Drive", "06_ARCHIVE", "backups", "brainlayer-db"]
+CANONICAL_MACHINE_ID = "MacBook-Pro"
+CANONICAL_FOLDER_PARTS = ["Brain Drive", "06_ARCHIVE", "backups", "brainlayer-db"]
+# Compatibility alias for callers that explicitly target the legacy M4 folder.
+DEFAULT_FOLDER_PARTS = CANONICAL_FOLDER_PARTS
+BACKUP_MACHINE_ID_ENV = "BRAINLAYER_MACHINE_ID"
+DRIVE_MACHINE_PROPERTY = "brainlayer_machine"
 DEFAULT_STAGING_DIR = Path.home() / ".local" / "share" / "brainlayer" / "backups"
 DEFAULT_LOG_PATH = Path.home() / ".local" / "share" / "brainlayer" / "logs" / "backup-daily.log"
 DEFAULT_BRAINBAR_SOCKET_PATH = "/tmp/brainbar.sock"
@@ -107,6 +112,50 @@ def _today() -> str:
     return dt.datetime.now(dt.UTC).date().isoformat()
 
 
+class InvalidMachineIdError(ValueError):
+    error_code = "invalid_machine_id"
+
+
+def _validate_machine_id(machine_id: str) -> str:
+    value = machine_id.strip()
+    if not value or any(not (character.isalnum() or character in "._-") for character in value):
+        raise InvalidMachineIdError(f"{BACKUP_MACHINE_ID_ENV} must contain only letters, numbers, '.', '_', or '-'")
+    return value
+
+
+def resolve_machine_id(env: Mapping[str, str] | None = None) -> str:
+    """Resolve a stable host identifier, preferring an explicit deployment value."""
+    source = env if env is not None else os.environ
+    configured = source.get(BACKUP_MACHINE_ID_ENV)
+    if configured is not None:
+        return _validate_machine_id(configured)
+
+    try:
+        completed = subprocess.run(
+            ["scutil", "--get", "LocalHostName"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        completed = None
+    if completed is not None and completed.returncode == 0 and completed.stdout.strip():
+        return _validate_machine_id(completed.stdout)
+
+    # Non-macOS development and CI hosts do not ship scutil. gethostname is a
+    # portability fallback, not the production identity source.
+    return _validate_machine_id(socket.gethostname().removesuffix(".local"))
+
+
+def default_drive_folder_parts(machine_id: str) -> list[str]:
+    """Return the per-machine Drive folder, preserving the M4's legacy folder."""
+    resolved = _validate_machine_id(machine_id)
+    if resolved == CANONICAL_MACHINE_ID:
+        return list(CANONICAL_FOLDER_PARTS)
+    return [*CANONICAL_FOLDER_PARTS[:-1], f"brainlayer-db-{resolved}"]
+
+
 def _append_json_log(path: Path, payload: dict[str, Any]) -> None:
     path = Path(path).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -146,6 +195,19 @@ class DriveUploadStalledError(RuntimeError):
         self.bytes_confirmed = bytes_confirmed
         super().__init__(
             f"{self.error_code}: confirmed {bytes_confirmed}/{total_bytes} bytes after {attempts} stalled attempts"
+        )
+
+
+class DriveFolderOwnedByOtherMachineError(RuntimeError):
+    error_code = "drive_folder_owned_by_other_machine"
+
+    def __init__(self, *, folder_id: str, machine_id: str, other_machine_ids: set[str]):
+        self.folder_id = folder_id
+        self.machine_id = machine_id
+        self.other_machine_ids = sorted(other_machine_ids)
+        super().__init__(
+            f"{self.error_code}: folder {folder_id!r} contains snapshots owned by "
+            f"{', '.join(self.other_machine_ids)}; current machine is {machine_id!r}"
         )
 
 
@@ -759,22 +821,66 @@ def ensure_drive_folder_chain(service: Any, folder_parts: list[str]) -> str:
     return parent_id
 
 
+def assert_drive_folder_owned_by_machine(service: Any, *, folder_id: str, machine_id: str) -> None:
+    """Refuse a target folder containing snapshots owned by another host."""
+    other_machine_ids: set[str] = set()
+    page_token = None
+    while True:
+        result = (
+            service.files()
+            .list(
+                q=f"'{folder_id}' in parents and trashed = false",
+                spaces="drive",
+                fields="nextPageToken,files(id,name,appProperties)",
+                pageSize=1000,
+                pageToken=page_token,
+                supportsAllDrives=True,
+            )
+            .execute()
+        )
+        for item in result.get("files", []):
+            if _parse_snapshot_date(item.get("name", "")) is None:
+                continue
+            properties = item.get("appProperties")
+            owner = properties.get(DRIVE_MACHINE_PROPERTY) if isinstance(properties, dict) else None
+            # Snapshots predating FU #99 belong to the canonical M4. A new host
+            # must never silently adopt the legacy pool.
+            resolved_owner = owner if isinstance(owner, str) and owner else CANONICAL_MACHINE_ID
+            if resolved_owner != machine_id:
+                other_machine_ids.add(resolved_owner)
+        page_token = result.get("nextPageToken")
+        if not page_token:
+            break
+    if other_machine_ids:
+        raise DriveFolderOwnedByOtherMachineError(
+            folder_id=folder_id,
+            machine_id=machine_id,
+            other_machine_ids=other_machine_ids,
+        )
+
+
 def upload_file_to_drive_raw(
     file_path: Path,
     folder_id: str,
     credentials: Any,
+    *,
+    machine_id: str,
     chunk_size: int = 8 * 1024 * 1024,
     max_attempts: int = 30,
 ) -> dict[str, Any]:
     """Upload large backups with Drive's raw resumable protocol."""
     file_path = Path(file_path)
     total = file_path.stat().st_size
-    metadata = {"name": file_path.name, "parents": [folder_id]}
+    metadata = {
+        "name": file_path.name,
+        "parents": [folder_id],
+        "appProperties": {DRIVE_MACHINE_PROPERTY: _validate_machine_id(machine_id)},
+    }
     init = requests.post(
         "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true"
         # md5Checksum is REQUIRED: retention coverage compares it against the surviving
         # object. Without it the integrity branch silently becomes dead code (PR #815 review).
-        "&fields=id,name,size,md5Checksum",
+        "&fields=id,name,size,md5Checksum,appProperties",
         headers={
             "Authorization": f"Bearer {credentials.token}",
             "Content-Type": "application/json; charset=UTF-8",
@@ -1102,9 +1208,20 @@ def verify_sqlite_backup_artifact(
     return result
 
 
-def verify_drive_upload(service: Any, *, file_id: str, expected_name: str, expected_size: int) -> None:
+def verify_drive_upload(
+    service: Any,
+    *,
+    file_id: str,
+    expected_name: str,
+    expected_size: int,
+    expected_machine_id: str,
+) -> None:
     """Verify that Drive can see the uploaded file with the expected name and byte size."""
-    metadata = service.files().get(fileId=file_id, fields="id,name,size,trashed", supportsAllDrives=True).execute()
+    metadata = (
+        service.files()
+        .get(fileId=file_id, fields="id,name,size,trashed,appProperties", supportsAllDrives=True)
+        .execute()
+    )
     if metadata.get("trashed"):
         raise RuntimeError(f"Uploaded Drive backup is trashed: {file_id}")
     if metadata.get("name") != expected_name:
@@ -1115,6 +1232,10 @@ def verify_drive_upload(service: Any, *, file_id: str, expected_name: str, expec
         raise RuntimeError(f"Uploaded Drive backup size is not numeric: {metadata.get('size')!r}") from exc
     if actual_size != expected_size:
         raise RuntimeError(f"Uploaded Drive backup size mismatch: {actual_size} != {expected_size}")
+    properties = metadata.get("appProperties")
+    actual_machine_id = properties.get(DRIVE_MACHINE_PROPERTY) if isinstance(properties, dict) else None
+    if actual_machine_id != expected_machine_id:
+        raise RuntimeError(f"Uploaded Drive backup machine mismatch: {actual_machine_id!r} != {expected_machine_id!r}")
 
 
 def prune_drive_backups(
@@ -1173,7 +1294,8 @@ def prune_drive_backups(
 def run_backup(
     db_path: Path | None = None,
     staging_dir: Path = DEFAULT_STAGING_DIR,
-    folder_parts: list[str] = DEFAULT_FOLDER_PARTS,
+    folder_parts: list[str] | None = None,
+    machine_id: str | None = None,
     log_path: Path | None = None,
     date_stamp: str | None = None,
     upload: bool = True,
@@ -1204,6 +1326,16 @@ def run_backup(
         result["writer_probe_error"] = error
 
     try:
+        resolved_machine_id = _validate_machine_id(machine_id) if machine_id is not None else resolve_machine_id()
+        resolved_folder_parts = (
+            list(folder_parts) if folder_parts is not None else default_drive_folder_parts(resolved_machine_id)
+        )
+        result.update(
+            {
+                "drive_folder": "/".join(resolved_folder_parts),
+                "machine_id": resolved_machine_id,
+            }
+        )
         artifact = create_sqlite_backup_artifact(
             resolved_db_path,
             staging_dir,
@@ -1236,8 +1368,18 @@ def run_backup(
         if upload:
             credentials = get_drive_credentials()
             service = build_drive_service()
-            folder_id = ensure_drive_folder_chain(service, folder_parts)
-            uploaded = upload_file_to_drive_raw(snapshot, folder_id, credentials)
+            folder_id = ensure_drive_folder_chain(service, resolved_folder_parts)
+            assert_drive_folder_owned_by_machine(
+                service,
+                folder_id=folder_id,
+                machine_id=resolved_machine_id,
+            )
+            uploaded = upload_file_to_drive_raw(
+                snapshot,
+                folder_id,
+                credentials,
+                machine_id=resolved_machine_id,
+            )
             file_id = uploaded.get("id")
             if not file_id:
                 raise RuntimeError(f"Drive upload response missing file id: {uploaded!r}")
@@ -1246,6 +1388,7 @@ def run_backup(
                 file_id=file_id,
                 expected_name=snapshot.name,
                 expected_size=snapshot_size,
+                expected_machine_id=resolved_machine_id,
             )
             result.update(
                 verify_sqlite_backup_artifact(
@@ -1268,7 +1411,7 @@ def run_backup(
                 deleted = (
                     prune_drive_backups(
                         service,
-                        folder_parts=folder_parts,
+                        folder_parts=resolved_folder_parts,
                         retention_policy=retention_policy,
                     )
                     if retention_enabled
@@ -1287,6 +1430,9 @@ def run_backup(
             )
     except Exception as exc:
         result.update({"error_type": type(exc).__name__, "error": str(exc)})
+        error_code = getattr(exc, "error_code", None)
+        if isinstance(error_code, str):
+            result["error_code"] = error_code
         if isinstance(exc, DriveUploadStalledError):
             result.update(
                 {
@@ -1310,11 +1456,18 @@ def _run_backup_process(timeout_seconds: int) -> int:
         resolved_db_path = get_db_path()
         result = run_backup(
             staging_dir=Path(os.environ.get("BRAINLAYER_BACKUP_STAGING_DIR", str(DEFAULT_STAGING_DIR))),
-            # Prefer BRAINLAYER_BACKUP_DRIVE_FOLDER; BRAINLAYER_BACKUP_DRIVE_PATH is a legacy alias before DEFAULT_FOLDER_PARTS.
-            folder_parts=os.environ.get(
-                "BRAINLAYER_BACKUP_DRIVE_FOLDER",
-                os.environ.get("BRAINLAYER_BACKUP_DRIVE_PATH", "/".join(DEFAULT_FOLDER_PARTS)),
-            ).split("/"),
+            # Prefer BRAINLAYER_BACKUP_DRIVE_FOLDER; BRAINLAYER_BACKUP_DRIVE_PATH
+            # is a legacy alias. With neither set, run_backup derives the host folder.
+            folder_parts=(
+                configured_folder.split("/")
+                if (
+                    configured_folder := os.environ.get(
+                        "BRAINLAYER_BACKUP_DRIVE_FOLDER",
+                        os.environ.get("BRAINLAYER_BACKUP_DRIVE_PATH"),
+                    )
+                )
+                else None
+            ),
             log_path=_backup_log_path(None, db_path=resolved_db_path, env=os.environ),
         )
     except BackupTimeoutError:

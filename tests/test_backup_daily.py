@@ -19,6 +19,11 @@ from tests.drive_listing_assertions import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _stable_backup_machine_id(monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_MACHINE_ID", "test-machine")
+
+
 def _start_fake_brainbar_vacuum_server(socket_path: Path, source_db: Path):
     received: queue.Queue[dict] = queue.Queue()
     ready = threading.Event()
@@ -94,6 +99,42 @@ def test_local_backup_cap_is_decoupled_from_drive_retention(monkeypatch):
     assert backup_daily._drive_upload_stall_max_attempts() == 3
 
 
+def test_noncanonical_machine_uses_its_own_default_drive_folder(monkeypatch):
+    from brainlayer import backup_daily
+
+    monkeypatch.setenv("BRAINLAYER_MACHINE_ID", "m1-brainlayer")
+
+    machine_id = backup_daily.resolve_machine_id()
+
+    assert machine_id == "m1-brainlayer"
+    assert backup_daily.default_drive_folder_parts(machine_id) == [
+        "Brain Drive",
+        "06_ARCHIVE",
+        "backups",
+        "brainlayer-db-m1-brainlayer",
+    ]
+    assert backup_daily.default_drive_folder_parts(machine_id) != backup_daily.CANONICAL_FOLDER_PARTS
+
+
+def test_canonical_m4_machine_keeps_existing_drive_folder():
+    from brainlayer import backup_daily
+
+    assert backup_daily.default_drive_folder_parts(backup_daily.CANONICAL_MACHINE_ID) == [
+        "Brain Drive",
+        "06_ARCHIVE",
+        "backups",
+        "brainlayer-db",
+    ]
+
+
+def test_backup_daily_plist_does_not_override_per_machine_drive_folder():
+    import plistlib
+
+    plist = plistlib.loads(Path("scripts/launchd/com.brainlayer.backup-daily.plist").read_bytes())
+
+    assert "BRAINLAYER_BACKUP_DRIVE_FOLDER" not in plist["EnvironmentVariables"]
+
+
 @pytest.mark.parametrize(
     ("value", "enabled"),
     (("0", False), ("", False), ("false", False), ("yes", False), ("on", False), ("1", True), ("true", True)),
@@ -162,10 +203,11 @@ def test_run_backup_verifies_gzip_with_snapshot_sentinel_and_keeps_raw_snapshot(
     monkeypatch.setattr(backup_daily, "get_drive_credentials", lambda *args, **kwargs: object())
     monkeypatch.setattr(backup_daily, "build_drive_service", lambda *args, **kwargs: object())
     monkeypatch.setattr(backup_daily, "ensure_drive_folder_chain", lambda service, folder_parts: "folder-id")
+    monkeypatch.setattr(backup_daily, "assert_drive_folder_owned_by_machine", lambda *args, **kwargs: None)
     monkeypatch.setattr(backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
     monkeypatch.setattr(backup_daily, "prune_drive_backups", lambda *args, **kwargs: [])
 
-    def fake_upload(file_path, folder_id, credentials):  # noqa: ARG001
+    def fake_upload(file_path, folder_id, credentials, *, machine_id):  # noqa: ARG001
         uploads.append(Path(file_path))
         return {"id": "drive-file-id", "name": Path(file_path).name, "size": str(Path(file_path).stat().st_size)}
 
@@ -205,10 +247,11 @@ def test_run_backup_full_verify_downloads_drive_copy_and_md5_compares(tmp_path, 
     monkeypatch.setattr(backup_daily, "get_drive_credentials", lambda *args, **kwargs: object())
     monkeypatch.setattr(backup_daily, "build_drive_service", lambda *args, **kwargs: object())
     monkeypatch.setattr(backup_daily, "ensure_drive_folder_chain", lambda service, folder_parts: "folder-id")
+    monkeypatch.setattr(backup_daily, "assert_drive_folder_owned_by_machine", lambda *args, **kwargs: None)
     monkeypatch.setattr(backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
     monkeypatch.setattr(backup_daily, "prune_drive_backups", lambda *args, **kwargs: [])
 
-    def fake_upload(file_path, folder_id, credentials):  # noqa: ARG001
+    def fake_upload(file_path, folder_id, credentials, *, machine_id):  # noqa: ARG001
         uploaded_bytes["drive-file-id"] = Path(file_path).read_bytes()
         return {"id": "drive-file-id", "name": Path(file_path).name, "size": str(Path(file_path).stat().st_size)}
 
@@ -378,6 +421,7 @@ def test_run_backup_wires_verified_log_provenance_into_local_gzip_pruning(tmp_pa
     monkeypatch.setattr(backup_daily, "get_drive_credentials", lambda *args, **kwargs: object())
     monkeypatch.setattr(backup_daily, "build_drive_service", lambda *args, **kwargs: object())
     monkeypatch.setattr(backup_daily, "ensure_drive_folder_chain", lambda service, folder_parts: "folder-id")
+    monkeypatch.setattr(backup_daily, "assert_drive_folder_owned_by_machine", lambda *args, **kwargs: None)
     monkeypatch.setattr(backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         backup_daily,
@@ -387,7 +431,7 @@ def test_run_backup_wires_verified_log_provenance_into_local_gzip_pruning(tmp_pa
     monkeypatch.setattr(
         backup_daily,
         "upload_file_to_drive_raw",
-        lambda file_path, folder_id, credentials: {
+        lambda file_path, folder_id, credentials, *, machine_id: {
             "id": "drive-file-id",
             "name": Path(file_path).name,
             "size": str(Path(file_path).stat().st_size),
@@ -1079,6 +1123,96 @@ def test_ensure_drive_folder_chain_creates_missing_folders():
     assert ("brainlayer-db", "folder-backups") in service.files().created
 
 
+def test_run_backup_refuses_folder_with_other_machine_snapshot_and_records_error(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    snapshot = tmp_path / "2026-09-14.db.gz"
+    snapshot.write_bytes(b"backup-bytes")
+    log_path = tmp_path / "backup-daily.log"
+    upload_calls: list[object] = []
+
+    class FakeArtifact:
+        gzip_path = snapshot
+        uncompressed_path = None
+        sentinel_chunks = 1
+        local_retention_deleted: list[str] = []
+
+    class FakeExecute:
+        def execute(self):
+            return {
+                "files": [
+                    {
+                        "id": "other-snapshot",
+                        "name": "2026-09-13.db.gz",
+                        "appProperties": {"brainlayer_machine": "m4-other"},
+                    }
+                ]
+            }
+
+    class FakeFiles:
+        def list(self, **kwargs):  # noqa: ARG002
+            return FakeExecute()
+
+    class FakeService:
+        def files(self):
+            return FakeFiles()
+
+    monkeypatch.setattr(backup_daily, "create_sqlite_backup_artifact", lambda *args, **kwargs: FakeArtifact())
+    monkeypatch.setattr(backup_daily, "get_drive_credentials", lambda *args, **kwargs: object())
+    monkeypatch.setattr(backup_daily, "build_drive_service", lambda *args, **kwargs: FakeService())
+    monkeypatch.setattr(backup_daily, "ensure_drive_folder_chain", lambda *args, **kwargs: "folder-id")
+    monkeypatch.setattr(
+        backup_daily,
+        "upload_file_to_drive_raw",
+        lambda *args, **kwargs: upload_calls.append((args, kwargs)),
+    )
+
+    with pytest.raises(backup_daily.DriveFolderOwnedByOtherMachineError):
+        backup_daily.run_backup(
+            db_path=tmp_path / "brainlayer.db",
+            staging_dir=tmp_path,
+            folder_parts=["brainlayer-db-m1"],
+            machine_id="m1",
+            date_stamp="2026-09-14",
+            upload=True,
+            log_path=log_path,
+        )
+
+    assert upload_calls == []
+    receipt = json.loads(log_path.read_text(encoding="utf-8"))
+    assert receipt["uploaded"] is False
+    assert receipt["error_code"] == "drive_folder_owned_by_other_machine"
+
+
+def test_legacy_unmarked_snapshot_is_owned_by_canonical_m4():
+    from brainlayer import backup_daily
+
+    class FakeExecute:
+        def execute(self):
+            return {"files": [{"id": "legacy", "name": "2026-09-13.db.gz"}]}
+
+    class FakeFiles:
+        def list(self, **kwargs):  # noqa: ARG002
+            return FakeExecute()
+
+    class FakeService:
+        def files(self):
+            return FakeFiles()
+
+    service = FakeService()
+    backup_daily.assert_drive_folder_owned_by_machine(
+        service,
+        folder_id="legacy-folder",
+        machine_id=backup_daily.CANONICAL_MACHINE_ID,
+    )
+    with pytest.raises(backup_daily.DriveFolderOwnedByOtherMachineError):
+        backup_daily.assert_drive_folder_owned_by_machine(
+            service,
+            folder_id="legacy-folder",
+            machine_id="m1",
+        )
+
+
 class _DriveResponse:
     def __init__(self, status_code, *, headers=None, payload=None):
         self.status_code = status_code
@@ -1092,6 +1226,84 @@ class _DriveResponse:
     def raise_for_status(self):
         if self.status_code >= 400:
             raise RuntimeError(f"HTTP {self.status_code}")
+
+
+def test_raw_drive_upload_sets_machine_app_property(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    snapshot = tmp_path / "2026-09-14.db.gz"
+    snapshot.write_bytes(b"backup")
+    uploaded_metadata: dict[str, object] = {}
+
+    def fake_post(*args, **kwargs):  # noqa: ARG001
+        uploaded_metadata.update(json.loads(kwargs["data"]))
+        return _DriveResponse(200, headers={"Location": "https://upload.test/session"})
+
+    class SuccessfulSession:
+        def put(self, *args, **kwargs):  # noqa: ARG002
+            return _DriveResponse(200, payload={"id": "drive-file-id"})
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(backup_daily.requests, "post", fake_post)
+    monkeypatch.setattr(backup_daily.requests, "Session", SuccessfulSession)
+
+    backup_daily.upload_file_to_drive_raw(
+        snapshot,
+        "folder-id",
+        type("Credentials", (), {"token": "test-token"})(),
+        machine_id="m1",
+    )
+
+    assert uploaded_metadata["appProperties"] == {"brainlayer_machine": "m1"}
+
+
+def test_backup_receipt_records_drive_folder_and_machine_id(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    snapshot = tmp_path / "2026-09-14.db.gz"
+    snapshot.write_bytes(b"backup")
+
+    class FakeArtifact:
+        gzip_path = snapshot
+        uncompressed_path = None
+        sentinel_chunks = 1
+        local_retention_deleted: list[str] = []
+
+    monkeypatch.setattr(backup_daily, "create_sqlite_backup_artifact", lambda *args, **kwargs: FakeArtifact())
+
+    result = backup_daily.run_backup(
+        db_path=tmp_path / "brainlayer.db",
+        staging_dir=tmp_path,
+        folder_parts=["Brain Drive", "06_ARCHIVE", "backups", "brainlayer-db-m1"],
+        machine_id="m1",
+        date_stamp="2026-09-14",
+        upload=False,
+        log_path=tmp_path / "backup-daily.log",
+    )
+
+    assert result["drive_folder"] == "Brain Drive/06_ARCHIVE/backups/brainlayer-db-m1"
+    assert result["machine_id"] == "m1"
+
+
+def test_invalid_machine_id_is_recorded_in_backup_receipt(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    log_path = tmp_path / "backup-daily.log"
+    monkeypatch.setenv("BRAINLAYER_MACHINE_ID", "bad machine id")
+
+    with pytest.raises(backup_daily.InvalidMachineIdError):
+        backup_daily.run_backup(
+            db_path=tmp_path / "brainlayer.db",
+            staging_dir=tmp_path,
+            upload=False,
+            log_path=log_path,
+        )
+
+    receipt = json.loads(log_path.read_text(encoding="utf-8"))
+    assert receipt["error_code"] == "invalid_machine_id"
+    assert receipt["uploaded"] is False
 
 
 def _stub_backup_for_drive_upload(backup_daily, monkeypatch, snapshot):
@@ -1109,6 +1321,7 @@ def _stub_backup_for_drive_upload(backup_daily, monkeypatch, snapshot):
     monkeypatch.setattr(backup_daily, "get_drive_credentials", lambda *args, **kwargs: Credentials())
     monkeypatch.setattr(backup_daily, "build_drive_service", lambda *args, **kwargs: service)
     monkeypatch.setattr(backup_daily, "ensure_drive_folder_chain", lambda *args, **kwargs: "folder-id")
+    monkeypatch.setattr(backup_daily, "assert_drive_folder_owned_by_machine", lambda *args, **kwargs: None)
     monkeypatch.setattr(backup_daily, "prune_drive_backups", lambda *args, **kwargs: [])
     monkeypatch.setattr(backup_daily, "prune_local_gzip_snapshots", lambda *args, **kwargs: [])
     monkeypatch.setattr(
@@ -1234,7 +1447,17 @@ def test_drive_upload_resumes_from_confirmed_offset_after_one_stall(tmp_path, mo
 
     assert ranges == ["bytes 0-5/6", "bytes */6", "bytes */6", "bytes 3-5/6"]
     assert timeouts == pytest.approx([5.02] * 4)
-    assert verified == [(service, {"file_id": "drive-file-id", "expected_name": snapshot.name, "expected_size": 6})]
+    assert verified == [
+        (
+            service,
+            {
+                "file_id": "drive-file-id",
+                "expected_name": snapshot.name,
+                "expected_size": 6,
+                "expected_machine_id": "test-machine",
+            },
+        )
+    ]
     assert result["uploaded"] is True
     assert result["verified"] is True
 
@@ -1264,6 +1487,7 @@ def test_drive_upload_missing_range_never_advances_unconfirmed_bytes(tmp_path, m
             snapshot,
             "folder-id",
             type("Credentials", (), {"token": "test-token"})(),
+            machine_id="test-machine",
         )
 
     assert ranges == ["bytes 0-5/6", "bytes */6", "bytes 0-5/6", "bytes */6"]
@@ -1319,6 +1543,7 @@ def _stub_verified_backup_run(backup_daily, monkeypatch, snapshot, service):
     monkeypatch.setattr(backup_daily, "get_drive_credentials", lambda *args, **kwargs: object())
     monkeypatch.setattr(backup_daily, "build_drive_service", lambda *args, **kwargs: service)
     monkeypatch.setattr(backup_daily, "ensure_drive_folder_chain", lambda *args, **kwargs: "folder-id")
+    monkeypatch.setattr(backup_daily, "assert_drive_folder_owned_by_machine", lambda *args, **kwargs: None)
     monkeypatch.setattr(backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         backup_daily,
@@ -1328,7 +1553,7 @@ def _stub_verified_backup_run(backup_daily, monkeypatch, snapshot, service):
     monkeypatch.setattr(
         backup_daily,
         "upload_file_to_drive_raw",
-        lambda file_path, folder_id, credentials: {
+        lambda file_path, folder_id, credentials, *, machine_id: {
             "id": "drive-file-id",
             "name": Path(file_path).name,
             "size": str(Path(file_path).stat().st_size),
@@ -1408,6 +1633,7 @@ def test_run_backup_unverified_upload_skips_drive_and_local_gzip_pruning(tmp_pat
     monkeypatch.setattr(backup_daily, "get_drive_credentials", lambda *args, **kwargs: object())
     monkeypatch.setattr(backup_daily, "build_drive_service", lambda *args, **kwargs: object())
     monkeypatch.setattr(backup_daily, "ensure_drive_folder_chain", lambda service, folder_parts: "folder-id")
+    monkeypatch.setattr(backup_daily, "assert_drive_folder_owned_by_machine", lambda *args, **kwargs: None)
     monkeypatch.setattr(backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         backup_daily,
@@ -1417,7 +1643,7 @@ def test_run_backup_unverified_upload_skips_drive_and_local_gzip_pruning(tmp_pat
     monkeypatch.setattr(
         backup_daily,
         "upload_file_to_drive_raw",
-        lambda file_path, folder_id, credentials: {
+        lambda file_path, folder_id, credentials, *, machine_id: {
             "id": "drive-file-id",
             "name": Path(file_path).name,
             "size": str(Path(file_path).stat().st_size),
@@ -1471,6 +1697,7 @@ def test_run_backup_appends_result_to_file_log(tmp_path, monkeypatch):
     monkeypatch.setattr(backup_daily, "get_drive_credentials", lambda *args, **kwargs: object())
     monkeypatch.setattr(backup_daily, "build_drive_service", lambda *args, **kwargs: object())
     monkeypatch.setattr(backup_daily, "ensure_drive_folder_chain", lambda service, folder_parts: "folder-id")
+    monkeypatch.setattr(backup_daily, "assert_drive_folder_owned_by_machine", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         backup_daily,
         "verify_sqlite_backup_artifact",
@@ -1484,7 +1711,7 @@ def test_run_backup_appends_result_to_file_log(tmp_path, monkeypatch):
     monkeypatch.setattr(
         backup_daily,
         "upload_file_to_drive_raw",
-        lambda file_path, folder_id, credentials: {
+        lambda file_path, folder_id, credentials, *, machine_id: {
             "id": "drive-file-id",
             "name": Path(file_path).name,
             "size": str(Path(file_path).stat().st_size),
@@ -1530,6 +1757,7 @@ def test_run_backup_appends_file_log_when_upload_fails(tmp_path, monkeypatch):
     monkeypatch.setattr(backup_daily, "get_drive_credentials", lambda *args, **kwargs: object())
     monkeypatch.setattr(backup_daily, "build_drive_service", lambda *args, **kwargs: object())
     monkeypatch.setattr(backup_daily, "ensure_drive_folder_chain", lambda service, folder_parts: "folder-id")
+    monkeypatch.setattr(backup_daily, "assert_drive_folder_owned_by_machine", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         backup_daily,
         "upload_file_to_drive_raw",

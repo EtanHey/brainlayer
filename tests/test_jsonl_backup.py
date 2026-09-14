@@ -8,6 +8,7 @@ import tarfile
 import threading
 import time
 from pathlib import Path
+from unittest.mock import create_autospec
 
 import pytest
 
@@ -53,7 +54,7 @@ def _mock_drive_success(jsonl_backup, monkeypatch, uploads: list[Path] | None = 
     monkeypatch.setattr(jsonl_backup.backup_daily, "build_drive_service", lambda: object())
     monkeypatch.setattr(jsonl_backup.backup_daily, "ensure_drive_folder_chain", lambda *args: "folder-id")
 
-    def upload(path, *args):  # noqa: ARG001
+    def upload(path, *args, **kwargs):  # noqa: ARG001
         if uploads is not None:
             uploads.append(Path(path))
         return {"id": "drive-id", "name": Path(path).name, "size": str(Path(path).stat().st_size)}
@@ -61,6 +62,78 @@ def _mock_drive_success(jsonl_backup, monkeypatch, uploads: list[Path] | None = 
     monkeypatch.setattr(jsonl_backup.backup_daily, "upload_file_to_drive_raw", upload)
     monkeypatch.setattr(jsonl_backup.backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
     monkeypatch.setattr(jsonl_backup.backup_daily, "prune_drive_backups", lambda *args, **kwargs: [])
+
+
+def test_jsonl_drive_calls_follow_backup_daily_signatures(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    now = time.time()
+    source_root = tmp_path / "sessions"
+    _write_jsonl(source_root / "changed.jsonl", mtime=now - 3600)
+    monkeypatch.setenv("BRAINLAYER_JSONL_FOREVER", "1")
+    monkeypatch.setattr(jsonl_backup.backup_daily, "resolve_machine_id", lambda: "test-machine")
+    monkeypatch.setattr(jsonl_backup.backup_daily, "get_drive_credentials", object)
+    monkeypatch.setattr(jsonl_backup.backup_daily, "build_drive_service", object)
+    monkeypatch.setattr(jsonl_backup.backup_daily, "ensure_drive_folder_chain", lambda *args: "folder-id")
+    upload = create_autospec(
+        jsonl_backup.backup_daily.upload_file_to_drive_raw,
+        return_value={"id": "drive-id", "md5Checksum": "abc123"},
+    )
+    verify = create_autospec(jsonl_backup.backup_daily.verify_drive_upload, return_value=None)
+    monkeypatch.setattr(jsonl_backup.backup_daily, "upload_file_to_drive_raw", upload)
+    monkeypatch.setattr(jsonl_backup.backup_daily, "verify_drive_upload", verify)
+
+    result = jsonl_backup.run_backup(
+        source_roots=[source_root],
+        state_path=tmp_path / "state.json",
+        staging_dir=tmp_path / "staging",
+        log_path=tmp_path / "jsonl-backup.log",
+        queue_dir=tmp_path / "queue",
+        date_stamp="2026-09-14",
+        now=now,
+        upload=True,
+    )
+
+    assert result["status"] == "uploaded"
+    assert result["forever_uploaded_file_count"] == 1
+    assert upload.call_count == 2
+    assert all(call.kwargs["machine_id"] == "test-machine" for call in upload.call_args_list)
+    assert verify.call_count == 2
+    assert all(call.kwargs["expected_machine_id"] == "test-machine" for call in verify.call_args_list)
+
+
+def test_invalid_jsonl_machine_id_writes_error_receipt_without_upload(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    now = time.time()
+    source_root = tmp_path / "sessions"
+    _write_jsonl(source_root / "changed.jsonl", mtime=now - 3600)
+    uploads: list[Path] = []
+    _mock_drive_success(jsonl_backup, monkeypatch, uploads)
+    monkeypatch.setattr(
+        jsonl_backup.backup_daily,
+        "resolve_machine_id",
+        lambda: (_ for _ in ()).throw(jsonl_backup.backup_daily.InvalidMachineIdError("invalid test id")),
+    )
+    log_path = tmp_path / "jsonl-backup.log"
+
+    result = jsonl_backup.run_backup(
+        source_roots=[source_root],
+        state_path=tmp_path / "state.json",
+        staging_dir=tmp_path / "staging",
+        log_path=log_path,
+        queue_dir=tmp_path / "queue",
+        date_stamp="2026-09-14",
+        now=now,
+        upload=True,
+    )
+
+    assert result["status"] == "failed"
+    assert result["uploaded"] is False
+    assert result["verified"] is False
+    assert result["error_code"] == "invalid_machine_id"
+    assert uploads == []
+    assert json.loads(log_path.read_text(encoding="utf-8"))["error_code"] == "invalid_machine_id"
 
 
 def test_jsonl_retention_is_disabled_by_default_and_keeps_local_archives(tmp_path, monkeypatch):
@@ -214,7 +287,7 @@ def test_jsonl_retention_opt_in_trashes_drive_objects_and_never_hard_deletes(tmp
     monkeypatch.setattr(
         jsonl_backup.backup_daily,
         "upload_file_to_drive_raw",
-        lambda path, *args: {
+        lambda path, *args, **kwargs: {
             "id": "new-id",
             "name": Path(path).name,
             "size": str(Path(path).stat().st_size),
@@ -436,8 +509,8 @@ def test_jsonl_retention_invariant_is_a_ci_guard_not_only_a_behavior_fixture():
     )
 
     unsafe_backup_daily = backup_daily_source.replace(
-        '"&fields=id,name,size,md5Checksum"',
-        '"&fields=id,name,size"',
+        '"&fields=id,name,size,md5Checksum,appProperties"',
+        '"&fields=id,name,size,appProperties"',
         1,
     ).replace(
         '"""Upload large backups with Drive\'s raw resumable protocol."""',
@@ -804,7 +877,7 @@ def test_concurrent_jsonl_backups_serialize_creation_through_state_persistence(t
     monkeypatch.setattr(jsonl_backup.backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
     monkeypatch.setattr(jsonl_backup.backup_daily, "prune_drive_backups", lambda *args, **kwargs: [])
 
-    def fake_upload(file_path, folder_id, credentials):  # noqa: ARG001
+    def fake_upload(file_path, folder_id, credentials, **kwargs):  # noqa: ARG001
         uploads.append(Path(file_path).read_bytes())
         if len(uploads) == 1:
             upload_started.set()
@@ -879,7 +952,7 @@ def test_run_jsonl_backup_uploads_incremental_bundle_verifies_and_enqueues_summa
     )
     monkeypatch.setattr(jsonl_backup.backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
 
-    def fake_upload(file_path, folder_id, credentials):  # noqa: ARG001
+    def fake_upload(file_path, folder_id, credentials, **kwargs):  # noqa: ARG001
         uploads.append(Path(file_path))
         return {
             "id": "drive-jsonl-id",
@@ -2817,7 +2890,7 @@ def test_jsonl_forever_upload_uses_separate_folder_and_rolling_prune_only(tmp_pa
         folder_calls.append(list(folder_parts))
         return "folder-" + "-".join(folder_parts[-2:])
 
-    def fake_upload(file_path, folder_id, credentials):  # noqa: ARG001
+    def fake_upload(file_path, folder_id, credentials, **kwargs):  # noqa: ARG001
         uploaded.append((Path(file_path), folder_id, Path(file_path).read_bytes()))
         return {
             "id": f"drive-{len(uploaded)}",
@@ -2879,7 +2952,7 @@ def test_jsonl_forever_hashes_the_staged_copy_before_upload(tmp_path, monkeypatc
         Path(destination).write_bytes(b"staged bytes")
         return destination
 
-    def fake_upload(file_path, folder_id, credentials):  # noqa: ARG001
+    def fake_upload(file_path, folder_id, credentials, **kwargs):  # noqa: ARG001
         path = Path(file_path)
         uploaded.append((path, path.read_bytes()))
         return {"id": f"drive-{len(uploaded)}", "name": path.name, "size": str(path.stat().st_size)}
@@ -2925,7 +2998,7 @@ def test_jsonl_forever_upload_caches_source_folder_lookup_per_root(tmp_path, mon
         folder_calls.append(list(folder_parts))
         return "folder-" + "-".join(folder_parts[-2:])
 
-    def fake_upload(file_path, folder_id, credentials):  # noqa: ARG001
+    def fake_upload(file_path, folder_id, credentials, **kwargs):  # noqa: ARG001
         path = Path(file_path)
         uploaded.append(path)
         return {"id": f"drive-{len(uploaded)}", "name": path.name, "size": str(path.stat().st_size)}
@@ -2971,7 +3044,7 @@ def test_jsonl_backup_persists_daily_state_when_forever_upload_fails(tmp_path, m
     monkeypatch.setattr(jsonl_backup.backup_daily, "ensure_drive_folder_chain", lambda *args, **kwargs: "folder-id")
     monkeypatch.setattr(jsonl_backup.backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
 
-    def fake_upload(file_path, folder_id, credentials):  # noqa: ARG001
+    def fake_upload(file_path, folder_id, credentials, **kwargs):  # noqa: ARG001
         path = Path(file_path)
         uploads.append(path)
         if len(uploads) == 2:
@@ -3024,7 +3097,7 @@ def test_run_jsonl_backup_second_run_noops_when_state_covers_files(tmp_path, mon
     monkeypatch.setattr(jsonl_backup.backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
     monkeypatch.setattr(jsonl_backup.backup_daily, "prune_drive_backups", lambda *args, **kwargs: [])
 
-    def _upload(file_path, folder_id, credentials):
+    def _upload(file_path, folder_id, credentials, **kwargs):
         path = Path(file_path)
         uploads.append(path)
         obj = {"id": f"drive-{len(uploads)}", "name": path.name, "md5Checksum": f"md5-{len(uploads)}"}
@@ -3089,7 +3162,7 @@ def test_local_only_jsonl_bundle_does_not_advance_upload_state(tmp_path, monkeyp
     monkeypatch.setattr(jsonl_backup.backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
     monkeypatch.setattr(jsonl_backup.backup_daily, "prune_drive_backups", lambda *args, **kwargs: [])
 
-    def fake_upload(file_path, folder_id, credentials):  # noqa: ARG001
+    def fake_upload(file_path, folder_id, credentials, **kwargs):  # noqa: ARG001
         uploads.append(Path(file_path))
         return {"id": "drive-jsonl-id", "name": Path(file_path).name, "size": str(Path(file_path).stat().st_size)}
 
@@ -3189,7 +3262,7 @@ def test_failed_bundle_verification_never_reports_uploaded_status(tmp_path, monk
     monkeypatch.setattr(
         jsonl_backup.backup_daily,
         "upload_file_to_drive_raw",
-        lambda path, *args: uploads.append(Path(path)),
+        lambda path, *args, **kwargs: uploads.append(Path(path)),
     )
     monkeypatch.setattr(jsonl_backup, "create_jsonl_bundle_with_digests", lambda *args, **kwargs: (corrupt, {}, {}))
 
@@ -3342,7 +3415,7 @@ def test_pruned_bundle_uncovers_its_files_instead_of_orphaning_them(tmp_path, mo
     monkeypatch.setattr(jsonl_backup.backup_daily, "verify_drive_upload", lambda *a, **k: None)
     monkeypatch.setattr(jsonl_backup.backup_daily, "prune_drive_backups", lambda *a, **k: [])
 
-    def _upload(file_path, folder_id, credentials):
+    def _upload(file_path, folder_id, credentials, **kwargs):
         p = Path(file_path)
         uploads.append(p)
         obj = {"id": f"drive-{len(uploads)}", "name": p.name, "md5Checksum": f"md5-{len(uploads)}"}
@@ -3398,7 +3471,7 @@ def _install_drive(monkeypatch, jsonl_backup, uploads, surviving):
     monkeypatch.setattr(jsonl_backup.backup_daily, "verify_drive_upload", lambda *a, **k: None)
     monkeypatch.setattr(jsonl_backup.backup_daily, "prune_drive_backups", lambda *a, **k: [])
 
-    def _upload(file_path, folder_id, credentials):
+    def _upload(file_path, folder_id, credentials, **kwargs):
         path = Path(file_path)
         uploads.append(path)
         obj = {"id": f"drive-{len(uploads)}", "name": path.name, "md5Checksum": f"md5-{len(uploads)}"}
@@ -3482,7 +3555,7 @@ def test_recorded_digest_describes_the_bundled_bytes_not_a_later_read(tmp_path, 
     monkeypatch.setattr(jsonl_backup.backup_daily, "verify_drive_upload", lambda *a, **k: None)
     monkeypatch.setattr(jsonl_backup.backup_daily, "prune_drive_backups", lambda *a, **k: [])
 
-    def _upload(file_path, folder_id, credentials):
+    def _upload(file_path, folder_id, credentials, **kwargs):
         path = Path(file_path)
         uploads.append(path)
         # Runs AFTER the bundle was built and BEFORE state is written: rewrite the source
