@@ -109,9 +109,10 @@ final class BrainBarWindowStateTests: XCTestCase {
         XCTAssertFalse(root.contains("brainbar.shell.tabs"))
         XCTAssertFalse(root.contains("injectionsContent"))
         XCTAssertFalse(root.contains("BrainBarInjectionTab"))
-        XCTAssertTrue(root.contains("ObservabilityDashboardView("))
-        XCTAssertTrue(root.contains("result: effectiveObservabilityResult"))
-        XCTAssertTrue(root.contains("cadence: observabilityCadence"))
+        XCTAssertTrue(root.contains("ObservabilityTechnicalDetailsView(result: effectiveObservabilityResult)"))
+        XCTAssertTrue(root.contains("summaryTiles(layout: layout)"))
+        XCTAssertTrue(root.contains("Text(\"Details\")"))
+        XCTAssertFalse(root.contains("Runtime & Details"))
         XCTAssertTrue(root.contains("BrainBarHeroBackupTruth.derive("))
         XCTAssertTrue(root.contains("ObservabilityPresentation.backupStatus(for: document.backups)"))
     }

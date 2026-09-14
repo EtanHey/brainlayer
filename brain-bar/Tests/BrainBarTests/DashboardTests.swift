@@ -613,17 +613,14 @@ final class DashboardTests: XCTestCase {
         XCTAssertTrue(source.contains("if signal.isAvailable"))
     }
 
-    func testVectorSignalDetailMountsAtRootToEscapePipelineAndScrollClips() throws {
+    func testVectorSignalDetailMountsAtRootToEscapeDetailsAndScrollClips() throws {
         let source = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
         let bodyRange = try XCTUnwrap(source.range(of: "var body: some View"))
-        let pipelinePanelRange = try XCTUnwrap(source.range(of: "private func pipelinePanel"))
-        // Redesign (feat/brainbar-dashboard-redesign): the old single `writesCard`
-        // helper was split into `writeCardsBand` (+ per-series card helpers). The
-        // band helper is the first function after `pipelinePanel`, so it remains
-        // the correct lower bound for slicing the pipeline-panel source.
-        let writesCardRange = try XCTUnwrap(source[pipelinePanelRange.upperBound...].range(of: "private func writeCardsBand"))
-        let bodySource = String(source[bodyRange.lowerBound..<pipelinePanelRange.lowerBound])
-        let pipelinePanelSource = String(source[pipelinePanelRange.lowerBound..<writesCardRange.lowerBound])
+        let statusStripRange = try XCTUnwrap(source.range(of: "private var statusStrip"))
+        let bodySource = String(source[bodyRange.lowerBound..<statusStripRange.lowerBound])
+        let diagnosticsRange = try XCTUnwrap(source.range(of: "private func diagnostics"))
+        let daemonSummaryRange = try XCTUnwrap(source[diagnosticsRange.upperBound...].range(of: "private var daemonSummary"))
+        let diagnosticsSource = String(source[diagnosticsRange.lowerBound..<daemonSummaryRange.lowerBound])
         let signalColumnRange = try XCTUnwrap(source.range(of: "private func signalColumn"))
         let coverageModelRange = try XCTUnwrap(source[signalColumnRange.upperBound...].range(of: "private struct BrainBarSignalCoverage"))
         let signalColumnSource = String(source[signalColumnRange.lowerBound..<coverageModelRange.lowerBound])
@@ -636,6 +633,8 @@ final class DashboardTests: XCTestCase {
             source.contains("anchorPreference(key: VectorRowAnchorKey.self"),
             "The Vector row click path should mount the detail directly instead of only emitting an anchor preference."
         )
+        XCTAssertFalse(source.contains("vectorSignalRowFrame"), "The removed in-panel frame must not leave dead state.")
+        XCTAssertFalse(source.contains("BrainBarVectorSignalFrameKey"), "Only the root-space frame is still consumed.")
         XCTAssertTrue(
             bodySource.contains(".coordinateSpace(name: BrainBarVectorSignalCoordinateSpace.root)"),
             "The root GeometryReader should define the coordinate space used to position the unclipped Vector detail."
@@ -652,17 +651,10 @@ final class DashboardTests: XCTestCase {
             bodySource.contains(".zIndex(vectorSignalDetailExpanded ? 30 : 0)"),
             "The hoisted Vector detail needs a high zIndex above every sibling pipeline card."
         )
-        XCTAssertFalse(
-            pipelinePanelSource.contains("BrainBarVectorSignalDetail(signal: vectorSignal, compact: layout.compactCards)"),
-            "The Vector detail cannot remain inside the pipeline panel overlay because that panel clips the float."
-        )
-        XCTAssertFalse(
-            pipelinePanelSource.contains(".zIndex(vectorSignalDetailExpanded ? 1 : 0)"),
-            "The old in-panel zIndex workaround should be removed once the float lives at root level."
-        )
-        XCTAssertFalse(
-            pipelinePanelSource.contains(".padding(.top, max(0, 20 - layout.gridSpacing))"),
-            "The old in-panel spacing workaround should be removed once the float lives at root level."
+        XCTAssertTrue(
+            diagnosticsSource.contains("DisclosureGroup(isExpanded: $detailsExpanded)") &&
+                diagnosticsSource.contains("signalCoveragePanel(layout: layout)"),
+            "Signal coverage should stay inside the one-page Details disclosure while its float mounts at the root."
         )
         XCTAssertFalse(
             signalColumnSource.contains("BrainBarVectorSignalDetail"),

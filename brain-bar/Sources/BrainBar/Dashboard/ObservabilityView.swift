@@ -18,7 +18,14 @@ struct ObservabilityDocument: Codable, Sendable {
         let totalChunks: Int?
         let inWindow: Window?
     }
-    struct Window: Codable, Sendable { let count: Int }
+    struct Window: Codable, Sendable {
+        let count: Int
+        let byHour: [HourBucket]?
+    }
+    struct HourBucket: Codable, Sendable {
+        let hour: Date
+        let count: Int
+    }
     struct Emitters: Codable, Sendable {
         let state: String, reason: String
         let inputs: [Input]
@@ -433,6 +440,86 @@ struct ObservabilityDashboardView: View {
 
     private func identifier(_ title: String) -> String {
         title.lowercased().replacingOccurrences(of: "-", with: "_")
+    }
+}
+
+struct ObservabilityTechnicalDetailsView: View {
+    let result: ObservabilityReadResult
+
+    var body: some View {
+        switch result {
+        case let .readable(document):
+            let window = "\(document.windowHours) h"
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Observability")
+                    .font(.headline)
+                detail("Document", "schema v\(document.schemaVersion) · \(document.windowHours) h window")
+                detail("Generated", document.generatedAt.formatted())
+                detail("Database", document.dbPath)
+
+                Divider()
+                Text("Memory provenance")
+                    .font(.subheadline.bold())
+                if let mcp = document.emitters.byEmitter?.first(where: { $0.emitter == "mcp" }) {
+                    detail("Agent writes", "\(mcp.countInWindow) writes via brain_store in \(window)")
+                }
+                ForEach(Array((document.emitters.byEmitter ?? []).enumerated()), id: \.offset) { _, row in
+                    if row.emitter != "mcp" {
+                        detail(row.emitter, "\(row.countInWindow) indexed chunks in \(window)")
+                    }
+                }
+                ForEach(Array((document.emitters.bySourceClass ?? []).enumerated()), id: \.offset) { _, row in
+                    detail(row.sourceClass ?? "unclassified", "\(row.count) indexed chunks total · \(row.inWindow) in \(window)")
+                }
+                if let unknown = document.authorUnknown.neverClassified {
+                    detail("Unattributed", "\(unknown.count) indexed chunks · \(percent(unknown.share)) of memory")
+                }
+
+                Divider()
+                Text("Backup internals")
+                    .font(.subheadline.bold())
+                if let launchd = document.backups.launchd {
+                    detail("Launch agent", "\(launchd.label) · \(launchd.bootstrapped ? "loaded" : "not loaded")")
+                }
+                if let archiveID = document.backups.lastVerifiedUpload?.archiveId {
+                    detail("Drive file ID", archiveID)
+                }
+                if let invariant = document.backups.retentionInvariant {
+                    detail("Retention invariant", invariant)
+                }
+                if let archives = document.backups.survivingArchives30D {
+                    detail("Retention", "\(archives) surviving transcript archives in 30 d")
+                }
+                if let error = document.backups.errorType {
+                    detail("Backup error", error.replacingOccurrences(of: "_", with: " "))
+                }
+                ForEach(Array(document.backups.inputs.enumerated()), id: \.offset) { _, input in
+                    detail("Backup input", "\(input.status) · \(input.path)")
+                }
+            }
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(Color.brainBarTextSecondary)
+            .accessibilityIdentifier("brainbar.dashboard.observability-details")
+        case let .unreadable(reason):
+            Text("Observability unreadable: \(reason)")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.orange)
+        }
+    }
+
+    private func detail(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(label)
+                .foregroundStyle(Color.brainBarTextPrimary)
+                .frame(width: 112, alignment: .leading)
+            Text(value)
+                .textSelection(.enabled)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func percent(_ share: Double) -> String {
+        share.formatted(.percent.precision(.fractionLength(1)))
     }
 }
 
