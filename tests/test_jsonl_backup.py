@@ -990,6 +990,7 @@ def test_icloud_deadline_is_size_scaled_and_env_configurable(tmp_path, monkeypat
     archive = tmp_path / "archive.tar.gz"
     archive.write_bytes(b"12345")
     monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(jsonl_backup, "DEFAULT_ICLOUD_TIMEOUT_SECONDS", 1)
     monkeypatch.setattr(jsonl_backup, "ICLOUD_MIN_BYTES_PER_SECOND", 2)
     monkeypatch.delenv("BRAINLAYER_JSONL_BACKUP_ICLOUD_TIMEOUT_SECONDS", raising=False)
 
@@ -1607,7 +1608,7 @@ def test_jsonl_backup_does_not_advance_state_until_icloud_copy_is_verified(tmp_p
     assert drive_uploads == []
 
 
-def test_run_backup_reuses_one_icloud_deadline_for_inventory_and_repair(tmp_path, monkeypatch):
+def test_run_backup_does_not_share_inventory_deadline_with_repair(tmp_path, monkeypatch):
     from brainlayer import jsonl_backup
 
     now = time.time()
@@ -1642,8 +1643,7 @@ def test_run_backup_reuses_one_icloud_deadline_for_inventory_and_repair(tmp_path
 
     assert observed[0][0] == "inventory"
     assert observed[1][0] == "copy"
-    assert observed[0][1] is not None
-    assert observed[0][1] == observed[1][1]
+    assert observed == [("inventory", None), ("copy", None)]
 
 
 def test_enabling_icloud_bootstraps_files_covered_only_by_legacy_drive_state(tmp_path, monkeypatch):
