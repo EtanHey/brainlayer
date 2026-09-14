@@ -89,7 +89,6 @@ final class BrainBarStatusPopoverController: NSObject {
     @objc private func toggleFromStatusItem(_ sender: Any?) {
         if let event = NSApp.currentEvent, event.type == .rightMouseUp,
            let button = statusItemForTesting.button {
-            NSApp.activate(ignoringOtherApps: true)
             NSMenu.popUpContextMenu(contextMenuForTesting, with: event, for: button)
             return
         }
@@ -98,6 +97,13 @@ final class BrainBarStatusPopoverController: NSObject {
     }
 
     private func configureContextMenu() {
+        contextMenuForTesting.addItem(
+            NSMenuItem(
+                title: "Toggle BrainBar",
+                action: #selector(toggleFromContextMenu(_:)),
+                keyEquivalent: ""
+            )
+        )
         contextMenuForTesting.addItem(
             NSMenuItem(
                 title: "Settings...",
@@ -125,6 +131,10 @@ final class BrainBarStatusPopoverController: NSObject {
         for item in contextMenuForTesting.items where item.action != nil {
             item.target = self
         }
+    }
+
+    @objc private func toggleFromContextMenu(_ sender: Any?) {
+        toggle(sender)
     }
 
     @objc private func restartBrainBar(_ sender: Any?) {

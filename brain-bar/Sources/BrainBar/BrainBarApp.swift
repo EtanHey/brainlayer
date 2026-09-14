@@ -2,6 +2,17 @@ import AppKit
 import BrainBarLifecycle
 import SwiftUI
 
+enum BrainBarAppMenuCommands {
+    static let settingsSceneEntryCount = 1
+    static let searchTitle = "Search BrainLayer"
+    static let captureTitle = "Capture Note"
+    static let manualCommandTitles = [searchTitle, captureTitle]
+
+    static var settingsEntryCountForTesting: Int {
+        settingsSceneEntryCount + manualCommandTitles.filter { $0.hasPrefix("Settings") }.count
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let runtime = BrainBarRuntime()
@@ -282,21 +293,13 @@ struct BrainBarApp: App {
         }
         .commands {
             CommandGroup(after: .appInfo) {
-                Button("Settings...") {
-                    BrainBarSettingsActions.openSettingsWindow(databasePath: appDelegate.runtime.databasePath)
-                }
-
-                Button("Toggle BrainBar") {
-                    appDelegate.runtime.handleToggleRequest()
-                }
-
                 if retrievalTools.isEnabled {
-                    Button("Search BrainLayer") {
+                    Button(BrainBarAppMenuCommands.searchTitle) {
                         appDelegate.showSearchPanel()
                     }
                     .keyboardShortcut("k", modifiers: [.command])
 
-                    Button("Capture Note") {
+                    Button(BrainBarAppMenuCommands.captureTitle) {
                         appDelegate.showQuickCapturePanel()
                     }
                 }
