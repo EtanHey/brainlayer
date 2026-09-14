@@ -12,6 +12,7 @@ import json
 import sqlite3
 import threading
 import time
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import apsw
@@ -70,6 +71,100 @@ class TestQueueStore:
             assert conn.cursor().execute("PRAGMA synchronous").fetchone()[0] == 1
         finally:
             conn.close()
+
+    def test_drain_connection_opens_while_another_writer_holds_wal_lock(self, tmp_path, monkeypatch):
+        from brainlayer.vector_store import VectorStore
+
+        db_path = tmp_path / "drain-contended-open.db"
+        VectorStore(db_path).close()
+        holder = apsw.Connection(str(db_path))
+        holder.execute("BEGIN IMMEDIATE")
+        monkeypatch.setenv("BRAINLAYER_DRAIN_BUSY_TIMEOUT_MS", "50")
+        try:
+            conn = _open_connection(db_path)
+            assert conn.execute("SELECT 1").fetchone() == (1,)
+            conn.close()
+        finally:
+            holder.execute("ROLLBACK")
+            holder.close()
+
+    def test_contended_drain_reports_blocker_then_resumes_with_watcher_priority(self, tmp_path, monkeypatch):
+        from brainlayer import drain
+        from brainlayer.queue_io import enqueue_jsonl
+        from brainlayer.vector_store import VectorStore
+        from brainlayer.writer_telemetry import _heartbeat_path
+
+        db_path = tmp_path / "drain-contended.db"
+        queue_dir = tmp_path / "queue"
+        log_path = tmp_path / "drain.log"
+        heartbeat_dir = tmp_path / "heartbeats"
+        VectorStore(db_path).close()
+        holder = apsw.Connection(str(db_path))
+        holder.execute("BEGIN IMMEDIATE")
+        monkeypatch.setenv("BRAINLAYER_DRAIN_BUSY_TIMEOUT_MS", "50")
+        monkeypatch.setenv("BRAINLAYER_WRITER_HEARTBEAT_DIR", str(heartbeat_dir))
+        monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+
+        blocker_pid = 424242
+        heartbeat_path = Path(str(_heartbeat_path(db_path)).rsplit("-", 1)[0] + f"-{blocker_pid}.json")
+        heartbeat_path.parent.mkdir(parents=True)
+        heartbeat_path.write_text(
+            json.dumps(
+                {
+                    "executor_pid": blocker_pid,
+                    "active_transactions": [
+                        {
+                            "producer": "index",
+                            "txn_started_monotonic": time.monotonic() - 30,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        watcher_path = enqueue_jsonl(
+            {
+                "kind": "watcher_chunk",
+                "chunk_id": "watcher-after-lock",
+                "content": "Watcher work must resume ahead of held enrichment.",
+            },
+            source="watcher",
+            queue_dir=queue_dir,
+        )
+        enrichment_path = enqueue_enrichment_updates(
+            [{"chunk_id": "missing", "enrichment": {"summary": "must wait"}}],
+            queue_dir=queue_dir,
+        )
+        blocked = []
+        drain_args = {
+            "db_path": db_path,
+            "queue_dir": queue_dir,
+            "batch_size": 1,
+            "log_path": log_path,
+            "blocked_reporter": blocked.append,
+        }
+        try:
+            assert drain.drain_once(**drain_args) == 0
+            assert drain.drain_once(**drain_args) == 0
+            assert log_path.read_text(encoding="utf-8").count("drain_blocked") == 1
+            assert blocked[-1]["state"] == "drain_blocked"
+            assert blocked[-1]["blocking_writer_class"] == "index"
+            assert blocked[-1]["blocking_writer_pid"] == blocker_pid
+            assert watcher_path.exists()
+            assert enrichment_path.exists()
+        finally:
+            holder.execute("ROLLBACK")
+            holder.close()
+
+        assert drain.drain_once(**drain_args) == 1
+        assert blocked[-1]["state"] == "ok"
+        assert not watcher_path.exists()
+        assert enrichment_path.exists()
+        conn = apsw.Connection(str(db_path))
+        assert conn.execute("SELECT id FROM chunks WHERE id = ?", ("watcher-after-lock",)).fetchone() == (
+            "watcher-after-lock",
+        )
+        conn.close()
 
     def test_queue_store_writes_jsonl(self, tmp_path):
         """_queue_store writes to the unified arbitration queue."""

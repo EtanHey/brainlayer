@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 
-from brainlayer.drain import run_daemon
+from brainlayer.drain import _configure_daemon_logging, run_daemon
 
 # Repair (c): rewind archive writes archived_at only. See also test_rewind_batch_archival.py.
 
@@ -28,3 +29,22 @@ def test_run_daemon_writes_progress_heartbeat(tmp_path):
     assert payload["drain_cycles"] == 2
     assert payload["drained_total"] == 2
     assert payload["updated_at"]
+
+
+def test_drain_daemon_rotates_oversized_error_log_at_start(tmp_path):
+    log_path = tmp_path / "drain.err.log"
+    log_path.write_text("x" * 256, encoding="utf-8")
+
+    handler = _configure_daemon_logging(
+        log_path=log_path,
+        max_bytes=128,
+        backup_count=2,
+        configure_root=False,
+    )
+    try:
+        handler.emit(logging.LogRecord("brainlayer.drain", logging.WARNING, __file__, 1, "after rotation", (), None))
+    finally:
+        handler.close()
+
+    assert log_path.read_text(encoding="utf-8").strip() == "after rotation"
+    assert log_path.with_name("drain.err.log.1").stat().st_size == 256
