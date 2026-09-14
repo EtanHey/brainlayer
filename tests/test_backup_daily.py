@@ -239,6 +239,45 @@ def test_create_snapshot_reports_no_uncompressed_path_when_current_raw_is_pruned
     assert sorted(path.name for path in out_dir.glob("*.db")) == ["2026-06-04.db", "2026-06-05.db"]
 
 
+def test_prune_local_gzip_snapshots_keeps_newest_three_and_requires_verified_coverage(tmp_path):
+    from brainlayer.backup_daily import prune_local_gzip_snapshots
+
+    for day in range(1, 7):
+        (tmp_path / f"2026-06-{day:02d}.db.gz").write_bytes(f"gzip-{day}".encode())
+
+    deleted = prune_local_gzip_snapshots(
+        tmp_path,
+        verified_drive_names={
+            "2026-06-01.db.gz",
+            "2026-06-02.db.gz",
+            "2026-06-03.db.gz",
+        },
+    )
+
+    assert deleted == ["2026-06-03.db.gz", "2026-06-02.db.gz", "2026-06-01.db.gz"]
+    assert sorted(path.name for path in tmp_path.glob("*.db.gz")) == [
+        "2026-06-04.db.gz",
+        "2026-06-05.db.gz",
+        "2026-06-06.db.gz",
+    ]
+
+
+def test_prune_local_gzip_snapshots_preserves_unverified_archive_without_three_newer_verified_copies(tmp_path):
+    from brainlayer.backup_daily import prune_local_gzip_snapshots
+
+    for day in range(1, 6):
+        (tmp_path / f"2026-06-{day:02d}.db.gz").write_bytes(f"gzip-{day}".encode())
+
+    deleted = prune_local_gzip_snapshots(
+        tmp_path,
+        verified_drive_names={"2026-06-02.db.gz", "2026-06-03.db.gz"},
+    )
+
+    assert deleted == ["2026-06-02.db.gz"]
+    assert (tmp_path / "2026-06-01.db.gz").exists()
+    assert (tmp_path / "2026-06-04.db.gz").exists()
+
+
 def test_create_snapshot_routes_vacuum_into_over_brainbar_socket(tmp_path):
     from brainlayer.backup_daily import create_sqlite_backup_gzip
 

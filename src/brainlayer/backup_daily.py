@@ -791,6 +791,66 @@ def _parse_snapshot_date(name: str, *, prefix: str = "", suffix: str = ".db.gz")
         return None
 
 
+def _verified_snapshot_names_from_log(log_path: Path) -> set[str]:
+    verified: set[str] = set()
+    try:
+        lines = Path(log_path).read_text(encoding="utf-8").splitlines()
+    except (FileNotFoundError, OSError):
+        return verified
+    for line in lines:
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if payload.get("uploaded") is not True or payload.get("verified") is not True:
+            continue
+        snapshot = payload.get("snapshot")
+        if isinstance(snapshot, str):
+            name = Path(snapshot).name
+            if _parse_snapshot_date(name) is not None:
+                verified.add(name)
+    return verified
+
+
+def prune_local_gzip_snapshots(
+    output_dir: Path,
+    *,
+    keep_latest: int = DEFAULT_DAILY_KEEP,
+    verified_drive_names: set[str] | None = None,
+) -> list[str]:
+    """Cap local gzip snapshots without deleting an archive lacking remote coverage."""
+    if keep_latest < 1:
+        raise ValueError("keep_latest must be at least 1")
+    output_dir = Path(output_dir).expanduser()
+    if not output_dir.exists():
+        return []
+
+    verified_names = verified_drive_names or set()
+    verified_dates = {
+        parsed
+        for name in verified_names
+        if (parsed := _parse_snapshot_date(name)) is not None
+    }
+    dated: list[tuple[dt.date, Path]] = []
+    for path in output_dir.iterdir():
+        parsed = _parse_snapshot_date(path.name)
+        if parsed and path.is_file():
+            dated.append((parsed, path))
+
+    dated.sort(key=lambda pair: pair[0], reverse=True)
+    deleted: list[str] = []
+    for index, (snapshot_date, path) in enumerate(dated):
+        if index < keep_latest:
+            continue
+        if path.name not in verified_names:
+            newer_verified = sum(date > snapshot_date for date in verified_dates)
+            if newer_verified < keep_latest:
+                continue
+        path.unlink(missing_ok=True)
+        deleted.append(path.name)
+    return deleted
+
+
 def _md5_file(path: Path) -> str:
     digest = hashlib.md5()  # noqa: S324 - backup restore verification needs MD5 parity with Drive tooling.
     with Path(path).open("rb") as handle:
@@ -1027,14 +1087,28 @@ def run_backup(
                 if remove_local_after_upload:
                     snapshot.unlink()
                     result["local_removed"] = True
+                verified_drive_names = _verified_snapshot_names_from_log(resolved_log_path)
+                verified_drive_names.add(snapshot.name)
+                local_gzip_deleted = prune_local_gzip_snapshots(
+                    snapshot.parent,
+                    verified_drive_names=verified_drive_names,
+                )
                 deleted = prune_drive_backups(
                     service,
                     folder_parts=folder_parts,
                     retention_policy=retention_policy,
                 )
             else:
+                local_gzip_deleted = []
                 deleted = []
-            result.update({"uploaded": True, "drive_file": uploaded, "retention_deleted": deleted})
+            result.update(
+                {
+                    "uploaded": True,
+                    "drive_file": uploaded,
+                    "retention_deleted": deleted,
+                    "local_gzip_retention_deleted": local_gzip_deleted,
+                }
+            )
     except Exception as exc:
         result.update({"error_type": type(exc).__name__, "error": str(exc)})
         raise
