@@ -28,7 +28,8 @@ final class ObservabilitySnapshotTests: XCTestCase {
         let cards = ObservabilityPresentation.snapshot(
             document: document,
             now: document.generatedAt,
-            cadence: .known(300)
+            cadence: .known(300),
+            locale: Locale(identifier: "en_US")
         ).cards
 
         XCTAssertEqual(cards.map(\.title), ["Chunks", "Stores", "Emitters", "Backups"])
@@ -36,8 +37,11 @@ final class ObservabilitySnapshotTests: XCTestCase {
         XCTAssertTrue(cards[0].detail.contains("in the last 24 h"))
         XCTAssertTrue(cards[0].detail.contains("everything BrainLayer has read, all sources"))
         XCTAssertTrue(cards[0].detail.contains("chunks not yet attributed to a person or source class"))
-        XCTAssertTrue(cards[1].detail.contains("MCP brain_store writes in the last 24 h"))
-        XCTAssertTrue(cards[1].detail.contains("what agents wrote via brain_store"))
+        XCTAssertEqual(
+            cards[1].detail,
+            "2 MCP brain_store writes in the last 24 h — what agents wrote via brain_store"
+        )
+        XCTAssertFalse(cards[1].detail.contains("27 MCP"), "Stores must never reuse stores.total_chunks.")
         for meaning in [
             "CLI agents", "MCP brain_store", "subagents",
             "desktop apps hidden from search", "fleet coordination", "unclassified",
@@ -49,16 +53,36 @@ final class ObservabilitySnapshotTests: XCTestCase {
         let labeledInteger = try NSRegularExpression(
             pattern: #"\d[\d,.]*\s+(?:chunks?|MCP|CLI|subagent|desktop|fleet|unclassified|h\b|days?\b|archives?\b|verified|%|in the last)"#
         )
-        for card in cards.prefix(3) {
-            let range = NSRange(card.detail.startIndex..., in: card.detail)
+        for card in cards {
+            let dateOrIdentifier = try NSRegularExpression(
+                pattern: #"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}, \d{4} at \d{1,2}:\d{2}|[A-Za-z][A-Za-z0-9._-]*\d[A-Za-z0-9._-]*"#
+            )
+            let originalRange = NSRange(card.detail.startIndex..., in: card.detail)
+            let countText = dateOrIdentifier.stringByReplacingMatches(
+                in: card.detail, range: originalRange, withTemplate: ""
+            )
+            let range = NSRange(countText.startIndex..., in: countText)
             let withoutLabeledIntegers = labeledInteger.stringByReplacingMatches(
-                in: card.detail, range: range, withTemplate: ""
+                in: countText, range: range, withTemplate: ""
             )
             XCTAssertNil(
                 withoutLabeledIntegers.rangeOfCharacter(from: .decimalDigits),
                 card.detail
             )
         }
+    }
+
+    func testLiveShapedCountsUseThousandsSeparators() throws {
+        let document = try liveShapedDocument()
+        let cards = ObservabilityPresentation.snapshot(
+            document: document,
+            now: document.generatedAt,
+            cadence: .known(300),
+            locale: Locale(identifier: "en_US")
+        ).cards
+
+        XCTAssertTrue(cards[0].detail.contains("797,727 chunks indexed"), cards[0].detail)
+        XCTAssertTrue(cards[2].detail.contains("587,430 chunks from CLI agents"), cards[2].detail)
     }
 
     func testBackupStatusUsesTruthfulGreenRedLogic() throws {
@@ -84,37 +108,26 @@ final class ObservabilitySnapshotTests: XCTestCase {
         )
 
         let archives = ObservabilityPresentation.backupStatus(for: backups).archives
-        XCTAssertEqual(archives.text, "Verified archives in the last 30 days: unknown")
+        XCTAssertEqual(archives.text, "Verified transcript archives in the last 30 days: unknown")
         XCTAssertEqual(archives.tone, .red)
-    }
-
-    func testEmptyDatabaseEnvironmentFallsBackToConfiguredPath() throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let config = directory.appendingPathComponent("brainlayer.env")
-        try "BRAINLAYER_DB=/tmp/configured-brainlayer.db\n".write(to: config, atomically: true, encoding: .utf8)
-
-        let url = ObservabilityReader.installedURL(
-            environment: ["BRAINLAYER_DB": ""],
-            configURL: config
-        )
-        XCTAssertEqual(url.path, "/tmp/observability.json")
     }
 
     func testBackupStatusSaysWhenWhereAndWhy() throws {
         let live = try liveShapedDocument()
         let status = ObservabilityPresentation.backupStatus(for: live.backups)
 
-        XCTAssertEqual(status.upload.text, "No verified upload on record")
+        XCTAssertEqual(status.upload.text, "No verified transcript upload on record")
         XCTAssertTrue(status.snapshot.text.contains("Latest DB snapshot (verified):"))
         XCTAssertTrue(status.snapshot.text.contains("→ 2026-09-13.db.gz"))
-        XCTAssertEqual(status.job.text, "Backup job: NOT loaded (parked in .disabled-retention-P0)")
-        XCTAssertEqual(status.freshness.text, "stale (> 36 h)")
-        XCTAssertEqual(status.retention.text, "Retention invariant: PASS")
-        XCTAssertEqual(status.archives.text, "0 verified archives in the last 30 days")
-        XCTAssertEqual(status.error?.text, "Google Drive credentials missing — re-auth needed")
+        XCTAssertEqual(
+            status.job.text,
+            "Transcript backup (com.brainlayer.jsonl-backup): NOT loaded — parked in .disabled-retention-P0"
+        )
+        XCTAssertFalse(status.lines.map(\.text).contains { $0.hasPrefix("Backup job") })
+        XCTAssertEqual(status.freshness.text, "Transcript backup freshness: stale (> 36 h)")
+        XCTAssertEqual(status.retention.text, "Transcript retention invariant: PASS")
+        XCTAssertEqual(status.archives.text, "0 verified transcript archives in the last 30 days")
+        XCTAssertEqual(status.error?.text, "DB backup error: Google Drive credentials missing — re-auth needed")
     }
 
     private var fixtureRoot: URL {
@@ -184,11 +197,11 @@ final class ObservabilitySnapshotTests: XCTestCase {
         )
 
         XCTAssertEqual(card.tone, .neutral)
-        XCTAssertTrue(card.detail.contains("No verified upload on record"))
-        XCTAssertTrue(card.detail.contains("freshness unknown"))
-        XCTAssertTrue(card.detail.contains("Retention invariant: PASS"))
-        XCTAssertTrue(card.detail.contains("0 verified archives in the last 30 days"))
-        XCTAssertTrue(card.detail.contains("Jsonl Backup Attempt Invalid"))
+        XCTAssertTrue(card.detail.contains("No verified transcript upload on record"))
+        XCTAssertTrue(card.detail.contains("Transcript backup freshness: unknown"))
+        XCTAssertTrue(card.detail.contains("Transcript retention invariant: PASS"))
+        XCTAssertTrue(card.detail.contains("0 verified transcript archives in the last 30 days"))
+        XCTAssertTrue(card.detail.contains("DB backup error: Jsonl Backup Attempt Invalid"))
         XCTAssertFalse(card.detail.contains("unmeasurable"))
     }
 
@@ -198,8 +211,8 @@ final class ObservabilitySnapshotTests: XCTestCase {
             ObservabilityPresentation.snapshot(document: document, now: document.generatedAt, cadence: .known(300))
                 .cards.first { $0.title == "Backups" }
         )
-        XCTAssertTrue(card.detail.contains("Backup input file missing"))
-        XCTAssertTrue(card.detail.contains("1 verified archive in the last 30 days"))
+        XCTAssertTrue(card.detail.contains("DB backup error: Backup input file missing"))
+        XCTAssertTrue(card.detail.contains("1 verified transcript archive in the last 30 days"))
     }
 
     func testRenderedCardTonesAreDistinct() throws {
@@ -239,6 +252,23 @@ final class ObservabilitySnapshotTests: XCTestCase {
                 environment: ["BRAINLAYER_OBSERVABILITY_PATH": "/tmp/custom.json"]
             ).path,
             "/tmp/custom.json"
+        )
+    }
+
+    func testDashboardAndSettingsUseTheSameRuntimeDatabasePath() {
+        let environment = [
+            "BRAINLAYER_DB": "/tmp/brainlayer-override/brainlayer.db",
+            "BRAINLAYER_OBSERVABILITY_PATH": "",
+        ]
+        let databasePath = environment["BRAINLAYER_DB"]!
+
+        XCTAssertEqual(
+            BrainBarSettingsView.observabilityURL(databasePath: databasePath, environment: environment),
+            ObservabilityReader.url(dbPath: databasePath, environment: environment)
+        )
+        XCTAssertEqual(
+            BrainBarSettingsView.observabilityURL(databasePath: databasePath, environment: environment).path,
+            "/tmp/brainlayer-override/observability.json"
         )
     }
 

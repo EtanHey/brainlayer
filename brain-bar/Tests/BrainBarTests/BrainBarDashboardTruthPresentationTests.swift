@@ -137,6 +137,67 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         XCTAssertTrue(source.contains("replayDebtBreakdown.isPartial"))
     }
 
+    func testOnePageFormatsEveryDisplayedCount() throws {
+        XCTAssertEqual(
+            DashboardMetricFormatter.integerString(797_727, locale: Locale(identifier: "en_US")),
+            "797,727"
+        )
+
+        let dashboard = try sourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
+        let pipeline = try sourceFile("Sources/BrainBar/Dashboard/PipelineState.swift")
+        for rawInterpolation in [
+            "\\(collector.stats.chunkCount)",
+            "\\(collector.stats.enrichedChunkCount)",
+            "\\(collector.stats.pendingEnrichmentCount)",
+            "\\(collector.stats.failedEnrichmentCount)",
+            "\\(collector.stats.skippedEnrichmentCount)",
+            "\\(debt.deduplicatedTotal)",
+            "\\(totalCount)",
+            "\\(component.snapshot.depth)",
+        ] {
+            XCTAssertFalse(dashboard.contains(rawInterpolation), rawInterpolation)
+        }
+        for rawInterpolation in [
+            "\\(stats.recentWriteCount)",
+            "\\(stats.recentEnrichmentCount)",
+            "\\(backlogCount)",
+            "\\(latestBucketCount)",
+            "\\(totalEvents)",
+            "\\(flushDepth)",
+            "\\(replayDebtDepth)",
+        ] {
+            XCTAssertFalse(pipeline.contains(rawInterpolation), rawInterpolation)
+        }
+    }
+
+    func testRemovedInjectionsSurfaceLeavesNoOrphanedViewStoreOrTests() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        for relativePath in [
+            "Sources/BrainBar/InjectionFeedView.swift",
+            "Sources/BrainBar/InjectionPresentation.swift",
+            "Sources/BrainBar/InjectionStore.swift",
+            "Sources/BrainBar/InjectionSummaryView.swift",
+            "Sources/BrainBarDaemon/InjectionFeedView.swift",
+            "Sources/BrainBarDaemon/InjectionPresentation.swift",
+            "Sources/BrainBarDaemon/InjectionStore.swift",
+            "Sources/BrainBarDaemon/InjectionSummaryView.swift",
+            "Tests/BrainBarTests/InjectionPresentationTests.swift",
+            "Tests/BrainBarTests/InjectionSignalDensityContractTests.swift",
+            "Tests/BrainBarTests/InjectionStoreTests.swift",
+        ] {
+            XCTAssertFalse(FileManager.default.fileExists(atPath: packageRoot.appendingPathComponent(relativePath).path), relativePath)
+        }
+
+        let runtime = try sourceFile("Sources/BrainBar/BrainBarRuntime.swift")
+        let appSupport = try sourceFile("Sources/BrainBar/BrainBarAppSupport.swift")
+        XCTAssertFalse(runtime.contains("injectionStore"))
+        XCTAssertFalse(runtime.contains("ensureInjectionStore"))
+        XCTAssertFalse(appSupport.contains("InjectionStore"))
+    }
+
     func testPowerActionsRequireExplicitConfirmation() throws {
         let source = try sourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
 

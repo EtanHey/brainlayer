@@ -19,9 +19,12 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         )
 
         let status = try await waitForBackupStatus(viewModel)
-        XCTAssertEqual(status.upload.text, "No verified upload on record")
+        XCTAssertEqual(status.upload.text, "No verified transcript upload on record")
         XCTAssertTrue(status.snapshot.text.contains("→ 2026-09-13.db.gz"))
-        XCTAssertEqual(status.job.text, "Backup job: NOT loaded (parked in .disabled-retention-P0)")
+        XCTAssertEqual(
+            status.job.text,
+            "Transcript backup (com.brainlayer.jsonl-backup): NOT loaded — parked in .disabled-retention-P0"
+        )
         XCTAssertEqual(status.job.tone, .red)
     }
 

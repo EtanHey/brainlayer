@@ -204,36 +204,6 @@ final class KGDegradationStateTests: XCTestCase {
 }
 
 @MainActor
-final class InjectionStoreDegradationStateTests: XCTestCase {
-    deinit {}
-
-    var tempDBPath: String!
-
-    override func setUp() {
-        super.setUp()
-        tempDBPath = NSTemporaryDirectory() + "brainbar-inj-degraded-\(UUID().uuidString).db"
-    }
-
-    override func tearDown() {
-        for suffix in ["", "-wal", "-shm"] {
-            try? FileManager.default.removeItem(atPath: tempDBPath + suffix)
-        }
-        super.tearDown()
-    }
-
-    // Regression guard: per Etan-mandate 2026-05-22 the injections panel must
-    // not silently blank when InjectionStore.refresh hits a transient
-    // ReadOnly / busy / locked error. Before this guard, refresh's catch only
-    // NSLog'd the error and the UI had no signal that data was stale.
-    func testInjectionStoreStartsHealthy() throws {
-        let store = try InjectionStore(databasePath: tempDBPath)
-        defer { store.stop() }
-
-        XCTAssertEqual(store.degradationState, .healthy)
-    }
-}
-
-@MainActor
 final class DegradationStateTypeTests: XCTestCase {
     deinit {}
 
