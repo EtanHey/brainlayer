@@ -17,7 +17,7 @@ enum BrainBarSettingsActions {
         NSApp.activate(ignoringOtherApps: true)
 
         if let controller = windowController {
-            promoteForSettings()
+            suppressDashboardResignDismiss = true
             controller.window?.makeKeyAndOrderFront(nil)
             return
         }
@@ -43,17 +43,9 @@ enum BrainBarSettingsActions {
             Task { @MainActor in demoteAfterSettings() }
         }
 
-        promoteForSettings()
+        suppressDashboardResignDismiss = true
         controller.showWindow(nil)
         window.makeKeyAndOrderFront(nil)
-    }
-
-    private static func promoteForSettings() {
-        suppressDashboardResignDismiss = true
-        if NSApp.activationPolicy() != .regular {
-            NSApp.setActivationPolicy(.regular)
-        }
-        NSApp.activate(ignoringOtherApps: true)
     }
 
     private static func demoteAfterSettings() {

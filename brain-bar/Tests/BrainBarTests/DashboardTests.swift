@@ -759,6 +759,10 @@ final class DashboardTests: XCTestCase {
         XCTAssertTrue(settingsSource.contains("private(set) static var suppressDashboardResignDismiss"))
         XCTAssertTrue(settingsSource.contains("suppressDashboardResignDismiss = true"))
         XCTAssertTrue(settingsSource.contains("suppressDashboardResignDismiss = false"))
+        XCTAssertTrue(settingsSource.contains("NSApp.activate(ignoringOtherApps: true)"))
+        XCTAssertTrue(settingsSource.contains("makeKeyAndOrderFront(nil)"))
+        XCTAssertFalse(settingsSource.contains("promoteForSettings"))
+        XCTAssertFalse(settingsSource.contains("setActivationPolicy(.regular)"))
     }
 
     func testRestartHandoffAllowsOnlyMatchingFreshExistingInstance() throws {
