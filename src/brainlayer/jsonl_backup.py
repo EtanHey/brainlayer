@@ -338,7 +338,10 @@ def _forever_enabled() -> bool:
 
 
 def _retention_enabled() -> bool:
-    return RETENTION_ENABLED or os.environ.get(BRAINLAYER_JSONL_BACKUP_RETENTION_ENV) == "1"
+    return RETENTION_ENABLED or os.environ.get(BRAINLAYER_JSONL_BACKUP_RETENTION_ENV, "").strip().lower() in {
+        "1",
+        "true",
+    }
 
 
 def _prune_drive_backups_to_trash(
