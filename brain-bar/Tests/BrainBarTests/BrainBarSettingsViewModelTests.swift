@@ -5,6 +5,29 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
     private let fixedNow = Date(timeIntervalSince1970: 1_784_466_000)
 
     @MainActor
+    func testSettingsReadsBackupTruthFromObservabilityDocument() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let url = try XCTUnwrap(Bundle.module.url(
+            forResource: "observability-main-58849a70",
+            withExtension: "json",
+            subdirectory: "Fixtures"
+        ))
+        let viewModel = BrainBarSettingsViewModel(
+            store: fixture.store,
+            launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
+            refreshStatusOnLoad: false,
+            observabilityURL: url
+        )
+
+        let status = try XCTUnwrap(viewModel.backupStatus)
+        XCTAssertEqual(status.upload.text, "No verified upload on record")
+        XCTAssertTrue(status.snapshot.text.contains("→ 2026-09-13.db.gz"))
+        XCTAssertEqual(status.job.text, "Backup job: NOT loaded (parked in .disabled-retention-P0)")
+        XCTAssertEqual(status.job.tone, .red)
+    }
+
+    @MainActor
     func testRetrievalToolsSettingPersistsEnabledState() throws {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }

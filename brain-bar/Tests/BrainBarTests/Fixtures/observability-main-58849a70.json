@@ -1,1 +1,267 @@
-{"author_unknown":{"census_2026_09_13":"never_classified = 476,679 of 731,153 live (65.2%); both-NULL = 65,017; classified_unknown literal not observed on the copy","classified_unknown":{"count":0,"definition":"provenance_class = 'unknown', archived_at IS NULL","share":0.0},"inputs":[{"mtime":"2026-09-02T18:55:05Z","path":"brainlayer-m4-snapshot-staging/snapshot/brainlayer-2026-09-02-postdrain.db","rows_or_bytes":797727,"sha256_first_64kb":null,"skipped_lines":225,"status":"read"}],"never_classified":{"count":476679,"definition":"provenance_class IS NULL OR source_class IS NULL, archived_at IS NULL","share":0.651955},"reason":"","state":"measured","top_source_files":[],"trend_7d":[]},"backups":{"db_snapshot":{"destination":"2026-09-13.db.gz","last_at":"2026-09-13T02:00:00Z","verified":true},"error_type":"drive_credentials_missing","freshness":"stale","inputs":[],"last_verified_upload":null,"launchd":{"bootstrapped":false,"disabled_dir_present":true,"label":"com.brainlayer.jsonl-backup"},"reason":"","retention_invariant":"PASS","state":"measured","surviving_archives_30d":0,"threshold_hours":36},"db_path":"brainlayer-m4-snapshot-staging/snapshot/brainlayer-2026-09-02-postdrain.db","emitters":{"by_emitter":[],"by_source_class":[{"count":102,"in_window":0,"source_class":"brain-worker"},{"count":587430,"in_window":0,"source_class":"cli-agent"},{"count":2696,"in_window":0,"source_class":"desktop"},{"count":105383,"in_window":0,"source_class":"fleet-coordination"},{"count":29740,"in_window":0,"source_class":"subagent"},{"count":72376,"in_window":0,"source_class":null}],"derivation_note":"metadata.attributionAgent is absent in the 2026-09-13 census","hidden_from_default_search":2798,"inputs":[],"reason":"","state":"measured"},"generated_at":"2026-09-14T02:26:10Z","schema_version":1,"stores":{"by_content_class":[],"in_window":{"by_hour":[],"count":0},"inputs":[],"latest":[],"reason":"","state":"measured","total_chunks":797727},"window_hours":24}
+{
+  "author_unknown": {
+    "census_2026_09_13": "never_classified = 476,679 of 731,153 live (65.2%); both-NULL = 65,017; classified_unknown literal not observed on the copy",
+    "classified_unknown": {
+      "count": 0,
+      "definition": "provenance_class = 'unknown', archived_at IS NULL",
+      "share": 0.0
+    },
+    "inputs": [
+      {
+        "mtime": "2026-09-02T18:55:05Z",
+        "path": "brainlayer-m4-snapshot-staging/snapshot/brainlayer-2026-09-02-postdrain.db",
+        "rows_or_bytes": 797727,
+        "sha256_first_64kb": null,
+        "skipped_lines": 225,
+        "status": "read"
+      }
+    ],
+    "never_classified": {
+      "count": 476679,
+      "definition": "provenance_class IS NULL OR source_class IS NULL, archived_at IS NULL",
+      "share": 0.651955
+    },
+    "reason": "",
+    "state": "measured",
+    "top_source_files": [
+      {
+        "count": 16882,
+        "source_file": ""
+      },
+      {
+        "count": 14558,
+        "source_file": "unknown"
+      },
+      {
+        "count": 12573,
+        "source_file": "brainbar-store"
+      },
+      {
+        "count": 8278,
+        "source_file": "realtime-hook"
+      },
+      {
+        "count": 6989,
+        "source_file": "/Users/etanheyman/.claude/projects/-Users-etanheyman-Desktop-Gits-domica/b68ce66e-2c2e-4cee-a32e-dda83805b167.jsonl"
+      }
+    ],
+    "trend_7d": [
+      {
+        "classified_unknown": 0,
+        "day": "2026-09-08",
+        "never_classified": 0
+      },
+      {
+        "classified_unknown": 0,
+        "day": "2026-09-09",
+        "never_classified": 0
+      },
+      {
+        "classified_unknown": 0,
+        "day": "2026-09-10",
+        "never_classified": 0
+      },
+      {
+        "classified_unknown": 0,
+        "day": "2026-09-11",
+        "never_classified": 0
+      },
+      {
+        "classified_unknown": 0,
+        "day": "2026-09-12",
+        "never_classified": 0
+      },
+      {
+        "classified_unknown": 0,
+        "day": "2026-09-13",
+        "never_classified": 0
+      },
+      {
+        "classified_unknown": 0,
+        "day": "2026-09-14",
+        "never_classified": 0
+      }
+    ]
+  },
+  "backups": {
+    "db_snapshot": {
+      "destination": "2026-09-13.db.gz",
+      "last_at": "2026-09-13T02:00:00Z",
+      "verified": true
+    },
+    "error_type": "drive_credentials_missing",
+    "freshness": "stale",
+    "inputs": [
+      {
+        "mtime": "2026-09-08T02:01:45Z",
+        "path": ".local/share/brainlayer/logs/jsonl-backup.log",
+        "rows_or_bytes": 43081,
+        "sha256_first_64kb": "b2ed09da3b25ddcae48f8d6074b5bafcc4711ef830b1a62c089d7f931d82555d",
+        "skipped_lines": 0,
+        "status": "read"
+      },
+      {
+        "mtime": "2026-09-14T00:50:19Z",
+        "path": ".local/share/brainlayer/logs/backup-daily.log",
+        "rows_or_bytes": 184487,
+        "sha256_first_64kb": "5f19b90a50fd080d02a476f510f05d16030ab7a8d53a51060eb75aefadc3c309",
+        "skipped_lines": 2393,
+        "status": "read"
+      },
+      {
+        "mtime": "2026-09-14T02:26:10Z",
+        "path": "Gits/brainlayer/docs.local/plans/2026-09-13-brainbar-observability-pivot/livegate/launchctl.txt",
+        "rows_or_bytes": 94,
+        "sha256_first_64kb": "78d567d3dcf4aef4cebfa9c79fab6f05278f35aa18d147cdd6761c8bef8eff02",
+        "skipped_lines": 0,
+        "status": "read"
+      }
+    ],
+    "last_verified_upload": null,
+    "launchd": {
+      "bootstrapped": false,
+      "disabled_dir_present": true,
+      "label": "com.brainlayer.jsonl-backup"
+    },
+    "reason": "",
+    "retention_invariant": "PASS",
+    "state": "measured",
+    "surviving_archives_30d": 0,
+    "threshold_hours": 36
+  },
+  "db_path": "brainlayer-m4-snapshot-staging/snapshot/brainlayer-2026-09-02-postdrain.db",
+  "emitters": {
+    "by_emitter": [],
+    "by_source_class": [
+      {
+        "count": 102,
+        "in_window": 0,
+        "source_class": "brain-worker"
+      },
+      {
+        "count": 587430,
+        "in_window": 0,
+        "source_class": "cli-agent"
+      },
+      {
+        "count": 2696,
+        "in_window": 0,
+        "source_class": "desktop"
+      },
+      {
+        "count": 105383,
+        "in_window": 0,
+        "source_class": "fleet-coordination"
+      },
+      {
+        "count": 29740,
+        "in_window": 0,
+        "source_class": "subagent"
+      },
+      {
+        "count": 72376,
+        "in_window": 0,
+        "source_class": null
+      }
+    ],
+    "derivation_note": "metadata.attributionAgent is absent in the 2026-09-13 census; emitter derives from source, then sender, then source_file, or the section is unmeasurable",
+    "hidden_from_default_search": 2798,
+    "inputs": [
+      {
+        "mtime": "2026-09-02T18:55:05Z",
+        "path": "brainlayer-m4-snapshot-staging/snapshot/brainlayer-2026-09-02-postdrain.db",
+        "rows_or_bytes": 797727,
+        "sha256_first_64kb": null,
+        "skipped_lines": 225,
+        "status": "read"
+      }
+    ],
+    "reason": "",
+    "state": "measured"
+  },
+  "generated_at": "2026-09-14T02:26:10Z",
+  "schema_version": 1,
+  "stores": {
+    "by_content_class": [
+      {
+        "content_class": "benchmark",
+        "count": 1
+      },
+      {
+        "content_class": "cold",
+        "count": 365
+      },
+      {
+        "content_class": "decision",
+        "count": 76692
+      },
+      {
+        "content_class": "knowledge",
+        "count": 712055
+      },
+      {
+        "content_class": "operational",
+        "count": 8370
+      },
+      {
+        "content_class": "test",
+        "count": 244
+      }
+    ],
+    "in_window": {
+      "by_hour": [],
+      "count": 0
+    },
+    "inputs": [
+      {
+        "mtime": "2026-09-02T18:55:05Z",
+        "path": "brainlayer-m4-snapshot-staging/snapshot/brainlayer-2026-09-02-postdrain.db",
+        "rows_or_bytes": 797727,
+        "sha256_first_64kb": null,
+        "skipped_lines": 225,
+        "status": "read"
+      }
+    ],
+    "latest": [
+      {
+        "chunk_id": "precompact:23bd4719505682a5:ddda6859",
+        "emitter": "precompact-hook",
+        "preview": "[ORC AGENTS 2026-09-02] cmuxlayerClaude -> @orcClaude \u2014 incident root-caused, #5",
+        "source_class": null,
+        "stored_at": "2026-09-02T21:53:54Z"
+      },
+      {
+        "chunk_id": "precompact:34d0020c71194cf0:7993da7a",
+        "emitter": "precompact-hook",
+        "preview": "[REDACTED:quarantined]",
+        "source_class": null,
+        "stored_at": "2026-09-02T21:53:54Z"
+      },
+      {
+        "chunk_id": "precompact:23bd4719505682a5:f06dfb1c",
+        "emitter": "precompact-hook",
+        "preview": "[ORC AGENTS 2026-09-02] cmuxlayerClaude -> @orcClaude \u2014 incident root-caused, #5",
+        "source_class": null,
+        "stored_at": "2026-09-02T21:53:23Z"
+      },
+      {
+        "chunk_id": "precompact:34d0020c71194cf0:2cdddafc",
+        "emitter": "precompact-hook",
+        "preview": "[REDACTED:quarantined]",
+        "source_class": null,
+        "stored_at": "2026-09-02T21:53:23Z"
+      },
+      {
+        "chunk_id": "precompact:23bd4719505682a5:b89ac494",
+        "emitter": "precompact-hook",
+        "preview": "[ORC AGENTS 2026-09-02] cmuxlayerClaude -> @orcClaude \u2014 incident root-caused, #5",
+        "source_class": null,
+        "stored_at": "2026-09-02T21:51:41Z"
+      }
+    ],
+    "reason": "",
+    "state": "measured",
+    "total_chunks": 797727
+  },
+  "window_hours": 24
+}

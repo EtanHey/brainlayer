@@ -43,9 +43,29 @@ struct ObservabilityDocument: Codable, Sendable {
         let state: String, reason: String
         let inputs: [Input]
         let freshness: String?
+        let thresholdHours: Double?
         let retentionInvariant: String?
         let survivingArchives30D: Int?
         let errorType: String?
+        let lastVerifiedUpload: LastVerifiedUpload?
+        let dbSnapshot: DBSnapshot?
+        let launchd: Launchd?
+    }
+    struct LastVerifiedUpload: Codable, Sendable {
+        let at: Date
+        let ageHours: Double
+        let archiveId: String
+        let verified: Bool
+    }
+    struct DBSnapshot: Codable, Sendable {
+        let lastAt: Date
+        let destination: String
+        let verified: Bool
+    }
+    struct Launchd: Codable, Sendable {
+        let label: String
+        let bootstrapped: Bool
+        let disabledDirPresent: Bool
     }
     struct Input: Codable, Sendable { let path: String, status: String }
 }
@@ -76,6 +96,14 @@ enum ObservabilityReader {
         }
         return URL(fileURLWithPath: dbPath).deletingLastPathComponent()
             .appendingPathComponent("observability.json")
+    }
+
+    static func installedURL(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL {
+        let dbPath = environment["BRAINLAYER_DB"] ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".local/share/brainlayer/brainlayer.db").path
+        return url(dbPath: dbPath, environment: environment)
     }
 
     static func read(url: URL) -> ObservabilityReadResult {
@@ -125,12 +153,33 @@ enum ObservabilityReader {
 }
 
 enum ObservabilityCardTone: String, Equatable, Sendable { case standard, neutral, amber }
+enum ObservabilityStatusTone: String, Equatable, Sendable { case green, red, neutral }
+
+struct ObservabilityStatusLine: Equatable, Sendable {
+    let text: String
+    let tone: ObservabilityStatusTone
+}
+
+struct ObservabilityBackupStatus: Equatable, Sendable {
+    let upload: ObservabilityStatusLine
+    let snapshot: ObservabilityStatusLine
+    let job: ObservabilityStatusLine
+    let freshness: ObservabilityStatusLine
+    let retention: ObservabilityStatusLine
+    let archives: ObservabilityStatusLine
+    let error: ObservabilityStatusLine?
+
+    var lines: [ObservabilityStatusLine] {
+        [upload, snapshot, job, freshness, retention, archives] + [error].compactMap { $0 }
+    }
+}
 
 struct ObservabilitySnapshot: Sendable {
     struct Card: Sendable {
         let title: String, subtitle: String, detail: String
         let note: String?
         let tone: ObservabilityCardTone
+        let statusLines: [ObservabilityStatusLine]
     }
     let generatedAt: Date, ageText: String, isStale: Bool, cards: [Card]
 }
@@ -180,23 +229,18 @@ enum ObservabilityPresentation {
                 "\(number(classified.count)) chunks classified as unknown author\n" +
                 "Why it matters: these never match a person filter"
         }
+        let backupStatus = backupStatus(for: document.backups)
         let backupTone: ObservabilityCardTone = document.backups.freshness == "unknown" ||
             document.backups.retentionInvariant == "unknown" ? .neutral :
             (document.backups.freshness == "stale" || document.backups.retentionInvariant == "FAIL" ? .amber : .standard)
         let backups = card(
             "Backups", "Are recoverable copies current and running?",
-            document.backups.state, document.backups.reason, stale, tone: backupTone
+            document.backups.state, document.backups.reason, stale, tone: backupTone,
+            statusLines: backupStatus.lines
         ) {
-            guard let freshness = document.backups.freshness,
-                  let retention = document.backups.retentionInvariant else { return nil }
-            var parts = [freshness, "retention \(retention)"]
-            if let archives = document.backups.survivingArchives30D {
-                parts.append("\(number(archives)) verified \(archives == 1 ? "archive" : "archives") in the last 30 days")
-            }
-            if let errorType = document.backups.errorType, !errorType.isEmpty {
-                parts.append(errorType)
-            }
-            return parts.joined(separator: " · ")
+            guard document.backups.freshness != nil,
+                  document.backups.retentionInvariant != nil else { return nil }
+            return backupStatus.lines.map(\.text).joined(separator: "\n")
         }
         return ObservabilitySnapshot(
             generatedAt: document.generatedAt,
@@ -210,13 +254,17 @@ enum ObservabilityPresentation {
         _ title: String, _ subtitle: String, _ state: String, _ reason: String, _ stale: Bool,
         tone: ObservabilityCardTone = .standard,
         note: String? = nil,
+        statusLines: [ObservabilityStatusLine] = [],
         measured: () -> String?
     ) -> ObservabilitySnapshot.Card {
         guard state == "measured", let detail = measured() else {
             let detail = reason.isEmpty ? "unmeasurable" : "unmeasurable — \(reason)"
-            return .init(title: title, subtitle: subtitle, detail: detail, note: note, tone: .neutral)
+            return .init(title: title, subtitle: subtitle, detail: detail, note: note, tone: .neutral, statusLines: [])
         }
-        return .init(title: title, subtitle: subtitle, detail: detail, note: note, tone: stale ? .amber : tone)
+        return .init(
+            title: title, subtitle: subtitle, detail: detail, note: note,
+            tone: stale ? .amber : tone, statusLines: statusLines
+        )
     }
 
     static func number(_ value: Int) -> String {
@@ -224,6 +272,85 @@ enum ObservabilityPresentation {
         formatter.numberStyle = .decimal
         formatter.locale = .current
         return formatter.string(from: NSNumber(value: value)) ?? String(value)
+    }
+
+    static func backupStatus(for backups: ObservabilityDocument.Backups) -> ObservabilityBackupStatus {
+        let isFresh = backups.freshness == "fresh"
+        let upload: ObservabilityStatusLine
+        if let value = backups.lastVerifiedUpload {
+            upload = .init(
+                text: "Last verified upload: \(localDate(value.at)) (\(hours(value.ageHours)) ago) · archive \(value.archiveId)",
+                tone: value.verified && isFresh ? .green : .red
+            )
+        } else {
+            upload = .init(text: "No verified upload on record", tone: .red)
+        }
+
+        let snapshot: ObservabilityStatusLine
+        if let value = backups.dbSnapshot {
+            snapshot = .init(
+                text: "Latest DB snapshot: \(localDate(value.lastAt)) → \(value.destination)",
+                tone: value.verified && isFresh ? .green : .red
+            )
+        } else {
+            snapshot = .init(text: "No verified DB snapshot on record", tone: .red)
+        }
+
+        let job: ObservabilityStatusLine
+        if backups.launchd?.bootstrapped == true {
+            job = .init(text: "Backup job: loaded", tone: .green)
+        } else if backups.launchd?.disabledDirPresent == true {
+            job = .init(text: "Backup job: NOT loaded (parked in .disabled-retention-P0)", tone: .red)
+        } else {
+            job = .init(text: "Backup job: NOT loaded", tone: .red)
+        }
+
+        let threshold = backups.thresholdHours.map { number(Int($0)) } ?? "unknown"
+        let freshness: ObservabilityStatusLine
+        switch backups.freshness {
+        case "fresh": freshness = .init(text: "fresh (within \(threshold) h)", tone: .green)
+        case "stale": freshness = .init(text: "stale (> \(threshold) h)", tone: .red)
+        default: freshness = .init(text: "freshness unknown", tone: .red)
+        }
+
+        let retentionValue = backups.retentionInvariant ?? "unknown"
+        let retention = ObservabilityStatusLine(
+            text: "Retention invariant: \(retentionValue)",
+            tone: retentionValue == "PASS" ? .green : .red
+        )
+        let archiveCount = backups.survivingArchives30D ?? 0
+        let archives = ObservabilityStatusLine(
+            text: "\(number(archiveCount)) verified \(archiveCount == 1 ? "archive" : "archives") in the last 30 days",
+            tone: archiveCount > 0 ? .green : .red
+        )
+        let error = backups.errorType.flatMap { value -> ObservabilityStatusLine? in
+            guard !value.isEmpty else { return nil }
+            return .init(text: errorText(value), tone: .red)
+        }
+        return .init(
+            upload: upload, snapshot: snapshot, job: job, freshness: freshness,
+            retention: retention, archives: archives, error: error
+        )
+    }
+
+    private static func localDate(_ date: Date) -> String {
+        date.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    private static func hours(_ value: Double) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = value.rounded() == value ? 0 : 1
+        formatter.locale = .current
+        return "\(formatter.string(from: NSNumber(value: value)) ?? String(value)) h"
+    }
+
+    private static func errorText(_ value: String) -> String {
+        switch value {
+        case "drive_credentials_missing": "Google Drive credentials missing — re-auth needed"
+        case "FileNotFoundError": "Backup input file missing"
+        default: value.replacingOccurrences(of: "_", with: " ").capitalized
+        }
     }
 }
 
@@ -250,8 +377,19 @@ struct ObservabilityDashboardView: View {
                             Text(card.subtitle)
                                 .font(.caption)
                                 .foregroundStyle(Color.secondary)
-                            Text(card.detail)
-                                .foregroundStyle(card.tone == .neutral ? Color.secondary : Color.primary)
+                            if card.statusLines.isEmpty {
+                                Text(card.detail)
+                                    .foregroundStyle(card.tone == .neutral ? Color.secondary : Color.primary)
+                            } else {
+                                ForEach(Array(card.statusLines.enumerated()), id: \.offset) { _, line in
+                                    HStack(alignment: .firstTextBaseline, spacing: 7) {
+                                        Circle()
+                                            .fill(statusColor(line.tone))
+                                            .frame(width: 7, height: 7)
+                                        Text(line.text)
+                                    }
+                                }
+                            }
                             if let note = card.note {
                                 Text(note).font(.caption).foregroundStyle(Color.secondary)
                             }
@@ -275,6 +413,14 @@ struct ObservabilityDashboardView: View {
         case .standard: Color.blue.opacity(0.16)
         case .neutral: Color.gray.opacity(0.16)
         case .amber: Color.orange.opacity(0.20)
+        }
+    }
+
+    private func statusColor(_ tone: ObservabilityStatusTone) -> Color {
+        switch tone {
+        case .green: Color.green
+        case .red: Color.red
+        case .neutral: Color.secondary
         }
     }
 

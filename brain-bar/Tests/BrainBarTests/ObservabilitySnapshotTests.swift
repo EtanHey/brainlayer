@@ -54,8 +54,20 @@ final class ObservabilitySnapshotTests: XCTestCase {
         let stale = try readableDocument(named: "backup-errors-dev")
         let missing = try readableDocument(named: "no-op-dev")
         let live = try liveShapedDocument()
+        let explicitlyUnverified = ObservabilityDocument.Backups(
+            state: "measured", reason: "", inputs: [], freshness: "fresh", thresholdHours: 36,
+            retentionInvariant: "PASS", survivingArchives30D: 1, errorType: nil,
+            lastVerifiedUpload: .init(
+                at: healthy.generatedAt, ageHours: 1, archiveId: "unverified-archive", verified: false
+            ),
+            dbSnapshot: .init(lastAt: healthy.generatedAt, destination: "snapshot.db", verified: false),
+            launchd: .init(label: "com.brainlayer.jsonl-backup", bootstrapped: false, disabledDirPresent: false)
+        )
 
         XCTAssertEqual(ObservabilityPresentation.backupStatus(for: healthy.backups).upload.tone, .green)
+        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: healthy.backups).snapshot.tone, .green)
+        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: explicitlyUnverified).upload.tone, .red)
+        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: explicitlyUnverified).snapshot.tone, .red)
         XCTAssertEqual(ObservabilityPresentation.backupStatus(for: stale.backups).upload.tone, .red)
         XCTAssertEqual(ObservabilityPresentation.backupStatus(for: missing.backups).upload.tone, .red)
         XCTAssertEqual(ObservabilityPresentation.backupStatus(for: live.backups).job.tone, .red)
@@ -142,7 +154,11 @@ final class ObservabilitySnapshotTests: XCTestCase {
         )
 
         XCTAssertEqual(card.tone, .neutral)
-        XCTAssertEqual(card.detail, "unknown · retention PASS · 0 archives in 30d · jsonl_backup_attempt_invalid")
+        XCTAssertTrue(card.detail.contains("No verified upload on record"))
+        XCTAssertTrue(card.detail.contains("freshness unknown"))
+        XCTAssertTrue(card.detail.contains("Retention invariant: PASS"))
+        XCTAssertTrue(card.detail.contains("0 verified archives in the last 30 days"))
+        XCTAssertTrue(card.detail.contains("Jsonl Backup Attempt Invalid"))
         XCTAssertFalse(card.detail.contains("unmeasurable"))
     }
 
@@ -152,8 +168,8 @@ final class ObservabilitySnapshotTests: XCTestCase {
             ObservabilityPresentation.snapshot(document: document, now: document.generatedAt, cadence: .known(300))
                 .cards.first { $0.title == "Backups" }
         )
-        XCTAssertTrue(card.detail.contains("FileNotFoundError"))
-        XCTAssertTrue(card.detail.contains("1 archive in 30d"))
+        XCTAssertTrue(card.detail.contains("Backup input file missing"))
+        XCTAssertTrue(card.detail.contains("1 verified archive in the last 30 days"))
     }
 
     func testRenderedTonesAndOpaqueBackgroundAreDistinct() throws {
