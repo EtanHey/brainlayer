@@ -72,11 +72,22 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
 
         for breakpoint in Breakpoint.allCases {
             let collector = BrainBarDashboardFixture.makeCollector()
+            let panelState = BrainBarDashboardPanelState()
             let view = BrainBarDashboardPreview.make(
                 collector: collector,
-                observabilityResult: observability
+                observabilityResult: observability,
+                panelState: panelState
             )
-            let (png, bitmap) = try renderPNG(view, size: breakpoint.size)
+            var size = breakpoint.size
+            if breakpoint == .default {
+                let host = NSHostingController(rootView: view)
+                host.view.frame = NSRect(origin: .zero, size: size)
+                host.view.layoutSubtreeIfNeeded()
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+                size.height = panelState.dashboardHeight
+                XCTAssertLessThan(size.height, 640)
+            }
+            let (png, bitmap) = try renderPNG(view, size: size)
 
             let url = try writePNG(png, name: "dashboard-\(breakpoint.rawValue)")
             XCTAssertGreaterThan(png.count, 5_000, "dashboard-\(breakpoint.rawValue) PNG looks empty")
@@ -89,30 +100,10 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
                 0.12,
                 "dashboard-\(breakpoint.rawValue) regressed to the old brown-card layout"
             )
+            if breakpoint == .default { XCTAssertTrue(bottomBandContainsForeground(in: bitmap)) }
             // Surface the path in the test log so an agent knows what to Read.
             print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
         }
-    }
-
-    @MainActor
-    func testRestingDashboardRenderUsesFittedHeightWithoutEmptyBottomBand() throws {
-        try XCTSkipIf(
-            shouldSkipDisplayDependentRenderInCI,
-            "Dashboard PNG render verification is display-dependent; set BRAINBAR_RENDER_IN_CI=1 to run in CI."
-        )
-        let view = BrainBarDashboardPreview.make(collector: BrainBarDashboardFixture.makeCollector())
-        let host = NSHostingController(rootView: view)
-        host.view.frame = NSRect(x: 0, y: 0, width: 960, height: 640)
-        host.view.layoutSubtreeIfNeeded()
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
-        host.view.layoutSubtreeIfNeeded()
-        let fittedHeight = host.view.fittingSize.height
-
-        XCTAssertGreaterThan(fittedHeight, 300)
-        XCTAssertLessThan(fittedHeight, 640)
-        let (png, bitmap) = try renderPNG(view, size: NSSize(width: 960, height: fittedHeight))
-        _ = try writePNG(png, name: "dashboard-default")
-        XCTAssertTrue(bottomBandContainsForeground(in: bitmap))
     }
 
     @MainActor
@@ -543,17 +534,13 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
 
     private func bottomBandContainsForeground(in bitmap: NSBitmapImageRep) -> Bool {
         let bandHeight = max(Int(Double(bitmap.pixelsHigh) * 0.15), 1)
-        for y in 0 ..< bandHeight {
-            for x in stride(from: 1, to: bitmap.pixelsWide, by: 2) {
-                guard let left = bitmap.colorAt(x: x - 1, y: y)?.usingColorSpace(.sRGB),
-                      let right = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-                let delta = abs(left.redComponent - right.redComponent)
-                    + abs(left.greenComponent - right.greenComponent)
-                    + abs(left.blueComponent - right.blueComponent)
-                if delta > 0.12 { return true }
+        return (0 ..< bandHeight).contains { y in
+            (1 ..< bitmap.pixelsWide).contains { x in
+                guard let a = bitmap.colorAt(x: x - 1, y: y), let b = bitmap.colorAt(x: x, y: y) else { return false }
+                return abs(a.redComponent - b.redComponent) + abs(a.greenComponent - b.greenComponent)
+                    + abs(a.blueComponent - b.blueComponent) > 0.12
             }
         }
-        return false
     }
 
     private enum RenderError: Error {

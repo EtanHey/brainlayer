@@ -25,14 +25,14 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         runtime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil)
         let controller = BrainBarDashboardPanelController(runtime: runtime)
         _ = controller.contentViewControllerForTesting.view
-        runMainRunLoop(0.5)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
 
         let restingHeight = controller.panelForTesting.contentLayoutRect.height
         XCTAssertEqual(restingHeight, controller.contentViewControllerForTesting.view.safeAreaRect.height, accuracy: 2)
         XCTAssertLessThan(restingHeight, 640)
 
         controller.setDetailsExpandedForTesting(true)
-        runMainRunLoop(0.5)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
         XCTAssertGreaterThan(controller.panelForTesting.contentLayoutRect.height, restingHeight)
     }
 
@@ -108,8 +108,8 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         )
     }
 
-    private func runMainRunLoop(_ duration: TimeInterval = 0.05) {
-        RunLoop.main.run(until: Date().addingTimeInterval(duration))
+    private func runMainRunLoop() {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
     }
 
     private func findSubview<T: NSView>(ofType type: T.Type, in root: NSView) -> T? {

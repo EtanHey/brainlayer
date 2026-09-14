@@ -15,11 +15,8 @@ struct BrainBarWindowRootView: View {
     @StateObject private var windowObserver: BrainBarWindowObserver
     @ObservedObject private var retrievalTools = BrainBarRetrievalToolsSettings.shared
 
-    init(
-        runtime: BrainBarRuntime,
-        managesWindowFrame: Bool = true,
-        panelState: BrainBarDashboardPanelState = BrainBarDashboardPanelState()
-    ) {
+    init(runtime: BrainBarRuntime, managesWindowFrame: Bool = true,
+         panelState: BrainBarDashboardPanelState = BrainBarDashboardPanelState()) {
         self.runtime = runtime
         self.managesWindowFrame = managesWindowFrame
         self.panelState = panelState
@@ -54,7 +51,7 @@ struct BrainBarWindowRootView: View {
                         .brainBarTabVisibility(selectedTab == .graph)
                 }
             }
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay {
                 // Overlay carries its own full-area tap-catcher and only
                 // renders when the user is on the Dashboard tab with a
@@ -69,8 +66,7 @@ struct BrainBarWindowRootView: View {
         .frame(
             minWidth: 760,
             idealWidth: 900,
-            maxWidth: .infinity,
-            idealHeight: panelState.fittingHeight
+            maxWidth: .infinity
         )
         .opacity(managesWindowFrame ? (windowObserver.isContentReady ? 1 : 0) : 1)
         .background(BrainBarAppBackground())
@@ -644,8 +640,6 @@ private struct BrainBarDashboardView: View {
     @State private var liveObservabilityResult: ObservabilityReadResult = .unreadable("Loading observability data.")
     private let observabilityCadence = ObservabilityReader.installedHealthCheckCadence
     @State private var vectorDetailHeight: CGFloat = 0
-    @State private var containerSize = CGSize(width: 900, height: 640)
-    @State private var measuredContentHeight: CGFloat = 0
 
     private var flowSummary: DashboardFlowSummary {
         DashboardFlowSummary.derive(daemon: collector.daemon, stats: collector.stats, now: currentNow)
@@ -699,9 +693,10 @@ private struct BrainBarDashboardView: View {
     }
 
     var body: some View {
-        let layout = BrainBarDashboardLayout(containerSize: containerSize)
+        GeometryReader { proxy in
+            let layout = BrainBarDashboardLayout(containerSize: proxy.size)
 
-        ZStack(alignment: .topLeading) {
+            ZStack(alignment: .topLeading) {
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: layout.sectionSpacing) {
                         statusStrip
@@ -716,7 +711,7 @@ private struct BrainBarDashboardView: View {
                         Color.clear.preference(key: BrainBarDashboardHeightKey.self, value: proxy.size.height)
                     })
                 }
-                .frame(maxWidth: .infinity, alignment: .top)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .accessibilityIdentifier("brainbar.dashboard.scroll")
                 .focusable()
             }
@@ -741,7 +736,7 @@ private struct BrainBarDashboardView: View {
                         )
                         .offset(
                             x: vectorDetailXOffset(layout: layout),
-                            y: vectorDetailYOffset(layout: layout, containerHeight: containerSize.height)
+                            y: vectorDetailYOffset(layout: layout, containerHeight: proxy.size.height)
                         )
                         .shadow(color: .brainBarBlack.opacity(0.55), radius: 22, y: 12)
                         .shadow(color: .brainBarBlack.opacity(0.30), radius: 6, y: 2)
@@ -756,13 +751,8 @@ private struct BrainBarDashboardView: View {
                     }
                 }
             }
-        .frame(idealHeight: max(measuredContentHeight, 300))
-        .background(GeometryReader { proxy in
-            Color.clear.preference(key: BrainBarDashboardSizeKey.self, value: proxy.size)
-        })
-        .onPreferenceChange(BrainBarDashboardSizeKey.self) { containerSize = $0 }
+        }
         .onPreferenceChange(BrainBarDashboardHeightKey.self) { height in
-            measuredContentHeight = height
             panelState.dashboardHeight = height
         }
         .onAppear {
@@ -785,10 +775,6 @@ private struct BrainBarDashboardView: View {
                 liveObservabilityResult = $0
             }
         }
-    }
-
-    private var detailsBinding: Binding<Bool> {
-        $panelState.detailsExpanded
     }
 
     private var statusStrip: some View {
@@ -1000,7 +986,7 @@ private struct BrainBarDashboardView: View {
         )
 
         VStack(alignment: .leading, spacing: 12) {
-            DisclosureGroup(isExpanded: detailsBinding) {
+            DisclosureGroup(isExpanded: $panelState.detailsExpanded) {
                 VStack(alignment: .leading, spacing: layout.gridSpacing) {
                     if layout.diagnosticColumns == 2 {
                         HStack(alignment: .top, spacing: layout.gridSpacing) {
@@ -1043,11 +1029,6 @@ private struct BrainBarDashboardView: View {
             activityWindowMinutes: collector.stats.activityWindowMinutes
         )
     }
-}
-
-private struct BrainBarDashboardSizeKey: PreferenceKey {
-    static let defaultValue = CGSize(width: 900, height: 640)
-    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
 }
 
 private struct BrainBarDashboardHeightKey: PreferenceKey {
@@ -2204,7 +2185,8 @@ enum BrainBarDashboardPreview {
         collector: StatsCollector,
         hotkeyStatus: String = "Hotkey ⌃⌥Space ready",
         observabilityResult: ObservabilityReadResult? = nil,
-        now: Date? = nil
+        now: Date? = nil,
+        panelState: BrainBarDashboardPanelState? = nil
     ) -> AnyView {
         AnyView(
             ZStack {
@@ -2213,7 +2195,8 @@ enum BrainBarDashboardPreview {
                     collector: collector,
                     hotkeyStatus: hotkeyStatus,
                     observabilityResult: observabilityResult,
-                    referenceNow: now
+                    referenceNow: now,
+                    panelState: panelState
                 )
             }
             .environment(\.colorScheme, .dark)

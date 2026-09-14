@@ -14,7 +14,6 @@ final class BrainBarDashboardPanelState: ObservableObject {
     @Published var headerHeight: CGFloat = 0
     @Published var searchOverlayPresented = false
     @Published var graphPresented = false
-
     var fittingHeight: CGFloat {
         searchOverlayPresented || graphPresented ? 640 : max(headerHeight + dashboardHeight, 300)
     }
@@ -35,7 +34,6 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
 
     private let panel: NSPanel
     private let panelState = BrainBarDashboardPanelState()
-    private var refitScheduled = false
     private var sizingObservation: AnyCancellable?
     private var clickOutsideMonitor: Any?
     private var localClickMonitor: Any?
@@ -57,8 +55,9 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         panelForTesting = panel
         super.init()
         panel.delegate = self
-        sizingObservation = panelState.objectWillChange.sink { [weak self] _ in self?.scheduleRefit() }
-        scheduleRefit()
+        sizingObservation = panelState.objectWillChange.sink { [weak self] _ in
+            DispatchQueue.main.async { self?.fitPanelToContent() }
+        }
     }
 
     func toggle(anchoredTo anchorView: NSView? = nil) {
@@ -127,22 +126,9 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         removeClickOutsideMonitor()
     }
 
-    func windowDidResize(_ notification: Notification) {
-        scheduleRefit()
-    }
+    func windowDidResize(_ notification: Notification) { fitPanelToContent() }
 
-    func setDetailsExpandedForTesting(_ expanded: Bool) {
-        panelState.detailsExpanded = expanded
-    }
-
-    private func scheduleRefit() {
-        guard !refitScheduled else { return }
-        refitScheduled = true
-        DispatchQueue.main.async { [weak self] in
-            self?.refitScheduled = false
-            self?.fitPanelToContent()
-        }
-    }
+    func setDetailsExpandedForTesting(_ expanded: Bool) { panelState.detailsExpanded = expanded }
 
     private func fitPanelToContent() {
         let width = panel.contentLayoutRect.width
