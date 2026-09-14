@@ -16,7 +16,7 @@ from brainlayer.vector_store import VectorStore
 
 SEED, GENERATED_AT = 20260913, datetime(2026, 9, 13, 12, tzinfo=UTC)
 FIXED_MTIME = int(GENERATED_AT.timestamp())
-HELDOUT_SHA256, MANIFEST = "2430cd2eaacb391f71121f2bb1b4a98002b0c062a69e71473478df78b1743098", Path(__file__).resolve().parents[1] / "tests/fixtures/observability/cases.json"  # fmt: skip
+HELDOUT_SHA256, MANIFEST = "b54720d394140261cb2129065169ab5c8b699e4391a2dd475e4b5f40476e88cc", Path(__file__).resolve().parents[1] / "tests/fixtures/observability/cases.json"  # fmt: skip
 
 
 @dataclass(frozen=True)

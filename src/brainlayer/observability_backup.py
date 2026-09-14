@@ -114,9 +114,8 @@ def _daily_snapshot(records: list[dict[str, Any]]) -> tuple[dict[str, Any] | Non
                 {
                     "last_at": attempted_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
                     "destination": destination,
-                    "verified": record.get("verified") is True and (
-                        "drive_md5_match" not in record or record.get("drive_md5_match") is True
-                    ),
+                    "verified": record.get("verified") is True
+                    and ("drive_md5_match" not in record or record.get("drive_md5_match") is True),
                 },
                 error_type,
                 all_errors,
