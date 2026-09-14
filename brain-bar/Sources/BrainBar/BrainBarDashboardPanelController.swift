@@ -15,7 +15,7 @@ final class BrainBarDashboardPanelState: ObservableObject {
     @Published var searchOverlayPresented = false
     @Published var graphPresented = false
     var fittingHeight: CGFloat {
-        searchOverlayPresented || graphPresented ? 640 : max(headerHeight + dashboardHeight, 300)
+        max(headerHeight + dashboardHeight, searchOverlayPresented || graphPresented ? 640 : 300)
     }
 }
 
@@ -31,6 +31,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     let panelForTesting: NSPanel
     let contentViewControllerForTesting: NSViewController
     var isShownForTesting: Bool { panel.isVisible }
+    var measuredContentHeightForTesting: CGFloat { panelState.headerHeight + panelState.dashboardHeight }
 
     private let panel: NSPanel
     private let panelState = BrainBarDashboardPanelState()
@@ -129,14 +130,24 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     func windowDidResize(_ notification: Notification) { fitPanelToContent() }
 
     func setDetailsExpandedForTesting(_ expanded: Bool) { panelState.detailsExpanded = expanded }
+    func setSearchOverlayPresentedForTesting(_ presented: Bool) { panelState.searchOverlayPresented = presented }
 
     private func fitPanelToContent() {
         let width = panel.contentLayoutRect.width
         let visibleHeight = statusItemButton?.window?.screen?.visibleFrame.height ?? Self.maxSize.height
-        let height = min(panelState.fittingHeight, visibleHeight)
-        guard abs(panel.contentLayoutRect.height - height) > 0.5 else { return }
-        panel.setContentSize(NSSize(width: width, height: height))
-        if let statusItemButton { positionPanel(below: statusItemButton) }
+        let titlebarInset = max((panel.contentView?.frame.height ?? panel.contentLayoutRect.height)
+            - panel.contentLayoutRect.height, 0)
+        let usableHeight = min(panelState.fittingHeight, max(visibleHeight - titlebarInset, 0))
+        let contentHeight = usableHeight + titlebarInset
+        let needsResize = abs(panel.contentLayoutRect.height - usableHeight) > 0.5
+        if needsResize {
+            panel.contentMinSize = NSSize(width: Self.minSize.width, height: 0)
+            panel.contentMaxSize = NSSize(width: Self.maxSize.width, height: Self.maxSize.height)
+            panel.setContentSize(NSSize(width: width, height: contentHeight))
+        }
+        panel.contentMinSize = NSSize(width: Self.minSize.width, height: contentHeight)
+        panel.contentMaxSize = NSSize(width: Self.maxSize.width, height: contentHeight)
+        if needsResize, let statusItemButton { positionPanel(below: statusItemButton) }
     }
 
     private static func makePanel(contentViewController: NSViewController) -> NSPanel {

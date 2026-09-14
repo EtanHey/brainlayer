@@ -56,6 +56,10 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
             controller.panelForTesting.contentMaxSize.height,
             accuracy: 1
         )
+        XCTAssertLessThan(
+            controller.panelForTesting.contentMinSize.width,
+            controller.panelForTesting.contentMaxSize.width
+        )
     }
 
     func testDashboardPanelDoesNotOpenWithoutStatusItemAnchor() {
