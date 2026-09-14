@@ -11,6 +11,11 @@ from pathlib import Path
 
 import pytest
 
+from tests.drive_listing_assertions import (
+    assert_non_trashed_drive_files_only_grow_or_are_trashed,
+    snapshot_non_trashed_drive_ids,
+)
+
 
 def test_real_jsonl_receipt_shapes_pin_legacy_and_current() -> None:
     fixture = Path(__file__).parent / "fixtures/observability/logs/healthy-dev/jsonl-backup.log"
@@ -65,6 +70,9 @@ def test_jsonl_retention_is_disabled_by_default_and_keeps_local_archives(tmp_pat
         def __init__(self):
             self.updates = []
             self.deleted = []
+            self.items = [
+                {"id": f"old-{index}", "name": f"claude-jsonl-2026-08-{index + 1:02d}.tar.gz"} for index in range(40)
+            ]
 
         def list(self, **kwargs):
             self.last_operation = "list"
@@ -72,6 +80,8 @@ def test_jsonl_retention_is_disabled_by_default_and_keeps_local_archives(tmp_pat
 
         def update(self, **kwargs):
             self.updates.append(kwargs)
+            if kwargs.get("body") == {"trashed": True}:
+                next(item for item in self.items if item["id"] == kwargs["fileId"])["trashed"] = True
             self.last_operation = "update"
             return self
 
@@ -82,12 +92,7 @@ def test_jsonl_retention_is_disabled_by_default_and_keeps_local_archives(tmp_pat
 
         def execute(self):
             if self.last_operation == "list":
-                return {
-                    "files": [
-                        {"id": f"old-{index}", "name": f"claude-jsonl-2026-08-{index + 1:02d}.tar.gz"}
-                        for index in range(40)
-                    ]
-                }
+                return {"files": [item for item in self.items if not item.get("trashed")]}
             return {}
 
     class Service:
@@ -109,6 +114,7 @@ def test_jsonl_retention_is_disabled_by_default_and_keeps_local_archives(tmp_pat
     service = Service()
     _mock_drive_success(jsonl_backup, monkeypatch)
     monkeypatch.setattr(jsonl_backup.backup_daily, "build_drive_service", lambda: service)
+    before = snapshot_non_trashed_drive_ids(service, folder_id="folder-id")
 
     result = jsonl_backup.run_backup(
         source_roots=[source_root],
@@ -120,7 +126,9 @@ def test_jsonl_retention_is_disabled_by_default_and_keeps_local_archives(tmp_pat
         now=now,
         upload=True,
     )
+    after = snapshot_non_trashed_drive_ids(service, folder_id="folder-id")
 
+    assert_non_trashed_drive_files_only_grow_or_are_trashed(before, after)
     assert result["retention"] == "disabled"
     assert result["retention_mode"] == "trash"
     assert result["retention_deleted"] == []
@@ -151,13 +159,22 @@ def test_jsonl_retention_opt_in_trashes_drive_objects_and_never_hard_deletes(tmp
         def __init__(self):
             self.updates = []
             self.deleted = []
+            self.items = [
+                {"id": "new-id", "name": "claude-jsonl-2026-09-14.tar.gz"},
+                {"id": "old-id", "name": "claude-jsonl-2026-09-01.tar.gz"},
+            ]
+            self.last_operation = None
 
         def list(self, **kwargs):
             assert kwargs["q"] == "'folder-id' in parents and trashed = false"
+            self.last_operation = "list"
             return self
 
         def update(self, **kwargs):
             self.updates.append(kwargs)
+            if kwargs.get("body") == {"trashed": True}:
+                next(item for item in self.items if item["id"] == kwargs["fileId"])["trashed"] = True
+            self.last_operation = "update"
             return self
 
         def delete(self, **kwargs):
@@ -165,14 +182,9 @@ def test_jsonl_retention_opt_in_trashes_drive_objects_and_never_hard_deletes(tmp
             raise AssertionError("JSONL retention must never hard-delete Drive objects")
 
         def execute(self):
-            if self.updates:
+            if self.last_operation == "update":
                 return {}
-            return {
-                "files": [
-                    {"id": "new-id", "name": "claude-jsonl-2026-09-14.tar.gz"},
-                    {"id": "old-id", "name": "claude-jsonl-2026-09-01.tar.gz"},
-                ]
-            }
+            return {"files": [item for item in self.items if not item.get("trashed")]}
 
     class Service:
         def __init__(self):
@@ -208,6 +220,7 @@ def test_jsonl_retention_opt_in_trashes_drive_objects_and_never_hard_deletes(tmp
             "size": str(Path(path).stat().st_size),
         },
     )
+    before = snapshot_non_trashed_drive_ids(service, folder_id="folder-id")
 
     result = jsonl_backup.run_backup(
         source_roots=[source_root],
@@ -219,7 +232,9 @@ def test_jsonl_retention_opt_in_trashes_drive_objects_and_never_hard_deletes(tmp
         now=now,
         upload=True,
     )
+    after = snapshot_non_trashed_drive_ids(service, folder_id="folder-id")
 
+    assert_non_trashed_drive_files_only_grow_or_are_trashed(before, after, trashed_ids={"old-id"})
     assert result["retention"] == "enabled"
     assert result["retention_mode"] == "trash"
     assert result["retention_deleted"] == ["claude-jsonl-2026-09-01.tar.gz"]

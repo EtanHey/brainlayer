@@ -13,6 +13,11 @@ from pathlib import Path
 
 import pytest
 
+from tests.drive_listing_assertions import (
+    assert_non_trashed_drive_files_only_grow_or_are_trashed,
+    snapshot_non_trashed_drive_ids,
+)
+
 
 def _start_fake_brainbar_vacuum_server(socket_path: Path, source_db: Path):
     received: queue.Queue[dict] = queue.Queue()
@@ -1062,10 +1067,12 @@ class _RetentionFiles:
 
     def list(self, **kwargs):  # noqa: ARG002
         self.list_calls += 1
-        return _RetentionExecute({"files": self.items})
+        return _RetentionExecute({"files": [item for item in self.items if not item.get("trashed")]})
 
     def update(self, *, fileId, body, **kwargs):  # noqa: N803, ARG002
         self.trashed.append((fileId, body))
+        if body == {"trashed": True}:
+            next(item for item in self.items if item["id"] == fileId)["trashed"] = True
         return _RetentionExecute({})
 
     def delete(self, *, fileId, **kwargs):  # noqa: N803, ARG002
@@ -1116,6 +1123,7 @@ def test_run_backup_default_retention_leaves_eight_drive_snapshots_untouched(tmp
     snapshot.write_bytes(b"backup-bytes")
     service = _RetentionService(count=8)
     _stub_verified_backup_run(backup_daily, monkeypatch, snapshot, service)
+    before = snapshot_non_trashed_drive_ids(service, folder_id="folder-id")
 
     result = backup_daily.run_backup(
         db_path=tmp_path / "brainlayer.db",
@@ -1124,11 +1132,13 @@ def test_run_backup_default_retention_leaves_eight_drive_snapshots_untouched(tmp
         upload=True,
         log_path=tmp_path / "backup-daily.log",
     )
+    after = snapshot_non_trashed_drive_ids(service, folder_id="folder-id")
 
+    assert_non_trashed_drive_files_only_grow_or_are_trashed(before, after)
     assert result["drive_retention"] == "disabled"
     assert result["retention_mode"] == "trash"
     assert result["retention_deleted"] == []
-    assert service.files().list_calls == 0
+    assert service.files().list_calls == 2
     assert service.files().trashed == []
     assert service.files().deleted == []
 
@@ -1141,6 +1151,7 @@ def test_run_backup_opted_in_retention_trashes_older_drive_snapshots(tmp_path, m
     service = _RetentionService(count=8)
     _stub_verified_backup_run(backup_daily, monkeypatch, snapshot, service)
     monkeypatch.setenv("BRAINLAYER_BACKUP_DRIVE_RETENTION", "1")
+    before = snapshot_non_trashed_drive_ids(service, folder_id="folder-id")
 
     result = backup_daily.run_backup(
         db_path=tmp_path / "brainlayer.db",
@@ -1149,7 +1160,9 @@ def test_run_backup_opted_in_retention_trashes_older_drive_snapshots(tmp_path, m
         upload=True,
         log_path=tmp_path / "backup-daily.log",
     )
+    after = snapshot_non_trashed_drive_ids(service, folder_id="folder-id")
 
+    assert_non_trashed_drive_files_only_grow_or_are_trashed(before, after, trashed_ids={"id-1"})
     assert result["drive_retention"] == "enabled"
     assert result["retention_mode"] == "trash"
     assert result["retention_deleted"] == ["2026-05-01.db.gz"]
